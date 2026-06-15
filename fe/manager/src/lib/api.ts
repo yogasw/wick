@@ -8,6 +8,10 @@ import type {
   TestRunResult,
   HistoryResult,
   HistoryFilter,
+  CustomMeta,
+  CustomDraftResult,
+  Draft,
+  SaveDraftResult,
 } from "./types.js";
 
 /* Connector definitions live at the server-absolute /manager surface,
@@ -90,6 +94,43 @@ export async function runConnectorTest(
     input,
     account_id: accountId,
   });
+}
+
+const customBase = "/manager/api/connectors/custom";
+
+export async function getCustomMeta(): Promise<CustomMeta> {
+  const r = await apiGet<CustomMeta>(`${customBase}/meta`);
+  return { ai_providers: r.ai_providers ?? [], categories: r.categories ?? [] };
+}
+
+export async function getCustomDraft(defID: string): Promise<CustomDraftResult> {
+  return apiGet<CustomDraftResult>(`${customBase}/${encodeURIComponent(defID)}/draft`);
+}
+
+export async function parseCustomPaste(
+  parser: string,
+  provider: string,
+  paste: string,
+): Promise<Draft> {
+  return apiPost<Draft>(`${customBase}/parse`, { parser, provider, paste });
+}
+
+export async function saveCustomDraft(draft: Draft): Promise<SaveDraftResult> {
+  return apiPost<SaveDraftResult>(`${customBase}/save`, draft);
+}
+
+export async function updateCustomDraft(defID: string, draft: Draft): Promise<SaveDraftResult> {
+  return apiPost<SaveDraftResult>(`${customBase}/${encodeURIComponent(defID)}/save`, draft);
+}
+
+export async function deleteCustomDef(defID: string): Promise<void> {
+  await apiPost(`${customBase}/${encodeURIComponent(defID)}/delete`);
+}
+
+export async function setCustomDefDisabled(defID: string, disabled: boolean): Promise<boolean> {
+  const verb = disabled ? "disable" : "enable";
+  const r = await apiPost<{ disabled: boolean }>(`${customBase}/${encodeURIComponent(defID)}/${verb}`);
+  return r.disabled;
 }
 
 export async function getConnectorHistory(

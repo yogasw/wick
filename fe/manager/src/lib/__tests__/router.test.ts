@@ -73,4 +73,14 @@ describe("match", () => {
   it("does not match the detail route against the test route", () => {
     expect(match("/connectors/:key/:id", "/connectors/slack/abc-123/test")).toBeNull();
   });
+
+  it("extracts defID from the custom edit route", () => {
+    expect(match("/custom/:defID/edit", "/custom/def-123/edit")).toEqual({ defID: "def-123" });
+  });
+
+  it("does not match the custom edit route against the static custom routes", () => {
+    expect(match("/custom/:defID/edit", "/custom/paste")).toBeNull();
+    expect(match("/custom/:defID/edit", "/custom/manual")).toBeNull();
+    expect(match("/custom/:defID/edit", "/custom/review")).toBeNull();
+  });
 });
