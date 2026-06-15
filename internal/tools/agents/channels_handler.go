@@ -332,8 +332,6 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 	}
 }
 
-
-
 // loadChannelRowsForUser returns entity.Config rows with values populated from
 // a specific user's agent_channels JSON config. App Owner users pass userID=""
 // which falls back to the owner row. Secret tokens are decrypted before render.

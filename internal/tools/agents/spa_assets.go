@@ -79,11 +79,3 @@ func spaAssetURL(app string) string {
 	}
 	return ""
 }
-
-// resetAssetCache clears the cached bundle path. Tests use it after
-// swapping in a fake embed; production code never needs it.
-func resetAssetCache() {
-	assetCacheMu.Lock()
-	defer assetCacheMu.Unlock()
-	assetCache = map[string]string{}
-}

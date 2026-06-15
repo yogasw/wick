@@ -161,12 +161,6 @@ func SetConnectors(c *connectors.Service) { globalConnectors = c }
 // hasn't reached SetGateStatus yet.
 func GetGateStatus() GateStatus { return globalGateStatus }
 
-// AskUsers returns the wired Manager so the boot path can hand it
-// to the MCP handler. Reading this is racy if SetAskUsers is
-// called concurrently with reads, but in practice it's set once
-// during boot before serving begins.
-func AskUsers() *askuser.Manager { return globalAskUsers }
-
 // Register mounts all Agents routes under /tools/agents.
 func Register(r tool.Router) {
 	// Svelte SPA shell + assets for the workflow editor.

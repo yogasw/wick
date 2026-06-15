@@ -1,8 +1,6 @@
 package view
 
 import (
-	"strconv"
-
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/session"
@@ -73,22 +71,6 @@ func (vm AgentsLayoutVM) ProjectIcon(id string) string {
 	return "📁"
 }
 
-// ScopedFolder returns the folder path shown in the scoped header chip:
-// the custom path, or "managed" for managed projects. Empty when not
-// scoped or project unknown.
-func (vm AgentsLayoutVM) ScopedFolder() string {
-	if vm.ScopedProjectID == "" {
-		return ""
-	}
-	if p, ok := vm.Projects[vm.ScopedProjectID]; ok {
-		if p.Meta.CustomPath != "" {
-			return p.Meta.CustomPath
-		}
-		return "managed"
-	}
-	return ""
-}
-
 // ProviderChoiceVM is one healthy provider row — what the New Session
 // picker offers. Disabled / unprobed / version-failed providers
 // never reach the UI.
@@ -105,66 +87,6 @@ type SessionLifecycleVM struct {
 	Lifecycle    string
 	PID          int
 	LastActiveMs int64
-}
-
-// Compose-form dropdown styling. When the page is scoped to a project,
-// provider/preset/project dropdowns render "inherited" (green) per
-// mockup state ②; otherwise neutral.
-const (
-	nsSelectBase      = "rounded-lg border px-2.5 py-1.5 text-xs focus:border-green-500 focus:outline-none cursor-pointer"
-	nsSelectInherited = "border-green-400 dark:border-green-700 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 font-semibold"
-	nsSelectNeutral   = "border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-black-900 dark:text-white-100"
-)
-
-// ComposerVM drives the shared compose card (composerCard) used both on
-// the standalone New Session page and embedded at the top of a scoped
-// project landing (Claude-style: compose box + chats below).
-type ComposerVM struct {
-	Base             string
-	Providers        []ProviderChoiceVM
-	Presets          []string
-	Projects         []ProjectChoiceVM
-	DefaultProvider  string
-	DefaultPreset    string
-	ScopedProjectID  string // explicit project scope → green "inherited" styling
-	DefaultProjectID string // soft default pre-select (operator setting)
-	Message          string // round-tripped on validation error
-	Scoped           bool   // green inherited dropdowns
-	// ShowProjectPicker shows the project dropdown. False on a project
-	// landing (already in the project) — the binding is sent as a hidden
-	// field instead.
-	ShowProjectPicker bool
-}
-
-// SelectedProjectID is the project the composer pre-selects.
-func (vm ComposerVM) SelectedProjectID() string {
-	if vm.ScopedProjectID != "" {
-		return vm.ScopedProjectID
-	}
-	return vm.DefaultProjectID
-}
-
-// ProjectChoiceVM is one project row offered by the New Session picker /
-// move menu. Defaults drive the compose-form prefill.
-type ProjectChoiceVM struct {
-	ID              string
-	Name            string
-	Icon            string
-	Description     string
-	DefaultPreset   string
-	DefaultProvider string
-	SystemAddon     string
-}
-
-// fmtCount renders an int as a string for templ text nodes.
-func fmtCount(n int) string { return strconv.Itoa(n) }
-
-// pinTitle is the tooltip for the project pin toggle.
-func pinTitle(pinned bool) string {
-	if pinned {
-		return "This is your default project — click to unpin"
-	}
-	return "Pin as your default project (opens here automatically)"
 }
 
 // ProviderCapVM is the used / effective-max slot count for one provider

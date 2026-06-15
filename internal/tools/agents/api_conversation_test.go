@@ -26,10 +26,10 @@ func makeSession(id, projectID, userID string) session.Session {
 
 func TestCallerCanSeeSession(t *testing.T) {
 	cases := []struct {
-		name    string
-		caller  *entity.User
-		meta    session.Meta
-		want    bool
+		name   string
+		caller *entity.User
+		meta   session.Meta
+		want   bool
 	}{
 		{
 			name:   "nil caller (unauthenticated) sees everything",

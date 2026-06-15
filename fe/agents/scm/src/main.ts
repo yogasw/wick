@@ -61,6 +61,9 @@ window.WickSCM = {
   },
 };
 
-// Standalone fallback.
+// Standalone fallback — only on the genuine standalone shell (marked with
+// data-scm-standalone), never when this bundle is lazy-loaded as an island.
 const appTarget = document.getElementById("app");
-if (appTarget) mount(App, { target: appTarget });
+if (appTarget && appTarget.dataset.scmStandalone !== undefined) {
+  mount(App, { target: appTarget });
+}

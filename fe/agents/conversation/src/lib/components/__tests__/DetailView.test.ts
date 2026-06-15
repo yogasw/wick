@@ -204,7 +204,7 @@ describe("DetailView — SCM source rail panel", () => {
     expect(container.querySelector("[data-scm-host]")).toBeNull();
   });
 
-  test("WickSCM.mount is called with non-empty sessionID when source tab opens", async () => {
+  test("WickSCM.mount is called with non-empty sessionID + onClose for desktop and mobile hosts", async () => {
     const mountFn = vi.fn();
     const unmountFn = vi.fn();
     (window as unknown as Record<string, unknown>)["WickSCM"] = { mount: mountFn, unmount: unmountFn };
@@ -216,10 +216,14 @@ describe("DetailView — SCM source rail panel", () => {
     /* Allow microtasks to flush */
     await Promise.resolve();
 
-    expect(mountFn).toHaveBeenCalledOnce();
-    const [, opts] = mountFn.mock.calls[0] as [unknown, { sessionID: string }];
-    expect(opts.sessionID).toBe("test-sess");
-    expect(opts.sessionID.length).toBeGreaterThan(0);
+    /* Both the desktop host and the mobile overlay host mount the island */
+    expect(mountFn).toHaveBeenCalledTimes(2);
+    for (const call of mountFn.mock.calls) {
+      const [, opts] = call as [unknown, { sessionID: string; onClose?: () => void }];
+      expect(opts.sessionID).toBe("test-sess");
+      expect(opts.sessionID.length).toBeGreaterThan(0);
+      expect(typeof opts.onClose).toBe("function");
+    }
   });
 
   test("WickSCM.mount is NOT called when sessionId is empty string", async () => {
@@ -234,7 +238,7 @@ describe("DetailView — SCM source rail panel", () => {
     expect(mountFn).not.toHaveBeenCalled();
   });
 
-  test("WickSCM.unmount is called when leaving source tab", async () => {
+  test("WickSCM.unmount is called for both hosts when leaving source tab", async () => {
     const mountFn = vi.fn();
     const unmountFn = vi.fn();
     (window as unknown as Record<string, unknown>)["WickSCM"] = { mount: mountFn, unmount: unmountFn };
@@ -249,7 +253,26 @@ describe("DetailView — SCM source rail panel", () => {
     await fireEvent.click(contextBtn);
     await Promise.resolve();
 
-    expect(unmountFn).toHaveBeenCalledOnce();
+    expect(unmountFn).toHaveBeenCalledTimes(2);
+  });
+
+  test("onClose passed to WickSCM.mount closes the source rail", async () => {
+    const mountFn = vi.fn();
+    const unmountFn = vi.fn();
+    (window as unknown as Record<string, unknown>)["WickSCM"] = { mount: mountFn, unmount: unmountFn };
+
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    const sourceBtn = screen.getByRole("button", { name: /source/i });
+    await fireEvent.click(sourceBtn);
+    await Promise.resolve();
+
+    expect(container.querySelector("[data-scm-host]")).not.toBeNull();
+
+    const [, opts] = mountFn.mock.calls[0] as [unknown, { onClose: () => void }];
+    opts.onClose();
+    await Promise.resolve();
+
+    expect(container.querySelector("[data-scm-host]")).toBeNull();
   });
 
   test("mobile overlay for source tab has fixed inset-0 classes (full-screen, not floating box)", async () => {

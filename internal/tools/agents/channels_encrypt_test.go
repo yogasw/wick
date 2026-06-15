@@ -3,8 +3,8 @@ package agents
 import (
 	"testing"
 
-	"github.com/yogasw/wick/internal/enc"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/enc"
 )
 
 const testEncKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
