@@ -43,7 +43,26 @@ What each card shows ([Status struct](https://github.com/yogasw/wick/blob/master
 - **Edit / Rescan / Delete** buttons per card.
 - **Add Instance** for a new named profile of the same type.
 
-The page also surfaces a [Gate Status card](../command-gate#diagnostics) and a recent spawns table (filterable by type/name/session).
+### Active Processes panel
+
+When at least one agent is running, an **Active Processes** table appears above the provider cards showing every live spawn: session ID (first 8 chars), agent name, PID, and lifecycle/substate badge. The count badge reads `N / PoolMax`. The panel is hidden when the pool is empty.
+
+### Hook actions per provider card
+
+Each provider card's **Command Gate** row now includes inline **Enable / Disable / Test** buttons (visible only when the master gate is enabled and bypass is not locked). The badge reflects four states:
+
+| Badge | Meaning |
+|---|---|
+| `enabled ✓` | Hook is on and the last probe verified it. |
+| `enabled (unverified)` | Hook is toggled on but no successful probe yet. |
+| `ready` | Hook is off but a prior probe succeeded — can be re-enabled quickly. |
+| `disabled` | Hook is off and has never been verified. |
+
+**Test** fires a live probe for the `PreToolUse` hook and refreshes the card. Results are visible immediately without a page reload.
+
+### Recent Spawns list
+
+The page also surfaces a [Gate Status card](../command-gate#diagnostics) and a recent spawns table (filterable by type/name/session). Each row links to the server-rendered spawn detail page.
 
 ## Binary resolution chain
 
