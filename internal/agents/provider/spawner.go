@@ -79,7 +79,12 @@ type SpawnOptions struct {
 	SessionDir string
 	// ExtraEnv lets the gate (phase 3) inject hook config paths
 	// without coupling the agent package to gate internals.
+	// Instance.Env is merged in by the factory before every spawn.
 	ExtraEnv []string
+	// ExtraArgs is appended after each spawner's own ExtraArgs field.
+	// Populated by the factory from Instance.ExtraArgs so UI-configured
+	// extra flags are forwarded on every spawn without restarting wick.
+	ExtraArgs []string
 
 	// Instance is the resolved per-instance config the factory looked
 	// up before this spawn. Spawners read Instance.Hooks to decide

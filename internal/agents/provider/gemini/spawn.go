@@ -82,6 +82,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		args = append(args, "--yolo")
 	}
 	args = append(args, s.ExtraArgs...)
+	args = append(args, opt.ExtraArgs...)
 	if opt.ResumeID != "" {
 		args = append(args, "--resume", opt.ResumeID)
 	}

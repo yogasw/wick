@@ -10,6 +10,30 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.18.6](https://github.com/yogasw/wick/compare/v0.18.5...v0.18.6) — Agents
+
+_Released on 2026-06-15_
+
+### Fixed
+
+*   **Agent Spawner Configuration**: Addressed an issue where `ExtraArgs` and `Env` settings configured in the providers UI were not being forwarded from the `Instance` to the agent subprocess during spawning, resulting in agents running without their intended custom configurations.
+
+### Added
+
+*   **Instance-Level Argument Flow**: `ExtraArgs` can now be passed via `SpawnOptions`, mirroring the existing `ExtraEnv` functionality to ensure instance-level arguments are correctly delivered.
+*   **Test Injection Utility**: A new `InstanceOverride` in `ClaudeFactory` facilitates test injection without requiring modifications to user configuration files.
+*   **Enhanced Testing for Claude**: Dedicated `spawn_test.go` added for the Claude provider to specifically validate `spawner` and `opt ExtraArgs` handling.
+*   **Configuration Contract Test**: A new test, `TestFactoryInstanceConfig_ExtraArgsAndEnv`, was implemented to establish a contract, ensuring all future providers correctly process and forward `ExtraArgs` and `Env` configurations.
+
+### Improved
+
+*   **Universal Spawner Compatibility**: All agent spawners (Claude, Codex, Gemini) now correctly append `opt.ExtraArgs` after their inherent `s.ExtraArgs`, preserving compatibility with existing static test fixtures.
+*   **Consistent Configuration Forwarding**: `ExtraArgs` are now consistently forwarded through `agent.Options` and both `Spawn` call-sites (`Start` and `respawnWithMessage`).
+*   **Extended Provider Test Coverage**: Existing Codex and Gemini spawn tests have been expanded to include `opt.ExtraArgs` cases, ensuring uniform behavior across different providers.
+
+---
+
+
 ## [v0.18.5](https://github.com/yogasw/wick/compare/v0.18.4...v0.18.5) — PWA Notifications
 
 _Released on 2026-06-15_
