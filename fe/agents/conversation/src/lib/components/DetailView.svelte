@@ -207,7 +207,14 @@
 
   function loadProcesses() {
     run(getProcesses(base, sessionId).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => { processes = res; })
+      .then((res) => {
+        processes = res;
+        // Derive active provider from processes when meta.active_agent is unset
+        if (!activeProvider && res && res.length > 0) {
+          activeProvider = res[0].provider || null;
+          agentLabel = res[0].provider || "";
+        }
+      })
       .catch((e: unknown) => toastError(`Processes: ${e instanceof Error ? e.message : String(e)}`));
   }
 
@@ -260,10 +267,46 @@
   }
 
   /* ── auto-scroll thread to bottom ─────────────────────────────── */
+  let userScrolledUp = $state(false);
+  let showJumpBtn = $state(false);
+
+  function scrollToBottom() {
+    if (threadEl) {
+      threadEl.scrollTop = threadEl.scrollHeight;
+      userScrolledUp = false;
+      showJumpBtn = false;
+    }
+  }
+
+  $effect(() => {
+    function onKeydown(e: KeyboardEvent) {
+      if (e.ctrlKey && e.key === "ArrowDown") {
+        e.preventDefault();
+        scrollToBottom();
+      }
+    }
+    window.addEventListener("keydown", onKeydown);
+    return () => window.removeEventListener("keydown", onKeydown);
+  });
+
+  $effect(() => {
+    if (!threadEl) return;
+    const el = threadEl;
+
+    function onScroll() {
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      userScrolledUp = distFromBottom > 80;
+      showJumpBtn = userScrolledUp;
+    }
+
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  });
+
   $effect(() => {
     const _dep1 = turns.length;
     const _dep2 = live;
-    if (threadEl) {
+    if (threadEl && !userScrolledUp) {
       threadEl.scrollTop = threadEl.scrollHeight;
     }
   });
@@ -531,7 +574,7 @@
         bind:this={threadEl}
         data-chat-panel
       >
-        <div class="max-w-4xl mx-auto w-full px-4 md:px-6 pt-4 pb-4">
+        <div class="max-w-4xl mx-auto w-full px-6 pt-14 pb-6 md:pt-6">
           <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} />
         </div>
       </div>
@@ -548,7 +591,21 @@
       </div>
 
       <!-- Zone 4: composer with leading toolbar actions in one row -->
-      <div class="relative shrink-0 px-4 md:px-6 pb-6 pt-2 bg-white-200 dark:bg-navy-800">
+      <div class="relative shrink-0 px-6 bg-white-200 dark:bg-navy-800">
+        {#if showJumpBtn}
+          <button
+            type="button"
+            onclick={scrollToBottom}
+            class="absolute left-1/2 -translate-x-1/2 -top-3 z-30 inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100 transition-colors"
+            title="Scroll to latest (Ctrl+↓)"
+          >
+            <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.75">
+              <path d="M8 3v9M4 9l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+            <span>Jump to latest</span>
+            <kbd class="rounded border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1 text-[10px] font-mono text-black-600 dark:text-black-700">Ctrl+↓</kbd>
+          </button>
+        {/if}
         <div class="max-w-4xl mx-auto">
           {#snippet toolbarLeading()}
             <ComposerToolbar
