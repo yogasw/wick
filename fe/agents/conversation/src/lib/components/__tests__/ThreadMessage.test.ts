@@ -418,3 +418,88 @@ describe("ThreadMessage - show trace toggle", () => {
     });
   });
 });
+
+const IMAGE_ATT = { name: "photo.jpg", stored_name: "photo.jpg", url: "https://example.com/photo.jpg", mime: "image/jpeg", size: 12345 };
+const FILE_ATT = { name: "report.pdf", stored_name: "report.pdf", url: "https://example.com/report.pdf", mime: "application/pdf", size: 9999 };
+
+describe("ThreadMessage - image lightbox", () => {
+  test("image thumbnail renders as a button trigger (not a[target=_blank])", () => {
+    const turn = makeTurn({ attachments: [IMAGE_ATT] });
+    const { container } = render(ThreadMessage, { props: { turn } });
+    expect(container.querySelector("a[target='_blank']")).toBeNull();
+    const trigger = container.querySelector("button[data-lightbox-trigger]");
+    expect(trigger).not.toBeNull();
+    const thumb = trigger!.querySelector("img");
+    expect(thumb).not.toBeNull();
+    expect(thumb!.getAttribute("src")).toBe(IMAGE_ATT.url);
+  });
+
+  test("lightbox is closed before thumbnail is clicked", () => {
+    const turn = makeTurn({ attachments: [IMAGE_ATT] });
+    const { container } = render(ThreadMessage, { props: { turn } });
+    expect(container.querySelector("[data-lightbox-modal]")).toBeNull();
+  });
+
+  test("clicking thumbnail opens lightbox modal with full-size image", async () => {
+    const turn = makeTurn({ attachments: [IMAGE_ATT] });
+    const { container } = render(ThreadMessage, { props: { turn } });
+    await fireEvent.click(container.querySelector("button[data-lightbox-trigger]")!);
+    const modal = container.querySelector("[data-lightbox-modal]");
+    expect(modal).not.toBeNull();
+    const fullImg = modal!.querySelector("img");
+    expect(fullImg).not.toBeNull();
+    expect(fullImg!.getAttribute("src")).toBe(IMAGE_ATT.url);
+  });
+
+  test("lightbox close button dismisses the modal", async () => {
+    const turn = makeTurn({ attachments: [IMAGE_ATT] });
+    const { container } = render(ThreadMessage, { props: { turn } });
+    await fireEvent.click(container.querySelector("button[data-lightbox-trigger]")!);
+    expect(container.querySelector("[data-lightbox-modal]")).not.toBeNull();
+    await fireEvent.click(container.querySelector("button[data-lightbox-close]")!);
+    expect(container.querySelector("[data-lightbox-modal]")).toBeNull();
+  });
+
+  test("Escape key closes the lightbox", async () => {
+    const turn = makeTurn({ attachments: [IMAGE_ATT] });
+    const { container } = render(ThreadMessage, { props: { turn } });
+    await fireEvent.click(container.querySelector("button[data-lightbox-trigger]")!);
+    expect(container.querySelector("[data-lightbox-modal]")).not.toBeNull();
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(container.querySelector("[data-lightbox-modal]")).toBeNull();
+  });
+
+  test("lightbox contains an 'Open in new tab' link pointing to the image url", async () => {
+    const turn = makeTurn({ attachments: [IMAGE_ATT] });
+    const { container } = render(ThreadMessage, { props: { turn } });
+    await fireEvent.click(container.querySelector("button[data-lightbox-trigger]")!);
+    const newTabLink = container.querySelector<HTMLAnchorElement>("a[data-lightbox-newtab]");
+    expect(newTabLink).not.toBeNull();
+    expect(newTabLink!.getAttribute("href")).toBe(IMAGE_ATT.url);
+    expect(newTabLink!.getAttribute("target")).toBe("_blank");
+  });
+});
+
+describe("ThreadMessage - non-image attachment unchanged", () => {
+  test("non-image renders as chip link with no lightbox trigger or modal", () => {
+    const turn = makeTurn({ attachments: [FILE_ATT] });
+    const { container } = render(ThreadMessage, { props: { turn } });
+    expect(container.querySelector("button[data-lightbox-trigger]")).toBeNull();
+    expect(container.querySelector("[data-lightbox-modal]")).toBeNull();
+    const chipLink = container.querySelector<HTMLAnchorElement>("a[href]");
+    expect(chipLink).not.toBeNull();
+    expect(chipLink!.getAttribute("href")).toBe(FILE_ATT.url);
+    expect(chipLink!.getAttribute("target")).toBe("_blank");
+  });
+});
+
+describe("ThreadMessage - mixed attachments", () => {
+  test("image gets lightbox trigger; file sibling keeps chip link with _blank target", () => {
+    const turn = makeTurn({ attachments: [IMAGE_ATT, FILE_ATT] });
+    const { container } = render(ThreadMessage, { props: { turn } });
+    expect(container.querySelector("button[data-lightbox-trigger]")).not.toBeNull();
+    const blankLinks = Array.from(container.querySelectorAll<HTMLAnchorElement>("a[target='_blank']"));
+    const hrefs = blankLinks.map((a) => a.getAttribute("href"));
+    expect(hrefs).toContain(FILE_ATT.url);
+  });
+});
