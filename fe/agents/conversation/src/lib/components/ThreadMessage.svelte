@@ -109,18 +109,30 @@
       {#if safeAttachments.length > 0}
         <div class="flex flex-wrap justify-end gap-1.5 max-w-full">
           {#each safeAttachments as attachment}
-            <a
-              href={attachment.url}
-              target="_blank"
-              rel="noopener"
-              class="inline-flex items-center gap-2 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-xs text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors max-w-[240px] text-left"
-            >
-              <svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0 text-green-500" fill="none" stroke="currentColor" stroke-width="1.5">
-                <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6L9 2z" stroke-linejoin="round"></path>
-                <path d="M9 2v4h4" stroke-linejoin="round"></path>
-              </svg>
-              <span class="truncate">{attachment.name}</span>
-            </a>
+            {#if attachment.mime?.startsWith("image/")}
+              <a
+                href={attachment.url}
+                target="_blank"
+                rel="noopener"
+                title={attachment.name}
+                class="block rounded-xl overflow-hidden border border-white-300 dark:border-navy-600 shadow-sm bg-white-100 dark:bg-navy-800 hover:shadow-md transition-shadow"
+              >
+                <img src={attachment.url} alt={attachment.name} class="block max-h-56 max-w-[240px] object-contain bg-white-200 dark:bg-navy-900" />
+              </a>
+            {:else}
+              <a
+                href={attachment.url}
+                target="_blank"
+                rel="noopener"
+                class="inline-flex items-center gap-2 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-xs text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors max-w-[240px] text-left"
+              >
+                <svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0 text-green-500" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M9 2H4a1 1 0 00-1 1v10a1 1 0 001 1h8a1 1 0 001-1V6L9 2z" stroke-linejoin="round"></path>
+                  <path d="M9 2v4h4" stroke-linejoin="round"></path>
+                </svg>
+                <span class="truncate">{attachment.name}</span>
+              </a>
+            {/if}
           {/each}
         </div>
       {/if}

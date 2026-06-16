@@ -98,6 +98,23 @@ describe("ThreadMessage - system turn", () => {
   });
 });
 
+describe("ThreadMessage - attachments", () => {
+  test("image attachment renders inline <img> thumbnail", () => {
+    const turn = makeTurn({ role: "user", text: "", attachments: [{ name: "p.png", stored_name: "p.png", url: "/u/p.png", mime: "image/png", size: 10 }] });
+    const { container } = render(ThreadMessage, { props: { turn } });
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute("src")).toBe("/u/p.png");
+  });
+
+  test("non-image attachment renders a file-row chip (no <img>)", () => {
+    const turn = makeTurn({ role: "user", text: "", attachments: [{ name: "a.pdf", stored_name: "a.pdf", url: "/u/a.pdf", mime: "application/pdf", size: 10 }] });
+    const { container } = render(ThreadMessage, { props: { turn } });
+    expect(container.querySelector("img")).toBeNull();
+    expect(screen.getByText("a.pdf")).toBeDefined();
+  });
+});
+
 describe("ThreadMessage - null-safe backend arrays (Go nil → JSON null)", () => {
   test("renders user turn without crash when events and attachments are null (Go nil slice)", () => {
     const turn = makeTurn({
