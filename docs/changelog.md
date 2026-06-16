@@ -22,6 +22,7 @@ All notable changes to Wick are documented here.
 *   **Conversation — system turn pills** — system/lifecycle turns in the thread render as centered pills with an optional step list instead of full message bubbles.
 *   **Conversation — lifecycle pill tracks streaming** — the session lifecycle pill transitions to "working" immediately while the agent is streaming, before the subprocess state update arrives.
 *   **Conversation — lifecycle pill shows "killed" state** — when a session is terminated (including when the idle auto-kill countdown reaches 0), the header pill now shows a neutral **killed** badge instead of lingering on "idle · 0s".
+*   **Conversation — rich assistant message rendering** — assistant chat bubbles now render Mermaid diagrams (flowchart, sequence, class, state, ER, Gantt, pie, journey, and more), syntax-highlighted code blocks (highlight.js, GitHub-style light/dark theme), and KaTeX math (`$…$` inline, `$$…$$` display). Previously these all showed as plain text. Renderers are lazy-loaded on first use so they don't affect initial page load.
 
 ### Changed
 *   **Manager UI rebuilt as a Svelte SPA** — the connector manager at `/manager/*` is now served as a Svelte single-page application rendered inside the host chrome (shared header, theme, user menu), replacing the previous server-rendered templ pages. URLs, features, and the full `/manager/api/*` surface are unchanged.
