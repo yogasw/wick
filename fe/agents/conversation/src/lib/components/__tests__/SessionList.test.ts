@@ -249,4 +249,46 @@ describe("SessionList", () => {
     });
     expect(screen.queryByRole("link", { name: "New chat" })).toBeNull();
   });
+
+  describe("#24 lifecycle badge tokens", () => {
+    const cases: Array<{ lc: string; badge: string }> = [
+      { lc: "working",  badge: "bg-pos-100 text-pos-400" },
+      { lc: "idle",     badge: "bg-prog-100 text-prog-400" },
+      { lc: "spawning", badge: "bg-cau-100 text-cau-400" },
+      { lc: "queued",   badge: "bg-cau-100 text-cau-400" },
+      { lc: "killed",   badge: "bg-neg-100 text-neg-400" },
+      { lc: "dead",     badge: "bg-neg-100 text-neg-400" },
+    ];
+
+    for (const { lc, badge } of cases) {
+      test(`lifecycle="${lc}" badge has classes ${badge}`, () => {
+        render(SessionList, {
+          props: {
+            sessions: [makeSession({ id: "lc-test", label: "LC Test", lifecycle: lc })],
+            search: "",
+            onSearch: vi.fn(),
+            onSelect: vi.fn(),
+          },
+        });
+        const badgeEl = screen.getByText(lc);
+        for (const cls of badge.split(" ")) {
+          expect(badgeEl.classList.contains(cls)).toBe(true);
+        }
+      });
+    }
+
+    test("unknown lifecycle falls back to neutral classes", () => {
+      render(SessionList, {
+        props: {
+          sessions: [makeSession({ id: "lc-unknown", label: "Unknown", lifecycle: "mystery" })],
+          search: "",
+          onSearch: vi.fn(),
+          onSelect: vi.fn(),
+        },
+      });
+      const badgeEl = screen.getByText("mystery");
+      expect(badgeEl.classList.contains("bg-white-300")).toBe(true);
+      expect(badgeEl.classList.contains("text-black-700")).toBe(true);
+    });
+  });
 });
