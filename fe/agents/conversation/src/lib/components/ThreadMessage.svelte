@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ConversationTurn, ThreadBlock, TurnEvent } from "../types/agents.js";
   import { renderMarkdown, linkifyText } from "../markdown.js";
+  import { enrich } from "../richRender.js";
   import ToolCard from "./ToolCard.svelte";
 
   type Props = {
@@ -234,7 +235,7 @@
       {/if}
 
       {#if turn.text}
-        <div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
+        <div use:enrich={turn.text} class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
           {@html renderMarkdown(turn.text)}
           {#if turn.interrupted}
             <div class="mt-2 flex items-center gap-1.5 border-t border-white-300 dark:border-navy-600 pt-2">

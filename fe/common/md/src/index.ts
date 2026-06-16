@@ -11,19 +11,38 @@ export function linkifyText(s: string): string {
   return s;
 }
 
+/* Wrap a TeX fragment in a placeholder the SPA upgrades to rendered math
+   (KaTeX). The raw TeX rides in data-math-src (attribute-escaped, decoded
+   back by the browser); the visible body is the raw `$…$` so it degrades
+   gracefully where no renderer runs. */
+function mathSpan(tex: string, display: boolean): string {
+  const delim = display ? "$$" : "$";
+  return `<span data-math${display ? ' data-math-display=""' : ""} data-math-src="${esc(tex)}">${esc(delim + tex + delim)}</span>`;
+}
+
 function inlineMarkdown(s: string): string {
+  /* Protect math before escaping: capture the raw TeX (which may contain
+     <, >, & that esc would mangle) behind a sentinel, then reinsert as a
+     placeholder span after the inline markdown passes. */
+  const math: { tex: string; display: boolean }[] = [];
+  s = s.replace(/\$\$([^\n$]+?)\$\$/g, (_m, tex) => `\x00M${math.push({ tex, display: true }) - 1}\x00`);
+  s = s.replace(/(^|[^\\$])\$(?!\s)([^\n$]+?)(?<!\s)\$(?!\d)/g, (_m, pre, tex) => `${pre}\x00M${math.push({ tex, display: false }) - 1}\x00`);
+
   s = esc(s);
   s = s.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
   s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/\*(.+?)\*/g, "<em>$1</em>");
   s = s.replace(/(^|\W)__(\S(?:.*?\S)?)__(?=\W|$)/g, "$1<strong>$2</strong>");
   s = s.replace(/(^|\W)_(\S(?:.*?\S)?)_(?=\W|$)/g, "$1<em>$2</em>");
+  s = s.replace(/~~(.+?)~~/g, "<del>$1</del>");
   s = s.replace(/`([^`]+)`/g, '<code class="font-mono text-xs bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 rounded text-black-900 dark:text-white-100">$1</code>');
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" class="text-green-600 dark:text-green-400 underline" target="_blank" rel="noopener">$1</a>');
   s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, href) => {
     return `<a href="#" data-chat-path="${href}" class="text-green-600 dark:text-green-400 underline">${label}</a>`;
   });
   s = s.replace(/(^|[\s(])((https?:\/\/)[^\s<>"']+)/g, '$1<a href="$2" class="text-green-600 dark:text-green-400 underline break-all" target="_blank" rel="noopener">$2</a>');
+
+  s = s.replace(/\x00M(\d+)\x00/g, (_m, i) => mathSpan(math[+i].tex, math[+i].display));
   return s;
 }
 
@@ -32,6 +51,7 @@ export function renderMarkdown(text: string): string {
   const lines = text.split("\n");
   const out: string[] = [];
   let inCode = false, codeLang = "", codeLines: string[] = [];
+  let inMath = false, mathLines: string[] = [];
   let inList = false, listOl = false;
   let inTable = false, tableHeader = false;
   let listItems: string[] = [];
@@ -52,15 +72,32 @@ export function renderMarkdown(text: string): string {
     inTable = false; tableHeader = false;
   }
 
+  function emitMathBlock(tex: string) {
+    out.push(
+      `<div class="wick-math my-2 overflow-x-auto" data-math data-math-display="" data-math-src="${esc(tex)}">${esc("$$" + tex + "$$")}</div>`,
+    );
+  }
+
   function emitCodeBlock(lang: string, code: string) {
+    /* Mermaid fences become a diagram placeholder; the SPA lazy-loads
+       mermaid and swaps the SVG in. The raw source stays as the body so it
+       degrades to a plain code block where no renderer runs. */
+    if (lang === "mermaid") {
+      out.push(
+        `<div class="wick-mermaid my-2 rounded-lg overflow-hidden border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800" data-mermaid data-mermaid-src="${esc(code)}">` +
+        `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 leading-relaxed"><code>${esc(code)}</code></pre></div>`,
+      );
+      return;
+    }
     const langLabel = lang
       ? `<span class="text-[10px] text-black-600 dark:text-black-700 uppercase tracking-wide">${esc(lang)}</span>`
       : "";
     const copyBtn = `<button type="button" data-copy-code data-code="${code.replace(/"/g, "&quot;")}" class="text-[10px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-400 transition-colors px-1.5 py-0.5 rounded hover:bg-white-400 dark:hover:bg-navy-500">Copy</button>`;
+    const codeOpen = lang ? `<code class="language-${esc(lang)}" data-code-lang="${esc(lang)}">` : "<code>";
     out.push(
       `<div class="my-2 rounded-lg overflow-hidden border border-white-300 dark:border-navy-600">` +
       `<div class="flex items-center justify-between px-3 py-1 bg-white-300 dark:bg-navy-600">${langLabel}${copyBtn}</div>` +
-      `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 leading-relaxed"><code>${esc(code)}</code></pre></div>`
+      `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 leading-relaxed">${codeOpen}${esc(code)}</code></pre></div>`,
     );
   }
 
@@ -79,6 +116,19 @@ export function renderMarkdown(text: string): string {
       continue;
     }
     if (inCode) { codeLines.push(line); continue; }
+
+    /* Display-math fence: a line that is exactly "$$" opens/closes a block. */
+    if (line.trim() === "$$") {
+      if (!inMath) {
+        flushList(); flushTable();
+        inMath = true; mathLines = [];
+      } else {
+        emitMathBlock(mathLines.join("\n"));
+        inMath = false; mathLines = [];
+      }
+      continue;
+    }
+    if (inMath) { mathLines.push(line); continue; }
 
     if (line.trim() === "") { flushList(); flushTable(); out.push('<div class="h-2"></div>'); continue; }
 
@@ -145,6 +195,9 @@ export function renderMarkdown(text: string): string {
   flushList();
   if (inCode && codeLines.length) {
     emitCodeBlock(codeLang, codeLines.join("\n"));
+  }
+  if (inMath && mathLines.length) {
+    emitMathBlock(mathLines.join("\n"));
   }
 
   return out.join("");

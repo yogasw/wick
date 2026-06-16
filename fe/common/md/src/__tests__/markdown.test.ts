@@ -98,3 +98,45 @@ describe("linkifyText", () => {
     expect(html).toContain("&lt;script&gt;");
   });
 });
+
+describe("renderMarkdown — rich blocks", () => {
+  test("mermaid fence becomes a diagram placeholder with raw source + fallback", () => {
+    const html = renderMarkdown("```mermaid\nflowchart TD\n  A-->B\n```");
+    expect(html).toContain("data-mermaid");
+    expect(html).toContain('data-mermaid-src="flowchart TD');
+    /* degrades to the raw code as a fallback */
+    expect(html).toContain("flowchart TD");
+    /* a mermaid block is not a highlightable code block */
+    expect(html).not.toContain("data-code-lang");
+  });
+
+  test("non-mermaid code fence carries its language for highlighting", () => {
+    const html = renderMarkdown("```js\nconst x = 1;\n```");
+    expect(html).toContain('data-code-lang="js"');
+    expect(html).toContain('class="language-js"');
+    expect(html).toContain("const x = 1;");
+  });
+
+  test("display-math fence becomes a math placeholder", () => {
+    const html = renderMarkdown("$$\n\\frac{a}{b}\n$$");
+    expect(html).toContain("data-math");
+    expect(html).toContain("data-math-display");
+    expect(html).toContain('data-math-src="\\frac{a}{b}"');
+  });
+
+  test("inline math becomes a math span carrying the raw tex", () => {
+    const html = renderMarkdown("the value $a^2 + b^2$ is fixed");
+    expect(html).toContain('data-math-src="a^2 + b^2"');
+    expect(html).not.toContain("data-math-display");
+  });
+
+  test("does not treat a price like $5 and $10 as inline math", () => {
+    const html = renderMarkdown("it costs $5 and $10 total");
+    expect(html).not.toContain("data-math");
+  });
+
+  test("renders strikethrough", () => {
+    const html = renderMarkdown("~~gone~~");
+    expect(html).toContain("<del>gone</del>");
+  });
+});
