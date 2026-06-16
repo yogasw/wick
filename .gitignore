@@ -62,6 +62,8 @@ web/public/css/app.css
 # every dev rebuild.
 internal/tools/agents/dist/*/index.html
 internal/tools/agents/dist/*/assets/
+internal/manager/dist/*/index.html
+internal/manager/dist/*/assets/
 
 # Stray root lockfile from `npm install` run outside fe/ — there's no
 # root package.json, this lock is always orphaned.

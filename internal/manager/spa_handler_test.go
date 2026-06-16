@@ -4,37 +4,26 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"testing/fstest"
 
+	"github.com/yogasw/wick/internal/pkg/spa"
 	"github.com/yogasw/wick/internal/pkg/ui"
 )
 
-// withTestSPAFS swaps the package SPA filesystem for a synthetic bundle so
-// the handler tests exercise the serve logic without depending on a real
-// `npm run build` artifact — that bundle is gitignored and absent in CI
-// (only dist/.gitkeep is committed), so reading the real embed would 404.
-// Restored on cleanup. The asset resolver caches its result once per
-// process, so the synthetic index.html must declare the bundle src the
-// asset test expects.
+// withTestSPAFS swaps spaLoader for a synthetic bundle so handler tests
+// exercise serve logic without depending on a real `npm run build` artifact.
 func withTestSPAFS(t *testing.T) {
 	t.Helper()
-	prev := spaFS
-	spaFS = fstest.MapFS{
+	prev := spaLoader
+	spaLoader = spa.New(fstest.MapFS{
 		"dist/manager/index.html": {Data: []byte(
 			`<!doctype html><html lang="en"><head>` +
 				`<script type="module" crossorigin src="/manager/_app/assets/index-test.js"></script>` +
 				`</head><body><div id="app" data-base=""></div></body></html>`)},
 		"dist/manager/assets/index-test.js": {Data: []byte("console.log(1);")},
-	}
-	t.Cleanup(func() {
-		spaFS = prev
-		assetURLOnce = sync.Once{}
-		assetURL = ""
-	})
-	assetURLOnce = sync.Once{}
-	assetURL = ""
+	}, "internal/manager")
+	t.Cleanup(func() { spaLoader = prev })
 }
 
 func TestServeSPAShellRendersHostChrome(t *testing.T) {
@@ -81,17 +70,11 @@ func TestServeSPAShellInheritsThemeFromContext(t *testing.T) {
 }
 
 func TestServeSPAShellFallbackWhenBundleMissing(t *testing.T) {
-	prev := spaFS
-	spaFS = fstest.MapFS{} // no dist/manager → empty asset URL
-	assetURLOnce = sync.Once{}
-	assetURL = ""
-	t.Cleanup(func() {
-		spaFS = prev
-		assetURLOnce = sync.Once{}
-		assetURL = ""
-	})
-	h := &Handler{}
+	prev := spaLoader
+	spaLoader = spa.New(fstest.MapFS{}, "internal/manager")
+	t.Cleanup(func() { spaLoader = prev })
 
+	h := &Handler{}
 	req := httptest.NewRequest(http.MethodGet, "/manager", nil)
 	rec := httptest.NewRecorder()
 	h.serveSPAShell(rec, req)

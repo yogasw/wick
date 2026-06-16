@@ -87,10 +87,14 @@
     }
   }
 
-  function statusChip(row: ConnectorRow): { label: string; cls: string; dot: string } {
-    if (row.disabled) return { label: "Disabled", cls: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600", dot: "bg-black-700" };
-    if (row.status === "needs_setup") return { label: "Needs setup", cls: "bg-prog-100 text-prog-400", dot: "bg-prog-400" };
-    return { label: "Published", cls: "bg-pos-100 text-pos-400", dot: "bg-pos-400" };
+  function statusChip(row: ConnectorRow): { label: string; cls: string } {
+    if (row.disabled) {
+      return { label: "Disabled", cls: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600" };
+    }
+    if (row.status === "needs_setup") {
+      return { label: "Needs setup", cls: "bg-prog-100 text-prog-400" };
+    }
+    return { label: "Published", cls: "bg-pos-100 text-pos-400" };
   }
 
   let rows = $derived(data?.rows ?? []);
@@ -118,7 +122,7 @@
         <span class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-navy-700 dark:bg-navy-700 text-base" aria-hidden="true">{data.icon || "🔌"}</span>
         <div class="min-w-0 flex-1 overflow-hidden">
           <div class="flex flex-wrap items-center gap-2">
-            <h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{data.name}</h1>
+            <h1 class="text-lg font-bold text-black-900 dark:text-white-100">{data.name}</h1>
             {#if data.custom}
               <span class="flex-shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-green-500 border border-green-600/40 bg-green-900/20">Custom</span>
             {/if}
@@ -129,12 +133,21 @@
           <p class="mt-1 text-xs text-black-700 dark:text-black-600">{data.op_count} operation(s) · {rows.length} row(s)</p>
         </div>
       </div>
-      <div class="flex flex-shrink-0 items-start gap-2">
+      <div class="flex flex-shrink-0 items-center gap-2 pt-1">
         {#if data.custom && data.def_id}
-          <Button variant="secondary" onclick={() => push(`/custom/${encodeURIComponent(data!.def_id!)}/edit`)}>Edit definition</Button>
+          <button
+            type="button"
+            onclick={() => push(`/custom/${encodeURIComponent(data!.def_id!)}/edit`)}
+            class="whitespace-nowrap rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
+          >Edit definition</button>
         {/if}
         {#if !data.fixed}
-          <Button disabled={busy} onclick={newRow}>+ New row</Button>
+          <button
+            type="button"
+            disabled={busy}
+            onclick={newRow}
+            class="whitespace-nowrap rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+          >+ New row</button>
         {/if}
       </div>
     </div>
@@ -168,7 +181,7 @@
                       </span>
                     {/each}
                   {/if}
-                  <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium {chip.cls}"><span class="h-1.5 w-1.5 rounded-full {chip.dot}"></span>{chip.label}</span>
+                  <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {chip.cls}">{chip.label}</span>
                   <Button variant="ghost" size="sm" onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}/history`)}>History</Button>
                   <Button variant="ghost" size="sm" onclick={() => toggleDisabled(row)}>{row.disabled ? "Enable" : "Disable"}</Button>
                   {#if !data.fixed}
