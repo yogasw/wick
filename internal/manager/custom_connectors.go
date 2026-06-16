@@ -152,6 +152,25 @@ func (h *Handler) customDefInfo(ctx context.Context, key string, user *entity.Us
 	return info
 }
 
+// connectorNeedsReload reports whether the custom definition behind connector
+// `key` has been edited since the live module was last built (drives the
+// "Definition updated — Reload" banner). Independent of mutate rights so the
+// banner shows to any viewer; reload itself is open to any caller.
+func (h *Handler) connectorNeedsReload(ctx context.Context, key string) bool {
+	if h.custom == nil {
+		return false
+	}
+	defID, ok := h.custom.DefIDForKey(key)
+	if !ok {
+		return false
+	}
+	def, err := h.custom.Store().GetDef(ctx, defID)
+	if err != nil || def == nil {
+		return false
+	}
+	return h.custom.IsDirty(def)
+}
+
 // customSSOClaims builds the caller identity forwarded to MCP servers
 // using the sso auth scheme from the session user.
 func customSSOClaims(r *http.Request) *customconn.SSOClaims {

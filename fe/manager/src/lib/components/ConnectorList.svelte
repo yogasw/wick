@@ -8,6 +8,7 @@
     toggleConnectorDisabled,
     duplicateConnectorRow,
     deleteConnectorRow,
+    reloadConnector,
   } from "$lib/api.js";
   import type { ConnectorList, ConnectorRow } from "$lib/types.js";
   import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
@@ -20,6 +21,7 @@
   let error = $state("");
   let busy = $state(false);
   let confirmRow = $state<ConnectorRow | null>(null);
+  let reloadBusy = $state(false);
 
   async function load(silent = false) {
     if (!silent) loading = true;
@@ -87,6 +89,20 @@
     }
   }
 
+  async function reloadDef() {
+    if (reloadBusy) return;
+    reloadBusy = true;
+    try {
+      await reloadConnector(connectorKey);
+      toastOk("Definition reloaded");
+      await load(true);
+    } catch (e) {
+      toastError("Reload failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      reloadBusy = false;
+    }
+  }
+
   function statusChip(row: ConnectorRow): { label: string; cls: string } {
     if (row.disabled) {
       return { label: "Disabled", cls: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600" };
@@ -115,6 +131,12 @@
   <div class="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">{error}</div>
 {:else if data}
   <div class="space-y-6">
+    {#if data.needs_reload}
+      <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cau-400 bg-cau-100 px-4 py-3 text-sm text-cau-400">
+        <span class="font-medium">Definition updated — reload to apply the latest changes.</span>
+        <Button size="sm" disabled={reloadBusy} onclick={reloadDef}>{reloadBusy ? "Reloading…" : "Reload"}</Button>
+      </div>
+    {/if}
     <div class="flex items-start gap-4">
 
       <!-- LEFT: icon + name + description -->

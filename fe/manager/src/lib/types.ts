@@ -35,6 +35,7 @@ export interface ConnectorList {
   custom: boolean;
   custom_source?: string;
   def_id?: string;
+  needs_reload?: boolean;
   rows: ConnectorRow[] | null;
 }
 
