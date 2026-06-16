@@ -159,8 +159,8 @@ Access rides the standard tag system — there is no separate sharing mechanism.
 Editing a definition does **not** affect the running connector:
 
 1. **Edit** the definition — fields, inputs, templates, operations. The key is immutable.
-2. The instance page shows a **needs reload** banner: the stored definition is now newer than the module currently serving. In-flight and new calls keep using the old definition.
-3. Click **Reload** — wick rebuilds the module from the stored row and swaps it atomically. No restart, no downtime; in-flight calls finish on the old version.
+2. The connector page shows a **"Definition updated — reload to apply the latest changes"** banner: the stored definition is now newer than the module currently serving. In-flight and new calls keep using the old definition. The banner is visible to any authenticated viewer, independent of edit rights.
+3. Click **Reload** in the banner — wick rebuilds the module from the stored row and swaps it atomically. No restart, no downtime; in-flight calls finish on the old version.
 
 **Status (MCP definitions):** the connector page shows a connection chip — **● Connected** after a successful probe, **● Disconnected** after a failed one. The status refreshes on every module rebuild (boot, **↻ Re-sync tools**, server-form save), so it stays Connected until a re-sync, reconnect, or disable says otherwise. cURL/manual definitions have no connection to track and show no chip.
 
