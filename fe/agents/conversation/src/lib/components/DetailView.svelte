@@ -295,7 +295,7 @@
 
     function onScroll() {
       const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      userScrolledUp = distFromBottom > 80;
+      userScrolledUp = distFromBottom > 5; // arbitrary threshold to avoid flickering
       showJumpBtn = userScrolledUp;
     }
 
@@ -606,7 +606,7 @@
             <kbd class="rounded border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1 text-[10px] font-mono text-black-600 dark:text-black-700">Ctrl+↓</kbd>
           </button>
         {/if}
-        <div class="max-w-4xl mx-auto">
+        <div class="max-w-4xl mx-auto pb-6">
           {#snippet toolbarLeading()}
             <ComposerToolbar
               providers={providerOptions}
