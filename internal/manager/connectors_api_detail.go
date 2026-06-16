@@ -35,6 +35,8 @@ type connectorListJSON struct {
 	OpCount     int                `json:"op_count"`
 	Custom      bool               `json:"custom"`
 	DefID       string             `json:"def_id,omitempty"`
+	MCP         bool               `json:"mcp"`
+	MCPStatus   string             `json:"mcp_status,omitempty"`
 	NeedsReload bool               `json:"needs_reload"`
 	Rows        []connectorRowJSON `json:"rows"`
 }
@@ -145,6 +147,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 	if customInfo != nil {
 		defID = customInfo.DefID
 	}
+	mcp, mcpStatus := h.mcpConnectorInfo(ctx, key)
 	out := connectorListJSON{
 		Key:         mod.Meta.Key,
 		Name:        mod.Meta.Name,
@@ -154,6 +157,8 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		OpCount:     len(mod.Operations),
 		Custom:      customInfo != nil,
 		DefID:       defID,
+		MCP:         mcp,
+		MCPStatus:   mcpStatus,
 		NeedsReload: h.connectorNeedsReload(ctx, key),
 		Rows:        make([]connectorRowJSON, 0, len(rows)),
 	}

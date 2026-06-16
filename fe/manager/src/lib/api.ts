@@ -106,6 +106,10 @@ export async function runHealthCheck(key: string, id: string): Promise<HealthChe
   return apiPost<HealthCheckResult>(`${rowBase(key, id)}/health-check`);
 }
 
+export async function resyncMcpTools(key: string): Promise<{ ok: boolean; operations: number }> {
+  return apiPost<{ ok: boolean; operations: number }>(`${connBase(key)}/resync-tools`);
+}
+
 /* Per-row admin controls (Phase 7a). Each POSTs JSON to a /manager/api
    twin of the legacy templ form-post route, reusing the same services +
    permission gates server-side. */

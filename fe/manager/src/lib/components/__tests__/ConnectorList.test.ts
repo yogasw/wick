@@ -166,4 +166,27 @@ describe("ConnectorList", () => {
     await screen.findByText("Slack");
     expect(screen.queryByText(/Definition updated/)).toBeNull();
   });
+
+  it("shows the Re-sync tools button and connection chip for a custom MCP connector", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true, mcp: true, mcp_status: "connected" }));
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Slack");
+    expect(screen.getByRole("button", { name: "Re-sync tools" })).toBeTruthy();
+    expect(screen.getByText("Connected")).toBeTruthy();
+  });
+
+  it("re-syncs MCP tools through the per-connector endpoint", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true, mcp: true, mcp_status: "disconnected" }));
+    vi.mocked(api.resyncMcpTools).mockResolvedValue({ ok: true, operations: 9 });
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Slack");
+    await fireEvent.click(screen.getByRole("button", { name: "Re-sync tools" }));
+    await waitFor(() => expect(api.resyncMcpTools).toHaveBeenCalledWith("slack"));
+  });
+
+  it("hides the Re-sync tools button for a non-MCP connector", async () => {
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Slack");
+    expect(screen.queryByRole("button", { name: "Re-sync tools" })).toBeNull();
+  });
 });
