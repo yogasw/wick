@@ -162,6 +162,10 @@ describe("AppShell breadcrumb", () => {
     expect(b.textContent).toContain("Home");
     expect(b.textContent).toContain("Google Workspace");
     expect(b.textContent).toContain("Test");
+    /* Four items (Home / name / label / Test) render three separators. */
+    expect(b.querySelectorAll("span[aria-hidden='true']")).toHaveLength(3);
+    /* The current item (Test) is plain text, not a link. */
+    expect(screen.queryByRole("button", { name: "Test" })).toBeNull();
   });
 
   it("connector history shows Home / <name> / <label> / History", async () => {
