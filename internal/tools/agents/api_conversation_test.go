@@ -22,57 +22,17 @@ func makeSession(id, projectID, userID string) session.Session {
 	}
 }
 
-/* ── callerCanSeeSession ─────────────────────────────────────────────── */
-
-func TestCallerCanSeeSession(t *testing.T) {
-	cases := []struct {
-		name   string
-		caller *entity.User
-		meta   session.Meta
-		want   bool
-	}{
-		{
-			name:   "nil caller (unauthenticated) sees everything",
-			caller: nil,
-			meta:   session.Meta{UserID: "u1"},
-			want:   true,
-		},
-		{
-			name:   "owner user sees all sessions",
-			caller: makeUser("admin", true),
-			meta:   session.Meta{UserID: "u1"},
-			want:   true,
-		},
-		{
-			name:   "non-admin sees own session",
-			caller: makeUser("u1", false),
-			meta:   session.Meta{UserID: "u1"},
-			want:   true,
-		},
-		{
-			name:   "non-admin sees ownerless session",
-			caller: makeUser("u1", false),
-			meta:   session.Meta{UserID: ""},
-			want:   true,
-		},
-		{
-			name:   "non-admin cannot see another user's session",
-			caller: makeUser("u1", false),
-			meta:   session.Meta{UserID: "u2"},
-			want:   false,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := callerCanSeeSession(tc.caller, tc.meta)
-			if got != tc.want {
-				t.Errorf("callerCanSeeSession = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 /* ── accessibleSessionIDs ────────────────────────────────────────────── */
+
+// access builds a non-admin projectAccess for caller "u1" over the given
+// accessible project IDs.
+func access(projectIDs ...string) projectAccess {
+	set := make(map[string]struct{}, len(projectIDs))
+	for _, id := range projectIDs {
+		set[id] = struct{}{}
+	}
+	return projectAccess{userID: "u1", projects: set}
+}
 
 func TestAccessibleSessionIDs(t *testing.T) {
 	sessions := map[string]session.Session{
@@ -81,62 +41,81 @@ func TestAccessibleSessionIDs(t *testing.T) {
 		"s3": makeSession("s3", "p2", "u1"),
 		"s4": makeSession("s4", "p2", ""),
 		"s5": makeSession("s5", "", "u1"),
+		"s6": makeSession("s6", "", "u2"), // unscoped, another user's
+		"s7": makeSession("s7", "", ""),   // unscoped, ownerless
 	}
-	allIDs := []string{"s1", "s2", "s3", "s4", "s5"}
+	allIDs := []string{"s1", "s2", "s3", "s4", "s5", "s6", "s7"}
 
 	cases := []struct {
 		name   string
 		ids    []string
-		caller *entity.User
+		access projectAccess
 		scoped string
 		want   []string
 	}{
 		{
-			name:   "admin (owner) sees all sessions",
+			name:   "seeAll sees all sessions",
 			ids:    allIDs,
-			caller: makeUser("admin", true),
+			access: projectAccess{seeAll: true},
+			scoped: "",
+			want:   []string{"s1", "s2", "s3", "s4", "s5", "s6", "s7"},
+		},
+		{
+			name:   "unscoped: only own visible; ownerless + another user's hidden",
+			ids:    []string{"s5", "s6", "s7"},
+			access: access(),
+			scoped: "",
+			// s5 own unscoped (visible); s6 another user's; s7 ownerless —
+			// both unscoped-non-own are admin-only, hidden from u1.
+			want: []string{"s5"},
+		},
+		{
+			name:   "non-admin sees accessible-project sessions + own unscoped only",
+			ids:    allIDs,
+			access: access("p1"),
+			scoped: "",
+			// s1,s2 in p1; s5 own unscoped. s7 ownerless unscoped is hidden.
+			want: []string{"s1", "s2", "s5"},
+		},
+		{
+			name:   "non-admin with two accessible projects + own unscoped only",
+			ids:    allIDs,
+			access: access("p1", "p2"),
 			scoped: "",
 			want:   []string{"s1", "s2", "s3", "s4", "s5"},
 		},
 		{
-			name:   "non-admin sees only own + ownerless sessions",
+			name:   "non-admin no project access still sees own unscoped only",
 			ids:    allIDs,
-			caller: makeUser("u1", false),
+			access: access(),
 			scoped: "",
-			want:   []string{"s1", "s3", "s4", "s5"},
+			want:   []string{"s5"},
 		},
 		{
-			name:   "non-admin u2 sees only own + ownerless",
+			name:   "project scoping filters to p1 (seeAll)",
 			ids:    allIDs,
-			caller: makeUser("u2", false),
-			scoped: "",
-			want:   []string{"s2", "s4"},
-		},
-		{
-			name:   "project scoping filters to p1 only (admin)",
-			ids:    allIDs,
-			caller: makeUser("admin", true),
+			access: projectAccess{seeAll: true},
 			scoped: "p1",
 			want:   []string{"s1", "s2"},
 		},
 		{
-			name:   "project scoping + non-admin: p2 sessions owned by u1 or ownerless",
+			name:   "scoped to accessible project shows all its sessions",
 			ids:    allIDs,
-			caller: makeUser("u1", false),
+			access: access("p2"),
 			scoped: "p2",
 			want:   []string{"s3", "s4"},
 		},
 		{
-			name:   "nil caller sees all sessions in project scope",
+			name:   "scoped to inaccessible project shows nothing",
 			ids:    allIDs,
-			caller: nil,
-			scoped: "p1",
-			want:   []string{"s1", "s2"},
+			access: access("p1"),
+			scoped: "p2",
+			want:   []string{},
 		},
 		{
 			name:   "empty ids returns empty",
 			ids:    []string{},
-			caller: makeUser("u1", false),
+			access: access("p1"),
 			scoped: "",
 			want:   []string{},
 		},
@@ -144,7 +123,7 @@ func TestAccessibleSessionIDs(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := accessibleSessionIDs(tc.ids, sessions, tc.caller, tc.scoped)
+			got := accessibleSessionIDs(tc.ids, sessions, tc.access, tc.scoped)
 			if len(got) != len(tc.want) {
 				t.Fatalf("len = %d, want %d; got %v want %v", len(got), len(tc.want), got, tc.want)
 			}

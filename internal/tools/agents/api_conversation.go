@@ -6,10 +6,12 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/session"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
-	"github.com/yogasw/wick/internal/entity"
-	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
+
+// sessionListCap bounds the /api/sessions payload — the list UI shows recent
+// sessions, not the full history, so there's no point shipping all of them.
+const sessionListCap = 50
 
 // SessionListItem is the JSON shape for one session in the /api/sessions list.
 type SessionListItem struct {
@@ -36,29 +38,12 @@ type SessionMetaDTO struct {
 	LastActive  string `json:"last_active"`
 }
 
-// callerCanSeeSession reports whether caller may read the session with the
-// given meta. Mirrors the per-session access rule applied in ownsSession:
-//   - unauthenticated (nil) → visible to all
-//   - owner (CanSeeAllSessions) → sees every session
-//   - regular user → only sessions where UserID == "" or UserID == caller.ID
-func callerCanSeeSession(caller *entity.User, m session.Meta) bool {
-	if caller == nil {
-		return true
-	}
-	if caller.CanSeeAllSessions() {
-		return true
-	}
-	return m.UserID == "" || m.UserID == caller.ID
-}
-
 // accessibleSessionIDs returns the subset of ids whose sessions pass the
-// project scope filter and the caller visibility check. It mirrors the
-// filtering logic in sessionsPage exactly so the JSON endpoints share the
-// same access-control semantics as the templ page.
+// project scope filter and the caller's project-access check. Shares the
+// projectAccess decision so JSON endpoints match the templ sidebar exactly.
 //
 // scoped: when non-empty, only sessions whose Meta.ProjectID == scoped pass.
-// caller: when nil (unauthenticated), all sessions in scope are visible.
-func accessibleSessionIDs(ids []string, sessions map[string]session.Session, caller *entity.User, scoped string) []string {
+func accessibleSessionIDs(ids []string, sessions map[string]session.Session, access projectAccess, scoped string) []string {
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
 		s, ok := sessions[id]
@@ -68,7 +53,7 @@ func accessibleSessionIDs(ids []string, sessions map[string]session.Session, cal
 		if scoped != "" && s.Meta.ProjectID != scoped {
 			continue
 		}
-		if !callerCanSeeSession(caller, s.Meta) {
+		if !access.allowSession(s.Meta.ProjectID, s.Meta.UserID) {
 			continue
 		}
 		out = append(out, id)
@@ -88,9 +73,12 @@ func apiSessionList(c *tool.Ctx) {
 			scoped = ""
 		}
 	}
-	caller := login.GetUser(c.Context())
+	access := callerProjectAccess(c)
 	allSessions := globalMgr.Registry().Sessions()
-	ids := accessibleSessionIDs(globalMgr.Registry().SessionIDs(), allSessions, caller, scoped)
+	ids := accessibleSessionIDs(globalMgr.Registry().SessionIDs(), allSessions, access, scoped)
+	if len(ids) > sessionListCap {
+		ids = ids[:sessionListCap]
+	}
 
 	lcBySession := make(map[string]struct {
 		Lifecycle string
@@ -138,8 +126,7 @@ func apiSessionConversation(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	caller := login.GetUser(c.Context())
-	if !callerCanSeeSession(caller, sess.Meta) {
+	if !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -151,6 +138,7 @@ func apiSessionConversation(c *tool.Ctx) {
 	if turns == nil {
 		turns = []agentstore.ConversationTurn{}
 	}
+	resolveLabelFromTurns(globalLayout, id, turns)
 	c.JSON(http.StatusOK, map[string][]agentstore.ConversationTurn{"turns": turns})
 }
 
@@ -166,8 +154,7 @@ func apiSessionMeta(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	caller := login.GetUser(c.Context())
-	if !callerCanSeeSession(caller, sess.Meta) {
+	if !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}

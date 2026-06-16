@@ -108,6 +108,12 @@ type PoolConfig struct {
 	// this to manager.RefreshSession so the in-memory registry reflects
 	// the new agent before sendMessage resolves agentName.
 	OnAgentAdded func(sessionID string)
+	// OnSessionMeta is called after the pool mutates a session's meta on
+	// disk (e.g. setLabelIfEmpty derives the first-message title). Wire
+	// this to syncSessionMeta so the in-memory registry refreshes and the
+	// new title broadcasts over SSE — otherwise the sidebar/list would
+	// only catch up on the next page load. Optional; nil = no callback.
+	OnSessionMeta func(sessionID string)
 	// OnLifecycle fires when the pool transitions a session+agent's
 	// lifecycle (Spawning, Killed). Idle/Working transitions are
 	// implicit from event flow and are NOT routed here — UIs that
@@ -1072,7 +1078,14 @@ func (p *Pool) setLabelIfEmpty(sessionID, text string) {
 		r = r[:60]
 	}
 	sess.Meta.Label = string(r)
-	_ = session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta)
+	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
+		return
+	}
+	// Refresh the registry + broadcast the new title over SSE so open
+	// sidebars/lists pick it up live instead of on next page load.
+	if p.cfg.OnSessionMeta != nil {
+		p.cfg.OnSessionMeta(sessionID)
+	}
 }
 
 // markStatus updates session meta.Status + LastActive.

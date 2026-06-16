@@ -2,6 +2,8 @@ package tags
 
 import (
 	"context"
+	"strings"
+
 	"github.com/yogasw/wick/internal/entity"
 
 	"gorm.io/gorm"
@@ -117,6 +119,26 @@ func (r *repo) GetTagByNameExact(ctx context.Context, name string) (*entity.Tag,
 		return nil, err
 	}
 	return &t, nil
+}
+
+// OwnedResourceIDs returns the resource IDs from every "owner:<id>" tag the
+// user carries, in a single JOIN query. Used to filter session/project lists
+// by access without an N+1 GetTagByNameExact/UserCarriesTag per resource.
+func (r *repo) OwnedResourceIDs(ctx context.Context, userID string) ([]string, error) {
+	var names []string
+	err := r.db.WithContext(ctx).
+		Model(&entity.Tag{}).
+		Joins("JOIN user_tags ON user_tags.tag_id = tags.id").
+		Where("user_tags.user_id = ? AND tags.name LIKE ?", userID, "owner:%").
+		Pluck("tags.name", &names).Error
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(names))
+	for _, n := range names {
+		ids = append(ids, strings.TrimPrefix(n, "owner:"))
+	}
+	return ids, nil
 }
 
 // UserCarriesTag reports whether the user has the given tag linked via UserTag.
