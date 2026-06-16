@@ -44,6 +44,11 @@ type ClaudeParser struct {
 	// would otherwise see the same text twice — once as live deltas,
 	// once as the final block). Cleared on Done/Error.
 	partialTextEmitted bool
+
+	// partialThinkingEmitted tracks whether any thinking_delta has been
+	// streamed in the current turn. When true, the trailing `assistant`
+	// frame's thinking block is suppressed — same dedup logic as text.
+	partialThinkingEmitted bool
 }
 
 // NewClaudeParser returns a fresh parser ready to consume Claude
@@ -186,6 +191,7 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 				return AgentEvent{Type: Unknown, Raw: trimmed}, nil
 			}
 			log.Debug().Int("len", len(raw.Event.Delta.Thinking)).Msg("claude.parse: stream thinking_delta")
+			p.partialThinkingEmitted = true
 			return AgentEvent{
 				Type: Thinking,
 				Text: raw.Event.Delta.Thinking,
@@ -218,7 +224,7 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 				if b.Thinking != "" {
 					// Suppress when stream_event thinking_delta already
 					// streamed this text; otherwise emit as one block.
-					if p.partialTextEmitted {
+					if p.partialThinkingEmitted {
 						return AgentEvent{Type: Unknown, Raw: trimmed}, nil
 					}
 					return AgentEvent{
@@ -284,6 +290,7 @@ func (p *ClaudeParser) Parse(line string) (AgentEvent, error) {
 		// frame is treated fresh (we may not get stream_event deltas
 		// for short replies — claude can batch them).
 		p.partialTextEmitted = false
+		p.partialThinkingEmitted = false
 		if raw.IsError {
 			// error_during_execution puts the detail on stderr, leaving
 			// .result empty — fall back to subtype so the error isn't blank.

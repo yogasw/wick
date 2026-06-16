@@ -1199,6 +1199,24 @@ func sessionProcesses(c *tool.Ctx) {
 			})
 		}
 	}
+	// Fallback: when no active/queued process exists (session idle),
+	// surface agents from agents.json so the UI can still show
+	// provider/agent name in the composer toolbar.
+	if len(out) == 0 {
+		if sess, ok := globalMgr.Registry().Session(id); ok {
+			for _, a := range sess.Agents {
+				prov := a.Provider
+				out = append(out, procEntry{
+					SessionID: id,
+					AgentName: a.Name,
+					Provider:  prov,
+					PID:       0,
+					Lifecycle: string(a.Status),
+					Alive:     false,
+				})
+			}
+		}
+	}
 	if out == nil {
 		out = []procEntry{}
 	}

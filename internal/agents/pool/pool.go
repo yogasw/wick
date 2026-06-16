@@ -121,11 +121,13 @@ type PoolConfig struct {
 // online, or a subprocess dying. PID is populated for spawning →
 // working; 0 for killed.
 type LifecycleEvent struct {
-	SessionID string
-	AgentName string
-	Lifecycle string // "spawning" | "killed"
-	PID       int
-	At        time.Time
+	SessionID    string
+	AgentName    string
+	Lifecycle    string // "spawning" | "killed"
+	PID          int
+	At           time.Time
+	ProviderType string
+	ProviderName string
 	// Ctx is the spawn-time context from the originating Send. Carries
 	// the zerolog logger the HTTP middleware attached, so callbacks
 	// can `log.Ctx(ev.Ctx)` and recover the request_id. Never nil —
@@ -374,6 +376,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	entry, alive := p.active[key]
 	p.mu.Unlock()
 
+	turnPersisted := false
 	if alive {
 		log.Ctx(ctx).Debug().
 			Str("component", "pool").
@@ -387,6 +390,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		// Active agent — append to conversation log + send straight.
 		if entry.store != nil {
 			_ = entry.store.AppendUserTurnWithAttachments(role, source, text, atts)
+			turnPersisted = true
 		}
 		if role == "user" {
 			p.setLabelIfEmpty(sessionID, text)
@@ -397,7 +401,21 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		// to the agent's pending queue, which fires no lifecycle event on
 		// its own.
 		p.notifyLifecycle(ctx, entry, sessionID, agentName)
-		return err
+		if err != nil && err.Error() == "agent not running" {
+			// Race: subprocess exited between the active-map lookup and
+			// Send — onAgentExit hasn't released the slot yet. Evict the
+			// stale entry and fall through to the buffer+spawn path so
+			// the message isn't lost.
+			log.Ctx(ctx).Warn().
+				Str("component", "pool").
+				Str("session", sessionID).
+				Str("agent", agentName).
+				Msg("pool.send: stale active entry (race), evicting and respawning")
+			p.releaseSlot(key)
+			alive = false
+		} else {
+			return err
+		}
 	}
 	log.Ctx(ctx).Debug().
 		Str("component", "pool").
@@ -434,7 +452,9 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// refresh while the session is buffered (queued or mid-spawn) still
 	// shows the messages — they previously only lived in PendingInput.
 	// We build a transient Store because no entry.store exists yet.
-	p.persistBufferedTurn(sessionID, agentName, role, source, text, atts)
+	if !turnPersisted {
+		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts)
+	}
 
 	// Resolve the provider for this session so the slot check can enforce
 	// the per-provider cap alongside the global one.
@@ -648,12 +668,14 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	if p.cfg.OnLifecycle != nil {
 		st.SetLifecycleHook(func(from, to state.Lifecycle) {
 			p.cfg.OnLifecycle(LifecycleEvent{
-				SessionID: sessionID,
-				AgentName: agentName,
-				Lifecycle: to.String(),
-				Ctx:       ctx,
-				PID:       a.PID(),
-				At:        time.Now().UTC(),
+				SessionID:    sessionID,
+				AgentName:    agentName,
+				Lifecycle:    to.String(),
+				Ctx:          ctx,
+				PID:          a.PID(),
+				At:           time.Now().UTC(),
+				ProviderType: pType,
+				ProviderName: pName,
 			})
 		})
 	}
@@ -694,6 +716,16 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	l.Debug().
 		Int("pid", a.PID()).
 		Msg("pool.spawn: subprocess started")
+	// Persist active agent so /api/sessions/{id}/meta returns it even
+	// after the subprocess exits (idle session still shows provider label).
+	label := pType
+	if pName != "" && pName != pType {
+		label = pName + " " + pType
+	}
+	if label == "" {
+		label = agentName
+	}
+	_ = session.SetActiveAgent(p.cfg.Layout, sessionID, label)
 	// Spawn metadata (pid + first user message) is only knowable here:
 	// pid arrives from a.Start, first message from the buffer drain.
 	if br.OnStarted != nil {
@@ -706,12 +738,14 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	}
 	if p.cfg.OnLifecycle != nil {
 		p.cfg.OnLifecycle(LifecycleEvent{
-			SessionID: sessionID,
-			AgentName: agentName,
-			Lifecycle: "spawning",
-			Ctx:       ctx,
-			PID:       a.PID(),
-			At:        time.Now().UTC(),
+			SessionID:    sessionID,
+			AgentName:    agentName,
+			Lifecycle:    "spawning",
+			Ctx:          ctx,
+			PID:          a.PID(),
+			At:           time.Now().UTC(),
+			ProviderType: pType,
+			ProviderName: pName,
 		})
 	}
 	if combined != "" {
@@ -778,12 +812,14 @@ func (p *Pool) notifyLifecycle(ctx context.Context, entry *runEntry, sessionID, 
 		return
 	}
 	p.cfg.OnLifecycle(LifecycleEvent{
-		SessionID: sessionID,
-		AgentName: agentName,
-		Lifecycle: entry.state.Lifecycle().String(),
-		Ctx:       ctx,
-		PID:       entry.agent.PID(),
-		At:        time.Now().UTC(),
+		SessionID:    sessionID,
+		AgentName:    agentName,
+		Lifecycle:    entry.state.Lifecycle().String(),
+		Ctx:          ctx,
+		PID:          entry.agent.PID(),
+		At:           time.Now().UTC(),
+		ProviderType: entry.provType,
+		ProviderName: entry.provName,
 	})
 }
 
@@ -1072,6 +1108,20 @@ func (p *Pool) Stop() {
 		_ = e.agent.Stop()
 	}
 	p.wg.Wait()
+	// wg only tracks background goroutines (tryGrantQueue, onAgentExit).
+	// onAgentExit calls wg.Add *after* the agent reader goroutine fires,
+	// so there is a window where wg reaches 0 before the last onAgentExit
+	// has run releaseSlot. Poll until p.active is empty — each iteration
+	// sleeps 1 ms; total wait is bounded by the number of exiting agents.
+	for {
+		p.mu.Lock()
+		n := len(p.active)
+		p.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // Active returns the number of running agents.

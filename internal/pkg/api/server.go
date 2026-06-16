@@ -598,7 +598,11 @@ func NewServer() *Server {
 				Str("lifecycle", ev.Lifecycle).
 				Int("pid", ev.PID).
 				Msg("lifecycle: broadcasting to SSE")
-			agentsBcast.PublishLifecycle(ev.Ctx, ev.SessionID, ev.AgentName, ev.Lifecycle, ev.PID)
+			prov := ev.ProviderType
+			if ev.ProviderName != "" && ev.ProviderName != ev.ProviderType {
+				prov = ev.ProviderType + "/" + ev.ProviderName
+			}
+			agentsBcast.PublishLifecycle(ev.Ctx, ev.SessionID, ev.AgentName, ev.Lifecycle, prov, ev.PID)
 			// Broadcast updated pool stats to Providers page global
 			// subscribers. MUST run async: this hook can fire while the
 			// pool already holds p.mu (e.g. onAgentExit → MarkKilled →

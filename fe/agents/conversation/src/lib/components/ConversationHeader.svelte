@@ -111,6 +111,16 @@
           : "",
   );
 
+  // Split agentLabel into instance name + provider type for two-tone display
+  // Format: "Wick claude" → instance="Wick", type="claude"
+  // Format: "claude" → instance="", type="claude"
+  const agentParts = $derived(() => {
+    if (!agentLabel) return { instance: "", type: "" };
+    const parts = agentLabel.split(" ");
+    if (parts.length >= 2) return { instance: parts[0], type: parts.slice(1).join(" ") };
+    return { instance: "", type: agentLabel };
+  });
+
   /* idle countdown state */
   let idleEnteredAt = $state(0);
   let countdownText = $state("");
@@ -135,40 +145,39 @@
   });
 </script>
 
-<div
-  class="relative z-30 shrink-0 flex flex-wrap items-center justify-between gap-2 pl-2 pr-2 md:px-4 py-2 bg-white-100/80 dark:bg-navy-800/80 backdrop-blur-sm border-b border-white-300 dark:border-navy-600"
->
-  <!-- Left: tab dropdown burger + title + agent label -->
-  <div class="flex items-center gap-2 min-w-0 flex-1">
-    <!-- Tab dropdown -->
-    <div class="shrink-0">
-      <button
-        bind:this={buttonEl}
-        type="button"
-        aria-label="Tab menu"
-        onclick={toggleTabMenu}
-        class="inline-flex items-center gap-1.5 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-700 px-2.5 py-1.5 text-xs font-medium text-black-800 dark:text-black-300 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
-      >
-        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-          <path d="M2 4h12M2 8h12M2 12h12" stroke-linecap="round"></path>
-        </svg>
-        <span>{TAB_LABELS[activeView]}</span>
-        <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-          <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"></path>
-        </svg>
-      </button>
-    </div>
+<!-- Absolute floating transparent bar — same pattern as release -->
+<div class="absolute top-0 left-0 right-0 z-20 flex flex-wrap items-center justify-between gap-2 pl-12 pr-2 md:px-4 py-2">
 
-    <span class="font-semibold text-sm text-black-900 dark:text-white-100 truncate">{title}</span>
-    {#if agentLabel}
-      <span class="hidden md:inline text-xs text-black-600 dark:text-black-700 shrink-0"
-        >{agentLabel}</span
-      >
-    {/if}
+  <!-- Left: tab dropdown only -->
+  <div class="shrink-0">
+    <button
+      bind:this={buttonEl}
+      type="button"
+      aria-label="Tab menu"
+      onclick={toggleTabMenu}
+      class="inline-flex items-center gap-1.5 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-1.5 text-xs font-medium text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors"
+    >
+      <svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <path d="M1 3h10M1 6h10M1 9h6" stroke-linecap="round"></path>
+      </svg>
+      {TAB_LABELS[activeView]}
+      <svg viewBox="0 0 12 12" class="h-3 w-3 opacity-50" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <path d="M3 4.5l3 3 3-3" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+    </button>
   </div>
 
-  <!-- Right: lifecycle + SSE status + Kill + Delete -->
+  <!-- Right: instance + provider + lifecycle + sse + kill + delete -->
   <div class="flex items-center gap-2 shrink-0">
+    {#if agentLabel}
+      {#if agentParts().instance}
+        <span class="hidden md:inline text-xs font-medium text-black-700 dark:text-black-600">{agentParts().instance}</span>
+        <span class="hidden md:inline text-xs text-black-500 dark:text-black-600">{agentParts().type}</span>
+      {:else}
+        <span class="hidden md:inline text-xs text-black-500 dark:text-black-600">{agentParts().type}</span>
+      {/if}
+    {/if}
+
     {#if lcVisible}
       <span
         data-lifecycle-badge
@@ -178,11 +187,11 @@
         ].join(" ")}
       >
         {#if lifecycle?.state === "spawning" || lifecycle?.state === "working"}
-          <svg viewBox="0 0 8 8" class="h-1.5 w-1.5 animate-pulse" fill="currentColor">
+          <svg viewBox="0 0 8 8" class="h-1.5 w-1.5 animate-pulse" fill="currentColor" aria-hidden="true">
             <circle cx="4" cy="4" r="3"></circle>
           </svg>
         {:else}
-          <svg viewBox="0 0 8 8" class="h-1.5 w-1.5" fill="currentColor">
+          <svg viewBox="0 0 8 8" class="h-1.5 w-1.5" fill="currentColor" aria-hidden="true">
             <circle cx="4" cy="4" r="3"></circle>
           </svg>
         {/if}
@@ -192,6 +201,7 @@
         {/if}
       </span>
     {/if}
+
     <span
       class={[
         "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
@@ -199,17 +209,11 @@
       ].join(" ")}
     >
       {#if sseStatus === "connecting"}
-        <svg
-          viewBox="0 0 16 16"
-          class="h-2.5 w-2.5 animate-spin"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-        >
+        <svg viewBox="0 0 16 16" class="h-2.5 w-2.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
           <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
         </svg>
       {:else}
-        <svg viewBox="0 0 8 8" class="h-1.5 w-1.5" fill="currentColor">
+        <svg viewBox="0 0 8 8" class="h-1.5 w-1.5" fill="currentColor" aria-hidden="true">
           <circle cx="4" cy="4" r="3"></circle>
         </svg>
       {/if}
@@ -222,13 +226,7 @@
       onclick={onKill}
       class="inline-flex items-center gap-1.5 rounded-lg border border-cau-400 dark:border-cau-600 px-2 md:px-3 py-1.5 text-xs font-medium text-cau-600 dark:text-cau-400 hover:bg-cau-50 dark:hover:bg-cau-900/20 transition-colors"
     >
-      <svg
-        viewBox="0 0 12 12"
-        class="h-3 w-3"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.5"
-      >
+      <svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
         <circle cx="6" cy="6" r="4.5"></circle>
         <path d="M4 4l4 4M8 4L4 8" stroke-linecap="round"></path>
       </svg>
@@ -241,18 +239,8 @@
       onclick={onDelete}
       class="inline-flex items-center gap-1.5 rounded-lg border border-neg-300 dark:border-neg-700 px-2 md:px-3 py-1.5 text-xs font-medium text-neg-600 dark:text-neg-400 hover:bg-neg-50 dark:hover:bg-neg-900/20 transition-colors"
     >
-      <svg
-        viewBox="0 0 12 12"
-        class="h-3 w-3"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.5"
-      >
-        <path
-          d="M2 3h8M4 3V2h4v1M5 5.5v3M7 5.5v3M3 3l.5 7h5L9 3"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        ></path>
+      <svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <path d="M2 3h8M4 3V2h4v1M5 5.5v3M7 5.5v3M3 3l.5 7h5L9 3" stroke-linecap="round" stroke-linejoin="round"></path>
       </svg>
       <span class="hidden md:inline">Delete</span>
     </button>
@@ -262,27 +250,21 @@
 {#if tabMenuOpen}
   <div
     data-tab-dropdown
-    class="fixed z-[1000] min-w-[160px] rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1"
+    class="fixed z-[1000] min-w-[140px] rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg py-1"
     style="top:{menuPos.top}px; left:{menuPos.left}px;"
   >
     {#each TAB_ORDER as tab}
       <button
         type="button"
-        aria-label={TAB_LABELS[tab]}
         onclick={() => selectTab(tab)}
         class={[
-          "w-full text-left px-3 py-2 text-xs transition-colors flex items-center justify-between gap-2",
+          "w-full text-left block px-3 py-2 text-xs transition-colors",
           activeView === tab
-            ? "text-green-700 dark:text-green-400 font-medium bg-green-50 dark:bg-green-900/20"
-            : "text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700",
+            ? "text-green-600 dark:text-green-400 font-medium bg-green-50 dark:bg-green-900/20"
+            : "text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-800",
         ].join(" ")}
       >
         {TAB_LABELS[tab]}
-        {#if activeView === tab}
-          <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0 text-green-500" fill="currentColor" aria-hidden="true">
-            <path d="M2 6.5L5 9.5L10 3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
-          </svg>
-        {/if}
       </button>
     {/each}
   </div>
