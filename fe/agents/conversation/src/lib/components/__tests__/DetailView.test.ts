@@ -118,7 +118,7 @@ vi.mock("svelte/store", async (importActual) => {
 });
 
 import DetailView from "../DetailView.svelte";
-import { killProcess } from "../../api/processes.js";
+import { killProcess, getProcesses } from "../../api/processes.js";
 import { getAsks } from "../../api/asks.js";
 
 const DEFAULT_PROPS = {
@@ -469,5 +469,29 @@ describe("DetailView — pending ask rehydration on load (G3)", () => {
   test("getAsks is called on mount to rehydrate any pending ask", () => {
     render(DetailView, { props: DEFAULT_PROPS });
     expect(getAsks).toHaveBeenCalledWith("/api", "test-sess");
+  });
+});
+
+describe("DetailView — process list polling (G4)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("loadProcesses polls again after 5s", () => {
+    vi.useFakeTimers();
+    try {
+      render(DetailView, { props: DEFAULT_PROPS });
+      expect(getProcesses).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(5000);
+      expect(getProcesses).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

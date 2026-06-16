@@ -139,6 +139,8 @@
   /* ── process panel state ──────────────────────────────────────── */
   let processes = $state<ProcessInfo[]>([]);
   let confirmKill = $state<{ sid: string; queued: boolean } | null>(null);
+  let processPollId: ReturnType<typeof setInterval> | null = null;
+  const PROCESS_POLL_MS = 5000;
 
   /* ── workspace panel state ────────────────────────────────────── */
   let wsInstances = $state<WsInstance[]>([]);
@@ -579,9 +581,20 @@
     loadProviderOptions();
     loadProjectOptions();
     loadPendingAsk();
+
+    if (typeof setInterval !== "undefined") {
+      processPollId = setInterval(() => {
+        if (typeof document !== "undefined" && document.hidden) return;
+        loadProcesses();
+      }, PROCESS_POLL_MS);
+    }
   });
 
   onDestroy(() => {
+    if (processPollId !== null) {
+      clearInterval(processPollId);
+      processPollId = null;
+    }
     closeSSE?.();
     unsubTurns();
     unsubLive();
