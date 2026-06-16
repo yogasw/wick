@@ -217,9 +217,9 @@
 
         {#if data.total_pages > 1}
           <nav class="mt-3 flex items-center justify-center gap-1 text-xs">
-            <Button variant="secondary" size="sm" disabled={data.page <= 1} onclick={() => gotoPage(data.page - 1)}>← Prev</Button>
+            <Button variant="secondary" size="sm" disabled={data.page <= 1} onclick={() => gotoPage(data!.page - 1)}>← Prev</Button>
             <span class="px-3 py-1.5 text-black-800 dark:text-black-600">Page {data.page} of {data.total_pages}</span>
-            <Button variant="secondary" size="sm" disabled={data.page >= data.total_pages} onclick={() => gotoPage(data.page + 1)}>Next →</Button>
+            <Button variant="secondary" size="sm" disabled={data.page >= data.total_pages} onclick={() => gotoPage(data!.page + 1)}>Next →</Button>
           </nav>
         {/if}
       </section>

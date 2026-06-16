@@ -135,7 +135,7 @@
         {#if data.custom && data.def_id}
           <button
             type="button"
-            onclick={() => push(`/custom/${encodeURIComponent(data.def_id!)}/edit`)}
+            onclick={() => push(`/custom/${encodeURIComponent(data!.def_id!)}/edit`)}
             class="inline-flex items-center rounded-lg border border-white-300 dark:border-navy-600 bg-transparent px-3 py-2 text-sm font-semibold text-black-800 dark:text-white-100 hover:border-green-400 hover:text-green-600 transition-colors leading-tight text-center"
           >Edit<br/>definition</button>
         {/if}
