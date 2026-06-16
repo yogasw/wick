@@ -106,7 +106,9 @@ Stock open-source MCP servers do not validate `X-Wick-User` — the `sso` scheme
 2. Optionally tick tools to exclude, then save. The connector exists immediately — you land on its page, where **+ New row** creates the first instance.
 3. Each exposed tool is one operation. Its JSON `inputSchema` is mapped to wick widgets (strings → text, enums → dropdown, numbers → number, booleans → checkbox, objects/arrays → raw-JSON textarea, password-ish fields → secret). Tools named `delete_*`, `remove_*`, `drop_*`, etc. are flagged **Destructive** (disabled by default per instance, like any destructive operation).
 
-**Keeping it in sync:** the operation set mirrors the server's live `tools/list` at every module build (boot, save, re-sync) — the catalog is never cached. To pick up tools added or removed upstream, click **↻ Re-sync tools** on the connector page; to reconnect or change auth/exclusions, open **Edit definition** (it leads to the server form), run **Test now**, and save — the module rebuilds atomically on save. Credential edits apply to calls immediately either way, because the server row is re-read on every execution. Deleting the connector definition also removes the server registration.
+**Keeping it in sync:** the operation set mirrors the server's live `tools/list` at every module build (boot, save, re-sync) — the catalog is never cached. To pick up tools added or removed upstream, click **↻ Re-sync tools** on the connector's page. The operation set is connector-level (shared by every instance), so this is a single per-connector action available to any user who can open the connector. It re-fetches `tools/list` (using a connected account for `oauth` servers) and refreshes the stored connection status.
+
+To reconnect or change auth/exclusions, open **Edit definition** (it leads to the server form), run **Test now**, and save — the module rebuilds atomically on save. Credential edits apply to calls immediately either way, because the server row is re-read on every execution. Deleting the connector definition also removes the server registration.
 
 ### Flow 3 — manual builder
 
@@ -162,7 +164,7 @@ Editing a definition does **not** affect the running connector:
 2. The instance page shows a **needs reload** banner: the stored definition is now newer than the module currently serving. In-flight and new calls keep using the old definition.
 3. Click **Reload** — wick rebuilds the module from the stored row and swaps it atomically. No restart, no downtime; in-flight calls finish on the old version.
 
-**Status (MCP definitions):** the connector page shows a connection chip — **● Connected** after a successful probe, **● Disconnected** after a failed one. The status refreshes on every module rebuild (boot, **↻ Re-sync tools**, server-form save), so it stays Connected until a re-sync, reconnect, or disable says otherwise. cURL/manual definitions have no connection to track and show no chip.
+**Status (MCP definitions):** the connector's page shows a connection chip — **● Connected**, **● Disconnected**, or **● Never tested** — for custom MCP connectors. The status refreshes on every module rebuild (boot, **↻ Re-sync tools**, server-form save), so it stays Connected until a re-sync, reconnect, or disable says otherwise. cURL/manual definitions have no connection to track and show no chip.
 
 **Disable / enable:** the definition danger zone has a **Disable definition** toggle. A disabled definition keeps its card, pages, and instance rows, but serves zero operations — nothing is listable or callable — until re-enabled (MCP definitions re-probe on enable).
 

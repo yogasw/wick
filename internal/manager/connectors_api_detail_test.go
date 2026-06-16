@@ -81,6 +81,9 @@ func TestAPIConnectorRows(t *testing.T) {
 	if got.Key != "slack" || got.Name != "Slack" || got.OpCount != 2 {
 		t.Errorf("metadata wrong: %+v", got)
 	}
+	if got.MCP {
+		t.Errorf("built-in connector should report mcp=false; got %+v", got)
+	}
 	if len(got.Rows) != 1 || got.Rows[0].Label != "Prod" {
 		t.Fatalf("rows wrong: %+v", got.Rows)
 	}

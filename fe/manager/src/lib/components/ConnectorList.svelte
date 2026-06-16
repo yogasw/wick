@@ -8,6 +8,7 @@
     toggleConnectorDisabled,
     duplicateConnectorRow,
     deleteConnectorRow,
+    resyncMcpTools,
   } from "$lib/api.js";
   import type { ConnectorList, ConnectorRow } from "$lib/types.js";
   import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
@@ -20,6 +21,7 @@
   let error = $state("");
   let busy = $state(false);
   let confirmRow = $state<ConnectorRow | null>(null);
+  let resyncBusy = $state(false);
 
   async function load(silent = false) {
     if (!silent) loading = true;
@@ -87,6 +89,20 @@
     }
   }
 
+  async function resyncTools() {
+    if (resyncBusy) return;
+    resyncBusy = true;
+    try {
+      const res = await resyncMcpTools(connectorKey);
+      toastOk(`Tools re-synced — ${res.operations} operation(s)`);
+      await load(true);
+    } catch (e) {
+      toastError("Re-sync failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      resyncBusy = false;
+    }
+  }
+
   function statusChip(row: ConnectorRow): { label: string; cls: string } {
     if (row.disabled) {
       return { label: "Disabled", cls: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600" };
@@ -98,6 +114,18 @@
   }
 
   let rows = $derived(data?.rows ?? []);
+
+  let mcpChip = $derived.by(() => {
+    if (!data?.mcp || !data.mcp_status) return null;
+    switch (data.mcp_status) {
+      case "connected":
+        return { label: "Connected", cls: "bg-pos-100 text-pos-400", dot: "bg-pos-400" };
+      case "disconnected":
+        return { label: "Disconnected", cls: "bg-neg-100 text-neg-400", dot: "bg-neg-400" };
+      default:
+        return { label: "Never tested", cls: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600", dot: "bg-black-700" };
+    }
+  });
 
   $effect(() => {
     if (data) setBreadcrumbNames({ connector: data.name });
@@ -126,6 +154,9 @@
             {#if data.custom}
               <span class="flex-shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-green-500 border border-green-600/40 bg-green-900/20">Custom</span>
             {/if}
+            {#if mcpChip}
+              <span class="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium {mcpChip.cls}"><span class="h-1.5 w-1.5 rounded-full {mcpChip.dot}"></span>{mcpChip.label}</span>
+            {/if}
           </div>
           {#if data.description}
             <p class="mt-0.5 break-words text-sm text-black-800 dark:text-black-600 line-clamp-3">{data.description}</p>
@@ -134,6 +165,14 @@
         </div>
       </div>
       <div class="flex flex-shrink-0 items-center gap-2 pt-1">
+        {#if data.mcp}
+          <button
+            type="button"
+            disabled={resyncBusy}
+            onclick={resyncTools}
+            class="whitespace-nowrap rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+          >{resyncBusy ? "Syncing…" : "Re-sync tools"}</button>
+        {/if}
         {#if data.custom && data.def_id}
           <button
             type="button"

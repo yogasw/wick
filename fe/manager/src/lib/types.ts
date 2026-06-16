@@ -35,6 +35,8 @@ export interface ConnectorList {
   custom: boolean;
   custom_source?: string;
   def_id?: string;
+  mcp?: boolean;
+  mcp_status?: string;
   rows: ConnectorRow[] | null;
 }
 

@@ -39,6 +39,44 @@ func (h *Handler) customConnectorAPIRoutes(mux *http.ServeMux, authMidd *login.M
 	mux.Handle("POST /manager/api/connectors/custom/{defID}/enable", auth(h.apiCustomSetDisabled(false)))
 }
 
+// apiResyncMCPTools serves POST /manager/api/connectors/{key}/resync-tools.
+// It re-fetches the custom MCP server's tools/list and swaps the fresh
+// operation set in for the whole connector — the op set is definition-level,
+// shared by every instance — refreshing the stored connection status. Custom
+// MCP connectors only; available to any authenticated caller (the catalog is
+// deterministic per connector, so this is not gated to admins/creators).
+func (h *Handler) apiResyncMCPTools(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	key := r.PathValue("key")
+	if h.custom == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "custom connectors unavailable"})
+		return
+	}
+	defID, ok := h.custom.DefIDForKey(key)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a custom connector"})
+		return
+	}
+	def, err := h.custom.Store().GetDef(ctx, defID)
+	if err != nil || def == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "definition not found"})
+		return
+	}
+	if customconn.ServerIDForDef(def) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not an MCP connector"})
+		return
+	}
+	if err := h.custom.ReloadFor(ctx, defID, ""); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	count := 0
+	if mod, ok := h.connectors.Module(key); ok {
+		count = len(mod.Operations)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "operations": count})
+}
+
 // customMetaResponse is the read model the builder shell consumes before
 // rendering the paste tabs and the draft form's category picker. An empty
 // ai_providers slice hides the AI parser tab.

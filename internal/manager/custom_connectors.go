@@ -152,6 +152,42 @@ func (h *Handler) customDefInfo(ctx context.Context, key string, user *entity.Us
 	return info
 }
 
+// mcpConnectorInfo reports whether connector `key` is a custom MCP definition
+// and, if so, its live connection status ("untested"/"connected"/
+// "disconnected"). The MCP operation set is definition-level (shared by every
+// instance), so this is keyed on the connector, not an instance, and is not
+// gated on mutate rights — re-sync is open to any authenticated caller.
+func (h *Handler) mcpConnectorInfo(ctx context.Context, key string) (mcp bool, status string) {
+	if h.custom == nil {
+		return false, ""
+	}
+	defID, ok := h.custom.DefIDForKey(key)
+	if !ok {
+		return false, ""
+	}
+	def, err := h.custom.Store().GetDef(ctx, defID)
+	if err != nil || def == nil {
+		return false, ""
+	}
+	serverID := customconn.ServerIDForDef(def)
+	if serverID == "" {
+		return false, ""
+	}
+	mcp = true
+	status = "untested"
+	if srv, err := h.custom.Store().GetServer(ctx, serverID); err == nil && srv != nil {
+		switch {
+		case srv.LastTestAt == nil:
+			status = "untested"
+		case srv.LastTestOK:
+			status = "connected"
+		default:
+			status = "disconnected"
+		}
+	}
+	return mcp, status
+}
+
 // customSSOClaims builds the caller identity forwarded to MCP servers
 // using the sso auth scheme from the session user.
 func customSSOClaims(r *http.Request) *customconn.SSOClaims {
