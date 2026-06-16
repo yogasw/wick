@@ -463,10 +463,10 @@ describe("createThreadStore", () => {
     expect(get(store.lifecycle).state).toBe("working");
   });
 
-  test("text_delta does NOT change lifecycle state when spawning", () => {
+  test("text_delta nudges lifecycle state to working when spawning", () => {
     store.handleEvent(ev("lifecycle", { lifecycle: "spawning", pid: 5, at: 1 }));
     store.handleEvent(ev("text_delta", { data: "hello" }));
-    expect(get(store.lifecycle).state).toBe("spawning");
+    expect(get(store.lifecycle).state).toBe("working");
   });
 
   test("text_delta does NOT change lifecycle state when killed", () => {
@@ -491,10 +491,10 @@ describe("createThreadStore", () => {
     expect(get(store.lifecycle).state).toBe("working");
   });
 
-  test("thinking does NOT change lifecycle state when spawning", () => {
+  test("thinking nudges lifecycle state to working when spawning", () => {
     store.handleEvent(ev("lifecycle", { lifecycle: "spawning", pid: 5, at: 1 }));
     store.handleEvent(ev("thinking", { data: "reasoning" }));
-    expect(get(store.lifecycle).state).toBe("spawning");
+    expect(get(store.lifecycle).state).toBe("working");
   });
 
   test("tool_use nudges lifecycle state to working when state is idle", () => {
@@ -503,10 +503,10 @@ describe("createThreadStore", () => {
     expect(get(store.lifecycle).state).toBe("working");
   });
 
-  test("tool_use does NOT change lifecycle state when spawning", () => {
+  test("tool_use nudges lifecycle state to working when spawning", () => {
     store.handleEvent(ev("lifecycle", { lifecycle: "spawning", pid: 5, at: 1 }));
     store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "bash", tool_input: "{}", at: 1 }));
-    expect(get(store.lifecycle).state).toBe("spawning");
+    expect(get(store.lifecycle).state).toBe("working");
   });
 
   test("tool_result nudges lifecycle state to working when state is idle", () => {

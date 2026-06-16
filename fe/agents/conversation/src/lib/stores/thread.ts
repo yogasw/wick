@@ -53,7 +53,7 @@ export function createThreadStore(): ThreadStore {
 
   function markWorking(): void {
     lifecycle.update((l) =>
-      l.state === "idle" || l.state === "" ? { ...l, state: "working" } : l
+      l.state === "killed" || l.state === "working" ? l : { ...l, state: "working" }
     );
   }
 
