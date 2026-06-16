@@ -31,8 +31,10 @@
         class={item.truncate ? `${truncateClass} hover:text-green-600` : linkBase}
         onclick={item.onClick}
       >{item.label}</button>
-    {:else}
+    {:else if i === items.length - 1}
       <span class={currentClass}>{item.label}</span>
+    {:else}
+      <span class={item.truncate ? truncateClass : "whitespace-nowrap"}>{item.label}</span>
     {/if}
     {#if i < items.length - 1}
       <span aria-hidden="true">/</span>
