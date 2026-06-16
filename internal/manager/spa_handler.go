@@ -13,8 +13,7 @@ import (
 // registerSPAAssets wires the manager SPA's Vite asset handler. The bundle
 // is served from the all:dist embed at spaAssetBase (the value baked as the
 // Vite `base`), so the hashed script + chunk URLs in dist/manager/index.html
-// resolve back here. Behind the same auth as the page routes. The "/" suffix
-// makes it a subtree match for /manager/_app/assets/*.
+// resolve back here. Behind the same auth as the page routes.
 func (h *Handler) registerSPAAssets(mux *http.ServeMux, authMidd *login.Middleware) {
 	mux.Handle("GET "+spaAssetBase, authMidd.RequireAuth(http.HandlerFunc(h.spaAssetHandler)))
 }
@@ -23,7 +22,7 @@ func (h *Handler) registerSPAAssets(mux *http.ServeMux, authMidd *login.Middlewa
 // spaAssetBase with an immutable cache. Only assets/* live here — page
 // routes render the thin-shell via serveSPAShell instead.
 func (h *Handler) spaAssetHandler(w http.ResponseWriter, r *http.Request) {
-	sub, err := fs.Sub(spaFS, "dist/manager")
+	sub, err := fs.Sub(spaLoader.FS(), "dist/manager")
 	if err != nil {
 		http.NotFound(w, r)
 		return
