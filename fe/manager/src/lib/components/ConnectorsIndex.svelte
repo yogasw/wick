@@ -102,6 +102,18 @@
   }
 
   $effect(() => { load(); });
+
+  function focusSearchOnSlash(e: KeyboardEvent): void {
+    if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+    const el = document.activeElement;
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
+    const search = document.querySelector<HTMLInputElement>("input[aria-label='Search connectors']");
+    if (search) { e.preventDefault(); search.focus(); }
+  }
+  $effect(() => {
+    window.addEventListener("keydown", focusSearchOnSlash);
+    return () => window.removeEventListener("keydown", focusSearchOnSlash);
+  });
 </script>
 
 <div class="space-y-6">
@@ -153,14 +165,14 @@
     >{error}</div>
   {:else}
     <div class="flex flex-col gap-3">
-      <div class="max-w-lg">
-        <TextInput
-          type="search"
-          value={query}
-          onChange={(v) => (query = v)}
-          placeholder="Search connectors…"
-          ariaLabel="Search connectors"
-        />
+      <div class="flex max-w-lg items-center gap-3 rounded-xl border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 focus-within:border-green-500">
+        <svg class="h-5 w-5 flex-shrink-0 text-black-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path>
+        </svg>
+        <div class="min-w-0 flex-1">
+          <TextInput type="search" value={query} onChange={(v) => (query = v)} placeholder="Search connectors…" ariaLabel="Search connectors" />
+        </div>
+        <kbd class="hidden items-center rounded border border-white-400 dark:border-navy-600 px-2 py-0.5 font-mono text-xs text-black-700 dark:text-black-600 sm:inline-flex">/</kbd>
       </div>
       {#if categories.length > 0}
         <div class="flex flex-wrap items-center gap-2">
