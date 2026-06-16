@@ -104,6 +104,19 @@ describe("CustomReview — edit mode", () => {
     expect(api.getCustomDraft).toHaveBeenCalledWith("def-1");
   });
 
+  it("routes an MCP custom definition to the SPA MCP edit route by server_id (not the legacy URL)", async () => {
+    vi.mocked(api.getCustomDraft).mockResolvedValue({ def_id: "def-1", disabled: false, mcp: true, server_id: "srv-1", draft: makeDraft() });
+    render(CustomReview, { defID: "def-1" });
+    await vi.waitFor(() => expect(router.push).toHaveBeenCalledWith("/custom/mcp/srv-1/edit"));
+  });
+
+  it("shows an error instead of a broken redirect when an MCP definition has no server_id", async () => {
+    vi.mocked(api.getCustomDraft).mockResolvedValue({ def_id: "def-1", disabled: false, mcp: true, draft: makeDraft() });
+    render(CustomReview, { defID: "def-1" });
+    expect(await screen.findByText(/Couldn't resolve the MCP server/)).toBeTruthy();
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
   it("updates the draft on save", async () => {
     vi.mocked(api.getCustomDraft).mockResolvedValue({ def_id: "def-1", disabled: false, mcp: false, draft: makeDraft() });
     vi.mocked(api.updateCustomDraft).mockResolvedValue({ ok: true });
