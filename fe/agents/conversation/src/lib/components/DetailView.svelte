@@ -269,12 +269,15 @@
   /* ── auto-scroll thread to bottom ─────────────────────────────── */
   let userScrolledUp = $state(false);
   let showJumpBtn = $state(false);
+  let suppressScrollCheck = false;
 
   function scrollToBottom() {
     if (threadEl) {
-      threadEl.scrollTop = threadEl.scrollHeight;
+      suppressScrollCheck = true;
       userScrolledUp = false;
       showJumpBtn = false;
+      threadEl.scrollTop = threadEl.scrollHeight;
+      requestAnimationFrame(() => { suppressScrollCheck = false; });
     }
   }
 
@@ -294,8 +297,9 @@
     const el = threadEl;
 
     function onScroll() {
+      if (suppressScrollCheck) return;
       const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      userScrolledUp = distFromBottom > 5; // arbitrary threshold to avoid flickering
+      userScrolledUp = distFromBottom > 80;
       showJumpBtn = userScrolledUp;
     }
 
@@ -305,7 +309,8 @@
 
   $effect(() => {
     const _dep1 = turns.length;
-    const _dep2 = live;
+    const _dep2 = live?.text?.length;
+    const _dep3 = live?.blocks?.length;
     if (threadEl && !userScrolledUp) {
       threadEl.scrollTop = threadEl.scrollHeight;
     }
@@ -482,7 +487,6 @@
       size: f.size,
     }));
     thread.appendUserTurn(msg.text, optimisticAttachments);
-    userScrolledUp = false;
     scrollToBottom();
     try {
       await run(sendMessage(base, sessionId, msg).pipe(Effect.provide(WickClientLayer)));
