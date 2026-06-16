@@ -10,15 +10,26 @@ All notable changes to Wick are documented here.
 *   **Conversation — Raw trace tab** — the **Raw** tab on a session detail page now renders an interactive, collapsible JSON tree of the session's turns. Turns that have a server-side trace (`has_trace`) automatically fetch their full per-turn tool and thinking events on demand when the tab opens, merging them into the tree as a `trace` field. Each node can be expanded or collapsed individually; values are type-colored (string / number / boolean / null). A **Copy** button copies the full JSON to the clipboard.
 *   **Providers list: Active Processes panel** — when any agent is running, a table above the provider cards shows every live spawn (session ID, agent name, PID, lifecycle/substate). Hidden when the pool is empty.
 *   **Providers list: per-provider hook actions** — each provider card now has inline Enable / Disable / Test buttons for the `PreToolUse` Command Gate hook (shown only when the master gate is enabled). The status badge distinguishes `enabled ✓`, `enabled (unverified)`, `ready`, and `disabled` states. Clicking Test fires a live probe and refreshes the card without a page reload.
+*   **Conversation — inline image thumbnails** — images attached to a user message render as inline thumbnails in the thread; clicking opens a full-screen lightbox. PDF and Markdown attachments open in the file viewer.
+*   **Conversation — file viewer previews** — the context-panel file viewer now shows image, PDF, and Markdown previews, and renders code files with syntax highlighting (lazy-loaded Ace editor).
+*   **Conversation — resizable Source sidebar** — the SCM dock sidebar can be dragged to any width; the chosen width is persisted in `localStorage` across sessions.
+*   **Conversation — confirm before kill/dequeue** — a confirmation dialog is shown before terminating a running agent or removing a queued session, preventing accidental kills.
+*   **Conversation — live count badges** — the Context, Processes, and Workspace rail tabs show live item-count badges that update as the agent works.
+*   **Conversation — system turn pills** — system/lifecycle turns in the thread render as centered pills with an optional step list instead of full message bubbles.
+*   **Conversation — lifecycle pill tracks streaming** — the session lifecycle pill transitions to "working" immediately while the agent is streaming, before the subprocess state update arrives.
 
 ### Changed
 *   **Manager UI rebuilt as a Svelte SPA** — the connector manager at `/manager/*` is now served as a Svelte single-page application rendered inside the host chrome (shared header, theme, user menu), replacing the previous server-rendered templ pages. URLs, features, and the full `/manager/api/*` surface are unchanged.
+*   **Manager UI — visual realignment** — connector list, custom connector builder (DraftEditor, McpServerForm, MCP SSO guidance, access toggles), jobs/tools setup banners, and audit-log headers are visually aligned to match the design-system tokens and the pre-SPA look. Common-UI primitives (Button, inputs, Select, ToastHost, KvList) use the correct radius and focus-ring tokens.
 
 ### Fixed
 *   **Connector operation toggle no longer silently no-ops on first disable** — `SetOperation` in the connector repo was using `db.Save()` which resolves to an `UPDATE` when the primary key is set, leaving a missing row untouched (and `Enabled=false` was dropped as a zero-value on struct insert). Rewritten as a GORM `OnConflict` upsert with a map payload so the `enabled` column is always written verbatim. Affects both the legacy admin UI and the new manager SPA.
 *   **Starting a new agents session no longer fails with 405** — tool root routes now accept POST/DELETE on the trailing-slash form (`/tools/{key}/`), not just GET. The new-session and conversation SPA POSTs to `${base}/` to create a session, which previously matched a GET-only pattern and returned 405 on Send.
 *   **Provider Detail — config saves and enable/disable toggle now work** — the API call was sending a JSON body but the Go handler reads `c.Form("value")` (form-encoded). Every provider config save and the enabled/disabled header toggle silently no-op'd; the request now sends `application/x-www-form-urlencoded`.
 *   **Provider Detail — UI parity restored after SPA migration** — the detail page now shows the Enabled/Disabled header toggle, a 2-column grid for simple config fields with a single Save All action, a row editor for `extra_args`, and a key-value editor for `env` (previously flattened to plain text inputs by the SPA migration).
+*   **Custom connector builder — input focus loss** — typing in the McpServerForm label/key fields no longer loses focus on every keystroke (dropped the `{#key rev}` remount wrapper).
+*   **Conversation — pending ask rehydrated on page load** — an open `AskUser` approval card is now restored when the page is loaded or refreshed mid-turn, so the question is never lost.
+*   **Conversation — orphan `tool_result` turns rendered** — tool-result turns that have no matching tool-call in the loaded window are now displayed as collapsed trace entries rather than silently dropped.
 
 ---
 
