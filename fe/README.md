@@ -167,6 +167,7 @@ through without a Go recompile.
 
 ```bash
 # Terminal 1: rebuild every workspace's bundle on save (~1 s incremental)
+# Uses scripts/dev.mjs to spawn all workspaces in parallel.
 cd fe
 npm run dev
 
@@ -208,13 +209,19 @@ For a new app, add a script in `fe/package.json`:
 
 ### How the live-disk swap works
 
-`internal/pkg/spadev/spadev.go` exposes `LiveDiskFS(toolName)`. Every
-tool's `spa.go` calls it from `init()`:
+There are two SPA hosts in wick. Each wires live-disk slightly differently.
+
+**`internal/tools/agents/` (agents tool — conversation, workflow, overview, …)**
+
+Uses `internal/pkg/spadev/spadev.go` which resolves
+`<WICK_DEV_REPO_ROOT>/internal/tools/<toolName>/dist/`:
 
 ```go
+// internal/tools/agents/spa.go
 //go:embed all:dist
 var spaEmbedded embed.FS
 var SPAFS fs.FS = spaEmbedded
+var spaLiveDisk bool
 
 func init() {
   if live, ok := spadev.LiveDiskFS("agents"); ok {
@@ -224,11 +231,39 @@ func init() {
 }
 ```
 
-When `WICK_DEV_REPO_ROOT` is set, `LiveDiskFS` returns an `os.DirFS`
-rooted at `<repo>/internal/tools/<toolName>/`; otherwise it returns
-`(nil, false)` and the embed stays in charge. The same one env var
-covers every tool that ever ships an SPA — drop a `spa.go` into the new
-tool and it joins the dev loop automatically.
+**`internal/manager/` (manager SPA)**
+
+Lives outside `internal/tools/` so it cannot use `spadev` directly.
+It has the same pattern inlined in `internal/manager/spa.go`, resolving
+`<WICK_DEV_REPO_ROOT>/internal/manager/dist/`:
+
+```go
+// internal/manager/spa.go
+//go:embed all:dist
+var spaEmbedded embed.FS
+var spaFS fs.FS = spaEmbedded
+var spaLiveDisk bool
+
+func init() {
+  // resolves <WICK_DEV_REPO_ROOT>/internal/manager/dist/
+  root := os.Getenv("WICK_DEV_REPO_ROOT")
+  ...
+  spaFS = os.DirFS(managerDir)
+  spaLiveDisk = true
+}
+```
+
+The asset-URL resolver in both hosts skips its per-process cache when
+`spaLiveDisk` is true, so Vite's new hashed filename is picked up on the
+next page render without restarting Go.
+
+**Adding a new SPA host outside `internal/tools/`**
+
+Copy the inlined pattern from `internal/manager/spa.go`. If the new host
+lives under `internal/tools/<newtool>/`, use `spadev.LiveDiskFS("<newtool>")`
+instead — it resolves the path automatically.
+
+The single env var `WICK_DEV_REPO_ROOT` covers all hosts.
 
 ## Build
 

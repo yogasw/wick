@@ -2,7 +2,10 @@ package manager
 
 import (
 	"embed"
+	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 )
 
 // spaEmbedded carries the Vite-built manager SPA tree. The build pipeline
@@ -17,7 +20,33 @@ import (
 //go:embed all:dist
 var spaEmbedded embed.FS
 
-// spaFS is the filesystem the SPA handler reads from. Kept as a var so a
-// future dev loop could swap it for an os.DirFS; production uses the
-// compile-time embed.
+// spaFS is the filesystem the SPA handler reads from. Defaults to the
+// compile-time embed (production). When WICK_DEV_REPO_ROOT is set,
+// swapped to an os.DirFS so Vite watch rebuilds are picked up without
+// recompiling Go — same convention as internal/tools/*/spa.go.
 var spaFS fs.FS = spaEmbedded
+
+// spaLiveDisk is true when spaFS points at a real filesystem. In that
+// mode the asset-URL resolver re-reads index.html on every request so
+// Vite's new-hash-on-every-rebuild flow surfaces immediately.
+var spaLiveDisk bool
+
+func init() {
+	root := os.Getenv("WICK_DEV_REPO_ROOT")
+	if root == "" {
+		return
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return
+	}
+	distDir := filepath.Join(abs, "internal", "manager", "dist")
+	if info, err := os.Stat(distDir); err != nil || !info.IsDir() {
+		fmt.Fprintf(os.Stderr, "[spa] manager has no dist/ at %s — falling back to embed\n", distDir)
+		return
+	}
+	managerDir := filepath.Join(abs, "internal", "manager")
+	fmt.Fprintf(os.Stderr, "[spa] live disk mode — manager reading from %s\n", managerDir)
+	spaFS = os.DirFS(managerDir)
+	spaLiveDisk = true
+}
