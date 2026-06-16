@@ -52,6 +52,16 @@ describe("McpServerForm — new mode (test gate)", () => {
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
+  it("keeps the focused input mounted while typing (no remount per keystroke)", async () => {
+    render(McpServerForm);
+    await screen.findByText("Register MCP server");
+    const input = screen.getByLabelText("Label") as HTMLInputElement;
+    input.focus();
+    await fireEvent.input(input, { target: { value: "Internal" } });
+    expect(input.isConnected).toBe(true);
+    expect(document.activeElement).toBe(input);
+  });
+
   it("enables Save after a successful test and lists discovered tools", async () => {
     vi.mocked(api.testMcpServer).mockResolvedValue({
       ok: true,
