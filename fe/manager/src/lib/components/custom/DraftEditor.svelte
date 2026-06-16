@@ -138,20 +138,24 @@
           <Select value={draft.category} options={categoryOptions} onChange={(v) => set("category", v)} class="mt-1" />
         </div>
         <div class="mt-4 divide-y divide-white-300 rounded-xl border border-white-300 dark:divide-navy-600 dark:border-navy-600">
-          <label class="flex cursor-pointer items-center justify-between gap-4 px-4 py-3 hover:bg-white-200 dark:hover:bg-navy-800">
+          <div class="flex items-center justify-between gap-4 px-4 py-3">
             <div class="min-w-0 flex-1">
               <p class="text-sm font-medium text-black-900 dark:text-white-100">Single instance only</p>
               <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Default off — admins can add and duplicate instance rows, each with its own credentials.</p>
             </div>
-            <input type="checkbox" class="accent-green-500" checked={draft.single} onchange={(e) => set("single", (e.target as HTMLInputElement).checked)} aria-label="Single instance only" />
-          </label>
-          <label class="flex cursor-pointer items-center justify-between gap-4 px-4 py-3 hover:bg-white-200 dark:hover:bg-navy-800">
+            <button type="button" role="switch" aria-checked={draft.single} aria-label="Single instance only" onclick={() => set("single", !draft.single)} class="relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors {draft.single ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}">
+              <span class="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white-100 shadow transition-transform {draft.single ? 'translate-x-4' : ''}"></span>
+            </button>
+          </div>
+          <div class="flex items-center justify-between gap-4 px-4 py-3">
             <div class="min-w-0 flex-1">
               <p class="text-sm font-medium text-black-900 dark:text-white-100">Allow per-session config override</p>
               <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">Default off. When on, this connector can be cloned into a per-session instance from the session Config tab.</p>
             </div>
-            <input type="checkbox" class="accent-green-500" checked={draft.allow_session_config} onchange={(e) => set("allow_session_config", (e.target as HTMLInputElement).checked)} aria-label="Allow per-session config override" />
-          </label>
+            <button type="button" role="switch" aria-checked={draft.allow_session_config} aria-label="Allow per-session config override" onclick={() => set("allow_session_config", !draft.allow_session_config)} class="relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors {draft.allow_session_config ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}">
+              <span class="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white-100 shadow transition-transform {draft.allow_session_config ? 'translate-x-4' : ''}"></span>
+            </button>
+          </div>
         </div>
         <div class="mt-4 rounded-xl border border-white-300 dark:border-navy-600 p-4">
           <p class="text-sm font-medium text-black-900 dark:text-white-100">Health check</p>

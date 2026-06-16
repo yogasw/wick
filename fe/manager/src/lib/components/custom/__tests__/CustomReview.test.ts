@@ -69,6 +69,17 @@ describe("CustomReview — new mode", () => {
     expect(screen.getByRole("button", { name: "Open navigator" })).toBeTruthy();
   });
 
+  it("renders the access toggles as pill switches and flips on click", async () => {
+    sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(makeDraft()));
+    render(CustomReview);
+    await screen.findByText("Review extracted definition");
+    const single = screen.getByRole("switch", { name: "Single instance only" });
+    expect(single.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("switch", { name: "Allow per-session config override" })).toBeTruthy();
+    await fireEvent.click(single);
+    expect(screen.getByRole("switch", { name: "Single instance only" }).getAttribute("aria-checked")).toBe("true");
+  });
+
   it("saves a new draft and clears the hand-off", async () => {
     sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(makeDraft()));
     vi.mocked(api.saveCustomDraft).mockResolvedValue({ redirect: "" });
