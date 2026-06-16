@@ -403,7 +403,11 @@
       thread.handleEvent(ev);
 
       if (ev.type === "ask_user") {
-        try { showAsk(JSON.parse(ev.data ?? "{}")); } catch (_) { /* skip */ }
+        try {
+          showAsk(JSON.parse(ev.data ?? "{}"));
+          userScrolledUp = false;
+          setTimeout(() => scrollToBottom(), 50);
+        } catch (_) { /* skip */ }
       } else if (ev.type === "ask_user_resolved") {
         try { hideAsk(JSON.parse(ev.data ?? "{}")); } catch (_) { /* skip */ }
       } else if (ev.type === "approval_request") {
@@ -478,6 +482,8 @@
       size: f.size,
     }));
     thread.appendUserTurn(msg.text, optimisticAttachments);
+    userScrolledUp = false;
+    scrollToBottom();
     try {
       await run(sendMessage(base, sessionId, msg).pipe(Effect.provide(WickClientLayer)));
     } catch (e: unknown) {
