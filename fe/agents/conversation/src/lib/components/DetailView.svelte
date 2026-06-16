@@ -14,6 +14,7 @@
   import { currentApproval, showApproval, hideApproval } from "../stores/approvals.js";
   import { notify } from "../notify.js";
   import { push } from "../router.js";
+  import { readScmWidth, writeScmWidth, clampScmWidth } from "../scmWidth.js";
 
   import { getConversation, getSessionMeta, deleteSession, getTurnTrace } from "../api/sessions.js";
   import { getProviderOptions, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
@@ -165,6 +166,32 @@
   let scmHostEl: HTMLElement | undefined = $state(undefined);
   let scmHostMobileEl: HTMLElement | undefined = $state(undefined);
   let scmMounted = false;
+
+  /* ── SCM sidebar resizable width (desktop only, persisted) ────── */
+  let scmWidth = $state(readScmWidth());
+  let scmSideEl: HTMLElement | undefined = $state(undefined);
+
+  function startScmResize(e: PointerEvent) {
+    e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture?.(e.pointerId);
+    document.body.style.userSelect = "none";
+
+    function onMove(ev: PointerEvent) {
+      if (!scmSideEl) return;
+      const right = scmSideEl.getBoundingClientRect().right;
+      scmWidth = clampScmWidth(right - ev.clientX);
+    }
+    function onUp(ev: PointerEvent) {
+      handle.releasePointerCapture?.(ev.pointerId);
+      document.body.style.userSelect = "";
+      scmWidth = writeScmWidth(scmWidth);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
 
   /* ── header tab view ──────────────────────────────────────────── */
   let activeView = $state<ActiveView>("conversation");
@@ -754,9 +781,19 @@
   <!-- Side panel: slides in when a rail tab is active -->
   {#if sideOpen}
     <div
-      class={`hidden lg:flex flex-col ${railTab === "source" ? "w-96" : "w-80"} shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden`}
+      bind:this={scmSideEl}
+      class={`relative hidden lg:flex flex-col ${railTab === "source" ? "" : "w-80"} shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden`}
+      style={railTab === "source" ? `width:${scmWidth}px` : ""}
     >
       {#if railTab === "source"}
+        <button
+          type="button"
+          aria-label="Resize source panel"
+          title="Drag to resize"
+          data-scm-resize
+          onpointerdown={startScmResize}
+          class="absolute left-0 top-0 z-10 h-full w-1.5 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-green-500/40 focus-visible:bg-green-500/40 transition-colors"
+        ></button>
         <div class="flex-1 overflow-hidden dark:bg-navy-700" data-scm-host bind:this={scmHostEl}></div>
       {:else if railTab === "context"}
         <ContextPanel

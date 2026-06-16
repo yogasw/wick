@@ -302,6 +302,50 @@ describe("DetailView — SCM source rail panel", () => {
   });
 });
 
+describe("DetailView — resizable + persisted Source sidebar width (#34)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+    (window as unknown as Record<string, unknown>)["WickSCM"] = undefined;
+  });
+
+  test("desktop Source sidebar applies persisted width as inline style on mount", async () => {
+    localStorage.setItem("wick.scm.width", "512");
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+
+    const sourceBtn = screen.getByRole("button", { name: /source/i });
+    await fireEvent.click(sourceBtn);
+
+    const sidePanel = container.querySelector<HTMLElement>(".lg\\:flex.flex-col");
+    expect(sidePanel).not.toBeNull();
+    expect(sidePanel?.getAttribute("style")).toContain("width: 512px");
+  });
+
+  test("desktop Source sidebar applies clamped default width when nothing persisted", async () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+
+    const sourceBtn = screen.getByRole("button", { name: /source/i });
+    await fireEvent.click(sourceBtn);
+
+    const sidePanel = container.querySelector<HTMLElement>(".lg\\:flex.flex-col");
+    expect(sidePanel?.getAttribute("style")).toContain("width: 384px");
+  });
+
+  test("desktop Source sidebar exposes a resize drag handle", async () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+
+    const sourceBtn = screen.getByRole("button", { name: /source/i });
+    await fireEvent.click(sourceBtn);
+
+    expect(container.querySelector("[data-scm-resize]")).not.toBeNull();
+  });
+});
+
 describe("DetailView — placeholder views full-height (#10)", () => {
   beforeEach(() => {
     localStorage.clear();
