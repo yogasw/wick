@@ -7,6 +7,7 @@
     search: string;
     pageSize?: number;
     newChatHref?: string;
+    projectNames?: Record<string, string>;
     onSearch: (s: string) => void;
     onSelect: (id: string) => void;
     onDelete?: (id: string) => void;
@@ -18,6 +19,7 @@
     search,
     pageSize = 10,
     newChatHref,
+    projectNames,
     onSearch,
     onSelect,
     onDelete,
@@ -155,6 +157,11 @@
                   class={"rounded px-1.5 py-0.5 text-[10px] font-medium " + lifecycleCls(sess.lifecycle)}
                 >
                   {sess.lifecycle}
+                </span>
+              {/if}
+              {#if projectNames && sess.project_id && projectNames[sess.project_id]}
+                <span class="text-xs text-black-600 dark:text-black-700 truncate">
+                  {projectNames[sess.project_id]}
                 </span>
               {/if}
               {#if sess.active_agent}

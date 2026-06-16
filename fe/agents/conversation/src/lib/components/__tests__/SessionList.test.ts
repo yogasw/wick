@@ -291,4 +291,58 @@ describe("SessionList", () => {
       expect(badgeEl.classList.contains("text-black-700")).toBe(true);
     });
   });
+
+  describe("#40 project name secondary row", () => {
+    test("shows project name when projectNames map contains the session project_id", () => {
+      render(SessionList, {
+        props: {
+          sessions: [makeSession({ id: "p-sess", label: "Proj Chat", project_id: "proj-1" })],
+          search: "",
+          onSearch: vi.fn(),
+          onSelect: vi.fn(),
+          projectNames: { "proj-1": "My Project" },
+        },
+      });
+      expect(screen.getByText("My Project")).toBeDefined();
+    });
+
+    test("does not show project name when projectNames is omitted", () => {
+      render(SessionList, {
+        props: {
+          sessions: [makeSession({ id: "p-sess", label: "No Proj", project_id: "proj-1" })],
+          search: "",
+          onSearch: vi.fn(),
+          onSelect: vi.fn(),
+        },
+      });
+      expect(screen.queryByText("My Project")).toBeNull();
+    });
+
+    test("does not show project name when session project_id is not in projectNames", () => {
+      render(SessionList, {
+        props: {
+          sessions: [makeSession({ id: "p-sess", label: "Missing", project_id: "proj-999" })],
+          search: "",
+          onSearch: vi.fn(),
+          onSelect: vi.fn(),
+          projectNames: { "proj-1": "My Project" },
+        },
+      });
+      expect(screen.queryByText("My Project")).toBeNull();
+    });
+
+    test("project name appears on the secondary row alongside lifecycle badge", () => {
+      render(SessionList, {
+        props: {
+          sessions: [makeSession({ id: "p-sess", label: "Both", project_id: "proj-1", lifecycle: "idle" })],
+          search: "",
+          onSearch: vi.fn(),
+          onSelect: vi.fn(),
+          projectNames: { "proj-1": "Alpha Project" },
+        },
+      });
+      expect(screen.getByText("Alpha Project")).toBeDefined();
+      expect(screen.getByText("idle")).toBeDefined();
+    });
+  });
 });
