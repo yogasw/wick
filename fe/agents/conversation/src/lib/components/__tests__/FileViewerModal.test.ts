@@ -144,4 +144,28 @@ describe("FileViewerModal", () => {
     });
     expect(container.querySelector("textarea")).not.toBeNull();
   });
+
+  test("code file mounts the code editor (container) with a textarea fallback", () => {
+    const file = { path: "src/main.go", size: 30, binary: false, content: "package main" } as FileContent;
+    const { container } = render(FileViewerModal, {
+      props: { file, dirty: false, onSave: vi.fn(), onClose: vi.fn() },
+    });
+    expect(container.querySelector("[data-testid='code-editor']")).not.toBeNull();
+    /* Ace cannot init under jsdom (no layout) — the textarea fallback
+       must remain present so the modal stays usable and editable. */
+    expect(container.querySelector("textarea")).not.toBeNull();
+  });
+
+  test("code editor textarea fallback initializes with file content and Save uses edited value", async () => {
+    const onSave = vi.fn();
+    const file = { path: "lib.rs", size: 12, binary: false, content: "fn main(){}" } as FileContent;
+    render(FileViewerModal, {
+      props: { file, dirty: false, onSave, onClose: vi.fn() },
+    });
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(textarea.value).toBe("fn main(){}");
+    await fireEvent.input(textarea, { target: { value: "fn main(){ }" } });
+    await fireEvent.click(screen.getByText("Save"));
+    expect(onSave).toHaveBeenCalledWith("fn main(){ }");
+  });
 });

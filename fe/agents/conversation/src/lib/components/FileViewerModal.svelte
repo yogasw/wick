@@ -1,12 +1,9 @@
 <script lang="ts">
-  /* ace/monaco syntax highlighting: deferred enhancement */
   import type { FileContent } from "../types/agents.js";
   import { renderMarkdown } from "../markdown.js";
+  import { extOf } from "../aceMode.js";
+  import CodeEditor from "./CodeEditor.svelte";
 
-  function extOf(p: string): string {
-    const i = p.lastIndexOf(".");
-    return i === -1 ? "" : p.slice(i + 1).toLowerCase();
-  }
   const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"];
 
   type Props = {
@@ -90,11 +87,12 @@
             <p class="text-xs text-black-700 dark:text-black-600">Use download to fetch the raw bytes.</p>
           </div>
         {:else}
-          <textarea
-            class="w-full h-full p-4 text-xs font-mono text-black-900 dark:text-white-100 bg-white-100 dark:bg-navy-800 resize-none focus:outline-none"
+          <CodeEditor
+            path={file.path}
             value={editContent}
-            oninput={(e) => { editContent = (e.currentTarget as HTMLTextAreaElement).value; }}
-          ></textarea>
+            onChange={(v) => { editContent = v; }}
+            readonly={!editable}
+          />
         {/if}
       </div>
     </div>
