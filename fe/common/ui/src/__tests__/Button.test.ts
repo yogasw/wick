@@ -48,7 +48,8 @@ describe("Button", () => {
   test("primary variant uses green-500", () => {
     const { container } = render(Button, { props: { variant: "primary", children: label("Go") } });
     const btn = container.querySelector("button") as HTMLButtonElement;
-    expect(btn.className).toContain("bg-green-500");
-    expect(btn.className).not.toContain("bg-green-600");
+    const classes = btn.className.split(/\s+/);
+    expect(classes).toContain("bg-green-500");
+    expect(classes).not.toContain("bg-green-600");
   });
 });
