@@ -81,6 +81,7 @@ export interface ConnectorDetail {
   icon: string;
   id: string;
   label: string;
+  description: string;
   disabled: boolean;
   rate_limit_rpm: number;
   has_health_check: boolean;
