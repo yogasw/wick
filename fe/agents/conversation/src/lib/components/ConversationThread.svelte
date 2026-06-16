@@ -24,6 +24,8 @@
 
   let liveTraceOpen = $state(false);
 
+  const isEmpty = $derived(turns.length === 0 && !live && !typing.active);
+
   onMount(() => {
     if (!containerEl) return;
     containerEl.addEventListener("click", (e: MouseEvent) => {
@@ -40,6 +42,12 @@
 </script>
 
 <div bind:this={containerEl} class="flex flex-col gap-3 px-4 py-3">
+  {#if isEmpty}
+    <div class="flex flex-col items-center justify-center py-16 text-center gap-1">
+      <p class="text-sm font-medium text-black-700 dark:text-black-600">No messages yet</p>
+      <p class="text-xs text-black-600 dark:text-black-700">Send a message to start.</p>
+    </div>
+  {/if}
   {#each turns as turn, i (turn.turn_id ? turn.turn_id + "-" + i : "turn-" + i)}
     <ThreadMessage {turn} {loadTrace} />
   {/each}

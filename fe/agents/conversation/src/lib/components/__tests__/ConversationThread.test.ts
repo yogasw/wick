@@ -86,6 +86,18 @@ describe("ConversationThread", () => {
     expect(container.innerHTML).toContain("running bash…");
   });
 
+  test("renders empty state when no turns and not live/typing", () => {
+    render(ConversationThread, { props: { turns: [], live: null, typing: { active: false } } });
+    expect(screen.getByText(/no messages yet/i)).toBeDefined();
+    expect(screen.getByText(/send a message to start/i)).toBeDefined();
+  });
+
+  test("does NOT render empty state when there are turns", () => {
+    const turns = [{ turn_id: "t1", role: "user", agent: "", provider: "", text: "hi", timestamp: 0, truncated: false, interrupted: false, has_trace: false, events: [], attachments: [] }];
+    const { container } = render(ConversationThread, { props: { turns, live: null, typing: { active: false } } });
+    expect(container.innerHTML).not.toContain("No messages yet");
+  });
+
   test("renders all turns when multiple turns share empty turn_id without crashing", () => {
     const emptyA = makeTurn("", "user", "First empty-id turn");
     const emptyB = makeTurn("", "assistant", "Second empty-id turn");
