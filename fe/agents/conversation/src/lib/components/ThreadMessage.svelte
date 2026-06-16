@@ -47,6 +47,23 @@
     )
   );
 
+  const traceOrphanResultBlocks = $derived(
+    resolvedTraceEvents
+      .filter((ev) =>
+        ev.type === "tool_result" &&
+        !resolvedTraceEvents.some((u) => u.type === "tool_use" && u.tool_use_id === ev.tool_use_id)
+      )
+      .map((ev) => ({
+        kind: "tool" as const,
+        toolUseId: ev.tool_use_id ?? "",
+        toolName: ev.tool_name ?? "tool result",
+        toolInput: "",
+        result: ev.text,
+        isError: ev.is_error,
+      } satisfies Extract<ThreadBlock, { kind: "tool" }>)
+    )
+  );
+
   const traceThinkingEvents = $derived(
     resolvedTraceEvents.filter((ev) => ev.type === "thinking")
   );
@@ -183,6 +200,9 @@
                 </div>
               {/each}
               {#each traceToolBlocks as block}
+                <ToolCard {block} />
+              {/each}
+              {#each traceOrphanResultBlocks as block}
                 <ToolCard {block} />
               {/each}
             </div>

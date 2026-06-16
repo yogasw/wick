@@ -356,6 +356,43 @@ describe("ThreadMessage - show trace toggle", () => {
     expect(loadTrace).toHaveBeenCalledWith("backend-uuid-abc");
   });
 
+  test("orphan tool_result (no matching tool_use) renders as its own tool card", async () => {
+    const traceEvents: TurnEvent[] = [
+      { type: "tool_use", tool_use_id: "tu-paired", tool_name: "paired_tool", tool_input: "{}" },
+      { type: "tool_result", tool_use_id: "tu-paired", text: "paired output", is_error: false },
+      { type: "tool_result", tool_use_id: "tu-orphan", text: "orphan output", is_error: false },
+    ];
+    const loadTrace = vi.fn().mockResolvedValue(traceEvents);
+    const turn = makeTurn({ role: "assistant", has_trace: true, turn_id: "backend-orphan" });
+
+    render(ThreadMessage, { props: { turn, loadTrace } });
+
+    const btn = screen.getByText(/show trace/i).closest("button")!;
+    await fireEvent.click(btn);
+
+    await vi.waitFor(() => {
+      expect(screen.getByText("paired_tool")).toBeDefined();
+      expect(screen.getByText(/orphan output/)).toBeDefined();
+    });
+  });
+
+  test("orphan tool_result error flag is preserved on its standalone card", async () => {
+    const turn = makeTurn({
+      role: "assistant",
+      has_trace: false,
+      events: [{ type: "tool_result", tool_use_id: "tu-err", text: "boom", is_error: true }],
+    });
+
+    render(ThreadMessage, { props: { turn } });
+
+    const btn = screen.getByText(/show trace/i).closest("button")!;
+    await fireEvent.click(btn);
+
+    await vi.waitFor(() => {
+      expect(screen.getByText(/boom/)).toBeDefined();
+    });
+  });
+
   test("tool events render as ToolCard inside trace section (not in bubble)", async () => {
     const localEvents: TurnEvent[] = [
       { type: "tool_use", tool_use_id: "t1", tool_name: "read_file", tool_input: '{"path":"/x"}' },
