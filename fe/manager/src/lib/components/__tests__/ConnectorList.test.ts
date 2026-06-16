@@ -130,4 +130,11 @@ describe("ConnectorList", () => {
     const chip = screen.getByText("Everyone");
     expect(chip.className).toContain("border-dashed");
   });
+
+  it("navigates to a row's run history via the per-row History action", async () => {
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    await fireEvent.click(screen.getAllByRole("button", { name: "History" })[0]);
+    expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-a/history");
+  });
 });
