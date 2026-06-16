@@ -460,8 +460,8 @@
         loadProcesses();
       } else if (ev.type === "git_status") {
         try {
-          const d = JSON.parse(ev.data ?? "{}") as { changed?: number };
-          if (typeof d.changed === "number") scmChangeCount = d.changed;
+          const d = JSON.parse(ev.data ?? "{}") as { total_changed?: number };
+          if (typeof d.total_changed === "number") scmChangeCount = d.total_changed;
         } catch (_) { /* skip */ }
       }
     });
