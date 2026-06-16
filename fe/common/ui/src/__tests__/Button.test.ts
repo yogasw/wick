@@ -38,4 +38,17 @@ describe("Button", () => {
     render(Button, { props: { type: "submit", children: label("Go") } });
     expect((screen.getByRole("button") as HTMLButtonElement).type).toBe("submit");
   });
+
+  test("base uses rounded-lg and a focus-visible ring", () => {
+    const { container } = render(Button, { props: { children: label("Go") } });
+    const btn = container.querySelector("button") as HTMLButtonElement;
+    expect(btn.className).toContain("rounded-lg");
+    expect(btn.className).toContain("focus-visible:ring-green-200");
+  });
+  test("primary variant uses green-500", () => {
+    const { container } = render(Button, { props: { variant: "primary", children: label("Go") } });
+    const btn = container.querySelector("button") as HTMLButtonElement;
+    expect(btn.className).toContain("bg-green-500");
+    expect(btn.className).not.toContain("bg-green-600");
+  });
 });
