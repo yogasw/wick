@@ -157,8 +157,8 @@
           {/if}
         {/if}
       </div>
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
+      <div class="overflow-x-auto resp-table-wrap">
+        <table class="w-full text-sm resp-table">
           <thead>
             <tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
               {#if canConfigure}
