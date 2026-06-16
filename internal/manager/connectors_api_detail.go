@@ -116,6 +116,11 @@ type connectorDetailJSON struct {
 	// Session config: capability is module-level, allowed is per-instance.
 	SessionConfigCapable bool `json:"session_config_capable"`
 	SessionConfigAllowed bool `json:"session_config_allowed"`
+	// Custom MCP connectors: live connection status (for the detail chip) and
+	// whether the caller may re-sync the tool catalog (admin ∨ creator).
+	MCP               bool   `json:"mcp"`
+	MCPStatus         string `json:"mcp_status,omitempty"`
+	CustomMutableByMe bool   `json:"custom_mutable_by_me"`
 }
 
 // apiConnectorRows serves GET /manager/api/connectors/{key}: the connector
@@ -237,6 +242,7 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 
 	isAdmin := user != nil && user.IsAdmin()
 	canConfigure := h.canConfigureRow(user, row)
+	mcp, mcpStatus, customMutable := h.mcpInstanceInfo(ctx, key, user)
 
 	accounts := make([]connectorAccountJSON, 0)
 	for _, acc := range h.accountsForRow(ctx, row.ID) {
@@ -282,6 +288,9 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 		AllowOthersConfigure:  row.AllowOthersConfigure,
 		SessionConfigCapable:  mod.AllowSessionConfig,
 		SessionConfigAllowed:  row.AllowSessionConfig,
+		MCP:                   mcp,
+		MCPStatus:             mcpStatus,
+		CustomMutableByMe:     customMutable,
 	})
 }
 

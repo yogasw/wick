@@ -16,6 +16,7 @@ import (
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/pkg/postgres"
+	"github.com/yogasw/wick/pkg/connector"
 )
 
 func newCustomAPIDB(t *testing.T) *gorm.DB {
@@ -77,6 +78,38 @@ func seedDef(t *testing.T, svc *customconn.Service, key, createdBy string) *enti
 func reqWithUser(method, path string, user *entity.User) *http.Request {
 	req := httptest.NewRequest(method, path, nil)
 	return req.WithContext(login.WithUser(req.Context(), user, nil))
+}
+
+// TestAPIResyncMCPToolsRejectsNonCustom verifies the resync endpoint is wired
+// and rejects a built-in (non-custom) connector before touching the MCP path.
+func TestAPIResyncMCPToolsRejectsNonCustom(t *testing.T) {
+	db := newCustomAPIDB(t)
+	cfgsSvc := configs.NewService(db)
+	if err := cfgsSvc.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("configs bootstrap: %v", err)
+	}
+	connSvc := connectors.NewServiceFromDB(db)
+	connSvc.SetConfigs(cfgsSvc)
+	if err := connSvc.Bootstrap(context.Background(), []connector.Module{apiDetailModule("slack")}); err != nil {
+		t.Fatalf("connectors bootstrap: %v", err)
+	}
+	custom := customconn.New(customconn.Deps{DB: db, Connectors: connSvc, Keys: cfgsSvc})
+	h := &Handler{connectors: connSvc, configs: cfgsSvc, custom: custom}
+
+	row, err := connSvc.Create(t.Context(), "slack", "Prod", map[string]string{"token": "xoxb-secret"}, "u-admin")
+	if err != nil {
+		t.Fatalf("create row: %v", err)
+	}
+	admin := &entity.User{ID: "u-admin", Role: entity.RoleAdmin}
+	req := reqWithUser(http.MethodPost, "/manager/api/connectors/slack/"+row.ID+"/resync-tools", admin)
+	req.SetPathValue("key", "slack")
+	req.SetPathValue("id", row.ID)
+	rec := httptest.NewRecorder()
+	h.apiResyncMCPTools(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (not a custom connector); body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestAPICustomMeta(t *testing.T) {

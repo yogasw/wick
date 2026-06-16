@@ -152,6 +152,43 @@ func (h *Handler) customDefInfo(ctx context.Context, key string, user *entity.Us
 	return info
 }
 
+// mcpInstanceInfo reports whether connector `key` is a custom MCP definition
+// and, if so, its live connection status ("untested"/"connected"/
+// "disconnected") and whether `user` may re-sync it (admin ∨ creator). Unlike
+// customDefInfo it is not gated on mutate rights, so the connection chip can
+// be shown to any viewer; only `mutable` controls the re-sync action.
+func (h *Handler) mcpInstanceInfo(ctx context.Context, key string, user *entity.User) (mcp bool, status string, mutable bool) {
+	if h.custom == nil {
+		return false, "", false
+	}
+	defID, ok := h.custom.DefIDForKey(key)
+	if !ok {
+		return false, "", false
+	}
+	def, err := h.custom.Store().GetDef(ctx, defID)
+	if err != nil || def == nil {
+		return false, "", false
+	}
+	serverID := customconn.ServerIDForDef(def)
+	if serverID == "" {
+		return false, "", false
+	}
+	mcp = true
+	mutable = customconn.CanMutate(def, user)
+	status = "untested"
+	if srv, err := h.custom.Store().GetServer(ctx, serverID); err == nil && srv != nil {
+		switch {
+		case srv.LastTestAt == nil:
+			status = "untested"
+		case srv.LastTestOK:
+			status = "connected"
+		default:
+			status = "disconnected"
+		}
+	}
+	return mcp, status, mutable
+}
+
 // customSSOClaims builds the caller identity forwarded to MCP servers
 // using the sso auth scheme from the session user.
 func customSSOClaims(r *http.Request) *customconn.SSOClaims {

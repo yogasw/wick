@@ -126,6 +126,9 @@ func TestAPIConnectorDetail(t *testing.T) {
 	if !got.CanConfigure {
 		t.Errorf("admin should be able to configure")
 	}
+	if got.MCP || got.CustomMutableByMe {
+		t.Errorf("built-in connector should report mcp=false, custom_mutable_by_me=false; got %+v", got)
+	}
 
 	byKey := map[string]configFieldJSON{}
 	for _, f := range got.Fields {

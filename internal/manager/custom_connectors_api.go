@@ -39,6 +39,54 @@ func (h *Handler) customConnectorAPIRoutes(mux *http.ServeMux, authMidd *login.M
 	mux.Handle("POST /manager/api/connectors/custom/{defID}/enable", auth(h.apiCustomSetDisabled(false)))
 }
 
+// apiResyncMCPTools serves POST /manager/api/connectors/{key}/{id}/resync-tools.
+// It re-fetches the custom MCP server's tools/list (under this instance's
+// account for oauth schemes) and swaps the fresh operation set in, refreshing
+// the stored connection status. Custom MCP defs only; gated to admins and the
+// definition's creator (same level-1 gate as the def_resync MCP op).
+func (h *Handler) apiResyncMCPTools(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	id := r.PathValue("id")
+	if h.custom == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "custom connectors unavailable"})
+		return
+	}
+	row, err := h.connectors.Get(ctx, id)
+	if err != nil || row.Key != key {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "connector not found"})
+		return
+	}
+	defID, ok := h.custom.DefIDForKey(key)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a custom connector"})
+		return
+	}
+	def, err := h.custom.Store().GetDef(ctx, defID)
+	if err != nil || def == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "definition not found"})
+		return
+	}
+	if customconn.ServerIDForDef(def) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not an MCP connector"})
+		return
+	}
+	if !customconn.CanMutate(def, user) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "re-sync requires admin or connector owner"})
+		return
+	}
+	if err := h.custom.ReloadFor(ctx, defID, row.ID); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	count := 0
+	if mod, ok := h.connectors.Module(key); ok {
+		count = len(mod.Operations)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "operations": count})
+}
+
 // customMetaResponse is the read model the builder shell consumes before
 // rendering the paste tabs and the draft form's category picker. An empty
 // ai_providers slice hides the AI parser tab.

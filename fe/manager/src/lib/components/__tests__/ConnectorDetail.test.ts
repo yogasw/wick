@@ -75,6 +75,31 @@ describe("ConnectorDetail", () => {
     expect(await screen.findByText(/No changes/)).toBeTruthy();
   });
 
+  it("shows the Re-sync tools button and connection chip for a custom MCP instance", async () => {
+    vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ mcp: true, mcp_status: "connected", custom_mutable_by_me: true }));
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    expect(screen.getByRole("button", { name: "Re-sync tools" })).toBeTruthy();
+    expect(screen.getByText("Connected")).toBeTruthy();
+  });
+
+  it("re-syncs MCP tools through the endpoint", async () => {
+    vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ mcp: true, mcp_status: "disconnected", custom_mutable_by_me: true }));
+    vi.mocked(api.resyncMcpTools).mockResolvedValue({ ok: true, operations: 7 });
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    await fireEvent.click(screen.getByRole("button", { name: "Re-sync tools" }));
+    await vi.waitFor(() => expect(api.resyncMcpTools).toHaveBeenCalledWith("slack", "row-a"));
+  });
+
+  it("hides the Re-sync tools button when the caller cannot mutate the definition", async () => {
+    vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ mcp: true, mcp_status: "connected", custom_mutable_by_me: false }));
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    expect(screen.queryByRole("button", { name: "Re-sync tools" })).toBeNull();
+    expect(screen.getByText("Connected")).toBeTruthy();
+  });
+
   it("hides the health-check button when unsupported", async () => {
     vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ has_health_check: false }));
     render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
