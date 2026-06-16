@@ -151,17 +151,14 @@
         <div class="mt-4 flex flex-col gap-2">
           {#each rows as row (row.id)}
             {@const chip = statusChip(row)}
-            <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 hover:border-green-400">
+            <div class="group relative rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 hover:border-green-400">
               <div class="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
-                <button
-                  type="button"
-                  class="min-w-0 flex-1 text-left"
-                  onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}`)}
-                >
-                  <span class="block truncate font-medium text-black-900 dark:text-white-100 hover:text-green-600">{row.label}</span>
+                <button type="button" class="absolute inset-0 z-0 rounded-xl" aria-label={`Open ${row.label}`} onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}`)}></button>
+                <div class="pointer-events-none relative min-w-0 flex-1">
+                  <span class="block truncate font-medium text-black-900 dark:text-white-100 group-hover:text-green-600">{row.label}</span>
                   <span class="mt-0.5 block truncate font-mono text-[10px] text-black-700 dark:text-black-600">{row.id}</span>
-                </button>
-                <div class="flex flex-wrap items-center gap-2 sm:flex-shrink-0">
+                </div>
+                <div class="pointer-events-auto relative z-10 flex flex-wrap items-center gap-2 sm:flex-shrink-0">
                   {#if (row.tags ?? []).length === 0}
                     <span class="rounded-md border border-dashed border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600">Everyone</span>
                   {:else}

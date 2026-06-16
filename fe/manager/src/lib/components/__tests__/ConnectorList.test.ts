@@ -51,7 +51,7 @@ describe("ConnectorList", () => {
   it("navigates to the detail route on row click", async () => {
     render(ConnectorList, { connectorKey: "slack" });
     await screen.findByText("Prod");
-    await fireEvent.click(screen.getByText("Prod"));
+    await fireEvent.click(screen.getByLabelText("Open Prod"));
     expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-a");
   });
 
@@ -136,5 +136,12 @@ describe("ConnectorList", () => {
     await screen.findByText("Prod");
     await fireEvent.click(screen.getAllByRole("button", { name: "History" })[0]);
     expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-a/history");
+  });
+
+  it("opens detail when the row body (not just the label) is clicked", async () => {
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    await fireEvent.click(screen.getByLabelText("Open Prod"));
+    expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-a");
   });
 });
