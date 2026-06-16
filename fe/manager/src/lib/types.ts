@@ -255,6 +255,7 @@ export interface CustomDraftResult {
   def_id: string;
   disabled: boolean;
   mcp: boolean;
+  server_id?: string;
   draft: Draft | null;
 }
 

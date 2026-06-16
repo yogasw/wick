@@ -46,7 +46,11 @@
       if (editMode) {
         const res = await getCustomDraft(defID);
         if (res.mcp) {
-          window.location.href = `/manager/connectors/custom/mcp-servers/edit?id=${encodeURIComponent(res.def_id)}`;
+          if (!res.server_id) {
+            error = "Couldn't resolve the MCP server for this connector definition.";
+            return;
+          }
+          push(`/custom/mcp/${encodeURIComponent(res.server_id)}/edit`);
           return;
         }
         disabled = res.disabled;
