@@ -6,10 +6,12 @@
 
   const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"];
 
+  type SaveStatus = "" | "saving" | "saved" | string;
+
   type Props = {
     file: FileContent | null;
     dirty: boolean;
-    onSave: (content: string) => void;
+    onSave: (content: string) => void | Promise<void>;
     onClose: () => void;
     downloadHref?: string;
   };
@@ -17,6 +19,7 @@
   let { file, dirty, onSave, onClose, downloadHref }: Props = $props();
 
   let editContent = $state("");
+  let saveStatus = $state<SaveStatus>("");
 
   $effect(() => {
     if (file) editContent = file.content ?? "";
@@ -33,6 +36,17 @@
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   });
+
+  async function handleSave() {
+    saveStatus = "saving";
+    try {
+      await onSave(editContent);
+      saveStatus = "saved";
+      setTimeout(() => { saveStatus = ""; }, 2000);
+    } catch (e: unknown) {
+      saveStatus = e instanceof Error ? e.message : String(e);
+    }
+  }
 
   const editable = $derived(file !== null && !file.binary && !file.tooBig);
   const ext = $derived(file ? extOf(file.path) : "");
@@ -54,6 +68,13 @@
           <p class="text-xs font-mono text-black-900 dark:text-white-100 truncate">{file.path}</p>
         </div>
         <div class="flex items-center gap-1 shrink-0">
+          {#if saveStatus === "saving"}
+            <span class="text-[11px] text-black-700 dark:text-black-600 px-1" data-save-status>Saving…</span>
+          {:else if saveStatus === "saved"}
+            <span class="text-[11px] text-green-600 dark:text-green-400 px-1" data-save-status>Saved</span>
+          {:else if saveStatus}
+            <span class="text-[11px] text-neg-400 px-1 max-w-[180px] truncate" title={saveStatus} data-save-status>{saveStatus}</span>
+          {/if}
           {#if downloadHref}
             <a href={downloadHref} download class="inline-flex h-7 w-7 items-center justify-center rounded-lg text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors" title="Download">
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -62,8 +83,8 @@
             </a>
           {/if}
           {#if editable}
-            <button type="button" onclick={() => onSave(editContent)}
-              class="inline-flex items-center gap-1 rounded-lg bg-green-500 px-2.5 py-1.5 text-[11px] font-medium text-white-100 hover:bg-green-600 transition-colors">
+            <button type="button" onclick={handleSave} disabled={saveStatus === "saving"}
+              class="inline-flex items-center gap-1 rounded-lg bg-green-500 px-2.5 py-1.5 text-[11px] font-medium text-white-100 hover:bg-green-600 transition-colors disabled:opacity-60">
               <svg viewBox="0 0 12 12" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M2 3a1 1 0 011-1h6l2 2v6a1 1 0 01-1 1H3a1 1 0 01-1-1V3z M4 9h4M4 2v2h3V2" stroke-linejoin="round"/>
               </svg>

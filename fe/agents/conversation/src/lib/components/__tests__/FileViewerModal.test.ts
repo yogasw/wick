@@ -137,6 +137,37 @@ describe("FileViewerModal", () => {
     expect(container.querySelector("textarea")).toBeNull();
   });
 
+  test("shows 'Saving…' while save is in flight", async () => {
+    let resolveSave!: () => void;
+    const onSave = vi.fn(
+      () => new Promise<void>((r) => { resolveSave = r; }),
+    );
+    render(FileViewerModal, {
+      props: { file: TEXT_FILE, dirty: false, onSave, onClose: vi.fn() },
+    });
+    fireEvent.click(screen.getByText("Save"));
+    await vi.waitFor(() => expect(screen.getByText("Saving…")).toBeDefined());
+    resolveSave();
+  });
+
+  test("shows 'Saved' briefly after save resolves", async () => {
+    const onSave = vi.fn(() => Promise.resolve());
+    render(FileViewerModal, {
+      props: { file: TEXT_FILE, dirty: false, onSave, onClose: vi.fn() },
+    });
+    await fireEvent.click(screen.getByText("Save"));
+    await vi.waitFor(() => expect(screen.getByText("Saved")).toBeDefined());
+  });
+
+  test("shows save error message when onSave rejects", async () => {
+    const onSave = vi.fn(() => Promise.reject(new Error("disk full")));
+    render(FileViewerModal, {
+      props: { file: TEXT_FILE, dirty: false, onSave, onClose: vi.fn() },
+    });
+    await fireEvent.click(screen.getByText("Save"));
+    await vi.waitFor(() => expect(screen.getByText(/disk full/i)).toBeDefined());
+  });
+
   test("Escape key calls onClose", async () => {
     const onClose = vi.fn();
     render(FileViewerModal, {
