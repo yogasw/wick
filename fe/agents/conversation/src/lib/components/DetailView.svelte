@@ -152,8 +152,10 @@
   /* ── process panel state ──────────────────────────────────────── */
   let processes = $state<ProcessInfo[]>([]);
   let confirmKill = $state<{ sid: string; queued: boolean } | null>(null);
-  let processPollId: ReturnType<typeof setInterval> | null = null;
-  const PROCESS_POLL_MS = 5000;
+  // Guard against overlapping /processes requests: a burst of SSE `lifecycle`
+  // events would otherwise stack into a pile of pending fetches. Skip while
+  // one is already in flight.
+  let processesInFlight = false;
 
   /* ── workspace panel state ────────────────────────────────────── */
   let wsInstances = $state<WsInstance[]>([]);
@@ -275,6 +277,8 @@
   }
 
   function loadProcesses() {
+    if (processesInFlight) return;
+    processesInFlight = true;
     run(getProcesses(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
         processes = res;
@@ -284,7 +288,8 @@
           agentLabel = res[0].provider || "";
         }
       })
-      .catch((e: unknown) => toastError(`Processes: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e: unknown) => toastError(`Processes: ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => { processesInFlight = false; });
   }
 
   function loadWorkspace() {
@@ -645,20 +650,12 @@
     loadProviderOptions();
     loadProjectOptions();
     loadPendingAsk();
-
-    if (typeof setInterval !== "undefined") {
-      processPollId = setInterval(() => {
-        if (typeof document !== "undefined" && document.hidden) return;
-        loadProcesses();
-      }, PROCESS_POLL_MS);
-    }
+    // No interval polling for /processes: the SSE `lifecycle` event already
+    // fires whenever a process starts/stops, and triggers loadProcesses().
+    // Polling on top of that just stacked redundant fetches.
   });
 
   onDestroy(() => {
-    if (processPollId !== null) {
-      clearInterval(processPollId);
-      processPollId = null;
-    }
     if (fileReloadTimer !== null) clearTimeout(fileReloadTimer);
     closeSSE?.();
     unsubTurns();

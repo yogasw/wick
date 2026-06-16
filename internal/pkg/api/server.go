@@ -594,6 +594,7 @@ func NewServer() *Server {
 		OnAgentAdded: func(sessionID string) {
 			_ = agentsMgr.RefreshSession(sessionID)
 		},
+		OnSessionMeta: syncSessionMeta,
 		OnLifecycle: func(ev agentpool.LifecycleEvent) {
 			log.Ctx(ev.Ctx).Debug().
 				Str("component", "lifecycle").

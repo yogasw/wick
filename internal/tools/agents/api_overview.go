@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -46,7 +45,7 @@ func apiOverview(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	caller := login.GetUser(c.Context())
+	access := callerProjectAccess(c)
 
 	active := globalPool.ActiveSnapshot()
 	projects := globalMgr.Registry().Projects()
@@ -58,7 +57,7 @@ func apiOverview(c *tool.Ctx) {
 		if !ok {
 			continue
 		}
-		if !callerCanSeeSession(caller, s.Meta) {
+		if !access.allowSession(s.Meta.ProjectID, s.Meta.UserID) {
 			continue
 		}
 		label := loadFirstUserMessage(globalLayout, e.SessionID, 60)
@@ -76,7 +75,7 @@ func apiOverview(c *tool.Ctx) {
 	queueItems := make([]OverviewQueuedDTO, 0, len(queue))
 	for _, q := range queue {
 		s, ok := allSessions[q.SessionID]
-		if ok && !callerCanSeeSession(caller, s.Meta) {
+		if ok && !access.allowSession(s.Meta.ProjectID, s.Meta.UserID) {
 			continue
 		}
 		projName := ""

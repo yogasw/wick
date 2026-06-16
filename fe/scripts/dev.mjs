@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 // Spawns all workspace build:watch processes in parallel.
+// Supports both bun and npm — prefers bun when available.
 import { spawn } from "node:child_process";
+
+// Detect package manager: bun if invoked via bun, else fall back to npm.
+const runner = process.versions.bun ? "bun" : "npm";
+console.log(`[dev] runner=${runner}`);
 
 const workspaces = [
   "@wick-fe/agents-conversation",
@@ -18,7 +23,7 @@ const workspaces = [
 
 const procs = workspaces.map((ws) => {
   const p = spawn(
-    "npm",
+    runner,
     ["--workspace", ws, "run", "build:watch"],
     { stdio: "inherit", shell: true }
   );

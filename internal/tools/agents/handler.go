@@ -412,11 +412,74 @@ func sidebarVM(c *tool.Ctx, activePage, activeSessionID string) view.AgentsLayou
 	return sidebarVMScoped(c, activePage, activeSessionID, "")
 }
 
+// projectAccess captures a caller's session/project visibility for one
+// request. seeAll is true for admins/owners (no filtering). Otherwise only
+// resources whose ID is in `projects` are visible. userID is the caller's
+// own ID, used to keep unscoped sessions visible to their creator.
+type projectAccess struct {
+	seeAll   bool
+	userID   string
+	projects map[string]struct{}
+}
+
+// allowProject reports whether the caller may see the project with projectID.
+func (a projectAccess) allowProject(projectID string) bool {
+	if a.seeAll {
+		return true
+	}
+	_, ok := a.projects[projectID]
+	return ok
+}
+
+// allowSession reports whether the caller may see a session with the given
+// project + owner. Project-bound sessions follow project access. Unscoped
+// sessions (no ProjectID) aren't covered by any project tag, so a non-admin
+// may only see their OWN unscoped sessions — ownerless ones (UserID == "")
+// are admin-only, never shown to other users.
+func (a projectAccess) allowSession(projectID, userID string) bool {
+	if a.seeAll {
+		return true
+	}
+	if projectID == "" {
+		return userID != "" && userID == a.userID
+	}
+	_, ok := a.projects[projectID]
+	return ok
+}
+
+// callerProjectAccess resolves the caller's project visibility once per
+// request with a single bulk query, instead of an N+1 UserOwnsResource per
+// project/session. Unauthenticated and admin/owner callers see everything.
+func callerProjectAccess(c *tool.Ctx) projectAccess {
+	u := login.GetUser(c.Context())
+	if u == nil || u.IsAdmin() {
+		return projectAccess{seeAll: true}
+	}
+	if globalTagsSvc != nil {
+		set, err := globalTagsSvc.AccessibleResourceIDs(c.Context(), u.ID)
+		if err != nil {
+			log.Ctx(c.Context()).Warn().Err(err).Msg("resolve accessible projects")
+			set = map[string]struct{}{}
+		}
+		return projectAccess{userID: u.ID, projects: set}
+	}
+	// No tags service: fall back to owner-by-meta, resolved against the
+	// registry's projects.
+	set := make(map[string]struct{})
+	for pid, p := range globalMgr.Registry().Projects() {
+		if p.Meta.OwnerUserID == "" || p.Meta.OwnerUserID == u.ID {
+			set[pid] = struct{}{}
+		}
+	}
+	return projectAccess{userID: u.ID, projects: set}
+}
+
 // sidebarVMScoped builds the sidebar VM, optionally scoped to a project.
 // When scopedProjectID is set, the Recent list is filtered to that
 // project's sessions and the scoped breadcrumb renders.
 func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID string) view.AgentsLayoutVM {
-	const sidebarCap = 15
+	const sidebarCap = 10
+	access := callerProjectAccess(c)
 	allSessions := globalMgr.Registry().Sessions()
 	// Per-project session counts across ALL sessions (sidebar pills).
 	counts := make(map[string]int, len(allSessions))
@@ -426,13 +489,22 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		}
 	}
 	allIDs := globalMgr.Registry().SessionIDs()
-	// Scoped sidebar: keep only sessions bound to the active project.
-	if scopedProjectID != "" {
+	// Keep only sessions the caller may see (project access). When scoped to a
+	// project, also drop sessions outside it. Sorted-desc order is preserved.
+	{
 		filtered := allIDs[:0:0]
 		for _, id := range allIDs {
-			if s, ok := allSessions[id]; ok && s.Meta.ProjectID == scopedProjectID {
-				filtered = append(filtered, id)
+			s, ok := allSessions[id]
+			if !ok {
+				continue
 			}
+			if scopedProjectID != "" && s.Meta.ProjectID != scopedProjectID {
+				continue
+			}
+			if !access.allowSession(s.Meta.ProjectID, s.Meta.UserID) {
+				continue
+			}
+			filtered = append(filtered, id)
 		}
 		allIDs = filtered
 	}
@@ -463,19 +535,10 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 	close(ch)
 	allProjects := globalMgr.Registry().Projects()
 	allProjectIDs := globalMgr.Registry().ProjectIDs()
-	if u := login.GetUser(c.Context()); u != nil && !u.IsAdmin() {
+	if !access.seeAll {
 		filtered := allProjectIDs[:0:0]
 		for _, pid := range allProjectIDs {
-			p, ok := allProjects[pid]
-			if !ok {
-				continue
-			}
-			if globalTagsSvc != nil {
-				owns, _ := globalTagsSvc.UserOwnsResource(c.Context(), u.ID, pid)
-				if owns {
-					filtered = append(filtered, pid)
-				}
-			} else if p.Meta.OwnerUserID == "" || p.Meta.OwnerUserID == u.ID {
+			if _, ok := allProjects[pid]; ok && access.allowProject(pid) {
 				filtered = append(filtered, pid)
 			}
 		}
@@ -614,14 +677,22 @@ func newSessionCompose(c *tool.Ctx) {
 		return
 	}
 	ensurePersonalProjectForUser(c)
+	access := callerProjectAccess(c)
 	scoped := c.Query("project")
 	if scoped != "" {
-		if _, ok := globalMgr.Registry().Project(scoped); !ok {
+		if _, ok := globalMgr.Registry().Project(scoped); !ok || !access.allowProject(scoped) {
 			scoped = ""
 		}
 	}
-	if scoped == "" {
-		scoped = pinnedProjectID(c)
+	// No explicit project in the URL: fall back to the user's pinned project
+	// (their personal default) and redirect so the URL carries ?project=. The
+	// new-session SPA reads ?project= to prefill the composer — without the
+	// redirect it has no way to know the active project.
+	if scoped == "" && c.Query("project") == "" {
+		if pinned := pinnedProjectID(c); pinned != "" && access.allowProject(pinned) {
+			c.Redirect(c.Base()+"/?project="+pinned, http.StatusSeeOther)
+			return
+		}
 	}
 	layout := sidebarVMScoped(c, "new", "", scoped)
 	layout.FullBleed = true
@@ -759,8 +830,14 @@ func sessionsPage(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	scoped := c.Query("project")
+	if scoped != "" {
+		if _, ok := globalMgr.Registry().Project(scoped); !ok {
+			scoped = ""
+		}
+	}
 	c.HTML(view.Conversation(view.ConversationVM{
-		Layout:        sidebarVM(c, "sessions", ""),
+		Layout:        sidebarVMScoped(c, "sessions", "", scoped),
 		Base:          c.Base(),
 		AssetURL:      spaAssetURL("conversation"),
 		ScmAsset:      spaAssetURL("scm"),
@@ -1413,9 +1490,13 @@ func projectOptionsJSON(c *tool.Ctx) {
 		Path    string `json:"path"`
 		Managed bool   `json:"managed"`
 	}
+	access := callerProjectAccess(c)
 	projects := globalMgr.Registry().Projects()
 	opts := make([]option, 0, len(projects))
 	for id, p := range projects {
+		if !access.allowProject(id) {
+			continue
+		}
 		managed := p.Meta.CustomPath == ""
 		path := p.Meta.CustomPath
 		if path == "" {
