@@ -107,4 +107,10 @@ describe("ConnectorTest", () => {
     render(ConnectorTest, { connectorKey: "slack", connectorId: "row-a" });
     expect(await screen.findByText("This connector exposes no operations.")).toBeTruthy();
   });
+
+  it("renders the H1 at the legacy 1.375rem size", async () => {
+    render(ConnectorTest, { connectorKey: "slack", connectorId: "row-a" });
+    const h1 = await screen.findByRole("heading", { level: 1, name: "Test runner" });
+    expect(h1.className).toContain("text-[1.375rem]");
+  });
 });
