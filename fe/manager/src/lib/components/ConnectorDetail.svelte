@@ -127,7 +127,7 @@
         <span class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg" aria-hidden="true">{data.icon || "🔌"}</span>
         <div class="min-w-0">
           <div class="flex flex-wrap items-center gap-2">
-            <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">{data.label}</h1>
+            <h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{data.label}</h1>
             {#if data.disabled}
               <span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2.5 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">Disabled</span>
             {:else}
@@ -135,6 +135,9 @@
             {/if}
           </div>
           <p class="mt-0.5 font-mono text-[11px] text-black-700 dark:text-black-600">{data.id}</p>
+          {#if data.description}
+            <p class="mt-1 max-w-xl text-sm text-black-800 dark:text-black-600">{data.description}</p>
+          {/if}
         </div>
       </div>
     </div>

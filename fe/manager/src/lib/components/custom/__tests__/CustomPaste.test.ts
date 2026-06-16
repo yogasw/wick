@@ -70,6 +70,15 @@ describe("CustomPaste", () => {
     expect(stored.key).toBe("petstore");
   });
 
+  it("shows AI-error guidance paragraph on parse error", async () => {
+    vi.mocked(api.parseCustomPaste).mockRejectedValue(new Error("bad paste"));
+    render(CustomPaste);
+    await screen.findByText("New connector from paste");
+    await fireEvent.input(screen.getByLabelText("Paste box"), { target: { value: "something" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Parse →" }));
+    expect(await screen.findByText(/Common causes:/)).toBeTruthy();
+  });
+
   it("surfaces a parse error", async () => {
     vi.mocked(api.parseCustomPaste).mockRejectedValue(new Error("could not parse"));
     render(CustomPaste);

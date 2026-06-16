@@ -5,9 +5,10 @@
     request: ApprovalRequest | null;
     onDecide: (decision: ApprovalDecision) => void;
     onClose?: () => void;
+    error?: string;
   };
 
-  let { request, onDecide, onClose }: Props = $props();
+  let { request, onDecide, onClose, error = "" }: Props = $props();
 
   let countdown = $state(25);
 
@@ -27,14 +28,36 @@
   function decide(decision: ApprovalDecision) {
     onDecide(decision);
   }
+
+  function dismiss() {
+    decide("block");
+    onClose?.();
+  }
+
+  $effect(() => {
+    if (!request) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        dismiss();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 </script>
 
 {#if request !== null}
-  <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-  >
+  <div class="fixed inset-0 z-50 flex items-center justify-center">
+    <button
+      type="button"
+      data-approval-backdrop
+      aria-label="Dismiss"
+      class="absolute inset-0 bg-black/60 backdrop-blur-sm"
+      onclick={dismiss}
+    ></button>
     <div
-      class="w-full max-w-lg mx-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-xl"
+      class="relative w-full max-w-lg mx-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-xl"
     >
       <div
         class="border-b border-white-300 dark:border-navy-600 px-6 py-4 flex items-center justify-between"
@@ -82,6 +105,10 @@
           >{request.cmd || ""}</pre>
         </div>
       </div>
+
+      {#if error}
+        <div data-approval-error class="px-6 pb-1 text-xs font-medium text-neg-400">{error}</div>
+      {/if}
 
       <div
         class="border-t border-white-300 dark:border-navy-600 px-6 py-4 grid grid-cols-4 gap-2"

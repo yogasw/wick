@@ -15,9 +15,14 @@
     onRefresh: () => void;
     onNewFile: () => void;
     onNewDir: () => void;
+    onDownload?: (path: string) => void;
+    onDelete?: (path: string) => void;
+    onNewHere?: (dirPath: string) => void;
+    loading?: boolean;
+    loadError?: string;
   };
 
-  let { cwd, files, search, openDirs, onSearch, onToggleDir, onOpen, onRefresh, onNewFile, onNewDir }: Props = $props();
+  let { cwd, files, search, openDirs, onSearch, onToggleDir, onOpen, onRefresh, onNewFile, onNewDir, onDownload = () => {}, onDelete = () => {}, onNewHere = () => {}, loading = false, loadError = "" }: Props = $props();
 
   function buildTree(entries: ContextFileEntry[]): TreeNode {
     const root: TreeNode = { entry: { path: "", name: "", isDir: true, size: 0, mtime: 0 }, children: [] };
@@ -96,7 +101,15 @@
 
   <!-- File tree -->
   <div class="flex-1 overflow-y-auto">
-    {#if files.length === 0}
+    {#if loading}
+      <div class="px-4 py-12 text-center text-xs text-black-700 dark:text-black-600" data-loading-placeholder>
+        Loading files…
+      </div>
+    {:else if loadError}
+      <div class="px-4 py-12 text-center text-xs text-neg-400" data-load-error>
+        {loadError}
+      </div>
+    {:else if files.length === 0}
       <div class="px-4 py-12 text-center text-xs text-black-700 dark:text-black-600">
         Empty. Use + to add a file or folder.
       </div>
@@ -106,7 +119,7 @@
       </div>
     {:else}
       {#each visible as node (node.entry.path)}
-        <FileTreeNode {node} depth={0} forceOpen={!!q} {openDirs} {onToggleDir} {onOpen} />
+        <FileTreeNode {node} depth={0} forceOpen={!!q} {openDirs} {onToggleDir} {onOpen} {onDownload} {onDelete} {onNewHere} />
       {/each}
     {/if}
   </div>

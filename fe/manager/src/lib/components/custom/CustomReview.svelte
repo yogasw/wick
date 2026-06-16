@@ -125,7 +125,7 @@
   <div class="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">{error}</div>
 {:else if draft}
   <div class="space-y-4">
-    <div class="sticky top-0 z-30 -mx-6 -mt-6 border-b border-white-300 bg-white-200 px-6 py-3 dark:border-navy-600 dark:bg-navy-800">
+    <div class="sticky top-16 z-30 -mx-6 border-b border-white-300 bg-white-200 px-6 py-3 dark:border-navy-600 dark:bg-navy-800">
       <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
         <h1 class="min-w-0 truncate text-lg font-semibold text-black-900 dark:text-white-100">
           {editMode ? "Edit connector definition" : "Review extracted definition"}

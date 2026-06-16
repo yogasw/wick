@@ -52,6 +52,16 @@ describe("McpServerForm — new mode (test gate)", () => {
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
+  it("keeps the focused input mounted while typing (no remount per keystroke)", async () => {
+    render(McpServerForm);
+    await screen.findByText("Register MCP server");
+    const input = screen.getByLabelText("Label") as HTMLInputElement;
+    input.focus();
+    await fireEvent.input(input, { target: { value: "Internal" } });
+    expect(input.isConnected).toBe(true);
+    expect(document.activeElement).toBe(input);
+  });
+
   it("enables Save after a successful test and lists discovered tools", async () => {
     vi.mocked(api.testMcpServer).mockResolvedValue({
       ok: true,
@@ -117,6 +127,34 @@ describe("McpServerForm — auth panel toggle", () => {
     await screen.findByText("Register MCP server");
     await fireEvent.click(screen.getByLabelText("OAuth (login on the server)"));
     expect(await screen.findByText("Client ID (optional)")).toBeTruthy();
+  });
+});
+
+describe("McpServerForm — Label slugified-key hint (finding #19)", () => {
+  it("shows the slugified-key hint on the Label field", async () => {
+    render(McpServerForm);
+    await screen.findByText("Register MCP server");
+    expect(screen.getByText(/and its key, slugified/)).toBeTruthy();
+  });
+});
+
+describe("McpServerForm — JSON-RPC explainer + Description helper (finding #17)", () => {
+  it("renders the JSON-RPC explainer and Description re-sync helper", async () => {
+    render(McpServerForm);
+    await screen.findByText("Register MCP server");
+    expect(screen.getByText(/forwards JSON-RPC/)).toBeTruthy();
+    expect(screen.getByText(/adopt the server's self-description/)).toBeTruthy();
+  });
+});
+
+describe("McpServerForm — SSO panel content (finding #15)", () => {
+  it("shows claim-mapping pre, Why-SSO box, and server-requirement callout when SSO is selected", async () => {
+    render(McpServerForm);
+    await screen.findByText("Register MCP server");
+    await fireEvent.click(screen.getByLabelText("SSO (forward caller's session)"));
+    expect(await screen.findByText(/Claim mapping/)).toBeTruthy();
+    expect(screen.getByText(/\.well-known\/wick-pubkey\.pem/)).toBeTruthy();
+    expect(screen.getByText(/Why SSO/)).toBeTruthy();
   });
 });
 

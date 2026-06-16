@@ -197,4 +197,10 @@ describe("OperationsTable", () => {
     const region = screen.getByText("Operations").closest("section") as HTMLElement;
     expect(within(region).getByText("Alpha")).toBeTruthy();
   });
+
+  it("applies the responsive resp-table wrapper for mobile", () => {
+    const { container } = renderTable(manyOps(3));
+    expect(container.querySelector(".resp-table-wrap")).toBeTruthy();
+    expect(container.querySelector("table.resp-table")).toBeTruthy();
+  });
 });

@@ -62,6 +62,26 @@ describe("JobDetail", () => {
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
+  it("shows the setup banner when required fields are missing", async () => {
+    vi.mocked(api.getJob).mockResolvedValue(
+      makeJob({ fields: [{ key: "token", type: "text", value: "", options: "", required: true, is_secret: true, has_value: false, description: "", visible_when: "", env_override: "" }] }),
+    );
+    render(JobDetail, { jobKey: "report" });
+    await screen.findByText("Daily Report");
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.getByText(/Setup required/)).toBeTruthy();
+    expect(screen.getByText(/1 required value/)).toBeTruthy();
+  });
+
+  it("hides the setup banner when no fields are missing", async () => {
+    vi.mocked(api.getJob).mockResolvedValue(
+      makeJob({ fields: [{ key: "token", type: "text", value: "x", options: "", required: true, is_secret: true, has_value: true, description: "", visible_when: "", env_override: "" }] }),
+    );
+    render(JobDetail, { jobKey: "report" });
+    await screen.findByText("Daily Report");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("runs the job and polls the run to completion", async () => {
     vi.useFakeTimers();
     vi.mocked(api.runJob).mockResolvedValue("run-1");

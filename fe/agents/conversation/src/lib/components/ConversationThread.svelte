@@ -10,9 +10,10 @@
     live: LiveTurn | null;
     typing: TypingState;
     loadTrace?: (turnId: string) => Promise<TurnEvent[]>;
+    onOpenPath?: (path: string) => void;
   };
 
-  let { turns, live, typing, loadTrace }: Props = $props();
+  let { turns, live, typing, loadTrace, onOpenPath }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -24,10 +25,20 @@
 
   let liveTraceOpen = $state(false);
 
+  const isEmpty = $derived(turns.length === 0 && !live && !typing.active);
+
   onMount(() => {
     if (!containerEl) return;
     containerEl.addEventListener("click", (e: MouseEvent) => {
-      const btn = (e.target as Element).closest<HTMLElement>("[data-copy-code]");
+      const target = e.target as Element;
+      const link = target.closest<HTMLElement>("[data-chat-path]");
+      if (link) {
+        e.preventDefault();
+        const path = link.dataset.chatPath ?? "";
+        if (path) onOpenPath?.(path);
+        return;
+      }
+      const btn = target.closest<HTMLElement>("[data-copy-code]");
       if (!btn) return;
       const code = btn.dataset.code ?? "";
       navigator.clipboard.writeText(code).then(() => {
@@ -40,6 +51,12 @@
 </script>
 
 <div bind:this={containerEl} class="flex flex-col gap-3 px-4 py-3">
+  {#if isEmpty}
+    <div class="flex flex-col items-center justify-center py-16 text-center gap-1">
+      <p class="text-sm font-medium text-black-700 dark:text-black-600">No messages yet</p>
+      <p class="text-xs text-black-600 dark:text-black-700">Send a message to start.</p>
+    </div>
+  {/if}
   {#each turns as turn, i (turn.turn_id ? turn.turn_id + "-" + i : "turn-" + i)}
     <ThreadMessage {turn} {loadTrace} />
   {/each}

@@ -18,13 +18,32 @@ vi.mock("effect", () => ({
   },
 }));
 
+const { metaStore } = vi.hoisted(() => {
+  /* Minimal writable so tests can drive the thread meta title. */
+  let value: Record<string, unknown> = {};
+  const subs = new Set<(v: Record<string, unknown>) => void>();
+  return {
+    metaStore: {
+      subscribe(fn: (v: Record<string, unknown>) => void) {
+        subs.add(fn);
+        fn(value);
+        return () => { subs.delete(fn); };
+      },
+      set(v: Record<string, unknown>) {
+        value = v;
+        subs.forEach((fn) => fn(value));
+      },
+    },
+  };
+});
+
 vi.mock("../../stores/thread.js", () => ({
   createThreadStore: () => ({
     turns: { subscribe: (fn: (v: unknown[]) => void) => { fn([]); return () => {}; } },
     live: { subscribe: (fn: (v: null) => void) => { fn(null); return () => {}; } },
     typing: { subscribe: (fn: (v: { active: boolean }) => void) => { fn({ active: false }); return () => {}; } },
     lifecycle: { subscribe: (fn: (v: { state: string; pid: number; substate: string; at: number }) => void) => { fn({ state: "", pid: 0, substate: "", at: 0 }); return () => {}; } },
-    meta: { subscribe: (fn: (v: Record<string, unknown>) => void) => { fn({}); return () => {}; } },
+    meta: metaStore,
     setHistory: vi.fn(),
     appendUserTurn: vi.fn(),
     handleEvent: vi.fn(),
@@ -73,6 +92,7 @@ vi.mock("../../api/options.js", () => ({
 }));
 
 vi.mock("../../api/asks.js", () => ({
+  getAsks: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   answerAsk: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
 }));
 
@@ -91,6 +111,7 @@ vi.mock("../../api/files.js", () => ({
   readFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   saveFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   createFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  deleteFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   downloadURL: vi.fn().mockReturnValue(""),
 }));
 
@@ -116,6 +137,8 @@ vi.mock("svelte/store", async (importActual) => {
 });
 
 import DetailView from "../DetailView.svelte";
+import { killProcess, getProcesses } from "../../api/processes.js";
+import { getAsks } from "../../api/asks.js";
 
 const DEFAULT_PROPS = {
   base: "/api",
@@ -300,6 +323,50 @@ describe("DetailView — SCM source rail panel", () => {
   });
 });
 
+describe("DetailView — resizable + persisted Source sidebar width (#34)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+    (window as unknown as Record<string, unknown>)["WickSCM"] = undefined;
+  });
+
+  test("desktop Source sidebar applies persisted width as inline style on mount", async () => {
+    localStorage.setItem("wick.scm.width", "512");
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+
+    const sourceBtn = screen.getByRole("button", { name: /source/i });
+    await fireEvent.click(sourceBtn);
+
+    const sidePanel = container.querySelector<HTMLElement>(".lg\\:flex.flex-col");
+    expect(sidePanel).not.toBeNull();
+    expect(sidePanel?.getAttribute("style")).toContain("width: 512px");
+  });
+
+  test("desktop Source sidebar applies clamped default width when nothing persisted", async () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+
+    const sourceBtn = screen.getByRole("button", { name: /source/i });
+    await fireEvent.click(sourceBtn);
+
+    const sidePanel = container.querySelector<HTMLElement>(".lg\\:flex.flex-col");
+    expect(sidePanel?.getAttribute("style")).toContain("width: 384px");
+  });
+
+  test("desktop Source sidebar exposes a resize drag handle", async () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+
+    const sourceBtn = screen.getByRole("button", { name: /source/i });
+    await fireEvent.click(sourceBtn);
+
+    expect(container.querySelector("[data-scm-resize]")).not.toBeNull();
+  });
+});
+
 describe("DetailView — placeholder views full-height (#10)", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -333,5 +400,161 @@ describe("DetailView — placeholder views full-height (#10)", () => {
     expect(screen.getByText(/Raw trace/)).not.toBeNull();
     expect(screen.getByRole("button", { name: /^copy$/i })).not.toBeNull();
     expect(container.querySelector("[data-placeholder-view]")).toBeNull();
+  });
+});
+
+describe("DetailView — rail tab count badges (#31)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("rail tabs render without a count badge when counts are zero", () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    expect(container.querySelector('[aria-label="Context"]')).not.toBeNull();
+    /* zero-count badges must not appear */
+    expect(container.querySelectorAll(".rounded-full.bg-green-500").length).toBe(0);
+  });
+});
+
+describe("DetailView — approvals modal error propagation (#35)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("ApprovalsModal receives error prop (data-approval-error absent when no error)", () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    expect(container.querySelector("[data-approval-error]")).toBeNull();
+  });
+});
+
+describe("DetailView — confirm before kill/dequeue (#33)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("header kill button is rendered", () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    const killBtn = container.querySelector('[aria-label="Kill session"]');
+    expect(killBtn).not.toBeNull();
+  });
+
+  test("clicking header kill opens a confirm dialog instead of killing immediately", async () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    const killBtn = screen.getByRole("button", { name: /kill session/i });
+    await fireEvent.click(killBtn);
+    /* destructive action must be gated — killProcess not called yet */
+    expect(killProcess).not.toHaveBeenCalled();
+    /* the shared confirm dialog is now open */
+    expect(screen.getByText("Stop this agent?")).toBeDefined();
+  });
+
+  test("confirming the dialog invokes killProcess", async () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByRole("button", { name: /kill session/i }));
+    await fireEvent.click(screen.getByRole("button", { name: /^stop agent$/i }));
+    expect(killProcess).toHaveBeenCalledWith("/api", "test-sess");
+  });
+});
+
+describe("DetailView — pending ask rehydration on load (G3)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("getAsks is called on mount to rehydrate any pending ask", () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    expect(getAsks).toHaveBeenCalledWith("/api", "test-sess");
+  });
+});
+
+describe("DetailView — process list polling (G4)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("loadProcesses polls again after 5s", () => {
+    vi.useFakeTimers();
+    try {
+      render(DetailView, { props: DEFAULT_PROPS });
+      expect(getProcesses).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(5000);
+      expect(getProcesses).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("DetailView — browser tab title from meta (G7)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    metaStore.set({});
+    document.title = "";
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("document.title reflects the thread meta title", async () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    metaStore.set({ title: "My Session" });
+    await Promise.resolve();
+    expect(document.title).toContain("My Session");
+  });
+});
+
+describe("DetailView — Ctrl/Cmd+B toggles the context rail (G8)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("Ctrl+B opens the context side panel, again closes it", async () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    expect(container.querySelector(".lg\\:flex.flex-col")).toBeNull();
+
+    await fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    expect(container.querySelector(".lg\\:flex.flex-col")).not.toBeNull();
+
+    await fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    expect(container.querySelector(".lg\\:flex.flex-col")).toBeNull();
   });
 });

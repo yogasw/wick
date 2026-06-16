@@ -249,4 +249,100 @@ describe("SessionList", () => {
     });
     expect(screen.queryByRole("link", { name: "New chat" })).toBeNull();
   });
+
+  describe("#24 lifecycle badge tokens", () => {
+    const cases: Array<{ lc: string; badge: string }> = [
+      { lc: "working",  badge: "bg-pos-100 text-pos-400" },
+      { lc: "idle",     badge: "bg-prog-100 text-prog-400" },
+      { lc: "spawning", badge: "bg-cau-100 text-cau-400" },
+      { lc: "queued",   badge: "bg-cau-100 text-cau-400" },
+      { lc: "killed",   badge: "bg-neg-100 text-neg-400" },
+      { lc: "dead",     badge: "bg-neg-100 text-neg-400" },
+    ];
+
+    for (const { lc, badge } of cases) {
+      test(`lifecycle="${lc}" badge has classes ${badge}`, () => {
+        render(SessionList, {
+          props: {
+            sessions: [makeSession({ id: "lc-test", label: "LC Test", lifecycle: lc })],
+            search: "",
+            onSearch: vi.fn(),
+            onSelect: vi.fn(),
+          },
+        });
+        const badgeEl = screen.getByText(lc);
+        for (const cls of badge.split(" ")) {
+          expect(badgeEl.classList.contains(cls)).toBe(true);
+        }
+      });
+    }
+
+    test("unknown lifecycle falls back to neutral classes", () => {
+      render(SessionList, {
+        props: {
+          sessions: [makeSession({ id: "lc-unknown", label: "Unknown", lifecycle: "mystery" })],
+          search: "",
+          onSearch: vi.fn(),
+          onSelect: vi.fn(),
+        },
+      });
+      const badgeEl = screen.getByText("mystery");
+      expect(badgeEl.classList.contains("bg-white-300")).toBe(true);
+      expect(badgeEl.classList.contains("text-black-700")).toBe(true);
+    });
+  });
+
+  describe("#40 project name secondary row", () => {
+    test("shows project name when projectNames map contains the session project_id", () => {
+      render(SessionList, {
+        props: {
+          sessions: [makeSession({ id: "p-sess", label: "Proj Chat", project_id: "proj-1" })],
+          search: "",
+          onSearch: vi.fn(),
+          onSelect: vi.fn(),
+          projectNames: { "proj-1": "My Project" },
+        },
+      });
+      expect(screen.getByText("My Project")).toBeDefined();
+    });
+
+    test("does not show project name when projectNames is omitted", () => {
+      render(SessionList, {
+        props: {
+          sessions: [makeSession({ id: "p-sess", label: "No Proj", project_id: "proj-1" })],
+          search: "",
+          onSearch: vi.fn(),
+          onSelect: vi.fn(),
+        },
+      });
+      expect(screen.queryByText("My Project")).toBeNull();
+    });
+
+    test("does not show project name when session project_id is not in projectNames", () => {
+      render(SessionList, {
+        props: {
+          sessions: [makeSession({ id: "p-sess", label: "Missing", project_id: "proj-999" })],
+          search: "",
+          onSearch: vi.fn(),
+          onSelect: vi.fn(),
+          projectNames: { "proj-1": "My Project" },
+        },
+      });
+      expect(screen.queryByText("My Project")).toBeNull();
+    });
+
+    test("project name appears on the secondary row alongside lifecycle badge", () => {
+      render(SessionList, {
+        props: {
+          sessions: [makeSession({ id: "p-sess", label: "Both", project_id: "proj-1", lifecycle: "idle" })],
+          search: "",
+          onSearch: vi.fn(),
+          onSelect: vi.fn(),
+          projectNames: { "proj-1": "Alpha Project" },
+        },
+      });
+      expect(screen.getByText("Alpha Project")).toBeDefined();
+      expect(screen.getByText("idle")).toBeDefined();
+    });
+  });
 });

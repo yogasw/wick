@@ -30,6 +30,26 @@ describe("ToolDetail", () => {
     expect(screen.getByText("prefix")).toBeTruthy();
   });
 
+  it("shows the setup banner when required fields are missing", async () => {
+    vi.mocked(api.getTool).mockResolvedValue(
+      makeTool({ fields: [{ key: "api_key", type: "text", value: "", options: "", required: true, is_secret: true, has_value: false, description: "", visible_when: "", env_override: "" }] }),
+    );
+    render(ToolDetail, { toolKey: "echo" });
+    await screen.findByText("Echo");
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.getByText(/Setup required/)).toBeTruthy();
+    expect(screen.getByText(/1 required value/)).toBeTruthy();
+  });
+
+  it("hides the setup banner when no fields are missing", async () => {
+    vi.mocked(api.getTool).mockResolvedValue(
+      makeTool({ fields: [{ key: "api_key", type: "text", value: "x", options: "", required: true, is_secret: true, has_value: true, description: "", visible_when: "", env_override: "" }] }),
+    );
+    render(ToolDetail, { toolKey: "echo" });
+    await screen.findByText("Echo");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("surfaces a load error", async () => {
     vi.mocked(api.getTool).mockRejectedValue(new Error("boom"));
     render(ToolDetail, { toolKey: "echo" });

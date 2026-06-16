@@ -95,15 +95,15 @@
     <span class="block text-[11px] text-black-700 dark:text-black-600">{helper}</span>
   {/if}
   {#if (rows ?? []).length === 0 && emptyText}
-    <div class="rounded border border-white-300 dark:border-navy-600 px-4 py-5 text-center text-xs text-black-700 dark:text-black-600">{emptyText}</div>
+    <div class="rounded-lg border border-white-300 dark:border-navy-600 px-4 py-5 text-center text-xs text-black-700 dark:text-black-600">{emptyText}</div>
   {/if}
   {#each rows ?? [] as r, index (index)}
     {#if row}
-      <div class="space-y-1 rounded border border-white-300 dark:border-navy-600 p-2">
+      <div class="space-y-1 rounded-lg border border-white-300 dark:border-navy-600 p-2">
         {@render row({ row: r, index, remove: () => removeRow(index), set: (col, value) => setCell(index, col, value) })}
       </div>
     {:else}
-      <div class="rounded border border-white-300 dark:border-navy-600 p-2">
+      <div class="rounded-lg border border-white-300 dark:border-navy-600 p-2">
         <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
           {#each columns as col}
             <div class="min-w-0 flex-1 space-y-1">

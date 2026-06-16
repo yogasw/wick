@@ -101,6 +101,9 @@
     {#if error}
       <div class="mt-4 rounded-lg border border-neg-400 bg-neg-100 px-4 py-3">
         <p class="text-sm font-medium text-neg-400">✗ {error}</p>
+        <p class="mt-1 text-xs text-black-800">
+          Common causes: paste too short or over 8 KB, multiple endpoints mixed in, non-HTTP content. Trim it down to a single endpoint{#if aiProviders.length > 0} or switch parser tabs{/if} and try again.
+        </p>
       </div>
     {/if}
 

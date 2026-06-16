@@ -175,4 +175,25 @@ describe("AskUserModal", () => {
     expect(screen.getByText("Speed")).toBeDefined();
     expect(screen.getByText("Cost")).toBeDefined();
   });
+
+  test("wizard text-input step auto-focuses the input", async () => {
+    const request = { id: "q1", fields: [{ key: "name", type: "text", label: "Name", required: false }] };
+    render(AskUserModal, { props: { request, onSubmit: vi.fn() } });
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    await vi.waitFor(() => { expect(document.activeElement).toBe(input); });
+  });
+
+  test("required text field shows red border after empty Next/Submit", async () => {
+    const request = {
+      id: "q1",
+      fields: [
+        { key: "step1", type: "text", label: "Step 1", required: true },
+        { key: "name", type: "text", label: "Name", required: true },
+      ],
+    };
+    const { container } = render(AskUserModal, { props: { request, onSubmit: vi.fn() } });
+    await fireEvent.click(screen.getByText("Next"));
+    const input = container.querySelector("input")!;
+    expect(input.className).toContain("border-neg-400");
+  });
 });

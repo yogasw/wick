@@ -62,16 +62,17 @@
   let toolName = $derived(names.tool ?? toolParams?.key ?? "");
 </script>
 
+{#snippet sep()}
+  <span aria-hidden="true">/</span>
+{/snippet}
+{#snippet homeLink()}
+  <button type="button" class="whitespace-nowrap hover:text-green-600" onclick={() => push("/")}>Home</button>
+{/snippet}
+{#snippet current(label: string)}
+  <span class="inline-block max-w-[55vw] truncate align-bottom text-black-900 dark:text-white-100 sm:max-w-[18rem]">{label}</span>
+{/snippet}
+
 <AppShell>
-  {#snippet sep()}
-    <span aria-hidden="true">/</span>
-  {/snippet}
-  {#snippet homeLink()}
-    <button type="button" class="whitespace-nowrap hover:text-green-600" onclick={() => push("/")}>Home</button>
-  {/snippet}
-  {#snippet current(label: string)}
-    <span class="inline-block max-w-[55vw] truncate align-bottom text-black-900 dark:text-white-100 sm:max-w-[18rem]">{label}</span>
-  {/snippet}
   {#snippet breadcrumb()}
     {#if auditRoute}
       {@render homeLink()}

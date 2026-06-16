@@ -62,14 +62,10 @@
   let testResult = $state<{ ok: boolean; count?: number; latency?: number; names?: string; error?: string } | null>(null);
   let saving = $state(false);
   let confirmDelete = $state(false);
-  /* Bump on every nested-form edit so $derived recomputes off the
-     mutated-in-place form object (Svelte does not deep-track it). */
-  let rev = $state(0);
 
   let activeLogin: OAuthLogin | null = null;
 
   function invalidateTest() {
-    rev += 1;
     testedOK = false;
   }
 
@@ -202,9 +198,8 @@
 {#if loading}
   <div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">Loading…</div>
 {:else}
-  {#key rev}
     <div class="space-y-4">
-      <div class="sticky top-0 z-30 -mx-6 -mt-6 border-b border-white-300 bg-white-200 px-6 py-3 dark:border-navy-600 dark:bg-navy-800">
+      <div class="sticky top-16 z-30 -mx-6 border-b border-white-300 bg-white-200 px-6 py-3 dark:border-navy-600 dark:bg-navy-800">
         <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
           <h1 class="min-w-0 truncate text-lg font-semibold text-black-900 dark:text-white-100">
             {editMode ? "Edit MCP server" : "Register MCP server"}
@@ -225,6 +220,10 @@
         <div class="rounded-lg border border-neg-400 bg-neg-100 px-4 py-3 text-sm font-medium text-neg-400">✗ {error}</div>
       {/if}
 
+      <p class="text-sm text-black-800 dark:text-black-600">
+        Wick forwards JSON-RPC (<code class="font-mono text-xs">initialize</code>, <code class="font-mono text-xs">tools/list</code>, <code class="font-mono text-xs">tools/call</code>) to this URL per request. Stdio servers are out of scope — expose them over HTTP with a sidecar.
+      </p>
+
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
         <div class="grid grid-cols-12 gap-4">
           <div class="col-span-3 sm:col-span-2">
@@ -243,7 +242,7 @@
                 ariaLabel="Label"
               />
             </div>
-            <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Display name — becomes the connector's name.</p>
+            <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Display name — becomes the connector's name (and its key, slugified).</p>
           </div>
           <div class="col-span-12 sm:col-span-6">
             <span class="block text-xs font-medium text-black-800 dark:text-black-600">MCP URL <span class="text-neg-400">*</span></span>
@@ -269,6 +268,7 @@
                 ariaLabel="Description"
               />
             </div>
+            <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Empty = adopt the server's self-description (from its <code class="font-mono">initialize</code> instructions) and keep it fresh on every re-sync. Write your own to lock it — clearing the field hands it back to the server.</p>
           </div>
         </div>
 
@@ -317,12 +317,11 @@
             Every tool this server lists is exposed automatically. Use Exclude to hide a tool.
           </p>
           <div class="mt-3">
-            <McpToolExcludeList {tools} excluded={form.excluded} onChange={(ex) => { form.excluded = ex; rev += 1; }} />
+            <McpToolExcludeList {tools} excluded={form.excluded} onChange={(ex) => { form.excluded = ex; }} />
           </div>
         </div>
       </div>
     </div>
-  {/key}
 
   <ConfirmDialog
     open={confirmDelete}

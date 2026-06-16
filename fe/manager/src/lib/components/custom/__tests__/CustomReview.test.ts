@@ -42,6 +42,44 @@ describe("CustomReview — new mode", () => {
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
+  it("renders the Jump navigator tab and section anchors", async () => {
+    sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(makeDraft()));
+    render(CustomReview);
+    await screen.findByText("Review extracted definition");
+    expect(screen.getByRole("button", { name: "Jump" })).toBeTruthy();
+    expect(document.getElementById("cc-section-meta")).toBeTruthy();
+  });
+
+  it("switches between Jump anchors and the JSON preview", async () => {
+    sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(makeDraft()));
+    render(CustomReview);
+    await screen.findByText("Review extracted definition");
+    expect(screen.getByRole("button", { name: "Operations" })).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "JSON" }));
+    expect(screen.getByText(/"petstore"/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Operations" })).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Jump" }));
+    expect(screen.getByRole("button", { name: "Operations" })).toBeTruthy();
+  });
+
+  it("renders the mobile Open navigator floating opener", async () => {
+    sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(makeDraft()));
+    render(CustomReview);
+    await screen.findByText("Review extracted definition");
+    expect(screen.getByRole("button", { name: "Open navigator" })).toBeTruthy();
+  });
+
+  it("renders the access toggles as pill switches and flips on click", async () => {
+    sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(makeDraft()));
+    render(CustomReview);
+    await screen.findByText("Review extracted definition");
+    const single = screen.getByRole("switch", { name: "Single instance only" });
+    expect(single.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("switch", { name: "Allow per-session config override" })).toBeTruthy();
+    await fireEvent.click(single);
+    expect(screen.getByRole("switch", { name: "Single instance only" }).getAttribute("aria-checked")).toBe("true");
+  });
+
   it("saves a new draft and clears the hand-off", async () => {
     sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(makeDraft()));
     vi.mocked(api.saveCustomDraft).mockResolvedValue({ redirect: "" });

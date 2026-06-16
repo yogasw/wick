@@ -51,6 +51,12 @@ export function createThreadStore(): ThreadStore {
   const lifecycle = writable<LifecycleState>({ state: "", pid: 0, substate: "", at: 0 });
   const meta = writable<ThreadMeta>({});
 
+  function markWorking(): void {
+    lifecycle.update((l) =>
+      l.state === "killed" || l.state === "working" ? l : { ...l, state: "working" }
+    );
+  }
+
   function ensureLive(): LiveTurn {
     let current = get(live);
     if (!current) {
@@ -127,6 +133,7 @@ export function createThreadStore(): ThreadStore {
         lt.text += ev.data ?? "";
         live.set(lt);
         typing.update((t) => ({ ...t, active: true }));
+        markWorking();
         break;
       }
 
@@ -134,6 +141,7 @@ export function createThreadStore(): ThreadStore {
         const lt = ensureLive();
         lt.blocks = [...lt.blocks, { kind: "thinking", text: ev.data ?? "" }];
         live.set(lt);
+        markWorking();
         break;
       }
 
@@ -148,6 +156,7 @@ export function createThreadStore(): ThreadStore {
         };
         lt.blocks = [...lt.blocks, block];
         live.set(lt);
+        markWorking();
         break;
       }
 
@@ -181,6 +190,7 @@ export function createThreadStore(): ThreadStore {
           lt.blocks = [...lt.blocks, standalone];
         }
         live.set(lt);
+        markWorking();
         break;
       }
 

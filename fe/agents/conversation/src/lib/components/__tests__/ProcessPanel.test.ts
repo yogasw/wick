@@ -154,4 +154,68 @@ describe("ProcessPanel", () => {
     expect(screen.getByText("agent-alpha")).toBeDefined();
     expect(screen.getByText("agent-beta")).toBeDefined();
   });
+
+  describe("#24 lifecycle badge tokens", () => {
+    const cases: Array<{ lc: string; badge: string; alive?: boolean }> = [
+      { lc: "working",  badge: "bg-pos-100 text-pos-400",   alive: true },
+      { lc: "idle",     badge: "bg-prog-100 text-prog-400", alive: true },
+      { lc: "spawning", badge: "bg-cau-100 text-cau-400",   alive: true },
+      { lc: "queued",   badge: "bg-cau-100 text-cau-400",   alive: false },
+      { lc: "killed",   badge: "bg-neg-100 text-neg-400",   alive: true },
+    ];
+
+    for (const { lc, badge, alive } of cases) {
+      test(`lifecycle="${lc}" badge has classes ${badge}`, () => {
+        const proc: ProcessInfo = {
+          session_id: "badge-test",
+          agent_name: "test-agent",
+          provider: "anthropic",
+          pid: lc === "queued" ? 0 : 9999,
+          queued: 0,
+          lifecycle: lc,
+          alive: alive ?? true,
+        };
+        render(ProcessPanel, {
+          props: { processes: [proc], onKill: vi.fn(), onDequeue: vi.fn() },
+        });
+        const badgeEl = screen.getByText(lc);
+        for (const cls of badge.split(" ")) {
+          expect(badgeEl.classList.contains(cls)).toBe(true);
+        }
+      });
+    }
+  });
+
+  describe("#32 lifecycle dot in ProcessPanel", () => {
+    test("working row has a dot with class bg-pos-400", () => {
+      render(ProcessPanel, {
+        props: { processes: [PROC_ACTIVE], onKill: vi.fn(), onDequeue: vi.fn() },
+      });
+      const badge = screen.getByText("working");
+      const dot = badge.previousElementSibling;
+      expect(dot).not.toBeNull();
+      expect(dot!.classList.contains("bg-pos-400")).toBe(true);
+    });
+
+    test("idle row has a dot with class bg-prog-400", () => {
+      render(ProcessPanel, {
+        props: { processes: [PROC_WITH_SUBSTATE], onKill: vi.fn(), onDequeue: vi.fn() },
+      });
+      const badge = screen.getByText("idle");
+      const dot = badge.previousElementSibling;
+      expect(dot).not.toBeNull();
+      expect(dot!.classList.contains("bg-prog-400")).toBe(true);
+    });
+
+    test("queued row has a dot with class bg-orange-500 and animate-pulse", () => {
+      render(ProcessPanel, {
+        props: { processes: [PROC_QUEUED], onKill: vi.fn(), onDequeue: vi.fn() },
+      });
+      const badge = screen.getByText("queued");
+      const dot = badge.previousElementSibling;
+      expect(dot).not.toBeNull();
+      expect(dot!.classList.contains("bg-orange-500")).toBe(true);
+      expect(dot!.classList.contains("animate-pulse")).toBe(true);
+    });
+  });
 });

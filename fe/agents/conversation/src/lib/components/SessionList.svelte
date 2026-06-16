@@ -7,6 +7,7 @@
     search: string;
     pageSize?: number;
     newChatHref?: string;
+    projectNames?: Record<string, string>;
     onSearch: (s: string) => void;
     onSelect: (id: string) => void;
     onDelete?: (id: string) => void;
@@ -18,6 +19,7 @@
     search,
     pageSize = 10,
     newChatHref,
+    projectNames,
     onSearch,
     onSelect,
     onDelete,
@@ -72,14 +74,15 @@
 
   function lifecycleCls(lc: string): string {
     const map: Record<string, string> = {
-      working: "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300",
-      idle: "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300",
-      spawning: "bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300",
-      queued: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600",
-      killed: "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300",
-      dead: "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300",
+      working:  "bg-pos-100 text-pos-400",
+      idle:     "bg-prog-100 text-prog-400",
+      spawning: "bg-cau-100 text-cau-400",
+      queued:   "bg-cau-100 text-cau-400",
+      killed:   "bg-neg-100 text-neg-400",
+      dead:     "bg-neg-100 text-neg-400",
+      error:    "bg-neg-100 text-neg-400",
     };
-    return map[lc] ?? "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600";
+    return map[lc] ?? "bg-white-300 dark:bg-navy-600 text-black-700";
   }
 </script>
 
@@ -154,6 +157,11 @@
                   class={"rounded px-1.5 py-0.5 text-[10px] font-medium " + lifecycleCls(sess.lifecycle)}
                 >
                   {sess.lifecycle}
+                </span>
+              {/if}
+              {#if projectNames && sess.project_id && projectNames[sess.project_id]}
+                <span class="text-xs text-black-600 dark:text-black-700 truncate">
+                  {projectNames[sess.project_id]}
                 </span>
               {/if}
               {#if sess.active_agent}
