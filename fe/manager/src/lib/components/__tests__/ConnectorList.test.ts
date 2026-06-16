@@ -19,6 +19,7 @@ function makeData(over: Partial<ConnectorListType> = {}): ConnectorListType {
     fixed: false,
     op_count: 3,
     custom: false,
+    custom_source: "",
     rows: [
       { id: "row-a", label: "Prod", disabled: false, status: "ready", rate_limit_rpm: 0, tags: ["team:eng"] },
       { id: "row-b", label: "Staging", disabled: true, status: "ready", rate_limit_rpm: 0, tags: [] },
@@ -113,5 +114,13 @@ describe("ConnectorList", () => {
     render(ConnectorList, { connectorKey: "slack" });
     const h1 = await screen.findByRole("heading", { level: 1, name: "Slack" });
     expect(h1.className).toContain("text-[1.375rem]");
+  });
+
+  it("renders the green Custom badge with its source", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true, custom_source: "MCP" }));
+    render(ConnectorList, { connectorKey: "slack" });
+    const badge = await screen.findByText("Custom · MCP");
+    expect(badge.className).toContain("bg-green-200");
+    expect(badge.className).toContain("text-green-700");
   });
 });

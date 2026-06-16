@@ -126,7 +126,7 @@
           <div class="flex flex-wrap items-center gap-2">
             <h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{data.name}</h1>
             {#if data.custom}
-              <span class="rounded bg-blue-100 dark:bg-blue-900/40 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:text-blue-300">Custom</span>
+              <span class="flex-shrink-0 rounded-full bg-green-200 dark:bg-green-800 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:text-green-300">{data.custom_source ? `Custom · ${data.custom_source}` : "Custom"}</span>
             {/if}
           </div>
           {#if data.description}
