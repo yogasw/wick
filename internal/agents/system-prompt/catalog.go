@@ -1,4 +1,4 @@
-package config
+package systemprompt
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 // connectorCatalogHeader is the section preamble appended above the
 // runtime list of connector keys + descriptions.
 //
-// The "MUST route via wick" rule lives in system_prompt_immutable.md
+// The "MUST route via wick" rule lives in immutable.md
 // where it can't be undone by presets or operator edits. This header
 // stays minimal — it only seeds the discovery hint so the agent jumps
 // straight to wick_get for whichever key it wants instead of burning

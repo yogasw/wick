@@ -1,4 +1,4 @@
-package config
+package systemprompt
 
 import (
 	_ "embed"
@@ -7,21 +7,35 @@ import (
 	"github.com/yogasw/wick/internal/appname"
 )
 
-//go:embed system_prompt_default.md
+//go:embed default.md
 var defaultSystemPromptTemplate string
 
-//go:embed system_prompt_immutable.md
+//go:embed immutable.md
 var immutableSystemPromptTemplate string
 
+// Split-out sections of the shared immutable prompt. Each lives as its
+// own .md file in this package so a topic is easy to find and extend in
+// isolation; the base immutable file controls WHERE each lands via a
+// {{PLACEHOLDER}} token (order matters), and baseImmutable() splices
+// them in. render_formats.md is the place to add a newly supported chat
+// render type (and how to use it); asking_user.md holds the interactive
+// -prompt contract.
+//
+//go:embed asking_user.md
+var immutableAskUserTemplate string
+
+//go:embed render_formats.md
+var immutableRenderFormatsTemplate string
+
 // Per-provider immutable overrides. Currently empty — the shared rules
-// (incl. "Asking the user") cover both providers. Kept as dedicated
+// (base + ask-user + render-formats) cover both providers. Kept as dedicated
 // files + append points so a future provider-specific rule has an
 // obvious home without re-plumbing the loader.
 //
-//go:embed system_prompt_immutable_claude.md
+//go:embed immutable_claude.md
 var immutableSystemPromptClaudeTemplate string
 
-//go:embed system_prompt_immutable_codex.md
+//go:embed immutable_codex.md
 var immutableSystemPromptCodexTemplate string
 
 // DefaultSystemPrompt is the baseline interaction policy embedded at
@@ -46,14 +60,31 @@ func DefaultSystemPrompt() string {
 // connectors service to filter for ready instances, which only the
 // factory can wire. See ClaudeFactory.ConnectorCatalogLoader.
 func ImmutableSystemPrompt() string {
-	return resolve(joinImmutable(immutableSystemPromptTemplate, immutableSystemPromptClaudeTemplate))
+	return resolve(joinImmutable(baseImmutable(), immutableSystemPromptClaudeTemplate))
+}
+
+// baseImmutable assembles the shared (provider-agnostic) immutable
+// prompt by splicing each split-out section file into its placeholder
+// in the base file. The base file owns ordering — move a {{TOKEN}} to
+// move the section. A new shared section = new .md under system-prompt/,
+// embed it, add a {{TOKEN}} where it should land, and a line here.
+//
+// Replacing rather than appending keeps each section in its intended
+// neighbourhood (render formats next to "Sending links", asking-user
+// before the connector rules) instead of all piled at the end.
+func baseImmutable() string {
+	r := strings.NewReplacer(
+		"{{ASKING_USER}}", strings.TrimSpace(immutableAskUserTemplate),
+		"{{RENDER_FORMATS}}", strings.TrimSpace(immutableRenderFormatsTemplate),
+	)
+	return r.Replace(immutableSystemPromptTemplate)
 }
 
 // ImmutableSystemPromptCodex returns the global rules combined with
 // codex-specific rules. Written as AGENTS.md into the workspace so
 // codex picks it up automatically on every spawn.
 func ImmutableSystemPromptCodex() string {
-	return resolve(joinImmutable(immutableSystemPromptTemplate, immutableSystemPromptCodexTemplate))
+	return resolve(joinImmutable(baseImmutable(), immutableSystemPromptCodexTemplate))
 }
 
 // joinImmutable appends the per-provider override only when it has
