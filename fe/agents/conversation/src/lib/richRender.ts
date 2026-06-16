@@ -31,7 +31,20 @@ function loadMermaid(): Promise<MermaidModule> {
   if (!mermaidPromise) {
     mermaidPromise = import("mermaid").then((m) => {
       const mermaid = m.default as unknown as MermaidModule;
-      mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: isDark() ? "dark" : "default", fontFamily: "inherit" });
+      const dark = isDark();
+      /* theme "base" + themeVariables gives nodes a clear filled colour
+         (warm amber by default) instead of the washed-out default theme.
+         Any `style`/`classDef` the diagram itself declares still wins, so
+         per-node colours authored by the model are preserved. */
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        fontFamily: "inherit",
+        theme: "base",
+        themeVariables: dark
+          ? { primaryColor: "#3f3a16", primaryBorderColor: "#eab308", primaryTextColor: "#fef9c3", lineColor: "#94a3b8", secondaryColor: "#1e3a5f", secondaryBorderColor: "#3b82f6", tertiaryColor: "#14402a", tertiaryBorderColor: "#22c55e" }
+          : { primaryColor: "#fef3c7", primaryBorderColor: "#f59e0b", primaryTextColor: "#111827", lineColor: "#6b7280", secondaryColor: "#e0f2fe", secondaryBorderColor: "#3b82f6", tertiaryColor: "#dcfce7", tertiaryBorderColor: "#22c55e" },
+      });
       return mermaid;
     });
   }
