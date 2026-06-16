@@ -10,11 +10,13 @@
   let { turn, loadTrace }: Props = $props();
 
   const isUser = $derived(turn.role === "user");
+  const isSystem = $derived(turn.role === "system");
 
   const safeEvents = $derived(turn.events ?? []);
   const safeAttachments = $derived(turn.attachments ?? []);
+  const safeSteps = $derived(safeEvents.filter((ev) => ev.type === "step"));
 
-  const showTraceToggle = $derived(!isUser && ((safeEvents.length > 0) || turn.has_trace === true));
+  const showTraceToggle = $derived(!isUser && !isSystem && ((safeEvents.length > 0) || turn.has_trace === true));
 
   const isSyntheticId = $derived(
     turn.turn_id.startsWith("live-") || turn.turn_id.startsWith("sys-")
@@ -77,7 +79,31 @@
   }
 </script>
 
-{#if isUser}
+{#if isSystem}
+  <div class="flex justify-center py-1">
+    <div class="flex flex-col items-center gap-1 max-w-full">
+      <div class="inline-flex items-start gap-1.5 rounded-2xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-xs text-black-700 dark:text-black-600 max-w-full">
+        <svg viewBox="0 0 12 12" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="6" cy="6" r="4.5"></circle>
+          <path d="M6 4v2l1 1" stroke-linecap="round"></path>
+        </svg>
+        <span class="whitespace-pre-wrap break-words min-w-0">{turn.text}</span>
+      </div>
+      {#if safeSteps.length > 0}
+        <div class="flex flex-col items-center gap-0.5 mt-0.5">
+          {#each safeSteps as ev}
+            <div class="inline-flex items-center gap-1 text-xs text-black-600 dark:text-black-500">
+              <svg viewBox="0 0 12 12" class="h-2.5 w-2.5 text-green-500" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M2 6l3 3 5-5" stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+              {ev.text ?? ""}
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  </div>
+{:else if isUser}
   <div class="flex justify-end gap-2 group">
     <div class="flex flex-col items-end gap-1 max-w-[80%] min-w-0">
       {#if safeAttachments.length > 0}

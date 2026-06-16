@@ -67,6 +67,37 @@ describe("ThreadMessage - assistant turn", () => {
   });
 });
 
+describe("ThreadMessage - system turn", () => {
+  test("system turn renders centered pill (justify-center), not an assistant bubble", () => {
+    const turn = makeTurn({ role: "system", turn_id: "sys-1", text: "Switched provider to claude" });
+    const { container } = render(ThreadMessage, { props: { turn } });
+    expect(container.innerHTML).toContain("justify-center");
+    expect(container.innerHTML).not.toContain("justify-start");
+  });
+
+  test("system turn shows pill text", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "system", turn_id: "sys-2", text: "Project moved" }) } });
+    expect(screen.getByText("Project moved")).toBeDefined();
+  });
+
+  test("system turn renders step events as a step list", () => {
+    const turn = makeTurn({
+      role: "system", turn_id: "sys-3", text: "Done",
+      events: [{ type: "step", text: "cloned repo" }, { type: "step", text: "ran setup" }],
+    });
+    render(ThreadMessage, { props: { turn } });
+    expect(screen.getByText("cloned repo")).toBeDefined();
+    expect(screen.getByText("ran setup")).toBeDefined();
+  });
+
+  test("system turn does NOT render a show-trace toggle", () => {
+    const turn = makeTurn({ role: "system", turn_id: "sys-4", text: "x", has_trace: true });
+    const loadTrace = vi.fn().mockResolvedValue([]);
+    const { container } = render(ThreadMessage, { props: { turn, loadTrace } });
+    expect(container.innerHTML).not.toContain("show trace");
+  });
+});
+
 describe("ThreadMessage - null-safe backend arrays (Go nil → JSON null)", () => {
   test("renders user turn without crash when events and attachments are null (Go nil slice)", () => {
     const turn = makeTurn({
