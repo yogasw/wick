@@ -1,6 +1,13 @@
 <script lang="ts">
   /* ace/monaco syntax highlighting: deferred enhancement */
   import type { FileContent } from "../types/agents.js";
+  import { renderMarkdown } from "../markdown.js";
+
+  function extOf(p: string): string {
+    const i = p.lastIndexOf(".");
+    return i === -1 ? "" : p.slice(i + 1).toLowerCase();
+  }
+  const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"];
 
   type Props = {
     file: FileContent | null;
@@ -19,6 +26,10 @@
   });
 
   const editable = $derived(file !== null && !file.binary && !file.tooBig);
+  const ext = $derived(file ? extOf(file.path) : "");
+  const isImage = $derived(IMAGE_EXTS.includes(ext));
+  const isPdf = $derived(ext === "pdf");
+  const isMarkdown = $derived(ext === "md" || ext === "markdown");
 </script>
 
 {#if file !== null}
@@ -58,7 +69,17 @@
 
       <!-- Body -->
       <div class="flex-1 min-h-0 overflow-hidden">
-        {#if file.binary}
+        {#if isImage && downloadHref}
+          <div class="flex items-center justify-center h-full bg-white-200 dark:bg-navy-800 p-4">
+            <img src={downloadHref} alt={file.path} class="max-w-full max-h-full object-contain" />
+          </div>
+        {:else if isPdf && downloadHref}
+          <iframe src={downloadHref} class="w-full h-full border-0" title="PDF preview"></iframe>
+        {:else if isMarkdown && !file.binary && !file.tooBig}
+          <div class="h-full overflow-auto prose prose-sm dark:prose-invert max-w-none p-6 text-sm text-black-900 dark:text-white-100">
+            {@html renderMarkdown(file.content ?? "")}
+          </div>
+        {:else if file.binary}
           <div class="flex flex-col items-center justify-center h-full gap-3 px-6 text-center">
             <p class="text-sm text-black-900 dark:text-white-100">Binary file</p>
             <p class="text-xs text-black-700 dark:text-black-600">Use download to fetch the raw bytes.</p>

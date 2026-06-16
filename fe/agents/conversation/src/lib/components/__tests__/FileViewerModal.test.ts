@@ -109,4 +109,39 @@ describe("FileViewerModal", () => {
     });
     expect(container.querySelector("a[download]")).toBeNull();
   });
+
+  test("image file renders an <img> preview using downloadHref", () => {
+    const file = { path: "pic.png", size: 10, binary: true } as FileContent;
+    const { container } = render(FileViewerModal, {
+      props: { file, dirty: false, onSave: vi.fn(), onClose: vi.fn(), downloadHref: "/d?path=pic.png" },
+    });
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute("src")).toContain("/d?path=pic.png");
+  });
+
+  test("pdf file renders an <iframe> preview", () => {
+    const file = { path: "doc.pdf", size: 10, binary: true } as FileContent;
+    const { container } = render(FileViewerModal, {
+      props: { file, dirty: false, onSave: vi.fn(), onClose: vi.fn(), downloadHref: "/d?path=doc.pdf" },
+    });
+    expect(container.querySelector("iframe")).not.toBeNull();
+  });
+
+  test("markdown file renders rendered HTML (heading becomes h-tag), not a textarea", () => {
+    const file = { path: "readme.md", size: 5, binary: false, content: "# Title" } as FileContent;
+    const { container } = render(FileViewerModal, {
+      props: { file, dirty: false, onSave: vi.fn(), onClose: vi.fn() },
+    });
+    expect(container.innerHTML).toContain("Title");
+    expect(container.querySelector("textarea")).toBeNull();
+  });
+
+  test("plain text file still renders editable textarea", () => {
+    const file = { path: "notes.txt", size: 5, binary: false, content: "hi" } as FileContent;
+    const { container } = render(FileViewerModal, {
+      props: { file, dirty: false, onSave: vi.fn(), onClose: vi.fn() },
+    });
+    expect(container.querySelector("textarea")).not.toBeNull();
+  });
 });
