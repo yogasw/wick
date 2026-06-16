@@ -20,6 +20,7 @@
   let renameValue = $state("");
   let testResult: TestResult = $state(null);
   let testing = $state(false);
+  let saveError = $state("");
 
   /* initialized from prop on mount — secrets always blank, non-secrets pre-fill */
   let fieldValues: Record<string, string> = $state({});
@@ -41,6 +42,11 @@
     Object.keys(fieldValues).filter((k) => fieldValues[k] !== origValues[k]),
   );
 
+  $effect(() => {
+    void JSON.stringify(fieldValues);
+    saveError = "";
+  });
+
   const anyDirty = $derived(dirtyFields.length > 0);
 
   function dirtyValues(): Record<string, string> {
@@ -54,7 +60,12 @@
   function handleSave() {
     const values = dirtyValues();
     if (!Object.keys(values).length) return;
-    onSave(instance.id, values);
+    saveError = "";
+    try {
+      onSave(instance.id, values);
+    } catch (e: unknown) {
+      saveError = e instanceof Error ? e.message : String(e);
+    }
   }
 
   async function handleTest() {
@@ -218,6 +229,10 @@
         <p class={"text-xs font-medium " + testResultCls(testResult)} data-testid="test-result">
           {testResultText(testResult)}
         </p>
+      {/if}
+
+      {#if saveError}
+        <p class="text-xs font-medium text-neg-400" data-testid="save-error">{saveError}</p>
       {/if}
 
       <!-- Actions -->
