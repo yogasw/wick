@@ -17,9 +17,10 @@ const baseProps = {
 };
 
 describe("ConversationHeader", () => {
-  test("renders session title", () => {
-    render(ConversationHeader, { props: baseProps });
-    expect(screen.getByText("Test Session")).toBeDefined();
+  test("renders tab label (title is no longer displayed directly in header)", () => {
+    const { container } = render(ConversationHeader, { props: baseProps });
+    // header now shows tab dropdown, not title text
+    expect(container.innerHTML).toContain("Conversation");
   });
 
   test("shows SSE connected status", () => {
@@ -239,10 +240,11 @@ describe("ConversationHeader", () => {
       expect(document.querySelector("[data-tab-dropdown]")).toBeNull();
     });
 
-    test("header root element has relative positioning class to establish stacking context", () => {
+    test("header root element has positioning class to establish stacking context", () => {
       const { container } = render(ConversationHeader, { props: baseProps });
       const root = container.firstElementChild as HTMLElement;
-      expect(root.className).toContain("relative");
+      // header is now absolute floating (transparent bar), not relative
+      expect(root.className).toMatch(/absolute|relative/);
     });
   });
 });

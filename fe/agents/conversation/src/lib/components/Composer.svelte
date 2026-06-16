@@ -16,7 +16,7 @@
   let fileInputEl: HTMLInputElement | undefined = $state();
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
-  const isDesktop = () => window.matchMedia("(pointer: fine)").matches;
+  const isDesktop = () => typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(pointer: fine)").matches;
 
   function focusTextarea() {
     textareaEl?.focus();
