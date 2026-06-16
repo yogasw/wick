@@ -4,11 +4,12 @@ description: Use for ANY work on the Svelte SPAs or shared FE libraries under fe
 allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 paths:
   - "fe/**"
+  - "internal/pkg/spa/**"
   - "internal/tools/agents/dist/**"
   - "internal/tools/agents/view/**"
   - "internal/tools/agents/spa_handler.go"
+  - "internal/tools/agents/spa.go"
   - "internal/manager/spa.go"
-  - "internal/manager/spa_assets.go"
   - "internal/manager/dist/**"
 ---
 
@@ -48,10 +49,11 @@ runtime deps in that package; leave dev tools to the root.
 and the out dir, add a `dev:<app>` and `build:watch` entry to `fe/scripts/dev.mjs`
 workspace list + `fe/package.json`, then add a templ thin shell (see Routing).
 
-**Adding a brand-new Go tool SPA (outside agents):** follow `internal/manager/spa.go`
-— inline the live-disk swap using `WICK_DEV_REPO_ROOT` (do NOT use `spadev` which
-only resolves `internal/tools/` paths). See fe/README.md § "Adding a new SPA host
-outside internal/tools/".
+**Adding a brand-new Go tool SPA (outside agents):** one line —
+`var spaLoader = spa.New(spaEmbedded, "internal/<path>")` (see `internal/manager/spa.go`).
+The `spa.Loader` handles embed-vs-live-disk, asset-URL resolution, and auto-reload
+registration. No `init()`, no `spadev` (removed), no per-host reload endpoint.
+See § "Go SPA host (internal/pkg/spa)" below.
 
 ## Effect API — `@wick-fe/common-api`
 
@@ -102,7 +104,7 @@ spaPrefix : "/workflow/"                         (internal/tools/agents/spa_hand
 Mount     : /tools/agents/workflow/
 App       : /tools/agents/workflow/<app>/        (workflow, scm, overview, …)
 outDir    : internal/tools/agents/dist/<app>/
-Go embed  : internal/tools/agents/spa.go  (uses spadev.LiveDiskFS)
+Go embed  : internal/tools/agents/spa.go  (spa.New, multi-app)
 ```
 
 `spaHandler` reads `dist/<app>/...` via `splitFirstSegment`, so adding a new
@@ -127,9 +129,35 @@ templ MyView(vm MyVM) {
 ```text
 Mount     : /manager/
 outDir    : internal/manager/dist/manager/
-Go embed  : internal/manager/spa.go  (inlined live-disk swap, NOT spadev)
-Asset URL : internal/manager/spa_assets.go → spaAssetURL()
+Go embed  : internal/manager/spa.go  (spa.New, single-app "manager")
+Asset URL : spaAssetURL() in spa.go → spaLoader.AssetURL("manager", ...)
 ```
+
+### Go SPA host (`internal/pkg/spa`)
+
+Both hosts share `spa.Loader`. A host is one line plus a thin `spaAssetURL`
+wrapper:
+
+```go
+//go:embed all:dist
+var spaEmbedded embed.FS
+var spaLoader = spa.New(spaEmbedded, "internal/<path>") // repo-rel dir holding dist/
+
+// single-app:  spaLoader.AssetURL("<app>", "<fallbackBase>/assets")
+// multi-app:   spaLoader.AssetURL(app, ...)  // one dist/ root, dist/<app>/ each
+```
+
+`spa.New` auto-detects `WICK_DEV_REPO_ROOT`: production serves the embed
+(asset URL cached per-app); dev swaps to `os.DirFS`, re-reads index.html per
+render, and registers the dist/ dir for auto-reload. **No init(), no spadev
+(removed), no per-host reload endpoint.**
+
+**Auto-reload** (live reload, not HMR): `spa.RegisterGlobalHandler(mux)` in
+`internal/pkg/api/server.go` mounts `GET /_dev/reload` (SSE, fsnotify on all
+dist/ dirs); `spa.DevReloadScript()` injected once in `internal/pkg/ui/layout.templ`
+makes every page subscribe + `location.reload()` on rebuild (skipped while a
+modal is visibly open). Both no-op in production. Do NOT add a `DevReloadScript`
+field to any VM — it lives in `ui.Layout`, not per-page.
 
 ## TDD — three layers
 
@@ -250,6 +278,11 @@ WICK_DEV_REPO_ROOT=$(pwd)/.. go run ./cmd/lab server
 `npm run dev` uses `fe/scripts/dev.mjs` which spawns all workspaces in parallel.
 `npm --workspaces run build:watch` is BROKEN for watch mode — it runs seri and blocks
 on the first workspace forever. Always use `npm run dev`.
+
+With `WICK_DEV_REPO_ROOT` set, the browser **auto-reloads** on every rebuild via the
+SSE endpoint `/_dev/reload` (Go-side fsnotify on dist/, client injected in `ui.Layout`).
+No `Ctrl+R`. Live reload (full refresh), not HMR — for state-preserving HMR use
+`dev:<app>` (drops templ chrome). See fe/README.md § "Auto-reload".
 
 When adding a new workspace to `dev`, edit `fe/scripts/dev.mjs` and add the workspace
 name to the `workspaces` array.
