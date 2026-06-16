@@ -64,6 +64,7 @@ type customDraftResponse struct {
 	DefID    string            `json:"def_id"`
 	Disabled bool              `json:"disabled"`
 	MCP      bool              `json:"mcp"`
+	ServerID string            `json:"server_id,omitempty"`
 	Draft    *customconn.Draft `json:"draft"`
 }
 
@@ -80,7 +81,7 @@ func (h *Handler) apiCustomDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if serverID := customconn.ServerIDForDef(def); serverID != "" {
-		writeJSON(w, http.StatusOK, customDraftResponse{DefID: def.ID, Disabled: def.Disabled, MCP: true})
+		writeJSON(w, http.StatusOK, customDraftResponse{DefID: def.ID, Disabled: def.Disabled, MCP: true, ServerID: serverID})
 		return
 	}
 	draft, err := customDraftFromDef(def)

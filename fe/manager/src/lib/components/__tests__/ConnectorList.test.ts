@@ -110,10 +110,10 @@ describe("ConnectorList", () => {
     expect(screen.getByText("Prod")).toBeTruthy();
   });
 
-  it("renders the H1 at the legacy 1.375rem size", async () => {
+  it("renders the connector H1 heading", async () => {
     render(ConnectorList, { connectorKey: "slack" });
     const h1 = await screen.findByRole("heading", { level: 1, name: "Slack" });
-    expect(h1.className).toContain("text-[1.375rem]");
+    expect(h1.className).toContain("text-lg");
   });
 
   it("renders the Custom badge for custom connectors", async () => {
