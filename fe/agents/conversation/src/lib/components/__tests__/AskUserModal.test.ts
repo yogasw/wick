@@ -175,4 +175,11 @@ describe("AskUserModal", () => {
     expect(screen.getByText("Speed")).toBeDefined();
     expect(screen.getByText("Cost")).toBeDefined();
   });
+
+  test("wizard text-input step auto-focuses the input", async () => {
+    const request = { id: "q1", fields: [{ key: "name", type: "text", label: "Name", required: false }] };
+    render(AskUserModal, { props: { request, onSubmit: vi.fn() } });
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    await vi.waitFor(() => { expect(document.activeElement).toBe(input); });
+  });
 });
