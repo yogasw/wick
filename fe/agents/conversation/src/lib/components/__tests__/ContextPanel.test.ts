@@ -258,6 +258,44 @@ describe("ContextPanel", () => {
     expect(screen.queryByText("main.go")).toBeNull();
   });
 
+  test("shows loading placeholder when loading=true", () => {
+    render(ContextPanel, {
+      props: {
+        cwd: "/project",
+        files: [],
+        search: "",
+        openDirs: {},
+        onSearch: vi.fn(),
+        onToggleDir: vi.fn(),
+        onOpen: vi.fn(),
+        onRefresh: vi.fn(),
+        onNewFile: vi.fn(),
+        onNewDir: vi.fn(),
+        loading: true,
+      },
+    });
+    expect(screen.getByText(/loading/i)).toBeDefined();
+  });
+
+  test("shows error message when loadError is set", () => {
+    render(ContextPanel, {
+      props: {
+        cwd: "/project",
+        files: [],
+        search: "",
+        openDirs: {},
+        onSearch: vi.fn(),
+        onToggleDir: vi.fn(),
+        onOpen: vi.fn(),
+        onRefresh: vi.fn(),
+        onNewFile: vi.fn(),
+        onNewDir: vi.fn(),
+        loadError: "connection refused",
+      },
+    });
+    expect(screen.getByText(/connection refused/i)).toBeDefined();
+  });
+
   test("children of an open dir are rendered", () => {
     render(ContextPanel, {
       props: {

@@ -142,6 +142,8 @@
   /* ── context panel state ──────────────────────────────────────── */
   let cwdVal = $state("");
   let filesVal = $state<ContextFileEntry[]>([]);
+  let filesLoading = $state(false);
+  let filesLoadError = $state("");
   let fileSearch = $state("");
   let openDirs = $state<Record<string, boolean>>({});
   let viewerFile = $state<FileContent | null>(null);
@@ -245,9 +247,16 @@
 
   /* ── data loaders ─────────────────────────────────────────────── */
   function loadFiles() {
+    filesLoading = true;
+    filesLoadError = "";
     run(listFiles(base, sessionId).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => { cwdVal = res.cwd; filesVal = res.files; })
-      .catch((e: unknown) => toastError(`Files: ${e instanceof Error ? e.message : String(e)}`));
+      .then((res) => { cwdVal = res.cwd; filesVal = res.files; filesLoading = false; })
+      .catch((e: unknown) => {
+        filesLoading = false;
+        const msg = e instanceof Error ? e.message : String(e);
+        filesLoadError = msg;
+        toastError(`Files: ${msg}`);
+      });
   }
 
   function loadProcesses() {
@@ -864,6 +873,8 @@
           files={filesVal}
           search={fileSearch}
           {openDirs}
+          loading={filesLoading}
+          loadError={filesLoadError}
           onSearch={(s) => { fileSearch = s; }}
           onToggleDir={(p) => { openDirs = { ...openDirs, [p]: !openDirs[p] }; }}
           onOpen={openFile}
@@ -960,6 +971,8 @@
               files={filesVal}
               search={fileSearch}
               {openDirs}
+              loading={filesLoading}
+              loadError={filesLoadError}
               onSearch={(s) => { fileSearch = s; }}
               onToggleDir={(p) => { openDirs = { ...openDirs, [p]: !openDirs[p] }; }}
               onOpen={openFile}
