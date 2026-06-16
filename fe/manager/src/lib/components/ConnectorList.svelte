@@ -124,7 +124,7 @@
         <span class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg" aria-hidden="true">{data.icon || "🔌"}</span>
         <div>
           <div class="flex flex-wrap items-center gap-2">
-            <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">{data.name}</h1>
+            <h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{data.name}</h1>
             {#if data.custom}
               <span class="rounded bg-blue-100 dark:bg-blue-900/40 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:text-blue-300">Custom</span>
             {/if}
