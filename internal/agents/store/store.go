@@ -373,8 +373,9 @@ func (s *Store) PartialText() string {
 func (s *Store) Flush() error {
 	s.mu.RLock()
 	evEmpty := len(s.eventBuf) == 0
+	bufEmpty := s.turnBuf.Len() == 0
 	s.mu.RUnlock()
-	if s.turnBuf.Len() == 0 && evEmpty {
+	if bufEmpty && evEmpty {
 		return nil
 	}
 	return s.flushAssistantTurn(true)

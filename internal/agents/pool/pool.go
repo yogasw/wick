@@ -1108,6 +1108,20 @@ func (p *Pool) Stop() {
 		_ = e.agent.Stop()
 	}
 	p.wg.Wait()
+	// wg only tracks background goroutines (tryGrantQueue, onAgentExit).
+	// onAgentExit calls wg.Add *after* the agent reader goroutine fires,
+	// so there is a window where wg reaches 0 before the last onAgentExit
+	// has run releaseSlot. Poll until p.active is empty — each iteration
+	// sleeps 1 ms; total wait is bounded by the number of exiting agents.
+	for {
+		p.mu.Lock()
+		n := len(p.active)
+		p.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // Active returns the number of running agents.
