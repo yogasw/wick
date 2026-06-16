@@ -91,6 +91,7 @@ vi.mock("../../api/files.js", () => ({
   readFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   saveFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   createFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  deleteFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   downloadURL: vi.fn().mockReturnValue(""),
 }));
 

@@ -19,7 +19,7 @@
   import { answerAsk } from "../api/asks.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
   import { sendMessage } from "../api/messages.js";
-  import { listFiles, readFile, saveFile, createFile, downloadURL } from "../api/files.js";
+  import { listFiles, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
   import { getProcesses, killProcess, dequeueProcess } from "../api/processes.js";
   import {
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
@@ -755,6 +755,20 @@
                 .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
             }
           }}
+          onDownload={(p) => { window.open(downloadURL(base, sessionId, p), "_blank"); }}
+          onDelete={(p) => {
+            run(deleteFile(base, sessionId, p).pipe(Effect.provide(WickClientLayer)))
+              .then(loadFiles)
+              .catch((e: unknown) => toastError(`Delete: ${e instanceof Error ? e.message : String(e)}`));
+          }}
+          onNewHere={(dir) => {
+            const name = prompt("File name:");
+            if (name) {
+              run(createFile(base, sessionId, `${dir}/${name}`, false).pipe(Effect.provide(WickClientLayer)))
+                .then(loadFiles)
+                .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
+            }
+          }}
         />
       {:else if railTab === "process"}
         <ProcessPanel
@@ -862,6 +876,20 @@
                 const name = prompt("Directory name:");
                 if (name) {
                   run(createFile(base, sessionId, name, true).pipe(Effect.provide(WickClientLayer)))
+                    .then(loadFiles)
+                    .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
+                }
+              }}
+              onDownload={(p) => { window.open(downloadURL(base, sessionId, p), "_blank"); }}
+              onDelete={(p) => {
+                run(deleteFile(base, sessionId, p).pipe(Effect.provide(WickClientLayer)))
+                  .then(loadFiles)
+                  .catch((e: unknown) => toastError(`Delete: ${e instanceof Error ? e.message : String(e)}`));
+              }}
+              onNewHere={(dir) => {
+                const name = prompt("File name:");
+                if (name) {
+                  run(createFile(base, sessionId, `${dir}/${name}`, false).pipe(Effect.provide(WickClientLayer)))
                     .then(loadFiles)
                     .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
                 }
