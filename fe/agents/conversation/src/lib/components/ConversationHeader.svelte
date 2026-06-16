@@ -91,24 +91,36 @@
     sseStatus === "connected" ? "live" : sseStatus === "error" ? "error" : "connecting",
   );
 
-  const lcVisible = $derived(lifecycle && lifecycle.state !== "" && lifecycle.state !== "killed");
+  let idleExpired = $state(false);
+
+  /* When the idle auto-kill countdown hits 0 the spawn is killed; reflect
+     "killed" immediately rather than lingering on "idle · 0s". */
+  const effectiveState = $derived(
+    lifecycle?.state === "idle" && idleExpired ? "killed" : (lifecycle?.state ?? ""),
+  );
+
+  const lcVisible = $derived(effectiveState !== "");
 
   const lcClass = $derived(
-    lifecycle?.state === "spawning"
+    effectiveState === "spawning"
       ? "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300"
-      : lifecycle?.state === "working"
+      : effectiveState === "working"
         ? "border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300"
-        : "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300",
+        : effectiveState === "killed"
+          ? "border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-700 dark:text-black-600"
+          : "border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300",
   );
 
   const lcLabel = $derived(
-    lifecycle?.state === "spawning"
+    effectiveState === "spawning"
       ? "spawning…"
-      : lifecycle?.state === "working"
+      : effectiveState === "working"
         ? "working"
-        : lifecycle?.state === "idle"
-          ? "idle"
-          : "",
+        : effectiveState === "killed"
+          ? "killed"
+          : effectiveState === "idle"
+            ? "idle"
+            : "",
   );
 
   // Split agentLabel into instance name + provider type for two-tone display
@@ -129,17 +141,20 @@
     if (lifecycle?.state !== "idle") {
       countdownText = "";
       idleEnteredAt = 0;
+      idleExpired = false;
       return;
     }
 
     const atMs = lifecycle.at || (idleEnteredAt || Date.now());
     if (!idleEnteredAt) idleEnteredAt = atMs;
 
-    countdownText = idleCountdownText(atMs, idleTimeoutMs, Date.now());
-
-    const timer = setInterval(() => {
+    function tick() {
+      idleExpired = atMs + idleTimeoutMs - Date.now() <= 0;
       countdownText = idleCountdownText(atMs, idleTimeoutMs, Date.now());
-    }, 1000);
+    }
+    tick();
+
+    const timer = setInterval(tick, 1000);
 
     return () => clearInterval(timer);
   });
@@ -186,7 +201,7 @@
           lcClass,
         ].join(" ")}
       >
-        {#if lifecycle?.state === "spawning" || lifecycle?.state === "working"}
+        {#if effectiveState === "spawning" || effectiveState === "working"}
           <svg viewBox="0 0 8 8" class="h-1.5 w-1.5 animate-pulse" fill="currentColor" aria-hidden="true">
             <circle cx="4" cy="4" r="3"></circle>
           </svg>
@@ -196,7 +211,7 @@
           </svg>
         {/if}
         <span data-lifecycle-label>{lcLabel}</span>
-        {#if lifecycle?.state === "idle" && countdownText}
+        {#if effectiveState === "idle" && countdownText}
           <span data-idle-countdown class="ml-0.5 opacity-80">{countdownText}</span>
         {/if}
       </span>
