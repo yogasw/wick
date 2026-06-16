@@ -117,6 +117,71 @@ async function renderMath(node: HTMLElement): Promise<void> {
   }
 }
 
+/* Content-Security-Policy injected into every HTML-artifact iframe. The
+   iframe is also sandboxed without allow-same-origin, so it runs in an opaque
+   origin (no access to the parent's cookies/storage/DOM). The CSP then blocks
+   every exfiltration channel: connect-src none (no fetch/XHR/WebSocket),
+   form-action none (no submitting a form anywhere), img/font/media data: only
+   (no external beacons), script-src inline only (no external scripts), and no
+   nested frames or base override. Inline scripts still run, so the artifact
+   stays interactive — it just cannot phone home or read anything outside it. */
+const ARTIFACT_CSP =
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; connect-src 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'";
+
+function buildArtifactSrcdoc(html: string): string {
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`;
+  if (/<head[\s>]/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => `${m}${meta}`);
+  if (/<html[\s>]/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => `${m}<head>${meta}</head>`);
+  return `<!doctype html><html><head><meta charset="utf-8">${meta}</head><body>${html}</body></html>`;
+}
+
+function renderHtmlArtifacts(node: HTMLElement): void {
+  const els = node.querySelectorAll<HTMLElement>("[data-html-artifact]:not([data-enriched])");
+  for (const el of els) {
+    el.setAttribute("data-enriched", "");
+    const src = el.getAttribute("data-html-src") ?? "";
+    if (!src.trim()) continue;
+
+    const header = document.createElement("div");
+    header.className = "flex items-center justify-between px-3 py-1 bg-white-300 dark:bg-navy-600";
+    const label = document.createElement("span");
+    label.className = "text-[10px] text-black-600 dark:text-black-700 uppercase tracking-wide";
+    label.textContent = "HTML preview";
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "text-[10px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-400 transition-colors px-1.5 py-0.5 rounded hover:bg-white-400 dark:hover:bg-navy-500";
+    toggle.textContent = "Show code";
+    header.append(label, toggle);
+
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("sandbox", "allow-scripts");
+    iframe.setAttribute("referrerpolicy", "no-referrer");
+    iframe.setAttribute("loading", "lazy");
+    iframe.setAttribute("title", "HTML preview");
+    iframe.className = "w-full bg-white-100";
+    iframe.style.height = "360px";
+    iframe.style.border = "0";
+    iframe.srcdoc = buildArtifactSrcdoc(src);
+
+    const code = document.createElement("pre");
+    code.className = "hidden overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 leading-relaxed";
+    const codeInner = document.createElement("code");
+    codeInner.textContent = src;
+    code.appendChild(codeInner);
+
+    let showingCode = false;
+    toggle.addEventListener("click", () => {
+      showingCode = !showingCode;
+      iframe.classList.toggle("hidden", showingCode);
+      code.classList.toggle("hidden", !showingCode);
+      toggle.textContent = showingCode ? "Show preview" : "Show code";
+    });
+
+    el.innerHTML = "";
+    el.append(header, iframe, code);
+  }
+}
+
 /* Svelte action: attach to the element whose innerHTML holds rendered
    markdown. Re-runs (debounced) whenever the bound text changes. */
 export function enrich(node: HTMLElement, _text: string) {
@@ -124,6 +189,7 @@ export function enrich(node: HTMLElement, _text: string) {
   function run(): void {
     clearTimeout(timer);
     timer = setTimeout(() => {
+      renderHtmlArtifacts(node);
       void renderMermaid(node);
       void highlightCode(node);
       void renderMath(node);

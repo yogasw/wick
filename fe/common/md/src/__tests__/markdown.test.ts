@@ -110,6 +110,16 @@ describe("renderMarkdown — rich blocks", () => {
     expect(html).not.toContain("data-code-lang");
   });
 
+  test("html fence becomes a sandboxed artifact placeholder", () => {
+    const html = renderMarkdown('```html\n<button onclick="x()">Hi</button>\n```');
+    expect(html).toContain("data-html-artifact");
+    expect(html).toContain("data-html-src=");
+    /* degrades to the raw source as a fallback */
+    expect(html).toContain("Hi");
+    /* an html artifact is not a highlightable code block */
+    expect(html).not.toContain("data-code-lang");
+  });
+
   test("non-mermaid code fence carries its language for highlighting", () => {
     const html = renderMarkdown("```js\nconst x = 1;\n```");
     expect(html).toContain('data-code-lang="js"');

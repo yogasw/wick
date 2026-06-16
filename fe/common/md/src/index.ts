@@ -89,6 +89,16 @@ export function renderMarkdown(text: string): string {
       );
       return;
     }
+    /* An html fence becomes a sandboxed live-preview artifact; the SPA swaps
+       in an isolated iframe. The raw source stays as the body so it degrades
+       to a plain code block where no renderer runs. */
+    if (lang === "html") {
+      out.push(
+        `<div class="wick-html-artifact my-2 rounded-lg overflow-hidden border border-white-300 dark:border-navy-600" data-html-artifact data-html-src="${esc(code)}">` +
+        `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 leading-relaxed"><code>${esc(code)}</code></pre></div>`,
+      );
+      return;
+    }
     const langLabel = lang
       ? `<span class="text-[10px] text-black-600 dark:text-black-700 uppercase tracking-wide">${esc(lang)}</span>`
       : "";
