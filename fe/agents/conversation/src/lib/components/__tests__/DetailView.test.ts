@@ -535,3 +535,26 @@ describe("DetailView — browser tab title from meta (G7)", () => {
     expect(document.title).toContain("My Session");
   });
 });
+
+describe("DetailView — Ctrl/Cmd+B toggles the context rail (G8)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("Ctrl+B opens the context side panel, again closes it", async () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    expect(container.querySelector(".lg\\:flex.flex-col")).toBeNull();
+
+    await fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    expect(container.querySelector(".lg\\:flex.flex-col")).not.toBeNull();
+
+    await fireEvent.keyDown(window, { key: "b", ctrlKey: true });
+    expect(container.querySelector(".lg\\:flex.flex-col")).toBeNull();
+  });
+});

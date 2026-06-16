@@ -342,6 +342,9 @@
       if (e.ctrlKey && e.key === "ArrowDown") {
         e.preventDefault();
         scrollToBottom();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B")) {
+        e.preventDefault();
+        toggleRail("context");
       }
     }
     window.addEventListener("keydown", onKeydown);
