@@ -27,7 +27,7 @@
   }: Props = $props();
 
   const base =
-    "w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-sm font-mono text-black-900 dark:text-white-100 outline-none transition-colors focus:border-green-500 disabled:opacity-50";
+    "w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-sm font-mono text-black-900 dark:text-white-100 outline-none transition-colors focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 disabled:opacity-50";
 </script>
 
 <textarea
