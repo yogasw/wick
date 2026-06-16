@@ -237,4 +237,9 @@
       </div>
     </div>
   </div>
+
+  <button type="button" aria-label="Open navigator" class="fixed bottom-4 right-4 z-30 inline-flex items-center gap-1.5 rounded-full bg-green-500 px-4 py-2.5 text-sm font-medium text-white-100 shadow-lg transition-colors hover:bg-green-600 lg:hidden" onclick={() => (navOpen = true)}>
+    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h7" stroke-linecap="round"></path></svg>
+    Jump
+  </button>
 </div>

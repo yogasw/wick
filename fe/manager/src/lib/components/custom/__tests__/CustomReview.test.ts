@@ -62,6 +62,13 @@ describe("CustomReview — new mode", () => {
     expect(screen.getByRole("button", { name: "Operations" })).toBeTruthy();
   });
 
+  it("renders the mobile Open navigator floating opener", async () => {
+    sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(makeDraft()));
+    render(CustomReview);
+    await screen.findByText("Review extracted definition");
+    expect(screen.getByRole("button", { name: "Open navigator" })).toBeTruthy();
+  });
+
   it("saves a new draft and clears the hand-off", async () => {
     sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(makeDraft()));
     vi.mocked(api.saveCustomDraft).mockResolvedValue({ redirect: "" });
