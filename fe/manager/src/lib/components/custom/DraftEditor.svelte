@@ -66,6 +66,22 @@
   let tagName = $derived(`custom:${draft.key || "…"}`);
   let previewJson = $derived(JSON.stringify(serialize(draft), null, 2));
 
+  type NavItem = { id: string; label: string };
+  let navItems = $derived(
+    [
+      shows("meta") ? { id: "cc-section-meta", label: "Meta" } : null,
+      showAccess ? { id: "cc-section-access", label: "Access & behavior" } : null,
+      shows("configs") ? { id: "cc-section-configs", label: "Configs" } : null,
+      shows("ops") ? { id: "cc-section-ops", label: "Operations" } : null,
+    ].filter((x): x is NavItem => x !== null),
+  );
+  let navTab = $state<"jump" | "json">("jump");
+  let navOpen = $state(false);
+  function jumpTo(id: string) {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    navOpen = false;
+  }
+
   function setHealthOp(v: string) {
     draft.health_op = v;
     onChange();
@@ -75,7 +91,7 @@
 <div class="grid grid-cols-12 gap-6">
   <div class="col-span-12 space-y-6 lg:col-span-7">
     {#if shows("meta")}
-      <section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
+      <section id="cc-section-meta" class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
         <div class="grid grid-cols-12 gap-4">
           <div class="col-span-12 sm:col-span-3">
             <span class="block text-xs font-medium text-black-800 dark:text-black-600">Icon</span>
@@ -110,7 +126,7 @@
     {/if}
 
     {#if showAccess}
-      <section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
+      <section id="cc-section-access" class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
         <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Access &amp; behavior</h2>
         <p class="mt-1 text-sm text-black-800 dark:text-black-600">
           Wick auto-creates the filter tag
@@ -158,7 +174,7 @@
     {/if}
 
     {#if shows("configs")}
-      <section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
+      <section id="cc-section-configs" class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
         <div class="flex items-center justify-between gap-3">
           <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Configs</h2>
           <button type="button" class="inline-flex items-center gap-1 rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600" onclick={addConfig}>+ Add field</button>
@@ -176,7 +192,7 @@
     {/if}
 
     {#if shows("ops")}
-      <section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
+      <section id="cc-section-ops" class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
         <div class="flex items-center justify-between gap-3">
           <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Operations</h2>
           <button type="button" class="inline-flex items-center gap-1 rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600" onclick={addOp}>+ Add operation</button>
@@ -195,10 +211,29 @@
   </div>
 
   <div class="col-span-12 lg:col-span-5">
-    <div class="lg:sticky lg:top-36">
-      <div class="rounded-xl border border-white-300 dark:border-navy-600">
-        <div class="border-b border-white-300 px-3 py-2 text-xs font-medium text-black-800 dark:border-navy-600 dark:text-black-600">Live preview (stored row)</div>
-        <pre class="max-h-[calc(100vh-14rem)] overflow-auto rounded-b-xl bg-navy-800 p-4 font-mono text-xs leading-relaxed text-white-100">{previewJson}</pre>
+    {#if navOpen}
+      <button type="button" aria-label="Close navigator" class="fixed inset-0 z-40 bg-black-900/40 lg:hidden" onclick={() => (navOpen = false)}></button>
+    {/if}
+    <div class="fixed inset-y-0 right-0 z-50 flex w-[22rem] max-w-[85vw] flex-col border-l border-white-300 bg-white-100 shadow-xl transition-transform dark:border-navy-600 dark:bg-navy-700 lg:sticky lg:inset-y-auto lg:top-36 lg:z-auto lg:max-h-[calc(100vh-11rem)] lg:w-auto lg:max-w-none lg:translate-x-0 lg:rounded-xl lg:border lg:shadow-none lg:transition-none {navOpen ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}">
+      <div class="flex items-center justify-between gap-2 border-b border-white-300 px-3 py-2 dark:border-navy-600">
+        <div class="flex items-center gap-1">
+          <button type="button" class="rounded-lg px-3 py-1.5 text-xs font-medium {navTab === 'jump' ? 'bg-white-200 text-green-600 dark:bg-navy-800' : 'text-black-800 dark:text-black-600'}" onclick={() => (navTab = "jump")}>Jump</button>
+          <button type="button" class="rounded-lg px-3 py-1.5 text-xs font-medium {navTab === 'json' ? 'bg-white-200 text-green-600 dark:bg-navy-800' : 'text-black-800 dark:text-black-600'}" onclick={() => (navTab = "json")}>JSON</button>
+        </div>
+        <button type="button" title="Hide panel" aria-label="Hide navigator" class="rounded-lg p-1.5 text-black-700 transition-colors hover:bg-white-200 hover:text-green-600 dark:text-black-600 dark:hover:bg-navy-800 lg:hidden" onclick={() => (navOpen = false)}>
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"></path></svg>
+        </button>
+      </div>
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        {#if navTab === "jump"}
+          <nav class="p-2">
+            {#each navItems as item (item.id)}
+              <button type="button" class="block w-full rounded-lg px-3 py-1.5 text-left text-xs font-medium text-black-800 hover:bg-white-200 hover:text-green-600 dark:text-black-600 dark:hover:bg-navy-800" onclick={() => jumpTo(item.id)}>{item.label}</button>
+            {/each}
+          </nav>
+        {:else}
+          <div class="p-2"><pre class="overflow-auto rounded-lg bg-navy-800 p-4 font-mono text-xs leading-relaxed text-white-100">{previewJson}</pre></div>
+        {/if}
       </div>
     </div>
   </div>
