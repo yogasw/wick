@@ -35,6 +35,8 @@ type connectorListJSON struct {
 	OpCount     int                `json:"op_count"`
 	Custom      bool               `json:"custom"`
 	DefID       string             `json:"def_id,omitempty"`
+	MCP         bool               `json:"mcp"`
+	MCPStatus   string             `json:"mcp_status,omitempty"`
 	Rows        []connectorRowJSON `json:"rows"`
 }
 
@@ -116,11 +118,6 @@ type connectorDetailJSON struct {
 	// Session config: capability is module-level, allowed is per-instance.
 	SessionConfigCapable bool `json:"session_config_capable"`
 	SessionConfigAllowed bool `json:"session_config_allowed"`
-	// Custom MCP connectors: live connection status (for the detail chip) and
-	// whether the caller may re-sync the tool catalog (admin ∨ creator).
-	MCP               bool   `json:"mcp"`
-	MCPStatus         string `json:"mcp_status,omitempty"`
-	CustomMutableByMe bool   `json:"custom_mutable_by_me"`
 }
 
 // apiConnectorRows serves GET /manager/api/connectors/{key}: the connector
@@ -149,6 +146,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 	if customInfo != nil {
 		defID = customInfo.DefID
 	}
+	mcp, mcpStatus := h.mcpConnectorInfo(ctx, key)
 	out := connectorListJSON{
 		Key:         mod.Meta.Key,
 		Name:        mod.Meta.Name,
@@ -158,6 +156,8 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		OpCount:     len(mod.Operations),
 		Custom:      customInfo != nil,
 		DefID:       defID,
+		MCP:         mcp,
+		MCPStatus:   mcpStatus,
 		Rows:        make([]connectorRowJSON, 0, len(rows)),
 	}
 	for _, row := range rows {
@@ -242,7 +242,6 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 
 	isAdmin := user != nil && user.IsAdmin()
 	canConfigure := h.canConfigureRow(user, row)
-	mcp, mcpStatus, customMutable := h.mcpInstanceInfo(ctx, key, user)
 
 	accounts := make([]connectorAccountJSON, 0)
 	for _, acc := range h.accountsForRow(ctx, row.ID) {
@@ -288,9 +287,6 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 		AllowOthersConfigure:  row.AllowOthersConfigure,
 		SessionConfigCapable:  mod.AllowSessionConfig,
 		SessionConfigAllowed:  row.AllowSessionConfig,
-		MCP:                   mcp,
-		MCPStatus:             mcpStatus,
-		CustomMutableByMe:     customMutable,
 	})
 }
 

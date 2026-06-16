@@ -40,7 +40,7 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("GET /manager/api/connectors/{key}/{id}", auth(h.apiConnectorDetail))
 	mux.Handle("POST /manager/api/connectors/{key}/new", auth(h.apiCreateConnectorRow))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/label", auth(h.apiSetConnectorLabel))
-	mux.Handle("POST /manager/api/connectors/{key}/{id}/resync-tools", auth(h.apiResyncMCPTools))
+	mux.Handle("POST /manager/api/connectors/{key}/resync-tools", auth(h.apiResyncMCPTools))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/configs/{configKey}", auth(h.apiSetConnectorConfig))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/disable", auth(h.apiToggleConnectorDisabled))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/delete", auth(h.apiDeleteConnectorRow))

@@ -39,23 +39,17 @@ func (h *Handler) customConnectorAPIRoutes(mux *http.ServeMux, authMidd *login.M
 	mux.Handle("POST /manager/api/connectors/custom/{defID}/enable", auth(h.apiCustomSetDisabled(false)))
 }
 
-// apiResyncMCPTools serves POST /manager/api/connectors/{key}/{id}/resync-tools.
-// It re-fetches the custom MCP server's tools/list (under this instance's
-// account for oauth schemes) and swaps the fresh operation set in, refreshing
-// the stored connection status. Custom MCP defs only; gated to admins and the
-// definition's creator (same level-1 gate as the def_resync MCP op).
+// apiResyncMCPTools serves POST /manager/api/connectors/{key}/resync-tools.
+// It re-fetches the custom MCP server's tools/list and swaps the fresh
+// operation set in for the whole connector — the op set is definition-level,
+// shared by every instance — refreshing the stored connection status. Custom
+// MCP connectors only; available to any authenticated caller (the catalog is
+// deterministic per connector, so this is not gated to admins/creators).
 func (h *Handler) apiResyncMCPTools(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	user := login.GetUser(ctx)
 	key := r.PathValue("key")
-	id := r.PathValue("id")
 	if h.custom == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "custom connectors unavailable"})
-		return
-	}
-	row, err := h.connectors.Get(ctx, id)
-	if err != nil || row.Key != key {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "connector not found"})
 		return
 	}
 	defID, ok := h.custom.DefIDForKey(key)
@@ -72,11 +66,7 @@ func (h *Handler) apiResyncMCPTools(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not an MCP connector"})
 		return
 	}
-	if !customconn.CanMutate(def, user) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "re-sync requires admin or connector owner"})
-		return
-	}
-	if err := h.custom.ReloadFor(ctx, defID, row.ID); err != nil {
+	if err := h.custom.ReloadFor(ctx, defID, ""); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}

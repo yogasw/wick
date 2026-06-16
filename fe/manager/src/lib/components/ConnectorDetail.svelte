@@ -11,7 +11,6 @@
     getConnectorRow,
     setConnectorLabel,
     runHealthCheck,
-    resyncMcpTools,
     setConnectorRateLimit,
   } from "$lib/api.js";
   import type { ConnectorDetail } from "$lib/types.js";
@@ -32,19 +31,6 @@
   let rateBusy = $state(false);
   let healthBusy = $state(false);
   let healthBanner = $state<{ ok: boolean; msg: string } | null>(null);
-  let resyncBusy = $state(false);
-
-  let mcpChip = $derived.by(() => {
-    if (!data?.mcp || !data.mcp_status) return null;
-    switch (data.mcp_status) {
-      case "connected":
-        return { label: "Connected", cls: "bg-pos-100 text-pos-400", dot: "bg-pos-400" };
-      case "disconnected":
-        return { label: "Disconnected", cls: "bg-neg-100 text-neg-400", dot: "bg-neg-400" };
-      default:
-        return { label: "Never tested", cls: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600", dot: "bg-black-700" };
-    }
-  });
 
   async function load(silent = false) {
     if (!silent) loading = true;
@@ -105,20 +91,6 @@
     }
   }
 
-  async function resyncTools() {
-    if (resyncBusy) return;
-    resyncBusy = true;
-    try {
-      const res = await resyncMcpTools(connectorKey, connectorId);
-      toastOk(`Tools re-synced — ${res.operations} operation(s)`);
-      await load(true);
-    } catch (e) {
-      toastError("Re-sync failed", e instanceof Error ? e.message : String(e));
-    } finally {
-      resyncBusy = false;
-    }
-  }
-
   async function saveRateLimit() {
     if (!data || rateBusy) return;
     rateBusy = true;
@@ -161,9 +133,6 @@
             {:else}
               <span class="inline-flex items-center rounded-full bg-pos-100 px-2.5 py-0.5 text-xs font-medium text-pos-400">Enabled</span>
             {/if}
-            {#if mcpChip}
-              <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium {mcpChip.cls}"><span class="h-1.5 w-1.5 rounded-full {mcpChip.dot}"></span>{mcpChip.label}</span>
-            {/if}
           </div>
           <p class="mt-0.5 font-mono text-[11px] text-black-700 dark:text-black-600">{data.id}</p>
           {#if data.description}
@@ -190,14 +159,9 @@
     <section>
       <div class="flex items-center justify-between gap-3">
         <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Credentials</h2>
-        <div class="flex items-center gap-2">
-          {#if data.mcp && data.custom_mutable_by_me}
-            <Button variant="secondary" size="md" disabled={resyncBusy} onclick={resyncTools}>{resyncBusy ? "Syncing…" : "Re-sync tools"}</Button>
-          {/if}
-          {#if data.has_health_check}
-            <Button variant="secondary" size="md" disabled={healthBusy} onclick={checkHealth}>{healthBusy ? "Checking…" : "Check Permissions"}</Button>
-          {/if}
-        </div>
+        {#if data.has_health_check}
+          <Button variant="secondary" size="md" disabled={healthBusy} onclick={checkHealth}>{healthBusy ? "Checking…" : "Check Permissions"}</Button>
+        {/if}
       </div>
       <p class="mt-1 text-sm text-black-800 dark:text-black-600">Per-row values shared by every operation on this connector.</p>
       <ConfigsForm

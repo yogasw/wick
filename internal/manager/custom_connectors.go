@@ -152,29 +152,28 @@ func (h *Handler) customDefInfo(ctx context.Context, key string, user *entity.Us
 	return info
 }
 
-// mcpInstanceInfo reports whether connector `key` is a custom MCP definition
+// mcpConnectorInfo reports whether connector `key` is a custom MCP definition
 // and, if so, its live connection status ("untested"/"connected"/
-// "disconnected") and whether `user` may re-sync it (admin ∨ creator). Unlike
-// customDefInfo it is not gated on mutate rights, so the connection chip can
-// be shown to any viewer; only `mutable` controls the re-sync action.
-func (h *Handler) mcpInstanceInfo(ctx context.Context, key string, user *entity.User) (mcp bool, status string, mutable bool) {
+// "disconnected"). The MCP operation set is definition-level (shared by every
+// instance), so this is keyed on the connector, not an instance, and is not
+// gated on mutate rights — re-sync is open to any authenticated caller.
+func (h *Handler) mcpConnectorInfo(ctx context.Context, key string) (mcp bool, status string) {
 	if h.custom == nil {
-		return false, "", false
+		return false, ""
 	}
 	defID, ok := h.custom.DefIDForKey(key)
 	if !ok {
-		return false, "", false
+		return false, ""
 	}
 	def, err := h.custom.Store().GetDef(ctx, defID)
 	if err != nil || def == nil {
-		return false, "", false
+		return false, ""
 	}
 	serverID := customconn.ServerIDForDef(def)
 	if serverID == "" {
-		return false, "", false
+		return false, ""
 	}
 	mcp = true
-	mutable = customconn.CanMutate(def, user)
 	status = "untested"
 	if srv, err := h.custom.Store().GetServer(ctx, serverID); err == nil && srv != nil {
 		switch {
@@ -186,7 +185,7 @@ func (h *Handler) mcpInstanceInfo(ctx context.Context, key string, user *entity.
 			status = "disconnected"
 		}
 	}
-	return mcp, status, mutable
+	return mcp, status
 }
 
 // customSSOClaims builds the caller identity forwarded to MCP servers

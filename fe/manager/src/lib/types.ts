@@ -35,6 +35,8 @@ export interface ConnectorList {
   custom: boolean;
   custom_source?: string;
   def_id?: string;
+  mcp?: boolean;
+  mcp_status?: string;
   rows: ConnectorRow[] | null;
 }
 
@@ -98,9 +100,6 @@ export interface ConnectorDetail {
   allow_others_configure: boolean;
   session_config_capable: boolean;
   session_config_allowed: boolean;
-  mcp?: boolean;
-  mcp_status?: string;
-  custom_mutable_by_me?: boolean;
 }
 
 export interface HealthCheckResult {
