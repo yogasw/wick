@@ -22,6 +22,18 @@
     if (file) editContent = file.content ?? "";
   });
 
+  $effect(() => {
+    if (!file) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   const editable = $derived(file !== null && !file.binary && !file.tooBig);
   const ext = $derived(file ? extOf(file.path) : "");
   const isImage = $derived(IMAGE_EXTS.includes(ext));
@@ -31,7 +43,10 @@
 
 {#if file !== null}
   <div data-testid="file-viewer"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+    data-file-viewer-backdrop
+    role="presentation"
+    onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
     <div class="w-full max-w-5xl h-[85vh] rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-2xl flex flex-col overflow-hidden">
       <!-- Header -->
       <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-white-300 dark:border-navy-600 shrink-0">

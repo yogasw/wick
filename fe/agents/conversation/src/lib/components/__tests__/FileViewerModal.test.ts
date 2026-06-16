@@ -137,6 +137,26 @@ describe("FileViewerModal", () => {
     expect(container.querySelector("textarea")).toBeNull();
   });
 
+  test("Escape key calls onClose", async () => {
+    const onClose = vi.fn();
+    render(FileViewerModal, {
+      props: { file: TEXT_FILE, dirty: false, onSave: vi.fn(), onClose },
+    });
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  test("clicking backdrop calls onClose", async () => {
+    const onClose = vi.fn();
+    const { container } = render(FileViewerModal, {
+      props: { file: TEXT_FILE, dirty: false, onSave: vi.fn(), onClose },
+    });
+    const backdrop = container.querySelector("[data-file-viewer-backdrop]") as HTMLElement;
+    expect(backdrop).not.toBeNull();
+    await fireEvent.click(backdrop);
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   test("plain text file still renders editable textarea", () => {
     const file = { path: "notes.txt", size: 5, binary: false, content: "hi" } as FileContent;
     const { container } = render(FileViewerModal, {
