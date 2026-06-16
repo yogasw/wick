@@ -18,7 +18,7 @@
 
   import { getConversation, getSessionMeta, deleteSession, getTurnTrace } from "../api/sessions.js";
   import { getProviderOptions, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
-  import { answerAsk } from "../api/asks.js";
+  import { getAsks, answerAsk } from "../api/asks.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
   import { sendMessage } from "../api/messages.js";
   import { listFiles, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
@@ -254,6 +254,17 @@
     run(listWorkspace(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { wsInstances = res.instances; wsBases = res.bases; })
       .catch((e: unknown) => toastError(`Workspace: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
+  /* Rehydrate a question that arrived while the tab was closed; never
+   * clobber an ask already shown by a live SSE event. */
+  function loadPendingAsk() {
+    run(getAsks(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        const pending = res.pending[0];
+        if (pending && !get(currentAsk)) showAsk(pending);
+      })
+      .catch(() => { /* non-fatal — live SSE still delivers new asks */ });
   }
 
   function loadProviderOptions() {
@@ -567,6 +578,7 @@
     loadWorkspace();
     loadProviderOptions();
     loadProjectOptions();
+    loadPendingAsk();
   });
 
   onDestroy(() => {

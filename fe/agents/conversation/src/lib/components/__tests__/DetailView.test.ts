@@ -73,6 +73,7 @@ vi.mock("../../api/options.js", () => ({
 }));
 
 vi.mock("../../api/asks.js", () => ({
+  getAsks: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   answerAsk: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
 }));
 
@@ -118,6 +119,7 @@ vi.mock("svelte/store", async (importActual) => {
 
 import DetailView from "../DetailView.svelte";
 import { killProcess } from "../../api/processes.js";
+import { getAsks } from "../../api/asks.js";
 
 const DEFAULT_PROPS = {
   base: "/api",
@@ -450,5 +452,22 @@ describe("DetailView — confirm before kill/dequeue (#33)", () => {
     await fireEvent.click(screen.getByRole("button", { name: /kill session/i }));
     await fireEvent.click(screen.getByRole("button", { name: /^stop agent$/i }));
     expect(killProcess).toHaveBeenCalledWith("/api", "test-sess");
+  });
+});
+
+describe("DetailView — pending ask rehydration on load (G3)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("getAsks is called on mount to rehydrate any pending ask", () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    expect(getAsks).toHaveBeenCalledWith("/api", "test-sess");
   });
 });
