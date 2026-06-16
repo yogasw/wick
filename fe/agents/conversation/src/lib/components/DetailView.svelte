@@ -150,6 +150,9 @@
   let activeProvider = $state<string | null>(null);
   let activeProjectId = $state<string | null>(null);
 
+  /* ── approval error state ─────────────────────────────────────── */
+  let approvalError = $state("");
+
   /* ── idle timeout ─────────────────────────────────────────────── */
   const idleTimeoutMs = parseInt(document.getElementById("app")?.dataset.idleTimeoutMs ?? "", 10) || 120_000;
 
@@ -420,6 +423,7 @@
       } else if (ev.type === "approval_request") {
         try {
           const req = JSON.parse(ev.data ?? "{}");
+          approvalError = "";
           showApproval(req);
           notify("Approval needed", req.cmd ?? "");
         } catch (_) { /* skip */ }
@@ -475,6 +479,7 @@
   async function handleApprovalDecide(decision: ApprovalDecision) {
     const approval = get(currentApproval);
     if (!approval) return;
+    approvalError = "";
     hideApproval();
     try {
       await run(
@@ -485,7 +490,9 @@
         }).pipe(Effect.provide(WickClientLayer))
       );
     } catch (e: unknown) {
-      toastError(`Approval: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      approvalError = msg;
+      showApproval(approval);
     }
   }
 
@@ -1035,7 +1042,8 @@
 <ApprovalsModal
   request={$currentApproval}
   onDecide={handleApprovalDecide}
-  onClose={() => hideApproval()}
+  onClose={() => { approvalError = ""; hideApproval(); }}
+  error={approvalError}
 />
 
 <ConfirmDialog

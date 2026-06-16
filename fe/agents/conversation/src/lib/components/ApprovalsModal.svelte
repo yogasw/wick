@@ -5,9 +5,10 @@
     request: ApprovalRequest | null;
     onDecide: (decision: ApprovalDecision) => void;
     onClose?: () => void;
+    error?: string;
   };
 
-  let { request, onDecide, onClose }: Props = $props();
+  let { request, onDecide, onClose, error = "" }: Props = $props();
 
   let countdown = $state(25);
 
@@ -82,6 +83,10 @@
           >{request.cmd || ""}</pre>
         </div>
       </div>
+
+      {#if error}
+        <div data-approval-error class="px-6 pb-1 text-xs font-medium text-neg-400">{error}</div>
+      {/if}
 
       <div
         class="border-t border-white-300 dark:border-navy-600 px-6 py-4 grid grid-cols-4 gap-2"

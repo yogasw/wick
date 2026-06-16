@@ -357,6 +357,23 @@ describe("DetailView — rail tab count badges (#31)", () => {
   });
 });
 
+describe("DetailView — approvals modal error propagation (#35)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("ApprovalsModal receives error prop (data-approval-error absent when no error)", () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    expect(container.querySelector("[data-approval-error]")).toBeNull();
+  });
+});
+
 describe("DetailView — confirm before kill/dequeue (#33)", () => {
   beforeEach(() => {
     localStorage.clear();
