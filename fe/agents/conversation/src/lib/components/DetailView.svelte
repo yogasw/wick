@@ -15,6 +15,7 @@
   import { notify } from "../notify.js";
   import { push } from "../router.js";
   import { readScmWidth, writeScmWidth, clampScmWidth } from "../scmWidth.js";
+  import { isValidFileName } from "../fileName.js";
 
   import { getConversation, getSessionMeta, deleteSession, getTurnTrace } from "../api/sessions.js";
   import { getProviderOptions, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
@@ -452,6 +453,25 @@
       .catch((e: unknown) => toastError(`Save: ${e instanceof Error ? e.message : String(e)}`));
   }
 
+  /* Prompt for a name, validate it, create the entry, and expand the
+   * parent dir on success (mirrors legacy context.js createEntry). */
+  function createEntry(isDir: boolean, parentDir?: string) {
+    const raw = prompt(isDir ? "Directory name:" : "File name:");
+    if (raw === null) return;
+    const name = raw.trim();
+    if (!isValidFileName(name)) {
+      toastError("Invalid name", "No slashes or '..'. Open the folder first to nest.");
+      return;
+    }
+    const path = parentDir ? `${parentDir}/${name}` : name;
+    run(createFile(base, sessionId, path, isDir).pipe(Effect.provide(WickClientLayer)))
+      .then(() => {
+        if (parentDir) openDirs = { ...openDirs, [parentDir]: true };
+        loadFiles();
+      })
+      .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
   /* ── SSE fan-out ──────────────────────────────────────────────── */
   function startSSE() {
     const stream = connectSession(base, sessionId);
@@ -840,36 +860,15 @@
           onToggleDir={(p) => { openDirs = { ...openDirs, [p]: !openDirs[p] }; }}
           onOpen={openFile}
           onRefresh={loadFiles}
-          onNewFile={() => {
-            const name = prompt("File name:");
-            if (name) {
-              run(createFile(base, sessionId, name, false).pipe(Effect.provide(WickClientLayer)))
-                .then(loadFiles)
-                .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
-            }
-          }}
-          onNewDir={() => {
-            const name = prompt("Directory name:");
-            if (name) {
-              run(createFile(base, sessionId, name, true).pipe(Effect.provide(WickClientLayer)))
-                .then(loadFiles)
-                .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
-            }
-          }}
+          onNewFile={() => createEntry(false)}
+          onNewDir={() => createEntry(true)}
           onDownload={(p) => { window.open(downloadURL(base, sessionId, p), "_blank"); }}
           onDelete={(p) => {
             run(deleteFile(base, sessionId, p).pipe(Effect.provide(WickClientLayer)))
               .then(loadFiles)
               .catch((e: unknown) => toastError(`Delete: ${e instanceof Error ? e.message : String(e)}`));
           }}
-          onNewHere={(dir) => {
-            const name = prompt("File name:");
-            if (name) {
-              run(createFile(base, sessionId, `${dir}/${name}`, false).pipe(Effect.provide(WickClientLayer)))
-                .then(loadFiles)
-                .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
-            }
-          }}
+          onNewHere={(dir) => createEntry(false, dir)}
         />
       {:else if railTab === "process"}
         <ProcessPanel
@@ -957,36 +956,15 @@
               onToggleDir={(p) => { openDirs = { ...openDirs, [p]: !openDirs[p] }; }}
               onOpen={openFile}
               onRefresh={loadFiles}
-              onNewFile={() => {
-                const name = prompt("File name:");
-                if (name) {
-                  run(createFile(base, sessionId, name, false).pipe(Effect.provide(WickClientLayer)))
-                    .then(loadFiles)
-                    .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
-                }
-              }}
-              onNewDir={() => {
-                const name = prompt("Directory name:");
-                if (name) {
-                  run(createFile(base, sessionId, name, true).pipe(Effect.provide(WickClientLayer)))
-                    .then(loadFiles)
-                    .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
-                }
-              }}
+              onNewFile={() => createEntry(false)}
+              onNewDir={() => createEntry(true)}
               onDownload={(p) => { window.open(downloadURL(base, sessionId, p), "_blank"); }}
               onDelete={(p) => {
                 run(deleteFile(base, sessionId, p).pipe(Effect.provide(WickClientLayer)))
                   .then(loadFiles)
                   .catch((e: unknown) => toastError(`Delete: ${e instanceof Error ? e.message : String(e)}`));
               }}
-              onNewHere={(dir) => {
-                const name = prompt("File name:");
-                if (name) {
-                  run(createFile(base, sessionId, `${dir}/${name}`, false).pipe(Effect.provide(WickClientLayer)))
-                    .then(loadFiles)
-                    .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
-                }
-              }}
+              onNewHere={(dir) => createEntry(false, dir)}
             />
           {:else if railTab === "process"}
             <ProcessPanel
