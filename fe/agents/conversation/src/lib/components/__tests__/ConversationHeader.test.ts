@@ -54,14 +54,15 @@ describe("ConversationHeader", () => {
     expect(container.querySelector("[data-lifecycle-badge]")).toBeNull();
   });
 
-  test("lifecycle:working shows badge with working styling", () => {
+  test("lifecycle:working shows badge with working styling and 'working' label", () => {
     const { container } = render(ConversationHeader, {
       props: { ...baseProps, lifecycle: lc("working", { substate: "bash" }) },
     });
     const badge = container.querySelector("[data-lifecycle-badge]");
     expect(badge).not.toBeNull();
     expect(badge!.className).toContain("green");
-    expect(container.innerHTML).toContain("bash");
+    /* label reflects the lifecycle state, not the substate (which can leak the provider name) */
+    expect(badge!.textContent).toContain("working");
   });
 
   test("lifecycle:spawning shows badge with amber styling", () => {

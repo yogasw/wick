@@ -103,9 +103,9 @@
 
   const lcLabel = $derived(
     lifecycle?.state === "spawning"
-      ? (lifecycle.substate ? lifecycle.substate : "spawning…")
+      ? "spawning…"
       : lifecycle?.state === "working"
-        ? (lifecycle.substate ? lifecycle.substate : "working")
+        ? "working"
         : lifecycle?.state === "idle"
           ? "idle"
           : "",
