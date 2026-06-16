@@ -182,4 +182,18 @@ describe("AskUserModal", () => {
     const input = screen.getByRole("textbox") as HTMLInputElement;
     await vi.waitFor(() => { expect(document.activeElement).toBe(input); });
   });
+
+  test("required text field shows red border after empty Next/Submit", async () => {
+    const request = {
+      id: "q1",
+      fields: [
+        { key: "step1", type: "text", label: "Step 1", required: true },
+        { key: "name", type: "text", label: "Name", required: true },
+      ],
+    };
+    const { container } = render(AskUserModal, { props: { request, onSubmit: vi.fn() } });
+    await fireEvent.click(screen.getByText("Next"));
+    const input = container.querySelector("input")!;
+    expect(input.className).toContain("border-neg-400");
+  });
 });

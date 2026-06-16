@@ -402,7 +402,7 @@
                   : "text"}
               autocomplete={field.type === "secret" ? "new-password" : undefined}
               placeholder={field.placeholder ?? ""}
-              class={FIELD_INPUT_CLASS}
+              class={`${FIELD_INPUT_CLASS} ${stepError ? "border-neg-400 dark:border-neg-400 focus:border-neg-400" : ""}`}
               bind:this={stepInputEl}
               bind:value={inputVal}
               oninput={() => (stepError = "")}
