@@ -8,3 +8,5 @@ export { default as NumberInput } from "./NumberInput.svelte";
 export { default as TextArea } from "./TextArea.svelte";
 export { default as LabeledInput } from "./LabeledInput.svelte";
 export { default as Modal } from "./Modal.svelte";
+export { default as Breadcrumb } from "./Breadcrumb.svelte";
+export type { BreadcrumbItem } from "./Breadcrumb.svelte";

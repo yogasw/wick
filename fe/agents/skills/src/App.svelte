@@ -2,6 +2,7 @@
   import { get } from "svelte/store";
   import { route, match, push } from "$lib/router.js";
   import { ToastHost } from "@wick-fe/common-ui";
+  import { buildSkillFileCrumbs } from "$lib/skillCrumbs.js";
   import SkillsList from "$lib/components/SkillsList.svelte";
   import SkillDetail from "$lib/components/SkillDetail.svelte";
   import SkillFileView from "$lib/components/SkillFileView.svelte";
@@ -22,13 +23,16 @@
     <SkillFileView
       folder={fileParams.folder}
       file={fileParams.file}
-      onBack={() => push(`/skills/${fileParams!.folder}`)}
+      breadcrumb={buildSkillFileCrumbs(fileParams.folder, fileParams.file, push)}
       onOpenChild={(childPath) => push(`/skills/${encodeURIComponent(fileParams!.folder)}/files/${childPath.split("/").map(encodeURIComponent).join("/")}`)}
     />
   {:else if detailParams}
     <SkillDetail
       name={detailParams.name}
-      onBack={() => push("/")}
+      breadcrumb={[
+        { label: "Skills", onClick: () => push("/") },
+        { label: detailParams.name },
+      ]}
       onOpen={(entryName) => push(`/skills/${encodeURIComponent(detailParams!.name)}/files/${encodeURIComponent(entryName)}`)}
     />
   {:else}

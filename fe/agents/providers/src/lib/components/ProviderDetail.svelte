@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { ConfirmDialog, KvList } from "@wick-fe/common-ui";
+  import { ConfirmDialog, KvList, Breadcrumb, type BreadcrumbItem } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     apiGetProviderDetail,
@@ -21,6 +21,11 @@
     onBack: () => void;
   };
   let { base, type, name, onBack }: Props = $props();
+
+  let crumbs = $derived<BreadcrumbItem[]>([
+    { label: "Providers", onClick: onBack },
+    { label: `${type}/${name}`, truncate: true },
+  ]);
 
   type KVRow = { key: string; value: string };
 
@@ -268,13 +273,9 @@
 
 <div class="space-y-4">
   <!-- Header -->
+  <Breadcrumb items={crumbs} />
   <div class="flex items-center justify-between gap-3 flex-wrap">
     <div class="flex items-center gap-3 flex-wrap">
-      <button
-        onclick={onBack}
-        class="text-xs text-black-700 dark:text-black-600 hover:underline"
-      >← Providers</button>
-      <span class="text-black-400 dark:text-black-600">/</span>
       <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">{type}/{name}</h1>
       {#if data}
         {#if !data.PathFound}

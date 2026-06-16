@@ -15,6 +15,7 @@
   import ToolDetail from "$lib/components/tools/ToolDetail.svelte";
   import AuditLog from "$lib/components/audit/AuditLog.svelte";
   import { breadcrumbNames } from "$lib/stores/breadcrumb.js";
+  import type { BreadcrumbItem } from "@wick-fe/common-ui";
 
   let currentRoute = $state(get(route));
   $effect(() => {
@@ -60,60 +61,53 @@
   let rowName = $derived(names.row ?? rowCrumb?.id ?? "");
   let jobName = $derived(names.job ?? jobParams?.key ?? "");
   let toolName = $derived(names.tool ?? toolParams?.key ?? "");
+
+  const home: BreadcrumbItem = { label: "Home", onClick: () => push("/") };
+
+  let items = $derived.by<BreadcrumbItem[]>(() => {
+    if (auditRoute) {
+      return [home, { label: "Audit Log" }];
+    }
+    if (jobParams) {
+      return [
+        { label: "Jobs" },
+        { label: jobName, onClick: () => push(`/jobs/${encodeURIComponent(jobParams.key)}`), truncate: true },
+      ];
+    }
+    if (toolParams) {
+      return [
+        { label: "Tools" },
+        { label: toolName, onClick: () => push(`/tools/${encodeURIComponent(toolParams.key)}`), truncate: true },
+      ];
+    }
+    if (customCrumb) {
+      return [home, { label: "Connectors", onClick: () => push("/") }, { label: customCrumb }];
+    }
+    if (listParams) {
+      return [home, { label: connectorName }];
+    }
+    if (rowCrumb) {
+      const trail: BreadcrumbItem[] = [
+        home,
+        { label: connectorName, onClick: () => push(`/connectors/${encodeURIComponent(rowCrumb.key)}`), truncate: true },
+      ];
+      if (testParams || historyParams) {
+        trail.push({
+          label: rowName,
+          onClick: () => push(`/connectors/${encodeURIComponent(rowCrumb.key)}/${encodeURIComponent(rowCrumb.id)}`),
+          truncate: true,
+        });
+        trail.push({ label: testParams ? "Test" : "History" });
+      } else {
+        trail.push({ label: rowName });
+      }
+      return trail;
+    }
+    return [home, { label: "Connectors" }];
+  });
 </script>
 
-{#snippet sep()}
-  <span aria-hidden="true">/</span>
-{/snippet}
-{#snippet homeLink()}
-  <button type="button" class="whitespace-nowrap hover:text-green-600" onclick={() => push("/")}>Home</button>
-{/snippet}
-{#snippet current(label: string)}
-  <span class="inline-block max-w-[55vw] truncate align-bottom text-black-900 dark:text-white-100 sm:max-w-[18rem]">{label}</span>
-{/snippet}
-
-<AppShell>
-  {#snippet breadcrumb()}
-    {#if auditRoute}
-      {@render homeLink()}
-      {@render sep()}
-      {@render current("Audit Log")}
-    {:else if jobParams}
-      <span>Jobs</span>
-      {@render sep()}
-      <button type="button" class="inline-block max-w-[55vw] truncate align-bottom text-black-900 dark:text-white-100 hover:text-green-600 sm:max-w-[18rem]" onclick={() => push(`/jobs/${encodeURIComponent(jobParams.key)}`)}>{jobName}</button>
-    {:else if toolParams}
-      <span>Tools</span>
-      {@render sep()}
-      <button type="button" class="inline-block max-w-[55vw] truncate align-bottom text-black-900 dark:text-white-100 hover:text-green-600 sm:max-w-[18rem]" onclick={() => push(`/tools/${encodeURIComponent(toolParams.key)}`)}>{toolName}</button>
-    {:else if customCrumb}
-      {@render homeLink()}
-      {@render sep()}
-      <button type="button" class="hover:text-green-600" onclick={() => push("/")}>Connectors</button>
-      {@render sep()}
-      {@render current(customCrumb)}
-    {:else if listParams}
-      {@render homeLink()}
-      {@render sep()}
-      {@render current(connectorName)}
-    {:else if rowCrumb}
-      {@render homeLink()}
-      {@render sep()}
-      <button type="button" class="inline-block max-w-[55vw] truncate align-bottom hover:text-green-600 sm:max-w-[18rem]" onclick={() => push(`/connectors/${encodeURIComponent(rowCrumb.key)}`)}>{connectorName}</button>
-      {@render sep()}
-      {#if testParams || historyParams}
-        <button type="button" class="inline-block max-w-[55vw] truncate align-bottom hover:text-green-600 sm:max-w-[18rem]" onclick={() => push(`/connectors/${encodeURIComponent(rowCrumb.key)}/${encodeURIComponent(rowCrumb.id)}`)}>{rowName}</button>
-        {@render sep()}
-        {@render current(testParams ? "Test" : "History")}
-      {:else}
-        {@render current(rowName)}
-      {/if}
-    {:else}
-      {@render homeLink()}
-      {@render sep()}
-      {@render current("Connectors")}
-    {/if}
-  {/snippet}
+<AppShell {items}>
   {#key currentRoute}
     {#if auditRoute}
       <AuditLog />

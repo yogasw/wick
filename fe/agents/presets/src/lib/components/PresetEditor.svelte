@@ -1,9 +1,15 @@
 <script lang="ts">
   import { toastOk, toastError } from "@wick-fe/common-stores";
+  import { Breadcrumb, type BreadcrumbItem } from "@wick-fe/common-ui";
   import { getPreset, updatePreset } from "$lib/api.js";
 
   type Props = { name: string; onBack: () => void };
   let { name, onBack }: Props = $props();
+
+  let crumbs = $derived<BreadcrumbItem[]>([
+    { label: "Presets", onClick: onBack },
+    { label: name, truncate: true },
+  ]);
 
   let body = $state("");
   let loading = $state(true);
@@ -40,9 +46,7 @@
 </script>
 
 <div class="space-y-4">
-  <div class="flex items-center gap-3">
-    <button onclick={onBack} class="text-xs text-black-700 dark:text-black-600 hover:underline">← Presets</button>
-  </div>
+  <Breadcrumb items={crumbs} />
   <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">{name}</h1>
 
   {#if loading}
