@@ -4,6 +4,7 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastError, toastOk } from "@wick-fe/common-stores";
+  import { ConfirmDialog } from "@wick-fe/common-ui";
 
   import { createThreadStore } from "../stores/thread.js";
   import type { ThreadMeta, LifecycleState } from "../stores/thread.js";
@@ -136,6 +137,7 @@
 
   /* ── process panel state ──────────────────────────────────────── */
   let processes = $state<ProcessInfo[]>([]);
+  let confirmKill = $state<{ sid: string; queued: boolean } | null>(null);
 
   /* ── workspace panel state ────────────────────────────────────── */
   let wsInstances = $state<WsInstance[]>([]);
@@ -436,7 +438,17 @@
 
   /* ── header actions ───────────────────────────────────────────── */
   function handleKill() {
-    run(killProcess(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+    confirmKill = { sid: sessionId, queued: false };
+  }
+
+  function doKill() {
+    const target = confirmKill;
+    confirmKill = null;
+    if (!target) return;
+    const action = target.queued
+      ? dequeueProcess(base, target.sid)
+      : killProcess(base, target.sid);
+    run(action.pipe(Effect.provide(WickClientLayer)))
       .then(loadProcesses)
       .catch((e: unknown) => toastError(`Kill: ${e instanceof Error ? e.message : String(e)}`));
   }
@@ -783,16 +795,8 @@
       {:else if railTab === "process"}
         <ProcessPanel
           {processes}
-          onKill={(sid) => {
-            run(killProcess(base, sid).pipe(Effect.provide(WickClientLayer)))
-              .then(loadProcesses)
-              .catch((e: unknown) => toastError(`Kill: ${e instanceof Error ? e.message : String(e)}`));
-          }}
-          onDequeue={(sid) => {
-            run(dequeueProcess(base, sid).pipe(Effect.provide(WickClientLayer)))
-              .then(loadProcesses)
-              .catch((e: unknown) => toastError(`Dequeue: ${e instanceof Error ? e.message : String(e)}`));
-          }}
+          onKill={(sid) => { confirmKill = { sid, queued: false }; }}
+          onDequeue={(sid) => { confirmKill = { sid, queued: true }; }}
         />
       {:else if railTab === "workspace"}
         <WorkspacePanel
@@ -908,16 +912,8 @@
           {:else if railTab === "process"}
             <ProcessPanel
               {processes}
-              onKill={(sid) => {
-                run(killProcess(base, sid).pipe(Effect.provide(WickClientLayer)))
-                  .then(loadProcesses)
-                  .catch((e: unknown) => toastError(`Kill: ${e instanceof Error ? e.message : String(e)}`));
-              }}
-              onDequeue={(sid) => {
-                run(dequeueProcess(base, sid).pipe(Effect.provide(WickClientLayer)))
-                  .then(loadProcesses)
-                  .catch((e: unknown) => toastError(`Dequeue: ${e instanceof Error ? e.message : String(e)}`));
-              }}
+              onKill={(sid) => { confirmKill = { sid, queued: false }; }}
+              onDequeue={(sid) => { confirmKill = { sid, queued: true }; }}
             />
           {:else if railTab === "workspace"}
             <WorkspacePanel
@@ -1040,6 +1036,16 @@
   request={$currentApproval}
   onDecide={handleApprovalDecide}
   onClose={() => hideApproval()}
+/>
+
+<ConfirmDialog
+  open={confirmKill !== null}
+  title={confirmKill?.queued ? "Cancel queued agent?" : "Stop this agent?"}
+  body={confirmKill?.queued ? "The queued spawn will be dropped." : "The running agent process will be terminated."}
+  confirmLabel={confirmKill?.queued ? "Cancel spawn" : "Stop agent"}
+  destructive={true}
+  onConfirm={doKill}
+  onCancel={() => { confirmKill = null; }}
 />
 
 {#if viewerFile !== null}

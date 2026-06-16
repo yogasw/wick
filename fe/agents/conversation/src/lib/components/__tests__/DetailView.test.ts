@@ -117,6 +117,7 @@ vi.mock("svelte/store", async (importActual) => {
 });
 
 import DetailView from "../DetailView.svelte";
+import { killProcess } from "../../api/processes.js";
 
 const DEFAULT_PROPS = {
   base: "/api",
@@ -353,5 +354,40 @@ describe("DetailView — rail tab count badges (#31)", () => {
     expect(container.querySelector('[aria-label="Context"]')).not.toBeNull();
     /* zero-count badges must not appear */
     expect(container.querySelectorAll(".rounded-full.bg-green-500").length).toBe(0);
+  });
+});
+
+describe("DetailView — confirm before kill/dequeue (#33)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("header kill button is rendered", () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    const killBtn = container.querySelector('[aria-label="Kill session"]');
+    expect(killBtn).not.toBeNull();
+  });
+
+  test("clicking header kill opens a confirm dialog instead of killing immediately", async () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    const killBtn = screen.getByRole("button", { name: /kill session/i });
+    await fireEvent.click(killBtn);
+    /* destructive action must be gated — killProcess not called yet */
+    expect(killProcess).not.toHaveBeenCalled();
+    /* the shared confirm dialog is now open */
+    expect(screen.getByText("Stop this agent?")).toBeDefined();
+  });
+
+  test("confirming the dialog invokes killProcess", async () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    await fireEvent.click(screen.getByRole("button", { name: /kill session/i }));
+    await fireEvent.click(screen.getByRole("button", { name: /^stop agent$/i }));
+    expect(killProcess).toHaveBeenCalledWith("/api", "test-sess");
   });
 });
