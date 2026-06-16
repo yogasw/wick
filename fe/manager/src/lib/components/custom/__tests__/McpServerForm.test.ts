@@ -120,6 +120,14 @@ describe("McpServerForm — auth panel toggle", () => {
   });
 });
 
+describe("McpServerForm — Label slugified-key hint (finding #19)", () => {
+  it("shows the slugified-key hint on the Label field", async () => {
+    render(McpServerForm);
+    await screen.findByText("Register MCP server");
+    expect(screen.getByText(/and its key, slugified/)).toBeTruthy();
+  });
+});
+
 describe("McpServerForm — JSON-RPC explainer + Description helper (finding #17)", () => {
   it("renders the JSON-RPC explainer and Description re-sync helper", async () => {
     render(McpServerForm);

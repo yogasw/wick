@@ -247,7 +247,7 @@
                 ariaLabel="Label"
               />
             </div>
-            <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Display name — becomes the connector's name.</p>
+            <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Display name — becomes the connector's name (and its key, slugified).</p>
           </div>
           <div class="col-span-12 sm:col-span-6">
             <span class="block text-xs font-medium text-black-800 dark:text-black-600">MCP URL <span class="text-neg-400">*</span></span>
