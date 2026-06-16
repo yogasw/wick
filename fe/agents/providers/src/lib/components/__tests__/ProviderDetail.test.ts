@@ -58,7 +58,7 @@ beforeEach(() => {
 describe("ProviderDetail - rendering", () => {
   it("renders provider heading with type/name", async () => {
     render(ProviderDetail, { props: defaultProps });
-    expect(await screen.findByText("claude/default")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "claude/default" })).toBeTruthy();
   });
 
   it("renders version badge when path found", async () => {
@@ -269,8 +269,8 @@ describe("ProviderDetail - callbacks", () => {
   it("calls onBack when back button clicked", async () => {
     const onBack = vi.fn();
     render(ProviderDetail, { props: { ...defaultProps, onBack } });
-    await screen.findByText("← Providers");
-    fireEvent.click(screen.getByText("← Providers"));
+    await screen.findByRole("button", { name: "Providers" });
+    fireEvent.click(screen.getByRole("button", { name: "Providers" }));
     expect(onBack).toHaveBeenCalled();
   });
 });

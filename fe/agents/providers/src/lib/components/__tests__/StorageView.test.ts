@@ -69,7 +69,7 @@ describe("StorageView", () => {
     const onBack = vi.fn();
     render(StorageView, { props: { onBack } });
     await screen.findByText("config.json");
-    fireEvent.click(screen.getByText("← Providers"));
+    fireEvent.click(screen.getByRole("button", { name: "Providers" }));
     expect(onBack).toHaveBeenCalled();
   });
 

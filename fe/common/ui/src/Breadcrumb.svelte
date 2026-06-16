@@ -1,8 +1,12 @@
 <script lang="ts">
   /* Breadcrumb trail. Pure rendering — the caller builds the item list and
      wires navigation through onClick. Items with onClick render as links;
-     the trailing item (no onClick) renders as the current page label. Uses
+     the trailing item (no onClick) renders as the current page label. Pass a
+     `current` snippet to render the current item yourself (e.g. an editable
+     title) — then every item is treated as a preceding segment. Uses
      design-system tokens (consumes them; does not change the design-system). */
+  import type { Snippet } from "svelte";
+
   export type BreadcrumbItem = {
     label: string;
     onClick?: () => void;
@@ -11,9 +15,10 @@
 
   type Props = {
     items: BreadcrumbItem[];
+    current?: Snippet;
   };
 
-  let { items }: Props = $props();
+  let { items, current }: Props = $props();
 
   const truncateClass = "inline-block max-w-[55vw] truncate align-bottom sm:max-w-[18rem]";
   const linkBase = "whitespace-nowrap hover:text-green-600";
@@ -31,7 +36,7 @@
         class={item.truncate ? `${truncateClass} hover:text-green-600` : linkBase}
         onclick={item.onClick}
       >{item.label}</button>
-    {:else if i === items.length - 1}
+    {:else if i === items.length - 1 && !current}
       <span class={currentClass}>{item.label}</span>
     {:else}
       <span class={item.truncate ? truncateClass : "whitespace-nowrap"}>{item.label}</span>
@@ -40,4 +45,8 @@
       <span aria-hidden="true">/</span>
     {/if}
   {/each}
+  {#if current}
+    <span aria-hidden="true">/</span>
+    {@render current()}
+  {/if}
 </nav>
