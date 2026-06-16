@@ -23,26 +23,30 @@ const spaBase = "/manager"
 // bundle lingers on disk" pitfall a plain readdir would hit.
 var bundleSrcRe = regexp.MustCompile(`<script[^>]*\bsrc="([^"]*/index-[^"]+\.js)"`)
 
-// Resolve the hashed bundle src once per process — the directory read is
-// only paid on the first shell render.
 var (
 	assetURLOnce sync.Once
 	assetURL     string
 )
 
 // spaAssetURL returns the absolute URL of the hashed entry .js bundle for
-// the manager SPA, read from dist/manager/index.html. Empty string when the
-// bundle isn't built (dev machine without `npm run build` in fe/manager);
-// the thin-shell renders a fallback message in that case.
+// the manager SPA, read from dist/manager/index.html. In live-disk dev mode
+// re-reads on every call so Vite watch rebuilds are reflected immediately.
+// In production resolves once per process. Empty string when not built yet.
 func spaAssetURL() string {
-	assetURLOnce.Do(func() {
-		data, err := fs.ReadFile(spaFS, "dist/manager/index.html")
-		if err != nil {
-			return
-		}
-		if m := bundleSrcRe.FindSubmatch(data); m != nil {
-			assetURL = string(m[1])
-		}
-	})
+	if spaLiveDisk {
+		return readAssetURL()
+	}
+	assetURLOnce.Do(func() { assetURL = readAssetURL() })
 	return assetURL
+}
+
+func readAssetURL() string {
+	data, err := fs.ReadFile(spaFS, "dist/manager/index.html")
+	if err != nil {
+		return ""
+	}
+	if m := bundleSrcRe.FindSubmatch(data); m != nil {
+		return string(m[1])
+	}
+	return ""
 }
