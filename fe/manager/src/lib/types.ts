@@ -33,6 +33,7 @@ export interface ConnectorList {
   fixed: boolean;
   op_count: number;
   custom: boolean;
+  def_id?: string;
   rows: ConnectorRow[] | null;
 }
 

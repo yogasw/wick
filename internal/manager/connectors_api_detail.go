@@ -34,6 +34,7 @@ type connectorListJSON struct {
 	Fixed       bool               `json:"fixed"`
 	OpCount     int                `json:"op_count"`
 	Custom      bool               `json:"custom"`
+	DefID       string             `json:"def_id,omitempty"`
 	Rows        []connectorRowJSON `json:"rows"`
 }
 
@@ -138,6 +139,11 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 	}
 	tagsByRow := h.resolveRowTags(ctx, rows)
 
+	customInfo := h.customDefInfo(ctx, key, user)
+	defID := ""
+	if customInfo != nil {
+		defID = customInfo.DefID
+	}
 	out := connectorListJSON{
 		Key:         mod.Meta.Key,
 		Name:        mod.Meta.Name,
@@ -145,7 +151,8 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		Icon:        mod.Meta.Icon,
 		Fixed:       mod.Meta.Fixed,
 		OpCount:     len(mod.Operations),
-		Custom:      h.customDefInfo(ctx, key, user) != nil,
+		Custom:      customInfo != nil,
+		DefID:       defID,
 		Rows:        make([]connectorRowJSON, 0, len(rows)),
 	}
 	for _, row := range rows {
