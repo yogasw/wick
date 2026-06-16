@@ -1,8 +1,4 @@
 <script lang="ts">
-  /* Per-connector-type instance list: every row (instance) of one connector,
-     with status chips, a "+ New row" action, and per-row disable/delete from a
-     kebab menu. Clicking a row opens its detail page via the SPA router. Mirrors
-     the legacy connector_list.templ surface. */
   import { Button, ConfirmDialog } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import { push } from "$lib/router.js";
@@ -119,34 +115,43 @@
   <div class="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">{error}</div>
 {:else if data}
   <div class="space-y-6">
-    <div class="grid grid-cols-[1fr_auto] items-start gap-4">
-      <div class="flex min-w-0 items-start gap-3">
+    <div class="flex items-start gap-4">
+
+      <!-- LEFT: icon + name + description -->
+      <div class="flex min-w-0 flex-1 items-start gap-3">
         <span class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-navy-700 dark:bg-navy-700 text-base" aria-hidden="true">{data.icon || "🔌"}</span>
-        <div class="min-w-0 w-full">
+        <div class="min-w-0 flex-1 overflow-hidden">
           <div class="flex flex-wrap items-center gap-2">
             <h1 class="text-lg font-bold text-black-900 dark:text-white-100">{data.name}</h1>
             {#if data.custom}
-              <span class="rounded px-1.5 py-0.5 text-[11px] font-medium text-green-500 border border-green-600/40 bg-green-900/20">Custom</span>
+              <span class="flex-shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-green-500 border border-green-600/40 bg-green-900/20">Custom</span>
             {/if}
           </div>
           {#if data.description}
-            <p class="mt-0.5 text-sm text-black-800 dark:text-black-600">{data.description}</p>
+            <p class="mt-0.5 break-words text-sm text-black-800 dark:text-black-600 line-clamp-3">{data.description}</p>
           {/if}
           <p class="mt-1 text-xs text-black-700 dark:text-black-600">{data.op_count} operation(s) · {rows.length} row(s)</p>
         </div>
       </div>
-      <div class="flex flex-shrink-0 items-start gap-2">
-        {#if data.custom && data.def_id}
-          <button
-            type="button"
-            onclick={() => push(`/custom/${encodeURIComponent(data.def_id!)}/edit`)}
-            class="inline-flex items-center rounded-lg border border-white-300 dark:border-navy-600 bg-transparent px-3 py-2 text-sm font-semibold text-black-800 dark:text-white-100 hover:border-green-400 hover:text-green-600 transition-colors leading-tight text-center"
-          >Edit<br/>definition</button>
-        {/if}
-        {#if !data.fixed}
-          <Button size="sm" disabled={busy} onclick={newRow}>+ New row</Button>
-        {/if}
-      </div>
+
+     <div class="flex flex-shrink-0 items-center gap-2 pt-1">
+      {#if data.custom && data.def_id}
+        <button
+          type="button"
+          onclick={() => push(`/custom/${encodeURIComponent(data.def_id!)}/edit`)}
+          class="whitespace-nowrap rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
+        >Edit definition</button>
+      {/if}
+      {#if !data.fixed}
+        <button
+          type="button"
+          disabled={busy}
+          onclick={newRow}
+          class="whitespace-nowrap rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+        >+ New row</button>
+      {/if}
+</div>
+
     </div>
 
     <section>
