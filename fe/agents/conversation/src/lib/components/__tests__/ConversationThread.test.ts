@@ -1,4 +1,4 @@
-import { describe, test, expect } from "vitest";
+import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import ConversationThread from "../ConversationThread.svelte";
 import type { ConversationTurn, LiveTurn, TypingState } from "../../types/agents.js";
@@ -96,6 +96,34 @@ describe("ConversationThread", () => {
     const turns = [{ turn_id: "t1", role: "user", agent: "", provider: "", text: "hi", timestamp: 0, truncated: false, interrupted: false, has_trace: false, events: [], attachments: [] }];
     const { container } = render(ConversationThread, { props: { turns, live: null, typing: { active: false } } });
     expect(container.innerHTML).not.toContain("No messages yet");
+  });
+
+  test("clicking a data-chat-path link calls onOpenPath with the path and prevents default navigation", async () => {
+    const onOpenPath = vi.fn();
+    const turn = makeTurn("t-path", "assistant", "See [x.ts](src/x.ts) for details");
+    const { container } = render(ConversationThread, {
+      props: { turns: [turn], live: null, typing: { active: false }, onOpenPath },
+    });
+    const link = container.querySelector<HTMLAnchorElement>("a[data-chat-path]");
+    expect(link).not.toBeNull();
+    expect(link!.getAttribute("data-chat-path")).toBe("src/x.ts");
+    const ev = new MouseEvent("click", { bubbles: true, cancelable: true });
+    link!.dispatchEvent(ev);
+    expect(onOpenPath).toHaveBeenCalledOnce();
+    expect(onOpenPath).toHaveBeenCalledWith("src/x.ts");
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  test("data-chat-path click is a no-op when onOpenPath is not provided", async () => {
+    const turn = makeTurn("t-path-2", "assistant", "See [y.ts](src/y.ts) for details");
+    const { container } = render(ConversationThread, {
+      props: { turns: [turn], live: null, typing: { active: false } },
+    });
+    const link = container.querySelector<HTMLAnchorElement>("a[data-chat-path]");
+    expect(link).not.toBeNull();
+    const ev = new MouseEvent("click", { bubbles: true, cancelable: true });
+    expect(() => link!.dispatchEvent(ev)).not.toThrow();
+    expect(ev.defaultPrevented).toBe(true);
   });
 
   test("renders all turns when multiple turns share empty turn_id without crashing", () => {

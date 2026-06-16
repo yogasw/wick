@@ -10,9 +10,10 @@
     live: LiveTurn | null;
     typing: TypingState;
     loadTrace?: (turnId: string) => Promise<TurnEvent[]>;
+    onOpenPath?: (path: string) => void;
   };
 
-  let { turns, live, typing, loadTrace }: Props = $props();
+  let { turns, live, typing, loadTrace, onOpenPath }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -29,7 +30,15 @@
   onMount(() => {
     if (!containerEl) return;
     containerEl.addEventListener("click", (e: MouseEvent) => {
-      const btn = (e.target as Element).closest<HTMLElement>("[data-copy-code]");
+      const target = e.target as Element;
+      const link = target.closest<HTMLElement>("[data-chat-path]");
+      if (link) {
+        e.preventDefault();
+        const path = link.dataset.chatPath ?? "";
+        if (path) onOpenPath?.(path);
+        return;
+      }
+      const btn = target.closest<HTMLElement>("[data-copy-code]");
       if (!btn) return;
       const code = btn.dataset.code ?? "";
       navigator.clipboard.writeText(code).then(() => {

@@ -435,14 +435,19 @@
   });
 
   /* ── file viewer ──────────────────────────────────────────────── */
-  function openFile(f: ContextFileEntry) {
-    if (f.isDir) return;
-    run(readFile(base, sessionId, f.path).pipe(Effect.provide(WickClientLayer)))
+  function openFileByPath(path: string) {
+    if (!path) return;
+    run(readFile(base, sessionId, path).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
         viewerFile = res;
         viewerDirty = false;
       })
       .catch((e: unknown) => toastError(`Read: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
+  function openFile(f: ContextFileEntry) {
+    if (f.isDir) return;
+    openFileByPath(f.path);
   }
 
   function handleViewerSave(content: string) {
@@ -699,7 +704,7 @@
         data-chat-panel
       >
         <div class="max-w-4xl mx-auto w-full px-6 pt-14 pb-6 md:pt-6">
-          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} />
+          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} />
         </div>
       </div>
 
