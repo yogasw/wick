@@ -9,43 +9,15 @@ import (
 
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
-	"github.com/yogasw/wick/internal/login"
-	"github.com/yogasw/wick/internal/manager/view"
 )
 
-// auditLogPage renders the cross-connector run history for admins.
-// Filters (source, status, from, to) are passed as query params; results
-// are server-side paginated.
-func (h *Handler) auditLogPage(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	user := login.GetUser(ctx)
-
-	f, fromStr, toStr := buildAuditFilter(r)
-
-	const pageSize = 25
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-
-	total, _ := h.connectors.CountRunsAudit(ctx, f)
-	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
-	if totalPages < 1 {
-		totalPages = 1
-	}
-	if page > totalPages {
-		page = totalPages
-	}
-
-	runs, _ := h.connectors.ListRunsAudit(ctx, f, pageSize, (page-1)*pageSize)
-	connectorsByID := h.resolveRunConnectors(ctx, runs)
-	usersByID := h.resolveRunUsers(ctx, runs)
-
-	view.AuditLogPage(runs, connectorsByID, usersByID, f, fromStr, toStr, page, totalPages, int(total), user).Render(ctx, w)
-}
+// The templ audit-log page was removed in the SPA cutover; GET /manager/runs
+// now 302s to the SPA, which reads the resolved JSON twin (apiAuditRuns in
+// audit_api.go). The raw /api/runs + /api/runs/summary JSON endpoints below
+// stay for dashboards and external monitoring.
 
 // apiRuns returns paginated connector runs as JSON. Supports the same
-// filter params as auditLogPage plus limit/offset for cursor-style access.
+// filter params as the audit log plus limit/offset for cursor-style access.
 func (h *Handler) apiRuns(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	f, _, _ := buildAuditFilter(r)

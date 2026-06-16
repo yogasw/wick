@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiDelete } from "./client";
+import { apiGet, apiPost, apiDelete } from "@wick-fe/common-api";
 import type { Workflow, WorkflowVersion } from "$lib/types/workflow";
 
 const BASE = "/tools/agents";

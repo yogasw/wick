@@ -733,11 +733,13 @@ func (s *Service) OperationStates(ctx context.Context, connectorID, key string) 
 // row: the admin-controlled Enabled flag, the health-check-controlled
 // SystemDisabled flag, and the reason surfaced alongside the lock when
 // SystemDisabled is true. Effective availability is
-// `Enabled AND NOT SystemDisabled`.
+// `Enabled AND NOT SystemDisabled`. AdminOnly restricts the operation to
+// admin MCP callers and is toggled separately by admins.
 type OpState struct {
 	Enabled              bool
 	SystemDisabled       bool
 	SystemDisabledReason string
+	AdminOnly            bool
 }
 
 // OperationStatesFull returns the full per-operation state map for a
@@ -764,6 +766,7 @@ func (s *Service) OperationStatesFull(ctx context.Context, connectorID, key stri
 			st.Enabled = row.Enabled
 			st.SystemDisabled = row.SystemDisabled
 			st.SystemDisabledReason = row.SystemDisabledReason
+			st.AdminOnly = row.AdminOnly
 		}
 		out[op.Key] = st
 	}
@@ -907,7 +910,6 @@ func (s *Service) HealthCheckSessionInstance(ctx context.Context, baseKey, insta
 	}
 	return report, nil
 }
-
 
 // ── Execution ───────────────────────────────────────────────────────
 
@@ -1125,9 +1127,9 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	masker := newMaskerAdapter(s.enc, p.UserID)
 	if s.enc != nil && !s.enc.Disabled() {
 		var (
-			err     error
-			decCfg  []string
-			decIn   []string
+			err    error
+			decCfg []string
+			decIn  []string
 		)
 		configs, decCfg, err = unmaskMap(s.enc, configs, p.UserID)
 		if err != nil {

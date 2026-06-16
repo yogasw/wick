@@ -20,7 +20,7 @@ After installing Go, restart your terminal so `go` is available in `PATH`.
 The Wick CLI scaffolds and builds projects (`wick init`, `wick build`, `wick dev`). Install via Go:
 
 ```bash
-go install github.com/yogasw/wick@v0.18.7
+go install github.com/yogasw/wick@v0.19.0
 ```
 
 Verify:

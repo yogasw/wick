@@ -1,7 +1,7 @@
 <script lang="ts">
   import { selectedNode, updateNode } from "$lib/stores/editor";
   import BaseInspectorPanel from "./nodes/BaseInspectorPanel.svelte";
-  import Select from "$lib/components/shared/Select.svelte";
+  import { Select } from "@wick-fe/common-ui";
   import type { Node } from "$lib/types/workflow";
 
   function patch(field: keyof Node, value: unknown) {

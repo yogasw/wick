@@ -25,9 +25,6 @@ var globalDataTables datatable.Service
 // allowed during early boot; handlers fall back to 503.
 func SetDataTables(s datatable.Service) { globalDataTables = s }
 
-// DataTables returns the wired service (read side).
-func DataTables() datatable.Service { return globalDataTables }
-
 func dataTablesNotReady(c *tool.Ctx) bool {
 	if globalDataTables == nil {
 		c.Error(http.StatusServiceUnavailable, "data tables service not initialised")
@@ -263,8 +260,8 @@ func dropDataTable(c *tool.Ctx) {
 // driven from query params so reload preserves state and bookmarks
 // work:
 //
-//   ?sort=<col>:asc|desc                  — single column sort
-//   ?f.<col>.op=<op>&f.<col>.v=<value>    — per-column filter chip
+//	?sort=<col>:asc|desc                  — single column sort
+//	?f.<col>.op=<op>&f.<col>.v=<value>    — per-column filter chip
 //
 // The sort/filter state is round-tripped to the VM so headers render
 // the active indicator and the popover pre-fills last-applied value.

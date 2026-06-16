@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -12,8 +11,6 @@ import (
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
-	"github.com/yogasw/wick/internal/manager/view"
-	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/tool"
@@ -30,10 +27,54 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 		return authMidd.RequireAuth(next)
 	}
 
-	mux.Handle("GET /manager/connectors", auth(h.connectorsIndexPage))
-	mux.Handle("GET /manager/connectors/{key}", auth(h.connectorListPage))
+	// Connectors index page → SPA shell (client route "/"). The JSON twin
+	// below stays; the SPA reads it.
+	mux.Handle("GET /manager/connectors", auth(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/api/connectors", auth(h.apiConnectors))
+
+	// JSON read/write surface for the manager SPA (Phase 2). Mirrors the
+	// templ /manager/connectors/* routes below but speaks JSON, reusing the
+	// same services + permission gates. The templ routes stay intact for
+	// coexistence during the migration.
+	mux.Handle("GET /manager/api/connectors/{key}", auth(h.apiConnectorRows))
+	mux.Handle("GET /manager/api/connectors/{key}/{id}", auth(h.apiConnectorDetail))
+	mux.Handle("POST /manager/api/connectors/{key}/new", auth(h.apiCreateConnectorRow))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/label", auth(h.apiSetConnectorLabel))
+	mux.Handle("POST /manager/api/connectors/{key}/reload", auth(h.apiConnectorReload))
+	mux.Handle("POST /manager/api/connectors/{key}/resync-tools", auth(h.apiResyncMCPTools))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/configs/{configKey}", auth(h.apiSetConnectorConfig))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/disable", auth(h.apiToggleConnectorDisabled))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/delete", auth(h.apiDeleteConnectorRow))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/health-check", auth(h.runConnectorHealthCheck))
+	// Phase 3 — test runner + run history JSON for the SPA. test-meta
+	// exposes each op's input schema (previously templ-only); test runs
+	// the op (alias of the legacy /test JSON handler); history serves the
+	// filtered + paginated audit log.
+	mux.Handle("GET /manager/api/connectors/{key}/{id}/test-meta", auth(h.apiConnectorTestMeta))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/test", auth(h.apiTestConnectorOperation))
+	mux.Handle("GET /manager/api/connectors/{key}/{id}/history", auth(h.apiConnectorHistory))
+
+	// Phase 7a — JSON twins of the per-row admin controls (rate limit,
+	// duplicate, access policy, session config, operation toggles, and
+	// account management). Same services + permission gates as the templ
+	// routes below; SPA-driven, no page reload.
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/rate-limit", auth(h.apiSetConnectorRateLimit))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/duplicate", auth(h.apiDuplicateConnector))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/access-policy", auth(h.apiSetConnectorAccessPolicy))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/session-config", auth(h.apiSetConnectorSessionConfig))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/operations/bulk", auth(h.apiBulkToggleOperations))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/operations/{opKey}", auth(h.apiToggleConnectorOperation))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/operations/{opKey}/admin-only", auth(h.apiToggleOperationAdminOnly))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/accounts/{accountID}/disconnect", auth(h.apiDisconnectAccount))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/accounts/{accountID}/ops", auth(h.apiSetAccountDisabledOps))
+
+	// Connector page routes → SPA shell. The SPA's client router resolves
+	// the rest of the path. Every POST/mutation route below stays live —
+	// they are the write surface and remain callable independent of which
+	// UI drives them.
+	mux.Handle("GET /manager/connectors/{key}", auth(http.HandlerFunc(h.serveSPAShell)))
 	mux.Handle("POST /manager/connectors/{key}/new", auth(h.createConnectorRow))
-	mux.Handle("GET /manager/connectors/{key}/{id}", auth(h.connectorDetailPage))
+	mux.Handle("GET /manager/connectors/{key}/{id}", auth(http.HandlerFunc(h.serveSPAShell)))
 	mux.Handle("POST /manager/connectors/{key}/{id}/label", auth(h.setConnectorLabel))
 	mux.Handle("POST /manager/connectors/{key}/{id}/configs/{configKey}", auth(h.setConnectorConfig))
 	mux.Handle("POST /manager/connectors/{key}/{id}/disable", auth(h.toggleConnectorDisabled))
@@ -42,7 +83,9 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/connectors/{key}/{id}/delete", auth(h.deleteConnector))
 	mux.Handle("POST /manager/connectors/{key}/{id}/access-policy", auth(h.setConnectorAccessPolicy))
 	mux.Handle("POST /manager/connectors/{key}/{id}/session-config", auth(h.setConnectorSessionConfig))
-	mux.Handle("GET /manager/connectors/{key}/{id}/accounts/{accountID}", auth(h.accountOpsPage))
+	// Account-ops controls live in the SPA row detail; the page route
+	// renders the shell. The account mutation routes below stay live.
+	mux.Handle("GET /manager/connectors/{key}/{id}/accounts/{accountID}", auth(http.HandlerFunc(h.serveSPAShell)))
 	mux.Handle("POST /manager/connectors/{key}/{id}/accounts/{accountID}/disconnect", auth(h.disconnectAccount))
 	mux.Handle("POST /manager/connectors/{key}/{id}/accounts/{accountID}/ops", auth(h.setAccountDisabledOps))
 	mux.Handle("POST /manager/connectors/{key}/{id}/accounts/{accountID}/ops/{opKey}", auth(h.toggleAccountOp))
@@ -50,168 +93,18 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/connectors/{key}/{id}/operations/{opKey}", auth(h.toggleConnectorOperation))
 	mux.Handle("POST /manager/connectors/{key}/{id}/operations/{opKey}/admin-only", auth(h.toggleOperationAdminOnly))
 	mux.Handle("POST /manager/connectors/{key}/{id}/health-check", auth(h.runConnectorHealthCheck))
-	mux.Handle("GET /manager/connectors/{key}/{id}/test", auth(h.connectorTestPage))
+	mux.Handle("GET /manager/connectors/{key}/{id}/test", auth(http.HandlerFunc(h.serveSPAShell)))
 	mux.Handle("POST /manager/connectors/{key}/{id}/test", auth(h.testConnectorOperation))
-	mux.Handle("GET /manager/connectors/{key}/{id}/history", auth(h.connectorHistoryPage))
+	mux.Handle("GET /manager/connectors/{key}/{id}/history", auth(http.HandlerFunc(h.serveSPAShell)))
 }
 
-// ── List page ────────────────────────────────────────────────────────
-
-func (h *Handler) connectorListPage(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	user := login.GetUser(ctx)
-	key := r.PathValue("key")
-
-	mod, ok := h.connectors.Module(key)
-	if !ok {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-
-	rows, err := h.visibleRowsForKey(r, user, key)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	tagsByRow := h.resolveRowTags(ctx, rows)
-
-	// Load connected accounts per row for the sub-account list.
-	accountsByRow := make(map[string][]entity.ConnectorAccount, len(rows))
-	for _, row := range rows {
-		accs, err := h.connectors.ListAccounts(ctx, row.ID)
-		if err == nil {
-			accountsByRow[row.ID] = accs
-		}
-	}
-
-	// Compute oauthURL per row for the Connect button on the list page.
-	oauthURLByRow := make(map[string]string, len(rows))
-	if mod.OAuth != nil {
-		for _, row := range rows {
-			if !row.EnableSSO {
-				continue
-			}
-			cfgs := h.connectors.LoadConfigs(row)
-			if strings.TrimSpace(cfgs["client_id"]) != "" {
-				oauthURLByRow[row.ID] = "/manager/connectors/" + key + "/oauth/start?connector_id=" + row.ID
-			}
-		}
-	}
-
-	oauthSuccess := r.URL.Query().Get("oauth") == "success"
-	oauthUser := r.URL.Query().Get("user")
-
-	// Definition-level controls render for whoever may mutate the def
-	// (admin ∨ creator) — customDefInfo gates internally.
-	customInfo := h.customDefInfo(ctx, key, user)
-
-	view.ConnectorListPage(mod, rows, tagsByRow, accountsByRow, oauthURLByRow, oauthSuccess, oauthUser, customInfo, user).Render(ctx, w)
-}
-
-// ── Index page ───────────────────────────────────────────────────────
-
-// connectorsIndexPage lists every registered connector definition,
-// grouped by category tag, with search + filter chips. It is the single
-// home-page launcher's destination: home shows one "Connectors" tile
-// instead of one tile per definition, so this page is where the full set
-// is browsed. Non-admins only see definitions they can manage at least
-// one row of; System connectors are admin-only.
-func (h *Handler) connectorsIndexPage(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	user := login.GetUser(ctx)
-	isAdmin := user != nil && user.IsAdmin()
-
-	rows, err := h.connectors.ListForManager(ctx, login.GetUserTagIDs(ctx), isAdmin)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	// Count instance states per connector, scoped to the rows the caller
-	// can manage (ListForManager already applies tag access; admins see
-	// every row). Three states, because an enabled instance is not
-	// necessarily usable — its required config may still be unfilled:
-	//   active     = enabled AND config complete (ready to use)
-	//   needsSetup = enabled BUT required config missing (not ready)
-	//   disabled   = row-level off-switch on
-	type instanceCount struct{ active, needsSetup, disabled int }
-	countByKey := make(map[string]instanceCount, len(rows))
-	for _, row := range rows {
-		c := countByKey[row.Key]
-		switch {
-		case row.Disabled:
-			c.disabled++
-		case h.connectors.Status(row) == "needs_setup":
-			c.needsSetup++
-		default:
-			c.active++
-		}
-		countByKey[row.Key] = c
-	}
-
-	mods := h.connectors.Modules()
-
-	// Bucket connectors by their category tag (the first group tag that
-	// is neither the "Connector" umbrella nor "System"). Track each
-	// category's sort order so groups render in catalog order.
-	type bucket struct {
-		sort  int
-		desc  string
-		cards []view.ConnectorIndexCard
-	}
-	buckets := make(map[string]*bucket)
-	for _, m := range mods {
-		system := hasDefaultTag(m.Meta.DefaultTags, tags.System.Name)
-		if system && !isAdmin {
-			continue
-		}
-		cnt := countByKey[m.Meta.Key]
-		if !isAdmin && cnt.active+cnt.needsSetup+cnt.disabled == 0 {
-			continue
-		}
-		cat, catSort, catDesc := connectorCategory(m.Meta.DefaultTags, system)
-		b := buckets[cat]
-		if b == nil {
-			b = &bucket{sort: catSort, desc: catDesc}
-			buckets[cat] = b
-		}
-		card := view.ConnectorIndexCard{
-			Key:             m.Meta.Key,
-			Name:            m.Meta.Name,
-			Description:     m.Meta.Description,
-			Icon:            m.Meta.Icon,
-			Category:        cat,
-			OpCount:         len(m.Operations),
-			ActiveCount:     cnt.active,
-			NeedsSetupCount: cnt.needsSetup,
-			DisabledCount:   cnt.disabled,
-			System:          system,
-		}
-		if info := h.customDefInfo(ctx, m.Meta.Key, user); info != nil {
-			card.Custom = true
-			card.CustomSource = info.SourceLabel
-			card.NeedsReload = info.Dirty
-		}
-		b.cards = append(b.cards, card)
-	}
-
-	groups := make([]view.ConnectorIndexGroup, 0, len(buckets))
-	for name, b := range buckets {
-		sort.Slice(b.cards, func(i, j int) bool { return b.cards[i].Name < b.cards[j].Name })
-		groups = append(groups, view.ConnectorIndexGroup{Name: name, Description: b.desc, Cards: b.cards})
-	}
-	sort.Slice(groups, func(i, j int) bool {
-		si, sj := buckets[groups[i].Name].sort, buckets[groups[j].Name].sort
-		if si != sj {
-			return si < sj
-		}
-		return groups[i].Name < groups[j].Name
-	})
-
-	// + New connector is open to every approved user (ownership level
-	// 1: anyone creates, only admin/creator mutates).
-	view.ConnectorsIndexPage(groups, h.custom != nil, user).Render(ctx, w)
-}
+// ── Connector index/list/detail pages ────────────────────────────────
+//
+// The templ index/list/detail/test/history/account-ops pages were removed
+// in the SPA cutover. Their GET routes 302 to the SPA, which reads the JSON
+// twins (apiConnectors / apiConnectorRows / apiConnectorDetail / test-meta /
+// history). connectorCategory + hasDefaultTag below are still used by
+// apiConnectors to bucket connectors by category for the SPA index.
 
 // connectorCategory picks the display category for a connector from its
 // DefaultTags: the first group tag that is neither "Connector" (the
@@ -290,161 +183,6 @@ func (h *Handler) resolveRowTags(ctx context.Context, rows []entity.Connector) m
 		}
 	}
 	return out
-}
-
-// ── Detail page ──────────────────────────────────────────────────────
-
-func (h *Handler) connectorDetailPage(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	user := login.GetUser(ctx)
-	key := r.PathValue("key")
-	id := r.PathValue("id")
-
-	mod, ok := h.connectors.Module(key)
-	if !ok {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-	row, err := h.connectors.Get(ctx, id)
-	if err != nil || row.Key != key {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-	if !h.canSeeRow(r, user, row.ID) {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-
-	configs := h.connectors.RowConfigs(*row)
-	customInfo := h.customDefInfo(ctx, key, user)
-	// Hidden configs (machine-managed values like OAuth tokens) are
-	// seeded and readable at runtime but never hand-edited — skip them.
-	// The connected-account marker surfaces in the header instead.
-	visible := configs[:0]
-	for _, cfg := range configs {
-		if customInfo != nil {
-			switch cfg.Key {
-			case "oauth_account":
-				// Legacy labels were 'Connected <ts>' before identity
-				// resolution existed — not an identity, hide the chip.
-				if !strings.HasPrefix(cfg.Value, "Connected ") {
-					customInfo.OAuthAccount = cfg.Value
-				}
-			case "oauth_access_token":
-				customInfo.OAuthConnected = cfg.Value != ""
-			}
-		}
-		if !cfg.Hidden {
-			visible = append(visible, cfg)
-		}
-	}
-	configs = visible
-	opStates, _ := h.connectors.OperationStatesFull(ctx, row.ID, row.Key)
-	editKey := r.URL.Query().Get("edit")
-
-	isAdmin := user != nil && user.IsAdmin()
-	view.ConnectorDetailPage(mod, row, configs, opStates, editKey, user, view.HealthBanner{}, isAdmin, customInfo).Render(ctx, w)
-}
-
-// connectorTestPage renders the standalone Postman-style test surface
-// for one connector row. The active operation comes from `?op=`; the
-// page itself swaps forms client-side and updates the URL so picking a
-// different operation never costs a round trip.
-func (h *Handler) connectorTestPage(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	user := login.GetUser(ctx)
-	key := r.PathValue("key")
-	id := r.PathValue("id")
-
-	mod, ok := h.connectors.Module(key)
-	if !ok {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-	row, err := h.connectors.Get(ctx, id)
-	if err != nil || row.Key != key {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-	if !h.canSeeRow(r, user, row.ID) {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-
-	activeOp := r.URL.Query().Get("op")
-	if activeOp == "" && len(mod.Operations) > 0 {
-		activeOp = mod.Operations[0].Key
-	}
-
-	// `?prefill=<runID>` populates the active op's input fields with the
-	// payload from a prior run so the user can review/edit before
-	// re-running. Silent fall-through on lookup failure — prefill is a
-	// convenience, not a hard dependency.
-	var prefill map[string]string
-	if runID := r.URL.Query().Get("prefill"); runID != "" {
-		if run, err := h.connectors.GetRun(ctx, runID); err == nil && run != nil && run.ConnectorID == row.ID {
-			if activeOp == "" {
-				activeOp = run.OperationKey
-			}
-			if run.RequestJSON != "" {
-				_ = json.Unmarshal([]byte(run.RequestJSON), &prefill)
-			}
-		}
-	}
-
-	accounts, _ := h.connectors.ListAccounts(ctx, row.ID)
-	view.ConnectorTestPage(mod, row, activeOp, prefill, accounts, user).Render(ctx, w)
-}
-
-// connectorHistoryPage renders the standalone runs audit surface with
-// filter chips. Filters are URL-driven so links can be shared.
-func (h *Handler) connectorHistoryPage(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	user := login.GetUser(ctx)
-	key := r.PathValue("key")
-	id := r.PathValue("id")
-
-	mod, ok := h.connectors.Module(key)
-	if !ok {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-	row, err := h.connectors.Get(ctx, id)
-	if err != nil || row.Key != key {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-	if !h.canSeeRow(r, user, row.ID) {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-
-	filter := connectors.RunFilter{
-		OperationKey: r.URL.Query().Get("op"),
-		Source:       r.URL.Query().Get("source"),
-		Status:       r.URL.Query().Get("status"),
-		UserID:       r.URL.Query().Get("user"),
-	}
-
-	const pageSize = 10
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if page < 1 {
-		page = 1
-	}
-
-	total, _ := h.connectors.CountRunsFiltered(ctx, row.ID, filter)
-	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
-	if totalPages < 1 {
-		totalPages = 1
-	}
-	if page > totalPages {
-		page = totalPages
-	}
-
-	runs, _ := h.connectors.ListRunsFiltered(ctx, row.ID, filter, pageSize, (page-1)*pageSize)
-	usersByID := h.resolveRunUsers(ctx, runs)
-
-	view.ConnectorHistoryPage(mod, row, runs, usersByID, filter, page, totalPages, int(total), user).Render(ctx, w)
 }
 
 // resolveRunUsers returns id→display map for every distinct UserID
@@ -611,36 +349,6 @@ func (h *Handler) setConnectorRateLimit(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
-}
-
-func (h *Handler) accountOpsPage(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	user := login.GetUser(ctx)
-	key := r.PathValue("key")
-	id := r.PathValue("id")
-	accountID := r.PathValue("accountID")
-
-	mod, ok := h.connectors.Module(key)
-	if !ok {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-	row, err := h.connectors.Get(ctx, id)
-	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-	acc, err := h.connectors.GetAccount(ctx, accountID)
-	if err != nil || acc.ConnectorID != row.ID {
-		ui.RenderNotFound(w, r, user, http.StatusNotFound)
-		return
-	}
-	disabled := connectors.AccountDisabledOps(acc)
-	opStates := make(map[string]connectors.OpState, len(mod.Operations))
-	for _, op := range mod.Operations {
-		opStates[op.Key] = connectors.OpState{Enabled: !disabled[op.Key]}
-	}
-	view.ConnectorAccountOpsPage(mod, row, acc, opStates, user).Render(ctx, w)
 }
 
 func (h *Handler) toggleAccountOp(w http.ResponseWriter, r *http.Request) {

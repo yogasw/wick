@@ -182,6 +182,25 @@ func (s *Service) CreateResourceOwnerTag(ctx context.Context, resourceID, userID
 	return s.repo.LinkUserTag(ctx, userID, t.ID)
 }
 
+// AccessibleResourceIDs returns the set of resource IDs the user has access
+// to (carries an "owner:<id>" tag for), in one query. Use this to filter a
+// list of sessions/projects by access instead of calling UserOwnsResource
+// per resource (which is an N+1 of two queries each).
+func (s *Service) AccessibleResourceIDs(ctx context.Context, userID string) (map[string]struct{}, error) {
+	if userID == "" {
+		return map[string]struct{}{}, nil
+	}
+	ids, err := s.repo.OwnedResourceIDs(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set, nil
+}
+
 // UserOwnsResource reports whether the user carries the owner tag for
 // the given resource ID. Returns false (not error) when tag doesn't exist.
 func (s *Service) UserOwnsResource(ctx context.Context, userID, resourceID string) (bool, error) {

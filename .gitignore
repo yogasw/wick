@@ -62,6 +62,8 @@ web/public/css/app.css
 # every dev rebuild.
 internal/tools/agents/dist/*/index.html
 internal/tools/agents/dist/*/assets/
+internal/manager/dist/*/index.html
+internal/manager/dist/*/assets/
 
 # Stray root lockfile from `npm install` run outside fe/ — there's no
 # root package.json, this lock is always orphaned.
@@ -73,4 +75,4 @@ wick
 ci-timing.txt
 node_modules/
 index-*
-fe/agents/workflow/vite.config.ts.timestamp-*
+vite.config.ts.timestamp-*

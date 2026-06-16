@@ -10,6 +10,92 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.19.0](https://github.com/yogasw/wick/compare/v0.18.7...v0.19.0) — Agents & Manager SPAs
+
+_Released on 2026-06-16_
+
+### Added
+*   **Custom connectors — "Definition updated" reload banner** — the connector page (Manager → Connectors → {connector}) now shows an actionable banner when the stored definition is newer than the live module (`needs_reload` state). The banner includes a **Reload** button that rebuilds the live module from the saved definition and clears the dirty state — no page reload required. The banner is visible to any authenticated viewer, independent of edit rights. Previously this state was indicated only by a passive "· needs reload" hint on the connectors index grid.
+*   **Custom MCP connector — Re-sync tools** — a **Re-sync tools** button is now shown on a custom MCP connector's page (Manager → Connectors → {connector}). Clicking it re-fetches the upstream server's `tools/list` and atomically swaps in the fresh operation set, refreshing the stored connection status. The operation set is connector-level (shared by every instance), so this is a per-connector action available to any user who can open the connector.
+*   **Custom MCP connector — connection status chip** — a custom MCP connector's page now shows a **Connected / Disconnected / Never tested** chip reflecting the last probe of its upstream server.
+*   **Skills — hierarchical breadcrumb navigation** — the Skills SPA now displays a clickable breadcrumb trail (`Skills / {folder} / {nested path…}`) instead of the old single back-button. Each ancestor segment is a link, so you can jump directly to any parent folder from a deeply nested skill file.
+*   **Consistent breadcrumb navigation across SPAs** — the connector manager, Providers (detail & storage), Presets, and the Workflow editor now render their navigation trail through one shared breadcrumb component, so the separator, hover, and accessibility read the same everywhere instead of each module hand-rolling its own back-link.
+*   **Conversation — Raw trace tab** — the **Raw** tab on a session detail page now renders an interactive, collapsible JSON tree of the session's turns. Turns that have a server-side trace (`has_trace`) automatically fetch their full per-turn tool and thinking events on demand when the tab opens, merging them into the tree as a `trace` field. Each node can be expanded or collapsed individually; values are type-colored (string / number / boolean / null). A **Copy** button copies the full JSON to the clipboard.
+*   **Providers list: Active Processes panel** — when any agent is running, a table above the provider cards shows every live spawn (session ID, agent name, PID, lifecycle/substate). Hidden when the pool is empty. Also includes a list of recent spawns linking to the server-rendered detail page.
+*   **Providers list: per-provider hook actions** — each provider card now has inline Enable / Disable / Test buttons for the `PreToolUse` Command Gate hook (shown only when the master gate is enabled). The status badge distinguishes `enabled ✓`, `enabled (unverified)`, `ready`, and `disabled` states. Clicking Test fires a live probe and refreshes the card without a page reload.
+*   **Conversation — inline image thumbnails** — images attached to a user message render as inline thumbnails in the thread; clicking opens a full-screen lightbox. PDF and Markdown attachments open in the file viewer.
+*   **Conversation — file viewer previews** — the context-panel file viewer now shows image, PDF, and Markdown previews, and renders code files with syntax highlighting (lazy-loaded Ace editor).
+*   **Conversation — resizable Source sidebar** — the SCM dock sidebar can be dragged to any width; the chosen width is persisted in `localStorage` across sessions.
+*   **Conversation — confirm before kill/dequeue** — a confirmation dialog is shown before terminating a running agent or removing a queued session, preventing accidental kills.
+*   **Conversation — live count badges** — the Context, Processes, and Workspace rail tabs show live item-count badges that update as the agent works.
+*   **Conversation — system turn pills** — system/lifecycle turns in the thread render as centered pills with an optional step list instead of full message bubbles.
+*   **Conversation — lifecycle pill tracks streaming** — the session lifecycle pill transitions to "working" immediately while the agent is streaming, before the subprocess state update arrives, and also reflects working from spawning state.
+*   **Conversation — lifecycle pill shows "killed" state** — when a session is terminated (including when the idle auto-kill countdown reaches 0), the header pill now shows a neutral **killed** badge instead of lingering on "idle · 0s".
+*   **Conversation — rich assistant message rendering** — assistant chat bubbles now render Mermaid diagrams (flowchart, sequence, class, state, ER, Gantt, pie, journey, and more), syntax-highlighted code blocks (highlight.js, GitHub-style light/dark theme), and KaTeX math (`$…$` inline, `$$…$$` display). `html blocks` now render as sandboxed live-preview artifacts. Previously these all showed as plain text. Renderers are lazy-loaded on first use so they don't affect initial page load.
+*   **Chat rendering formats documented** — the full set of rich formats the web Conversation tab can render (GFM markdown, highlighted code, Mermaid diagrams, KaTeX inline/display math, smart links) is now documented in [Agents — Chat rendering](/guide/agents#chat-rendering). The same table is injected into the agent's immutable system prompt via `internal/agents/system-prompt/render_formats.md` so the model knows what it can reach for; editing that one file keeps the prompt and the docs in lockstep.
+*   **System-prompt assembly extracted to own package** — the system-prompt builder logic moved from `internal/agents/config/` to `internal/agents/system-prompt/` (package rename). No behavior change; the catalog, default baseline, and immutable sections are now co-located and individually testable.
+*   **Overview dashboard rebuilt as a Svelte SPA.**
+*   **Presets page rebuilt as a Svelte SPA.**
+*   **Project settings rebuilt as a Svelte SPA.**
+*   **Common-UI: Reusable KvList row editor component.**
+*   **Common-UI: Primitive components** (Button, TextInput, NumberInput, TextArea, LabeledInput, Modal, ConfirmDialog).
+*   **Common-UI: Shared Breadcrumb component.**
+*   **Manager UI — "Everyone" chip shown for untagged connector rows.**
+*   **Manager UI — Per-row "History" action added to connector list.**
+*   **Manager UI — Search icon and '/' shortcut restored on connectors index.**
+*   **Manager UI — Anchor IDs and jump navigation added to custom connector DraftEditor.**
+*   **Manager UI — Two-tab "Jump/JSON" navigator restored in custom connector DraftEditor.**
+*   **Manager UI — Mobile "Jump" opener (FAB) added to custom connector DraftEditor.**
+*   **Manager UI — Per-account operations editor for OAuth connectors.**
+*   **Conversation — Optimistic user turn rendering on send.**
+*   **Conversation — Project name shown on session list secondary row.**
+*   **Conversation — Empty-state message in conversation thread.**
+*   **Conversation — Inline error region in approvals modal.**
+*   **Conversation — Esc and backdrop dismiss for approvals modal.**
+*   **Conversation — Auto-focus current wizard step input.**
+*   **Conversation — Red border on invalid required wizard field in wizard.**
+*   **Conversation — Folder path shown in project landing header.**
+*   **Conversation — Browser tab title now set from session metadata.**
+*   **Conversation — New file/directory names validated, parent expanded on create.**
+*   **Conversation — Ctrl/Cmd+B keyboard shortcut toggles Context rail.**
+*   **Conversation — Data-chat-path links in chat now open in file viewer.**
+*   **Conversation — FileViewerModal now dismissible with Esc key and backdrop click.**
+*   **Conversation — FileViewerModal now shows save-status indicator.**
+*   **Conversation — Inline save error shown in WsInstanceCard.**
+*   **Conversation — ContextPanel file list now shows loading/error states.**
+*   **Conversation — Fallback bubble for interrupted text-less turns.**
+
+### Changed
+*   **Manager UI rebuilt as a Svelte SPA** — the connector manager at `/manager/*` is now served as a Svelte single-page application rendered inside the host chrome (shared header, theme, user menu), replacing the previous server-rendered templ pages. URLs, features, and the full `/manager/api/*` surface are unchanged.
+*   **Manager UI — visual realignment** — connector list, custom connector builder (DraftEditor, McpServerForm, MCP SSO guidance, access toggles), jobs/tools setup banners, and audit-log headers are visually aligned to match the design-system tokens and the pre-SPA look. Common-UI primitives (Button, inputs, Select, ToastHost, KvList) use the correct radius and focus-ring tokens. This also includes visual parity restores for new-session, overview, providers, skills UIs.
+
+### Fixed
+*   **Conversation — workspace file tree auto-syncs as the agent writes files** — the workspace file tree in the session detail page previously only loaded on session open and manual refresh, so files written by the agent mid-session (artifacts, generated output) did not appear until you reloaded. The SSE handler now silently reloads the file tree — debounced at 400 ms — on every `lifecycle` and `git_status` event, so generated files appear on their own without a refresh.
+*   **Connector operation toggle no longer silently no-ops on first disable** — `SetOperation` in the connector repo was using `db.Save()` which resolves to an `UPDATE` when the primary key is set, leaving a missing row untouched (and `Enabled=false` was dropped as a zero-value on struct insert). Rewritten as a GORM `OnConflict` upsert with a map payload so the `enabled` column is always written verbatim. Affects both the legacy admin UI and the new manager SPA.
+*   **Starting a new agents session no longer fails with 405** — tool root routes now accept POST/DELETE on the trailing-slash form (`/tools/{key}/`), not just GET. The new-session and conversation SPA POSTs to `${base}/` to create a session, which previously matched a GET-only pattern and returned 405 on Send.
+*   **Provider Detail — config saves and enable/disable toggle now work** — the API call was sending a JSON body but the Go handler reads `c.Form("value")` (form-encoded). Every provider config save and the enabled/disabled header toggle silently no-op'd; the request now sends `application/x-www-form-urlencoded`.
+*   **Provider Detail — UI parity restored after SPA migration** — the detail page now shows the Enabled/Disabled header toggle, a 2-column grid for simple config fields with a single Save All action, a row editor for `extra_args`, and a key-value editor for `env` (previously flattened to plain text inputs by the SPA migration).
+*   **Custom connector builder — input focus loss** — typing in the McpServerForm label/key fields no longer loses focus on every keystroke (dropped the `{#key rev}` remount wrapper), and sticky-header now stays on top.
+*   **Custom MCP connector — "Edit definition" dead-end fixed** — clicking "Edit definition" on a custom MCP connector previously navigated to a broken URL because the SPA used the connector's definition ID where the MCP server-form route expects the server's row ID. The backend draft endpoint now returns `server_id` in its response, and the SPA redirects to `/custom/mcp/{server_id}/edit`. An explicit error message is shown if the server ID cannot be resolved instead of silently landing on a not-found page.
+*   **Conversation — pending ask rehydrated on page load** — an open `AskUser` approval card is now restored when the page is loaded or refreshed mid-turn, so the question is never lost.
+*   **Conversation — orphan `tool_result` turns rendered** — tool-result turns that have no matching tool-call in the loaded window are now displayed as collapsed trace entries rather than silently dropped.
+*   **Conversation — Normalize null backend arrays to prevent crashes.**
+*   **Skills and Providers API calls now correctly prepend base path (fixes 404).**
+*   **Manager UI — SPA now applies app theme correctly.**
+*   **Installation — `install-rtk` script no longer fails due to non-breaking spaces.**
+*   **Conversation — Thinking duplicate removed from trace.**
+*   **Conversation — Agent stuck spawning fixed.**
+*   **Conversation — Provider/agent label missing fixed.**
+*   **Conversation — Composer auto-resize, autofocus, global keydown redirect, click-to-focus.**
+*   **Conversation — Jump to latest pill for scrolling, Ctrl+↓ shortcut.**
+*   **Conversation — SCM Source badge now correctly reads total_changed count.**
+*   **Conversation — Process list updates now rely solely on SSE lifecycle events, removing redundant 5s polling.**
+*   **Manager UI — Live-disk SPA hot-reload now works without Go recompile.**
+*   **Manager UI — "Access & behavior" section now correctly shown on the Operations wizard step in custom connector builder.**
+
+---
+
+
 ## [v0.18.7](https://github.com/yogasw/wick/compare/v0.18.6...v0.18.7) — Workflows & Agents
 
 _Released on 2026-06-15_
@@ -143,6 +229,7 @@ _Released on 2026-06-14_
 
 ### Added
 
+*   **Conversation UI rebuilt as a Svelte 5 SPA** — the session list and conversation thread (`/tools/agents/sessions` and `/tools/agents/sessions/{id}`) are now served by a self-contained Svelte 5 single-page application. Visible changes: an **Approvals** tab joins Conversation / Commands / Raw in the session header; agent turns with tool events show a **Show trace** toggle for lazy-loading the thinking + event stream without cluttering the thread; the conversation header shows an idle-countdown badge ("kill in Ns") during the idle-timeout window; the Projects landing page scoped to managed and custom projects is now integrated into the SPA; the composer reuses the full action row (provider/project selectors, bell, attachment). The server now exposes three JSON endpoints that back the SPA: `GET /api/sessions`, `GET /api/sessions/{id}/conversation`, `GET /api/sessions/{id}/meta`, and `GET /providers/options`.
 *   **Workflow editor — replay-to-editor imports full run state** — the **Copy to editor** button now pins the run's trigger event payload alongside per-node status overlays and output pre-population. Every node inspector's INPUT dropdown gains an entry for the pinned event so `{{.Event.Payload.*}}` expressions resolve to the real run's data during an Execute step (n8n-style "retry with pinned input"). A **Unpin** action on the trigger OUTPUT pane clears the pinned payload. See [Canvas editor — Run timeline](./workflow/canvas#run-timeline).
 *   **Workflow editor — per-expression preview table** — template fields that contain multiple `{{...}}` segments now show a breakdown table in the inspector preview: one row per expression with its rendered value or error, isolating a failing ref without blanking the combined output. Autocomplete now suggests `.Event.Payload.*`, `.Node.<label>.*`, `.Env.*`, and `.Trigger.*` paths from the live context, and a manual refresh button re-renders when upstream outputs change.
 *   **Workflow editor — node rename cascades `{{.Node.<label>.…}}` refs** — renaming a node label in the inspector rewrites every reference to that label across all other nodes in the workflow automatically. A toast confirms how many references were updated.
