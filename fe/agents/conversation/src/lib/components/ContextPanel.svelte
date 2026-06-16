@@ -15,12 +15,12 @@
     onRefresh: () => void;
     onNewFile: () => void;
     onNewDir: () => void;
-    onDownload: (path: string) => void;
-    onDelete: (path: string) => void;
-    onNewHere: (dirPath: string) => void;
+    onDownload?: (path: string) => void;
+    onDelete?: (path: string) => void;
+    onNewHere?: (dirPath: string) => void;
   };
 
-  let { cwd, files, search, openDirs, onSearch, onToggleDir, onOpen, onRefresh, onNewFile, onNewDir, onDownload, onDelete, onNewHere }: Props = $props();
+  let { cwd, files, search, openDirs, onSearch, onToggleDir, onOpen, onRefresh, onNewFile, onNewDir, onDownload = () => {}, onDelete = () => {}, onNewHere = () => {} }: Props = $props();
 
   function buildTree(entries: ContextFileEntry[]): TreeNode {
     const root: TreeNode = { entry: { path: "", name: "", isDir: true, size: 0, mtime: 0 }, children: [] };
