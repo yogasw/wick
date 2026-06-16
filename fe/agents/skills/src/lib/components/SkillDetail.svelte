@@ -1,15 +1,18 @@
 <script lang="ts">
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import { renderMarkdown } from "@wick-fe/common-md";
+  import { Breadcrumb } from "@wick-fe/common-ui";
+  import type { BreadcrumbItem } from "@wick-fe/common-ui";
   import { getSkill, postMutation } from "$lib/api.js";
   import type { SkillDetailResponse } from "$lib/types.js";
 
   type Props = {
     name: string;
-    onBack: () => void;
-    onOpen: (entryName: string) => void;
+    breadcrumb?: BreadcrumbItem[];
+    onBack?: () => void;
+    onOpen?: (entryName: string) => void;
   };
-  let { name, onBack, onOpen }: Props = $props();
+  let { name, breadcrumb, onBack, onOpen }: Props = $props();
 
   let data = $state<SkillDetailResponse | null>(null);
   let loading = $state(true);
@@ -41,7 +44,7 @@
     try {
       await postMutation(`/skills/${name}/delete`);
       toastOk(`Deleted ${name}`);
-      onBack();
+      if (onBack) onBack();
     } catch (e) {
       toastError(e instanceof Error ? e.message : "Delete failed");
     }
@@ -65,9 +68,13 @@
 
 <div class="space-y-6">
   <div class="flex items-center justify-between gap-3 flex-wrap">
-    <div class="flex items-center gap-3">
-      <button onclick={onBack} class="text-sm text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">← Skills</button>
-      <h1 class="font-mono text-base font-semibold text-black-900 dark:text-white-100">{name}</h1>
+    <div class="flex items-center gap-3 min-w-0">
+      {#if breadcrumb}
+        <Breadcrumb items={breadcrumb} />
+      {:else}
+        <button onclick={onBack} class="text-sm text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">← Skills</button>
+        <h1 class="font-mono text-base font-semibold text-black-900 dark:text-white-100">{name}</h1>
+      {/if}
     </div>
     {#if data}
       <div class="flex items-center gap-2">
@@ -113,8 +120,8 @@
                 class="cursor-pointer hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
                 role="button"
                 tabindex="0"
-                onclick={() => onOpen(entry.name)}
-                onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(entry.name); } }}
+                onclick={() => onOpen?.(entry.name)}
+                onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen?.(entry.name); } }}
               >
                 <td class="px-3 sm:px-5 py-3">
                   <div class="flex items-center gap-2">

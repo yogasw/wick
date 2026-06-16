@@ -1,15 +1,18 @@
 <script lang="ts">
   import { renderMarkdown } from "@wick-fe/common-md";
+  import { Breadcrumb } from "@wick-fe/common-ui";
+  import type { BreadcrumbItem } from "@wick-fe/common-ui";
   import { getSkillFile } from "$lib/api.js";
   import type { SkillFileDetailResponse } from "$lib/types.js";
 
   type Props = {
     folder: string;
     file: string;
-    onBack: () => void;
+    breadcrumb?: BreadcrumbItem[];
+    onBack?: () => void;
     onOpenChild: (childPath: string) => void;
   };
-  let { folder, file, onBack, onOpenChild }: Props = $props();
+  let { folder, file, breadcrumb, onBack, onOpenChild }: Props = $props();
 
   let data = $state<SkillFileDetailResponse | null>(null);
   let loading = $state(true);
@@ -40,10 +43,16 @@
 
 <div class="space-y-6">
   <div class="flex items-center justify-between gap-3 flex-wrap">
-    <div class="flex items-center gap-2 text-sm flex-wrap">
-      <button onclick={onBack} class="text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">← {folder}</button>
-      <span class="text-black-500">/</span>
-      <span class="font-mono font-semibold text-black-900 dark:text-white-100">{file}</span>
+    <div class="min-w-0">
+      {#if breadcrumb}
+        <Breadcrumb items={breadcrumb} />
+      {:else}
+        <div class="flex items-center gap-2 text-sm flex-wrap">
+          <button onclick={onBack} class="text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">← {folder}</button>
+          <span class="text-black-500">/</span>
+          <span class="font-mono font-semibold text-black-900 dark:text-white-100">{file}</span>
+        </div>
+      {/if}
     </div>
     {#if data}
       <div class="flex flex-wrap gap-1">

@@ -32,7 +32,7 @@
     $lastSavedAt ? fmtAgo(now - $lastSavedAt) : "",
   );
   import { workflowAPI } from "$lib/api/workflow";
-  import { ConfirmDialog } from "@wick-fe/common-ui";
+  import { ConfirmDialog, Breadcrumb } from "@wick-fe/common-ui";
   import type { Writable } from "svelte/store";
 
   // EditorShell hoists the top-level Editor / Executions toggle and
@@ -156,26 +156,26 @@
          bg-white-100 dark:bg-navy-800 text-black-800 dark:text-white-100"
 >
   <!-- Breadcrumb + inline-renamable name. -->
-  <div class="flex items-center gap-2 text-sm font-medium min-w-0">
-    <a href="/tools/agents/workflows" class="hidden md:inline-block text-black-700 dark:text-black-600 hover:text-black-800 dark:hover:text-black-800 dark:text-white-100">
-      Workflows
-    </a>
-    <span class="hidden md:inline text-black-700 dark:text-black-500">›</span>
-    {#if editingName}
-      <input
-        class="rounded border border-slate-300 dark:border-navy-500 bg-white-100 dark:bg-navy-700 px-2 py-0.5 text-sm"
-        bind:value={nameDraft}
-        onblur={commitRename}
-        onkeydown={(e) => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") cancelRename(); }}
-        autofocus
-      />
-    {:else}
-      <button
-        class="truncate min-w-0 hover:text-emerald-500"
-        title="Click to rename (URL stays the same)"
-        onclick={startRename}
-      >{$draftWorkflow?.name ?? "—"}</button>
-    {/if}
+  <div class="min-w-0 font-medium">
+    <Breadcrumb items={[{ label: "Workflows", onClick: () => { window.location.href = "/tools/agents/workflows"; } }]}>
+      {#snippet current()}
+        {#if editingName}
+          <input
+            class="rounded border border-slate-300 dark:border-navy-500 bg-white-100 dark:bg-navy-700 px-2 py-0.5 text-sm"
+            bind:value={nameDraft}
+            onblur={commitRename}
+            onkeydown={(e) => { if (e.key === "Enter") commitRename(); if (e.key === "Escape") cancelRename(); }}
+            autofocus
+          />
+        {:else}
+          <button
+            class="truncate min-w-0 hover:text-emerald-500"
+            title="Click to rename (URL stays the same)"
+            onclick={startRename}
+          >{$draftWorkflow?.name ?? "—"}</button>
+        {/if}
+      {/snippet}
+    </Breadcrumb>
   </div>
 
   <!-- Editor / Executions tab toggle. -->

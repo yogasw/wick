@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { ConfirmDialog } from "@wick-fe/common-ui";
+  import { ConfirmDialog, Breadcrumb, type BreadcrumbItem } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     apiGetStorage,
@@ -18,6 +18,11 @@
     onBack: () => void;
   };
   let { onBack }: Props = $props();
+
+  const crumbs: BreadcrumbItem[] = [
+    { label: "Providers", onClick: () => onBack() },
+    { label: "Provider Storage" },
+  ];
 
   let data = $state<StorageResponse | null>(null);
   let loading = $state(true);
@@ -204,16 +209,11 @@
 
 <div class="space-y-6">
   <!-- header -->
+  <Breadcrumb items={crumbs} />
   <div class="flex items-center justify-between gap-3 flex-wrap">
-    <div class="flex items-center gap-3">
-      <button
-        onclick={onBack}
-        class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800"
-      >← Providers</button>
-      <div>
-        <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Provider Storage</h1>
-        <p class="text-xs text-black-700 dark:text-black-600 mt-0.5">Synced file snapshots — preview, restore, manage retention.</p>
-      </div>
+    <div>
+      <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Provider Storage</h1>
+      <p class="text-xs text-black-700 dark:text-black-600 mt-0.5">Synced file snapshots — preview, restore, manage retention.</p>
     </div>
     <button
       onclick={() => { uploadOpen = !uploadOpen; }}
