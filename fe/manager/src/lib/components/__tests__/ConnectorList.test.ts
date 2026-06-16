@@ -116,12 +116,11 @@ describe("ConnectorList", () => {
     expect(h1.className).toContain("text-[1.375rem]");
   });
 
-  it("renders the green Custom badge with its source", async () => {
-    vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true, custom_source: "MCP" }));
+  it("renders the Custom badge for custom connectors", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true }));
     render(ConnectorList, { connectorKey: "slack" });
-    const badge = await screen.findByText("Custom · MCP");
-    expect(badge.className).toContain("bg-green-200");
-    expect(badge.className).toContain("text-green-700");
+    const badge = await screen.findByText("Custom");
+    expect(badge.className).toContain("text-green-500");
   });
 
   it("shows an 'Everyone' dashed chip for rows without tags", async () => {

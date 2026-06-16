@@ -33,7 +33,8 @@ export interface ConnectorList {
   fixed: boolean;
   op_count: number;
   custom: boolean;
-  custom_source: string;
+  custom_source?: string;
+  def_id?: string;
   rows: ConnectorRow[] | null;
 }
 
@@ -81,7 +82,7 @@ export interface ConnectorDetail {
   icon: string;
   id: string;
   label: string;
-  description: string;
+  description?: string;
   disabled: boolean;
   rate_limit_rpm: number;
   has_health_check: boolean;

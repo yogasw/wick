@@ -115,14 +115,14 @@
   <div class="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">{error}</div>
 {:else if data}
   <div class="space-y-6">
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-      <div class="flex items-center gap-3">
-        <span class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg" aria-hidden="true">{data.icon || "🔌"}</span>
-        <div>
+    <div class="grid grid-cols-[1fr_auto] items-start gap-4">
+      <div class="flex min-w-0 items-start gap-3">
+        <span class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-navy-700 dark:bg-navy-700 text-base" aria-hidden="true">{data.icon || "🔌"}</span>
+        <div class="min-w-0 w-full">
           <div class="flex flex-wrap items-center gap-2">
             <h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">{data.name}</h1>
             {#if data.custom}
-              <span class="flex-shrink-0 rounded-full bg-green-200 dark:bg-green-800 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:text-green-300">{data.custom_source ? `Custom · ${data.custom_source}` : "Custom"}</span>
+              <span class="rounded px-1.5 py-0.5 text-[11px] font-medium text-green-500 border border-green-600/40 bg-green-900/20">Custom</span>
             {/if}
           </div>
           {#if data.description}
@@ -131,9 +131,18 @@
           <p class="mt-1 text-xs text-black-700 dark:text-black-600">{data.op_count} operation(s) · {rows.length} row(s)</p>
         </div>
       </div>
-      {#if !data.fixed}
-        <Button size="lg" disabled={busy} onclick={newRow}>+ New row</Button>
-      {/if}
+      <div class="flex flex-shrink-0 items-start gap-2">
+        {#if data.custom && data.def_id}
+          <button
+            type="button"
+            onclick={() => push(`/custom/${encodeURIComponent(data.def_id!)}/edit`)}
+            class="inline-flex items-center rounded-lg border border-white-300 dark:border-navy-600 bg-transparent px-3 py-2 text-sm font-semibold text-black-800 dark:text-white-100 hover:border-green-400 hover:text-green-600 transition-colors leading-tight text-center"
+          >Edit<br/>definition</button>
+        {/if}
+        {#if !data.fixed}
+          <Button size="sm" disabled={busy} onclick={newRow}>+ New row</Button>
+        {/if}
+      </div>
     </div>
 
     <section>

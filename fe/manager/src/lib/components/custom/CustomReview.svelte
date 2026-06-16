@@ -35,10 +35,6 @@
   let saving = $state(false);
   let saved = $state(false);
   let confirmDelete = $state(false);
-  /* Bump on every editor edit to force the preview + toolbar to re-read the
-     mutated-in-place draft (Svelte does not deep-track plain object edits). */
-  let rev = $state(0);
-
   const appBase = document.getElementById("app")?.dataset.base ?? "";
 
   async function load() {
@@ -67,7 +63,6 @@
   }
 
   function onChange() {
-    rev += 1;
     saved = false;
   }
 
@@ -151,9 +146,7 @@
       <div class="rounded-lg border border-neg-400 bg-neg-100 px-4 py-3 text-sm font-medium text-neg-400">✗ {error}</div>
     {/if}
 
-    {#key rev}
-      <DraftEditor {draft} {categories} {editMode} {onChange} />
-    {/key}
+    <DraftEditor {draft} {categories} {editMode} {onChange} />
   </div>
 
   <ConfirmDialog

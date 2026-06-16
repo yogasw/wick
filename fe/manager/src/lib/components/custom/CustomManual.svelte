@@ -27,7 +27,6 @@
   let error = $state("");
   let saving = $state(false);
   let step = $state(0);
-  let rev = $state(0);
 
   let isLast = $derived(step === STEPS.length - 1);
   let visibleSteps = $derived<StepKey[]>([STEPS[step].key]);
@@ -42,9 +41,7 @@
     }
   }
 
-  function onChange() {
-    rev += 1;
-  }
+  function onChange() {}
 
   function prev() {
     if (step > 0) step -= 1;
@@ -113,9 +110,7 @@
       <div class="rounded-lg border border-neg-400 bg-neg-100 px-4 py-3 text-sm font-medium text-neg-400">✗ {error}</div>
     {/if}
 
-    {#key rev}
-      <DraftEditor {draft} {categories} editMode={false} {onChange} {visibleSteps} />
-    {/key}
+    <DraftEditor {draft} {categories} editMode={false} {onChange} {visibleSteps} />
 
     {#if isLast}
       <div class="flex items-center justify-between">
