@@ -259,6 +259,21 @@
       });
   }
 
+  /* Workspace files change as the agent works (it writes artifacts into the
+     session cwd). Reload the tree — silently + debounced — whenever the agent
+     reports activity over SSE, so generated files appear without a manual
+     refresh / session reload. */
+  let fileReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  function reloadFilesSilently() {
+    run(listFiles(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { cwdVal = res.cwd; filesVal = res.files; })
+      .catch(() => { /* keep the current tree on a transient failure */ });
+  }
+  function scheduleFileReload() {
+    if (fileReloadTimer !== null) clearTimeout(fileReloadTimer);
+    fileReloadTimer = setTimeout(reloadFilesSilently, 400);
+  }
+
   function loadProcesses() {
     run(getProcesses(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
@@ -518,11 +533,13 @@
         try { hideApproval(JSON.parse(ev.data ?? "{}")); } catch (_) { /* skip */ }
       } else if (ev.type === "lifecycle") {
         loadProcesses();
+        scheduleFileReload();
       } else if (ev.type === "git_status") {
         try {
           const d = JSON.parse(ev.data ?? "{}") as { total_changed?: number };
           if (typeof d.total_changed === "number") scmChangeCount = d.total_changed;
         } catch (_) { /* skip */ }
+        scheduleFileReload();
       }
     });
   }
@@ -642,6 +659,7 @@
       clearInterval(processPollId);
       processPollId = null;
     }
+    if (fileReloadTimer !== null) clearTimeout(fileReloadTimer);
     closeSSE?.();
     unsubTurns();
     unsubLive();
