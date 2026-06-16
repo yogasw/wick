@@ -69,6 +69,9 @@
         <p class="text-xs text-black-700 dark:text-black-600 mt-0.5">
           {chatCount} chats · {project.managed ? "managed" : "custom"}
         </p>
+        {#if project.path}
+          <p class="text-[11px] font-mono text-black-600 dark:text-black-700 mt-0.5 truncate">{project.path}</p>
+        {/if}
       </div>
     </div>
 

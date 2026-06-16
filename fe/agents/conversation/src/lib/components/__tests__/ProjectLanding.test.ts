@@ -47,13 +47,13 @@ describe("ProjectLanding — presentational rendering", () => {
 
   test("shows 'managed' when project.managed is true", () => {
     render(ProjectLanding, { props: baseProps });
-    expect(screen.getByText(/managed/)).toBeDefined();
+    expect(screen.getByText(/3 chats · managed/)).toBeDefined();
   });
 
   test("shows 'custom' when project.managed is false", () => {
     const customProject = { ...PROJECT, managed: false };
     render(ProjectLanding, { props: { ...baseProps, project: customProject } });
-    expect(screen.getByText(/custom/)).toBeDefined();
+    expect(screen.getByText(/3 chats · custom/)).toBeDefined();
   });
 
   test("renders a Pin as default button", () => {
@@ -101,6 +101,14 @@ describe("ProjectLanding — presentational rendering", () => {
     const link = screen.getByRole("link", { name: /all chats/i });
     expect(link).toBeDefined();
     expect(link.getAttribute("href")).toBe("/tools/agents/sessions");
+  });
+});
+
+describe("ProjectLanding — folder path in header (#41)", () => {
+  test("project header shows the folder path", () => {
+    const project = { id: "p1", name: "Proj", path: "/home/work/proj", managed: true };
+    render(ProjectLanding, { props: { base: "/agents", project, providers: [], sessions: [], onPin: vi.fn(), onSelectSession: vi.fn() } });
+    expect(screen.getByText("/home/work/proj")).toBeDefined();
   });
 });
 
