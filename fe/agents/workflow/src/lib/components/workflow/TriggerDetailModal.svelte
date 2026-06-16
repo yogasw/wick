@@ -16,7 +16,7 @@
     isValidLabel,
     LABEL_FORMAT_HINT,
   } from "$lib/stores/editor";
-  import { toastOk } from "$lib/stores/toast";
+  import { toastOk } from "@wick-fe/common-stores";
   import { catalog } from "$lib/stores/catalog";
   import type { Trigger } from "$lib/types/workflow";
   import type {

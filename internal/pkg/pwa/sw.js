@@ -1,7 +1,7 @@
 // wick service worker — minimal, enables PWA installability and a small
 // static cache. Kept conservative on purpose: navigations always go to the
 // network so we never serve a stale Cloudflare Access login page from cache.
-const CACHE = 'wick-static-v2';
+const CACHE = 'wick-static-v3';
 const ASSETS = [
   '/public/img/icon-192.png',
   '/public/img/icon-512.png',
@@ -26,19 +26,47 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Network-first for same-origin GETs; the precached static assets fall back
-// to cache when offline. Cross-origin requests (Cloudflare beacon, analytics,
-// CDNs…) are NOT intercepted — letting them go straight to the network avoids
-// needless proxying and the "Failed to convert value to 'Response'" crash that
-// happened when such a fetch failed and respondWith() got an undefined cache
-// miss.
+// staticAssetRe matches fingerprinted/immutable static assets that are safe to
+// serve cache-first: images, styles, scripts, fonts. These never change under
+// a given URL (Vite hashes bundles; img/css are versioned by deploy), so a
+// cache hit is always correct and avoids a needless network round-trip — the
+// 2s "pending" we saw was network-first paying that round-trip every time.
+const staticAssetRe = /\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|mjs|woff2?|ttf|eot)$/i;
+
+// Routing:
+//   - static assets → cache-first (instant on repeat; revalidate-on-miss only)
+//   - everything else (navigations, JSON APIs) → network-first, cache as
+//     offline fallback. Navigations must never serve a stale Cloudflare Access
+//     login page from cache, so they stay network-first.
+// Cross-origin requests are NOT intercepted — letting them go straight to the
+// network avoids needless proxying and the "Failed to convert value to
+// 'Response'" crash when such a fetch failed and respondWith() got undefined.
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
-  let sameOrigin = false;
-  try { sameOrigin = new URL(req.url).origin === self.location.origin; }
-  catch (_) { sameOrigin = false; }
-  if (!sameOrigin) return;
+  let url;
+  try { url = new URL(req.url); }
+  catch (_) { return; }
+  if (url.origin !== self.location.origin) return;
+
+  if (staticAssetRe.test(url.pathname)) {
+    // Cache-first: return the cached copy immediately, fetch+store on miss.
+    event.respondWith(
+      caches.match(req).then((cached) => {
+        if (cached) return cached;
+        return fetch(req).then((res) => {
+          if (res && res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+          }
+          return res;
+        });
+      })
+    );
+    return;
+  }
+
+  // Network-first for navigations and dynamic responses.
   event.respondWith(
     fetch(req).catch(() =>
       caches.match(req).then((cached) => cached || Response.error())

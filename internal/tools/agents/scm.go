@@ -93,9 +93,9 @@ type RepoSummary struct {
 // changes list of each repo — so a change event needs no follow-up
 // fetch (zero polling).
 type GitStatusSnapshot struct {
-	Repos        []RepoSummary           `json:"repos"`
+	Repos        []RepoSummary               `json:"repos"`
 	Statuses     map[string]scm.StatusResult `json:"statuses"`
-	TotalChanged int                     `json:"total_changed"`
+	TotalChanged int                         `json:"total_changed"`
 }
 
 // buildGitSnapshot scans cwd and computes the full snapshot. One
@@ -250,8 +250,10 @@ func gitBlob(c *tool.Ctx) {
 
 // gitCompare returns the two raw sides for a working-tree change, picked
 // to match git semantics so STAGED and CHANGES show different diffs:
-//   staged=true  → HEAD (original)  vs index   (modified)
-//   staged=false → index (original) vs working (modified)
+//
+//	staged=true  → HEAD (original)  vs index   (modified)
+//	staged=false → index (original) vs working (modified)
+//
 // The FE feeds both to Monaco, which computes + colors the diff.
 func gitCompare(c *tool.Ctx) {
 	cwd, ok := sessionCwd(c)

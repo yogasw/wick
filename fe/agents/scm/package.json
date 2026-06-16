@@ -13,6 +13,10 @@
     "test:unit": "vitest run"
   },
   "dependencies": {
+    "@wick-fe/common-api": "*",
+    "@wick-fe/common-sse-worker": "*",
+    "@wick-fe/common-stores": "*",
+    "@wick-fe/common-ui": "*",
     "monaco-editor": "^0.52.0"
   }
 }

@@ -6,15 +6,16 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/pkg/strutil"
 )
 
 const (
-	maxRunRequestLen = strutil.DefaultLimit
+	maxRunRequestLen  = strutil.DefaultLimit
 	maxRunResponseLen = strutil.DefaultLimit
-	maxRunErrorLen   = 2_000
+	maxRunErrorLen    = 2_000
 )
 
 // Repo wraps the gorm handle and exposes the connector-specific CRUD
@@ -364,15 +365,26 @@ func (r *Repo) ListOperations(ctx context.Context, connectorID string) ([]entity
 }
 
 // SetOperation upserts the toggle for a single (connector, op) pair.
-// Insert when no row exists, update when it does.
+// Insert when no row exists, update when it does. Uses an explicit
+// OnConflict upsert on the composite PK with a map payload so the boolean
+// Enabled column is always written verbatim: a plain Save() resolves to an
+// UPDATE when the PK is populated (silent no-op on a missing row), and a
+// struct insert drops Enabled=false because the column carries a
+// `default:true` tag — false is indistinguishable from unset. A map value
+// bypasses that zero-value detection.
 func (r *Repo) SetOperation(ctx context.Context, connectorID, opKey string, enabled bool) error {
-	row := entity.ConnectorOperation{
-		ConnectorID:  connectorID,
-		OperationKey: opKey,
-		Enabled:      enabled,
-		UpdatedAt:    time.Now(),
-	}
-	return r.db.WithContext(ctx).Save(&row).Error
+	return r.db.WithContext(ctx).
+		Model(&entity.ConnectorOperation{}).
+		Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "connector_id"}, {Name: "operation_key"}},
+			DoUpdates: clause.AssignmentColumns([]string{"enabled", "updated_at"}),
+		}).
+		Create(map[string]any{
+			"connector_id":  connectorID,
+			"operation_key": opKey,
+			"enabled":       enabled,
+			"updated_at":    time.Now(),
+		}).Error
 }
 
 // SetSystemDisabled marks an operation as disabled by the health-check
@@ -383,9 +395,9 @@ func (r *Repo) SetSystemDisabled(ctx context.Context, connectorID, opKey, reason
 	return r.db.WithContext(ctx).
 		Where(entity.ConnectorOperation{ConnectorID: connectorID, OperationKey: opKey}).
 		Assign(map[string]any{
-			"system_disabled":         true,
-			"system_disabled_reason":  reason,
-			"updated_at":              time.Now(),
+			"system_disabled":        true,
+			"system_disabled_reason": reason,
+			"updated_at":             time.Now(),
 		}).
 		FirstOrCreate(&entity.ConnectorOperation{
 			ConnectorID:          connectorID,
@@ -534,9 +546,9 @@ type RunSummary struct {
 // SummariseRuns returns aggregate stats for the given audit filter window.
 func (r *Repo) SummariseRuns(ctx context.Context, f AuditFilter) (RunSummary, error) {
 	type row struct {
-		Status    string
-		Count     int64
-		AvgLatMs  float64
+		Status   string
+		Count    int64
+		AvgLatMs float64
 	}
 	var rows []row
 	err := r.auditFilterQuery(ctx, f).

@@ -1,0 +1,21 @@
+{
+  "name": "@wick-fe/manager",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:watch": "vite build --watch",
+    "preview": "vite preview",
+    "check": "tsc --noEmit && vite build",
+    "test:unit": "vitest run"
+  },
+  "dependencies": {
+    "@emoji-mart/data": "^1.2.1",
+    "@wick-fe/common-api": "*",
+    "@wick-fe/common-stores": "*",
+    "@wick-fe/common-ui": "*",
+    "emoji-mart": "^5.6.0"
+  }
+}

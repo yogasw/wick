@@ -5,7 +5,6 @@
 
 import type { GitStatusSnapshot } from "$lib/api/scm";
 
-const WORKER_URL = "/tools/agents/static/js/sse-worker.js";
 const SUBSCRIBE_BASE = "/tools/agents";
 
 export function subscribeGitStatus(
@@ -15,7 +14,10 @@ export function subscribeGitStatus(
   if (!sessionID) return () => {};
   let worker: SharedWorker | null = null;
   try {
-    worker = new SharedWorker(WORKER_URL);
+    worker = new SharedWorker(
+      new URL("@wick-fe/common-sse-worker/src/sse-worker.ts", import.meta.url),
+      { type: "module" },
+    );
     worker.port.start();
   } catch {
     return () => {};

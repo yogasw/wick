@@ -37,7 +37,7 @@ After boot, head to `/tools/agents`.
 | Page | What you do |
 |---|---|
 | **Overview** | Pool stats (active / max / queue), running list, recent sessions. |
-| **Sessions** | List, open, delete sessions. Detail tabs: Conversation, Commands (gate audit), Raw events. Composer at the bottom posts a new message. |
+| **Sessions** | List, open, delete sessions. Detail tabs: Conversation (assistant bubbles render Mermaid diagrams, syntax-highlighted code, and KaTeX math), Commands (gate audit), Approvals, Raw (collapsible JSON tree of all turns + per-turn tool/thinking traces fetched on demand). Composer at the bottom posts a new message. |
 | **Projects** | Create / delete projects. New = empty managed folder unless pointed at a custom path. |
 | **Presets** | Edit reusable agent instructions. Each preset is one `agent.md` file. The built-in `default` preset is the fallback when a session has no project (or the project has no `DefaultPreset`); it cannot be deleted, only edited. |
 | **Providers** | Per-instance status cards: binary path, version, env vars, extra args, "Rescan" button. Add custom instances when you need two PATs for the same CLI. |
@@ -107,7 +107,26 @@ Source: [`config.GeneralConfig`](https://github.com/yogasw/wick/blob/master/inte
 | `PublicURL` | _(empty)_ | Base URL of this wick instance. Used to build `/dashboard` meta-command links. |
 | `AutoRescan` | `true` | Re-probe provider binaries when cached version is older than 24h. Off = manual Rescan only. |
 | `PreemptIdle` | `true` | When the pool is full and a new session is queued, kill the longest-idle active subprocess to free its slot instead of waiting out the idle TTL. Killed sessions resume via `--resume` on their next message. A 1 s background loop keeps retrying preemption while the queue is non-empty so a session that goes idle after a queued send still releases its slot promptly. |
-| `SystemPrompt` | _(embedded baseline)_ | Global interaction rules appended to every preset's `agent.md` on spawn. Adds to the preset — never replaces it. Edit and reset the default from `/tools/agents/settings`; the shipped baseline is [`internal/agents/config/system_prompt_default.md`](https://github.com/yogasw/wick/blob/master/internal/agents/config/system_prompt_default.md). |
+| `SystemPrompt` | _(embedded baseline)_ | Global interaction rules appended to every preset's `agent.md` on spawn. Adds to the preset — never replaces it. Edit and reset the default from `/tools/agents/settings`; the shipped baseline is [`internal/agents/system-prompt/default.md`](https://github.com/yogasw/wick/blob/master/internal/agents/system-prompt/default.md). |
+
+## Chat rendering
+
+Assistant bubbles in the **web Conversation tab** render as GitHub-flavored markdown plus a few rich formats — what the agent writes is rendered the same way [claude.ai](https://claude.ai) does. Every format degrades gracefully: on channels with no rich renderer (Slack, Telegram) the raw source still reads fine.
+
+| Format | Author it as | Renders as |
+|---|---|---|
+| **Markdown** | normal GFM — headings, lists, **bold**, `inline code`, tables, blockquotes, `~~strikethrough~~` | styled rich text |
+| **Links** | `[short label](https://…)` | clickable label (the noisy query string is hidden) |
+| **Code (highlighted)** | fenced block with a language tag: ` ```js `, ` ```python `, ` ```go `, ` ```sql `, … | syntax-highlighted block via [highlight.js](https://highlightjs.org/), light/dark aware |
+| **Mermaid diagrams** | a ` ```mermaid ` fence — `flowchart`, `sequenceDiagram`, `classDiagram`, `stateDiagram-v2`, `erDiagram`, `gantt`, `pie`, `journey`, … | colored [Mermaid](https://mermaid.js.org/) diagram, theme-aware light/dark |
+| **Inline math** | `$…$` — e.g. `$E = mc^2$` | [KaTeX](https://katex.org/) inline (a bare `$5 and $10` stays currency, not math) |
+| **Display math** | `$$…$$` on its own line(s) | KaTeX centered block |
+
+::: tip Same list the agent sees
+This table is mirrored into the agent's immutable system prompt (the `## Renderable formats in chat` section, sourced from [`internal/agents/system-prompt/render_formats.md`](https://github.com/yogasw/wick/blob/master/internal/agents/system-prompt/render_formats.md)) so the model knows it can reach for a diagram or a highlighted snippet. To add a newly supported render type, edit that one file — it lands in the prompt and stays documented here in lockstep.
+:::
+
+The renderers (mermaid / highlight.js / KaTeX) are **lazy-loaded** on first use as separate chunks, and Mermaid runs with `securityLevel: strict` since the content is LLM-authored.
 
 ## Context file panel
 

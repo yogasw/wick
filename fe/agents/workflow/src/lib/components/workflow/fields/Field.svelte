@@ -17,7 +17,7 @@
   // template-aware text/textarea fields. Caller manages where
   // mode lives (typically node.arg_modes[key]).
   import ArgField from "./ArgField.svelte";
-  import Select from "$lib/components/shared/Select.svelte";
+  import { Select } from "@wick-fe/common-ui";
 
   type Mode = "fixed" | "expression";
   type SelectOption = string | { label: string; value: string };

@@ -19,6 +19,7 @@ import (
 	geminipkg "github.com/yogasw/wick/internal/agents/provider/gemini"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
+	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
 	"github.com/yogasw/wick/internal/safeexec"
 )
 
@@ -167,9 +168,9 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	}
 	var immutable string
 	if provider.Type(pTypeStrEarly) == provider.TypeCodex {
-		immutable = config.ImmutableSystemPromptCodex()
+		immutable = systemprompt.ImmutableSystemPromptCodex()
 	} else {
-		immutable = config.ImmutableSystemPrompt()
+		immutable = systemprompt.ImmutableSystemPrompt()
 	}
 	presetContent := immutable
 	if f.ConnectorCatalogLoader != nil {
@@ -359,13 +360,13 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		OnSpawn: func(binary string, argv []string, pid int, firstMsg string) {
 			writeStartEvent(pid, binary, argv, firstMsg)
 		},
-		Instance:        &insCopy,
-		GateBinary:      gateBin,
-		Preset:          presetContent,
-		MaxTurns:        opt.MaxTurns,
-		ThinkingTokens:  opt.ThinkingTokens,
-		ExtraArgs:       resolvedIns.ExtraArgs,
-		ExtraEnv:        resolvedIns.Env,
+		Instance:       &insCopy,
+		GateBinary:     gateBin,
+		Preset:         presetContent,
+		MaxTurns:       opt.MaxTurns,
+		ThinkingTokens: opt.ThinkingTokens,
+		ExtraArgs:      resolvedIns.ExtraArgs,
+		ExtraEnv:       resolvedIns.Env,
 		// claude = persistent stdin (append); codex = one-shot per turn,
 		// queue mid-turn sends so spam doesn't stack subprocesses. A
 		// per-instance override (providers UI) takes precedence over the

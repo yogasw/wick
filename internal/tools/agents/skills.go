@@ -15,7 +15,6 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
-
 // canMutateSkill returns true when the caller is an admin or owns the named skill.
 // It writes a 401/403 response and returns false when access is denied.
 func canMutateSkill(c *tool.Ctx, name string) bool {
@@ -40,8 +39,11 @@ func canMutateSkill(c *tool.Ctx, name string) bool {
 }
 
 func skillsPage(c *tool.Ctx) {
-	files, dirs, _ := skillsync.Status()
-	c.HTML(view.SkillsPage(buildSkillsPageVM(c, dirs, files, "", "")))
+	c.HTML(view.SkillsSPA(view.SkillsSPAVM{
+		Layout:   sidebarVM(c, "skills", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("skills"),
+	}))
 }
 
 func skillsSync(c *tool.Ctx) {
@@ -49,19 +51,11 @@ func skillsSync(c *tool.Ctx) {
 		c.Error(http.StatusForbidden, "admins only")
 		return
 	}
-	res, err := skillsync.Sync()
-	flash := ""
-	errMsg := ""
-	if err != nil {
-		errMsg = err.Error()
-	} else {
-		flash = fmt.Sprintf("Synced %d file(s), %d already up to date (hidden dirs skipped).", res.Copied, res.Skipped)
-		if len(res.Errors) > 0 {
-			flash += fmt.Sprintf(" %d error(s): %s", len(res.Errors), strings.Join(res.Errors, "; "))
-		}
+	if _, err := skillsync.Sync(); err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
 	}
-	files, dirs, _ := skillsync.Status()
-	c.HTML(view.SkillsPage(buildSkillsPageVM(c, dirs, files, flash, errMsg)))
+	c.Redirect(c.Base()+"/skills", http.StatusSeeOther)
 }
 
 func skillsUpload(c *tool.Ctx) {
@@ -93,33 +87,33 @@ func skillsUpload(c *tool.Ctx) {
 	}
 
 	folderName, res, err := skillsync.UploadProcessed(filename, data)
-	flash := ""
-	errMsg := ""
 	if err != nil {
-		errMsg = err.Error()
-	} else if res.Copied == 0 {
-		errMsg = fmt.Sprintf("nothing imported from %q — check the archive structure", filename)
-		if len(res.Errors) > 0 {
-			errMsg += fmt.Sprintf(" (%s)", strings.Join(res.Errors, "; "))
-		}
-	} else {
-		flash = fmt.Sprintf("Uploaded %q as skill %q to %d dir(s).", filename, folderName, res.Copied)
-		if len(res.Errors) > 0 {
-			flash += fmt.Sprintf(" %d error(s): %s", len(res.Errors), strings.Join(res.Errors, "; "))
-		}
-		if globalTagsSvc != nil && folderName != "" {
-			_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), folderName, actorID(c))
-		}
-		if globalSkillStore != nil && folderName != "" {
-			_ = globalSkillStore.Register(c.Context(), folderName, actorID(c), "")
-		}
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
 	}
-	files, dirs, _ := skillsync.Status()
-	c.HTML(view.SkillsPage(buildSkillsPageVM(c, dirs, files, flash, errMsg)))
+	if res.Copied == 0 {
+		msg := fmt.Sprintf("nothing imported from %q — check the archive structure", filename)
+		if len(res.Errors) > 0 {
+			msg += fmt.Sprintf(" (%s)", strings.Join(res.Errors, "; "))
+		}
+		c.Error(http.StatusBadRequest, msg)
+		return
+	}
+	if globalTagsSvc != nil && folderName != "" {
+		_ = globalTagsSvc.CreateResourceOwnerTag(c.Context(), folderName, actorID(c))
+	}
+	if globalSkillStore != nil && folderName != "" {
+		_ = globalSkillStore.Register(c.Context(), folderName, actorID(c), "")
+	}
+	c.Redirect(c.Base()+"/skills", http.StatusSeeOther)
 }
 
 func skillDetail(c *tool.Ctx) {
-	skillDetailByPath(c, c.PathValue("name"))
+	c.HTML(view.SkillsSPA(view.SkillsSPAVM{
+		Layout:   sidebarVM(c, "skills", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("skills"),
+	}))
 }
 
 // skillEntrySync force-copies a skill entry from dirs that have it to dirs that don't.
@@ -175,49 +169,6 @@ func skillEntrySync(c *tool.Ctx) {
 		return nil
 	})
 	c.Redirect(c.Base()+"/skills/"+name, http.StatusSeeOther)
-}
-
-func skillDetailByPath(c *tool.Ctx, name string) {
-	entries, presentIn, _ := skillsync.ListDir(name)
-	if len(presentIn) > 0 {
-		// It's a folder — render folder explorer
-		_, allDirs, _ := skillsync.Status()
-		missing := dirsNotIn(allDirs, presentIn)
-		vm := view.SkillFolderVM{
-			Layout:     sidebarVM(c, "skills", ""),
-			Base:       c.Base(),
-			FolderName: name,
-			InDirs:     presentIn,
-			Missing:    missing,
-		}
-		for _, e := range entries {
-			vm.Entries = append(vm.Entries, view.SkillFileVM{
-				Name:    e.Name,
-				IsDir:   e.IsDir,
-				InDirs:  e.Sources,
-				Missing: e.Missing,
-			})
-		}
-		c.HTML(view.SkillFolderPage(vm))
-		return
-	}
-
-	// File viewer
-	data, srcPath, err := skillsync.ReadFile(name)
-	if err != nil {
-		c.NotFound()
-		return
-	}
-	_, dirs, _ := skillsync.Status()
-	inDirs := dirsContaining(dirs, name)
-	c.HTML(view.SkillDetailPage(view.SkillDetailVM{
-		Layout:     sidebarVM(c, "skills", ""),
-		Base:       c.Base(),
-		Filename:   name,
-		Content:    string(data),
-		SourcePath: srcPath,
-		InDirs:     inDirs,
-	}))
 }
 
 func skillDelete(c *tool.Ctx) {
@@ -279,23 +230,10 @@ func skillDeleteFromDir(c *tool.Ctx) {
 }
 
 func skillFolderFileDetail(c *tool.Ctx) {
-	folder := c.PathValue("folder")
-	file := c.PathValue("file")
-	name := folder + "/" + file
-	data, srcPath, err := skillsync.ReadFile(name)
-	if err != nil {
-		c.NotFound()
-		return
-	}
-	_, dirs, _ := skillsync.Status()
-	inDirs := dirsContaining(dirs, name)
-	c.HTML(view.SkillDetailPage(view.SkillDetailVM{
-		Layout:     sidebarVM(c, "skills", ""),
-		Base:       c.Base(),
-		Filename:   name,
-		Content:    string(data),
-		SourcePath: srcPath,
-		InDirs:     inDirs,
+	c.HTML(view.SkillsSPA(view.SkillsSPAVM{
+		Layout:   sidebarVM(c, "skills", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("skills"),
 	}))
 }
 
@@ -347,92 +285,11 @@ func resolveProviderDir(provider string) string {
 }
 
 // skillProviderPath handles GET /skills/{provider}/{path...}
-// If the resolved path is a directory → render folder page.
-// If it's a file → render file detail page.
 func skillProviderPath(c *tool.Ctx) {
-	provider := c.PathValue("provider")
-	rawPath := c.PathValue("path")
-
-	cleanPath, ok := safeSkillPath(rawPath)
-	if !ok {
-		c.Error(http.StatusBadRequest, "invalid path")
-		return
-	}
-
-	providerDir := resolveProviderDir(provider)
-	if providerDir == "" {
-		// Not a provider label — treat provider+path as a skillsync subfolder path.
-		fullPath := provider
-		if cleanPath != "" {
-			fullPath = provider + "/" + cleanPath
-		}
-		skillDetailByPath(c, fullPath)
-		return
-	}
-
-	target := filepath.Join(providerDir, cleanPath)
-	fi, err := os.Stat(target)
-	if err != nil {
-		c.NotFound()
-		return
-	}
-
-	allDirs := skillsync.KnownDirs()
-	allProviders := make([]string, 0, len(allDirs))
-	for _, d := range allDirs {
-		allProviders = append(allProviders, skillsync.DirLabel(d))
-	}
-
-	if fi.IsDir() {
-		entries, _ := os.ReadDir(target)
-		vm := view.SkillProviderFolderVM{
-			Layout:       sidebarVM(c, "skills", ""),
-			Base:         c.Base(),
-			Provider:     provider,
-			FolderName:   cleanPath,
-			AllProviders: allProviders,
-		}
-		for _, e := range entries {
-			if strings.HasPrefix(e.Name(), ".") {
-				continue
-			}
-			vm.Entries = append(vm.Entries, view.SkillFileVM{
-				Name:  e.Name(),
-				IsDir: e.IsDir(),
-			})
-		}
-		c.HTML(view.SkillProviderFolderPage(vm))
-		return
-	}
-
-	// File
-	data, err := os.ReadFile(target)
-	if err != nil {
-		c.NotFound()
-		return
-	}
-	hasFile := make(map[string]bool)
-	for _, d := range allDirs {
-		lbl := skillsync.DirLabel(d)
-		if _, err := os.Stat(filepath.Join(d, cleanPath)); err == nil {
-			hasFile[lbl] = true
-		}
-	}
-	// folder part = all but last segment
-	parts := strings.Split(filepath.ToSlash(cleanPath), "/")
-	folderPart := strings.Join(parts[:len(parts)-1], "/")
-	filename := parts[len(parts)-1]
-
-	c.HTML(view.SkillProviderFilePage(view.SkillProviderFileVM{
-		Layout:       sidebarVM(c, "skills", ""),
-		Base:         c.Base(),
-		Provider:     provider,
-		FolderName:   folderPart,
-		Filename:     filename,
-		Content:      string(data),
-		SourcePath:   target,
-		AllProviders: allProviders,
-		HasFile:      hasFile,
+	c.HTML(view.SkillsSPA(view.SkillsSPAVM{
+		Layout:   sidebarVM(c, "skills", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("skills"),
 	}))
 }
 
@@ -491,25 +348,6 @@ func skillProviderSync(c *tool.Ctx) {
 	})
 
 	c.Redirect(c.Base()+"/skills/"+provider+"/"+filepath.ToSlash(cleanPath), http.StatusSeeOther)
-}
-
-func buildSkillsPageVM(c *tool.Ctx, dirs []string, files []skillsync.SkillFile, flash, errMsg string) view.SkillsPageVM {
-	vm := view.SkillsPageVM{
-		Layout: sidebarVM(c, "skills", ""),
-		Base:   c.Base(),
-		Dirs:   dirs,
-		Flash:  flash,
-		Error:  errMsg,
-	}
-	for _, f := range files {
-		vm.Files = append(vm.Files, view.SkillFileVM{
-			Name:    f.Name,
-			IsDir:   f.IsDir,
-			InDirs:  f.Sources,
-			Missing: f.Missing,
-		})
-	}
-	return vm
 }
 
 func dirsContaining(dirs []string, filename string) []string {

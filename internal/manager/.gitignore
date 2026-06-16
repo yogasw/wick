@@ -1,0 +1,5 @@
+# Vite-built manager SPA bundle (produced by
+# `npm --workspace=@wick-fe/manager run build` in fe/).
+# dist/.gitkeep stays tracked so go:embed all:dist always has a directory.
+dist/manager/index.html
+dist/manager/assets/

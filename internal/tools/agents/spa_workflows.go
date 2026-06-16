@@ -104,10 +104,10 @@ type spaWorkflowSummary struct {
 }
 
 var workflowTemplates = []map[string]string{
-	{"value": "empty",             "label": "Empty",             "desc": "Blank canvas — start from scratch"},
-	{"value": "support-triage",    "label": "Support Triage",    "desc": "Classify inbound support messages and route to the right handler"},
+	{"value": "empty", "label": "Empty", "desc": "Blank canvas — start from scratch"},
+	{"value": "support-triage", "label": "Support Triage", "desc": "Classify inbound support messages and route to the right handler"},
 	{"value": "incident-response", "label": "Incident Response", "desc": "Webhook-triggered incident response with parallel data gathering"},
-	{"value": "daily-digest",      "label": "Daily Digest",      "desc": "Cron-triggered daily summary"},
+	{"value": "daily-digest", "label": "Daily Digest", "desc": "Cron-triggered daily summary"},
 }
 
 func spaWorkflowTemplates(c *tool.Ctx) {
@@ -407,11 +407,11 @@ func spaWorkflowToggle(c *tool.Ctx) {
 
 // spaWorkflowLock flips workflow._canvas.locked. Dedicated endpoint
 // rather than piggybacking on /save so we can:
-//   1. allow toggling lock even while the workflow IS locked (the
-//      regular save path rejects writes on a locked workflow);
-//   2. skip validation — locking shouldn't fail because the draft
-//      has a half-finished node, since locking is the user saying
-//      "freeze the current state".
+//  1. allow toggling lock even while the workflow IS locked (the
+//     regular save path rejects writes on a locked workflow);
+//  2. skip validation — locking shouldn't fail because the draft
+//     has a half-finished node, since locking is the user saying
+//     "freeze the current state".
 func spaWorkflowLock(c *tool.Ctx) {
 	if notReadyWorkflow(c) {
 		return
@@ -730,9 +730,9 @@ func parseDateInput(v string, endOfDay bool) (time.Time, error) {
 // templateTestRL limits template-test to 5 req/s (200ms min between calls).
 // Single bucket — fine for a local dev server where all traffic is one user.
 var templateTestRL = struct {
-	mu       sync.Mutex
-	last     time.Time
-	minGap   time.Duration
+	mu     sync.Mutex
+	last   time.Time
+	minGap time.Duration
 }{minGap: 200 * time.Millisecond}
 
 func spaTemplateTest(c *tool.Ctx) {

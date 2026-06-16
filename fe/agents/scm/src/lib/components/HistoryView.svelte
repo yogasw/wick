@@ -3,7 +3,7 @@
   import * as api from "$lib/api/scm";
   import type { LogEntry, CommitDetail, FileChange } from "$lib/api/scm";
   import { sessionID, activeRepo } from "$lib/stores/scm";
-  import { toastError } from "$lib/stores/toast";
+  import { toastError } from "@wick-fe/common-stores";
 
   type Props = {
     onOpenCommitFile: (sha: string, file: FileChange) => void;

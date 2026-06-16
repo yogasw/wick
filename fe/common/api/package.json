@@ -1,0 +1,14 @@
+{
+  "name": "@wick-fe/common-api",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "effect": "^3.10.0",
+    "@effect/platform": "^0.70.0"
+  },
+  "scripts": {
+    "test:unit": "vitest run"
+  }
+}

@@ -1,0 +1,33 @@
+package view
+
+// ProjectSettingsSPAVM feeds the thin-shell that hosts the project-settings
+// SPA inside the standard agents layout. AssetURL is the hashed Vite bundle
+// path resolved at boot via spaAssetURL("project-settings").
+type ProjectSettingsSPAVM struct {
+	Layout    AgentsLayoutVM
+	Base      string
+	ProjectID string
+	AssetURL  string
+}
+
+// ProjectSettingsSPA renders the project-settings SPA shell inside the agents
+// chrome. The SPA reads data-base and data-project-id from the #app div.
+templ ProjectSettingsSPA(vm ProjectSettingsSPAVM) {
+	@AgentsLayout(vm.Layout) {
+		if vm.AssetURL == "" {
+			<div class="p-8 text-sm text-rose-600 dark:text-rose-400">
+				Project-settings bundle not built yet. Run
+				<code class="font-mono">npm --workspace=@wick-fe/agents-project-settings run build</code>
+				in <code class="font-mono">fe/</code> and refresh.
+			</div>
+		} else {
+			<div
+				id="app"
+				data-base={ vm.Base }
+				data-project-id={ vm.ProjectID }
+				class="h-full"
+			></div>
+			<script type="module" src={ vm.AssetURL }></script>
+		}
+	}
+}

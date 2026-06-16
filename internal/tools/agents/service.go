@@ -2,53 +2,58 @@ package agents
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"strings"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
-	"github.com/yogasw/wick/internal/agents/gate"
-	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
 )
 
 // loadFirstUserMessage returns the cached label from meta (in-memory, fast).
-// Falls back to scanning conversation.jsonl for sessions created before label
-// caching was introduced.
+// It never touches disk: list endpoints call this for every session, so a
+// per-session jsonl scan here would block the whole list. Sessions whose label
+// is still empty fall back to their ID; the label gets backfilled lazily the
+// next time the conversation is opened (see resolveLabelFromTurns).
 func loadFirstUserMessage(layout agentconfig.Layout, sessionID string, maxLen int) string {
 	if globalMgr != nil {
 		if sess, ok := globalMgr.Registry().Session(sessionID); ok && sess.Meta.Label != "" {
-			r := []rune(sess.Meta.Label)
-			if len(r) > maxLen {
-				return string(r[:maxLen]) + "…"
-			}
-			return sess.Meta.Label
+			return truncateRunes(sess.Meta.Label, maxLen)
 		}
 	}
-	// Legacy fallback: scan conversation.jsonl and backfill label.
-	var result string
-	storage.ReadJSONL(layout.SessionConversation(sessionID), func(line []byte) bool {
-		var t store.ConversationTurn
-		if json.Unmarshal(line, &t) != nil || t.Role != "user" || t.Text == "" {
-			return true
-		}
-		r := []rune(strings.TrimSpace(t.Text))
-		if len(r) > maxLen {
-			result = string(r[:maxLen]) + "…"
-		} else {
-			result = string(r)
-		}
-		return false
-	})
-	// Backfill label to disk so next call hits the fast path.
-	if result != "" && globalMgr != nil {
-		if sess, ok := globalMgr.Registry().Session(sessionID); ok && sess.Meta.Label == "" {
-			sess.Meta.Label = result
-			_ = session.SaveMeta(layout, sessionID, sess.Meta)
+	return sessionID
+}
+
+// truncateRunes shortens s to maxLen runes, appending "…" when truncated.
+func truncateRunes(s string, maxLen int) string {
+	r := []rune(s)
+	if len(r) > maxLen {
+		return string(r[:maxLen]) + "…"
+	}
+	return s
+}
+
+// resolveLabelFromTurns derives a session label from already-loaded turns and
+// backfills it to meta.json once, so list endpoints can use the fast path next
+// time. Called from the conversation path where turns are read anyway — no
+// extra disk scan. Falls back to "(no text)" so empty sessions stop retrying.
+func resolveLabelFromTurns(layout agentconfig.Layout, sessionID string, turns []store.ConversationTurn) {
+	if globalMgr == nil {
+		return
+	}
+	sess, ok := globalMgr.Registry().Session(sessionID)
+	if !ok || sess.Meta.Label != "" {
+		return
+	}
+	label := "(no text)"
+	for _, t := range turns {
+		if t.Role == "user" && strings.TrimSpace(t.Text) != "" {
+			label = strings.TrimSpace(t.Text)
+			break
 		}
 	}
-	return result
+	sess.Meta.Label = label
+	_ = session.SaveMeta(layout, sessionID, sess.Meta)
 }
 
 // loadConversation reads all ConversationTurn entries from conversation.jsonl
@@ -66,80 +71,4 @@ func loadConversation(layout agentconfig.Layout, sessionID string) ([]store.Conv
 		return nil, err
 	}
 	return turns, nil
-}
-
-// loadCommands reads raw lines from the SHARED commands.jsonl filtered
-// by the session's project cwd. Stage 9 moved the audit log out of
-// per-session files and into a single app-wide jsonl; we filter on
-// the read side so the UI session-detail Commands tab still shows
-// only what's relevant to that session.
-//
-// Filter: an entry matches a session when its WorkDir equals the
-// session's resolved project path or sits under it (prefix match
-// with separator boundary). Entries with empty WorkDir (failure
-// modes from gate-side timeouts where cwd was never recorded) are
-// dropped from per-session views.
-func loadCommands(layout agentconfig.Layout, sessionID string) ([]string, error) {
-	projectID := lookupSessionProject(layout, sessionID)
-	wsPath := ""
-	if projectID != "" && project.Exists(layout, projectID) {
-		if p, err := project.ResolvePath(layout, projectID); err == nil {
-			if abs, err := filepath.Abs(p); err == nil {
-				wsPath = filepath.Clean(abs)
-			} else {
-				wsPath = filepath.Clean(p)
-			}
-		}
-	}
-	app := gate.AppName()
-	if app == "" {
-		app = "wick"
-	}
-	var lines []string
-	err := storage.ReadJSONL(gate.SharedCommandsPath(app), func(line []byte) bool {
-		if wsPath == "" {
-			lines = append(lines, string(line))
-			return true
-		}
-		var e gate.Entry
-		if err := json.Unmarshal(line, &e); err != nil {
-			return true
-		}
-		if e.SessionID != "" {
-			if e.SessionID == sessionID {
-				lines = append(lines, string(line))
-			}
-			return true
-		}
-		if e.WorkDir == "" {
-			return true
-		}
-		ew := e.WorkDir
-		if abs, err := filepath.Abs(ew); err == nil {
-			ew = filepath.Clean(abs)
-		} else {
-			ew = filepath.Clean(ew)
-		}
-		if ew == wsPath || strings.HasPrefix(ew, wsPath+string(filepath.Separator)) {
-			lines = append(lines, string(line))
-		}
-		return true
-	})
-	if err != nil {
-		return nil, err
-	}
-	return lines, nil
-}
-
-// lookupSessionProject returns the project id from a session's
-// meta.json, or empty if the session has none / can't be loaded.
-func lookupSessionProject(_ agentconfig.Layout, sessionID string) string {
-	if globalMgr == nil {
-		return ""
-	}
-	s, ok := globalMgr.Registry().Sessions()[sessionID]
-	if !ok {
-		return ""
-	}
-	return s.Meta.ProjectID
 }

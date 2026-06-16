@@ -136,7 +136,7 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 // carries the originating request_id (set by the HTTP middleware) when
 // the spawn came from an HTTP path. Pass context.Background() when
 // no spawn ctx is in scope.
-func (b *Broadcaster) PublishLifecycle(ctx context.Context, sessionID, agentName, lifecycle string, pid int) {
+func (b *Broadcaster) PublishLifecycle(ctx context.Context, sessionID, agentName, lifecycle, provider string, pid int) {
 	log.Ctx(ctx).Debug().
 		Str("component", "sse").
 		Str("session", sessionID).
@@ -149,6 +149,7 @@ func (b *Broadcaster) PublishLifecycle(ctx context.Context, sessionID, agentName
 		AgentName: agentName,
 		Type:      "lifecycle",
 		Lifecycle: lifecycle,
+		Data:      provider,
 		PID:       pid,
 	})
 }

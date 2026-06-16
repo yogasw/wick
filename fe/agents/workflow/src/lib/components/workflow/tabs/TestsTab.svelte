@@ -3,7 +3,7 @@
   // delete / run cases. Mirrors v1's TestManager templ but with an
   // inline assertion builder instead of free-text JSON.
   import { draftWorkflow } from "$lib/stores/editor";
-  import { toastOk, toastError } from "$lib/stores/toast";
+  import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     workflowAPI,
     type TestAssertion,

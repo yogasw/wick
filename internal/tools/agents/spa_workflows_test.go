@@ -69,9 +69,9 @@ func TestMissingUpstreamNode(t *testing.T) {
 		`executing "node" at <.Node.analyze.text>: nil pointer evaluating interface {}.text`:            "analyze",
 		`pre-render url: template: node:1:21: executing "node" at <.Node.fetch_diff.body>: nil pointer`: "fetch_diff",
 		// not a node-ref nil-pointer → no match
-		`map has no entry for key "channel"`:                  "",
-		`executing "node" at <.Event.Payload.x>: some error`:  "",
-		`<.Node.analyze.session_id>: nil pointer evaluating`:  "analyze",
+		`map has no entry for key "channel"`:                 "",
+		`executing "node" at <.Event.Payload.x>: some error`: "",
+		`<.Node.analyze.session_id>: nil pointer evaluating`: "analyze",
 	}
 	for in, want := range cases {
 		if got := missingUpstreamNode(in); got != want {

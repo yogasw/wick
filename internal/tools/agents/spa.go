@@ -4,30 +4,28 @@ import (
 	"embed"
 	"io/fs"
 
-	"github.com/yogasw/wick/internal/pkg/spadev"
+	"github.com/yogasw/wick/internal/pkg/spa"
 )
 
 // spaEmbedded carries the Vite-built Svelte SPA tree. The build pipeline
-// (`npm run build` from `fe/`) writes assets into `dist/`; this file is
+// (`npm run build` from `fe/`) writes assets into `dist/<app>/`; this file is
 // the only Go-side glue. Served by spa_handler.go at /tools/workflow/.
 //
 //go:embed all:dist
 var spaEmbedded embed.FS
 
-// SPAFS is the filesystem callers should read SPA files from. Defaults
-// to the compile-time embed (production); swapped to an os.DirFS at
-// init when WICK_DEV_REPO_ROOT is set so the dev loop can rebuild the
-// bundle (`vite build --watch`) without a Go recompile.
-var SPAFS fs.FS = spaEmbedded
+// spaLoader handles FS selection (embed vs live-disk) and per-app asset URL
+// resolution. Auto-switches to os.DirFS and registers for global dev-reload
+// watching when WICK_DEV_REPO_ROOT is set.
+var spaLoader = spa.New(spaEmbedded, "internal/tools/agents")
 
-// spaLiveDisk is true when SPAFS points at a real filesystem. In that
-// mode the asset-URL resolver skips its per-process cache so Vite's
-// new-hash-on-every-rebuild flow surfaces on the next page render.
-var spaLiveDisk bool
+// SPAFS is kept for backward compatibility with spa_handler.go (reads the FS
+// directly to serve assets + the shell). Points at the same FS as spaLoader.
+var SPAFS fs.FS = func() fs.FS { return spaLoader.FS() }()
 
-func init() {
-	if live, ok := spadev.LiveDiskFS("agents"); ok {
-		SPAFS = live
-		spaLiveDisk = true
-	}
+// spaAssetURL returns the hashed entry .js bundle URL for app, read from
+// dist/<app>/index.html. The fallback base mirrors the Vite-baked asset path
+// (/tools/agents/workflow/<app>/assets) for the rare hand-rolled-dist case.
+func spaAssetURL(app string) string {
+	return spaLoader.AssetURL(app, "/tools/agents"+spaPrefix+app+"/assets")
 }

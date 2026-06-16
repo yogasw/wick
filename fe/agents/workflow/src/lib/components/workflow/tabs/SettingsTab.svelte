@@ -1,7 +1,7 @@
 <script lang="ts">
   import { workflowAPI, type EnvField } from "$lib/api/workflow";
-  import type { Workflow, ConcurrencyPolicy } from "$lib/types/workflow";
-  import Select from "$lib/components/shared/Select.svelte";
+  import type { Workflow } from "$lib/types/workflow";
+  import { Select } from "@wick-fe/common-ui";
 
   type Props = { workflowID: string };
   let { workflowID }: Props = $props();

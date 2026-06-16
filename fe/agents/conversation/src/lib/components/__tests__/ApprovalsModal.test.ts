@@ -1,0 +1,118 @@
+import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/svelte";
+import ApprovalsModal from "../ApprovalsModal.svelte";
+import type { ApprovalRequest, ApprovalDecision } from "../../types/agents.js";
+
+const REQ: ApprovalRequest = {
+  id: "appr-1",
+  agent_name: "claude",
+  tool: "bash",
+  work_dir: "/home/user/project",
+  cmd: "git status",
+  match_key: "sha256:abc123",
+};
+
+describe("ApprovalsModal", () => {
+  test("renders nothing when request is null", () => {
+    const { container } = render(ApprovalsModal, {
+      props: { request: null, onDecide: vi.fn() },
+    });
+    expect(container.querySelector("div")).toBeNull();
+  });
+
+  test("renders agent_name when request is provided", () => {
+    render(ApprovalsModal, { props: { request: REQ, onDecide: vi.fn() } });
+    expect(screen.getByText("claude")).toBeDefined();
+  });
+
+  test("renders tool when request is provided", () => {
+    render(ApprovalsModal, { props: { request: REQ, onDecide: vi.fn() } });
+    expect(screen.getByText("bash")).toBeDefined();
+  });
+
+  test("renders work_dir when request is provided", () => {
+    render(ApprovalsModal, { props: { request: REQ, onDecide: vi.fn() } });
+    expect(screen.getByText("/home/user/project")).toBeDefined();
+  });
+
+  test("renders cmd when request is provided", () => {
+    render(ApprovalsModal, { props: { request: REQ, onDecide: vi.fn() } });
+    expect(screen.getByText("git status")).toBeDefined();
+  });
+
+  test("clicking 'Approve once' calls onDecide with approve_once", async () => {
+    const onDecide = vi.fn();
+    render(ApprovalsModal, { props: { request: REQ, onDecide } });
+    await fireEvent.click(screen.getByText("Approve once"));
+    expect(onDecide).toHaveBeenCalledOnce();
+    expect(onDecide).toHaveBeenCalledWith("approve_once" satisfies ApprovalDecision);
+  });
+
+  test("clicking 'Allow this session' calls onDecide with approve_session", async () => {
+    const onDecide = vi.fn();
+    render(ApprovalsModal, { props: { request: REQ, onDecide } });
+    await fireEvent.click(screen.getByText("Allow this session"));
+    expect(onDecide).toHaveBeenCalledOnce();
+    expect(onDecide).toHaveBeenCalledWith("approve_session" satisfies ApprovalDecision);
+  });
+
+  test("clicking 'Always allow' calls onDecide with approve_always", async () => {
+    const onDecide = vi.fn();
+    render(ApprovalsModal, { props: { request: REQ, onDecide } });
+    await fireEvent.click(screen.getByText("Always allow"));
+    expect(onDecide).toHaveBeenCalledOnce();
+    expect(onDecide).toHaveBeenCalledWith("approve_always" satisfies ApprovalDecision);
+  });
+
+  test("clicking 'Block' calls onDecide with block", async () => {
+    const onDecide = vi.fn();
+    render(ApprovalsModal, { props: { request: REQ, onDecide } });
+    await fireEvent.click(screen.getByText("Block"));
+    expect(onDecide).toHaveBeenCalledOnce();
+    expect(onDecide).toHaveBeenCalledWith("block" satisfies ApprovalDecision);
+  });
+
+  test("renders a starting countdown value when request is provided", () => {
+    render(ApprovalsModal, { props: { request: REQ, onDecide: vi.fn() } });
+    expect(screen.getByText("25s")).toBeDefined();
+  });
+
+  test("countdown auto-block after 25s via fake timers", async () => {
+    vi.useFakeTimers();
+    const onDecide = vi.fn();
+    render(ApprovalsModal, { props: { request: REQ, onDecide } });
+    vi.advanceTimersByTime(25000);
+    expect(onDecide).toHaveBeenCalledWith("block" satisfies ApprovalDecision);
+    vi.useRealTimers();
+  });
+
+  test("renders inline error region when error prop is set", () => {
+    const request = { id: "a1", agent_name: "main", tool: "bash", work_dir: "/w", cmd: "rm -rf /", match_key: "k" };
+    render(ApprovalsModal, { props: { request, onDecide: vi.fn(), error: "Decision expired (410) — request a new approval." } });
+    expect(screen.getByText(/decision expired/i)).toBeDefined();
+  });
+
+  test("no error region when error prop is empty", () => {
+    const request = { id: "a1", agent_name: "main", tool: "bash", work_dir: "/w", cmd: "x", match_key: "k" };
+    const { container } = render(ApprovalsModal, { props: { request, onDecide: vi.fn() } });
+    expect(container.querySelector("[data-approval-error]")).toBeNull();
+  });
+
+  test("Escape key dismisses (block + close)", async () => {
+    const request = { id: "a1", agent_name: "m", tool: "bash", work_dir: "/", cmd: "x", match_key: "k" };
+    const onDecide = vi.fn();
+    const onClose = vi.fn();
+    render(ApprovalsModal, { props: { request, onDecide, onClose } });
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(onDecide).toHaveBeenCalledWith("block");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  test("backdrop click dismisses", async () => {
+    const request = { id: "a1", agent_name: "m", tool: "bash", work_dir: "/", cmd: "x", match_key: "k" };
+    const onClose = vi.fn();
+    const { container } = render(ApprovalsModal, { props: { request, onDecide: vi.fn(), onClose } });
+    await fireEvent.click(container.querySelector("[data-approval-backdrop]")!);
+    expect(onClose).toHaveBeenCalled();
+  });
+});

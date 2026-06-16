@@ -4,10 +4,8 @@
     sessionID, repos, activeRepo, changes, branch, loading, loadRepos, applySnapshot,
   } from "$lib/stores/scm";
   import { subscribeGitStatus } from "$lib/sse";
-  import { toastError } from "$lib/stores/toast";
   import { stagePaths, unstagePaths, discardPaths, commit, loadCompare, loadCommitCompare, saveFile, langFor, type FileChange, type CompareData } from "$lib/git-actions";
-  import ToastHost from "$lib/components/shared/ToastHost.svelte";
-  import ConfirmDialog from "$lib/components/shared/ConfirmDialog.svelte";
+  import { ToastHost, ConfirmDialog } from "@wick-fe/common-ui";
   import RepoSection from "$lib/components/RepoSection.svelte";
   import ChangesSection from "$lib/components/ChangesSection.svelte";
   import CommitBox from "$lib/components/CommitBox.svelte";
@@ -36,6 +34,7 @@
   const VIEW_MODE_KEY = "wick.scm.viewMode";
 
   let busy = $state(false);
+  let noSession = $state(false);
   // compare holds the file to diff. commitSha set → diff a past commit;
   // otherwise staged picks the HEAD↔index vs index↔working sides.
   let compare = $state<{ file: FileChange; staged: boolean; commitSha?: string } | null>(null);
@@ -105,7 +104,7 @@
   onMount(() => {
     if (sessionIDProp) sessionID.set(sessionIDProp);
     if (!$sessionID) {
-      toastError("No session", "Open this panel from a session page.");
+      noSession = true;
       return;
     }
     // One HTTP fetch for the initial snapshot; afterwards every update is
@@ -182,13 +181,18 @@
           type="button"
           onclick={() => onClose?.()}
           title="Close"
-          class="inline-flex h-7 w-7 items-center justify-center rounded-lg text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+          class="inline-flex lg:hidden h-7 w-7 items-center justify-center rounded-lg text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
         >
           <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"/></svg>
         </button>
       </div>
     </div>
 
+    {#if noSession}
+      <div class="flex flex-1 items-center justify-center px-6">
+        <p class="text-center text-xs text-black-700 dark:text-black-600">Open this panel from a session page.</p>
+      </div>
+    {:else}
     <!-- Repositories section (collapsible). Hidden when only one repo. -->
     {#if $repos.length > 1}
       <RepoSection repos={$repos} activeRepo={$activeRepo} onSelect={selectRepo} />
@@ -241,6 +245,11 @@
         <BranchBar branch={$branch} {busy} />
       {/if}
     {/if}
+    {/if}
+  </div>
+{:else if noSession}
+  <div class="flex h-full w-full items-center justify-center bg-white-100 dark:bg-navy-700 px-6">
+    <p class="text-center text-xs text-black-700 dark:text-black-600">Open this panel from a session page.</p>
   </div>
 {:else}
   <!-- Full mode: slim file list + diff editor as primary surface -->

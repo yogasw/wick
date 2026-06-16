@@ -4,7 +4,7 @@
 import { get } from "svelte/store";
 import * as api from "$lib/api/scm";
 import type { FileChange } from "$lib/api/scm";
-import { toastOk, toastError } from "$lib/stores/toast";
+import { toastOk, toastError } from "@wick-fe/common-stores";
 import {
   sessionID,
   activeRepo,

@@ -1,0 +1,207 @@
+/* Enriches the static markdown HTML rendered into a chat bubble: turns the
+   common-md placeholders into rendered Mermaid diagrams, syntax-highlighted
+   code, and KaTeX math. Each library is lazy-loaded on first use, the work is
+   idempotent (a `data-enriched` marker), and it is debounced so a streaming
+   message that re-renders on every token does not thrash the renderers. */
+import "katex/dist/katex.min.css";
+import "./richRender.css";
+
+type MermaidModule = {
+  initialize: (config: Record<string, unknown>) => void;
+  render: (id: string, src: string) => Promise<{ svg: string }>;
+};
+type HljsModule = {
+  highlight: (code: string, opts: { language: string }) => { value: string };
+  highlightAuto: (code: string) => { value: string };
+  getLanguage: (name: string) => unknown;
+};
+type KatexModule = {
+  render: (tex: string, el: HTMLElement, opts: Record<string, unknown>) => void;
+};
+
+let mermaidPromise: Promise<MermaidModule> | null = null;
+let hljsPromise: Promise<HljsModule> | null = null;
+let katexPromise: Promise<KatexModule> | null = null;
+
+function isDark(): boolean {
+  return typeof document !== "undefined" && document.documentElement.classList.contains("dark");
+}
+
+function loadMermaid(): Promise<MermaidModule> {
+  if (!mermaidPromise) {
+    mermaidPromise = import("mermaid").then((m) => {
+      const mermaid = m.default as unknown as MermaidModule;
+      const dark = isDark();
+      /* theme "base" + themeVariables gives nodes a clear filled colour
+         (warm amber by default) instead of the washed-out default theme.
+         Any `style`/`classDef` the diagram itself declares still wins, so
+         per-node colours authored by the model are preserved. */
+      mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        fontFamily: "inherit",
+        theme: "base",
+        themeVariables: dark
+          ? { primaryColor: "#3f3a16", primaryBorderColor: "#eab308", primaryTextColor: "#fef9c3", lineColor: "#94a3b8", secondaryColor: "#1e3a5f", secondaryBorderColor: "#3b82f6", tertiaryColor: "#14402a", tertiaryBorderColor: "#22c55e" }
+          : { primaryColor: "#fef3c7", primaryBorderColor: "#f59e0b", primaryTextColor: "#111827", lineColor: "#6b7280", secondaryColor: "#e0f2fe", secondaryBorderColor: "#3b82f6", tertiaryColor: "#dcfce7", tertiaryBorderColor: "#22c55e" },
+      });
+      return mermaid;
+    });
+  }
+  return mermaidPromise;
+}
+
+function loadHljs(): Promise<HljsModule> {
+  if (!hljsPromise) {
+    hljsPromise = import("highlight.js").then((m) => m.default as unknown as HljsModule);
+  }
+  return hljsPromise;
+}
+
+function loadKatex(): Promise<KatexModule> {
+  if (!katexPromise) {
+    katexPromise = import("katex").then((m) => m.default as unknown as KatexModule);
+  }
+  return katexPromise;
+}
+
+let mermaidSeq = 0;
+
+async function renderMermaid(node: HTMLElement): Promise<void> {
+  const els = node.querySelectorAll<HTMLElement>("[data-mermaid]:not([data-enriched])");
+  if (!els.length) return;
+  const mermaid = await loadMermaid();
+  for (const el of els) {
+    el.setAttribute("data-enriched", "");
+    const src = el.getAttribute("data-mermaid-src") ?? "";
+    try {
+      const { svg } = await mermaid.render(`wmmd-${++mermaidSeq}`, src);
+      el.innerHTML = `<div class="flex justify-center overflow-x-auto p-2">${svg}</div>`;
+    } catch {
+      /* keep the raw-code fallback already inside the placeholder */
+    }
+  }
+}
+
+async function highlightCode(node: HTMLElement): Promise<void> {
+  const els = node.querySelectorAll<HTMLElement>("code[data-code-lang]:not([data-enriched])");
+  if (!els.length) return;
+  const hljs = await loadHljs();
+  for (const el of els) {
+    el.setAttribute("data-enriched", "");
+    const lang = el.getAttribute("data-code-lang") ?? "";
+    const code = el.textContent ?? "";
+    try {
+      const res = lang && hljs.getLanguage(lang) ? hljs.highlight(code, { language: lang }) : hljs.highlightAuto(code);
+      el.innerHTML = res.value;
+      el.classList.add("hljs");
+    } catch {
+      /* keep the plain escaped code */
+    }
+  }
+}
+
+async function renderMath(node: HTMLElement): Promise<void> {
+  const els = node.querySelectorAll<HTMLElement>("[data-math]:not([data-enriched])");
+  if (!els.length) return;
+  const katex = await loadKatex();
+  for (const el of els) {
+    el.setAttribute("data-enriched", "");
+    const tex = el.getAttribute("data-math-src") ?? "";
+    const display = el.hasAttribute("data-math-display");
+    try {
+      katex.render(tex, el, { displayMode: display, throwOnError: false, output: "html" });
+    } catch {
+      /* keep the raw $…$ fallback */
+    }
+  }
+}
+
+/* Content-Security-Policy injected into every HTML-artifact iframe. The
+   iframe is also sandboxed without allow-same-origin, so it runs in an opaque
+   origin (no access to the parent's cookies/storage/DOM). The CSP then blocks
+   every exfiltration channel: connect-src none (no fetch/XHR/WebSocket),
+   form-action none (no submitting a form anywhere), img/font/media data: only
+   (no external beacons), script-src inline only (no external scripts), and no
+   nested frames or base override. Inline scripts still run, so the artifact
+   stays interactive — it just cannot phone home or read anything outside it. */
+const ARTIFACT_CSP =
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; connect-src 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'";
+
+function buildArtifactSrcdoc(html: string): string {
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`;
+  if (/<head[\s>]/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => `${m}${meta}`);
+  if (/<html[\s>]/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => `${m}<head>${meta}</head>`);
+  return `<!doctype html><html><head><meta charset="utf-8">${meta}</head><body>${html}</body></html>`;
+}
+
+function renderHtmlArtifacts(node: HTMLElement): void {
+  const els = node.querySelectorAll<HTMLElement>("[data-html-artifact]:not([data-enriched])");
+  for (const el of els) {
+    el.setAttribute("data-enriched", "");
+    const src = el.getAttribute("data-html-src") ?? "";
+    if (!src.trim()) continue;
+
+    const header = document.createElement("div");
+    header.className = "flex items-center justify-between px-3 py-1 bg-white-300 dark:bg-navy-600";
+    const label = document.createElement("span");
+    label.className = "text-[10px] text-black-600 dark:text-black-700 uppercase tracking-wide";
+    label.textContent = "HTML preview";
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "text-[10px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-400 transition-colors px-1.5 py-0.5 rounded hover:bg-white-400 dark:hover:bg-navy-500";
+    toggle.textContent = "Show code";
+    header.append(label, toggle);
+
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("sandbox", "allow-scripts");
+    iframe.setAttribute("referrerpolicy", "no-referrer");
+    iframe.setAttribute("loading", "lazy");
+    iframe.setAttribute("title", "HTML preview");
+    iframe.className = "w-full bg-white-100";
+    iframe.style.height = "360px";
+    iframe.style.border = "0";
+    iframe.srcdoc = buildArtifactSrcdoc(src);
+
+    const code = document.createElement("pre");
+    code.className = "hidden overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 leading-relaxed";
+    const codeInner = document.createElement("code");
+    codeInner.textContent = src;
+    code.appendChild(codeInner);
+
+    let showingCode = false;
+    toggle.addEventListener("click", () => {
+      showingCode = !showingCode;
+      iframe.classList.toggle("hidden", showingCode);
+      code.classList.toggle("hidden", !showingCode);
+      toggle.textContent = showingCode ? "Show preview" : "Show code";
+    });
+
+    el.innerHTML = "";
+    el.append(header, iframe, code);
+  }
+}
+
+/* Svelte action: attach to the element whose innerHTML holds rendered
+   markdown. Re-runs (debounced) whenever the bound text changes. */
+export function enrich(node: HTMLElement, _text: string) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  function run(): void {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      renderHtmlArtifacts(node);
+      void renderMermaid(node);
+      void highlightCode(node);
+      void renderMath(node);
+    }, 120);
+  }
+  run();
+  return {
+    update(_next: string) {
+      run();
+    },
+    destroy() {
+      clearTimeout(timer);
+    },
+  };
+}

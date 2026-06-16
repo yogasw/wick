@@ -128,6 +128,24 @@ func ThemeFromContext(ctx context.Context) string {
 	return v
 }
 
+// HTMLThemeClass returns the class string that belongs on the root
+// <html> element for the theme resolved from ctx, matching exactly what
+// the server-rendered Layout applies via htmlThemeClasses. A standalone
+// SPA shell (served outside Layout) injects this so it reflects the same
+// theme as the rest of the app. An empty result means "no stored
+// preference": the caller should fall back to the device color-scheme
+// before first paint (see SystemThemeScript).
+func HTMLThemeClass(ctx context.Context) string {
+	return htmlThemeClasses(ThemeByID(ThemeFromContext(ctx)))
+}
+
+// SystemThemeScript is the one-line inline script that applies the device
+// prefers-color-scheme to <html> before first paint. It mirrors the
+// no-preference branch of Layout so a standalone SPA shell behaves the
+// same as a server-rendered page when no theme is stored. The returned
+// string is the script body only (no <script> tags).
+const SystemThemeScript = `(function(){var h=document.documentElement;if(window.matchMedia('(prefers-color-scheme:dark)').matches){h.classList.add('theme-dark','dark')}else{h.classList.add('theme-light')}})()`
+
 // GuestTheme holds the three theme preferences stored in the plain guest cookie.
 // Current is the active theme; Light and Dark remember the last picked
 // theme of each mode so the toggle button can cycle back to them.

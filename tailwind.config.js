@@ -22,6 +22,9 @@ module.exports = {
     // walks every workspace's node_modules and triples scan time.
     './fe/agents/*/src/**/*.{svelte,ts}',
     './fe/agents/*/index.html',
+    './fe/common/*/src/**/*.{svelte,ts}',
+    './fe/manager/src/**/*.{svelte,ts}',
+    './fe/manager/index.html',
   ],
 
   theme: {

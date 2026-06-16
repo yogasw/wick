@@ -36,8 +36,10 @@ import (
 	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
+	agentskills "github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
+	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
 	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
@@ -50,8 +52,8 @@ import (
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	customconn "github.com/yogasw/wick/internal/connectors/custom"
-	"github.com/yogasw/wick/internal/connectors/notifications"
 	customconnector "github.com/yogasw/wick/internal/connectors/customconnector"
+	"github.com/yogasw/wick/internal/connectors/notifications"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
@@ -63,8 +65,8 @@ import (
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
-	sessionconfigpurge "github.com/yogasw/wick/internal/jobs/session-config-purge"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
+	sessionconfigpurge "github.com/yogasw/wick/internal/jobs/session-config-purge"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/mcp"
@@ -73,13 +75,13 @@ import (
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/pkg/pwa"
+	"github.com/yogasw/wick/internal/pkg/spa"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
-	agentskills "github.com/yogasw/wick/internal/agents/skills"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
@@ -104,10 +106,12 @@ func genMCPInternalToken() string {
 }
 
 // wfListerAdapter wraps a workflow service.Service to satisfy admin.WorkflowLister.
-type wfListerAdapter struct{ svc interface {
-	List() ([]string, error)
-	Load(id string) (wf.Workflow, error)
-} }
+type wfListerAdapter struct {
+	svc interface {
+		List() ([]string, error)
+		Load(id string) (wf.Workflow, error)
+	}
+}
 
 func (a wfListerAdapter) List() ([]string, error) { return a.svc.List() }
 func (a wfListerAdapter) LoadInfo(id string) (admin.WorkflowInfo, error) {
@@ -590,6 +594,7 @@ func NewServer() *Server {
 		OnAgentAdded: func(sessionID string) {
 			_ = agentsMgr.RefreshSession(sessionID)
 		},
+		OnSessionMeta: syncSessionMeta,
 		OnLifecycle: func(ev agentpool.LifecycleEvent) {
 			log.Ctx(ev.Ctx).Debug().
 				Str("component", "lifecycle").
@@ -598,7 +603,11 @@ func NewServer() *Server {
 				Str("lifecycle", ev.Lifecycle).
 				Int("pid", ev.PID).
 				Msg("lifecycle: broadcasting to SSE")
-			agentsBcast.PublishLifecycle(ev.Ctx, ev.SessionID, ev.AgentName, ev.Lifecycle, ev.PID)
+			prov := ev.ProviderType
+			if ev.ProviderName != "" && ev.ProviderName != ev.ProviderType {
+				prov = ev.ProviderType + "/" + ev.ProviderName
+			}
+			agentsBcast.PublishLifecycle(ev.Ctx, ev.SessionID, ev.AgentName, ev.Lifecycle, prov, ev.PID)
 			// Broadcast updated pool stats to Providers page global
 			// subscribers. MUST run async: this hook can fire while the
 			// pool already holds p.mu (e.g. onAgentExit → MarkKilled →
@@ -926,7 +935,7 @@ func NewServer() *Server {
 				ready[row.Key] = true
 			}
 		}
-		return agentconfig.ConnectorCatalog(ready)
+		return systemprompt.ConnectorCatalog(ready)
 	}
 
 	// Workflow connector executor needs row credentials resolved
@@ -1333,6 +1342,10 @@ func NewServer() *Server {
 	// ── Router ───────────────────────────────────────────────────
 	r := http.NewServeMux()
 
+	// Global SPA dev-reload SSE endpoint. No-op when WICK_DEV_REPO_ROOT is
+	// unset — all Loader.New() calls auto-register their dist/ dirs.
+	spa.RegisterGlobalHandler(r)
+
 	// Health check endpoint — used by load balancers and uptime monitoring.
 	r.Handle("GET /health", http.HandlerFunc(healthHandler.Check))
 	// /boot-status reports readiness for the boot gate page. The gate
@@ -1454,10 +1467,10 @@ type Server struct {
 	// the agentctl refresh_session handler. nil before agents boot.
 	syncSessionMeta func(sessionID string)
 	channelReg      *agentchannels.Registry
-	db           *gorm.DB
-	gateBin      string // resolved gate binary path; used for hook cleanup on shutdown
-	jobsSvc      *manager.Service
-	wfMgr        *wfsetup.Manager
+	db              *gorm.DB
+	gateBin         string // resolved gate binary path; used for hook cleanup on shutdown
+	jobsSvc         *manager.Service
+	wfMgr           *wfsetup.Manager
 	// bootGate tracks the async boot steps that must finish before the HTTP
 	// surface opens. Until it lifts, bootGateHandler serves a lightweight
 	// "Booting…" page (HTTP 503, auto refreshing) for every non-exempt
