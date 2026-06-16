@@ -31,6 +31,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/skills"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
+	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/login"
@@ -401,7 +402,7 @@ func settingsPage(c *tool.Ctx) {
 		Base:                c.Base(),
 		Rows:                rest,
 		SystemPromptCurrent: current,
-		SystemPromptDefault: agentconfig.DefaultSystemPrompt(),
+		SystemPromptDefault: systemprompt.DefaultSystemPrompt(),
 	}))
 }
 
