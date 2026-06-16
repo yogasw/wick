@@ -16,6 +16,7 @@
     "@wick-fe/common-md": "*",
     "@wick-fe/common-sse-worker": "*",
     "@wick-fe/common-stores": "*",
-    "@wick-fe/common-ui": "*"
+    "@wick-fe/common-ui": "*",
+    "ace-builds": "^1.44.0"
   }
 }

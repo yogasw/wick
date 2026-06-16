@@ -4,9 +4,13 @@ description: Use for ANY work on the Svelte SPAs or shared FE libraries under fe
 allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 paths:
   - "fe/**"
+  - "internal/pkg/spa/**"
   - "internal/tools/agents/dist/**"
   - "internal/tools/agents/view/**"
   - "internal/tools/agents/spa_handler.go"
+  - "internal/tools/agents/spa.go"
+  - "internal/manager/spa.go"
+  - "internal/manager/dist/**"
 ---
 
 # FE Module — wick
@@ -26,19 +30,30 @@ fe/
   agents/       @wick-fe/agents-*  — full Svelte SPAs (have build/dev/check scripts)
     workflow/   Workflow editor
     scm/        Git SCM panel
+    conversation, overview, presets, project-settings, providers, shell, skills, new-session
+  manager/      @wick-fe/manager — Manager SPA (connector builder, job runner, etc.)
+                outDir: internal/manager/dist/manager/
+                Go host: internal/manager/spa.go (NOT internal/tools/)
 ```
 
-The workspace globs are `["agents/*", "common/*"]` in `fe/package.json`. Shared dev
-tools (vitest, svelte, @testing-library/svelte, jsdom, typescript, vite) are declared
-once at the `fe/` root and hoisted — do NOT redeclare them in `common/*` packages.
+The workspace globs are `["agents/*", "common/*", "manager"]` in `fe/package.json`.
+Shared dev tools (vitest, svelte, @testing-library/svelte, jsdom, typescript, vite)
+are declared once at the `fe/` root and hoisted — do NOT redeclare them in
+`common/*` packages.
 
 **Adding a common library:** create `fe/common/<name>/package.json` with
 `"main": "src/index.ts"` and NO `build` script, then `cd fe && npm install`. Pin
 runtime deps in that package; leave dev tools to the root.
 
-**Adding a new SPA:** copy `fe/agents/workflow/vite.config.ts`, change `base` and
-the out dir, add a `dev:<app>` script to `fe/package.json`, and add a templ thin
-shell (see Routing).
+**Adding a new agents SPA:** copy `fe/agents/workflow/vite.config.ts`, change `base`
+and the out dir, add a `dev:<app>` and `build:watch` entry to `fe/scripts/dev.mjs`
+workspace list + `fe/package.json`, then add a templ thin shell (see Routing).
+
+**Adding a brand-new Go tool SPA (outside agents):** one line —
+`var spaLoader = spa.New(spaEmbedded, "internal/<path>")` (see `internal/manager/spa.go`).
+The `spa.Loader` handles embed-vs-live-disk, asset-URL resolution, and auto-reload
+registration. No `init()`, no `spadev` (removed), no per-host reload endpoint.
+See § "Go SPA host (internal/pkg/spa)" below.
 
 ## Effect API — `@wick-fe/common-api`
 
@@ -80,11 +95,16 @@ import { toastOk, toastError } from "@wick-fe/common-stores";
 
 ## Routing (Go side)
 
+Two SPA hosts exist. Pick the right one.
+
+### agents tool (`internal/tools/agents/`)
+
 ```text
 spaPrefix : "/workflow/"                         (internal/tools/agents/spa_handler.go)
 Mount     : /tools/agents/workflow/
-App       : /tools/agents/workflow/<app>/        (workflow, scm, …)
+App       : /tools/agents/workflow/<app>/        (workflow, scm, overview, …)
 outDir    : internal/tools/agents/dist/<app>/
+Go embed  : internal/tools/agents/spa.go  (spa.New, multi-app)
 ```
 
 `spaHandler` reads `dist/<app>/...` via `splitFirstSegment`, so adding a new
@@ -103,6 +123,41 @@ templ MyView(vm MyVM) {
     }
 }
 ```
+
+### manager (`internal/manager/`)
+
+```text
+Mount     : /manager/
+outDir    : internal/manager/dist/manager/
+Go embed  : internal/manager/spa.go  (spa.New, single-app "manager")
+Asset URL : spaAssetURL() in spa.go → spaLoader.AssetURL("manager", ...)
+```
+
+### Go SPA host (`internal/pkg/spa`)
+
+Both hosts share `spa.Loader`. A host is one line plus a thin `spaAssetURL`
+wrapper:
+
+```go
+//go:embed all:dist
+var spaEmbedded embed.FS
+var spaLoader = spa.New(spaEmbedded, "internal/<path>") // repo-rel dir holding dist/
+
+// single-app:  spaLoader.AssetURL("<app>", "<fallbackBase>/assets")
+// multi-app:   spaLoader.AssetURL(app, ...)  // one dist/ root, dist/<app>/ each
+```
+
+`spa.New` auto-detects `WICK_DEV_REPO_ROOT`: production serves the embed
+(asset URL cached per-app); dev swaps to `os.DirFS`, re-reads index.html per
+render, and registers the dist/ dir for auto-reload. **No init(), no spadev
+(removed), no per-host reload endpoint.**
+
+**Auto-reload** (live reload, not HMR): `spa.RegisterGlobalHandler(mux)` in
+`internal/pkg/api/server.go` mounts `GET /_dev/reload` (SSE, fsnotify on all
+dist/ dirs); `spa.DevReloadScript()` injected once in `internal/pkg/ui/layout.templ`
+makes every page subscribe + `location.reload()` on rebuild (skipped while a
+modal is visibly open). Both no-op in production. Do NOT add a `DevReloadScript`
+field to any VM — it lives in `ui.Layout`, not per-page.
 
 ## TDD — three layers
 
@@ -206,17 +261,31 @@ Before writing or editing any API function, UI component, or store:
 ## Dev / build / test
 
 ```bash
-cd fe && npm run dev            # build:watch across all workspaces
+cd fe && npm run dev            # build:watch ALL workspaces in parallel (scripts/dev.mjs)
 cd fe && npm run dev:workflow   # per-app Vite HMR (no templ chrome)
+cd fe && npm run dev:manager    # manager SPA only
 cd fe && npm run dev:scm
 
 cd fe && npm run build          # builds SPAs (libraries have no build script)
 cd fe && npm run test           # vitest across all workspaces (test:unit)
 cd fe && npm run check          # svelte-check + tsc
 
-# Full-stack: run the Go server pointed at this checkout in a second terminal.
+# Full-stack with live-disk hot reload (no Go recompile on FE changes):
 WICK_DEV_REPO_ROOT=$(pwd)/.. go run ./cmd/lab server
+# VS Code: launch "wicklab" (already has WICK_DEV_REPO_ROOT set)
 ```
+
+`npm run dev` uses `fe/scripts/dev.mjs` which spawns all workspaces in parallel.
+`npm --workspaces run build:watch` is BROKEN for watch mode — it runs seri and blocks
+on the first workspace forever. Always use `npm run dev`.
+
+With `WICK_DEV_REPO_ROOT` set, the browser **auto-reloads** on every rebuild via the
+SSE endpoint `/_dev/reload` (Go-side fsnotify on dist/, client injected in `ui.Layout`).
+No `Ctrl+R`. Live reload (full refresh), not HMR — for state-preserving HMR use
+`dev:<app>` (drops templ chrome). See fe/README.md § "Auto-reload".
+
+When adding a new workspace to `dev`, edit `fe/scripts/dev.mjs` and add the workspace
+name to the `workspaces` array.
 
 Note: `agents-scm` currently has no unit-test files, so its `test:unit` exits 1 with
 "No test files found" — that is the existing baseline, not a regression.

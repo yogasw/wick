@@ -4,6 +4,7 @@
   import { createSessionInProject } from "../api/options.js";
   import Composer from "./Composer.svelte";
   import ComposerToolbar from "./ComposerToolbar.svelte";
+  import SessionList from "./SessionList.svelte";
 
   type Props = {
     base: string;
@@ -25,24 +26,6 @@
   });
 
   const chatCount = $derived(sessions.length);
-
-  const filtered = $derived(
-    search.trim() === ""
-      ? sessions
-      : sessions.filter((s) => s.label.toLowerCase().includes(search.trim().toLowerCase()))
-  );
-
-  function formatLastActive(ts: string): string {
-    if (!ts) return "";
-    const d = new Date(ts);
-    if (isNaN(d.getTime())) return ts;
-    const now = Date.now();
-    const diff = Math.floor((now - d.getTime()) / 1000);
-    if (diff < 60) return "just now";
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return `${Math.floor(diff / 86400)}d ago`;
-  }
 
   async function handleSend({ text, files }: { text: string; files: File[] }) {
     try {
@@ -86,6 +69,9 @@
         <p class="text-xs text-black-700 dark:text-black-600 mt-0.5">
           {chatCount} chats · {project.managed ? "managed" : "custom"}
         </p>
+        {#if project.path}
+          <p class="text-[11px] font-mono text-black-600 dark:text-black-700 mt-0.5 truncate">{project.path}</p>
+        {/if}
       </div>
     </div>
 
@@ -130,58 +116,13 @@
     leadingActions={toolbarLeading}
   />
 
-  <!-- Session search + list -->
+  <!-- Session list — reuses SessionList for status badge, kebab/delete, pagination, search -->
   <div class="flex flex-col gap-3 flex-1 min-h-0">
-    <div class="relative shrink-0">
-      <svg
-        viewBox="0 0 16 16"
-        class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-black-600 dark:text-black-700 pointer-events-none"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.5"
-      >
-        <circle cx="6.5" cy="6.5" r="4.5"></circle>
-        <path d="M10.5 10.5l3 3" stroke-linecap="round"></path>
-      </svg>
-      <input
-        type="text"
-        placeholder="Search chats in this project…"
-        value={search}
-        oninput={(e) => { search = (e.target as HTMLInputElement).value; }}
-        class="w-full rounded-xl border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 pl-9 pr-4 py-2.5 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
-      />
-    </div>
-
-    {#if filtered.length === 0}
-      <div class="flex flex-col items-center py-12 text-center">
-        <p class="text-sm text-black-700 dark:text-black-600">
-          {sessions.length === 0 ? "No chats in this project yet." : "No chats match your search."}
-        </p>
-      </div>
-    {:else}
-      <div class="overflow-y-auto flex-1 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 divide-y divide-white-300 dark:divide-navy-600">
-        {#each filtered as sess (sess.id)}
-          <div
-            role="button"
-            tabindex="0"
-            onclick={() => onSelectSession(sess.id)}
-            onkeydown={(e) => e.key === "Enter" && onSelectSession(sess.id)}
-            class="flex items-center justify-between gap-4 px-5 py-3.5 cursor-pointer hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
-          >
-            <div class="flex-1 min-w-0">
-              <p class="truncate text-sm font-medium text-black-900 dark:text-white-100">
-                {sess.label || "New session"}
-              </p>
-              <p class="text-xs text-black-600 dark:text-black-700 mt-0.5">
-                {formatLastActive(sess.last_active)}
-              </p>
-            </div>
-            <svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0 text-black-600 dark:text-black-700" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path>
-            </svg>
-          </div>
-        {/each}
-      </div>
-    {/if}
+    <SessionList
+      {sessions}
+      {search}
+      onSearch={(s) => { search = s; }}
+      onSelect={onSelectSession}
+    />
   </div>
 </div>

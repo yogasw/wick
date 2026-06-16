@@ -54,14 +54,15 @@ describe("ConversationHeader", () => {
     expect(container.querySelector("[data-lifecycle-badge]")).toBeNull();
   });
 
-  test("lifecycle:working shows badge with working styling", () => {
+  test("lifecycle:working shows badge with working styling and 'working' label", () => {
     const { container } = render(ConversationHeader, {
       props: { ...baseProps, lifecycle: lc("working", { substate: "bash" }) },
     });
     const badge = container.querySelector("[data-lifecycle-badge]");
     expect(badge).not.toBeNull();
     expect(badge!.className).toContain("green");
-    expect(container.innerHTML).toContain("bash");
+    /* label reflects the lifecycle state, not the substate (which can leak the provider name) */
+    expect(badge!.textContent).toContain("working");
   });
 
   test("lifecycle:spawning shows badge with amber styling", () => {
@@ -84,11 +85,13 @@ describe("ConversationHeader", () => {
     expect(container.innerHTML).toContain("idle");
   });
 
-  test("lifecycle:killed does not show badge (treated as neutral)", () => {
+  test("lifecycle:killed shows a 'killed' badge", () => {
     const { container } = render(ConversationHeader, {
       props: { ...baseProps, lifecycle: lc("killed") },
     });
-    expect(container.querySelector("[data-lifecycle-badge]")).toBeNull();
+    const badge = container.querySelector("[data-lifecycle-badge]");
+    expect(badge).not.toBeNull();
+    expect(badge!.textContent).toContain("killed");
   });
 
   test("lifecycle:working without substate shows 'working' label", () => {
@@ -153,6 +156,24 @@ describe("ConversationHeader", () => {
           idleTimeoutMs: 120_000,
         },
       });
+      expect(container.innerHTML).not.toContain("kill in");
+    });
+
+    test("idle countdown expired shows 'killed' instead of 'idle · 0s'", () => {
+      vi.useFakeTimers();
+      const now = 5_000_000;
+      vi.setSystemTime(now);
+      /* at far in the past → remaining <= 0 → spawn auto-killed */
+      const at = now - 200_000;
+      const { container } = render(ConversationHeader, {
+        props: {
+          ...baseProps,
+          lifecycle: lc("idle", { at }),
+          idleTimeoutMs: 120_000,
+        },
+      });
+      const badge = container.querySelector("[data-lifecycle-badge]");
+      expect(badge!.textContent).toContain("killed");
       expect(container.innerHTML).not.toContain("kill in");
     });
   });

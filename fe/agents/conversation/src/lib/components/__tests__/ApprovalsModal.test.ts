@@ -85,4 +85,34 @@ describe("ApprovalsModal", () => {
     expect(onDecide).toHaveBeenCalledWith("block" satisfies ApprovalDecision);
     vi.useRealTimers();
   });
+
+  test("renders inline error region when error prop is set", () => {
+    const request = { id: "a1", agent_name: "main", tool: "bash", work_dir: "/w", cmd: "rm -rf /", match_key: "k" };
+    render(ApprovalsModal, { props: { request, onDecide: vi.fn(), error: "Decision expired (410) — request a new approval." } });
+    expect(screen.getByText(/decision expired/i)).toBeDefined();
+  });
+
+  test("no error region when error prop is empty", () => {
+    const request = { id: "a1", agent_name: "main", tool: "bash", work_dir: "/w", cmd: "x", match_key: "k" };
+    const { container } = render(ApprovalsModal, { props: { request, onDecide: vi.fn() } });
+    expect(container.querySelector("[data-approval-error]")).toBeNull();
+  });
+
+  test("Escape key dismisses (block + close)", async () => {
+    const request = { id: "a1", agent_name: "m", tool: "bash", work_dir: "/", cmd: "x", match_key: "k" };
+    const onDecide = vi.fn();
+    const onClose = vi.fn();
+    render(ApprovalsModal, { props: { request, onDecide, onClose } });
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(onDecide).toHaveBeenCalledWith("block");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  test("backdrop click dismisses", async () => {
+    const request = { id: "a1", agent_name: "m", tool: "bash", work_dir: "/", cmd: "x", match_key: "k" };
+    const onClose = vi.fn();
+    const { container } = render(ApprovalsModal, { props: { request, onDecide: vi.fn(), onClose } });
+    await fireEvent.click(container.querySelector("[data-approval-backdrop]")!);
+    expect(onClose).toHaveBeenCalled();
+  });
 });

@@ -25,7 +25,7 @@
   }: Props = $props();
 
   const base =
-    "w-full appearance-none rounded border bg-white-100 dark:bg-navy-800 text-black-900 dark:text-white-100 outline-none transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus:border-green-500 pr-7";
+    "w-full appearance-none rounded-lg border bg-white-100 dark:bg-navy-800 text-black-900 dark:text-white-100 outline-none transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 pr-7";
   const sizes = {
     sm: "px-2 py-1 text-xs border-white-400 dark:border-navy-600",
     md: "px-3 py-2 text-sm border-white-400 dark:border-navy-600",

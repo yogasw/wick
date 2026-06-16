@@ -14,19 +14,34 @@
     pid: string;
     lc: string;
     lcCls: string;
+    dotCls: string;
     isQueued: boolean;
   };
 
   function lifecycleCls(lc: string): string {
     const map: Record<string, string> = {
-      working: "bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300",
-      idle: "bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300",
-      spawning: "bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300",
-      queued: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600",
-      killed: "bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300",
-      dead: "bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300",
+      working:  "bg-pos-100 text-pos-400",
+      idle:     "bg-prog-100 text-prog-400",
+      spawning: "bg-cau-100 text-cau-400",
+      queued:   "bg-cau-100 text-cau-400",
+      killed:   "bg-neg-100 text-neg-400",
+      dead:     "bg-neg-100 text-neg-400",
+      error:    "bg-neg-100 text-neg-400",
     };
-    return map[lc] ?? "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600";
+    return map[lc] ?? "bg-white-300 dark:bg-navy-600 text-black-700";
+  }
+
+  function lifecycleDotCls(lc: string): string {
+    const map: Record<string, string> = {
+      working:  "bg-pos-400",
+      idle:     "bg-prog-400",
+      spawning: "bg-cau-400",
+      queued:   "bg-orange-500 animate-pulse",
+      killed:   "bg-neg-400",
+      dead:     "bg-neg-400",
+      error:    "bg-neg-400",
+    };
+    return map[lc] ?? "bg-white-400 dark:bg-navy-500";
   }
 
   function buildRow(p: ProcessInfo): RowData {
@@ -37,6 +52,7 @@
       pid: p.pid > 0 ? String(p.pid) : "—",
       lc,
       lcCls: lifecycleCls(lc),
+      dotCls: lifecycleDotCls(lc),
       isQueued: p.lifecycle === "queued",
     };
   }
@@ -53,6 +69,7 @@
         <div class="flex items-center justify-between gap-2">
           <div class="flex items-center gap-2 min-w-0">
             <span class="text-xs font-semibold text-black-900 dark:text-white-100 truncate">{row.proc.agent_name || "—"}</span>
+            <span class={"h-1.5 w-1.5 rounded-full shrink-0 " + row.dotCls} aria-hidden="true"></span>
             <span class={"rounded px-1.5 py-0.5 text-[10px] font-medium " + row.lcCls}>{row.lc}</span>
           </div>
           {#if row.isQueued}

@@ -4,6 +4,7 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastError, toastOk } from "@wick-fe/common-stores";
+  import { ConfirmDialog } from "@wick-fe/common-ui";
 
   import { createThreadStore } from "../stores/thread.js";
   import type { ThreadMeta, LifecycleState } from "../stores/thread.js";
@@ -13,13 +14,15 @@
   import { currentApproval, showApproval, hideApproval } from "../stores/approvals.js";
   import { notify } from "../notify.js";
   import { push } from "../router.js";
+  import { readScmWidth, writeScmWidth, clampScmWidth } from "../scmWidth.js";
+  import { isValidFileName } from "../fileName.js";
 
   import { getConversation, getSessionMeta, deleteSession, getTurnTrace } from "../api/sessions.js";
   import { getProviderOptions, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
-  import { answerAsk } from "../api/asks.js";
+  import { getAsks, answerAsk } from "../api/asks.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
   import { sendMessage } from "../api/messages.js";
-  import { listFiles, readFile, saveFile, createFile, downloadURL } from "../api/files.js";
+  import { listFiles, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
   import { getProcesses, killProcess, dequeueProcess } from "../api/processes.js";
   import {
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
@@ -115,6 +118,16 @@
   let title = $state("");
   let agentLabel = $state("");
 
+  /* Reflect the live session title in the browser tab; restore on leave. */
+  $effect(() => {
+    if (typeof document === "undefined") return;
+    const shown = (threadMeta.title || title).trim();
+    if (!shown) return;
+    const prev = document.title;
+    document.title = `${shown} · Agents`;
+    return () => { document.title = prev; };
+  });
+
   /* ── SSE ───────────────────────────────────────────────────────── */
   let closeSSE: (() => void) | null = null;
   let sseStatus = $state<SSEStatus>("connecting");
@@ -129,6 +142,8 @@
   /* ── context panel state ──────────────────────────────────────── */
   let cwdVal = $state("");
   let filesVal = $state<ContextFileEntry[]>([]);
+  let filesLoading = $state(false);
+  let filesLoadError = $state("");
   let fileSearch = $state("");
   let openDirs = $state<Record<string, boolean>>({});
   let viewerFile = $state<FileContent | null>(null);
@@ -136,6 +151,9 @@
 
   /* ── process panel state ──────────────────────────────────────── */
   let processes = $state<ProcessInfo[]>([]);
+  let confirmKill = $state<{ sid: string; queued: boolean } | null>(null);
+  let processPollId: ReturnType<typeof setInterval> | null = null;
+  const PROCESS_POLL_MS = 5000;
 
   /* ── workspace panel state ────────────────────────────────────── */
   let wsInstances = $state<WsInstance[]>([]);
@@ -147,6 +165,9 @@
   let projectOptions = $state<ProjectOption[]>([]);
   let activeProvider = $state<string | null>(null);
   let activeProjectId = $state<string | null>(null);
+
+  /* ── approval error state ─────────────────────────────────────── */
+  let approvalError = $state("");
 
   /* ── idle timeout ─────────────────────────────────────────────── */
   const idleTimeoutMs = parseInt(document.getElementById("app")?.dataset.idleTimeoutMs ?? "", 10) || 120_000;
@@ -160,6 +181,32 @@
   let scmHostEl: HTMLElement | undefined = $state(undefined);
   let scmHostMobileEl: HTMLElement | undefined = $state(undefined);
   let scmMounted = false;
+
+  /* ── SCM sidebar resizable width (desktop only, persisted) ────── */
+  let scmWidth = $state(readScmWidth());
+  let scmSideEl: HTMLElement | undefined = $state(undefined);
+
+  function startScmResize(e: PointerEvent) {
+    e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture?.(e.pointerId);
+    document.body.style.userSelect = "none";
+
+    function onMove(ev: PointerEvent) {
+      if (!scmSideEl) return;
+      const right = scmSideEl.getBoundingClientRect().right;
+      scmWidth = clampScmWidth(right - ev.clientX);
+    }
+    function onUp(ev: PointerEvent) {
+      handle.releasePointerCapture?.(ev.pointerId);
+      document.body.style.userSelect = "";
+      scmWidth = writeScmWidth(scmWidth);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    }
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
 
   /* ── header tab view ──────────────────────────────────────────── */
   let activeView = $state<ActiveView>("conversation");
@@ -200,9 +247,16 @@
 
   /* ── data loaders ─────────────────────────────────────────────── */
   function loadFiles() {
+    filesLoading = true;
+    filesLoadError = "";
     run(listFiles(base, sessionId).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => { cwdVal = res.cwd; filesVal = res.files; })
-      .catch((e: unknown) => toastError(`Files: ${e instanceof Error ? e.message : String(e)}`));
+      .then((res) => { cwdVal = res.cwd; filesVal = res.files; filesLoading = false; })
+      .catch((e: unknown) => {
+        filesLoading = false;
+        const msg = e instanceof Error ? e.message : String(e);
+        filesLoadError = msg;
+        toastError(`Files: ${msg}`);
+      });
   }
 
   function loadProcesses() {
@@ -222,6 +276,17 @@
     run(listWorkspace(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { wsInstances = res.instances; wsBases = res.bases; })
       .catch((e: unknown) => toastError(`Workspace: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
+  /* Rehydrate a question that arrived while the tab was closed; never
+   * clobber an ask already shown by a live SSE event. */
+  function loadPendingAsk() {
+    run(getAsks(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        const pending = res.pending[0];
+        if (pending && !get(currentAsk)) showAsk(pending);
+      })
+      .catch(() => { /* non-fatal — live SSE still delivers new asks */ });
   }
 
   function loadProviderOptions() {
@@ -286,6 +351,9 @@
       if (e.ctrlKey && e.key === "ArrowDown") {
         e.preventDefault();
         scrollToBottom();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B")) {
+        e.preventDefault();
+        toggleRail("context");
       }
     }
     window.addEventListener("keydown", onKeydown);
@@ -376,14 +444,19 @@
   });
 
   /* ── file viewer ──────────────────────────────────────────────── */
-  function openFile(f: ContextFileEntry) {
-    if (f.isDir) return;
-    run(readFile(base, sessionId, f.path).pipe(Effect.provide(WickClientLayer)))
+  function openFileByPath(path: string) {
+    if (!path) return;
+    run(readFile(base, sessionId, path).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
         viewerFile = res;
         viewerDirty = false;
       })
       .catch((e: unknown) => toastError(`Read: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
+  function openFile(f: ContextFileEntry) {
+    if (f.isDir) return;
+    openFileByPath(f.path);
   }
 
   function handleViewerSave(content: string) {
@@ -395,6 +468,25 @@
         viewerDirty = false;
       })
       .catch((e: unknown) => toastError(`Save: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
+  /* Prompt for a name, validate it, create the entry, and expand the
+   * parent dir on success (mirrors legacy context.js createEntry). */
+  function createEntry(isDir: boolean, parentDir?: string) {
+    const raw = prompt(isDir ? "Directory name:" : "File name:");
+    if (raw === null) return;
+    const name = raw.trim();
+    if (!isValidFileName(name)) {
+      toastError("Invalid name", "No slashes or '..'. Open the folder first to nest.");
+      return;
+    }
+    const path = parentDir ? `${parentDir}/${name}` : name;
+    run(createFile(base, sessionId, path, isDir).pipe(Effect.provide(WickClientLayer)))
+      .then(() => {
+        if (parentDir) openDirs = { ...openDirs, [parentDir]: true };
+        loadFiles();
+      })
+      .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
   }
 
   /* ── SSE fan-out ──────────────────────────────────────────────── */
@@ -418,6 +510,7 @@
       } else if (ev.type === "approval_request") {
         try {
           const req = JSON.parse(ev.data ?? "{}");
+          approvalError = "";
           showApproval(req);
           notify("Approval needed", req.cmd ?? "");
         } catch (_) { /* skip */ }
@@ -427,8 +520,8 @@
         loadProcesses();
       } else if (ev.type === "git_status") {
         try {
-          const d = JSON.parse(ev.data ?? "{}") as { changed?: number };
-          if (typeof d.changed === "number") scmChangeCount = d.changed;
+          const d = JSON.parse(ev.data ?? "{}") as { total_changed?: number };
+          if (typeof d.total_changed === "number") scmChangeCount = d.total_changed;
         } catch (_) { /* skip */ }
       }
     });
@@ -436,7 +529,17 @@
 
   /* ── header actions ───────────────────────────────────────────── */
   function handleKill() {
-    run(killProcess(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+    confirmKill = { sid: sessionId, queued: false };
+  }
+
+  function doKill() {
+    const target = confirmKill;
+    confirmKill = null;
+    if (!target) return;
+    const action = target.queued
+      ? dequeueProcess(base, target.sid)
+      : killProcess(base, target.sid);
+    run(action.pipe(Effect.provide(WickClientLayer)))
       .then(loadProcesses)
       .catch((e: unknown) => toastError(`Kill: ${e instanceof Error ? e.message : String(e)}`));
   }
@@ -463,6 +566,7 @@
   async function handleApprovalDecide(decision: ApprovalDecision) {
     const approval = get(currentApproval);
     if (!approval) return;
+    approvalError = "";
     hideApproval();
     try {
       await run(
@@ -473,7 +577,9 @@
         }).pipe(Effect.provide(WickClientLayer))
       );
     } catch (e: unknown) {
-      toastError(`Approval: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      approvalError = msg;
+      showApproval(approval);
     }
   }
 
@@ -521,9 +627,21 @@
     loadWorkspace();
     loadProviderOptions();
     loadProjectOptions();
+    loadPendingAsk();
+
+    if (typeof setInterval !== "undefined") {
+      processPollId = setInterval(() => {
+        if (typeof document !== "undefined" && document.hidden) return;
+        loadProcesses();
+      }, PROCESS_POLL_MS);
+    }
   });
 
   onDestroy(() => {
+    if (processPollId !== null) {
+      clearInterval(processPollId);
+      processPollId = null;
+    }
     closeSSE?.();
     unsubTurns();
     unsubLive();
@@ -556,6 +674,16 @@
   ];
 
   const sideOpen = $derived(railTab !== null);
+
+  const contextCount = $derived(filesVal.filter((f) => !f.isDir).length);
+  const processCount = $derived(processes.length);
+  const workspaceCount = $derived(wsInstances.length);
+  function railCount(id: RailTab): number {
+    if (id === "context") return contextCount;
+    if (id === "process") return processCount;
+    if (id === "workspace") return workspaceCount;
+    return 0;
+  }
 </script>
 
 <!-- Full-height flex row: main area + vertical rail -->
@@ -585,7 +713,7 @@
         data-chat-panel
       >
         <div class="max-w-4xl mx-auto w-full px-6 pt-14 pb-6 md:pt-6">
-          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} />
+          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} />
         </div>
       </div>
 
@@ -725,9 +853,19 @@
   <!-- Side panel: slides in when a rail tab is active -->
   {#if sideOpen}
     <div
-      class={`hidden lg:flex flex-col ${railTab === "source" ? "w-96" : "w-80"} shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden`}
+      bind:this={scmSideEl}
+      class={`relative hidden lg:flex flex-col ${railTab === "source" ? "" : "w-80"} shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden`}
+      style={railTab === "source" ? `width:${scmWidth}px` : ""}
     >
       {#if railTab === "source"}
+        <button
+          type="button"
+          aria-label="Resize source panel"
+          title="Drag to resize"
+          data-scm-resize
+          onpointerdown={startScmResize}
+          class="absolute left-0 top-0 z-10 h-full w-1.5 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-green-500/40 focus-visible:bg-green-500/40 transition-colors"
+        ></button>
         <div class="flex-1 overflow-hidden dark:bg-navy-700" data-scm-host bind:this={scmHostEl}></div>
       {:else if railTab === "context"}
         <ContextPanel
@@ -735,40 +873,27 @@
           files={filesVal}
           search={fileSearch}
           {openDirs}
+          loading={filesLoading}
+          loadError={filesLoadError}
           onSearch={(s) => { fileSearch = s; }}
           onToggleDir={(p) => { openDirs = { ...openDirs, [p]: !openDirs[p] }; }}
           onOpen={openFile}
           onRefresh={loadFiles}
-          onNewFile={() => {
-            const name = prompt("File name:");
-            if (name) {
-              run(createFile(base, sessionId, name, false).pipe(Effect.provide(WickClientLayer)))
-                .then(loadFiles)
-                .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
-            }
+          onNewFile={() => createEntry(false)}
+          onNewDir={() => createEntry(true)}
+          onDownload={(p) => { window.open(downloadURL(base, sessionId, p), "_blank"); }}
+          onDelete={(p) => {
+            run(deleteFile(base, sessionId, p).pipe(Effect.provide(WickClientLayer)))
+              .then(loadFiles)
+              .catch((e: unknown) => toastError(`Delete: ${e instanceof Error ? e.message : String(e)}`));
           }}
-          onNewDir={() => {
-            const name = prompt("Directory name:");
-            if (name) {
-              run(createFile(base, sessionId, name, true).pipe(Effect.provide(WickClientLayer)))
-                .then(loadFiles)
-                .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
-            }
-          }}
+          onNewHere={(dir) => createEntry(false, dir)}
         />
       {:else if railTab === "process"}
         <ProcessPanel
           {processes}
-          onKill={(sid) => {
-            run(killProcess(base, sid).pipe(Effect.provide(WickClientLayer)))
-              .then(loadProcesses)
-              .catch((e: unknown) => toastError(`Kill: ${e instanceof Error ? e.message : String(e)}`));
-          }}
-          onDequeue={(sid) => {
-            run(dequeueProcess(base, sid).pipe(Effect.provide(WickClientLayer)))
-              .then(loadProcesses)
-              .catch((e: unknown) => toastError(`Dequeue: ${e instanceof Error ? e.message : String(e)}`));
-          }}
+          onKill={(sid) => { confirmKill = { sid, queued: false }; }}
+          onDequeue={(sid) => { confirmKill = { sid, queued: true }; }}
         />
       {:else if railTab === "workspace"}
         <WorkspacePanel
@@ -846,40 +971,27 @@
               files={filesVal}
               search={fileSearch}
               {openDirs}
+              loading={filesLoading}
+              loadError={filesLoadError}
               onSearch={(s) => { fileSearch = s; }}
               onToggleDir={(p) => { openDirs = { ...openDirs, [p]: !openDirs[p] }; }}
               onOpen={openFile}
               onRefresh={loadFiles}
-              onNewFile={() => {
-                const name = prompt("File name:");
-                if (name) {
-                  run(createFile(base, sessionId, name, false).pipe(Effect.provide(WickClientLayer)))
-                    .then(loadFiles)
-                    .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
-                }
+              onNewFile={() => createEntry(false)}
+              onNewDir={() => createEntry(true)}
+              onDownload={(p) => { window.open(downloadURL(base, sessionId, p), "_blank"); }}
+              onDelete={(p) => {
+                run(deleteFile(base, sessionId, p).pipe(Effect.provide(WickClientLayer)))
+                  .then(loadFiles)
+                  .catch((e: unknown) => toastError(`Delete: ${e instanceof Error ? e.message : String(e)}`));
               }}
-              onNewDir={() => {
-                const name = prompt("Directory name:");
-                if (name) {
-                  run(createFile(base, sessionId, name, true).pipe(Effect.provide(WickClientLayer)))
-                    .then(loadFiles)
-                    .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
-                }
-              }}
+              onNewHere={(dir) => createEntry(false, dir)}
             />
           {:else if railTab === "process"}
             <ProcessPanel
               {processes}
-              onKill={(sid) => {
-                run(killProcess(base, sid).pipe(Effect.provide(WickClientLayer)))
-                  .then(loadProcesses)
-                  .catch((e: unknown) => toastError(`Kill: ${e instanceof Error ? e.message : String(e)}`));
-              }}
-              onDequeue={(sid) => {
-                run(dequeueProcess(base, sid).pipe(Effect.provide(WickClientLayer)))
-                  .then(loadProcesses)
-                  .catch((e: unknown) => toastError(`Dequeue: ${e instanceof Error ? e.message : String(e)}`));
-              }}
+              onKill={(sid) => { confirmKill = { sid, queued: false }; }}
+              onDequeue={(sid) => { confirmKill = { sid, queued: true }; }}
             />
           {:else if railTab === "workspace"}
             <WorkspacePanel
@@ -958,6 +1070,21 @@
               class="absolute -top-1 -right-1 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-green-500 px-0.5 text-[9px] font-semibold text-white-100"
             >{scmChangeCount > 99 ? "99+" : scmChangeCount}</span>
           </span>
+        {:else if railCount(tab.id) > 0}
+          <span class="relative">
+            <svg
+              viewBox="0 0 16 16"
+              class="h-4 w-4 text-green-500"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+            >
+              {@html tab.icon}
+            </svg>
+            <span
+              class="absolute -top-1 -right-1 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-green-500 px-0.5 text-[9px] font-semibold text-white-100"
+            >{railCount(tab.id) > 99 ? "99+" : railCount(tab.id)}</span>
+          </span>
         {:else}
           <svg
             viewBox="0 0 16 16"
@@ -986,7 +1113,18 @@
 <ApprovalsModal
   request={$currentApproval}
   onDecide={handleApprovalDecide}
-  onClose={() => hideApproval()}
+  onClose={() => { approvalError = ""; hideApproval(); }}
+  error={approvalError}
+/>
+
+<ConfirmDialog
+  open={confirmKill !== null}
+  title={confirmKill?.queued ? "Cancel queued agent?" : "Stop this agent?"}
+  body={confirmKill?.queued ? "The queued spawn will be dropped." : "The running agent process will be terminated."}
+  confirmLabel={confirmKill?.queued ? "Cancel spawn" : "Stop agent"}
+  destructive={true}
+  onConfirm={doKill}
+  onCancel={() => { confirmKill = null; }}
 />
 
 {#if viewerFile !== null}

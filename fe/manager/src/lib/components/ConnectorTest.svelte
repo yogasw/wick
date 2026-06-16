@@ -137,7 +137,7 @@
   <div class="space-y-6">
     <div class="flex items-start justify-between gap-4">
       <div>
-        <h1 class="text-lg font-semibold text-black-900 dark:text-white-100">Test runner</h1>
+        <h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Test runner</h1>
         <p class="mt-1 text-sm text-black-800 dark:text-black-600">Pick an operation, fill the input, and run it against this row's credentials. Calls are recorded as <code class="font-mono text-xs">source=test</code> in the run log.</p>
       </div>
       <Button variant="secondary" size="md" onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(connectorId)}/history`)}>View history</Button>

@@ -19,6 +19,7 @@ function makeData(over: Partial<ConnectorListType> = {}): ConnectorListType {
     fixed: false,
     op_count: 3,
     custom: false,
+    custom_source: "",
     rows: [
       { id: "row-a", label: "Prod", disabled: false, status: "ready", rate_limit_rpm: 0, tags: ["team:eng"] },
       { id: "row-b", label: "Staging", disabled: true, status: "ready", rate_limit_rpm: 0, tags: [] },
@@ -50,7 +51,7 @@ describe("ConnectorList", () => {
   it("navigates to the detail route on row click", async () => {
     render(ConnectorList, { connectorKey: "slack" });
     await screen.findByText("Prod");
-    await fireEvent.click(screen.getByText("Prod"));
+    await fireEvent.click(screen.getByLabelText("Open Prod"));
     expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-a");
   });
 
@@ -107,5 +108,39 @@ describe("ConnectorList", () => {
     await waitFor(() => expect(stores.toastError).toHaveBeenCalledWith("Refresh failed", "refresh boom"));
     expect(screen.queryByText("refresh boom")).toBeNull();
     expect(screen.getByText("Prod")).toBeTruthy();
+  });
+
+  it("renders the H1 at the legacy 1.375rem size", async () => {
+    render(ConnectorList, { connectorKey: "slack" });
+    const h1 = await screen.findByRole("heading", { level: 1, name: "Slack" });
+    expect(h1.className).toContain("text-[1.375rem]");
+  });
+
+  it("renders the Custom badge for custom connectors", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true }));
+    render(ConnectorList, { connectorKey: "slack" });
+    const badge = await screen.findByText("Custom");
+    expect(badge.className).toContain("text-green-500");
+  });
+
+  it("shows an 'Everyone' dashed chip for rows without tags", async () => {
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Staging");
+    const chip = screen.getByText("Everyone");
+    expect(chip.className).toContain("border-dashed");
+  });
+
+  it("navigates to a row's run history via the per-row History action", async () => {
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    await fireEvent.click(screen.getAllByRole("button", { name: "History" })[0]);
+    expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-a/history");
+  });
+
+  it("opens detail when the row body (not just the label) is clicked", async () => {
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Prod");
+    await fireEvent.click(screen.getByLabelText("Open Prod"));
+    expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-a");
   });
 });

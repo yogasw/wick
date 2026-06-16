@@ -190,6 +190,14 @@
   const isLastStep = $derived(step >= totalSteps - 1);
   const progressLabel = $derived(totalSteps > 1 ? `${step + 1} / ${totalSteps}` : "");
 
+  /* Auto-focus the text/secret/number input when the step changes. */
+  let stepInputEl: HTMLInputElement | undefined = $state();
+
+  $effect(() => {
+    void step;
+    if (stepInputEl) stepInputEl.focus();
+  });
+
   /* CSS constants (mirroring askuser.js). */
   const FIELD_INPUT_CLASS =
     "w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none";
@@ -394,7 +402,8 @@
                   : "text"}
               autocomplete={field.type === "secret" ? "new-password" : undefined}
               placeholder={field.placeholder ?? ""}
-              class={FIELD_INPUT_CLASS}
+              class={`${FIELD_INPUT_CLASS} ${stepError ? "border-neg-400 dark:border-neg-400 focus:border-neg-400" : ""}`}
+              bind:this={stepInputEl}
               bind:value={inputVal}
               oninput={() => (stepError = "")}
               onkeydown={(e) => {

@@ -14,6 +14,7 @@
   let data = $state<ToolDetail | null>(null);
   let loading = $state(true);
   let error = $state("");
+  let missingRequired = $derived((data?.fields ?? []).filter((f) => f.required && !f.has_value).length);
 
   async function load(silent = false): Promise<void> {
     if (!silent) loading = true;
@@ -52,6 +53,17 @@
   <div class="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">{error}</div>
 {:else if data}
   <div class="space-y-6">
+    {#if missingRequired > 0}
+      <div class="rounded-lg border border-cau-300 bg-cau-100 px-4 py-3 text-cau-400" role="alert">
+        <div class="flex items-center gap-3 text-sm">
+          <span aria-hidden="true" class="text-base leading-5">⚠️</span>
+          <div class="flex-1 text-black-900 dark:text-black-800">
+            <span class="font-medium">Setup required —</span>
+            <span>{data.name} is missing {missingRequired} required {missingRequired === 1 ? "value" : "values"}.</span>
+          </div>
+        </div>
+      </div>
+    {/if}
     <div class="flex items-center gap-3">
       <div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">{data.icon}</div>
       <div>

@@ -167,4 +167,17 @@ describe("ConnectorsIndex", () => {
     await screen.findByText("Slack");
     expect(screen.getByText(/LLM-callable connectors that wrap external APIs/)).toBeTruthy();
   });
+
+  it("renders the '/' keyboard hint next to search", async () => {
+    render(ConnectorsIndex);
+    await screen.findByText("Slack");
+    expect(screen.getByText("/")).toBeTruthy();
+  });
+
+  it("focuses the search box when '/' is pressed", async () => {
+    render(ConnectorsIndex);
+    await screen.findByText("Slack");
+    await fireEvent.keyDown(window, { key: "/" });
+    expect(document.activeElement).toBe(screen.getByLabelText("Search connectors"));
+  });
 });

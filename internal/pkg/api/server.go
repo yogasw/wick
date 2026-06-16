@@ -73,6 +73,7 @@ import (
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/pkg/pwa"
+	"github.com/yogasw/wick/internal/pkg/spa"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/sso"
@@ -1336,6 +1337,10 @@ func NewServer() *Server {
 
 	// ── Router ───────────────────────────────────────────────────
 	r := http.NewServeMux()
+
+	// Global SPA dev-reload SSE endpoint. No-op when WICK_DEV_REPO_ROOT is
+	// unset — all Loader.New() calls auto-register their dist/ dirs.
+	spa.RegisterGlobalHandler(r)
 
 	// Health check endpoint — used by load balancers and uptime monitoring.
 	r.Handle("GET /health", http.HandlerFunc(healthHandler.Check))

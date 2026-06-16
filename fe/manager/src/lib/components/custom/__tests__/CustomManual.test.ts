@@ -59,4 +59,17 @@ describe("CustomManual stepper", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
     expect(router.push).not.toHaveBeenCalled();
   });
+
+  it("Access & behavior is absent on the Configs step and present on the Operations step", async () => {
+    render(CustomManual);
+    await screen.findByText("Build a connector by hand");
+    await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
+    await screen.findByRole("button", { name: "+ Add field" });
+    /* On the Configs step — Access section heading must NOT be rendered */
+    expect(screen.queryByRole("heading", { name: "Access & behavior" })).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "Step 3 — Operations →" }));
+    await screen.findByRole("button", { name: "+ Add operation" });
+    /* On the Operations step — Access section heading MUST be visible */
+    expect(screen.getByRole("heading", { name: "Access & behavior" })).toBeTruthy();
+  });
 });

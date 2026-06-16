@@ -264,4 +264,31 @@ describe("WsInstanceCard", () => {
     expect(onDelete).toHaveBeenCalledOnce();
     expect(onDelete).toHaveBeenCalledWith("cid-1");
   });
+
+  test("shows inline save error when onSave throws", async () => {
+    const onSave = vi.fn(() => { throw new Error("network error"); });
+    render(WsInstanceCard, { props: makeProps({ onSave, open: true }) });
+    const urlInput = screen.getByDisplayValue("https://example.com") as HTMLInputElement;
+    await fireEvent.input(urlInput, { target: { value: "https://changed.com" } });
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await vi.waitFor(() => expect(screen.getByText(/network error/i)).toBeDefined());
+  });
+
+  test("inline error clears when field is edited after a save error", async () => {
+    const onSave = vi.fn(() => { throw new Error("oops"); });
+    render(WsInstanceCard, { props: makeProps({ onSave, open: true }) });
+    const urlInput = screen.getByDisplayValue("https://example.com") as HTMLInputElement;
+    await fireEvent.input(urlInput, { target: { value: "https://changed.com" } });
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await vi.waitFor(() => expect(screen.queryByText(/oops/i)).not.toBeNull());
+    await fireEvent.input(urlInput, { target: { value: "https://other.com" } });
+    expect(screen.queryByText(/oops/i)).toBeNull();
+  });
+
+  test("Save button disabled when no fields dirty shows nothing-to-save hint", () => {
+    render(WsInstanceCard, { props: makeProps({ open: true }) });
+    const saveBtn = screen.getByRole("button", { name: /^save$/i }) as HTMLButtonElement;
+    expect(saveBtn.disabled).toBe(true);
+    expect(screen.queryByText(/no changes/i)).toBeDefined();
+  });
 });

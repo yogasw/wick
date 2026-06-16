@@ -167,6 +167,7 @@ through without a Go recompile.
 
 ```bash
 # Terminal 1: rebuild every workspace's bundle on save (~1 s incremental)
+# Uses scripts/dev.mjs to spawn all workspaces in parallel.
 cd fe
 npm run dev
 
@@ -180,9 +181,10 @@ The VS Code launch config `wicklab` already sets `WICK_DEV_REPO_ROOT`
 via `env:` — F5 there to skip the manual env wiring.
 
 Edit `.svelte` / `.ts` → Vite rewrites `internal/tools/<tool>/dist/<app>/`
-→ wick picks the new bundle on the next render. Browser still needs a
-manual reload (`Ctrl+R`); for auto-reload run the optional Vite dev
-server below.
+→ wick picks the new bundle on the next render. **The browser reloads
+automatically** — wick watches `dist/` (Go fsnotify) and `ui.Layout` injects
+an SSE client that calls `location.reload()` on each rebuild (skipped when a
+modal is open). No `Ctrl+R`. See _Auto-reload_ below.
 
 ### Per-app Vite dev server (HMR, no templ chrome)
 
@@ -208,27 +210,67 @@ For a new app, add a script in `fe/package.json`:
 
 ### How the live-disk swap works
 
-`internal/pkg/spadev/spadev.go` exposes `LiveDiskFS(toolName)`. Every
-tool's `spa.go` calls it from `init()`:
+All SPA hosts share one helper: **`internal/pkg/spa`**. Each host creates a
+`spa.Loader` with its embed FS and repo-relative dir. The loader handles
+everything — FS selection (embed vs disk), per-app asset-URL resolution, and
+auto-registration for dev-reload. A host is just one line:
 
 ```go
+// internal/manager/spa.go
 //go:embed all:dist
 var spaEmbedded embed.FS
-var SPAFS fs.FS = spaEmbedded
+var spaLoader = spa.New(spaEmbedded, "internal/manager")
+func spaAssetURL() string { return spaLoader.AssetURL("manager", spaAssetBase+"assets") }
+```
 
-func init() {
-  if live, ok := spadev.LiveDiskFS("agents"); ok {
-    SPAFS = live
-    spaLiveDisk = true
-  }
+```go
+// internal/tools/agents/spa.go  (multi-app: one dist/ holds dist/<app>/)
+//go:embed all:dist
+var spaEmbedded embed.FS
+var spaLoader = spa.New(spaEmbedded, "internal/tools/agents")
+func spaAssetURL(app string) string {
+  return spaLoader.AssetURL(app, "/tools/agents"+spaPrefix+app+"/assets")
 }
 ```
 
-When `WICK_DEV_REPO_ROOT` is set, `LiveDiskFS` returns an `os.DirFS`
-rooted at `<repo>/internal/tools/<toolName>/`; otherwise it returns
-`(nil, false)` and the embed stays in charge. The same one env var
-covers every tool that ever ships an SPA — drop a `spa.go` into the new
-tool and it joins the dev loop automatically.
+`spa.New(embed, repoRelDir)`:
+
+- Production: serves from the compile-time embed; `AssetURL` cached per-app.
+- `WICK_DEV_REPO_ROOT` set + `dist/` exists on disk: swaps to `os.DirFS`,
+  re-reads `index.html` on every render (so Vite's new hash surfaces with no
+  Go recompile), and registers the `dist/` dir for dev-reload watching.
+
+The single env var `WICK_DEV_REPO_ROOT` covers all hosts. `AssetURL(app,
+fallbackBase)` reads `dist/<app>/index.html` and extracts the Vite-written
+bundle src; `fallbackBase` is only used for a hand-rolled dist tree with no
+script tag.
+
+**Adding a new SPA host** — one line: `spa.New(embed, "internal/<path>")`.
+Auto-reload and live-disk come for free. No init(), no spadev, no per-host
+reload endpoint.
+
+### Auto-reload
+
+Two pieces, both automatic when `WICK_DEV_REPO_ROOT` is set:
+
+1. **Server** — `spa.RegisterGlobalHandler(mux)` (called once in
+   `internal/pkg/api/server.go`) mounts `GET /_dev/reload`, an SSE endpoint
+   that watches every registered `dist/` dir (+ immediate subdirs) with
+   fsnotify and pushes `event: reload` when any `index.html` changes. No-op in
+   production (no watch dirs registered → endpoint not mounted).
+
+2. **Client** — `spa.DevReloadScript()` returns a `<script>` that subscribes to
+   `/_dev/reload` and calls `location.reload()` on each event. Injected once in
+   `internal/pkg/ui/layout.templ`, so **every** page (SPA + server-rendered
+   templ) gets it. Returns `""` in production. Reload is skipped while a modal
+   is visibly open so an in-progress form isn't lost.
+
+`scripts/dev.mjs` triggers the rebuild that fsnotify detects — it spawns each
+workspace's `build:watch`; Vite rewrites `dist/<app>/index.html` on every
+rebuild.
+
+This is **live reload** (full page refresh, ~3 s), not HMR. For state-preserving
+HMR use the per-app Vite dev server above — but that drops the templ chrome.
 
 ## Build
 
@@ -245,12 +287,14 @@ picks it up automatically.
 
 ## Go embed and serving
 
-The agents tool embeds the dist tree:
+The agents tool embeds the dist tree and wraps it in a `spa.Loader`:
 
 ```go
 // internal/tools/agents/spa.go
 //go:embed all:dist
-var SPAFS embed.FS
+var spaEmbedded embed.FS
+var spaLoader = spa.New(spaEmbedded, "internal/tools/agents")
+var SPAFS fs.FS = spaLoader.FS() // handler reads assets/shell directly
 ```
 
 The SPA handler dispatches by the first URL segment:
@@ -282,8 +326,10 @@ carried in git.
 [.gitignore](../.gitignore):
 
 ```
-internal/tools/*/dist/*/index.html
-internal/tools/*/dist/*/assets/
+internal/tools/agents/dist/*/index.html
+internal/tools/agents/dist/*/assets/
+internal/manager/dist/*/index.html
+internal/manager/dist/*/assets/
 ```
 
 The `.gitkeep` at the embed root keeps `//go:embed` happy on a clean

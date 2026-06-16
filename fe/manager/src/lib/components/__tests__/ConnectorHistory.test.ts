@@ -124,4 +124,41 @@ describe("ConnectorHistory", () => {
     const table = screen.getByRole("table");
     expect(within(table).getByText("kaboom")).toBeTruthy();
   });
+
+  it("renders the H1 at the legacy 1.375rem size", async () => {
+    render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
+    const h1 = await screen.findByRole("heading", { level: 1, name: "Run history" });
+    expect(h1.className).toContain("text-[1.375rem]");
+  });
+
+  it("shows the 'Showing X–Y of N run(s)' range", async () => {
+    vi.mocked(api.getConnectorHistory).mockResolvedValue(makeResult({ total: 13, total_pages: 2, page: 2, page_size: 10, runs: [makeRun()] }));
+    history.replaceState({}, "", "/modules/manager/app/connectors/slack/row-a/history?page=2");
+    render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
+    expect(await screen.findByText("Showing 11–13 of 13 run(s)")).toBeTruthy();
+  });
+
+  it("shows the user-agent line in the expanded row", async () => {
+    render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("Run history");
+    await fireEvent.click(screen.getByText("send"));
+    expect(await screen.findByText(/UA:/)).toBeTruthy();
+    expect(screen.getByText("vitest")).toBeTruthy();
+  });
+
+  it("deep-links a completed run to the test panel with ?op= and ?prefill=", async () => {
+    render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("Run history");
+    await fireEvent.click(screen.getByText("send"));
+    await fireEvent.click(await screen.findByRole("button", { name: "Retry in test panel" }));
+    expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-a/test?op=send&prefill=run-1");
+  });
+
+  it("hides the retry link for running runs", async () => {
+    vi.mocked(api.getConnectorHistory).mockResolvedValue(makeResult({ runs: [makeRun({ status: "running" })] }));
+    render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("Run history");
+    await fireEvent.click(screen.getByText("send"));
+    expect(screen.queryByRole("button", { name: "Retry in test panel" })).toBeNull();
+  });
 });

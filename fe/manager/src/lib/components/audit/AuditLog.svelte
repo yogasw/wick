@@ -184,13 +184,13 @@
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-                <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Connector</th>
-                <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Operation</th>
-                <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Source</th>
-                <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Status</th>
-                <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">User</th>
-                <th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600">Latency</th>
-                <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Time</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Connector</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Operation</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Source</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Status</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">User</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Latency</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Time</th>
               </tr>
             </thead>
             <tbody>
@@ -217,9 +217,9 @@
 
         {#if data.total_pages > 1}
           <nav class="mt-3 flex items-center justify-center gap-1 text-xs">
-            <Button variant="secondary" size="sm" disabled={data.page <= 1} onclick={() => gotoPage(data.page - 1)}>← Prev</Button>
+            <Button variant="secondary" size="sm" disabled={data.page <= 1} onclick={() => gotoPage(data!.page - 1)}>← Prev</Button>
             <span class="px-3 py-1.5 text-black-800 dark:text-black-600">Page {data.page} of {data.total_pages}</span>
-            <Button variant="secondary" size="sm" disabled={data.page >= data.total_pages} onclick={() => gotoPage(data.page + 1)}>Next →</Button>
+            <Button variant="secondary" size="sm" disabled={data.page >= data.total_pages} onclick={() => gotoPage(data!.page + 1)}>Next →</Button>
           </nav>
         {/if}
       </section>

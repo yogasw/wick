@@ -449,4 +449,82 @@ describe("createThreadStore", () => {
     expect(lc.state).toBe("spawning");
     expect(lc.pid).toBe(7);
   });
+
+  /* ── lifecycle nudge from content stream ────────────────────────── */
+
+  test("text_delta nudges lifecycle state to working when state is idle", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 10 }));
+    store.handleEvent(ev("text_delta", { data: "hello" }));
+    expect(get(store.lifecycle).state).toBe("working");
+  });
+
+  test("text_delta nudges lifecycle state to working when state is empty string", () => {
+    store.handleEvent(ev("text_delta", { data: "hello" }));
+    expect(get(store.lifecycle).state).toBe("working");
+  });
+
+  test("text_delta nudges lifecycle state to working when spawning", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "spawning", pid: 5, at: 1 }));
+    store.handleEvent(ev("text_delta", { data: "hello" }));
+    expect(get(store.lifecycle).state).toBe("working");
+  });
+
+  test("text_delta does NOT change lifecycle state when killed", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "killed", pid: 5, at: 1 }));
+    store.handleEvent(ev("text_delta", { data: "hello" }));
+    expect(get(store.lifecycle).state).toBe("killed");
+  });
+
+  test("text_delta nudge preserves pid, substate, at on lifecycle", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 42, data: "sub", at: 999 }));
+    store.handleEvent(ev("text_delta", { data: "hello" }));
+    const lc = get(store.lifecycle);
+    expect(lc.state).toBe("working");
+    expect(lc.pid).toBe(42);
+    expect(lc.substate).toBe("sub");
+    expect(lc.at).toBe(999);
+  });
+
+  test("thinking nudges lifecycle state to working when state is idle", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 10 }));
+    store.handleEvent(ev("thinking", { data: "reasoning" }));
+    expect(get(store.lifecycle).state).toBe("working");
+  });
+
+  test("thinking nudges lifecycle state to working when spawning", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "spawning", pid: 5, at: 1 }));
+    store.handleEvent(ev("thinking", { data: "reasoning" }));
+    expect(get(store.lifecycle).state).toBe("working");
+  });
+
+  test("tool_use nudges lifecycle state to working when state is idle", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 10 }));
+    store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "bash", tool_input: "{}", at: 1 }));
+    expect(get(store.lifecycle).state).toBe("working");
+  });
+
+  test("tool_use nudges lifecycle state to working when spawning", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "spawning", pid: 5, at: 1 }));
+    store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "bash", tool_input: "{}", at: 1 }));
+    expect(get(store.lifecycle).state).toBe("working");
+  });
+
+  test("tool_result nudges lifecycle state to working when state is idle", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 10 }));
+    store.handleEvent(ev("tool_result", { tool_use_id: "u1", data: "ok", is_error: false, at: 2 }));
+    expect(get(store.lifecycle).state).toBe("working");
+  });
+
+  test("tool_result does NOT change lifecycle state when killed", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "killed", pid: 5, at: 1 }));
+    store.handleEvent(ev("tool_result", { tool_use_id: "u1", data: "ok", is_error: false, at: 2 }));
+    expect(get(store.lifecycle).state).toBe("killed");
+  });
+
+  test("explicit lifecycle:idle event still sets state to idle after content nudge", () => {
+    store.handleEvent(ev("text_delta", { data: "hello" }));
+    expect(get(store.lifecycle).state).toBe("working");
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle", pid: 1, at: 20 }));
+    expect(get(store.lifecycle).state).toBe("idle");
+  });
 });

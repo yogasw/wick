@@ -29,9 +29,9 @@
   }: Props = $props();
 
   const base =
-    "rounded font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
+    "rounded-lg font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-green-200 dark:focus-visible:ring-green-800 disabled:opacity-50 disabled:cursor-not-allowed";
   const variants: Record<Variant, string> = {
-    primary: "bg-green-600 hover:bg-green-700 text-white-100",
+    primary: "bg-green-500 hover:bg-green-600 text-white-100",
     secondary: "bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 text-black-800 dark:text-white-100",
     danger: "bg-rose-500 hover:bg-rose-600 text-white-100",
     ghost: "text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700",

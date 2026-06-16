@@ -65,4 +65,12 @@ describe("KvList", () => {
     expect(screen.getByTestId("custom-cell")).toBeTruthy();
     expect(screen.queryByLabelText("value")).toBeNull();
   });
+
+  test("row container uses rounded-lg", () => {
+    const { container } = render(KvList, {
+      props: { columns: ["key", "value"], rows: [{ key: "a", value: "b" }], onChange: vi.fn() },
+    });
+    const rowDiv = container.querySelector(".border.border-white-300") as HTMLElement;
+    expect(rowDiv.className).toContain("rounded-lg");
+  });
 });

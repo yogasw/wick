@@ -15,6 +15,7 @@ function makeData(over: Partial<DetailType> = {}): DetailType {
     icon: "💬",
     id: "row-a",
     label: "Prod",
+    description: "",
     disabled: false,
     rate_limit_rpm: 0,
     has_health_check: true,
@@ -143,6 +144,19 @@ describe("ConnectorDetail", () => {
     render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
     await screen.findByText("row-a");
     expect(screen.queryByRole("button", { name: "Test runner" })).toBeNull();
+  });
+
+  it("renders the H1 at the legacy 1.375rem size", async () => {
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    const h1 = await screen.findByRole("heading", { level: 1, name: "Prod" });
+    expect(h1.className).toContain("text-[1.375rem]");
+  });
+
+  it("renders the connector description under the id line", async () => {
+    vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ description: "Slack connector" }));
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    expect(screen.getByText("Slack connector")).toBeTruthy();
   });
 
   it("renders the accounts section + connect button for OAuth connectors", async () => {

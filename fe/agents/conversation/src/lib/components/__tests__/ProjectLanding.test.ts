@@ -47,13 +47,13 @@ describe("ProjectLanding — presentational rendering", () => {
 
   test("shows 'managed' when project.managed is true", () => {
     render(ProjectLanding, { props: baseProps });
-    expect(screen.getByText(/managed/)).toBeDefined();
+    expect(screen.getByText(/3 chats · managed/)).toBeDefined();
   });
 
   test("shows 'custom' when project.managed is false", () => {
     const customProject = { ...PROJECT, managed: false };
     render(ProjectLanding, { props: { ...baseProps, project: customProject } });
-    expect(screen.getByText(/custom/)).toBeDefined();
+    expect(screen.getByText(/3 chats · custom/)).toBeDefined();
   });
 
   test("renders a Pin as default button", () => {
@@ -101,6 +101,32 @@ describe("ProjectLanding — presentational rendering", () => {
     const link = screen.getByRole("link", { name: /all chats/i });
     expect(link).toBeDefined();
     expect(link.getAttribute("href")).toBe("/tools/agents/sessions");
+  });
+});
+
+describe("ProjectLanding — folder path in header (#41)", () => {
+  test("project header shows the folder path", () => {
+    const project = { id: "p1", name: "Proj", path: "/home/work/proj", managed: true };
+    render(ProjectLanding, { props: { base: "/agents", project, providers: [], sessions: [], onPin: vi.fn(), onSelectSession: vi.fn() } });
+    expect(screen.getByText("/home/work/proj")).toBeDefined();
+  });
+});
+
+describe("ProjectLanding — SessionList reuse (#39)", () => {
+  test("in-project session list renders lifecycle status badge", () => {
+    const project = { id: "p1", name: "Proj", path: "/p", managed: true };
+    const sessions = [{ id: "s1", label: "Chat A", status: "", project_id: "p1", active_agent: "", created_at: "", last_active: "", lifecycle: "working" }];
+    render(ProjectLanding, { props: { base: "/agents", project, providers: [], sessions, onPin: vi.fn(), onSelectSession: vi.fn() } });
+    expect(screen.getByText("working")).toBeDefined();
+  });
+
+  test("clicking a session row calls onSelectSession", async () => {
+    const project = { id: "p1", name: "Proj", path: "/p", managed: true };
+    const sessions = [{ id: "s1", label: "Chat A", status: "", project_id: "p1", active_agent: "", created_at: "", last_active: "", lifecycle: "" }];
+    const onSelectSession = vi.fn();
+    render(ProjectLanding, { props: { base: "/agents", project, providers: [], sessions, onPin: vi.fn(), onSelectSession } });
+    await fireEvent.click(screen.getByTestId("session-row-s1"));
+    expect(onSelectSession).toHaveBeenCalledWith("s1");
   });
 });
 

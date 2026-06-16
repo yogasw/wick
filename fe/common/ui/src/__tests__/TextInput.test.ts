@@ -23,4 +23,11 @@ describe("TextInput", () => {
     render(TextInput, { props: { value: "", onChange: vi.fn(), type: "search", ariaLabel: "s" } });
     expect((screen.getByLabelText("s") as HTMLInputElement).type).toBe("search");
   });
+
+  test("base uses rounded-lg and a green focus ring", () => {
+    render(TextInput, { props: { value: "", onChange: vi.fn(), ariaLabel: "r" } });
+    const input = screen.getByLabelText("r") as HTMLInputElement;
+    expect(input.className).toContain("rounded-lg");
+    expect(input.className).toContain("focus:ring-green-200");
+  });
 });
