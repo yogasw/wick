@@ -225,6 +225,10 @@
         <div class="rounded-lg border border-neg-400 bg-neg-100 px-4 py-3 text-sm font-medium text-neg-400">✗ {error}</div>
       {/if}
 
+      <p class="text-sm text-black-800 dark:text-black-600">
+        Wick forwards JSON-RPC (<code class="font-mono text-xs">initialize</code>, <code class="font-mono text-xs">tools/list</code>, <code class="font-mono text-xs">tools/call</code>) to this URL per request. Stdio servers are out of scope — expose them over HTTP with a sidecar.
+      </p>
+
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6">
         <div class="grid grid-cols-12 gap-4">
           <div class="col-span-3 sm:col-span-2">
@@ -269,6 +273,7 @@
                 ariaLabel="Description"
               />
             </div>
+            <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Empty = adopt the server's self-description (from its <code class="font-mono">initialize</code> instructions) and keep it fresh on every re-sync. Write your own to lock it — clearing the field hands it back to the server.</p>
           </div>
         </div>
 

@@ -120,6 +120,15 @@ describe("McpServerForm — auth panel toggle", () => {
   });
 });
 
+describe("McpServerForm — JSON-RPC explainer + Description helper (finding #17)", () => {
+  it("renders the JSON-RPC explainer and Description re-sync helper", async () => {
+    render(McpServerForm);
+    await screen.findByText("Register MCP server");
+    expect(screen.getByText(/forwards JSON-RPC/)).toBeTruthy();
+    expect(screen.getByText(/adopt the server's self-description/)).toBeTruthy();
+  });
+});
+
 describe("McpServerForm — SSO panel content (finding #15)", () => {
   it("shows claim-mapping pre, Why-SSO box, and server-requirement callout when SSO is selected", async () => {
     render(McpServerForm);
