@@ -79,6 +79,21 @@ func reqWithUser(method, path string, user *entity.User) *http.Request {
 	return req.WithContext(login.WithUser(req.Context(), user, nil))
 }
 
+// TestAPIConnectorReloadRejectsNonCustom verifies the reload endpoint is
+// wired and rejects a non-custom connector key.
+func TestAPIConnectorReloadRejectsNonCustom(t *testing.T) {
+	h, _ := newCustomHandler(t)
+	admin := &entity.User{ID: "u-admin", Role: entity.RoleAdmin}
+	req := reqWithUser(http.MethodPost, "/manager/api/connectors/slack/reload", admin)
+	req.SetPathValue("key", "slack")
+	rec := httptest.NewRecorder()
+	h.apiConnectorReload(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (not a custom connector); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 // TestAPIResyncMCPToolsRejectsNonCustom verifies the resync endpoint is wired
 // and rejects a non-custom connector key before touching the MCP path.
 func TestAPIResyncMCPToolsRejectsNonCustom(t *testing.T) {

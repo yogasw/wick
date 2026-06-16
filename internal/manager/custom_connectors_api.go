@@ -39,6 +39,30 @@ func (h *Handler) customConnectorAPIRoutes(mux *http.ServeMux, authMidd *login.M
 	mux.Handle("POST /manager/api/connectors/custom/{defID}/enable", auth(h.apiCustomSetDisabled(false)))
 }
 
+// apiConnectorReload serves POST /manager/api/connectors/{key}/reload. It
+// rebuilds the live module from the stored custom definition, applying any
+// pending edits and clearing the "needs reload" state. Custom connectors
+// only; available to any authenticated caller — it just applies the
+// already-saved definition, no destructive change.
+func (h *Handler) apiConnectorReload(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	key := r.PathValue("key")
+	if h.custom == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "custom connectors unavailable"})
+		return
+	}
+	defID, ok := h.custom.DefIDForKey(key)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not a custom connector"})
+		return
+	}
+	if err := h.custom.Reload(ctx, defID); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 // apiResyncMCPTools serves POST /manager/api/connectors/{key}/resync-tools.
 // It re-fetches the custom MCP server's tools/list and swaps the fresh
 // operation set in for the whole connector — the op set is definition-level,

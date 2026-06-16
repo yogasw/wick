@@ -144,6 +144,29 @@ describe("ConnectorList", () => {
     expect(router.push).toHaveBeenCalledWith("/connectors/slack/row-a");
   });
 
+  it("shows the definition-updated reload banner when the connector needs a reload", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true, needs_reload: true }));
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Slack");
+    expect(screen.getByText(/Definition updated/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Reload" })).toBeTruthy();
+  });
+
+  it("reloads the definition through the per-connector endpoint", async () => {
+    vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true, needs_reload: true }));
+    vi.mocked(api.reloadConnector).mockResolvedValue({ ok: true });
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Slack");
+    await fireEvent.click(screen.getByRole("button", { name: "Reload" }));
+    await waitFor(() => expect(api.reloadConnector).toHaveBeenCalledWith("slack"));
+  });
+
+  it("hides the reload banner when the connector is up to date", async () => {
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Slack");
+    expect(screen.queryByText(/Definition updated/)).toBeNull();
+  });
+
   it("shows the Re-sync tools button and connection chip for a custom MCP connector", async () => {
     vi.mocked(api.getConnector).mockResolvedValue(makeData({ custom: true, mcp: true, mcp_status: "connected" }));
     render(ConnectorList, { connectorKey: "slack" });

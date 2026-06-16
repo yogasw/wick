@@ -61,6 +61,10 @@ export async function getConnector(key: string): Promise<ConnectorList> {
   return { ...r, rows: r.rows ?? [] };
 }
 
+export async function reloadConnector(key: string): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>(`${connBase(key)}/reload`);
+}
+
 export async function getConnectorRow(key: string, id: string): Promise<ConnectorDetail> {
   const r = await apiGet<ConnectorDetail>(rowBase(key, id));
   return {

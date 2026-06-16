@@ -37,6 +37,7 @@ type connectorListJSON struct {
 	DefID       string             `json:"def_id,omitempty"`
 	MCP         bool               `json:"mcp"`
 	MCPStatus   string             `json:"mcp_status,omitempty"`
+	NeedsReload bool               `json:"needs_reload"`
 	Rows        []connectorRowJSON `json:"rows"`
 }
 
@@ -158,6 +159,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		DefID:       defID,
 		MCP:         mcp,
 		MCPStatus:   mcpStatus,
+		NeedsReload: h.connectorNeedsReload(ctx, key),
 		Rows:        make([]connectorRowJSON, 0, len(rows)),
 	}
 	for _, row := range rows {
