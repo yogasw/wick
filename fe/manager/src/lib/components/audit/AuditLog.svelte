@@ -184,13 +184,13 @@
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-                <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Connector</th>
-                <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Operation</th>
-                <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Source</th>
-                <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Status</th>
-                <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">User</th>
-                <th class="px-4 py-3 text-right font-medium text-black-800 dark:text-black-600">Latency</th>
-                <th class="px-4 py-3 text-left font-medium text-black-800 dark:text-black-600">Time</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Connector</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Operation</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Source</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Status</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">User</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Latency</th>
+                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-black-800 dark:text-black-600">Time</th>
               </tr>
             </thead>
             <tbody>

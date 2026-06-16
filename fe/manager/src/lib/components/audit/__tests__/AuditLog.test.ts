@@ -103,6 +103,15 @@ describe("AuditLog", () => {
     expect(screen.queryByText("Loading…")).toBeNull();
   });
 
+  it("renders table header cells with uppercase tracking-wide classes", async () => {
+    render(AuditLog);
+    await screen.findByText("Prod Slack");
+    const th = screen.getByText("Connector").closest("th");
+    expect(th?.className).toContain("uppercase");
+    expect(th?.className).toContain("tracking-wide");
+    expect(th?.className).toContain("text-xs");
+  });
+
   it("toasts on a silent-refresh failure instead of showing the error screen", async () => {
     vi.mocked(api.getAuditRuns).mockResolvedValueOnce(makeResult()).mockRejectedValueOnce(new Error("refresh boom"));
     render(AuditLog);
