@@ -115,6 +115,14 @@ describe("ThreadMessage - attachments", () => {
   });
 });
 
+describe("ThreadMessage - interrupted fallback", () => {
+  test("interrupted assistant turn with no text renders an interrupted fallback bubble", () => {
+    const turn = makeTurn({ role: "assistant", text: "", interrupted: true });
+    render(ThreadMessage, { props: { turn } });
+    expect(screen.getByText(/interrupted/i)).toBeDefined();
+  });
+});
+
 describe("ThreadMessage - null-safe backend arrays (Go nil → JSON null)", () => {
   test("renders user turn without crash when events and attachments are null (Go nil slice)", () => {
     const turn = makeTurn({

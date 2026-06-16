@@ -206,6 +206,18 @@
           {/if}
         </div>
       {/if}
+
+      {#if !turn.text && turn.interrupted}
+        <div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 shadow-sm">
+          <div class="flex items-center gap-1.5">
+            <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-amber-500" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M8 2L1.5 13.5h13L8 2z" stroke-linejoin="round"></path>
+              <path d="M8 6v4M8 11.5v.5" stroke-linecap="round"></path>
+            </svg>
+            <span class="text-xs text-amber-700 dark:text-amber-300">Interrupted — response was cut off</span>
+          </div>
+        </div>
+      {/if}
     </div>
   </div>
 {/if}
