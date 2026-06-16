@@ -104,6 +104,24 @@ describe("ProjectLanding — presentational rendering", () => {
   });
 });
 
+describe("ProjectLanding — SessionList reuse (#39)", () => {
+  test("in-project session list renders lifecycle status badge", () => {
+    const project = { id: "p1", name: "Proj", path: "/p", managed: true };
+    const sessions = [{ id: "s1", label: "Chat A", status: "", project_id: "p1", active_agent: "", created_at: "", last_active: "", lifecycle: "working" }];
+    render(ProjectLanding, { props: { base: "/agents", project, providers: [], sessions, onPin: vi.fn(), onSelectSession: vi.fn() } });
+    expect(screen.getByText("working")).toBeDefined();
+  });
+
+  test("clicking a session row calls onSelectSession", async () => {
+    const project = { id: "p1", name: "Proj", path: "/p", managed: true };
+    const sessions = [{ id: "s1", label: "Chat A", status: "", project_id: "p1", active_agent: "", created_at: "", last_active: "", lifecycle: "" }];
+    const onSelectSession = vi.fn();
+    render(ProjectLanding, { props: { base: "/agents", project, providers: [], sessions, onPin: vi.fn(), onSelectSession } });
+    await fireEvent.click(screen.getByTestId("session-row-s1"));
+    expect(onSelectSession).toHaveBeenCalledWith("s1");
+  });
+});
+
 describe("ProjectLanding — create-and-navigate on send", () => {
   let fetchSpy: ReturnType<typeof vi.fn>;
   let originalFetch: typeof fetch;
