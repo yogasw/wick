@@ -28,14 +28,36 @@
   function decide(decision: ApprovalDecision) {
     onDecide(decision);
   }
+
+  function dismiss() {
+    decide("block");
+    onClose?.();
+  }
+
+  $effect(() => {
+    if (!request) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        dismiss();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 </script>
 
 {#if request !== null}
-  <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-  >
+  <div class="fixed inset-0 z-50 flex items-center justify-center">
+    <button
+      type="button"
+      data-approval-backdrop
+      aria-label="Dismiss"
+      class="absolute inset-0 bg-black/60 backdrop-blur-sm"
+      onclick={dismiss}
+    ></button>
     <div
-      class="w-full max-w-lg mx-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-xl"
+      class="relative w-full max-w-lg mx-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-xl"
     >
       <div
         class="border-b border-white-300 dark:border-navy-600 px-6 py-4 flex items-center justify-between"

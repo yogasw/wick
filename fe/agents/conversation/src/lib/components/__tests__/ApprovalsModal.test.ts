@@ -97,4 +97,22 @@ describe("ApprovalsModal", () => {
     const { container } = render(ApprovalsModal, { props: { request, onDecide: vi.fn() } });
     expect(container.querySelector("[data-approval-error]")).toBeNull();
   });
+
+  test("Escape key dismisses (block + close)", async () => {
+    const request = { id: "a1", agent_name: "m", tool: "bash", work_dir: "/", cmd: "x", match_key: "k" };
+    const onDecide = vi.fn();
+    const onClose = vi.fn();
+    render(ApprovalsModal, { props: { request, onDecide, onClose } });
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(onDecide).toHaveBeenCalledWith("block");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  test("backdrop click dismisses", async () => {
+    const request = { id: "a1", agent_name: "m", tool: "bash", work_dir: "/", cmd: "x", match_key: "k" };
+    const onClose = vi.fn();
+    const { container } = render(ApprovalsModal, { props: { request, onDecide: vi.fn(), onClose } });
+    await fireEvent.click(container.querySelector("[data-approval-backdrop]")!);
+    expect(onClose).toHaveBeenCalled();
+  });
 });
