@@ -556,6 +556,16 @@
   ];
 
   const sideOpen = $derived(railTab !== null);
+
+  const contextCount = $derived(filesVal.filter((f) => !f.isDir).length);
+  const processCount = $derived(processes.length);
+  const workspaceCount = $derived(wsInstances.length);
+  function railCount(id: RailTab): number {
+    if (id === "context") return contextCount;
+    if (id === "process") return processCount;
+    if (id === "workspace") return workspaceCount;
+    return 0;
+  }
 </script>
 
 <!-- Full-height flex row: main area + vertical rail -->
@@ -985,6 +995,21 @@
             <span
               class="absolute -top-1 -right-1 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-green-500 px-0.5 text-[9px] font-semibold text-white-100"
             >{scmChangeCount > 99 ? "99+" : scmChangeCount}</span>
+          </span>
+        {:else if railCount(tab.id) > 0}
+          <span class="relative">
+            <svg
+              viewBox="0 0 16 16"
+              class="h-4 w-4 text-green-500"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+            >
+              {@html tab.icon}
+            </svg>
+            <span
+              class="absolute -top-1 -right-1 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-green-500 px-0.5 text-[9px] font-semibold text-white-100"
+            >{railCount(tab.id) > 99 ? "99+" : railCount(tab.id)}</span>
           </span>
         {:else}
           <svg

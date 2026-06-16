@@ -336,3 +336,22 @@ describe("DetailView — placeholder views full-height (#10)", () => {
     expect(container.querySelector("[data-placeholder-view]")).toBeNull();
   });
 });
+
+describe("DetailView — rail tab count badges (#31)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("rail tabs render without a count badge when counts are zero", () => {
+    const { container } = render(DetailView, { props: DEFAULT_PROPS });
+    expect(container.querySelector('[aria-label="Context"]')).not.toBeNull();
+    /* zero-count badges must not appear */
+    expect(container.querySelectorAll(".rounded-full.bg-green-500").length).toBe(0);
+  });
+});
