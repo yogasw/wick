@@ -28,8 +28,8 @@
     return !visibleSteps || visibleSteps.includes(step);
   }
 
-  /* Access & behavior rides with the configs step in the manual stepper. */
-  let showAccess = $derived(!visibleSteps || visibleSteps.includes("configs"));
+  /* Access & behavior rides with the operations step in the manual stepper. */
+  let showAccess = $derived(!visibleSteps || visibleSteps.includes("ops"));
 
   function set<K extends keyof Draft>(k: K, v: Draft[K]) {
     draft[k] = v;
