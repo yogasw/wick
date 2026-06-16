@@ -133,25 +133,23 @@
           <p class="mt-1 text-xs text-black-700 dark:text-black-600">{data.op_count} operation(s) · {rows.length} row(s)</p>
         </div>
       </div>
-
-     <div class="flex flex-shrink-0 items-center gap-2 pt-1">
-      {#if data.custom && data.def_id}
-        <button
-          type="button"
-          onclick={() => push(`/custom/${encodeURIComponent(data.def_id!)}/edit`)}
-          class="whitespace-nowrap rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
-        >Edit definition</button>
-      {/if}
-      {#if !data.fixed}
-        <button
-          type="button"
-          disabled={busy}
-          onclick={newRow}
-          class="whitespace-nowrap rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
-        >+ New row</button>
-      {/if}
-</div>
-
+      <div class="flex flex-shrink-0 items-center gap-2 pt-1">
+        {#if data.custom && data.def_id}
+          <button
+            type="button"
+            onclick={() => push(`/custom/${encodeURIComponent(data!.def_id!)}/edit`)}
+            class="whitespace-nowrap rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
+          >Edit definition</button>
+        {/if}
+        {#if !data.fixed}
+          <button
+            type="button"
+            disabled={busy}
+            onclick={newRow}
+            class="whitespace-nowrap rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
+          >+ New row</button>
+        {/if}
+      </div>
     </div>
 
     <section>
@@ -183,7 +181,7 @@
                       </span>
                     {/each}
                   {/if}
-                  <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium {chip.cls}"><span class="h-1.5 w-1.5 rounded-full {chip.dot}"></span>{chip.label}</span>
+                  <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {chip.cls}">{chip.label}</span>
                   <Button variant="ghost" size="sm" onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}/history`)}>History</Button>
                   <Button variant="ghost" size="sm" onclick={() => toggleDisabled(row)}>{row.disabled ? "Enable" : "Disable"}</Button>
                   {#if !data.fixed}
