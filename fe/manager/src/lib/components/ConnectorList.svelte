@@ -91,14 +91,10 @@
     }
   }
 
-  function statusChip(row: ConnectorRow): { label: string; cls: string } {
-    if (row.disabled) {
-      return { label: "Disabled", cls: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600" };
-    }
-    if (row.status === "needs_setup") {
-      return { label: "Needs setup", cls: "bg-prog-100 text-prog-400" };
-    }
-    return { label: "Published", cls: "bg-pos-100 text-pos-400" };
+  function statusChip(row: ConnectorRow): { label: string; cls: string; dot: string } {
+    if (row.disabled) return { label: "Disabled", cls: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600", dot: "bg-black-700" };
+    if (row.status === "needs_setup") return { label: "Needs setup", cls: "bg-prog-100 text-prog-400", dot: "bg-prog-400" };
+    return { label: "Published", cls: "bg-pos-100 text-pos-400", dot: "bg-pos-400" };
   }
 
   let rows = $derived(data?.rows ?? []);
@@ -169,7 +165,7 @@
                       </span>
                     {/each}
                   {/if}
-                  <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {chip.cls}">{chip.label}</span>
+                  <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium {chip.cls}"><span class="h-1.5 w-1.5 rounded-full {chip.dot}"></span>{chip.label}</span>
                   <Button variant="ghost" size="sm" onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}/history`)}>History</Button>
                   <Button variant="ghost" size="sm" onclick={() => toggleDisabled(row)}>{row.disabled ? "Enable" : "Disable"}</Button>
                   {#if !data.fixed}
