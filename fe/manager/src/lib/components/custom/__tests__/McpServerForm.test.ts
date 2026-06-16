@@ -120,6 +120,17 @@ describe("McpServerForm — auth panel toggle", () => {
   });
 });
 
+describe("McpServerForm — SSO panel content (finding #15)", () => {
+  it("shows claim-mapping pre, Why-SSO box, and server-requirement callout when SSO is selected", async () => {
+    render(McpServerForm);
+    await screen.findByText("Register MCP server");
+    await fireEvent.click(screen.getByLabelText("SSO (forward caller's session)"));
+    expect(await screen.findByText(/Claim mapping/)).toBeTruthy();
+    expect(screen.getByText(/\.well-known\/wick-pubkey\.pem/)).toBeTruthy();
+    expect(screen.getByText(/Why SSO/)).toBeTruthy();
+  });
+});
+
 describe("McpServerForm — edit mode", () => {
   it("prefills from the JSON endpoint and shows enable/disable + delete", async () => {
     vi.mocked(api.getMcpServerForm).mockResolvedValue(makeFormResult());

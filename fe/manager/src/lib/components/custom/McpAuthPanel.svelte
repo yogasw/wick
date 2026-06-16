@@ -33,6 +33,16 @@
   const inputClass =
     "mt-1 w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-2 font-mono text-sm text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800";
 
+  const ssoClaimExample = `{
+    "sub":    "user id (uuid)",
+    "email":  "user email",
+    "name":   "user display name",
+    "groups": "user tag ids",
+    "aud":    "audience below",
+    "iss":    "this wick's app URL",
+    "iat":    "now", "exp": "now + TTL"
+  }`;
+
   function selectScheme(value: string) {
     form.auth_scheme = value;
     onChange();
@@ -139,6 +149,8 @@
     <p class="text-xs text-black-800 dark:text-black-600">
       Wick mints a short-lived ED25519-signed JWT for the calling user and forwards it as <code class="font-mono">X-Wick-User</code>. No shared secret is stored.
     </p>
+    <span class="mt-3 block text-xs font-medium text-black-800 dark:text-black-600">Claim mapping (read-only)</span>
+    <pre class="mt-1 overflow-auto rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3 font-mono text-xs leading-relaxed text-black-900 dark:text-white-100">{ssoClaimExample}</pre>
     <div class="mt-3 grid grid-cols-12 gap-3">
       <div class="col-span-12 sm:col-span-7">
         <span class="block text-xs font-medium text-black-800 dark:text-black-600">Audience (<code class="font-mono">aud</code> claim)</span>
@@ -150,6 +162,7 @@
             ariaLabel="SSO audience"
           />
         </div>
+        <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">The MCP server should validate this — prevents token re-use across servers.</p>
       </div>
       <div class="col-span-12 sm:col-span-5">
         <label class="block text-xs font-medium text-black-800 dark:text-black-600" for="cc-srv-sso-ttl">Token TTL</label>
@@ -163,7 +176,14 @@
             <option value={o.value}>{o.label}</option>
           {/each}
         </select>
+        <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Re-minted per request — short TTL is safe.</p>
       </div>
     </div>
+  </div>
+  <div class="mt-3 rounded-lg border border-pos-400 bg-pos-100 px-3 py-2">
+    <p class="text-[11px] text-black-800"><span class="font-semibold text-pos-400">✓ Why SSO:</span> no shared secret in wick; per-user RBAC + audit on the MCP side; revoking a wick user revokes downstream access instantly.</p>
+  </div>
+  <div class="mt-2 rounded-lg border border-cau-400 bg-cau-100 px-3 py-2">
+    <p class="text-[11px] text-black-800"><span class="font-semibold text-cau-400">⚠ Server requirement:</span> the MCP server must validate the JWT against <code class="font-mono">/.well-known/wick-pubkey.pem</code> on this wick. Stock open-source MCP servers don't — typically only in-house ones.</p>
   </div>
 {/if}
