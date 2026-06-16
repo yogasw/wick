@@ -140,6 +140,15 @@ export function renderMarkdown(text: string): string {
     }
     if (inMath) { mathLines.push(line); continue; }
 
+    /* A line that is solely `$$…$$` is a standalone display equation: emit it
+       as a centered block rather than an inline span inside a paragraph. */
+    const dispMath = line.match(/^\s*\$\$(.+)\$\$\s*$/);
+    if (dispMath && !dispMath[1].includes("$$")) {
+      flushList(); flushTable();
+      emitMathBlock(dispMath[1].trim());
+      continue;
+    }
+
     if (line.trim() === "") { flushList(); flushTable(); out.push('<div class="h-2"></div>'); continue; }
 
     const h = line.match(/^(#{1,3})\s+(.+)$/);

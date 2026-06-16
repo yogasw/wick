@@ -134,6 +134,15 @@ describe("renderMarkdown — rich blocks", () => {
     expect(html).toContain('data-math-src="\\frac{a}{b}"');
   });
 
+  test("a standalone $$…$$ line renders as a centered block, not inline in a paragraph", () => {
+    const html = renderMarkdown("$$A=\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix} \\Rightarrow \\det(A)=ad-bc$$");
+    expect(html).toContain("data-math-display");
+    /* the matrix `&` survives (attribute-escaped, decoded by the browser) */
+    expect(html).toContain("\\begin{pmatrix} a &amp; b");
+    /* emitted as a block, not wrapped in a text paragraph */
+    expect(html).not.toContain('<p class="text-sm');
+  });
+
   test("inline math becomes a math span carrying the raw tex", () => {
     const html = renderMarkdown("the value $a^2 + b^2$ is fixed");
     expect(html).toContain('data-math-src="a^2 + b^2"');
