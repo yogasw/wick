@@ -162,9 +162,16 @@
                   <span class="mt-0.5 block truncate font-mono text-[10px] text-black-700 dark:text-black-600">{row.id}</span>
                 </button>
                 <div class="flex flex-wrap items-center gap-2 sm:flex-shrink-0">
-                  {#each row.tags ?? [] as tag (tag)}
-                    <span class="rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600">{tag}</span>
-                  {/each}
+                  {#if (row.tags ?? []).length === 0}
+                    <span class="rounded-md border border-dashed border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600">Everyone</span>
+                  {:else}
+                    {#each row.tags ?? [] as tag (tag)}
+                      <span class="inline-flex min-w-0 max-w-[12rem] items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600">
+                        <svg class="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+                        <span class="truncate">{tag}</span>
+                      </span>
+                    {/each}
+                  {/if}
                   <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {chip.cls}">{chip.label}</span>
                   <Button variant="ghost" size="sm" onclick={() => toggleDisabled(row)}>{row.disabled ? "Enable" : "Disable"}</Button>
                   {#if !data.fixed}

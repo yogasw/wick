@@ -123,4 +123,11 @@ describe("ConnectorList", () => {
     expect(badge.className).toContain("bg-green-200");
     expect(badge.className).toContain("text-green-700");
   });
+
+  it("shows an 'Everyone' dashed chip for rows without tags", async () => {
+    render(ConnectorList, { connectorKey: "slack" });
+    await screen.findByText("Staging");
+    const chip = screen.getByText("Everyone");
+    expect(chip.className).toContain("border-dashed");
+  });
 });
