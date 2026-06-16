@@ -181,6 +181,7 @@
         connectorKey={connectorKey}
         connectorId={connectorId}
         accounts={data.accounts ?? []}
+        operations={data.operations ?? []}
         oauth={data.oauth}
         enableSso={data.enable_sso}
         multiAccount={data.multi_account}
