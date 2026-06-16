@@ -117,6 +117,16 @@
   let title = $state("");
   let agentLabel = $state("");
 
+  /* Reflect the live session title in the browser tab; restore on leave. */
+  $effect(() => {
+    if (typeof document === "undefined") return;
+    const shown = (threadMeta.title || title).trim();
+    if (!shown) return;
+    const prev = document.title;
+    document.title = `${shown} · Agents`;
+    return () => { document.title = prev; };
+  });
+
   /* ── SSE ───────────────────────────────────────────────────────── */
   let closeSSE: (() => void) | null = null;
   let sseStatus = $state<SSEStatus>("connecting");

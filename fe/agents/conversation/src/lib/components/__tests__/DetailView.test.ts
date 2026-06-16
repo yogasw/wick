@@ -18,13 +18,32 @@ vi.mock("effect", () => ({
   },
 }));
 
+const { metaStore } = vi.hoisted(() => {
+  /* Minimal writable so tests can drive the thread meta title. */
+  let value: Record<string, unknown> = {};
+  const subs = new Set<(v: Record<string, unknown>) => void>();
+  return {
+    metaStore: {
+      subscribe(fn: (v: Record<string, unknown>) => void) {
+        subs.add(fn);
+        fn(value);
+        return () => { subs.delete(fn); };
+      },
+      set(v: Record<string, unknown>) {
+        value = v;
+        subs.forEach((fn) => fn(value));
+      },
+    },
+  };
+});
+
 vi.mock("../../stores/thread.js", () => ({
   createThreadStore: () => ({
     turns: { subscribe: (fn: (v: unknown[]) => void) => { fn([]); return () => {}; } },
     live: { subscribe: (fn: (v: null) => void) => { fn(null); return () => {}; } },
     typing: { subscribe: (fn: (v: { active: boolean }) => void) => { fn({ active: false }); return () => {}; } },
     lifecycle: { subscribe: (fn: (v: { state: string; pid: number; substate: string; at: number }) => void) => { fn({ state: "", pid: 0, substate: "", at: 0 }); return () => {}; } },
-    meta: { subscribe: (fn: (v: Record<string, unknown>) => void) => { fn({}); return () => {}; } },
+    meta: metaStore,
     setHistory: vi.fn(),
     appendUserTurn: vi.fn(),
     handleEvent: vi.fn(),
@@ -493,5 +512,26 @@ describe("DetailView — process list polling (G4)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("DetailView — browser tab title from meta (G7)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    metaStore.set({});
+    document.title = "";
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("document.title reflects the thread meta title", async () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    metaStore.set({ title: "My Session" });
+    await Promise.resolve();
+    expect(document.title).toContain("My Session");
   });
 });
