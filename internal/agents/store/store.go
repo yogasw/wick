@@ -270,13 +270,16 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 
 	case event.Thinking:
 		now := s.now().UTC()
-		te := TurnEvent{
-			Type: "thinking",
-			Text: ev.Text,
-			At:   now,
-		}
 		s.mu.Lock()
-		s.eventBuf = append(s.eventBuf, te)
+		if n := len(s.eventBuf); n > 0 && s.eventBuf[n-1].Type == "thinking" {
+			s.eventBuf[n-1].Text += ev.Text
+		} else {
+			s.eventBuf = append(s.eventBuf, TurnEvent{
+				Type: "thinking",
+				Text: ev.Text,
+				At:   now,
+			})
+		}
 		s.mu.Unlock()
 		_ = s.appendInflight(InflightEntry{
 			Type: "thinking",

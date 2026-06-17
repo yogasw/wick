@@ -417,6 +417,51 @@ describe("ThreadMessage - show trace toggle", () => {
       expect(screen.getByText("read_file")).toBeDefined();
     });
   });
+
+  test("consecutive thinking events coalesce into a single bubble", async () => {
+    const traceEvents: TurnEvent[] = [
+      { type: "thinking", text: "Let me start " },
+      { type: "thinking", text: "by searching " },
+      { type: "thinking", text: "for the PR." },
+    ];
+    const loadTrace = vi.fn().mockResolvedValue(traceEvents);
+    const turn = makeTurn({ role: "assistant", has_trace: true, turn_id: "backend-coalesce" });
+
+    const { container } = render(ThreadMessage, { props: { turn, loadTrace } });
+    await fireEvent.click(screen.getByText(/show trace/i).closest("button")!);
+
+    await vi.waitFor(() => {
+      const blocks = container.querySelectorAll("[data-thinking-block]");
+      expect(blocks.length).toBe(1);
+      expect(blocks[0].textContent).toContain("Let me start by searching for the PR.");
+    });
+  });
+
+  test("thinking split by a tool call renders two thinking bubbles in chronological order", async () => {
+    const traceEvents: TurnEvent[] = [
+      { type: "thinking", text: "first thought" },
+      { type: "tool_use", tool_use_id: "tu-1", tool_name: "bash", tool_input: "{}" },
+      { type: "tool_result", tool_use_id: "tu-1", text: "ok", is_error: false },
+      { type: "thinking", text: "second thought" },
+    ];
+    const loadTrace = vi.fn().mockResolvedValue(traceEvents);
+    const turn = makeTurn({ role: "assistant", has_trace: true, turn_id: "backend-order" });
+
+    const { container } = render(ThreadMessage, { props: { turn, loadTrace } });
+    await fireEvent.click(screen.getByText(/show trace/i).closest("button")!);
+
+    await vi.waitFor(() => {
+      const blocks = container.querySelectorAll("[data-thinking-block]");
+      expect(blocks.length).toBe(2);
+      expect(blocks[0].textContent).toContain("first thought");
+      expect(blocks[1].textContent).toContain("second thought");
+    });
+
+    const trace = container.querySelector("[data-trace-blocks]")!;
+    const html = trace.innerHTML;
+    expect(html.indexOf("first thought")).toBeLessThan(html.indexOf("bash"));
+    expect(html.indexOf("bash")).toBeLessThan(html.indexOf("second thought"));
+  });
 });
 
 const IMAGE_ATT = { name: "photo.jpg", stored_name: "photo.jpg", url: "https://example.com/photo.jpg", mime: "image/jpeg", size: 12345 };

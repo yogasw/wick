@@ -249,6 +249,54 @@ func TestApplyThinkingBufferedInEvents(t *testing.T) {
 	}
 }
 
+// TestApplyConsecutiveThinkingCoalesced verifies streamed thinking_delta
+// fragments collapse into a single thinking event instead of one event per
+// delta (which rendered as many chopped-up bubbles in the trace UI).
+func TestApplyConsecutiveThinkingCoalesced(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "Let me start "})
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "by searching "})
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "for the PR."})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "answer"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+	lines := readConvLines(t, layout)
+	evs := readTraceEvents(t, layout, lines[0])
+	if len(evs) != 1 {
+		t.Fatalf("events: %d, want 1 coalesced thinking", len(evs))
+	}
+	if evs[0].Type != "thinking" || evs[0].Text != "Let me start by searching for the PR." {
+		t.Fatalf("coalesced thinking event: %+v", evs[0])
+	}
+}
+
+// TestApplyThinkingRunsSplitByToolUse verifies a tool_use between two thinking
+// runs keeps them as two separate blocks in chronological order, not merged
+// across the tool boundary.
+func TestApplyThinkingRunsSplitByToolUse(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "first "})
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "thought"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.ToolResult, Text: "ok", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "second "})
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "thought"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+	lines := readConvLines(t, layout)
+	evs := readTraceEvents(t, layout, lines[0])
+	if len(evs) != 4 {
+		t.Fatalf("events: %d, want 4", len(evs))
+	}
+	if evs[0].Type != "thinking" || evs[0].Text != "first thought" {
+		t.Fatalf("evs[0]: %+v", evs[0])
+	}
+	if evs[1].Type != "tool_use" {
+		t.Fatalf("evs[1]: %+v", evs[1])
+	}
+	if evs[3].Type != "thinking" || evs[3].Text != "second thought" {
+		t.Fatalf("evs[3]: %+v", evs[3])
+	}
+}
+
 func TestApplyToolUseAndResultBuffered(t *testing.T) {
 	st, layout := newStore(t, "backend", false)
 	st.Apply(event.AgentEvent{
