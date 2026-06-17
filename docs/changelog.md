@@ -6,7 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **Conversation — assistant artifact gallery** — files the agent writes or edits during a turn are now surfaced as an **artifact gallery** directly below the assistant bubble. Up to 4 items show as a grid; more than 4 switch to a carousel. Per-kind rendering: images open a zoomable/pannable lightbox (mouse-wheel, drag, `Esc`/`+`/`−`/`0`); PDFs open inline in the lightbox; HTML files render as a sandboxed live-preview iframe; any other type shows as a downloadable chip. Detection is retroactive — no schema migration, works for existing sessions. See [Agents — Artifacts](/guide/agents#artifacts).
+*   **Backend — `GET /tools/agents/sessions/{id}/files/raw`** — new endpoint serves cwd files inline for the artifact lightbox (images and PDFs with correct MIME type; SVG with a `sandbox` CSP header; HTML and other types forced to download). Path-traversal protection via the same `safeJoin` sandbox as the rest of the agents file API.
+*   **Conversation API — `artifacts[]` and `has_artifact` per turn** — each turn in the conversation API response now carries an `artifacts` array (path, kind, MIME type) and a `has_artifact` boolean. Visible in the session detail Raw tab.
 
 ---
 

@@ -139,6 +139,9 @@ func apiSessionConversation(c *tool.Ctx) {
 		turns = []agentstore.ConversationTurn{}
 	}
 	resolveLabelFromTurns(globalLayout, id, turns)
+	if cwd, err := resolveSessionCwd(sess); err == nil {
+		attachArtifactsToTurns(globalLayout, id, c.Base(), cwd, turns)
+	}
 	c.JSON(http.StatusOK, map[string][]agentstore.ConversationTurn{"turns": turns})
 }
 
