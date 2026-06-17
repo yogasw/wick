@@ -161,20 +161,23 @@ const (
 //   - started_at                       → retention purge
 //   - parent_run_id                    → retry lineage trace
 type ConnectorRun struct {
-	ID           string             `gorm:"type:varchar(36);primaryKey"`
-	ConnectorID  string             `gorm:"type:varchar(36);not null;index:idx_run_connector_started,priority:1"`
-	OperationKey string             `gorm:"type:varchar(100);not null"`
-	UserID       string             `gorm:"type:varchar(36);index:idx_run_user_started,priority:1"`
-	Source       ConnectorRunSource `gorm:"type:varchar(20);not null"`
+	// String columns are text, not varchar(n): in Postgres text and varchar
+	// share storage/perf, so a length cap is pure constraint — and the caps
+	// here kept biting (e.g. ConnectorID held "sw_"+uuid = 39 > varchar(36)).
+	ID           string             `gorm:"type:text;primaryKey"`
+	ConnectorID  string             `gorm:"type:text;not null;index:idx_run_connector_started,priority:1"`
+	OperationKey string             `gorm:"type:text;not null"`
+	UserID       string             `gorm:"type:text;index:idx_run_user_started,priority:1"`
+	Source       ConnectorRunSource `gorm:"type:text;not null"`
 	RequestJSON  string             `gorm:"type:text"`
 	ResponseJSON string             `gorm:"type:text"`
-	Status       ConnectorRunStatus `gorm:"type:varchar(20);not null;index:idx_run_status_started,priority:1"`
+	Status       ConnectorRunStatus `gorm:"type:text;not null;index:idx_run_status_started,priority:1"`
 	ErrorMsg     string             `gorm:"type:text"`
 	LatencyMs    int
 	HTTPStatus   int
-	IPAddress    string    `gorm:"type:varchar(45);index:idx_run_ip_started,priority:1"`
-	UserAgent    string    `gorm:"type:varchar(512)"`
-	ParentRunID  *string   `gorm:"type:varchar(36);index"`
+	IPAddress    string    `gorm:"type:text;index:idx_run_ip_started,priority:1"`
+	UserAgent    string    `gorm:"type:text"`
+	ParentRunID  *string   `gorm:"type:text;index"`
 	StartedAt    time.Time `gorm:"not null;index;index:idx_run_connector_started,priority:2,sort:desc;index:idx_run_user_started,priority:2,sort:desc;index:idx_run_status_started,priority:2,sort:desc;index:idx_run_ip_started,priority:2,sort:desc"`
 	EndedAt      *time.Time
 	CreatedAt    time.Time

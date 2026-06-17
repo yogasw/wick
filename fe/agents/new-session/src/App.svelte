@@ -17,6 +17,10 @@
   let providers = $state<ProviderOption[]>([]);
   let presets = $state<PresetOption[]>([]);
   let projects = $state<ProjectOption[]>([]);
+  // Distinguish "still fetching" from "fetched, genuinely empty" so the
+  // "No healthy providers" banner doesn't flash on first paint before the
+  // options request resolves.
+  let loadingProviders = $state(true);
 
   let selectedProvider = $state("");
   let selectedPreset = $state("");
@@ -45,6 +49,7 @@
         providers = provRes.value;
         if (providers.length > 0) selectedProvider = providers[0].type;
       }
+      loadingProviders = false;
       if (presetRes.status === "fulfilled") {
         presets = presetRes.value;
       }
@@ -161,7 +166,10 @@
     {/if}
   </div>
 
-  {#if providers.length === 0}
+  {#if loadingProviders}
+    <!-- Quiet placeholder while options load — no banner, no flash. -->
+    <div class="h-[52px] w-full"></div>
+  {:else if providers.length === 0}
     <div class="w-full rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3">
       <p class="text-sm text-amber-700 dark:text-amber-300">
         No healthy providers found. Configure one in

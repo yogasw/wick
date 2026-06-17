@@ -422,13 +422,15 @@ jobs:
           (cd fe && npm run build)
 
           # Extra commit on detached state carrying generated files, then tag it.
-          # The dist/ glob covers every Go tool that ships a Vite SPA — convention:
-          # `internal/tools/<tool>/dist/`. Add a new tool with its own SPA and it
-          # joins the tag bundle without touching this workflow.
+          # The dist/ glob covers every Go host that ships a Vite SPA by scanning
+          # the whole internal/ tree for a `dist` dir — convention is `//go:embed
+          # all:dist` next to a `dist/.gitkeep`. Add a new tool or host with its
+          # own SPA anywhere under internal/ and it joins the tag bundle without
+          # touching this workflow.
           git add -f \
             $(find . -name '*_templ.go' -not -path './vendor/*') \
             web/public/css/app.css \
-            $(find internal/tools -type d -name dist 2>/dev/null)
+            $(find internal -type d -name dist 2>/dev/null)
           git commit -m "chore: bundle generated templ + css + spa for v${VERSION}"
           git tag v${VERSION}
           git push origin v${VERSION}

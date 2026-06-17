@@ -10,6 +10,20 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.19.2](https://github.com/yogasw/wick/compare/v0.19.1...v0.19.2) — Fixes & Improvements
+
+_Released on 2026-06-17_
+
+### Fixed
+- **Connectors**: Resolved an issue where `ConnectorRun` string columns, such as `ConnectorID`, were too short (`varchar(36)`) to store session-workspace instance IDs (e.g., `sw_<UUID>`, which are 39 characters). These columns have been widened to `text` to prevent "value too long" errors during run inserts. Existing columns are automatically updated on application boot.
+- **New Session UI**: Corrected a visual bug where the "No healthy providers found" banner would briefly flash on the new session page before provider options had finished loading. The banner is now gated to appear only once the provider options request has settled and confirmed an empty list.
+
+### Improved
+- **Release Process**: Enhanced the release tag bundle creation to dynamically discover Single Page Application (SPA) distribution directories within `internal/`. This streamlines development by automatically including new SPA hosts in the bundle and managing their `.gitignore` entries, removing the need for manual configuration.
+
+---
+
+
 ## [v0.19.1](https://github.com/yogasw/wick/compare/v0.19.0...v0.19.1) — Artifact Gallery
 
 _Released on 2026-06-17_
