@@ -326,11 +326,12 @@ carried in git.
 [.gitignore](../.gitignore):
 
 ```
-internal/tools/agents/dist/*/index.html
-internal/tools/agents/dist/*/assets/
-internal/manager/dist/*/index.html
-internal/manager/dist/*/assets/
+internal/**/dist/*/index.html
+internal/**/dist/*/assets/
 ```
+
+One glob covers every SPA host under `internal/` — a new host needs no
+`.gitignore` edit.
 
 The `.gitkeep` at the embed root keeps `//go:embed` happy on a clean
 checkout where nothing has been built yet.
@@ -338,15 +339,15 @@ checkout where nothing has been built yet.
 ## Release pipeline
 
 [`.github/workflows/release.yml`](../.github/workflows/release.yml)
-runs `npm ci` then `npm run build` at `fe/`, then commits every
-`internal/tools/*/dist` directory into the tag commit (alongside
+runs `npm ci` then `npm run build` at `fe/`, then commits every `dist`
+directory found anywhere under `internal/` into the tag commit (alongside
 `*_templ.go` and `web/public/css/app.css`). Glob:
 
 ```bash
 git add -f \
   $(find . -name '*_templ.go' -not -path './vendor/*') \
   web/public/css/app.css \
-  $(find internal/tools -type d -name dist)
+  $(find internal -type d -name dist)
 ```
 
 This means: add a workspace, add a tool, add a route — the release
