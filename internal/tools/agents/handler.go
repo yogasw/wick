@@ -197,6 +197,7 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}/processes", sessionProcesses)
 	r.GET("/sessions/{id}/files/read", sessionContextRead)
 	r.GET("/sessions/{id}/files/download", sessionContextDownload)
+	r.GET("/sessions/{id}/files/raw", sessionContextRaw)
 	r.POST("/sessions/{id}/files/save", sessionContextSave)
 	r.POST("/sessions/{id}/files/create", sessionContextCreate)
 	r.DELETE("/sessions/{id}/files", sessionContextDelete)

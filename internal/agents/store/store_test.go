@@ -352,3 +352,25 @@ func TestEventBufferClearedBetweenTurns(t *testing.T) {
 		t.Fatalf("turn2 should have no events, got: %+v", evs2)
 	}
 }
+
+func TestConversationTurnArtifactsJSON(t *testing.T) {
+	turn := ConversationTurn{
+		Role: "assistant",
+		Text: "done",
+		Artifacts: []Artifact{
+			{Name: "chart.png", Path: "chart.png", URL: "/u/raw?path=chart.png", DownloadURL: "/u/dl?path=chart.png", Kind: "image", MIME: "image/png", Size: 1024},
+		},
+	}
+	b, err := json.Marshal(turn)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"artifacts"`) {
+		t.Fatalf("expected artifacts key, got %s", b)
+	}
+	var empty ConversationTurn
+	b2, _ := json.Marshal(empty)
+	if strings.Contains(string(b2), "artifacts") {
+		t.Fatalf("empty turn must omit artifacts: %s", b2)
+	}
+}
