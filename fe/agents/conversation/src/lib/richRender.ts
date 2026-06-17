@@ -128,7 +128,7 @@ async function renderMath(node: HTMLElement): Promise<void> {
 const ARTIFACT_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; connect-src 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'";
 
-function buildArtifactSrcdoc(html: string): string {
+export function buildArtifactSrcdoc(html: string): string {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`;
   if (/<head[\s>]/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => `${m}${meta}`);
   if (/<html[\s>]/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => `${m}<head>${meta}</head>`);

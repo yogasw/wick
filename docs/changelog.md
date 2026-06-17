@@ -10,6 +10,21 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.19.1](https://github.com/yogasw/wick/compare/v0.19.0...v0.19.1) — Artifact Gallery
+
+_Released on 2026-06-17_
+
+### Added
+*   **Conversation — Assistant Artifact Gallery** — files the agent writes or edits during a turn are now surfaced as an **artifact gallery** directly below the assistant bubble. Up to 4 items show as a grid; more than 4 switch to a carousel. Per-kind rendering: images open a zoomable/pannable lightbox (mouse-wheel, drag, `Esc`/`+`/`−`/`0`); PDFs open inline in the lightbox; HTML files render as a sandboxed live-preview iframe; any other type shows as a downloadable chip. Detection is retroactive — no schema migration, works for existing sessions. See [Agents — Artifacts](/guide/agents#artifacts).
+*   **Backend — `GET /tools/agents/sessions/{id}/files/raw`** — new endpoint serves cwd files inline for the artifact lightbox (images and PDFs with correct MIME type; SVG with a `sandbox` CSP header; HTML and other types forced to download). Path-traversal protection via the same `safeJoin` sandbox as the rest of the agents file API.
+*   **Conversation API — `artifacts[]` and `has_artifact` per turn** — each turn in the conversation API response now carries an `artifacts` array (path, kind, MIME type) and a `has_artifact` boolean. Visible in the session detail Raw tab.
+
+### Fixed
+*   **Conversation** — Artifacts now render automatically below assistant turns upon completion without requiring a manual page refresh.
+
+---
+
+
 ## [v0.19.0](https://github.com/yogasw/wick/compare/v0.18.7...v0.19.0) — Agents & Manager SPAs
 
 _Released on 2026-06-16_
@@ -70,6 +85,7 @@ _Released on 2026-06-16_
 *   **Manager UI — visual realignment** — connector list, custom connector builder (DraftEditor, McpServerForm, MCP SSO guidance, access toggles), jobs/tools setup banners, and audit-log headers are visually aligned to match the design-system tokens and the pre-SPA look. Common-UI primitives (Button, inputs, Select, ToastHost, KvList) use the correct radius and focus-ring tokens. This also includes visual parity restores for new-session, overview, providers, skills UIs.
 
 ### Fixed
+*   **Conversation — artifact gallery now appears without a manual refresh** — assistant-turn artifacts (files written or edited during a turn) were missing from the gallery after a turn completed and only appeared after a full page reload. The conversation is now refetched from the server on each SSE `done`/`error` event, so the server-derived `artifacts`/`has_artifact` data is picked up immediately.
 *   **Conversation — workspace file tree auto-syncs as the agent writes files** — the workspace file tree in the session detail page previously only loaded on session open and manual refresh, so files written by the agent mid-session (artifacts, generated output) did not appear until you reloaded. The SSE handler now silently reloads the file tree — debounced at 400 ms — on every `lifecycle` and `git_status` event, so generated files appear on their own without a refresh.
 *   **Connector operation toggle no longer silently no-ops on first disable** — `SetOperation` in the connector repo was using `db.Save()` which resolves to an `UPDATE` when the primary key is set, leaving a missing row untouched (and `Enabled=false` was dropped as a zero-value on struct insert). Rewritten as a GORM `OnConflict` upsert with a map payload so the `enabled` column is always written verbatim. Affects both the legacy admin UI and the new manager SPA.
 *   **Starting a new agents session no longer fails with 405** — tool root routes now accept POST/DELETE on the trailing-slash form (`/tools/{key}/`), not just GET. The new-session and conversation SPA POSTs to `${base}/` to create a session, which previously matched a GET-only pattern and returned 405 on Send.

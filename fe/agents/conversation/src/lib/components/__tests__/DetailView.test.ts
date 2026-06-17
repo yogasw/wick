@@ -50,11 +50,15 @@ vi.mock("../../stores/thread.js", () => ({
   }),
 }));
 
+const { sseBus } = vi.hoisted(() => ({
+  sseBus: { handler: null as ((ev: { type: string }) => void) | null },
+}));
+
 vi.mock("../../stores/sse.js", () => ({
   connectSession: () => ({
     close: vi.fn(),
     status: { subscribe: (fn: (v: string) => void) => { fn("connected"); return () => {}; } },
-    onEvent: vi.fn(),
+    onEvent: (fn: (ev: { type: string }) => void) => { sseBus.handler = fn; },
   }),
 }));
 
@@ -139,6 +143,7 @@ vi.mock("svelte/store", async (importActual) => {
 import DetailView from "../DetailView.svelte";
 import { killProcess, getProcesses } from "../../api/processes.js";
 import { getAsks } from "../../api/asks.js";
+import { getConversation } from "../../api/sessions.js";
 
 const DEFAULT_PROPS = {
   base: "/api",
@@ -556,5 +561,37 @@ describe("DetailView — Ctrl/Cmd+B toggles the context rail (G8)", () => {
 
     await fireEvent.keyDown(window, { key: "b", ctrlKey: true });
     expect(container.querySelector(".lg\\:flex.flex-col")).toBeNull();
+  });
+});
+
+describe("DetailView — conversation refetch on turn completion (artifacts)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sseBus.handler = null;
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  test("refetches conversation when a 'done' event arrives", () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    expect(getConversation).toHaveBeenCalledTimes(1);
+    expect(sseBus.handler).not.toBeNull();
+    sseBus.handler!({ type: "done" });
+    expect(getConversation).toHaveBeenCalledTimes(2);
+  });
+
+  test("refetches conversation when an 'error' event arrives", () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    sseBus.handler!({ type: "error" });
+    expect(getConversation).toHaveBeenCalledTimes(2);
+  });
+
+  test("does not refetch on a streaming text_delta event", () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    sseBus.handler!({ type: "text_delta" });
+    expect(getConversation).toHaveBeenCalledTimes(1);
   });
 });

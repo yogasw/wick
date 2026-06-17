@@ -3,6 +3,8 @@
   import { renderMarkdown, linkifyText } from "../markdown.js";
   import { enrich } from "../richRender.js";
   import ToolCard from "./ToolCard.svelte";
+  import ArtifactGallery from "./ArtifactGallery.svelte";
+  import MediaLightbox from "./MediaLightbox.svelte";
 
   type Props = {
     turn: ConversationTurn;
@@ -15,6 +17,7 @@
 
   const safeEvents = $derived(turn.events ?? []);
   const safeAttachments = $derived(turn.attachments ?? []);
+  const safeArtifacts = $derived(turn.artifacts ?? []);
   const safeSteps = $derived(safeEvents.filter((ev) => ev.type === "step"));
 
   const showTraceToggle = $derived(!isUser && !isSystem && ((safeEvents.length > 0) || turn.has_trace === true));
@@ -32,28 +35,16 @@
   let traceEvents = $state<TurnEvent[] | null>(null);
   let traceError = $state(false);
 
-  type LightboxImage = { url: string; name: string };
-  let lightbox = $state<LightboxImage | null>(null);
+  type LightboxItem = { url: string; name: string; kind: "image" | "pdf" | "html" | "file" };
+  let lightbox = $state<LightboxItem | null>(null);
 
-  function openLightbox(img: LightboxImage) {
-    lightbox = img;
+  function openLightbox(item: LightboxItem) {
+    lightbox = item;
   }
 
   function closeLightbox() {
     lightbox = null;
   }
-
-  $effect(() => {
-    if (!lightbox) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        closeLightbox();
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
 
   const resolvedTraceEvents = $derived(traceEvents ?? safeEvents);
 
@@ -155,7 +146,7 @@
                 type="button"
                 data-lightbox-trigger
                 title={attachment.name}
-                onclick={() => openLightbox({ url: attachment.url, name: attachment.name })}
+                onclick={() => openLightbox({ url: attachment.url, name: attachment.name, kind: "image" })}
                 class="block rounded-xl overflow-hidden border border-white-300 dark:border-navy-600 shadow-sm bg-white-100 dark:bg-navy-800 hover:shadow-md transition-shadow cursor-zoom-in"
               >
                 <img src={attachment.url} alt={attachment.name} class="block max-h-56 max-w-[240px] object-contain bg-white-200 dark:bg-navy-900" />
@@ -251,6 +242,10 @@
         </div>
       {/if}
 
+      {#if safeArtifacts.length > 0}
+        <ArtifactGallery artifacts={safeArtifacts} onOpen={openLightbox} />
+      {/if}
+
       {#if !turn.text && turn.interrupted}
         <div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 shadow-sm">
           <div class="flex items-center gap-1.5">
@@ -266,47 +261,4 @@
   </div>
 {/if}
 
-{#if lightbox !== null}
-  <div
-    data-lightbox-modal
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
-    role="presentation"
-    onclick={(e) => { if (e.target === e.currentTarget) closeLightbox(); }}
-  >
-    <div class="relative flex flex-col items-center gap-3 max-w-[90vw] max-h-[90vh]">
-      <div class="flex items-center justify-between gap-4 w-full px-1">
-        <span class="text-sm text-white-100 truncate max-w-[70vw]">{lightbox.name}</span>
-        <div class="flex items-center gap-2 shrink-0">
-          <a
-            data-lightbox-newtab
-            href={lightbox.url}
-            target="_blank"
-            rel="noopener"
-            class="inline-flex items-center gap-1.5 rounded-lg border border-white-300/30 px-2.5 py-1.5 text-xs text-white-100 hover:bg-white-100/10 transition-colors"
-          >
-            <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M6 3H3a1 1 0 00-1 1v9a1 1 0 001 1h9a1 1 0 001-1v-3M9 2h5m0 0v5m0-5L7 10" stroke-linecap="round" stroke-linejoin="round"></path>
-            </svg>
-            Open in new tab
-          </a>
-          <button
-            type="button"
-            data-lightbox-close
-            aria-label="Close preview"
-            onclick={closeLightbox}
-            class="inline-flex h-7 w-7 items-center justify-center rounded-lg text-white-100 hover:bg-white-100/10 transition-colors"
-          >
-            <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"></path>
-            </svg>
-          </button>
-        </div>
-      </div>
-      <img
-        src={lightbox.url}
-        alt={lightbox.name}
-        class="max-w-full max-h-[80vh] object-contain rounded-xl shadow-2xl"
-      />
-    </div>
-  </div>
-{/if}
+<MediaLightbox item={lightbox} onClose={closeLightbox} />
