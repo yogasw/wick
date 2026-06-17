@@ -6,7 +6,8 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+*   **Conversation — trace view renders correctly** — the "Show trace" panel on assistant turns previously rendered each streamed `thinking_delta` fragment as its own separate bubble, and all thinking blocks were grouped at the top before tool cards. Consecutive thinking fragments are now coalesced into a single bubble per reasoning run, and the trace renders in chronological order (thinking interleaved with tool cards) so the agent's actual reasoning flow is visible.
 
 ---
 
