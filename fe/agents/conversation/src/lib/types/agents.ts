@@ -65,6 +65,16 @@ export type Attachment = {
   size: number;
 };
 
+export type Artifact = {
+  name: string;
+  path: string;
+  url: string;
+  download_url: string;
+  kind: "image" | "pdf" | "html" | "file";
+  mime?: string;
+  size?: number;
+};
+
 export type ConversationTurn = {
   turn_id: string;
   role: string;
@@ -77,6 +87,7 @@ export type ConversationTurn = {
   has_trace: boolean;
   events: TurnEvent[];
   attachments: Attachment[];
+  artifacts?: Artifact[];
 };
 
 export type ApprovalRequest = {
