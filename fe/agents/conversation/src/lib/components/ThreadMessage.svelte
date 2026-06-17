@@ -48,40 +48,52 @@
 
   const resolvedTraceEvents = $derived(traceEvents ?? safeEvents);
 
-  const traceToolBlocks = $derived(
-    resolvedTraceEvents
-      .filter((ev) => ev.type === "tool_use")
-      .map((ev) => ({
-        kind: "tool" as const,
-        toolUseId: ev.tool_use_id ?? "",
-        toolName: ev.tool_name ?? "",
-        toolInput: ev.tool_input ?? "",
-        result: resolvedTraceEvents.find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.text,
-        isError: resolvedTraceEvents.find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id)?.is_error,
-      } satisfies Extract<ThreadBlock, { kind: "tool" }>)
-    )
-  );
-
-  const traceOrphanResultBlocks = $derived(
-    resolvedTraceEvents
-      .filter((ev) =>
-        ev.type === "tool_result" &&
-        !resolvedTraceEvents.some((u) => u.type === "tool_use" && u.tool_use_id === ev.tool_use_id)
-      )
-      .map((ev) => ({
-        kind: "tool" as const,
-        toolUseId: ev.tool_use_id ?? "",
-        toolName: ev.tool_name ?? "tool result",
-        toolInput: "",
-        result: ev.text,
-        isError: ev.is_error,
-      } satisfies Extract<ThreadBlock, { kind: "tool" }>)
-    )
-  );
-
-  const traceThinkingEvents = $derived(
-    resolvedTraceEvents.filter((ev) => ev.type === "thinking")
-  );
+  /* Walk the trace in order, coalescing consecutive thinking deltas into one
+     block so streamed thinking_delta fragments render as a single bubble
+     instead of one bubble per delta. Tool calls break a thinking run, so
+     chronological think→tool→think ordering is preserved. */
+  const traceBlocks = $derived.by<ThreadBlock[]>(() => {
+    const blocks: ThreadBlock[] = [];
+    let thinking: string | null = null;
+    const flush = () => {
+      if (thinking !== null) {
+        blocks.push({ kind: "thinking", text: thinking });
+        thinking = null;
+      }
+    };
+    for (const ev of resolvedTraceEvents) {
+      if (ev.type === "thinking") {
+        thinking = (thinking ?? "") + (ev.text ?? "");
+      } else if (ev.type === "tool_use") {
+        flush();
+        const res = resolvedTraceEvents.find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id);
+        blocks.push({
+          kind: "tool",
+          toolUseId: ev.tool_use_id ?? "",
+          toolName: ev.tool_name ?? "",
+          toolInput: ev.tool_input ?? "",
+          result: res?.text,
+          isError: res?.is_error,
+        });
+      } else if (ev.type === "tool_result") {
+        const paired = resolvedTraceEvents.some((u) => u.type === "tool_use" && u.tool_use_id === ev.tool_use_id);
+        if (paired) {
+          continue;
+        }
+        flush();
+        blocks.push({
+          kind: "tool",
+          toolUseId: ev.tool_use_id ?? "",
+          toolName: ev.tool_name ?? "tool result",
+          toolInput: "",
+          result: ev.text,
+          isError: ev.is_error,
+        });
+      }
+    }
+    flush();
+    return blocks;
+  });
 
   async function toggleTrace() {
     if (traceOpen) {
@@ -208,17 +220,15 @@
           {/if}
 
           {#if traceOpen}
-            <div class="flex flex-col gap-1 mt-0.5">
-              {#each traceThinkingEvents as ev}
-                <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700">
-                  {ev.text ?? ""}
-                </div>
-              {/each}
-              {#each traceToolBlocks as block}
-                <ToolCard {block} />
-              {/each}
-              {#each traceOrphanResultBlocks as block}
-                <ToolCard {block} />
+            <div class="flex flex-col gap-1 mt-0.5" data-trace-blocks>
+              {#each traceBlocks as block}
+                {#if block.kind === "thinking"}
+                  <div data-thinking-block class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700 whitespace-pre-wrap break-words">
+                    {block.text}
+                  </div>
+                {:else}
+                  <ToolCard {block} />
+                {/if}
               {/each}
             </div>
           {/if}
