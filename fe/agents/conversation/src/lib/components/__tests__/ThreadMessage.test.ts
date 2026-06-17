@@ -456,7 +456,7 @@ describe("ThreadMessage - image lightbox", () => {
     const { container } = render(ThreadMessage, { props: { turn } });
     await fireEvent.click(container.querySelector("button[data-lightbox-trigger]")!);
     expect(container.querySelector("[data-lightbox-modal]")).not.toBeNull();
-    await fireEvent.click(container.querySelector("button[data-lightbox-close]")!);
+    await fireEvent.click(container.querySelector('button[aria-label="Close preview"]')!);
     expect(container.querySelector("[data-lightbox-modal]")).toBeNull();
   });
 
@@ -473,7 +473,7 @@ describe("ThreadMessage - image lightbox", () => {
     const turn = makeTurn({ attachments: [IMAGE_ATT] });
     const { container } = render(ThreadMessage, { props: { turn } });
     await fireEvent.click(container.querySelector("button[data-lightbox-trigger]")!);
-    const newTabLink = container.querySelector<HTMLAnchorElement>("a[data-lightbox-newtab]");
+    const newTabLink = container.querySelector<HTMLAnchorElement>('a[aria-label="Open in new tab"]');
     expect(newTabLink).not.toBeNull();
     expect(newTabLink!.getAttribute("href")).toBe(IMAGE_ATT.url);
     expect(newTabLink!.getAttribute("target")).toBe("_blank");
@@ -501,5 +501,35 @@ describe("ThreadMessage - mixed attachments", () => {
     const blankLinks = Array.from(container.querySelectorAll<HTMLAnchorElement>("a[target='_blank']"));
     const hrefs = blankLinks.map((a) => a.getAttribute("href"));
     expect(hrefs).toContain(FILE_ATT.url);
+  });
+});
+
+describe("ThreadMessage - assistant artifacts", () => {
+  test("renders ArtifactGallery for assistant turn with artifacts", () => {
+    const { container } = render(ThreadMessage, {
+      props: {
+        turn: makeTurn({
+          role: "assistant",
+          text: "done",
+          artifacts: [{ name: "c.png", path: "c.png", url: "/raw?path=c.png", download_url: "/dl?path=c.png", kind: "image" }],
+        }),
+      },
+    });
+    expect(container.querySelector("[data-gallery-grid]")).not.toBeNull();
+    expect(container.querySelector('img[src="/raw?path=c.png"]')).not.toBeNull();
+  });
+
+  test("opens MediaLightbox when an artifact image is clicked", async () => {
+    const { container } = render(ThreadMessage, {
+      props: {
+        turn: makeTurn({
+          role: "assistant",
+          text: "",
+          artifacts: [{ name: "c.png", path: "c.png", url: "/raw?path=c.png", download_url: "/dl?path=c.png", kind: "image" }],
+        }),
+      },
+    });
+    await fireEvent.click(container.querySelector("[data-gallery-grid] button") as HTMLElement);
+    expect(container.querySelector("[data-lightbox-modal]")).not.toBeNull();
   });
 });
