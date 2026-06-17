@@ -274,6 +274,70 @@ func sessionContextDownload(c *tool.Ctx) {
 	http.ServeFile(c.W, c.R, full)
 }
 
+// artifactServeContentType returns the inline Content-Type for a name when the
+// type is in the inline whitelist; inline=false means serve as a download.
+func artifactServeContentType(name string) (string, bool) {
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext == ".svg" {
+		return "image/svg+xml", true // safe via <img>; CSP sandbox added on serve
+	}
+	ct, ok := inlineSafeMIME[normalizeExtMIME(ext)]
+	return ct, ok
+}
+
+// sessionContextRaw streams a cwd file inline when its type is whitelisted
+// (images, pdf), else as a download. Used by artifact <img>/<iframe> previews.
+func sessionContextRaw(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	rel := c.Query("path")
+	if rel == "" {
+		c.Error(http.StatusBadRequest, "path required")
+		return
+	}
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.Error(http.StatusNotFound, "session not found")
+		return
+	}
+	cwd, err := resolveSessionCwd(sess)
+	if err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	full, err := safeJoin(cwd, rel)
+	if err != nil {
+		c.Error(http.StatusBadRequest, err.Error())
+		return
+	}
+	info, err := os.Stat(full)
+	if err != nil || info.IsDir() {
+		c.Error(http.StatusNotFound, "not found")
+		return
+	}
+	name := info.Name()
+	c.W.Header().Set("X-Content-Type-Options", "nosniff")
+	if ct, inline := artifactServeContentType(name); inline {
+		c.W.Header().Set("Content-Type", ct)
+		if ct == "image/svg+xml" {
+			c.W.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+		}
+		c.W.Header().Set("Content-Disposition", `inline; filename="`+sanitizeHeaderFilename(name)+`"`)
+	} else {
+		c.W.Header().Set("Content-Type", "application/octet-stream")
+		c.W.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeHeaderFilename(name)+`"`)
+	}
+	f, err := os.Open(full)
+	if err != nil {
+		c.Error(http.StatusInternalServerError, "open file")
+		return
+	}
+	defer func() { _ = f.Close() }()
+	http.ServeContent(c.W, c.R, name, info.ModTime(), f)
+}
+
 type contextSaveReq struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
