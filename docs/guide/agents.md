@@ -37,7 +37,7 @@ After boot, head to `/tools/agents`.
 | Page | What you do |
 |---|---|
 | **Overview** | Pool stats (active / max / queue), running list, recent sessions. |
-| **Sessions** | List, open, delete sessions. Detail tabs: Conversation (assistant bubbles render Mermaid diagrams, syntax-highlighted code, and KaTeX math), Commands (gate audit), Approvals, Raw (collapsible JSON tree of all turns + per-turn tool/thinking traces fetched on demand). Composer at the bottom posts a new message. |
+| **Sessions** | List, open, delete sessions. Detail tabs: Conversation (assistant bubbles render Mermaid diagrams, syntax-highlighted code, KaTeX math, and [artifact galleries](#artifacts)), Commands (gate audit), Approvals, Raw (collapsible JSON tree of all turns + per-turn tool/thinking traces fetched on demand). Composer at the bottom posts a new message. |
 | **Projects** | Create / delete projects. New = empty managed folder unless pointed at a custom path. |
 | **Presets** | Edit reusable agent instructions. Each preset is one `agent.md` file. The built-in `default` preset is the fallback when a session has no project (or the project has no `DefaultPreset`); it cannot be deleted, only edited. |
 | **Providers** | Per-instance status cards: binary path, version, env vars, extra args, "Rescan" button. Add custom instances when you need two PATs for the same CLI. |
@@ -127,6 +127,35 @@ This table is mirrored into the agent's immutable system prompt (the `## Rendera
 :::
 
 The renderers (mermaid / highlight.js / KaTeX) are **lazy-loaded** on first use as separate chunks, and Mermaid runs with `securityLevel: strict` since the content is LLM-authored.
+
+## Artifacts
+
+When an assistant turn writes or edits files in the session `cwd/`, those files are automatically surfaced as **artifacts** — inline previews attached to that bubble, directly below the message text. No extra steps: the detection is read-time from the turn's trace index (Write / Edit tool calls), so it works retroactively for sessions that already exist.
+
+Files produced in a single turn are shown as a **grid** (up to 4 items) or a **carousel** (more than 4), each rendered according to its type:
+
+| File type | How it renders |
+|---|---|
+| Image — png, jpg, jpeg, svg, webp, gif | Thumbnail in the grid. Click opens a **zoomable / pannable lightbox** (zoom buttons, mouse-wheel, drag to pan, `Esc` / `+` / `−` / `0` keyboard shortcuts). |
+| PDF | Thumbnail chip. Click opens the PDF inline in the lightbox. |
+| HTML | Live sandboxed `<iframe>` preview chip. Click opens a full-screen sandboxed preview. |
+| Any other type | Downloadable file chip (icon + filename). |
+
+Detection rules: Write and Edit calls on any file type qualify as artifacts. Read calls qualify only for non-text files (e.g. a PNG the agent generated and then read back). Text files the agent only read — not wrote — are not shown as artifacts.
+
+### Serving artifacts
+
+A new backend endpoint serves cwd files on demand:
+
+```
+GET /tools/agents/sessions/{id}/files/raw?path=<relative-path>
+```
+
+- Images, PDFs: served `inline` with the detected MIME type and `X-Content-Type-Options: nosniff`.
+- SVG: served inline with an additional `Content-Security-Policy: sandbox` header to prevent script execution.
+- HTML and other types: forced to `attachment` (download) for safety — the lightbox HTML preview uses `srcdoc` not `src` so the raw file is never trusted directly.
+
+The endpoint is gated by the same session-ownership check as the rest of the agents API and respects the `safeJoin` path sandbox (no `..` traversal).
 
 ## Context file panel
 
