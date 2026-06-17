@@ -55,6 +55,19 @@ type Attachment struct {
 	Size       int64  `json:"size,omitempty"`
 }
 
+// Artifact is a file produced by an assistant turn, derived from the turn's
+// trace at read time (never persisted). URL serves bytes inline (images, pdf);
+// DownloadURL forces a download. Kind drives how the UI previews it.
+type Artifact struct {
+	Name        string `json:"name"`
+	Path        string `json:"path"` // relative to session cwd, forward slashes
+	URL         string `json:"url"`
+	DownloadURL string `json:"download_url"`
+	Kind        string `json:"kind"` // image | pdf | html | file
+	MIME        string `json:"mime,omitempty"`
+	Size        int64  `json:"size,omitempty"`
+}
+
 // ConversationTurn is the on-disk shape of one user/assistant turn.
 // Events are NOT stored here — they live in thinking/<TurnID>.json so
 // conversation.jsonl stays small regardless of tool payload size.
@@ -71,6 +84,7 @@ type ConversationTurn struct {
 	HasTrace    bool         `json:"has_trace,omitempty"`   // true when thinking/<TurnID>.json exists
 	Events      []TurnEvent  `json:"events,omitempty"`      // legacy: populated only when reading old turns
 	Attachments []Attachment `json:"attachments,omitempty"` // user turn only
+	Artifacts   []Artifact   `json:"artifacts,omitempty"`   // assistant turn, derived read-time
 }
 
 // TurnTraceIndex is the lightweight index written to thinking/<turn_id>.json.
