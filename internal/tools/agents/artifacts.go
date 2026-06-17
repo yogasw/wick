@@ -154,6 +154,7 @@ func attachArtifactsToTurns(layout agentconfig.Layout, sessionID, base, cwd stri
 	for i := range turns {
 		if a := deriveArtifacts(layout, sessionID, base, cwd, turns[i]); len(a) > 0 {
 			turns[i].Artifacts = a
+			turns[i].HasArtifact = true
 		}
 	}
 }

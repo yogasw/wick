@@ -132,10 +132,13 @@ func TestAttachArtifactsToTurns(t *testing.T) {
 		{TurnID: tid, Role: "assistant", HasTrace: true, Text: "done"},
 	}
 	attachArtifactsToTurns(layout, sid, "/base", cwd, turns)
-	if len(turns[0].Artifacts) != 0 {
-		t.Errorf("user turn must have no artifacts")
+	if len(turns[0].Artifacts) != 0 || turns[0].HasArtifact {
+		t.Errorf("user turn must have no artifacts and has_artifact=false")
 	}
 	if len(turns[1].Artifacts) != 1 || turns[1].Artifacts[0].Path != "out.png" {
 		t.Fatalf("assistant turn artifacts = %v", turns[1].Artifacts)
+	}
+	if !turns[1].HasArtifact {
+		t.Errorf("assistant turn with artifacts must have has_artifact=true")
 	}
 }

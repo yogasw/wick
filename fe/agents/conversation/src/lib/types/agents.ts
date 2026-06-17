@@ -87,6 +87,7 @@ export type ConversationTurn = {
   has_trace: boolean;
   events: TurnEvent[];
   attachments: Attachment[];
+  has_artifact?: boolean;
   artifacts?: Artifact[];
 };
 

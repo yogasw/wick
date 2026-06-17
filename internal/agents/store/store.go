@@ -83,8 +83,9 @@ type ConversationTurn struct {
 	Interrupted bool         `json:"interrupted,omitempty"` // true when killed before Done — distinct from text-cap truncation
 	HasTrace    bool         `json:"has_trace,omitempty"`   // true when thinking/<TurnID>.json exists
 	Events      []TurnEvent  `json:"events,omitempty"`      // legacy: populated only when reading old turns
-	Attachments []Attachment `json:"attachments,omitempty"` // user turn only
-	Artifacts   []Artifact   `json:"artifacts,omitempty"`   // assistant turn, derived read-time
+	Attachments []Attachment `json:"attachments,omitempty"`  // user turn only
+	HasArtifact bool         `json:"has_artifact,omitempty"` // assistant turn — true when Artifacts derived
+	Artifacts   []Artifact   `json:"artifacts,omitempty"`    // assistant turn, derived read-time
 }
 
 // TurnTraceIndex is the lightweight index written to thinking/<turn_id>.json.
