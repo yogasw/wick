@@ -509,6 +509,17 @@
       .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
   }
 
+  /* Refetch the persisted conversation so a just-completed turn picks up
+     server-derived artifacts — the live SSE turn is built client-side and
+     carries none. showError surfaces a toast only on the initial load. */
+  function loadConversation(showError = false) {
+    return run(getConversation(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => thread.setHistory(res.turns))
+      .catch((e: unknown) => {
+        if (showError) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
+      });
+  }
+
   /* ── SSE fan-out ──────────────────────────────────────────────── */
   function startSSE() {
     const stream = connectSession(base, sessionId);
@@ -536,6 +547,8 @@
         } catch (_) { /* skip */ }
       } else if (ev.type === "approval_resolved") {
         try { hideApproval(JSON.parse(ev.data ?? "{}")); } catch (_) { /* skip */ }
+      } else if (ev.type === "done" || ev.type === "error") {
+        void loadConversation();
       } else if (ev.type === "lifecycle") {
         loadProcesses();
         scheduleFileReload();
@@ -630,9 +643,7 @@
 
   /* ── mount/unmount ────────────────────────────────────────────── */
   onMount(() => {
-    run(getConversation(base, sessionId).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => thread.setHistory(res.turns))
-      .catch((e: unknown) => toastError(`History: ${e instanceof Error ? e.message : String(e)}`));
+    loadConversation(true);
 
     run(getSessionMeta(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
