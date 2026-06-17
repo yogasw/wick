@@ -6,10 +6,19 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Fixed
-*   **Conversation — trace view renders correctly** — the "Show trace" panel on assistant turns previously rendered each streamed `thinking_delta` fragment as its own separate bubble, and all thinking blocks were grouped at the top before tool cards. Consecutive thinking fragments are now coalesced into a single bubble per reasoning run, and the trace renders in chronological order (thinking interleaved with tool cards) so the agent's actual reasoning flow is visible.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.19.3](https://github.com/yogasw/wick/compare/v0.19.2...v0.19.3) — Conversation Trace
+
+_Released on 2026-06-17_
+
+### Fixed
+*   **Conversation — trace view renders correctly** — The "Show trace" panel on assistant turns previously rendered each streamed `thinking_delta` fragment as its own separate bubble, often split mid-sentence, and grouped all thinking blocks at the top before tool cards. Consecutive thinking fragments are now coalesced into a single bubble per reasoning run, and the trace renders in chronological order (thinking interleaved with tool cards) so the agent's actual reasoning flow is visible. This improvement applies to both live snapshots and persisted traces, and it also repairs old traces that were stored with fragmented thinking events.
+
+---
+
 
 ## [v0.19.2](https://github.com/yogasw/wick/compare/v0.19.1...v0.19.2) — Fixes & Improvements
 
