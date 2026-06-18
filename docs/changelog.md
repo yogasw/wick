@@ -6,6 +6,14 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.20.1](https://github.com/yogasw/wick/compare/v0.20.0...v0.20.1) — Chat & Agents
+
+_Released on 2026-06-18_
+
 ### Improved
 
 *   **Chat — WhatsApp-style message timestamps**: Each assistant and user bubble now shows an `HH:mm` timestamp on hover/focus, and a sticky centered date separator (Today / Yesterday / weekday name / full date) appears whenever the date changes between turns.
@@ -15,8 +23,10 @@ All notable changes to Wick are documented here.
 ### Fixed
 
 *   **Agents — ownerless "system" projects now visible**: Projects with no recorded owner (created directly in the DB or by internal tooling) are now accessible to every authenticated caller, not only when the tags service is absent.
+*   **Chat — Pin as default state**: The "Pin as default" button and project pinning state now reflect immediately in the UI without needing a page refresh.
 
 ---
+
 
 ## [v0.20.0](https://github.com/yogasw/wick/compare/v0.19.3...v0.20.0) — Agents & Chat
 
