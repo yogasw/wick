@@ -442,10 +442,23 @@ func (a projectAccess) allowSession(projectID, userID string) bool {
 		return true
 	}
 	if projectID == "" {
+		// Unscoped session: visible only to its own creator. Ownerless
+		// unscoped sessions (UserID == "") are hidden from everyone while
+		// AdminSeeAll is off — no one is scoped to "see all".
 		return userID != "" && userID == a.userID
 	}
 	_, ok := a.projects[projectID]
 	return ok
+}
+
+// adminSeeAll reports whether the AdminSeeAll knob is on. When true, admins
+// regain the legacy unrestricted view of every project and session. Default
+// (and on missing config) is false: admins are scoped like regular users.
+func adminSeeAll() bool {
+	if globalConfigs == nil {
+		return false
+	}
+	return globalConfigs.GetOwned("agents", "admin_see_all") == "true"
 }
 
 // callerProjectAccess resolves the caller's project visibility once per
@@ -453,7 +466,15 @@ func (a projectAccess) allowSession(projectID, userID string) bool {
 // project/session. Unauthenticated and admin/owner callers see everything.
 func callerProjectAccess(c *tool.Ctx) projectAccess {
 	u := login.GetUser(c.Context())
-	if u == nil || u.IsAdmin() {
+	// No user in context = internal / MCP caller: unrestricted.
+	if u == nil {
+		return projectAccess{seeAll: true}
+	}
+	// Admins see everything only when AdminSeeAll is on (legacy behaviour).
+	// With it off (default) an admin is scoped like a regular user, falling
+	// through to the tag-based path below — keeps the admin's own session
+	// list and conversation history clean and private.
+	if u.IsAdmin() && adminSeeAll() {
 		return projectAccess{seeAll: true}
 	}
 	if globalTagsSvc != nil {
@@ -620,9 +641,10 @@ func idleTimeoutMs() int {
 	return 120 * 1000
 }
 
-// ownsSession reports whether the caller may access sess. App owners see
-// all sessions; regular users may only access sessions they own or legacy
-// sessions that have no recorded owner (UserID=="").
+// ownsSession reports whether the caller may access sess. App owners (and
+// admins while AdminSeeAll is on) see all sessions; everyone else may only
+// access sessions they own. Ownerless sessions (UserID=="") are reachable
+// only by the owner / see-all caller — they are not a public escape hatch.
 func ownsSession(c *tool.Ctx, sess session.Session) bool {
 	u := login.GetUser(c.Context())
 	if u == nil {
@@ -631,7 +653,10 @@ func ownsSession(c *tool.Ctx, sess session.Session) bool {
 	if u.CanSeeAllSessions() {
 		return true
 	}
-	return sess.Meta.UserID == "" || sess.Meta.UserID == u.ID
+	if u.IsAdmin() && adminSeeAll() {
+		return true
+	}
+	return sess.Meta.UserID != "" && sess.Meta.UserID == u.ID
 }
 
 // ensurePersonalProjectForUser auto-creates a personal project for a non-admin

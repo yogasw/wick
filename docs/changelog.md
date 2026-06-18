@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Changed
+
+*   **Agents — admin session visibility now scoped by default** — admins are no longer implicitly unrestricted. By default an admin sees only tag-granted projects and their own sessions, matching the regular-user isolation model. To restore the legacy unrestricted view, enable `admin_see_all` at `/admin/variables`. The App Owner tier is unaffected and remains always-unrestricted. Ownerless sessions (no recorded creator) are now hidden from everyone while `admin_see_all` is off, instead of being reachable by any logged-in user. See [Admin Panel — Admin session visibility](/guide/admin-panel#admin-session-visibility-admin_see_all).
 
 ---
 
