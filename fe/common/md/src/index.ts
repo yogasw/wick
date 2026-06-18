@@ -52,6 +52,7 @@ export function renderMarkdown(text: string): string {
   const out: string[] = [];
   let inCode = false, codeLang = "", codeLines: string[] = [];
   let inMath = false, mathLines: string[] = [];
+  let inSvg = false, svgLines: string[] = [];
   let inList = false, listOl = false;
   let inTable = false, tableHeader = false;
   let listItems: string[] = [];
@@ -78,13 +79,30 @@ export function renderMarkdown(text: string): string {
     );
   }
 
+  function emitSvgBlock(code: string) {
+    out.push(
+      `<div class="wick-svg my-2 rounded-lg overflow-hidden bg-white-200 dark:bg-navy-800" data-svg data-svg-src="${esc(code)}">` +
+      `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 leading-relaxed"><code>${esc(code)}</code></pre></div>`,
+    );
+  }
+
   function emitCodeBlock(lang: string, code: string) {
     /* Mermaid fences become a diagram placeholder; the SPA lazy-loads
        mermaid and swaps the SVG in. The raw source stays as the body so it
        degrades to a plain code block where no renderer runs. */
     if (lang === "mermaid") {
       out.push(
-        `<div class="wick-mermaid my-2 rounded-lg overflow-hidden border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800" data-mermaid data-mermaid-src="${esc(code)}">` +
+        `<div class="wick-mermaid my-2 rounded-lg overflow-hidden bg-white-200 dark:bg-navy-800" data-mermaid data-mermaid-src="${esc(code)}">` +
+        `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 leading-relaxed"><code>${esc(code)}</code></pre></div>`,
+      );
+      return;
+    }
+    /* An svg fence becomes a rendered image placeholder; the SPA injects the
+       markup as a sanitised inline SVG. The raw source stays as the body so it
+       degrades to a plain code block where no renderer runs. */
+    if (lang === "svg") {
+      out.push(
+        `<div class="wick-svg my-2 rounded-lg overflow-hidden bg-white-200 dark:bg-navy-800" data-svg data-svg-src="${esc(code)}">` +
         `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 leading-relaxed"><code>${esc(code)}</code></pre></div>`,
       );
       return;
@@ -94,7 +112,7 @@ export function renderMarkdown(text: string): string {
        to a plain code block where no renderer runs. */
     if (lang === "html") {
       out.push(
-        `<div class="wick-html-artifact my-2 rounded-lg overflow-hidden border border-white-300 dark:border-navy-600" data-html-artifact data-html-src="${esc(code)}">` +
+        `<div class="wick-html-artifact my-2 rounded-lg overflow-hidden" data-html-artifact data-html-src="${esc(code)}">` +
         `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 leading-relaxed"><code>${esc(code)}</code></pre></div>`,
       );
       return;
@@ -105,7 +123,7 @@ export function renderMarkdown(text: string): string {
     const copyBtn = `<button type="button" data-copy-code data-code="${code.replace(/"/g, "&quot;")}" class="text-[10px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-400 transition-colors px-1.5 py-0.5 rounded hover:bg-white-400 dark:hover:bg-navy-500">Copy</button>`;
     const codeOpen = lang ? `<code class="language-${esc(lang)}" data-code-lang="${esc(lang)}">` : "<code>";
     out.push(
-      `<div class="my-2 rounded-lg overflow-hidden border border-white-300 dark:border-navy-600">` +
+      `<div class="my-2 rounded-lg overflow-hidden">` +
       `<div class="flex items-center justify-between px-3 py-1 bg-white-300 dark:bg-navy-600">${langLabel}${copyBtn}</div>` +
       `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 leading-relaxed">${codeOpen}${esc(code)}</code></pre></div>`,
     );
@@ -126,6 +144,23 @@ export function renderMarkdown(text: string): string {
       continue;
     }
     if (inCode) { codeLines.push(line); continue; }
+
+    /* Raw inline SVG (no ```svg``` fence): the model often emits a bare
+       <svg>…</svg>. Treat it like an svg block so it renders as an image
+       instead of escaped source. Collect from the opening <svg until the
+       closing </svg> (may span many lines, or be all on one). */
+    if (!inSvg && /^\s*<svg[\s>]/i.test(line)) {
+      flushList(); flushTable();
+      inSvg = true; svgLines = [];
+    }
+    if (inSvg) {
+      svgLines.push(line);
+      if (/<\/svg\s*>/i.test(line)) {
+        emitSvgBlock(svgLines.join("\n").trim());
+        inSvg = false; svgLines = [];
+      }
+      continue;
+    }
 
     /* Display-math fence: a line that is exactly "$$" opens/closes a block. */
     if (line.trim() === "$$") {
@@ -217,6 +252,17 @@ export function renderMarkdown(text: string): string {
   }
   if (inMath && mathLines.length) {
     emitMathBlock(mathLines.join("\n"));
+  }
+  /* An SVG still open at EOF is mid-stream (no </svg> yet). Emit it as a
+     partial svg block so the SPA renders whatever shapes are already complete
+     ("painting" effect) instead of showing raw source. data-svg-partial tells
+     the renderer to auto-close + tolerate an unfinished trailing tag. */
+  if (inSvg && svgLines.length) {
+    const partial = svgLines.join("\n").trim();
+    out.push(
+      `<div class="wick-svg my-2 rounded-lg overflow-hidden bg-white-200 dark:bg-navy-800" data-svg data-svg-partial data-svg-src="${esc(partial)}">` +
+      `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 leading-relaxed"><code>${esc(partial)}</code></pre></div>`,
+    );
   }
 
   return out.join("");

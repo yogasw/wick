@@ -5,6 +5,8 @@
    message that re-renders on every token does not thrash the renderers. */
 import "katex/dist/katex.min.css";
 import "./richRender.css";
+import { attachToolbar } from "./blockToolbar.js";
+import { renderMarkdown } from "./markdown.js";
 
 type MermaidModule = {
   initialize: (config: Record<string, unknown>) => void;
@@ -72,13 +74,22 @@ async function renderMermaid(node: HTMLElement): Promise<void> {
   if (!els.length) return;
   const mermaid = await loadMermaid();
   for (const el of els) {
-    el.setAttribute("data-enriched", "");
     const src = el.getAttribute("data-mermaid-src") ?? "";
     try {
       const { svg } = await mermaid.render(`wmmd-${++mermaidSeq}`, src);
+      el.setAttribute("data-enriched", "");
       el.innerHTML = `<div class="flex justify-center overflow-x-auto p-2">${svg}</div>`;
+      /* hover toolbar: Copy .mmd source / Download / Copy diagram as PNG */
+      attachToolbar(el, {
+        source: () => src,
+        filename: "diagram.mmd",
+        mime: "text/plain;charset=utf-8",
+        svg: () => el.querySelector("svg"),
+      });
     } catch {
-      /* keep the raw-code fallback already inside the placeholder */
+      /* parse failed: reveal the raw-code fallback (CSS shows pre again) */
+      el.setAttribute("data-enriched", "");
+      el.setAttribute("data-render-failed", "");
     }
   }
 }
@@ -97,6 +108,129 @@ async function highlightCode(node: HTMLElement): Promise<void> {
       el.classList.add("hljs");
     } catch {
       /* keep the plain escaped code */
+    }
+  }
+}
+
+/* Parses untrusted SVG markup and strips anything that can execute or phone
+   home: <script>, event handlers (on*), external/javascript: URLs, and
+   <foreignObject> (which can embed arbitrary HTML). Returns the sanitised
+   <svg> element, or null when the markup has no usable root. */
+function sanitiseSvg(markup: string): SVGSVGElement | null {
+  let root: Element | null = null;
+
+  /* 1) strict XML parse (preferred — preserves SVG namespace exactly) */
+  let doc = new DOMParser().parseFromString(markup, "image/svg+xml");
+  if (doc.querySelector("parsererror")) {
+    /* XML is strict: a bare & (common in text/URLs) breaks it. Escape
+       ampersands that aren't already an entity, then retry. */
+    const fixed = markup.replace(/&(?!#?\w+;)/g, "&amp;");
+    doc = new DOMParser().parseFromString(fixed, "image/svg+xml");
+  }
+  if (!doc.querySelector("parsererror") && doc.documentElement.nodeName.toLowerCase() === "svg") {
+    root = doc.documentElement;
+  }
+
+  /* 2) lenient fallback: the HTML parser never throws on imperfect markup.
+     Reparenting the parsed <svg> into the SVG namespace via outerHTML round-trip
+     keeps it a real SVGSVGElement that renders. */
+  if (!root) {
+    const html = new DOMParser().parseFromString(markup, "text/html");
+    const found = html.querySelector("svg");
+    if (found) {
+      const reparsed = new DOMParser().parseFromString(found.outerHTML, "image/svg+xml");
+      if (!reparsed.querySelector("parsererror") && reparsed.documentElement.nodeName.toLowerCase() === "svg") {
+        root = reparsed.documentElement;
+      }
+    }
+  }
+
+  if (!root || root.nodeName.toLowerCase() !== "svg") return null;
+  const walk = (el: Element) => {
+    const tag = el.nodeName.toLowerCase();
+    if (tag === "script" || tag === "foreignobject") { el.remove(); return; }
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase();
+      const val = attr.value.trim().toLowerCase();
+      if (name.startsWith("on")) { el.removeAttribute(attr.name); continue; }
+      if ((name === "href" || name === "xlink:href" || name === "src") &&
+          (val.startsWith("javascript:") || (!val.startsWith("#") && !val.startsWith("data:image/")))) {
+        el.removeAttribute(attr.name);
+      }
+    }
+    for (const child of Array.from(el.children)) walk(child);
+  };
+  walk(root);
+  return root as unknown as SVGSVGElement;
+}
+
+/* Turns mid-stream SVG source into parseable markup so it can be rendered
+   progressively ("painting" effect): drops a trailing half-typed tag, then
+   closes every still-open element and appends </svg>. Self-closing and void-ish
+   shapes are ignored. Best-effort — returns "" when there's no <svg> yet. */
+function completePartialSvg(src: string): string {
+  let s = src;
+  /* drop an unfinished trailing tag like `<path d="M 3` (no closing >) */
+  const lastLt = s.lastIndexOf("<");
+  const lastGt = s.lastIndexOf(">");
+  if (lastLt > lastGt) s = s.slice(0, lastLt);
+  if (!/<svg[\s>]/i.test(s)) return "";
+  /* track open (non-self-closed) tags to close them in reverse */
+  const stack: string[] = [];
+  const tagRe = /<(\/?)([a-zA-Z][\w:-]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(s)) !== null) {
+    const [, closing, name, , selfClose] = m;
+    if (selfClose) continue;
+    if (closing) { if (stack[stack.length - 1] === name) stack.pop(); }
+    else stack.push(name);
+  }
+  for (let i = stack.length - 1; i >= 0; i--) s += `</${stack[i]}>`;
+  return s;
+}
+
+function renderSvg(node: HTMLElement): void {
+  /* Partial (streaming) blocks re-render every paint as more shapes arrive;
+     complete blocks render once. */
+  const els = node.querySelectorAll<HTMLElement>(
+    "[data-svg][data-svg-partial], [data-svg]:not([data-enriched])",
+  );
+  for (const el of els) {
+    const src = el.getAttribute("data-svg-src") ?? "";
+    const partial = el.hasAttribute("data-svg-partial");
+    /* skip re-render when a partial block's source hasn't grown since last paint */
+    if (partial && el.getAttribute("data-svg-rendered") === src) continue;
+
+    /* Best-effort render: try the source as-is, then fall back to auto-closing
+       any open tags (handles mid-stream AND a complete-but-slightly-malformed
+       SVG). Only give up to raw when even the repaired markup won't parse. */
+    let svg = src ? sanitiseSvg(src) : null;
+    if (!svg) {
+      const repaired = completePartialSvg(src);
+      if (repaired) svg = sanitiseSvg(repaired);
+    }
+    if (!svg) {
+      if (!partial) {
+        /* a complete block that won't parse even repaired: show raw source */
+        el.setAttribute("data-enriched", "");
+        el.setAttribute("data-render-failed", "");
+      }
+      continue; /* partial not yet parseable: keep "rendering…" */
+    }
+    el.setAttribute("data-enriched", "");
+    el.setAttribute("data-svg-rendered", src);
+    el.innerHTML = "";
+    const box = document.createElement("div");
+    box.className = "flex justify-center overflow-x-auto p-2";
+    box.appendChild(svg);
+    el.appendChild(box);
+    if (!partial) {
+      attachToolbar(el, {
+        source: () => src,
+        filename: "image.svg",
+        mime: "image/svg+xml;charset=utf-8",
+        svg: () => el.querySelector("svg"),
+      });
     }
   }
 }
@@ -182,26 +316,87 @@ function renderHtmlArtifacts(node: HTMLElement): void {
   }
 }
 
-/* Svelte action: attach to the element whose innerHTML holds rendered
-   markdown. Re-runs (debounced) whenever the bound text changes. */
+function enrichAll(node: HTMLElement): void {
+  renderHtmlArtifacts(node);
+  void renderMermaid(node);
+  renderSvg(node);
+  void highlightCode(node);
+  void renderMath(node);
+}
+
+/* Svelte action for STATIC (committed) messages: enrich the markdown already
+   placed in innerHTML by {@html}. Runs SYNCHRONOUSLY on mount so a committed
+   message (or a page reload) never flashes raw mermaid/svg source before the
+   render — only updates (rare for committed turns) are debounced. */
 export function enrich(node: HTMLElement, _text: string) {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  function run(): void {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      renderHtmlArtifacts(node);
-      void renderMermaid(node);
-      void highlightCode(node);
-      void renderMath(node);
-    }, 120);
-  }
-  run();
+  enrichAll(node);
   return {
     update(_next: string) {
-      run();
-    },
-    destroy() {
       clearTimeout(timer);
+      timer = setTimeout(() => enrichAll(node), 120);
     },
+    destroy() { clearTimeout(timer); },
+  };
+}
+
+/* Svelte action for the STREAMING live turn. Owns innerHTML itself (do NOT
+   pair with {@html}) so it can re-render markdown on each token WITHOUT
+   wiping diagrams that are already rendered — those flicker text→image→text
+   otherwise. Strategy: re-render markdown into a detached fragment, then for
+   every already-enriched block in the live DOM whose source is unchanged,
+   transplant the rendered node into the new fragment before swapping it in.
+   Only genuinely new/changed blocks re-enrich. */
+const ENRICHED_SEL = "[data-mermaid][data-enriched], [data-svg][data-enriched], [data-html-artifact][data-enriched], [data-math][data-enriched], code[data-code-lang][data-enriched]";
+
+function srcKey(el: Element): string {
+  return (
+    el.getAttribute("data-mermaid-src") ??
+    el.getAttribute("data-svg-src") ??
+    el.getAttribute("data-html-src") ??
+    el.getAttribute("data-math-src") ??
+    (el.classList.contains("hljs") ? el.textContent ?? "" : "")
+  );
+}
+
+export function renderLive(node: HTMLElement, text: string) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let last = "";
+
+  function paint(t: string): void {
+    /* snapshot already-rendered blocks from the current DOM, keyed by source */
+    const cache = new Map<string, Element>();
+    node.querySelectorAll(ENRICHED_SEL).forEach((el) => {
+      const k = `${el.getAttribute("data-mermaid") !== null ? "m" : el.getAttribute("data-svg") !== null ? "s" : el.getAttribute("data-html-artifact") !== null ? "h" : el.getAttribute("data-math") !== null ? "t" : "c"}:${srcKey(el)}`;
+      if (k.slice(2)) cache.set(k, el);
+    });
+
+    const tmp = document.createElement("div");
+    tmp.innerHTML = renderMarkdown(t);
+
+    /* transplant unchanged rendered blocks so they are not reset to raw text */
+    tmp.querySelectorAll("[data-mermaid], [data-svg], [data-html-artifact], [data-math]").forEach((fresh) => {
+      const tag = fresh.getAttribute("data-mermaid") !== null ? "m" : fresh.getAttribute("data-svg") !== null ? "s" : fresh.getAttribute("data-html-artifact") !== null ? "h" : "t";
+      const k = `${tag}:${srcKey(fresh)}`;
+      const done = cache.get(k);
+      if (done) fresh.replaceWith(done);
+    });
+
+    node.innerHTML = "";
+    while (tmp.firstChild) node.appendChild(tmp.firstChild);
+    enrichAll(node);
+  }
+
+  paint(text);
+  last = text;
+
+  return {
+    update(next: string) {
+      if (next === last) return;
+      last = next;
+      clearTimeout(timer);
+      timer = setTimeout(() => paint(next), 80);
+    },
+    destroy() { clearTimeout(timer); },
   };
 }

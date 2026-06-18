@@ -10,6 +10,34 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.20.0](https://github.com/yogasw/wick/compare/v0.19.3...v0.20.0) — Agents & Chat
+
+_Released on 2026-06-18_
+
+### Changed
+*   **Agents — Admin session visibility now scoped by default**:
+    *   Admins are no longer implicitly unrestricted. By default, an admin sees only tag-granted projects and their own sessions, matching the regular-user isolation model.
+    *   To restore the legacy unrestricted view, enable `admin_see_all` at `/admin/variables`.
+    *   The App Owner tier is unaffected and remains always-unrestricted.
+    *   Ownerless sessions (no recorded creator) are now hidden from everyone while `admin_see_all` is off, instead of being reachable by any logged-in user.
+    *   See [Admin Panel — Admin session visibility](/guide/admin-panel#admin-session-visibility-admin_see_all).
+
+### Improved
+*   **Chat conversation rendering**:
+    *   **SVG support**: `svg` fences or bare inline `<svg>…</svg>` now render as inline images. SVGs are sanitized (`<script>`, `<foreignObject>`, `on*` attributes, and external URLs are stripped). Lenient parsing ensures complex SVGs (with patterns, filters, gradients) render instead of falling back to raw source.
+    *   **Progressive SVG rendering**: Mid-stream SVGs auto-close their open tags, allowing shapes to appear as they stream rather than waiting for `</svg>`.
+    *   **Streaming live turn enrichment**: A dedicated `renderLive` action manages `innerHTML` and transplants already-rendered diagrams between repaints, fixing text↔image flickering with every token.
+    *   **Synchronous enrichment**: Committed messages now enrich synchronously on mount (no 120ms debounce delay).
+    *   **Placeholder for pending blocks**: Mermaid and SVG blocks show a "rendering…" placeholder instead of flashing raw source on load.
+    *   **Streamlined UI**: Borders have been removed from the assistant bubble and rendered blocks for a cleaner, document-like appearance.
+    *   **Documentation**: SVG support is now documented in the agent system prompt (`render_formats.md`).
+
+### Added
+*   **Per-block hover toolbar**: Rendered diagrams now feature a "···" hover toolbar, providing options to Copy source, Download file, and Download as PNG.
+
+---
+
+
 ## [v0.19.3](https://github.com/yogasw/wick/compare/v0.19.2...v0.19.3) — Conversation Trace
 
 _Released on 2026-06-17_
