@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ConversationTurn, ThreadBlock, TurnEvent } from "../types/agents.js";
   import { renderMarkdown, linkifyText } from "../markdown.js";
+  import { turnTime } from "../timeFormat.js";
   import { enrich } from "../richRender.js";
   import ToolCard from "./ToolCard.svelte";
   import ArtifactGallery from "./ArtifactGallery.svelte";
@@ -14,6 +15,12 @@
 
   const isUser = $derived(turn.role === "user");
   const isSystem = $derived(turn.role === "system");
+
+  /* Per-bubble timestamp is just the clock (WhatsApp shows only HH:mm inside
+     each bubble; the day/date lives in the centered separator the parent
+     renders). Reads `ts` (RFC3339 from history) first, falls back to
+     `timestamp` (epoch ms on client-built live turns). */
+  const stamp = $derived(turnTime(turn));
 
   const safeEvents = $derived(turn.events ?? []);
   const safeAttachments = $derived(turn.attachments ?? []);
@@ -181,7 +188,10 @@
         </div>
       {/if}
       {#if turn.text}
-        <div class="rounded-2xl rounded-tr-sm bg-green-500 px-4 py-3 text-sm text-white-100 whitespace-pre-wrap break-words leading-relaxed shadow-sm">
+        {#if stamp}
+          <span class="text-[10px] leading-none text-black-500 dark:text-black-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{stamp}</span>
+        {/if}
+        <div class="rounded-2xl rounded-tr-sm bg-green-500 px-4 py-2.5 text-sm text-white-100 whitespace-pre-wrap break-words leading-relaxed shadow-sm">
           {@html linkifyText(turn.text)}
         </div>
       {/if}
@@ -236,6 +246,9 @@
       {/if}
 
       {#if turn.text}
+        {#if stamp}
+          <span class="self-end text-[10px] leading-none text-black-500 dark:text-black-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{stamp}</span>
+        {/if}
         <div use:enrich={turn.text} class="rounded-2xl rounded-tl-sm bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
           {@html renderMarkdown(turn.text)}
           {#if turn.interrupted}

@@ -12,37 +12,46 @@ Telegram) the raw source still reads fine.
 | **Markdown** | normal GFM — headings, lists, **bold**, `inline code`, tables, blockquotes, `~~strikethrough~~` | styled rich text |
 | **Links** | `[short label](https://…)` — see "Sending links" above | clickable label, query string hidden |
 | **Code (highlighted)** | fenced block with a language tag: ` ```js `, ` ```python `, ` ```go `, ` ```sql `, … | syntax-highlighted block (highlight.js), light/dark aware |
-| **Mermaid diagrams** | fence tagged ` ```mermaid ` containing any Mermaid source | colored diagram, theme-aware light/dark |
 | **SVG images** | fence tagged ` ```svg ` **or** a bare `<svg>…</svg>` written inline | rendered inline image, paints progressively while streaming |
+| **Mermaid diagrams** | fence tagged ` ```mermaid ` containing any Mermaid source | colored diagram, theme-aware light/dark |
 | **Inline math** | `$…$` — e.g. `$E = mc^2$` | KaTeX inline |
 | **Display math** | `$$…$$` on its own line(s) | KaTeX centered block |
 
-### Mermaid
+### Choosing SVG vs Mermaid for a diagram
 
-One fence (` ```mermaid `) covers every diagram type — pick the type
-with the first keyword inside the block: `flowchart TD`, `sequenceDiagram`,
-`classDiagram`, `stateDiagram-v2`, `erDiagram`, `gantt`, `pie`,
-`journey`, and the rest. Use it for flows, sequences, state machines,
-and ER schemas instead of describing them in text.
+Both render and both paint progressively while streaming. Pick by what the
+diagram *is*, not by habit:
 
-````
-```mermaid
-flowchart TD
-  A[User message] --> B{In catalog?}
-  B -->|yes| C[wick_execute]
-  B -->|no| D[fallback tool]
-```
-````
+- **Node-and-edge diagrams → SVG.** Flowcharts, state machines, ER schemas,
+  trees, mindmaps, architecture/box-and-arrow layouts. You place the nodes
+  and connectors yourself, which gives precise, readable, custom-styled
+  results. This is the default for anything you can lay out by hand on a
+  grid.
+- **Algorithmically-laid-out diagrams → Mermaid.** Sequence diagrams, Gantt
+  charts, pie charts, journeys. Their geometry (message timing lanes, time
+  axes, proportional slices) is tedious and error-prone to position by hand,
+  so let Mermaid compute it.
+- **Custom vector art → SVG.** Badges, icons, maps, annotated layouts,
+  non-standard charts — anything Mermaid has no diagram type for.
+- **User asked for a specific format → honor it.** If the user says
+  "pakai mermaid" / "make it an SVG" / names a format, use that regardless
+  of the rules above.
+
+When unsure between the two for a graph, prefer SVG — it reads better and
+you keep full control of layout and styling.
 
 ### SVG
 
-Hand-written SVG renders as an inline image. You can either wrap it in a
-` ```svg ` fence or just write the bare `<svg …>…</svg>` directly in the
-message — both render. The image **paints progressively** as you stream,
-so a large SVG appears shape-by-shape rather than all at once; you don't
-need to buffer the whole thing before emitting. Reach for SVG when you
-want precise, custom vector art (badges, simple maps, charts, icons,
-annotated layouts) that Mermaid can't express.
+Hand-written SVG renders as an inline image. Wrap it in a ` ```svg ` fence
+or just write the bare `<svg …>…</svg>` directly in the message — both
+render. The image **paints progressively** as you stream, so a large SVG
+appears shape-by-shape rather than all at once; you don't need to buffer
+the whole thing before emitting.
+
+Layout tips for node/edge diagrams: pick a `viewBox` big enough for the
+whole graph up front, space nodes on a consistent grid, and route
+connectors so they don't cross labels. Keep it readable — generous
+padding, clear arrowheads, labels that don't overlap edges.
 
 ````
 ```svg
@@ -57,8 +66,26 @@ Constraints: the renderer sanitises the markup for safety — `<script>`,
 `<foreignObject>`, `on*` event handlers, and external/`javascript:` URLs
 are stripped, so keep SVGs self-contained (inline shapes, gradients,
 filters, `data:` images, in-document `#id` refs). No external fonts or
-network resources. Mermaid is still the better choice for standard
-flow/sequence/ER diagrams — use raw SVG only when you need full control.
+network resources.
+
+### Mermaid
+
+Reach for Mermaid when the layout is algorithmic — sequences, Gantt,
+pie, journeys (see the rule above). One fence (` ```mermaid `) covers
+every type; pick it with the first keyword inside the block:
+`sequenceDiagram`, `gantt`, `pie`, `journey`, and also `flowchart TD`,
+`stateDiagram-v2`, `erDiagram`, `classDiagram` when you'd rather let
+Mermaid auto-lay-out a graph than place it yourself in SVG.
+
+````
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant W as wick
+  U->>W: message
+  W-->>U: reply
+```
+````
 
 ### Code blocks
 

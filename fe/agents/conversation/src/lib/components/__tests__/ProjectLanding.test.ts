@@ -8,7 +8,7 @@ vi.mock("../../router.js", () => ({
 
 import ProjectLanding from "../ProjectLanding.svelte";
 
-const PROJECT: ProjectOption = { id: "proj-42", name: "Acme API", path: "/managed/path", managed: true };
+const PROJECT: ProjectOption = { id: "proj-42", name: "Acme API", path: "/managed/path", managed: true, pinned: false };
 
 const PROVIDER: ProviderOption = { type: "anthropic", name: "Claude Sonnet", version: "claude-sonnet-4" };
 

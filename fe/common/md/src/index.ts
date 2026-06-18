@@ -248,7 +248,19 @@ export function renderMarkdown(text: string): string {
   flushTable();
   flushList();
   if (inCode && codeLines.length) {
-    emitCodeBlock(codeLang, codeLines.join("\n"));
+    /* A mermaid fence still open at EOF is mid-stream (no closing ```). Emit a
+       partial mermaid block — data-mermaid-partial tells the renderer to paint
+       progressively (best-effort parse, keep last good frame) instead of
+       flashing raw source / parse errors on every streamed token. */
+    if (codeLang === "mermaid") {
+      const partial = codeLines.join("\n");
+      out.push(
+        `<div class="wick-mermaid my-2 rounded-lg overflow-hidden bg-white-200 dark:bg-navy-800" data-mermaid data-mermaid-partial data-mermaid-src="${esc(partial)}">` +
+        `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 leading-relaxed"><code>${esc(partial)}</code></pre></div>`,
+      );
+    } else {
+      emitCodeBlock(codeLang, codeLines.join("\n"));
+    }
   }
   if (inMath && mathLines.length) {
     emitMathBlock(mathLines.join("\n"));

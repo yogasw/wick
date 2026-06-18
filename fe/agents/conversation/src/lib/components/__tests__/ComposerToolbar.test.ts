@@ -9,8 +9,8 @@ const PROVIDERS: ProviderOption[] = [
 ];
 
 const PROJECTS: ProjectOption[] = [
-  { id: "proj-1", name: "My Project", path: "/home/user/project", managed: false },
-  { id: "proj-2", name: "Other Project", path: "/home/user/other", managed: false },
+  { id: "proj-1", name: "My Project", path: "/home/user/project", managed: false, pinned: false },
+  { id: "proj-2", name: "Other Project", path: "/home/user/other", managed: false, pinned: false },
 ];
 
 describe("ComposerToolbar", () => {

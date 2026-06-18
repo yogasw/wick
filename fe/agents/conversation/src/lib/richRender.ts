@@ -69,28 +69,82 @@ function loadKatex(): Promise<KatexModule> {
 
 let mermaidSeq = 0;
 
+/* Trims a mid-stream mermaid source back to a parseable prefix so the diagram
+   "paints" as statements arrive. Mermaid can't parse a half-typed statement,
+   so we drop the trailing incomplete line; keeping the header (first line)
+   ensures the diagram type is always present. Best-effort — the renderer still
+   falls back to the last good frame when even this won't parse. */
+function completePartialMermaid(src: string): string {
+  const lines = src.split("\n");
+  /* drop a trailing line that looks unfinished (open arrow / dangling token) */
+  while (lines.length > 1) {
+    const last = lines[lines.length - 1].trim();
+    if (last === "" || /[-=>|:[{(]$/.test(last) || /--+\s*$/.test(last)) {
+      lines.pop();
+      continue;
+    }
+    break;
+  }
+  return lines.join("\n").trim();
+}
+
 async function renderMermaid(node: HTMLElement): Promise<void> {
-  const els = node.querySelectorAll<HTMLElement>("[data-mermaid]:not([data-enriched])");
+  /* Partial (streaming) blocks re-render as more lines arrive; complete blocks
+     render once. Mirrors renderSvg's partial handling. */
+  const els = node.querySelectorAll<HTMLElement>(
+    "[data-mermaid][data-mermaid-partial], [data-mermaid]:not([data-enriched])",
+  );
   if (!els.length) return;
   const mermaid = await loadMermaid();
   for (const el of els) {
     const src = el.getAttribute("data-mermaid-src") ?? "";
+    const partial = el.hasAttribute("data-mermaid-partial");
+    /* skip re-render when a partial block's source hasn't grown since last paint */
+    if (partial && el.getAttribute("data-mermaid-rendered") === src) continue;
+
+    /* Race guard: stamp this attempt's sequence on the element. Mermaid.render
+       is async and the live painter wipes innerHTML each token; if a newer
+       attempt started meanwhile, drop this stale result instead of writing a
+       detached/old SVG (the source of the flicker). */
+    const seq = ++mermaidSeq;
+    el.setAttribute("data-mermaid-seq", String(seq));
+
+    let svg: string | null = null;
     try {
-      const { svg } = await mermaid.render(`wmmd-${++mermaidSeq}`, src);
-      el.setAttribute("data-enriched", "");
-      el.innerHTML = `<div class="flex justify-center overflow-x-auto p-2">${svg}</div>`;
-      /* hover toolbar: Copy .mmd source / Download / Copy diagram as PNG */
-      attachToolbar(el, {
-        source: () => src,
-        filename: "diagram.mmd",
-        mime: "text/plain;charset=utf-8",
-        svg: () => el.querySelector("svg"),
-      });
+      svg = (await mermaid.render(`wmmd-${seq}`, src)).svg;
     } catch {
-      /* parse failed: reveal the raw-code fallback (CSS shows pre again) */
+      if (partial) {
+        /* mid-stream parse fail: retry on the largest parseable prefix */
+        const repaired = completePartialMermaid(src);
+        if (repaired && repaired !== src) {
+          try { svg = (await mermaid.render(`wmmd-${seq}r`, repaired)).svg; } catch { /* keep last frame */ }
+        }
+      }
+    }
+
+    /* a newer paint superseded this attempt — discard */
+    if (el.getAttribute("data-mermaid-seq") !== String(seq)) continue;
+
+    if (svg) {
+      el.setAttribute("data-mermaid-rendered", src);
+      el.innerHTML = `<div class="flex justify-center overflow-x-auto p-2">${svg}</div>`;
+      if (!partial) {
+        el.setAttribute("data-enriched", "");
+        /* hover toolbar: Copy .mmd source / Download / Copy diagram as PNG */
+        attachToolbar(el, {
+          source: () => src,
+          filename: "diagram.mmd",
+          mime: "text/plain;charset=utf-8",
+          svg: () => el.querySelector("svg"),
+        });
+      }
+    } else if (!partial) {
+      /* complete block that won't parse even repaired: reveal raw-code fallback */
       el.setAttribute("data-enriched", "");
       el.setAttribute("data-render-failed", "");
     }
+    /* partial with no parseable frame yet: keep whatever's shown (raw or last
+       good frame), don't flash — next paint retries */
   }
 }
 
@@ -347,7 +401,15 @@ export function enrich(node: HTMLElement, _text: string) {
    every already-enriched block in the live DOM whose source is unchanged,
    transplant the rendered node into the new fragment before swapping it in.
    Only genuinely new/changed blocks re-enrich. */
-const ENRICHED_SEL = "[data-mermaid][data-enriched], [data-svg][data-enriched], [data-html-artifact][data-enriched], [data-math][data-enriched], code[data-code-lang][data-enriched]";
+/* Includes partial mermaid/svg blocks (which carry data-*-rendered instead of
+   data-enriched) so a frame already painted mid-stream survives the per-token
+   innerHTML swap. Critical for ASYNC mermaid: without transplanting the last
+   rendered node, each paint shows raw source until mermaid.render resolves —
+   the flicker. */
+const ENRICHED_SEL =
+  "[data-mermaid][data-enriched], [data-mermaid][data-mermaid-rendered], " +
+  "[data-svg][data-enriched], [data-svg][data-svg-rendered], " +
+  "[data-html-artifact][data-enriched], [data-math][data-enriched], code[data-code-lang][data-enriched]";
 
 function srcKey(el: Element): string {
   return (
@@ -359,16 +421,33 @@ function srcKey(el: Element): string {
   );
 }
 
+/* A growing partial diagram changes src every token, so an exact-src cache
+   never hits. Match the single in-flight partial of the same kind instead, so
+   its painted frame transplants forward; renderMermaid/renderSvg then refresh
+   it in place once the new (larger) source renders. */
+const PARTIAL_KEY = { m: "mp:partial", s: "sp:partial" } as const;
+
 export function renderLive(node: HTMLElement, text: string) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let last = "";
 
+  function kindOf(el: Element): "m" | "s" | "h" | "t" | "c" {
+    return el.getAttribute("data-mermaid") !== null ? "m"
+      : el.getAttribute("data-svg") !== null ? "s"
+      : el.getAttribute("data-html-artifact") !== null ? "h"
+      : el.getAttribute("data-math") !== null ? "t" : "c";
+  }
+
   function paint(t: string): void {
-    /* snapshot already-rendered blocks from the current DOM, keyed by source */
+    /* snapshot already-rendered blocks from the current DOM. Exact-src key for
+       finished blocks; a single partial-of-kind key for the in-flight diagram
+       so its painted frame transplants forward as its source grows. */
     const cache = new Map<string, Element>();
     node.querySelectorAll(ENRICHED_SEL).forEach((el) => {
-      const k = `${el.getAttribute("data-mermaid") !== null ? "m" : el.getAttribute("data-svg") !== null ? "s" : el.getAttribute("data-html-artifact") !== null ? "h" : el.getAttribute("data-math") !== null ? "t" : "c"}:${srcKey(el)}`;
-      if (k.slice(2)) cache.set(k, el);
+      const kind = kindOf(el);
+      cache.set(`${kind}:${srcKey(el)}`, el);
+      if (kind === "m" && el.hasAttribute("data-mermaid-partial")) cache.set(PARTIAL_KEY.m, el);
+      if (kind === "s" && el.hasAttribute("data-svg-partial")) cache.set(PARTIAL_KEY.s, el);
     });
 
     const tmp = document.createElement("div");
@@ -376,9 +455,18 @@ export function renderLive(node: HTMLElement, text: string) {
 
     /* transplant unchanged rendered blocks so they are not reset to raw text */
     tmp.querySelectorAll("[data-mermaid], [data-svg], [data-html-artifact], [data-math]").forEach((fresh) => {
-      const tag = fresh.getAttribute("data-mermaid") !== null ? "m" : fresh.getAttribute("data-svg") !== null ? "s" : fresh.getAttribute("data-html-artifact") !== null ? "h" : "t";
-      const k = `${tag}:${srcKey(fresh)}`;
-      const done = cache.get(k);
+      const kind = kindOf(fresh);
+      let done = cache.get(`${kind}:${srcKey(fresh)}`);
+      /* growing partial: reuse the in-flight frame and update its source so the
+         renderer refreshes the already-visible diagram in place (no raw flash) */
+      if (!done && kind === "m" && fresh.hasAttribute("data-mermaid-partial")) {
+        done = cache.get(PARTIAL_KEY.m);
+        if (done) done.setAttribute("data-mermaid-src", fresh.getAttribute("data-mermaid-src") ?? "");
+      }
+      if (!done && kind === "s" && fresh.hasAttribute("data-svg-partial")) {
+        done = cache.get(PARTIAL_KEY.s);
+        if (done) done.setAttribute("data-svg-src", fresh.getAttribute("data-svg-src") ?? "");
+      }
       if (done) fresh.replaceWith(done);
     });
 

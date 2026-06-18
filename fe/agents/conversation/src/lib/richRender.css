@@ -131,6 +131,27 @@
 [data-mermaid][data-enriched]::before,
 [data-svg][data-enriched]::before,
 [data-mermaid][data-render-failed]::before,
-[data-svg][data-render-failed]::before {
+[data-svg][data-render-failed]::before,
+/* a partial block that has painted at least one frame: drop the note */
+[data-mermaid][data-mermaid-rendered]::before,
+[data-svg][data-svg-rendered]::before {
   content: none;
+}
+
+/* Center the rendered diagram and let it use the available width. Mermaid
+   stamps an intrinsic `max-width:<NNN>px` on its <svg> that (a) keeps an
+   early, few-node diagram tiny and (b) when it overflows, the scroll box
+   left-aligns it. Override: stretch to the container, cap height so a tall
+   diagram doesn't blow up the bubble, and keep it centered. */
+/* Center the rendered diagram and constrain it WITHOUT forcing a width.
+   Forcing width:100% breaks tall/vertical diagrams: on a narrow viewport the
+   forced width makes height:auto explode to a huge column. Instead cap both
+   dimensions and let the intrinsic aspect ratio scale down to fit. */
+[data-mermaid] svg,
+[data-svg] svg {
+  display: block;
+  margin-inline: auto;
+  max-width: 100% !important;
+  height: auto !important;
+  max-height: 75vh;
 }

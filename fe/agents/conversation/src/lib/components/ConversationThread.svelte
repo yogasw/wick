@@ -4,6 +4,7 @@
   import { renderLive } from "../richRender.js";
   import ThreadMessage from "./ThreadMessage.svelte";
   import ToolCard from "./ToolCard.svelte";
+  import { turnDay, turnDayKey } from "../timeFormat.js";
 
   type Props = {
     turns: ConversationTurn[];
@@ -58,8 +59,22 @@
     </div>
   {/if}
   {#each turns as turn, i (turn.turn_id ? turn.turn_id + "-" + i : "turn-" + i)}
+    {@const label = turnDay(turn)}
+    {@const dayKey = turnDayKey(turn)}
+    {@const prevKey = i === 0 ? "" : turnDayKey(turns[i - 1])}
+    {#if label && dayKey !== prevKey}
+      <div class="sticky top-1.5 z-10 flex justify-center py-1.5 pointer-events-none">
+        <span class="pointer-events-auto rounded-md bg-white-200/95 dark:bg-navy-800/95 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm backdrop-blur-sm">{label}</span>
+      </div>
+    {/if}
     <ThreadMessage {turn} {loadTrace} />
   {/each}
+
+  {#if live && turns.length === 0}
+    <div class="flex justify-center py-1.5">
+      <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">Today</span>
+    </div>
+  {/if}
 
   {#if live}
     <div class="flex justify-start">

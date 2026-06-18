@@ -147,17 +147,20 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 					</div>
 				</details>
 			</nav>
-			<!-- Projects section (mockup state ①) -->
+			<!-- Projects section (mockup state ①). Keep the section visible even
+			     when the caller has no projects yet so + New is always reachable. -->
+			<div class="px-3 pt-1 pb-1 flex items-center justify-between">
+				<span class="text-[11px] font-semibold text-black-700 dark:text-black-600 uppercase tracking-wider">Projects</span>
+				<a href={ templ.SafeURL(vm.Base + "/projects/new") } title="New project" class="text-[11px] font-semibold text-green-600 dark:text-green-400 hover:text-green-500 transition-colors normal-case tracking-normal">+ New</a>
+			</div>
 			if len(vm.ProjectList) > 0 {
-				<div class="px-3 pt-1 pb-1 flex items-center justify-between">
-					<span class="text-[11px] font-semibold text-black-700 dark:text-black-600 uppercase tracking-wider">Projects</span>
-					<a href={ templ.SafeURL(vm.Base + "/projects/new") } title="New project" class="text-[11px] font-semibold text-green-600 dark:text-green-400 hover:text-green-500 transition-colors normal-case tracking-normal">+ New</a>
-				</div>
 				<div class="px-2 pb-1 space-y-0.5 max-h-40 overflow-y-auto">
 					for _, pid := range vm.ProjectList {
 						@sidebarProjectRow(vm.Base, vm.ProjectIcon(pid), vm.ProjectName(pid), pid, vm.ProjectCounts[pid], vm.ScopedProjectID == pid, vm.PinnedProjectID == pid)
 					}
 				</div>
+			} else {
+				<p class="px-3 pb-2 text-xs text-black-600 dark:text-black-700">No projects yet</p>
 			}
 			<!-- Recent sessions list (scrollable, fills remaining height) -->
 			<div class="flex flex-col flex-1 overflow-hidden">
