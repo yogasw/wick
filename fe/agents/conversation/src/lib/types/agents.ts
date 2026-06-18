@@ -81,6 +81,9 @@ export type ConversationTurn = {
   agent: string;
   provider: string;
   text: string;
+  // RFC3339 string from history payload (Go struct `json:"ts"`). Live turns
+  // built client-side only set `timestamp` (epoch ms) — read either.
+  ts?: string;
   timestamp: number;
   truncated: boolean;
   interrupted: boolean;

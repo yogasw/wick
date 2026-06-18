@@ -490,17 +490,14 @@ func callerProjectAccess(c *tool.Ctx) projectAccess {
 	// predate owner tags (or lose their tag rows), but their metadata still
 	// records the creator. A scoped admin/user must keep access to projects they
 	// own even when AdminSeeAll is off.
+	// Union tag grants with project ownership AND ownerless ("system") projects.
+	// Owned projects: a scoped admin/user keeps access to projects they created
+	// even when AdminSeeAll is off (some legacy projects predate owner tags).
+	// Ownerless projects (OwnerUserID == "") are shared/system resources — they
+	// belong to no one in particular, so every authenticated caller may see them.
 	for pid, p := range globalMgr.Registry().Projects() {
-		if p.Meta.OwnerUserID == u.ID {
+		if p.Meta.OwnerUserID == u.ID || p.Meta.OwnerUserID == "" {
 			set[pid] = struct{}{}
-		}
-	}
-	if globalTagsSvc == nil {
-		// No tags service: retain the legacy ownerless-project fallback.
-		for pid, p := range globalMgr.Registry().Projects() {
-			if p.Meta.OwnerUserID == "" {
-				set[pid] = struct{}{}
-			}
 		}
 	}
 	return projectAccess{userID: u.ID, projects: set}
