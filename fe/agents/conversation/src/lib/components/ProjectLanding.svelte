@@ -79,12 +79,13 @@
       <button
         type="button"
         onclick={onPin}
-        class="inline-flex items-center gap-1.5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-600 transition-colors"
+        aria-pressed={project.pinned}
+        class="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors {project.pinned
+          ? 'border-green-500 bg-green-500 text-white-100 hover:bg-green-600'
+          : 'border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-black-800 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-600'}"
       >
-        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M10 2L14 6l-4 4-3-3-4 4V9l4-4 3 3 3-3-3-3z" stroke-linecap="round" stroke-linejoin="round"></path>
-        </svg>
-        Pin as default
+        <span class="text-[11px] leading-none {project.pinned ? '' : 'grayscale'}">📌</span>
+        {project.pinned ? "Pinned as default" : "Pin as default"}
       </button>
       <a
         href={`${base}/projects/${project.id}`}
