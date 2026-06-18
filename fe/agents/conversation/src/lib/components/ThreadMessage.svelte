@@ -177,7 +177,7 @@
   </div>
 {:else}
   <div class="flex justify-start group">
-    <div class="flex flex-col gap-1.5 max-w-[92%] min-w-0">
+    <div class="flex flex-col gap-1.5 w-full max-w-full min-w-0">
       {#if showTraceToggle}
         <div class="flex flex-col gap-1">
           <button
@@ -226,7 +226,7 @@
       {/if}
 
       {#if turn.text}
-        <div use:enrich={turn.text} class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
+        <div use:enrich={turn.text} class="rounded-2xl rounded-tl-sm bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
           {@html renderMarkdown(turn.text)}
           {#if turn.interrupted}
             <div class="mt-2 flex items-center gap-1.5 border-t border-white-300 dark:border-navy-600 pt-2">
