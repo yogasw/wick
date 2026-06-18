@@ -1522,8 +1522,10 @@ func projectOptionsJSON(c *tool.Ctx) {
 		Name    string `json:"name"`
 		Path    string `json:"path"`
 		Managed bool   `json:"managed"`
+		Pinned  bool   `json:"pinned"`
 	}
 	access := callerProjectAccess(c)
+	pinned := pinnedProjectID(c)
 	projects := globalMgr.Registry().Projects()
 	opts := make([]option, 0, len(projects))
 	for id, p := range projects {
@@ -1535,7 +1537,7 @@ func projectOptionsJSON(c *tool.Ctx) {
 		if path == "" {
 			path = globalLayout.ProjectManagedPath(id)
 		}
-		opts = append(opts, option{ID: id, Name: p.Meta.Name, Path: path, Managed: managed})
+		opts = append(opts, option{ID: id, Name: p.Meta.Name, Path: path, Managed: managed, Pinned: id == pinned})
 	}
 	c.JSON(http.StatusOK, opts)
 }

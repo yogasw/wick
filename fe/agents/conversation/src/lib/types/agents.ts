@@ -209,4 +209,5 @@ export type ProjectOption = {
   name: string;
   path: string;
   managed: boolean;
+  pinned: boolean;
 };
