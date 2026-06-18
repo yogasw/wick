@@ -477,20 +477,30 @@ func callerProjectAccess(c *tool.Ctx) projectAccess {
 	if u.IsAdmin() && adminSeeAll() {
 		return projectAccess{seeAll: true}
 	}
+	set := make(map[string]struct{})
 	if globalTagsSvc != nil {
-		set, err := globalTagsSvc.AccessibleResourceIDs(c.Context(), u.ID)
+		var err error
+		set, err = globalTagsSvc.AccessibleResourceIDs(c.Context(), u.ID)
 		if err != nil {
 			log.Ctx(c.Context()).Warn().Err(err).Msg("resolve accessible projects")
 			set = map[string]struct{}{}
 		}
-		return projectAccess{userID: u.ID, projects: set}
 	}
-	// No tags service: fall back to owner-by-meta, resolved against the
-	// registry's projects.
-	set := make(map[string]struct{})
+	// Always union tag grants with project ownership. Some legacy projects can
+	// predate owner tags (or lose their tag rows), but their metadata still
+	// records the creator. A scoped admin/user must keep access to projects they
+	// own even when AdminSeeAll is off.
 	for pid, p := range globalMgr.Registry().Projects() {
-		if p.Meta.OwnerUserID == "" || p.Meta.OwnerUserID == u.ID {
+		if p.Meta.OwnerUserID == u.ID {
 			set[pid] = struct{}{}
+		}
+	}
+	if globalTagsSvc == nil {
+		// No tags service: retain the legacy ownerless-project fallback.
+		for pid, p := range globalMgr.Registry().Projects() {
+			if p.Meta.OwnerUserID == "" {
+				set[pid] = struct{}{}
+			}
 		}
 	}
 	return projectAccess{userID: u.ID, projects: set}
