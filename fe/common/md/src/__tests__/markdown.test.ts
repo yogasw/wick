@@ -110,6 +110,31 @@ describe("renderMarkdown — rich blocks", () => {
     expect(html).not.toContain("data-code-lang");
   });
 
+  test("svg fence becomes a rendered-image placeholder with raw source", () => {
+    const html = renderMarkdown('```svg\n<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>\n```');
+    expect(html).toContain("data-svg");
+    expect(html).toContain("data-svg-src=");
+    /* degrades to the raw source as a fallback */
+    expect(html).toContain("rect");
+    /* an svg block is not a highlightable code block */
+    expect(html).not.toContain("data-code-lang");
+  });
+
+  test("bare <svg>…</svg> (no fence) becomes a rendered-image placeholder", () => {
+    const html = renderMarkdown('intro\n<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>\nafter');
+    expect(html).toContain("data-svg");
+    expect(html).toContain("data-svg-src=");
+    /* surrounding prose still renders */
+    expect(html).toContain("intro");
+    expect(html).toContain("after");
+  });
+
+  test("single-line bare <svg> is detected", () => {
+    const html = renderMarkdown('<svg><circle r="5"/></svg>');
+    expect(html).toContain("data-svg");
+    expect(html).toContain("circle");
+  });
+
   test("html fence becomes a sandboxed artifact placeholder", () => {
     const html = renderMarkdown('```html\n<button onclick="x()">Hi</button>\n```');
     expect(html).toContain("data-html-artifact");

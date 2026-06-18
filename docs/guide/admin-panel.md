@@ -12,6 +12,12 @@ A user becomes admin in one of two ways: their email is in `APP_ADMIN_EMAILS` at
 Above admin sits a single **App Owner**: the first user ever registered is auto-promoted (`is_owner`). The owner is a superset of admin — `IsAdmin()` is true for both — but **only the owner can see every user's agent sessions**. Admins and regular users see only the sessions, projects, workflows, and skills they own; per-session routes return `404` for sessions they don't own. There is no env var for this — it's assigned automatically to the first account.
 :::
 
+::: info Admin session visibility (`admin_see_all`)
+By default, admins are scoped exactly like regular users: they see only projects granted via tags and their own sessions. Ownerless sessions (no recorded creator) are hidden from everyone under this default.
+
+To restore the old behaviour where admins see every project and session, turn on **`admin_see_all`** at `/admin/variables`. When on, admins regain an unrestricted view identical to the App Owner's legacy view. The App Owner is always unrestricted regardless of this setting.
+:::
+
 ## Dashboard
 
 ![Admin Dashboard](/screenshots/admin-dashboard.png)

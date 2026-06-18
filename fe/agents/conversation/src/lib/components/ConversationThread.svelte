@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import type { ConversationTurn, LiveTurn, TypingState, ThreadBlock, TurnEvent } from "../types/agents.js";
-  import { renderMarkdown } from "../markdown.js";
+  import { renderLive } from "../richRender.js";
   import ThreadMessage from "./ThreadMessage.svelte";
   import ToolCard from "./ToolCard.svelte";
 
@@ -97,9 +97,9 @@
           {/if}
         {/if}
         {#if live.text}
-          <div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
-            {@html renderMarkdown(live.text)}
-          </div>
+          <!-- renderLive owns innerHTML (no {@html}) so streaming tokens don't
+               wipe already-rendered diagrams — prevents text↔image flicker. -->
+          <div use:renderLive={live.text} class="rounded-2xl rounded-tl-sm bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm"></div>
         {/if}
       </div>
     </div>

@@ -13,6 +13,7 @@ Telegram) the raw source still reads fine.
 | **Links** | `[short label](https://…)` — see "Sending links" above | clickable label, query string hidden |
 | **Code (highlighted)** | fenced block with a language tag: ` ```js `, ` ```python `, ` ```go `, ` ```sql `, … | syntax-highlighted block (highlight.js), light/dark aware |
 | **Mermaid diagrams** | fence tagged ` ```mermaid ` containing any Mermaid source | colored diagram, theme-aware light/dark |
+| **SVG images** | fence tagged ` ```svg ` **or** a bare `<svg>…</svg>` written inline | rendered inline image, paints progressively while streaming |
 | **Inline math** | `$…$` — e.g. `$E = mc^2$` | KaTeX inline |
 | **Display math** | `$$…$$` on its own line(s) | KaTeX centered block |
 
@@ -32,6 +33,32 @@ flowchart TD
   B -->|no| D[fallback tool]
 ```
 ````
+
+### SVG
+
+Hand-written SVG renders as an inline image. You can either wrap it in a
+` ```svg ` fence or just write the bare `<svg …>…</svg>` directly in the
+message — both render. The image **paints progressively** as you stream,
+so a large SVG appears shape-by-shape rather than all at once; you don't
+need to buffer the whole thing before emitting. Reach for SVG when you
+want precise, custom vector art (badges, simple maps, charts, icons,
+annotated layouts) that Mermaid can't express.
+
+````
+```svg
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 60" width="120" height="60">
+  <rect width="120" height="60" rx="8" fill="#1e293b"/>
+  <text x="60" y="36" text-anchor="middle" fill="#fef3c7" font-size="18">OK</text>
+</svg>
+```
+````
+
+Constraints: the renderer sanitises the markup for safety — `<script>`,
+`<foreignObject>`, `on*` event handlers, and external/`javascript:` URLs
+are stripped, so keep SVGs self-contained (inline shapes, gradients,
+filters, `data:` images, in-document `#id` refs). No external fonts or
+network resources. Mermaid is still the better choice for standard
+flow/sequence/ER diagrams — use raw SVG only when you need full control.
 
 ### Code blocks
 

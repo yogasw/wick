@@ -97,3 +97,40 @@
 .katex {
   font-size: 1em;
 }
+
+/* Per-block hover toolbar ("···"): visible only when THAT block is hovered or
+   its trigger has focus. Scoped to the block via [data-toolbar] so hovering one
+   diagram never reveals another's toolbar. */
+[data-toolbar]:hover > .wick-block-toolbar,
+.wick-block-toolbar:focus-within {
+  opacity: 1;
+}
+
+/* Anti-flash for renderable blocks (mermaid/svg): while a block is still
+   pending render, hide its raw-code fallback and show a small "rendering…"
+   note instead of flashing the source. Once enriched, the rendered diagram
+   replaces the pre. If parsing fails we mark [data-render-failed] to reveal
+   the raw fallback again. */
+[data-mermaid]:not([data-enriched]) > pre,
+[data-svg]:not([data-enriched]) > pre {
+  display: none;
+}
+[data-mermaid][data-render-failed] > pre,
+[data-svg][data-render-failed] > pre {
+  display: block;
+}
+[data-mermaid]:not([data-enriched])::before,
+[data-svg]:not([data-enriched])::before {
+  content: "rendering…";
+  display: block;
+  padding: 0.75rem 1rem;
+  font-size: 0.75rem;
+  font-style: italic;
+  opacity: 0.55;
+}
+[data-mermaid][data-enriched]::before,
+[data-svg][data-enriched]::before,
+[data-mermaid][data-render-failed]::before,
+[data-svg][data-render-failed]::before {
+  content: none;
+}
