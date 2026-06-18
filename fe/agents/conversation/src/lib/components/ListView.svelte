@@ -64,9 +64,18 @@
   });
 
   function handlePin() {
-    if (!projectId) return;
+    if (!projectId || !project) return;
+    const prev = project.pinned;
+    /* optimistic flip so the button reacts instantly; reconcile with the
+       server's authoritative `pinned` (the endpoint toggles) and roll back on
+       error. */
+    project = { ...project, pinned: !prev };
     Effect.runPromise(pinProject(base, projectId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        if (project) project = { ...project, pinned: res.pinned };
+      })
       .catch((err: unknown) => {
+        if (project) project = { ...project, pinned: prev };
         toastError(`Failed to pin project: ${err instanceof Error ? err.message : String(err)}`);
       });
   }

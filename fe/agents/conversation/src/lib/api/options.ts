@@ -9,7 +9,7 @@ export const getProviderOptions = (base: string) =>
 
 export const getProjectOptions = (base: string) =>
   apiGetE<ProjectOption[] | null>(`${base}/projects/options`).pipe(
-    Effect.map((r) => (r ?? []).map((p) => ({ ...p, managed: p.managed ?? false }))),
+    Effect.map((r) => (r ?? []).map((p) => ({ ...p, managed: p.managed ?? false, pinned: p.pinned ?? false }))),
   );
 
 export const switchProvider = (base: string, sessionId: string, provider: string) =>
@@ -25,7 +25,10 @@ export const moveProject = (base: string, sessionId: string, projectId: string |
   );
 
 export const pinProject = (base: string, projectId: string) =>
-  apiPostE<{ status: string }>(`${base}/projects/${encodeURIComponent(projectId)}/pin`, {});
+  apiPostE<{ status: string; pinned: boolean; project_id: string }>(
+    `${base}/projects/${encodeURIComponent(projectId)}/pin`,
+    {},
+  );
 
 export async function createSessionInProject(
   base: string,

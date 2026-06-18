@@ -23,7 +23,7 @@ const mockLayer = (status: number, body: unknown) =>
   );
 
 const PROVIDER: ProviderOption = { type: "anthropic", name: "Claude Sonnet", version: "claude-sonnet-4" };
-const PROJECT: ProjectOption = { id: "proj-1", name: "My Project", path: "/home/user/project", managed: false };
+const PROJECT: ProjectOption = { id: "proj-1", name: "My Project", path: "/home/user/project", managed: false, pinned: false };
 
 describe("getProviderOptions", () => {
   test("parses provider options array from response", async () => {

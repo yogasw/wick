@@ -6,7 +6,15 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Improved
+
+*   **Chat — WhatsApp-style message timestamps**: Each assistant and user bubble now shows an `HH:mm` timestamp on hover/focus, and a sticky centered date separator (Today / Yesterday / weekday name / full date) appears whenever the date changes between turns.
+*   **Chat — Mermaid live progressive rendering**: Mermaid diagrams now render progressively during streaming the same way SVG does — partial blocks paint incrementally, a last-good-frame is preserved across token repaints, and raw source never flashes while the diagram is building.
+*   **Chat — diagram format selection rule**: The agent system prompt now encodes an explicit SVG-vs-Mermaid selection rule: node/edge graphs → SVG; algorithmic diagrams (sequence, Gantt, pie, journey) → Mermaid. User overrides always win.
+
+### Fixed
+
+*   **Agents — ownerless "system" projects now visible**: Projects with no recorded owner (created directly in the DB or by internal tooling) are now accessible to every authenticated caller, not only when the tags service is absent.
 
 ---
 
