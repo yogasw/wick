@@ -9,6 +9,13 @@ All notable changes to Wick are documented here.
 ### Added
 
 *   **Chat — fullscreen diagram lightbox**: Double-clicking any rendered Mermaid or SVG diagram opens a fullscreen zoom/pan viewer. Gestures: scroll or two-finger trackpad to pan; Ctrl/Cmd+scroll or pinch to zoom toward cursor; drag to pan; double-click inside to reset to fit; Esc, close button, or clicking bare backdrop to dismiss. The backdrop colour is switchable (auto-theme → light → dark → checkerboard) and persists across opens so diagrams on any canvas stay readable.
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.20.1](https://github.com/yogasw/wick/compare/v0.20.0...v0.20.1) — Chat & Agents
+
+_Released on 2026-06-18_
 
 ### Improved
 
@@ -19,8 +26,10 @@ All notable changes to Wick are documented here.
 ### Fixed
 
 *   **Agents — ownerless "system" projects now visible**: Projects with no recorded owner (created directly in the DB or by internal tooling) are now accessible to every authenticated caller, not only when the tags service is absent.
+*   **Chat — Pin as default state**: The "Pin as default" button and project pinning state now reflect immediately in the UI without needing a page refresh.
 
 ---
+
 
 ## [v0.20.0](https://github.com/yogasw/wick/compare/v0.19.3...v0.20.0) — Agents & Chat
 
