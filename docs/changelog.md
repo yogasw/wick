@@ -9,7 +9,11 @@ All notable changes to Wick are documented here.
 ### Added
 
 *   **Chat — fullscreen diagram lightbox**: Double-clicking any rendered Mermaid or SVG diagram opens a fullscreen zoom/pan viewer. Gestures: scroll or two-finger trackpad to pan; Ctrl/Cmd+scroll or pinch to zoom toward cursor; drag to pan; double-click inside to reset to fit; Esc, close button, or clicking bare backdrop to dismiss. The backdrop colour is switchable (auto-theme → light → dark → checkerboard) and persists across opens so diagrams on any canvas stay readable.
-_Nothing yet — notes for the next release go here._
+
+### Improved
+
+*   **Chat — AI timestamp always visible**: Assistant (AI) response bubbles now show the `HH:mm` stamp at all times instead of only on hover. User bubbles remain hover-only. Day separators in the thread are now static dividers rather than sticky elements.
+*   **Chat — floating day pill**: A WhatsApp-style floating date pill appears at the top of the conversation viewport while scrolling and fades out after ~1.4 s of idle. It always shows the label for the topmost visible day group.
 
 ---
 
