@@ -247,7 +247,7 @@
 
       {#if turn.text}
         {#if stamp}
-          <span class="self-end text-[10px] leading-none text-black-500 dark:text-black-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{stamp}</span>
+          <span class="self-start text-[10px] leading-none text-black-500 dark:text-black-600">{stamp}</span>
         {/if}
         <div use:enrich={turn.text} class="rounded-2xl rounded-tl-sm bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
           {@html renderMarkdown(turn.text)}
