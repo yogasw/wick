@@ -4,7 +4,7 @@
   import { renderLive } from "../richRender.js";
   import ThreadMessage from "./ThreadMessage.svelte";
   import ToolCard from "./ToolCard.svelte";
-  import { turnDay, turnDayKey } from "../timeFormat.js";
+  import { turnDay, turnDayKey, activeDayLabel } from "../timeFormat.js";
 
   type Props = {
     turns: ConversationTurn[];
@@ -25,12 +25,44 @@
   }
 
   let liveTraceOpen = $state(false);
+  let floatLabel = $state("");
+  let floatVisible = $state(false);
+  let scrollParent: HTMLElement | null = null;
+  let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
   const isEmpty = $derived(turns.length === 0 && !live && !typing.active);
 
+  function findScrollParent(el: HTMLElement | null): HTMLElement | null {
+    let node = el?.parentElement ?? null;
+    while (node) {
+      const oy = getComputedStyle(node).overflowY;
+      if (oy === "auto" || oy === "scroll") return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function topDayLabel(): string {
+    if (!scrollParent || !containerEl) return "";
+    const parentTop = scrollParent.getBoundingClientRect().top;
+    const seps = Array.from(containerEl.querySelectorAll<HTMLElement>("[data-day-sep]")).map((el) => ({
+      top: el.getBoundingClientRect().top,
+      label: el.dataset.dayLabel ?? "",
+    }));
+    return activeDayLabel(seps, parentTop, 28);
+  }
+
+  function onScroll() {
+    const label = topDayLabel();
+    if (label) floatLabel = label;
+    floatVisible = true;
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => { floatVisible = false; }, 1400);
+  }
+
   onMount(() => {
     if (!containerEl) return;
-    containerEl.addEventListener("click", (e: MouseEvent) => {
+    const onClick = (e: MouseEvent) => {
       const target = e.target as Element;
       const link = target.closest<HTMLElement>("[data-chat-path]");
       if (link) {
@@ -47,11 +79,25 @@
         btn.textContent = "Copied";
         setTimeout(() => { btn.textContent = prev; }, 1500);
       }).catch(() => {});
-    });
+    };
+    containerEl.addEventListener("click", onClick);
+    scrollParent = findScrollParent(containerEl);
+    scrollParent?.addEventListener("scroll", onScroll, { passive: true });
+    floatLabel = topDayLabel();
+    return () => {
+      containerEl?.removeEventListener("click", onClick);
+      scrollParent?.removeEventListener("scroll", onScroll);
+      if (hideTimer) clearTimeout(hideTimer);
+    };
   });
 </script>
 
 <div bind:this={containerEl} class="flex flex-col gap-3 px-4 py-3">
+  <div data-floating-day class="pointer-events-none sticky top-2 z-20 -mb-3 flex h-0 items-start justify-center">
+    {#if floatLabel}
+      <span class="rounded-md bg-white-200/95 dark:bg-navy-800/95 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm backdrop-blur-sm transition-opacity duration-300 {floatVisible ? 'opacity-100' : 'opacity-0'}">{floatLabel}</span>
+    {/if}
+  </div>
   {#if isEmpty}
     <div class="flex flex-col items-center justify-center py-16 text-center gap-1">
       <p class="text-sm font-medium text-black-700 dark:text-black-600">No messages yet</p>
@@ -63,8 +109,8 @@
     {@const dayKey = turnDayKey(turn)}
     {@const prevKey = i === 0 ? "" : turnDayKey(turns[i - 1])}
     {#if label && dayKey !== prevKey}
-      <div class="sticky top-1.5 z-10 flex justify-center py-1.5 pointer-events-none">
-        <span class="pointer-events-auto rounded-md bg-white-200/95 dark:bg-navy-800/95 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm backdrop-blur-sm">{label}</span>
+      <div data-day-sep data-day-label={label} class="flex justify-center py-1.5">
+        <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">{label}</span>
       </div>
     {/if}
     <ThreadMessage {turn} {loadTrace} />
