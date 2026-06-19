@@ -10,6 +10,16 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.21.0](https://github.com/yogasw/wick/compare/v0.20.2...v0.21.0) — MCP
+
+_Released on 2026-06-19_
+
+### Fixed
+*   Allow admins and session creators to manage session titles. Previously, only the session owner could use `wick_set_title` and `wick_session_info` to manage a session's title, which prevented administrators (including internal agents) and the original session creator from performing these actions due to ID mismatch. The system now correctly grants these permissions.
+
+---
+
+
 ## [v0.21.0](https://github.com/yogasw/wick/compare/v0.20.2...v0.21.0) — MCP session-title guard fix
 
 _Released on 2026-06-19_
