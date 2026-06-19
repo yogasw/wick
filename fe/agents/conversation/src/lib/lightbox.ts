@@ -376,17 +376,47 @@ export function openLightbox(svg: SVGSVGElement, sourceEl?: Element | null): voi
   };
 }
 
-/* Wires double-click on a rendered block to open its <svg> in the lightbox.
-   Idempotent via a data marker. `getSvg` returns the live rendered svg. */
+/* Wires "open in lightbox" on a rendered block. Idempotent via a data marker.
+   `getSvg` returns the live rendered svg.
+
+   Desktop fires a real `dblclick`. Touch devices DON'T reliably emit dblclick
+   (a double-tap is consumed as browser zoom), so we also detect a double-tap
+   manually from two quick `pointerup`s near the same spot. */
 export function enableZoom(block: HTMLElement, getSvg: () => SVGSVGElement | null): void {
   if (block.hasAttribute("data-zoomable")) return;
   block.setAttribute("data-zoomable", "");
   block.style.cursor = "zoom-in";
-  block.addEventListener("dblclick", (e) => {
+
+  function open(e: Event): void {
     const svg = getSvg();
     if (!svg) return;
     e.preventDefault();
     /* sample the bubble/surface bg (parent of the diagram block) for "Auto" */
     openLightbox(svg, block.parentElement);
-  });
+  }
+
+  /* mouse / trackpad */
+  block.addEventListener("dblclick", open);
+
+  /* touch double-tap: two pointerups within 320ms and ~24px of each other */
+  let lastTap = 0;
+  let lastX = 0;
+  let lastY = 0;
+  block.addEventListener(
+    "pointerup",
+    (e) => {
+      if (e.pointerType === "mouse") return; /* dblclick handles mouse */
+      const now = e.timeStamp;
+      const near = Math.abs(e.clientX - lastX) < 24 && Math.abs(e.clientY - lastY) < 24;
+      if (now - lastTap < 320 && near) {
+        lastTap = 0;
+        open(e);
+        return;
+      }
+      lastTap = now;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    },
+    { passive: false },
+  );
 }
