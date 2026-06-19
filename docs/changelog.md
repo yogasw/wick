@@ -10,6 +10,16 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.21.0](https://github.com/yogasw/wick/compare/v0.20.2...v0.21.0) — MCP session-title guard fix
+
+_Released on 2026-06-19_
+
+### Fixed
+
+*   **MCP — `wick_set_title` / `wick_session_info` authorization**: Admin principals (including the internal agent principal) can now manage any session's title without being blocked by the owner-only guard. Previously, calls made by the agent on behalf of an admin context were incorrectly rejected. Session creators and admins are now both accepted; ownerless sessions remain admin-only.
+
+---
+
 ## [v0.20.2](https://github.com/yogasw/wick/compare/v0.20.1...v0.20.2) — Chat UI
 
 _Released on 2026-06-19_
