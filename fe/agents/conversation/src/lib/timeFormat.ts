@@ -22,6 +22,22 @@ export function turnTime(turn: ConversationTurn): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
+/* Label of the day separator currently at the top of the viewport: the lowest
+   separator still at/above `parentTop + offset`, else the first separator. */
+export function activeDayLabel(
+  separators: { top: number; label: string }[],
+  parentTop: number,
+  offset: number,
+): string {
+  if (separators.length === 0) return "";
+  const limit = parentTop + offset;
+  let active = "";
+  for (const sep of separators) {
+    if (sep.top <= limit) active = sep.label;
+  }
+  return active || separators[0].label;
+}
+
 /** Stable per-day key ("2026-06-18"); empty when the turn has no parseable time. */
 export function turnDayKey(turn: ConversationTurn): string {
   const d = turnDate(turn);
