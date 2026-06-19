@@ -7,6 +7,8 @@
    Only wire this for blocks worth exporting (diagrams, math, artifacts). Plain
    code fences keep their own inline Copy button. */
 
+import { enableZoom } from "./lightbox.js";
+
 export interface ToolbarSpec {
   /** raw text to copy / download */
   source: () => string;
@@ -148,4 +150,7 @@ export function attachToolbar(block: HTMLElement, spec: ToolbarSpec): void {
   block.setAttribute("data-toolbar", "");
   block.classList.add("relative");
   block.appendChild(buildToolbar(spec));
+  /* exportable blocks (diagrams) are also zoomable: double-click → fullscreen
+     pan/zoom viewer over an opaque backdrop */
+  if (spec.svg) enableZoom(block, spec.svg);
 }

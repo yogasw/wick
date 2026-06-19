@@ -10,6 +10,29 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.20.2](https://github.com/yogasw/wick/compare/v0.20.1...v0.20.2) — Chat UI
+
+_Released on 2026-06-19_
+
+### Added
+
+*   **Chat — fullscreen diagram lightbox**: Double-clicking any rendered Mermaid or SVG diagram opens a fullscreen zoom/pan viewer.
+    *   Gestures: scroll or two-finger trackpad to pan; Ctrl/Cmd+scroll or pinch to zoom toward cursor; drag to pan; double-click inside to reset to fit; Esc, close button, or clicking bare backdrop to dismiss.
+    *   On touch devices, the lightbox opens on double-tap.
+    *   The backdrop color is switchable (auto-theme → light → dark → checkerboard) and persists across opens, ensuring diagrams on any canvas stay readable.
+    *   The viewer recomputes the viewBox from the real bounding box, ensuring any node that spills past the declared viewBox is not clipped.
+    *   Diagrams remain crisp vector at any zoom level (2D transform, no GPU-layer bitmap scaling).
+    *   Includes a live zoom-level readout.
+
+### Improved
+
+*   **Chat — AI timestamp always visible**: Assistant (AI) response bubbles now show the `HH:mm` stamp at all times instead of only on hover. User bubbles remain hover-only. Day separators in the thread are now static dividers.
+*   **Chat — floating day pill**: A WhatsApp-style floating date pill appears at the top of the conversation viewport while scrolling and fades out after ~1.4 seconds of idle. It always shows the label for the topmost visible day group.
+*   **Chat — Diagram display**: Wide diagrams and raw fallbacks within chat bubbles are now contained to prevent overflow and overlap with other UI on mobile.
+
+---
+
+
 ## [v0.20.1](https://github.com/yogasw/wick/compare/v0.20.0...v0.20.1) — Chat & Agents
 
 _Released on 2026-06-18_

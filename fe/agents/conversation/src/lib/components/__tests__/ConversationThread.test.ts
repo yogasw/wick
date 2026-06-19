@@ -126,6 +126,21 @@ describe("ConversationThread", () => {
     expect(ev.defaultPrevented).toBe(true);
   });
 
+  test("inserts a non-sticky day separator per day group and renders a floating day pill", () => {
+    const now = new Date();
+    const earlier = new Date(now.getTime() - 3 * 86400000);
+    const older = { ...makeTurn("d-1", "user", "old day msg"), ts: earlier.toISOString() };
+    const today = { ...makeTurn("d-2", "assistant", "today msg"), ts: now.toISOString() };
+    const { container } = render(ConversationThread, {
+      props: { turns: [older, today], live: null, typing: { active: false } },
+    });
+    const seps = container.querySelectorAll("[data-day-sep]");
+    expect(seps.length).toBe(2);
+    seps.forEach((s) => expect(s.className).not.toContain("sticky"));
+    expect(container.querySelector("[data-day-label=\"Today\"]")).not.toBeNull();
+    expect(container.querySelector("[data-floating-day]")).not.toBeNull();
+  });
+
   test("renders all turns when multiple turns share empty turn_id without crashing", () => {
     const emptyA = makeTurn("", "user", "First empty-id turn");
     const emptyB = makeTurn("", "assistant", "Second empty-id turn");

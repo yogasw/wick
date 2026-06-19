@@ -48,6 +48,18 @@ describe("ThreadMessage - assistant turn", () => {
     expect(container.innerHTML).toContain("justify-start");
   });
 
+  test("assistant bubble shows an HH:mm stamp (no date, no seconds) that is always visible", () => {
+    const local = new Date(2026, 5, 19, 15, 36, 42);
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "assistant", text: "answer", timestamp: local.getTime() }) },
+    });
+    const stamp = screen.getByText("15:36");
+    expect(stamp).toBeDefined();
+    expect(stamp.className).not.toContain("opacity-0");
+    expect(screen.queryByText(/15:36:42/)).toBeNull();
+    expect(screen.queryByText(/2026/)).toBeNull();
+  });
+
   test("turn with tool_use event shows trace toggle (tool card is inside trace, not bubble)", async () => {
     const turn = makeTurn({
       role: "assistant",
