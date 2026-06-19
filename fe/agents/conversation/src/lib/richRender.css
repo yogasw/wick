@@ -155,3 +155,20 @@
   height: auto !important;
   max-height: 75vh;
 }
+
+/* Lightbox "Grid" backdrop: neutral mid-tone checkerboard so a diagram reads
+   clearly whether its own fills are light OR dark. */
+.wick-lb-grid {
+  background-color: #9ca3af;
+  background-image:
+    linear-gradient(45deg, rgba(0, 0, 0, 0.12) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(0, 0, 0, 0.12) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(0, 0, 0, 0.12) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(0, 0, 0, 0.12) 75%);
+  background-size: 24px 24px;
+  background-position:
+    0 0,
+    0 12px,
+    12px -12px,
+    -12px 0;
+}

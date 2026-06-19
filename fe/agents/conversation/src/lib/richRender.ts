@@ -243,6 +243,38 @@ function completePartialSvg(src: string): string {
   return s;
 }
 
+/* Some generated SVGs declare a viewBox / width-height smaller than their real
+   content (e.g. the last node's box extends past the stated height), clipping
+   the overflow in the source itself. Recompute the viewBox from the rendered
+   bounding box (+ small padding) so nothing is cut off. Must run AFTER the svg
+   is in the DOM and laid out — getBBox needs layout. No-op on failure. */
+export function correctViewBox(svg: SVGSVGElement): void {
+  try {
+    const bb = svg.getBBox();
+    if (!bb.width || !bb.height) return;
+    const vb = svg.viewBox.baseVal;
+    /* only widen when content actually spills past the declared viewBox */
+    const spills =
+      !vb ||
+      (vb.width === 0 && vb.height === 0) ||
+      bb.x < vb.x - 0.5 ||
+      bb.y < vb.y - 0.5 ||
+      bb.x + bb.width > vb.x + vb.width + 0.5 ||
+      bb.y + bb.height > vb.y + vb.height + 0.5;
+    if (!spills) return;
+    const pad = Math.max(8, Math.min(bb.width, bb.height) * 0.02);
+    const x = bb.x - pad;
+    const y = bb.y - pad;
+    const w = bb.width + pad * 2;
+    const h = bb.height + pad * 2;
+    svg.setAttribute("viewBox", `${x} ${y} ${w} ${h}`);
+    svg.setAttribute("width", String(w));
+    svg.setAttribute("height", String(h));
+  } catch {
+    /* getBBox can throw on a detached / empty svg — leave it as-is */
+  }
+}
+
 function renderSvg(node: HTMLElement): void {
   /* Partial (streaming) blocks re-render every paint as more shapes arrive;
      complete blocks render once. */
@@ -278,6 +310,9 @@ function renderSvg(node: HTMLElement): void {
     box.className = "flex justify-center overflow-x-auto p-2";
     box.appendChild(svg);
     el.appendChild(box);
+    /* now in the DOM: fix a too-small viewBox so a node that spills past it
+       isn't clipped (complete blocks only — a partial is still growing) */
+    if (!partial) correctViewBox(svg);
     if (!partial) {
       attachToolbar(el, {
         source: () => src,
