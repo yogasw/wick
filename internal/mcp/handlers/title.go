@@ -8,12 +8,31 @@ import (
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 )
 
 // titleMaxRunes caps a session title so the sidebar never overflows.
 // Matches the truncation applied to the auto-derived first-message label.
 const titleMaxRunes = 60
+
+// canManageSession reports whether caller may read/write this session's
+// meta over MCP. Owners and admins (including the internal agent
+// principal, which is admin) pass; otherwise the caller must be the
+// session's creator. Ownerless sessions (UserID=="") are reachable only
+// by owner/admin. Mirrors ownsSession in internal/tools/agents, but
+// admins are allowed unconditionally here: this is a write to one
+// already-known session, not a list enumeration, so there is no
+// cross-user leak to guard against — unlike the session-list view.
+func canManageSession(caller *entity.User, ownerID string) bool {
+	if caller == nil {
+		return true
+	}
+	if caller.CanSeeAllSessions() || caller.IsAdmin() {
+		return true
+	}
+	return ownerID != "" && ownerID == caller.ID
+}
 
 // WickSessionInfo handles the wick_session_info tool — a read-only view
 // of one session's meta so the agent can decide whether to set a title.
@@ -31,8 +50,7 @@ func WickSessionInfo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp
 		rsp.ToolError(w, req.ID, "load session: "+err.Error(), "wick_session_info")
 		return
 	}
-	caller := login.GetUser(r.Context())
-	if caller != nil && !caller.CanSeeAllSessions() && sess.Meta.UserID != "" && sess.Meta.UserID != caller.ID {
+	if !canManageSession(login.GetUser(r.Context()), sess.Meta.UserID) {
 		rsp.ToolError(w, req.ID, fmt.Sprintf("session not found: %s", sessionID), "wick_session_info")
 		return
 	}
@@ -80,8 +98,7 @@ func WickSetTitle(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Re
 		rsp.ToolError(w, req.ID, "load session: "+err.Error(), "wick_set_title")
 		return
 	}
-	caller := login.GetUser(r.Context())
-	if caller != nil && !caller.CanSeeAllSessions() && sess.Meta.UserID != "" && sess.Meta.UserID != caller.ID {
+	if !canManageSession(login.GetUser(r.Context()), sess.Meta.UserID) {
 		rsp.ToolError(w, req.ID, fmt.Sprintf("session not found: %s", sessionID), "wick_set_title")
 		return
 	}
