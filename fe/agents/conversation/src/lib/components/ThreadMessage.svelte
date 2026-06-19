@@ -155,7 +155,7 @@
     </div>
   </div>
 {:else if isUser}
-  <div class="flex justify-end gap-2 group">
+  <div class="flex min-w-0 max-w-full justify-end gap-2 group">
     <div class="flex flex-col items-end gap-1 max-w-[80%] min-w-0">
       {#if safeAttachments.length > 0}
         <div class="flex flex-wrap justify-end gap-1.5 max-w-full">
@@ -191,7 +191,7 @@
         {#if stamp}
           <span class="text-[10px] leading-none text-black-500 dark:text-black-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{stamp}</span>
         {/if}
-        <div class="rounded-2xl rounded-tr-sm bg-green-500 px-4 py-2.5 text-sm text-white-100 whitespace-pre-wrap break-words leading-relaxed shadow-sm">
+        <div class="min-w-0 max-w-full overflow-hidden rounded-2xl rounded-tr-sm bg-green-500 px-4 py-2.5 text-sm text-white-100 whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm">
           {@html linkifyText(turn.text)}
         </div>
       {/if}
