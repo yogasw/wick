@@ -70,7 +70,7 @@ export type Artifact = {
   path: string;
   url: string;
   download_url: string;
-  kind: "image" | "pdf" | "html" | "file";
+  kind: "image" | "pdf" | "html" | "markdown" | "text" | "file";
   mime?: string;
   size?: number;
 };

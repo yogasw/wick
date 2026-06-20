@@ -5,8 +5,10 @@
    message that re-renders on every token does not thrash the renderers. */
 import "katex/dist/katex.min.css";
 import "./richRender.css";
+import { mount } from "svelte";
 import { attachToolbar } from "./blockToolbar.js";
 import { renderMarkdown } from "./markdown.js";
+import HtmlArtifact from "./components/HtmlArtifact.svelte";
 
 type MermaidModule = {
   initialize: (config: Record<string, unknown>) => void;
@@ -351,57 +353,84 @@ async function renderMath(node: HTMLElement): Promise<void> {
 const ARTIFACT_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; connect-src 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'";
 
-export function buildArtifactSrcdoc(html: string): string {
-  const meta = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`;
-  if (/<head[\s>]/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => `${m}${meta}`);
-  if (/<html[\s>]/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => `${m}<head>${meta}</head>`);
-  return `<!doctype html><html><head><meta charset="utf-8">${meta}</head><body>${html}</body></html>`;
+/* Theme bridge injected into every artifact iframe so HTML the model writes
+   can match the chat's light/dark theme. We expose CSS variables (which the
+   system prompt tells the model to use) and set `color-scheme` so native form
+   controls adapt. We do NOT force a background — HTML that styles itself wins;
+   only the :root vars + color-scheme are provided. `dark` is mirrored onto the
+   artifact's <html> too, so authors can also key off `.dark` / a media-like
+   class. Read from the parent's class-based dark mode at build time. */
+function artifactThemeStyle(): string {
+  const dark = isDark();
+  const vars = dark
+    ? "--wick-bg:#0f172a;--wick-surface:#1e293b;--wick-fg:#f1f5f9;--wick-muted:#94a3b8;--wick-border:#334155;--wick-accent:#22c55e;"
+    : "--wick-bg:#ffffff;--wick-surface:#f1f5f9;--wick-fg:#0f172a;--wick-muted:#64748b;--wick-border:#e2e8f0;--wick-accent:#16a34a;";
+  return `<style>:root{color-scheme:${dark ? "dark" : "light"};${vars}}</style>`;
 }
 
+export function buildArtifactSrcdoc(html: string): string {
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`;
+  const head = meta + artifactThemeStyle();
+  const htmlClass = isDark() ? ' class="dark"' : "";
+  if (/<head[\s>]/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => `${m}${head}`);
+  if (/<html[\s>]/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => `${m}<head>${head}</head>`);
+  return `<!doctype html><html${htmlClass}><head><meta charset="utf-8">${head}</head><body>${html}</body></html>`;
+}
+
+/* Inline reporter (CSP allows script-src 'unsafe-inline') that posts the
+   document's full scroll height to the parent on load, mutation, and resize.
+   The host iframe listens for {type:"wick-artifact-height"} and grows to fit,
+   so the inline preview has no inner scrollbar — it reads as one with the
+   chat. id correlates the message to the right iframe when several are shown. */
+export function artifactHeightReporter(id: string): string {
+  // Measuring scrollHeight alone breaks when the doc sizes to the viewport
+  // (body{min-height:100vh} / flex-centering): inside the iframe 100vh ===
+  // the iframe's CURRENT height, so scrollHeight just echoes whatever we set
+  // and the content stays clipped. The body's children keep their natural
+  // size though, so the farthest child's bottom edge gives the real height.
+  return `<script>(function(){
+    var de=document.documentElement;
+    function h(){
+      var b=document.body, max=de.scrollHeight;
+      if(b){
+        max=Math.max(max,b.scrollHeight,b.offsetHeight);
+        var k=b.children;
+        for(var i=0;i<k.length;i++){var bot=k[i].getBoundingClientRect().bottom; if(bot>max)max=bot;}
+      }
+      return Math.ceil(max)||0;
+    }
+    function send(){var hh=h(); if(hh>0){try{parent.postMessage({type:"wick-artifact-height",id:${JSON.stringify(id)},height:hh},"*");}catch(e){}}}
+    window.addEventListener("load",send);
+    window.addEventListener("resize",send);
+    if(window.ResizeObserver){try{new ResizeObserver(send).observe(de); if(document.body){new ResizeObserver(send).observe(document.body);}}catch(e){}}
+    if(window.MutationObserver){try{new MutationObserver(send).observe(de,{subtree:true,childList:true,attributes:true});}catch(e){}}
+    setTimeout(send,50);setTimeout(send,300);setTimeout(send,1000);
+  })();<\/script>`;
+}
+
+/* buildArtifactSrcdoc + the height reporter injected before </body> (or
+   appended). Used by the inline gallery preview that auto-grows to content. */
+export function buildAutoHeightSrcdoc(html: string, id: string): string {
+  const doc = buildArtifactSrcdoc(html);
+  const reporter = artifactHeightReporter(id);
+  if (/<\/body>/i.test(doc)) return doc.replace(/<\/body>/i, `${reporter}</body>`);
+  return doc + reporter;
+}
+
+/* Inline HTML artifacts (HTML the model emitted in the message body) render
+   through the SAME Svelte component as the file-artifact gallery
+   (HtmlArtifact.svelte): a borderless auto-height preview with a floating ⋮
+   menu (Full screen / Show code / Download). The placeholder div is enriched
+   in place by mounting the component into it with the inline source. */
 function renderHtmlArtifacts(node: HTMLElement): void {
   const els = node.querySelectorAll<HTMLElement>("[data-html-artifact]:not([data-enriched])");
   for (const el of els) {
     el.setAttribute("data-enriched", "");
     const src = el.getAttribute("data-html-src") ?? "";
     if (!src.trim()) continue;
-
-    const header = document.createElement("div");
-    header.className = "flex items-center justify-between px-3 py-1 bg-white-300 dark:bg-navy-600";
-    const label = document.createElement("span");
-    label.className = "text-[10px] text-black-600 dark:text-black-700 uppercase tracking-wide";
-    label.textContent = "HTML preview";
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = "text-[10px] text-black-500 dark:text-black-600 hover:text-black-700 dark:hover:text-black-400 transition-colors px-1.5 py-0.5 rounded hover:bg-white-400 dark:hover:bg-navy-500";
-    toggle.textContent = "Show code";
-    header.append(label, toggle);
-
-    const iframe = document.createElement("iframe");
-    iframe.setAttribute("sandbox", "allow-scripts");
-    iframe.setAttribute("referrerpolicy", "no-referrer");
-    iframe.setAttribute("loading", "lazy");
-    iframe.setAttribute("title", "HTML preview");
-    iframe.className = "w-full bg-white-100";
-    iframe.style.height = "360px";
-    iframe.style.border = "0";
-    iframe.srcdoc = buildArtifactSrcdoc(src);
-
-    const code = document.createElement("pre");
-    code.className = "hidden overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 leading-relaxed";
-    const codeInner = document.createElement("code");
-    codeInner.textContent = src;
-    code.appendChild(codeInner);
-
-    let showingCode = false;
-    toggle.addEventListener("click", () => {
-      showingCode = !showingCode;
-      iframe.classList.toggle("hidden", showingCode);
-      code.classList.toggle("hidden", !showingCode);
-      toggle.textContent = showingCode ? "Show preview" : "Show code";
-    });
-
     el.innerHTML = "";
-    el.append(header, iframe, code);
+    el.className = "w-full";
+    mount(HtmlArtifact, { target: el, props: { src, name: el.getAttribute("data-html-name") || "preview.html" } });
   }
 }
 

@@ -286,6 +286,24 @@ type Module struct {
 	// true only when a connector has config (base_url, API key, …) that a
 	// user may legitimately want to swap for one session.
 	AllowSessionConfig bool
+	// DefaultAccess seeds the access-policy flags onto every freshly
+	// created instance row of this connector (Create + the Fixed auto-seed).
+	// Zero value = the historical default (everything off → admin opts in
+	// per row). An OAuth-only connector like Google Workspace sets
+	// {EnableSSO: true, AllowOthersConnectSSO: true} so a new row is ready
+	// to Connect without an extra Access Policy step. These are starting
+	// values only — admins can still change them per row afterwards.
+	DefaultAccess AccessDefaults
+}
+
+// AccessDefaults are the per-row access-policy starting values a Module
+// can declare. Each field maps to the same-named column on
+// entity.Connector and is copied verbatim onto a new row at creation.
+type AccessDefaults struct {
+	EnableSSO             bool
+	AllowOthersConnectSSO bool
+	MultiAccount          bool
+	AllowOthersConfigure  bool
 }
 
 // AllOps flattens the module's categorized operations into a single slice

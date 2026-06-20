@@ -8,6 +8,12 @@ All notable changes to Wick are documented here.
 
 ### Added
 
+*   **Connector list — inline Connect + connected-account rows**: Each connector row on the list page now shows a **Connect** / **Reconnect** / **+ Connect another** button when the instance has SSO enabled and the caller may connect (no need to open the detail page). Connected accounts appear as sub-rows under the connector card; each account row has a **Disconnect** button (confirmation dialog) for users who own that account or admins.
+*   **Connector list — per-row kebab (⋮) menu**: The per-row action buttons (History / Disable / Duplicate / Delete) are now collected behind a `⋮` kebab menu, keeping each row compact.
+*   **Connector list — Private chip**: Rows that carry only an `owner:<id>` tag and no sharing tag now display a lock **Private** chip instead of the misleading **Everyone** fallback. Adding a filter tag flips the chip back to tag names.
+*   **`Module.DefaultAccess` — seeded access-policy defaults**: Connector module authors can now declare `DefaultAccess connector.AccessDefaults` on their `Module` to pre-seed per-row access-policy flags (`EnableSSO`, `AllowOthersConnectSSO`, `MultiAccount`, `AllowOthersConfigure`) onto every freshly created instance. The Google Workspace connector ships `EnableSSO: true, AllowOthersConnectSSO: true` so a new row is ready to use **Connect Account** without a manual Access Policy step. Admins can still change individual rows afterwards. See [Connector Module — DefaultAccess](/guide/connector-module#defaultaccess-seeding-access-policy-defaults).
+*   **HTML artifacts — themed, borderless, auto-height preview**: HTML file artifacts and inline ` ```html ` blocks in the conversation now render in a borderless sandboxed iframe that grows to its content (no inner scrollbar), with a floating **⋮** menu offering Full screen / Show code / Download. The iframe receives a **theme bridge** — CSS variables (`--wick-bg`, `--wick-surface`, `--wick-fg`, `--wick-muted`, `--wick-border`, `--wick-accent`), `color-scheme`, and a `.dark` class in dark mode — so generated HTML matches the chat's active light/dark theme. The agent system prompt instructs the model to use `var(--wick-*)` for theming by default. See [Agents — Artifacts](/guide/agents#artifacts).
+*   **Artifact kinds — markdown and text**: `.md` files now render as **markdown** artifacts (fullscreen viewer + download); plain text and code files render as **text** artifacts with the same viewer + download. Previously these fell through to the generic downloadable chip.
 *   **Connector build profiles**: Operators can now select which builtin connectors register at boot without rebuilding the binary. Three profiles are available:
     *   `full` (default) — all 7 builtin connectors (GitHub, HTTP REST, Slack, Bitbucket, Loki, Phoenix, Google Workspace). Preserves existing behaviour.
     *   `agent` — curated subset: GitHub, HTTP REST, Slack.
@@ -16,6 +22,7 @@ All notable changes to Wick are documented here.
 
 ### Changed
 
+*   **Connector visibility — live tag resolution**: The connector list now resolves each row's filter-tag IDs live from the database rather than from the session-cookie snapshot. A row created or duplicated in the current session is visible immediately without logout/login.
 *   **Home — default landing page**: Navigating to `/` now redirects to the agent UI (`/tools/agents/`). The tools/connectors grid previously at `/` is now at `/launcher` and remains fully reachable.
 *   **Admin nav — Mini Tools dropdown**: The standalone Tools, Connectors, and Jobs tabs in the admin navigation bar are grouped into a single **Mini Tools** dropdown. A Launcher shortcut is included in the same dropdown. See [Admin Panel](./guide/admin-panel#mini-tools-tools-connectors-jobs).
 

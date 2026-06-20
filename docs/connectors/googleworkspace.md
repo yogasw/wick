@@ -21,6 +21,8 @@ This replaces the older code-only `google_drive` connector. The connector now sh
 
 The admin sets `ClientID` / `ClientSecret` (from a Google Cloud Console OAuth client); `UserToken` / `RefreshToken` are auto-filled when the operator clicks **Connect Account** and completes the Google consent screen. The connector requests offline access (`access_type=offline`, `prompt=consent`) so it obtains a refresh token and auto-renews the 1-hour access token.
 
+> **New rows are Connect-ready by default.** Google Workspace ships with `DefaultAccess{EnableSSO: true, AllowOthersConnectSSO: true}` so every freshly created instance row has the OAuth Connect Account flow already enabled — no manual Access Policy step required. Set `ClientID` and `ClientSecret`, then click **Connect Account** on the list page or the detail page.
+
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `ClientID` | string | ✅ | OAuth Client ID from Google Cloud Console. Required to activate the **Connect Account** button. |

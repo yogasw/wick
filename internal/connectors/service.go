@@ -270,9 +270,13 @@ func (s *Service) seedModuleRows(ctx context.Context, m connector.Module) error 
 	}
 	if n == 0 && m.Meta.Fixed {
 		row := &entity.Connector{
-			Key:                m.Meta.Key,
-			Label:              m.Meta.Name,
-			AllowSessionConfig: m.AllowSessionConfig,
+			Key:                   m.Meta.Key,
+			Label:                 m.Meta.Name,
+			AllowSessionConfig:    m.AllowSessionConfig,
+			EnableSSO:             m.DefaultAccess.EnableSSO,
+			AllowOthersConnectSSO: m.DefaultAccess.AllowOthersConnectSSO,
+			MultiAccount:          m.DefaultAccess.MultiAccount,
+			AllowOthersConfigure:  m.DefaultAccess.AllowOthersConfigure,
 		}
 		if err := s.repo.Create(ctx, row); err != nil {
 			return fmt.Errorf("seed initial row for %q: %w", m.Meta.Key, err)
@@ -381,10 +385,14 @@ func (s *Service) Create(ctx context.Context, key, label string, configs map[str
 		}
 	}
 	c := &entity.Connector{
-		Key:                key,
-		Label:              label,
-		CreatedBy:          createdBy,
-		AllowSessionConfig: mod.AllowSessionConfig,
+		Key:                   key,
+		Label:                 label,
+		CreatedBy:             createdBy,
+		AllowSessionConfig:    mod.AllowSessionConfig,
+		EnableSSO:             mod.DefaultAccess.EnableSSO,
+		AllowOthersConnectSSO: mod.DefaultAccess.AllowOthersConnectSSO,
+		MultiAccount:          mod.DefaultAccess.MultiAccount,
+		AllowOthersConfigure:  mod.DefaultAccess.AllowOthersConfigure,
 	}
 	if err := s.repo.Create(ctx, c); err != nil {
 		return nil, err

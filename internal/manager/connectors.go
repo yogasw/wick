@@ -135,12 +135,17 @@ func hasDefaultTag(list []tool.DefaultTag, name string) bool {
 	return false
 }
 
-// resolveRowTags returns a map from connector row ID to the tag names
-// linked to it. Used by the list view to render access chips.
-func (h *Handler) resolveRowTags(ctx context.Context, rows []entity.Connector) map[string][]string {
+// resolveRowTags returns, per connector row ID, the user-facing access tag
+// names linked to it (owner:<id> markers excluded) and whether the row
+// carries an owner tag (private set). A row is "private" when it has an
+// owner tag: only the owner + admins see it until an admin adds a sharing
+// tag. The list view renders: real tags if any; else 🔒 Private if owned;
+// else Everyone.
+func (h *Handler) resolveRowTags(ctx context.Context, rows []entity.Connector) (map[string][]string, map[string]bool) {
 	out := map[string][]string{}
+	private := map[string]bool{}
 	if h.tags == nil || len(rows) == 0 {
-		return out
+		return out, private
 	}
 	paths := make([]string, len(rows))
 	pathToID := make(map[string]string, len(rows))
@@ -151,7 +156,7 @@ func (h *Handler) resolveRowTags(ctx context.Context, rows []entity.Connector) m
 	}
 	idsByPath, err := h.tags.ToolTagIDs(ctx, paths)
 	if err != nil {
-		return out
+		return out, private
 	}
 	uniq := map[string]struct{}{}
 	for _, ids := range idsByPath {
@@ -160,7 +165,7 @@ func (h *Handler) resolveRowTags(ctx context.Context, rows []entity.Connector) m
 		}
 	}
 	if len(uniq) == 0 {
-		return out
+		return out, private
 	}
 	all := make([]string, 0, len(uniq))
 	for id := range uniq {
@@ -168,7 +173,7 @@ func (h *Handler) resolveRowTags(ctx context.Context, rows []entity.Connector) m
 	}
 	tagRows, err := h.tags.TagsByIDs(ctx, all)
 	if err != nil {
-		return out
+		return out, private
 	}
 	nameByID := make(map[string]string, len(tagRows))
 	for _, t := range tagRows {
@@ -178,11 +183,20 @@ func (h *Handler) resolveRowTags(ctx context.Context, rows []entity.Connector) m
 		rowID := pathToID[path]
 		for _, id := range ids {
 			if n, ok := nameByID[id]; ok {
+				// "owner:<id>" tags are the internal per-row access marker
+				// seeded on non-admin create — not a user-facing access tag.
+				// A row carrying one is private (owner + admins only) until an
+				// admin adds a real sharing tag; track that, but don't render
+				// the raw "owner:<uuid>" as a chip.
+				if strings.HasPrefix(n, "owner:") {
+					private[rowID] = true
+					continue
+				}
 				out[rowID] = append(out[rowID], n)
 			}
 		}
 	}
-	return out
+	return out, private
 }
 
 // resolveRunUsers returns id→display map for every distinct UserID
@@ -813,9 +827,22 @@ func (h *Handler) canConnectSSO(user *entity.User, row *entity.Connector) bool {
 	return row.AllowOthersConnectSSO
 }
 
+// userFilterTagIDs resolves the caller's filter tag IDs live from the DB
+// rather than the session cookie. The cookie is a login-time snapshot, so a
+// tag created mid-session (owner tag on create/duplicate, or one an admin
+// just granted) wouldn't appear until re-login. Querying per request keeps
+// visibility correct with no cookie re-issue. Falls back to the cookie when
+// the login service isn't wired (tests) or the user is nil.
+func (h *Handler) userFilterTagIDs(ctx context.Context, user *entity.User) []string {
+	if h.users != nil && user != nil {
+		return h.users.GetUserFilterTagIDs(ctx, user.ID)
+	}
+	return login.GetUserTagIDs(ctx)
+}
+
 func (h *Handler) visibleRowsForKey(r *http.Request, user *entity.User, key string) ([]entity.Connector, error) {
 	ctx := r.Context()
-	rows, err := h.connectors.ListForManager(ctx, login.GetUserTagIDs(ctx), user != nil && user.IsAdmin())
+	rows, err := h.connectors.ListForManager(ctx, h.userFilterTagIDs(ctx, user), user != nil && user.IsAdmin())
 	if err != nil {
 		return nil, err
 	}
@@ -834,7 +861,9 @@ func (h *Handler) visibleRowsForKey(r *http.Request, user *entity.User, key stri
 func (h *Handler) canSeeRow(r *http.Request, user *entity.User, connectorID string) bool {
 	ctx := r.Context()
 	isAdmin := user != nil && user.IsAdmin()
-	ok, err := h.connectors.IsManageableBy(ctx, connectorID, login.GetUserTagIDs(ctx), isAdmin)
+	// Live tag IDs (not the cookie snapshot) so a just-created owner tag is
+	// honored without a re-login — same source visibleRowsForKey uses.
+	ok, err := h.connectors.IsManageableBy(ctx, connectorID, h.userFilterTagIDs(ctx, user), isAdmin)
 	return err == nil && ok
 }
 
