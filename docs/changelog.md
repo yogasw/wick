@@ -6,7 +6,18 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Connector build profiles**: Operators can now select which builtin connectors register at boot without rebuilding the binary. Three profiles are available:
+    *   `full` (default) — all 7 builtin connectors (GitHub, HTTP REST, Slack, Bitbucket, Loki, Phoenix, Google Workspace). Preserves existing behaviour.
+    *   `agent` — curated subset: GitHub, HTTP REST, Slack.
+    *   `lite` — no builtin connectors registered at boot.
+    Set the active profile with `<app> config profile <full|agent|lite>` (takes effect on restart) or via the admin Configs page (`/admin/variables`, key `profile`). The four runtime connectors (Wick Manager, Workflow, Notifications, Custom Connector) are never profile-gated. See [App CLI Reference — config profile](./reference/app-cli#app-config-profile-full-agent-lite).
+
+### Changed
+
+*   **Home — default landing page**: Navigating to `/` now redirects to the agent UI (`/tools/agents/`). The tools/connectors grid previously at `/` is now at `/launcher` and remains fully reachable.
+*   **Admin nav — Mini Tools dropdown**: The standalone Tools, Connectors, and Jobs tabs in the admin navigation bar are grouped into a single **Mini Tools** dropdown. A Launcher shortcut is included in the same dropdown. See [Admin Panel](./guide/admin-panel#mini-tools-tools-connectors-jobs).
 
 ---
 
