@@ -88,45 +88,49 @@ func Meta() connector.Meta {
 	}
 }
 
-// Operations returns the LLM-callable actions exposed by this connector.
-// Order is stable so MCP wick_list output reads predictably (create,
-// list, get, update, delete).
-func Operations() []connector.Operation {
-	return []connector.Operation{
-		connector.Op(
-			"create",
-			"Create Document",
-			"Create a new JSON document under {resource}. crudcrud auto-generates an _id and returns the stored document.",
-			CreateInput{},
-			create, wickdocs.Docs{},
-		),
-		connector.Op(
-			"list",
-			"List Documents",
-			"List every document in {resource}. Returns an array; empty when the collection has no entries yet.",
-			ListInput{},
-			list, wickdocs.Docs{},
-		),
-		connector.Op(
-			"get",
-			"Get Document",
-			"Fetch a single document from {resource} by its _id.",
-			GetInput{},
-			get, wickdocs.Docs{},
-		),
-		connector.Op(
-			"update",
-			"Update Document",
-			"Replace the document at {resource}/{id} with the provided JSON. Full replacement, not a partial patch.",
-			UpdateInput{},
-			update, wickdocs.Docs{},
-		),
-		connector.OpDestructive(
-			"delete",
-			"Delete Document",
-			"Permanently delete the document at {resource}/{id}. Cannot be undone.",
-			DeleteInput{},
-			deleteOp, wickdocs.Docs{},
+// Operations returns the LLM-callable actions exposed by this connector,
+// grouped into a category. Order is stable so MCP wick_list output reads
+// predictably (create, list, get, update, delete).
+func Operations() []connector.Category {
+	return []connector.Category{
+		connector.Cat(
+			"Records",
+			"Create, read, update, and delete JSON documents in a crudcrud collection.",
+			connector.Op(
+				"create",
+				"Create Document",
+				"Create a new JSON document under {resource}. crudcrud auto-generates an _id and returns the stored document.",
+				CreateInput{},
+				create, wickdocs.Docs{},
+			),
+			connector.Op(
+				"list",
+				"List Documents",
+				"List every document in {resource}. Returns an array; empty when the collection has no entries yet.",
+				ListInput{},
+				list, wickdocs.Docs{},
+			),
+			connector.Op(
+				"get",
+				"Get Document",
+				"Fetch a single document from {resource} by its _id.",
+				GetInput{},
+				get, wickdocs.Docs{},
+			),
+			connector.Op(
+				"update",
+				"Update Document",
+				"Replace the document at {resource}/{id} with the provided JSON. Full replacement, not a partial patch.",
+				UpdateInput{},
+				update, wickdocs.Docs{},
+			),
+			connector.OpDestructive(
+				"delete",
+				"Delete Document",
+				"Permanently delete the document at {resource}/{id}. Cannot be undone.",
+				DeleteInput{},
+				deleteOp, wickdocs.Docs{},
+			),
 		),
 	}
 }
