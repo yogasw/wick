@@ -1,11 +1,11 @@
-// Package googleworkspace wraps Google Drive, Sheets, Docs, and Slides REST APIs
-// for LLM consumption.
+// Package googleworkspace wraps Google Drive, Sheets, Docs, Slides, Gmail,
+// Calendar, and Meet REST APIs for LLM consumption.
 //
-// Purpose: Provides Meta, Configs, 11 Operations, and HealthCheck. Each user
-// authenticates their own Google account via OAuth2 (Connect Account button).
-// Operations are split read-only (list, search, info, content) vs mutating
-// (upload, create_folder, delete, share, create_doc, create_sheet, create_slides).
-// Mutating ops default to disabled.
+// Purpose: Provides Meta, Configs, 37 Operations across 7 categories, and
+// HealthCheck. Each user authenticates their own Google account via OAuth2
+// (Connect Account button). Operations are split read-only (list, search,
+// info, content, get) vs mutating (upload, create, delete, share, send, RSVP).
+// Mutating/destructive ops default to disabled per row.
 //
 // Caller:   internal/connectors/registry.go::RegisterBuiltins()
 // Dependencies: googleworkspace/service.go, googleworkspace/repo.go, googleworkspace/oauth.go
@@ -26,7 +26,7 @@ func Meta() connector.Meta {
 	return connector.Meta{
 		Key:         "google_workspace",
 		Name:        "Google Workspace",
-		Description: "Manage files in Drive, read and write Sheets data, edit Docs content, and manage Slides presentations — all with one Google OAuth account.",
+		Description: "Manage Drive files, Sheets data, Docs content, and Slides; read, send, and label Gmail; manage Calendar events with Meet links; and read Meet recordings and transcripts — all with one Google OAuth account.",
 		Icon:        "🗂️",
 	}
 }
@@ -172,7 +172,129 @@ type SlidesDuplicateSlideInput struct {
 	SlideIndex int    `wick:"required;desc=0-based index of the slide to duplicate."`
 }
 
-// Operations returns all 20 operations for the Google Workspace connector.
+// --- Gmail input structs ---
+
+// GmailListMessagesInput is the argument schema for gmail_list_messages.
+type GmailListMessagesInput struct {
+	Query      string `wick:"desc=Gmail search query. Example: from:alice@abc.com is:unread newer_than:7d. Leave empty for the whole mailbox."`
+	MaxResults int    `wick:"desc=Max messages to return (1-100). Default: 20."`
+}
+
+// GmailGetMessageInput is the argument schema for gmail_get_message.
+type GmailGetMessageInput struct {
+	MessageID string `wick:"required;desc=Gmail message ID (from gmail_list_messages)."`
+}
+
+// GmailSendInput is the argument schema for gmail_send.
+type GmailSendInput struct {
+	To      string `wick:"required;desc=Recipient email address(es), comma-separated. Example: bob@abc.com"`
+	Cc      string `wick:"desc=CC email address(es), comma-separated."`
+	Subject string `wick:"required;desc=Email subject line."`
+	Body    string `wick:"required;textarea;desc=Plain-text email body."`
+}
+
+// GmailCreateDraftInput is the argument schema for gmail_create_draft.
+type GmailCreateDraftInput struct {
+	To      string `wick:"desc=Recipient email address(es), comma-separated."`
+	Cc      string `wick:"desc=CC email address(es), comma-separated."`
+	Subject string `wick:"desc=Email subject line."`
+	Body    string `wick:"textarea;desc=Plain-text email body."`
+}
+
+// GmailReplyInput is the argument schema for gmail_reply.
+type GmailReplyInput struct {
+	MessageID string `wick:"required;desc=ID of the message to reply to. The reply stays in the same thread."`
+	Body      string `wick:"required;textarea;desc=Plain-text reply body."`
+}
+
+// GmailModifyLabelsInput is the argument schema for gmail_modify_labels.
+type GmailModifyLabelsInput struct {
+	MessageID    string `wick:"required;desc=Gmail message ID to modify."`
+	AddLabels    string `wick:"desc=Label IDs to add, comma-separated. System labels: UNREAD, STARRED, IMPORTANT, INBOX, SPAM, TRASH."`
+	RemoveLabels string `wick:"desc=Label IDs to remove, comma-separated. Remove UNREAD to mark read; remove INBOX to archive."`
+}
+
+// --- Calendar input structs ---
+
+// CalendarListCalendarsInput is the argument schema for calendar_list_calendars.
+type CalendarListCalendarsInput struct{}
+
+// CalendarListEventsInput is the argument schema for calendar_list_events.
+type CalendarListEventsInput struct {
+	CalendarID string `wick:"desc=Calendar ID. Default: primary."`
+	TimeMin    string `wick:"desc=Lower bound (RFC3339, inclusive). Example: 2026-06-20T00:00:00Z. Leave empty for no lower bound."`
+	TimeMax    string `wick:"desc=Upper bound (RFC3339, exclusive). Leave empty for no upper bound."`
+	Query      string `wick:"desc=Free-text search over event fields. Optional."`
+	MaxResults int    `wick:"desc=Max events to return (1-250). Default: 50."`
+}
+
+// CalendarGetEventInput is the argument schema for calendar_get_event.
+type CalendarGetEventInput struct {
+	CalendarID string `wick:"desc=Calendar ID. Default: primary."`
+	EventID    string `wick:"required;desc=Event ID (from calendar_list_events)."`
+}
+
+// CalendarCreateEventInput is the argument schema for calendar_create_event.
+type CalendarCreateEventInput struct {
+	CalendarID  string `wick:"desc=Calendar ID. Default: primary."`
+	Summary     string `wick:"required;desc=Event title."`
+	Description string `wick:"textarea;desc=Event description / agenda. Optional."`
+	Location    string `wick:"desc=Physical location or address. Optional."`
+	Start       string `wick:"required;desc=Start time (RFC3339). Example: 2026-06-21T09:00:00+07:00. For an all-day event pass a date: 2026-06-21."`
+	End         string `wick:"required;desc=End time (RFC3339 or date for all-day)."`
+	Attendees   string `wick:"desc=Attendee email addresses, comma-separated. Optional."`
+	AddMeet     bool   `wick:"desc=Attach a Google Meet video link to the event. Default: false."`
+}
+
+// CalendarUpdateEventInput is the argument schema for calendar_update_event.
+type CalendarUpdateEventInput struct {
+	CalendarID  string `wick:"desc=Calendar ID. Default: primary."`
+	EventID     string `wick:"required;desc=Event ID to update."`
+	Summary     string `wick:"desc=New title. Leave empty to keep current."`
+	Description string `wick:"textarea;desc=New description. Leave empty to keep current."`
+	Location    string `wick:"desc=New location. Leave empty to keep current."`
+	Start       string `wick:"desc=New start time (RFC3339). Leave empty to keep current."`
+	End         string `wick:"desc=New end time (RFC3339). Leave empty to keep current."`
+	Attendees   string `wick:"desc=Replacement attendee list, comma-separated. Leave empty to keep current attendees."`
+}
+
+// CalendarDeleteEventInput is the argument schema for calendar_delete_event.
+type CalendarDeleteEventInput struct {
+	CalendarID string `wick:"desc=Calendar ID. Default: primary."`
+	EventID    string `wick:"required;desc=Event ID to cancel/delete. Attendees are notified."`
+}
+
+// CalendarRespondEventInput is the argument schema for calendar_respond_event.
+type CalendarRespondEventInput struct {
+	CalendarID string `wick:"desc=Calendar ID. Default: primary."`
+	EventID    string `wick:"required;desc=Event ID to respond to."`
+	Response   string `wick:"required;dropdown=accepted|declined|tentative;desc=Your RSVP response."`
+}
+
+// --- Meet input structs ---
+
+// MeetGetSpaceInput is the argument schema for meet_get_space.
+type MeetGetSpaceInput struct {
+	Space string `wick:"required;desc=Meet space resource name (spaces/abc), meeting code, or full Meet URL."`
+}
+
+// MeetListConferenceRecordsInput is the argument schema for meet_list_conference_records.
+type MeetListConferenceRecordsInput struct {
+	Filter   string `wick:"desc=Meet filter expression. Example: space.meeting_code=\"abc-defg-hij\" or start_time>=\"2026-06-01T00:00:00Z\". Optional."`
+	PageSize int    `wick:"desc=Max records to return (1-100). Default: 25."`
+}
+
+// MeetListRecordingsInput is the argument schema for meet_list_recordings.
+type MeetListRecordingsInput struct {
+	ConferenceRecord string `wick:"required;desc=Conference record name (conferenceRecords/abc) from meet_list_conference_records."`
+}
+
+// MeetListTranscriptsInput is the argument schema for meet_list_transcripts.
+type MeetListTranscriptsInput struct {
+	ConferenceRecord string `wick:"required;desc=Conference record name (conferenceRecords/abc) from meet_list_conference_records."`
+}
+
+// Operations returns all 37 operations for the Google Workspace connector.
 // Operations groups every Google Workspace action into its product
 // section. Group() flattens these into the Module's op list + the section
 // metadata the admin detail page renders.
@@ -245,6 +367,63 @@ func Operations() []connector.Category {
 			connector.OpDestructive("slides_duplicate_slide", "Duplicate Slide",
 				"Duplicate an existing slide by its 0-based index. The duplicate is inserted immediately after the original.",
 				SlidesDuplicateSlideInput{}, slidesDuplicateSlide, wickdocs.Docs{}),
+		),
+		connector.Cat("Gmail", "Read, search, send, draft, reply to, and label email in Gmail.",
+			connector.Op("gmail_list_messages", "List / Search Messages",
+				"Search the mailbox using Gmail query syntax (e.g. from:x is:unread). Returns id, thread_id, from, to, subject, date, and snippet for each match. Empty result = empty array.",
+				GmailListMessagesInput{}, gmailListMessages, wickdocs.Docs{}),
+			connector.Op("gmail_get_message", "Get Message",
+				"Read a single message in full: headers (from, to, cc, subject, date), labels, and the plain-text body. Returns the message by ID.",
+				GmailGetMessageInput{}, gmailGetMessage, wickdocs.Docs{}),
+			connector.OpDestructive("gmail_send", "Send Email",
+				"Send a new plain-text email. Specify to, optional cc, subject, and body. Returns the sent message ID and thread ID. This actually delivers mail — not a draft.",
+				GmailSendInput{}, gmailSend, wickdocs.Docs{}),
+			connector.OpDestructive("gmail_create_draft", "Create Draft",
+				"Create a draft email without sending it. Returns the draft ID and message ID. The user can review and send it later from Gmail.",
+				GmailCreateDraftInput{}, gmailCreateDraft, wickdocs.Docs{}),
+			connector.OpDestructive("gmail_reply", "Reply to Message",
+				"Reply to an existing message within its thread. Subject is prefixed with Re:, threading headers are set automatically, and the reply goes to the original sender. Returns the sent message ID.",
+				GmailReplyInput{}, gmailReply, wickdocs.Docs{}),
+			connector.OpDestructive("gmail_modify_labels", "Modify Labels",
+				"Add and/or remove labels on a message. Remove UNREAD to mark as read; remove INBOX to archive; add STARRED to star. Returns the message's current label set.",
+				GmailModifyLabelsInput{}, gmailModifyLabels, wickdocs.Docs{}),
+		),
+		connector.Cat("Calendar", "List, read, create, update, delete, and RSVP to Google Calendar events. Create events with a Google Meet link.",
+			connector.Op("calendar_list_calendars", "List Calendars",
+				"List the calendars on the account. Returns id, summary, description, primary flag, and access role. Use a calendar id with the other Calendar operations.",
+				CalendarListCalendarsInput{}, calendarListCalendars, wickdocs.Docs{}),
+			connector.Op("calendar_list_events", "List Events",
+				"List events in a calendar within an optional time window. Returns id, summary, start, end, attendees, and meet_link for each. Use RFC3339 for time_min / time_max. Default calendar is primary.",
+				CalendarListEventsInput{}, calendarListEvents, wickdocs.Docs{}),
+			connector.Op("calendar_get_event", "Get Event",
+				"Read a single event in full: summary, description, location, start/end, attendees with RSVP status, and Meet link if any.",
+				CalendarGetEventInput{}, calendarGetEvent, wickdocs.Docs{}),
+			connector.OpDestructive("calendar_create_event", "Create Event",
+				"Create a calendar event. Set add_meet=true to attach a Google Meet video link (returned in meet_link). Attendees are emailed an invite. Returns the created event.",
+				CalendarCreateEventInput{}, calendarCreateEvent, wickdocs.Docs{}),
+			connector.OpDestructive("calendar_update_event", "Update Event",
+				"Patch an existing event — change time, title, location, description, or replace the attendee list. Only non-empty fields are applied. Attendees are notified. Returns the updated event.",
+				CalendarUpdateEventInput{}, calendarUpdateEvent, wickdocs.Docs{}),
+			connector.OpDestructive("calendar_delete_event", "Delete Event",
+				"Cancel and delete an event. Attendees are notified of the cancellation. Returns the deleted event ID. Not reversible via this connector.",
+				CalendarDeleteEventInput{}, calendarDeleteEvent, wickdocs.Docs{}),
+			connector.OpDestructive("calendar_respond_event", "RSVP to Event",
+				"Set your RSVP (accepted / declined / tentative) on an event you were invited to. Returns the event ID and your new response status.",
+				CalendarRespondEventInput{}, calendarRespondEvent, wickdocs.Docs{}),
+		),
+		connector.Cat("Meet", "Read Google Meet conference data — spaces, past meetings, recordings, and transcripts. To create a Meet link, use Calendar → Create Event with add_meet=true.",
+			connector.Op("meet_get_space", "Get Meet Space",
+				"Get a Meet space's config and active conference by resource name, meeting code, or Meet URL. Returns meeting_uri, meeting_code, access_type, and the active conference record (if a call is live).",
+				MeetGetSpaceInput{}, meetGetSpace, wickdocs.Docs{}),
+			connector.Op("meet_list_conference_records", "List Past Meetings",
+				"List past meetings (conference records) for the account, optionally filtered by Meet filter syntax. Returns name, start_time, end_time, and space for each. Use a record name with the recordings / transcripts operations.",
+				MeetListConferenceRecordsInput{}, meetListConferenceRecords, wickdocs.Docs{}),
+			connector.Op("meet_list_recordings", "List Recordings",
+				"List the recordings produced for a conference record. Returns name, state, start/end time, and the Drive file id of each recording (when available).",
+				MeetListRecordingsInput{}, meetListRecordings, wickdocs.Docs{}),
+			connector.Op("meet_list_transcripts", "List Transcripts",
+				"List the transcripts produced for a conference record. Returns name, state, start/end time, and the Google Docs document id of each transcript (when available).",
+				MeetListTranscriptsInput{}, meetListTranscripts, wickdocs.Docs{}),
 		),
 	}
 }
@@ -523,4 +702,175 @@ func slidesDuplicateSlide(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return duplicateSlide(c, fileID, c.InputInt("slide_index"))
+}
+
+// --- Gmail handlers ---
+
+func gmailListMessages(c *connector.Ctx) (any, error) {
+	max := c.InputInt("max_results")
+	if max <= 0 {
+		max = 20
+	}
+	return listMessages(c, strings.TrimSpace(c.Input("query")), max)
+}
+
+func gmailGetMessage(c *connector.Ctx) (any, error) {
+	id, err := validateString(c.Input("message_id"), "message_id")
+	if err != nil {
+		return nil, err
+	}
+	return getMessage(c, id)
+}
+
+func gmailSend(c *connector.Ctx) (any, error) {
+	to, err := validateString(c.Input("to"), "to")
+	if err != nil {
+		return nil, err
+	}
+	subject, err := validateString(c.Input("subject"), "subject")
+	if err != nil {
+		return nil, err
+	}
+	body, err := validateString(c.Input("body"), "body")
+	if err != nil {
+		return nil, err
+	}
+	raw := buildRFC822(to, c.Input("cc"), subject, body, "")
+	return sendMessage(c, raw, "")
+}
+
+func gmailCreateDraft(c *connector.Ctx) (any, error) {
+	raw := buildRFC822(c.Input("to"), c.Input("cc"), c.Input("subject"), c.Input("body"), "")
+	return createDraft(c, raw)
+}
+
+func gmailReply(c *connector.Ctx) (any, error) {
+	id, err := validateString(c.Input("message_id"), "message_id")
+	if err != nil {
+		return nil, err
+	}
+	body, err := validateString(c.Input("body"), "body")
+	if err != nil {
+		return nil, err
+	}
+	return replyMessage(c, id, body)
+}
+
+func gmailModifyLabels(c *connector.Ctx) (any, error) {
+	id, err := validateString(c.Input("message_id"), "message_id")
+	if err != nil {
+		return nil, err
+	}
+	add := splitCSVList(c.Input("add_labels"))
+	remove := splitCSVList(c.Input("remove_labels"))
+	if len(add) == 0 && len(remove) == 0 {
+		return nil, fmt.Errorf("at least one of add_labels or remove_labels is required")
+	}
+	return modifyLabels(c, id, add, remove)
+}
+
+// --- Calendar handlers ---
+
+func calendarListCalendars(c *connector.Ctx) (any, error) {
+	return listCalendars(c)
+}
+
+func calendarListEvents(c *connector.Ctx) (any, error) {
+	max := c.InputInt("max_results")
+	if max <= 0 {
+		max = 50
+	}
+	return listEvents(c, calendarIDOrPrimary(c), c.Input("time_min"), c.Input("time_max"), c.Input("query"), max)
+}
+
+func calendarGetEvent(c *connector.Ctx) (any, error) {
+	eventID, err := validateString(c.Input("event_id"), "event_id")
+	if err != nil {
+		return nil, err
+	}
+	return getEvent(c, calendarIDOrPrimary(c), eventID)
+}
+
+func calendarCreateEvent(c *connector.Ctx) (any, error) {
+	summary, err := validateString(c.Input("summary"), "summary")
+	if err != nil {
+		return nil, err
+	}
+	start, err := validateString(c.Input("start"), "start")
+	if err != nil {
+		return nil, err
+	}
+	end, err := validateString(c.Input("end"), "end")
+	if err != nil {
+		return nil, err
+	}
+	ev := buildEventBody(summary, c.Input("description"), c.Input("location"), start, end, c.Input("attendees"))
+	return createEvent(c, calendarIDOrPrimary(c), ev, c.InputBool("add_meet"))
+}
+
+func calendarUpdateEvent(c *connector.Ctx) (any, error) {
+	eventID, err := validateString(c.Input("event_id"), "event_id")
+	if err != nil {
+		return nil, err
+	}
+	patch := buildEventPatch(c.Input("summary"), c.Input("description"), c.Input("location"),
+		c.Input("start"), c.Input("end"), c.Input("attendees"))
+	if len(patch) == 0 {
+		return nil, fmt.Errorf("at least one field to update is required")
+	}
+	return updateEvent(c, calendarIDOrPrimary(c), eventID, patch)
+}
+
+func calendarDeleteEvent(c *connector.Ctx) (any, error) {
+	eventID, err := validateString(c.Input("event_id"), "event_id")
+	if err != nil {
+		return nil, err
+	}
+	return deleteEvent(c, calendarIDOrPrimary(c), eventID)
+}
+
+func calendarRespondEvent(c *connector.Ctx) (any, error) {
+	eventID, err := validateString(c.Input("event_id"), "event_id")
+	if err != nil {
+		return nil, err
+	}
+	response, err := validateString(c.Input("response"), "response")
+	if err != nil {
+		return nil, err
+	}
+	return respondEvent(c, calendarIDOrPrimary(c), eventID, response)
+}
+
+// --- Meet handlers ---
+
+func meetGetSpace(c *connector.Ctx) (any, error) {
+	space, err := validateString(c.Input("space"), "space")
+	if err != nil {
+		return nil, err
+	}
+	return getMeetSpace(c, space)
+}
+
+func meetListConferenceRecords(c *connector.Ctx) (any, error) {
+	pageSize := c.InputInt("page_size")
+	if pageSize <= 0 {
+		pageSize = 25
+	}
+	return listConferenceRecords(c, c.Input("filter"), pageSize)
+}
+
+func meetListRecordings(c *connector.Ctx) (any, error) {
+	rec, err := validateString(c.Input("conference_record"), "conference_record")
+	if err != nil {
+		return nil, err
+	}
+	return listRecordings(c, rec)
+}
+
+func meetListTranscripts(c *connector.Ctx) (any, error) {
+	rec, err := validateString(c.Input("conference_record"), "conference_record")
+	if err != nil {
+		return nil, err
+	}
+	return listTranscripts(c, rec)
 }
