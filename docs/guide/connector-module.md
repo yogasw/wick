@@ -134,29 +134,40 @@ Read at runtime via `c.Input("org")`, `c.InputInt("per_page")`, `c.InputBool("in
 
 ### `Operations()`
 
+`Operations()` returns `[]connector.Category` — operations grouped into titled, described sections via `connector.Cat(title, description, ...ops)`. The admin detail page renders one card per category (title + description + ops table + per-card Enable/Disable all). A sticky "Sections" jump sidebar lists every category with its op count.
+
 ```go
-func Operations() []connector.Operation {
-    return []connector.Operation{
-        connector.Op(
-            "list_repos",
-            "List Repositories",
-            "List repositories under {org}. Returns repo name, full_name, default_branch, visibility, and updated_at.",
-            ListReposInput{},
-            listRepos,
+func Operations() []connector.Category {
+    return []connector.Category{
+        connector.Cat("Repositories", "Browse and inspect repositories.",
+            connector.Op(
+                "list_repos",
+                "List Repositories",
+                "List repositories under {org}. Returns repo name, full_name, default_branch, visibility, and updated_at.",
+                ListReposInput{},
+                listRepos,
+            ),
         ),
-        connector.OpDestructive(
-            "close_issue",
-            "Close Issue",
-            "Close the given issue on {owner}/{repo}. Reversible only by reopening; comments and history are preserved.",
-            CloseIssueInput{},
-            closeIssue,
+        connector.Cat("Issues", "Read and mutate issues.",
+            connector.OpDestructive(
+                "close_issue",
+                "Close Issue",
+                "Close the given issue on {owner}/{repo}. Reversible only by reopening; comments and history are preserved.",
+                CloseIssueInput{},
+                closeIssue,
+            ),
         ),
     }
 }
 ```
 
+Use `connector.Cat("", "", ops...)` for an ungrouped/flat list — an empty title means the ops render without a section header.
+
+Code that needs to iterate every op regardless of grouping calls `module.AllOps()`. To find which category an op belongs to, use `module.CategoryOf(opKey)`.
+
 | Constructor | When to use |
 |-------------|-------------|
+| `connector.Cat(title, desc, ops...)` | Groups ops into a named section on the detail page. Use one `Cat` per logical feature area. |
 | `connector.Op(...)` | Read-only or idempotent writes that can be safely retried |
 | `connector.OpDestructive(...)` | Actions that mutate state in a hard-to-undo way — DELETE, send-message, post-comment, force-push |
 
@@ -323,7 +334,7 @@ Implementation: `Service.SetDisabled` (`internal/connectors/service.go`) writes 
    - `Multi-account` — each user connect creates a new account entry (vs replacing the single token).
    - `Allow others to configure` — non-admin users with tag access may edit credentials.
    - `Allow others to connect SSO` — non-admin users with tag access may initiate the OAuth flow.
-6. **Operations** table — searchable, paginated list. Each row carries:
+6. **Operations** — operations grouped into named category cards (one card per `connector.Cat` section: title, description, op count, per-card Enable/Disable all). A sticky "Sections" sidebar on the right lists every category; clicking a row jumps to that card. A global search box filters across all categories (cards with no match hide). Each op row carries:
    - `[Test]` link → opens the test panel (`/test?op=<key>`)
    - `[History]` link → opens the audit log filtered to that op
    - `Enable / Disable` toggle — toggle individual ops. Destructive ops ship enabled; disable here if you want to restrict them.
@@ -394,7 +405,7 @@ After registering and filling credentials:
 
 ## Reference
 
-- Public API: `pkg/connector` — `Meta`, `Module`, `Operation`, `Op`, `OpDestructive`, `ExecuteFunc`, `Ctx`
+- Public API: `pkg/connector` — `Meta`, `Module`, `Category`, `Cat`, `Operation`, `Op`, `OpDestructive`, `ExecuteFunc`, `Ctx`, `Module.AllOps()`, `Module.CategoryOf()`
 - Canonical example: [`connectors/crudcrud/`](https://github.com/yogasw/wick/tree/master/template/connectors/crudcrud) — three-file split (`connector.go` + `service.go` + `repo.go`)
 - **Built-in connectors** shipped with wick (httprest, github, slack, wickmanager, workflow, crudcrud) — see [Built-in Connectors](/connectors/)
 - MCP transport: [MCP for LLMs](./mcp)
