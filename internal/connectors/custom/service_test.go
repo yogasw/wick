@@ -223,7 +223,7 @@ func TestStoreDefRoundTrip(t *testing.T) {
 		Source:     "curl",
 		SourceMeta: `{"category":"API"}`,
 		Configs:    `[{"key":"base_url","widget":"url","required":true}]`,
-		Ops:        `[{"key":"list_pets","name":"List Pets","description":"List.","inputs":[],"request":{"method":"GET","url_template":"{{.cfg.base_url}}/pets"}}]`,
+		Ops:        `[{"title":"Pets","ops":[{"key":"list_pets","name":"List Pets","description":"List.","inputs":[],"request":{"method":"GET","url_template":"{{.cfg.base_url}}/pets"}}]}]`,
 		CreatedBy:  "admin-1",
 	}
 	if err := store.CreateDef(ctx, def); err != nil {

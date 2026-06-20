@@ -33,9 +33,11 @@ func apiDetailModule(key string) connector.Module {
 			{Key: "internal", Type: "text", Hidden: true},
 			{Key: "channels", Type: "kvlist", Options: "id|name"},
 		},
-		Operations: []connector.Operation{
-			{Key: "send", Name: "Send", Description: "Send a message", Execute: noopExec},
-			{Key: "del", Name: "Delete", Description: "Delete a message", Destructive: true, Execute: noopExec},
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Operation{Key: "send", Name: "Send", Description: "Send a message", Execute: noopExec},
+				connector.Operation{Key: "del", Name: "Delete", Description: "Delete a message", Destructive: true, Execute: noopExec},
+			),
 		},
 	}
 }
@@ -294,5 +296,36 @@ func TestAPICreateConnectorRow(t *testing.T) {
 	}
 	if _, err := svc.Get(t.Context(), got["id"]); err != nil {
 		t.Errorf("new row not found: %v", err)
+	}
+}
+
+func TestBuildCategoryJSON(t *testing.T) {
+	mod := connector.Module{
+		Operations: []connector.Category{
+			connector.Cat("Drive", "Files.",
+				connector.Operation{Key: "a"}),
+			connector.Cat("Sheets", "Cells.",
+				connector.Operation{Key: "b"}),
+			connector.Cat("Empty", "No ops."), // declared, no ops
+			connector.Cat("", "",
+				connector.Operation{Key: "d"}), // uncategorized
+		},
+	}
+
+	got := buildCategoryJSON(mod)
+
+	// One entry per titled non-empty category, in declaration order.
+	// "Empty" (titled, no ops) and "" (untitled) are excluded.
+	want := []connectorCategoryJSON{
+		{Key: "Drive", Title: "Drive", Description: "Files."},
+		{Key: "Sheets", Title: "Sheets", Description: "Cells."},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d (%+v), want %d", len(got), got, len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("category[%d] = %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }

@@ -230,21 +230,23 @@ func RegisterJobNoConfig(meta job.Meta, run job.RunFunc) {
 //
 //	app.RegisterConnector(
 //	    loki.Meta(),
-//	    loki.Creds{},        // typed credential struct, reflected for the form
-//	    loki.Operations(),   // []connector.Operation, one per LLM-callable action
+//	    loki.Creds{},          // typed credential struct, reflected for the form
+//	    loki.Operations(),     // []connector.Category, ops grouped under titled sections
 //	)
 //
 // creds is a typed struct whose exported fields carry `wick:"..."` tags
 // and represent per-instance credential / endpoint values shared across
-// every operation of this connector. ops is the list of named actions
-// (one MCP tool per op per instance); each carries its own input schema
-// and ExecuteFunc. Pass an empty struct{}{} for creds when the
-// connector has no credentials.
-func RegisterConnector[C any](meta connector.Meta, creds C, ops []connector.Operation) {
+// every operation of this connector. categories is the connector's
+// operations grouped into titled sections (see connector.Cat); each op is
+// one named action (one MCP tool per op per instance) with its own input
+// schema and ExecuteFunc. Group() flattens them into the Module's flat op
+// list + the section metadata the admin UI renders. Pass an empty
+// struct{}{} for creds when the connector has no credentials.
+func RegisterConnector[C any](meta connector.Meta, creds C, categories []connector.Category) {
 	connectors.Register(connector.Module{
 		Meta:       meta,
 		Configs:    entity.StructToConfigs(creds),
-		Operations: ops,
+		Operations: categories,
 	})
 }
 

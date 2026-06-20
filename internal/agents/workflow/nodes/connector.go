@@ -80,9 +80,10 @@ func (e *ConnectorExecutor) Execute(ctx context.Context, n workflow.Node, rc *wo
 		return workflow.NodeOutput{}, fmt.Errorf("connector module %q not registered (have: %v)", n.Module, e.Registry.List())
 	}
 	var op *pkgconnector.Operation
-	for i, o := range mod.Operations {
+	ops := mod.AllOps()
+	for i, o := range ops {
 		if o.Key == n.Op {
-			op = &mod.Operations[i]
+			op = &ops[i]
 			break
 		}
 	}

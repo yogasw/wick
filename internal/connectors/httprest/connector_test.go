@@ -193,7 +193,10 @@ func TestMeta(t *testing.T) {
 }
 
 func TestOperationsCount(t *testing.T) {
-	ops := Operations()
+	var ops []connector.Operation
+	for _, c := range Operations() {
+		ops = append(ops, c.Ops...)
+	}
 	assert.Len(t, ops, 5)
 
 	keys := make([]string, len(ops))

@@ -193,7 +193,7 @@ func (h *Handler) apiBulkToggleOperations(w http.ResponseWriter, r *http.Request
 	}
 	targets := body.Ops
 	if len(targets) == 0 {
-		for _, op := range mod.Operations {
+		for _, op := range mod.AllOps() {
 			targets = append(targets, op.Key)
 		}
 	}

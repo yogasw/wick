@@ -759,8 +759,9 @@ func (s *Service) OperationStatesFull(ctx context.Context, connectorID, key stri
 	for _, r := range rows {
 		stored[r.OperationKey] = r
 	}
-	out := make(map[string]OpState, len(mod.Operations))
-	for _, op := range mod.Operations {
+	modOps := mod.AllOps()
+	out := make(map[string]OpState, len(modOps))
+	for _, op := range modOps {
 		st := OpState{Enabled: true} // destructive ops now default ON; LLM confirms before executing
 		if row, ok := stored[op.Key]; ok {
 			st.Enabled = row.Enabled
@@ -1021,9 +1022,10 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	}
 
 	var op *connector.Operation
-	for i := range mod.Operations {
-		if mod.Operations[i].Key == p.OperationKey {
-			op = &mod.Operations[i]
+	ops := mod.AllOps()
+	for i := range ops {
+		if ops[i].Key == p.OperationKey {
+			op = &ops[i]
 			break
 		}
 	}

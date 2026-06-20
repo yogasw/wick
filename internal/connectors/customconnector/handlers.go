@@ -68,30 +68,36 @@ func (h handlers) defSchema(c *connector.Ctx) (any, error) {
 	return map[string]any{
 		"workflow": []string{
 			"1. Gather the API contract from the user (endpoint, auth, sample request/response).",
-			"2. Build the draft JSON following this contract, picking sensible defaults for the decision points below.",
+			"2. Build the draft JSON following this contract, picking sensible defaults for the decision points below. Group the operations into named sections (`ops` is an array of sections) — always do this when there is more than a handful of operations.",
 			"3. Call def_validate to dry-run it.",
-			"4. PRESENT THE PLAN to the user before creating anything: name, key, icon, description, every config field (key, widget, secret, required, purpose), every operation (key, description, inputs, request recipe or mcp_source) — AND the decision points with the default you picked, so the user can override. Wait for explicit confirmation.",
+			"4. PRESENT THE PLAN to the user before creating anything: name, key, icon, description, every config field (key, widget, secret, required, purpose), and the operations ORGANIZED BY SECTION (section title → its operations: key, description, inputs, request recipe or mcp_source) — AND the decision points with the default you picked, so the user can override. Wait for explicit confirmation.",
 			"5. Only after the user confirms, call def_create.",
 		},
 		"decisions": map[string]string{
-			"single":           "Multi-instance (default) lets admins add rows per account/environment, each with its own credentials; single locks the def to one auto-seeded row. Ask when the API clearly has per-team/per-env credentials; otherwise default to multi and mention it.",
-			"destructive_ops":  "Mark every op that mutates user-visible state, sends messages, or spends money as destructive:true — it ships disabled per instance until an admin enables it. State which ops you flagged and why.",
-			"secret_fields":    "Every credential-ish config (tokens, keys, passwords) must be secret:true — encrypted at rest, masked from LLMs. List which fields you marked secret.",
-			"category":         "Visual grouping only. Pick the closest from `categories` or leave empty; mention your pick.",
-			"icon":             "Cosmetic. Default 🔌 — offer the user a custom emoji/SVG if they care.",
-			"access":           "Not part of the draft: the connector starts admin-only behind the auto-created custom:<key> tag. Tell the user that opening it to others happens at /admin/tags afterwards.",
-			"required_configs": "required:true makes the instance show needs_setup until filled. Mark base URL + credentials required; optional tuning knobs not.",
+			"single":             "Multi-instance (default) lets admins add rows per account/environment, each with its own credentials; single locks the def to one auto-seeded row. Ask when the API clearly has per-team/per-env credentials; otherwise default to multi and mention it.",
+			"destructive_ops":    "Mark every op that mutates user-visible state, sends messages, or spends money as destructive:true — it ships disabled per instance until an admin enables it. State which ops you flagged and why.",
+			"secret_fields":      "Every credential-ish config (tokens, keys, passwords) must be secret:true — encrypted at rest, masked from LLMs. List which fields you marked secret.",
+			"op_sections":        "STRONGLY PREFERRED: group operations into named sections. The `ops` array is an array of SECTIONS, each {title, description, ops:[]}. A clear title (\"Rooms\", \"Messages\", \"Reports\") makes the connector detail page readable. ALWAYS use real section titles when the connector has more than ~5 operations — split them into 2-5 logical groups by resource or theme. A single untitled section ({title:\"\"}) is acceptable only for a tiny 1-3 op connector. Tell the user how you grouped them.",
+			"connector_category": "draft.category is SEPARATE from op sections — it groups the whole connector on the connectors index page. Pick the closest from `categories` or leave empty; mention your pick. Do not confuse it with the per-operation sections inside `ops`.",
+			"icon":               "Cosmetic. Default 🔌 — offer the user a custom emoji/SVG if they care.",
+			"access":             "Not part of the draft: the connector starts admin-only behind the auto-created custom:<key> tag. Tell the user that opening it to others happens at /admin/tags afterwards.",
+			"required_configs":   "required:true makes the instance show needs_setup until filled. Mark base URL + credentials required; optional tuning knobs not.",
 		},
 		"draft_shape": map[string]any{
-			"key":         "Lowercase slug (a-z0-9_-), unique across built-in and custom connectors, IMMUTABLE after create. 'custom' is reserved.",
-			"name":        "Display name.",
-			"description": "What the connector does — shown to admins and (via the module) to the LLM in wick_list. Write it action-oriented.",
-			"icon":        "Optional. An emoji, an inline <svg>…</svg>, or a data:image/...;base64 payload. Max 32KB; plain-text icons max 32 bytes. Default 🔌.",
-			"category":    "Optional visual group on the connectors index.",
+			"key":                  "Lowercase slug (a-z0-9_-), unique across built-in and custom connectors, IMMUTABLE after create. 'custom' is reserved.",
+			"name":                 "Display name.",
+			"description":          "What the connector does — shown to admins and (via the module) to the LLM in wick_list. Write it action-oriented.",
+			"icon":                 "Optional. An emoji, an inline <svg>…</svg>, or a data:image/...;base64 payload. Max 32KB; plain-text icons max 32 bytes. Default 🔌.",
+			"category":             "Optional visual group for the WHOLE connector on the connectors index page (NOT the per-operation sections — those live inside `ops`).",
 			"single":               "Optional bool. true locks the def to one instance row (auto-seeded). Default false: multi-instance like built-ins, rows created via instance_create / + New row.",
 			"allow_session_config": "Optional bool. true lets users clone this connector into a per-session instance via the session Config tab / wick_session_workspace — handy for curl/manual API defs pointed at staging or a different key. Default false; an admin still has to enable the per-instance toggle. Leave false for oauth/sso defs whose config is a user token.",
 			"configs":              "Array of fields shared by every operation of an instance (base URL, credentials). Each instance row gets its own values.",
-			"ops":         "Array of operations. Each has exactly one of `request` (templated HTTP) or `mcp_source` (proxy to a registered MCP server — normally produced by mcp_register, not by hand).",
+			"ops":                  "Array of SECTIONS that group the operations — NOT a flat op array. Each section is {title, description, ops:[...]}. PREFER named sections (title \"Rooms\", \"Messages\", …); use 2-5 sections when there are many ops. A single {title:\"\", ops:[...]} is fine for 1-3 ops. Each operation inside a section has exactly one of `request` (templated HTTP) or `mcp_source` (proxy to a registered MCP server — normally produced by mcp_register, not by hand).",
+		},
+		"section_shape": map[string]any{
+			"title":       "Section heading shown on the connector detail page (e.g. \"Rooms\"). Empty string = the default/ungrouped section. Non-empty titles must be unique within the draft.",
+			"description": "Optional one-line description of the section, shown under its title.",
+			"ops":         "The operations that belong to this section.",
 		},
 		"field_shape": map[string]any{
 			"key":      "snake_case (a-z0-9_, must start with a letter), unique within its list.",
@@ -129,7 +135,10 @@ func (h handlers) defSchema(c *connector.Ctx) (any, error) {
 		},
 		"validation": []string{
 			"key must match ^[a-z][a-z0-9_-]*$ and be unique (def_validate checks availability).",
-			"at least one operation; op keys snake_case, unique; op name + description required.",
+			"`ops` is an array of sections; at least one operation total across all sections.",
+			"op keys are snake_case and unique ACROSS THE WHOLE connector (not per-section) — they map to MCP tool ids.",
+			"op name + description required.",
+			"non-empty section titles must be unique; an empty title is the default section.",
 			"each op needs exactly one of request / mcp_source.",
 			"field keys snake_case, unique per list; widget must be from the supported set.",
 		},
@@ -144,23 +153,65 @@ func (h handlers) defSchema(c *connector.Ctx) (any, error) {
 				{"key": "base_url", "widget": "url", "required": true, "default": "https://api.acme.test", "desc": "API base URL."},
 				{"key": "api_key", "widget": "secret", "secret": true, "required": true, "desc": "Acme API key, sent as Bearer."},
 			},
-			"ops": []map[string]any{{
-				"key":         "create_invoice",
-				"name":        "Create Invoice",
-				"description": "Create an invoice for {customer_id}. Returns the upstream JSON invoice object.",
-				"destructive": false,
-				"inputs": []map[string]any{
-					{"key": "customer_id", "widget": "text", "required": true, "desc": "Customer ID. Example: cus_123"},
-					{"key": "amount", "widget": "number", "required": true, "desc": "Amount in cents. Example: 2000"},
+			"ops": []map[string]any{
+				{
+					"title":       "Invoices",
+					"description": "Create and read invoices.",
+					"ops": []map[string]any{
+						{
+							"key":         "create_invoice",
+							"name":        "Create Invoice",
+							"description": "Create an invoice for {customer_id}. Returns the upstream JSON invoice object.",
+							"destructive": true,
+							"inputs": []map[string]any{
+								{"key": "customer_id", "widget": "text", "required": true, "desc": "Customer ID. Example: cus_123"},
+								{"key": "amount", "widget": "number", "required": true, "desc": "Amount in cents. Example: 2000"},
+							},
+							"request": map[string]any{
+								"method":        "POST",
+								"url_template":  "{{.cfg.base_url}}/v1/invoices",
+								"headers":       map[string]string{"Authorization": "Bearer {{.cfg.api_key}}"},
+								"body_template": "{\"customer\":\"{{js .in.customer_id}}\",\"amount\":{{.in.amount}}}",
+								"content_type":  "application/json",
+							},
+						},
+						{
+							"key":         "get_invoice",
+							"name":        "Get Invoice",
+							"description": "Fetch a single invoice by id. Returns the upstream JSON invoice object.",
+							"destructive": false,
+							"inputs": []map[string]any{
+								{"key": "invoice_id", "widget": "text", "required": true, "desc": "Invoice ID. Example: inv_123"},
+							},
+							"request": map[string]any{
+								"method":       "GET",
+								"url_template": "{{.cfg.base_url}}/v1/invoices/{{.in.invoice_id}}",
+								"headers":      map[string]string{"Authorization": "Bearer {{.cfg.api_key}}"},
+							},
+						},
+					},
 				},
-				"request": map[string]any{
-					"method":        "POST",
-					"url_template":  "{{.cfg.base_url}}/v1/invoices",
-					"headers":       map[string]string{"Authorization": "Bearer {{.cfg.api_key}}"},
-					"body_template": "{\"customer\":\"{{js .in.customer_id}}\",\"amount\":{{.in.amount}}}",
-					"content_type":  "application/json",
+				{
+					"title":       "Customers",
+					"description": "Look up customers.",
+					"ops": []map[string]any{
+						{
+							"key":         "get_customer",
+							"name":        "Get Customer",
+							"description": "Fetch a customer by id. Returns the upstream JSON customer object.",
+							"destructive": false,
+							"inputs": []map[string]any{
+								{"key": "customer_id", "widget": "text", "required": true, "desc": "Customer ID. Example: cus_123"},
+							},
+							"request": map[string]any{
+								"method":       "GET",
+								"url_template": "{{.cfg.base_url}}/v1/customers/{{.in.customer_id}}",
+								"headers":      map[string]string{"Authorization": "Bearer {{.cfg.api_key}}"},
+							},
+						},
+					},
 				},
-			}},
+			},
 		},
 	}, nil
 }
@@ -184,7 +235,7 @@ func (h handlers) defValidate(c *connector.Ctx) (any, error) {
 	if _, taken := h.deps.Connectors.Module(d.Key); taken {
 		return map[string]any{"ok": false, "error": "key '" + d.Key + "' is already in use by a registered connector — pick another"}, nil
 	}
-	return map[string]any{"ok": true, "key": d.Key, "operations": len(d.Ops), "configs": len(d.Configs)}, nil
+	return map[string]any{"ok": true, "key": d.Key, "operations": len(d.AllOps()), "configs": len(d.Configs)}, nil
 }
 
 func (h handlers) defList(c *connector.Ctx) (any, error) {
@@ -211,7 +262,7 @@ func (h handlers) defList(c *connector.Ctx) (any, error) {
 			"single_instance": def.SingleInstance,
 		}
 		if mod, ok := h.deps.Connectors.Module(def.Key); ok {
-			entry["operations"] = len(mod.Operations)
+			entry["operations"] = len(mod.AllOps())
 		}
 		if rows, err := h.deps.Connectors.ListByKey(c.Context(), def.Key); err == nil {
 			entry["instances"] = len(rows)
@@ -239,17 +290,17 @@ func (h handlers) defGet(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	out := map[string]any{
-		"key":         def.Key,
-		"name":        def.Name,
-		"description": def.Description,
-		"icon":        def.Icon,
-		"source":      string(def.Source),
+		"key":                  def.Key,
+		"name":                 def.Name,
+		"description":          def.Description,
+		"icon":                 def.Icon,
+		"source":               string(def.Source),
 		"category":             custom.ParseSourceMeta(def.SourceMeta).Category,
 		"single":               def.SingleInstance,
 		"allow_session_config": def.AllowSessionConfig,
 		"disabled":             def.Disabled,
-		"configs":     fields,
-		"ops":         ops,
+		"configs":              fields,
+		"ops":                  ops,
 	}
 	if serverID := custom.ServerIDForDef(def); serverID != "" {
 		srv, err := h.deps.Custom.Store().GetServer(c.Context(), serverID)
@@ -276,8 +327,9 @@ func (h handlers) defGet(c *connector.Ctx) (any, error) {
 		}
 		// The live catalog is the module, not the (empty) ops column.
 		if mod, ok := h.deps.Connectors.Module(def.Key); ok {
-			names := make([]string, 0, len(mod.Operations))
-			for _, op := range mod.Operations {
+			modOps := mod.AllOps()
+			names := make([]string, 0, len(modOps))
+			for _, op := range modOps {
 				names = append(names, op.Key)
 			}
 			out["ops"] = names
@@ -374,7 +426,7 @@ func (h handlers) defResync(c *connector.Ctx) (any, error) {
 	}
 	count := 0
 	if mod, ok := h.deps.Connectors.Module(def.Key); ok {
-		count = len(mod.Operations)
+		count = len(mod.AllOps())
 	}
 	return map[string]any{"ok": true, "key": def.Key, "operations": count}, nil
 }
@@ -466,7 +518,7 @@ func (h handlers) mcpSetExcluded(c *connector.Ctx) (any, error) {
 	}
 	count := 0
 	if mod, ok := h.deps.Connectors.Module(def.Key); ok {
-		count = len(mod.Operations)
+		count = len(mod.AllOps())
 	}
 	return map[string]any{"ok": true, "key": def.Key, "excluded": excluded, "operations": count}, nil
 }

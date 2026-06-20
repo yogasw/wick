@@ -48,15 +48,17 @@ func echoModule() connector.Module {
 		Configs: []entity.Config{
 			{Key: "token", Type: "text", IsSecret: true, Required: true},
 		},
-		Operations: []connector.Operation{
-			connector.Op("echo", "Echo", "echo input + cfg",
-				EchoInput{},
-				func(c *connector.Ctx) (any, error) {
-					return map[string]string{
-						"echoed_token":    c.Cfg("token"),
-						"echoed_password": c.Input("password"),
-					}, nil
-				}, wickdocs.Docs{},
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Op("echo", "Echo", "echo input + cfg",
+					EchoInput{},
+					func(c *connector.Ctx) (any, error) {
+						return map[string]string{
+							"echoed_token":    c.Cfg("token"),
+							"echoed_password": c.Input("password"),
+						}, nil
+					}, wickdocs.Docs{},
+				),
 			),
 		},
 	}
@@ -213,15 +215,17 @@ func echoNonSecretModule() connector.Module {
 		Configs: []entity.Config{
 			{Key: "token", Type: "text", IsSecret: true, Required: true},
 		},
-		Operations: []connector.Operation{
-			connector.Op("echo", "Echo", "echo input + cfg",
-				EchoInput{},
-				func(c *connector.Ctx) (any, error) {
-					return map[string]string{
-						"echoed_token": c.Cfg("token"),
-						"echoed_note":  c.Input("note"),
-					}, nil
-				}, wickdocs.Docs{},
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Op("echo", "Echo", "echo input + cfg",
+					EchoInput{},
+					func(c *connector.Ctx) (any, error) {
+						return map[string]string{
+							"echoed_token": c.Cfg("token"),
+							"echoed_note":  c.Input("note"),
+						}, nil
+					}, wickdocs.Docs{},
+				),
 			),
 		},
 	}
@@ -305,16 +309,18 @@ func echoMaskModule() connector.Module {
 		Configs: []entity.Config{
 			{Key: "token", Type: "text", IsSecret: true, Required: true},
 		},
-		Operations: []connector.Operation{
-			connector.Op("echo", "Echo", "echo input + dynamic mask",
-				EchoInput{},
-				func(c *connector.Ctx) (any, error) {
-					dyn := "dynamic-session-cookie-9999"
-					_ = c.Mask("ignored", []string{dyn}) // returns string is dropped — only side-effect (record) matters
-					return map[string]string{
-						"raw_field": dyn, // intentionally raw — middleware must catch it
-					}, nil
-				}, wickdocs.Docs{},
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Op("echo", "Echo", "echo input + dynamic mask",
+					EchoInput{},
+					func(c *connector.Ctx) (any, error) {
+						dyn := "dynamic-session-cookie-9999"
+						_ = c.Mask("ignored", []string{dyn}) // returns string is dropped — only side-effect (record) matters
+						return map[string]string{
+							"raw_field": dyn, // intentionally raw — middleware must catch it
+						}, nil
+					}, wickdocs.Docs{},
+				),
 			),
 		},
 	}
@@ -368,12 +374,14 @@ func errLeakModule() connector.Module {
 		Configs: []entity.Config{
 			{Key: "token", Type: "text", IsSecret: true, Required: true},
 		},
-		Operations: []connector.Operation{
-			connector.Op("fail", "Fail", "always returns error containing token",
-				EchoInput{},
-				func(c *connector.Ctx) (any, error) {
-					return nil, fmt.Errorf("upstream auth failed for token %q", c.Cfg("token"))
-				}, wickdocs.Docs{},
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Op("fail", "Fail", "always returns error containing token",
+					EchoInput{},
+					func(c *connector.Ctx) (any, error) {
+						return nil, fmt.Errorf("upstream auth failed for token %q", c.Cfg("token"))
+					}, wickdocs.Docs{},
+				),
 			),
 		},
 	}

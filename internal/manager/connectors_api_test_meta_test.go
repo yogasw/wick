@@ -22,24 +22,26 @@ func testMetaModule(key string) connector.Module {
 			Icon:        "💬",
 			DefaultTags: []tool.DefaultTag{},
 		},
-		Operations: []connector.Operation{
-			{
-				Key:         "send",
-				Name:        "Send",
-				Description: "Send a message",
-				Input: []entity.Config{
-					{Key: "channel", Type: "text", Required: true, Description: "target channel"},
-					{Key: "text", Type: "textarea"},
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Operation{
+					Key:         "send",
+					Name:        "Send",
+					Description: "Send a message",
+					Input: []entity.Config{
+						{Key: "channel", Type: "text", Required: true, Description: "target channel"},
+						{Key: "text", Type: "textarea"},
+					},
+					Execute: noopExec,
 				},
-				Execute: noopExec,
-			},
-			{
-				Key:         "del",
-				Name:        "Delete",
-				Description: "Delete a message",
-				Destructive: true,
-				Execute:     noopExec,
-			},
+				connector.Operation{
+					Key:         "del",
+					Name:        "Delete",
+					Description: "Delete a message",
+					Destructive: true,
+					Execute:     noopExec,
+				},
+			),
 		},
 	}
 }

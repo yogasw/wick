@@ -55,8 +55,10 @@ func Module(deps Deps) connector.Module {
 	m := Meta()
 	m.DefaultTags = []tool.DefaultTag{tags.Connector, tags.System}
 	return connector.Module{
-		Meta:       m,
-		Operations: Operations(deps),
+		Meta: m,
+		Operations: []connector.Category{
+			connector.Cat("", "", Operations(deps)...),
+		},
 	}
 }
 

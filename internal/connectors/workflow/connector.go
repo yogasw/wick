@@ -74,9 +74,9 @@ func ModuleWithRunner(ops *wfmcp.Ops, runner *wftest.Runner) connector.Module {
 
 // Operations builds the full op list, capturing ops + runner so every
 // handler can reach the workflow engine.
-func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
+func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Category {
 	h := &handlers{ops: ops, runner: runner}
-	return []connector.Operation{
+	return []connector.Category{connector.Cat("Workflow", "Author, validate, run, and debug workflows over MCP.",
 		// ── Tier 1: introspection ──────────────────────────────────────
 		connector.Op("workflow_workspace", "Workflow Workspace",
 			"Entry point. Returns {base_dir, node_types[], trigger_types[], templates[]}. Call this first to orient yourself before creating or editing workflows.",
@@ -297,7 +297,7 @@ func Operations(ops *wfmcp.Ops, runner *wftest.Runner) []connector.Operation {
 		connector.Op("datatable_count", "Count Rows",
 			"Count rows matching 'where' equality or 'conditions'. Cheap statistic for decisions.",
 			dtFilterInput{}, h.datatableCount, wickdocs.Docs{}),
-	}
+	)}
 }
 
 type emptyInput struct{}

@@ -10,6 +10,7 @@ import (
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/pkg/connector"
 )
 
 // connectorRowJSON is the read model for one connector instance (row) the
@@ -71,6 +72,15 @@ type connectorOpJSON struct {
 	SystemDisabled       bool   `json:"system_disabled"`
 	SystemDisabledReason string `json:"system_disabled_reason"`
 	AdminOnly            bool   `json:"admin_only"`
+	Category             string `json:"category"`
+}
+
+// connectorCategoryJSON is the section header the operations table renders
+// per category: a stable key plus its human-facing title and description.
+type connectorCategoryJSON struct {
+	Key         string `json:"key"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
 }
 
 // connectorAccountJSON is the per-account read model for the detail page's
@@ -96,20 +106,21 @@ type connectorOAuthJSON struct {
 // GET /manager/api/connectors/{key}/{id}: the row identity, the connector
 // type metadata, the visible config fields, and the operations table.
 type connectorDetailJSON struct {
-	Key            string                 `json:"key"`
-	Name           string                 `json:"name"`
-	Icon           string                 `json:"icon"`
-	ID             string                 `json:"id"`
-	Label          string                 `json:"label"`
-	Disabled       bool                   `json:"disabled"`
-	RateLimitRPM   int                    `json:"rate_limit_rpm"`
-	HasHealthCheck bool                   `json:"has_health_check"`
-	CanConfigure   bool                   `json:"can_configure"`
-	IsAdmin        bool                   `json:"is_admin"`
-	Fields         []configFieldJSON      `json:"fields"`
-	Operations     []connectorOpJSON      `json:"operations"`
-	Accounts       []connectorAccountJSON `json:"accounts"`
-	OAuth          *connectorOAuthJSON    `json:"oauth"`
+	Key            string                  `json:"key"`
+	Name           string                  `json:"name"`
+	Icon           string                  `json:"icon"`
+	ID             string                  `json:"id"`
+	Label          string                  `json:"label"`
+	Disabled       bool                    `json:"disabled"`
+	RateLimitRPM   int                     `json:"rate_limit_rpm"`
+	HasHealthCheck bool                    `json:"has_health_check"`
+	CanConfigure   bool                    `json:"can_configure"`
+	IsAdmin        bool                    `json:"is_admin"`
+	Fields         []configFieldJSON       `json:"fields"`
+	Operations     []connectorOpJSON       `json:"operations"`
+	Categories     []connectorCategoryJSON `json:"categories"`
+	Accounts       []connectorAccountJSON  `json:"accounts"`
+	OAuth          *connectorOAuthJSON     `json:"oauth"`
 	// Access policy (admin-controlled). Surfaced so the SPA can render
 	// the toggles + decide whether the Connect button is offered.
 	EnableSSO             bool `json:"enable_sso"`
@@ -154,7 +165,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		Description: mod.Meta.Description,
 		Icon:        mod.Meta.Icon,
 		Fixed:       mod.Meta.Fixed,
-		OpCount:     len(mod.Operations),
+		OpCount:     len(mod.AllOps()),
 		Custom:      customInfo != nil,
 		DefID:       defID,
 		MCP:         mcp,
@@ -227,20 +238,24 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	states, _ := h.connectors.OperationStatesFull(ctx, row.ID, row.Key)
-	ops := make([]connectorOpJSON, 0, len(mod.Operations))
-	for _, op := range mod.Operations {
-		st := states[op.Key]
-		ops = append(ops, connectorOpJSON{
-			Key:                  op.Key,
-			Name:                 op.Name,
-			Description:          op.Description,
-			Destructive:          op.Destructive,
-			Enabled:              st.Enabled,
-			SystemDisabled:       st.SystemDisabled,
-			SystemDisabledReason: st.SystemDisabledReason,
-			AdminOnly:            st.AdminOnly,
-		})
+	ops := make([]connectorOpJSON, 0)
+	for _, cat := range mod.Operations {
+		for _, op := range cat.Ops {
+			st := states[op.Key]
+			ops = append(ops, connectorOpJSON{
+				Key:                  op.Key,
+				Name:                 op.Name,
+				Description:          op.Description,
+				Destructive:          op.Destructive,
+				Enabled:              st.Enabled,
+				SystemDisabled:       st.SystemDisabled,
+				SystemDisabledReason: st.SystemDisabledReason,
+				AdminOnly:            st.AdminOnly,
+				Category:             cat.Title,
+			})
+		}
 	}
+	categories := buildCategoryJSON(mod)
 
 	isAdmin := user != nil && user.IsAdmin()
 	canConfigure := h.canConfigureRow(user, row)
@@ -281,6 +296,7 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 		IsAdmin:               isAdmin,
 		Fields:                fields,
 		Operations:            ops,
+		Categories:            categories,
 		Accounts:              accounts,
 		OAuth:                 oauthJSON,
 		EnableSSO:             row.EnableSSO,
@@ -290,6 +306,23 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 		SessionConfigCapable:  mod.AllowSessionConfig,
 		SessionConfigAllowed:  row.AllowSessionConfig,
 	})
+}
+
+// buildCategoryJSON projects the section headers the detail page renders,
+// one per titled category that has at least one operation, in declaration
+// order. mod.Operations is the canonical []connector.Category; an op row's
+// Category field equals its section Title, which the UI keys its grouping
+// off (so the JSON key doubles as the title). Untitled categories carry the
+// ungrouped ops and are omitted here — the UI renders those without a header.
+func buildCategoryJSON(mod connector.Module) []connectorCategoryJSON {
+	out := make([]connectorCategoryJSON, 0, len(mod.Operations))
+	for _, c := range mod.Operations {
+		if c.Title == "" || len(c.Ops) == 0 {
+			continue
+		}
+		out = append(out, connectorCategoryJSON{Key: c.Title, Title: c.Title, Description: c.Description})
+	}
+	return out
 }
 
 // accountsForRow lists a row's connected accounts, swallowing the (rare)

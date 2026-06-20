@@ -139,7 +139,10 @@ func TestMeta(t *testing.T) {
 }
 
 func TestOperations(t *testing.T) {
-	ops := Operations()
+	var ops []connector.Operation
+	for _, c := range Operations() {
+		ops = append(ops, c.Ops...)
+	}
 	assert.Len(t, ops, 57)
 	keys := make([]string, len(ops))
 	for i, op := range ops {

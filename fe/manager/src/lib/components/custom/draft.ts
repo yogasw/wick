@@ -1,4 +1,4 @@
-import type { Draft, DraftField, DraftOp } from "$lib/types.js";
+import type { Draft, DraftField, DraftOp, DraftCategory } from "$lib/types.js";
 
 export const WIDGETS = [
   "text",
@@ -31,6 +31,16 @@ export function newOp(): DraftOp {
   };
 }
 
+export function newCategory(): DraftCategory {
+  return { title: "", description: "", ops: [] };
+}
+
+/* allOps flattens a draft's sections into a single op list — for the
+   health-probe picker and any flat count. */
+export function allOps(d: Draft): DraftOp[] {
+  return d.ops.flatMap((c) => c.ops);
+}
+
 function normalizeField(f: Partial<DraftField>): DraftField {
   return {
     key: f.key ?? "",
@@ -60,6 +70,14 @@ function normalizeOp(op: Partial<DraftOp>): DraftOp {
   return out;
 }
 
+function normalizeCategory(c: Partial<DraftCategory>): DraftCategory {
+  return {
+    title: c.title ?? "",
+    description: c.description ?? "",
+    ops: (c.ops ?? []).map(normalizeOp),
+  };
+}
+
 /* normalize coerces a partial parse/edit payload into a full Draft so the
    form binds against stable fields, mirroring the legacy normalize(). */
 export function normalize(d: Partial<Draft> | null | undefined): Draft {
@@ -76,7 +94,9 @@ export function normalize(d: Partial<Draft> | null | undefined): Draft {
     health_op: src.health_op ?? "",
     health_expect: src.health_expect ?? "",
     configs: (src.configs ?? []).map(normalizeField),
-    ops: (src.ops ?? []).map(normalizeOp),
+    /* Always have at least one section so the builder can add ops into it.
+       A fresh manual draft starts with a single untitled section. */
+    ops: (src.ops?.length ? src.ops : [{}]).map(normalizeCategory),
   };
 }
 
