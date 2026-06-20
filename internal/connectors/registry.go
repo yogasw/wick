@@ -105,62 +105,62 @@ func notify(m connector.Module) {
 	}
 }
 
+// builtinModules returns the in-house connector modules every "full"
+// wick build registers. Extracted from RegisterBuiltins so profile
+// selection (profileModules) can filter the same list by Meta.Key
+// without duplicating the definitions.
+func builtinModules() []connector.Module {
+	return []connector.Module{
+		{
+			Meta:        withConnectorTag(github.Meta(), tags.Development),
+			Configs:     entity.StructToConfigs(github.Configs{}),
+			Operations:  github.Operations(),
+			HealthCheck: github.HealthCheck,
+		},
+		{
+			Meta:               withConnectorTag(httprest.Meta(), tags.API),
+			Configs:            entity.StructToConfigs(httprest.Configs{}),
+			Operations:         httprest.Operations(),
+			AllowSessionConfig: true,
+		},
+		{
+			Meta:        withConnectorTag(slack.Meta(), tags.Communication),
+			Configs:     entity.StructToConfigs(slack.Configs{}),
+			Operations:  slack.Operations(),
+			HealthCheck: slack.HealthCheck,
+			OAuth:       slack.SlackOAuthMeta(),
+		},
+		{
+			Meta:       withConnectorTag(bitbucket.Meta(), tags.Development),
+			Configs:    entity.StructToConfigs(bitbucket.Configs{}),
+			Operations: bitbucket.Operations(),
+		},
+		{
+			Meta:       withConnectorTag(loki.Meta(), tags.Observability),
+			Configs:    entity.StructToConfigs(loki.Configs{}),
+			Operations: loki.Operations(),
+		},
+		{
+			Meta:       withConnectorTag(phoenix.Meta(), tags.Observability),
+			Configs:    entity.StructToConfigs(phoenix.Configs{}),
+			Operations: phoenix.Operations(),
+		},
+		{
+			Meta:        withConnectorTag(googleworkspace.Meta(), tags.API),
+			Configs:     entity.StructToConfigs(googleworkspace.Configs{}),
+			Operations:  googleworkspace.Operations(),
+			HealthCheck: googleworkspace.HealthCheck,
+			OAuth:       googleworkspace.OAuthMeta(),
+		},
+	}
+}
+
 // RegisterBuiltins seeds in-house connectors every downstream wick app
-// gets by default — the public-API connectors (github, httprest) that
-// most apps want available immediately. Called from
-// internal/pkg/api/server.go at boot, before connectors.All().
-//
-// Idempotent on Meta.Key: re-calling appends nothing if the key was
-// already registered.
-//
-// Note: wickmanager is registered inline in server.go (line ~494)
-// because it requires runtime Deps (configsSvc, jobsSvc, etc.) that
-// only exist mid-boot.
+// gets by default. Idempotent on Meta.Key via registerOnce.
 func RegisterBuiltins() {
-	registerOnce(connector.Module{
-		Meta:        withConnectorTag(github.Meta(), tags.Development),
-		Configs:     entity.StructToConfigs(github.Configs{}),
-		Operations:  github.Operations(),
-		HealthCheck: github.HealthCheck,
-	})
-	registerOnce(connector.Module{
-		Meta:       withConnectorTag(httprest.Meta(), tags.API),
-		Configs:    entity.StructToConfigs(httprest.Configs{}),
-		Operations: httprest.Operations(),
-		// Generic HTTP connector: base_url / auth header are exactly the
-		// kind of config a user may want to point at staging or another
-		// account for a single session.
-		AllowSessionConfig: true,
-	})
-	registerOnce(connector.Module{
-		Meta:        withConnectorTag(slack.Meta(), tags.Communication),
-		Configs:     entity.StructToConfigs(slack.Configs{}),
-		Operations:  slack.Operations(),
-		HealthCheck: slack.HealthCheck,
-		OAuth:       slack.SlackOAuthMeta(),
-	})
-	registerOnce(connector.Module{
-		Meta:       withConnectorTag(bitbucket.Meta(), tags.Development),
-		Configs:    entity.StructToConfigs(bitbucket.Configs{}),
-		Operations: bitbucket.Operations(),
-	})
-	registerOnce(connector.Module{
-		Meta:       withConnectorTag(loki.Meta(), tags.Observability),
-		Configs:    entity.StructToConfigs(loki.Configs{}),
-		Operations: loki.Operations(),
-	})
-	registerOnce(connector.Module{
-		Meta:       withConnectorTag(phoenix.Meta(), tags.Observability),
-		Configs:    entity.StructToConfigs(phoenix.Configs{}),
-		Operations: phoenix.Operations(),
-	})
-	registerOnce(connector.Module{
-		Meta:        withConnectorTag(googleworkspace.Meta(), tags.API),
-		Configs:     entity.StructToConfigs(googleworkspace.Configs{}),
-		Operations:  googleworkspace.Operations(),
-		HealthCheck: googleworkspace.HealthCheck,
-		OAuth:       googleworkspace.OAuthMeta(),
-	})
+	for _, m := range builtinModules() {
+		registerOnce(m)
+	}
 }
 
 // RegisterLabSamples seeds the demo-only connectors shipped with the
