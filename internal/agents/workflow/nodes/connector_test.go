@@ -20,18 +20,20 @@ func stubIdentityRegistry() (*connector.Registry, *string) {
 	reg := connector.NewRegistry(nil, nil)
 	reg.Register(pkgconnector.Module{
 		Meta: pkgconnector.Meta{Key: "stub", Name: "Stub"},
-		Operations: []pkgconnector.Operation{
-			{
-				Key: "whoami",
-				Execute: func(c *pkgconnector.Ctx) (any, error) {
-					u := login.GetUser(c.Context())
-					if u == nil {
-						return nil, errors.New("not authenticated")
-					}
-					*seen = u.ID
-					return map[string]any{"id": u.ID}, nil
+		Operations: []pkgconnector.Category{
+			pkgconnector.Cat("", "",
+				pkgconnector.Operation{
+					Key: "whoami",
+					Execute: func(c *pkgconnector.Ctx) (any, error) {
+						u := login.GetUser(c.Context())
+						if u == nil {
+							return nil, errors.New("not authenticated")
+						}
+						*seen = u.ID
+						return map[string]any{"id": u.ID}, nil
+					},
 				},
-			},
+			),
 		},
 	})
 	return reg, seen

@@ -116,14 +116,14 @@ func (h *Handler) apiConnectorHistory(w http.ResponseWriter, r *http.Request) {
 		ID:         row.ID,
 		Label:      row.Label,
 		Runs:       make([]historyRunJSON, 0, len(runs)),
-		Ops:        make([]historyOpJSON, 0, len(mod.Operations)),
+		Ops:        make([]historyOpJSON, 0, len(mod.AllOps())),
 		Users:      make([]historyUserJSON, 0, len(usersByID)),
 		Page:       page,
 		TotalPages: totalPages,
 		Total:      int(total),
 		PageSize:   historyPageSize,
 	}
-	for _, op := range mod.Operations {
+	for _, op := range mod.AllOps() {
 		out.Ops = append(out.Ops, historyOpJSON{Key: op.Key, Name: op.Name})
 	}
 	for id, name := range usersByID {

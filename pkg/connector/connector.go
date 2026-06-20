@@ -170,6 +170,35 @@ func OpDestructive[I any](key, name, description string, input I, exec ExecuteFu
 	return op
 }
 
+// Category is one operation group on a connector's admin detail page. The
+// category owns its operations: a connector's Operations() returns a slice
+// of Category, each wrapping the ops that belong under its Title +
+// Description section header. This keeps the title, the description, and
+// the member ops in one place, so an op can never reference a missing or
+// mistyped category — it is physically inside the one it belongs to.
+//
+// Category is the ONLY representation of a connector's operations: it is
+// what Operations() returns and what Module.Operations stores. Code that
+// just needs to iterate every op regardless of group calls Module.AllOps().
+//
+// Build one with Cat().
+type Category struct {
+	Title       string
+	Description string
+	Ops         []Operation
+}
+
+// Cat groups operations under a titled, described section for the admin
+// UI. It reads as a nested literal in Operations():
+//
+//	connector.Cat("Drive", "Browse, read, and upload Drive files.",
+//	    connector.Op("list_files", "List Files", "...", ListInput{}, listFiles, wickdocs.Docs{}),
+//	    connector.OpDestructive("upload_file", "Upload File", "...", UpInput{}, upload, wickdocs.Docs{}),
+//	)
+func Cat(title, description string, ops ...Operation) Category {
+	return Category{Title: title, Description: description, Ops: ops}
+}
+
 // OpHealth is one entry in the report returned by Module.HealthCheck.
 // OK=true means the configured credential has every upstream permission
 // the operation needs; OK=false means the op should be system-disabled
@@ -239,9 +268,14 @@ type OAuthMeta struct {
 // shows an "OAuth App" section on the list page and a "Connect" button on
 // detail pages automatically — no per-connector handler wiring needed.
 type Module struct {
-	Meta        Meta
-	Configs     []entity.Config
-	Operations  []Operation
+	Meta    Meta
+	Configs []entity.Config
+	// Operations is the connector's operations grouped into titled
+	// sections, in display order — the single, canonical representation.
+	// The admin detail page renders one section per Category (Title +
+	// Description header); code that needs to iterate every op regardless
+	// of group calls AllOps().
+	Operations  []Category
 	HealthCheck HealthCheckFunc
 	// OAuth is non-nil when this connector supports user OAuth.
 	OAuth *OAuthMeta
@@ -252,4 +286,30 @@ type Module struct {
 	// true only when a connector has config (base_url, API key, …) that a
 	// user may legitimately want to swap for one session.
 	AllowSessionConfig bool
+}
+
+// AllOps flattens the module's categorized operations into a single slice
+// in declaration order, for callers that address ops by key or expose the
+// flat tool list (MCP, per-op state, history) and do not care about the
+// grouping. The grouping itself lives in Operations ([]Category).
+func (m Module) AllOps() []Operation {
+	var ops []Operation
+	for _, c := range m.Operations {
+		ops = append(ops, c.Ops...)
+	}
+	return ops
+}
+
+// CategoryOf returns the section title the operation with opKey belongs to,
+// or "" when no such op exists. Used by the admin detail projection to tag
+// each op row with its group without a separate lookup table.
+func (m Module) CategoryOf(opKey string) string {
+	for _, c := range m.Operations {
+		for _, op := range c.Ops {
+			if op.Key == opKey {
+				return c.Title
+			}
+		}
+	}
+	return ""
 }

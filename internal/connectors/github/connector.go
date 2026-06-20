@@ -532,78 +532,82 @@ func Meta() connector.Meta {
 	}
 }
 
-// Operations returns the LLM-callable actions for this connector.
-func Operations() []connector.Operation {
-	return []connector.Operation{
-		connector.Op(
-			"list_repos",
-			"List Repositories",
-			"List repositories visible to the authenticated token. Returns name, description, language, visibility, and clone URL.",
-			ListReposInput{},
-			listRepos,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"repos": "Array of repo summaries (full_name, name, description, private, language, default_branch, html_url).",
+// Operations returns the LLM-callable actions for this connector, grouped
+// into human-facing categories for the admin UI.
+func Operations() []connector.Category {
+	return []connector.Category{
+		connector.Cat(
+			"Common Actions",
+			"The everyday GitHub operations: list repos/issues/PRs, read files, comment, and open/merge/commit changes.",
+			connector.Op(
+				"list_repos",
+				"List Repositories",
+				"List repositories visible to the authenticated token. Returns name, description, language, visibility, and clone URL.",
+				ListReposInput{},
+				listRepos,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"repos": "Array of repo summaries (full_name, name, description, private, language, default_branch, html_url).",
+					},
+					Quirks: []string{
+						"affiliation defaults to \"owner\" — pass \"owner,collaborator,organization_member\" to widen.",
+						"GitHub paginates server-side. PerPage max 100; for >100 repos call again with the next page (this op currently returns the first page only).",
+						"PAT scope: repo for private repos, public_repo for public-only listings.",
+					},
+					PairWith:     []string{"connector:github.list_issues", "connector:github.list_prs", "connector:github.get_file"},
+					InputSample:  `{"affiliation":"owner","visibility":"all","per_page":30}`,
+					OutputSample: `{"repos":[{"full_name":"abc/web","name":"web","private":false,"language":"Go","default_branch":"main","html_url":"https://github.com/abc/web"}]}`,
 				},
-				Quirks: []string{
-					"affiliation defaults to \"owner\" — pass \"owner,collaborator,organization_member\" to widen.",
-					"GitHub paginates server-side. PerPage max 100; for >100 repos call again with the next page (this op currently returns the first page only).",
-					"PAT scope: repo for private repos, public_repo for public-only listings.",
+			),
+			connector.Op(
+				"list_issues",
+				"List Issues",
+				"List issues in a repository. Returns number, title, state, labels, and author.",
+				ListIssuesInput{},
+				listIssues,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"issues": "Array of issue summaries (number, title, state, labels[], user.login, html_url, created_at, updated_at).",
+					},
+					Quirks: []string{
+						"GitHub's REST issues endpoint returns BOTH issues and pull requests — PR rows have a non-null pull_request key. Filter client-side if you want issues only.",
+						"state defaults to \"open\". Pass \"all\" to include closed.",
+						"Pagination: PerPage max 100, page param not exposed here (first page only). Loop in your workflow if you need deeper history.",
+					},
+					PairWith:     []string{"connector:github.create_issue", "connector:github.add_comment"},
+					InputSample:  `{"owner":"abc","repo":"web","state":"open","per_page":30}`,
+					OutputSample: `{"issues":[{"number":42,"title":"Payment refund bug","state":"open","labels":[{"name":"bug"}],"user":{"login":"yoga"},"html_url":"https://github.com/abc/web/issues/42"}]}`,
 				},
-				PairWith:     []string{"connector:github.list_issues", "connector:github.list_prs", "connector:github.get_file"},
-				InputSample:  `{"affiliation":"owner","visibility":"all","per_page":30}`,
-				OutputSample: `{"repos":[{"full_name":"abc/web","name":"web","private":false,"language":"Go","default_branch":"main","html_url":"https://github.com/abc/web"}]}`,
-			},
-		),
-		connector.Op(
-			"list_issues",
-			"List Issues",
-			"List issues in a repository. Returns number, title, state, labels, and author.",
-			ListIssuesInput{},
-			listIssues,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"issues": "Array of issue summaries (number, title, state, labels[], user.login, html_url, created_at, updated_at).",
-				},
-				Quirks: []string{
-					"GitHub's REST issues endpoint returns BOTH issues and pull requests — PR rows have a non-null pull_request key. Filter client-side if you want issues only.",
-					"state defaults to \"open\". Pass \"all\" to include closed.",
-					"Pagination: PerPage max 100, page param not exposed here (first page only). Loop in your workflow if you need deeper history.",
-				},
-				PairWith:     []string{"connector:github.create_issue", "connector:github.add_comment"},
-				InputSample:  `{"owner":"abc","repo":"web","state":"open","per_page":30}`,
-				OutputSample: `{"issues":[{"number":42,"title":"Payment refund bug","state":"open","labels":[{"name":"bug"}],"user":{"login":"yoga"},"html_url":"https://github.com/abc/web/issues/42"}]}`,
-			},
-		),
-		connector.OpDestructive(
-			"create_issue",
-			"Create Issue",
-			"Create a new issue in a repository. Returns the created issue number and URL.",
-			CreateIssueInput{},
-			createIssue,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"number":   "Created issue number — pass to add_comment for follow-ups.",
-					"html_url": "Web URL of the new issue, useful for Slack message replies.",
-					"state":    "Always \"open\" right after creation.",
-				},
-				TemplateableFields: []string{"owner", "repo", "title", "body", "labels"},
-				Quirks: []string{
-					"labels is COMMA-separated string at the wick layer; the connector splits it server-side before calling GitHub.",
-					"body supports GitHub-flavoured Markdown (mentions, task lists, code fences).",
-					"PAT scope: repo (private) or public_repo (public). Issues permission must be set to write in fine-grained PATs.",
-					"Won't fail if labels don't exist — GitHub silently ignores unknown labels.",
-				},
-				PairWith: []string{"connector:github.add_comment", "connector:github.list_issues"},
-				CommonPitfalls: []string{
-					"Don't include \"#\" in labels (label is \"bug\", not \"#bug\").",
-				},
-				InputSample:  `{"owner":"abc","repo":"web","title":"Payment refund bug","body":"User U12345 reports failed refunds.\n\n## Steps\n- ...","labels":"bug,priority:high"}`,
-				OutputSample: `{"number":42,"html_url":"https://github.com/abc/web/issues/42","state":"open","title":"Payment refund bug"}`,
-				Examples: []wickdocs.Example{
-					{
-						Name: "create_from_slack",
-						Body: `- id: file_bug
+			),
+			connector.OpDestructive(
+				"create_issue",
+				"Create Issue",
+				"Create a new issue in a repository. Returns the created issue number and URL.",
+				CreateIssueInput{},
+				createIssue,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"number":   "Created issue number — pass to add_comment for follow-ups.",
+						"html_url": "Web URL of the new issue, useful for Slack message replies.",
+						"state":    "Always \"open\" right after creation.",
+					},
+					TemplateableFields: []string{"owner", "repo", "title", "body", "labels"},
+					Quirks: []string{
+						"labels is COMMA-separated string at the wick layer; the connector splits it server-side before calling GitHub.",
+						"body supports GitHub-flavoured Markdown (mentions, task lists, code fences).",
+						"PAT scope: repo (private) or public_repo (public). Issues permission must be set to write in fine-grained PATs.",
+						"Won't fail if labels don't exist — GitHub silently ignores unknown labels.",
+					},
+					PairWith: []string{"connector:github.add_comment", "connector:github.list_issues"},
+					CommonPitfalls: []string{
+						"Don't include \"#\" in labels (label is \"bug\", not \"#bug\").",
+					},
+					InputSample:  `{"owner":"abc","repo":"web","title":"Payment refund bug","body":"User U12345 reports failed refunds.\n\n## Steps\n- ...","labels":"bug,priority:high"}`,
+					OutputSample: `{"number":42,"html_url":"https://github.com/abc/web/issues/42","state":"open","title":"Payment refund bug"}`,
+					Examples: []wickdocs.Example{
+						{
+							Name: "create_from_slack",
+							Body: `- id: file_bug
   type: connector
   module: github
   op: create_issue
@@ -616,1048 +620,1109 @@ func Operations() []connector.Operation {
     title: "{{.Node.classify.parsed.summary}}"
     body: "Reported in Slack by <@{{.Node.trigger.payload.user}}>:\n\n{{.Node.trigger.payload.text}}"
     labels: bug,from-slack`,
+						},
 					},
 				},
-			},
-		),
-		connector.Op(
-			"get_file",
-			"Get File Content",
-			"Read a file from a repository. Returns the decoded text content. Binary files are not supported.",
-			GetFileInput{},
-			getFile, wickdocs.Docs{},
-		),
-		connector.Op(
-			"list_prs",
-			"List Pull Requests",
-			"List pull requests in a repository. Returns number, title, state, head/base branches, and author.",
-			ListPRsInput{},
-			listPRs, wickdocs.Docs{},
-		),
-		connector.OpDestructive(
-			"add_comment",
-			"Add Comment",
-			"Post a comment on an issue or pull request. Returns the comment ID and URL.",
-			AddCommentInput{},
-			addComment, wickdocs.Docs{},
-		),
-		connector.Op(
-			"get_pr_diff",
-			"Get PR Diff",
-			"Fetch the unified diff for a pull request as raw text. Optionally truncate to a byte budget for LLM review.",
-			GetPRDiffInput{},
-			getPRDiff,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"diff":      "Unified diff text for the PR (the same bytes GitHub serves at the .diff URL).",
-					"truncated": "true when the diff was cut to fit max_bytes; the marker line \"…[diff truncated]\" is appended.",
-					"bytes":     "Length in bytes of the returned diff string (after any truncation).",
+			),
+			connector.Op(
+				"get_file",
+				"Get File Content",
+				"Read a file from a repository. Returns the decoded text content. Binary files are not supported.",
+				GetFileInput{},
+				getFile, wickdocs.Docs{},
+			),
+			connector.Op(
+				"list_prs",
+				"List Pull Requests",
+				"List pull requests in a repository. Returns number, title, state, head/base branches, and author.",
+				ListPRsInput{},
+				listPRs, wickdocs.Docs{},
+			),
+			connector.OpDestructive(
+				"add_comment",
+				"Add Comment",
+				"Post a comment on an issue or pull request. Returns the comment ID and URL.",
+				AddCommentInput{},
+				addComment, wickdocs.Docs{},
+			),
+			connector.Op(
+				"get_pr_diff",
+				"Get PR Diff",
+				"Fetch the unified diff for a pull request as raw text. Optionally truncate to a byte budget for LLM review.",
+				GetPRDiffInput{},
+				getPRDiff,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"diff":      "Unified diff text for the PR (the same bytes GitHub serves at the .diff URL).",
+						"truncated": "true when the diff was cut to fit max_bytes; the marker line \"…[diff truncated]\" is appended.",
+						"bytes":     "Length in bytes of the returned diff string (after any truncation).",
+					},
+					Quirks: []string{
+						"Returns RAW unified diff text, not JSON — feed it straight to an LLM reviewer.",
+						"Large PRs can be huge; set max_bytes (e.g. 100000) to keep the payload within model context.",
+						"max_bytes truncates on a byte boundary, so the last hunk may be cut mid-line.",
+					},
+					PairWith:     []string{"connector:github.add_comment", "connector:github.merge_pr", "connector:github.list_prs"},
+					InputSample:  `{"owner":"abc","repo":"web","number":7,"max_bytes":100000}`,
+					OutputSample: `{"diff":"diff --git a/main.go b/main.go\n...","truncated":false,"bytes":512}`,
 				},
-				Quirks: []string{
-					"Returns RAW unified diff text, not JSON — feed it straight to an LLM reviewer.",
-					"Large PRs can be huge; set max_bytes (e.g. 100000) to keep the payload within model context.",
-					"max_bytes truncates on a byte boundary, so the last hunk may be cut mid-line.",
+			),
+			connector.OpDestructive(
+				"merge_pr",
+				"Merge Pull Request",
+				"Merge a pull request using merge, squash, or rebase. Returns the merge commit SHA.",
+				MergePRInput{},
+				mergePR,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"merged":  "true when the PR was merged.",
+						"sha":     "SHA of the resulting merge commit.",
+						"message": "Human-readable status from GitHub (e.g. \"Pull Request successfully merged\").",
+					},
+					Quirks: []string{
+						"merge_method defaults to \"merge\". Use \"squash\" to collapse commits or \"rebase\" to replay them.",
+						"GitHub returns 405 if the PR is not mergeable (conflicts, required checks failing, branch protection).",
+						"PAT scope: repo (or fine-grained Pull requests: write).",
+					},
+					PairWith:     []string{"connector:github.get_pr_diff", "connector:github.list_prs"},
+					InputSample:  `{"owner":"abc","repo":"web","number":7,"merge_method":"squash","commit_title":"Ship feature X"}`,
+					OutputSample: `{"merged":true,"sha":"6dcb09b5b57875f334f61aebed695e2e4193db5e","message":"Pull Request successfully merged"}`,
 				},
-				PairWith:     []string{"connector:github.add_comment", "connector:github.merge_pr", "connector:github.list_prs"},
-				InputSample:  `{"owner":"abc","repo":"web","number":7,"max_bytes":100000}`,
-				OutputSample: `{"diff":"diff --git a/main.go b/main.go\n...","truncated":false,"bytes":512}`,
-			},
-		),
-		connector.OpDestructive(
-			"merge_pr",
-			"Merge Pull Request",
-			"Merge a pull request using merge, squash, or rebase. Returns the merge commit SHA.",
-			MergePRInput{},
-			mergePR,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"merged":  "true when the PR was merged.",
-					"sha":     "SHA of the resulting merge commit.",
-					"message": "Human-readable status from GitHub (e.g. \"Pull Request successfully merged\").",
+			),
+			connector.OpDestructive(
+				"create_pr",
+				"Create Pull Request",
+				"Open a new pull request from a head branch into a base branch. Returns the PR number and URL.",
+				CreatePRInput{},
+				createPR,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"number":   "Created PR number — pass to merge_pr, get_pr_diff, or add_comment.",
+						"html_url": "Web URL of the new PR, useful for Slack replies.",
+						"state":    "Always \"open\" right after creation (\"draft\" PRs still report state \"open\").",
+					},
+					Quirks: []string{
+						"head is the SOURCE branch; for a PR from a fork use \"owner:branch\".",
+						"base is the TARGET branch (e.g. main or master) — must already exist.",
+						"draft=true requires a repo plan that supports draft PRs; GitHub 422s otherwise.",
+						"GitHub 422s if a PR for the same head→base already exists or head has no commits ahead of base.",
+					},
+					PairWith:     []string{"connector:github.create_or_update_file", "connector:github.merge_pr", "connector:github.add_comment"},
+					InputSample:  `{"owner":"abc","repo":"web","title":"Add retry logic","head":"feature/retry","base":"main","body":"Closes #42","draft":false}`,
+					OutputSample: `{"number":51,"html_url":"https://github.com/abc/web/pull/51","state":"open"}`,
 				},
-				Quirks: []string{
-					"merge_method defaults to \"merge\". Use \"squash\" to collapse commits or \"rebase\" to replay them.",
-					"GitHub returns 405 if the PR is not mergeable (conflicts, required checks failing, branch protection).",
-					"PAT scope: repo (or fine-grained Pull requests: write).",
+			),
+			connector.OpDestructive(
+				"create_or_update_file",
+				"Create or Update File",
+				"Create a new file or replace an existing one with a single commit. Content is plaintext and base64-encoded for you.",
+				CreateOrUpdateFileInput{},
+				createOrUpdateFile,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"commit.sha":       "SHA of the commit that created/updated the file.",
+						"content.path":     "Path of the written file.",
+						"content.html_url": "Web URL of the file at the new commit.",
+					},
+					Quirks: []string{
+						"content is PLAINTEXT — the connector base64-encodes it before calling GitHub.",
+						"Updating an existing file needs its current blob sha; leave sha empty and the connector looks it up automatically (and creates the file if it does not exist).",
+						"branch defaults to the repo's default branch; set it to commit onto a feature branch (pair with create_pr).",
+						"PAT scope: repo (or fine-grained Contents: write).",
+					},
+					PairWith:     []string{"connector:github.get_file", "connector:github.create_pr"},
+					InputSample:  `{"owner":"abc","repo":"web","path":"docs/CHANGELOG.md","content":"# Changelog\n\n- v1.2.0\n","message":"docs: update changelog","branch":"main"}`,
+					OutputSample: `{"commit":{"sha":"7638417db6d59f3c431d3e1f261cc637155684cd"},"content":{"path":"docs/CHANGELOG.md","html_url":"https://github.com/abc/web/blob/main/docs/CHANGELOG.md"}}`,
 				},
-				PairWith:     []string{"connector:github.get_pr_diff", "connector:github.list_prs"},
-				InputSample:  `{"owner":"abc","repo":"web","number":7,"merge_method":"squash","commit_title":"Ship feature X"}`,
-				OutputSample: `{"merged":true,"sha":"6dcb09b5b57875f334f61aebed695e2e4193db5e","message":"Pull Request successfully merged"}`,
-			},
-		),
-		connector.OpDestructive(
-			"create_pr",
-			"Create Pull Request",
-			"Open a new pull request from a head branch into a base branch. Returns the PR number and URL.",
-			CreatePRInput{},
-			createPR,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"number":   "Created PR number — pass to merge_pr, get_pr_diff, or add_comment.",
-					"html_url": "Web URL of the new PR, useful for Slack replies.",
-					"state":    "Always \"open\" right after creation (\"draft\" PRs still report state \"open\").",
-				},
-				Quirks: []string{
-					"head is the SOURCE branch; for a PR from a fork use \"owner:branch\".",
-					"base is the TARGET branch (e.g. main or master) — must already exist.",
-					"draft=true requires a repo plan that supports draft PRs; GitHub 422s otherwise.",
-					"GitHub 422s if a PR for the same head→base already exists or head has no commits ahead of base.",
-				},
-				PairWith:     []string{"connector:github.create_or_update_file", "connector:github.merge_pr", "connector:github.add_comment"},
-				InputSample:  `{"owner":"abc","repo":"web","title":"Add retry logic","head":"feature/retry","base":"main","body":"Closes #42","draft":false}`,
-				OutputSample: `{"number":51,"html_url":"https://github.com/abc/web/pull/51","state":"open"}`,
-			},
-		),
-		connector.OpDestructive(
-			"create_or_update_file",
-			"Create or Update File",
-			"Create a new file or replace an existing one with a single commit. Content is plaintext and base64-encoded for you.",
-			CreateOrUpdateFileInput{},
-			createOrUpdateFile,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"commit.sha":       "SHA of the commit that created/updated the file.",
-					"content.path":     "Path of the written file.",
-					"content.html_url": "Web URL of the file at the new commit.",
-				},
-				Quirks: []string{
-					"content is PLAINTEXT — the connector base64-encodes it before calling GitHub.",
-					"Updating an existing file needs its current blob sha; leave sha empty and the connector looks it up automatically (and creates the file if it does not exist).",
-					"branch defaults to the repo's default branch; set it to commit onto a feature branch (pair with create_pr).",
-					"PAT scope: repo (or fine-grained Contents: write).",
-				},
-				PairWith:     []string{"connector:github.get_file", "connector:github.create_pr"},
-				InputSample:  `{"owner":"abc","repo":"web","path":"docs/CHANGELOG.md","content":"# Changelog\n\n- v1.2.0\n","message":"docs: update changelog","branch":"main"}`,
-				OutputSample: `{"commit":{"sha":"7638417db6d59f3c431d3e1f261cc637155684cd"},"content":{"path":"docs/CHANGELOG.md","html_url":"https://github.com/abc/web/blob/main/docs/CHANGELOG.md"}}`,
-			},
+			),
 		),
 
 		// ── REPO ─────────────────────────────────────────────────────
-		connector.Op(
-			"get_repo",
-			"Get Repository",
-			"Fetch a single repository's metadata (description, default branch, stars, forks, visibility).",
-			GetRepoInput{},
-			getRepo,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"full_name":        "owner/name slug.",
-					"default_branch":   "Default branch name — useful before create_or_update_file or create_pr.",
-					"stargazers_count": "Number of stars.",
+		connector.Cat(
+			"Repositories",
+			"Inspect a repo and its branches, commits, forks, and stargazers; star/unstar repos.",
+			connector.Op(
+				"get_repo",
+				"Get Repository",
+				"Fetch a single repository's metadata (description, default branch, stars, forks, visibility).",
+				GetRepoInput{},
+				getRepo,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"full_name":        "owner/name slug.",
+						"default_branch":   "Default branch name — useful before create_or_update_file or create_pr.",
+						"stargazers_count": "Number of stars.",
+					},
+					Quirks: []string{
+						"Returns the full repo object; pick the fields you need.",
+						"PAT scope: repo for private repos, public_repo (or none) for public ones.",
+					},
+					PairWith:    []string{"connector:github.list_branches", "connector:github.list_commits"},
+					InputSample: `{"owner":"abc","repo":"web"}`,
 				},
-				Quirks: []string{
-					"Returns the full repo object; pick the fields you need.",
-					"PAT scope: repo for private repos, public_repo (or none) for public ones.",
+			),
+			connector.Op(
+				"list_branches",
+				"List Branches",
+				"List branches in a repository. Returns branch name, head commit SHA, and protection flag.",
+				ListBranchesInput{},
+				listBranches,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"branches": "Array of {name, commit.sha, protected}.",
+					},
+					Quirks: []string{
+						"Pagination: PerPage max 100; first page only.",
+					},
+					PairWith:    []string{"connector:github.create_pr", "connector:github.list_commits"},
+					InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
 				},
-				PairWith:    []string{"connector:github.list_branches", "connector:github.list_commits"},
-				InputSample: `{"owner":"abc","repo":"web"}`,
-			},
-		),
-		connector.Op(
-			"list_branches",
-			"List Branches",
-			"List branches in a repository. Returns branch name, head commit SHA, and protection flag.",
-			ListBranchesInput{},
-			listBranches,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"branches": "Array of {name, commit.sha, protected}.",
+			),
+			connector.Op(
+				"list_commits",
+				"List Commits",
+				"List commits in a repository, optionally filtered by branch/sha, file path, or author.",
+				ListCommitsInput{},
+				listCommits,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"commits": "Array of {sha, commit.message, commit.author, author.login, html_url}.",
+					},
+					Quirks: []string{
+						"sha selects the branch/tag/SHA to start from; path filters to commits touching that file.",
+						"author matches a GitHub login or commit email.",
+						"Pagination: PerPage max 100; first page only.",
+					},
+					PairWith:    []string{"connector:github.get_repo", "connector:github.list_branches"},
+					InputSample: `{"owner":"abc","repo":"web","sha":"main","path":"go.mod","per_page":30}`,
 				},
-				Quirks: []string{
-					"Pagination: PerPage max 100; first page only.",
+			),
+			connector.Op(
+				"list_forks",
+				"List Forks",
+				"List the forks of a repository — i.e. who forked it.",
+				ListForksInput{},
+				listForks,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"forks": "Array of forked repos (full_name, owner.login, html_url).",
+					},
+					Quirks: []string{
+						"Each entry is a full repo object owned by the forker; owner.login is who forked.",
+						"Pagination: PerPage max 100; first page only.",
+					},
+					PairWith:    []string{"connector:github.create_fork", "connector:github.list_stargazers"},
+					InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
 				},
-				PairWith:    []string{"connector:github.create_pr", "connector:github.list_commits"},
-				InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
-			},
-		),
-		connector.Op(
-			"list_commits",
-			"List Commits",
-			"List commits in a repository, optionally filtered by branch/sha, file path, or author.",
-			ListCommitsInput{},
-			listCommits,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"commits": "Array of {sha, commit.message, commit.author, author.login, html_url}.",
+			),
+			connector.OpDestructive(
+				"create_fork",
+				"Create Fork",
+				"Fork a repository into the authenticated user's account or an organization.",
+				CreateForkInput{},
+				createFork,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"full_name": "owner/name of the new fork.",
+						"html_url":  "Web URL of the new fork.",
+					},
+					Quirks: []string{
+						"Forking is asynchronous on GitHub's side; the response describes the queued fork.",
+						"organization forks into that org; name renames the fork (defaults to the source name).",
+						"PAT scope: repo (or fine-grained Administration/Contents on the target).",
+					},
+					PairWith:    []string{"connector:github.list_forks"},
+					InputSample: `{"owner":"abc","repo":"web","organization":"my-org","name":"web-fork"}`,
 				},
-				Quirks: []string{
-					"sha selects the branch/tag/SHA to start from; path filters to commits touching that file.",
-					"author matches a GitHub login or commit email.",
-					"Pagination: PerPage max 100; first page only.",
+			),
+			connector.Op(
+				"list_stargazers",
+				"List Stargazers",
+				"List the users who starred a repository.",
+				ListStargazersInput{},
+				listStargazers,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"stargazers": "Array of users (login, html_url).",
+					},
+					Quirks: []string{
+						"Returns the basic user object for each stargazer.",
+						"Pagination: PerPage max 100; first page only.",
+					},
+					PairWith:    []string{"connector:github.star_repo", "connector:github.list_forks"},
+					InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
 				},
-				PairWith:    []string{"connector:github.get_repo", "connector:github.list_branches"},
-				InputSample: `{"owner":"abc","repo":"web","sha":"main","path":"go.mod","per_page":30}`,
-			},
-		),
-		connector.Op(
-			"list_forks",
-			"List Forks",
-			"List the forks of a repository — i.e. who forked it.",
-			ListForksInput{},
-			listForks,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"forks": "Array of forked repos (full_name, owner.login, html_url).",
+			),
+			connector.OpDestructive(
+				"star_repo",
+				"Star Repository",
+				"Star a repository for the authenticated user.",
+				StarRepoInput{},
+				starRepo,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"ok": "true when GitHub returned 204 No Content.",
+					},
+					Quirks: []string{
+						"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
+						"Idempotent — starring an already-starred repo still returns 204.",
+						"PAT scope: user or public_repo.",
+					},
+					PairWith:    []string{"connector:github.unstar_repo", "connector:github.list_stargazers"},
+					InputSample: `{"owner":"abc","repo":"web"}`,
 				},
-				Quirks: []string{
-					"Each entry is a full repo object owned by the forker; owner.login is who forked.",
-					"Pagination: PerPage max 100; first page only.",
+			),
+			connector.OpDestructive(
+				"unstar_repo",
+				"Unstar Repository",
+				"Remove the authenticated user's star from a repository.",
+				UnstarRepoInput{},
+				unstarRepo,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"ok": "true when GitHub returned 204 No Content.",
+					},
+					Quirks: []string{
+						"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
+						"Idempotent — unstarring a repo that isn't starred still returns 204.",
+					},
+					PairWith:    []string{"connector:github.star_repo"},
+					InputSample: `{"owner":"abc","repo":"web"}`,
 				},
-				PairWith:    []string{"connector:github.create_fork", "connector:github.list_stargazers"},
-				InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
-			},
-		),
-		connector.OpDestructive(
-			"create_fork",
-			"Create Fork",
-			"Fork a repository into the authenticated user's account or an organization.",
-			CreateForkInput{},
-			createFork,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"full_name": "owner/name of the new fork.",
-					"html_url":  "Web URL of the new fork.",
-				},
-				Quirks: []string{
-					"Forking is asynchronous on GitHub's side; the response describes the queued fork.",
-					"organization forks into that org; name renames the fork (defaults to the source name).",
-					"PAT scope: repo (or fine-grained Administration/Contents on the target).",
-				},
-				PairWith:    []string{"connector:github.list_forks"},
-				InputSample: `{"owner":"abc","repo":"web","organization":"my-org","name":"web-fork"}`,
-			},
-		),
-		connector.Op(
-			"list_stargazers",
-			"List Stargazers",
-			"List the users who starred a repository.",
-			ListStargazersInput{},
-			listStargazers,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"stargazers": "Array of users (login, html_url).",
-				},
-				Quirks: []string{
-					"Returns the basic user object for each stargazer.",
-					"Pagination: PerPage max 100; first page only.",
-				},
-				PairWith:    []string{"connector:github.star_repo", "connector:github.list_forks"},
-				InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
-			},
-		),
-		connector.OpDestructive(
-			"star_repo",
-			"Star Repository",
-			"Star a repository for the authenticated user.",
-			StarRepoInput{},
-			starRepo,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"ok": "true when GitHub returned 204 No Content.",
-				},
-				Quirks: []string{
-					"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
-					"Idempotent — starring an already-starred repo still returns 204.",
-					"PAT scope: user or public_repo.",
-				},
-				PairWith:    []string{"connector:github.unstar_repo", "connector:github.list_stargazers"},
-				InputSample: `{"owner":"abc","repo":"web"}`,
-			},
-		),
-		connector.OpDestructive(
-			"unstar_repo",
-			"Unstar Repository",
-			"Remove the authenticated user's star from a repository.",
-			UnstarRepoInput{},
-			unstarRepo,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"ok": "true when GitHub returned 204 No Content.",
-				},
-				Quirks: []string{
-					"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
-					"Idempotent — unstarring a repo that isn't starred still returns 204.",
-				},
-				PairWith:    []string{"connector:github.star_repo"},
-				InputSample: `{"owner":"abc","repo":"web"}`,
-			},
+			),
 		),
 
 		// ── ISSUES ───────────────────────────────────────────────────
-		connector.Op(
-			"get_issue",
-			"Get Issue",
-			"Fetch a single issue by number. Returns title, body, state, labels, and author.",
-			GetIssueInput{},
-			getIssue,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"number": "Issue number.",
-					"state":  "open | closed.",
-					"body":   "Issue body (Markdown).",
+		connector.Cat(
+			"Issues",
+			"Read and edit issues and their comment threads.",
+			connector.Op(
+				"get_issue",
+				"Get Issue",
+				"Fetch a single issue by number. Returns title, body, state, labels, and author.",
+				GetIssueInput{},
+				getIssue,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"number": "Issue number.",
+						"state":  "open | closed.",
+						"body":   "Issue body (Markdown).",
+					},
+					Quirks: []string{
+						"GitHub's issues endpoint also serves PRs; a non-null pull_request key means this is a PR.",
+					},
+					PairWith:    []string{"connector:github.update_issue", "connector:github.list_issue_comments"},
+					InputSample: `{"owner":"abc","repo":"web","number":42}`,
 				},
-				Quirks: []string{
-					"GitHub's issues endpoint also serves PRs; a non-null pull_request key means this is a PR.",
+			),
+			connector.OpDestructive(
+				"update_issue",
+				"Update Issue",
+				"Edit an issue's title, body, state, or labels. Only provided fields are changed.",
+				UpdateIssueInput{},
+				updateIssue,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"number": "Issue number.",
+						"state":  "Resulting state after the update.",
+					},
+					Quirks: []string{
+						"Only fields you supply are sent — omit a field to leave it unchanged.",
+						"labels is comma-separated and REPLACES the full label set (it is not additive).",
+						"state must be open or closed; close an issue by passing state=closed.",
+						"PAT scope: repo (or fine-grained Issues: write).",
+					},
+					PairWith:    []string{"connector:github.get_issue", "connector:github.add_comment"},
+					InputSample: `{"owner":"abc","repo":"web","number":42,"state":"closed","labels":"bug,wontfix"}`,
 				},
-				PairWith:    []string{"connector:github.update_issue", "connector:github.list_issue_comments"},
-				InputSample: `{"owner":"abc","repo":"web","number":42}`,
-			},
-		),
-		connector.OpDestructive(
-			"update_issue",
-			"Update Issue",
-			"Edit an issue's title, body, state, or labels. Only provided fields are changed.",
-			UpdateIssueInput{},
-			updateIssue,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"number": "Issue number.",
-					"state":  "Resulting state after the update.",
+			),
+			connector.Op(
+				"list_issue_comments",
+				"List Issue Comments",
+				"List comments on an issue or pull request.",
+				ListIssueCommentsInput{},
+				listIssueComments,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"comments": "Array of {id, user.login, body, created_at, html_url}.",
+					},
+					Quirks: []string{
+						"Works for both issues and PRs (they share the issue comments timeline).",
+						"Pagination: PerPage max 100; first page only.",
+					},
+					PairWith:    []string{"connector:github.add_comment", "connector:github.get_issue"},
+					InputSample: `{"owner":"abc","repo":"web","number":42,"per_page":30}`,
 				},
-				Quirks: []string{
-					"Only fields you supply are sent — omit a field to leave it unchanged.",
-					"labels is comma-separated and REPLACES the full label set (it is not additive).",
-					"state must be open or closed; close an issue by passing state=closed.",
-					"PAT scope: repo (or fine-grained Issues: write).",
-				},
-				PairWith:    []string{"connector:github.get_issue", "connector:github.add_comment"},
-				InputSample: `{"owner":"abc","repo":"web","number":42,"state":"closed","labels":"bug,wontfix"}`,
-			},
-		),
-		connector.Op(
-			"list_issue_comments",
-			"List Issue Comments",
-			"List comments on an issue or pull request.",
-			ListIssueCommentsInput{},
-			listIssueComments,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"comments": "Array of {id, user.login, body, created_at, html_url}.",
-				},
-				Quirks: []string{
-					"Works for both issues and PRs (they share the issue comments timeline).",
-					"Pagination: PerPage max 100; first page only.",
-				},
-				PairWith:    []string{"connector:github.add_comment", "connector:github.get_issue"},
-				InputSample: `{"owner":"abc","repo":"web","number":42,"per_page":30}`,
-			},
+			),
 		),
 
 		// ── PULL REQUESTS ────────────────────────────────────────────
-		connector.Op(
-			"get_pr",
-			"Get Pull Request",
-			"Fetch a single pull request by number. Returns title, state, head/base, mergeable status.",
-			GetPRInput{},
-			getPR,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"number":    "PR number.",
-					"state":     "open | closed.",
-					"merged":    "true once the PR has been merged.",
-					"mergeable": "GitHub's mergeability assessment (may be null while computing).",
+		connector.Cat(
+			"Pull Requests",
+			"Fetch pull requests, list their changed files, and edit PR metadata.",
+			connector.Op(
+				"get_pr",
+				"Get Pull Request",
+				"Fetch a single pull request by number. Returns title, state, head/base, mergeable status.",
+				GetPRInput{},
+				getPR,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"number":    "PR number.",
+						"state":     "open | closed.",
+						"merged":    "true once the PR has been merged.",
+						"mergeable": "GitHub's mergeability assessment (may be null while computing).",
+					},
+					Quirks: []string{
+						"mergeable can be null right after open while GitHub computes it; poll again if needed.",
+					},
+					PairWith:    []string{"connector:github.get_pr_diff", "connector:github.list_pr_files", "connector:github.merge_pr"},
+					InputSample: `{"owner":"abc","repo":"web","number":7}`,
 				},
-				Quirks: []string{
-					"mergeable can be null right after open while GitHub computes it; poll again if needed.",
+			),
+			connector.Op(
+				"list_pr_files",
+				"List PR Files",
+				"List the files changed in a pull request with additions/deletions and status.",
+				ListPRFilesInput{},
+				listPRFiles,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"files": "Array of {filename, status, additions, deletions, changes}.",
+					},
+					Quirks: []string{
+						"status is added | modified | removed | renamed.",
+						"Pagination: PerPage max 100; first page only — large PRs may have more files.",
+					},
+					PairWith:    []string{"connector:github.get_pr_diff", "connector:github.get_pr"},
+					InputSample: `{"owner":"abc","repo":"web","number":7,"per_page":30}`,
 				},
-				PairWith:    []string{"connector:github.get_pr_diff", "connector:github.list_pr_files", "connector:github.merge_pr"},
-				InputSample: `{"owner":"abc","repo":"web","number":7}`,
-			},
-		),
-		connector.Op(
-			"list_pr_files",
-			"List PR Files",
-			"List the files changed in a pull request with additions/deletions and status.",
-			ListPRFilesInput{},
-			listPRFiles,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"files": "Array of {filename, status, additions, deletions, changes}.",
+			),
+			connector.OpDestructive(
+				"update_pr",
+				"Update Pull Request",
+				"Edit a pull request's title, body, state, or base branch. Only provided fields are changed.",
+				UpdatePRInput{},
+				updatePR,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"number": "PR number.",
+						"state":  "Resulting state after the update.",
+					},
+					Quirks: []string{
+						"Only fields you supply are sent — omit a field to leave it unchanged.",
+						"Close a PR (without merging) by passing state=closed; reopen with state=open.",
+						"base retargets the PR onto a different branch (must already exist).",
+						"PAT scope: repo (or fine-grained Pull requests: write).",
+					},
+					PairWith:    []string{"connector:github.get_pr", "connector:github.merge_pr"},
+					InputSample: `{"owner":"abc","repo":"web","number":7,"title":"Updated title","state":"open"}`,
 				},
-				Quirks: []string{
-					"status is added | modified | removed | renamed.",
-					"Pagination: PerPage max 100; first page only — large PRs may have more files.",
-				},
-				PairWith:    []string{"connector:github.get_pr_diff", "connector:github.get_pr"},
-				InputSample: `{"owner":"abc","repo":"web","number":7,"per_page":30}`,
-			},
-		),
-		connector.OpDestructive(
-			"update_pr",
-			"Update Pull Request",
-			"Edit a pull request's title, body, state, or base branch. Only provided fields are changed.",
-			UpdatePRInput{},
-			updatePR,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"number": "PR number.",
-					"state":  "Resulting state after the update.",
-				},
-				Quirks: []string{
-					"Only fields you supply are sent — omit a field to leave it unchanged.",
-					"Close a PR (without merging) by passing state=closed; reopen with state=open.",
-					"base retargets the PR onto a different branch (must already exist).",
-					"PAT scope: repo (or fine-grained Pull requests: write).",
-				},
-				PairWith:    []string{"connector:github.get_pr", "connector:github.merge_pr"},
-				InputSample: `{"owner":"abc","repo":"web","number":7,"title":"Updated title","state":"open"}`,
-			},
+			),
 		),
 
 		// ── RELEASES ─────────────────────────────────────────────────
-		connector.Op(
-			"list_releases",
-			"List Releases",
-			"List releases in a repository. Returns tag, name, draft/prerelease flags, and publish time.",
-			ListReleasesInput{},
-			listReleases,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"releases": "Array of {id, tag_name, name, draft, prerelease, published_at, html_url}.",
+		connector.Cat(
+			"Releases",
+			"List, fetch, publish, edit, and delete repository releases.",
+			connector.Op(
+				"list_releases",
+				"List Releases",
+				"List releases in a repository. Returns tag, name, draft/prerelease flags, and publish time.",
+				ListReleasesInput{},
+				listReleases,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"releases": "Array of {id, tag_name, name, draft, prerelease, published_at, html_url}.",
+					},
+					Quirks: []string{
+						"Includes drafts only if the token can see them.",
+						"Pagination: PerPage max 100; first page only.",
+					},
+					PairWith:    []string{"connector:github.get_latest_release", "connector:github.get_release"},
+					InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
 				},
-				Quirks: []string{
-					"Includes drafts only if the token can see them.",
-					"Pagination: PerPage max 100; first page only.",
+			),
+			connector.Op(
+				"get_latest_release",
+				"Get Latest Release",
+				"Fetch the latest published, non-draft release of a repository.",
+				GetLatestReleaseInput{},
+				getLatestRelease,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"tag_name": "Tag of the latest release.",
+						"name":     "Release title.",
+						"body":     "Release notes (Markdown).",
+					},
+					Quirks: []string{
+						"\"Latest\" excludes drafts and pre-releases; GitHub 404s if there is no published release.",
+					},
+					PairWith:    []string{"connector:github.list_releases"},
+					InputSample: `{"owner":"abc","repo":"web"}`,
 				},
-				PairWith:    []string{"connector:github.get_latest_release", "connector:github.get_release"},
-				InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
-			},
-		),
-		connector.Op(
-			"get_latest_release",
-			"Get Latest Release",
-			"Fetch the latest published, non-draft release of a repository.",
-			GetLatestReleaseInput{},
-			getLatestRelease,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"tag_name": "Tag of the latest release.",
-					"name":     "Release title.",
-					"body":     "Release notes (Markdown).",
+			),
+			connector.Op(
+				"get_release",
+				"Get Release",
+				"Fetch a single release by its numeric ID.",
+				GetReleaseInput{},
+				getRelease,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"id":       "Release ID.",
+						"tag_name": "Release tag.",
+						"assets":   "Array of attached release assets.",
+					},
+					Quirks: []string{
+						"release_id is the numeric ID from list_releases, NOT the tag name.",
+					},
+					PairWith:    []string{"connector:github.list_releases", "connector:github.update_release"},
+					InputSample: `{"owner":"abc","repo":"web","release_id":123456}`,
 				},
-				Quirks: []string{
-					"\"Latest\" excludes drafts and pre-releases; GitHub 404s if there is no published release.",
+			),
+			connector.OpDestructive(
+				"create_release",
+				"Create Release",
+				"Publish a new release for a tag. Returns the release ID and URL.",
+				CreateReleaseInput{},
+				createRelease,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"id":       "Created release ID.",
+						"html_url": "Web URL of the release.",
+					},
+					Quirks: []string{
+						"tag_name is created if it doesn't exist (off target_commitish, default branch otherwise).",
+						"draft=true keeps it unpublished; prerelease=true flags it as a pre-release.",
+						"PAT scope: repo (or fine-grained Contents: write).",
+					},
+					PairWith:    []string{"connector:github.update_release", "connector:github.list_releases"},
+					InputSample: `{"owner":"abc","repo":"web","tag_name":"v1.2.0","name":"v1.2.0","body":"Bug fixes","draft":false}`,
 				},
-				PairWith:    []string{"connector:github.list_releases"},
-				InputSample: `{"owner":"abc","repo":"web"}`,
-			},
-		),
-		connector.Op(
-			"get_release",
-			"Get Release",
-			"Fetch a single release by its numeric ID.",
-			GetReleaseInput{},
-			getRelease,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"id":       "Release ID.",
-					"tag_name": "Release tag.",
-					"assets":   "Array of attached release assets.",
+			),
+			connector.OpDestructive(
+				"update_release",
+				"Update Release",
+				"Edit an existing release's tag, name, notes, or draft/pre-release flags. Only provided fields are changed.",
+				UpdateReleaseInput{},
+				updateRelease,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"id":       "Release ID.",
+						"html_url": "Web URL of the release.",
+					},
+					Quirks: []string{
+						"Only fields you supply are sent — omit text fields to leave them unchanged.",
+						"draft and prerelease are sent only when true (pass them to set the flags on).",
+						"PAT scope: repo (or fine-grained Contents: write).",
+					},
+					PairWith:    []string{"connector:github.get_release", "connector:github.delete_release"},
+					InputSample: `{"owner":"abc","repo":"web","release_id":123456,"name":"v1.2.1","body":"Patched"}`,
 				},
-				Quirks: []string{
-					"release_id is the numeric ID from list_releases, NOT the tag name.",
+			),
+			connector.OpDestructive(
+				"delete_release",
+				"Delete Release",
+				"Delete a release by its numeric ID.",
+				DeleteReleaseInput{},
+				deleteRelease,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"ok": "true when GitHub returned 204 No Content.",
+					},
+					Quirks: []string{
+						"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
+						"Deletes the release record but leaves the underlying git tag in place.",
+						"PAT scope: repo (or fine-grained Contents: write).",
+					},
+					PairWith:    []string{"connector:github.list_releases"},
+					InputSample: `{"owner":"abc","repo":"web","release_id":123456}`,
 				},
-				PairWith:    []string{"connector:github.list_releases", "connector:github.update_release"},
-				InputSample: `{"owner":"abc","repo":"web","release_id":123456}`,
-			},
-		),
-		connector.OpDestructive(
-			"create_release",
-			"Create Release",
-			"Publish a new release for a tag. Returns the release ID and URL.",
-			CreateReleaseInput{},
-			createRelease,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"id":       "Created release ID.",
-					"html_url": "Web URL of the release.",
-				},
-				Quirks: []string{
-					"tag_name is created if it doesn't exist (off target_commitish, default branch otherwise).",
-					"draft=true keeps it unpublished; prerelease=true flags it as a pre-release.",
-					"PAT scope: repo (or fine-grained Contents: write).",
-				},
-				PairWith:    []string{"connector:github.update_release", "connector:github.list_releases"},
-				InputSample: `{"owner":"abc","repo":"web","tag_name":"v1.2.0","name":"v1.2.0","body":"Bug fixes","draft":false}`,
-			},
-		),
-		connector.OpDestructive(
-			"update_release",
-			"Update Release",
-			"Edit an existing release's tag, name, notes, or draft/pre-release flags. Only provided fields are changed.",
-			UpdateReleaseInput{},
-			updateRelease,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"id":       "Release ID.",
-					"html_url": "Web URL of the release.",
-				},
-				Quirks: []string{
-					"Only fields you supply are sent — omit text fields to leave them unchanged.",
-					"draft and prerelease are sent only when true (pass them to set the flags on).",
-					"PAT scope: repo (or fine-grained Contents: write).",
-				},
-				PairWith:    []string{"connector:github.get_release", "connector:github.delete_release"},
-				InputSample: `{"owner":"abc","repo":"web","release_id":123456,"name":"v1.2.1","body":"Patched"}`,
-			},
-		),
-		connector.OpDestructive(
-			"delete_release",
-			"Delete Release",
-			"Delete a release by its numeric ID.",
-			DeleteReleaseInput{},
-			deleteRelease,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"ok": "true when GitHub returned 204 No Content.",
-				},
-				Quirks: []string{
-					"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
-					"Deletes the release record but leaves the underlying git tag in place.",
-					"PAT scope: repo (or fine-grained Contents: write).",
-				},
-				PairWith:    []string{"connector:github.list_releases"},
-				InputSample: `{"owner":"abc","repo":"web","release_id":123456}`,
-			},
+			),
 		),
 
 		// ── TAGS ─────────────────────────────────────────────────────
-		connector.Op(
-			"list_tags",
-			"List Tags",
-			"List tags in a repository. Returns tag name and the commit it points to.",
-			ListTagsInput{},
-			listTags,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"tags": "Array of {name, commit.sha, zipball_url, tarball_url}.",
+		connector.Cat(
+			"Tags",
+			"List the tags in a repository.",
+			connector.Op(
+				"list_tags",
+				"List Tags",
+				"List tags in a repository. Returns tag name and the commit it points to.",
+				ListTagsInput{},
+				listTags,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"tags": "Array of {name, commit.sha, zipball_url, tarball_url}.",
+					},
+					Quirks: []string{
+						"Lists lightweight + annotated tags by name; ordering is GitHub's default.",
+						"Pagination: PerPage max 100; first page only.",
+					},
+					PairWith:    []string{"connector:github.list_releases", "connector:github.list_commits"},
+					InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
 				},
-				Quirks: []string{
-					"Lists lightweight + annotated tags by name; ordering is GitHub's default.",
-					"Pagination: PerPage max 100; first page only.",
-				},
-				PairWith:    []string{"connector:github.list_releases", "connector:github.list_commits"},
-				InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
-			},
+			),
 		),
 
 		// ── USER ─────────────────────────────────────────────────────
-		connector.Op(
-			"get_me",
-			"Get Authenticated User",
-			"Fetch the user the configured token belongs to (login, name, account type).",
-			GetMeInput{},
-			getMe,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"login": "The authenticated user's GitHub login.",
-					"name":  "Display name (may be null).",
-					"type":  "User | Organization.",
+		connector.Cat(
+			"User",
+			"Identify the authenticated user and probe token health.",
+			connector.Op(
+				"get_me",
+				"Get Authenticated User",
+				"Fetch the user the configured token belongs to (login, name, account type).",
+				GetMeInput{},
+				getMe,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"login": "The authenticated user's GitHub login.",
+						"name":  "Display name (may be null).",
+						"type":  "User | Organization.",
+					},
+					Quirks: []string{
+						"Takes no arguments — identifies whoever owns the token.",
+						"Also used as the connector's health-check probe (GET /user).",
+					},
+					PairWith:    []string{"connector:github.list_repos"},
+					InputSample: `{}`,
 				},
-				Quirks: []string{
-					"Takes no arguments — identifies whoever owns the token.",
-					"Also used as the connector's health-check probe (GET /user).",
-				},
-				PairWith:    []string{"connector:github.list_repos"},
-				InputSample: `{}`,
-			},
+			),
 		),
 
 		// ── COMMENTS ─────────────────────────────────────────────────
-		connector.OpDestructive(
-			"update_comment",
-			"Update Comment",
-			"Edit an existing issue or PR comment by its ID.",
-			UpdateCommentInput{},
-			updateComment,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"id":       "Comment ID.",
-					"body":     "Updated comment body.",
-					"html_url": "Web URL of the comment.",
+		connector.Cat(
+			"Comments",
+			"Edit and delete existing issue or PR conversation comments.",
+			connector.OpDestructive(
+				"update_comment",
+				"Update Comment",
+				"Edit an existing issue or PR comment by its ID.",
+				UpdateCommentInput{},
+				updateComment,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"id":       "Comment ID.",
+						"body":     "Updated comment body.",
+						"html_url": "Web URL of the comment.",
+					},
+					Quirks: []string{
+						"comment_id is the numeric comment ID (from list_issue_comments), NOT the issue number.",
+						"Works for issue and PR conversation comments (shared endpoint).",
+					},
+					PairWith:    []string{"connector:github.list_issue_comments", "connector:github.delete_comment"},
+					InputSample: `{"owner":"abc","repo":"web","comment_id":123,"body":"edited"}`,
 				},
-				Quirks: []string{
-					"comment_id is the numeric comment ID (from list_issue_comments), NOT the issue number.",
-					"Works for issue and PR conversation comments (shared endpoint).",
+			),
+			connector.OpDestructive(
+				"delete_comment",
+				"Delete Comment",
+				"Delete an issue or PR comment by its ID.",
+				DeleteCommentInput{},
+				deleteComment,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"ok": "true when GitHub returned 204 No Content.",
+					},
+					Quirks: []string{
+						"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
+						"comment_id is the numeric comment ID, not the issue number.",
+					},
+					PairWith:    []string{"connector:github.list_issue_comments"},
+					InputSample: `{"owner":"abc","repo":"web","comment_id":123}`,
 				},
-				PairWith:    []string{"connector:github.list_issue_comments", "connector:github.delete_comment"},
-				InputSample: `{"owner":"abc","repo":"web","comment_id":123,"body":"edited"}`,
-			},
-		),
-		connector.OpDestructive(
-			"delete_comment",
-			"Delete Comment",
-			"Delete an issue or PR comment by its ID.",
-			DeleteCommentInput{},
-			deleteComment,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"ok": "true when GitHub returned 204 No Content.",
-				},
-				Quirks: []string{
-					"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
-					"comment_id is the numeric comment ID, not the issue number.",
-				},
-				PairWith:    []string{"connector:github.list_issue_comments"},
-				InputSample: `{"owner":"abc","repo":"web","comment_id":123}`,
-			},
+			),
 		),
 
 		// ── PULL REQUEST REVIEWS ─────────────────────────────────────
-		connector.OpDestructive(
-			"create_review",
-			"Create PR Review",
-			"Submit a formal review (approve, request changes, or comment) on a pull request.",
-			CreateReviewInput{},
-			createReview,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"id":    "Review ID.",
-					"state": "APPROVED | CHANGES_REQUESTED | COMMENTED.",
+		connector.Cat(
+			"Pull Request Reviews",
+			"Submit and list formal reviews, post inline diff comments, and request reviewers.",
+			connector.OpDestructive(
+				"create_review",
+				"Create PR Review",
+				"Submit a formal review (approve, request changes, or comment) on a pull request.",
+				CreateReviewInput{},
+				createReview,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"id":    "Review ID.",
+						"state": "APPROVED | CHANGES_REQUESTED | COMMENTED.",
+					},
+					Quirks: []string{
+						"event defaults to COMMENT; use APPROVE or REQUEST_CHANGES for a verdict.",
+						"GitHub 422s on a COMMENT/REQUEST_CHANGES review with an empty body.",
+						"commit_id pins the review to a specific SHA; omit to use the PR head.",
+					},
+					PairWith:    []string{"connector:github.get_pr_diff", "connector:github.list_reviews", "connector:github.create_review_comment"},
+					InputSample: `{"owner":"abc","repo":"web","number":7,"event":"APPROVE","body":"LGTM"}`,
 				},
-				Quirks: []string{
-					"event defaults to COMMENT; use APPROVE or REQUEST_CHANGES for a verdict.",
-					"GitHub 422s on a COMMENT/REQUEST_CHANGES review with an empty body.",
-					"commit_id pins the review to a specific SHA; omit to use the PR head.",
+			),
+			connector.Op(
+				"list_reviews",
+				"List PR Reviews",
+				"List the reviews submitted on a pull request.",
+				ListReviewsInput{},
+				listReviews,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"reviews": "Array of {id, user.login, state, body, submitted_at}.",
+					},
+					Quirks: []string{
+						"state is APPROVED | CHANGES_REQUESTED | COMMENTED | PENDING | DISMISSED.",
+						"Pagination: PerPage max 100; first page only.",
+					},
+					PairWith:    []string{"connector:github.create_review", "connector:github.list_review_comments"},
+					InputSample: `{"owner":"abc","repo":"web","number":7,"per_page":30}`,
 				},
-				PairWith:    []string{"connector:github.get_pr_diff", "connector:github.list_reviews", "connector:github.create_review_comment"},
-				InputSample: `{"owner":"abc","repo":"web","number":7,"event":"APPROVE","body":"LGTM"}`,
-			},
-		),
-		connector.Op(
-			"list_reviews",
-			"List PR Reviews",
-			"List the reviews submitted on a pull request.",
-			ListReviewsInput{},
-			listReviews,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"reviews": "Array of {id, user.login, state, body, submitted_at}.",
+			),
+			connector.OpDestructive(
+				"create_review_comment",
+				"Create PR Review Comment",
+				"Post an inline comment on a specific line of a pull request's diff.",
+				CreateReviewCommentInput{},
+				createReviewComment,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"id":       "Review comment ID.",
+						"path":     "File path the comment is attached to.",
+						"html_url": "Web URL of the inline comment.",
+					},
+					Quirks: []string{
+						"This is an INLINE diff comment (different from add_comment, which posts to the conversation).",
+						"commit_id, path, and line are required and must match a line present in the diff.",
+						"side selects LEFT (old) or RIGHT (new) of the diff; default RIGHT.",
+					},
+					PairWith:    []string{"connector:github.get_pr_diff", "connector:github.list_review_comments", "connector:github.create_review"},
+					InputSample: `{"owner":"abc","repo":"web","number":7,"body":"nit: rename","commit_id":"abc123","path":"main.go","line":10,"side":"RIGHT"}`,
 				},
-				Quirks: []string{
-					"state is APPROVED | CHANGES_REQUESTED | COMMENTED | PENDING | DISMISSED.",
-					"Pagination: PerPage max 100; first page only.",
+			),
+			connector.Op(
+				"list_review_comments",
+				"List PR Review Comments",
+				"List the inline diff comments on a pull request.",
+				ListReviewCommentsInput{},
+				listReviewComments,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"comments": "Array of {id, user.login, body, path, line, commit_id, html_url}.",
+					},
+					Quirks: []string{
+						"These are INLINE diff comments, not the conversation comments from list_issue_comments.",
+						"Pagination: PerPage max 100; first page only.",
+					},
+					PairWith:    []string{"connector:github.create_review_comment"},
+					InputSample: `{"owner":"abc","repo":"web","number":7,"per_page":30}`,
 				},
-				PairWith:    []string{"connector:github.create_review", "connector:github.list_review_comments"},
-				InputSample: `{"owner":"abc","repo":"web","number":7,"per_page":30}`,
-			},
-		),
-		connector.OpDestructive(
-			"create_review_comment",
-			"Create PR Review Comment",
-			"Post an inline comment on a specific line of a pull request's diff.",
-			CreateReviewCommentInput{},
-			createReviewComment,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"id":       "Review comment ID.",
-					"path":     "File path the comment is attached to.",
-					"html_url": "Web URL of the inline comment.",
+			),
+			connector.OpDestructive(
+				"request_reviewers",
+				"Request PR Reviewers",
+				"Request one or more users or teams to review a pull request.",
+				RequestReviewersInput{},
+				requestReviewers,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"requested_reviewers": "Array of users now requested.",
+						"requested_teams":     "Array of teams now requested.",
+					},
+					Quirks: []string{
+						"reviewers and team_reviewers are comma-separated; supply at least one.",
+						"reviewers are GitHub logins; team_reviewers are team slugs (org repos only).",
+						"GitHub 422s if you request a reviewer who is the PR author.",
+					},
+					PairWith:    []string{"connector:github.create_review", "connector:github.get_pr"},
+					InputSample: `{"owner":"abc","repo":"web","number":7,"reviewers":"yoga,riska"}`,
 				},
-				Quirks: []string{
-					"This is an INLINE diff comment (different from add_comment, which posts to the conversation).",
-					"commit_id, path, and line are required and must match a line present in the diff.",
-					"side selects LEFT (old) or RIGHT (new) of the diff; default RIGHT.",
-				},
-				PairWith:    []string{"connector:github.get_pr_diff", "connector:github.list_review_comments", "connector:github.create_review"},
-				InputSample: `{"owner":"abc","repo":"web","number":7,"body":"nit: rename","commit_id":"abc123","path":"main.go","line":10,"side":"RIGHT"}`,
-			},
-		),
-		connector.Op(
-			"list_review_comments",
-			"List PR Review Comments",
-			"List the inline diff comments on a pull request.",
-			ListReviewCommentsInput{},
-			listReviewComments,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"comments": "Array of {id, user.login, body, path, line, commit_id, html_url}.",
-				},
-				Quirks: []string{
-					"These are INLINE diff comments, not the conversation comments from list_issue_comments.",
-					"Pagination: PerPage max 100; first page only.",
-				},
-				PairWith:    []string{"connector:github.create_review_comment"},
-				InputSample: `{"owner":"abc","repo":"web","number":7,"per_page":30}`,
-			},
-		),
-		connector.OpDestructive(
-			"request_reviewers",
-			"Request PR Reviewers",
-			"Request one or more users or teams to review a pull request.",
-			RequestReviewersInput{},
-			requestReviewers,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"requested_reviewers": "Array of users now requested.",
-					"requested_teams":     "Array of teams now requested.",
-				},
-				Quirks: []string{
-					"reviewers and team_reviewers are comma-separated; supply at least one.",
-					"reviewers are GitHub logins; team_reviewers are team slugs (org repos only).",
-					"GitHub 422s if you request a reviewer who is the PR author.",
-				},
-				PairWith:    []string{"connector:github.create_review", "connector:github.get_pr"},
-				InputSample: `{"owner":"abc","repo":"web","number":7,"reviewers":"yoga,riska"}`,
-			},
+			),
 		),
 
 		// ── BRANCHES / REFS ──────────────────────────────────────────
-		connector.OpDestructive(
-			"create_branch",
-			"Create Branch",
-			"Create a new branch from another branch's head (or an explicit SHA).",
-			CreateBranchInput{},
-			createBranch,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"ref":        "Full ref of the new branch (refs/heads/<branch>).",
-					"object.sha": "SHA the new branch points at.",
+		connector.Cat(
+			"Branches",
+			"Create and delete branch refs.",
+			connector.OpDestructive(
+				"create_branch",
+				"Create Branch",
+				"Create a new branch from another branch's head (or an explicit SHA).",
+				CreateBranchInput{},
+				createBranch,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"ref":        "Full ref of the new branch (refs/heads/<branch>).",
+						"object.sha": "SHA the new branch points at.",
+					},
+					Quirks: []string{
+						"Pass sha to branch off a specific commit; otherwise from_branch's head is used.",
+						"from_branch defaults to the repo's default branch (resolved via GET /repos/{o}/{r}).",
+						"GitHub 422s if the branch already exists.",
+					},
+					PairWith:    []string{"connector:github.create_or_update_file", "connector:github.create_pr", "connector:github.delete_ref"},
+					InputSample: `{"owner":"abc","repo":"web","branch":"feature/x","from_branch":"main"}`,
 				},
-				Quirks: []string{
-					"Pass sha to branch off a specific commit; otherwise from_branch's head is used.",
-					"from_branch defaults to the repo's default branch (resolved via GET /repos/{o}/{r}).",
-					"GitHub 422s if the branch already exists.",
+			),
+			connector.OpDestructive(
+				"delete_ref",
+				"Delete Branch",
+				"Delete a branch ref from a repository.",
+				DeleteRefInput{},
+				deleteRef,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"ok": "true when GitHub returned 204 No Content.",
+					},
+					Quirks: []string{
+						"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
+						"Deletes refs/heads/{branch}; cannot delete a protected branch.",
+					},
+					PairWith:    []string{"connector:github.create_branch", "connector:github.list_branches"},
+					InputSample: `{"owner":"abc","repo":"web","branch":"feature/x"}`,
 				},
-				PairWith:    []string{"connector:github.create_or_update_file", "connector:github.create_pr", "connector:github.delete_ref"},
-				InputSample: `{"owner":"abc","repo":"web","branch":"feature/x","from_branch":"main"}`,
-			},
-		),
-		connector.OpDestructive(
-			"delete_ref",
-			"Delete Branch",
-			"Delete a branch ref from a repository.",
-			DeleteRefInput{},
-			deleteRef,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"ok": "true when GitHub returned 204 No Content.",
-				},
-				Quirks: []string{
-					"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
-					"Deletes refs/heads/{branch}; cannot delete a protected branch.",
-				},
-				PairWith:    []string{"connector:github.create_branch", "connector:github.list_branches"},
-				InputSample: `{"owner":"abc","repo":"web","branch":"feature/x"}`,
-			},
+			),
 		),
 
 		// ── LABELS / ASSIGNEES ───────────────────────────────────────
-		connector.OpDestructive(
-			"add_labels",
-			"Add Labels",
-			"Add labels to an issue or PR (additive — does not replace existing labels).",
-			AddLabelsInput{},
-			addLabels,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"labels": "Array of all labels on the issue after adding.",
+		connector.Cat(
+			"Labels & Assignees",
+			"Add or remove labels and assign users on issues and PRs.",
+			connector.OpDestructive(
+				"add_labels",
+				"Add Labels",
+				"Add labels to an issue or PR (additive — does not replace existing labels).",
+				AddLabelsInput{},
+				addLabels,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"labels": "Array of all labels on the issue after adding.",
+					},
+					Quirks: []string{
+						"Additive — unlike update_issue's labels which replaces the whole set.",
+						"labels is comma-separated; unknown labels are created/ignored by GitHub.",
+					},
+					PairWith:    []string{"connector:github.remove_label", "connector:github.update_issue"},
+					InputSample: `{"owner":"abc","repo":"web","number":42,"labels":"bug,priority:high"}`,
 				},
-				Quirks: []string{
-					"Additive — unlike update_issue's labels which replaces the whole set.",
-					"labels is comma-separated; unknown labels are created/ignored by GitHub.",
+			),
+			connector.OpDestructive(
+				"remove_label",
+				"Remove Label",
+				"Remove a single label from an issue or PR.",
+				RemoveLabelInput{},
+				removeLabel,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"labels": "Array of remaining labels on the issue.",
+					},
+					Quirks: []string{
+						"Removes exactly one label by name; GitHub 404s if the label isn't applied.",
+						"name is the label text (e.g. \"bug\"), URL-escaped by the connector.",
+					},
+					PairWith:    []string{"connector:github.add_labels"},
+					InputSample: `{"owner":"abc","repo":"web","number":42,"name":"bug"}`,
 				},
-				PairWith:    []string{"connector:github.remove_label", "connector:github.update_issue"},
-				InputSample: `{"owner":"abc","repo":"web","number":42,"labels":"bug,priority:high"}`,
-			},
-		),
-		connector.OpDestructive(
-			"remove_label",
-			"Remove Label",
-			"Remove a single label from an issue or PR.",
-			RemoveLabelInput{},
-			removeLabel,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"labels": "Array of remaining labels on the issue.",
+			),
+			connector.OpDestructive(
+				"add_assignees",
+				"Add Assignees",
+				"Assign one or more users to an issue or PR.",
+				AddAssigneesInput{},
+				addAssignees,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"assignees": "Array of users now assigned to the issue.",
+					},
+					Quirks: []string{
+						"assignees is comma-separated GitHub logins; only users with repo access can be assigned.",
+						"Additive — leaves existing assignees in place.",
+					},
+					PairWith:    []string{"connector:github.update_issue", "connector:github.add_labels"},
+					InputSample: `{"owner":"abc","repo":"web","number":42,"assignees":"yoga,riska"}`,
 				},
-				Quirks: []string{
-					"Removes exactly one label by name; GitHub 404s if the label isn't applied.",
-					"name is the label text (e.g. \"bug\"), URL-escaped by the connector.",
-				},
-				PairWith:    []string{"connector:github.add_labels"},
-				InputSample: `{"owner":"abc","repo":"web","number":42,"name":"bug"}`,
-			},
-		),
-		connector.OpDestructive(
-			"add_assignees",
-			"Add Assignees",
-			"Assign one or more users to an issue or PR.",
-			AddAssigneesInput{},
-			addAssignees,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"assignees": "Array of users now assigned to the issue.",
-				},
-				Quirks: []string{
-					"assignees is comma-separated GitHub logins; only users with repo access can be assigned.",
-					"Additive — leaves existing assignees in place.",
-				},
-				PairWith:    []string{"connector:github.update_issue", "connector:github.add_labels"},
-				InputSample: `{"owner":"abc","repo":"web","number":42,"assignees":"yoga,riska"}`,
-			},
+			),
 		),
 
 		// ── COMMITS / COMPARE ────────────────────────────────────────
-		connector.Op(
-			"get_commit",
-			"Get Commit",
-			"Fetch a single commit with its message, author, and changed files.",
-			GetCommitInput{},
-			getCommit,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"sha":            "Commit SHA.",
-					"commit.message": "Commit message.",
-					"files":          "Array of changed files with patch/additions/deletions.",
+		connector.Cat(
+			"Commits",
+			"Fetch a single commit and compare two commits or branches.",
+			connector.Op(
+				"get_commit",
+				"Get Commit",
+				"Fetch a single commit with its message, author, and changed files.",
+				GetCommitInput{},
+				getCommit,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"sha":            "Commit SHA.",
+						"commit.message": "Commit message.",
+						"files":          "Array of changed files with patch/additions/deletions.",
+					},
+					Quirks: []string{
+						"sha may be a full/short SHA or a branch/tag name.",
+					},
+					PairWith:    []string{"connector:github.list_commits", "connector:github.compare_commits"},
+					InputSample: `{"owner":"abc","repo":"web","sha":"main"}`,
 				},
-				Quirks: []string{
-					"sha may be a full/short SHA or a branch/tag name.",
+			),
+			connector.Op(
+				"compare_commits",
+				"Compare Commits",
+				"Compare two commits or branches (base...head). Returns the diff stats and commits between them.",
+				CompareCommitsInput{},
+				compareCommits,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"status":   "ahead | behind | identical | diverged.",
+						"ahead_by": "How many commits head is ahead of base.",
+						"commits":  "Array of commits between base and head.",
+						"files":    "Array of changed files.",
+					},
+					Quirks: []string{
+						"Compares base...head (three-dot, merge-base diff), matching GitHub's compare view.",
+						"base/head can be branches, tags, or SHAs; cross-fork uses owner:branch.",
+					},
+					PairWith:    []string{"connector:github.get_commit", "connector:github.list_commits"},
+					InputSample: `{"owner":"abc","repo":"web","base":"main","head":"feature/x"}`,
 				},
-				PairWith:    []string{"connector:github.list_commits", "connector:github.compare_commits"},
-				InputSample: `{"owner":"abc","repo":"web","sha":"main"}`,
-			},
-		),
-		connector.Op(
-			"compare_commits",
-			"Compare Commits",
-			"Compare two commits or branches (base...head). Returns the diff stats and commits between them.",
-			CompareCommitsInput{},
-			compareCommits,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"status":   "ahead | behind | identical | diverged.",
-					"ahead_by": "How many commits head is ahead of base.",
-					"commits":  "Array of commits between base and head.",
-					"files":    "Array of changed files.",
-				},
-				Quirks: []string{
-					"Compares base...head (three-dot, merge-base diff), matching GitHub's compare view.",
-					"base/head can be branches, tags, or SHAs; cross-fork uses owner:branch.",
-				},
-				PairWith:    []string{"connector:github.get_commit", "connector:github.list_commits"},
-				InputSample: `{"owner":"abc","repo":"web","base":"main","head":"feature/x"}`,
-			},
+			),
 		),
 
 		// ── SEARCH ───────────────────────────────────────────────────
-		connector.Op(
-			"search_issues",
-			"Search Issues",
-			"Search issues and pull requests across GitHub using the search query syntax.",
-			SearchIssuesInput{},
-			searchIssues,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"total_count": "Total matches (may exceed the returned page).",
-					"items":       "Array of matching issues/PRs.",
+		connector.Cat(
+			"Search",
+			"Search issues/PRs, repositories, and code across GitHub.",
+			connector.Op(
+				"search_issues",
+				"Search Issues",
+				"Search issues and pull requests across GitHub using the search query syntax.",
+				SearchIssuesInput{},
+				searchIssues,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"total_count": "Total matches (may exceed the returned page).",
+						"items":       "Array of matching issues/PRs.",
+					},
+					Quirks: []string{
+						"q uses GitHub search syntax (qualifiers like repo:, is:open, label:, author:).",
+						"Both issues and PRs are returned; add is:issue or is:pr to filter.",
+						"Search is rate-limited separately and returns the first page only here.",
+					},
+					PairWith:    []string{"connector:github.get_issue", "connector:github.get_pr"},
+					InputSample: `{"q":"repo:abc/web is:open is:issue label:bug","per_page":30}`,
 				},
-				Quirks: []string{
-					"q uses GitHub search syntax (qualifiers like repo:, is:open, label:, author:).",
-					"Both issues and PRs are returned; add is:issue or is:pr to filter.",
-					"Search is rate-limited separately and returns the first page only here.",
+			),
+			connector.Op(
+				"search_repos",
+				"Search Repositories",
+				"Search repositories across GitHub using the search query syntax.",
+				SearchReposInput{},
+				searchRepos,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"total_count": "Total matches.",
+						"items":       "Array of matching repositories.",
+					},
+					Quirks: []string{
+						"q uses GitHub search syntax (language:, stars:>, topic:, org:).",
+						"First page only; sort/order qualifiers go in q.",
+					},
+					PairWith:    []string{"connector:github.get_repo"},
+					InputSample: `{"q":"language:go stars:>100","per_page":30}`,
 				},
-				PairWith:    []string{"connector:github.get_issue", "connector:github.get_pr"},
-				InputSample: `{"q":"repo:abc/web is:open is:issue label:bug","per_page":30}`,
-			},
-		),
-		connector.Op(
-			"search_repos",
-			"Search Repositories",
-			"Search repositories across GitHub using the search query syntax.",
-			SearchReposInput{},
-			searchRepos,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"total_count": "Total matches.",
-					"items":       "Array of matching repositories.",
+			),
+			connector.Op(
+				"search_code",
+				"Search Code",
+				"Search code across GitHub using the code search query syntax.",
+				SearchCodeInput{},
+				searchCode,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"total_count": "Total matches.",
+						"items":       "Array of matching files (name, path, repository).",
+					},
+					Quirks: []string{
+						"Code search needs a qualifier scoping the search (e.g. repo:, org:, user:).",
+						"q uses code search syntax (in:file, language:, filename:); first page only.",
+					},
+					PairWith:    []string{"connector:github.get_file"},
+					InputSample: `{"q":"addClass in:file language:js repo:abc/web","per_page":30}`,
 				},
-				Quirks: []string{
-					"q uses GitHub search syntax (language:, stars:>, topic:, org:).",
-					"First page only; sort/order qualifiers go in q.",
-				},
-				PairWith:    []string{"connector:github.get_repo"},
-				InputSample: `{"q":"language:go stars:>100","per_page":30}`,
-			},
-		),
-		connector.Op(
-			"search_code",
-			"Search Code",
-			"Search code across GitHub using the code search query syntax.",
-			SearchCodeInput{},
-			searchCode,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"total_count": "Total matches.",
-					"items":       "Array of matching files (name, path, repository).",
-				},
-				Quirks: []string{
-					"Code search needs a qualifier scoping the search (e.g. repo:, org:, user:).",
-					"q uses code search syntax (in:file, language:, filename:); first page only.",
-				},
-				PairWith:    []string{"connector:github.get_file"},
-				InputSample: `{"q":"addClass in:file language:js repo:abc/web","per_page":30}`,
-			},
+			),
 		),
 
 		// ── COLLABORATORS / REPO MANAGEMENT ──────────────────────────
-		connector.Op(
-			"list_collaborators",
-			"List Collaborators",
-			"List the collaborators on a repository.",
-			ListCollaboratorsInput{},
-			listCollaborators,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"collaborators": "Array of users (login, permissions, html_url).",
+		connector.Cat(
+			"Repository Management",
+			"List collaborators and create or edit repository settings.",
+			connector.Op(
+				"list_collaborators",
+				"List Collaborators",
+				"List the collaborators on a repository.",
+				ListCollaboratorsInput{},
+				listCollaborators,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"collaborators": "Array of users (login, permissions, html_url).",
+					},
+					Quirks: []string{
+						"Requires push access to the repo to see the full collaborator list.",
+						"Pagination: PerPage max 100; first page only.",
+					},
+					PairWith:    []string{"connector:github.add_assignees", "connector:github.request_reviewers"},
+					InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
 				},
-				Quirks: []string{
-					"Requires push access to the repo to see the full collaborator list.",
-					"Pagination: PerPage max 100; first page only.",
+			),
+			connector.OpDestructive(
+				"create_repo",
+				"Create Repository",
+				"Create a new repository for the authenticated user, or under an organisation.",
+				CreateRepoInput{},
+				createRepo,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"full_name": "owner/name of the new repo.",
+						"html_url":  "Web URL of the new repo.",
+					},
+					Quirks: []string{
+						"Set org to create under an organisation (POST /orgs/{org}/repos); otherwise it's created for the token's user.",
+						"auto_init=true seeds an empty README so the repo has a default branch.",
+						"PAT scope: repo (or fine-grained Administration: write).",
+					},
+					PairWith:    []string{"connector:github.update_repo", "connector:github.create_or_update_file"},
+					InputSample: `{"name":"web","description":"My app","private":true,"auto_init":true}`,
 				},
-				PairWith:    []string{"connector:github.add_assignees", "connector:github.request_reviewers"},
-				InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
-			},
-		),
-		connector.OpDestructive(
-			"create_repo",
-			"Create Repository",
-			"Create a new repository for the authenticated user, or under an organisation.",
-			CreateRepoInput{},
-			createRepo,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"full_name": "owner/name of the new repo.",
-					"html_url":  "Web URL of the new repo.",
+			),
+			connector.OpDestructive(
+				"update_repo",
+				"Update Repository",
+				"Edit repository settings (name, description, visibility, default branch, archived). Only provided fields change.",
+				UpdateRepoInput{},
+				updateRepo,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"full_name": "owner/name (reflects rename).",
+						"private":   "Resulting visibility.",
+						"archived":  "Resulting archive state.",
+					},
+					Quirks: []string{
+						"Only fields you supply are sent; private/archived are sent only when their input key is non-empty.",
+						"archived=true archives the repo (read-only); set false to unarchive.",
+						"PAT scope: repo (or fine-grained Administration: write).",
+					},
+					PairWith:    []string{"connector:github.get_repo"},
+					InputSample: `{"owner":"abc","repo":"web","description":"Updated","default_branch":"main"}`,
 				},
-				Quirks: []string{
-					"Set org to create under an organisation (POST /orgs/{org}/repos); otherwise it's created for the token's user.",
-					"auto_init=true seeds an empty README so the repo has a default branch.",
-					"PAT scope: repo (or fine-grained Administration: write).",
-				},
-				PairWith:    []string{"connector:github.update_repo", "connector:github.create_or_update_file"},
-				InputSample: `{"name":"web","description":"My app","private":true,"auto_init":true}`,
-			},
-		),
-		connector.OpDestructive(
-			"update_repo",
-			"Update Repository",
-			"Edit repository settings (name, description, visibility, default branch, archived). Only provided fields change.",
-			UpdateRepoInput{},
-			updateRepo,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"full_name": "owner/name (reflects rename).",
-					"private":   "Resulting visibility.",
-					"archived":  "Resulting archive state.",
-				},
-				Quirks: []string{
-					"Only fields you supply are sent; private/archived are sent only when their input key is non-empty.",
-					"archived=true archives the repo (read-only); set false to unarchive.",
-					"PAT scope: repo (or fine-grained Administration: write).",
-				},
-				PairWith:    []string{"connector:github.get_repo"},
-				InputSample: `{"owner":"abc","repo":"web","description":"Updated","default_branch":"main"}`,
-			},
+			),
 		),
 
 		// ── ACTIONS ──────────────────────────────────────────────────
-		connector.Op(
-			"list_workflows",
-			"List Workflows",
-			"List the GitHub Actions workflows defined in a repository.",
-			ListWorkflowsInput{},
-			listWorkflows,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"total_count": "Number of workflows.",
-					"workflows":   "Array of {id, name, path, state}.",
+		connector.Cat(
+			"Actions",
+			"List GitHub Actions workflows and runs, and trigger workflow dispatches.",
+			connector.Op(
+				"list_workflows",
+				"List Workflows",
+				"List the GitHub Actions workflows defined in a repository.",
+				ListWorkflowsInput{},
+				listWorkflows,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"total_count": "Number of workflows.",
+						"workflows":   "Array of {id, name, path, state}.",
+					},
+					Quirks: []string{
+						"id and path (filename) can both be used as workflow_id in dispatch_workflow.",
+					},
+					PairWith:    []string{"connector:github.dispatch_workflow", "connector:github.list_workflow_runs"},
+					InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
 				},
-				Quirks: []string{
-					"id and path (filename) can both be used as workflow_id in dispatch_workflow.",
+			),
+			connector.Op(
+				"list_workflow_runs",
+				"List Workflow Runs",
+				"List recent GitHub Actions workflow runs in a repository.",
+				ListWorkflowRunsInput{},
+				listWorkflowRuns,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"total_count":   "Number of runs.",
+						"workflow_runs": "Array of {id, name, status, conclusion, head_branch, html_url}.",
+					},
+					Quirks: []string{
+						"status is queued | in_progress | completed; conclusion holds the result when completed.",
+						"Pagination: PerPage max 100; first page only.",
+					},
+					PairWith:    []string{"connector:github.list_workflows", "connector:github.dispatch_workflow"},
+					InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
 				},
-				PairWith:    []string{"connector:github.dispatch_workflow", "connector:github.list_workflow_runs"},
-				InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
-			},
-		),
-		connector.Op(
-			"list_workflow_runs",
-			"List Workflow Runs",
-			"List recent GitHub Actions workflow runs in a repository.",
-			ListWorkflowRunsInput{},
-			listWorkflowRuns,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"total_count":   "Number of runs.",
-					"workflow_runs": "Array of {id, name, status, conclusion, head_branch, html_url}.",
+			),
+			connector.OpDestructive(
+				"dispatch_workflow",
+				"Dispatch Workflow",
+				"Trigger a workflow_dispatch event to run a GitHub Actions workflow on a ref.",
+				DispatchWorkflowInput{},
+				dispatchWorkflow,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"ok": "true when GitHub returned 204 No Content.",
+					},
+					Quirks: []string{
+						"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
+						"workflow_id can be the numeric ID or the filename (e.g. ci.yml).",
+						"The workflow must declare an on: workflow_dispatch trigger or GitHub 404s.",
+						"inputs is an optional JSON object string; invalid JSON is ignored.",
+					},
+					PairWith:    []string{"connector:github.list_workflows", "connector:github.list_workflow_runs"},
+					InputSample: `{"owner":"abc","repo":"web","workflow_id":"ci.yml","ref":"main","inputs":"{\"env\":\"prod\"}"}`,
 				},
-				Quirks: []string{
-					"status is queued | in_progress | completed; conclusion holds the result when completed.",
-					"Pagination: PerPage max 100; first page only.",
-				},
-				PairWith:    []string{"connector:github.list_workflows", "connector:github.dispatch_workflow"},
-				InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
-			},
-		),
-		connector.OpDestructive(
-			"dispatch_workflow",
-			"Dispatch Workflow",
-			"Trigger a workflow_dispatch event to run a GitHub Actions workflow on a ref.",
-			DispatchWorkflowInput{},
-			dispatchWorkflow,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"ok": "true when GitHub returned 204 No Content.",
-				},
-				Quirks: []string{
-					"GitHub returns 204 with no body on success; the connector reports {\"ok\":true}.",
-					"workflow_id can be the numeric ID or the filename (e.g. ci.yml).",
-					"The workflow must declare an on: workflow_dispatch trigger or GitHub 404s.",
-					"inputs is an optional JSON object string; invalid JSON is ignored.",
-				},
-				PairWith:    []string{"connector:github.list_workflows", "connector:github.list_workflow_runs"},
-				InputSample: `{"owner":"abc","repo":"web","workflow_id":"ci.yml","ref":"main","inputs":"{\"env\":\"prod\"}"}`,
-			},
+			),
 		),
 
 		// ── WEBHOOKS ─────────────────────────────────────────────────
-		connector.Op(
-			"list_hooks",
-			"List Webhooks",
-			"List the webhooks configured on a repository.",
-			ListHooksInput{},
-			listHooks,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"hooks": "Array of {id, name, active, events, config.url}.",
+		connector.Cat(
+			"Webhooks",
+			"List and create repository webhooks.",
+			connector.Op(
+				"list_hooks",
+				"List Webhooks",
+				"List the webhooks configured on a repository.",
+				ListHooksInput{},
+				listHooks,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"hooks": "Array of {id, name, active, events, config.url}.",
+					},
+					Quirks: []string{
+						"Requires admin access to the repo.",
+					},
+					PairWith:    []string{"connector:github.create_hook"},
+					InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
 				},
-				Quirks: []string{
-					"Requires admin access to the repo.",
+			),
+			connector.OpDestructive(
+				"create_hook",
+				"Create Webhook",
+				"Create a repository webhook that POSTs events to a payload URL.",
+				CreateHookInput{},
+				createHook,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"id":     "Webhook ID.",
+						"config": "The stored config (url, content_type).",
+						"active": "Whether the hook is active.",
+					},
+					Quirks: []string{
+						"events defaults to [\"push\"]; pass a comma-separated list to subscribe to more.",
+						"content_type is json (default) or form; secret signs the payloads (X-Hub-Signature-256).",
+						"Requires admin access to the repo.",
+					},
+					PairWith:    []string{"connector:github.list_hooks"},
+					InputSample: `{"owner":"abc","repo":"web","url":"https://example.com/hook","events":"push,pull_request"}`,
 				},
-				PairWith:    []string{"connector:github.create_hook"},
-				InputSample: `{"owner":"abc","repo":"web","per_page":30}`,
-			},
-		),
-		connector.OpDestructive(
-			"create_hook",
-			"Create Webhook",
-			"Create a repository webhook that POSTs events to a payload URL.",
-			CreateHookInput{},
-			createHook,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"id":     "Webhook ID.",
-					"config": "The stored config (url, content_type).",
-					"active": "Whether the hook is active.",
-				},
-				Quirks: []string{
-					"events defaults to [\"push\"]; pass a comma-separated list to subscribe to more.",
-					"content_type is json (default) or form; secret signs the payloads (X-Hub-Signature-256).",
-					"Requires admin access to the repo.",
-				},
-				PairWith:    []string{"connector:github.list_hooks"},
-				InputSample: `{"owner":"abc","repo":"web","url":"https://example.com/hook","events":"push,pull_request"}`,
-			},
+			),
 		),
 	}
 }

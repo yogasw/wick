@@ -41,8 +41,8 @@ func WickManagerToolDescriptors(ctx context.Context, svc *connectors.Service, ta
 	if err != nil {
 		return nil
 	}
-	out := make([]ToolDescriptor, 0, len(mod.Operations))
-	for _, op := range mod.Operations {
+	out := make([]ToolDescriptor, 0, len(mod.AllOps()))
+	for _, op := range mod.AllOps() {
 		if !states[op.Key] {
 			continue
 		}

@@ -598,7 +598,7 @@ func (h *handlers) connectorList(c *connector.Ctx) (any, error) {
 		}
 		states, _ := h.deps.Connectors.OperationStates(ctx, row.ID, row.Key)
 		count := 0
-		for _, op := range mod.Operations {
+		for _, op := range mod.AllOps() {
 			if states[op.Key] {
 				count++
 			}
@@ -649,9 +649,10 @@ func (h *handlers) connectorGet(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	cfgs := h.deps.Connectors.RowConfigs(*row)
-	ops := make([]map[string]any, 0, len(mod.Operations))
+	modOps := mod.AllOps()
+	ops := make([]map[string]any, 0, len(modOps))
 	states, _ := h.deps.Connectors.OperationStates(ctx, row.ID, row.Key)
-	for _, op := range mod.Operations {
+	for _, op := range modOps {
 		ops = append(ops, map[string]any{
 			"key":         op.Key,
 			"name":        op.Name,

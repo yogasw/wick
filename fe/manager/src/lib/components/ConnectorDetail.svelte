@@ -206,6 +206,7 @@
 
     <OperationsTable
       operations={data.operations ?? []}
+      categories={data.categories ?? []}
       connectorKey={connectorKey}
       connectorId={connectorId}
       canConfigure={data.can_configure}

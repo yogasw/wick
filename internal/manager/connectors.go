@@ -586,7 +586,7 @@ func (h *Handler) bulkToggleOperations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	enabled := boolParam(r, "enabled")
-	for _, op := range mod.Operations {
+	for _, op := range mod.AllOps() {
 		if err := h.connectors.SetOperationEnabled(ctx, row.ID, op.Key, enabled); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

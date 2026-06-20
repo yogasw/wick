@@ -102,7 +102,7 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 			continue
 		}
 		count := 0
-		for _, op := range mod.Operations {
+		for _, op := range mod.AllOps() {
 			if states[op.Key] {
 				count++
 			}
@@ -119,7 +119,7 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 				if states, err = svc.OperationStates(r.Context(), row.ID, row.Key); err != nil {
 					continue
 				}
-				for _, op := range mod.Operations {
+				for _, op := range mod.AllOps() {
 					if states[op.Key] {
 						count++
 					}
@@ -210,7 +210,7 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 			continue
 		}
 		matched := make([]searchTool, 0)
-		for _, op := range mod.Operations {
+		for _, op := range mod.AllOps() {
 			if !states[op.Key] {
 				continue
 			}
@@ -304,8 +304,9 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 		rsp.ToolError(w, req.ID, "load operation states: "+err.Error(), connectorID)
 		return
 	}
-	tools := make([]toolDetail, 0, len(mod.Operations))
-	for _, op := range mod.Operations {
+	ops := mod.AllOps()
+	tools := make([]toolDetail, 0, len(ops))
+	for _, op := range ops {
 		if !states[op.Key] {
 			continue
 		}

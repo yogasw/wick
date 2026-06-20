@@ -48,12 +48,14 @@ func stubModule() connector.Module {
 			Description: "In-process test connector",
 			Fixed:       true,
 		},
-		Operations: []connector.Operation{
-			connector.Op("echo", "Echo", "Returns Msg back to the caller",
-				EchoInput{},
-				func(c *connector.Ctx) (any, error) {
-					return map[string]string{"echo": c.Input("msg")}, nil
-				}, wickdocs.Docs{},
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Op("echo", "Echo", "Returns Msg back to the caller",
+					EchoInput{},
+					func(c *connector.Ctx) (any, error) {
+						return map[string]string{"echo": c.Input("msg")}, nil
+					}, wickdocs.Docs{},
+				),
 			),
 		},
 	}
@@ -253,7 +255,7 @@ func TestWickExecuteErrorRunStillPersisted(t *testing.T) {
 	db := newTestDB(t)
 	mod := stubModule()
 	// Override echo to always fail.
-	mod.Operations[0].Execute = func(c *connector.Ctx) (any, error) {
+	mod.Operations[0].Ops[0].Execute = func(c *connector.Ctx) (any, error) {
 		return nil, fmt.Errorf("stub error")
 	}
 	svc := newTestService(t, db, mod)

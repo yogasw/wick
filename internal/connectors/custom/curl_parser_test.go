@@ -39,7 +39,7 @@ func TestParseCurlAndExtract(t *testing.T) {
 			name:  "GET with query string and bearer header",
 			paste: `curl 'https://api.example.com/v1/items?limit=10&q=test' -H 'Authorization: Bearer abc123'`,
 			check: func(t *testing.T, p *ParsedRequest, d *Draft) {
-				op := d.Ops[0]
+				op := d.Ops[0].Ops[0]
 				if p.Method != "GET" || op.Request.Method != "GET" {
 					t.Errorf("method = %q / %q, want GET", p.Method, op.Request.Method)
 				}
@@ -73,7 +73,7 @@ func TestParseCurlAndExtract(t *testing.T) {
 			name:  "POST JSON body with nested object",
 			paste: `curl -X POST https://example.com/users -H 'Content-Type: application/json' -d '{"name":"Bob","age":30,"active":true,"meta":{"tier":"gold"}}'`,
 			check: func(t *testing.T, p *ParsedRequest, d *Draft) {
-				op := d.Ops[0]
+				op := d.Ops[0].Ops[0]
 				if op.Request.Method != "POST" {
 					t.Errorf("method = %q", op.Request.Method)
 				}
@@ -103,7 +103,7 @@ func TestParseCurlAndExtract(t *testing.T) {
 			name:  "POST form-encoded -d pairs",
 			paste: `curl https://example.com/login -d 'username=bob&password=hunter2'`,
 			check: func(t *testing.T, p *ParsedRequest, d *Draft) {
-				op := d.Ops[0]
+				op := d.Ops[0].Ops[0]
 				if op.Request.Method != "POST" {
 					t.Errorf("method = %q, want implicit POST from -d", op.Request.Method)
 				}
@@ -129,7 +129,7 @@ func TestParseCurlAndExtract(t *testing.T) {
 				if p.Body != "q=hello world&lang=en" {
 					t.Errorf("body = %q", p.Body)
 				}
-				op := d.Ops[0]
+				op := d.Ops[0].Ops[0]
 				if op.Request.Method != "POST" {
 					t.Errorf("method = %q", op.Request.Method)
 				}
@@ -154,7 +154,7 @@ func TestParseCurlAndExtract(t *testing.T) {
 				if !cfg.Secret || cfg.Default != wantB64 {
 					t.Errorf("auth_basic = %+v, want secret with default %q", cfg, wantB64)
 				}
-				op := d.Ops[0]
+				op := d.Ops[0].Ops[0]
 				if got := op.Request.Headers["Authorization"]; got != "Basic {{.cfg.auth_basic}}" {
 					t.Errorf("Authorization template = %q", got)
 				}
@@ -164,7 +164,7 @@ func TestParseCurlAndExtract(t *testing.T) {
 			name:  "PUT with numeric path segment becomes path input",
 			paste: `curl -X PUT 'https://example.com/api/users/42' -H 'Content-Type: application/json' -d '{"name":"Ann"}'`,
 			check: func(t *testing.T, p *ParsedRequest, d *Draft) {
-				op := d.Ops[0]
+				op := d.Ops[0].Ops[0]
 				if op.Request.Method != "PUT" {
 					t.Errorf("method = %q", op.Request.Method)
 				}
@@ -185,7 +185,7 @@ func TestParseCurlAndExtract(t *testing.T) {
 			name:  "multiline bash backslash continuation",
 			paste: "curl https://example.com/api/v2/ping \\\n  -H 'Accept: application/json' \\\n  -H 'X-Trace: 1'",
 			check: func(t *testing.T, p *ParsedRequest, d *Draft) {
-				op := d.Ops[0]
+				op := d.Ops[0].Ops[0]
 				if op.Request.URLTemplate != "{{.cfg.base_url}}/api/v2/ping" {
 					t.Errorf("url_template = %q", op.Request.URLTemplate)
 				}
@@ -204,7 +204,7 @@ func TestParseCurlAndExtract(t *testing.T) {
 			name:  "PowerShell backtick continuation",
 			paste: "curl https://example.com/data `\n  -H \"Accept: application/json\"",
 			check: func(t *testing.T, p *ParsedRequest, d *Draft) {
-				op := d.Ops[0]
+				op := d.Ops[0].Ops[0]
 				if p.Method != "GET" {
 					t.Errorf("method = %q", p.Method)
 				}
@@ -223,7 +223,7 @@ func TestParseCurlAndExtract(t *testing.T) {
 				if p.Body != `{"note":"hi"}` {
 					t.Errorf("body = %q, escapes not unwrapped", p.Body)
 				}
-				op := d.Ops[0]
+				op := d.Ops[0].Ops[0]
 				if got := op.Request.Headers["X-Mode"]; got != "a b" {
 					t.Errorf("X-Mode = %q, single-quoted space lost", got)
 				}
@@ -236,7 +236,7 @@ func TestParseCurlAndExtract(t *testing.T) {
 			name:  "long-form flags --request --url --header",
 			paste: `curl --request GET --url https://example.com/v1/ping --header 'X-Custom: yes'`,
 			check: func(t *testing.T, p *ParsedRequest, d *Draft) {
-				op := d.Ops[0]
+				op := d.Ops[0].Ops[0]
 				if op.Request.Method != "GET" {
 					t.Errorf("method = %q", op.Request.Method)
 				}
@@ -271,7 +271,7 @@ func TestParseCurlAndExtract(t *testing.T) {
 				if d.Key != "github_com" {
 					t.Errorf("draft key = %q", d.Key)
 				}
-				op := d.Ops[0]
+				op := d.Ops[0].Ops[0]
 				want := "{{.cfg.base_url}}/repos/acme/widgets/issues?per_page={{urlquery .in.per_page}}&state={{urlquery .in.state}}"
 				if op.Request.URLTemplate != want {
 					t.Errorf("url_template = %q\nwant %q", op.Request.URLTemplate, want)
@@ -305,7 +305,7 @@ func TestParseCurlAndExtract(t *testing.T) {
 			name:  "DELETE is destructive with id path input",
 			paste: `curl -X DELETE https://example.com/items/99`,
 			check: func(t *testing.T, p *ParsedRequest, d *Draft) {
-				op := d.Ops[0]
+				op := d.Ops[0].Ops[0]
 				if !op.Destructive {
 					t.Error("DELETE op must be destructive")
 				}
@@ -322,7 +322,7 @@ func TestParseCurlAndExtract(t *testing.T) {
 				if p.URL != "https://example.com/q?api_key=zzz" {
 					t.Errorf("URL = %q, https not prefixed", p.URL)
 				}
-				op := d.Ops[0]
+				op := d.Ops[0].Ops[0]
 				if f := findInput(t, op, "api_key"); !f.Secret {
 					t.Errorf("api_key input not marked secret: %+v", f)
 				}
@@ -346,10 +346,10 @@ func TestParseCurlAndExtract(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Extract: %v", err)
 			}
-			if len(d.Ops) != 1 {
-				t.Fatalf("ops = %d, want 1", len(d.Ops))
+			if len(d.AllOps()) != 1 {
+				t.Fatalf("ops = %d, want 1", len(d.AllOps()))
 			}
-			if d.Ops[0].Request == nil {
+			if d.Ops[0].Ops[0].Request == nil {
 				t.Fatal("op.Request is nil")
 			}
 			tc.check(t, p, d)

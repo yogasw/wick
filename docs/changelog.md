@@ -10,6 +10,21 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+
+## [v0.22.0] — Connector Categories
+
+### Added
+
+*   **Connectors — operations grouped into categories**: The connector detail page (Manager → Connectors → {connector}) now renders operations as named section cards instead of a flat list. Each card shows the section title, description, op count, per-card Enable/Disable all, and a paginated op table (5 ops per page). A sticky "Sections" jump sidebar lets you jump between sections without scrolling; a global search box filters across all categories.
+*   **Custom connector builder — operation sections**: The manual builder's Operations step is now section-based. Each section has a title and description, and ops can be dragged between sections. The right-hand Jump panel is a collapsible mini-map with scroll-spy highlighting that auto-expands the active section.
+*   **`pkg/connector` — `Category` / `Cat()`**: Built-in connector authors now group operations into titled sections using `connector.Cat(title, description, ops...)`. `Module.Operations` is `[]connector.Category`; `Module.AllOps()` flattens for callers that do not care about grouping; `Module.CategoryOf(opKey)` returns the section title for a given op key. See [Connector Module — Operations()](/guide/connector-module#operations).
+
+### Breaking
+
+*   **Custom connectors — ops storage format changed**: The stored `ops` column is now a nested array of sections (`[{title, description, ops:[...]}]`). The old flat `[{key, ...}]` format is no longer accepted. **Existing custom connectors built before v0.22.0 must be deleted and recreated.** See [Custom Connectors — Operations data format](/guide/custom-connectors#operations-data-format-breaking-change-for-existing-custom-connectors). Built-in and MCP-backed connectors are unaffected.
+
+---
+
 ## [v0.21.0](https://github.com/yogasw/wick/compare/v0.20.2...v0.21.0) — MCP
 
 _Released on 2026-06-19_
