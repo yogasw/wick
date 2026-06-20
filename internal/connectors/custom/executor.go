@@ -42,7 +42,7 @@ func (s *Service) BuildModule(ctx context.Context, def *entity.CustomConnector) 
 // that instance's account (MCP servers may expose different tools per
 // account).
 func (s *Service) buildModuleFor(ctx context.Context, def *entity.CustomConnector, preferInstance string) (connector.Module, error) {
-	var ops []DefOp
+	var cats []DefCategory
 	var err error
 	switch {
 	case def.Disabled:
@@ -50,20 +50,20 @@ func (s *Service) buildModuleFor(ctx context.Context, def *entity.CustomConnecto
 		// instance rows stay reachable) but expose zero operations —
 		// nothing is listable or callable until re-enabled.
 	case def.Source == entity.CustomConnectorSourceMCP:
-		ops, _ = s.liveMCPOps(ctx, def, preferInstance)
+		cats, _ = s.liveMCPOps(ctx, def, preferInstance)
 	default:
-		if ops, err = ParseOps(def.Ops); err != nil {
+		if cats, err = ParseOps(def.Ops); err != nil {
 			return connector.Module{}, fmt.Errorf("def %s: %w", def.Key, err)
 		}
 	}
-	return s.assembleModule(ctx, def, ops)
+	return s.assembleModule(ctx, def, cats)
 }
 
 // assembleModule turns a def plus its resolved operation set into the
 // registry module — split from BuildModule so RefreshIfStale can keep
 // the old catalog when a live probe fails instead of swapping in zero
 // ops.
-func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnector, ops []DefOp) (connector.Module, error) {
+func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnector, cats []DefCategory) (connector.Module, error) {
 	cfgFields, err := ParseFields(def.Configs)
 	if err != nil {
 		return connector.Module{}, fmt.Errorf("def %s: %w", def.Key, err)
@@ -76,24 +76,36 @@ func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnecto
 		cfgFields = append(cfgFields, oauthInstanceConfigs()...)
 	}
 
-	operations := make([]connector.Operation, 0, len(ops))
-	opKeys := make([]string, 0, len(ops))
+	// Build each category's ops in order — grouping is explicit in the
+	// stored DefCategory shape, so each DefCategory maps straight onto a
+	// connector.Category. Capture the health probe and the flat op-key
+	// list (both addressed by op key, regardless of group) along the way.
+	var categories []connector.Category
+	var opKeys []string
 	var probe connector.ExecuteFunc
 	meta := ParseSourceMeta(def.SourceMeta)
-	for _, op := range ops {
-		exec := s.executeFunc(cfgFields, op)
-		if op.Key == meta.HealthOp {
-			probe = exec
+	for _, cat := range cats {
+		built := make([]connector.Operation, 0, len(cat.Ops))
+		for _, op := range cat.Ops {
+			exec := s.executeFunc(cfgFields, op)
+			if op.Key == meta.HealthOp {
+				probe = exec
+			}
+			opKeys = append(opKeys, op.Key)
+			built = append(built, connector.Operation{
+				Key:         op.Key,
+				Name:        op.Name,
+				Description: op.Description,
+				Input:       FieldsToConfigs(op.Inputs),
+				Destructive: op.Destructive,
+				Execute:     exec,
+				Docs:        wickdocs.Docs{},
+			})
 		}
-		opKeys = append(opKeys, op.Key)
-		operations = append(operations, connector.Operation{
-			Key:         op.Key,
-			Name:        op.Name,
-			Description: op.Description,
-			Input:       FieldsToConfigs(op.Inputs),
-			Destructive: op.Destructive,
-			Execute:     exec,
-			Docs:        wickdocs.Docs{},
+		categories = append(categories, connector.Category{
+			Title:       cat.Title,
+			Description: cat.Description,
+			Ops:         built,
 		})
 	}
 
@@ -126,7 +138,7 @@ func (s *Service) assembleModule(ctx context.Context, def *entity.CustomConnecto
 			DefaultTags: s.defaultTagsFor(def),
 		},
 		Configs:     FieldsToConfigs(cfgFields),
-		Operations:  operations,
+		Operations:  categories,
 		HealthCheck: healthCheck,
 		// Author opt-in: lets users override this def's config per agent
 		// session (still gated by the per-instance admin toggle).
@@ -214,7 +226,7 @@ func (s *Service) serverRowForDef(parent context.Context, def *entity.CustomConn
 // servers may expose different tools per account, so the per-instance
 // re-sync passes the instance being viewed; "" falls back to the first
 // enabled instance with a connected account.
-func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector, preferInstance string) ([]DefOp, bool) {
+func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector, preferInstance string) ([]DefCategory, bool) {
 	l := log.Ctx(parent).With().Str("component", "custom-connector").Str("key", def.Key).Logger()
 	serverID := ParseSourceMeta(def.SourceMeta).ServerID
 	if serverID == "" {
@@ -286,7 +298,18 @@ func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector
 		return nil, false
 	}
 	s.adoptServerDescription(ctx, def, res.Instructions)
-	return toolsToOps(serverID, res.Tools, parseExcluded(row.ExcludedTools)), true
+	return toolsToCats(toolsToOps(serverID, res.Tools, parseExcluded(row.ExcludedTools))), true
+}
+
+// toolsToCats wraps a flat MCP op list into a single untitled section.
+// MCP-sourced connectors expose their whole live tool catalog under one
+// default section; an admin re-groups them later in the UI (a later FE
+// phase). An empty op list yields no categories at all.
+func toolsToCats(ops []DefOp) []DefCategory {
+	if len(ops) == 0 {
+		return nil
+	}
+	return []DefCategory{{Ops: ops}}
 }
 
 // adoptServerDescription replaces the auto-generated placeholder with

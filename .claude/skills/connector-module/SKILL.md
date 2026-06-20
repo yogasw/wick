@@ -21,7 +21,8 @@ Activate this skill whenever the user touches a connector in the wick lab binary
 
 A connector wraps **one external API** for LLM consumption.
 
-- One `Module` carries one shared `Configs` struct (URL, token, ...) and **N `Operations`** (`query`, `list_repos`, `create_issue`, ...).
+- One `Module` carries one shared `Configs` struct (URL, token, ...) and **N `Operations`** (`query`, `list_repos`, `create_issue`, ...), grouped into **categories** (titled sections).
+- `Module.Operations` is a `[]connector.Category` — each `Category{Title, Description, Ops}` owns its operations. The admin detail page renders one card per category. Code that needs the flat op list calls `Module.AllOps()`; an op's owning section is `Module.CategoryOf(opKey)`. There is **no `Operation.Category` field** — the section owns the grouping.
 - Each `Operation` has its own typed `Input` struct (turned into the MCP JSON Schema) and its own `ExecuteFunc`.
 - An admin can create many rows per definition at runtime; each row carries its own credential values, label, and tags. Same Go code, different rows = different (env, team, account).
 - LLMs do not see N×M static tools. The MCP server exposes a fixed meta surface (`wick_list`, `wick_search`, `wick_get`, `wick_execute`); each (row × operation) pair is addressed by an opaque `tool_id` of the form `conn:{connector_id}/{op_key}`.
@@ -155,26 +156,36 @@ type ListReposInput struct {
 
 ### `Operations()`
 
+Returns `[]connector.Category` — operations grouped into titled sections via `connector.Cat(title, description, ...ops)`. The category owns its ops; the admin detail page renders one card per section, and the per-connector "Sections" jump sidebar lists them. A connector with a single conceptual group uses one `Cat` (the title becomes the card header); use an empty title (`Cat("", "", ...)`) for an ungrouped/flat list.
+
 ```go
-func Operations() []connector.Operation {
-    return []connector.Operation{
-        connector.Op(
-            "list_repos",
-            "List Repositories",
-            "List repositories under {org}. Returns repo name, full_name, default_branch, visibility, and updated_at. Pagination is single-page only.",
-            ListReposInput{},
-            listRepos,
+func Operations() []connector.Category {
+    return []connector.Category{
+        connector.Cat("Repositories", "Browse and inspect repositories.",
+            connector.Op(
+                "list_repos",
+                "List Repositories",
+                "List repositories under {org}. Returns repo name, full_name, default_branch, visibility, and updated_at. Pagination is single-page only.",
+                ListReposInput{},
+                listRepos,
+                wickdocs.Docs{}, // optional self-documentation; zero value is fine
+            ),
         ),
-        connector.OpDestructive(
-            "close_issue",
-            "Close Issue",
-            "Close the given issue on {owner}/{repo}. Reversible only by reopening; comments and history are preserved.",
-            CloseIssueInput{},
-            closeIssue,
+        connector.Cat("Issues", "Read and mutate issues.",
+            connector.OpDestructive(
+                "close_issue",
+                "Close Issue",
+                "Close the given issue on {owner}/{repo}. Reversible only by reopening; comments and history are preserved.",
+                CloseIssueInput{},
+                closeIssue,
+                wickdocs.Docs{},
+            ),
         ),
     }
 }
 ```
+
+Signatures: `Op(key, name, description string, input I, exec ExecuteFunc, docs wickdocs.Docs)` and `OpDestructive(...)` — same args. The trailing `docs wickdocs.Docs` carries optional self-documentation (examples, quirks, output shape) surfaced by the workflow `workflow_node_detail` MCP op; pass `wickdocs.Docs{}` when there is nothing extra. The flat helper `Module.AllOps()` concatenates every section's ops in order for callers that don't care about grouping.
 
 **`Op` vs `OpDestructive`:**
 
@@ -284,27 +295,22 @@ Effective op call passes only when all three resolve to "available".
 
 ## Registration
 
-Built-in wick connectors are appended in `internal/connectors/registry.go::RegisterBuiltins()`:
+Built-in wick connectors are registered in `internal/connectors/registry.go::RegisterBuiltins()` via `registerOnce`:
 
 ```go
 func RegisterBuiltins() {
-    extra = append(extra,
-        connector.Module{
-            Meta:       crudcrud.Meta(),
-            Configs:    entity.StructToConfigs(crudcrud.Configs{}),
-            Operations: crudcrud.Operations(),
-        },
-        connector.Module{
-            Meta:       myconn.Meta(),
-            Configs:    entity.StructToConfigs(myconn.Configs{}),
-            Operations: myconn.Operations(),
-            OAuth:      myconn.OAuthMeta(), // optional — see OAuth section below
-        },
-    )
+    registerOnce(connector.Module{
+        Meta:       myconn.Meta(),
+        Configs:    entity.StructToConfigs(myconn.Configs{}),
+        Operations: myconn.Operations(), // []connector.Category
+        OAuth:      myconn.OAuthMeta(),   // optional — see OAuth section below
+    })
 }
 ```
 
-Downstream projects use `app.RegisterConnector(meta, configs, ops)` from `main.go` instead — that's the path the downstream skill covers.
+`Module.Operations` is the `[]connector.Category` returned by `Operations()` directly — no flattening at registration; the category tree is the canonical store.
+
+Downstream projects use `app.RegisterConnector(meta, configs, categories)` from `main.go` — `categories` is the `[]connector.Category` from the connector's `Operations()`. That's the path the downstream skill covers.
 
 ## OAuth (user token acquisition)
 
@@ -436,6 +442,18 @@ Documented in `connectors-design.md` § 5.4. Highlights:
 - Existing rows are never overwritten on subsequent boots.
 - Two registrations with the same `Key` are a fatal boot error.
 - A registered `Key` whose module has been removed is tolerated: row stays, marked "Module not registered" in the admin UI; calls return an error.
+
+## Custom connectors (admin-built) — category parity
+
+Admin-built connectors (`internal/connectors/custom/`, stored as `entity.CustomConnector` rows) mirror the same category model. The `Ops` JSON column is a nested array of `custom.DefCategory{Title, Description, Ops []DefOp}` — NOT a flat `[]DefOp`. There is no backward-compat parse: `ParseOps` decodes the nested shape only.
+
+- `custom.FlattenOps(cats)` / `Draft.AllOps()` give the flat op list; `DefOp` has no `Category` field (the section owns grouping, same as built-ins).
+- `executor.go` maps each `DefCategory` → `connector.Category` so a custom module is indistinguishable from a built-in at the registry/MCP layer.
+- **curl / manual** defs: sections are stored and editable in the builder (named sections + drag-drop ops between them).
+- **MCP** defs: ops come live from the server's `tools/list`, so they land in a single untitled section (`toolsToCats`) — not re-groupable in the builder today.
+- `ValidateDraft` requires globally-unique op keys across all sections (keys map to MCP tool ids) and unique non-empty section titles.
+
+The builder FE (`fe/manager/src/lib/components/custom/`) renders section blocks with add/remove section, drag-drop ops, and a nested Jump panel.
 
 ## MCP surface — what to know when editing
 

@@ -30,16 +30,18 @@ func benchModule(repeat int) connector.Module {
 		Configs: []entity.Config{
 			{Key: "token", Type: "text", IsSecret: true, Required: true},
 		},
-		Operations: []connector.Operation{
-			connector.Op("echo", "Echo", "echo big payload",
-				EchoInput{},
-				func(c *connector.Ctx) (any, error) {
-					return map[string]string{
-						"echoed_token":    c.Cfg("token"),
-						"echoed_password": c.Input("password"),
-						"filler":          filler,
-					}, nil
-				}, wickdocs.Docs{},
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Op("echo", "Echo", "echo big payload",
+					EchoInput{},
+					func(c *connector.Ctx) (any, error) {
+						return map[string]string{
+							"echoed_token":    c.Cfg("token"),
+							"echoed_password": c.Input("password"),
+							"filler":          filler,
+						}, nil
+					}, wickdocs.Docs{},
+				),
 			),
 		},
 	}

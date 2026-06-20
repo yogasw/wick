@@ -359,13 +359,13 @@ func (s *Service) SaveNew(ctx context.Context, d *Draft, createdBy string) (*ent
 	}
 
 	def := &entity.CustomConnector{
-		Key:            d.Key,
-		Name:           d.Name,
-		Description:    d.Description,
-		Icon:           defaultIcon(d.Icon),
-		Source:         entity.CustomConnectorSource(d.Source),
-		SourceMeta:     mustJSON(SourceMeta{Category: d.Category, ServerID: serverIDOf(d), HealthOp: strings.TrimSpace(d.HealthOp), HealthExpect: strings.TrimSpace(d.HealthExpect)}),
-		Configs:        mustJSON(d.Configs),
+		Key:                d.Key,
+		Name:               d.Name,
+		Description:        d.Description,
+		Icon:               defaultIcon(d.Icon),
+		Source:             entity.CustomConnectorSource(d.Source),
+		SourceMeta:         mustJSON(SourceMeta{Category: d.Category, ServerID: serverIDOf(d), HealthOp: strings.TrimSpace(d.HealthOp), HealthExpect: strings.TrimSpace(d.HealthExpect)}),
+		Configs:            mustJSON(d.Configs),
 		Ops:                mustJSON(d.Ops),
 		SingleInstance:     d.Single,
 		AllowSessionConfig: d.AllowSessionConfig,
@@ -663,7 +663,7 @@ func defaultMCPIcon(icon string) string {
 }
 
 func serverIDOf(d *Draft) string {
-	for _, op := range d.Ops {
+	for _, op := range d.AllOps() {
 		if op.MCPSource != nil {
 			return op.MCPSource.ServerID
 		}

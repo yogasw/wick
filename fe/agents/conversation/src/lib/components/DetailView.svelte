@@ -355,12 +355,19 @@
   let userScrolledUp = $state(false);
   let showJumpBtn = $state(false);
   let suppressScrollCheck = false;
+  /* While true, the thread stays pinned to the bottom as content grows — the
+     natural chat behaviour. Starts true (a fresh open should land at the
+     latest turn) and, crucially, stays true through the post-mount settle when
+     HTML-artifact iframes resize to their content: each growth re-pins instead
+     of stranding the user above the fold. Any manual scroll up releases it. */
+  let stickToBottom = $state(true);
 
   function scrollToBottom() {
     if (threadEl) {
       suppressScrollCheck = true;
       userScrolledUp = false;
       showJumpBtn = false;
+      stickToBottom = true;
       threadEl.scrollTop = threadEl.scrollHeight;
       requestAnimationFrame(() => { suppressScrollCheck = false; });
     }
@@ -384,22 +391,53 @@
     if (!threadEl) return;
     const el = threadEl;
 
+    // A real user scroll: release the bottom-pin the moment they move up, and
+    // re-pin once they return to the bottom. Drives the Jump button.
     function onScroll() {
       if (suppressScrollCheck) return;
       const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       userScrolledUp = distFromBottom > 80;
+      stickToBottom = !userScrolledUp;
       showJumpBtn = userScrolledUp;
     }
 
+    // Content can grow AFTER the initial layout with no scroll event — an HTML
+    // artifact iframe auto-resizes to its content a beat after mount. While
+    // pinned, follow that growth down (smooth, no overlay, no timing guess) so
+    // a refresh lands at the latest turn even though the height wasn't known at
+    // mount. Once the user has scrolled up (stickToBottom false), don't yank
+    // them — just surface the Jump button.
+    function onResize() {
+      if (suppressScrollCheck) return;
+      if (stickToBottom) {
+        el.scrollTop = el.scrollHeight;
+        showJumpBtn = false;
+        userScrolledUp = false;
+      } else {
+        const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        userScrolledUp = distFromBottom > 80;
+        showJumpBtn = userScrolledUp;
+      }
+    }
+
     el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => onResize());
+      ro.observe(el);
+      for (const child of Array.from(el.children)) ro.observe(child);
+    }
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      ro?.disconnect();
+    };
   });
 
   $effect(() => {
     const _dep1 = turns.length;
     const _dep2 = live?.text?.length;
     const _dep3 = live?.blocks?.length;
-    if (threadEl && !userScrolledUp) {
+    if (threadEl && stickToBottom) {
       threadEl.scrollTop = threadEl.scrollHeight;
     }
   });

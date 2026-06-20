@@ -35,21 +35,25 @@ The dashboard groups stats into two clusters so module health and auth surface d
 
 Approve newly-registered users, demote/promote roles, and attach access tags. The tag picker hides System tags (code-managed, see [Connector Runs Purge](./connector-runs-purge#system-tag-—-what-makes-this-job-special)).
 
-## Tools
+## Mini Tools (Tools, Connectors, Jobs)
+
+The Tools, Connectors, and Jobs admin pages are grouped under a **Mini Tools** dropdown in the admin navigation bar. A **Launcher** link in the same dropdown opens the tools grid at `/launcher`.
+
+### Tools
 
 ![Admin Tools](/screenshots/admin-tools.png)
 *Tool Permissions — enable/disable tools, set per-tool visibility (public/private), assign tags.*
 
 Disabling a tool here is a kill-switch — the tool disappears from the home grid and Ctrl+K palette without a redeploy. Tag assignments here drive the home-grid grouping and (for filter tags) access control.
 
-## Jobs
+### Jobs
 
 ![Admin Jobs](/screenshots/admin-jobs.png)
 *Job Permissions — enable/disable jobs, assign access tags. System-tagged jobs (e.g. `connector-runs-purge`) are locked: no Hide/Show button, no tag mutation, no schedule disable from this page.*
 
 For System-tagged jobs the action buttons are removed and the tag picker is read-only. Manage retention windows and cron schedules from `/manager/jobs/{key}` instead.
 
-## Connectors
+### Connectors
 
 ![Admin connectors cross-key list](/screenshots/admin-connectors.png)
 

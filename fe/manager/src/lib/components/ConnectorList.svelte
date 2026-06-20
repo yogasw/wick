@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, ConfirmDialog } from "@wick-fe/common-ui";
+  import { Button, ConfirmDialog, KebabMenu } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import { push } from "$lib/router.js";
   import {
@@ -10,8 +10,10 @@
     deleteConnectorRow,
     reloadConnector,
     resyncMcpTools,
+    disconnectConnectorAccount,
   } from "$lib/api.js";
-  import type { ConnectorList, ConnectorRow } from "$lib/types.js";
+  import { startConnectorOAuth, type OAuthConnect } from "./connectorOAuth.js";
+  import type { ConnectorList, ConnectorRow, ConnectorAccount } from "$lib/types.js";
   import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
   type Props = { connectorKey: string };
@@ -24,6 +26,70 @@
   let confirmRow = $state<ConnectorRow | null>(null);
   let reloadBusy = $state(false);
   let resyncBusy = $state(false);
+
+  /* Per-row kebab (⋮) menu items. History/Disable/Duplicate/Delete —
+     Duplicate + Delete only when the connector isn't fixed. */
+  function rowMenuItems(row: ConnectorRow) {
+    const items = [
+      { label: "History", onclick: () => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}/history`) },
+      { label: row.disabled ? "Enable" : "Disable", onclick: () => toggleDisabled(row) },
+    ];
+    if (!data?.fixed) {
+      items.push({ label: "Duplicate", onclick: () => duplicateRow(row), disabled: busy });
+      items.push({ label: "Delete", onclick: () => (confirmRow = row), danger: true });
+    }
+    return items;
+  }
+
+  /* Per-row OAuth connect: the row id currently mid-popup, the live popup
+     handle, and the account pending disconnect confirmation. */
+  let connectingId = $state("");
+  let oauthHandle: OAuthConnect | null = null;
+  let confirmAcc = $state<{ row: ConnectorRow; acc: ConnectorAccount } | null>(null);
+
+  /* Connect button is offered only when the backend resolved a start_url
+     (SSO on + caller may connect + client_id set). Label mirrors
+     AccountsSection: first connect vs reconnect vs add-another. */
+  function canConnect(row: ConnectorRow): boolean {
+    return !!row.oauth && !!row.oauth.start_url;
+  }
+  function connectLabel(row: ConnectorRow): string {
+    const n = row.accounts?.length ?? 0;
+    if (n === 0) return "Connect";
+    return row.multi_account ? "+ Connect another" : "Reconnect";
+  }
+
+  function connect(row: ConnectorRow): void {
+    const url = row.oauth?.start_url;
+    if (!url || connectingId) return;
+    connectingId = row.id;
+    oauthHandle = startConnectorOAuth(url);
+    oauthHandle.promise
+      .then(() => {
+        toastOk("Account connected");
+        return load(true);
+      })
+      .catch((e) => toastError("Connect failed", e instanceof Error ? e.message : String(e)))
+      .finally(() => {
+        connectingId = "";
+        oauthHandle = null;
+      });
+  }
+
+  async function confirmDisconnectAccount() {
+    const pending = confirmAcc;
+    confirmAcc = null;
+    if (!pending) return;
+    try {
+      await disconnectConnectorAccount(connectorKey, pending.row.id, pending.acc.id);
+      toastOk("Account disconnected");
+      await load(true);
+    } catch (e) {
+      toastError("Disconnect failed", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  $effect(() => () => oauthHandle?.cancel());
 
   async function load(silent = false) {
     if (!silent) loading = true;
@@ -169,7 +235,7 @@
 
       <!-- LEFT: icon + name + description -->
       <div class="flex min-w-0 flex-1 items-start gap-3">
-        <span class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-navy-700 dark:bg-navy-700 text-base" aria-hidden="true">{data.icon || "🔌"}</span>
+        <span class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-base text-green-700 dark:text-green-300" aria-hidden="true">{data.icon || "🔌"}</span>
         <div class="min-w-0 flex-1 overflow-hidden">
           <div class="flex flex-wrap items-center gap-2">
             <h1 class="text-lg font-bold text-black-900 dark:text-white-100">{data.name}</h1>
@@ -233,7 +299,14 @@
                 </div>
                 <div class="pointer-events-auto relative z-10 flex flex-wrap items-center gap-2 sm:flex-shrink-0">
                   {#if (row.tags ?? []).length === 0}
-                    <span class="rounded-md border border-dashed border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600">Everyone</span>
+                    {#if row.private}
+                      <span class="inline-flex items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600" title="Visible to its owner and admins only. An admin can add a tag to share it.">
+                        <svg class="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                        Private
+                      </span>
+                    {:else}
+                      <span class="rounded-md border border-dashed border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600">Everyone</span>
+                    {/if}
                   {:else}
                     {#each row.tags ?? [] as tag (tag)}
                       <span class="inline-flex min-w-0 max-w-[12rem] items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600">
@@ -243,14 +316,33 @@
                     {/each}
                   {/if}
                   <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {chip.cls}">{chip.label}</span>
-                  <Button variant="ghost" size="sm" onclick={() => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}/history`)}>History</Button>
-                  <Button variant="ghost" size="sm" onclick={() => toggleDisabled(row)}>{row.disabled ? "Enable" : "Disable"}</Button>
-                  {#if !data.fixed}
-                    <Button variant="ghost" size="sm" disabled={busy} onclick={() => duplicateRow(row)}>Duplicate</Button>
-                    <Button variant="ghost" size="sm" onclick={() => (confirmRow = row)}>Delete</Button>
+                  {#if canConnect(row)}
+                    <Button variant="secondary" size="sm" disabled={connectingId === row.id} onclick={() => connect(row)}>
+                      {connectingId === row.id ? "Connecting…" : connectLabel(row)}
+                    </Button>
                   {/if}
+                  <KebabMenu ariaLabel={`Actions for ${row.label}`} items={rowMenuItems(row)} />
                 </div>
               </div>
+              {#if (row.accounts ?? []).length}
+                <div class="pointer-events-auto relative z-10 border-t border-white-300 dark:border-navy-600">
+                  {#each row.accounts ?? [] as acc (acc.id)}
+                    <div class="flex items-center justify-between gap-3 px-4 py-2.5">
+                      <span class="flex min-w-0 items-center gap-2 text-sm text-black-800 dark:text-black-600">
+                        <svg class="h-3.5 w-3.5 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                        <span class="truncate font-medium">@{acc.display_name}</span>
+                      </span>
+                      {#if acc.can_manage}
+                        <button
+                          type="button"
+                          class="flex-shrink-0 text-xs font-medium text-neg-400 hover:underline"
+                          onclick={() => (confirmAcc = { row, acc })}
+                        >Disconnect</button>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
             </div>
           {/each}
         </div>
@@ -266,5 +358,15 @@
     destructive
     onConfirm={confirmDelete}
     onCancel={() => (confirmRow = null)}
+  />
+
+  <ConfirmDialog
+    open={confirmAcc !== null}
+    title="Disconnect this account?"
+    body="The stored OAuth token is removed. The user can reconnect at any time."
+    confirmLabel="Disconnect"
+    destructive
+    onConfirm={confirmDisconnectAccount}
+    onCancel={() => (confirmAcc = null)}
   />
 {/if}

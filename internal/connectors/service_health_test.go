@@ -21,10 +21,12 @@ func healthModule(report *[]connector.OpHealth, callErr *error) connector.Module
 	noop := func(c *connector.Ctx) (any, error) { return "ok", nil }
 	return connector.Module{
 		Meta: connector.Meta{Key: "health-stub", Name: "Health Stub", Fixed: true},
-		Operations: []connector.Operation{
-			connector.Op("a", "A", "first", struct{}{}, noop, wickdocs.Docs{}),
-			connector.Op("b", "B", "second", struct{}{}, noop, wickdocs.Docs{}),
-			connector.Op("c", "C", "third", struct{}{}, noop, wickdocs.Docs{}),
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Op("a", "A", "first", struct{}{}, noop, wickdocs.Docs{}),
+				connector.Op("b", "B", "second", struct{}{}, noop, wickdocs.Docs{}),
+				connector.Op("c", "C", "third", struct{}{}, noop, wickdocs.Docs{}),
+			),
 		},
 		HealthCheck: func(c *connector.Ctx) ([]connector.OpHealth, error) {
 			if callErr != nil && *callErr != nil {
@@ -100,7 +102,7 @@ func TestRunHealthCheck_ClearsRecoveredOps(t *testing.T) {
 func TestRunHealthCheck_NoHook(t *testing.T) {
 	mod := connector.Module{
 		Meta:       connector.Meta{Key: "no-hc", Name: "No Hook", Fixed: true},
-		Operations: []connector.Operation{},
+		Operations: []connector.Category{},
 	}
 	svc, id := newSvcHealth(t, mod)
 	_, err := svc.RunHealthCheck(context.Background(), id)

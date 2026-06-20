@@ -10,6 +10,7 @@ import (
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/pkg/connector"
 )
 
 // connectorRowJSON is the read model for one connector instance (row) the
@@ -22,6 +23,20 @@ type connectorRowJSON struct {
 	Status       string   `json:"status"`
 	RateLimitRPM int      `json:"rate_limit_rpm"`
 	Tags         []string `json:"tags"`
+	// Private is true when the row carries an owner:<id> tag and no other
+	// sharing tag — visible to its owner + admins only. The list renders a
+	// 🔒 Private chip instead of the misleading "Everyone" fallback. Adding
+	// a sharing tag flips it false (real tags then render).
+	Private bool `json:"private"`
+	// OAuth/SSO surface, mirrored from the detail read model so the list
+	// page can render the per-row Connect button + connected-account
+	// sub-rows inline. OAuth is nil on the wire when the connector type has
+	// no OAuth support; StartURL is only set when SSO is enabled, the caller
+	// may connect, and client_id is configured (same gate as the detail page).
+	OAuth        *connectorOAuthJSON    `json:"oauth"`
+	EnableSSO    bool                   `json:"enable_sso"`
+	MultiAccount bool                   `json:"multi_account"`
+	Accounts     []connectorAccountJSON `json:"accounts"`
 }
 
 // connectorListJSON is the shape served at GET /manager/api/connectors/{key}:
@@ -71,6 +86,15 @@ type connectorOpJSON struct {
 	SystemDisabled       bool   `json:"system_disabled"`
 	SystemDisabledReason string `json:"system_disabled_reason"`
 	AdminOnly            bool   `json:"admin_only"`
+	Category             string `json:"category"`
+}
+
+// connectorCategoryJSON is the section header the operations table renders
+// per category: a stable key plus its human-facing title and description.
+type connectorCategoryJSON struct {
+	Key         string `json:"key"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
 }
 
 // connectorAccountJSON is the per-account read model for the detail page's
@@ -96,20 +120,21 @@ type connectorOAuthJSON struct {
 // GET /manager/api/connectors/{key}/{id}: the row identity, the connector
 // type metadata, the visible config fields, and the operations table.
 type connectorDetailJSON struct {
-	Key            string                 `json:"key"`
-	Name           string                 `json:"name"`
-	Icon           string                 `json:"icon"`
-	ID             string                 `json:"id"`
-	Label          string                 `json:"label"`
-	Disabled       bool                   `json:"disabled"`
-	RateLimitRPM   int                    `json:"rate_limit_rpm"`
-	HasHealthCheck bool                   `json:"has_health_check"`
-	CanConfigure   bool                   `json:"can_configure"`
-	IsAdmin        bool                   `json:"is_admin"`
-	Fields         []configFieldJSON      `json:"fields"`
-	Operations     []connectorOpJSON      `json:"operations"`
-	Accounts       []connectorAccountJSON `json:"accounts"`
-	OAuth          *connectorOAuthJSON    `json:"oauth"`
+	Key            string                  `json:"key"`
+	Name           string                  `json:"name"`
+	Icon           string                  `json:"icon"`
+	ID             string                  `json:"id"`
+	Label          string                  `json:"label"`
+	Disabled       bool                    `json:"disabled"`
+	RateLimitRPM   int                     `json:"rate_limit_rpm"`
+	HasHealthCheck bool                    `json:"has_health_check"`
+	CanConfigure   bool                    `json:"can_configure"`
+	IsAdmin        bool                    `json:"is_admin"`
+	Fields         []configFieldJSON       `json:"fields"`
+	Operations     []connectorOpJSON       `json:"operations"`
+	Categories     []connectorCategoryJSON `json:"categories"`
+	Accounts       []connectorAccountJSON  `json:"accounts"`
+	OAuth          *connectorOAuthJSON     `json:"oauth"`
 	// Access policy (admin-controlled). Surfaced so the SPA can render
 	// the toggles + decide whether the Connect button is offered.
 	EnableSSO             bool `json:"enable_sso"`
@@ -140,7 +165,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	tagsByRow := h.resolveRowTags(ctx, rows)
+	tagsByRow, privateByRow := h.resolveRowTags(ctx, rows)
 
 	customInfo := h.customDefInfo(ctx, key, user)
 	defID := ""
@@ -154,7 +179,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		Description: mod.Meta.Description,
 		Icon:        mod.Meta.Icon,
 		Fixed:       mod.Meta.Fixed,
-		OpCount:     len(mod.Operations),
+		OpCount:     len(mod.AllOps()),
 		Custom:      customInfo != nil,
 		DefID:       defID,
 		MCP:         mcp,
@@ -163,14 +188,22 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		Rows:        make([]connectorRowJSON, 0, len(rows)),
 	}
 	for _, row := range rows {
-		out.Rows = append(out.Rows, connectorRowJSON{
+		rowJSON := connectorRowJSON{
 			ID:           row.ID,
 			Label:        row.Label,
 			Disabled:     row.Disabled,
 			Status:       h.connectors.Status(row),
 			RateLimitRPM: row.RateLimitRPM,
 			Tags:         tagsByRow[row.ID],
-		})
+			Private:      privateByRow[row.ID],
+			EnableSSO:    row.EnableSSO,
+			MultiAccount: row.MultiAccount,
+		}
+		if mod.OAuth != nil {
+			rowJSON.OAuth = h.rowOAuthJSON(mod, row, user)
+			rowJSON.Accounts = h.rowAccountsJSON(ctx, row, user)
+		}
+		out.Rows = append(out.Rows, rowJSON)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -227,45 +260,33 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	states, _ := h.connectors.OperationStatesFull(ctx, row.ID, row.Key)
-	ops := make([]connectorOpJSON, 0, len(mod.Operations))
-	for _, op := range mod.Operations {
-		st := states[op.Key]
-		ops = append(ops, connectorOpJSON{
-			Key:                  op.Key,
-			Name:                 op.Name,
-			Description:          op.Description,
-			Destructive:          op.Destructive,
-			Enabled:              st.Enabled,
-			SystemDisabled:       st.SystemDisabled,
-			SystemDisabledReason: st.SystemDisabledReason,
-			AdminOnly:            st.AdminOnly,
-		})
+	ops := make([]connectorOpJSON, 0)
+	for _, cat := range mod.Operations {
+		for _, op := range cat.Ops {
+			st := states[op.Key]
+			ops = append(ops, connectorOpJSON{
+				Key:                  op.Key,
+				Name:                 op.Name,
+				Description:          op.Description,
+				Destructive:          op.Destructive,
+				Enabled:              st.Enabled,
+				SystemDisabled:       st.SystemDisabled,
+				SystemDisabledReason: st.SystemDisabledReason,
+				AdminOnly:            st.AdminOnly,
+				Category:             cat.Title,
+			})
+		}
 	}
+	categories := buildCategoryJSON(mod)
 
 	isAdmin := user != nil && user.IsAdmin()
 	canConfigure := h.canConfigureRow(user, row)
 
-	accounts := make([]connectorAccountJSON, 0)
-	for _, acc := range h.accountsForRow(ctx, row.ID) {
-		accounts = append(accounts, connectorAccountJSON{
-			ID:          acc.ID,
-			DisplayName: acc.DisplayName,
-			WickUserID:  acc.WickUserID,
-			DisabledOps: accountDisabledOpKeys(&acc),
-			CanManage:   canConfigure || (user != nil && acc.WickUserID == user.ID),
-		})
-	}
+	accounts := h.rowAccountsJSON(ctx, *row, user)
 
 	var oauthJSON *connectorOAuthJSON
 	if mod.OAuth != nil {
-		oauthJSON = &connectorOAuthJSON{DisplayName: mod.OAuth.DisplayName}
-		// Connect is only offered when SSO is enabled, the caller may
-		// connect, and client_id is configured — same gate as the list page.
-		if row.EnableSSO && h.canConnectSSO(user, row) {
-			if strings.TrimSpace(h.connectors.LoadConfigs(*row)["client_id"]) != "" {
-				oauthJSON.StartURL = "/manager/connectors/" + mod.Meta.Key + "/oauth/start?connector_id=" + row.ID
-			}
-		}
+		oauthJSON = h.rowOAuthJSON(mod, *row, user)
 	}
 
 	writeJSON(w, http.StatusOK, connectorDetailJSON{
@@ -281,6 +302,7 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 		IsAdmin:               isAdmin,
 		Fields:                fields,
 		Operations:            ops,
+		Categories:            categories,
 		Accounts:              accounts,
 		OAuth:                 oauthJSON,
 		EnableSSO:             row.EnableSSO,
@@ -290,6 +312,55 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 		SessionConfigCapable:  mod.AllowSessionConfig,
 		SessionConfigAllowed:  row.AllowSessionConfig,
 	})
+}
+
+// buildCategoryJSON projects the section headers the detail page renders,
+// one per titled category that has at least one operation, in declaration
+// order. mod.Operations is the canonical []connector.Category; an op row's
+// Category field equals its section Title, which the UI keys its grouping
+// off (so the JSON key doubles as the title). Untitled categories carry the
+// ungrouped ops and are omitted here — the UI renders those without a header.
+func buildCategoryJSON(mod connector.Module) []connectorCategoryJSON {
+	out := make([]connectorCategoryJSON, 0, len(mod.Operations))
+	for _, c := range mod.Operations {
+		if c.Title == "" || len(c.Ops) == 0 {
+			continue
+		}
+		out = append(out, connectorCategoryJSON{Key: c.Title, Title: c.Title, Description: c.Description})
+	}
+	return out
+}
+
+// rowAccountsJSON projects a row's connected OAuth accounts into the read
+// model shared by the list + detail pages. CanManage is true for the row's
+// configurer or the account's own user.
+func (h *Handler) rowAccountsJSON(ctx context.Context, row entity.Connector, user *entity.User) []connectorAccountJSON {
+	canConfigure := h.canConfigureRow(user, &row)
+	accounts := make([]connectorAccountJSON, 0)
+	for _, acc := range h.accountsForRow(ctx, row.ID) {
+		accounts = append(accounts, connectorAccountJSON{
+			ID:          acc.ID,
+			DisplayName: acc.DisplayName,
+			WickUserID:  acc.WickUserID,
+			DisabledOps: accountDisabledOpKeys(&acc),
+			CanManage:   canConfigure || (user != nil && acc.WickUserID == user.ID),
+		})
+	}
+	return accounts
+}
+
+// rowOAuthJSON builds the OAuth read model for a row. The caller guarantees
+// mod.OAuth != nil. StartURL — the Connect target — is only populated when
+// SSO is enabled, the caller may connect, and client_id is configured; an
+// empty StartURL means "no Connect button" (shared gate, list + detail).
+func (h *Handler) rowOAuthJSON(mod connector.Module, row entity.Connector, user *entity.User) *connectorOAuthJSON {
+	out := &connectorOAuthJSON{DisplayName: mod.OAuth.DisplayName}
+	if row.EnableSSO && h.canConnectSSO(user, &row) {
+		if strings.TrimSpace(h.connectors.LoadConfigs(row)["client_id"]) != "" {
+			out.StartURL = "/manager/connectors/" + mod.Meta.Key + "/oauth/start?connector_id=" + row.ID
+		}
+	}
+	return out
 }
 
 // accountsForRow lists a row's connected accounts, swallowing the (rare)
@@ -334,6 +405,10 @@ func (h *Handler) apiCreateConnectorRow(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if h.tags != nil && user != nil && !user.IsAdmin() {
+		// Seed the owner tag so the creator (and admins) can see + manage
+		// this row. Visibility reads tag IDs live from the DB per request
+		// (see Handler.userFilterTagIDs), so the new tag takes effect on the
+		// very next request — no session-cookie re-issue needed.
 		_ = h.tags.CreateOwnerTag(ctx, row.ID, user.ID)
 	}
 	if h.custom != nil {

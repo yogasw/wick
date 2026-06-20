@@ -25,9 +25,10 @@ function makeData(over: Partial<DetailType> = {}): DetailType {
       { key: "api_url", type: "url", value: "https://x.test", options: "", required: true, is_secret: false, has_value: true, description: "", visible_when: "", env_override: "" },
     ],
     operations: [
-      { key: "send", name: "Send", description: "Send a message", destructive: false, enabled: true, system_disabled: false, system_disabled_reason: "", admin_only: false },
-      { key: "del", name: "Delete", description: "Delete a message", destructive: true, enabled: false, system_disabled: false, system_disabled_reason: "", admin_only: false },
+      { key: "send", name: "Send", description: "Send a message", destructive: false, enabled: true, system_disabled: false, system_disabled_reason: "", admin_only: false, category: "" },
+      { key: "del", name: "Delete", description: "Delete a message", destructive: true, enabled: false, system_disabled: false, system_disabled_reason: "", admin_only: false, category: "" },
     ],
+    categories: [],
     accounts: [],
     oauth: null,
     enable_sso: false,

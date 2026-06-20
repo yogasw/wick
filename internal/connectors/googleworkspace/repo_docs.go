@@ -24,7 +24,7 @@ func docsGet(c *connector.Ctx, path string) ([]byte, error) {
 
 func docsPost(c *connector.Ctx, path string, body any) ([]byte, error) {
 	return doWithRefresh(c, func(token string) (*http.Request, error) {
-		return buildJSONRequest(c, http.MethodPost, docsBaseURL+path, body)
+		return buildJSONRequest(c, http.MethodPost, docsBaseURL+path, token, body)
 	})
 }
 

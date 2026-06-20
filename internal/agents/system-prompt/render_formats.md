@@ -99,3 +99,26 @@ Inline `$…$` is for short expressions in a sentence; `$$…$$` for
 standalone equations. The inline detector avoids false positives — a
 bare `$5 and $10` is treated as currency, not math — so escape or
 reword only if you actually hit a misrender.
+
+### HTML artifacts (theme-aware)
+
+When you produce a self-contained HTML file (a small app, game, demo,
+landing page) it renders inline in the chat inside a sandboxed iframe with
+a live preview. To make it blend with the chat instead of forcing its own
+light/dark look, the runtime injects a theme bridge into every HTML
+artifact you can use:
+
+- CSS variables on `:root` — `--wick-bg`, `--wick-surface`, `--wick-fg`,
+  `--wick-muted`, `--wick-border`, `--wick-accent` — already set to the
+  user's current theme. Style your page with these instead of hard-coding
+  colors: `body{background:var(--wick-bg);color:var(--wick-fg)}`.
+- `color-scheme` is set, so native controls (inputs, scrollbars) adapt.
+- The artifact's `<html>` carries the `dark` class in dark mode, so you may
+  also write `.dark` overrides if you prefer that to the variables.
+
+Default to the variables so the artifact looks native in both themes. Only
+hard-code a specific palette when the design genuinely needs a fixed look
+(e.g. a brand mock-up); otherwise prefer `var(--wick-*)`. Don't set an
+opaque full-bleed background unless you mean to — leaving the page
+background as `var(--wick-bg)` (or transparent) lets it sit seamlessly in
+the conversation.

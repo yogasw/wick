@@ -42,8 +42,10 @@ func apiTestModule(key, name, icon string, defaultTags ...tool.DefaultTag) conne
 			Icon:        icon,
 			DefaultTags: defaultTags,
 		},
-		Operations: []connector.Operation{
-			{Key: "noop", Name: "Noop", Execute: func(*connector.Ctx) (any, error) { return nil, nil }},
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Operation{Key: "noop", Name: "Noop", Execute: func(*connector.Ctx) (any, error) { return nil, nil }},
+			),
 		},
 	}
 }
@@ -182,9 +184,11 @@ func TestAPIConnectorsEnriched(t *testing.T) {
 				Icon:        "💳",
 				DefaultTags: []tool.DefaultTag{tags.Connector, tags.Development},
 			},
-			Operations: []connector.Operation{
-				{Key: "charge", Name: "Charge", Execute: func(*connector.Ctx) (any, error) { return nil, nil }},
-				{Key: "refund", Name: "Refund", Execute: func(*connector.Ctx) (any, error) { return nil, nil }},
+			Operations: []connector.Category{
+				connector.Cat("", "",
+					connector.Operation{Key: "charge", Name: "Charge", Execute: func(*connector.Ctx) (any, error) { return nil, nil }},
+					connector.Operation{Key: "refund", Name: "Refund", Execute: func(*connector.Ctx) (any, error) { return nil, nil }},
+				),
 			},
 		},
 	}

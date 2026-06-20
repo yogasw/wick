@@ -26,9 +26,12 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 				<div class="flex flex-wrap items-center gap-1 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-1 order-last w-full md:order-none md:w-auto md:mr-auto">
 					@adminTab("/admin", "Dashboard", activeTab == "dashboard")
 					@adminTab("/admin/users", "Users", activeTab == "users")
-					@adminTab("/admin/tools", "Tools", activeTab == "tools")
-					@adminTab("/admin/jobs", "Jobs", activeTab == "jobs")
-					@adminTab("/admin/connectors", "Connectors", activeTab == "connectors")
+					@adminDropdown("Mini Tools", isMiniToolsActive(activeTab), []dropdownItem{
+						{Href: "/admin/tools", Label: "Tools", Active: activeTab == "tools"},
+						{Href: "/admin/connectors", Label: "Connectors", Active: activeTab == "connectors"},
+						{Href: "/admin/jobs", Label: "Jobs", Active: activeTab == "jobs"},
+						{Href: "/launcher", Label: "Launcher", Active: false},
+					})
 					@adminDropdown("Agents", isAgentsActive(activeTab), []dropdownItem{
 						{Href: "/admin/projects", Label: "Projects", Active: activeTab == "projects"},
 						{Href: "/admin/workflows", Label: "Workflows", Active: activeTab == "workflows"},
@@ -74,6 +77,10 @@ type dropdownItem struct {
 	Href   string
 	Label  string
 	Active bool
+}
+
+func isMiniToolsActive(tab string) bool {
+	return tab == "tools" || tab == "connectors" || tab == "jobs"
 }
 
 func isAgentsActive(tab string) bool {

@@ -88,7 +88,7 @@ func (h *Handler) apiConnectors(w http.ResponseWriter, r *http.Request) {
 			Category:        cat,
 			CategoryDesc:    catDesc,
 			Icon:            m.Meta.Icon,
-			OpCount:         len(m.Operations),
+			OpCount:         len(m.AllOps()),
 			ActiveCount:     cnt.active,
 			NeedsSetupCount: cnt.needsSetup,
 			DisabledCount:   cnt.disabled,

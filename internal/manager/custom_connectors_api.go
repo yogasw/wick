@@ -96,7 +96,7 @@ func (h *Handler) apiResyncMCPTools(w http.ResponseWriter, r *http.Request) {
 	}
 	count := 0
 	if mod, ok := h.connectors.Module(key); ok {
-		count = len(mod.Operations)
+		count = len(mod.AllOps())
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "operations": count})
 }

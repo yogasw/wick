@@ -17,6 +17,7 @@ function op(over: Partial<ConnectorOp> & { key: string }): ConnectorOp {
     system_disabled: false,
     system_disabled_reason: "",
     admin_only: false,
+    category: "",
     ...over,
   };
 }
@@ -46,39 +47,42 @@ describe("OperationsTable", () => {
     expect(screen.getByText("20")).toBeTruthy();
   });
 
-  it("paginates with page size 10 and shows the legacy 'Showing X–Y of N' footer", () => {
-    renderTable(manyOps(25));
-    expect(screen.getByText("Showing 1–10 of 25")).toBeTruthy();
+  it("paginates each card at 5 ops with a Prev/Next pager", async () => {
+    renderTable(manyOps(12));
     expect(screen.getByText("Operation 1")).toBeTruthy();
-    expect(screen.getByText("Operation 10")).toBeTruthy();
-    expect(screen.queryByText("Operation 11")).toBeNull();
-  });
-
-  it("advances to the next page and back, updating the footer and rows", async () => {
-    renderTable(manyOps(25));
+    expect(screen.getByText("Operation 5")).toBeTruthy();
+    expect(screen.queryByText("Operation 6")).toBeNull();
+    expect(screen.getByText("Showing 1–5 of 12")).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
-    expect(screen.getByText("Showing 11–20 of 25")).toBeTruthy();
-    expect(screen.getByText("Operation 11")).toBeTruthy();
-    expect(screen.queryByText("Operation 10")).toBeNull();
-    await fireEvent.click(screen.getByRole("button", { name: "← Prev" }));
-    expect(screen.getByText("Showing 1–10 of 25")).toBeTruthy();
-    expect(screen.getByText("Operation 1")).toBeTruthy();
+    expect(screen.getByText("Operation 6")).toBeTruthy();
+    expect(screen.queryByText("Operation 5")).toBeNull();
+    expect(screen.getByText("Showing 6–10 of 12")).toBeTruthy();
   });
 
-  it("disables Prev on the first page and Next on the last page", async () => {
-    renderTable(manyOps(25));
-    const prev = screen.getByRole("button", { name: "← Prev" }) as HTMLButtonElement;
-    const next = screen.getByRole("button", { name: "Next →" }) as HTMLButtonElement;
-    expect(prev.disabled).toBe(true);
-    expect(next.disabled).toBe(false);
-    await fireEvent.click(next);
-    await fireEvent.click(next);
-    expect(screen.getByText("Showing 21–25 of 25")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Next →" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "← Prev" }) as HTMLButtonElement).disabled).toBe(false);
+  it("hides the pager when a card has 5 or fewer ops", () => {
+    renderTable(manyOps(4));
+    expect(screen.queryByRole("button", { name: "Next →" })).toBeNull();
+    expect(screen.queryByText(/Showing/)).toBeNull();
   });
 
-  it("filters rows by name, key, and description and resets to page 1", async () => {
+  it("filters within a card via the per-card search box", async () => {
+    const ops = [
+      op({ key: "alpha", name: "Alpha", category: "Drive" }),
+      op({ key: "beta", name: "Beta", category: "Drive" }),
+    ];
+    render(OperationsTable, {
+      operations: ops,
+      categories: [{ key: "Drive", title: "Drive", description: "" }],
+      connectorKey: "gws",
+      connectorId: "row-a",
+      canConfigure: true,
+    });
+    await fireEvent.input(screen.getByLabelText("Search Drive"), { target: { value: "alpha" } });
+    expect(screen.getByText("Alpha")).toBeTruthy();
+    expect(screen.queryByText("Beta")).toBeNull();
+  });
+
+  it("filters rows by name, key, and description across categories", async () => {
     const ops = [
       op({ key: "send_message", name: "Send Message", description: "post to a channel" }),
       op({ key: "delete_message", name: "Delete Message", description: "remove a post" }),
@@ -89,7 +93,6 @@ describe("OperationsTable", () => {
     await fireEvent.input(search, { target: { value: "channel" } });
     expect(screen.getByText("Send Message")).toBeTruthy();
     expect(screen.queryByText("Delete Message")).toBeNull();
-    expect(screen.getByText("Showing 1–1 of 1")).toBeTruthy();
     await fireEvent.input(search, { target: { value: "list_users" } });
     expect(screen.getByText("List Users")).toBeTruthy();
     expect(screen.queryByText("Send Message")).toBeNull();
@@ -97,14 +100,26 @@ describe("OperationsTable", () => {
     expect(screen.getByText("Delete Message")).toBeTruthy();
   });
 
-  it("paginates over the filtered list and resets to page 1 on a new query", async () => {
-    const ops = [...manyOps(15), op({ key: "zzz", name: "Zebra", description: "stripes" })];
-    renderTable(ops);
-    await fireEvent.click(screen.getByRole("button", { name: "Next →" }));
-    expect(screen.getByText("Showing 11–16 of 16")).toBeTruthy();
-    const search = screen.getByLabelText("Search operations");
-    await fireEvent.input(search, { target: { value: "Operation" } });
-    expect(screen.getByText("Showing 1–10 of 15")).toBeTruthy();
+  it("renders one card per category with its title + description, plus a sections sidebar", () => {
+    const ops = [
+      op({ key: "list_files", name: "List Files", category: "Drive" }),
+      op({ key: "read_range", name: "Read Range", category: "Sheets" }),
+    ];
+    render(OperationsTable, {
+      operations: ops,
+      categories: [
+        { key: "Drive", title: "Drive", description: "Drive files." },
+        { key: "Sheets", title: "Sheets", description: "Spreadsheet ranges." },
+      ],
+      connectorKey: "gws",
+      connectorId: "row-a",
+      canConfigure: true,
+    });
+    expect(screen.getByRole("heading", { name: "Drive" })).toBeTruthy();
+    expect(screen.getByText("Drive files.")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Sheets" })).toBeTruthy();
+    /* Sidebar jump buttons (one per category). */
+    expect(screen.getByRole("button", { name: /Drive\s*1/ })).toBeTruthy();
   });
 
   it("selects a row and bulk-enables only selected ops", async () => {
@@ -121,18 +136,18 @@ describe("OperationsTable", () => {
     expect(api.bulkToggleOperations).toHaveBeenCalledWith("slack", "row-a", true, ["a"]);
   });
 
-  it("select-all on the current page selects every visible row", async () => {
+  it("select-all in a card selects the visible page (max 5)", async () => {
     vi.mocked(api.bulkToggleOperations).mockResolvedValue(undefined);
     renderTable(manyOps(12));
-    await fireEvent.click(screen.getByLabelText("Select all on this page"));
-    expect(screen.getByText("10 selected")).toBeTruthy();
+    await fireEvent.click(screen.getByLabelText("Select all in operations"));
+    expect(screen.getByText("5 selected")).toBeTruthy();
     await fireEvent.click(screen.getByRole("button", { name: "Disable selected" }));
     await Promise.resolve();
     const call = vi.mocked(api.bulkToggleOperations).mock.calls[0];
     expect(call[0]).toBe("slack");
     expect(call[1]).toBe("row-a");
     expect(call[2]).toBe(false);
-    expect(call[3]).toHaveLength(10);
+    expect(call[3]).toHaveLength(5);
   });
 
   it("falls back to Enable/Disable all (empty ops array) when nothing is selected", async () => {
@@ -145,7 +160,7 @@ describe("OperationsTable", () => {
 
   it("hides selection + bulk controls when can_configure is false", () => {
     renderTable(manyOps(3), false);
-    expect(screen.queryByLabelText("Select all on this page")).toBeNull();
+    expect(screen.queryByLabelText("Select all in operations")).toBeNull();
     expect(screen.queryByRole("button", { name: "Enable all" })).toBeNull();
     expect(screen.getByLabelText("Search operations")).toBeTruthy();
   });
@@ -176,11 +191,11 @@ describe("OperationsTable", () => {
     expect(screen.getByText("This connector exposes no operations.")).toBeTruthy();
   });
 
-  it("uses an en-dash and shows 0 when filtered to nothing", async () => {
+  it("shows an empty-search message when nothing matches", async () => {
     renderTable(manyOps(3));
     const search = screen.getByLabelText("Search operations");
     await fireEvent.input(search, { target: { value: "nomatch-xyz" } });
-    expect(screen.getByText("Showing 0–0 of 0")).toBeTruthy();
+    expect(screen.getByText(/No operations match/)).toBeTruthy();
   });
 
   it("keeps row checkboxes independent across rows", async () => {

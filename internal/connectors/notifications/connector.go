@@ -52,12 +52,14 @@ type sendInput struct {
 	URL    string `wick:"desc=Relative app URL to open when the notification is clicked, for example /tools/agents. Defaults to /."`
 }
 
-func Operations(deps Deps) []connector.Operation {
+func Operations(deps Deps) []connector.Category {
 	h := handlers{deps: deps}
-	return []connector.Operation{
-		connector.Op("send_to_push_id", "Send Notification To PN ID",
-			"Send a notification to every active subscribed browser/device for one opaque PN ID. Payload: push_id is required and comes from Account → Notifications; title/body/url control the browser notification content and click target. Returns {ok, sent}. This connector does not expose self-send, user search, user listing, or device inspection.",
-			sendInput{}, h.sendToUser, wickdocs.Docs{}),
+	return []connector.Category{
+		connector.Cat("Notifications", "Send browser push notifications to a PN ID.",
+			connector.Op("send_to_push_id", "Send Notification To PN ID",
+				"Send a notification to every active subscribed browser/device for one opaque PN ID. Payload: push_id is required and comes from Account → Notifications; title/body/url control the browser notification content and click target. Returns {ok, sent}. This connector does not expose self-send, user search, user listing, or device inspection.",
+				sendInput{}, h.sendToUser, wickdocs.Docs{}),
+		),
 	}
 }
 

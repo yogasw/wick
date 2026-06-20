@@ -38,31 +38,35 @@ func Meta() connector.Meta {
 	}
 }
 
-func Operations() []connector.Operation {
-	return []connector.Operation{
-		connector.Op(
-			"query",
-			"Query Logs",
-			"Search logs using LogQL over a time range. Returns a count and flat list of log entries, each with an RFC3339 timestamp, stream labels map, and line text. Empty entries array means no matches found.",
-			QueryInput{},
-			query,
-			wickdocs.Docs{},
-		),
-		connector.Op(
-			"labels",
-			"List Labels",
-			"List all label names currently indexed by Loki. Use this to discover available labels before constructing a LogQL stream selector.",
-			struct{}{},
-			labels,
-			wickdocs.Docs{},
-		),
-		connector.Op(
-			"label_values",
-			"List Label Values",
-			"List all values for a given label name. Combine with the labels operation to build precise LogQL stream selectors like {app=\"api\", env=\"prod\"}.",
-			LabelValuesInput{},
-			labelValues,
-			wickdocs.Docs{},
+func Operations() []connector.Category {
+	return []connector.Category{
+		connector.Cat(
+			"Loki",
+			"Query logs and discover labels in Grafana Loki using LogQL.",
+			connector.Op(
+				"query",
+				"Query Logs",
+				"Search logs using LogQL over a time range. Returns a count and flat list of log entries, each with an RFC3339 timestamp, stream labels map, and line text. Empty entries array means no matches found.",
+				QueryInput{},
+				query,
+				wickdocs.Docs{},
+			),
+			connector.Op(
+				"labels",
+				"List Labels",
+				"List all label names currently indexed by Loki. Use this to discover available labels before constructing a LogQL stream selector.",
+				struct{}{},
+				labels,
+				wickdocs.Docs{},
+			),
+			connector.Op(
+				"label_values",
+				"List Label Values",
+				"List all values for a given label name. Combine with the labels operation to build precise LogQL stream selectors like {app=\"api\", env=\"prod\"}.",
+				LabelValuesInput{},
+				labelValues,
+				wickdocs.Docs{},
+			),
 		),
 	}
 }

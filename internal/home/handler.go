@@ -25,9 +25,21 @@ func NewHandler(items []tool.Tool, authSvc *login.Service, tagsSvc *tags.Service
 
 const guestViewCookie = "_st_view"
 
-func (h *Handler) Index(w http.ResponseWriter, r *http.Request) {
-	user := login.GetUser(r.Context())
+// RootRedirect serves "/": it redirects to the agent flagship UI and
+// keeps the catch-all 404 role for every other unmatched path.
+func (h *Handler) RootRedirect(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
+		ui.RenderNotFound(w, r, login.GetUser(r.Context()), http.StatusNotFound)
+		return
+	}
+	http.Redirect(w, r, "/tools/agents/", http.StatusFound)
+}
+
+// Launcher renders the tools grid at /launcher (GET) and handles the
+// home_view toggle (POST).
+func (h *Handler) Launcher(w http.ResponseWriter, r *http.Request) {
+	user := login.GetUser(r.Context())
+	if r.URL.Path != "/launcher" {
 		ui.RenderNotFound(w, r, user, http.StatusNotFound)
 		return
 	}
@@ -47,7 +59,7 @@ func (h *Handler) Index(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 		}
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, "/launcher", http.StatusSeeOther)
 		return
 	}
 	visible := h.VisibleItems(r, user)

@@ -10,6 +10,54 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.22.0](https://github.com/yogasw/wick/compare/v0.21.0...v0.22.0) — Connectors & Agents
+
+_Released on 2026-06-20_
+
+### Added
+
+*   **Connector list — inline Connect + connected-account rows**: Each connector row on the list page now shows a **Connect** / **Reconnect** / **+ Connect another** button when the instance has SSO enabled and the caller may connect (no need to open the detail page). Connected accounts appear as sub-rows under the connector card; each account row has a **Disconnect** button (confirmation dialog) for users who own that account or admins.
+*   **Connector list — per-row kebab (⋮) menu**: The per-row action buttons (History / Disable / Duplicate / Delete) are now collected behind a `⋮` kebab menu, keeping each row compact.
+*   **Connector list — Private chip**: Rows that carry only an `owner:<id>` tag and no sharing tag now display a lock **Private** chip instead of the misleading **Everyone** fallback. Adding a filter tag flips the chip back to tag names.
+*   **`Module.DefaultAccess` — seeded access-policy defaults**: Connector module authors can now declare `DefaultAccess connector.AccessDefaults` on their `Module` to pre-seed per-row access-policy flags (`EnableSSO`, `AllowOthersConnectSSO`, `MultiAccount`, `AllowOthersConfigure`) onto every freshly created instance. The Google Workspace connector ships `EnableSSO: true, AllowOthersConnectSSO: true` so a new row is ready to use **Connect Account** without a manual Access Policy step. Admins can still change individual rows afterwards. See [Connector Module — DefaultAccess](/guide/connector-module#defaultaccess-seeding-access-policy-defaults).
+*   **HTML artifacts — themed, borderless, auto-height preview**: HTML file artifacts and inline `` ```html `` blocks in the conversation now render in a borderless sandboxed iframe that grows to its content (no inner scrollbar), with a floating **⋮** menu offering Full screen / Show code / Download. The iframe receives a **theme bridge** — CSS variables (`--wick-bg`, `--wick-surface`, `--wick-fg`, `--wick-muted`, `--wick-border`, `--wick-accent`), `color-scheme`, and a `.dark` class in dark mode — so generated HTML matches the chat's active light/dark theme. The agent system prompt instructs the model to use `var(--wick-*)` for theming by default. See [Agents — Artifacts](/guide/agents#artifacts).
+*   **Artifact kinds — markdown and text**: `.md` files now render as **markdown** artifacts (fullscreen viewer + download); plain text and code files render as **text** artifacts with the same viewer + download. Previously these fell through to the generic downloadable chip.
+*   **Connector build profiles**: Operators can now select which builtin connectors register at boot without rebuilding the binary. Three profiles are available:
+    *   `full` (default) — all 7 builtin connectors (GitHub, HTTP REST, Slack, Bitbucket, Loki, Phoenix, Google Workspace). Preserves existing behaviour.
+    *   `agent` — curated subset: GitHub, HTTP REST, Slack.
+    *   `lite` — no builtin connectors registered at boot.
+    Set the active profile with `<app> config profile <full|agent|lite>` (takes effect on restart) or via the admin Configs page (`/admin/variables`, key `profile`). The four runtime connectors (Wick Manager, Workflow, Notifications, Custom Connector) are never profile-gated. See [App CLI Reference — config profile](./reference/app-cli#app-config-profile-full-agent-lite).
+
+### Changed
+
+*   **Connector visibility — live tag resolution**: The connector list now resolves each row's filter-tag IDs live from the database rather than from the session-cookie snapshot. A row created or duplicated in the current session is visible immediately without logout/login.
+*   **Home — default landing page**: Navigating to `/` now redirects to the agent UI (`/tools/agents/`). The tools/connectors grid previously at `/` is now at `/launcher` and remains fully reachable.
+*   **Admin nav — Mini Tools dropdown**: The standalone Tools, Connectors, and Jobs tabs in the admin navigation bar are grouped into a single **Mini Tools** dropdown. A Launcher shortcut is included in the same dropdown. See [Admin Panel](./guide/admin-panel#mini-tools-tools-connectors-jobs).
+
+---
+
+
+
+## [v0.22.0] — Connector Categories
+
+### Added
+
+*   **Connectors — operations grouped into categories**: The connector detail page (Manager → Connectors → {connector}) now renders operations as named section cards instead of a flat list. Each card shows the section title, description, op count, per-card Enable/Disable all, and a paginated op table (5 ops per page). A sticky "Sections" jump sidebar lets you jump between sections without scrolling; a global search box filters across all categories.
+*   **Custom connector builder — operation sections**: The manual builder's Operations step is now section-based. Each section has a title and description, and ops can be dragged between sections. The right-hand Jump panel is a collapsible mini-map with scroll-spy highlighting that auto-expands the active section.
+*   **`pkg/connector` — `Category` / `Cat()`**: Built-in connector authors now group operations into titled sections using `connector.Cat(title, description, ops...)`. `Module.Operations` is `[]connector.Category`; `Module.AllOps()` flattens for callers that do not care about grouping; `Module.CategoryOf(opKey)` returns the section title for a given op key. See [Connector Module — Operations()](/guide/connector-module#operations).
+*   **Google Workspace — Gmail, Calendar, and Meet**: 18 new operations across three new categories on the existing `google_workspace` connector (same OAuth row, one re-consent required):
+    *   **Gmail** (6 ops): `gmail_list_messages` (search), `gmail_get_message`, `gmail_send`, `gmail_create_draft`, `gmail_reply` (threaded), `gmail_modify_labels` (archive, star, mark read, etc.).
+    *   **Calendar** (7 ops): `calendar_list_calendars`, `calendar_list_events`, `calendar_get_event`, `calendar_create_event` (with optional Google Meet link via `add_meet=true`), `calendar_update_event`, `calendar_delete_event`, `calendar_respond_event` (RSVP accept/decline/tentative).
+    *   **Meet** (5 ops): `meet_create_space` (create a standalone Meet link), `meet_get_space`, `meet_list_conference_records`, `meet_list_recordings`, `meet_list_transcripts`.
+    *   See [Google Workspace connector](/connectors/googleworkspace) for the full op reference.
+
+### Breaking
+
+*   **Custom connectors — ops storage format changed**: The stored `ops` column is now a nested array of sections (`[{title, description, ops:[...]}]`). The old flat `[{key, ...}]` format is no longer accepted. **Existing custom connectors built before v0.22.0 must be deleted and recreated.** See [Custom Connectors — Operations data format](/guide/custom-connectors#operations-data-format-breaking-change-for-existing-custom-connectors). Built-in and MCP-backed connectors are unaffected.
+*   **Google Workspace — existing connected accounts must re-consent**: The OAuth consent now requests Gmail, Calendar, and Meet scopes in addition to the previous Drive/Sheets/Docs/Slides scopes. Accounts connected before this release will have those new ops flagged as `needs scope: …` in the health check until the operator clicks **Connect Account** again to re-run the consent flow.
+
+---
+
 ## [v0.21.0](https://github.com/yogasw/wick/compare/v0.20.2...v0.21.0) — MCP
 
 _Released on 2026-06-19_

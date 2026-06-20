@@ -22,11 +22,13 @@ func wickManagerStubModule() connector.Module {
 			Description: "Manage wick itself (test stub)",
 			Fixed:       true,
 		},
-		Operations: []connector.Operation{
-			connector.Op("app_list", "App List", "List app config keys", AppListInput{},
-				func(c *connector.Ctx) (any, error) {
-					return map[string]any{"ok": true, "keys": []string{}}, nil
-				}, wickdocs.Docs{}),
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Op("app_list", "App List", "List app config keys", AppListInput{},
+					func(c *connector.Ctx) (any, error) {
+						return map[string]any{"ok": true, "keys": []string{}}, nil
+					}, wickdocs.Docs{}),
+			),
 		},
 	}
 }

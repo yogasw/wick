@@ -22,7 +22,7 @@ function makeDraft(over: Partial<Draft> = {}): Draft {
     health_op: "",
     health_expect: "",
     configs: [{ key: "base_url", widget: "url", options: "", secret: false, required: true, default: "", desc: "" }],
-    ops: [{ key: "list", name: "List", description: "", destructive: false, inputs: [], request: { method: "GET", url_template: "/p", headers: {}, body_template: "", content_type: "" } }],
+    ops: [{ title: "", description: "", ops: [{ key: "list", name: "List", description: "", destructive: false, inputs: [], request: { method: "GET", url_template: "/p", headers: {}, body_template: "", content_type: "" } }] }],
     ...over,
   };
 }

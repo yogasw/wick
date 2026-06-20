@@ -11,18 +11,26 @@ import (
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 )
 
-// classifyArtifactKind maps a filename to a UI render kind.
+// classifyArtifactKind maps a filename to a UI render kind. image/pdf/html
+// get inline previews + a fullscreen viewer; markdown/text get a fullscreen
+// viewer (rendered / monospace) on top of download; everything else is a
+// plain download card.
 func classifyArtifactKind(name string) string {
-	switch strings.ToLower(filepath.Ext(name)) {
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
 	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".bmp", ".svg":
 		return "image"
 	case ".pdf":
 		return "pdf"
 	case ".html", ".htm":
 		return "html"
-	default:
-		return "file"
+	case ".md", ".markdown":
+		return "markdown"
 	}
+	if textArtifactExts[ext] {
+		return "text"
+	}
+	return "file"
 }
 
 // textArtifactExts are source/text types excluded when a file was only read

@@ -23,6 +23,16 @@ export interface ConnectorRow {
   status: string;
   rate_limit_rpm: number;
   tags: string[] | null;
+  /* Owner-only: row visible to its owner + admins until an admin adds a
+     sharing tag. Drives the 🔒 Private chip vs the Everyone fallback. */
+  private?: boolean;
+  /* OAuth/SSO surface — present only for OAuth connector types. oauth.start_url
+     is non-empty only when the caller may connect (SSO on + policy + client_id
+     set), which drives whether the per-row Connect button renders. */
+  oauth?: ConnectorOAuthMeta | null;
+  enable_sso?: boolean;
+  multi_account?: boolean;
+  accounts?: ConnectorAccount[] | null;
 }
 
 export interface ConnectorList {
@@ -64,6 +74,13 @@ export interface ConnectorOp {
   system_disabled: boolean;
   system_disabled_reason: string;
   admin_only: boolean;
+  category: string;
+}
+
+export interface ConnectorCategory {
+  key: string;
+  title: string;
+  description: string;
 }
 
 export interface ConnectorAccount {
@@ -93,6 +110,7 @@ export interface ConnectorDetail {
   is_admin: boolean;
   fields: ConfigField[] | null;
   operations: ConnectorOp[] | null;
+  categories: ConnectorCategory[] | null;
   accounts: ConnectorAccount[] | null;
   oauth: ConnectorOAuthMeta | null;
   enable_sso: boolean;
@@ -232,6 +250,15 @@ export interface DraftOp {
   mcp_source?: DraftMCPSource;
 }
 
+/* A titled section grouping a custom connector's operations. Mirrors the
+   Go custom.DefCategory; the connector detail page renders one card per
+   section. An empty title is the default/ungrouped section. */
+export interface DraftCategory {
+  title: string;
+  description: string;
+  ops: DraftOp[];
+}
+
 export interface Draft {
   key: string;
   name: string;
@@ -244,7 +271,7 @@ export interface Draft {
   health_op: string;
   health_expect: string;
   configs: DraftField[];
-  ops: DraftOp[];
+  ops: DraftCategory[];
 }
 
 export interface CustomMeta {

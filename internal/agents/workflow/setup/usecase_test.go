@@ -220,17 +220,19 @@ func TestUseCase_Connector_StubModule(t *testing.T) {
 	var receivedArgs map[string]string
 	m.Connectors.Register(pkgconnector.Module{
 		Meta: pkgconnector.Meta{Key: "stub", Name: "Stub", Description: "test only"},
-		Operations: []pkgconnector.Operation{
-			{
-				Key:         "echo",
-				Name:        "Echo",
-				Description: "Echo back the input.",
-				Execute: func(c *pkgconnector.Ctx) (any, error) {
-					executed = true
-					receivedArgs = map[string]string{"text": c.Input("text")}
-					return map[string]any{"echoed": c.Input("text")}, nil
+		Operations: []pkgconnector.Category{
+			pkgconnector.Cat("", "",
+				pkgconnector.Operation{
+					Key:         "echo",
+					Name:        "Echo",
+					Description: "Echo back the input.",
+					Execute: func(c *pkgconnector.Ctx) (any, error) {
+						executed = true
+						receivedArgs = map[string]string{"text": c.Input("text")}
+						return map[string]any{"echoed": c.Input("text")}, nil
+					},
 				},
-			},
+			),
 		},
 	})
 

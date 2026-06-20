@@ -42,7 +42,7 @@
   let traceEvents = $state<TurnEvent[] | null>(null);
   let traceError = $state(false);
 
-  type LightboxItem = { url: string; name: string; kind: "image" | "pdf" | "html" | "file" };
+  type LightboxItem = { url: string; name: string; kind: "image" | "pdf" | "html" | "markdown" | "text" | "file" };
   let lightbox = $state<LightboxItem | null>(null);
 
   function openLightbox(item: LightboxItem) {

@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/yogasw/wick/internal/configs"
+	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/lan"
 	"github.com/yogasw/wick/internal/pkg/postgres"
@@ -50,6 +51,7 @@ func configCmd() *cobra.Command {
 		configListCmd(),
 		configGetCmd(),
 		configSetCmd(),
+		configProfileCmd(),
 		configAllowedOriginsCmd(),
 	)
 	return cmd
@@ -106,6 +108,37 @@ func configSetCmd() *cobra.Command {
 					return err
 				}
 				fmt.Printf("%s = %s\n", args[0], args[1])
+				return nil
+			})
+		},
+	}
+}
+
+func parseProfileArg(p string) (string, error) {
+	switch p {
+	case connectors.ProfileFull, connectors.ProfileAgent, connectors.ProfileLite:
+		return p, nil
+	default:
+		return "", fmt.Errorf("invalid profile %q (want %s|%s|%s)",
+			p, connectors.ProfileFull, connectors.ProfileAgent, connectors.ProfileLite)
+	}
+}
+
+func configProfileCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "profile <full|agent|lite>",
+		Short: "Set the connector profile this instance registers at boot. Takes effect on restart.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p, err := parseProfileArg(args[0])
+			if err != nil {
+				return err
+			}
+			return withConfigsService(func(ctx context.Context, svc *configs.Service) error {
+				if err := svc.Set(ctx, configs.KeyProfile, p); err != nil {
+					return err
+				}
+				fmt.Printf("profile = %s (restart to apply)\n", p)
 				return nil
 			})
 		},

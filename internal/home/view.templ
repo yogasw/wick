@@ -95,7 +95,7 @@ templ IndexPage(items []tool.Tool, groups []Group, ungrouped []tool.Tool, meta m
 }
 
 templ ViewModeToggle(current string) {
-	<form method="POST" action="/" class="mx-auto mt-4 inline-flex items-center gap-1 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-1 shadow-sm">
+	<form method="POST" action="/launcher" class="mx-auto mt-4 inline-flex items-center gap-1 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-1 shadow-sm">
 		<button
 			type="submit"
 			name="home_view"

@@ -10,3 +10,4 @@ export { default as LabeledInput } from "./LabeledInput.svelte";
 export { default as Modal } from "./Modal.svelte";
 export { default as Breadcrumb } from "./Breadcrumb.svelte";
 export type { BreadcrumbItem } from "./Breadcrumb.svelte";
+export { default as KebabMenu } from "./KebabMenu.svelte";

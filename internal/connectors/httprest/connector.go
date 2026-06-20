@@ -72,42 +72,46 @@ func Meta() connector.Meta {
 
 // Operations returns the five LLM-callable HTTP verbs exposed by this
 // connector. GET is read-only; POST/PUT/PATCH/DELETE are destructive.
-func Operations() []connector.Operation {
-	return []connector.Operation{
-		connector.Op(
-			"get",
-			"GET Request",
-			"Send an HTTP GET request to {base_url}/{path}. Optionally append query parameters. Returns the parsed JSON response.",
-			GetInput{},
-			getOp, wickdocs.Docs{},
-		),
-		connector.OpDestructive(
-			"post",
-			"POST Request",
-			"Send an HTTP POST request with a JSON body to {base_url}/{path}. Returns the parsed JSON response.",
-			PostInput{},
-			postOp, wickdocs.Docs{},
-		),
-		connector.OpDestructive(
-			"put",
-			"PUT Request",
-			"Send an HTTP PUT request (full replacement) with a JSON body to {base_url}/{path}. Returns the parsed JSON response.",
-			PutInput{},
-			putOp, wickdocs.Docs{},
-		),
-		connector.OpDestructive(
-			"patch",
-			"PATCH Request",
-			"Send an HTTP PATCH request (partial update) with a JSON body to {base_url}/{path}. Returns the parsed JSON response.",
-			PatchInput{},
-			patchOp, wickdocs.Docs{},
-		),
-		connector.OpDestructive(
-			"delete",
-			"DELETE Request",
-			"Send an HTTP DELETE request to {base_url}/{path}. Returns status confirmation.",
-			DeleteInput{},
-			deleteOp, wickdocs.Docs{},
+func Operations() []connector.Category {
+	return []connector.Category{
+		connector.Cat(
+			"HTTP",
+			"Send raw HTTP requests with any verb to an arbitrary URL.",
+			connector.Op(
+				"get",
+				"GET Request",
+				"Send an HTTP GET request to {base_url}/{path}. Optionally append query parameters. Returns the parsed JSON response.",
+				GetInput{},
+				getOp, wickdocs.Docs{},
+			),
+			connector.OpDestructive(
+				"post",
+				"POST Request",
+				"Send an HTTP POST request with a JSON body to {base_url}/{path}. Returns the parsed JSON response.",
+				PostInput{},
+				postOp, wickdocs.Docs{},
+			),
+			connector.OpDestructive(
+				"put",
+				"PUT Request",
+				"Send an HTTP PUT request (full replacement) with a JSON body to {base_url}/{path}. Returns the parsed JSON response.",
+				PutInput{},
+				putOp, wickdocs.Docs{},
+			),
+			connector.OpDestructive(
+				"patch",
+				"PATCH Request",
+				"Send an HTTP PATCH request (partial update) with a JSON body to {base_url}/{path}. Returns the parsed JSON response.",
+				PatchInput{},
+				patchOp, wickdocs.Docs{},
+			),
+			connector.OpDestructive(
+				"delete",
+				"DELETE Request",
+				"Send an HTTP DELETE request to {base_url}/{path}. Returns status confirmation.",
+				DeleteInput{},
+				deleteOp, wickdocs.Docs{},
+			),
 		),
 	}
 }

@@ -21,9 +21,11 @@ func adminModule() connector.Module {
 	return connector.Module{
 		Meta:    connector.Meta{Key: "acl-stub", Name: "ACL Stub", Description: "access control test", Fixed: true},
 		Configs: nil,
-		Operations: []connector.Operation{
-			connector.Op("read", "Read", "readable by all", In{}, noop, wickdocs.Docs{}),
-			connector.OpDestructive("write", "Write", "admin-restricted", In{}, noop, wickdocs.Docs{}),
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Op("read", "Read", "readable by all", In{}, noop, wickdocs.Docs{}),
+				connector.OpDestructive("write", "Write", "admin-restricted", In{}, noop, wickdocs.Docs{}),
+			),
 		},
 	}
 }

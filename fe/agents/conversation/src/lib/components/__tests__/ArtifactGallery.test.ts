@@ -1,5 +1,5 @@
 import { describe, test, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/svelte";
+import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 import ArtifactGallery from "../ArtifactGallery.svelte";
 import type { Artifact } from "../../types/agents.js";
 
@@ -28,11 +28,42 @@ describe("ArtifactGallery", () => {
     expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ kind: "image", url: "/raw?path=a.png" }));
   });
 
-  test("file artifact renders a download link", () => {
-    const { container } = render(ArtifactGallery, {
+  test("file artifact renders a doc card with an actions menu", () => {
+    render(ArtifactGallery, {
       props: { artifacts: [art({ name: "x.zip", path: "x.zip", kind: "file", download_url: "/dl?path=x.zip" })], onOpen: () => {} },
     });
-    const a = container.querySelector('a[href="/dl?path=x.zip"]') as HTMLAnchorElement;
-    expect(a).not.toBeNull();
+    expect(screen.getByText("x.zip")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Actions for x.zip" })).toBeTruthy();
+  });
+
+  test("markdown artifact renders a doc card with a Full screen action in its menu", async () => {
+    render(ArtifactGallery, {
+      props: { artifacts: [art({ name: "PLAN.md", path: "PLAN.md", kind: "markdown", download_url: "/dl?path=PLAN.md" })], onOpen: () => {} },
+    });
+    expect(screen.getByText("Document · MD")).toBeTruthy();
+    await fireEvent.click(screen.getByRole("button", { name: "Actions for PLAN.md" }));
+    expect(screen.getByRole("menuitem", { name: "Full screen" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: "Download" })).toBeTruthy();
+  });
+
+  test("Full screen on a markdown artifact calls onOpen with kind markdown", async () => {
+    const onOpen = vi.fn();
+    render(ArtifactGallery, {
+      props: { artifacts: [art({ name: "PLAN.md", path: "PLAN.md", kind: "markdown", url: "/raw?path=PLAN.md" })], onOpen },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Actions for PLAN.md" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Full screen" }));
+    expect(onOpen).toHaveBeenCalledWith(expect.objectContaining({ kind: "markdown", url: "/raw?path=PLAN.md" }));
+  });
+
+  test("html artifact delegates to the shared HtmlArtifact preview (own ⋮ menu)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ text: () => Promise.resolve("<p>hi</p>") }));
+    const { container } = render(ArtifactGallery, {
+      props: { artifacts: [art({ name: "p.html", path: "p.html", kind: "html", url: "/raw?path=p.html" })], onOpen: () => {} },
+    });
+    expect(container.querySelector("[data-html-artifact]")).not.toBeNull();
+    // The HtmlArtifact component owns the actions menu, keyed by the artifact name.
+    expect(screen.getByRole("button", { name: "Actions for p.html" })).toBeTruthy();
+    vi.unstubAllGlobals();
   });
 });

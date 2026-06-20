@@ -138,10 +138,22 @@ Files produced in a single turn are shown as a **grid** (up to 4 items) or a **c
 |---|---|
 | Image — png, jpg, jpeg, svg, webp, gif | Thumbnail in the grid. Click opens a **zoomable / pannable lightbox** (zoom buttons, mouse-wheel, drag to pan, `Esc` / `+` / `−` / `0` keyboard shortcuts). |
 | PDF | Thumbnail chip. Click opens the PDF inline in the lightbox. |
-| HTML | Live sandboxed `<iframe>` preview chip. Click opens a full-screen sandboxed preview. |
+| HTML | Borderless sandboxed `<iframe>` that grows to its content height (no inner scrollbar). A floating **⋮** menu offers Full screen / Show code / Download. Inline ` ```html ` blocks in the message body use the same renderer. |
+| Markdown (`.md`) | File card with a fullscreen markdown viewer + download. |
+| Text / code | File card with a fullscreen text viewer + download. |
 | Any other type | Downloadable file chip (icon + filename). |
 
 Detection rules: Write and Edit calls on any file type qualify as artifacts. Read calls qualify only for non-text files (e.g. a PNG the agent generated and then read back). Text files the agent only read — not wrote — are not shown as artifacts.
+
+### HTML artifact theme bridge
+
+HTML artifacts (both file artifacts and inline ` ```html ` blocks) receive a **theme bridge** injected by the runtime before the iframe loads:
+
+- **CSS variables on `:root`**: `--wick-bg`, `--wick-surface`, `--wick-fg`, `--wick-muted`, `--wick-border`, `--wick-accent` — already set to the active chat theme. Style with `body { background: var(--wick-bg); color: var(--wick-fg) }` to match the host.
+- **`color-scheme`** is set, so native browser controls (inputs, scrollbars) adapt to light/dark.
+- **`.dark` class** is added to `<html>` in dark mode, for `.dark`-prefix overrides.
+
+The agent system prompt tells the model to use `var(--wick-*)` by default and only hard-code a palette when the design genuinely requires a fixed look (brand mock-up, game canvas, etc.).
 
 ### Serving artifacts
 

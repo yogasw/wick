@@ -352,7 +352,7 @@ func handleConnectorOpMissing(dc DiagnoseCtx) Diagnosis {
 		return d
 	}
 	avail := []string{}
-	for _, o := range mod.Operations {
+	for _, o := range mod.AllOps() {
 		avail = append(avail, o.Key)
 	}
 	d.AvailableKeys = avail

@@ -385,7 +385,9 @@ func Extract(p *ParsedRequest) (*Draft, error) {
 	d.Key = toFieldKey(strings.TrimPrefix(u.Hostname(), "api."))
 	d.Name = humanize(d.Key)
 	d.Description = "Imported from cURL — " + p.Method + " " + u.Host + u.Path
-	d.Ops = []DefOp{op}
+	// One parsed cURL = one op in an untitled default section. The admin
+	// can rename/regroup it on the review screen.
+	d.Ops = []DefCategory{{Ops: []DefOp{op}}}
 	dedupeConfigs(d)
 	return d, nil
 }
@@ -519,17 +521,19 @@ func dedupeConfigs(d *Draft) {
 		cfgs = append(cfgs, c)
 	}
 	d.Configs = cfgs
-	for oi := range d.Ops {
-		inSeen := map[string]bool{}
-		ins := d.Ops[oi].Inputs[:0]
-		for _, f := range d.Ops[oi].Inputs {
-			if inSeen[f.Key] || seen[f.Key] {
-				continue
+	for ci := range d.Ops {
+		for oi := range d.Ops[ci].Ops {
+			inSeen := map[string]bool{}
+			ins := d.Ops[ci].Ops[oi].Inputs[:0]
+			for _, f := range d.Ops[ci].Ops[oi].Inputs {
+				if inSeen[f.Key] || seen[f.Key] {
+					continue
+				}
+				inSeen[f.Key] = true
+				ins = append(ins, f)
 			}
-			inSeen[f.Key] = true
-			ins = append(ins, f)
+			d.Ops[ci].Ops[oi].Inputs = ins
 		}
-		d.Ops[oi].Inputs = ins
 	}
 }
 

@@ -23,12 +23,14 @@ func historyModule(key string) connector.Module {
 			Icon:        "💬",
 			DefaultTags: []tool.DefaultTag{},
 		},
-		Operations: []connector.Operation{
-			{
-				Key:     "send",
-				Name:    "Send",
-				Execute: func(*connector.Ctx) (any, error) { return map[string]string{"ok": "yes"}, nil },
-			},
+		Operations: []connector.Category{
+			connector.Cat("", "",
+				connector.Operation{
+					Key:     "send",
+					Name:    "Send",
+					Execute: func(*connector.Ctx) (any, error) { return map[string]string{"ok": "yes"}, nil },
+				},
+			),
 		},
 	}
 }

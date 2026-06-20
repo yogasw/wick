@@ -116,7 +116,9 @@ To reconnect or change auth/exclusions, open **Edit definition** (it leads to th
 
 1. **Meta** — key, name, description, icon.
 2. **Configs** — a table editor: key, label, widget, secret/required toggles, default, description.
-3. **Operations** — for each operation: meta (key, name, description, destructive toggle), inputs (same table editor), and the request recipe — method, URL template, header rows, body template, content type.
+3. **Operations** — operations are organized into **section blocks**. Each section has a title and an optional description; ops inside it share that header on the connector's detail page. You can add as many sections as you need, reorder them, and drag individual ops between sections. Within a section, click **+ Add operation** to add an op; each op has its own meta (key, name, description, destructive toggle), inputs table, and request recipe (method, URL template, header rows, body template, content type).
+
+A collapsible **Jump** panel on the right shows a mini-map of sections and ops. Scrolling the form updates the active highlight; clicking a jump entry scrolls straight to that section or op.
 
 A **Test** button fires the operation once against your current config values so you can verify the recipe before saving. Useful when you have API docs but neither a cURL string nor an MCP server.
 
@@ -155,6 +157,19 @@ Access rides the standard tag system — there is no separate sharing mechanism.
 - **Grant access:** open `/admin/tags`, pick the `custom:<key>` tag, and assign it to users or user groups. Tagged users see the connector and can call its operations.
 - **Open to all:** remove the `custom:<key>` tag from the connector instance (Access section on the instance page). Without a filter tag, every approved user can see it. The tag row itself is kept, so you can re-attach it later to restore the restriction.
 - Per-operation switches still apply on top: an operation can be disabled entirely, or marked admin-only even when the row is open to others. A call goes through only when the row tags allow it **and** the op is enabled **and** the op is not admin-only for a non-admin caller.
+
+## Operations data format (breaking change for existing custom connectors)
+
+The stored `ops` column changed shape in v0.22.0 — it is now a **nested array of sections** (`[{title, description, ops:[...]}]`) instead of a flat array of operations. There is **no automatic migration**. Any custom connector built before this version stores the old flat shape, which the current parser no longer accepts — `ParseOps` returns an error on the old format and the connector fails to reload.
+
+**Action required if you have existing custom connectors:**
+
+1. Open **Connectors → {your custom connector} → Edit definition**.
+2. Note the existing operations (key, name, inputs, request recipe).
+3. Delete the old definition.
+4. Recreate it using any of the three creation flows above. In the manual builder, group your operations into sections (one section with an empty title produces the flat layout from before).
+
+This only affects self-hosted instances where custom connectors were built before v0.22.0. Built-in connectors and MCP-backed connectors are unaffected.
 
 ## Editing and reloading
 

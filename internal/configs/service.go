@@ -539,6 +539,15 @@ func (s *Service) EncryptionKey() string {
 	return s.Get(KeyEncryptionKey)
 }
 
+// Profile returns the connector profile this instance should register
+// at boot (full/agent/lite). Empty/unset falls back to DefaultProfile.
+func (s *Service) Profile() string {
+	if p := strings.TrimSpace(s.Get(KeyProfile)); p != "" {
+		return p
+	}
+	return DefaultProfile
+}
+
 // EncryptSecret encrypts plain using the master key. Returns the
 // wick_cenc_ token. No-op (returns plain) when no encryptor is wired
 // or encryption is disabled.
