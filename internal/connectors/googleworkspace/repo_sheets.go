@@ -28,13 +28,13 @@ func sheetsGet(c *connector.Ctx, path string, params url.Values) ([]byte, error)
 
 func sheetsPost(c *connector.Ctx, path string, body any) ([]byte, error) {
 	return doWithRefresh(c, func(token string) (*http.Request, error) {
-		return buildJSONRequest(c, http.MethodPost, sheetsBaseURL+path, body)
+		return buildJSONRequest(c, http.MethodPost, sheetsBaseURL+path, token, body)
 	})
 }
 
 func sheetsPut(c *connector.Ctx, path string, body any) ([]byte, error) {
 	return doWithRefresh(c, func(token string) (*http.Request, error) {
-		return buildJSONRequest(c, http.MethodPut, sheetsBaseURL+path, body)
+		return buildJSONRequest(c, http.MethodPut, sheetsBaseURL+path, token, body)
 	})
 }
 
