@@ -10,6 +10,16 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.22.1](https://github.com/yogasw/wick/compare/v0.22.0...v0.22.1) — Connectors
+
+_Released on 2026-06-20_
+
+### Fixed
+*   Corrected the `crudcrud` sample template to return `[]connector.Category` when registering operations. This resolves a build failure in the materialized template (`wick-agent`) by aligning with `app.RegisterConnector`'s updated signature, which now expects operations grouped into categories.
+
+---
+
+
 ## [v0.22.0](https://github.com/yogasw/wick/compare/v0.21.0...v0.22.0) — Connectors & Agents
 
 _Released on 2026-06-20_
