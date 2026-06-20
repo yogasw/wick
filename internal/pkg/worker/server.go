@@ -47,7 +47,6 @@ func NewServer() *Server {
 	// identical.
 	tools.RegisterBuiltins()
 	jobs.RegisterBuiltins()
-	connectors.RegisterBuiltins()
 
 	// Reconcile the configs table so job.Ctx.Cfg(...) sees the same
 	// cached values the web process uses. Seeds per-tool / per-job
@@ -69,6 +68,8 @@ func NewServer() *Server {
 	if err := configsSvc.Bootstrap(context.Background(), extraConfigs...); err != nil {
 		log.Fatal().Msgf("configs bootstrap: %s", err.Error())
 	}
+
+	connectors.RegisterProfile(configsSvc.Profile())
 
 	jobsSvc := manager.NewServiceFromDB(db)
 	jobsSvc.SetConfigReader(configsSvc)
