@@ -430,7 +430,13 @@ function renderHtmlArtifacts(node: HTMLElement): void {
     if (!src.trim()) continue;
     el.innerHTML = "";
     el.className = "w-full";
-    mount(HtmlArtifact, { target: el, props: { src, name: el.getAttribute("data-html-name") || "preview.html" } });
+    // Pass the host element so the component can re-read data-html-src while
+    // the block is still streaming (renderLive transplants this node forward
+    // and updates the attribute each token instead of remounting).
+    mount(HtmlArtifact, {
+      target: el,
+      props: { src, srcHost: el, name: el.getAttribute("data-html-name") || "preview.html" },
+    });
   }
 }
 
@@ -489,7 +495,7 @@ function srcKey(el: Element): string {
    never hits. Match the single in-flight partial of the same kind instead, so
    its painted frame transplants forward; renderMermaid/renderSvg then refresh
    it in place once the new (larger) source renders. */
-const PARTIAL_KEY = { m: "mp:partial", s: "sp:partial" } as const;
+const PARTIAL_KEY = { m: "mp:partial", s: "sp:partial", h: "hp:partial" } as const;
 
 export function renderLive(node: HTMLElement, text: string) {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -512,6 +518,10 @@ export function renderLive(node: HTMLElement, text: string) {
       cache.set(`${kind}:${srcKey(el)}`, el);
       if (kind === "m" && el.hasAttribute("data-mermaid-partial")) cache.set(PARTIAL_KEY.m, el);
       if (kind === "s" && el.hasAttribute("data-svg-partial")) cache.set(PARTIAL_KEY.s, el);
+      // An HTML artifact's source grows every token while it streams, so the
+      // exact-src cache never hits — keep the single in-flight one keyed so its
+      // mounted iframe transplants forward (no remount → no height reset).
+      if (kind === "h") cache.set(PARTIAL_KEY.h, el);
     });
 
     const tmp = document.createElement("div");
@@ -530,6 +540,13 @@ export function renderLive(node: HTMLElement, text: string) {
       if (!done && kind === "s" && fresh.hasAttribute("data-svg-partial")) {
         done = cache.get(PARTIAL_KEY.s);
         if (done) done.setAttribute("data-svg-src", fresh.getAttribute("data-svg-src") ?? "");
+      }
+      // Streaming HTML artifact: reuse the already-mounted iframe and push the
+      // grown source onto its host attribute. HtmlArtifact observes the attr
+      // and refreshes its preview in place (so it keeps growing, not resets).
+      if (!done && kind === "h") {
+        done = cache.get(PARTIAL_KEY.h);
+        if (done) done.setAttribute("data-html-src", fresh.getAttribute("data-html-src") ?? "");
       }
       if (done) fresh.replaceWith(done);
     });

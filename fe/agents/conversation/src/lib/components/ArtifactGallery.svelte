@@ -101,7 +101,9 @@
     {/each}
   </div>
 {:else}
-  <div data-gallery-grid class="flex flex-col items-center gap-2">
+  <!-- items-stretch so a full-width HTML preview spans the bubble width;
+       the narrow doc/image/pdf cards size to their own content regardless. -->
+  <div data-gallery-grid class="flex flex-col items-stretch gap-2">
     {#each artifacts as a (a.path)}
       {@render cell(a)}
     {/each}

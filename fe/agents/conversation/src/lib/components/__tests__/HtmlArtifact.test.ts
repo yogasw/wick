@@ -54,6 +54,18 @@ describe("HtmlArtifact", () => {
     expect(container.querySelector("iframe")).not.toBeNull();
   });
 
+  test("updates the preview when the streaming host's data-html-src grows", async () => {
+    const host = document.createElement("div");
+    host.setAttribute("data-html-src", "<p>one</p>");
+    document.body.appendChild(host);
+    render(HtmlArtifact, { target: host, props: { src: "<p>one</p>", srcHost: host, name: "x.html" } });
+    expect((host.querySelector("iframe") as HTMLIFrameElement).srcdoc).toContain("one");
+    // Simulate a streaming token growing the source on the host attribute.
+    host.setAttribute("data-html-src", "<p>one</p><p>two</p>");
+    await waitFor(() => expect((host.querySelector("iframe") as HTMLIFrameElement).srcdoc).toContain("two"));
+    host.remove();
+  });
+
   test("Full screen opens an overlay with a larger iframe; Escape closes", async () => {
     render(HtmlArtifact, { props: { src: "<p>hi</p>", name: "x.html" } });
     await fireEvent.click(screen.getByRole("button", { name: "Actions for x.html" }));

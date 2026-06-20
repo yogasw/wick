@@ -16,9 +16,13 @@
     url?: string;
     /** forced-download endpoint; defaults to url for file artifacts. */
     downloadUrl?: string;
+    /** when mounted into a [data-html-artifact] host that streams, the host
+        element whose data-html-src grows each token — observed so the preview
+        refreshes in place instead of resetting on remount. */
+    srcHost?: HTMLElement;
     name?: string;
   };
-  let { src, url, downloadUrl, name = "preview.html" }: Props = $props();
+  let { src, url, downloadUrl, srcHost, name = "preview.html" }: Props = $props();
 
   const id = `html-artifact-${Math.round(performance.now())}-${Math.floor((performance.now() * 1000) % 100000)}`;
 
@@ -30,6 +34,12 @@
   let fullscreen = $state(false);
 
   const MAX_HEIGHT = 2400;
+
+  function applyRaw(next: string) {
+    if (next === raw) return;
+    raw = next;
+    srcdoc = buildAutoHeightSrcdoc(next, id);
+  }
 
   async function ensureLoaded() {
     if (raw !== null) {
@@ -55,6 +65,19 @@
     }
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
+  });
+
+  // While the inline block streams, renderLive keeps THIS mounted node and
+  // rewrites the host's data-html-src each token. Observe it so the preview
+  // grows with the source instead of staying at the first partial.
+  $effect(() => {
+    if (!srcHost || typeof MutationObserver === "undefined") return;
+    const obs = new MutationObserver(() => {
+      const next = srcHost.getAttribute("data-html-src");
+      if (next && next.trim()) applyRaw(next);
+    });
+    obs.observe(srcHost, { attributes: true, attributeFilter: ["data-html-src"] });
+    return () => obs.disconnect();
   });
 
   function download() {
@@ -99,10 +122,12 @@
 
 <!-- Borderless so the preview reads as one with the conversation. -->
 <div class="relative w-full overflow-hidden rounded-xl">
-  <!-- The ⋮ chip floats over an interactive iframe; promote it to its own
-       layer (transform) + high z + explicit pointer-events so the iframe
-       can't swallow the click. -->
-  <div class="absolute right-1.5 top-1.5 z-30 rounded-lg bg-white-100/80 dark:bg-navy-800/80 shadow-sm backdrop-blur" style="pointer-events:auto;transform:translateZ(0)">
+  <!-- ⋮ chip floats over the (interactive) iframe. NOTE: no transform/filter/
+       backdrop-blur here — any of those make this a containing block for the
+       KebabMenu's position:fixed dropdown, which then gets clipped by the
+       container's overflow-hidden and never shows. A solid bg + z keeps it
+       legible and clickable without that trap. -->
+  <div class="absolute right-1.5 top-1.5 z-30 rounded-lg bg-white-200 dark:bg-navy-700 shadow-sm">
     <KebabMenu ariaLabel={`Actions for ${name}`} items={menuItems} />
   </div>
   {#if loadErr}
