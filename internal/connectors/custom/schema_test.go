@@ -17,13 +17,13 @@ func validDraft() *Draft {
 			{Key: "base_url", Widget: "url", Required: true},
 			{Key: "token", Widget: "secret", Secret: true},
 		},
-		Ops: []DefOp{{
+		Ops: []DefCategory{{Ops: []DefOp{{
 			Key:         "list_pets",
 			Name:        "List Pets",
 			Description: "List pets in the store.",
 			Inputs:      []DefField{{Key: "limit", Widget: "number"}},
 			Request:     &OpRequest{Method: "GET", URLTemplate: "{{.cfg.base_url}}/pets"},
-		}},
+		}}}},
 	}
 }
 
@@ -37,8 +37,8 @@ func TestValidateDraft(t *testing.T) {
 		{
 			name: "valid mcp draft",
 			mutate: func(d *Draft) {
-				d.Ops[0].Request = nil
-				d.Ops[0].MCPSource = &MCPSource{ServerID: "srv-1", ToolName: "list_pets"}
+				d.Ops[0].Ops[0].Request = nil
+				d.Ops[0].Ops[0].MCPSource = &MCPSource{ServerID: "srv-1", ToolName: "list_pets"}
 			},
 		},
 		{
@@ -85,56 +85,56 @@ func TestValidateDraft(t *testing.T) {
 		},
 		{
 			name:    "op key not snake_case",
-			mutate:  func(d *Draft) { d.Ops[0].Key = "ListPets" },
+			mutate:  func(d *Draft) { d.Ops[0].Ops[0].Key = "ListPets" },
 			wantErr: "snake_case",
 		},
 		{
 			name: "duplicate op keys",
 			mutate: func(d *Draft) {
-				op2 := d.Ops[0]
-				d.Ops = append(d.Ops, op2)
+				op2 := d.Ops[0].Ops[0]
+				d.Ops[0].Ops = append(d.Ops[0].Ops, op2)
 			},
 			wantErr: "duplicate op key",
 		},
 		{
 			name:    "op missing description",
-			mutate:  func(d *Draft) { d.Ops[0].Description = "" },
+			mutate:  func(d *Draft) { d.Ops[0].Ops[0].Description = "" },
 			wantErr: "name and description are required",
 		},
 		{
 			name:    "op input bad widget",
-			mutate:  func(d *Draft) { d.Ops[0].Inputs[0].Widget = "picker" },
+			mutate:  func(d *Draft) { d.Ops[0].Ops[0].Inputs[0].Widget = "picker" },
 			wantErr: "unsupported widget",
 		},
 		{
 			name: "request and mcp_source both set",
 			mutate: func(d *Draft) {
-				d.Ops[0].MCPSource = &MCPSource{ServerID: "s", ToolName: "t"}
+				d.Ops[0].Ops[0].MCPSource = &MCPSource{ServerID: "s", ToolName: "t"}
 			},
 			wantErr: "mutually exclusive",
 		},
 		{
 			name: "neither request nor mcp_source",
 			mutate: func(d *Draft) {
-				d.Ops[0].Request = nil
+				d.Ops[0].Ops[0].Request = nil
 			},
 			wantErr: "either request or mcp_source",
 		},
 		{
 			name:    "unsupported http method",
-			mutate:  func(d *Draft) { d.Ops[0].Request.Method = "TRACE" },
+			mutate:  func(d *Draft) { d.Ops[0].Ops[0].Request.Method = "TRACE" },
 			wantErr: "unsupported HTTP method",
 		},
 		{
 			name:    "missing url_template",
-			mutate:  func(d *Draft) { d.Ops[0].Request.URLTemplate = "  " },
+			mutate:  func(d *Draft) { d.Ops[0].Ops[0].Request.URLTemplate = "  " },
 			wantErr: "url_template is required",
 		},
 		{
 			name: "mcp_source missing tool_name",
 			mutate: func(d *Draft) {
-				d.Ops[0].Request = nil
-				d.Ops[0].MCPSource = &MCPSource{ServerID: "srv-1"}
+				d.Ops[0].Ops[0].Request = nil
+				d.Ops[0].Ops[0].MCPSource = &MCPSource{ServerID: "srv-1"}
 			},
 			wantErr: "server_id and tool_name",
 		},
@@ -250,23 +250,27 @@ func TestParseFieldsRoundTrip(t *testing.T) {
 }
 
 func TestParseOpsRoundTrip(t *testing.T) {
-	in := []DefOp{
-		{
-			Key: "get_pet", Name: "Get Pet", Description: "Fetch one pet.",
-			Inputs: []DefField{{Key: "pet_id", Required: true}},
-			Request: &OpRequest{
-				Method:      "GET",
-				URLTemplate: "{{.cfg.base_url}}/pets/{{.in.pet_id}}",
-				Headers:     map[string]string{"Accept": "application/json"},
+	in := []DefCategory{{
+		Title:       "Pets",
+		Description: "Pet operations.",
+		Ops: []DefOp{
+			{
+				Key: "get_pet", Name: "Get Pet", Description: "Fetch one pet.",
+				Inputs: []DefField{{Key: "pet_id", Required: true}},
+				Request: &OpRequest{
+					Method:      "GET",
+					URLTemplate: "{{.cfg.base_url}}/pets/{{.in.pet_id}}",
+					Headers:     map[string]string{"Accept": "application/json"},
+				},
+			},
+			{
+				Key: "delete_pet", Name: "Delete Pet", Description: "Remove a pet.",
+				Destructive: true,
+				Inputs:      []DefField{{Key: "pet_id", Required: true}},
+				MCPSource:   &MCPSource{ServerID: "srv-1", ToolName: "delete_pet"},
 			},
 		},
-		{
-			Key: "delete_pet", Name: "Delete Pet", Description: "Remove a pet.",
-			Destructive: true,
-			Inputs:      []DefField{{Key: "pet_id", Required: true}},
-			MCPSource:   &MCPSource{ServerID: "srv-1", ToolName: "delete_pet"},
-		},
-	}
+	}}
 	raw, err := json.Marshal(in)
 	if err != nil {
 		t.Fatal(err)

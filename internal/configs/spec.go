@@ -37,6 +37,8 @@ const (
 	KeyEncryptionKey        = "encryption_key"
 	KeyStartupScript        = "startup_script"
 	KeyStartupScriptEnabled = "startup_script_enabled"
+	KeyProfile              = "profile"
+	DefaultProfile          = "full"
 )
 
 // generators maps app-level keys to the function that produces a fresh
@@ -141,6 +143,12 @@ func appDefaults() []entity.Config {
 			Description:   "Master key for the encrypted-fields layer (HKDF salt = user_uuid, AES-256-GCM). Regenerating invalidates every wick_enc_ token already issued. Set WICK_ENC_KEY in the environment to override the DB value (vault injection); set WICK_ENC_DISABLE=true to disable encryption entirely.",
 			IsSecret:      true,
 			CanRegenerate: true,
+		},
+		{
+			Key:         KeyProfile,
+			Type:        "text",
+			Value:       DefaultProfile,
+			Description: "Connector profile this instance registers at boot: full (all builtin connectors), agent (curated subset), or lite (none). Set via `<app> config profile <name>`; takes effect on restart.",
 		},
 	}
 }

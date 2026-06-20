@@ -270,9 +270,13 @@ func (s *Service) seedModuleRows(ctx context.Context, m connector.Module) error 
 	}
 	if n == 0 && m.Meta.Fixed {
 		row := &entity.Connector{
-			Key:                m.Meta.Key,
-			Label:              m.Meta.Name,
-			AllowSessionConfig: m.AllowSessionConfig,
+			Key:                   m.Meta.Key,
+			Label:                 m.Meta.Name,
+			AllowSessionConfig:    m.AllowSessionConfig,
+			EnableSSO:             m.DefaultAccess.EnableSSO,
+			AllowOthersConnectSSO: m.DefaultAccess.AllowOthersConnectSSO,
+			MultiAccount:          m.DefaultAccess.MultiAccount,
+			AllowOthersConfigure:  m.DefaultAccess.AllowOthersConfigure,
 		}
 		if err := s.repo.Create(ctx, row); err != nil {
 			return fmt.Errorf("seed initial row for %q: %w", m.Meta.Key, err)
@@ -381,10 +385,14 @@ func (s *Service) Create(ctx context.Context, key, label string, configs map[str
 		}
 	}
 	c := &entity.Connector{
-		Key:                key,
-		Label:              label,
-		CreatedBy:          createdBy,
-		AllowSessionConfig: mod.AllowSessionConfig,
+		Key:                   key,
+		Label:                 label,
+		CreatedBy:             createdBy,
+		AllowSessionConfig:    mod.AllowSessionConfig,
+		EnableSSO:             mod.DefaultAccess.EnableSSO,
+		AllowOthersConnectSSO: mod.DefaultAccess.AllowOthersConnectSSO,
+		MultiAccount:          mod.DefaultAccess.MultiAccount,
+		AllowOthersConfigure:  mod.DefaultAccess.AllowOthersConfigure,
 	}
 	if err := s.repo.Create(ctx, c); err != nil {
 		return nil, err
@@ -759,8 +767,9 @@ func (s *Service) OperationStatesFull(ctx context.Context, connectorID, key stri
 	for _, r := range rows {
 		stored[r.OperationKey] = r
 	}
-	out := make(map[string]OpState, len(mod.Operations))
-	for _, op := range mod.Operations {
+	modOps := mod.AllOps()
+	out := make(map[string]OpState, len(modOps))
+	for _, op := range modOps {
 		st := OpState{Enabled: true} // destructive ops now default ON; LLM confirms before executing
 		if row, ok := stored[op.Key]; ok {
 			st.Enabled = row.Enabled
@@ -1021,9 +1030,10 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	}
 
 	var op *connector.Operation
-	for i := range mod.Operations {
-		if mod.Operations[i].Key == p.OperationKey {
-			op = &mod.Operations[i]
+	ops := mod.AllOps()
+	for i := range ops {
+		if ops[i].Key == p.OperationKey {
+			op = &ops[i]
 			break
 		}
 	}

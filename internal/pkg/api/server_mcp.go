@@ -141,7 +141,7 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 		connectors.Register(wfconn.ModuleWithRunner(stdioWfMgr.MCP, stdioRunner))
 	}
 
-	connectors.RegisterBuiltins()
+	connectors.RegisterProfile(configsSvc.Profile())
 	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}

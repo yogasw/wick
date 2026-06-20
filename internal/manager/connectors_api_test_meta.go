@@ -73,8 +73,8 @@ func (h *Handler) apiConnectorTestMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ops := make([]testOpJSON, 0, len(mod.Operations))
-	for _, op := range mod.Operations {
+	ops := make([]testOpJSON, 0, len(mod.AllOps()))
+	for _, op := range mod.AllOps() {
 		ins := make([]testInputJSON, 0, len(op.Input))
 		for _, in := range op.Input {
 			ins = append(ins, testInputJSON{

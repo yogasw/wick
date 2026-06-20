@@ -22,6 +22,7 @@ import (
 	wftest "github.com/yogasw/wick/internal/agents/workflow/wftest"
 	"github.com/yogasw/wick/internal/entity"
 	wfview "github.com/yogasw/wick/internal/tools/agents/view/workflow"
+	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -389,6 +390,10 @@ func workflowRegistryAPI(c *tool.Ctx) {
 	connectors := []map[string]any{}
 	for _, info := range globalWorkflowMgr.MCP.ConnectorsList() {
 		mod, modOK := globalWorkflowMgr.Connectors.Module(info.Module)
+		var modOps []connector.Operation
+		if modOK {
+			modOps = mod.AllOps()
+		}
 		ops := []map[string]any{}
 		for i, op := range info.Operations {
 			inputs := make([]map[string]any, 0, len(op.Input))
@@ -406,9 +411,9 @@ func workflowRegistryAPI(c *tool.Ctx) {
 				"destructive": op.Destructive,
 				"input":       inputs,
 			}
-			if modOK && i < len(mod.Operations) {
-				row["args_html"] = renderArgFormHTML(c.Context(), mod.Operations[i].Input)
-				row["args_schema"] = mod.Operations[i].Input
+			if modOK && i < len(modOps) {
+				row["args_html"] = renderArgFormHTML(c.Context(), modOps[i].Input)
+				row["args_schema"] = modOps[i].Input
 			}
 			ops = append(ops, row)
 		}

@@ -239,6 +239,27 @@ Update one value. Rejects locked rows and rows currently overridden by an env va
 ./bin/myapp config set app_url https://my-deployment.example.com
 ```
 
+### `<app> config profile <full|agent|lite>`
+
+Set the connector build profile this instance registers at boot. The value is stored as a `profile` config row in the database; a restart is required for the change to take effect.
+
+```bash
+./bin/myapp config profile full    # all builtin connectors (default)
+./bin/myapp config profile agent   # curated subset: GitHub, HTTP REST, Slack
+./bin/myapp config profile lite    # no builtin connectors registered
+# profile = agent (restart to apply)
+```
+
+| Profile | Builtin connectors registered at boot |
+|---|---|
+| `full` (default) | All 7: GitHub, HTTP REST, Slack, Bitbucket, Loki, Phoenix, Google Workspace |
+| `agent` | GitHub, HTTP REST, Slack |
+| `lite` | None |
+
+The four runtime connectors (Wick Manager, Workflow, Notifications, Custom Connector) are never profile-gated and always register regardless of this setting.
+
+The active profile can also be read and written via the admin Configs page (`/admin/variables`, key `profile`).
+
 ### `<app> config allowed-origins`
 
 A second-level group for managing the host allowlist (URLs that may reach the manager beyond `app_url`).

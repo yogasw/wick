@@ -76,9 +76,9 @@ func Module(deps Deps) connector.Module {
 // Operations builds the closure-bound op list for the registry. All
 // handlers capture `deps` so each op can reach into wick services
 // without a global accessor (Opsi C of the plan).
-func Operations(deps Deps) []connector.Operation {
+func Operations(deps Deps) []connector.Category {
 	h := newHandlers(deps)
-	return []connector.Operation{
+	return []connector.Category{connector.Cat("Management", "Manage app variables, jobs, tools, connectors, and system preferences.",
 		// app_*
 		connector.Op("app_list", "List App Variables",
 			"List app-level configuration variables (session secret, app URL, encryption key, etc). Returns array of {key, type, description, is_secret, is_set, is_locked, can_regenerate, value}. Secret values are masked. Access: ADMIN ONLY. UI: <app_url>/admin/variables.",
@@ -172,7 +172,7 @@ func Operations(deps Deps) []connector.Operation {
 				// emptyInput marks an op that takes no arguments. Reflected into an
 				// empty Configs slice; the LLM sees `{}` as the input schema.
 			}),
-	}
+	)}
 }
 
 type emptyInput struct{}

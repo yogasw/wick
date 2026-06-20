@@ -51,6 +51,7 @@ beforeEach(() => {
     is_admin: false,
     fields: [],
     operations: [],
+    categories: [],
     accounts: [],
     oauth: null,
     enable_sso: false,

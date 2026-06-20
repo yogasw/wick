@@ -14,7 +14,11 @@ func TestClassifyArtifactKind(t *testing.T) {
 	cases := map[string]string{
 		"a.png": "image", "b.JPG": "image", "c.svg": "image", "d.webp": "image",
 		"e.pdf": "pdf", "f.html": "html", "g.htm": "html",
-		"h.zip": "file", "i.go": "file", "j": "file",
+		// markdown + text/code get their own previewable kinds; only
+		// unknown/binary types stay plain "file".
+		"k.md": "markdown", "l.markdown": "markdown",
+		"i.go": "text", "m.json": "text", "n.txt": "text", "o.log": "text",
+		"h.zip": "file", "j": "file",
 	}
 	for name, want := range cases {
 		if got := classifyArtifactKind(name); got != want {

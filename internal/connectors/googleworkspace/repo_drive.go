@@ -288,8 +288,10 @@ func createPermission(c *connector.Ctx, fileID, email, role string) (any, error)
 	}, nil
 }
 
-// buildJSONRequest builds an HTTP request with a JSON body. Shared by repo_sheets, repo_docs, repo_slides.
-func buildJSONRequest(c *connector.Ctx, method, fullURL string, body any) (*http.Request, error) {
+// buildJSONRequest builds an authorized HTTP request with a JSON body. Shared by
+// repo_sheets, repo_docs, repo_slides, repo_calendar, repo_meet. The token comes
+// from the doWithRefresh closure so the lazy-refresh retry re-signs the request.
+func buildJSONRequest(c *connector.Ctx, method, fullURL, token string, body any) (*http.Request, error) {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request body: %w", err)
@@ -298,6 +300,7 @@ func buildJSONRequest(c *connector.Ctx, method, fullURL string, body any) (*http
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	return req, nil
 }

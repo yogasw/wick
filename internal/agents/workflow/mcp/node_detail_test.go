@@ -80,18 +80,20 @@ func newTestOps(t *testing.T) *Ops {
 	cr := connector.NewRegistry(nil, nil)
 	cr.Register(pkgconnector.Module{
 		Meta: pkgconnector.Meta{Key: "demo", Name: "Demo"},
-		Operations: []pkgconnector.Operation{
-			{
-				Key:         "echo",
-				Name:        "Echo",
-				Description: "Echo a value",
-				Input: []pkgentity.Config{
-					{Key: "text", Description: "value to echo", Required: true, Type: "text"},
+		Operations: []pkgconnector.Category{
+			pkgconnector.Cat("", "",
+				pkgconnector.Operation{
+					Key:         "echo",
+					Name:        "Echo",
+					Description: "Echo a value",
+					Input: []pkgentity.Config{
+						{Key: "text", Description: "value to echo", Required: true, Type: "text"},
+					},
+					Docs: wickdocs.Docs{
+						CommonPitfalls: []string{"Don't echo secrets"},
+					},
 				},
-				Docs: wickdocs.Docs{
-					CommonPitfalls: []string{"Don't echo secrets"},
-				},
-			},
+			),
 		},
 	})
 

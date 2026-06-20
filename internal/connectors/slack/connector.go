@@ -186,166 +186,172 @@ func Meta() connector.Meta {
 	}
 }
 
-// Operations returns the LLM-callable actions for this connector.
-func Operations() []connector.Operation {
-	return []connector.Operation{
-		connector.Op(
-			"list_channels",
-			"List Channels",
-			"List channels visible to the bot. Returns id, name, is_private, is_archived, topic, purpose, and pagination cursor.",
-			ListChannelsInput{},
-			listChannels,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"channels":          "Array of channel objects: id, name, is_private, is_archived, topic, purpose, num_members.",
-					"response_metadata": "Pagination wrapper. response_metadata.next_cursor non-empty = call again with cursor.",
+// Operations returns the LLM-callable actions for this connector,
+// grouped into titled categories for the admin UI.
+func Operations() []connector.Category {
+	return []connector.Category{
+		connector.Cat("Channels", "List, search, and inspect channels, history, and threads.",
+			connector.Op(
+				"list_channels",
+				"List Channels",
+				"List channels visible to the bot. Returns id, name, is_private, is_archived, topic, purpose, and pagination cursor.",
+				ListChannelsInput{},
+				listChannels,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"channels":          "Array of channel objects: id, name, is_private, is_archived, topic, purpose, num_members.",
+						"response_metadata": "Pagination wrapper. response_metadata.next_cursor non-empty = call again with cursor.",
+					},
+					Quirks: []string{
+						"types defaults to public_channel,private_channel. Add mpim,im to include group DMs and DMs.",
+						"exclude_archived defaults true — flip to false when auditing/restoring.",
+						"name_contains is applied client-side after Slack returns the page; if your match is in a later page it won't surface without paginating.",
+						"Slack caps the per-call result at 1000. Use cursor for the next page.",
+					},
+					PairWith:     []string{"connector:slack.search_channels", "connector:slack.get_channel_info"},
+					OutputSample: `{"ok":true,"channels":[{"id":"C12345","name":"general","is_private":false,"is_archived":false}],"response_metadata":{"next_cursor":""}}`,
 				},
-				Quirks: []string{
-					"types defaults to public_channel,private_channel. Add mpim,im to include group DMs and DMs.",
-					"exclude_archived defaults true — flip to false when auditing/restoring.",
-					"name_contains is applied client-side after Slack returns the page; if your match is in a later page it won't surface without paginating.",
-					"Slack caps the per-call result at 1000. Use cursor for the next page.",
+			),
+			connector.Op(
+				"search_channels",
+				"Search Channels by Name",
+				"Find channels whose name contains the query (case-insensitive). Returns up to {limit} matches with id, name, is_private.",
+				SearchChannelsInput{},
+				searchChannels, wickdocs.Docs{},
+			),
+			connector.Op(
+				"get_channel_info",
+				"Get Channel Info",
+				"Return metadata for a single channel: id, name, is_private, is_archived, topic, purpose, creator, created.",
+				GetChannelInfoInput{},
+				getChannelInfo, wickdocs.Docs{},
+			),
+			connector.Op(
+				"get_channel_history",
+				"Get Channel History",
+				"Read recent messages in a channel. Returns ts, user, text, thread_ts, reply_count, reactions, and pagination cursor.",
+				GetChannelHistoryInput{},
+				getChannelHistory,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"messages":          "Array of message objects (ts, user, text, thread_ts, reply_count, reactions).",
+						"response_metadata": "Pagination wrapper. response_metadata.next_cursor non-empty = more pages.",
+						"has_more":          "True when older messages exist beyond the current page.",
+					},
+					Quirks: []string{
+						"oldest / latest are INCLUSIVE Slack ts strings (e.g. \"1700000000.000100\"), not RFC3339.",
+						"Default limit 50, max 1000. For long ranges paginate with cursor instead of bumping limit.",
+						"Returns ONLY top-level messages — threaded replies need get_thread_replies on the parent ts.",
+						"Requires channels:history (public), groups:history (private), or im:history / mpim:history depending on channel type.",
+					},
+					PairWith:     []string{"connector:slack.get_thread_replies", "connector:slack.get_permalink"},
+					InputSample:  `{"channel":"C12345","limit":50,"oldest":"1700000000.000000"}`,
+					OutputSample: `{"ok":true,"messages":[{"ts":"1700001234.005600","user":"U02ABCDEF","text":"hello","thread_ts":"1700001234.005600","reply_count":3}],"has_more":false,"response_metadata":{"next_cursor":""}}`,
 				},
-				PairWith:     []string{"connector:slack.search_channels", "connector:slack.get_channel_info"},
-				OutputSample: `{"ok":true,"channels":[{"id":"C12345","name":"general","is_private":false,"is_archived":false}],"response_metadata":{"next_cursor":""}}`,
-			},
+			),
+			connector.Op(
+				"get_thread_replies",
+				"Get Thread Replies",
+				"Read all replies under a parent message thread. Returns parent + replies (ts, user, text, reactions) and pagination cursor.",
+				GetThreadRepliesInput{},
+				getThreadReplies, wickdocs.Docs{},
+			),
 		),
-		connector.Op(
-			"search_channels",
-			"Search Channels by Name",
-			"Find channels whose name contains the query (case-insensitive). Returns up to {limit} matches with id, name, is_private.",
-			SearchChannelsInput{},
-			searchChannels, wickdocs.Docs{},
+		connector.Cat("Users", "Look up workspace members by id or email.",
+			connector.Op(
+				"list_users",
+				"List Users",
+				"List workspace members. Returns id, name, real_name, email, is_bot, is_admin, deleted, and pagination cursor.",
+				ListUsersInput{},
+				listUsers,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"members":           "Array of user objects (id, name, real_name, profile.email, is_bot, is_admin, deleted).",
+						"response_metadata": "Pagination wrapper — response_metadata.next_cursor.",
+					},
+					Quirks: []string{
+						"Slack returns deactivated users by default — set include_deleted=false-ish via custom filter in your workflow if you don't want them.",
+						"Email visibility requires users:read.email scope. Without it the email field is empty.",
+						"Tier-2 rate limit — paginate, don't tight-loop.",
+					},
+					PairWith:     []string{"connector:slack.get_user_info", "connector:slack.get_user_by_email"},
+					OutputSample: `{"ok":true,"members":[{"id":"U02ABCDEF","name":"yoga","real_name":"Yoga Setiawan","profile":{"email":"yoga@example.com"},"is_bot":false,"deleted":false}],"response_metadata":{"next_cursor":""}}`,
+				},
+			),
+			connector.Op(
+				"get_user_info",
+				"Get User Info",
+				"Return profile for a single user id: id, name, real_name, email, is_bot, is_admin, deleted.",
+				GetUserInfoInput{},
+				getUserInfo, wickdocs.Docs{},
+			),
+			connector.Op(
+				"get_user_by_email",
+				"Get User by Email",
+				"Resolve a workspace user by their email address. Returns the same shape as get_user_info.",
+				GetUserByEmailInput{},
+				getUserByEmail,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"user": "Single user object (id, name, real_name, profile.email, is_bot, is_admin, deleted). Empty when no match.",
+					},
+					Quirks: []string{
+						"Requires users:read.email scope.",
+						"Slack returns users_not_found when no workspace member uses that exact email — wick surfaces the error verbatim.",
+						"Email is matched case-insensitively but must be the FULL address (no aliasing).",
+					},
+					PairWith:     []string{"connector:slack.get_user_info", "channel:slack.open_dm"},
+					InputSample:  `{"email":"yoga@example.com"}`,
+					OutputSample: `{"ok":true,"user":{"id":"U02ABCDEF","name":"yoga","real_name":"Yoga Setiawan","profile":{"email":"yoga@example.com"},"is_bot":false}}`,
+				},
+			),
 		),
-		connector.Op(
-			"get_channel_info",
-			"Get Channel Info",
-			"Return metadata for a single channel: id, name, is_private, is_archived, topic, purpose, creator, created.",
-			GetChannelInfoInput{},
-			getChannelInfo, wickdocs.Docs{},
-		),
-		connector.Op(
-			"get_channel_history",
-			"Get Channel History",
-			"Read recent messages in a channel. Returns ts, user, text, thread_ts, reply_count, reactions, and pagination cursor.",
-			GetChannelHistoryInput{},
-			getChannelHistory,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"messages":          "Array of message objects (ts, user, text, thread_ts, reply_count, reactions).",
-					"response_metadata": "Pagination wrapper. response_metadata.next_cursor non-empty = more pages.",
-					"has_more":          "True when older messages exist beyond the current page.",
-				},
-				Quirks: []string{
-					"oldest / latest are INCLUSIVE Slack ts strings (e.g. \"1700000000.000100\"), not RFC3339.",
-					"Default limit 50, max 1000. For long ranges paginate with cursor instead of bumping limit.",
-					"Returns ONLY top-level messages — threaded replies need get_thread_replies on the parent ts.",
-					"Requires channels:history (public), groups:history (private), or im:history / mpim:history depending on channel type.",
-				},
-				PairWith:     []string{"connector:slack.get_thread_replies", "connector:slack.get_permalink"},
-				InputSample:  `{"channel":"C12345","limit":50,"oldest":"1700000000.000000"}`,
-				OutputSample: `{"ok":true,"messages":[{"ts":"1700001234.005600","user":"U02ABCDEF","text":"hello","thread_ts":"1700001234.005600","reply_count":3}],"has_more":false,"response_metadata":{"next_cursor":""}}`,
-			},
-		),
-		connector.Op(
-			"get_thread_replies",
-			"Get Thread Replies",
-			"Read all replies under a parent message thread. Returns parent + replies (ts, user, text, reactions) and pagination cursor.",
-			GetThreadRepliesInput{},
-			getThreadReplies, wickdocs.Docs{},
-		),
-		connector.Op(
-			"list_users",
-			"List Users",
-			"List workspace members. Returns id, name, real_name, email, is_bot, is_admin, deleted, and pagination cursor.",
-			ListUsersInput{},
-			listUsers,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"members":           "Array of user objects (id, name, real_name, profile.email, is_bot, is_admin, deleted).",
-					"response_metadata": "Pagination wrapper — response_metadata.next_cursor.",
-				},
-				Quirks: []string{
-					"Slack returns deactivated users by default — set include_deleted=false-ish via custom filter in your workflow if you don't want them.",
-					"Email visibility requires users:read.email scope. Without it the email field is empty.",
-					"Tier-2 rate limit — paginate, don't tight-loop.",
-				},
-				PairWith:     []string{"connector:slack.get_user_info", "connector:slack.get_user_by_email"},
-				OutputSample: `{"ok":true,"members":[{"id":"U02ABCDEF","name":"yoga","real_name":"Yoga Setiawan","profile":{"email":"yoga@example.com"},"is_bot":false,"deleted":false}],"response_metadata":{"next_cursor":""}}`,
-			},
-		),
-		connector.Op(
-			"get_user_info",
-			"Get User Info",
-			"Return profile for a single user id: id, name, real_name, email, is_bot, is_admin, deleted.",
-			GetUserInfoInput{},
-			getUserInfo, wickdocs.Docs{},
-		),
-		connector.Op(
-			"get_user_by_email",
-			"Get User by Email",
-			"Resolve a workspace user by their email address. Returns the same shape as get_user_info.",
-			GetUserByEmailInput{},
-			getUserByEmail,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"user": "Single user object (id, name, real_name, profile.email, is_bot, is_admin, deleted). Empty when no match.",
-				},
-				Quirks: []string{
-					"Requires users:read.email scope.",
-					"Slack returns users_not_found when no workspace member uses that exact email — wick surfaces the error verbatim.",
-					"Email is matched case-insensitively but must be the FULL address (no aliasing).",
-				},
-				PairWith:     []string{"connector:slack.get_user_info", "channel:slack.open_dm"},
-				InputSample:  `{"email":"yoga@example.com"}`,
-				OutputSample: `{"ok":true,"user":{"id":"U02ABCDEF","name":"yoga","real_name":"Yoga Setiawan","profile":{"email":"yoga@example.com"},"is_bot":false}}`,
-			},
-		),
-		connector.Op(
-			"get_permalink",
-			"Get Message Permalink",
-			"Return the permalink URL for a message ts in a channel.",
-			GetPermalinkInput{},
-			getPermalink, wickdocs.Docs{},
-		),
-		connector.OpDestructive(
-			"send_message",
-			"Send Message",
-			"Post a message to a channel, DM, or thread. Returns the posted message ts and channel id. Idempotent only if the caller dedupes upstream.",
-			SendMessageInput{},
-			sendMessage,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"ok":      "Slack API success flag. False means the request reached Slack but the post was rejected.",
-					"channel": "Channel ID the message landed in (C…/D…/G…). Resolved from #name input server-side.",
-					"ts":      "Slack message timestamp / message ID. Pass to update_message, delete_message, get_permalink, add_reaction, or as thread_ts for follow-ups.",
-					"message": "Echoed payload Slack accepted, including normalised text/blocks. Useful for audit fixtures.",
-				},
-				TemplateableFields: []string{"channel", "text", "blocks", "thread_ts"},
-				Quirks: []string{
-					"channel accepts: channel ID (C…), DM ID (D…), user ID (U…) for an auto-opened DM, or #channel-name (resolved server-side). #name fails when the bot isn't already a member.",
-					"When blocks is set it OVERRIDES text for rendering, but Slack still requires a non-empty text for notifications. Always set both.",
-					"thread_ts must be the PARENT message's ts. Replying to a reply still uses the root ts.",
-					"reply_broadcast only does anything when thread_ts is set. With it true, the threaded reply also fans out to the main channel.",
-					"Rate limit: 1 msg/sec per channel for posting. Bursts beyond that get queued then 429'd.",
-				},
-				PairWith: []string{
-					"connector:slack.update_message",
-					"connector:slack.delete_message",
-					"connector:slack.add_reaction",
-					"channel:slack.send_message",
-				},
-				CommonPitfalls: []string{
-					"Don't put both text and blocks as templates and forget to {{jsonEscape}} text inside blocks — unescaped quotes break the JSON.",
-					"Don't pass channel: \"#name\" expecting Slack to auto-invite the bot — name resolution succeeds only when the bot is already a member.",
-					"Don't reuse a stored ts across days for thread_ts on a high-volume channel — Slack purges old thread state.",
-				},
-				InputSample:  `{"channel":"#alerts","text":"New ticket from U12345: payment refund issue","thread_ts":"1700000000.000100"}`,
-				OutputSample: `{"ok":true,"channel":"C12345","ts":"1700001234.005600","message":{"text":"New ticket from U12345: payment refund issue","user":"UBOT01","ts":"1700001234.005600"}}`,
-				Examples: []wickdocs.Example{
-					{
-						Name: "simple_send",
-						Body: `- id: notify
+		connector.Cat("Messaging", "Send, edit, delete messages, manage reactions, and share files.",
+			connector.Op(
+				"get_permalink",
+				"Get Message Permalink",
+				"Return the permalink URL for a message ts in a channel.",
+				GetPermalinkInput{},
+				getPermalink, wickdocs.Docs{},
+			),
+			connector.OpDestructive(
+				"send_message",
+				"Send Message",
+				"Post a message to a channel, DM, or thread. Returns the posted message ts and channel id. Idempotent only if the caller dedupes upstream.",
+				SendMessageInput{},
+				sendMessage,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"ok":      "Slack API success flag. False means the request reached Slack but the post was rejected.",
+						"channel": "Channel ID the message landed in (C…/D…/G…). Resolved from #name input server-side.",
+						"ts":      "Slack message timestamp / message ID. Pass to update_message, delete_message, get_permalink, add_reaction, or as thread_ts for follow-ups.",
+						"message": "Echoed payload Slack accepted, including normalised text/blocks. Useful for audit fixtures.",
+					},
+					TemplateableFields: []string{"channel", "text", "blocks", "thread_ts"},
+					Quirks: []string{
+						"channel accepts: channel ID (C…), DM ID (D…), user ID (U…) for an auto-opened DM, or #channel-name (resolved server-side). #name fails when the bot isn't already a member.",
+						"When blocks is set it OVERRIDES text for rendering, but Slack still requires a non-empty text for notifications. Always set both.",
+						"thread_ts must be the PARENT message's ts. Replying to a reply still uses the root ts.",
+						"reply_broadcast only does anything when thread_ts is set. With it true, the threaded reply also fans out to the main channel.",
+						"Rate limit: 1 msg/sec per channel for posting. Bursts beyond that get queued then 429'd.",
+					},
+					PairWith: []string{
+						"connector:slack.update_message",
+						"connector:slack.delete_message",
+						"connector:slack.add_reaction",
+						"channel:slack.send_message",
+					},
+					CommonPitfalls: []string{
+						"Don't put both text and blocks as templates and forget to {{jsonEscape}} text inside blocks — unescaped quotes break the JSON.",
+						"Don't pass channel: \"#name\" expecting Slack to auto-invite the bot — name resolution succeeds only when the bot is already a member.",
+						"Don't reuse a stored ts across days for thread_ts on a high-volume channel — Slack purges old thread state.",
+					},
+					InputSample:  `{"channel":"#alerts","text":"New ticket from U12345: payment refund issue","thread_ts":"1700000000.000100"}`,
+					OutputSample: `{"ok":true,"channel":"C12345","ts":"1700001234.005600","message":{"text":"New ticket from U12345: payment refund issue","user":"UBOT01","ts":"1700001234.005600"}}`,
+					Examples: []wickdocs.Example{
+						{
+							Name: "simple_send",
+							Body: `- id: notify
   type: connector
   module: slack
   op: send_message
@@ -354,10 +360,10 @@ func Operations() []connector.Operation {
   args:
     channel: "#alerts"
     text: "New ticket from {{.Node.trigger.payload.user}}: {{.Node.trigger.payload.text}}"`,
-					},
-					{
-						Name: "thread_reply",
-						Body: `- id: reply
+						},
+						{
+							Name: "thread_reply",
+							Body: `- id: reply
   type: connector
   module: slack
   op: send_message
@@ -369,10 +375,10 @@ func Operations() []connector.Operation {
     channel: '{{.Node.trigger.payload.channel_id}}'
     thread_ts: '{{.Node.trigger.payload.thread}}'
     text: "Got it — looking into this now."`,
-					},
-					{
-						Name: "with_blocks",
-						Body: `- id: alert
+						},
+						{
+							Name: "with_blocks",
+							Body: `- id: alert
   type: connector
   module: slack
   op: send_message
@@ -390,165 +396,168 @@ func Operations() []connector.Operation {
           {"type":"button","text":{"type":"plain_text","text":"Open runbook"},"url":"https://example.com/runbook"}
         ]}
       ]`,
+						},
 					},
 				},
-			},
-		),
-		connector.OpDestructive(
-			"send_ephemeral",
-			"Send Ephemeral Message",
-			"Post a message visible only to {user} in {channel}. Returns the message ts.",
-			SendEphemeralInput{},
-			sendEphemeral, wickdocs.Docs{},
-		),
-		connector.OpDestructive(
-			"update_message",
-			"Update Message",
-			"Edit a previously-sent message identified by ts. Returns the new ts and text.",
-			UpdateMessageInput{},
-			updateMessage,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"ok":      "True on success.",
-					"channel": "Channel ID (echo).",
-					"ts":      "Edited message ts (matches input).",
-					"text":    "Echoed new text.",
+			),
+			connector.OpDestructive(
+				"send_ephemeral",
+				"Send Ephemeral Message",
+				"Post a message visible only to {user} in {channel}. Returns the message ts.",
+				SendEphemeralInput{},
+				sendEphemeral, wickdocs.Docs{},
+			),
+			connector.OpDestructive(
+				"update_message",
+				"Update Message",
+				"Edit a previously-sent message identified by ts. Returns the new ts and text.",
+				UpdateMessageInput{},
+				updateMessage,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"ok":      "True on success.",
+						"channel": "Channel ID (echo).",
+						"ts":      "Edited message ts (matches input).",
+						"text":    "Echoed new text.",
+					},
+					TemplateableFields: []string{"channel", "ts", "text", "blocks"},
+					Quirks: []string{
+						"Can only edit messages the bot itself posted. Other authors' messages return cant_update_message.",
+						"Doesn't work on ephemerals — use respond_url with replace_original.",
+						"blocks REPLACES the entire block set. Pass full new state, not a diff.",
+					},
+					PairWith:     []string{"connector:slack.send_message", "connector:slack.delete_message"},
+					InputSample:  `{"channel":"C12345","ts":"1700001234.005600","text":"Resolved. Thanks!"}`,
+					OutputSample: `{"ok":true,"channel":"C12345","ts":"1700001234.005600","text":"Resolved. Thanks!"}`,
 				},
-				TemplateableFields: []string{"channel", "ts", "text", "blocks"},
-				Quirks: []string{
-					"Can only edit messages the bot itself posted. Other authors' messages return cant_update_message.",
-					"Doesn't work on ephemerals — use respond_url with replace_original.",
-					"blocks REPLACES the entire block set. Pass full new state, not a diff.",
+			),
+			connector.OpDestructive(
+				"delete_message",
+				"Delete Message",
+				"Permanently delete a message by ts. Not reversible.",
+				DeleteMessageInput{},
+				deleteMessage, wickdocs.Docs{},
+			),
+			connector.OpDestructive(
+				"add_reaction",
+				"Add Reaction",
+				"Add an emoji reaction to a message. Emoji name is unprefixed (e.g. 'thumbsup').",
+				AddReactionInput{},
+				addReaction,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"ok": "True on success or already_reacted.",
+					},
+					TemplateableFields: []string{"channel", "ts", "name"},
+					Quirks: []string{
+						"name is the emoji shortname WITHOUT colons (\"thumbsup\", not \":thumbsup:\").",
+						"Idempotent: re-adding the same reaction errors with already_reacted — wrap with on_failure: skip if you don't want to fail the workflow.",
+						"Requires reactions:write scope.",
+					},
+					PairWith:     []string{"connector:slack.remove_reaction"},
+					InputSample:  `{"channel":"C12345","ts":"1700001234.005600","name":"white_check_mark"}`,
+					OutputSample: `{"ok":true}`,
 				},
-				PairWith:     []string{"connector:slack.send_message", "connector:slack.delete_message"},
-				InputSample:  `{"channel":"C12345","ts":"1700001234.005600","text":"Resolved. Thanks!"}`,
-				OutputSample: `{"ok":true,"channel":"C12345","ts":"1700001234.005600","text":"Resolved. Thanks!"}`,
-			},
-		),
-		connector.OpDestructive(
-			"delete_message",
-			"Delete Message",
-			"Permanently delete a message by ts. Not reversible.",
-			DeleteMessageInput{},
-			deleteMessage, wickdocs.Docs{},
-		),
-		connector.OpDestructive(
-			"add_reaction",
-			"Add Reaction",
-			"Add an emoji reaction to a message. Emoji name is unprefixed (e.g. 'thumbsup').",
-			AddReactionInput{},
-			addReaction,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"ok": "True on success or already_reacted.",
+			),
+			connector.OpDestructive(
+				"remove_reaction",
+				"Remove Reaction",
+				"Remove an emoji reaction previously added by the bot.",
+				RemoveReactionInput{},
+				removeReaction, wickdocs.Docs{},
+			),
+			connector.OpDestructive(
+				"upload_file",
+				"Upload File",
+				"Upload a file to Slack via the v2 two-step API, then optionally share it to a channel or thread. Requires files:write scope.",
+				UploadFileInput{},
+				uploadFile,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"file_id":   "Slack file ID (F...).",
+						"name":      "Filename as stored by Slack.",
+						"title":     "Display title shown in Slack.",
+						"permalink": "Permanent link to the file in the Slack UI.",
+						"channel":   "Channel ID the file was shared to (only present when channel_id was provided).",
+					},
+					TemplateableFields: []string{"filename", "content", "channel_id", "thread_ts", "title", "initial_comment"},
+					Quirks: []string{
+						"Uses Slack v2 upload API (files.getUploadURLExternal + files.completeUploadExternal). The legacy files.upload is deprecated.",
+						"Slack determines the file type from the filename extension — choose the extension carefully.",
+						"Omitting channel_id uploads the file without sharing it.",
+						"Requires files:write scope.",
+					},
+					PairWith: []string{"connector:slack.send_message"},
 				},
-				TemplateableFields: []string{"channel", "ts", "name"},
-				Quirks: []string{
-					"name is the emoji shortname WITHOUT colons (\"thumbsup\", not \":thumbsup:\").",
-					"Idempotent: re-adding the same reaction errors with already_reacted — wrap with on_failure: skip if you don't want to fail the workflow.",
-					"Requires reactions:write scope.",
+			),
+		),
+		connector.Cat("Canvases", "Create, edit, inspect, and share Slack canvases.",
+			connector.OpDestructive(
+				"create_canvas",
+				"Create Canvas",
+				"Create a standalone Slack canvas, optionally pre-filled with markdown and added as a channel tab.",
+				CreateCanvasInput{},
+				createCanvas,
+				wickdocs.Docs{
+					TemplateableFields: []string{"title", "markdown", "channel_id"},
+					Quirks: []string{
+						"Requires canvases:write scope.",
+						"On free Slack teams, channel_id is required because non-tabbed standalone canvases cannot be created.",
+						"Use set_canvas_access to share a standalone canvas after creation.",
+					},
+					PairWith: []string{"connector:slack.set_canvas_access", "connector:slack.send_message"},
 				},
-				PairWith:     []string{"connector:slack.remove_reaction"},
-				InputSample:  `{"channel":"C12345","ts":"1700001234.005600","name":"white_check_mark"}`,
-				OutputSample: `{"ok":true}`,
-			},
-		),
-		connector.OpDestructive(
-			"remove_reaction",
-			"Remove Reaction",
-			"Remove an emoji reaction previously added by the bot.",
-			RemoveReactionInput{},
-			removeReaction, wickdocs.Docs{},
-		),
-		connector.OpDestructive(
-			"create_canvas",
-			"Create Canvas",
-			"Create a standalone Slack canvas, optionally pre-filled with markdown and added as a channel tab.",
-			CreateCanvasInput{},
-			createCanvas,
-			wickdocs.Docs{
-				TemplateableFields: []string{"title", "markdown", "channel_id"},
-				Quirks: []string{
-					"Requires canvases:write scope.",
-					"On free Slack teams, channel_id is required because non-tabbed standalone canvases cannot be created.",
-					"Use set_canvas_access to share a standalone canvas after creation.",
+			),
+			connector.OpDestructive(
+				"create_channel_canvas",
+				"Create Channel Canvas",
+				"Create the dedicated canvas for a channel, optionally pre-filled with markdown.",
+				CreateChannelCanvasInput{},
+				createChannelCanvas,
+				wickdocs.Docs{
+					TemplateableFields: []string{"channel_id", "title", "markdown"},
+					Quirks: []string{
+						"Each channel can have only one channel canvas; Slack returns channel_canvas_already_exists if one is already present.",
+						"Access follows channel membership, so set_canvas_access is unnecessary for this operation.",
+					},
 				},
-				PairWith: []string{"connector:slack.set_canvas_access", "connector:slack.send_message"},
-			},
-		),
-		connector.OpDestructive(
-			"create_channel_canvas",
-			"Create Channel Canvas",
-			"Create the dedicated canvas for a channel, optionally pre-filled with markdown.",
-			CreateChannelCanvasInput{},
-			createChannelCanvas,
-			wickdocs.Docs{
-				TemplateableFields: []string{"channel_id", "title", "markdown"},
-				Quirks: []string{
-					"Each channel can have only one channel canvas; Slack returns channel_canvas_already_exists if one is already present.",
-					"Access follows channel membership, so set_canvas_access is unnecessary for this operation.",
+			),
+			connector.OpDestructive(
+				"edit_canvas",
+				"Edit Canvas",
+				"Append, insert, replace, delete a section, or rename an existing Slack canvas.",
+				EditCanvasInput{},
+				editCanvas,
+				wickdocs.Docs{
+					TemplateableFields: []string{"canvas_id", "operation", "section_id", "markdown"},
+					PairWith:           []string{"connector:slack.lookup_canvas_sections"},
 				},
-			},
-		),
-		connector.OpDestructive(
-			"edit_canvas",
-			"Edit Canvas",
-			"Append, insert, replace, delete a section, or rename an existing Slack canvas.",
-			EditCanvasInput{},
-			editCanvas,
-			wickdocs.Docs{
-				TemplateableFields: []string{"canvas_id", "operation", "section_id", "markdown"},
-				PairWith:           []string{"connector:slack.lookup_canvas_sections"},
-			},
-		),
-		connector.Op(
-			"lookup_canvas_sections",
-			"Lookup Canvas Sections",
-			"Find canvas section IDs by heading type or contained text for subsequent targeted edits.",
-			LookupCanvasSectionsInput{},
-			lookupCanvasSections,
-			wickdocs.Docs{
-				PairWith: []string{"connector:slack.edit_canvas"},
-			},
-		),
-		connector.OpDestructive(
-			"set_canvas_access",
-			"Set Canvas Access",
-			"Grant read, write, or owner access to a standalone canvas for channels or users.",
-			SetCanvasAccessInput{},
-			setCanvasAccess,
-			wickdocs.Docs{
-				TemplateableFields: []string{"canvas_id", "access_level", "channel_ids", "user_ids"},
-				Quirks: []string{
-					"Provide channel_ids or user_ids, never both.",
-					"Only user_ids may receive owner access.",
-					"Slack requires the canvas link to have been shared with each target channel or user before setting its access.",
+			),
+			connector.Op(
+				"lookup_canvas_sections",
+				"Lookup Canvas Sections",
+				"Find canvas section IDs by heading type or contained text for subsequent targeted edits.",
+				LookupCanvasSectionsInput{},
+				lookupCanvasSections,
+				wickdocs.Docs{
+					PairWith: []string{"connector:slack.edit_canvas"},
 				},
-			},
-		),
-		connector.OpDestructive(
-			"upload_file",
-			"Upload File",
-			"Upload a file to Slack via the v2 two-step API, then optionally share it to a channel or thread. Requires files:write scope.",
-			UploadFileInput{},
-			uploadFile,
-			wickdocs.Docs{
-				OutputShape: map[string]string{
-					"file_id":   "Slack file ID (F...).",
-					"name":      "Filename as stored by Slack.",
-					"title":     "Display title shown in Slack.",
-					"permalink": "Permanent link to the file in the Slack UI.",
-					"channel":   "Channel ID the file was shared to (only present when channel_id was provided).",
+			),
+			connector.OpDestructive(
+				"set_canvas_access",
+				"Set Canvas Access",
+				"Grant read, write, or owner access to a standalone canvas for channels or users.",
+				SetCanvasAccessInput{},
+				setCanvasAccess,
+				wickdocs.Docs{
+					TemplateableFields: []string{"canvas_id", "access_level", "channel_ids", "user_ids"},
+					Quirks: []string{
+						"Provide channel_ids or user_ids, never both.",
+						"Only user_ids may receive owner access.",
+						"Slack requires the canvas link to have been shared with each target channel or user before setting its access.",
+					},
 				},
-				TemplateableFields: []string{"filename", "content", "channel_id", "thread_ts", "title", "initial_comment"},
-				Quirks: []string{
-					"Uses Slack v2 upload API (files.getUploadURLExternal + files.completeUploadExternal). The legacy files.upload is deprecated.",
-					"Slack determines the file type from the filename extension — choose the extension carefully.",
-					"Omitting channel_id uploads the file without sharing it.",
-					"Requires files:write scope.",
-				},
-				PairWith: []string{"connector:slack.send_message"},
-			},
+			),
 		),
 	}
 }

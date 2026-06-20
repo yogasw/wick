@@ -153,8 +153,9 @@ func (r *Registry) Describe() []Info {
 	defer r.mu.RUnlock()
 	out := []Info{}
 	for _, m := range r.modules {
-		ops := make([]OpInfo, 0, len(m.Operations))
-		for _, op := range m.Operations {
+		allOps := m.AllOps()
+		ops := make([]OpInfo, 0, len(allOps))
+		for _, op := range allOps {
 			inputs := make([]OpInput, 0, len(op.Input))
 			for _, in := range op.Input {
 				inputs = append(inputs, OpInput{

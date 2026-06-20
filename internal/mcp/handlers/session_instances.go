@@ -103,7 +103,7 @@ func sessionInstanceSummaries(svc *connectors.Service, layout agentconfig.Layout
 		if !ok {
 			continue
 		}
-		count := len(mod.Operations)
+		count := len(mod.AllOps())
 		total += count
 		label := in.Label
 		if strings.TrimSpace(label) == "" {
@@ -152,8 +152,9 @@ func sessionInstanceSearch(svc *connectors.Service, layout agentconfig.Layout, s
 			label = mod.Meta.Name + " (session)"
 		}
 		matched := make([]searchTool, 0)
-		for i := range mod.Operations {
-			op := mod.Operations[i]
+		ops := mod.AllOps()
+		for i := range ops {
+			op := ops[i]
 			hay := strings.ToLower(label + " " + mod.Meta.Name + " " + mod.Meta.Key + " " + op.Name + " " + op.Description)
 			if !strings.Contains(hay, needle) {
 				continue
@@ -201,9 +202,10 @@ func sessionInstanceDetail(svc *connectors.Service, target *connectors.SessionIn
 	if strings.TrimSpace(label) == "" {
 		label = mod.Meta.Name + " (session)"
 	}
-	tools := make([]toolDetail, 0, len(mod.Operations))
-	for i := range mod.Operations {
-		op := mod.Operations[i]
+	ops := mod.AllOps()
+	tools := make([]toolDetail, 0, len(ops))
+	for i := range ops {
+		op := ops[i]
 		desc := op.Description
 		if op.Destructive {
 			desc += " ⚠ DESTRUCTIVE: Always confirm with the user before executing this operation."

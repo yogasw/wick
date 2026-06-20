@@ -10,8 +10,8 @@ vi.mock("../connectorOAuth.js", () => ({ startConnectorOAuth: vi.fn() }));
 
 const oauth: ConnectorOAuthMeta = { display_name: "Slack", start_url: "" };
 const ops: ConnectorOp[] = [
-  { key: "send", name: "Send", description: "", destructive: false, enabled: true, system_disabled: false, system_disabled_reason: "", admin_only: false },
-  { key: "del", name: "Delete", description: "", destructive: true, enabled: true, system_disabled: false, system_disabled_reason: "", admin_only: false },
+  { key: "send", name: "Send", description: "", destructive: false, enabled: true, system_disabled: false, system_disabled_reason: "", admin_only: false, category: "" },
+  { key: "del", name: "Delete", description: "", destructive: true, enabled: true, system_disabled: false, system_disabled_reason: "", admin_only: false, category: "" },
 ];
 
 function acc(over: Partial<ConnectorAccount> = {}): ConnectorAccount {

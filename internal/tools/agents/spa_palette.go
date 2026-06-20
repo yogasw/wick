@@ -215,12 +215,16 @@ func buildPalette() paletteResponse {
 	// Per-connector action drills.
 	for _, info := range globalWorkflowMgr.MCP.ConnectorsList() {
 		mod, ok := globalWorkflowMgr.Connectors.Module(info.Module)
-		if !ok || len(mod.Operations) == 0 {
+		if !ok {
+			continue
+		}
+		modOps := mod.AllOps()
+		if len(modOps) == 0 {
 			continue
 		}
 		key := "connector-ops:" + info.Module
-		ops := make([]paletteItem, 0, len(mod.Operations))
-		for _, op := range mod.Operations {
+		ops := make([]paletteItem, 0, len(modOps))
+		for _, op := range modOps {
 			ops = append(ops, paletteItem{
 				Kind:        "drag",
 				Label:       op.Name,

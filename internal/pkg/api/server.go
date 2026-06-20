@@ -160,7 +160,6 @@ func NewServer() *Server {
 	// re-register the same key without producing duplicates.
 	tools.RegisterBuiltins()
 	jobs.RegisterBuiltins()
-	connectors.RegisterBuiltins()
 
 	// ── Tool modules (discover first so their Specs feed into the
 	// config bootstrap below) ──────────────────────────────────────
@@ -194,6 +193,8 @@ func NewServer() *Server {
 	if err := configsSvc.Bootstrap(context.Background(), extraConfigs...); err != nil {
 		log.Fatal().Msgf("configs bootstrap: %s", err.Error())
 	}
+
+	connectors.RegisterProfile(configsSvc.Profile())
 
 	// Seed connector_oauth:slack rows for the generic connector OAuth framework.
 	// The manager reads/writes these at owner="connector_oauth:slack" so they
@@ -1450,7 +1451,8 @@ func NewServer() *Server {
 	r.Handle("GET /metrics", authMidd.RequireAdmin(metricsRec.Handler()))
 
 	// Home
-	r.Handle("/", http.HandlerFunc(homeHandler.Index))
+	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
+	r.Handle("/launcher", http.HandlerFunc(homeHandler.Launcher))
 
 	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate}
 }

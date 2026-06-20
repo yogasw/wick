@@ -159,7 +159,7 @@ func (m *Ops) connectorDetail(rest string) (NodeDetail, error) {
 	if !ok {
 		return NodeDetail{}, fmt.Errorf("unknown connector module %q", moduleKey)
 	}
-	for _, op := range mod.Operations {
+	for _, op := range mod.AllOps() {
 		if op.Key != opKey {
 			continue
 		}
