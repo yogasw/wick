@@ -243,6 +243,11 @@ const (
 // the builtin connectors a wick-agent build realistically calls. This
 // is an intentional product default; widen or narrow it with a one-line
 // edit here, no architecture change required.
+//
+// Candidate to add (product decision — design §9.3): googleworkspace. Since
+// the latest upstream sync it covers gmail/calendar/meet/drive/docs/sheets/
+// slides, a strong default for a flagship agent. Left out of the default
+// below until the product call is made (keeps the Task 2 test stable).
 func agentConnectors() map[string]bool {
 	return map[string]bool{
 		github.Meta().Key:   true,
@@ -367,6 +372,8 @@ connectors.RegisterProfile(appname.BuildProfile)
 ```
 
 Leave `tools.RegisterBuiltins()` and `jobs.RegisterBuiltins()` untouched — this plan scopes profiles to connectors (the 7-vs-rest pain). Add the import `"github.com/yogasw/wick/internal/appname"` to any of the three files that does not already import it.
+
+> **Scope note (validated vs master):** This swap gates ONLY the `RegisterBuiltins` set (the 7 public connectors). Four connectors register at runtime via `connectors.Register(...)` inline in `server.go`/`server_mcp.go` (they need runtime Deps): `wickmanager`, `workflow` (wfconn), `notifications`, `customconnector`. Those are NOT affected by the profile and remain registered in every profile, including `lite` — intentional, they are platform/infra connectors. Gating them too would mean touching those inline call-sites, which is out of scope here. See design §4.5.
 
 - [ ] **Step 2: Confirm no stray builtin connector calls remain in boot paths**
 
@@ -573,7 +580,7 @@ go build -ldflags "-X github.com/yogasw/wick/internal/appname.BuildProfile=lite"
 go build -ldflags "-X github.com/yogasw/wick/internal/appname.BuildProfile=full" -o /tmp/wick-full .
 ```
 
-Expected: the `lite` binary's MCP/admin connector list shows none of the 7 builtins (downstream-registered connectors only); the `full` binary shows all 7. (How to list depends on the running surface — admin UI connectors page or the MCP `wick_list` op.)
+Expected: the `lite` binary's MCP/admin connector list shows none of the 7 builtins; the `full` binary shows all 7. NOTE: `lite` is NOT an empty connector surface — the 4 runtime-registered platform connectors (`wickmanager`, `workflow`, `notifications`, `customconnector`) still appear in every profile because they register via `connectors.Register(...)` outside `RegisterBuiltins` (design §4.5). So verify "none of the 7 builtins," not "zero connectors total." (How to list depends on the running surface — admin UI connectors page or the MCP `wick_list` op.)
 
 - [ ] **Step 3: Update install.sh (handoff note, not this plan)**
 
@@ -584,5 +591,6 @@ Expected: the `lite` binary's MCP/admin connector list shows none of the 7 built
 ## Self-Review notes
 
 - **Spec coverage:** design §4.1 (profile concept + `wick build --profile`, default full) → Tasks 2-6. §4.2 (build tags for binary-size lite) → intentionally DEFERRED (see below). §4.3/§4.4 (reuse registry pattern, no module split) → honoured: profiles layer over `RegisterBuiltins`, no Go-module change.
+- **Scope validated vs upstream master (latest sync):** every referenced symbol/line confirmed present — `RegisterBuiltins` (registry.go:119, exactly 7), the 3 boot sites (api/server.go:163, server_mcp.go:144, worker/server.go:50), `appname.BuildAppName/Version` (32/37, no `BuildProfile` yet), `builder.Config` + `assembleLDFlags`, `cmd/cli/build.go` `buildCmd()` / `--headless` / `builder.Config{}` literal, and `connector.Module` + `Meta.Key`. **Caveat:** the profile gates ONLY the 7 `RegisterBuiltins` connectors; 4 runtime connectors (`wickmanager`/`workflow`/`notifications`/`customconnector`) register via `connectors.Register(...)` and remain in all profiles — see design §4.5 and Task 4 Step 1.
 - **Deferred from this plan:** (1) build-tag compilation exclusion for a genuinely smaller `lite` binary (§4.2) — the registration-profile mechanism here delivers selectable module *sets*; physical binary shrink via build tags is a follow-up. (2) profiles for tools/jobs — out of scope; connectors are the pain. (3) `install.sh` profile picker (Task 7 Step 3). Each is a small, independent follow-up.
 - **Type consistency:** `ProfileFull/Agent/Lite`, `builtinModules()`, `profileModules()`, `RegisterProfile()`, `agentConnectors()`, `appname.BuildProfile`, `Config.Profile`, `validateProfile()` are used consistently across tasks.

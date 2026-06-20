@@ -23,8 +23,12 @@ merapikan dan mengekspos kemampuan itu, bukan merombak.
 
 Diukur langsung dari repo:
 
-- `internal/tools/` = 7 modul, `internal/connectors/` = 24 modul, `fe/agents/` = 10 SPA.
-  Pusat gravitasi produk sudah pindah ke connector; "tools sebagai wajah" sudah tidak akurat.
+- `internal/tools/` = 6 modul, `internal/connectors/` = 13 dir (7 builtin di
+  `RegisterBuiltins` + `crudcrud` sample di `RegisterLabSamples` + 4 connector runtime
+  via `connectors.Register(...)` saat boot: wickmanager/workflow/notifications/
+  customconnector; `custom` = paket pendukung, bukan modul tersendiri), `fe/agents/` = 10 SPA.
+  (Diukur ulang dari repo per sync upstream master terbaru.) Pusat gravitasi produk sudah
+  pindah ke connector; "tools sebagai wajah" sudah tidak akurat.
 - `internal/tools/registry.go` dan `internal/connectors/registry.go` punya pola identik:
   `RegisterBuiltins()` (on untuk semua app) + `RegisterLabSamples()` (binary lab) +
   downstream `app.RegisterTool`/`app.RegisterConnector`. `cmd/lab/root.go` tinggal milih
@@ -130,6 +134,24 @@ ter-compile. Default (tanpa tag) = full, supaya tidak memecah perilaku existing.
   menambah friksi go-module multi-repo, dan justru **memperparah** pain #1 jangka
   pendek. Premature — bisa ditinjau ulang setelah #1+#2 stabil.
 
+### 4.5 Yang TIDAK digerbang profile (temuan validasi vs master — penting)
+
+Profile hanya menyaring himpunan `RegisterBuiltins` (7 connector publik). **Empat
+connector lain di-register runtime** lewat `connectors.Register(...)` saat boot (butuh
+Deps seperti configsSvc/jobsSvc/runner) di `internal/pkg/api/server.go` + `server_mcp.go`,
+sehingga **di luar kendali profile** dan tetap on di SEMUA profile termasuk `lite`:
+
+- `wickmanager` (server.go ~978, server_mcp.go ~90)
+- `workflow` / wfconn (server.go ~969, server_mcp.go ~141)
+- `notifications` (server.go ~986, server_mcp.go ~97)
+- `customconnector` (server.go ~1025)
+
+Ini **disengaja**: keempatnya connector platform/infra (self-management, workflow engine,
+notifikasi, host custom-connector) yang memang seharusnya selalu hadir. Konsekuensi:
+`lite` berarti "tanpa 7 builtin", BUKAN "tanpa connector sama sekali". Kalau kelak
+diinginkan profile yang juga mematikan connector platform ini, butuh perubahan terpisah
+pada call-site `connectors.Register(...)` — di luar scope plan ws2.
+
 ---
 
 ## 5. Work-stream #3 — FE: home -> agent, tools jadi "Mini Tools"
@@ -188,3 +210,8 @@ Open questions:
    diputuskan di plan Phase 1 setelah investigasi 3.3.
 2. Granularitas profile: cukup 3 (agent/full/lite) atau perlu custom profile
    per-downstream? Default mulai dari 3; custom menyusul kalau ada kebutuhan nyata.
+3. Isi profile `agent`: default plan = {github, httprest, slack}. Sejak sync upstream
+   terbaru, `googleworkspace` diperluas besar (gmail/calendar/meet/drive/docs/sheets/
+   slides) sehingga jadi kandidat kuat untuk ikut di profile `agent`. Keputusan isi
+   akhir = produk; default konservatif tetap 3 connector sampai diputuskan (lihat
+   catatan di `agentConnectors()`, plan ws2 Task 2).
