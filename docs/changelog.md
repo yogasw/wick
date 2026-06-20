@@ -18,10 +18,10 @@ _Nothing yet — notes for the next release go here._
 *   **Connectors — operations grouped into categories**: The connector detail page (Manager → Connectors → {connector}) now renders operations as named section cards instead of a flat list. Each card shows the section title, description, op count, per-card Enable/Disable all, and a paginated op table (5 ops per page). A sticky "Sections" jump sidebar lets you jump between sections without scrolling; a global search box filters across all categories.
 *   **Custom connector builder — operation sections**: The manual builder's Operations step is now section-based. Each section has a title and description, and ops can be dragged between sections. The right-hand Jump panel is a collapsible mini-map with scroll-spy highlighting that auto-expands the active section.
 *   **`pkg/connector` — `Category` / `Cat()`**: Built-in connector authors now group operations into titled sections using `connector.Cat(title, description, ops...)`. `Module.Operations` is `[]connector.Category`; `Module.AllOps()` flattens for callers that do not care about grouping; `Module.CategoryOf(opKey)` returns the section title for a given op key. See [Connector Module — Operations()](/guide/connector-module#operations).
-*   **Google Workspace — Gmail, Calendar, and Meet**: 17 new operations across three new categories on the existing `google_workspace` connector (same OAuth row, one re-consent required):
+*   **Google Workspace — Gmail, Calendar, and Meet**: 18 new operations across three new categories on the existing `google_workspace` connector (same OAuth row, one re-consent required):
     *   **Gmail** (6 ops): `gmail_list_messages` (search), `gmail_get_message`, `gmail_send`, `gmail_create_draft`, `gmail_reply` (threaded), `gmail_modify_labels` (archive, star, mark read, etc.).
     *   **Calendar** (7 ops): `calendar_list_calendars`, `calendar_list_events`, `calendar_get_event`, `calendar_create_event` (with optional Google Meet link via `add_meet=true`), `calendar_update_event`, `calendar_delete_event`, `calendar_respond_event` (RSVP accept/decline/tentative).
-    *   **Meet** (4 ops, read-only): `meet_get_space`, `meet_list_conference_records`, `meet_list_recordings`, `meet_list_transcripts`.
+    *   **Meet** (5 ops): `meet_create_space` (create a standalone Meet link), `meet_get_space`, `meet_list_conference_records`, `meet_list_recordings`, `meet_list_transcripts`.
     *   See [Google Workspace connector](/connectors/googleworkspace) for the full op reference.
 
 ### Breaking

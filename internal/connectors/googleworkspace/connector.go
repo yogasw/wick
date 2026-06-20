@@ -1,11 +1,12 @@
 // Package googleworkspace wraps Google Drive, Sheets, Docs, Slides, Gmail,
 // Calendar, and Meet REST APIs for LLM consumption.
 //
-// Purpose: Provides Meta, Configs, 37 Operations across 7 categories, and
+// Purpose: Provides Meta, Configs, 38 Operations across 7 categories, and
 // HealthCheck. Each user authenticates their own Google account via OAuth2
 // (Connect Account button). Operations are split read-only (list, search,
 // info, content, get) vs mutating (upload, create, delete, share, send, RSVP).
-// Mutating/destructive ops default to disabled per row.
+// Mutating ops are marked destructive so the LLM confirms before executing;
+// they are enabled by default like every other op.
 //
 // Caller:   internal/connectors/registry.go::RegisterBuiltins()
 // Dependencies: googleworkspace/service.go, googleworkspace/repo.go, googleworkspace/oauth.go
@@ -273,6 +274,11 @@ type CalendarRespondEventInput struct {
 
 // --- Meet input structs ---
 
+// MeetCreateSpaceInput is the argument schema for meet_create_space.
+type MeetCreateSpaceInput struct {
+	AccessType string `wick:"dropdown=TRUSTED|OPEN|RESTRICTED;desc=Who can join. TRUSTED: org + invited (default). OPEN: anyone with the link. RESTRICTED: invited only."`
+}
+
 // MeetGetSpaceInput is the argument schema for meet_get_space.
 type MeetGetSpaceInput struct {
 	Space string `wick:"required;desc=Meet space resource name (spaces/abc), meeting code, or full Meet URL."`
@@ -294,7 +300,7 @@ type MeetListTranscriptsInput struct {
 	ConferenceRecord string `wick:"required;desc=Conference record name (conferenceRecords/abc) from meet_list_conference_records."`
 }
 
-// Operations returns all 37 operations for the Google Workspace connector.
+// Operations returns all 38 operations for the Google Workspace connector.
 // Operations groups every Google Workspace action into its product
 // section. Group() flattens these into the Module's op list + the section
 // metadata the admin detail page renders.
@@ -411,7 +417,10 @@ func Operations() []connector.Category {
 				"Set your RSVP (accepted / declined / tentative) on an event you were invited to. Returns the event ID and your new response status.",
 				CalendarRespondEventInput{}, calendarRespondEvent, wickdocs.Docs{}),
 		),
-		connector.Cat("Meet", "Read Google Meet conference data — spaces, past meetings, recordings, and transcripts. To create a Meet link, use Calendar → Create Event with add_meet=true.",
+		connector.Cat("Meet", "Create a standalone Google Meet link, and read Meet conference data — spaces, past meetings, recordings, and transcripts. To attach a Meet link to a calendar invite instead, use Calendar → Create Event with add_meet=true.",
+			connector.OpDestructive("meet_create_space", "Create Meet Link",
+				"Create a new standalone Google Meet space (not tied to a calendar event). Returns meeting_uri (the shareable link) and meeting_code. Use access_type to control who can join. For a meeting with a scheduled time and invitees, use calendar_create_event with add_meet=true instead.",
+				MeetCreateSpaceInput{}, meetCreateSpace, wickdocs.Docs{}),
 			connector.Op("meet_get_space", "Get Meet Space",
 				"Get a Meet space's config and active conference by resource name, meeting code, or Meet URL. Returns meeting_uri, meeting_code, access_type, and the active conference record (if a call is live).",
 				MeetGetSpaceInput{}, meetGetSpace, wickdocs.Docs{}),
@@ -842,6 +851,10 @@ func calendarRespondEvent(c *connector.Ctx) (any, error) {
 }
 
 // --- Meet handlers ---
+
+func meetCreateSpace(c *connector.Ctx) (any, error) {
+	return createMeetSpace(c, c.Input("access_type"))
+}
 
 func meetGetSpace(c *connector.Ctx) (any, error) {
 	space, err := validateString(c.Input("space"), "space")

@@ -333,7 +333,10 @@ var opScopes = map[string][][]string{
 		{"https://www.googleapis.com/auth/calendar.events"},
 		{"https://www.googleapis.com/auth/calendar"},
 	},
-	// Meet ops (read-only conference data).
+	// Meet ops.
+	"meet_create_space": {
+		{"https://www.googleapis.com/auth/meetings.space.created"},
+	},
 	"meet_get_space": {
 		{"https://www.googleapis.com/auth/meetings.space.readonly"},
 		{"https://www.googleapis.com/auth/meetings.space.created"},
@@ -391,6 +394,10 @@ func normalizeGranted(scopeStr string) map[string]bool {
 	if m["https://www.googleapis.com/auth/gmail.modify"] {
 		m["https://www.googleapis.com/auth/gmail.readonly"] = true
 		m["https://www.googleapis.com/auth/gmail.compose"] = true
+	}
+	// meetings.space.created (write) implies read access to space/conference data
+	if m["https://www.googleapis.com/auth/meetings.space.created"] {
+		m["https://www.googleapis.com/auth/meetings.space.readonly"] = true
 	}
 	return m
 }

@@ -52,7 +52,7 @@ func calendarPost(c *connector.Ctx, path string, params url.Values, body any) ([
 		u += "?" + params.Encode()
 	}
 	return doWithRefresh(c, func(token string) (*http.Request, error) {
-		return buildJSONRequest(c, http.MethodPost, u, body)
+		return buildJSONRequest(c, http.MethodPost, u, token, body)
 	})
 }
 
@@ -62,7 +62,7 @@ func calendarPatch(c *connector.Ctx, path string, params url.Values, body any) (
 		u += "?" + params.Encode()
 	}
 	return doWithRefresh(c, func(token string) (*http.Request, error) {
-		return buildJSONRequest(c, http.MethodPatch, u, body)
+		return buildJSONRequest(c, http.MethodPatch, u, token, body)
 	})
 }
 

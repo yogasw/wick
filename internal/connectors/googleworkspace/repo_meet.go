@@ -36,6 +36,42 @@ func meetGet(c *connector.Ctx, path string, params url.Values) ([]byte, error) {
 	})
 }
 
+// createMeetSpace creates a new Meet space and returns its meeting URI + code.
+// This is a standalone link not tied to any calendar event.
+func createMeetSpace(c *connector.Ctx, accessType string) (MeetSpace, error) {
+	body := map[string]any{}
+	if accessType != "" {
+		body["config"] = map[string]any{"accessType": accessType}
+	}
+	respBody, err := meetPost(c, "/spaces", body)
+	if err != nil {
+		return MeetSpace{}, err
+	}
+	var r struct {
+		Name        string `json:"name"`
+		MeetingURI  string `json:"meetingUri"`
+		MeetingCode string `json:"meetingCode"`
+		Config      struct {
+			AccessType string `json:"accessType"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(respBody, &r); err != nil {
+		return MeetSpace{}, fmt.Errorf("parse created space: %w", err)
+	}
+	return MeetSpace{
+		Name:        r.Name,
+		MeetingURI:  r.MeetingURI,
+		MeetingCode: r.MeetingCode,
+		AccessType:  r.Config.AccessType,
+	}, nil
+}
+
+func meetPost(c *connector.Ctx, path string, body any) ([]byte, error) {
+	return doWithRefresh(c, func(token string) (*http.Request, error) {
+		return buildJSONRequest(c, http.MethodPost, meetBaseURL+path, token, body)
+	})
+}
+
 // getMeetSpace fetches a space by its name. The caller may pass a full resource
 // name ("spaces/abc"), a meeting code, or a Meet URL — normalized here.
 func getMeetSpace(c *connector.Ctx, space string) (MeetSpace, error) {

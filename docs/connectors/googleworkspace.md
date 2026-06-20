@@ -6,7 +6,7 @@ outline: deep
 
 `google_workspace` wraps the Google Drive, Sheets, Docs, Slides, Gmail, Calendar, and Meet REST APIs behind one connector. One instance = one Google account, authenticated via the **Connect Account** OAuth2 button — a single token grants access to all seven products.
 
-This replaces the older code-only `google_drive` connector. The connector now ships **37 operations across 7 categories**.
+This replaces the older code-only `google_drive` connector. The connector now ships **38 operations across 7 categories**.
 
 | | |
 |---|---|
@@ -42,7 +42,7 @@ The Connect Account flow asks for all of the scopes below; the health check veri
 | `https://www.googleapis.com/auth/gmail.send` | `gmail_send`, `gmail_reply`. |
 | `https://www.googleapis.com/auth/gmail.compose` | `gmail_create_draft`. |
 | `https://www.googleapis.com/auth/calendar` | All `calendar_*` ops (full read/write). |
-| `https://www.googleapis.com/auth/meetings.space.readonly` | All `meet_*` ops (read-only). |
+| `https://www.googleapis.com/auth/meetings.space.created` | All `meet_*` ops. Lets `meet_create_space` create links and is a superset of `meetings.space.readonly` for the read ops. |
 | `https://www.googleapis.com/auth/userinfo.email` | Identifies the connected account (per-user token mapping). |
 
 The health check treats a write scope as a superset of its read-only variant. Read-only ops are satisfied by either the read-only or full scope.
@@ -60,7 +60,7 @@ The health check treats a write scope as a superset of its read-only variant. Re
 | `get_file_info` | `file_id` | Metadata for one file/folder: name, MIME type, size, owner email, sharing state, parent IDs, web view link. |
 | `get_file_content` | `file_id` | Read text content. Docs → plain text, Sheets → CSV, Slides → plain text, other files → raw bytes (first 100 KB). |
 
-### Write (destructive, opt-in per row)
+### Write (destructive)
 
 | Op | Input | What it does |
 |---|---|---|
@@ -98,7 +98,7 @@ The health check treats a write scope as a superset of its read-only variant. Re
 
 ## Operations — Gmail
 
-All Gmail ops require at least one Gmail scope (see scopes table). `gmail_send`, `gmail_create_draft`, `gmail_reply`, and `gmail_modify_labels` are destructive and opt-in per row.
+All Gmail ops require at least one Gmail scope (see scopes table). `gmail_send`, `gmail_create_draft`, `gmail_reply`, and `gmail_modify_labels` are marked destructive — they are enabled by default like every op, the destructive flag just makes the LLM confirm before executing (and an admin can disable any of them per row).
 
 ### Read
 
@@ -107,7 +107,7 @@ All Gmail ops require at least one Gmail scope (see scopes table). `gmail_send`,
 | `gmail_list_messages` | `query`, `max_results` | Search the mailbox using Gmail query syntax (e.g. `from:alice@abc.com is:unread newer_than:7d`). Returns id, thread_id, from, to, subject, date, snippet. Leave `query` empty to list the whole mailbox. Default `max_results`: 20 (max 100). |
 | `gmail_get_message` | `message_id` | Read a single message in full: headers (from, to, cc, subject, date), labels, and the plain-text body. |
 
-### Write (destructive, opt-in per row)
+### Write (destructive)
 
 | Op | Input | What it does |
 |---|---|---|
@@ -118,7 +118,7 @@ All Gmail ops require at least one Gmail scope (see scopes table). `gmail_send`,
 
 ## Operations — Calendar
 
-All Calendar ops require the `calendar` scope. Create/update/delete/RSVP ops are destructive and opt-in per row.
+All Calendar ops require the `calendar` scope. Create/update/delete/RSVP ops are marked destructive (LLM confirms before executing; enabled by default, disable per row if you want).
 
 ### Read
 
@@ -128,7 +128,7 @@ All Calendar ops require the `calendar` scope. Create/update/delete/RSVP ops are
 | `calendar_list_events` | `calendar_id`, `time_min`, `time_max`, `query`, `max_results` | List events in a calendar within an optional time window. `time_min` / `time_max` are RFC3339 strings. Returns id, summary, start, end, attendees, and meet_link for each. Default calendar: `primary`. Default `max_results`: 50 (max 250). |
 | `calendar_get_event` | `calendar_id`, `event_id` | Read a single event in full: summary, description, location, start/end, attendees with RSVP status, and Meet link if any. |
 
-### Write (destructive, opt-in per row)
+### Write (destructive)
 
 | Op | Input | What it does |
 |---|---|---|
@@ -139,7 +139,15 @@ All Calendar ops require the `calendar` scope. Create/update/delete/RSVP ops are
 
 ## Operations — Meet
 
-All Meet ops require the `meetings.space.readonly` scope. All are read-only; no write ops exist in this category. To create a Meet link for a new meeting, use `calendar_create_event` with `add_meet=true`.
+All Meet ops require the `meetings.space.created` scope (a superset of `meetings.space.readonly`). One op writes (`meet_create_space`); the rest are read-only. To attach a Meet link to a scheduled meeting with invitees, use `calendar_create_event` with `add_meet=true` instead.
+
+### Write (destructive)
+
+| Op | Input | What it does |
+|---|---|---|
+| `meet_create_space` | `access_type` | Create a **standalone** Meet space not tied to any calendar event. Returns `meeting_uri` (the shareable link) and `meeting_code`. `access_type` controls who can join: `TRUSTED` (org + invited, default), `OPEN` (anyone with the link), `RESTRICTED` (invited only). Marked destructive (LLM confirms before executing). |
+
+### Read
 
 | Op | Input | What it does |
 |---|---|---|
@@ -158,6 +166,7 @@ All Meet ops require the `meetings.space.readonly` scope. All are read-only; no 
 - `calendar_delete_event` is **not reversible** via this connector (unlike Drive trash).
 - IDs are Google **resource IDs** (the long string in a Drive/Docs/Sheets/Slides URL, or the opaque ID from a list op). Resolve names to IDs with a list or search op first.
 - `calendar_create_event` with `add_meet=true` uses the Calendar `conferenceData` API to attach a Meet link. The `meet_link` field in the response contains the generated `meet.google.com` URL.
+- **Two ways to get a Meet link.** `meet_create_space` returns a **standalone** link with no event behind it — good for an ad-hoc "send me a link now". `calendar_create_event` with `add_meet=true` returns a link **bound to a scheduled event** with a time and invitees who get an email. Pick based on whether the meeting needs a calendar entry.
 
 ## See also
 

@@ -23,7 +23,7 @@ func slidesGet(c *connector.Ctx, path string) ([]byte, error) {
 
 func slidesPost(c *connector.Ctx, path string, body any) ([]byte, error) {
 	return doWithRefresh(c, func(token string) (*http.Request, error) {
-		return buildJSONRequest(c, http.MethodPost, slidesBaseURL+path, body)
+		return buildJSONRequest(c, http.MethodPost, slidesBaseURL+path, token, body)
 	})
 }
 

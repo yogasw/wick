@@ -38,7 +38,7 @@ func gmailGet(c *connector.Ctx, path string, params url.Values) ([]byte, error) 
 
 func gmailPost(c *connector.Ctx, path string, body any) ([]byte, error) {
 	return doWithRefresh(c, func(token string) (*http.Request, error) {
-		return buildJSONRequest(c, http.MethodPost, gmailBaseURL+path, body)
+		return buildJSONRequest(c, http.MethodPost, gmailBaseURL+path, token, body)
 	})
 }
 

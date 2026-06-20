@@ -39,8 +39,9 @@ func OAuthMeta() *connector.OAuthMeta {
 			"https://www.googleapis.com/auth/gmail.compose",
 			// Calendar: full read/write (covers events + read-only).
 			"https://www.googleapis.com/auth/calendar",
-			// Meet: read-only conference data (spaces, records, recordings, transcripts).
-			"https://www.googleapis.com/auth/meetings.space.readonly",
+			// Meet: create spaces + read conference data (records, recordings, transcripts).
+			// meetings.space.created is a superset of meetings.space.readonly.
+			"https://www.googleapis.com/auth/meetings.space.created",
 			"https://www.googleapis.com/auth/userinfo.email",
 		}, " "),
 		DisplayName: "Google Workspace",
