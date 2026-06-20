@@ -155,6 +155,56 @@ func builtinModules() []connector.Module {
 	}
 }
 
+// Build profiles select which builtin connectors a binary registers.
+// The active profile is read at boot from the configs DB row
+// (configs.KeyProfile) via configsSvc.Profile(). "full" (default and
+// any unknown value) preserves the historical all-connectors behaviour.
+const (
+	ProfileFull  = "full"
+	ProfileAgent = "agent"
+	ProfileLite  = "lite"
+)
+
+// agentConnectors is the curated allow-list for the "agent" profile.
+// Widen or narrow it with a one-line edit here.
+func agentConnectors() map[string]bool {
+	return map[string]bool{
+		github.Meta().Key:   true,
+		httprest.Meta().Key: true,
+		slack.Meta().Key:    true,
+	}
+}
+
+// profileModules is the pure selector behind RegisterProfile: given a
+// profile name it returns the builtin modules that profile should
+// register, without touching global registry state (so it is trivially
+// unit-testable).
+func profileModules(profile string) []connector.Module {
+	switch profile {
+	case ProfileLite:
+		return nil
+	case ProfileAgent:
+		allow := agentConnectors()
+		out := make([]connector.Module, 0, len(allow))
+		for _, m := range builtinModules() {
+			if allow[m.Meta.Key] {
+				out = append(out, m)
+			}
+		}
+		return out
+	default: // ProfileFull and any unknown value
+		return builtinModules()
+	}
+}
+
+// RegisterProfile seeds the builtin connectors permitted by the named
+// profile. Idempotent on Meta.Key via registerOnce.
+func RegisterProfile(profile string) {
+	for _, m := range profileModules(profile) {
+		registerOnce(m)
+	}
+}
+
 // RegisterBuiltins seeds in-house connectors every downstream wick app
 // gets by default. Idempotent on Meta.Key via registerOnce.
 func RegisterBuiltins() {
