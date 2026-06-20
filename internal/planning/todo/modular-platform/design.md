@@ -73,11 +73,11 @@ registration list, `wick.yml`) bisa stale atau ketimpa saat upgrade/re-init.
 ### 3.2 Desain
 
 - **Entrypoint contract stabil**: downstream `main.go` cuma memanggil `app.Run()`.
-  Profile aktif di-inject saat build (lihat 4.1), jadi `main.go` TIDAK menyebut nama
-  profile dan tetap stabil lintas pilihan profile maupun upgrade core.
+  Profile aktif dibaca runtime dari config DB (lihat 4.1), jadi `main.go` TIDAK menyebut
+  profile sama sekali dan tetap stabil lintas pilihan profile maupun upgrade core.
 
       func main() {
-          app.Run() // profile dipilih saat `wick build --profile <name>`
+          app.Run() // profil = config row di DB (runtime), tidak disebut di sini
       }
 
 - Konsekuensi: upgrade core (b) **tidak pernah** memaksa edit `main.go`. Nambah/ubah
@@ -96,23 +96,30 @@ memastikan fix #1 menyasar penyebab nyata, bukan dugaan.
 
 ## 4. Work-stream #2 — Registration profiles (keystone)
 
-Mekanisme terpilih: **Opsi A — profile sebagai named function + build tags opsional**.
-(Opsi B runtime-flag dan Opsi C pisah-repo ditolak; lihat 4.4.)
+Mekanisme terpilih (KEPUTUSAN 2026-06-20, lihat §9): **named function
+(`profileModules`/`RegisterProfile`) yang sumber profilnya = config row di DB**, di-set
+via command `<app> config profile <name>`. BUKAN build-time ldflag, BUKAN env. (Opsi C
+pisah-repo tetap ditolak; lihat 4.4. Build tags untuk pengecilan binary = jalur terpisah,
+lihat 4.2.)
 
 ### 4.1 Konsep
 
-Layer "profile" di atas `RegisterBuiltins`/`RegisterLabSamples` yang sudah ada. Profile
-adalah named function yang memanggil himpunan `Register*` tertentu.
+Layer "profile" di atas `RegisterBuiltins` yang sudah ada. `profileModules(profile)`
+menyaring himpunan builtin per `Meta.Key`; `RegisterProfile(profile)` me-register subset
+itu. Tiga profil:
 
-- `profile.Agent` — agent + connector minimal yang dibutuhkan agent.
-- `profile.Full`  — semua builtin (perilaku sekarang).
-- `profile.Lite`  — core saja, tanpa connector berat.
+- `agent` — connector minimal yang dibutuhkan agent (default: github, httprest, slack).
+- `full`  — semua 7 builtin (perilaku sekarang; default).
+- `lite`  — tanpa builtin (lihat 4.5: connector platform tetap on).
 
-Profile dipilih **saat build** lewat argumen `wick build --profile <name>` (KEPUTUSAN,
-lihat §9) — diimplementasikan via build tags + `-ldflags` (lihat 4.2). `install.sh`
-menanyakan profile lalu memanggil `wick build --profile <name>`. Default tanpa argumen
-= `full` (perilaku sekarang). Ini realisasi visi "install.sh milih module, versi
-full/lite".
+Profil **disimpan sebagai config row di DB** (`configs.KeyProfile`, default `full`) dan
+**dibaca saat boot** lewat `configsSvc.Profile()` sebelum `RegisterProfile`. Di-set lewat
+command `<app> config profile <name>` — pola sama dengan `allowed-origins` yang sudah ada,
+dan jalan **tanpa boot connector** (`withConfigsService` cuma buka `configs.Service`
+singkat). Karena `install.sh` mengunduh binary **prebuilt** (tidak build dari source),
+seleksi build-time tidak mungkin: install.sh memilih profil dengan memanggil
+`<app> config profile <name>` setelah unduh. Ini realisasi visi "install.sh milih module"
+dengan **1 artifact release**, tanpa env, tanpa rebuild.
 
 ### 4.2 Build tags (opsional, untuk lite binary kecil)
 
@@ -128,8 +135,11 @@ ter-compile. Default (tanpa tag) = full, supaya tidak memecah perilaku existing.
 
 ### 4.4 Yang ditolak
 
-- **Opsi B (runtime feature flag)**: tidak mengecilkan binary, tidak menyelesaikan
-  "ketarik semua connector" — semua tetap ter-compile.
+- **Opsi B versi env (runtime flag lewat env var)**: ditolak sebagai mekanisme utama
+  (Yoga: "ngak usah env"). Seleksi runtime tetap dipakai, tapi sumbernya **config row di
+  DB**, bukan env — lebih eksplisit, persisten, reuse infra `configs` + command
+  `<app> config`. Catatan: seleksi runtime (env maupun DB) **tidak** mengecilkan binary —
+  semua connector tetap ter-compile; pengecilan fisik cuma lewat build tags (4.2).
 - **Opsi C (pisah Go module/repo, ide Yoga)**: versioning independen tapi berat,
   menambah friksi go-module multi-repo, dan justru **memperparah** pain #1 jangka
   pendek. Premature — bisa ditinjau ulang setelah #1+#2 stabil.
@@ -160,8 +170,9 @@ pada call-site `connectors.Register(...)` — di luar scope plan ws2.
 - UI admin tools/connector dikelompokkan di menu **"Mini Tools"** (analogi helpdesk).
 - Ini **perubahan information-architecture / routing**, BUKAN rewrite. Tools tetap
   first-class secara fungsi; hanya turun di hierarki navigasi.
-- Diikat ke profile: build `agent`/`full` -> home agent + Mini Tools terisi;
-  `lite` boleh menyembunyikan Mini Tools.
+- Diikat ke profile (dibaca runtime dari config DB, bukan build): profil `agent`/`full`
+  -> home agent + Mini Tools terisi; `lite` boleh menyembunyikan Mini Tools. FE membaca
+  profil aktif lewat config/endpoint, bukan flag build-time.
 - Paling kelihatan tapi paling gampang di-rollback -> dikerjakan **terakhir**.
 
 ---
@@ -181,8 +192,9 @@ Tiap phase jadi file plan tersendiri di `internal/planning/todo/modular-platform
 
 - #1: integration test memastikan `wick upgrade` tidak menyentuh `main.go` user;
   bump go.mod terverifikasi.
-- #2: table-driven test memastikan tiap profile me-register tepat himpunan modul yang
-  diharapkan (tidak lebih, tidak kurang). Build-tag variant: smoke build per tag.
+- #2: table-driven test `profileModules` (tiap profil → himpunan modul tepat); unit test
+  `configs.Profile()` (default full + nilai ter-set); unit test `parseProfileArg`
+  (validasi full|agent|lite). Build-tag variant: ditunda (4.2).
 - #3: FE route test (home resolve ke agent; menu Mini Tools render sesuai profile).
 
 ---
@@ -198,11 +210,14 @@ Tiap phase jadi file plan tersendiri di `internal/planning/todo/modular-platform
 
 ## 9. Keputusan & open questions
 
-Keputusan:
+Keputusan (revisi 2026-06-20, arahan Yoga — membalik keputusan build-time sebelumnya):
 
-- **Profile dipilih sebagai argumen `wick build --profile <name>`**, BUKAN ditulis ke
-  `wick.yml`. `install.sh` menanyakan profile lalu memanggil `wick build` dengan
-  argumen itu. Default tanpa argumen = `full`.
+- **Profile = config row di DB** (`configs.KeyProfile`, default `full`), di-set via command
+  `<app> config profile <name>` (pola sama dengan `allowed-origins`), dan **dibaca saat boot**
+  sebelum `RegisterProfile`. BUKAN build-time `wick build --profile`, BUKAN env var.
+- Alasan: `install.sh` mengunduh binary prebuilt (tidak build), jadi seleksi harus runtime;
+  command `config` jalan tanpa boot connector (`withConfigsService`) sehingga install.sh bisa
+  set profil pasca-unduh. Konsekuensi: ganti profil butuh restart (registrasi saat boot) — wajar.
 
 Open questions:
 

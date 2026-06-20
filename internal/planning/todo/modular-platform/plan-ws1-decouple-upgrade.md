@@ -6,7 +6,7 @@
 
 **Goal:** Confirm why upgrading wick via the CLI is painful, then decouple core upgrade from the user's scaffolded files so `wick upgrade` never clobbers `main.go` / customisations and updating core does not force a re-scaffold.
 
-**Architecture:** Phase A traces the `wick upgrade` + `wick init` scaffold paths and reproduces the pain in a throwaway downstream app. Phase B implements the decoupling the findings justify — the design's target is a *stable entrypoint contract* (`main.go` only picks a profile + calls `app.Run()`; see design §3.2 and the ws2 plan).
+**Architecture:** Phase A traces the `wick upgrade` + `wick init` scaffold paths and reproduces the pain in a throwaway downstream app. Phase B implements the decoupling the findings justify — the design's target is a *stable entrypoint contract* (`main.go` only calls `app.Run()`; the profile is a runtime config-DB row, NOT referenced in `main.go`; see design §3.2 and the ws2 plan).
 
 **Tech Stack:** Go, cobra, `go.mod` / `go get`, `wick init` / `wick upgrade`.
 
@@ -102,4 +102,4 @@ git commit -m "docs(planning): upgrade-decouple investigation findings + Phase B
 
 ## Dependencies & sequencing
 
-- Shares the **entrypoint contract** with the ws2 (registration profiles) plan: candidate C1 assumes `main.go` becomes `app.Run()`-only with the profile baked at build time. If ws2 lands first, C1 is mostly a `template/main.go` simplification + a guard. Recommend running Phase A in parallel with ws2, then Phase B after both ws2 and the findings are in.
+- Shares the **entrypoint contract** with the ws2 (registration profiles) plan: candidate C1 assumes `main.go` becomes `app.Run()`-only. Because ws2 now selects the profile at runtime from a config-DB row (not a build flag), `main.go` does not reference the profile at all — C1 is mostly a `template/main.go` simplification + a guard, independent of ws2's profile source. Recommend running Phase A in parallel with ws2, then Phase B after both ws2 and the findings are in.

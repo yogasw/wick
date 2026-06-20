@@ -1,36 +1,39 @@
-# Registration Profiles (#2) Implementation Plan
+# Registration Profiles (#2) Implementation Plan — config-DB
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add build-time connector profiles (`full` / `agent` / `lite`) so a wick binary registers only the builtin connectors its profile allows, selected via `wick build --profile <name>`.
+> **Decision (2026-06-20, supersedes the earlier build-time ldflag draft):** Per Yoga, the profile is a **config flag stored in the DB** and set via the existing `<app> config` command — **not** env, **not** a build flag. Rationale: `install.sh` downloads a *prebuilt* binary (no build step), so selection must be runtime. The `<app> config` command already runs **without booting connectors** (`withConfigsService` opens only a short-lived `configs.Service`), so `install.sh` can set the profile right after download. See design §4 and §9.
 
-**Architecture:** A new `BuildProfile` ldflag var in `internal/appname` is injected by `wick build --profile`. `internal/connectors` gains a pure `profileModules(profile)` selector + `RegisterProfile(profile)` layered over the existing `RegisterBuiltins()`. The three server/worker/mcp boot sites call `RegisterProfile(appname.BuildProfile)` instead of `RegisterBuiltins()`. Profiles are allow-lists keyed by connector `Meta().Key`. Default `full` preserves current behaviour (all 7 builtins).
+**Goal:** Add a connector profile (`full` / `agent` / `lite`) stored as a `configs` DB row, set via `<app> config profile <name>`, read at boot so a wick binary registers only the builtin connectors its profile allows. One prebuilt binary; profile chosen at install/runtime.
 
-**Tech Stack:** Go, cobra (CLI), `go test` (table-driven), `-ldflags -X` injection.
+**Architecture:** `profileModules(profile)` + `RegisterProfile(profile)` layer over the existing `RegisterBuiltins()` (a pure, source-agnostic registration filter). The active profile is a `configs` row (`configs.KeyProfile`, default `"full"`) read at the three boot sites via `configsSvc.Profile()` and passed to `RegisterProfile`. A new `<app> config profile` subcommand writes that row, mirroring the existing `allowed-origins` command. Default `"full"` preserves current behaviour (all 7 builtins).
 
-**Reference:** design at `internal/planning/todo/modular-platform/design.md` §4.
+**Tech Stack:** Go, gorm, cobra, `internal/configs` service, `go test` (sqlite in-memory + table-driven), `-ldflags` NOT used for profiles.
+
+**Reference:** design at `internal/planning/todo/modular-platform/design.md` §4 (config-DB mechanism) and §9 (decision).
 
 ---
 
 ## File Structure
 
-- `internal/connectors/registry.go` (modify) — extract `builtinModules()`, add `profileModules()`, `RegisterProfile()`, profile constants, `agentConnectors()`.
-- `internal/connectors/profile_test.go` (create) — table-driven test for `profileModules()`.
-- `internal/appname/appname.go` (modify) — add `BuildProfile` ldflag var (default `"full"`).
-- `internal/pkg/api/server.go` (modify, ~line 163) — `RegisterBuiltins()` → `RegisterProfile(appname.BuildProfile)`.
-- `internal/pkg/api/server_mcp.go` (modify, ~line 144) — same.
-- `internal/pkg/worker/server.go` (modify, ~line 50) — same.
-- `internal/builder/config.go` (modify) — add `Profile string` field.
-- `internal/builder/ldflags.go` (modify) — inject `-X .../appname.BuildProfile=<profile>`.
-- `internal/builder/ldflags_test.go` (create or modify) — assert profile ldflag present.
-- `cmd/cli/build.go` (modify) — add `--profile` flag + validation.
+- `internal/connectors/registry.go` (modify) — extract `builtinModules()`, add `profileModules()`, `RegisterProfile()`, `ProfileFull/Agent/Lite`, `agentConnectors()`. [Tasks 1-2]
+- `internal/connectors/profile_test.go` (create) — table-driven tests for `builtinModules()` / `profileModules()`. [Tasks 1-2]
+- `internal/configs/spec.go` (modify) — add `KeyProfile` + `DefaultProfile` + an `appDefaults()` seed row. [Task 3]
+- `internal/configs/service.go` (modify) — add `Profile()` accessor. [Task 3]
+- `internal/configs/profile_test.go` (create) — `Profile()` default + set-value. [Task 3]
+- `internal/pkg/api/server.go` (modify) — remove `RegisterBuiltins()` (~line 163); add `RegisterProfile(configsSvc.Profile())` right after `configsSvc.Bootstrap()` (~line 194). [Task 4]
+- `internal/pkg/api/server_mcp.go` (modify, ~line 144) — replace `RegisterBuiltins()` with `RegisterProfile(configsSvc.Profile())` (`configsSvc` already bootstrapped ~line 65). [Task 4]
+- `internal/pkg/worker/server.go` (modify) — remove `RegisterBuiltins()` (~line 50); add `RegisterProfile(configsSvc.Profile())` after `configsSvc.Bootstrap()` (~line 69). [Task 4]
+- `app/config_cmd.go` (modify) — add `parseProfileArg()` + `configProfileCmd()` + register it. [Task 5]
+- `app/config_profile_test.go` (create) — `parseProfileArg()` validation. [Task 5]
+- **NOT changed:** `cmd/lab/root.go` keeps `connectors.RegisterBuiltins()` (the dev/lab binary stays `full`). No `internal/appname`, `internal/builder`, or `cmd/cli/build.go` changes — no ldflag, no `--profile` flag.
 
 ---
 
 ## Task 1: Extract `builtinModules()` (behaviour-preserving refactor)
 
 **Files:**
-- Modify: `internal/connectors/registry.go` (`RegisterBuiltins`, ~line 119-165)
+- Modify: `internal/connectors/registry.go` (`RegisterBuiltins`, ~line 119-164)
 - Test: `internal/connectors/profile_test.go`
 
 - [ ] **Step 1: Write the failing test**
@@ -230,9 +233,9 @@ Expected: FAIL — `undefined: ProfileFull` / `profileModules`.
 
 ```go
 // Build profiles select which builtin connectors a binary registers.
-// The active profile is baked into appname.BuildProfile via
-// `wick build --profile <name>`. "full" (default and any unknown value)
-// preserves the historical all-connectors behaviour.
+// The active profile is read at boot from the configs DB row
+// (configs.KeyProfile) via configsSvc.Profile(). "full" (default and
+// any unknown value) preserves the historical all-connectors behaviour.
 const (
 	ProfileFull  = "full"
 	ProfileAgent = "agent"
@@ -301,296 +304,309 @@ git commit -m "feat(connectors): add build-profile connector selection (full/age
 
 ---
 
-## Task 3: Add `BuildProfile` ldflag var to `internal/appname`
+## Task 3: Add the `profile` config row + `Profile()` accessor to `internal/configs`
 
 **Files:**
-- Modify: `internal/appname/appname.go`
-- Test: `internal/appname/appname_test.go` (create if absent)
+- Modify: `internal/configs/spec.go` (key constant + default + `appDefaults()` seed row)
+- Modify: `internal/configs/service.go` (`Profile()` accessor)
+- Test: `internal/configs/profile_test.go` (create)
 
 - [ ] **Step 1: Write the failing test**
 
 ```go
-package appname
+package configs
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
-func TestBuildProfile_DefaultsToFull(t *testing.T) {
-	if BuildProfile != "full" {
-		t.Fatalf("BuildProfile default = %q, want \"full\"", BuildProfile)
+func TestProfile_DefaultsToFull(t *testing.T) {
+	svc := newTestSvc(t)
+	if err := svc.Bootstrap(context.Background()); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if got := svc.Profile(); got != "full" {
+		t.Fatalf("Profile() default = %q, want \"full\"", got)
+	}
+}
+
+func TestProfile_ReturnsSetValue(t *testing.T) {
+	svc := newTestSvc(t)
+	ctx := context.Background()
+	if err := svc.Bootstrap(ctx); err != nil {
+		t.Fatalf("bootstrap: %v", err)
+	}
+	if err := svc.Set(ctx, KeyProfile, "agent"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if got := svc.Profile(); got != "agent" {
+		t.Fatalf("Profile() = %q, want \"agent\"", got)
 	}
 }
 ```
 
+(`newTestSvc` is the existing sqlite-in-memory helper in `internal/configs/service_test.go`, same package.)
+
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `go test ./internal/appname/ -run TestBuildProfile -v`
-Expected: FAIL — `undefined: BuildProfile`.
+Run: `go test ./internal/configs/ -run TestProfile -v`
+Expected: FAIL — `undefined: KeyProfile` / `svc.Profile undefined`.
 
-- [ ] **Step 3: Add the var (next to `BuildAppName` / `BuildAppVersion`, ~line 32-37)**
+- [ ] **Step 3: Add the key constant + default + seed row in `spec.go`**
+
+In the const block in `internal/configs/spec.go` (next to `KeyAllowedOrigins`), add:
 
 ```go
-// BuildProfile is the ldflag injection target selecting which builtin
-// connectors the binary registers. Builder writes here via
-// `-X github.com/yogasw/wick/internal/appname.BuildProfile=<profile>`.
-// Empty / unset is treated as "full" by connectors.RegisterProfile.
-var BuildProfile = "full"
+	KeyProfile     = "profile"
+	DefaultProfile = "full"
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+Then add a seed row inside `appDefaults()` (alongside the other `entity.Config{...}` entries):
 
-Run: `go test ./internal/appname/ -run TestBuildProfile -v`
-Expected: PASS.
+```go
+		{
+			Key:         KeyProfile,
+			Type:        "text",
+			Value:       DefaultProfile,
+			Description: "Connector profile this instance registers at boot: full (all builtin connectors), agent (curated subset), or lite (none). Set via `<app> config profile <name>`; takes effect on restart.",
+		},
+```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Add the `Profile()` accessor in `service.go`**
+
+In `internal/configs/service.go`, next to the other typed accessors (`AppName()`, `AllowedOrigins()`, ~line 479-500), add:
+
+```go
+// Profile returns the connector profile this instance should register
+// at boot (full/agent/lite). Empty/unset falls back to DefaultProfile
+// ("full"), so a fresh DB behaves exactly like today.
+func (s *Service) Profile() string {
+	if p := strings.TrimSpace(s.Get(KeyProfile)); p != "" {
+		return p
+	}
+	return DefaultProfile
+}
+```
+
+(`strings` is already imported in `service.go` — used by `AllowedOrigins`.)
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `go test ./internal/configs/ -run TestProfile -v`
+Expected: PASS (both sub-tests). Then `go test ./internal/configs/...` → PASS (no regression).
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add internal/appname/appname.go internal/appname/appname_test.go
-git commit -m "feat(appname): add BuildProfile ldflag var (default full)"
+git add internal/configs/spec.go internal/configs/service.go internal/configs/profile_test.go
+git commit -m "feat(configs): add profile config row + Profile() accessor (default full)"
 ```
 
 ---
 
-## Task 4: Wire the three boot sites to `RegisterProfile`
+## Task 4: Wire the three boot sites to `RegisterProfile(configsSvc.Profile())`
+
+The connector registration must run **after** `configsSvc.Bootstrap(...)` (so the profile row is in cache) and **before** anything walks `connectors.All()`. Boot order differs per site (validated against master), so the edit differs per file.
 
 **Files:**
-- Modify: `internal/pkg/api/server.go` (~line 163)
-- Modify: `internal/pkg/api/server_mcp.go` (~line 144)
-- Modify: `internal/pkg/worker/server.go` (~line 50)
+- Modify: `internal/pkg/api/server_mcp.go` (~line 144 — `configsSvc.Bootstrap` is already at ~line 65, before this)
+- Modify: `internal/pkg/api/server.go` (remove ~line 163; add after `configsSvc.Bootstrap` ~line 194)
+- Modify: `internal/pkg/worker/server.go` (remove ~line 50; add after `configsSvc.Bootstrap` ~line 69)
 
-- [ ] **Step 1: Replace the connector call at each site**
+- [ ] **Step 1: `server_mcp.go` — replace in place (Bootstrap already precedes it)**
 
-At each location, change:
+`configsSvc` is created and `Bootstrap`-ed at ~line 64-65, well above the connector call at ~line 144. Replace:
 
 ```go
 connectors.RegisterBuiltins()
 ```
 
-to:
+with:
 
 ```go
-connectors.RegisterProfile(appname.BuildProfile)
+connectors.RegisterProfile(configsSvc.Profile())
 ```
 
-Leave `tools.RegisterBuiltins()` and `jobs.RegisterBuiltins()` untouched — this plan scopes profiles to connectors (the 7-vs-rest pain). Add the import `"github.com/yogasw/wick/internal/appname"` to any of the three files that does not already import it.
+- [ ] **Step 2: `server.go` — move the call below `configsSvc.Bootstrap`**
 
-> **Scope note (validated vs master):** This swap gates ONLY the `RegisterBuiltins` set (the 7 public connectors). Four connectors register at runtime via `connectors.Register(...)` inline in `server.go`/`server_mcp.go` (they need runtime Deps): `wickmanager`, `workflow` (wfconn), `notifications`, `customconnector`. Those are NOT affected by the profile and remain registered in every profile, including `lite` — intentional, they are platform/infra connectors. Gating them too would mean touching those inline call-sites, which is out of scope here. See design §4.5.
+`connectors.RegisterBuiltins()` is at ~line 163, but `configsSvc` is only created at ~line 180 and bootstrapped at ~line 194. So:
 
-- [ ] **Step 2: Confirm no stray builtin connector calls remain in boot paths**
+1. **Delete** the `connectors.RegisterBuiltins()` line (~163). Leave `tools.RegisterBuiltins()` and `jobs.RegisterBuiltins()` untouched (the tools/jobs validation right below them depends on `tools.All()` / `jobs.All()`).
+2. Immediately **after** the `configsSvc.Bootstrap(context.Background(), extraConfigs...)` error-check block (~line 194-196), add:
+
+```go
+	connectors.RegisterProfile(configsSvc.Profile())
+```
+
+This is well before `connectorsSvc.Bootstrap(context.Background(), connectors.All())` (~line 1032), the first consumer of `connectors.All()`.
+
+- [ ] **Step 3: `worker/server.go` — move the call below `configsSvc.Bootstrap`**
+
+`connectors.RegisterBuiltins()` is at ~line 50, but `configsSvc` is created at ~line 55 and bootstrapped at ~line 69. So:
+
+1. **Delete** the `connectors.RegisterBuiltins()` line (~50). Leave `tools.RegisterBuiltins()` / `jobs.RegisterBuiltins()` untouched.
+2. Immediately **after** the `configsSvc.Bootstrap(context.Background(), extraConfigs...)` error-check block (~line 69), add:
+
+```go
+	connectors.RegisterProfile(configsSvc.Profile())
+```
+
+- [ ] **Step 4: Confirm no stray builtin connector calls remain in boot paths**
 
 Run: `grep -rn "connectors.RegisterBuiltins()" internal/pkg/`
-Expected: no output (all three boot sites now use `RegisterProfile`).
+Expected: no output. (`cmd/lab/root.go` still calls it — intentional: the dev/lab binary stays `full`. Out of scope here.)
 
-- [ ] **Step 3: Build the whole module**
+- [ ] **Step 5: Build the whole module**
 
 Run: `go build ./...`
-Expected: builds clean (no import-cycle / unused-import errors).
+Expected: builds clean (no import-cycle / unused-import errors). `template/` package errors are pre-existing and unrelated (scaffolding, not a real module).
 
-- [ ] **Step 4: Run the affected packages' tests**
+- [ ] **Step 6: Run the affected packages' tests**
 
-Run: `go test ./internal/pkg/api/... ./internal/pkg/worker/... ./internal/connectors/...`
-Expected: PASS. (Default `BuildProfile == "full"` means behaviour is unchanged — every builtin still registers.)
+Run: `go test ./internal/pkg/api/... ./internal/pkg/worker/... ./internal/connectors/... ./internal/configs/...`
+Expected: PASS. (Default profile `"full"` means behaviour is unchanged — every builtin still registers.)
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add internal/pkg/api/server.go internal/pkg/api/server_mcp.go internal/pkg/worker/server.go
-git commit -m "feat(boot): register connectors via build profile at server/worker/mcp boot"
+git commit -m "feat(boot): register connectors via DB profile (configsSvc.Profile()) at boot"
 ```
 
 ---
 
-## Task 5: Inject `BuildProfile` via ldflags in the builder
+## Task 5: Add `<app> config profile <full|agent|lite>` subcommand
 
 **Files:**
-- Modify: `internal/builder/config.go` (add `Profile` field)
-- Modify: `internal/builder/ldflags.go` (`assembleLDFlags`)
-- Test: `internal/builder/ldflags_test.go`
+- Modify: `app/config_cmd.go` (add `parseProfileArg` + `configProfileCmd` + register; import `internal/connectors`)
+- Test: `app/config_profile_test.go` (create)
 
 - [ ] **Step 1: Write the failing test**
 
 ```go
-package builder
-
-import (
-	"strings"
-	"testing"
-)
-
-func TestAssembleLDFlags_InjectsProfile(t *testing.T) {
-	cfg := Config{AppName: "demo", AppVersion: "v1.2.3", Profile: "agent"}
-	got := strings.Join(assembleLDFlags(cfg), " ")
-	want := "-X github.com/yogasw/wick/internal/appname.BuildProfile=agent"
-	if !strings.Contains(got, want) {
-		t.Fatalf("assembleLDFlags() = %q, missing %q", got, want)
-	}
-}
-
-func TestAssembleLDFlags_DefaultsProfileToFull(t *testing.T) {
-	cfg := Config{AppName: "demo", AppVersion: "v1.2.3"} // Profile zero-value
-	got := strings.Join(assembleLDFlags(cfg), " ")
-	want := "-X github.com/yogasw/wick/internal/appname.BuildProfile=full"
-	if !strings.Contains(got, want) {
-		t.Fatalf("assembleLDFlags() = %q, missing %q", got, want)
-	}
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `go test ./internal/builder/ -run TestAssembleLDFlags_InjectsProfile -v`
-Expected: FAIL — `unknown field 'Profile' in struct literal` (compile error) or missing flag.
-
-- [ ] **Step 3: Add `Profile` to `Config`**
-
-In `internal/builder/config.go`, add to the `Config` struct:
-
-```go
-// Profile selects the connector build profile baked into the binary
-// (full/agent/lite). Empty is normalised to "full" in assembleLDFlags.
-Profile string
-```
-
-- [ ] **Step 4: Inject the flag in `assembleLDFlags`**
-
-In `internal/builder/ldflags.go`, inside `assembleLDFlags`, after the existing `BuildAppName` / `BuildAppVersion` appends, add:
-
-```go
-profile := cfg.Profile
-if profile == "" {
-	profile = "full"
-}
-flags = append(flags, fmt.Sprintf("-X github.com/yogasw/wick/internal/appname.BuildProfile=%s", profile))
-```
-
-- [ ] **Step 5: Run tests to verify they pass**
-
-Run: `go test ./internal/builder/ -run TestAssembleLDFlags -v`
-Expected: PASS (both sub-tests).
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add internal/builder/config.go internal/builder/ldflags.go internal/builder/ldflags_test.go
-git commit -m "feat(builder): inject BuildProfile ldflag (default full)"
-```
-
----
-
-## Task 6: Add `--profile` flag to `wick build` with validation
-
-**Files:**
-- Modify: `cmd/cli/build.go`
-- Test: `cmd/cli/build_profile_test.go` (create)
-
-- [ ] **Step 1: Write the failing test**
-
-```go
-package cli
+package app
 
 import "testing"
 
-func TestValidateProfile(t *testing.T) {
+func TestParseProfileArg(t *testing.T) {
 	for _, ok := range []string{"full", "agent", "lite"} {
-		if err := validateProfile(ok); err != nil {
-			t.Errorf("validateProfile(%q) = %v, want nil", ok, err)
+		got, err := parseProfileArg(ok)
+		if err != nil || got != ok {
+			t.Errorf("parseProfileArg(%q) = (%q, %v), want (%q, nil)", ok, got, err, ok)
 		}
 	}
-	if err := validateProfile("nope"); err == nil {
-		t.Errorf("validateProfile(\"nope\") = nil, want error")
+	if _, err := parseProfileArg("nope"); err == nil {
+		t.Errorf("parseProfileArg(\"nope\") = nil error, want error")
 	}
 }
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `go test ./cmd/cli/ -run TestValidateProfile -v`
-Expected: FAIL — `undefined: validateProfile`.
+Run: `go test ./app/ -run TestParseProfileArg -v`
+Expected: FAIL — `undefined: parseProfileArg`.
 
-- [ ] **Step 3: Implement `validateProfile` + wire the flag**
+- [ ] **Step 3: Implement `parseProfileArg` + `configProfileCmd` and register it**
 
-In `cmd/cli/build.go`, add the validator:
+Add the import `"github.com/yogasw/wick/internal/connectors"` to `app/config_cmd.go`. Then add:
 
 ```go
-func validateProfile(p string) error {
+// parseProfileArg validates a profile name for the `config profile`
+// command. Returns the normalised value or an error naming the valid set.
+func parseProfileArg(p string) (string, error) {
 	switch p {
-	case "full", "agent", "lite":
-		return nil
+	case connectors.ProfileFull, connectors.ProfileAgent, connectors.ProfileLite:
+		return p, nil
 	default:
-		return fmt.Errorf("invalid --profile %q (want full|agent|lite)", p)
+		return "", fmt.Errorf("invalid profile %q (want %s|%s|%s)",
+			p, connectors.ProfileFull, connectors.ProfileAgent, connectors.ProfileLite)
+	}
+}
+
+func configProfileCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "profile <full|agent|lite>",
+		Short: "Set the connector profile this instance registers at boot. Takes effect on restart.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p, err := parseProfileArg(args[0])
+			if err != nil {
+				return err
+			}
+			return withConfigsService(func(ctx context.Context, svc *configs.Service) error {
+				if err := svc.Set(ctx, configs.KeyProfile, p); err != nil {
+					return err
+				}
+				fmt.Printf("profile = %s (restart to apply)\n", p)
+				return nil
+			})
+		},
 	}
 }
 ```
 
-In `buildCmd()`, declare the flag variable alongside the others:
+Then register it in `configCmd()`'s `cmd.AddCommand(...)` list (~line 49-54):
 
 ```go
-var profile string
+	cmd.AddCommand(
+		configListCmd(),
+		configGetCmd(),
+		configSetCmd(),
+		configProfileCmd(),
+		configAllowedOriginsCmd(),
+	)
 ```
-
-register it (next to the other `cmd.Flags()` calls):
-
-```go
-cmd.Flags().StringVar(&profile, "profile", "full", "Connector build profile: full|agent|lite → app.BuildProfile")
-```
-
-validate it at the top of the `RunE` body, then pass it into the builder config:
-
-```go
-if err := validateProfile(profile); err != nil {
-	return err
-}
-```
-
-and set `Profile: profile` on the `builder.Config{...}` literal constructed in this command.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `go test ./cmd/cli/ -run TestValidateProfile -v`
+Run: `go test ./app/ -run TestParseProfileArg -v`
 Expected: PASS.
 
-- [ ] **Step 5: Build + smoke-check the flag is wired**
+- [ ] **Step 5: Build + smoke-check the command is wired**
 
-Run: `go build ./... && go run . build --help`
-Expected: `--profile` appears in the help output with the `full|agent|lite` description.
+Run: `go build ./... && go run . config profile --help`
+Expected: builds clean; help shows `Set the connector profile this instance registers at boot`. (Also `go run . config profile nope` should print the `invalid profile` error.)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add cmd/cli/build.go cmd/cli/build_profile_test.go
-git commit -m "feat(cli): add wick build --profile flag (full|agent|lite)"
+git add app/config_cmd.go app/config_profile_test.go
+git commit -m "feat(app): add <app> config profile <full|agent|lite> command"
 ```
 
 ---
 
-## Task 7: End-to-end verification (lite build registers zero builtin connectors)
+## Task 6: End-to-end verification
 
 **Files:** none (verification only)
 
 - [ ] **Step 1: Full test sweep**
 
-Run: `go test ./internal/connectors/... ./internal/appname/... ./internal/builder/... ./cmd/cli/...`
+Run: `go test ./internal/connectors/... ./internal/configs/... ./internal/pkg/api/... ./internal/pkg/worker/... ./app/...`
 Expected: PASS.
 
-- [ ] **Step 2: Manual profile trace (optional but recommended)**
-
-Build a lite binary and confirm builtin connectors are absent, then a full binary and confirm they return:
+- [ ] **Step 2: Manual profile trace (one binary, no rebuild between profiles)**
 
 ```bash
-go build -ldflags "-X github.com/yogasw/wick/internal/appname.BuildProfile=lite" -o /tmp/wick-lite .
-go build -ldflags "-X github.com/yogasw/wick/internal/appname.BuildProfile=full" -o /tmp/wick-full .
+go build -o /tmp/wick-agent .
+/tmp/wick-agent config profile lite      # writes the DB row
+# start the server, then inspect the connector list (admin UI / MCP wick_list)
+/tmp/wick-agent config profile full      # flip back
+# restart, inspect again
 ```
 
-Expected: the `lite` binary's MCP/admin connector list shows none of the 7 builtins; the `full` binary shows all 7. NOTE: `lite` is NOT an empty connector surface — the 4 runtime-registered platform connectors (`wickmanager`, `workflow`, `notifications`, `customconnector`) still appear in every profile because they register via `connectors.Register(...)` outside `RegisterBuiltins` (design §4.5). So verify "none of the 7 builtins," not "zero connectors total." (How to list depends on the running surface — admin UI connectors page or the MCP `wick_list` op.)
+Expected: under `lite` the connector list shows **none of the 7 builtins**; under `full` all 7 return. **NOTE:** `lite` is NOT an empty connector surface — the 4 runtime-registered platform connectors (`wickmanager`, `workflow`, `notifications`, `customconnector`) still appear in every profile because they register via `connectors.Register(...)` outside `RegisterBuiltins` (design §4.5). Verify "none of the 7 builtins," not "zero connectors total." The same binary changes behaviour purely from the DB row — no env, no rebuild.
 
 - [ ] **Step 3: Update install.sh (handoff note, not this plan)**
 
-`scripts/install.sh` gaining a profile picker that calls `wick build --profile <name>` is tracked separately (design §4.1, §9). It is NOT part of this plan — this plan delivers the `--profile` flag the installer will call.
+`scripts/install.sh` gaining a profile picker that, after downloading the prebuilt binary, runs `<app> config profile <name>` is tracked separately (design §4.1, §9). It is NOT part of this plan — this plan delivers the `config profile` command + the boot-time read the installer relies on. The command works pre-server-start because `withConfigsService` opens only a short-lived `configs.Service` (no connectors, no HTTP).
 
 ---
 
 ## Self-Review notes
 
-- **Spec coverage:** design §4.1 (profile concept + `wick build --profile`, default full) → Tasks 2-6. §4.2 (build tags for binary-size lite) → intentionally DEFERRED (see below). §4.3/§4.4 (reuse registry pattern, no module split) → honoured: profiles layer over `RegisterBuiltins`, no Go-module change.
-- **Scope validated vs upstream master (latest sync):** every referenced symbol/line confirmed present — `RegisterBuiltins` (registry.go:119, exactly 7), the 3 boot sites (api/server.go:163, server_mcp.go:144, worker/server.go:50), `appname.BuildAppName/Version` (32/37, no `BuildProfile` yet), `builder.Config` + `assembleLDFlags`, `cmd/cli/build.go` `buildCmd()` / `--headless` / `builder.Config{}` literal, and `connector.Module` + `Meta.Key`. **Caveat:** the profile gates ONLY the 7 `RegisterBuiltins` connectors; 4 runtime connectors (`wickmanager`/`workflow`/`notifications`/`customconnector`) register via `connectors.Register(...)` and remain in all profiles — see design §4.5 and Task 4 Step 1.
-- **Deferred from this plan:** (1) build-tag compilation exclusion for a genuinely smaller `lite` binary (§4.2) — the registration-profile mechanism here delivers selectable module *sets*; physical binary shrink via build tags is a follow-up. (2) profiles for tools/jobs — out of scope; connectors are the pain. (3) `install.sh` profile picker (Task 7 Step 3). Each is a small, independent follow-up.
-- **Type consistency:** `ProfileFull/Agent/Lite`, `builtinModules()`, `profileModules()`, `RegisterProfile()`, `agentConnectors()`, `appname.BuildProfile`, `Config.Profile`, `validateProfile()` are used consistently across tasks.
+- **Spec coverage:** design §4.1 (profile = DB config row, set via `<app> config`, read at boot, default full) → Tasks 2-5. §4.3 (reuse registry pattern, no module split) → honoured: `profileModules`/`RegisterProfile` layer over `RegisterBuiltins`. §4.5 (4 runtime connectors out of profile scope) → honoured: Task 4 only swaps the `RegisterBuiltins` call; the inline `connectors.Register(...)` sites are untouched. §4.2 (build-tags for a genuinely smaller `lite` binary) → intentionally DEFERRED (registration-only here; no physical size reduction).
+- **Validated vs upstream master (latest sync):** `RegisterBuiltins` (registry.go:119, exactly 7); boot sites + Bootstrap timing — `server.go` register@163 / `configsSvc`@180 / `Bootstrap`@194 / `connectors.All()`@1032; `server_mcp.go` `Bootstrap`@65 before register@144; `worker/server.go` register@50 / `configsSvc`@55 / `Bootstrap`@69. `configs.Service` API: `NewService`, `Bootstrap`, `Get`, `Set`, typed accessors (`AllowedOrigins`), `appDefaults()` in spec.go, `newTestSvc` sqlite harness. `<app> config` command + `withConfigsService` (no-connectors boot) in `app/config_cmd.go`.
+- **Changed vs the earlier ldflag draft:** DROPPED `appname.BuildProfile` ldflag, `internal/builder` ldflag injection, and `wick build --profile`. Profile source is now the `configs` DB row, set via `<app> config profile`, per Yoga's decision (design §9). `cmd/lab/root.go` intentionally keeps `RegisterBuiltins()` (dev/lab = `full`).
+- **Type consistency:** `ProfileFull/Agent/Lite` (`internal/connectors`), `builtinModules()`, `profileModules()`, `RegisterProfile()`, `agentConnectors()`, `configs.KeyProfile` / `configs.DefaultProfile`, `configsSvc.Profile()`, `parseProfileArg()`, `configProfileCmd()` are used consistently across tasks.
