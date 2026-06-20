@@ -1451,7 +1451,8 @@ func NewServer() *Server {
 	r.Handle("GET /metrics", authMidd.RequireAdmin(metricsRec.Handler()))
 
 	// Home
-	r.Handle("/", http.HandlerFunc(homeHandler.Index))
+	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
+	r.Handle("/launcher", http.HandlerFunc(homeHandler.Launcher))
 
 	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate}
 }
