@@ -180,14 +180,21 @@ slack-connector   v0.9.1   ← repo sendiri, release sendiri, tag sendiri</code>
   "os_arch": ["linux/arm64","linux/amd64"],
   "sha256": "abc123...",
 
-  // = connector.Operation (key/name/desc/destructive/input)
+  // = Module.Operations []Category (Category{title,desc,ops})
+  // ops = connector.Operation (key/name/desc/destructive/input)
   "operations": [
-    { "key": "issues.create", "name": "Create Issue",
-      "destructive": false,
-      "input": { "repo":"string", "title":"string" } },
-    { "key": "pr.merge", "name": "Merge PR",
-      "destructive": true,
-      "input": { "repo":"string", "number":"int" } }
+    { "title": "Issues",
+      "ops": [
+        { "key": "issues.create", "name": "Create Issue",
+          "destructive": false,
+          "input": { "repo":"string", "title":"string" } }
+      ] },
+    { "title": "Pull Requests",
+      "ops": [
+        { "key": "pr.merge", "name": "Merge PR",
+          "destructive": true,
+          "input": { "repo":"string", "number":"int" } }
+      ] }
   ],
   // = []entity.Config (DEFAULT config, di-seed ke DB)
   "configs": [
@@ -366,6 +373,7 @@ go build -o github-connector ./...
 </div>
 
 <h2 id="sec">12 · Kontrak proto & keamanan</h2>
+<p class="sub">Snippet lengkap & compile-able (semua message didefinisi di PLAN.md §12).</p>
 <pre><code>service Connector {
   rpc Schema   (SchemaRequest)   returns (SchemaResponse);
   rpc Execute  (ExecuteRequest)  returns (ExecuteResponse);
@@ -373,13 +381,19 @@ go build -o github-connector ./...
   rpc Validate (ValidateRequest) returns (ValidateResponse);
   rpc Health   (HealthRequest)   returns (HealthResponse);
 }
+message Error { string code = 1; string message = 2; }
 message ExecuteRequest {
   string operation = 1;            // "issues.create"
   bytes  args_json = 2;
   map&lt;string,string&gt; creds = 3;     // host decrypt wick_enc_ -> plain
   string request_id = 4;
   string session_id = 5;           // jaga scoping session wick
-}</code></pre>
+}
+message ExecuteResponse { bytes result_json = 1; Error error = 2; }
+message Chunk { bytes data = 1; bool eof = 2; Error error = 3; }
+message SchemaResponse  { bytes manifest_json = 1; }   // dipakai --dump-manifest
+message HealthResponse  { bool healthy = 1; string detail = 2; }
+// SchemaRequest / ValidateRequest+Response / HealthRequest — lihat PLAN.md</code></pre>
 <div class="grid g3">
   <div class="card"><h3>Credential</h3>Host decrypt <code>wick_enc_</code>, kirim plain lewat UDS+mTLS. Plugin ngk pegang key.</div>
   <div class="card"><h3>Verifikasi</h3>sha256 + signature (cosign/minisign) sebelum exec.</div>
@@ -407,9 +421,10 @@ message ExecuteRequest {
 <pre><code>type ExecuteFunc func(c *Ctx) (any, error)
 type Operation struct { Key, Name, Description string; Input []entity.Config;
                         Execute ExecuteFunc; Destructive bool }
+type Category struct { Title, Description string; Ops []Operation }
 type Module struct { Meta Meta; Configs []entity.Config; Operations []Category;
                      HealthCheck HealthCheckFunc; OAuth *OAuthMeta }</code></pre>
-<p class="sub"><code>Module</code>/<code>Operation</code>/<code>Meta</code> memetakan <b>1:1 ke plugin.json</b>. Flag <code>LiveCatalog</code> sudah ada untuk catalog dinamis — plugin manifest pakai mekanisme sama (sumber = plugin.json statis, bukan probe live).</p>
+<p class="sub"><code>Module</code> memetakan ke plugin.json apa adanya — <b>perhatikan <code>Operations</code> itu <code>[]Category</code></b> (operasi nested dalam category), operasi datar via <code>mod.AllOps()</code>, BUKAN array Operation datar. Flag <code>LiveCatalog</code> sudah ada untuk catalog dinamis — plugin manifest pakai mekanisme sama (sumber = plugin.json statis, bukan probe live).</p>
 
 <h3>Titik sambung (seam) yang disentuh</h3>
 <table>

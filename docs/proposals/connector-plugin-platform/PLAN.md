@@ -140,14 +140,21 @@ JSON, ngk perlu dep YAML, `--dump-manifest` natural keluar JSON):
   "os_arch": ["linux/arm64", "linux/amd64"],    // WAJIB ada arm64 utk Termux
   "sha256": "abc123...",
 
-  // === operasi — sama kayak connector.Operation (Key/Name/Description/Destructive/Input) ===
+  // === operations DIKELOMPOKKAN per kategori — persis connector.Module.Operations []Category ===
+  // (Category{ Title, Description, Ops []Operation }; tiap Op = Key/Name/Description/Destructive/Input)
   "operations": [
-    { "key": "issues.create", "name": "Create Issue", "description": "Buat issue baru",
-      "destructive": false,
-      "input": { "repo": "string", "title": "string", "body": "string" } },
-    { "key": "pr.merge", "name": "Merge PR", "description": "Merge pull request",
-      "destructive": true,
-      "input": { "repo": "string", "number": "int" } }
+    { "title": "Issues", "description": "Operasi issue",
+      "ops": [
+        { "key": "issues.create", "name": "Create Issue", "description": "Buat issue baru",
+          "destructive": false,
+          "input": { "repo": "string", "title": "string", "body": "string" } }
+      ] },
+    { "title": "Pull Requests", "description": "Operasi PR",
+      "ops": [
+        { "key": "pr.merge", "name": "Merge PR", "description": "Merge pull request",
+          "destructive": true,
+          "input": { "repo": "string", "number": "int" } }
+      ] }
   ],
 
   // === config (= connector.Configs / []entity.Config) — DEFAULT config, di-seed ke DB saat Register/Bootstrap ===
@@ -160,12 +167,14 @@ JSON, ngk perlu dep YAML, `--dump-manifest` natural keluar JSON):
 }
 ```
 
-> Field identitas (`key`/`name`/`description`/`icon`) + `operations` (Key/Name/
-> Description/Destructive/Input) + `configs` (Key/Type/Value-default/IsSecret/
-> Required/Description) **persis memetakan `connector.Meta` / `connector.Operation`
-> / `[]entity.Config`** (§17.2). Manifest = serialisasi **seluruh `Module`** ke
-> JSON. `--dump-manifest` tinggal marshal struct yang sudah ada → mustahil beda
-> dari kode.
+> **Struktur manifest = bentuk JSON dari `connector.Module` PERSIS:**
+> `operations` itu **`[]Category`** (`Category{Title, Description, Ops []Operation}`),
+> **bukan** array `Operation` datar — sesuai `connector.Module.Operations []Category`
+> (`pkg/connector/connector.go`). Operasi datar diambil runtime via `mod.AllOps()`
+> (flatten dari semua Category). Identitas (`key`/`name`/`description`/`icon`) =
+> `connector.Meta`; `configs` = `[]entity.Config`. Karena manifest mirror struct
+> apa adanya, **`--dump-manifest` = `json.Marshal(mod)`** → byte-identik, mustahil
+> drift.
 
 > **PENTING — yang di-`Register` itu Module utuh, bukan cuma Meta.** Default config
 > (`configs`) ikut di Module. Saat `Register(mod)` → `Bootstrap` →
@@ -417,6 +426,9 @@ Overhead gRPC 0.1ms vs call API 50-500ms = **<0.5%**, asal proses **persisten**.
 
 ## 12. Kontrak proto (sketsa)
 
+> Snippet di bawah **lengkap & compile-able** (semua message yang direferensi
+> didefinisikan). Detail field bisa berkembang — anggap titik awal, bukan final.
+
 ```proto
 syntax = "proto3";
 package wick.connector.v1;
@@ -427,6 +439,11 @@ service Connector {
   rpc ExecuteStream (ExecuteRequest) returns (stream Chunk);   // bulk
   rpc Validate (ValidateRequest) returns (ValidateResponse);
   rpc Health   (HealthRequest)   returns (HealthResponse);
+}
+
+message Error {
+  string code    = 1;
+  string message = 2;
 }
 
 message ExecuteRequest {
@@ -442,6 +459,23 @@ message ExecuteResponse {
   Error  error = 2;
   map<string,string> meta = 3;   // rate-limit, pagination cursor, dll
 }
+
+message Chunk {                   // potongan stream utk ExecuteStream
+  bytes  data = 1;
+  bool   eof  = 2;
+  Error  error = 3;
+}
+
+// Schema() balikin manifest (Meta + categories + configs) sbg JSON —
+// inilah yang dipakai `--dump-manifest`.
+message SchemaRequest  {}
+message SchemaResponse { bytes manifest_json = 1; }
+
+message ValidateRequest  { map<string,string> creds = 1; }
+message ValidateResponse { bool ok = 1; Error error = 2; }
+
+message HealthRequest  {}
+message HealthResponse { bool healthy = 1; string detail = 2; }
 ```
 
 ---
@@ -529,12 +563,15 @@ transport baru, bukan bongkar arsitektur.
 type ExecuteFunc func(c *Ctx) (any, error)
 type Operation struct { Key, Name, Description string; Input []entity.Config;
                         Execute ExecuteFunc; Destructive bool }
+type Category struct { Title, Description string; Ops []Operation }
 type Module struct { Meta Meta; Configs []entity.Config; Operations []Category;
                      HealthCheck HealthCheckFunc; OAuth *OAuthMeta }
 type Meta struct { Key, Name, Description, Icon string; Fixed bool;
                    LiveCatalog bool; ... }
 ```
-- `Module` / `Operation` / `Meta` **memetakan 1:1 ke plugin.json** (§5.1).
+- `Module` (Meta + Configs + **Operations `[]Category`**) **memetakan ke plugin.json**
+  apa adanya (§5.1) — `operations` di manifest = `[]Category`, operasi datar diambil
+  via `mod.AllOps()`. **Bukan** array `Operation` datar.
 - Flag **`LiveCatalog`** sudah ada untuk catalog dinamis (MCP). Plugin manifest
   cukup pakai mekanisme yang sama — bedanya sumber = `plugin.json` statis, bukan
   probe live.
