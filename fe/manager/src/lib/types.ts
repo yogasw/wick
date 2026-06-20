@@ -23,6 +23,16 @@ export interface ConnectorRow {
   status: string;
   rate_limit_rpm: number;
   tags: string[] | null;
+  /* Owner-only: row visible to its owner + admins until an admin adds a
+     sharing tag. Drives the 🔒 Private chip vs the Everyone fallback. */
+  private?: boolean;
+  /* OAuth/SSO surface — present only for OAuth connector types. oauth.start_url
+     is non-empty only when the caller may connect (SSO on + policy + client_id
+     set), which drives whether the per-row Connect button renders. */
+  oauth?: ConnectorOAuthMeta | null;
+  enable_sso?: boolean;
+  multi_account?: boolean;
+  accounts?: ConnectorAccount[] | null;
 }
 
 export interface ConnectorList {

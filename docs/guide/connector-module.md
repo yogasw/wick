@@ -305,6 +305,36 @@ Behavior:
 
 Returning an error (auth invalid, network) aborts the entire reconcile — no partial flips. `SystemDisabled` is surfaced in the operations table as a warning badge but no longer acts as a hard gate; admin `Enabled` takes precedence.
 
+### DefaultAccess — seeding access-policy defaults
+
+By default, every freshly created connector row has all access-policy flags off (`EnableSSO`, `AllowOthersConnectSSO`, `MultiAccount`, `AllowOthersConfigure`). An admin would then visit the row's detail page and turn on the ones they want.
+
+For OAuth-only connectors — where nearly every deployment will want `EnableSSO` and `AllowOthersConnectSSO` on — this is an unnecessary extra step. `Module.DefaultAccess` lets the connector module declare starting values:
+
+```go
+connector.Module{
+    Meta:        googleworkspace.Meta(),
+    Configs:     entity.StructToConfigs(googleworkspace.Configs{}),
+    Operations:  googleworkspace.Operations(),
+    OAuth:       googleworkspace.OAuth(),
+    DefaultAccess: connector.AccessDefaults{
+        EnableSSO:             true,
+        AllowOthersConnectSSO: true,
+    },
+}
+```
+
+`AccessDefaults` fields map 1:1 to the same-named columns on `entity.Connector`:
+
+| Field | What it controls |
+|---|---|
+| `EnableSSO` | Turns on the **Connect Account** OAuth flow for new rows. |
+| `AllowOthersConnectSSO` | Non-admin users with tag access may initiate the OAuth flow. |
+| `MultiAccount` | Each connect adds a new account entry instead of replacing the existing token. |
+| `AllowOthersConfigure` | Non-admin users with tag access may edit credentials and settings. |
+
+These are **starting values only** — admins can change them per row afterwards from the Access Policy section. The defaults do not retroactively apply to rows that already exist.
+
 ### Row-level disable (whole connector off)
 
 Separate from the per-op toggle and the healthcheck lock, every row has a single `Disabled bool` flag (`entity.Connector.Disabled`) flipped from the **Disable / Enable Connector** button in the detail page top actions. When `Disabled = true`:

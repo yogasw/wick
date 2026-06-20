@@ -151,6 +151,10 @@ func builtinModules() []connector.Module {
 			Operations:  googleworkspace.Operations(),
 			HealthCheck: googleworkspace.HealthCheck,
 			OAuth:       googleworkspace.OAuthMeta(),
+			// OAuth-only — no bot-token path. New rows start SSO-on and let
+			// tag-scoped users connect their own account, so there's no extra
+			// Enable-SSO step before the first Connect.
+			DefaultAccess: connector.AccessDefaults{EnableSSO: true, AllowOthersConnectSSO: true},
 		},
 	}
 }

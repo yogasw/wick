@@ -63,6 +63,9 @@ func (h *Handler) apiDuplicateConnector(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if h.tags != nil && user != nil && !user.IsAdmin() {
+		// Owner tag so the duplicate is visible to its creator. Tag IDs are
+		// read live per request, so it shows up immediately — no cookie
+		// re-issue needed.
 		if err := h.tags.CreateOwnerTag(ctx, dup.ID, user.ID); err != nil {
 			log.Warn().Err(err).Str("row_id", dup.ID).Msg("manager api: create owner tag on duplicate failed")
 		}
