@@ -38,6 +38,29 @@ func buildEcho(tb testing.TB) string {
 	return filepath.Join(root, "connectors")
 }
 
+func buildEchoSigned(t *testing.T, keyPath string) string {
+	t.Helper()
+	root := t.TempDir()
+	connDir := filepath.Join(root, "connectors", "echo")
+	if err := os.MkdirAll(connDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(connDir, "echo")
+	build := exec.Command("go", "build", "-o", bin, "github.com/yogasw/wick/cmd/plugins/echo")
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		t.Fatalf("build echo: %v", err)
+	}
+	manifest, err := exec.Command(bin, "--dump-manifest", "--sign-key", keyPath).Output()
+	if err != nil {
+		t.Fatalf("dump-manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(connDir, "plugin.json"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Join(root, "connectors")
+}
+
 func TestPluginEndToEnd(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds + spawns a subprocess")
@@ -70,5 +93,61 @@ func TestPluginEndToEnd(t *testing.T) {
 	}
 	if got["said"] != "hello-over-grpc" || got["token"] != "s3cr3t" {
 		t.Fatalf("round trip wrong: %v", got)
+	}
+}
+
+func TestPluginVerifyRejectsTamperedBinary(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a subprocess binary")
+	}
+	dir := buildEcho(t)
+	found, err := Scan(dir)
+	if err != nil || len(found) != 1 {
+		t.Fatalf("scan: %v %d", err, len(found))
+	}
+	f, err := os.OpenFile(found[0].BinaryPath, os.O_APPEND|os.O_WRONLY, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Write([]byte{0x00})
+	f.Close()
+	if err := wickplugin.VerifyManifest(found[0].Manifest, found[0].BinaryPath); err == nil {
+		t.Fatal("tampered binary must fail verification")
+	}
+}
+
+func TestPluginSignedEndToEnd(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds + spawns a subprocess")
+	}
+	priv, pub := wickplugin.GenerateKeypair()
+	keyPath := filepath.Join(t.TempDir(), "k.key")
+	if err := os.WriteFile(keyPath, []byte(priv), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir := buildEchoSigned(t, keyPath)
+	t.Setenv("WICK_PLUGIN_REQUIRE_SIGNATURE", "1")
+	t.Setenv("WICK_PLUGIN_PUBKEY", pub)
+
+	found, _ := Scan(dir)
+	if len(found) != 1 {
+		t.Fatalf("scan: %d", len(found))
+	}
+	if err := wickplugin.VerifyManifest(found[0].Manifest, found[0].BinaryPath); err != nil {
+		t.Fatalf("signed plugin should verify under require-mode: %v", err)
+	}
+	mgr := NewManager(map[string]string{found[0].Key: found[0].BinaryPath}, 5*time.Minute)
+	defer mgr.KillAll()
+	mod := BuildModule(found[0].Manifest.Module, mgr.Client)
+	op := mod.AllOps()[0]
+	cctx := connector.NewPluginCtx(context.Background(), map[string]string{"token": "s"}, map[string]string{"text": "hi"})
+	out, err := op.Execute(cctx)
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	var got map[string]string
+	json.Unmarshal(out.(json.RawMessage), &got)
+	if got["said"] != "hi" {
+		t.Fatalf("round trip: %v", got)
 	}
 }
