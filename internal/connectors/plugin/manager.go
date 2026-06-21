@@ -6,6 +6,7 @@ package plugin
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -36,6 +37,7 @@ type Manager struct {
 	stop         chan struct{}
 	cond         *sync.Cond
 	breakers     map[string]*breaker
+	socketDir    string
 }
 
 // NewManager builds a Manager and starts the idle sweeper.
@@ -49,10 +51,12 @@ func NewManager(binaries map[string]string, idleTimeout time.Duration) *Manager 
 		now:          time.Now,
 		stop:         make(chan struct{}),
 		breakers:     map[string]*breaker{},
+		socketDir:    RunDir(),
 	}
 	m.cond = sync.NewCond(&m.mu)
 	m.spawnFn = m.spawn
 	m.killFn = m.kill
+	_ = os.MkdirAll(m.socketDir, 0o700)
 	go m.sweepLoop()
 	return m
 }
@@ -118,6 +122,7 @@ func (m *Manager) spawn(key string) (*entry, error) {
 		Cmd:              exec.Command(bin),
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		AutoMTLS:         true,
+		UnixSocketConfig: &goplugin.UnixSocketConfig{TempDir: m.socketDir},
 	})
 	rpc, err := client.Client()
 	if err != nil {

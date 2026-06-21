@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"os"
 	"testing"
 	"time"
 )
@@ -60,5 +61,22 @@ func TestSetAndRemoveBinary(t *testing.T) {
 	m.RemoveBinary("slack")
 	if m.IsPlugin("slack") {
 		t.Fatal("RemoveBinary should drop the key")
+	}
+}
+
+func TestNewManagerCreatesSocketDir(t *testing.T) {
+	dir := t.TempDir() + "/run"
+	t.Setenv("WICK_PLUGIN_SOCKET_DIR", dir)
+	m := NewManager(map[string]string{}, time.Minute)
+	defer m.KillAll()
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("socket dir not created: %v", err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("socket dir perm = %o, want 0700", info.Mode().Perm())
+	}
+	if m.socketDir != dir {
+		t.Fatalf("manager socketDir = %q, want %q", m.socketDir, dir)
 	}
 }

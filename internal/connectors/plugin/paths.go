@@ -18,3 +18,17 @@ func DefaultDir() string {
 	}
 	return filepath.Join(home, ".wick", "plugins", "connectors")
 }
+
+// RunDir is where wick pins plugin Unix sockets: <home>/.wick/run, overridable
+// with WICK_PLUGIN_SOCKET_DIR. go-plugin creates the socket under here (0700)
+// instead of the OS temp dir.
+func RunDir() string {
+	if d := os.Getenv("WICK_PLUGIN_SOCKET_DIR"); d != "" {
+		return d
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	return filepath.Join(home, ".wick", "run")
+}
