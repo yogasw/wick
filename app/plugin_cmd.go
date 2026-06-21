@@ -16,8 +16,23 @@ import (
 	"github.com/spf13/cobra"
 
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
+	"github.com/yogasw/wick/internal/pkg/config"
+	"github.com/yogasw/wick/internal/pkg/postgres"
+	"github.com/yogasw/wick/internal/userconfig"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
+
+// withPluginStore opens the DB and runs fn against a plugin StateStore.
+func withPluginStore(fn func(store *connplugin.StateStore) error) error {
+	userconfig.ResolveDBPath(BuildAppName, "")
+	db := postgres.NewGORM(config.Load().Database)
+	defer func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	}()
+	return fn(connplugin.NewStateStore(db))
+}
 
 // installPlugin verifies the {binary, plugin.json} in srcDir and copies them
 // into destRoot/<key>/. destRoot defaults to connplugin.DefaultDir().
@@ -239,7 +254,7 @@ func extractZip(archive, dst string) error {
 
 func pluginCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "plugin", Short: "Manage connector plugins"}
-	cmd.AddCommand(pluginInstallCmd(), pluginListCmd(), pluginRemoveCmd())
+	cmd.AddCommand(pluginInstallCmd(), pluginListCmd(), pluginRemoveCmd(), pluginEnableCmd(), pluginDisableCmd())
 	return cmd
 }
 
@@ -272,6 +287,13 @@ func pluginListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			states := map[string]bool{}
+			_ = withPluginStore(func(store *connplugin.StateStore) error {
+				if m, lerr := store.List(); lerr == nil {
+					states = m
+				}
+				return nil
+			})
 			host := runtime.GOOS + "/" + runtime.GOARCH
 			for _, f := range found {
 				signed := "none"
@@ -288,7 +310,11 @@ func pluginListCmd() *cobra.Command {
 						archOK = "yes"
 					}
 				}
-				fmt.Printf("%-20s %-12s arch:%s signed:%s\n", f.Key, f.Manifest.Version, archOK, signed)
+				status := "enabled"
+				if v, ok := states[f.Key]; ok && !v {
+					status = "disabled"
+				}
+				fmt.Printf("%-20s %-12s arch:%s signed:%s %s\n", f.Key, f.Manifest.Version, archOK, signed, status)
 			}
 			return nil
 		},
@@ -316,6 +342,40 @@ func pluginRemoveCmd() *cobra.Command {
 				}
 			}
 			return fmt.Errorf("plugin %q not installed", args[0])
+		},
+	}
+}
+
+func pluginEnableCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "enable <key>",
+		Short: "Enable a connector plugin (running wick picks it up shortly)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return withPluginStore(func(store *connplugin.StateStore) error {
+				if err := store.SetEnabled(args[0], true); err != nil {
+					return err
+				}
+				fmt.Printf("plugin %q enabled\n", args[0])
+				return nil
+			})
+		},
+	}
+}
+
+func pluginDisableCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "disable <key>",
+		Short: "Disable a connector plugin without removing it",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return withPluginStore(func(store *connplugin.StateStore) error {
+				if err := store.SetEnabled(args[0], false); err != nil {
+					return err
+				}
+				fmt.Printf("plugin %q disabled\n", args[0])
+				return nil
+			})
 		},
 	}
 }
