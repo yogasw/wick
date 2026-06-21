@@ -69,8 +69,10 @@ func Scan(dir string) ([]Found, error) {
 type registerFn func(connector.Module)
 
 // loadWith is the testable core of Load. mgr may be nil in tests that only
-// assert registration (the closures are not invoked).
-func loadWith(dir string, register registerFn, mgr *Manager) (int, error) {
+// assert registration (the closures are not invoked). When enabled is non-nil,
+// keys for which it returns false are skipped (not verified, not registered);
+// a nil enabled treats all discovered plugins as enabled.
+func loadWith(dir string, register registerFn, mgr *Manager, enabled func(string) bool) (int, error) {
 	found, err := Scan(dir)
 	if err != nil {
 		return 0, err
@@ -85,6 +87,9 @@ func loadWith(dir string, register registerFn, mgr *Manager) (int, error) {
 	}
 	count := 0
 	for _, f := range found {
+		if enabled != nil && !enabled(f.Key) {
+			continue
+		}
 		if err := wickplugin.VerifyManifest(f.Manifest, f.BinaryPath); err != nil {
 			log.Warn().Str("connector", f.Key).Err(err).Msg("connector plugin: skipped (verification failed)")
 			continue
@@ -99,21 +104,26 @@ func loadWith(dir string, register registerFn, mgr *Manager) (int, error) {
 // each plugin module via connectors.Register (replace-by-key so a plugin
 // overrides the compiled-in builtin of the same key), and returns the
 // Manager (caller owns its KillAll on shutdown). Returns a nil Manager when
-// no plugins are present.
-func Load(dir string, idleTimeout time.Duration) (*Manager, int, error) {
+// no plugins are present. When enabled is non-nil, keys for which it returns
+// false are excluded from the Manager (not spawnable) and not registered; a
+// nil enabled treats all discovered plugins as enabled.
+func Load(dir string, idleTimeout time.Duration, enabled func(string) bool) (*Manager, int, error) {
 	found, err := Scan(dir)
 	if err != nil {
 		return nil, 0, err
 	}
-	if len(found) == 0 {
-		return nil, 0, nil
-	}
 	binaries := make(map[string]string, len(found))
 	for _, f := range found {
+		if enabled != nil && !enabled(f.Key) {
+			continue
+		}
 		binaries[f.Key] = f.BinaryPath
 	}
+	if len(binaries) == 0 {
+		return nil, 0, nil
+	}
 	mgr := NewManager(binaries, idleTimeout)
-	n, err := loadWith(dir, connectors.Register, mgr)
+	n, err := loadWith(dir, connectors.Register, mgr, enabled)
 	if err != nil {
 		mgr.KillAll()
 		return nil, 0, err

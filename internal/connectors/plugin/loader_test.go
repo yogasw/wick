@@ -76,11 +76,49 @@ func TestLoadRegistersModules(t *testing.T) {
 	var registered []connector.Module
 	register := func(m connector.Module) { registered = append(registered, m) }
 
-	n, err := loadWith(dir, register, nil)
+	n, err := loadWith(dir, register, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 || len(registered) != 1 || registered[0].Meta.Key != "demo" {
 		t.Fatalf("expected demo registered, got %d / %+v", n, registered)
+	}
+}
+
+func TestLoadWithSkipsDisabled(t *testing.T) {
+	t.Setenv("WICK_PLUGIN_REQUIRE_SIGNATURE", "0")
+	t.Setenv("WICK_PLUGIN_PUBKEY", "")
+	dir := t.TempDir()
+	cdir := filepath.Join(dir, "demo")
+	if err := os.MkdirAll(cdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(cdir, "demo")
+	if err := os.WriteFile(bin, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(bin)
+	h := sha256.Sum256(raw)
+	env := wickplugin.Manifest{
+		SchemaVersion: 1, Version: "t", ProtoVersion: wickplugin.ProtoVersion,
+		Entry: "demo", OSArch: []string{runtime.GOOS + "/" + runtime.GOARCH},
+		SHA256: hex.EncodeToString(h[:]),
+		Module: connector.Module{Meta: connector.Meta{Key: "demo", Name: "Demo"}},
+	}
+	b, _ := json.Marshal(env)
+	if err := os.WriteFile(filepath.Join(cdir, "plugin.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var registered []connector.Module
+	register := func(m connector.Module) { registered = append(registered, m) }
+	disableAll := func(string) bool { return false }
+
+	n, err := loadWith(dir, register, nil, disableAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 || len(registered) != 0 {
+		t.Fatalf("disabled plugin must not register, got n=%d", n)
 	}
 }

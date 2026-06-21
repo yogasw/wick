@@ -198,7 +198,7 @@ func NewServer() *Server {
 	connectors.RegisterProfile(configsSvc.Profile())
 
 	var pluginMgr *connplugin.Manager
-	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute); err != nil {
+	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute, nil); err != nil {
 		log.Warn().Err(err).Msg("connector plugins: load failed")
 	} else if mgr != nil {
 		log.Info().Int("plugins", n).Msg("connector plugins: loaded")
