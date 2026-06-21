@@ -74,3 +74,6 @@ ci-timing.txt
 node_modules/
 index-*
 vite.config.ts.timestamp-*
+
+# connector plugin runtime artifacts (built binaries + generated manifests)
+/plugins/connectors/
