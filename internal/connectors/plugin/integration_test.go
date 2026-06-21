@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,5 +150,36 @@ func TestPluginSignedEndToEnd(t *testing.T) {
 	json.Unmarshal(out.(json.RawMessage), &got)
 	if got["said"] != "hi" {
 		t.Fatalf("round trip: %v", got)
+	}
+}
+
+func TestPluginStreamLargeResult(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds + spawns a subprocess")
+	}
+	dir := buildEcho(t)
+	found, err := Scan(dir)
+	if err != nil || len(found) != 1 {
+		t.Fatalf("scan: %v %d", err, len(found))
+	}
+	mgr := NewManager(map[string]string{found[0].Key: found[0].BinaryPath}, 5*time.Minute)
+	defer mgr.KillAll()
+	lease, err := mgr.Client(found[0].Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	// A >2 MiB text forces multiple 1 MiB chunks through ExecuteStream.
+	big := strings.Repeat("Z", (1<<20)*2)
+	out, err := lease.Conn.ExecuteStream(context.Background(), wickplugin.ExecCall{
+		Operation: found[0].Manifest.Module.AllOps()[0].Key,
+		Input:     map[string]string{"text": big},
+		Creds:     map[string]string{"token": "s"},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteStream over subprocess: %v", err)
+	}
+	if !strings.Contains(string(out), big) {
+		t.Fatal("streamed result missing the large payload")
 	}
 }
