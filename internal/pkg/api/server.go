@@ -1187,6 +1187,9 @@ func NewServer() *Server {
 	}()
 	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, authSvc, allItems)
 	managerHandler.SetCustomConnectors(customConnSvc)
+	if pluginMgr != nil {
+		managerHandler.SetPluginResolver(pluginMgr)
+	}
 
 	// Build the hidden-key set from the "agents" module's seed. Any config
 	// field tagged with `wick:"hidden"` is managed from a dedicated UI page

@@ -40,6 +40,16 @@ type Handler struct {
 	// oauthPending stores in-flight OAuth state tokens keyed by the state string.
 	// Values are oauthStateEntry (defined in oauth.go).
 	oauthPending sync.Map
+	// pluginResolver routes OAuth identity resolution to plugin connectors.
+	// nil-safe: nil means no plugins are loaded (in-process connectors only).
+	pluginResolver pluginIdentityResolver
+}
+
+// SetPluginResolver wires the connector plugin manager so the OAuth callback
+// can resolve token owners for plugin-backed connectors. Call only with a
+// non-nil resolver to avoid the typed-nil-interface trap.
+func (h *Handler) SetPluginResolver(r pluginIdentityResolver) {
+	h.pluginResolver = r
 }
 
 // RegisterConfigDecorator registers a function that is called on the config
