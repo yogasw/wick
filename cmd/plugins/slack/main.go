@@ -1,6 +1,6 @@
 // Command slack runs the wick Slack connector as an out-of-process plugin.
-// Phase 0: bot-token path only (OAuth ResolveIdentity is added in a later
-// task). Reuses internal/connectors/slack verbatim.
+// OAuth identity resolution is served over gRPC (ResolveIdentity); the host
+// calls it after the token exchange. Reuses internal/connectors/slack verbatim.
 package main
 
 import (
@@ -16,6 +16,7 @@ func main() {
 		Configs:     entity.StructToConfigs(slack.Configs{}),
 		Operations:  slack.Operations(),
 		HealthCheck: slack.HealthCheck,
+		OAuth:       slack.SlackOAuthMeta(),
 	}
 	wickplugin.Serve(mod)
 }

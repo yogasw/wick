@@ -1,6 +1,6 @@
 // Command googleworkspace runs the wick Google Workspace connector as an
-// out-of-process plugin. OAuth identity resolution is wired in a later task;
-// at execute time the host injects the resolved access_token via creds.
+// out-of-process plugin. OAuth identity resolution is served over gRPC
+// (ResolveIdentity); at execute time the host injects the access_token via creds.
 package main
 
 import (
@@ -16,6 +16,7 @@ func main() {
 		Configs:       entity.StructToConfigs(googleworkspace.Configs{}),
 		Operations:    googleworkspace.Operations(),
 		HealthCheck:   googleworkspace.HealthCheck,
+		OAuth:         googleworkspace.OAuthMeta(),
 		DefaultAccess: connector.AccessDefaults{EnableSSO: true, AllowOthersConnectSSO: true},
 	}
 	wickplugin.Serve(mod)
