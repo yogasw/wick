@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	goplugin "github.com/hashicorp/go-plugin"
 
@@ -21,16 +22,37 @@ func DumpManifest(mod connector.Module) ([]byte, error) {
 // manifest JSON and exits (used by `make plugins` / CI); otherwise it serves
 // the gRPC plugin and blocks until the host disconnects.
 func Serve(mod connector.Module) {
-	for _, a := range os.Args[1:] {
-		if a == "--dump-manifest" {
-			b, err := DumpManifest(mod)
-			if err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				os.Exit(1)
+	args := os.Args[1:]
+	dump := false
+	signKey := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--dump-manifest":
+			dump = true
+		case "--sign-key":
+			if i+1 < len(args) {
+				signKey = args[i+1]
+				i++
 			}
-			fmt.Println(string(b))
-			return
+		default:
+			if v, ok := strings.CutPrefix(args[i], "--sign-key="); ok {
+				signKey = v
+			}
 		}
+	}
+	if dump {
+		m, err := BuildSelfManifest(mod, signKey)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		b, err := json.Marshal(m)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println(string(b))
+		return
 	}
 	goplugin.Serve(&goplugin.ServeConfig{
 		HandshakeConfig: Handshake,
