@@ -12,6 +12,7 @@ import (
 	"time"
 
 	goplugin "github.com/hashicorp/go-plugin"
+	"github.com/rs/zerolog/log"
 
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
@@ -31,6 +32,7 @@ type Manager struct {
 	idleTimeout  time.Duration
 	maxProcs     int
 	queueTimeout time.Duration
+	warm         map[string]bool
 	spawnFn      func(key string) (*entry, error)
 	killFn       func(key string)
 	now          func() time.Time
@@ -48,6 +50,7 @@ func NewManager(binaries map[string]string, idleTimeout time.Duration) *Manager 
 		idleTimeout:  idleTimeout,
 		maxProcs:     envMaxProcs(),
 		queueTimeout: envQueueTimeout(),
+		warm:         envWarmSet(),
 		now:          time.Now,
 		stop:         make(chan struct{}),
 		breakers:     map[string]*breaker{},
@@ -66,7 +69,7 @@ func (m *Manager) sweep() {
 	defer m.mu.Unlock()
 	cutoff := m.now().Add(-m.idleTimeout)
 	for key, e := range m.entries {
-		if e.inflight == 0 && e.lastUsed.Before(cutoff) {
+		if !m.warm[key] && e.inflight == 0 && e.lastUsed.Before(cutoff) {
 			// kill before delete: kill reads the entry from m.entries.
 			m.killFn(key)
 			delete(m.entries, key)
@@ -110,6 +113,33 @@ func (m *Manager) KillAll() {
 	for key := range m.entries {
 		m.kill(key)
 		delete(m.entries, key)
+	}
+}
+
+// WarmUp eagerly spawns every warm connector that has a registered binary so
+// it is hot before the first call. Failures are logged and skipped — boot must
+// not abort. Call once at boot after Load wires the binaries.
+func (m *Manager) WarmUp() {
+	m.mu.Lock()
+	keys := make([]string, 0, len(m.warm))
+	for k := range m.warm {
+		if _, ok := m.binaries[k]; ok {
+			keys = append(keys, k)
+		}
+	}
+	maxProcs := m.maxProcs
+	m.mu.Unlock()
+	if maxProcs > 0 && len(keys) >= maxProcs {
+		log.Warn().Int("warm", len(keys)).Int("max_procs", maxProcs).
+			Msg("connector plugin warm set >= max procs; non-warm spawns will queue")
+	}
+	for _, k := range keys {
+		lease, err := m.Client(k)
+		if err != nil {
+			log.Warn().Str("connector", k).Err(err).Msg("connector plugin warm-up failed")
+			continue
+		}
+		lease.Release()
 	}
 }
 

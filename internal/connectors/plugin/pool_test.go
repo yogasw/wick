@@ -157,3 +157,46 @@ func TestKillAllWakesQueuedWaiter(t *testing.T) {
 		t.Fatal("KillAll did not promptly wake the queued waiter")
 	}
 }
+
+func TestWarmUpSpawnsAndPins(t *testing.T) {
+	m := newTestManager()
+	m.warm = map[string]bool{"a": true}
+	m.binaries = map[string]string{"a": "/x/a"}
+	m.spawnFn = func(string) (*entry, error) { return &entry{conn: stubConn{}}, nil }
+
+	m.WarmUp()
+	if _, ok := m.entries["a"]; !ok {
+		t.Fatal("WarmUp should spawn warm key 'a'")
+	}
+	if m.entries["a"].inflight != 0 {
+		t.Fatal("warm entry should be released (inflight 0)")
+	}
+}
+
+func TestSweepSkipsWarm(t *testing.T) {
+	m := newTestManager()
+	m.idleTimeout = 10 * time.Millisecond
+	m.warm = map[string]bool{"a": true}
+	m.now = func() time.Time { return time.Unix(100, 0) }
+	m.entries["a"] = &entry{lastUsed: time.Unix(0, 0)} // old + idle
+	m.sweep()
+	if _, ok := m.entries["a"]; !ok {
+		t.Fatal("sweep must not kill a warm connector")
+	}
+}
+
+func TestEvictSkipsWarm(t *testing.T) {
+	m := newTestManager()
+	m.now = time.Now
+	m.maxProcs = 1
+	m.queueTimeout = 60 * time.Millisecond
+	m.warm = map[string]bool{"a": true}
+	m.spawnFn = func(string) (*entry, error) { return &entry{conn: stubConn{}}, nil }
+
+	la, _ := m.Client("a") // warm, idle after release
+	la.Release()
+	// 'b' needs a slot; only 'a' is idle but warm -> cannot evict -> timeout.
+	if _, err := m.Client("b"); err == nil {
+		t.Fatal("warm connector must not be LRU-evicted; 'b' should time out")
+	}
+}

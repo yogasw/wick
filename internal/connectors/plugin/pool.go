@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
@@ -47,6 +48,16 @@ func envQueueTimeout() time.Duration {
 	return defaultQueueTimeout
 }
 
+func envWarmSet() map[string]bool {
+	out := map[string]bool{}
+	for _, k := range strings.Split(os.Getenv("WICK_PLUGIN_WARM"), ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			out[k] = true
+		}
+	}
+	return out
+}
+
 // ensureSlotLocked makes room for one new subprocess when at capacity. It
 // evicts the least-recently-used idle subprocess, or waits (bounded by
 // queueTimeout) when all are busy. Caller holds m.mu. maxProcs <= 0 = unlimited.
@@ -84,7 +95,7 @@ func (m *Manager) evictIdleLocked() bool {
 	var lruUsed time.Time
 	found := false
 	for k, e := range m.entries {
-		if e.inflight > 0 {
+		if e.inflight > 0 || m.warm[k] {
 			continue
 		}
 		if !found || e.lastUsed.Before(lruUsed) {
