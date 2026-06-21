@@ -11,11 +11,16 @@ import (
 
 type fakeConn struct {
 	lastCall wickplugin.ExecCall
+	streamed bool
 }
 
 func (f *fakeConn) Execute(_ context.Context, call wickplugin.ExecCall) ([]byte, error) {
 	f.lastCall = call
 	return json.Marshal(map[string]string{"echo": call.Input["text"]})
+}
+func (f *fakeConn) ExecuteStream(ctx context.Context, call wickplugin.ExecCall) ([]byte, error) {
+	f.streamed = true
+	return f.Execute(ctx, call)
 }
 func (f *fakeConn) Schema(context.Context) ([]byte, error) { return nil, nil }
 func (f *fakeConn) ResolveIdentity(context.Context, string) (string, string, error) {

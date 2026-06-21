@@ -27,6 +27,7 @@ type ExecCall struct {
 // manager hands this to the adapter closure; *grpcClient implements it.
 type GRPCConn interface {
 	Execute(ctx context.Context, call ExecCall) ([]byte, error)
+	ExecuteStream(ctx context.Context, call ExecCall) ([]byte, error)
 	Schema(ctx context.Context) ([]byte, error)
 	ResolveIdentity(ctx context.Context, accessToken string) (userID, displayName string, err error)
 }
@@ -57,6 +58,41 @@ func (c *grpcClient) Execute(ctx context.Context, call ExecCall) ([]byte, error)
 		return nil, fmt.Errorf("%w: [%s] %s", ErrPluginOp, resp.Error.Code, resp.Error.Message)
 	}
 	return resp.ResultJson, nil
+}
+
+// ExecuteStream runs one operation and reassembles the streamed result. It
+// removes the default gRPC message ceiling for large results.
+func (c *grpcClient) ExecuteStream(ctx context.Context, call ExecCall) ([]byte, error) {
+	args, err := json.Marshal(call.Input)
+	if err != nil {
+		return nil, fmt.Errorf("marshal input: %w", err)
+	}
+	stream, err := c.inner.ExecuteStream(ctx, &pb.ExecuteRequest{
+		Operation: call.Operation,
+		ArgsJson:  args,
+		Creds:     call.Creds,
+		RequestId: call.RequestID,
+		SessionId: call.SessionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("plugin transport: %w", err)
+	}
+	var out []byte
+	for {
+		chunk, err := stream.Recv()
+		if err != nil {
+			return nil, fmt.Errorf("plugin transport: %w", err)
+		}
+		if chunk.Error != nil {
+			return nil, fmt.Errorf("%w: [%s] %s", ErrPluginOp, chunk.Error.Code, chunk.Error.Message)
+		}
+		if len(chunk.Data) > 0 {
+			out = append(out, chunk.Data...)
+		}
+		if chunk.Eof {
+			return out, nil
+		}
+	}
 }
 
 // ResolveIdentity asks the plugin who an OAuth access token belongs to.
