@@ -569,7 +569,7 @@ func Run() {
 		serverCmd, workerCmd, allCmd,
 		startCmd, stopCmd, restartCmd, statusCmd, svcCmd,
 		mcpCmd, trayCmd,
-		configCmd(), uninstallCmd(),
+		configCmd(), pluginCmd(), uninstallCmd(),
 		versionCmd,
 	)
 
