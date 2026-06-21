@@ -82,3 +82,9 @@ vite.config.ts.timestamp-*
 /echo
 /slack
 /googleworkspace
+
+# plugin signing keys (never commit)
+*.key
+
+# stray plugin/keygen binaries if built at repo root
+/plugin-keygen
