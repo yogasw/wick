@@ -66,6 +66,9 @@ func TestAdapterBuildsModuleThatDispatchesOverGRPC(t *testing.T) {
 	if fc.lastCall.Operation != "say" || fc.lastCall.Input["text"] != "hi" {
 		t.Fatalf("closure did not forward call: %+v", fc.lastCall)
 	}
+	if !fc.streamed {
+		t.Fatal("adapter should dispatch via ExecuteStream")
+	}
 	got := out.(json.RawMessage)
 	var m map[string]string
 	if err := json.Unmarshal(got, &m); err != nil {

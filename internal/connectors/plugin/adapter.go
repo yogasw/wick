@@ -35,7 +35,7 @@ func newExecuteClosure(connKey, opKey string, getConn ConnGetter) connector.Exec
 			return nil, fmt.Errorf("plugin %q unavailable: %w", connKey, err)
 		}
 		defer lease.Release()
-		raw, err := lease.Conn.Execute(c.Context(), wickplugin.ExecCall{
+		raw, err := lease.Conn.ExecuteStream(c.Context(), wickplugin.ExecCall{
 			Operation: opKey,
 			Input:     c.Inputs(),
 			Creds:     c.Configs(),
