@@ -73,11 +73,6 @@ func NewServer() *Server {
 	connectors.RegisterProfile(configsSvc.Profile())
 
 	var pluginMgr *connplugin.Manager
-	defer func() {
-		if pluginMgr != nil {
-			pluginMgr.KillAll()
-		}
-	}()
 	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute); err != nil {
 		log.Warn().Err(err).Msg("connector plugins: load failed")
 	} else if mgr != nil {
@@ -88,16 +83,23 @@ func NewServer() *Server {
 	jobsSvc := manager.NewServiceFromDB(db)
 	jobsSvc.SetConfigReader(configsSvc)
 
-	return &Server{jobsSvc: jobsSvc}
+	return &Server{jobsSvc: jobsSvc, pluginMgr: pluginMgr}
 }
 
 type Server struct {
-	jobsSvc *manager.Service
+	jobsSvc   *manager.Service
+	pluginMgr *connplugin.Manager
 }
 
 // Run bootstraps jobs and starts the scheduler loop. Cancel ctx to
 // stop. Returns nil on clean shutdown or the bootstrap error.
 func (s *Server) Run(ctx context.Context) error {
+	defer func() {
+		if s.pluginMgr != nil {
+			s.pluginMgr.KillAll()
+		}
+	}()
+
 	logger := zerolog.Ctx(ctx)
 	allJobs := jobs.All()
 	if err := job.ValidateJobs(allJobs); err != nil {
