@@ -98,6 +98,7 @@ func (m *Manager) KillAll() {
 }
 
 func (m *Manager) spawn(key string) (*entry, error) {
+	// caller (Client) holds m.mu.
 	bin, ok := m.binaries[key]
 	if !ok {
 		return nil, fmt.Errorf("no plugin binary registered for %q", key)
@@ -129,8 +130,28 @@ func (m *Manager) spawn(key string) (*entry, error) {
 
 // IsPlugin reports whether key is served by a plugin subprocess.
 func (m *Manager) IsPlugin(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	_, ok := m.binaries[key]
 	return ok
+}
+
+// SetBinary registers or updates the on-disk binary path for a connector key.
+func (m *Manager) SetBinary(key, path string) {
+	m.mu.Lock()
+	m.binaries[key] = path
+	m.mu.Unlock()
+}
+
+// RemoveBinary drops a connector key and kills its running subprocess (if any).
+func (m *Manager) RemoveBinary(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.binaries, key)
+	if e := m.entries[key]; e != nil {
+		m.kill(key)
+		delete(m.entries, key)
+	}
 }
 
 // ResolveIdentity spawns-if-needed and asks the plugin to resolve an OAuth

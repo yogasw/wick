@@ -44,3 +44,21 @@ func TestKillAllIsIdempotent(t *testing.T) {
 	m.KillAll()
 	m.KillAll() // must not panic on second call
 }
+
+func TestSetAndRemoveBinary(t *testing.T) {
+	m := &Manager{
+		entries:  map[string]*entry{},
+		binaries: map[string]string{},
+		now:      func() time.Time { return time.Unix(0, 0) },
+		stop:     make(chan struct{}),
+	}
+	m.killFn = m.kill
+	m.SetBinary("slack", "/x/slack")
+	if !m.IsPlugin("slack") {
+		t.Fatal("SetBinary should register the key")
+	}
+	m.RemoveBinary("slack")
+	if m.IsPlugin("slack") {
+		t.Fatal("RemoveBinary should drop the key")
+	}
+}
