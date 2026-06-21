@@ -29,6 +29,16 @@ func TestManagerEvictsIdle(t *testing.T) {
 	}
 }
 
+func TestIsPlugin(t *testing.T) {
+	m := &Manager{binaries: map[string]string{"slack": "/x/slack"}}
+	if !m.IsPlugin("slack") {
+		t.Fatal("slack should be a plugin")
+	}
+	if m.IsPlugin("github") {
+		t.Fatal("github is not a plugin")
+	}
+}
+
 func TestKillAllIsIdempotent(t *testing.T) {
 	m := NewManager(map[string]string{}, time.Minute)
 	m.KillAll()

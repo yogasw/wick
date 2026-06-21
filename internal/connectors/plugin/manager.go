@@ -4,6 +4,7 @@
 package plugin
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"sync"
@@ -124,6 +125,22 @@ func (m *Manager) spawn(key string) (*entry, error) {
 		return nil, fmt.Errorf("plugin %q returned unexpected client type", key)
 	}
 	return &entry{client: client, conn: conn, lastUsed: m.now()}, nil
+}
+
+// IsPlugin reports whether key is served by a plugin subprocess.
+func (m *Manager) IsPlugin(key string) bool {
+	_, ok := m.binaries[key]
+	return ok
+}
+
+// ResolveIdentity spawns-if-needed and asks the plugin to resolve an OAuth
+// token's owner.
+func (m *Manager) ResolveIdentity(ctx context.Context, key, token string) (string, string, error) {
+	conn, err := m.Client(key)
+	if err != nil {
+		return "", "", err
+	}
+	return conn.ResolveIdentity(ctx, token)
 }
 
 // Client returns a live gRPC connection for key, spawning the subprocess on
