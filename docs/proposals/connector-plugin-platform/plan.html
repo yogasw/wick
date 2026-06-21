@@ -577,6 +577,36 @@ github-1.4.2-linux-arm64.sha256 / .sig</code></pre>
 </div>
 <div class="note"><b>Nyambung ke marketplace (§6):</b> <code>gh release create</code> → muncul di GitHub Releases API → otomatis jadi entri <b>Available</b> di marketplace. Push connector → CI build+release → langsung nongol. Zero langkah manual. Matrix os/arch jalan paralel + path-filter → cepat & hemat CI.</div>
 
+<h3>Mass-rebuild &amp; auto-bump saat kontrak core berubah</h3>
+<div class="ok"><b>Koreksi premis:</b> ngk semua perubahan core maksa recompile semua. Cuma <b>breaking (proto_version naik)</b> yg maksa. Additive (minor proto) = connector lama tetap kompatibel → <b>nol rebuild</b>. Mass-rebuild jarang &amp; terkontrol.</div>
+<table>
+  <tr><th>Pemicu</th><th>Scope</th><th>Mekanisme</th></tr>
+  <tr><td>Folder 1 connector berubah</td><td>connector itu</td><td>path-filter</td></tr>
+  <tr><td><b>proto_version naik (breaking)</b></td><td><b>SEMUA connector</b></td><td>fan-out + auto-bump</td></tr>
+</table>
+<div class="grid g2">
+  <div class="card"><h3>Fan-out + auto-bump (jangan edit satu-satu)</h3>
+    <pre><code># proto-bump.yml di repo connectors
+on: repository_dispatch [proto-released]   # dari repo proto, rilis vN
+matrix: semua connector folder:
+  go get wick-connector-proto@vN
+  go test ./${name}
+  bump VERSION ${name} (patch++)   # OTOMATIS, script
+  build + gh release "${name}/v${newVER}"
+  commit "chore(${name}): rebuild utk proto vN"</code></pre>
+    <p class="sub">1 workflow handle semua → zero edit manual. Alt: Renovate auto-PR bump dep proto per connector.</p>
+  </div>
+  <div class="card"><h3>Integrasi release workflow core</h3>
+    <pre><code># master → release: tambah 1 job
+check-proto:
+  proto_version rilis ini vs terakhir
+   ├─ naik (breaking) → repository_dispatch
+   │     → trigger fan-out (rebuild+bump semua)
+   └─ sama (additive) → ngk ngapa-ngapain</code></pre>
+    <div class="ok">Breaking → otomatis dorong rebuild semua. Additive → connector ngk keganggu. Dua-duanya zero edit manual.</div>
+  </div>
+</div>
+
 <p class="sub" style="margin-top:40px;text-align:center">Wick Plugin Platform — Architecture Plan · detail lengkap di <code>PLAN.md</code></p>
 </body>
 </html>

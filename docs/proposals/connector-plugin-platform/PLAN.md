@@ -808,3 +808,58 @@ otomatis jadi entri **Available** di marketplace wick (§6.2). Jadi: push connec
 
 > Catatan: build matrix per os/arch jalan **paralel** → cepat. Cuma connector yang
 > berubah yang di-rebuild (path-filter) → hemat CI.
+
+### 20.5 Mass-rebuild & auto-bump saat KONTRAK core berubah
+
+**Premis penting (koreksi):** ngk semua perubahan core maksa recompile semua.
+Cuma **breaking** (proto_version naik) yang maksa. Additive (minor proto) =
+connector lama tetap kompatibel → **nol rebuild** (lihat §19.3). Jadi mass-rebuild
+= jarang & terkontrol.
+
+**Dua pemicu rebuild:**
+
+| Pemicu | Scope | Mekanisme |
+|--------|-------|-----------|
+| Folder 1 connector berubah | connector itu | path-filter (§20.2) |
+| **`proto_version` naik (breaking)** | **SEMUA connector** | fan-out + auto-bump (di bawah) |
+
+**Auto-bump — JANGAN edit VERSION satu-satu.** Pas proto breaking, otomasi:
+
+```yaml
+# .github/workflows/proto-bump.yml di repo connectors
+on:
+  repository_dispatch:               # dikirim dari repo proto pas rilis proto vN (major)
+    types: [proto-released]
+jobs:
+  fanout:
+    strategy: { matrix: { name: <semua folder connector> } }
+    steps:
+      - go get github.com/yogasw/wick-connector-proto@vN   # naik ke proto baru
+      - go test ./${{ matrix.name }}                       # pastikan masih jalan
+      - bump VERSION ${{ matrix.name }} (patch++)          # OTOMATIS, script kecil
+      - go build ... && gh release create "${name}/v${newVER}"
+      - git commit -m "chore(${name}): rebuild utk proto vN"
+```
+- **1 workflow handle semua connector** → zero edit manual. VERSION di-bump script
+  (patch++), bukan tangan.
+- **Alternatif Renovate/Dependabot:** bot auto-PR bump dep shared-proto di tiap
+  connector → CI per-connector jalan (path-filter dep) → rebuild + release. Fully
+  automated, ngk perlu repository_dispatch.
+
+**Integrasi ke release workflow core (master→release):**
+
+Workflow rilis core sekarang cek VERSION. Tambah 1 job:
+```
+job check-proto:
+  baca proto_version di rilis ini vs rilis terakhir
+    ├─ naik (breaking) → repository_dispatch {type: proto-released, vN} ke repo connectors
+    │                     → trigger fan-out di atas (rebuild + auto-bump semua)
+    └─ sama (additive)  → ngk ngapa-ngapain (connector lama aman, ngk usah rebuild)
+```
+Jadi rilis core yang breaking **otomatis mendorong rebuild semua connector**, dan
+yang additive **ngk ganggu** connector sama sekali. Ngk ada langkah edit manual
+di kedua kasus.
+
+> Ringkas: edit-satu-satu cuma kejadian kalau ngk ada otomasi. Dengan fan-out +
+> auto-bump VERSION (script) + repository_dispatch dari release workflow, breaking
+> proto = 1 trigger → semua connector rebuild & rilis sendiri.
