@@ -28,3 +28,9 @@ func TestManagerEvictsIdle(t *testing.T) {
 		t.Fatal("killed entry must be removed from the map")
 	}
 }
+
+func TestKillAllIsIdempotent(t *testing.T) {
+	m := NewManager(map[string]string{}, time.Minute)
+	m.KillAll()
+	m.KillAll() // must not panic on second call
+}

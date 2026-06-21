@@ -53,6 +53,7 @@ func (m *Manager) sweep() {
 	cutoff := m.now().Add(-m.idleTimeout)
 	for key, e := range m.entries {
 		if e.lastUsed.Before(cutoff) {
+			// kill before delete: kill reads the entry from m.entries.
 			m.killFn(key)
 			delete(m.entries, key)
 		}
@@ -78,11 +79,17 @@ func (m *Manager) kill(key string) {
 	}
 }
 
-// KillAll reaps every subprocess (call on app shutdown).
+// KillAll reaps every subprocess (call on app shutdown). It is safe to call
+// more than once: the stop channel is closed at most once.
 func (m *Manager) KillAll() {
-	close(m.stop)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	select {
+	case <-m.stop:
+		// already stopped
+	default:
+		close(m.stop)
+	}
 	for key := range m.entries {
 		m.kill(key)
 		delete(m.entries, key)
