@@ -62,6 +62,21 @@ func (s *grpcServer) Execute(ctx context.Context, req *pb.ExecuteRequest) (*pb.E
 	return &pb.ExecuteResponse{ResultJson: b}, nil
 }
 
+// ResolveIdentity resolves which provider user an OAuth access token belongs
+// to by calling the module's OAuth.GetUserIdentity. The host invokes this
+// across the process boundary because GetUserIdentity (a func) cannot be
+// marshalled in the manifest.
+func (s *grpcServer) ResolveIdentity(ctx context.Context, req *pb.IdentityRequest) (*pb.IdentityResponse, error) {
+	if s.mod.OAuth == nil || s.mod.OAuth.GetUserIdentity == nil {
+		return &pb.IdentityResponse{Error: &pb.Error{Code: "no_oauth", Message: "connector has no OAuth identity resolver"}}, nil
+	}
+	uid, name, err := s.mod.OAuth.GetUserIdentity(ctx, req.AccessToken)
+	if err != nil {
+		return &pb.IdentityResponse{Error: &pb.Error{Code: "identity_error", Message: err.Error()}}, nil
+	}
+	return &pb.IdentityResponse{UserId: uid, DisplayName: name}, nil
+}
+
 func (s *grpcServer) Health(_ context.Context, _ *pb.HealthRequest) (*pb.HealthResponse, error) {
 	return &pb.HealthResponse{Healthy: true}, nil
 }

@@ -28,6 +28,7 @@ type ExecCall struct {
 type GRPCConn interface {
 	Execute(ctx context.Context, call ExecCall) ([]byte, error)
 	Schema(ctx context.Context) ([]byte, error)
+	ResolveIdentity(ctx context.Context, accessToken string) (userID, displayName string, err error)
 }
 
 // grpcClient is the host's handle to one connector plugin's gRPC service.
@@ -56,6 +57,18 @@ func (c *grpcClient) Execute(ctx context.Context, call ExecCall) ([]byte, error)
 		return nil, fmt.Errorf("%w: [%s] %s", ErrPluginOp, resp.Error.Code, resp.Error.Message)
 	}
 	return resp.ResultJson, nil
+}
+
+// ResolveIdentity asks the plugin who an OAuth access token belongs to.
+func (c *grpcClient) ResolveIdentity(ctx context.Context, accessToken string) (userID, displayName string, err error) {
+	resp, err := c.inner.ResolveIdentity(ctx, &pb.IdentityRequest{AccessToken: accessToken})
+	if err != nil {
+		return "", "", fmt.Errorf("plugin transport: %w", err)
+	}
+	if resp.Error != nil {
+		return "", "", fmt.Errorf("%w: [%s] %s", ErrPluginOp, resp.Error.Code, resp.Error.Message)
+	}
+	return resp.UserId, resp.DisplayName, nil
 }
 
 // Schema fetches the manifest JSON from a live plugin (used by the loader

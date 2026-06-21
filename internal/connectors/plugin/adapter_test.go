@@ -18,6 +18,9 @@ func (f *fakeConn) Execute(_ context.Context, call wickplugin.ExecCall) ([]byte,
 	return json.Marshal(map[string]string{"echo": call.Input["text"]})
 }
 func (f *fakeConn) Schema(context.Context) ([]byte, error) { return nil, nil }
+func (f *fakeConn) ResolveIdentity(context.Context, string) (string, string, error) {
+	return "", "", nil
+}
 
 func manifestJSON(t *testing.T) []byte {
 	t.Helper()

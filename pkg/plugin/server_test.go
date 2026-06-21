@@ -66,3 +66,28 @@ func TestServerExecuteUnknownOp(t *testing.T) {
 		t.Fatal("expected error for unknown op")
 	}
 }
+
+func TestServerResolveIdentity(t *testing.T) {
+	mod := sampleModule()
+	mod.OAuth = &connector.OAuthMeta{
+		GetUserIdentity: func(_ context.Context, token string) (string, string, error) {
+			return "U" + token, "User " + token, nil
+		},
+	}
+	srv := NewServer(mod)
+	resp, err := srv.ResolveIdentity(context.Background(), &pb.IdentityRequest{AccessToken: "123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.UserId != "U123" || resp.DisplayName != "User 123" {
+		t.Fatalf("identity wrong: %+v", resp)
+	}
+}
+
+func TestServerResolveIdentityNoOAuth(t *testing.T) {
+	srv := NewServer(sampleModule())
+	resp, _ := srv.ResolveIdentity(context.Background(), &pb.IdentityRequest{AccessToken: "x"})
+	if resp.Error == nil {
+		t.Fatal("expected error when connector has no OAuth")
+	}
+}
