@@ -23,6 +23,13 @@ type ExecCall struct {
 	SessionID string
 }
 
+// GRPCConn is the host-facing surface of a connector plugin client. The
+// manager hands this to the adapter closure; *grpcClient implements it.
+type GRPCConn interface {
+	Execute(ctx context.Context, call ExecCall) ([]byte, error)
+	Schema(ctx context.Context) ([]byte, error)
+}
+
 // grpcClient is the host's handle to one connector plugin's gRPC service.
 // It is what GRPCClient() dispenses; the manager keeps it alive per plugin.
 type grpcClient struct {
