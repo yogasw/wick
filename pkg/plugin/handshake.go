@@ -53,5 +53,3 @@ func (p *ConnectorGRPCPlugin) GRPCServer(_ *goplugin.GRPCBroker, s *grpc.Server)
 func (p *ConnectorGRPCPlugin) GRPCClient(_ context.Context, _ *goplugin.GRPCBroker, c *grpc.ClientConn) (any, error) {
 	return &grpcClient{inner: pb.NewConnectorClient(c)}, nil
 }
-
-type grpcClient struct{ inner pb.ConnectorClient }
