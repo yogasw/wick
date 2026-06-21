@@ -104,6 +104,9 @@ func (m *Manager) KillAll() {
 	default:
 		close(m.stop)
 	}
+	if m.cond != nil {
+		m.cond.Broadcast() // wake any queued Client waiter so it exits on shutdown
+	}
 	for key := range m.entries {
 		m.kill(key)
 		delete(m.entries, key)
@@ -212,6 +215,11 @@ func (m *Manager) Client(key string) (*Lease, error) {
 	if e == nil {
 		if err := m.ensureSlotLocked(); err != nil {
 			return nil, err
+		}
+		select {
+		case <-m.stop:
+			return nil, fmt.Errorf("connector plugin manager shutting down")
+		default:
 		}
 		spawned, err := m.spawnFn(key)
 		if err != nil {

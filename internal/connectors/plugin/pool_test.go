@@ -119,3 +119,38 @@ func TestQueueTimesOut(t *testing.T) {
 		t.Fatal("expected timeout error when pool is full and all busy")
 	}
 }
+
+func TestClientRejectsAfterShutdown(t *testing.T) {
+	m := newTestManager()
+	m.spawnFn = func(string) (*entry, error) { return &entry{conn: stubConn{}}, nil }
+	m.KillAll()
+	if _, err := m.Client("x"); err == nil {
+		t.Fatal("Client must reject spawning after KillAll")
+	}
+}
+
+func TestKillAllWakesQueuedWaiter(t *testing.T) {
+	m := newTestManager()
+	m.now = time.Now
+	m.maxProcs = 1
+	m.queueTimeout = 10 * time.Second // long: only KillAll's broadcast can wake it promptly
+	m.spawnFn = func(string) (*entry, error) { return &entry{conn: stubConn{}}, nil }
+
+	la, _ := m.Client("a") // busy, holds the only slot
+	_ = la
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.Client("b") // queues (all busy)
+		done <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	m.KillAll()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("queued waiter should get a shutdown error, not spawn after KillAll")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("KillAll did not promptly wake the queued waiter")
+	}
+}
