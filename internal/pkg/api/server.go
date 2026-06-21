@@ -54,6 +54,7 @@ import (
 	customconn "github.com/yogasw/wick/internal/connectors/custom"
 	customconnector "github.com/yogasw/wick/internal/connectors/customconnector"
 	"github.com/yogasw/wick/internal/connectors/notifications"
+	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
@@ -195,6 +196,14 @@ func NewServer() *Server {
 	}
 
 	connectors.RegisterProfile(configsSvc.Profile())
+
+	var pluginMgr *connplugin.Manager
+	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute); err != nil {
+		log.Warn().Err(err).Msg("connector plugins: load failed")
+	} else if mgr != nil {
+		log.Info().Int("plugins", n).Msg("connector plugins: loaded")
+		pluginMgr = mgr
+	}
 
 	// Seed connector_oauth:slack rows for the generic connector OAuth framework.
 	// The manager reads/writes these at owner="connector_oauth:slack" so they
@@ -1454,7 +1463,7 @@ func NewServer() *Server {
 	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
 	r.Handle("/launcher", http.HandlerFunc(homeHandler.Launcher))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, pluginMgr: pluginMgr}
 }
 
 type Server struct {
@@ -1463,6 +1472,7 @@ type Server struct {
 	authMidd     *login.Middleware
 	agentsPool   *agentpool.Pool
 	agentsLayout agentconfig.Layout
+	pluginMgr    *connplugin.Manager
 	// syncSessionMeta reloads one session into the in-memory registry
 	// and broadcasts its meta over SSE. Built in NewServer (where the
 	// registry + broadcaster are in scope) and reused by Run to wire
@@ -1794,6 +1804,9 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		logger.Info().Msg("server is shutting down...")
 		if s.agentsPool != nil {
 			s.agentsPool.Stop()
+		}
+		if s.pluginMgr != nil {
+			s.pluginMgr.KillAll()
 		}
 		sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

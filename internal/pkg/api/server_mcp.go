@@ -4,13 +4,14 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/joho/godotenv"
 
-	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
-	slackwf "github.com/yogasw/wick/internal/agents/channels/slack/workflow"
 	"github.com/yogasw/wick/internal/agents/agentctl"
 	"github.com/yogasw/wick/internal/agents/askuser"
+	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
+	slackwf "github.com/yogasw/wick/internal/agents/channels/slack/workflow"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	wfsetup "github.com/yogasw/wick/internal/agents/workflow/setup"
 	"github.com/yogasw/wick/internal/agents/workflow/wftest"
@@ -18,6 +19,7 @@ import (
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/connectors/notifications"
+	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
@@ -33,6 +35,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 )
+
+var stdioPluginMgr *connplugin.Manager
 
 // BuildMCPHandler initialises the connector layer (DB + connectors
 // bootstrap) and returns a ready-to-serve MCP handler + admin context.
@@ -142,6 +146,16 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 	}
 
 	connectors.RegisterProfile(configsSvc.Profile())
+
+	var pluginMgr *connplugin.Manager
+	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute); err != nil {
+		log.Warn().Err(err).Msg("connector plugins: load failed")
+	} else if mgr != nil {
+		log.Info().Int("plugins", n).Msg("connector plugins: loaded")
+		pluginMgr = mgr
+	}
+	stdioPluginMgr = pluginMgr
+
 	if err := connSvc.Bootstrap(context.Background(), connectors.All()); err != nil {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
@@ -195,6 +209,11 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 // over stdin/stdout. Intended for local clients (Claude Desktop, Cursor).
 func RunMCPStdio(version, commit, buildTime string) {
 	h, ctx := BuildMCPHandler(version, commit, buildTime)
+	defer func() {
+		if stdioPluginMgr != nil {
+			stdioPluginMgr.KillAll()
+		}
+	}()
 	h.ServeStdioOS(ctx)
 }
 

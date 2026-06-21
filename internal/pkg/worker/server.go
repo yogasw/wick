@@ -4,15 +4,16 @@ import (
 	"context"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
+	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
-	sessionconfigpurge "github.com/yogasw/wick/internal/jobs/session-config-purge"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
-	"github.com/yogasw/wick/internal/agents/providersync"
+	sessionconfigpurge "github.com/yogasw/wick/internal/jobs/session-config-purge"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
@@ -70,6 +71,19 @@ func NewServer() *Server {
 	}
 
 	connectors.RegisterProfile(configsSvc.Profile())
+
+	var pluginMgr *connplugin.Manager
+	defer func() {
+		if pluginMgr != nil {
+			pluginMgr.KillAll()
+		}
+	}()
+	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute); err != nil {
+		log.Warn().Err(err).Msg("connector plugins: load failed")
+	} else if mgr != nil {
+		log.Info().Int("plugins", n).Msg("connector plugins: loaded")
+		pluginMgr = mgr
+	}
 
 	jobsSvc := manager.NewServiceFromDB(db)
 	jobsSvc.SetConfigReader(configsSvc)
