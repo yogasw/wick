@@ -922,6 +922,13 @@ func NewServer() *Server {
 	connectorsSvc.SetConfigs(configsSvc)
 	metricsRec := metrics.NewSimpleRecorder()
 	connectorsSvc.SetMetrics(metricsRec)
+
+	// Hot-reload poller: built here where pluginMgr + connectorsSvc are
+	// both in scope, started in Run with the server lifetime ctx.
+	var pluginReloader *connplugin.Reloader
+	if pluginMgr != nil {
+		pluginReloader = connplugin.NewReloader(connplugin.DefaultDir(), connectorsSvc, pluginMgr, 0)
+	}
 	// Wire the connectors service into the agents tool so the session
 	// Config tab can read connector field schemas + AllowSessionConfig.
 	agentstool.SetConnectors(connectorsSvc)
@@ -1466,16 +1473,17 @@ func NewServer() *Server {
 	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
 	r.Handle("/launcher", http.HandlerFunc(homeHandler.Launcher))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, pluginMgr: pluginMgr}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, pluginMgr: pluginMgr, pluginReloader: pluginReloader}
 }
 
 type Server struct {
-	router       *http.ServeMux
-	configsSvc   *configs.Service
-	authMidd     *login.Middleware
-	agentsPool   *agentpool.Pool
-	agentsLayout agentconfig.Layout
-	pluginMgr    *connplugin.Manager
+	router         *http.ServeMux
+	configsSvc     *configs.Service
+	authMidd       *login.Middleware
+	agentsPool     *agentpool.Pool
+	agentsLayout   agentconfig.Layout
+	pluginMgr      *connplugin.Manager
+	pluginReloader *connplugin.Reloader
 	// syncSessionMeta reloads one session into the in-memory registry
 	// and broadcasts its meta over SSE. Built in NewServer (where the
 	// registry + broadcaster are in scope) and reused by Run to wire
@@ -1704,6 +1712,9 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		ctx = log.With().Str("component", "server").Logger().WithContext(ctx)
 	}
 	logger := zerolog.Ctx(ctx)
+	if s.pluginReloader != nil {
+		go s.pluginReloader.Start(ctx)
+	}
 	// Opt-in profiling on loopback only. Set WICK_PPROF=1 to expose
 	// /debug/pprof on 127.0.0.1:6060 (heap, goroutine, profile) for
 	// diagnosing memory/CPU. Never bound to the public listener.
@@ -1807,6 +1818,9 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		logger.Info().Msg("server is shutting down...")
 		if s.agentsPool != nil {
 			s.agentsPool.Stop()
+		}
+		if s.pluginReloader != nil {
+			s.pluginReloader.Stop()
 		}
 		if s.pluginMgr != nil {
 			s.pluginMgr.KillAll()

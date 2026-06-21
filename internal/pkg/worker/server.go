@@ -80,25 +80,41 @@ func NewServer() *Server {
 		pluginMgr = mgr
 	}
 
+	// Hot-reload poller: needs a connectors service as its module sink.
+	// Built here, started in Run with the worker lifetime ctx.
+	var pluginReloader *connplugin.Reloader
+	if pluginMgr != nil {
+		connectorsSvc := connectors.NewServiceFromDB(db)
+		pluginReloader = connplugin.NewReloader(connplugin.DefaultDir(), connectorsSvc, pluginMgr, 0)
+	}
+
 	jobsSvc := manager.NewServiceFromDB(db)
 	jobsSvc.SetConfigReader(configsSvc)
 
-	return &Server{jobsSvc: jobsSvc, pluginMgr: pluginMgr}
+	return &Server{jobsSvc: jobsSvc, pluginMgr: pluginMgr, pluginReloader: pluginReloader}
 }
 
 type Server struct {
-	jobsSvc   *manager.Service
-	pluginMgr *connplugin.Manager
+	jobsSvc        *manager.Service
+	pluginMgr      *connplugin.Manager
+	pluginReloader *connplugin.Reloader
 }
 
 // Run bootstraps jobs and starts the scheduler loop. Cancel ctx to
 // stop. Returns nil on clean shutdown or the bootstrap error.
 func (s *Server) Run(ctx context.Context) error {
 	defer func() {
+		if s.pluginReloader != nil {
+			s.pluginReloader.Stop()
+		}
 		if s.pluginMgr != nil {
 			s.pluginMgr.KillAll()
 		}
 	}()
+
+	if s.pluginReloader != nil {
+		go s.pluginReloader.Start(ctx)
+	}
 
 	logger := zerolog.Ctx(ctx)
 	allJobs := jobs.All()
