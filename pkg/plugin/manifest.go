@@ -44,6 +44,48 @@ func sha256File(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// VerifyManifest checks a plugin envelope against the binary at binaryPath
+// and the host's trust policy. Returns nil when the plugin is safe to load.
+// Order: os_arch -> proto_version -> sha256 integrity -> signature.
+func VerifyManifest(m Manifest, binaryPath string) error {
+	host := runtime.GOOS + "/" + runtime.GOARCH
+	okArch := false
+	for _, oa := range m.OSArch {
+		if oa == host {
+			okArch = true
+			break
+		}
+	}
+	if !okArch {
+		return fmt.Errorf("incompatible arch: need %v, have %s", m.OSArch, host)
+	}
+	if m.ProtoVersion != ProtoVersion {
+		return fmt.Errorf("proto v%d unsupported (host speaks v%d)", m.ProtoVersion, ProtoVersion)
+	}
+	sum, err := sha256File(binaryPath)
+	if err != nil {
+		return err
+	}
+	if sum != m.SHA256 {
+		return fmt.Errorf("integrity check failed: binary sha256 %s != manifest %s", sum, m.SHA256)
+	}
+	if RequireSig() {
+		if m.Signature == "" {
+			return fmt.Errorf("signature required but plugin is unsigned")
+		}
+		if !VerifySHA256(TrustedKeys(), m.SHA256, m.Signature) {
+			return fmt.Errorf("signature verification failed (no trusted key matched)")
+		}
+		return nil
+	}
+	if m.Signature != "" {
+		if keys := TrustedKeys(); len(keys) > 0 && !VerifySHA256(keys, m.SHA256, m.Signature) {
+			return fmt.Errorf("signature present but does not match any trusted key")
+		}
+	}
+	return nil
+}
+
 // BuildSelfManifest builds the envelope for a connector plugin binary from
 // the binary itself (self-pack): it hashes os.Executable() and, when
 // signKeyPath is non-empty, signs that hash. mod is the connector's module.
