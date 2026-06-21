@@ -54,6 +54,7 @@ func Serve(mod connector.Module) {
 		fmt.Println(string(b))
 		return
 	}
+	applyRlimits()
 	goplugin.Serve(&goplugin.ServeConfig{
 		HandshakeConfig: Handshake,
 		VersionedPlugins: map[int]goplugin.PluginSet{
