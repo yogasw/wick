@@ -12,18 +12,12 @@ import (
 // manager's Client method satisfies it; tests pass a fake.
 type ConnGetter func(key string) (wickplugin.GRPCConn, error)
 
-// BuildModule parses a plugin.json manifest into a connector.Module whose
-// every Operation.Execute is a closure that dispatches to the plugin
-// subprocess over gRPC. The host engine (service.Execute) calls these
-// closures exactly like in-proc ops — same pattern as custom-MCP.
-func BuildModule(manifest []byte, getConn ConnGetter) (connector.Module, error) {
-	var mod connector.Module
-	if err := json.Unmarshal(manifest, &mod); err != nil {
-		return connector.Module{}, fmt.Errorf("parse manifest: %w", err)
-	}
-	if mod.Meta.Key == "" {
-		return connector.Module{}, fmt.Errorf("manifest missing meta.key")
-	}
+// BuildModule wires a parsed connector.Module's operations to gRPC closures
+// that dispatch to the plugin subprocess. The host engine (service.Execute)
+// calls these closures exactly like in-proc ops — same pattern as custom-MCP.
+// The envelope parsing and verification happen in the loader before this is
+// called.
+func BuildModule(mod connector.Module, getConn ConnGetter) connector.Module {
 	key := mod.Meta.Key
 	for ci := range mod.Operations {
 		for oi := range mod.Operations[ci].Ops {
@@ -31,7 +25,7 @@ func BuildModule(manifest []byte, getConn ConnGetter) (connector.Module, error) 
 			mod.Operations[ci].Ops[oi].Execute = newExecuteClosure(key, opKey, getConn)
 		}
 	}
-	return mod, nil
+	return mod
 }
 
 func newExecuteClosure(connKey, opKey string, getConn ConnGetter) connector.ExecuteFunc {

@@ -40,14 +40,15 @@ func TestAdapterBuildsModuleThatDispatchesOverGRPC(t *testing.T) {
 	fc := &fakeConn{}
 	getConn := func(key string) (wickplugin.GRPCConn, error) { return fc, nil }
 
-	mod, err := BuildModule(manifestJSON(t), getConn)
-	if err != nil {
+	var mod connector.Module
+	if err := json.Unmarshal(manifestJSON(t), &mod); err != nil {
 		t.Fatal(err)
 	}
-	if mod.Meta.Key != "demo" {
-		t.Fatalf("meta not parsed: %+v", mod.Meta)
+	built := BuildModule(mod, getConn)
+	if built.Meta.Key != "demo" {
+		t.Fatalf("meta not parsed: %+v", built.Meta)
 	}
-	ops := mod.AllOps()
+	ops := built.AllOps()
 	if len(ops) != 1 || ops[0].Key != "say" {
 		t.Fatalf("ops not parsed: %+v", ops)
 	}

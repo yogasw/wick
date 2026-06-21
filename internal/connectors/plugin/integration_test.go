@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/pkg/connector"
+	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
 // buildEcho compiles cmd/plugins/echo into a temp dir laid out as the loader
@@ -47,13 +48,13 @@ func TestPluginEndToEnd(t *testing.T) {
 	if err != nil || len(found) != 1 {
 		t.Fatalf("scan: %v %d", err, len(found))
 	}
+	if err := wickplugin.VerifyManifest(found[0].Manifest, found[0].BinaryPath); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
 	mgr := NewManager(map[string]string{found[0].Key: found[0].BinaryPath}, 5*time.Minute)
 	defer mgr.KillAll()
 
-	mod, err := BuildModule(found[0].Manifest, mgr.Client)
-	if err != nil {
-		t.Fatal(err)
-	}
+	mod := BuildModule(found[0].Manifest.Module, mgr.Client)
 	op := mod.AllOps()[0]
 
 	cctx := connector.NewPluginCtx(context.Background(),

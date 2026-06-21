@@ -21,10 +21,7 @@ func BenchmarkWarmExecute(b *testing.B) {
 	}
 	mgr := NewManager(map[string]string{found[0].Key: found[0].BinaryPath}, 5*time.Minute)
 	defer mgr.KillAll()
-	mod, err := BuildModule(found[0].Manifest, mgr.Client)
-	if err != nil {
-		b.Fatal(err)
-	}
+	mod := BuildModule(found[0].Manifest.Module, mgr.Client)
 	op := mod.AllOps()[0]
 	cctx := connector.NewPluginCtx(context.Background(),
 		map[string]string{"token": "x"}, map[string]string{"text": "hi"})

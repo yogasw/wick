@@ -7,21 +7,25 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	connectors "github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/pkg/connector"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
-// Found is one discovered plugin: its key, on-disk binary, and raw manifest.
+// Found is one discovered plugin: its key, on-disk binary, and parsed manifest
+// envelope.
 type Found struct {
 	Key        string
 	BinaryPath string
-	Manifest   []byte
+	Manifest   wickplugin.Manifest
 }
 
-// Scan walks dir/<name>/plugin.json and returns one Found per connector. The
-// binary is the sibling file named after the directory (e.g. demo/demo). A
-// missing dir is not an error (returns nil) — plugins are optional.
+// Scan walks dir/<name>/plugin.json and returns one Found per connector. Each
+// plugin.json is a manifest envelope; the binary is resolved from the
+// manifest's Entry (falling back to the directory name). A missing dir is not
+// an error (returns nil) — plugins are optional.
 func Scan(dir string) ([]Found, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -41,14 +45,21 @@ func Scan(dir string) ([]Found, error) {
 		if err != nil {
 			continue
 		}
-		var mod connector.Module
-		if err := json.Unmarshal(raw, &mod); err != nil {
+		var env wickplugin.Manifest
+		if err := json.Unmarshal(raw, &env); err != nil {
 			continue
 		}
+		if env.Module.Meta.Key == "" {
+			continue
+		}
+		entry := env.Entry
+		if entry == "" {
+			entry = name
+		}
 		out = append(out, Found{
-			Key:        mod.Meta.Key,
-			BinaryPath: filepath.Join(dir, name, name),
-			Manifest:   raw,
+			Key:        env.Module.Meta.Key,
+			BinaryPath: filepath.Join(dir, name, entry),
+			Manifest:   env,
 		})
 	}
 	return out, nil
@@ -74,11 +85,11 @@ func loadWith(dir string, register registerFn, mgr *Manager) (int, error) {
 	}
 	count := 0
 	for _, f := range found {
-		mod, err := BuildModule(f.Manifest, getConn)
-		if err != nil {
-			return count, fmt.Errorf("build %q: %w", f.Key, err)
+		if err := wickplugin.VerifyManifest(f.Manifest, f.BinaryPath); err != nil {
+			log.Warn().Str("connector", f.Key).Err(err).Msg("connector plugin: skipped (verification failed)")
+			continue
 		}
-		register(mod)
+		register(BuildModule(f.Manifest.Module, getConn))
 		count++
 	}
 	return count, nil

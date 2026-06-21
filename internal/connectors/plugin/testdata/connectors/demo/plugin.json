@@ -1,1 +1,1 @@
-{"Meta":{"Key":"demo","Name":"Demo"},"Operations":[{"Title":"Main","Ops":[{"Key":"say","Name":"Say","Description":"echo"}]}]}
+{"schema_version":1,"version":"0.0.0-test","proto_version":1,"entry":"demo","os_arch":["linux/amd64"],"sha256":"00","signature":"","module":{"Meta":{"Key":"demo","Name":"Demo"},"Operations":[{"Title":"Main","Ops":[{"Key":"say","Name":"Say","Description":"echo"}]}]}}
