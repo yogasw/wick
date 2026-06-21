@@ -35,6 +35,7 @@ type Manager struct {
 	now          func() time.Time
 	stop         chan struct{}
 	cond         *sync.Cond
+	breakers     map[string]*breaker
 }
 
 // NewManager builds a Manager and starts the idle sweeper.
@@ -47,6 +48,7 @@ func NewManager(binaries map[string]string, idleTimeout time.Duration) *Manager 
 		queueTimeout: envQueueTimeout(),
 		now:          time.Now,
 		stop:         make(chan struct{}),
+		breakers:     map[string]*breaker{},
 	}
 	m.cond = sync.NewCond(&m.mu)
 	m.spawnFn = m.spawn
@@ -193,6 +195,9 @@ func (m *Manager) Client(key string) (*Lease, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.ensureInit()
+	if err := m.breakerOpenLocked(key); err != nil {
+		return nil, err
+	}
 	e := m.entries[key]
 	if e != nil && e.client != nil && e.client.Exited() {
 		m.kill(key)
@@ -205,8 +210,10 @@ func (m *Manager) Client(key string) (*Lease, error) {
 		}
 		spawned, err := m.spawnFn(key)
 		if err != nil {
+			m.recordFailureLocked(key)
 			return nil, err
 		}
+		m.resetBreakerLocked(key)
 		m.entries[key] = spawned
 		e = spawned
 	}
