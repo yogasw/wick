@@ -177,6 +177,29 @@ func (c *Ctx) ReportProgress(progress, total int, message string) {
 	c.progress.Report(progress, total, message)
 }
 
+// ── Full-map accessors ───────────────────────────────────────────────
+
+// Configs returns a copy of the resolved per-instance credential map. The
+// connector plugin adapter uses it to ship the full creds set (including
+// host-injected OAuth keys like access_token) over gRPC. Returns a copy so
+// callers cannot mutate the Ctx's internal state.
+func (c *Ctx) Configs() map[string]string {
+	out := make(map[string]string, len(c.configs))
+	for k, v := range c.configs {
+		out[k] = v
+	}
+	return out
+}
+
+// Inputs returns a copy of the per-call input map (same rationale as Configs).
+func (c *Ctx) Inputs() map[string]string {
+	out := make(map[string]string, len(c.input))
+	for k, v := range c.input {
+		out[k] = v
+	}
+	return out
+}
+
 // ── Credential reads ─────────────────────────────────────────────────
 
 // Cfg returns the value of a credential field declared by this
