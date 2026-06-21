@@ -137,10 +137,16 @@ func (m *Manager) IsPlugin(key string) bool {
 }
 
 // SetBinary registers or updates the on-disk binary path for a connector key.
+// If a subprocess is already running for this key it is killed so the next
+// Client call spawns the new binary.
 func (m *Manager) SetBinary(key, path string) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.binaries[key] = path
-	m.mu.Unlock()
+	if e := m.entries[key]; e != nil {
+		m.kill(key)
+		delete(m.entries, key)
+	}
 }
 
 // RemoveBinary drops a connector key and kills its running subprocess (if any).
