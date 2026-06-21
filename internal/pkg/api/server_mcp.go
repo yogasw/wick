@@ -154,6 +154,7 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 	} else if mgr != nil {
 		log.Info().Int("plugins", n).Msg("connector plugins: loaded")
 		pluginMgr = mgr
+		go pluginMgr.WarmUp()
 	}
 	stdioPluginMgr = pluginMgr
 

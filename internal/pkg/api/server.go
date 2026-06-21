@@ -204,6 +204,7 @@ func NewServer() *Server {
 	} else if mgr != nil {
 		log.Info().Int("plugins", n).Msg("connector plugins: loaded")
 		pluginMgr = mgr
+		go pluginMgr.WarmUp()
 	}
 
 	// Seed connector_oauth:slack rows for the generic connector OAuth framework.
