@@ -45,6 +45,7 @@ package connector
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/tool"
@@ -132,6 +133,28 @@ type Operation struct {
 	// Zero-value Docs = current behaviour; populate per op when worth
 	// it. See pkg/wickdocs + internal/planning/archive/workflow/24-describe-contract.md.
 	wickdocs.Docs
+}
+
+// MarshalJSON serializes an Operation without the Execute func, which is not
+// representable as JSON. Used when the plugin-side server sends its manifest
+// to the host over gRPC.
+func (o Operation) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		Key         string          `json:"key"`
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Input       []entity.Config `json:"input"`
+		Destructive bool            `json:"destructive,omitempty"`
+		wickdocs.Docs
+	}
+	return json.Marshal(wire{
+		Key:         o.Key,
+		Name:        o.Name,
+		Description: o.Description,
+		Input:       o.Input,
+		Destructive: o.Destructive,
+		Docs:        o.Docs,
+	})
 }
 
 // Op is a small constructor that reflects a typed input struct into
@@ -304,6 +327,45 @@ type AccessDefaults struct {
 	AllowOthersConnectSSO bool
 	MultiAccount          bool
 	AllowOthersConfigure  bool
+}
+
+// MarshalJSON serializes a Module without the func fields (HealthCheck,
+// OAuth.GetUserIdentity) so the plugin server can send the manifest over gRPC.
+func (m Module) MarshalJSON() ([]byte, error) {
+	type oauthWire struct {
+		AuthorizeURL string            `json:"authorize_url,omitempty"`
+		TokenURL     string            `json:"token_url,omitempty"`
+		ExtraParams  map[string]string `json:"extra_params,omitempty"`
+		Scopes       string            `json:"scopes,omitempty"`
+		DisplayName  string            `json:"display_name,omitempty"`
+		Icon         string            `json:"icon,omitempty"`
+	}
+	type wire struct {
+		Meta               Meta            `json:"meta"`
+		Configs            []entity.Config `json:"configs"`
+		Operations         []Category      `json:"operations"`
+		OAuth              *oauthWire      `json:"oauth,omitempty"`
+		AllowSessionConfig bool            `json:"allow_session_config,omitempty"`
+		DefaultAccess      AccessDefaults  `json:"default_access,omitempty"`
+	}
+	w := wire{
+		Meta:               m.Meta,
+		Configs:            m.Configs,
+		Operations:         m.Operations,
+		AllowSessionConfig: m.AllowSessionConfig,
+		DefaultAccess:      m.DefaultAccess,
+	}
+	if m.OAuth != nil {
+		w.OAuth = &oauthWire{
+			AuthorizeURL: m.OAuth.AuthorizeURL,
+			TokenURL:     m.OAuth.TokenURL,
+			ExtraParams:  m.OAuth.ExtraParams,
+			Scopes:       m.OAuth.Scopes,
+			DisplayName:  m.OAuth.DisplayName,
+			Icon:         m.OAuth.Icon,
+		}
+	}
+	return json.Marshal(w)
 }
 
 // AllOps flattens the module's categorized operations into a single slice

@@ -102,6 +102,14 @@ func NewCtx(ctx context.Context, instanceID string, configs, input map[string]st
 	}
 }
 
+// NewPluginCtx builds a Ctx inside a connector plugin subprocess from the
+// plaintext creds + input the host sent over gRPC. There is no masker or
+// progress reporter here — masking stays host-side; progress is bridged by
+// the streaming server when used.
+func NewPluginCtx(ctx context.Context, configs, input map[string]string) *Ctx {
+	return &Ctx{ctx: ctx, HTTP: http.DefaultClient, configs: configs, input: input}
+}
+
 // Context returns the context.Context bound to this call. The MCP
 // transport derives this ctx from the inbound HTTP request and may
 // further wrap it with a deadline (e.g. the SSE path's per-call
