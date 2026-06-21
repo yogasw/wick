@@ -24,25 +24,29 @@ type entry struct {
 
 // Manager owns connector plugin subprocesses keyed by connector Meta.Key.
 type Manager struct {
-	mu          sync.Mutex
-	entries     map[string]*entry
-	binaries    map[string]string
-	idleTimeout time.Duration
-	spawnFn     func(key string) (*entry, error)
-	killFn      func(key string)
-	now         func() time.Time
-	stop        chan struct{}
-	cond        *sync.Cond
+	mu           sync.Mutex
+	entries      map[string]*entry
+	binaries     map[string]string
+	idleTimeout  time.Duration
+	maxProcs     int
+	queueTimeout time.Duration
+	spawnFn      func(key string) (*entry, error)
+	killFn       func(key string)
+	now          func() time.Time
+	stop         chan struct{}
+	cond         *sync.Cond
 }
 
 // NewManager builds a Manager and starts the idle sweeper.
 func NewManager(binaries map[string]string, idleTimeout time.Duration) *Manager {
 	m := &Manager{
-		entries:     map[string]*entry{},
-		binaries:    binaries,
-		idleTimeout: idleTimeout,
-		now:         time.Now,
-		stop:        make(chan struct{}),
+		entries:      map[string]*entry{},
+		binaries:     binaries,
+		idleTimeout:  idleTimeout,
+		maxProcs:     envMaxProcs(),
+		queueTimeout: envQueueTimeout(),
+		now:          time.Now,
+		stop:         make(chan struct{}),
 	}
 	m.cond = sync.NewCond(&m.mu)
 	m.spawnFn = m.spawn
@@ -196,6 +200,9 @@ func (m *Manager) Client(key string) (*Lease, error) {
 		e = nil
 	}
 	if e == nil {
+		if err := m.ensureSlotLocked(); err != nil {
+			return nil, err
+		}
 		spawned, err := m.spawnFn(key)
 		if err != nil {
 			return nil, err
