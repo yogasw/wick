@@ -13,8 +13,10 @@ import (
 // runs INSIDE the plugin subprocess; the host never sees it.
 type grpcServer struct {
 	pb.UnimplementedConnectorServer
-	mod connector.Module
-	ops map[string]connector.Operation
+	mod       connector.Module
+	ops       map[string]connector.Operation
+	schema    []byte
+	schemaErr error
 }
 
 // NewServer builds the plugin-side service for one connector module.
@@ -23,21 +25,24 @@ func NewServer(mod connector.Module) pb.ConnectorServer {
 	for _, op := range mod.AllOps() {
 		ops[op.Key] = op
 	}
-	return &grpcServer{mod: mod, ops: ops}
+	b, err := json.Marshal(mod)
+	return &grpcServer{mod: mod, ops: ops, schema: b, schemaErr: err}
 }
 
 func (s *grpcServer) Schema(_ context.Context, _ *pb.SchemaRequest) (*pb.SchemaResponse, error) {
-	b, err := json.Marshal(s.mod)
-	if err != nil {
-		return nil, fmt.Errorf("marshal manifest: %w", err)
+	if s.schemaErr != nil {
+		return nil, fmt.Errorf("marshal manifest: %w", s.schemaErr)
 	}
-	return &pb.SchemaResponse{ManifestJson: b}, nil
+	return &pb.SchemaResponse{ManifestJson: s.schema}, nil
 }
 
 func (s *grpcServer) Execute(ctx context.Context, req *pb.ExecuteRequest) (*pb.ExecuteResponse, error) {
 	op, ok := s.ops[req.Operation]
 	if !ok {
 		return &pb.ExecuteResponse{Error: &pb.Error{Code: "unknown_operation", Message: req.Operation}}, nil
+	}
+	if op.Execute == nil {
+		return &pb.ExecuteResponse{Error: &pb.Error{Code: "no_handler", Message: req.Operation}}, nil
 	}
 	var input map[string]string
 	if len(req.ArgsJson) > 0 {

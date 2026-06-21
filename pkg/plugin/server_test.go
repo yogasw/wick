@@ -51,7 +51,9 @@ func TestServerExecuteRunsOp(t *testing.T) {
 		t.Fatalf("unexpected op error: %v", resp.Error)
 	}
 	var out map[string]string
-	json.Unmarshal(resp.ResultJson, &out)
+	if err := json.Unmarshal(resp.ResultJson, &out); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
 	if out["said"] != "hi" {
 		t.Fatalf("got %v", out)
 	}
