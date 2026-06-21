@@ -38,7 +38,7 @@ func manifestJSON(t *testing.T) []byte {
 
 func TestAdapterBuildsModuleThatDispatchesOverGRPC(t *testing.T) {
 	fc := &fakeConn{}
-	getConn := func(key string) (wickplugin.GRPCConn, error) { return fc, nil }
+	getConn := func(key string) (*Lease, error) { return &Lease{Conn: fc}, nil }
 
 	var mod connector.Module
 	if err := json.Unmarshal(manifestJSON(t), &mod); err != nil {

@@ -77,9 +77,9 @@ func loadWith(dir string, register registerFn, mgr *Manager) (int, error) {
 	}
 	var getConn ConnGetter
 	if mgr != nil {
-		getConn = func(key string) (wickplugin.GRPCConn, error) { return mgr.Client(key) }
+		getConn = func(key string) (*Lease, error) { return mgr.Client(key) }
 	} else {
-		getConn = func(string) (wickplugin.GRPCConn, error) {
+		getConn = func(string) (*Lease, error) {
 			return nil, fmt.Errorf("no manager configured")
 		}
 	}

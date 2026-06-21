@@ -19,6 +19,7 @@ type entry struct {
 	client   *goplugin.Client
 	conn     wickplugin.GRPCConn
 	lastUsed time.Time
+	inflight int
 }
 
 // Manager owns connector plugin subprocesses keyed by connector Meta.Key.
@@ -31,6 +32,7 @@ type Manager struct {
 	killFn      func(key string)
 	now         func() time.Time
 	stop        chan struct{}
+	cond        *sync.Cond
 }
 
 // NewManager builds a Manager and starts the idle sweeper.
@@ -42,6 +44,7 @@ func NewManager(binaries map[string]string, idleTimeout time.Duration) *Manager 
 		now:         time.Now,
 		stop:        make(chan struct{}),
 	}
+	m.cond = sync.NewCond(&m.mu)
 	m.spawnFn = m.spawn
 	m.killFn = m.kill
 	go m.sweepLoop()
@@ -53,7 +56,7 @@ func (m *Manager) sweep() {
 	defer m.mu.Unlock()
 	cutoff := m.now().Add(-m.idleTimeout)
 	for key, e := range m.entries {
-		if e.lastUsed.Before(cutoff) {
+		if e.inflight == 0 && e.lastUsed.Before(cutoff) {
 			// kill before delete: kill reads the entry from m.entries.
 			m.killFn(key)
 			delete(m.entries, key)
@@ -163,18 +166,29 @@ func (m *Manager) RemoveBinary(key string) {
 // ResolveIdentity spawns-if-needed and asks the plugin to resolve an OAuth
 // token's owner.
 func (m *Manager) ResolveIdentity(ctx context.Context, key, token string) (string, string, error) {
-	conn, err := m.Client(key)
+	lease, err := m.Client(key)
 	if err != nil {
 		return "", "", err
 	}
-	return conn.ResolveIdentity(ctx, token)
+	defer lease.Release()
+	return lease.Conn.ResolveIdentity(ctx, token)
 }
 
-// Client returns a live gRPC connection for key, spawning the subprocess on
-// first use (lazy) and re-spawning if a previous process died.
-func (m *Manager) Client(key string) (wickplugin.GRPCConn, error) {
+// ensureInit lazily wires fields that struct-literal test Managers omit.
+// Caller holds m.mu.
+func (m *Manager) ensureInit() {
+	if m.cond == nil {
+		m.cond = sync.NewCond(&m.mu)
+	}
+}
+
+// Client returns a lease on a live gRPC connection for key, spawning the
+// subprocess on first use (lazy) and re-spawning if a previous process died.
+// Release the lease when the call completes.
+func (m *Manager) Client(key string) (*Lease, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.ensureInit()
 	e := m.entries[key]
 	if e != nil && e.client != nil && e.client.Exited() {
 		m.kill(key)
@@ -190,5 +204,6 @@ func (m *Manager) Client(key string) (wickplugin.GRPCConn, error) {
 		e = spawned
 	}
 	e.lastUsed = m.now()
-	return e.conn, nil
+	e.inflight++
+	return m.leaseLocked(e), nil
 }

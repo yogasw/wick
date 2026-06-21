@@ -8,9 +8,9 @@ import (
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
-// ConnGetter returns a live plugin connection for a connector key. The
-// manager's Client method satisfies it; tests pass a fake.
-type ConnGetter func(key string) (wickplugin.GRPCConn, error)
+// ConnGetter returns a lease on a live plugin connection for a connector key.
+// The manager's Client method satisfies it; tests pass a fake.
+type ConnGetter func(key string) (*Lease, error)
 
 // BuildModule wires a parsed connector.Module's operations to gRPC closures
 // that dispatch to the plugin subprocess. The host engine (service.Execute)
@@ -30,11 +30,12 @@ func BuildModule(mod connector.Module, getConn ConnGetter) connector.Module {
 
 func newExecuteClosure(connKey, opKey string, getConn ConnGetter) connector.ExecuteFunc {
 	return func(c *connector.Ctx) (any, error) {
-		conn, err := getConn(connKey)
+		lease, err := getConn(connKey)
 		if err != nil {
 			return nil, fmt.Errorf("plugin %q unavailable: %w", connKey, err)
 		}
-		raw, err := conn.Execute(c.Context(), wickplugin.ExecCall{
+		defer lease.Release()
+		raw, err := lease.Conn.Execute(c.Context(), wickplugin.ExecCall{
 			Operation: opKey,
 			Input:     c.Inputs(),
 			Creds:     c.Configs(),
