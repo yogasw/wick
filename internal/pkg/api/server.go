@@ -197,8 +197,9 @@ func NewServer() *Server {
 
 	connectors.RegisterProfile(configsSvc.Profile())
 
+	pluginStore := connplugin.NewStateStore(db)
 	var pluginMgr *connplugin.Manager
-	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute, nil); err != nil {
+	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute, pluginStore.Enabled); err != nil {
 		log.Warn().Err(err).Msg("connector plugins: load failed")
 	} else if mgr != nil {
 		log.Info().Int("plugins", n).Msg("connector plugins: loaded")
@@ -927,7 +928,7 @@ func NewServer() *Server {
 	// both in scope, started in Run with the server lifetime ctx.
 	var pluginReloader *connplugin.Reloader
 	if pluginMgr != nil {
-		pluginReloader = connplugin.NewReloader(connplugin.DefaultDir(), connectorsSvc, pluginMgr, 0, nil)
+		pluginReloader = connplugin.NewReloader(connplugin.DefaultDir(), connectorsSvc, pluginMgr, 0, pluginStore)
 	}
 	// Wire the connectors service into the agents tool so the session
 	// Config tab can read connector field schemas + AllowSessionConfig.

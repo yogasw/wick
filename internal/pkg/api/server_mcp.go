@@ -147,8 +147,9 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 
 	connectors.RegisterProfile(configsSvc.Profile())
 
+	pluginStore := connplugin.NewStateStore(db)
 	var pluginMgr *connplugin.Manager
-	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute, nil); err != nil {
+	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute, pluginStore.Enabled); err != nil {
 		log.Warn().Err(err).Msg("connector plugins: load failed")
 	} else if mgr != nil {
 		log.Info().Int("plugins", n).Msg("connector plugins: loaded")
