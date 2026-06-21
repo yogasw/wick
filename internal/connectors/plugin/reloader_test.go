@@ -81,3 +81,63 @@ func TestReloaderReconcile(t *testing.T) {
 		t.Fatal("alpha binary should be dropped")
 	}
 }
+
+type fakeStore struct{ enabled map[string]bool }
+
+func (f *fakeStore) Enabled(key string) bool {
+	v, ok := f.enabled[key]
+	return !ok || v // default-on
+}
+
+func TestReloaderSkipsDisabled(t *testing.T) {
+	t.Setenv("WICK_PLUGIN_REQUIRE_SIGNATURE", "0")
+	t.Setenv("WICK_PLUGIN_PUBKEY", "")
+	dir := t.TempDir()
+	writeDemoPlugin(t, dir, "alpha", "v1")
+
+	svc := &fakeUpserter{upserted: map[string]bool{}, removed: map[string]bool{}}
+	mgr := &Manager{entries: map[string]*entry{}, binaries: map[string]string{}, now: func() time.Time { return time.Unix(0, 0) }, stop: make(chan struct{})}
+	mgr.killFn = mgr.kill
+	store := &fakeStore{enabled: map[string]bool{"alpha": false}}
+	r := &Reloader{dir: dir, svc: svc, mgr: mgr, seen: map[string]string{}, store: store}
+
+	r.reconcile(context.Background())
+	if svc.upserted["alpha"] {
+		t.Fatal("disabled alpha must not be registered")
+	}
+	if mgr.IsPlugin("alpha") {
+		t.Fatal("disabled alpha must not be spawnable")
+	}
+
+	store.enabled["alpha"] = true
+	r.reconcile(context.Background())
+	if !svc.upserted["alpha"] {
+		t.Fatal("re-enabled alpha should be registered")
+	}
+}
+
+func TestReloaderRemovesNowDisabled(t *testing.T) {
+	t.Setenv("WICK_PLUGIN_REQUIRE_SIGNATURE", "0")
+	t.Setenv("WICK_PLUGIN_PUBKEY", "")
+	dir := t.TempDir()
+	writeDemoPlugin(t, dir, "alpha", "v1")
+
+	svc := &fakeUpserter{upserted: map[string]bool{}, removed: map[string]bool{}}
+	mgr := &Manager{entries: map[string]*entry{}, binaries: map[string]string{}, now: func() time.Time { return time.Unix(0, 0) }, stop: make(chan struct{})}
+	mgr.killFn = mgr.kill
+	store := &fakeStore{enabled: map[string]bool{}}
+	r := &Reloader{dir: dir, svc: svc, mgr: mgr, seen: map[string]string{}, store: store}
+
+	r.reconcile(context.Background())
+	if !svc.upserted["alpha"] {
+		t.Fatal("alpha should be registered first")
+	}
+	store.enabled["alpha"] = false
+	r.reconcile(context.Background())
+	if !svc.removed["alpha"] {
+		t.Fatal("disabled alpha should be removed")
+	}
+	if mgr.IsPlugin("alpha") {
+		t.Fatal("disabled alpha binary should be dropped")
+	}
+}

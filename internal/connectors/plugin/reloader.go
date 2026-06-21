@@ -18,6 +18,12 @@ type moduleSink interface {
 	RemoveModule(key string)
 }
 
+// enabledChecker is the subset of *StateStore the reloader needs. nil means
+// every plugin is treated as enabled.
+type enabledChecker interface {
+	Enabled(key string) bool
+}
+
 // Reloader watches the plugins dir and reconciles installed plugins into the
 // running service without a restart. It polls on a fixed interval (no fsnotify
 // dependency).
@@ -28,10 +34,11 @@ type Reloader struct {
 	interval time.Duration
 	seen     map[string]string // key -> sha256
 	stop     chan struct{}
+	store    enabledChecker
 }
 
 // NewReloader builds a Reloader. interval <= 0 defaults to 5s.
-func NewReloader(dir string, svc moduleSink, mgr *Manager, interval time.Duration) *Reloader {
+func NewReloader(dir string, svc moduleSink, mgr *Manager, interval time.Duration, store enabledChecker) *Reloader {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
@@ -42,6 +49,7 @@ func NewReloader(dir string, svc moduleSink, mgr *Manager, interval time.Duratio
 		interval: interval,
 		seen:     map[string]string{},
 		stop:     make(chan struct{}),
+		store:    store,
 	}
 }
 
@@ -75,6 +83,15 @@ func (r *Reloader) reconcile(ctx context.Context) {
 	}
 	present := map[string]bool{}
 	for _, f := range found {
+		if r.store != nil && !r.store.Enabled(f.Key) {
+			if _, ok := r.seen[f.Key]; ok {
+				r.svc.RemoveModule(f.Key)
+				r.mgr.RemoveBinary(f.Key)
+				delete(r.seen, f.Key)
+				log.Info().Str("connector", f.Key).Msg("connector plugin reload: disabled, removed")
+			}
+			continue
+		}
 		present[f.Key] = true
 		if r.seen[f.Key] == f.Manifest.SHA256 {
 			continue

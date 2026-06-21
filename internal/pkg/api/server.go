@@ -927,7 +927,7 @@ func NewServer() *Server {
 	// both in scope, started in Run with the server lifetime ctx.
 	var pluginReloader *connplugin.Reloader
 	if pluginMgr != nil {
-		pluginReloader = connplugin.NewReloader(connplugin.DefaultDir(), connectorsSvc, pluginMgr, 0)
+		pluginReloader = connplugin.NewReloader(connplugin.DefaultDir(), connectorsSvc, pluginMgr, 0, nil)
 	}
 	// Wire the connectors service into the agents tool so the session
 	// Config tab can read connector field schemas + AllowSessionConfig.
