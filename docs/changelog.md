@@ -6,16 +6,25 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Changed
-
-*   **Connectors moved into the Agents UI**: The connectors manager is now hosted at `/tools/agents/connectors` inside the Agents sidebar shell. Every browser-facing `/manager/connectors*` URL 302-redirects to that page (deep links preserved via `?deep=`). The `/manager/api/connectors*` JSON routes and all write/mutation routes remain at `/manager` and are unaffected.
-*   **Agents sidebar — Connectors link**: A **Connectors** nav item is now in the Agents sidebar, visible to all users.
-*   **`/launcher` renamed to `/mini-tools`**: The tools-grid launcher page moved from `/launcher` to `/mini-tools`. A **Mini Tools** link is visible in the bottom of the Agents sidebar for all users (previously only admins saw a Settings link there).
-*   **Home tile — Connectors**: The "Connectors" tile on the Mini Tools home grid now links to `/tools/agents/connectors` instead of `/manager/connectors`.
-*   **Connectors SPA breadcrumb**: The connectors index page now shows no breadcrumb (the heading already says "Connectors"). Sub-pages root at "Connectors". Audit Log shows only "Audit Log" with no root crumb.
-*   **Chat block toolbar — mobile + PNG fixes**: The per-block hover toolbar is now always visible at 70% opacity on touch/no-hover devices (phones, tablets) rather than hidden until hover. PNG export now uses the SVG's intrinsic viewBox/width-height instead of the on-screen size, fixing the "looks like my phone screen" export bug; if rasterisation still fails (tainted canvas), the chart is downloaded as `.svg` instead of silently producing nothing.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.22.2](https://github.com/yogasw/wick/compare/v0.22.1...v0.22.2) — Connectors UI
+
+_Released on 2026-06-22_
+
+### Changed
+
+*   **Connectors moved into the Agents UI**: The connectors manager is now hosted at `/tools/agents/connectors` inside the Agents sidebar shell. All browser-facing `/manager/connectors*` URLs now 302-redirect to this new location, preserving deep links via `?deep=`. The `/manager/api/connectors*` JSON routes and all write/mutation routes remain at `/manager` and are unaffected.
+*   **Agents sidebar — Connectors link**: A dedicated **Connectors** navigation item has been added to the Agents sidebar, visible to all users.
+*   **`/launcher` renamed to `/mini-tools`**: The tools-grid launcher page has been moved from `/launcher` to `/mini-tools`. A **Mini Tools** link is now visible at the bottom of the Agents sidebar for all users (previously, only admins saw a Settings link there).
+*   **Home tile — Connectors**: The "Connectors" tile on the Mini Tools home grid now links directly to `/tools/agents/connectors` instead of `/manager/connectors`.
+*   **Connectors SPA breadcrumb**: The connectors index page now displays no breadcrumb (as the heading already states "Connectors"). Sub-pages root at "Connectors". The Audit Log page shows only "Audit Log" with no root breadcrumb.
+*   **Chat block toolbar — mobile + PNG fixes**: The per-block hover toolbar is now consistently visible at 70% opacity on touch/no-hover devices (phones, tablets), resolving its previous hidden state until hover. PNG export functionality now utilizes the SVG's intrinsic viewBox/width-height rather than the on-screen size, addressing the "looks like my phone screen" export bug. If rasterization still fails (e.g., due to a tainted canvas), the chart is now downloaded as an `.svg` file instead of silently producing no output.
+
+---
+
 
 ## [v0.22.1](https://github.com/yogasw/wick/compare/v0.22.0...v0.22.1) — Connectors
 
