@@ -37,7 +37,7 @@ Approve newly-registered users, demote/promote roles, and attach access tags. Th
 
 ## Mini Tools (Tools, Connectors, Jobs)
 
-The Tools, Connectors, and Jobs admin pages are grouped under a **Mini Tools** dropdown in the admin navigation bar. A **Launcher** link in the same dropdown opens the tools grid at `/launcher`.
+The Tools, Connectors, and Jobs admin pages are grouped under a **Mini Tools** dropdown in the admin navigation bar. A **Mini Tools** link is also available to all users in the Agents sidebar at the bottom, and opens the tools grid at `/mini-tools`.
 
 ### Tools
 

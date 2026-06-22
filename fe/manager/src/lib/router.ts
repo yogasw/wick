@@ -12,15 +12,25 @@ export function routeFromPath(pathname: string, base: string): string {
   return "/";
 }
 
-const _route = writable<string>(routeFromPath(window.location.pathname, getBase()));
+// When the SPA is hosted outside its own base (the Agents shell mounts it
+// at /tools/agents/connectors while base stays /manager), window.location
+// won't match base, so routeFromPath would always yield "/". The host
+// forwards the intended client route via data-deep — honour it for the
+// initial route only. After boot, push() drives navigation normally.
+function initialRoute(): string {
+  const deep = document.getElementById("app")?.dataset.deep ?? "";
+  if (deep) return deep.startsWith("/") ? deep : "/" + deep;
+  return routeFromPath(window.location.pathname, getBase());
+}
+
+const _route = writable<string>(initialRoute());
 
 window.addEventListener("popstate", () => {
   _route.set(routeFromPath(window.location.pathname, getBase()));
 });
 
-export const route = readable<string>(
-  routeFromPath(window.location.pathname, getBase()),
-  (set) => _route.subscribe(set),
+export const route = readable<string>(initialRoute(), (set) =>
+  _route.subscribe(set),
 );
 
 export function push(path: string): void {

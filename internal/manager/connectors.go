@@ -29,7 +29,7 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 
 	// Connectors index page → SPA shell (client route "/"). The JSON twin
 	// below stays; the SPA reads it.
-	mux.Handle("GET /manager/connectors", auth(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/connectors", auth(http.HandlerFunc(h.serveConnectorsShell)))
 	mux.Handle("GET /manager/api/connectors", auth(h.apiConnectors))
 
 	// JSON read/write surface for the manager SPA (Phase 2). Mirrors the
@@ -72,9 +72,9 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	// the rest of the path. Every POST/mutation route below stays live —
 	// they are the write surface and remain callable independent of which
 	// UI drives them.
-	mux.Handle("GET /manager/connectors/{key}", auth(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/connectors/{key}", auth(http.HandlerFunc(h.serveConnectorsShell)))
 	mux.Handle("POST /manager/connectors/{key}/new", auth(h.createConnectorRow))
-	mux.Handle("GET /manager/connectors/{key}/{id}", auth(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/connectors/{key}/{id}", auth(http.HandlerFunc(h.serveConnectorsShell)))
 	mux.Handle("POST /manager/connectors/{key}/{id}/label", auth(h.setConnectorLabel))
 	mux.Handle("POST /manager/connectors/{key}/{id}/configs/{configKey}", auth(h.setConnectorConfig))
 	mux.Handle("POST /manager/connectors/{key}/{id}/disable", auth(h.toggleConnectorDisabled))
@@ -85,7 +85,7 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/connectors/{key}/{id}/session-config", auth(h.setConnectorSessionConfig))
 	// Account-ops controls live in the SPA row detail; the page route
 	// renders the shell. The account mutation routes below stay live.
-	mux.Handle("GET /manager/connectors/{key}/{id}/accounts/{accountID}", auth(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/connectors/{key}/{id}/accounts/{accountID}", auth(http.HandlerFunc(h.serveConnectorsShell)))
 	mux.Handle("POST /manager/connectors/{key}/{id}/accounts/{accountID}/disconnect", auth(h.disconnectAccount))
 	mux.Handle("POST /manager/connectors/{key}/{id}/accounts/{accountID}/ops", auth(h.setAccountDisabledOps))
 	mux.Handle("POST /manager/connectors/{key}/{id}/accounts/{accountID}/ops/{opKey}", auth(h.toggleAccountOp))
@@ -93,9 +93,9 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/connectors/{key}/{id}/operations/{opKey}", auth(h.toggleConnectorOperation))
 	mux.Handle("POST /manager/connectors/{key}/{id}/operations/{opKey}/admin-only", auth(h.toggleOperationAdminOnly))
 	mux.Handle("POST /manager/connectors/{key}/{id}/health-check", auth(h.runConnectorHealthCheck))
-	mux.Handle("GET /manager/connectors/{key}/{id}/test", auth(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/connectors/{key}/{id}/test", auth(http.HandlerFunc(h.serveConnectorsShell)))
 	mux.Handle("POST /manager/connectors/{key}/{id}/test", auth(h.testConnectorOperation))
-	mux.Handle("GET /manager/connectors/{key}/{id}/history", auth(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/connectors/{key}/{id}/history", auth(http.HandlerFunc(h.serveConnectorsShell)))
 }
 
 // ── Connector index/list/detail pages ────────────────────────────────

@@ -32,3 +32,12 @@ const spaBase = "/manager"
 
 // spaAssetURL returns the hashed entry .js bundle URL for the manager app.
 func spaAssetURL() string { return spaLoader.AssetURL("manager", spaAssetBase+"assets") }
+
+// SPAMount exposes the manager SPA's entry bundle URL and client-side
+// route base so another host (e.g. the Agents shell) can render the same
+// SPA inside its own chrome without duplicating the embed/asset wiring.
+// Assets keep loading from the manager asset handler at spaAssetBase and
+// the client router keeps its /manager base, so every in-SPA API call and
+// internal navigation resolves against the live /manager/* routes. The
+// host is just a different outer shell around the same #app div.
+func SPAMount() (assetURL, base string) { return spaAssetURL(), spaBase }
