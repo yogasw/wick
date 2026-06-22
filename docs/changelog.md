@@ -6,7 +6,14 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Changed
+
+*   **Connectors moved into the Agents UI**: The connectors manager is now hosted at `/tools/agents/connectors` inside the Agents sidebar shell. Every browser-facing `/manager/connectors*` URL 302-redirects to that page (deep links preserved via `?deep=`). The `/manager/api/connectors*` JSON routes and all write/mutation routes remain at `/manager` and are unaffected.
+*   **Agents sidebar — Connectors link**: A **Connectors** nav item is now in the Agents sidebar, visible to all users.
+*   **`/launcher` renamed to `/mini-tools`**: The tools-grid launcher page moved from `/launcher` to `/mini-tools`. A **Mini Tools** link is visible in the bottom of the Agents sidebar for all users (previously only admins saw a Settings link there).
+*   **Home tile — Connectors**: The "Connectors" tile on the Mini Tools home grid now links to `/tools/agents/connectors` instead of `/manager/connectors`.
+*   **Connectors SPA breadcrumb**: The connectors index page now shows no breadcrumb (the heading already says "Connectors"). Sub-pages root at "Connectors". Audit Log shows only "Audit Log" with no root crumb.
+*   **Chat block toolbar — mobile + PNG fixes**: The per-block hover toolbar is now always visible at 70% opacity on touch/no-hover devices (phones, tablets) rather than hidden until hover. PNG export now uses the SVG's intrinsic viewBox/width-height instead of the on-screen size, fixing the "looks like my phone screen" export bug; if rasterisation still fails (tainted canvas), the chart is downloaded as `.svg` instead of silently producing nothing.
 
 ---
 
@@ -41,8 +48,8 @@ _Released on 2026-06-20_
 ### Changed
 
 *   **Connector visibility — live tag resolution**: The connector list now resolves each row's filter-tag IDs live from the database rather than from the session-cookie snapshot. A row created or duplicated in the current session is visible immediately without logout/login.
-*   **Home — default landing page**: Navigating to `/` now redirects to the agent UI (`/tools/agents/`). The tools/connectors grid previously at `/` is now at `/launcher` and remains fully reachable.
-*   **Admin nav — Mini Tools dropdown**: The standalone Tools, Connectors, and Jobs tabs in the admin navigation bar are grouped into a single **Mini Tools** dropdown. A Launcher shortcut is included in the same dropdown. See [Admin Panel](./guide/admin-panel#mini-tools-tools-connectors-jobs).
+*   **Home — default landing page**: Navigating to `/` now redirects to the agent UI (`/tools/agents/`). The tools/connectors grid previously at `/` is now at `/mini-tools` (was `/launcher` in v0.22.0; renamed in the subsequent release) and remains fully reachable.
+*   **Admin nav — Mini Tools dropdown**: The standalone Tools, Connectors, and Jobs tabs in the admin navigation bar are grouped into a single **Mini Tools** dropdown. See [Admin Panel](./guide/admin-panel#mini-tools-tools-connectors-jobs).
 
 ---
 
