@@ -49,12 +49,12 @@ func (h *Handler) customConnectorRoutes(mux *http.ServeMux, authMidd *login.Midd
 	// Definition builder flows. The builder pages render the SPA shell; the
 	// SPA reads the JSON twins (apiCustomMeta / apiCustomDraft). Every
 	// POST/mutation route stays live.
-	mux.Handle("GET /manager/connectors/custom/new/paste", authOnly(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/connectors/custom/new/paste", authOnly(http.HandlerFunc(h.serveConnectorsShell)))
 	mux.Handle("POST /manager/connectors/custom/parse", authOnly(h.customParse))
-	mux.Handle("GET /manager/connectors/custom/new/manual", authOnly(http.HandlerFunc(h.serveSPAShell)))
-	mux.Handle("GET /manager/connectors/custom/new/review", authOnly(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/connectors/custom/new/manual", authOnly(http.HandlerFunc(h.serveConnectorsShell)))
+	mux.Handle("GET /manager/connectors/custom/new/review", authOnly(http.HandlerFunc(h.serveConnectorsShell)))
 	mux.Handle("POST /manager/connectors/custom/save", authOnly(h.customSaveNew))
-	mux.Handle("GET /manager/connectors/custom/{defID}/edit", authOnly(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/connectors/custom/{defID}/edit", authOnly(http.HandlerFunc(h.serveConnectorsShell)))
 	mux.Handle("POST /manager/connectors/custom/{defID}/save", authOnly(h.customSaveExisting))
 	mux.Handle("POST /manager/connectors/custom/{defID}/reload", authOnly(h.customReload))
 	mux.Handle("POST /manager/connectors/custom/{defID}/disable", authOnly(h.customSetDisabled(true)))
@@ -67,9 +67,9 @@ func (h *Handler) customConnectorRoutes(mux *http.ServeMux, authMidd *login.Midd
 	// Deleting the connector definition cascades to the server row. The
 	// register/edit form GET pages render the SPA shell (which reads the
 	// JSON edit twin); test/save/oauth below already speak JSON and are reused.
-	mux.Handle("GET /manager/connectors/custom/mcp-servers", authOnly(http.HandlerFunc(h.serveSPAShell)))
-	mux.Handle("GET /manager/connectors/custom/mcp-servers/new", authOnly(http.HandlerFunc(h.serveSPAShell)))
-	mux.Handle("GET /manager/connectors/custom/mcp-servers/edit", authOnly(http.HandlerFunc(h.serveSPAShell)))
+	mux.Handle("GET /manager/connectors/custom/mcp-servers", authOnly(http.HandlerFunc(h.serveConnectorsShell)))
+	mux.Handle("GET /manager/connectors/custom/mcp-servers/new", authOnly(http.HandlerFunc(h.serveConnectorsShell)))
+	mux.Handle("GET /manager/connectors/custom/mcp-servers/edit", authOnly(http.HandlerFunc(h.serveConnectorsShell)))
 	mux.Handle("POST /manager/connectors/custom/mcp-servers/test", authOnly(h.customMCPServerTest))
 	mux.Handle("POST /manager/connectors/custom/mcp-servers/save", authOnly(h.customMCPServerSave))
 

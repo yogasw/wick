@@ -8,8 +8,8 @@ import (
 )
 
 templ IndexPage(items []tool.Tool, groups []Group, ungrouped []tool.Tool, meta map[string]ToolMetaEntry, user *entity.User, viewMode string) {
-	@ui.Layout("Home") {
-		@ui.Navbar(user)
+	@ui.Layout("Mini Tools") {
+		@ui.NavbarHome(user, "/mini-tools")
 		<!-- Hero -->
 		<div class="py-12">
 			<div class="mx-auto w-full max-w-container px-6 text-center">
@@ -95,7 +95,7 @@ templ IndexPage(items []tool.Tool, groups []Group, ungrouped []tool.Tool, meta m
 }
 
 templ ViewModeToggle(current string) {
-	<form method="POST" action="/launcher" class="mx-auto mt-4 inline-flex items-center gap-1 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-1 shadow-sm">
+	<form method="POST" action="/mini-tools" class="mx-auto mt-4 inline-flex items-center gap-1 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-1 shadow-sm">
 		<button
 			type="submit"
 			name="home_view"

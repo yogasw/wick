@@ -35,6 +35,7 @@ import (
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/login"
+	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/tags"
@@ -174,6 +175,7 @@ func Register(r tool.Router) {
 	r.GET("/", newSessionCompose)
 	r.POST("/", startNewSession)
 	r.GET("/overview", overviewPage)
+	r.GET("/connectors", connectorsPage)
 
 	r.GET("/sessions", sessionsPage)
 	r.POST("/sessions", createSession)
@@ -854,6 +856,28 @@ func overviewPage(c *tool.Ctx) {
 		Layout:   sidebarVM(c, "overview", ""),
 		Base:     c.Base(),
 		AssetURL: spaAssetURL("overview"),
+	}))
+}
+
+// connectorsPage hosts the manager SPA inside the Agents shell. It renders
+// the SAME Vite bundle the /manager pages serve (asset URL + client-route
+// base from manager.SPAMount), just wrapped in the Agents sidebar layout
+// instead of the manager navbar. The SPA's API calls and internal links
+// keep their /manager base, so no connector code moves — this is purely a
+// host-shell swap. Auth is the standard agents gate; /manager/* routes run
+// their own per-row checks.
+func connectorsPage(c *tool.Ctx) {
+	layout := sidebarVM(c, "connectors", "")
+	layout.FullBleed = true
+	assetURL, base := manager.SPAMount()
+	c.HTML(view.ConnectorsPage(view.ConnectorsSPAVM{
+		Layout:   layout,
+		Base:     base,
+		AssetURL: assetURL,
+		// Deep is the client-route path forwarded by manager's connectors
+		// redirect (?deep=/connectors/<key>/<id>...) so a reload of a manager
+		// connectors URL reopens the same view here instead of the index.
+		Deep: c.Query("deep"),
 	}))
 }
 
