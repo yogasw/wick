@@ -10,6 +10,22 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.22.2](https://github.com/yogasw/wick/compare/v0.22.1...v0.22.2) — Connectors UI
+
+_Released on 2026-06-22_
+
+### Changed
+
+*   **Connectors moved into the Agents UI**: The connectors manager is now hosted at `/tools/agents/connectors` inside the Agents sidebar shell. All browser-facing `/manager/connectors*` URLs now 302-redirect to this new location, preserving deep links via `?deep=`. The `/manager/api/connectors*` JSON routes and all write/mutation routes remain at `/manager` and are unaffected.
+*   **Agents sidebar — Connectors link**: A dedicated **Connectors** navigation item has been added to the Agents sidebar, visible to all users.
+*   **`/launcher` renamed to `/mini-tools`**: The tools-grid launcher page has been moved from `/launcher` to `/mini-tools`. A **Mini Tools** link is now visible at the bottom of the Agents sidebar for all users (previously, only admins saw a Settings link there).
+*   **Home tile — Connectors**: The "Connectors" tile on the Mini Tools home grid now links directly to `/tools/agents/connectors` instead of `/manager/connectors`.
+*   **Connectors SPA breadcrumb**: The connectors index page now displays no breadcrumb (as the heading already states "Connectors"). Sub-pages root at "Connectors". The Audit Log page shows only "Audit Log" with no root breadcrumb.
+*   **Chat block toolbar — mobile + PNG fixes**: The per-block hover toolbar is now consistently visible at 70% opacity on touch/no-hover devices (phones, tablets), resolving its previous hidden state until hover. PNG export functionality now utilizes the SVG's intrinsic viewBox/width-height rather than the on-screen size, addressing the "looks like my phone screen" export bug. If rasterization still fails (e.g., due to a tainted canvas), the chart is now downloaded as an `.svg` file instead of silently producing no output.
+
+---
+
+
 ## [v0.22.1](https://github.com/yogasw/wick/compare/v0.22.0...v0.22.1) — Connectors
 
 _Released on 2026-06-20_
@@ -41,8 +57,8 @@ _Released on 2026-06-20_
 ### Changed
 
 *   **Connector visibility — live tag resolution**: The connector list now resolves each row's filter-tag IDs live from the database rather than from the session-cookie snapshot. A row created or duplicated in the current session is visible immediately without logout/login.
-*   **Home — default landing page**: Navigating to `/` now redirects to the agent UI (`/tools/agents/`). The tools/connectors grid previously at `/` is now at `/launcher` and remains fully reachable.
-*   **Admin nav — Mini Tools dropdown**: The standalone Tools, Connectors, and Jobs tabs in the admin navigation bar are grouped into a single **Mini Tools** dropdown. A Launcher shortcut is included in the same dropdown. See [Admin Panel](./guide/admin-panel#mini-tools-tools-connectors-jobs).
+*   **Home — default landing page**: Navigating to `/` now redirects to the agent UI (`/tools/agents/`). The tools/connectors grid previously at `/` is now at `/mini-tools` (was `/launcher` in v0.22.0; renamed in the subsequent release) and remains fully reachable.
+*   **Admin nav — Mini Tools dropdown**: The standalone Tools, Connectors, and Jobs tabs in the admin navigation bar are grouped into a single **Mini Tools** dropdown. See [Admin Panel](./guide/admin-panel#mini-tools-tools-connectors-jobs).
 
 ---
 

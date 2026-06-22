@@ -30,7 +30,7 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 						{Href: "/admin/tools", Label: "Tools", Active: activeTab == "tools"},
 						{Href: "/admin/connectors", Label: "Connectors", Active: activeTab == "connectors"},
 						{Href: "/admin/jobs", Label: "Jobs", Active: activeTab == "jobs"},
-						{Href: "/launcher", Label: "Launcher", Active: false},
+						{Href: "/mini-tools", Label: "Mini Tools", Active: false},
 					})
 					@adminDropdown("Agents", isAgentsActive(activeTab), []dropdownItem{
 						{Href: "/admin/projects", Label: "Projects", Active: activeTab == "projects"},

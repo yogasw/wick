@@ -106,6 +106,16 @@
   opacity: 1;
 }
 
+/* Touch / no-hover devices (phones, tablets) can't hover to reveal the "···"
+   trigger, so it would never appear. Keep it always visible there. Slightly
+   dimmed at rest so it doesn't fight the content; full opacity once tapped
+   (focus-within already handles the open state above). */
+@media (hover: none), (pointer: coarse) {
+  [data-toolbar] > .wick-block-toolbar {
+    opacity: 0.7;
+  }
+}
+
 /* Anti-flash for renderable blocks (mermaid/svg): while a block is still
    pending render, hide its raw-code fallback and show a small "rendering…"
    note instead of flashing the source. Once enriched, the rendered diagram

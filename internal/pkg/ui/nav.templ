@@ -3,10 +3,19 @@ package ui
 import "github.com/yogasw/wick/internal/entity"
 
 // Navbar is the shared top navigation bar used across all pages (tools, profile, etc.)
+// Logo links to "/" by default; callers that have their own home (e.g. the
+// Mini Tools launcher) use NavbarHome to point the logo back to that page.
 templ Navbar(user *entity.User) {
+	@NavbarHome(user, "/")
+}
+
+// NavbarHome is Navbar with an explicit logo target. The logo returns the
+// user to homeHref instead of always bouncing through "/" (which redirects
+// to the Agents flagship UI).
+templ NavbarHome(user *entity.User, homeHref string) {
 	<nav class="sticky top-0 z-50 flex h-16 items-center border-b border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
 		<div class="mx-auto flex w-full max-w-container items-center justify-between px-6">
-			<a href="/" class="inline-flex items-center gap-2 text-base font-semibold text-black-900 dark:text-white-100 transition-colors hover:text-green-600 dark:hover:text-green-400">
+			<a href={ templ.SafeURL(homeHref) } class="inline-flex items-center gap-2 text-base font-semibold text-black-900 dark:text-white-100 transition-colors hover:text-green-600 dark:hover:text-green-400">
 				<span class="inline-block h-2 w-2 rounded-full bg-green-500"></span>
 				{ AppNameFromContext(ctx) }
 			</a>

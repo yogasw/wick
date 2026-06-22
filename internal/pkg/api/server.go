@@ -1315,7 +1315,10 @@ func NewServer() *Server {
 	// Home shows connectors as one launcher tile under the AI group
 	// instead of one tile per definition. Derive a home-only item list:
 	// drop the per-connector entries, append a single "Connectors" card
-	// that deep-links to the /manager/connectors index page.
+	// that deep-links to the Agents-hosted connectors page (which embeds
+	// /manager/connectors inside the Agents shell). Connectors are an
+	// Agents-domain concern UX-wise, so the launcher tile is a shortcut
+	// into Agents rather than the raw /manager surface.
 	homeItems := make([]tool.Tool, 0, len(allItems)+1)
 	for _, t := range allItems {
 		if t.Category == "connector" {
@@ -1327,7 +1330,7 @@ func NewServer() *Server {
 		Name:              "Connectors",
 		Description:       "Browse and manage LLM-callable connectors that wrap external APIs.",
 		Icon:              "🔌",
-		Path:              "/manager/connectors",
+		Path:              "/tools/agents/connectors",
 		Category:          "connector",
 		DefaultVisibility: entity.VisibilityPrivate,
 		DefaultTags:       []tool.DefaultTag{tags.AI},
@@ -1452,7 +1455,7 @@ func NewServer() *Server {
 
 	// Home
 	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
-	r.Handle("/launcher", http.HandlerFunc(homeHandler.Launcher))
+	r.Handle("/mini-tools", http.HandlerFunc(homeHandler.Launcher))
 
 	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate}
 }

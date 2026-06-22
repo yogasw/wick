@@ -42,6 +42,7 @@ After boot, head to `/tools/agents`.
 | **Presets** | Edit reusable agent instructions. Each preset is one `agent.md` file. The built-in `default` preset is the fallback when a session has no project (or the project has no `DefaultPreset`); it cannot be deleted, only edited. |
 | **Providers** | Per-instance status cards: binary path, version, env vars, extra args, "Rescan" button. Add custom instances when you need two PATs for the same CLI. |
 | **Skills** | Browse, preview, sync, and delete skill files across all provider skill dirs. |
+| **Connectors** | Browse and manage LLM-callable connectors from inside the Agents shell. Opens at `/tools/agents/connectors`. Direct links to `/manager/connectors/*` redirect here automatically (deep links preserved). |
 | **Channels** | Slack + Telegram bot config (tokens, access control, default project). Web UI is always-on. |
 
 Sessions auto-create on the first message in a Slack thread, a Telegram chat, or a fresh web conversation. You don't pre-allocate them.

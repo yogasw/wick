@@ -1,0 +1,46 @@
+package view
+
+// ConnectorsSPAVM hosts the manager SPA inside the Agents chrome. Base +
+// AssetURL come from manager.SPAMount() — the SAME bundle the /manager
+// pages serve, with the client router still rooted at /manager. Mounting
+// it here just swaps the outer shell (Agents sidebar instead of the
+// manager navbar); every in-SPA API call and link keeps resolving against
+// the live /manager/* routes, so no connector code moves.
+type ConnectorsSPAVM struct {
+	Layout   AgentsLayoutVM
+	Base     string
+	AssetURL string
+	// Deep is an optional client-route path (e.g. /connectors/slack/123)
+	// forwarded by manager's connectors→agents redirect. The SPA router
+	// reads it from data-deep on boot to open that view directly, so a
+	// reload/deep link of a /manager/connectors URL lands on the same page
+	// inside the Agents shell rather than the connectors index.
+	Deep string
+}
+
+// ConnectorsPage renders the manager SPA mount point inside AgentsLayout.
+// data-base is the manager client-route prefix, so the SPA boots straight
+// into its connectors view and stays self-consistent.
+templ ConnectorsPage(vm ConnectorsSPAVM) {
+	@AgentsLayout(vm.Layout) {
+		if vm.AssetURL == "" {
+			<div class="p-8 text-sm text-rose-600 dark:text-rose-400">
+				Manager bundle not built yet. Run
+				<code class="font-mono">npm --workspace=@wick-fe/manager run build</code>
+				in <code class="font-mono">fe/</code> and refresh.
+			</div>
+		} else {
+			<!-- p-6 matches the overview/skills SPA roots. The manager SPA's
+			     AppShell carries no padding of its own (its /manager host
+			     supplies px-6 py-6 around the mount), so when hosted inside
+			     the Agents shell we add the same gutter here. -->
+			<div
+				id="app"
+				data-base={ vm.Base }
+				data-deep={ vm.Deep }
+				class="h-full p-6"
+			></div>
+			<script type="module" src={ vm.AssetURL }></script>
+		}
+	}
+}
