@@ -35,11 +35,11 @@ func (h *Handler) RootRedirect(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/tools/agents/", http.StatusFound)
 }
 
-// Launcher renders the tools grid at /launcher (GET) and handles the
-// home_view toggle (POST).
+// Launcher renders the Mini Tools grid at /mini-tools (GET) and handles
+// the home_view toggle (POST).
 func (h *Handler) Launcher(w http.ResponseWriter, r *http.Request) {
 	user := login.GetUser(r.Context())
-	if r.URL.Path != "/launcher" {
+	if r.URL.Path != "/mini-tools" {
 		ui.RenderNotFound(w, r, user, http.StatusNotFound)
 		return
 	}
@@ -59,7 +59,7 @@ func (h *Handler) Launcher(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 		}
-		http.Redirect(w, r, "/launcher", http.StatusSeeOther)
+		http.Redirect(w, r, "/mini-tools", http.StatusSeeOther)
 		return
 	}
 	visible := h.VisibleItems(r, user)

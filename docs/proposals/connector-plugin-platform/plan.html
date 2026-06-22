@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wick Connector — Plugin-over-gRPC Plan</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --bd:#2d3748;
+    --fg:#e6edf3; --mut:#8b949e; --acc:#58a6ff; --good:#3fb950;
+    --bad:#f85149; --warn:#d29922; --pur:#bc8cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;padding:24px;max-width:1100px;margin:0 auto}
+  h1{font-size:28px;margin:0 0 4px} h2{font-size:21px;margin:38px 0 14px;border-bottom:1px solid var(--bd);padding-bottom:8px}
+  h3{font-size:16px;margin:18px 0 8px;color:var(--acc)}
+  .sub{color:var(--mut);margin:0 0 8px}
+  code{background:#1f2630;padding:2px 6px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--pur)}
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:1fr 1fr} .g3{grid-template-columns:repeat(3,1fr)}
+  @media(max-width:760px){.g2,.g3{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--bd);border-radius:12px;padding:16px}
+  .card.good{border-left:4px solid var(--good)} .card.bad{border-left:4px solid var(--bad)}
+  .card.trick{border-left:4px solid var(--acc)} .card.warn{border-left:4px solid var(--warn)}
+  .tag{display:inline-block;font-size:11px;padding:2px 9px;border-radius:20px;font-weight:600}
+  .t-good{background:rgba(63,185,80,.15);color:var(--good)}
+  .t-bad{background:rgba(248,81,73,.15);color:var(--bad)}
+  .t-acc{background:rgba(88,166,255,.15);color:var(--acc)}
+  .t-warn{background:rgba(210,153,34,.15);color:var(--warn)}
+  table{width:100%;border-collapse:collapse;margin:8px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--bd);vertical-align:top}
+  th{color:var(--mut);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+  .num{color:var(--acc);font-weight:700}
+  .bar{height:22px;border-radius:5px;background:linear-gradient(90deg,var(--acc),var(--pur));display:flex;align-items:center;padding-left:8px;font-size:12px;font-weight:600;color:#0d1117;min-width:40px;white-space:nowrap}
+  .barwrap{display:flex;align-items:center;gap:10px;margin:6px 0}
+  .barwrap .lbl{width:170px;color:var(--mut);font-size:13px}
+  pre{background:#0a0e14;border:1px solid var(--bd);border-radius:10px;padding:14px;overflow-x:auto;font-size:12.5px;line-height:1.5}
+  .pill{font-size:12px;color:var(--mut);background:var(--panel2);padding:3px 10px;border-radius:20px;border:1px solid var(--bd)}
+  .trick h3{display:flex;align-items:center;gap:8px;margin-top:0}
+  .trick .badge{background:var(--acc);color:#0d1117;font-size:11px;font-weight:700;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border-radius:6px}
+  .note{background:rgba(210,153,34,.12);border:1px solid var(--warn);border-radius:10px;padding:12px 14px;color:#e8d39a;margin:14px 0}
+  .ok{background:rgba(63,185,80,.1);border:1px solid var(--good);border-radius:10px;padding:12px 14px;color:#9fe0ab;margin:14px 0}
+  .steps{counter-reset:s;list-style:none;padding:0}
+  .steps li{counter-increment:s;background:var(--panel);border:1px solid var(--bd);border-radius:10px;padding:12px 14px 12px 50px;position:relative;margin:8px 0}
+  .steps li::before{content:counter(s);position:absolute;left:12px;top:12px;background:var(--acc);color:#0d1117;width:26px;height:26px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:700}
+  svg{max-width:100%;height:auto}
+  .verdict{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
+  .verdict div{flex:1;min-width:200px;border-radius:10px;padding:12px 14px;font-size:14px}
+  .v-good{background:rgba(63,185,80,.1);border:1px solid var(--good)}
+  .v-mid{background:rgba(88,166,255,.1);border:1px solid var(--acc)}
+  .v-bad{background:rgba(248,81,73,.1);border:1px solid var(--bad)}
+  .toc{background:var(--panel2);border:1px solid var(--bd);border-radius:10px;padding:12px 18px;font-size:13px;color:var(--mut)}
+  .toc a{color:var(--acc);text-decoration:none;margin-right:14px;white-space:nowrap}
+</style>
+</head>
+<body>
+
+<h1>Wick Connector → Plugin-over-gRPC</h1>
+<p class="sub">Pindah dari connector <b>in-process</b> ke <b>plugin eksternal</b>: build terpisah, versioning sendiri, download per kebutuhan.</p>
+<p><span class="pill">pola: HashiCorp go-plugin</span> <span class="pill">transport: gRPC / UDS</span> <span class="pill">strategi: hybrid</span> <span class="pill">spawn: lazy + idle-kill</span></p>
+
+<div class="toc">
+  <a href="#arch">1·Arsitektur</a><a href="#core">2·Metadata vs Proses</a><a href="#hybrid">3·Hybrid</a>
+  <a href="#ver">4·Versioning</a><a href="#artifact">5·2-Artifact</a><a href="#life">6·Lifecycle</a><a href="#spawn">7·Spawn</a>
+  <a href="#prc">8·Untung/Rugi</a><a href="#light">9·Enteng?</a><a href="#build">10·Build</a>
+  <a href="#lat">11·Latency</a><a href="#sec">12·Keamanan</a><a href="#ground">13·Kode Nyata</a><a href="#mig">14·Migrasi</a><a href="#platform">15·Platform Generik</a><a href="#proto">16·Proto Sync</a><a href="#cicd">17·CI/CD</a>
+</div>
+
+<h2 id="arch">1 · Sekarang vs Target</h2>
+<div class="grid g2">
+  <div class="card">
+    <h3>Sekarang — Monolith in-process</h3>
+    <svg viewBox="0 0 360 230" xmlns="http://www.w3.org/2000/svg">
+      <rect x="10" y="10" width="340" height="210" rx="12" fill="#161b22" stroke="#2d3748"/>
+      <text x="180" y="34" text-anchor="middle" fill="#e6edf3" font-size="14" font-weight="700">wick (1 binary)</text>
+      <rect x="40" y="50" width="280" height="32" rx="7" fill="#1c2330" stroke="#2d3748"/>
+      <text x="180" y="71" text-anchor="middle" fill="#58a6ff" font-size="12">MCP + connector registry</text>
+      <g font-size="11" fill="#e6edf3" text-anchor="middle">
+        <rect x="40"  y="110" width="80" height="80" rx="8" fill="#0a0e14" stroke="#3fb950"/>
+        <text x="80"  y="146">github</text><text x="80" y="162" fill="#8b949e" font-size="9">Go pkg</text>
+        <rect x="140" y="110" width="80" height="80" rx="8" fill="#0a0e14" stroke="#3fb950"/>
+        <text x="180" y="146">slack</text><text x="180" y="162" fill="#8b949e" font-size="9">Go pkg</text>
+        <rect x="240" y="110" width="80" height="80" rx="8" fill="#0a0e14" stroke="#3fb950"/>
+        <text x="280" y="146">notion</text><text x="280" y="162" fill="#8b949e" font-size="9">Go pkg</text>
+      </g>
+      <line x1="180" y1="82" x2="80"  y2="110" stroke="#2d3748"/>
+      <line x1="180" y1="82" x2="180" y2="110" stroke="#2d3748"/>
+      <line x1="180" y1="82" x2="280" y2="110" stroke="#2d3748"/>
+    </svg>
+    <p class="sub">Call ~ns. Tapi: tambah connector = recompile core, crash 1 = mati semua, RAM konstan walau idle.</p>
+  </div>
+  <div class="card">
+    <h3>Target — Plugin eksternal via gRPC</h3>
+    <svg viewBox="0 0 360 230" xmlns="http://www.w3.org/2000/svg">
+      <rect x="10" y="20" width="150" height="190" rx="12" fill="#161b22" stroke="#2d3748"/>
+      <text x="85" y="42" text-anchor="middle" fill="#e6edf3" font-size="12" font-weight="700">wick core</text>
+      <rect x="28" y="55" width="114" height="30" rx="7" fill="#1c2330" stroke="#2d3748"/>
+      <text x="85" y="74" text-anchor="middle" fill="#58a6ff" font-size="11">plugin manager</text>
+      <rect x="28" y="150" width="114" height="44" rx="7" fill="#0a0e14" stroke="#3fb950"/>
+      <text x="85" y="170" text-anchor="middle" fill="#3fb950" font-size="10">fast-path</text>
+      <text x="85" y="184" text-anchor="middle" fill="#8b949e" font-size="9">core in-proc</text>
+
+      <rect x="200" y="20" width="150" height="80" rx="10" fill="#161b22" stroke="#bc8cff"/>
+      <text x="275" y="42" text-anchor="middle" fill="#bc8cff" font-size="11" font-weight="700">github plugin</text>
+      <text x="275" y="60" text-anchor="middle" fill="#8b949e" font-size="9">binary terpisah</text>
+      <text x="275" y="76" text-anchor="middle" fill="#8b949e" font-size="9">Execute / Schema</text>
+
+      <rect x="200" y="130" width="150" height="80" rx="10" fill="#161b22" stroke="#bc8cff"/>
+      <text x="275" y="152" text-anchor="middle" fill="#bc8cff" font-size="11" font-weight="700">slack plugin</text>
+      <text x="275" y="170" text-anchor="middle" fill="#8b949e" font-size="9">Go / Rust / Py</text>
+      <text x="275" y="186" text-anchor="middle" fill="#8b949e" font-size="9">download on-demand</text>
+
+      <line x1="142" y1="70" x2="200" y2="60"  stroke="#58a6ff" stroke-width="2"/>
+      <line x1="142" y1="70" x2="200" y2="170" stroke="#58a6ff" stroke-width="2"/>
+      <text x="170" y="56" fill="#58a6ff" font-size="9">gRPC</text>
+      <text x="158" y="128" fill="#58a6ff" font-size="9">UDS</text>
+    </svg>
+    <p class="sub">Call ~0.1ms. Release independen, crash terisolasi, polyglot, marketplace, RAM idle 0.</p>
+  </div>
+</div>
+
+<h2 id="core">2 · Prinsip inti — pisahkan METADATA dari PROSES</h2>
+<p class="sub">Fondasi semua keputusan. <code>list</code>/<code>get</code> = baca data. Proses cuma hidup saat <code>execute</code>.</p>
+<div class="grid g2">
+  <div class="card good">
+    <span class="tag t-good">MANIFEST · statis · data</span>
+    <table>
+      <tr><td>name, version, proto_version</td></tr>
+      <tr><td>schema, operations, config fields</td></tr>
+      <tr><td>os/arch, sha256, signature</td></tr>
+    </table>
+    <p class="sub"><code>wick_list</code> / <code>wick_get</code> baca ini → <b>ZERO spawn</b></p>
+  </div>
+  <div class="card warn">
+    <span class="tag t-warn">PROSES · runtime</span>
+    <table>
+      <tr><td>cuma hidup saat <code>Execute()</code></td></tr>
+      <tr><td>lazy spawn, idle kill</td></tr>
+      <tr><td>0 RAM saat idle</td></tr>
+    </table>
+    <p class="sub"><code>wick_execute</code> → spawn kalau belum → jalanin</p>
+  </div>
+</div>
+
+<h2 id="hybrid">3 · Tidak semua connector jadi plugin (Hybrid)</h2>
+<table>
+  <tr><th>Connector</th><th>Model</th><th>Alasan</th></tr>
+  <tr><td><code>wickmanager</code>, <code>workflow</code>, <code>custom-connector</code></td><td><span class="tag t-good">in-proc</span></td><td>akses internal perut wick; IPC malah ngaco</td></tr>
+  <tr><td><code>github</code>, <code>slack</code>, <code>notion</code>, <code>context7</code></td><td><span class="tag t-acc">plugin</span></td><td>cuma panggil API luar; aman dipisah proses</td></tr>
+</table>
+<div class="note"><b>Aturan:</b> panggil API eksternal → plugin. Menyentuh state internal wick → in-process. Hybrid selamanya OK.</div>
+
+<h2 id="ver">4 · Repo terpisah + versioning independen</h2>
+<pre><code>wick core         v2.1.0
+github-connector  v1.4.2   ← repo sendiri, release sendiri, tag sendiri
+slack-connector   v0.9.1   ← repo sendiri, release sendiri, tag sendiri</code></pre>
+<div class="grid g3">
+  <div class="card"><h3>Versi sama = no rebuild</h3>Cuma yang berubah yang di-pull. Connector ngk berubah ngk diapa-apain.</div>
+  <div class="card"><h3>Core naik ≠ connector naik</h3>Independen. <code>proto_version</code> dicek saat load.</div>
+  <div class="card"><h3>Kontribusi pihak ketiga</h3>Repo connector sendiri, ngk perlu merge ke core.</div>
+</div>
+
+<h2 id="artifact">5 · Output build = 2 artifact (binary + manifest)</h2>
+<p class="sub">Tiap release connector = 2 file. Manifest = data statis (baca doang). Binary = di-spawn <b>cuma saat execute</b>.</p>
+<div class="grid g2">
+  <div class="card warn">
+    <h3>📄 plugin.json — manifest (statis)</h3>
+    <pre><code>{
+  // identitas = connector.Meta wick
+  "key": "github",            // slug unik (dipakai tool_id)
+  "name": "GitHub",           // display name
+  "description": "Repo, issue, PR",
+  "icon": "github",
+  "kind": "connector",        // connector|tool|job
+
+  "version": "1.4.2",
+  "proto_version": 1,
+  "entry": "./github-connector",
+  "os_arch": ["linux/arm64","linux/amd64"],
+  "sha256": "abc123...",
+
+  // = Module.Operations []Category (Category{title,desc,ops})
+  // ops = connector.Operation (key/name/desc/destructive/input)
+  "operations": [
+    { "title": "Issues",
+      "ops": [
+        { "key": "issues.create", "name": "Create Issue",
+          "destructive": false,
+          "input": { "repo":"string", "title":"string" } }
+      ] },
+    { "title": "Pull Requests",
+      "ops": [
+        { "key": "pr.merge", "name": "Merge PR",
+          "destructive": true,
+          "input": { "repo":"string", "number":"int" } }
+      ] }
+  ],
+  // = []entity.Config (DEFAULT config, di-seed ke DB)
+  "configs": [
+    { "key":"token", "type":"text", "is_secret":true,
+      "required":true, "description":"GitHub PAT" },
+    { "key":"base_url", "type":"text",
+      "value":"https://api.github.com" }
+  ]
+}</code></pre>
+    <p class="sub"><code>list</code>/<code>get</code> baca ini → ZERO spawn</p>
+  </div>
+  <div class="card good">
+    <h3>⚙️ github-connector — binary (runtime)</h3>
+    <pre><code>github-connector-v1.4.2/
+├── github-connector   # executable
+└── plugin.json         # manifest
+
+# Alur:
+wick_list    → scan *.json     → no spawn
+wick_get     → baca 1 .json    → no spawn
+wick_execute → spawn binary    → jalanin → idle kill</code></pre>
+    <div class="ok">Binary tidur di disk sampai <code>execute</code>. <b>RAM idle = 0.</b></div>
+    <h3>Anti-drift</h3>
+    <pre><code># generate manifest DARI binary (CI), jangan tulis tangan
+go build -o github-connector ./...
+./github-connector --dump-manifest > plugin.json</code></pre>
+    <p class="sub">Schema = single-source-of-truth dari kode. Mustahil beda.</p>
+  </div>
+</div>
+<h3>Layout folder runtime — generik, grup per <code>kind</code></h3>
+<pre><code>$WICK_DATA/plugins/               # milik app, bukan connector-spesifik
+├── connectors/
+│   ├── github/  { plugin.json, github-connector }
+│   └── slack/   { plugin.json, slack-connector }
+├── tools/       # (NANTI) kind=tool, infra sama
+└── jobs/        # (NANTI) kind=job, infra sama</code></pre>
+<div class="ok"><b>NGK pakai file index (registry.json) — folder + manifest = source of truth.</b> Terinstall = scan <code>plugins/*/*/plugin.json</code>. Enabled/disabled+config = <b>DB wick yg sudah ada</b> (sama kayak connector sekarang). File index = sumber kedua yg bisa drift → buang.</div>
+<div class="note"><b>Folder disiapkan multi-kind dari awal</b> biar tools & jobs nyusul pakai infra sama (§15). <b>Startup:</b> scan <code>plugins/*/*/plugin.json</code> → register per kind. <b>Install:</b> 2 file + verify sha256. <b>Disable:</b> flag di DB. · RAM kelar; disk ~5-15MB/binary tapi cuma yg di-install yg makan.</div>
+
+<h2 id="life">6 · Lifecycle connector</h2>
+<svg viewBox="0 0 900 90" xmlns="http://www.w3.org/2000/svg" style="margin:8px 0">
+  <g font-size="12" text-anchor="middle">
+    <rect x="10"  y="25" width="120" height="40" rx="8" fill="#161b22" stroke="#58a6ff"/><text x="70"  y="50" fill="#e6edf3">install</text>
+    <rect x="170" y="25" width="140" height="40" rx="8" fill="#161b22" stroke="#58a6ff"/><text x="240" y="44" fill="#e6edf3">register manifest</text><text x="240" y="58" fill="#8b949e" font-size="9">startup-scan / reload</text>
+    <rect x="350" y="25" width="150" height="40" rx="8" fill="#161b22" stroke="#3fb950"/><text x="425" y="50" fill="#3fb950">enable ⇄ disable</text>
+    <rect x="540" y="25" width="120" height="40" rx="8" fill="#161b22" stroke="#bc8cff"/><text x="600" y="44" fill="#bc8cff">execute</text><text x="600" y="58" fill="#8b949e" font-size="9">lazy spawn</text>
+    <rect x="700" y="25" width="80" height="40" rx="8" fill="#161b22" stroke="#d29922"/><text x="740" y="50" fill="#d29922">idle kill</text>
+    <rect x="800" y="25" width="90" height="40" rx="8" fill="#161b22" stroke="#f85149"/><text x="845" y="50" fill="#f85149">uninstall</text>
+    <g stroke="#2d3748" stroke-width="2"><line x1="130" y1="45" x2="170" y2="45"/><line x1="310" y1="45" x2="350" y2="45"/><line x1="500" y1="45" x2="540" y2="45"/><line x1="660" y1="45" x2="700" y2="45"/></g>
+  </g>
+</svg>
+<div class="note"><b>2 LIST berbeda — jangan dicampur:</b> (1) <code>wick_list</code> ke LLM = cuma yg <b>installed+enabled</b> (executable). (2) Dashboard = tampil <b>semua</b>, jadi marketplace.</div>
+<table>
+  <tr><th>Status</th><th>Dashboard / Marketplace</th><th>wick_list LLM</th><th>Execute?</th></tr>
+  <tr><td>installed + enabled</td><td class="num">tampil (Installed)</td><td class="num">ya</td><td class="num">ya</td></tr>
+  <tr><td>installed + disabled</td><td>tampil (Installed, badge off)</td><td>tidak</td><td>tidak</td></tr>
+  <tr><td><b>available</b> (not installed)</td><td><b>tampil (Available, [Install])</b></td><td>tidak</td><td>tidak (install dulu)</td></tr>
+</table>
+
+<h3>Marketplace — sumber "Available" dari GitHub Releases API</h3>
+<div class="grid g2">
+  <div class="card">
+    <pre><code>LIST DASHBOARD = merge 2 sumber:
+  1. INSTALLED → scan lokal plugins/*.json  (offline, instan)
+  2. AVAILABLE → GitHub Releases API         (remote, di-cache)
+
+┌─ Installed ────────────────┐
+│ github  v1.4.2  [enabled]  │
+│ slack   v0.9.1  [disabled] │
+├─ Available (marketplace) ──┤
+│ notion  v2.1.0  [Install]  │
+│ jira    v1.0.0  [Install]  │
+└────────────────────────────┘</code></pre>
+  </div>
+  <div class="card">
+    <h3>Narik dari GitHub Releases API</h3>
+    <table>
+      <tr><th>Opsi</th><th>Cara</th></tr>
+      <tr><td><b>A. Registry repo</b> (rekomendasi)</td><td>1 repo indeks (<code>wick-connectors</code>); <code>GET /releases</code> → daftar + asset. Terkontrol, bisa di-sign.</td></tr>
+      <tr><td>B. Topic discovery</td><td>Search <code>topic:wick-connector</code> → tiap repo <code>/releases/latest</code>. Terbuka, tapi trust/rate-limit berat.</td></tr>
+    </table>
+    <div class="ok"><b>Marketplace = metadata, ngk download binary.</b> <code>list</code> tarik nama+versi. Liat operasi available = tarik asset <code>plugin.json</code> (~KB). Binary di-download <b>cuma saat Install</b>.</div>
+  </div>
+</div>
+<div class="note"><b>Cache + rate-limit:</b> GitHub API limit ketat → cache Releases (~15 mnt) pakai <b>ETag</b> + refresh manual/berkala. Reuse pola <code>CatalogRefresh()</code> yg udah ada (lihat §13).</div>
+<p class="sub"><b>Manifest INSTALLED didaftar saat startup-scan + hot-reload</b> — bukan saat spawn. AVAILABLE ngk masuk registry sampai diinstall. Proses baru hidup saat execute.</p>
+
+<h2 id="spawn">7 · Spawn policy</h2>
+<div class="grid g3">
+  <div class="card good"><h3>LAZY (default)</h3>execute pertama → spawn (~10-50ms sekali) → idle timeout → kill → execute lagi → spawn ulang. <b>RAM idle = 0.</b></div>
+  <div class="card"><h3>EAGER</h3>spawn saat startup → selalu warm. Buat connector super-hot.</div>
+  <div class="card"><h3>WARM POOL</h3>pool N proses, scale naik-turun ikut traffic.</div>
+</div>
+<div class="note"><b>Proteksi resource (Termux RAM terbatas):</b> cap concurrent plugin (mis. max 5) · idle timeout pendek · LRU evict saat RAM mepet.</div>
+
+<h2 id="prc">8 · Untung vs Rugi (jujur)</h2>
+<div class="grid g2">
+  <div class="card good">
+    <span class="tag t-good">UNTUNG</span>
+    <table>
+      <tr><td>Build & release terpisah, versioning independen</td></tr>
+      <tr><td>Marketplace / download on-demand</td></tr>
+      <tr><td>Isolasi crash (panic ≠ mati core)</td></tr>
+      <tr><td>Polyglot (Go/Rust/Python)</td></tr>
+      <tr><td>Sandbox keamanan per-proses</td></tr>
+      <tr><td>Kontribusi pihak ketiga tanpa merge core</td></tr>
+      <tr><td>Core ramping, startup cepat, RAM idle rendah</td></tr>
+    </table>
+  </div>
+  <div class="card bad">
+    <span class="tag t-bad">RUGI</span>
+    <table>
+      <tr><td>Overhead IPC ~10-200µs/call (ketutup API)</td></tr>
+      <tr><td>Versi proto host↔plugin harus cocok</td></tr>
+      <tr><td>Lifecycle kompleks (spawn/health/evict)</td></tr>
+      <tr><td>Build matrix OS×arch (wajib linux/arm64)</td></tr>
+      <tr><td>Supply-chain → wajib signing + checksum</td></tr>
+      <tr><td>RAM saat banyak plugin warm (tiap proc ~10-30MB)</td></tr>
+      <tr><td>Disk lebih besar (tiap binary bawa runtime)</td></tr>
+    </table>
+  </div>
+</div>
+
+<h2 id="light">9 · Jadi enteng & cepet? (analisis jujur)</h2>
+<div class="verdict">
+  <div class="v-good"><b>ENTENG ✅</b><br>core binary kecil, startup cepat, RAM idle rendah, list/get zero-proses</div>
+  <div class="v-mid"><b>SAMA ≈</b><br>throughput per-call (I/O-bound, IPC 0.1ms ketutup API 50-500ms)</div>
+  <div class="v-bad"><b>BERAT ❌</b><br>RAM saat banyak plugin warm barengan, disk total</div>
+</div>
+<div class="card">
+  <h3>Realita pemakaian</h3>
+  <pre><code>punya 20 connector terinstall
+   → dipakai per sesi: ~2-3 (github, slack)
+   → punya proses hidup: cuma yang baru/lagi execute
+   → sisanya: 0 proses, 0 RAM (cuma manifest di disk)</code></pre>
+  <div class="ok">Connector dipanggil sporadis. Dengan idle-kill, model plugin <b>sering lebih hemat RAM</b> dari monolith — yang nganggur beneran nol, bukan nempel di core. Ngk semua plugin jalan bareng.</div>
+  <div class="note"><b>Worst case = burst</b> (workflow fan-out ke banyak API). Dijaga: cap concurrent + idle timeout + LRU evict.</div>
+  <p><b>Kesimpulan:</b> bukan "tiap call lebih ngebut" — tapi <b>lebih modular + core ramping + skalabel + RAM idle hemat</b>. Untung utama: release independen, marketplace, isolasi crash, komunitas.</p>
+</div>
+
+<h2 id="build">10 · Build jadi lebih cepat</h2>
+<div class="grid g2">
+  <div class="card bad"><h3>Monolith</h3>ubah 1 connector → <b>rebuild SELURUH core</b> + semua connector. Berat di Termux/arm64.</div>
+  <div class="card good"><h3>Plugin</h3>ubah 1 connector → <b>build connector itu DOANG</b>. Detik, bukan menit.</div>
+</div>
+<table>
+  <tr><th>Skenario</th><th>Hasil</th></tr>
+  <tr><td>Iterasi 1 connector (harian)</td><td class="num">jauh lebih cepat ✅</td></tr>
+  <tr><td>Build core (connector ngk ikut)</td><td class="num">lebih cepat ✅</td></tr>
+  <tr><td>CI (paralel per-repo, cache per-repo)</td><td class="num">lebih cepat ✅</td></tr>
+  <tr><td>Clean build SEMUA dari nol</td><td>sedikit lebih lambat ❌ (jarang)</td></tr>
+</table>
+
+<h2 id="lat">11 · Latency — kenapa overhead ngk kerasa</h2>
+<p class="sub">Connector I/O-bound (nunggu API). IPC porsi kecil — asal proses <b>persisten</b>.</p>
+<div class="card">
+  <div class="barwrap"><span class="lbl">func call in-proc</span><div class="bar" style="width:3%">~0s</div></div>
+  <div class="barwrap"><span class="lbl">gRPC UDS lokal</span><div class="bar" style="width:5%">~0.1ms</div></div>
+  <div class="barwrap"><span class="lbl">gRPC TCP loopback</span><div class="bar" style="width:9%">~0.3ms</div></div>
+  <div class="barwrap"><span class="lbl">spawn per-call ❌</span><div class="bar" style="width:55%;background:linear-gradient(90deg,#f85149,#d29922)">~10-50ms</div></div>
+  <div class="barwrap"><span class="lbl">API GitHub (dominan)</span><div class="bar" style="width:92%">~50-500ms</div></div>
+  <div class="ok">gRPC 0.1ms vs API 50-500ms = <b>&lt;0.5%</b>. Ngk terasa — asal proses persisten, bukan spawn per-call.</div>
+</div>
+<h3>10 trik tutup overhead</h3>
+<div class="grid g2">
+  <div class="card trick"><h3><span class="badge">1</span>Persistent subprocess</h3>spawn sekali, pakai ribuan call.</div>
+  <div class="card trick"><h3><span class="badge">2</span>Unix Domain Socket</h3>skip stack TCP/IP, ~2-5× lebih cepat dari TCP localhost.</div>
+  <div class="card trick"><h3><span class="badge">3</span>Connection reuse</h3>gRPC HTTP/2 multiplex 1 koneksi.</div>
+  <div class="card trick"><h3><span class="badge">4</span>Schema caching</h3><code>Schema()</code> sekali saat load, cache host.</div>
+  <div class="card trick"><h3><span class="badge">5</span>Streaming RPC</h3>list besar pakai server-streaming.</div>
+  <div class="card trick"><h3><span class="badge">6</span>Hybrid fast-path</h3>connector hot tetap in-process.</div>
+  <div class="card trick"><h3><span class="badge">7</span>Warm pool</h3>plugin sering dipakai dijaga warm.</div>
+  <div class="card trick"><h3><span class="badge">8</span>Shared memory</h3>payload besar lewat mmap, kirim handle.</div>
+  <div class="card trick"><h3><span class="badge">9</span>Batching</h3>op kecil digabung <code>ExecuteBatch</code>.</div>
+  <div class="card trick"><h3><span class="badge">10</span>Protobuf binary</h3>encode cepat, jangan double-encode JSON.</div>
+</div>
+
+<h2 id="sec">12 · Kontrak proto & keamanan</h2>
+<p class="sub">Snippet lengkap & compile-able (semua message didefinisi di PLAN.md §12).</p>
+<pre><code>service Connector {
+  rpc Schema   (SchemaRequest)   returns (SchemaResponse);
+  rpc Execute  (ExecuteRequest)  returns (ExecuteResponse);
+  rpc ExecuteStream (ExecuteRequest) returns (stream Chunk);   // bulk
+  rpc Validate (ValidateRequest) returns (ValidateResponse);
+  rpc Health   (HealthRequest)   returns (HealthResponse);
+}
+message Error { string code = 1; string message = 2; }
+message ExecuteRequest {
+  string operation = 1;            // "issues.create"
+  bytes  args_json = 2;
+  map&lt;string,string&gt; creds = 3;     // host decrypt wick_enc_ -> plain
+  string request_id = 4;
+  string session_id = 5;           // jaga scoping session wick
+}
+message ExecuteResponse { bytes result_json = 1; Error error = 2; }
+message Chunk { bytes data = 1; bool eof = 2; Error error = 3; }
+message SchemaResponse  { bytes manifest_json = 1; }   // dipakai --dump-manifest
+message HealthResponse  { bool healthy = 1; string detail = 2; }
+// SchemaRequest / ValidateRequest+Response / HealthRequest — lihat PLAN.md</code></pre>
+<div class="grid g3">
+  <div class="card"><h3>Credential</h3>Host decrypt <code>wick_enc_</code>, kirim plain lewat UDS+mTLS. Plugin ngk pegang key.</div>
+  <div class="card"><h3>Verifikasi</h3>sha256 + signature (cosign/minisign) sebelum exec.</div>
+  <div class="card"><h3>Sandbox</h3>user/cgroup terbatas, FS read-only, network allow-list.</div>
+  <div class="card"><h3>Versi proto</h3>handshake tolak plugin incompatible.</div>
+  <div class="card"><h3>Dashboard config</h3>tetap di host. Plugin cuma deklarasi field via <code>Schema()</code>.</div>
+  <div class="card"><h3>Registry</h3>GitHub Releases + index JSON dulu. Registry sendiri nanti.</div>
+</div>
+
+<h2 id="ground">13 · Pemetaan ke kode wick NYATA (grounding)</h2>
+<p class="sub">Dibaca dari <code>yogasw/wick</code> (clone <code>wick-src/</code>). Bikin rencana nyambung ke file asli, bukan teori.</p>
+
+<div class="card good">
+  <h3>🔑 Temuan kunci: wick UDAH punya connector eksternal</h3>
+  <p>Wick sudah punya jalur connector di luar core — <b>custom MCP connector</b>: core ngobrol JSON-RPC over HTTP ke MCP server <b>remote</b>.</p>
+  <table>
+    <tr><td><code>internal/connectors/custom/mcp_client.go</code></td><td>client JSON-RPC, <code>buildHeaders()</code>, <code>decrypt()</code> buka wick_enc_</td></tr>
+    <tr><td><code>internal/connectors/custom/service.go</code></td><td>definisi custom: <code>manual</code> (HTTP) & <code>mcp</code> (server eksternal)</td></tr>
+    <tr><td><code>CatalogRefresh()</code></td><td>probe <code>/tools/list</code> → operasi live jadi ops</td></tr>
+  </table>
+  <div class="ok"><b>Plugin-gRPC = saudara LOKAL dari yang sudah ada.</b> Custom-MCP = connector eksternal <i>remote (HTTP)</i>. Plugin-gRPC = connector eksternal <i>lokal (subprocess + UDS)</i>. Seam sudah ada — tinggal tambah transport, bukan bongkar arsitektur.</div>
+</div>
+
+<h3>Kontrak yang dipertahankan — <code>pkg/connector/connector.go</code></h3>
+<pre><code>type ExecuteFunc func(c *Ctx) (any, error)
+type Operation struct { Key, Name, Description string; Input []entity.Config;
+                        Execute ExecuteFunc; Destructive bool }
+type Category struct { Title, Description string; Ops []Operation }
+type Module struct { Meta Meta; Configs []entity.Config; Operations []Category;
+                     HealthCheck HealthCheckFunc; OAuth *OAuthMeta }</code></pre>
+<p class="sub"><code>Module</code> memetakan ke plugin.json apa adanya — <b>perhatikan <code>Operations</code> itu <code>[]Category</code></b> (operasi nested dalam category), operasi datar via <code>mod.AllOps()</code>, BUKAN array Operation datar. Flag <code>LiveCatalog</code> sudah ada untuk catalog dinamis — plugin manifest pakai mekanisme sama (sumber = plugin.json statis, bukan probe live).</p>
+
+<h3>Titik sambung (seam) yang disentuh</h3>
+<table>
+  <tr><th>#</th><th>Apa</th><th>File</th><th>Perubahan</th></tr>
+  <tr><td>1</td><td>Call site eksekusi</td><td><code>internal/connectors/service.go</code> (<code>op.Execute(cctx)</code>)</td><td>plugin → ganti in-proc call jadi <b>gRPC call</b></td></tr>
+  <tr><td>2</td><td>Registry</td><td><code>internal/connectors/registry.go</code></td><td>register dari hasil scan <code>plugin.json</code></td></tr>
+  <tr><td>3</td><td>Bootstrap</td><td><code>service.go</code> (<code>Bootstrap</code>)</td><td>scan folder <code>plugins/</code> saat startup</td></tr>
+  <tr><td>4</td><td>Ctx → gRPC</td><td><code>pkg/connector/ctx.go</code></td><td>field Ctx jadi <code>ExecuteRequest</code>; progress jadi stream</td></tr>
+  <tr><td>5</td><td>Creds</td><td><code>internal/connectors/enc.go</code></td><td>host decrypt → kirim plain via UDS+mTLS; masker tetap host</td></tr>
+  <tr><td>6</td><td>MCP dispatch</td><td><code>internal/mcp/handlers/connectors.go</code></td><td><b>ngk berubah</b> — udah jadi fasad</td></tr>
+</table>
+
+<div class="note"><b>Yang bikin ringan:</b> hampir semua logika plugin masuk di balik <code>op.Execute</code> (seam tunggal). Connector plugin = <code>Module</code> yang <code>Execute</code>-nya stub gRPC. Engine lain (rate-limit, run record, masking, audit) ngk berubah. <b>Belum ada</b> .proto/subprocess/loader → greenfield, <code>hashicorp/go-plugin</code> tetap relevan. Ada skill repo <code>connector-module</code> sebagai acuan kontrak.</div>
+
+<div class="card good">
+  <h3>🔌 Plug-and-play: reference connector.Module, bukan struct manifest paralel</h3>
+  <pre><code>manifest.json ──unmarshal──► connector.Module ──Register()──► [registry, MCP, seed, masking jalan semua]
+                                  ▲ inject Execute = gRPC stub per-op (1 field runtime)
+
+mod := connector.Module{}
+json.Unmarshal(manifest, &mod)          // Meta + Operations + Configs(default) terisi
+for op := range mod.AllOps() { op.Execute = grpcStub(conn, op.Key) }
+registry.Register(mod)                    // SAMA kayak builtin → hilir ngk berubah</code></pre>
+  <div class="ok"><b>Register = Module UTUH, bukan cuma Meta.</b> Default <code>configs</code> ikut di Module → <code>Bootstrap</code> → <code>seedModuleRows()</code> seed row config ke DB (persis alur builtin sekarang). Plugin nebeng seed yg sama, ngk bikin baru.</div>
+  <div class="note"><b>Plug-and-play sejati = shared types module:</b> publish subset data-type <code>pkg/connector</code> (Meta/Operation/Configs) + proto stub jadi 1 Go module berversi. Core & plugin import yg sama → <code>--dump-manifest</code> = <code>json.Marshal(mod)</code> byte-identik → mustahil drift. Cuma <code>Execute</code> (Go func) yg ngk ke-serialize, di-inject runtime.</div>
+</div>
+
+<h2 id="mig">14 · Rencana migrasi</h2>
+<ol class="steps">
+  <li><b>Fase 0</b> — proto + handshake + plugin manager (<code>hashicorp/go-plugin</code>). <span class="tag t-good">rendah</span></li>
+  <li><b>Fase 1</b> — <code>PluginModule</code> adapter (implement <code>connector.Module</code>, <code>Execute</code> = stub gRPC) + loader scan <code>plugin.json</code> → <code>Register()</code>; port github jadi binary + <code>--dump-manifest</code>, sisanya in-proc, ukur di Termux. <span class="tag t-good">rendah</span></li>
+  <li><b>Fase 2</b> — registry + manifest + verifikasi checksum/sig. <span class="tag t-acc">sedang</span></li>
+  <li><b>Fase 3</b> — lifecycle penuh: lazy spawn, idle-kill, cap concurrent, LRU evict, enable/disable. <span class="tag t-acc">sedang</span></li>
+  <li><b>Fase 4</b> — sandbox + streaming + warm pool. <span class="tag t-acc">sedang</span></li>
+  <li><b>Fase 5</b> — buka marketplace pihak ketiga. <span class="tag t-bad">tinggi (supply-chain)</span></li>
+</ol>
+<div class="note"><b>Hybrid selamanya OK.</b> Pakai <code>hashicorp/go-plugin</code> (dipakai Terraform/Vault/Nomad) — jangan tulis dari nol.</div>
+
+<table>
+  <tr><th>Keputusan</th><th>Rekomendasi</th></tr>
+  <tr><td>Spawn per-call vs persistent</td><td class="num">Persistent</td></tr>
+  <tr><td>UDS vs TCP</td><td class="num">UDS (host sama)</td></tr>
+  <tr><td>Port semua vs hybrid</td><td class="num">Hybrid</td></tr>
+  <tr><td>Spawn policy</td><td class="num">Lazy + idle-kill + cap</td></tr>
+  <tr><td>Daftar manifest kapan</td><td class="num">Startup-scan + hot-reload</td></tr>
+  <tr><td>Registry</td><td class="num">GitHub Releases dulu</td></tr>
+  <tr><td>Bahasa plugin pertama</td><td class="num">Go (polyglot nanti)</td></tr>
+  <tr><td>Versioning</td><td class="num">Per-repo independen</td></tr>
+</table>
+
+<h2 id="platform">15 · Platform generik — connector → tools → jobs</h2>
+<p class="sub"><b>Scope sekarang = connector.</b> Tapi infra dirancang generik biar tools & jobs nyusul tanpa bikin ulang.</p>
+<svg viewBox="0 0 720 230" xmlns="http://www.w3.org/2000/svg">
+  <rect x="10" y="10" width="700" height="120" rx="12" fill="#161b22" stroke="#3fb950"/>
+  <text x="360" y="32" text-anchor="middle" fill="#3fb950" font-size="13" font-weight="700">PLUGIN PLATFORM (shared · bikin sekali)</text>
+  <g font-size="10.5" fill="#e6edf3" text-anchor="middle">
+    <text x="360" y="54">transport: gRPC + UDS + hashicorp/go-plugin</text>
+    <text x="360" y="72">manifest plugin.json (field kind) · loader · registry · enable/disable</text>
+    <text x="360" y="90">lifecycle: lazy spawn · idle-kill · cap · LRU evict</text>
+    <text x="360" y="108">marketplace (GitHub Releases) · verify sha256+sig · host decrypt creds · sandbox</text>
+  </g>
+  <g text-anchor="middle">
+    <rect x="40"  y="160" width="190" height="56" rx="9" fill="#161b22" stroke="#bc8cff"/>
+    <text x="135" y="182" fill="#bc8cff" font-size="12" font-weight="700">kontrak connector</text>
+    <text x="135" y="200" fill="#8b949e" font-size="9">Schema/Execute(op)/Validate/Health</text>
+    <rect x="265" y="160" width="190" height="56" rx="9" fill="#161b22" stroke="#2d3748"/>
+    <text x="360" y="182" fill="#8b949e" font-size="12" font-weight="700">kontrak tool (NANTI)</text>
+    <text x="360" y="200" fill="#8b949e" font-size="9">Schema/Run(input)/Health</text>
+    <rect x="490" y="160" width="190" height="56" rx="9" fill="#161b22" stroke="#2d3748"/>
+    <text x="585" y="182" fill="#8b949e" font-size="12" font-weight="700">kontrak job (NANTI)</text>
+    <text x="585" y="200" fill="#8b949e" font-size="9">Schema/Run(trigger)/Health + jadwal</text>
+  </g>
+  <g stroke="#2d3748" stroke-width="2"><line x1="135" y1="130" x2="135" y2="160"/><line x1="360" y1="130" x2="360" y2="160"/><line x1="585" y1="130" x2="585" y2="160"/></g>
+</svg>
+<div class="grid g2">
+  <div class="card good"><h3>Shared (90% kode)</h3>Semua di kotak hijau. Bikin sekali, dipakai semua kind.</div>
+  <div class="card"><h3>Per-kind (10%)</h3>Cuma <b>proto service</b> + adapter ke interface internal wick masing-masing.</div>
+</div>
+<div class="ok"><b>Realistis di wick:</b> connector, tool, job <b>sudah berbagi</b> tata bahasa schema <code>wick:"..."</code> (skill <code>tool-module</code> + <code>connector-module</code>). Refleksi schema → manifest jalan sama buat ketiganya. Platform tinggal +1 proto service per kind.</div>
+<div class="note"><b>Prinsip:</b> jangan over-build sekarang — implement platform secukupnya buat connector, TAPI desain interface (manifest <code>kind</code>, folder per-kind, loader) sudah sadar-multi-kind biar tools/jobs cuma "colok" proto service baru, bukan refactor.</div>
+
+<h2 id="proto">16 · Proto sync &amp; versioning</h2>
+<p class="sub">Proto = kontrak bersama core ↔ tiap plugin (repo terpisah). Sync = semua pegang versi cocok <b>tanpa rebuild barengan</b>.</p>
+<div class="grid g2">
+  <div class="card"><h3>1 sumber proto, berversi</h3>
+    <pre><code>wick-connector-proto/
+├── connector.proto
+├── buf.yaml          # lint + breaking-check
+└── gen/go/...        # stub → Go module</code></pre>
+    <b>Go-only (sekarang):</b> publish Go module <code>wick-connector-proto</code>, core+plugin <code>go get …@v1</code>. <b>Polyglot (nanti):</b> Buf Schema Registry.
+  </div>
+  <div class="card warn"><h3>DUA angka versi — jangan dicampur</h3>
+    <table>
+      <tr><th>Angka</th><th>Naik kapan</th></tr>
+      <tr><td><b>semver modul</b> v1.4.2</td><td>tiap perubahan (minor utk additive)</td></tr>
+      <tr><td><b>proto_version</b> 1,2</td><td><b>cuma pas breaking</b> (gerbang handshake)</td></tr>
+    </table>
+    <p class="sub">proto_version naik <b>sesedikit mungkin</b> → plugin jarang dipaksa rebuild.</p>
+  </div>
+</div>
+<table>
+  <tr><th>Perubahan</th><th>semver</th><th>proto_version</th><th>Plugin lama</th></tr>
+  <tr><td>Tambah field (tag baru)</td><td>minor v1.1</td><td class="num">tetap</td><td class="num">ngk rebuild ✅</td></tr>
+  <tr><td>Hapus/ganti tipe/renumber tag</td><td>major v2.0</td><td>naik</td><td>wajib rebuild + migrasi</td></tr>
+</table>
+<div class="note"><b>Aturan emas:</b> field tag number NGK boleh dipakai-ulang/renumber, cuma boleh <b>nambah</b>. Itu yg bikin plugin lama + host baru tetap jalan tanpa rebuild barengan.</div>
+<div class="card good">
+  <h3>Handshake + CI proto (breaking ketahan)</h3>
+  <pre><code># handshake (hashicorp/go-plugin Negotiate)
+host:   support proto_version 1, 2
+plugin: v1 → cocok → load   |   v3 → TOLAK + error jelas
+
+# CI on push folder proto:
+buf lint && buf breaking --against 'main'
+  ├─ ngk breaking → minor bump, proto_version TETAP, codegen, publish
+  └─ ADA breaking → BLOCK PR / label merah → manusia putuskan proto_version++</code></pre>
+  <div class="ok">Breaking selalu lewat review manusia. Additive = auto. Breaking butuh transisi → host support v1+v2 sekaligus 1 window.</div>
+</div>
+
+<h2 id="cicd">17 · CI/CD auto-build &amp; release</h2>
+<p class="sub">Connector berubah → <b>auto rebuild</b>, artifact otomatis dinamai <code>nama-versi-os-arch</code>, manifest digenerate, attach ke GitHub Release.</p>
+<div class="grid g2">
+  <div class="card"><h3>Repo connector (monorepo)</h3>
+    <pre><code>wick-connectors/        # tiap subfolder = 1 connector
+├── github/  { go.mod, *.go, VERSION }
+├── slack/   { go.mod, *.go, VERSION }
+└── .github/workflows/release.yml</code></pre>
+    CI <b>path-filter</b>: cuma connector yg foldernya berubah yg di-rebuild.
+  </div>
+  <div class="card"><h3>Pipeline (GitHub Actions)</h3>
+    <pre><code>on: push paths: ['*/**']
+detect:  git diff → folder berubah
+build (matrix: name × os_arch):
+  go build -o ${name}-${VER}-${OS}-${ARCH}
+  ./${name}-... --dump-manifest > plugin.json
+  sha256sum + cosign sign
+release:
+  gh release create "${name}/v${VER}" \
+    ${name}-${VER}-*-* plugin.json *.sha256 *.sig</code></pre>
+  </div>
+</div>
+<div class="card good">
+  <h3>Konvensi nama artifact (otomatis)</h3>
+  <pre><code>github-1.4.2-linux-arm64      ← &lt;name&gt;-&lt;version&gt;-&lt;goos&gt;-&lt;goarch&gt;
+github-1.4.2-linux-amd64
+github-1.4.2-darwin-arm64
+plugin.json                   ← manifest (generate dari binary)
+github-1.4.2-linux-arm64.sha256 / .sig</code></pre>
+  <div class="ok">Host pas Install pilih asset cocok dgn device (Termux → <code>linux-arm64</code>). Nama+versi terbaca dari nama file & plugin.json, ngk ditulis tangan.</div>
+</div>
+<div class="note"><b>Nyambung ke marketplace (§6):</b> <code>gh release create</code> → muncul di GitHub Releases API → otomatis jadi entri <b>Available</b> di marketplace. Push connector → CI build+release → langsung nongol. Zero langkah manual. Matrix os/arch jalan paralel + path-filter → cepat & hemat CI.</div>
+
+<h3>Mass-rebuild &amp; auto-bump saat kontrak core berubah</h3>
+<div class="ok"><b>Koreksi premis:</b> ngk semua perubahan core maksa recompile semua. Cuma <b>breaking (proto_version naik)</b> yg maksa. Additive (minor proto) = connector lama tetap kompatibel → <b>nol rebuild</b>. Mass-rebuild jarang &amp; terkontrol.</div>
+<table>
+  <tr><th>Pemicu</th><th>Scope</th><th>Mekanisme</th></tr>
+  <tr><td>Folder 1 connector berubah</td><td>connector itu</td><td>path-filter</td></tr>
+  <tr><td><b>proto_version naik (breaking)</b></td><td><b>SEMUA connector</b></td><td>fan-out + auto-bump</td></tr>
+</table>
+<div class="grid g2">
+  <div class="card"><h3>Fan-out + auto-bump (jangan edit satu-satu)</h3>
+    <pre><code># proto-bump.yml di repo connectors
+on: repository_dispatch [proto-released]   # dari repo proto, rilis vN
+matrix: semua connector folder:
+  go get wick-connector-proto@vN
+  go test ./${name}
+  bump VERSION ${name} (patch++)   # OTOMATIS, script
+  build + gh release "${name}/v${newVER}"
+  commit "chore(${name}): rebuild utk proto vN"</code></pre>
+    <p class="sub">1 workflow handle semua → zero edit manual. Alt: Renovate auto-PR bump dep proto per connector.</p>
+  </div>
+  <div class="card"><h3>Integrasi release workflow core</h3>
+    <pre><code># master → release: tambah 1 job
+check-proto:
+  proto_version rilis ini vs terakhir
+   ├─ naik (breaking) → repository_dispatch
+   │     → trigger fan-out (rebuild+bump semua)
+   └─ sama (additive) → ngk ngapa-ngapain</code></pre>
+    <div class="ok">Breaking → otomatis dorong rebuild semua. Additive → connector ngk keganggu. Dua-duanya zero edit manual.</div>
+  </div>
+</div>
+
+<p class="sub" style="margin-top:40px;text-align:center">Wick Plugin Platform — Architecture Plan · detail lengkap di <code>PLAN.md</code></p>
+</body>
+</html>

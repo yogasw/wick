@@ -62,11 +62,11 @@
   let jobName = $derived(names.job ?? jobParams?.key ?? "");
   let toolName = $derived(names.tool ?? toolParams?.key ?? "");
 
-  const home: BreadcrumbItem = { label: "Home", onClick: () => push("/") };
+  const home: BreadcrumbItem = { label: "Connectors", onClick: () => push("/") };
 
   let items = $derived.by<BreadcrumbItem[]>(() => {
     if (auditRoute) {
-      return [home, { label: "Audit Log" }];
+      return [{ label: "Audit Log" }];
     }
     if (jobParams) {
       return [
@@ -81,7 +81,7 @@
       ];
     }
     if (customCrumb) {
-      return [home, { label: "Connectors", onClick: () => push("/") }, { label: customCrumb }];
+      return [home, { label: customCrumb }];
     }
     if (listParams) {
       return [home, { label: connectorName }];
@@ -103,7 +103,9 @@
       }
       return trail;
     }
-    return [home, { label: "Connectors" }];
+    // Connectors index: no breadcrumb — the page already shows a
+    // "Connectors" heading, so a single-item crumb would just repeat it.
+    return [];
   });
 </script>
 

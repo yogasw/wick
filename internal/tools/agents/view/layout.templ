@@ -122,6 +122,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 				</a>
 				@agentsNavLink(vm.Base+"/overview", "Overview", vm.ActivePage == "overview")
 				@agentsNavLink(vm.Base+"/workflows", "Workflows", vm.ActivePage == "workflows")
+				@agentsNavLink(vm.Base+"/connectors", "Connectors", vm.ActivePage == "connectors")
 				<details class="group" { agentsMoreOpenAttr(vm.ActivePage)... }>
 					<summary class="list-none cursor-pointer flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors select-none">
 						<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -188,10 +189,13 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 					}
 				</div>
 			</div>
-			<!-- Bottom: Settings (admin-only) + user/theme widgets (moved from global navbar) -->
-			if user != nil && user.IsAdmin() {
+			<!-- Bottom: Mini Tools (all users) + Settings (admin-only) -->
+			if user != nil {
 				<div class="border-t border-white-300 dark:border-navy-600 px-2 py-2">
-					@agentsNavLink(vm.Base+"/settings", "Settings", vm.ActivePage == "settings")
+					@agentsNavLink("/mini-tools", "Mini Tools", false)
+					if user.IsAdmin() {
+						@agentsNavLink(vm.Base+"/settings", "Settings", vm.ActivePage == "settings")
+					}
 				</div>
 			}
 			<!-- Constrain top-widget dropdowns to sidebar width so menus don't overflow -->
@@ -697,6 +701,16 @@ templ agentsNavIcon(label string) {
 		case "Workflows":
 			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
 				<path d="M9 2L3 9h4l-1 5 6-7H8l1-5z" stroke-linejoin="round"></path>
+			</svg>
+		case "Connectors":
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<circle cx="4" cy="8" r="2"></circle>
+				<circle cx="12" cy="8" r="2"></circle>
+				<path d="M6 8h4" stroke-linecap="round"></path>
+			</svg>
+		case "Mini Tools":
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<path d="M6.5 2.5a3 3 0 00-3.5 4l-1 1 2.5 2.5 1-1a3 3 0 004-3.5L7.5 7 6 5.5l1-3z" stroke-linejoin="round"></path>
 			</svg>
 		case "Projects":
 			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
