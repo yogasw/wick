@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+*   **Session detail access for tag-granted project members**: Users who could see a session in the sidebar via project tag grants could not open its detail/conversation page (the route returned 404). `ownsSession()` now also checks project-scoped access (`callerProjectAccess().allowSession()`), so list visibility and detail access are consistent. The App Owner, `admin_see_all` admins, and ownerless unscoped sessions remain unchanged.
 
 ---
 

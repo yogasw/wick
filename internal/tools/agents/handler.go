@@ -652,8 +652,11 @@ func idleTimeoutMs() int {
 
 // ownsSession reports whether the caller may access sess. App owners (and
 // admins while AdminSeeAll is on) see all sessions; everyone else may only
-// access sessions they own. Ownerless sessions (UserID=="") are reachable
-// only by the owner / see-all caller — they are not a public escape hatch.
+// access sessions they own OR sessions belonging to a project they can reach
+// (via project tag grants / project ownership). This mirrors the sidebar's
+// allowSession path so a session shown in the list is also openable. Ownerless
+// UNSCOPED sessions (ProjectID=="" && UserID=="") are reachable only by the
+// owner / see-all caller — they are not a public escape hatch.
 func ownsSession(c *tool.Ctx, sess session.Session) bool {
 	u := login.GetUser(c.Context())
 	if u == nil {
@@ -665,7 +668,13 @@ func ownsSession(c *tool.Ctx, sess session.Session) bool {
 	if u.IsAdmin() && adminSeeAll() {
 		return true
 	}
-	return sess.Meta.UserID != "" && sess.Meta.UserID == u.ID
+	if sess.Meta.UserID != "" && sess.Meta.UserID == u.ID {
+		return true
+	}
+	// Project-scoped sessions are reachable by anyone with access to the
+	// project (tag grant, ownership, or ownerless/system project) — same rule
+	// the sidebar uses, keeping list visibility and detail access consistent.
+	return callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID)
 }
 
 // ensurePersonalProjectForUser auto-creates a personal project for a non-admin
