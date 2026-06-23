@@ -10,6 +10,18 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.23.1](https://github.com/yogasw/wick/compare/v0.23.0...v0.23.1) — Agents
+
+_Released on 2026-06-23_
+
+### Fixed
+
+*   **Session detail access for tag-granted project members**: Users who could see a session in the sidebar via project tag grants could not open its detail/conversation page (the route returned 404). The `ownsSession()` function now also checks project-scoped access (`callerProjectAccess().allowSession()`), ensuring consistency between session list visibility and detail access. The App Owner, `admin_see_all` admins, and ownerless unscoped sessions are unaffected.
+*   Updated `admin-panel.md` to clarify that tag-granted project members can now open session detail pages, not just their own.
+
+---
+
+
 ## [v0.23.0](https://github.com/yogasw/wick/compare/v0.22.2...v0.23.0) — MCP & Connectors
 
 _Released on 2026-06-23_
