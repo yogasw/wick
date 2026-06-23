@@ -36,7 +36,7 @@ templ NavbarHome(user *entity.User, homeHref string) {
 					{{ g := GuestThemeFromContext(ctx) }}
 					@ThemePicker(ThemeByID(g.Current), g.Light, g.Dark)
 				}
-				@UserMenu(user)
+				@UserMenu(user, false)
 			</div>
 		</div>
 	</nav>
@@ -115,7 +115,12 @@ templ ThemePicker(current Theme, lightPref, darkPref string) {
 
 // UserMenu renders the user avatar dropdown used in all navbars.
 // Shows avatar + dropdown (Profile, Sign out) when logged in, or a Sign in link.
-templ UserMenu(user *entity.User) {
+// UserMenu is the avatar dropdown (profile, tokens, …, sign out). Set
+// showTheme when the surrounding chrome has no standalone ThemePicker (e.g.
+// the agents sidebar) — it then renders a Theme section inside the menu.
+// Pass false where a ThemePicker already sits next to the avatar (the home
+// navbar, manager, profile layouts) to avoid a duplicate control.
+templ UserMenu(user *entity.User, showTheme bool) {
 	if user != nil {
 		<div class="relative">
 			<details class="group">
@@ -202,6 +207,12 @@ templ UserMenu(user *entity.User) {
 							</a>
 						}
 					</div>
+					if showTheme {
+						<div class="flex items-center justify-between gap-2 border-t border-white-300 dark:border-navy-600 px-4 py-2.5">
+							<span class="text-sm text-black-800 dark:text-black-600">Theme</span>
+							@ThemePicker(ThemeByID(EffectiveTheme(user.Metadata.Theme)), EffectiveLightTheme(user.Metadata.LightTheme), EffectiveDarkTheme(user.Metadata.DarkTheme))
+						</div>
+					}
 					<div class="border-t border-white-300 dark:border-navy-600 py-1">
 						<form action="/auth/logout" method="POST">
 							<button

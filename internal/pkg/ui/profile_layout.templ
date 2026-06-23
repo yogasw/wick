@@ -49,7 +49,7 @@ templ ProfileLayout(title string, active ProfileTabKey, user *entity.User) {
 						{{ g := GuestThemeFromContext(ctx) }}
 						@ThemePicker(ThemeByID(g.Current), g.Light, g.Dark)
 					}
-					@UserMenu(user)
+					@UserMenu(user, false)
 				</div>
 			</div>
 		</nav>
