@@ -1662,7 +1662,7 @@ func updateProject(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	p, ok := globalMgr.Registry().Project(id)
-	if !ok {
+	if !ok || !callerProjectAccess(c).allowProject(id) {
 		c.Error(http.StatusNotFound, "project not found")
 		return
 	}
@@ -1717,7 +1717,13 @@ func deleteProject(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	p, ok := globalMgr.Registry().Project(id)
-	if ok && p.Meta.Name == project.DefaultName {
+	if !ok || !callerProjectAccess(c).allowProject(id) {
+		// 404 for missing or unreachable — don't confirm existence to a caller
+		// who can't see the project, and don't let them delete it.
+		c.Error(http.StatusNotFound, "project not found")
+		return
+	}
+	if p.Meta.Name == project.DefaultName {
 		c.JSON(http.StatusForbidden, map[string]string{"error": "the default project cannot be deleted"})
 		return
 	}
@@ -1847,6 +1853,23 @@ func streamSSE(c *tool.Ctx) {
 		return
 	}
 	sessionID := c.Query("session")
+	// Access guard. A session-scoped stream replays that session's lifecycle +
+	// partial assistant text and subscribes to its live turn events, so the
+	// caller must be allowed to open the session. A global stream (no session)
+	// carries pool_stats listing every active session across all users — that's
+	// the admin Providers view, so restrict it to see-all callers.
+	if sessionID != "" {
+		sess, ok := globalMgr.Registry().Session(sessionID)
+		if !ok || !ownsSession(c, sess) {
+			c.Error(http.StatusNotFound, "session not found")
+			return
+		}
+	} else if u := login.GetUser(c.Context()); u != nil && !u.IsAdmin() {
+		// Global stream = admin Providers view (same gate as providersPage).
+		// u == nil is an internal/MCP caller and stays unrestricted.
+		c.Error(http.StatusForbidden, "admins only")
+		return
+	}
 	w := c.W
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
