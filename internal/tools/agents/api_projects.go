@@ -64,7 +64,9 @@ func apiProjectDetail(c *tool.Ctx) {
 	}
 
 	p, ok := globalMgr.Registry().Project(id)
-	if !ok {
+	if !ok || !callerProjectAccess(c).allowProject(id) {
+		// Same 404 for "missing" and "no access" — don't leak project existence
+		// to a caller who can't reach it (ownerless/other-owner projects).
 		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
 		return
 	}
@@ -132,7 +134,7 @@ func apiProjectUpdate(c *tool.Ctx) {
 	}
 
 	p, ok := globalMgr.Registry().Project(id)
-	if !ok {
+	if !ok || !callerProjectAccess(c).allowProject(id) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
 		return
 	}
