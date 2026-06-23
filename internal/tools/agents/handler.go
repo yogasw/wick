@@ -488,17 +488,19 @@ func callerProjectAccess(c *tool.Ctx) projectAccess {
 			set = map[string]struct{}{}
 		}
 	}
-	// Always union tag grants with project ownership. Some legacy projects can
-	// predate owner tags (or lose their tag rows), but their metadata still
-	// records the creator. A scoped admin/user must keep access to projects they
-	// own even when AdminSeeAll is off.
-	// Union tag grants with project ownership AND ownerless ("system") projects.
-	// Owned projects: a scoped admin/user keeps access to projects they created
-	// even when AdminSeeAll is off (some legacy projects predate owner tags).
-	// Ownerless projects (OwnerUserID == "") are shared/system resources — they
-	// belong to no one in particular, so every authenticated caller may see them.
+	// Union tag grants with project ownership. Some legacy projects can predate
+	// owner tags (or lose their tag rows), but their metadata still records the
+	// creator — a scoped admin/user must keep access to projects they own even
+	// when AdminSeeAll is off.
+	//
+	// Ownerless projects (OwnerUserID == "") are NOT a public escape hatch: they
+	// are admin-only by default. A non-admin reaches one only via an explicit tag
+	// grant (already unioned in from AccessibleResourceIDs above), never just
+	// because it lacks an owner. Without this guard every authenticated user
+	// could see (and open) every ownerless project + its sessions in Recent.
+	isAdmin := u.IsAdmin()
 	for pid, p := range globalMgr.Registry().Projects() {
-		if p.Meta.OwnerUserID == u.ID || p.Meta.OwnerUserID == "" {
+		if p.Meta.OwnerUserID == u.ID || (p.Meta.OwnerUserID == "" && isAdmin) {
 			set[pid] = struct{}{}
 		}
 	}
