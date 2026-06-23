@@ -36,7 +36,7 @@ Wick does **not** advertise N×M static tools (one entry per connector × operat
 |------|------------|---------|
 | `wick_list` | `readOnlyHint` | List every connector instance and connected OAuth account visible to the caller. Each entry has `id`, `connector` (label), `description`, `total_tools`, `status`, `kind`, and `parent_id`. Pass `session_id` to also include this session's workspace connectors (`sw_…` entries) and a `session_config_bases` array (connectors that can be cloned into a session workspace but haven't been added yet). |
 | `wick_search` | `readOnlyHint` | Substring search over label, name, description. Pass `session_id` to also match this session's workspace connectors. |
-| `wick_get` | `readOnlyHint` | Fetch full detail for one `id` (connector or composite `connectorID/accountID`), including `input_schema` and account-scoped `tool_id` values. For session-workspace connectors (`sw_…` id), also pass `session_id` as a separate argument. |
+| `wick_get` | `readOnlyHint` | Drill into a connector one level at a time via an optional `selector` argument. Pass only `id` to list the connector's categories; add `selector=<category title>` to list that category's operations (no schemas yet); add `selector=<op key>` to get that one op's `input_schema`. Flat connectors with no named categories skip straight to listing ops. For session-workspace connectors (`sw_…` id), also pass `session_id` as a separate argument. |
 | `wick_execute` | `destructiveHint` | Run an operation by `tool_id` + `params`. Composite tool IDs (`conn:…/op@accountID`) inject the account token automatically. |
 | `wick_info` | `readOnlyHint` | Return server version and build info |
 | `wick_encrypt` | `readOnlyHint` | Redirect to the in-app encrypt UI — no crypto over MCP. See [Encrypted credentials](#encrypted-credentials) |
@@ -44,6 +44,8 @@ Wick does **not** advertise N×M static tools (one entry per connector × operat
 | `wick_session_info` | `readOnlyHint` | Read the active session's metadata: `session_id`, `title`, `title_custom`, `origin`, `status`, `project_id`. Used by the agent to decide whether to set a title. |
 | `wick_set_title` | `idempotentHint` | Set the session's sidebar title and mark it as custom so the auto-derived first-message label never overwrites it. Title is truncated to 60 characters. |
 | `wick_session_workspace` | — | Spin up throwaway connector instances scoped to one session (clone a base connector, point it at staging, use a different key). The agent creates blank instances; the **user** fills the config in a UI form; the agent never sees the values. Instances appear in `wick_list` for that session only and die with it. See [Session workspace](#session-workspace). |
+
+The `selector` argument accepts either a **category title** (from a prior id-only response) or an **op key** (from a category listing). The `category` and `op_key` argument names are accepted as aliases for `selector` — use whichever reads naturally in your tool call. An unknown selector returns an error listing what to try instead.
 
 Why not a static list?
 
@@ -80,7 +82,7 @@ Account-scoped (personal OAuth identity):
 conn:{connector_id}/{op_key}@{account_id}
 ```
 
-UUID-based, opaque, stable across admin label renames. The `conn:` prefix is reserved for future module classes (e.g. `prompt:` for prompt templates). When `wick_get` is called with a composite `connectorID/accountID` id (from a `kind="account"` entry in `wick_list`), the returned `tool_id` values carry the `@accountID` suffix. Passing such a `tool_id` to `wick_execute` automatically injects that account's OAuth token and enforces its per-account disabled-op list.
+UUID-based, opaque, stable across admin label renames. The `conn:` prefix is reserved for future module classes (e.g. `prompt:` for prompt templates). When `wick_get` is called with a composite `connectorID/accountID` id (from a `kind="account"` entry in `wick_list`), the returned `tool_id` values in the op listing and schema levels carry the `@accountID` suffix. Passing such a `tool_id` to `wick_execute` automatically injects that account's OAuth token and enforces its per-account disabled-op list.
 
 ### Typical LLM flow
 
@@ -97,10 +99,14 @@ sequenceDiagram
     MCP-->>LLM: [wick_list, wick_search, wick_get, wick_execute]
     LLM->>MCP: wick_list
     MCP->>Auth: IsVisibleTo(user, tags, is_admin)
-    Auth-->>MCP: filtered (row × op) set
-    MCP-->>LLM: [{ tool_id, connector, name, description, destructive }]
-    LLM->>MCP: wick_get({tool_id})
-    MCP-->>LLM: input_schema + detailed description
+    Auth-->>MCP: filtered connector set
+    MCP-->>LLM: [{ id, connector, description, total_tools, status, kind }]
+    LLM->>MCP: wick_get({id})
+    MCP-->>LLM: categories list (title, description, total_tools per category)
+    LLM->>MCP: wick_get({id, selector: "Calendar"})
+    MCP-->>LLM: ops in that category (tool_id, name, description) — no schemas
+    LLM->>MCP: wick_get({id, selector: "calendar_create_event"})
+    MCP-->>LLM: single op with input_schema
     LLM->>MCP: wick_execute({tool_id, params})
     MCP->>Auth: re-check visibility + op enabled
     MCP->>Op: ExecuteFunc(ctx, c, params)
@@ -110,17 +116,30 @@ sequenceDiagram
     MCP-->>LLM: { result, audit_id }
 ```
 
-```
-wick_list                                 → list of { tool_id, connector, name, description, destructive }
-wick_get({tool_id: "conn:abc/get"})       → schema + detailed description
-wick_execute({tool_id, params: {...}})    → operation result
-```
-
-Or shortcut when the LLM already knows the schema from a prior turn:
+The three `wick_get` levels keep the LLM's context from ballooning — only the final level carries an `input_schema`:
 
 ```
-wick_search({query: "loki query"})        → matched tool_id
-wick_execute({tool_id, params: {...}})    → result
+# Level 1 — category list (no ops, no schemas)
+wick_get({id: "conn-uuid"})
+→ { categories: [{ category, description, total_tools }, …] }
+
+# Level 2 — op list for one category (no schemas)
+wick_get({id: "conn-uuid", selector: "Calendar"})
+→ { tools: [{ tool_id, name, description, destructive }, …] }
+
+# Level 3 — single op with schema
+wick_get({id: "conn-uuid", selector: "calendar_create_event"})
+→ { tools: [{ tool_id, name, description, destructive, input_schema }] }
+```
+
+For a flat connector with no named categories, level 1 falls through to an op list directly — skip straight to level 3 with an op key.
+
+Shortcut when the LLM already knows the op key (e.g. from a prior `wick_search` hit):
+
+```
+wick_search({query: "loki query"})                             → matched tool_id
+wick_get({id: "conn-uuid", selector: "loki_query_range"})      → input_schema
+wick_execute({tool_id, params: {...}})                          → result
 ```
 
 ### Multi-identity: connector vs account

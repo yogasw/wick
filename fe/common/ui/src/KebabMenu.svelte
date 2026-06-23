@@ -41,14 +41,33 @@
 
   const isOpen = $derived(myId !== 0 && currentOwner === myId);
 
+  /* Estimated row height (px) used to decide flip direction before the menu
+     has rendered. Matches the py-2 text-sm rows below. */
+  const ROW_H = 36;
+  const GAP = 4;
+  const PAD = 8;
+
   function place() {
     if (!triggerEl) return;
     const r = triggerEl.getBoundingClientRect();
     // Right-align the menu under the trigger; clamp into the viewport.
     let left = r.right - width;
-    if (left < 8) left = 8;
-    if (left + width > window.innerWidth - 8) left = window.innerWidth - 8 - width;
-    pos = { top: r.bottom + 4, left };
+    if (left < PAD) left = PAD;
+    if (left + width > window.innerWidth - PAD) left = window.innerWidth - PAD - width;
+
+    // Prefer below the trigger, but flip above when it would overflow the
+    // viewport bottom — otherwise the last rows get clipped / sit under the
+    // following list row. Use the rendered height once available, else estimate.
+    const menuH = menuEl?.offsetHeight ?? items.length * ROW_H + PAD;
+    const below = r.bottom + GAP;
+    const fitsBelow = below + menuH <= window.innerHeight - PAD;
+    let top = fitsBelow ? below : r.top - GAP - menuH;
+    // If it fits neither way, clamp to the viewport so it stays fully on-screen.
+    if (top < PAD) top = PAD;
+    if (top + menuH > window.innerHeight - PAD) {
+      top = Math.max(PAD, window.innerHeight - PAD - menuH);
+    }
+    pos = { top, left };
   }
 
   function toggle(e: MouseEvent) {
@@ -66,6 +85,13 @@
     releaseOpen();
     item.onclick();
   }
+
+  /* The first place() in toggle() runs before the popup exists, so it uses
+     the estimated height to pick a flip direction. Once menuEl mounts, place
+     again with its real measured height to correct any estimate drift. */
+  $effect(() => {
+    if (isOpen && menuEl) place();
+  });
 
   /* Outside-click / Escape / reposition wiring, only while open. */
   $effect(() => {
@@ -93,6 +119,20 @@
   });
 
   let menuEl = $state<HTMLDivElement | null>(null);
+
+  /* Move the popup to <body> so it escapes each list row's stacking context.
+     A row is `position:relative`, so a fixed child painted inside it can still
+     be covered by the *next* sibling row (whose own stacking context paints
+     later) — z-index alone can't win across sibling contexts. Portaling to the
+     body takes the popup out of every row context entirely. */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return {
+      destroy() {
+        node.remove();
+      },
+    };
+  }
 </script>
 
 <button
@@ -110,6 +150,7 @@
 {#if isOpen && pos}
   <div
     bind:this={menuEl}
+    use:portal
     role="menu"
     style="position:fixed; top:{pos.top}px; left:{pos.left}px; width:{width}px; z-index:9999;"
     class="overflow-hidden rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 py-1 shadow-lg"

@@ -125,22 +125,25 @@ func TestWickSearchNoMatch(t *testing.T) {
 
 // ── wick_get ─────────────────────────────────────────────────────────
 
-func TestWickGetReturnsInputSchema(t *testing.T) {
-	db := newTestDB(t)
-	svc := newTestService(t, db, stubModule())
-	h := NewHandler(svc)
+// wickGetPayload is the subset of the wick_get response the tests read.
+type wickGetPayload struct {
+	ID         string `json:"id"`
+	Categories []struct {
+		Category   string `json:"category"`
+		TotalTools int    `json:"total_tools"`
+	} `json:"categories"`
+	Tools []struct {
+		ToolID      string           `json:"tool_id"`
+		Name        string           `json:"name"`
+		Category    string           `json:"category"`
+		InputSchema *json.RawMessage `json:"input_schema"`
+	} `json:"tools"`
+}
 
-	rows, err := svc.List(context.Background())
-	if err != nil || len(rows) == 0 {
-		t.Fatalf("list: %v rows=%d", err, len(rows))
-	}
-	connectorID := rows[0].ID
-
-	raw := dispatchJSON(t, h, "tools/call", map[string]any{
-		"name":      "wick_get",
-		"arguments": map[string]any{"id": connectorID},
-	})
-
+// dispatchWickGet runs wick_get and decodes the payload, failing on error.
+func dispatchWickGet(t *testing.T, h *Handler, args map[string]any) wickGetPayload {
+	t.Helper()
+	raw := dispatchJSON(t, h, "tools/call", map[string]any{"name": "wick_get", "arguments": args})
 	var resp struct {
 		Result struct {
 			Content []struct{ Text string `json:"text"` } `json:"content"`
@@ -153,37 +156,165 @@ func TestWickGetReturnsInputSchema(t *testing.T) {
 	if resp.Result.IsError {
 		t.Fatalf("isError=true:\n%s", raw)
 	}
-
-	var payload struct {
-		ID        string `json:"id"`
-		Connector string `json:"connector"`
-		Tools     []struct {
-			ToolID      string `json:"tool_id"`
-			Name        string `json:"name"`
-			InputSchema struct {
-				Type       string                     `json:"type"`
-				Properties map[string]json.RawMessage `json:"properties"`
-			} `json:"input_schema"`
-		} `json:"tools"`
-	}
+	var payload wickGetPayload
 	if err := json.Unmarshal([]byte(resp.Result.Content[0].Text), &payload); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
-	if payload.ID != connectorID {
-		t.Fatalf("id = %q, want %q", payload.ID, connectorID)
+	return payload
+}
+
+// LEVEL 1 — grouped connector, id only: returns categories, no ops, no schema.
+func TestWickGetListsCategoriesOnly(t *testing.T) {
+	db := newTestDB(t)
+	svc := newTestService(t, db, groupedStubModule())
+	h := NewHandler(svc)
+
+	rows, err := svc.List(context.Background())
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("list: %v rows=%d", err, len(rows))
 	}
-	if len(payload.Tools) != 1 {
-		t.Fatalf("tools count = %d, want 1", len(payload.Tools))
+
+	p := dispatchWickGet(t, h, map[string]any{"id": rows[0].ID})
+
+	if len(p.Categories) != 2 {
+		t.Fatalf("categories = %d, want 2 (Alpha, Beta)", len(p.Categories))
 	}
-	tool := payload.Tools[0]
-	if tool.Name != "Echo" {
-		t.Fatalf("tool name = %q, want Echo", tool.Name)
+	byName := map[string]int{}
+	for _, c := range p.Categories {
+		byName[c.Category] = c.TotalTools
 	}
-	if tool.InputSchema.Type != "object" {
-		t.Fatalf("input_schema.type = %q, want object", tool.InputSchema.Type)
+	if byName["Alpha"] != 10 || byName["Beta"] != 5 {
+		t.Fatalf("category counts = %v, want Alpha:10 Beta:5", byName)
 	}
-	if _, ok := tool.InputSchema.Properties["msg"]; !ok {
+	if len(p.Tools) != 0 {
+		t.Fatalf("tools = %d, want 0 at category level", len(p.Tools))
+	}
+}
+
+// LEVEL 2 — selector = category title: lists that category's ops, no schema.
+func TestWickGetCategoryListsOpsNoSchema(t *testing.T) {
+	db := newTestDB(t)
+	svc := newTestService(t, db, groupedStubModule())
+	h := NewHandler(svc)
+
+	rows, err := svc.List(context.Background())
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("list: %v rows=%d", err, len(rows))
+	}
+
+	p := dispatchWickGet(t, h, map[string]any{"id": rows[0].ID, "selector": "Alpha"})
+
+	if len(p.Categories) != 0 {
+		t.Fatalf("categories = %d, want 0 at op-list level", len(p.Categories))
+	}
+	if len(p.Tools) != 10 {
+		t.Fatalf("tools = %d, want 10 (Alpha only)", len(p.Tools))
+	}
+	for _, tool := range p.Tools {
+		if tool.Category != "Alpha" {
+			t.Fatalf("op %q category = %q, want Alpha", tool.Name, tool.Category)
+		}
+		if tool.InputSchema != nil {
+			t.Fatalf("op %q has input_schema at op-list level; want omitted", tool.Name)
+		}
+	}
+}
+
+// LEVEL 3 — selector = op key: returns that one op WITH its input_schema.
+func TestWickGetOpKeyReturnsSchema(t *testing.T) {
+	db := newTestDB(t)
+	svc := newTestService(t, db, groupedStubModule())
+	h := NewHandler(svc)
+
+	rows, err := svc.List(context.Background())
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("list: %v rows=%d", err, len(rows))
+	}
+
+	p := dispatchWickGet(t, h, map[string]any{"id": rows[0].ID, "selector": "a_3"})
+
+	if len(p.Tools) != 1 {
+		t.Fatalf("tools = %d, want 1 (single op)", len(p.Tools))
+	}
+	tool := p.Tools[0]
+	if tool.Category != "Alpha" {
+		t.Fatalf("op category = %q, want Alpha", tool.Category)
+	}
+	if tool.InputSchema == nil {
+		t.Fatalf("op %q missing input_schema at op level", tool.Name)
+	}
+}
+
+// Flat connector (no named categories): id only lists ops directly (no
+// schema), and an op key returns the schema.
+func TestWickGetFlatConnector(t *testing.T) {
+	db := newTestDB(t)
+	svc := newTestService(t, db, stubModule())
+	h := NewHandler(svc)
+
+	rows, err := svc.List(context.Background())
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("list: %v rows=%d", err, len(rows))
+	}
+	connectorID := rows[0].ID
+
+	// id only → op list, no categories, no schema.
+	p := dispatchWickGet(t, h, map[string]any{"id": connectorID})
+	if len(p.Categories) != 0 {
+		t.Fatalf("categories = %d, want 0 for flat connector", len(p.Categories))
+	}
+	if len(p.Tools) != 1 {
+		t.Fatalf("tools = %d, want 1", len(p.Tools))
+	}
+	if p.Tools[0].Name != "Echo" {
+		t.Fatalf("tool name = %q, want Echo", p.Tools[0].Name)
+	}
+	if p.Tools[0].InputSchema != nil {
+		t.Fatalf("flat op list should not carry input_schema")
+	}
+
+	// op key → schema.
+	p2 := dispatchWickGet(t, h, map[string]any{"id": connectorID, "selector": "echo"})
+	if len(p2.Tools) != 1 || p2.Tools[0].InputSchema == nil {
+		t.Fatalf("op-key call should return 1 op with schema; got %d tools", len(p2.Tools))
+	}
+	var schema struct {
+		Type       string                     `json:"type"`
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(*p2.Tools[0].InputSchema, &schema); err != nil {
+		t.Fatalf("unmarshal schema: %v", err)
+	}
+	if _, ok := schema.Properties["msg"]; !ok {
 		t.Fatalf("input_schema missing 'msg' property")
+	}
+}
+
+// wick_get with a selector that is neither a category nor an op key errors.
+func TestWickGetUnknownSelector(t *testing.T) {
+	db := newTestDB(t)
+	svc := newTestService(t, db, groupedStubModule())
+	h := NewHandler(svc)
+
+	rows, err := svc.List(context.Background())
+	if err != nil || len(rows) == 0 {
+		t.Fatalf("list: %v rows=%d", err, len(rows))
+	}
+
+	raw := dispatchJSON(t, h, "tools/call", map[string]any{
+		"name":      "wick_get",
+		"arguments": map[string]any{"id": rows[0].ID, "selector": "Nonexistent"},
+	})
+	var resp struct {
+		Result struct {
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !resp.Result.IsError {
+		t.Fatalf("want isError=true for unknown category:\n%s", raw)
 	}
 }
 

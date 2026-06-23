@@ -10,6 +10,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/pkg/connector"
 )
 
 // connectorSummary is one entry in the wick_list response.
@@ -67,18 +68,36 @@ type searchResult struct {
 }
 
 type toolDetail struct {
-	ToolID      string     `json:"tool_id"`
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	Destructive bool       `json:"destructive"`
-	InputSchema JSONSchema `json:"input_schema"`
+	ToolID      string      `json:"tool_id"`
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	Destructive bool        `json:"destructive"`
+	Category    string      `json:"category,omitempty"`
+	// InputSchema is a pointer so it can be omitted in list mode
+	// (wick_get without a category). It is populated only when the caller
+	// scopes the request to a single category.
+	InputSchema *JSONSchema `json:"input_schema,omitempty"`
+}
+
+// categoryDetail is one group entry in the wick_get list-mode response.
+type categoryDetail struct {
+	Category    string `json:"category"`
+	Description string `json:"description"`
+	TotalTools  int    `json:"total_tools"`
 }
 
 type connectorDetail struct {
 	ID          string       `json:"id"`
 	Connector   string       `json:"connector"`
 	Description string       `json:"description"`
-	Tools       []toolDetail `json:"tools"`
+	// Categories lists the op groups when wick_get is called without a
+	// category argument (list mode). The caller picks one and re-calls
+	// wick_get with category=<title> to get the op schemas.
+	Categories []categoryDetail `json:"categories,omitempty"`
+	// Tools carries the per-op schemas. In list mode (no category arg) it
+	// holds lightweight entries WITHOUT input_schema; in scoped mode (a
+	// category was supplied) it holds the full schemas for that category.
+	Tools []toolDetail `json:"tools"`
 }
 
 func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, tagIDs []string, isAdmin bool) {
@@ -266,15 +285,22 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 		rsp.ToolError(w, req.ID, "id is required", "")
 		return
 	}
+	// The drill-down selector accepts a category title or an op key. Accept a
+	// few arg names so the LLM can pass whichever reads naturally.
+	selector := firstNonEmpty(args, "selector", "category", "op_key")
 	// Session-workspace instance: resolve from the session file and render
-	// the base module's op schema, no DB row involved.
+	// the base module's category list / op list / op schema, no DB row involved.
 	if target, ok, err := SessionInstanceFor(layout, args, connectorID); err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), connectorID)
 		return
 	} else if ok {
-		detail, found := sessionInstanceDetail(svc, target, connectorID)
+		detail, found, derr := sessionInstanceDetail(svc, target, connectorID, selector)
 		if !found {
 			rsp.ToolError(w, req.ID, "session connector base module not registered", connectorID)
+			return
+		}
+		if derr != nil {
+			rsp.ToolError(w, req.ID, derr.Error(), connectorID)
 			return
 		}
 		rsp.ToolJSON(w, req.ID, detail)
@@ -304,34 +330,162 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 		rsp.ToolError(w, req.ID, "load operation states: "+err.Error(), connectorID)
 		return
 	}
-	ops := mod.AllOps()
-	tools := make([]toolDetail, 0, len(ops))
-	for _, op := range ops {
-		if !states[op.Key] {
-			continue
-		}
-		desc := op.Description
-		if op.Destructive {
-			desc += " ⚠ DESTRUCTIVE: Always confirm with the user before executing this operation."
-		}
-		toolID := FormatToolID(row.ID, op.Key)
+	toolIDFor := func(opKey string) string {
 		if scopedAccountID != "" {
-			toolID = FormatToolIDWithAccount(row.ID, op.Key, scopedAccountID)
+			return FormatToolIDWithAccount(row.ID, opKey, scopedAccountID)
 		}
-		tools = append(tools, toolDetail{
-			ToolID:      toolID,
-			Name:        op.Name,
-			Description: desc,
-			Destructive: op.Destructive,
-			InputSchema: ConfigsToJSONSchema(op.Input),
-		})
+		return FormatToolID(row.ID, opKey)
 	}
-	rsp.ToolJSON(w, req.ID, connectorDetail{
-		ID:          row.ID,
-		Connector:   row.Label,
-		Description: mod.Meta.Description,
-		Tools:       tools,
-	})
+	detail, err := buildConnectorDetail(mod, row.ID, row.Label, selector, toolIDFor, func(opKey string) bool { return states[opKey] })
+	if err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), connectorID)
+		return
+	}
+	rsp.ToolJSON(w, req.ID, detail)
+}
+
+// buildConnectorDetail renders a wick_get response across three drill-down
+// levels, selected by the `selector` argument. This keeps the LLM's context
+// from ballooning: a connector with dozens of ops never dumps every op (let
+// alone every schema) in one response — the caller asks for exactly the next
+// level it needs.
+//
+//   - selector == "": CATEGORY LIST. Returns just the category groups (title +
+//     description + enabled-op count). No ops, no schemas. The cheapest level.
+//     (For a flat connector with no named categories there is nothing to group
+//     by, so this falls through to the OP LIST of every op instead.)
+//   - selector matches a category title: OP LIST. Returns the lightweight op
+//     entries (tool_id, name, description, destructive) in that category. Still
+//     no input_schema.
+//   - selector matches an op key: OP SCHEMA. Returns that single op with its
+//     input_schema — the only level that carries a schema.
+//
+// A selector that matches neither a category nor an op key is an error.
+//
+// enabled reports whether an op key is currently enabled for this instance;
+// toolIDFor builds the tool_id for an op key (account suffix handled by the
+// caller). Sharing this between the DB-row and session-instance paths keeps
+// the two from drifting.
+func buildConnectorDetail(mod connector.Module, id, label, selector string, toolIDFor func(opKey string) string, enabled func(opKey string) bool) (connectorDetail, error) {
+	detail := connectorDetail{ID: id, Connector: label, Description: mod.Meta.Description}
+	selector = strings.TrimSpace(selector)
+
+	// OP SCHEMA: selector names an enabled op key → return just that op + schema.
+	if selector != "" {
+		for _, op := range mod.AllOps() {
+			if op.Key != selector {
+				continue
+			}
+			if !enabled(op.Key) {
+				return connectorDetail{}, fmt.Errorf("operation %q is disabled on this connector", selector)
+			}
+			schema := ConfigsToJSONSchema(op.Input)
+			detail.Tools = append(detail.Tools, toolDetail{
+				ToolID:      toolIDFor(op.Key),
+				Name:        op.Name,
+				Description: opDescription(op),
+				Destructive: op.Destructive,
+				Category:    mod.CategoryOf(op.Key),
+				InputSchema: &schema,
+			})
+			return detail, nil
+		}
+	}
+
+	// OP LIST: selector names a category → list its enabled ops, no schema.
+	if selector != "" {
+		for i := range mod.Operations {
+			if !strings.EqualFold(mod.Operations[i].Title, selector) {
+				continue
+			}
+			cat := mod.Operations[i]
+			for _, op := range cat.Ops {
+				if !enabled(op.Key) {
+					continue
+				}
+				detail.Tools = append(detail.Tools, toolDetail{
+					ToolID:      toolIDFor(op.Key),
+					Name:        op.Name,
+					Description: opDescription(op),
+					Destructive: op.Destructive,
+					Category:    cat.Title,
+				})
+			}
+			if len(detail.Tools) == 0 {
+				return connectorDetail{}, fmt.Errorf("category %q has no enabled operations", cat.Title)
+			}
+			return detail, nil
+		}
+		// Matched neither an op key nor a category.
+		return connectorDetail{}, fmt.Errorf("unknown category or operation %q — call wick_get with no selector to list categories, then with a category to list its operations", selector)
+	}
+
+	// CATEGORY LIST (selector == ""). Flat connectors (no named categories)
+	// have nothing to group by, so fall through to listing every enabled op.
+	if !hasNamedCategories(mod) {
+		for _, op := range mod.AllOps() {
+			if !enabled(op.Key) {
+				continue
+			}
+			detail.Tools = append(detail.Tools, toolDetail{
+				ToolID:      toolIDFor(op.Key),
+				Name:        op.Name,
+				Description: opDescription(op),
+				Destructive: op.Destructive,
+			})
+		}
+		return detail, nil
+	}
+	for _, cat := range mod.Operations {
+		count := 0
+		for _, op := range cat.Ops {
+			if enabled(op.Key) {
+				count++
+			}
+		}
+		if count > 0 {
+			detail.Categories = append(detail.Categories, categoryDetail{
+				Category:    cat.Title,
+				Description: cat.Description,
+				TotalTools:  count,
+			})
+		}
+	}
+	return detail, nil
+}
+
+// firstNonEmpty returns the first arg value (by key, in order) that is a
+// non-empty trimmed string, or "".
+func firstNonEmpty(args map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := args[k].(string); ok {
+			if t := strings.TrimSpace(v); t != "" {
+				return t
+			}
+		}
+	}
+	return ""
+}
+
+// hasNamedCategories reports whether the module groups its ops under at
+// least one non-empty category title. False for the flat Cat("", "", …)
+// case, where there is nothing to drill into — wick_get lists every op
+// directly at the top level.
+func hasNamedCategories(mod connector.Module) bool {
+	for _, cat := range mod.Operations {
+		if strings.TrimSpace(cat.Title) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// opDescription appends the destructive warning suffix used across wick_get.
+func opDescription(op connector.Operation) string {
+	if op.Destructive {
+		return op.Description + " ⚠ DESTRUCTIVE: Always confirm with the user before executing this operation."
+	}
+	return op.Description
 }
 
 func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, user *entity.User, tagIDs []string) {
