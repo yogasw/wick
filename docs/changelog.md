@@ -8,6 +8,8 @@ All notable changes to Wick are documented here.
 
 _Nothing yet — notes for the next release go here._
 
+*   **PWA stale layout fix**: Non-hashed static assets (`app.css`, `app.js`, `dialog.js`, `palette.js`, `push.js`) are now served stale-while-revalidate instead of cache-first. The previous strategy pinned those files to whatever was cached at first load; a new deploy would not surface until a hard refresh. With this change the next normal page load after a deploy picks up the updated assets automatically.
+
 *   **Cross-tenant project access leaks closed**: Project detail, update, delete, and SSE stream routes now enforce `callerProjectAccess().allowProject()` so a scoped user cannot read, modify, or delete a project they have no access to — even if they guess the project ID. The endpoints return 404 (not 403) to avoid confirming project existence to unauthorised callers.
 
 *   **Ownerless projects restricted to admins**: Projects with no owner (`OwnerUserID == ""`) are now treated as admin-only resources instead of public/shared. A non-admin can still reach an ownerless project if an explicit tag grant covers it, but the lack of an owner no longer acts as a public escape hatch that exposes every ownerless project (and its sessions) to all authenticated users.
