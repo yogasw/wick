@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Changed
+
+*   **`wick_get` — three-level drill-down via `selector`**: `wick_get` now navigates connector operations across three levels instead of returning all schemas at once. Call with `id` only to get the connector's **category list**; add `selector=<category title>` to list that category's **operations** (no schemas); add `selector=<op key>` to retrieve that **one op's `input_schema`**. Flat connectors with no named categories list their ops directly at level 1. The `category` and `op_key` argument names are accepted as aliases for `selector`. Session-workspace instances follow the same three levels. This keeps large connectors (e.g. Google Workspace with 50+ ops) from dumping every schema into the LLM's context on a single call.
 
 ---
 
