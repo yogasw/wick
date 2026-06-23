@@ -172,6 +172,14 @@ func Register(r tool.Router) {
 	registerSPAPanels(r)
 	registerSPAPalette(r)
 
+	// Access gates for every per-resource subtree. Registered once here so
+	// each {id} route — and any added later — is checked before its handler
+	// runs, instead of repeating ownsSession/allowProject in every handler.
+	r.Use("/sessions/{id}", sessionAccessMW)
+	r.Use("/api/sessions/{id}", sessionAccessMW)
+	r.Use("/projects/{id}", projectAccessMW)
+	r.Use("/api/projects/{id}", projectAccessMW)
+
 	r.GET("/", newSessionCompose)
 	r.POST("/", startNewSession)
 	r.GET("/overview", overviewPage)
@@ -488,17 +496,19 @@ func callerProjectAccess(c *tool.Ctx) projectAccess {
 			set = map[string]struct{}{}
 		}
 	}
-	// Always union tag grants with project ownership. Some legacy projects can
-	// predate owner tags (or lose their tag rows), but their metadata still
-	// records the creator. A scoped admin/user must keep access to projects they
-	// own even when AdminSeeAll is off.
-	// Union tag grants with project ownership AND ownerless ("system") projects.
-	// Owned projects: a scoped admin/user keeps access to projects they created
-	// even when AdminSeeAll is off (some legacy projects predate owner tags).
-	// Ownerless projects (OwnerUserID == "") are shared/system resources — they
-	// belong to no one in particular, so every authenticated caller may see them.
+	// Union tag grants with project ownership. Some legacy projects can predate
+	// owner tags (or lose their tag rows), but their metadata still records the
+	// creator — a scoped admin/user must keep access to projects they own even
+	// when AdminSeeAll is off.
+	//
+	// Ownerless projects (OwnerUserID == "") are NOT a public escape hatch: they
+	// are admin-only by default. A non-admin reaches one only via an explicit tag
+	// grant (already unioned in from AccessibleResourceIDs above), never just
+	// because it lacks an owner. Without this guard every authenticated user
+	// could see (and open) every ownerless project + its sessions in Recent.
+	isAdmin := u.IsAdmin()
 	for pid, p := range globalMgr.Registry().Projects() {
-		if p.Meta.OwnerUserID == u.ID || p.Meta.OwnerUserID == "" {
+		if p.Meta.OwnerUserID == u.ID || (p.Meta.OwnerUserID == "" && isAdmin) {
 			set[pid] = struct{}{}
 		}
 	}
@@ -675,6 +685,49 @@ func ownsSession(c *tool.Ctx, sess session.Session) bool {
 	// project (tag grant, ownership, or ownerless/system project) — same rule
 	// the sidebar uses, keeping list visibility and detail access consistent.
 	return callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID)
+}
+
+// sessionAccessMW gates every route under /sessions/{id} and /api/sessions/{id}:
+// the caller must be allowed to access the session named by the {id} path value
+// (ownsSession — owner, project grant, or admin/see-all). Registered once via
+// r.Use, so any current OR future subroute (conversation, files, approvals,
+// asks, workspace, …) is covered without each handler repeating the check.
+// 404 on no access — don't confirm a session exists to a caller who can't see
+// it. notReady is left to the handlers (the mux only mounts these when up).
+func sessionAccessMW(next tool.HandlerFunc) tool.HandlerFunc {
+	return func(c *tool.Ctx) {
+		if globalMgr == nil {
+			next(c)
+			return
+		}
+		sess, ok := globalMgr.Registry().Session(c.PathValue("id"))
+		if !ok || !ownsSession(c, sess) {
+			c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+			return
+		}
+		next(c)
+	}
+}
+
+// projectAccessMW gates every route under /projects/{id} and /api/projects/{id}
+// by project access (allowProject — owner, tag grant, or ownerless-if-admin).
+// "/projects/{id}/pin", settings, update, delete all inherit it; siblings
+// without an {id} segment (/projects, /projects/options) are not covered. The
+// special "new" id (create form / draft) is allowed through — there's no
+// project to gate yet. 404 on no access so existence isn't leaked.
+func projectAccessMW(next tool.HandlerFunc) tool.HandlerFunc {
+	return func(c *tool.Ctx) {
+		id := c.PathValue("id")
+		if id == "new" || globalMgr == nil {
+			next(c)
+			return
+		}
+		if _, ok := globalMgr.Registry().Project(id); !ok || !callerProjectAccess(c).allowProject(id) {
+			c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+			return
+		}
+		next(c)
+	}
 }
 
 // ensurePersonalProjectForUser auto-creates a personal project for a non-admin
@@ -1658,6 +1711,8 @@ func updateProject(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	// Access is enforced by projectAccessMW (r.Use "/projects/{id}"); here we
+	// only need the project row for its current meta.
 	id := c.PathValue("id")
 	p, ok := globalMgr.Registry().Project(id)
 	if !ok {
@@ -1713,9 +1768,14 @@ func deleteProject(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	// Access is enforced by projectAccessMW (r.Use "/projects/{id}").
 	id := c.PathValue("id")
 	p, ok := globalMgr.Registry().Project(id)
-	if ok && p.Meta.Name == project.DefaultName {
+	if !ok {
+		c.Error(http.StatusNotFound, "project not found")
+		return
+	}
+	if p.Meta.Name == project.DefaultName {
 		c.JSON(http.StatusForbidden, map[string]string{"error": "the default project cannot be deleted"})
 		return
 	}
@@ -1845,6 +1905,23 @@ func streamSSE(c *tool.Ctx) {
 		return
 	}
 	sessionID := c.Query("session")
+	// Access guard. A session-scoped stream replays that session's lifecycle +
+	// partial assistant text and subscribes to its live turn events, so the
+	// caller must be allowed to open the session. A global stream (no session)
+	// carries pool_stats listing every active session across all users — that's
+	// the admin Providers view, so restrict it to see-all callers.
+	if sessionID != "" {
+		sess, ok := globalMgr.Registry().Session(sessionID)
+		if !ok || !ownsSession(c, sess) {
+			c.Error(http.StatusNotFound, "session not found")
+			return
+		}
+	} else if u := login.GetUser(c.Context()); u != nil && !u.IsAdmin() {
+		// Global stream = admin Providers view (same gate as providersPage).
+		// u == nil is an internal/MCP caller and stays unrestricted.
+		c.Error(http.StatusForbidden, "admins only")
+		return
+	}
 	w := c.W
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")

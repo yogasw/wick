@@ -63,6 +63,7 @@ func apiProjectDetail(c *tool.Ctx) {
 		return
 	}
 
+	// Access enforced by projectAccessMW (r.Use "/api/projects/{id}").
 	p, ok := globalMgr.Registry().Project(id)
 	if !ok {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
@@ -131,6 +132,7 @@ func apiProjectUpdate(c *tool.Ctx) {
 		return
 	}
 
+	// Access enforced by projectAccessMW (r.Use "/api/projects/{id}").
 	p, ok := globalMgr.Registry().Project(id)
 	if !ok {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
