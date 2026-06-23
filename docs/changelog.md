@@ -10,6 +10,12 @@ All notable changes to Wick are documented here.
 
 *   **Session detail access for tag-granted project members**: Users who could see a session in the sidebar via project tag grants could not open its detail/conversation page (the route returned 404). `ownsSession()` now also checks project-scoped access (`callerProjectAccess().allowSession()`), so list visibility and detail access are consistent. The App Owner, `admin_see_all` admins, and ownerless unscoped sessions remain unchanged.
 
+*   **Cross-tenant project access leaks closed**: Project detail, update, delete, and SSE stream routes now enforce `callerProjectAccess().allowProject()` so a scoped user cannot read, modify, or delete a project they have no access to — even if they guess the project ID. The endpoints return 404 (not 403) to avoid confirming project existence to unauthorised callers.
+
+*   **Ownerless projects restricted to admins**: Projects with no owner (`OwnerUserID == ""`) are now treated as admin-only resources instead of public/shared. A non-admin can still reach an ownerless project if an explicit tag grant covers it, but the lack of an owner no longer acts as a public escape hatch that exposes every ownerless project (and its sessions) to all authenticated users.
+
+*   **SSE stream access control**: The global SSE stream (`/sse` with no `session` query param), which carries pool stats listing every active session across all users, is now restricted to admins. Session-scoped SSE streams (`?session=<id>`) require the caller to own or have tag-granted access to that session.
+
 ---
 
 ## [v0.23.0](https://github.com/yogasw/wick/compare/v0.22.2...v0.23.0) — MCP & Connectors
