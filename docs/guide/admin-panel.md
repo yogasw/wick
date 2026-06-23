@@ -9,7 +9,7 @@ A user becomes admin in one of two ways: their email is in `APP_ADMIN_EMAILS` at
 :::
 
 ::: tip App Owner
-Above admin sits a single **App Owner**: the first user ever registered is auto-promoted (`is_owner`). The owner is a superset of admin — `IsAdmin()` is true for both — but **only the owner can see every user's agent sessions**. Admins and regular users see only the sessions, projects, workflows, and skills they own; per-session routes return `404` for sessions they don't own. There is no env var for this — it's assigned automatically to the first account.
+Above admin sits a single **App Owner**: the first user ever registered is auto-promoted (`is_owner`). The owner is a superset of admin — `IsAdmin()` is true for both — but **only the owner can see every user's agent sessions**. Admins and regular users see only the sessions, projects, workflows, and skills they own or can reach via project tag grants; per-session routes return `404` for sessions outside their access. There is no env var for this — it's assigned automatically to the first account.
 :::
 
 ::: info Admin session visibility (`admin_see_all`)
