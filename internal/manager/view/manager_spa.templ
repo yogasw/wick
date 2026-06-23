@@ -41,7 +41,7 @@ templ ManagerSPA(vm ManagerSPAVM) {
 						{{ g := ui.GuestThemeFromContext(ctx) }}
 						@ui.ThemePicker(ui.ThemeByID(g.Current), g.Light, g.Dark)
 					}
-					@ui.UserMenu(vm.User)
+					@ui.UserMenu(vm.User, false)
 				</div>
 			</div>
 		</nav>

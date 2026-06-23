@@ -18,8 +18,12 @@ ENCRYPTED VALUES (wick_enc_)
 - Only call wick_decrypt when the user explicitly asks to see the plaintext behind a token.
 
 WORKFLOW
-- Before calling wick_execute, always call wick_get to read the tool's input_schema.
-- Never guess parameters — derive them from the schema returned by wick_get.
+- wick_get drills down three levels via its selector argument, so you only load what you
+  need: (1) id only → lists categories; (2) id + a category title → lists that category's
+  operations (no schemas); (3) id + an op key → returns that one op's input_schema. An
+  ungrouped connector skips level 1 (it lists ops directly), so go straight to an op key.
+- Before calling wick_execute, always fetch the op's input_schema (level 3 — wick_get with
+  the op key). Never guess parameters — derive them from that schema.
 - If a connector status is "needs_setup", do not call wick_execute. Tell the user to
   complete the setup in the Wick admin dashboard first.
 `

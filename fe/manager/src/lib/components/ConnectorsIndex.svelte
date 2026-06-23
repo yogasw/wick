@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, TextInput } from "@wick-fe/common-ui";
+  import { Button } from "@wick-fe/common-ui";
   import { listConnectors } from "$lib/api.js";
   import { push } from "$lib/router.js";
   import type { ConnectorDef } from "$lib/types.js";
@@ -169,9 +169,14 @@
         <svg class="h-5 w-5 flex-shrink-0 text-black-700" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
           <circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path>
         </svg>
-        <div class="min-w-0 flex-1">
-          <TextInput type="search" value={query} onChange={(v) => (query = v)} placeholder="Search connectors…" ariaLabel="Search connectors" />
-        </div>
+        <input
+          type="search"
+          value={query}
+          oninput={(e) => (query = (e.target as HTMLInputElement).value)}
+          placeholder="Search connectors…"
+          aria-label="Search connectors"
+          class="min-w-0 flex-1 border-0 bg-transparent py-2 text-sm text-black-900 dark:text-white-100 placeholder-black-700 dark:placeholder-black-600 outline-none focus:ring-0"
+        />
         <kbd class="hidden items-center rounded border border-white-400 dark:border-navy-600 px-2 py-0.5 font-mono text-xs text-black-700 dark:text-black-600 sm:inline-flex">/</kbd>
       </div>
       {#if categories.length > 0}

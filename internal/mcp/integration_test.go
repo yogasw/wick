@@ -61,6 +61,36 @@ func stubModule() connector.Module {
 	}
 }
 
+// groupedStubModule has two NAMED categories totalling more ops than
+// inlineSchemaThreshold so wick_get's two-tier (list categories → fetch one
+// category's schemas) path is exercised. Alpha has 10 ops, Beta has 5.
+func groupedStubModule() connector.Module {
+	type AInput struct {
+		Foo string `wick:"desc=foo arg"`
+	}
+	exec := func(c *connector.Ctx) (any, error) { return map[string]any{"ok": true}, nil }
+	mkOps := func(prefix string, n int) []connector.Operation {
+		ops := make([]connector.Operation, n)
+		for i := 0; i < n; i++ {
+			key := fmt.Sprintf("%s_%d", prefix, i)
+			ops[i] = connector.Op(key, key, "op "+key, AInput{}, exec, wickdocs.Docs{})
+		}
+		return ops
+	}
+	return connector.Module{
+		Meta: connector.Meta{
+			Key:         "grouped",
+			Name:        "Grouped Connector",
+			Description: "Test connector with named categories",
+			Fixed:       true,
+		},
+		Operations: []connector.Category{
+			connector.Cat("Alpha", "Alpha group", mkOps("a", 10)...),
+			connector.Cat("Beta", "Beta group", mkOps("b", 5)...),
+		},
+	}
+}
+
 func newTestService(t *testing.T, db *gorm.DB, mod connector.Module) *connectors.Service {
 	t.Helper()
 	cfgsSvc := configs.NewService(db)

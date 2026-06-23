@@ -15,7 +15,16 @@ type SvelteListVM struct {
 // sidebar/chrome, Svelte owns the list content.
 templ SvelteList(vm SvelteListVM) {
 	@view.AgentsLayout(vm.Layout) {
-		<div class="h-[calc(100vh-3.5rem)]" data-wick-island-root>
+		<style>
+			/* The list owns its own internal scroll (flex-1 overflow-y-auto),
+			   so pin <main> to the viewport instead of letting it scroll too —
+			   otherwise the island's fixed height leaves a gap below the last
+			   row. Same approach as the workflow editor. */
+			[data-main]:has([data-wick-island-root]) {
+				height: 100%;
+			}
+		</style>
+		<div class="h-full overflow-hidden" data-wick-island-root>
 			if vm.AssetURL == "" {
 				<div class="p-8 text-sm text-rose-600 dark:text-rose-400">
 					Workflow bundle not built yet. Run

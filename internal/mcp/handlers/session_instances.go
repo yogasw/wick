@@ -189,39 +189,27 @@ func sessionInstanceSearch(svc *connectors.Service, layout agentconfig.Layout, s
 	return groups, total
 }
 
-// sessionInstanceDetail renders one session-workspace instance's op
-// schema for wick_get, with tool ids that route back through wick_execute
-// (conn:<sw_id>/<opKey>). Returns ok=false when the instance or its base
-// module is gone.
-func sessionInstanceDetail(svc *connectors.Service, target *connectors.SessionInstanceTarget, instanceID string) (connectorDetail, bool) {
+// sessionInstanceDetail renders one session-workspace instance for wick_get,
+// with tool ids that route back through wick_execute (conn:<sw_id>/<opKey>).
+// selector follows the same three-level rule as buildConnectorDetail: ""
+// lists categories, a category title lists its ops, an op key returns that
+// op's schema. Returns ok=false when the instance or its base module is gone;
+// err is non-nil for an unknown selector.
+func sessionInstanceDetail(svc *connectors.Service, target *connectors.SessionInstanceTarget, instanceID, selector string) (connectorDetail, bool, error) {
 	mod, ok := svc.Module(target.BaseKey)
 	if !ok {
-		return connectorDetail{}, false
+		return connectorDetail{}, false, nil
 	}
 	label := target.Label
 	if strings.TrimSpace(label) == "" {
 		label = mod.Meta.Name + " (session)"
 	}
-	ops := mod.AllOps()
-	tools := make([]toolDetail, 0, len(ops))
-	for i := range ops {
-		op := ops[i]
-		desc := op.Description
-		if op.Destructive {
-			desc += " ⚠ DESTRUCTIVE: Always confirm with the user before executing this operation."
-		}
-		tools = append(tools, toolDetail{
-			ToolID:      FormatToolID(instanceID, op.Key),
-			Name:        op.Name,
-			Description: desc,
-			Destructive: op.Destructive,
-			InputSchema: ConfigsToJSONSchema(op.Input),
-		})
+	// Session instances have no per-op disable state — every op is enabled.
+	detail, err := buildConnectorDetail(mod, instanceID, label, selector,
+		func(opKey string) string { return FormatToolID(instanceID, opKey) },
+		func(string) bool { return true })
+	if err != nil {
+		return connectorDetail{}, true, err
 	}
-	return connectorDetail{
-		ID:          instanceID,
-		Connector:   label,
-		Description: mod.Meta.Description,
-		Tools:       tools,
-	}, true
+	return detail, true, nil
 }

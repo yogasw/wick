@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { KebabMenu } from "@wick-fe/common-ui";
   import { workflowAPI, type WorkflowSummary } from "$lib/api/workflow";
   import type { Workflow } from "$lib/types/workflow";
 
@@ -20,7 +21,6 @@
   let newName     = $state("");
   let newTemplate = $state("empty");
   let saving      = $state(false);
-  let menuOpenId  = $state<string | null>(null);
   let actionMsg   = $state<string | null>(null);
   let createMode  = $state<"template" | "import">("template");
   let importFile  = $state<File | null>(null);
@@ -124,7 +124,6 @@
   }
 
   async function duplicate(id: string) {
-    menuOpenId = null;
     try {
       const res = await workflowAPI.duplicate(id);
       await load();
@@ -135,7 +134,6 @@
   }
 
   async function deleteWorkflow(id: string, name: string) {
-    menuOpenId = null;
     if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
     try {
       await workflowAPI.remove(id);
@@ -147,7 +145,6 @@
   }
 
   async function toggleEnabled(wf: WorkflowSummary) {
-    menuOpenId = null;
     try {
       await workflowAPI.toggle(wf.id, !wf.enabled);
       items = items.map(w => w.id === wf.id ? { ...w, enabled: !wf.enabled } : w);
@@ -185,14 +182,8 @@
     });
   }
 
-  function closeMenu(e: MouseEvent) {
-    if (menuOpenId && !(e.target as Element).closest(".wf-menu")) {
-      menuOpenId = null;
-    }
-  }
 </script>
 
-<svelte:window onclick={closeMenu} />
 
 <div class="flex flex-col h-full text-black-800 dark:text-white-100 select-none">
 
@@ -350,7 +341,7 @@
   {/if}
 
   <!-- List -->
-  <div class="flex-1 overflow-y-auto px-6 py-4">
+  <div class="flex-1 min-h-0 overflow-y-auto px-6 py-4">
     {#if loading}
       <div class="flex items-center gap-2 text-black-600 dark:text-black-600 text-sm mt-8">
         <svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
@@ -422,40 +413,16 @@
             >{wf.enabled ? "enabled" : "disabled"}</span>
 
             <!-- 3-dot menu -->
-            <div class="wf-menu flex-shrink-0 relative" onclick={(e) => e.stopPropagation()}>
-              <button
-                class="w-7 h-7 flex items-center justify-center rounded-lg text-black-600 dark:text-black-600 hover:text-black-800 dark:hover:text-white-100 hover:bg-white-200 dark:hover:bg-navy-600 opacity-0 group-hover:opacity-100 transition-all"
-                onclick={() => menuOpenId = menuOpenId === wf.id ? null : wf.id}
-                title="More options"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
-              </button>
-
-              {#if menuOpenId === wf.id}
-                <div class="absolute right-0 top-8 z-50 w-44 rounded-xl bg-white-100 dark:bg-navy-700 border border-white-300 dark:border-navy-600 shadow-md overflow-hidden py-1">
-                  <button class="w-full text-left px-4 py-2 text-sm text-black-800 dark:text-black-400 hover:bg-white-200 dark:hover:bg-navy-700 hover:text-black-800 dark:hover:text-white-100 transition-colors flex items-center gap-2"
-                          onclick={() => open(wf.id)}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                    Open editor
-                  </button>
-                  <button class="w-full text-left px-4 py-2 text-sm text-black-800 dark:text-black-400 hover:bg-white-200 dark:hover:bg-navy-700 hover:text-black-800 dark:hover:text-white-100 transition-colors flex items-center gap-2"
-                          onclick={() => duplicate(wf.id)}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                    Duplicate
-                  </button>
-                  <button class="w-full text-left px-4 py-2 text-sm text-black-800 dark:text-black-400 hover:bg-white-200 dark:hover:bg-navy-700 hover:text-black-800 dark:hover:text-white-100 transition-colors flex items-center gap-2"
-                          onclick={() => toggleEnabled(wf)}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64A9 9 0 1 1 5.64 5.64"/><line x1="12" y1="2" x2="12" y2="12"/></svg>
-                    {wf.enabled ? "Disable" : "Enable"}
-                  </button>
-                  <div class="border-t border-white-300 dark:border-navy-600 my-1"></div>
-                  <button class="w-full text-left px-4 py-2 text-sm text-red-500 dark:text-red-400 hover:bg-white-200 dark:hover:bg-navy-700 hover:text-red-600 dark:hover:text-red-300 transition-colors flex items-center gap-2"
-                          onclick={() => deleteWorkflow(wf.id, wf.name)}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
-                    Delete
-                  </button>
-                </div>
-              {/if}
+            <div class="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" onclick={(e) => e.stopPropagation()}>
+              <KebabMenu
+                ariaLabel={`Actions for ${wf.name}`}
+                items={[
+                  { label: "Open editor", onclick: () => open(wf.id) },
+                  { label: "Duplicate", onclick: () => duplicate(wf.id) },
+                  { label: wf.enabled ? "Disable" : "Enable", onclick: () => toggleEnabled(wf) },
+                  { label: "Delete", onclick: () => deleteWorkflow(wf.id, wf.name), danger: true },
+                ]}
+              />
             </div>
           </li>
         {/each}

@@ -48,7 +48,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Use kind to decide which identity to run as: kind='connector' for shared/bot credentials, kind='account' for personal identity. " +
 				"status is 'ready' (all required configs filled) or 'needs_setup' (missing config — do NOT call wick_execute; tell the user to open the admin dashboard to complete setup). " +
 				"WORKFLOW: (1) wick_list to see what connectors and accounts exist, " +
-				"(2) wick_get with the id (connector id or connector_id/account_id for account entries) to see its tools + input_schemas, " +
+				"(2) wick_get with the id to see its categories, then with a category to list its ops, then with an op key to get that op's input_schema, " +
 				"(3) wick_execute with tool_id + params. " +
 				"Pass session_id to also include this session's workspace connectors (ephemeral sw_… instances created via wick_session_workspace); in the wick agent the session is resolved automatically, so you normally do not need to pass it.",
 			InputSchema: map[string]any{
@@ -71,7 +71,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Case-insensitive match on connector label, tool name, and description. " +
 				"Returns matching tools nested under their connector (id, description, status), with tool_id per hit. " +
 				"status is 'ready' or 'needs_setup' — do NOT call wick_execute on a needs_setup connector; tell the user to open the admin dashboard to complete setup. " +
-				"WORKFLOW: after finding a match, call wick_get with the connector id to get full schemas, " +
+				"WORKFLOW: after finding a match, call wick_get with the connector id + the op key (selector) to get its input_schema, " +
 				"then wick_execute. Pass session_id to also search this session's workspace connectors.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -94,10 +94,13 @@ func MetaToolDescriptors() []ToolDescriptor {
 		},
 		{
 			Name: "wick_get",
-			Description: "Get a connector's full tool list with input_schemas. " +
-				"Pass the connector id from wick_list or wick_search. " +
-				"ALWAYS call this before wick_execute to know the required params. " +
-				"Never guess params — read input_schema from this response first. " +
+			Description: "Drill into a connector's operations, one level at a time, so you never load more than you need into context. Three levels via the `selector` argument:\n" +
+				"(1) id ONLY → lists the connector's CATEGORIES (title, description, op count). No ops, no schemas.\n" +
+				"(2) id + selector=<category title> → lists the OPERATIONS in that category (tool_id, name, description). Still no input_schema.\n" +
+				"(3) id + selector=<op key> → returns that ONE operation with its input_schema. This is the only level that carries a schema.\n" +
+				"Flow: call with id only to see categories, again with a category to see its ops, then with the op key to get the schema. " +
+				"(An ungrouped connector has no categories, so level 1 lists its ops directly — go straight to level 3 with an op key.) " +
+				"ALWAYS fetch the op schema (level 3) before wick_execute — never guess params. " +
 				"For a session-workspace connector (id starts with sw_), also pass " +
 				"session_id as a SEPARATE argument — never append it to id.",
 			InputSchema: map[string]any{
@@ -106,6 +109,10 @@ func MetaToolDescriptors() []ToolDescriptor {
 					"id": map[string]any{
 						"type":        "string",
 						"description": "Connector id from wick_list or wick_search — the id ONLY (e.g. \"sw_abc\" or a uuid). Never append \"?session_id=...\" or any query string to it.",
+					},
+					"selector": map[string]any{
+						"type":        "string",
+						"description": "Optional drill-down. A category title (from a prior id-only call) lists that category's operations; an op key (from a category listing) returns that one op's input_schema. Omit to list the connector's categories.",
 					},
 					"session_id": map[string]any{
 						"type":        "string",
