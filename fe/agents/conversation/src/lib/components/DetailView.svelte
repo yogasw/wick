@@ -829,7 +829,7 @@
       </div>
     {:else if activeView === "approvals"}
       <div class="flex-1 min-h-0 overflow-y-auto bg-white-200 dark:bg-navy-800">
-        <div class="max-w-4xl mx-auto w-full px-4 md:px-6 py-6 flex flex-col gap-4">
+        <div class="max-w-4xl mx-auto w-full px-4 md:px-6 pt-14 pb-6 md:pt-16 flex flex-col gap-4">
           {#if approvalsTabPending.length > 0}
             <div>
               <h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-3">Pending approvals</h3>
@@ -887,11 +887,11 @@
         </div>
       </div>
     {:else if activeView === "commands"}
-      <div data-placeholder-view class="flex-1 min-h-0 flex items-center justify-center bg-white-200 dark:bg-navy-800">
+      <div data-placeholder-view class="flex-1 min-h-0 flex items-center justify-center bg-white-200 dark:bg-navy-800 pt-14">
         <p class="text-sm text-black-600 dark:text-black-700">Commands view — coming soon to the new UI</p>
       </div>
     {:else if activeView === "raw"}
-      <div class="flex-1 min-h-0 flex flex-col bg-white-200 dark:bg-navy-800">
+      <div class="flex-1 min-h-0 flex flex-col bg-white-200 dark:bg-navy-800 pt-14">
         <div class="flex items-center justify-between gap-2 px-4 py-2 border-b border-white-300 dark:border-navy-600 shrink-0">
           <span class="text-xs font-medium text-black-700 dark:text-black-600">Raw trace · {turns.length} turn{turns.length === 1 ? "" : "s"}</span>
           <button
