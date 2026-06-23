@@ -8,15 +8,23 @@ All notable changes to Wick are documented here.
 
 _Nothing yet — notes for the next release go here._
 
-*   **PWA stale layout fix**: Non-hashed static assets (`app.css`, `app.js`, `dialog.js`, `palette.js`, `push.js`) are now served stale-while-revalidate instead of cache-first. The previous strategy pinned those files to whatever was cached at first load; a new deploy would not surface until a hard refresh. With this change the next normal page load after a deploy picks up the updated assets automatically.
+---
 
-*   **Cross-tenant project access leaks closed**: Project detail, update, delete, and SSE stream routes now enforce `callerProjectAccess().allowProject()` so a scoped user cannot read, modify, or delete a project they have no access to — even if they guess the project ID. The endpoints return 404 (not 403) to avoid confirming project existence to unauthorised callers.
+## [v0.23.2](https://github.com/yogasw/wick/compare/v0.23.1...v0.23.2) — Access Control & UI
 
-*   **Ownerless projects restricted to admins**: Projects with no owner (`OwnerUserID == ""`) are now treated as admin-only resources instead of public/shared. A non-admin can still reach an ownerless project if an explicit tag grant covers it, but the lack of an owner no longer acts as a public escape hatch that exposes every ownerless project (and its sessions) to all authenticated users.
+_Released on 2026-06-23_
 
-*   **SSE stream access control**: The global SSE stream (`/sse` with no `session` query param), which carries pool stats listing every active session across all users, is now restricted to admins. Session-scoped SSE streams (`?session=<id>`) require the caller to own or have tag-granted access to that session.
+### Fixed
+*   **PWA Stale Layout**: Non-hashed static assets (`app.css`, `app.js`, `dialog.js`, `palette.js`, `push.js`) are now served stale-while-revalidate instead of cache-first. This ensures updated assets are picked up automatically after a deploy on the next normal page load, resolving the issue where new deploys did not surface until a hard refresh.
+*   **Cross-Tenant Project Access Leaks**: Project detail, update, delete, and SSE stream routes now enforce `callerProjectAccess().allowProject()`. This prevents scoped users from reading, modifying, or deleting projects they lack access to, even if the project ID is known. Endpoints return 404 (Not Found) to avoid confirming project existence to unauthorized callers.
+*   **Ownerless Projects**: Projects with no owner (`OwnerUserID == ""`) are now treated as admin-only resources. Non-admins can only access such projects if an explicit tag grant covers them, closing a loophole that previously exposed every ownerless project and its sessions to all authenticated users.
+*   **SSE Stream Access Control**: The global SSE stream (`/sse`), which lists all active sessions, is now restricted to admins. Session-scoped SSE streams (`?session=<id>`) require the caller to own or have tag-granted access to that specific session.
+*   **Session Subroute Access**: Remaining cross-tenant leaks for session subroutes (e.g., approvals, asks, workspace connector configurations, and SCM Git routes) are closed. Access to these routes now requires the caller to own or have tag-granted access to the specific session ID. This was implemented using a new `Router.Use` middleware.
+*   **Conversation UI Overlap**: Resolved floating header overlap in Raw, Commands, and Approvals views by adding appropriate top offsets (`pt-14`, `md:pt-16`), ensuring their content starts below the header bar.
+*   **Markdown Enrichment Self-Healing**: Improved Markdown rendering for committed-turn bubbles. Blocks like Mermaid/SVG now self-heal and re-enrich correctly after history reloads or content changes (e.g., `innerHTML` reset), preventing them from intermittently displaying as raw "rendering…" text.
 
 ---
+
 
 ## [v0.23.1](https://github.com/yogasw/wick/compare/v0.23.0...v0.23.1) — Agents
 
