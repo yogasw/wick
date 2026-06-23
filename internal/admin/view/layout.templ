@@ -55,7 +55,7 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 						<span class="dark:hidden">🌙</span>
 						<span class="hidden dark:inline">☀️</span>
 					</button>
-					@ui.UserMenu(user)
+					@ui.UserMenu(user, false)
 				</div>
 			</div>
 		</nav>
