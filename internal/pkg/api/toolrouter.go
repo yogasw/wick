@@ -43,6 +43,7 @@ type toolRouter struct {
 	routes  []routeEntry
 	statics []staticEntry
 	raws    []rawEntry
+	mws     []mwEntry
 }
 
 type routeEntry struct {
@@ -60,6 +61,12 @@ type staticEntry struct {
 type rawEntry struct {
 	prefix, owner string
 	fn            func(cfg tool.ConfigReader) http.Handler
+}
+
+type mwEntry struct {
+	prefix string // resolved, /tools/{key}-prefixed
+	owner  string
+	mw     tool.Middleware
 }
 
 func newToolRouter(cfg tool.ConfigReader) *toolRouter {
@@ -84,6 +91,17 @@ func (t *toolRouter) POST(path string, h tool.HandlerFunc)   { t.add("POST", pat
 func (t *toolRouter) PUT(path string, h tool.HandlerFunc)    { t.add("PUT", path, h) }
 func (t *toolRouter) DELETE(path string, h tool.HandlerFunc) { t.add("DELETE", path, h) }
 func (t *toolRouter) PATCH(path string, h tool.HandlerFunc)  { t.add("PATCH", path, h) }
+
+func (t *toolRouter) Use(prefix string, mw tool.Middleware) {
+	if mw == nil {
+		return
+	}
+	t.mws = append(t.mws, mwEntry{
+		prefix: t.resolve(prefix),
+		owner:  t.meta.Name,
+		mw:     mw,
+	})
+}
 
 func (t *toolRouter) Static(prefix string, fsys fs.FS) {
 	t.statics = append(t.statics, staticEntry{
@@ -119,6 +137,19 @@ func (t *toolRouter) add(method, path string, h tool.HandlerFunc) {
 		render: render.NewToolRenderer(t.hasConfigs),
 		meta:   t.meta,
 	})
+}
+
+// mwCovers reports whether a middleware registered at prefix applies to a
+// route at path: true for the exact path and anything nested under it, matched
+// on segment boundaries so "/sessions/{id}" covers "/sessions/{id}/send" but
+// not a sibling like "/sessions/{id}x" or the shorter "/sessions". A route and
+// a middleware that share a subtree share the same "{id}" wildcard names, so
+// comparing the resolved path strings is exact and sufficient.
+func mwCovers(prefix, path string) bool {
+	if prefix == "" {
+		return false
+	}
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }
 
 // resolve joins the current /tools/{key} base with a module-supplied
@@ -184,11 +215,20 @@ func (t *toolRouter) mount(mux *http.ServeMux) {
 	for _, r := range t.routes {
 		r := r
 		cfg := t.cfg
+		// Compose the middleware chain once at mount: wrap from last matching
+		// to first so the first-registered middleware ends up outermost. The
+		// per-request hot path then runs a pre-built chain, no matching.
+		h := r.h
+		for i := len(t.mws) - 1; i >= 0; i-- {
+			if mwCovers(t.mws[i].prefix, r.path) {
+				h = t.mws[i].mw(h)
+			}
+		}
 		handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			notFound := func(w http.ResponseWriter, r *http.Request) {
 				ui.RenderNotFound(w, r, nil, http.StatusNotFound)
 			}
-			r.h(tool.NewCtx(w, req, r.render, r.meta, cfg, notFound))
+			h(tool.NewCtx(w, req, r.render, r.meta, cfg, notFound))
 		})
 		mux.Handle(r.method+" "+r.path, handler)
 		if r.path == "/tools/"+r.meta.Key {

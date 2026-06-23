@@ -74,6 +74,13 @@ type DefaultTag struct {
 // types, and status codes for you.
 type HandlerFunc func(c *Ctx)
 
+// Middleware wraps a HandlerFunc, returning a new one. It runs before the
+// wrapped handler and decides whether to call it: invoke next(c) to proceed,
+// or write a response (e.g. c.Error / c.JSON) and return without calling next
+// to short-circuit. Use it to apply a cross-cutting check (access control,
+// logging) to a whole subtree of routes at once. Registered via Router.Use.
+type Middleware func(next HandlerFunc) HandlerFunc
+
 // Router is the surface wick exposes to a module's Register method.
 // Modules declare their HTTP routes through these Echo/Gin-style
 // verb methods; wick owns the underlying mux, validates that no two
@@ -94,6 +101,17 @@ type Router interface {
 	PUT(path string, h HandlerFunc)
 	DELETE(path string, h HandlerFunc)
 	PATCH(path string, h HandlerFunc)
+	// Use registers mw to run before every route whose resolved path is
+	// covered by prefix — the exact path and anything nested under it, matched
+	// on segment boundaries. So Use("/sessions/{id}", mw) covers
+	// "/sessions/{id}", "/sessions/{id}/send", "/sessions/{id}/files/read",
+	// and any route added later under that subtree, but never a sibling like
+	// "/sessions" or "/sessions/{id}x". prefix is relative to the tool's
+	// /tools/{Key} base, same as route paths. When several middlewares match a
+	// route they run in registration order (first registered = outermost).
+	// Call from Register; order relative to the route declarations doesn't
+	// matter — wiring happens at mount.
+	Use(prefix string, mw Middleware)
 	Static(prefix string, fsys fs.FS)
 	// HandleRaw mounts a raw http.Handler at a subtree prefix relative
 	// to the tool's /tools/{Key} base. The prefix must end with "/".

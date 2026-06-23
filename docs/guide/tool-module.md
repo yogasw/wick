@@ -105,6 +105,33 @@ r.HandleRaw("/tty/", func(cfg tool.ConfigReader) http.Handler {
 - `fn` receives a `tool.ConfigReader` — use `cfg.GetOwned(key, field)` to gate on runtime config
 - Use sparingly — prefer `r.GET`/`r.POST` for normal endpoints
 
+### Gating a subtree with middleware
+
+`r.Use(prefix, mw)` runs a `tool.Middleware` before every route covered by `prefix` — the exact path and anything nested under it, matched on segment boundaries. Register it once and every current **or future** subroute is covered, so a cross-cutting check (access control, logging) lives in one place instead of being repeated in each handler:
+
+```go
+func Register(r tool.Router) {
+    // Every /things/{id} and /things/{id}/... route is gated by one check.
+    r.Use("/things/{id}", func(next tool.HandlerFunc) tool.HandlerFunc {
+        return func(c *tool.Ctx) {
+            if !callerMayAccess(c, c.PathValue("id")) {
+                c.JSON(http.StatusNotFound, map[string]string{"error": "not found"})
+                return // short-circuit: next is never called
+            }
+            next(c)
+        }
+    })
+
+    r.GET("/things/{id}", show)
+    r.POST("/things/{id}/rename", rename) // auto-gated, no per-handler check
+}
+```
+
+- `prefix` is relative to `/tools/{key}`, same as route paths. `"/things/{id}"` covers `"/things/{id}"` and `"/things/{id}/rename"`, but not a sibling like `"/things"` or `"/things/{id}x"`.
+- The middleware either calls `next(c)` to proceed or writes a response and returns to short-circuit.
+- Multiple middlewares matching one route run in registration order (first registered = outermost).
+- The chain is composed once at mount, not per request.
+
 ## Handlers
 
 Handlers are plain top-level funcs that receive `*tool.Ctx`:
