@@ -448,19 +448,55 @@ function enrichAll(node: HTMLElement): void {
   void renderMath(node);
 }
 
-/* Svelte action for STATIC (committed) messages: enrich the markdown already
-   placed in innerHTML by {@html}. Runs SYNCHRONOUSLY on mount so a committed
-   message (or a page reload) never flashes raw mermaid/svg source before the
-   render — only updates (rare for committed turns) are debounced. */
+/* Svelte action for STATIC (committed) messages: enrich the markdown placed in
+   innerHTML by {@html}. The action body runs after the element mounts, but the
+   {@html} child population and the action's first pass aren't strictly ordered
+   across re-renders — and a history reload (loadConversation after `done`) can
+   re-set innerHTML, dropping every [data-enriched] marker. Relying on the
+   action's `update` to recover doesn't work: when turn.text is reference-equal
+   (same string from history) Svelte skips both the {@html} re-eval AND the
+   action update, but when it DOES re-set innerHTML the markers vanish with no
+   `update` firing for the unchanged text. Result: a diagram intermittently
+   stays as raw "rendering…"/source. Fix: re-enrich on mount, again next frame
+   (catch a late {@html} paint), and on any child mutation via an observer so a
+   re-populated bubble self-heals. */
 export function enrich(node: HTMLElement, _text: string) {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  enrichAll(node);
+  let raf = 0;
+  let alive = true;
+  const opts: MutationObserverInit = { childList: true, subtree: true };
+
+  const mo = typeof MutationObserver !== "undefined"
+    ? new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(run, 50); })
+    : null;
+
+  // enrichAll mutates the DOM (swaps innerHTML of diagram/code blocks); detach
+  // the observer across our own writes and drop the records they queue, so we
+  // never re-trigger ourselves into a loop. Reattach to keep watching for the
+  // NEXT external {@html} re-population.
+  function run() {
+    if (!alive) return;
+    mo?.disconnect();
+    enrichAll(node);
+    mo?.observe(node, opts);
+  }
+
+  run();
+  // A late {@html} paint can land after the synchronous mount pass — re-run on
+  // the next frame to enrich anything that wasn't in the DOM yet.
+  raf = requestAnimationFrame(run);
+
   return {
     update(_next: string) {
       clearTimeout(timer);
-      timer = setTimeout(() => enrichAll(node), 120);
+      timer = setTimeout(run, 120);
     },
-    destroy() { clearTimeout(timer); },
+    destroy() {
+      alive = false;
+      clearTimeout(timer);
+      cancelAnimationFrame(raf);
+      mo?.disconnect();
+    },
   };
 }
 
