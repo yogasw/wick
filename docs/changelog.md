@@ -6,11 +6,40 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Changed
-
-*   **`wick_get` — three-level drill-down via `selector`**: `wick_get` now navigates connector operations across three levels instead of returning all schemas at once. Call with `id` only to get the connector's **category list**; add `selector=<category title>` to list that category's **operations** (no schemas); add `selector=<op key>` to retrieve that **one op's `input_schema`**. Flat connectors with no named categories list their ops directly at level 1. The `category` and `op_key` argument names are accepted as aliases for `selector`. Session-workspace instances follow the same three levels. This keeps large connectors (e.g. Google Workspace with 50+ ops) from dumping every schema into the LLM's context on a single call.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.23.0](https://github.com/yogasw/wick/compare/v0.22.2...v0.23.0) — MCP & Connectors
+
+_Released on 2026-06-23_
+
+### Added
+
+*   **Google Workspace Input Structs**: Added input structs for Google Workspace operations across Calendar, Docs, Drive, Gmail, Meet, Sheets, and Slides, enhancing connector capabilities.
+
+### Changed
+
+*   **`wick_get` — three-level drill-down via `selector`**: `wick_get` now navigates connector operations across three levels instead of returning all schemas at once.
+    *   Call with `id` only to get the connector's **category list**.
+    *   Add `selector=<category title>` to list that category's **operations** (no schemas).
+    *   Add `selector=<op key>` to retrieve that **one op's `input_schema`**.
+    *   Flat connectors with no named categories list their ops directly at level 1.
+    *   The `category` and `op_key` argument names are accepted as aliases for `selector`.
+    *   Session-workspace instances follow the same three levels.
+    *   This change keeps large connectors (e.g., Google Workspace with 50+ ops) from dumping every schema into the LLM's context on a single call.
+*   **Documentation**: Updated `mcp.md` and the changelog to reflect the `wick_get` three-level drill-down with the `selector` argument.
+
+### Improved
+
+*   **Agent UI**:
+    *   **Kebab Menu**: Improved behavior to flip up near the viewport bottom and portal the popup to `<body>` to escape per-row stacking contexts.
+    *   **Workflow List**: Swapped the manual workflow-list dropdown to use the Kebab Menu, and pinned `<main>` with `min-h-0` for smoother scrolling without a gap.
+    *   **Connector List**: Added bottom padding and refined the search input to a bare style, removing the double border.
+    *   **Theme Picker**: Introduced a theme picker in the agents sidebar via `UserMenu(showTheme)`.
+
+---
+
 
 ## [v0.22.2](https://github.com/yogasw/wick/compare/v0.22.1...v0.22.2) — Connectors UI
 
