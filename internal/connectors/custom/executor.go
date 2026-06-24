@@ -554,6 +554,22 @@ func coerceArgs(fields []DefField, c *connector.Ctx) map[string]any {
 		if name == "" {
 			name = f.Key
 		}
+		// Prefer the caller's original JSON type for scalars the string
+		// round-trip would otherwise flatten. A server may advertise a
+		// boolean/number parameter as "string" in its inputSchema (so the
+		// field lands on the text widget below) yet validate the tools/call
+		// against the real boolean/number type — relaying the stringified
+		// form then fails the server's own validation. When the caller
+		// actually sent a bool or number, forward it unchanged. Strings and
+		// objects deliberately fall through to the widget logic so wick_enc_
+		// decryption and textarea JSON parsing still run.
+		if rv, ok := c.RawInputValue(f.Key); ok {
+			switch rv.(type) {
+			case bool, float64, json.Number:
+				out[name] = rv
+				continue
+			}
+		}
 		switch f.Widget {
 		case "number":
 			if n, err := strconv.ParseFloat(raw, 64); err == nil {

@@ -277,6 +277,68 @@ func TestCoerceArgsUsesOriginalNames(t *testing.T) {
 	}
 }
 
+// TestCoerceArgsPreservesRawScalarTypes: when a server advertises a
+// boolean/number parameter as "string" in its inputSchema (so the field
+// maps to a text widget) but validates the tools/call against the real
+// type, the stringified form is rejected. If the caller actually sent a
+// bool or number, coerceArgs must forward it in its original JSON type.
+// Strings stay strings so wick_enc_ decryption and textarea JSON parsing
+// are untouched.
+func TestCoerceArgsPreservesRawScalarTypes(t *testing.T) {
+	fields := []DefField{
+		{Key: "use_proxy", Label: "use_proxy", Widget: "text"}, // advertised string, sent bool
+		{Key: "count", Label: "count", Widget: "text"},         // advertised string, sent number
+		{Key: "name", Label: "name", Widget: "text"},           // genuine string
+		{Key: "toggle", Label: "toggle", Widget: "checkbox"},   // sent real bool
+	}
+	// Input is the stringified form (what StringifyArgs produces).
+	in := map[string]string{
+		"use_proxy": "true",
+		"count":     "5",
+		"name":      "yoga",
+		"toggle":    "false",
+	}
+	c := connector.NewCtx(context.Background(), "i", nil, in, nil, nil, nil)
+	// RawInput is the caller's original typed payload.
+	c.SetRawInput(map[string]any{
+		"use_proxy": true,
+		"count":     float64(5),
+		"name":      "yoga",
+		"toggle":    false,
+	})
+
+	out := coerceArgs(fields, c)
+
+	if v, ok := out["use_proxy"].(bool); !ok || !v {
+		t.Errorf("use_proxy = %#v, want bool true (not stringified)", out["use_proxy"])
+	}
+	if v, ok := out["count"].(float64); !ok || v != 5 {
+		t.Errorf("count = %#v, want float64 5", out["count"])
+	}
+	if v, ok := out["name"].(string); !ok || v != "yoga" {
+		t.Errorf("name = %#v, want string passthrough", out["name"])
+	}
+	if v, ok := out["toggle"].(bool); !ok || v {
+		t.Errorf("toggle = %#v, want bool false", out["toggle"])
+	}
+}
+
+// TestCoerceArgsRawInputAbsentFallsBack: with no RawInput recorded (e.g.
+// the panel-test path), coerceArgs must behave exactly as before —
+// widget-driven coercion off the string input map.
+func TestCoerceArgsRawInputAbsentFallsBack(t *testing.T) {
+	fields := []DefField{{Key: "use_proxy", Label: "use_proxy", Widget: "text"}}
+	in := map[string]string{"use_proxy": "true"}
+	c := connector.NewCtx(context.Background(), "i", nil, in, nil, nil, nil)
+	// No SetRawInput call — rawInput stays nil.
+
+	out := coerceArgs(fields, c)
+
+	if v, ok := out["use_proxy"].(string); !ok || v != "true" {
+		t.Errorf("use_proxy = %#v, want string \"true\" (widget fallback)", out["use_proxy"])
+	}
+}
+
 func TestHealthCheckForVerdict(t *testing.T) {
 	opKeys := []string{"ping", "list"}
 
