@@ -75,6 +75,16 @@ func (u *Updater) extractStaged(asset []byte) ([]byte, error) {
 	return data, nil
 }
 
+// installDirWritable / materializeInnerBinary are the Linux binary-swap
+// helpers; darwin never reaches the .deb branch in ApplyStagedAndRestart
+// (it stages an extracted Mach-O via swapUnix directly), so these are
+// unreachable stubs that satisfy the all-platform compile of updater.go.
+func installDirWritable(string) bool { return false }
+
+func (u *Updater) materializeInnerBinary(string) (string, error) {
+	return "", fmt.Errorf("deb binary-swap not supported on darwin")
+}
+
 // findInnerBinary walks the mounted DMG looking for
 // <app>.app/Contents/MacOS/<app>. Returns the first match; errors
 // when no .app bundle is present.
