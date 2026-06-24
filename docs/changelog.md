@@ -10,6 +10,16 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.23.4](https://github.com/yogasw/wick/compare/v0.23.3...v0.23.4) — Self-Update
+
+_Released on 2026-06-24_
+
+### Improved
+*   Internal test release to validate the self-update mechanism.
+
+---
+
+
 ## [v0.23.3](https://github.com/yogasw/wick/compare/v0.23.2...v0.23.3) — Self-Update & Admin
 
 _Released on 2026-06-24_
