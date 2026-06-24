@@ -52,7 +52,7 @@ App name shown in the UI **and** used to namespace per-app paths
 (`~/.<app>/`) for config / DB / logs / agents. Only used on first boot
 to seed the database display name; the `~/.<app>/` directory layout is
 fixed for the life of the install. After first boot the display name
-can be changed from `/admin/configs` — the database value always wins.
+can be changed from `/admin/advanced` — the database value always wins.
 
 At build time (`wick build`) the same variable bakes the app name into
 the binary via `app.BuildAppName`, used as the default MCP server name

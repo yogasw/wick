@@ -61,7 +61,7 @@ You write the business logic. Wick handles everything else:
 ![Admin Dashboard](/screenshots/admin-dashboard.png)
 *Dashboard — top-line stats split into Modules (execution health) and Access (auth surface).*
 
-The admin panel covers users, modules, tags, configs, and the LLM auth surface — all from one place, no separate codebase. See [Admin Panel](./admin-panel) for screenshots and notes on every page (`/admin/users`, `/admin/tools`, `/admin/jobs`, `/admin/connectors`, `/admin/access-tokens`, `/admin/connections`, `/admin/tags`, `/admin/configs`).
+The admin panel covers users, modules, tags, runtime config, and the LLM auth surface — all from one place, no separate codebase. See [Admin Panel](./admin-panel) for screenshots and notes on every page (`/admin/users`, `/admin/tools`, `/admin/jobs`, `/admin/connectors`, `/admin/access-tokens`, `/admin/connections`, `/admin/tags`, `/admin/advanced`).
 
 ### LLM Surface
 

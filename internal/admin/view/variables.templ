@@ -6,10 +6,10 @@ import (
 )
 
 templ VariablesPage(rows []entity.Config, editKey string, user *entity.User) {
-	@AdminLayout("Admin · Variables", "configs", user) {
+	@AdminLayout("Admin · Variables", "advanced", user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
-				<a href="/admin/configs" class="hover:text-green-600">Configs</a>
+				<a href="/admin/advanced" class="hover:text-green-600">Advanced</a>
 				<span>/</span>
 				<span class="text-black-900 dark:text-white-100">Variables</span>
 			</div>

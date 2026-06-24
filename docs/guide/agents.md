@@ -91,9 +91,9 @@ Daily wick logs (server, worker, app, gate tail) live one level up at `~/.<app>/
 
 ## Agents config (general knobs)
 
-The agents subsystem reads its top-level knobs from the `configs` table under owner `agents`. Edit from `/admin/configs` → group **Agents**.
+The agents subsystem reads its top-level knobs from the `configs` table under owner `agents`. Edit from `/admin/advanced` → group **Agents**.
 
-> **📸 Screenshot needed:** `agents-general-config.png` — capture `/admin/configs` filtered to the `agents` group, showing the General fields table. Save to `docs/public/screenshots/agents-general-config.png`.
+> **📸 Screenshot needed:** `agents-general-config.png` — capture `/admin/advanced` filtered to the `agents` group, showing the General fields table. Save to `docs/public/screenshots/agents-general-config.png`.
 
 Source: [`config.GeneralConfig`](https://github.com/yogasw/wick/blob/master/internal/agents/config/general.go)
 

@@ -16,6 +16,7 @@ const (
 	PhaseDownloading Phase = "downloading" // transferring the asset (Percent meaningful)
 	PhaseStaged      Phase = "staged"      // a binary is downloaded and ready to apply
 	PhaseUpToDate    Phase = "up-to-date"  // current version is the latest
+	PhaseNoAsset     Phase = "no-asset"    // newer release exists but no build for this OS/arch
 	PhaseApplying    Phase = "applying"    // swap + re-exec in progress
 	PhaseError       Phase = "error"       // last job failed; Error is set
 )
@@ -30,7 +31,15 @@ type Status struct {
 	LatestVersion  string `json:"latest_version,omitempty"`
 	HasStaged      bool   `json:"has_staged"`
 	StagedVersion  string `json:"staged_version,omitempty"`
-	Error          string `json:"error,omitempty"`
+	// ReleaseNotes is the latest release's body (markdown) and
+	// PublishedAt its RFC3339 date — what changed and when. Set once a
+	// check finds a newer (or up-to-date) release; empty until then.
+	ReleaseNotes string `json:"release_notes,omitempty"`
+	PublishedAt  string `json:"published_at,omitempty"`
+	// WantedAsset is the asset filename that was expected but absent when
+	// Phase is PhaseNoAsset (a newer release with no build for this OS).
+	WantedAsset string `json:"wanted_asset,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // Coordinator owns the single in-flight web update job and fans its
@@ -161,10 +170,37 @@ func (c *Coordinator) Check(ctx context.Context) {
 		return
 	}
 
+	// Carry "what changed + when" on every non-error outcome so the UI
+	// can show release notes whether we're up to date or about to apply.
+	// For the official build, prefer the published changelog site (covers
+	// the full range current→latest, one codebase shared with the
+	// framework); downstream apps fall back to the per-release GitHub body.
+	published := info.PublishedAt
+	notes := info.Notes
+	if rng := c.upd.ChangelogRange(ctx, c.upd.CurrentVersion(), info.Version); rng != "" {
+		notes = rng
+	}
+
 	if info.AlreadyLatest {
 		c.set(func(s *Status) {
 			s.Phase = PhaseUpToDate
 			s.LatestVersion = info.Version
+			s.ReleaseNotes = notes
+			s.PublishedAt = published
+		})
+		return
+	}
+
+	// A newer version exists but there's no build for this OS/arch. Not an
+	// error — show the version + notes so the user knows what's available,
+	// and the UI recommends building from source or asking the maintainer.
+	if info.NoAssetForOS {
+		c.set(func(s *Status) {
+			s.Phase = PhaseNoAsset
+			s.LatestVersion = info.Version
+			s.ReleaseNotes = notes
+			s.PublishedAt = published
+			s.WantedAsset = info.WantedAsset
 		})
 		return
 	}
@@ -177,6 +213,8 @@ func (c *Coordinator) Check(ctx context.Context) {
 			s.HasStaged = true
 			s.StagedVersion = c.upd.StagedVersion()
 			s.Percent = 100
+			s.ReleaseNotes = notes
+			s.PublishedAt = published
 		})
 		return
 	}
@@ -185,6 +223,8 @@ func (c *Coordinator) Check(ctx context.Context) {
 		s.Phase = PhaseDownloading
 		s.LatestVersion = info.Version
 		s.Percent = 0
+		s.ReleaseNotes = notes
+		s.PublishedAt = published
 	})
 
 	err = c.upd.DownloadWithProgress(ctx, info, func(done, total int64) {
@@ -213,6 +253,8 @@ func (c *Coordinator) Check(ctx context.Context) {
 		s.Percent = 100
 		s.HasStaged = c.upd.HasStaged()
 		s.StagedVersion = c.upd.StagedVersion()
+		s.ReleaseNotes = notes
+		s.PublishedAt = published
 	})
 }
 

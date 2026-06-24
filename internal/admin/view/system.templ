@@ -1,6 +1,10 @@
 package view
 
-import "github.com/yogasw/wick/internal/entity"
+import (
+	"time"
+
+	"github.com/yogasw/wick/internal/entity"
+)
 
 // orDash returns s, or an em dash when s is empty — keeps version rows
 // from rendering a blank cell.
@@ -20,6 +24,8 @@ func statusLine(d SystemPageData) string {
 		return "Downloading…"
 	case "up-to-date":
 		return "You are on the latest version."
+	case "no-asset":
+		return orDash(d.LatestVersion) + " is available, but there's no build for this platform."
 	case "staged":
 		if d.StagedVersion != "" {
 			return d.StagedVersion + " is ready to apply."
@@ -59,11 +65,16 @@ type SystemPageData struct {
 
 	// Update state.
 	Configured    bool   // a release source is set; check/apply are usable
+	IsOfficial    bool   // release repo is the canonical wick repo (wick-agent)
 	LatestVersion string // last-known latest tag (may be empty)
 	HasStaged     bool   // a downloaded binary is ready to apply
 	StagedVersion string // version of the staged binary
 	Phase         string // coordinator phase at load time
 	Percent       int    // download percent at load time
+	ReleaseNotes  string // latest release body (what changed)
+	PublishedAt   string // latest release date (RFC3339)
+	WantedAsset   string // asset that was missing when no build exists for this OS
+	ChangelogURL  string // link to the full changelog (site or GitHub releases)
 	Error         string // last error, if any
 	AutoUpdate    bool   // auto-update toggle state
 }
@@ -74,14 +85,14 @@ type SystemPageData struct {
 // "Restarting…" panel that polls /health until the new build answers,
 // then reloads.
 templ SystemPage(d SystemPageData, user *entity.User) {
-	@AdminLayout("Admin · System", "configs", user) {
+	@AdminLayout("Admin · Software Update", "advanced", user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
-				<a href="/admin/configs" class="hover:text-green-600">Configs</a>
+				<a href="/admin/advanced" class="hover:text-green-600">Advanced</a>
 				<span>/</span>
-				<span class="text-black-900 dark:text-white-100">System</span>
+				<span class="text-black-900 dark:text-white-100">Software Update</span>
 			</div>
-			<h1 class="mt-2 text-[1.375rem] font-semibold text-black-900 dark:text-white-100">System</h1>
+			<h1 class="mt-2 text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Software Update</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Check for a new release, download it, and restart the service to apply. The service re-execs in place — running sessions reconnect once it's back.</p>
 			<div class="mt-6 flex flex-col gap-4">
 				@versionCard(d)
@@ -93,6 +104,10 @@ templ SystemPage(d SystemPageData, user *entity.User) {
 				@autoUpdateCard(d)
 			</div>
 		</main>
+		// Shared markdown renderer (built from fe/common/md, served from the
+		// global /public/ static root). Exposes window.WickMarkdown.render-
+		// Markdown for the "What's new" block; any page can load this one URL.
+		<script src="/public/lib/wick-markdown.js"></script>
 		@systemUpdateScript()
 	}
 }
@@ -106,12 +121,11 @@ templ versionCard(d SystemPageData) {
 		<p class="mt-3 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Application</p>
 		<dl class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
 			@versionRow("App name", orDash(d.AppName), "")
-			@versionRow("App version", orDash(d.CurrentVersion), "")
-			@versionRow("Latest release", orDash(d.LatestVersion), "sys-latest")
+			@appVersionRow(d)
 		</dl>
 		<p class="mt-5 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Build</p>
 		<dl class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
-			@versionRow("Wick version", orDash(d.WickVersion), "")
+			@wickVersionRow(d)
 			@versionRow("Commit", orDash(d.Commit), "")
 			@versionRow("Built", orDash(d.BuildTime), "")
 		</dl>
@@ -123,6 +137,49 @@ templ versionCard(d SystemPageData) {
 	</div>
 }
 
+// showNotes reports whether the "What's new" block should render at
+// first paint — only when a check has surfaced a newer/staged release
+// with notes to show.
+func showNotes(d SystemPageData) bool {
+	return d.ReleaseNotes != "" && (d.HasStaged || d.Phase == "staged" || d.Phase == "downloading" || d.Phase == "no-asset")
+}
+
+// showNoAsset reports whether the "no build for your platform" banner
+// should render at first paint.
+func showNoAsset(d SystemPageData) bool { return d.Phase == "no-asset" }
+
+// notesHeadline is the "vCurrent → vLatest · Released <date>" line above
+// the release notes. Falls back gracefully when a field is missing.
+func notesHeadline(d SystemPageData) string {
+	cur := orDash(d.CurrentVersion)
+	latest := d.LatestVersion
+	if latest == "" {
+		latest = d.StagedVersion
+	}
+	head := cur + " → " + orDash(latest)
+	if d := fmtReleaseDate(d.PublishedAt); d != "" {
+		head += " · Released " + d
+	}
+	return head
+}
+
+// fmtReleaseDate turns an RFC3339 timestamp into a plain YYYY-MM-DD.
+// Returns "" when empty or unparseable so the caller can omit it.
+func fmtReleaseDate(s string) string {
+	if s == "" {
+		return ""
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.Format("2006-01-02")
+	}
+	// Already a date-ish string or unknown format — show the leading 10
+	// chars (YYYY-MM-DD) if they look like a date, else nothing.
+	if len(s) >= 10 {
+		return s[:10]
+	}
+	return ""
+}
+
 // dbLine joins the db type + status into one cell, e.g. "sqlite · connected".
 func dbLine(d SystemPageData) string {
 	t := orDash(d.DBType)
@@ -132,8 +189,7 @@ func dbLine(d SystemPageData) string {
 	return t + " · " + d.DBStatus
 }
 
-// versionRow is one term/definition pair in the version grid. id is set
-// only on the Latest row so the SSE handler can live-update it.
+// versionRow is one term/definition pair in the version grid.
 templ versionRow(label, value, id string) {
 	<div class="flex flex-col gap-0.5">
 		<dt class="text-xs text-black-700 dark:text-black-600">{ label }</dt>
@@ -143,6 +199,72 @@ templ versionRow(label, value, id string) {
 			<dd class="font-mono text-sm text-black-900 dark:text-white-100">{ value }</dd>
 		}
 	</div>
+}
+
+// appVersionRow shows the running version with an update-status badge:
+// "Latest" (green) when current, or "Update available → vX" (amber) when
+// a newer release exists. The badge (#sys-update-badge) is live-updated
+// by the SSE handler; it starts hidden and the check on load fills it.
+templ appVersionRow(d SystemPageData) {
+	<div class="flex flex-col gap-0.5">
+		<dt class="text-xs text-black-700 dark:text-black-600">App version</dt>
+		<dd class="flex flex-wrap items-center gap-2">
+			<span class="font-mono text-sm text-black-900 dark:text-white-100">{ orDash(d.CurrentVersion) }</span>
+			<span id="sys-update-badge" class={ updateBadgeClass(d), templ.KV("hidden", updateBadgeText(d) == "") }>{ updateBadgeText(d) }</span>
+		</dd>
+	</div>
+}
+
+// wickVersionRow shows the embedded wick framework version. For the
+// official build (wick-agent), app and framework are one codebase and
+// one release, so the framework moves with the app — we reuse the same
+// update badge. For a downstream app built against wick, the framework
+// version is whatever it bundled; its "latest" isn't tracked by the
+// app's release repo, so we show it plain with a "bundled" note instead
+// of a misleading update badge.
+templ wickVersionRow(d SystemPageData) {
+	<div class="flex flex-col gap-0.5">
+		<dt class="text-xs text-black-700 dark:text-black-600">Wick version</dt>
+		<dd class="flex flex-wrap items-center gap-2">
+			<span class="font-mono text-sm text-black-900 dark:text-white-100">{ orDash(d.WickVersion) }</span>
+			if d.IsOfficial {
+				<span id="sys-wick-badge" class={ updateBadgeClass(d), templ.KV("hidden", updateBadgeText(d) == "") }>{ updateBadgeText(d) }</span>
+			} else {
+				<span class="rounded-full bg-white-200 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">bundled</span>
+			}
+		</dd>
+	</div>
+}
+
+// updateBadgeText returns the badge label for the current phase, or ""
+// to hide it (idle / checking / before any check).
+func updateBadgeText(d SystemPageData) string {
+	switch d.Phase {
+	case "up-to-date":
+		return "Latest"
+	case "staged", "downloading", "no-asset":
+		if d.LatestVersion != "" {
+			return "Update available → " + d.LatestVersion
+		}
+		return "Update available"
+	}
+	if d.HasStaged {
+		if d.StagedVersion != "" {
+			return "Update available → " + d.StagedVersion
+		}
+		return "Update available"
+	}
+	return ""
+}
+
+// updateBadgeClass picks the badge color: green when up to date, amber
+// when an update is available.
+func updateBadgeClass(d SystemPageData) string {
+	base := "rounded-full px-2 py-0.5 text-xs font-medium "
+	if d.Phase == "up-to-date" {
+		return base + "bg-pos-100 text-pos-400"
+	}
+	return base + "bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
 }
 
 // notConfiguredCard explains why update controls are hidden when no
@@ -178,6 +300,34 @@ templ updateCard(d SystemPageData) {
 			</div>
 			<p id="sys-progress-pct" class="mt-1.5 text-xs font-mono text-black-700 dark:text-black-600">0%</p>
 		</div>
+		// What's new — the upgrade headline (current → latest · released
+		// date) plus the release notes from the app's own GitHub release.
+		// Hidden until a check surfaces a newer/staged version; populated
+		// server-side at load and live-updated by the SSE handler.
+		<div id="sys-notes-wrap" class={ "mt-4 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4", templ.KV("hidden", !showNotes(d)) }>
+			<p class="text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">What's new</p>
+			<p id="sys-notes-head" class="mt-1 text-sm font-medium text-black-900 dark:text-white-100">{ notesHeadline(d) }</p>
+			// Rendered changelog. Filled by the SSE handler via
+			// WickMarkdown.renderMarkdown (markdown → HTML); falls back to
+			// raw text if the bundle didn't load. Scrolls within the box so
+			// a long range doesn't stretch the page.
+			<div id="sys-notes-body" class="mt-2 max-h-64 overflow-auto break-words text-sm text-black-800 dark:text-black-600">{ d.ReleaseNotes }</div>
+			if d.ChangelogURL != "" {
+				<a href={ templ.SafeURL(d.ChangelogURL) } target="_blank" rel="noopener" class="mt-3 inline-block text-xs font-medium text-green-600 dark:text-green-400 hover:underline">View full changelog →</a>
+			}
+		</div>
+		// No-build-for-this-platform notice. Informational (amber), NOT an
+		// error: a newer version exists but the release has no asset for
+		// this OS/arch. The user can't auto-update; we recommend building
+		// from source or asking the maintainer to publish this platform.
+		<div id="sys-noasset-wrap" class={ "mt-4 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 p-4 text-sm", templ.KV("hidden", !showNoAsset(d)) }>
+			<p class="font-medium text-black-900 dark:text-white-100">No build for this platform</p>
+			<p class="mt-1 text-black-800 dark:text-black-600">
+				A newer version is available, but this release has no download for your operating system
+				(expected <code id="sys-noasset-name" class="font-mono">{ orDash(d.WantedAsset) }</code>).
+				You can still update by building from source, or ask the maintainer to publish a build for this platform.
+			</p>
+		</div>
 		// Apply row — shown when a staged update is ready (server-side at
 		// load, or flipped on by the SSE handler when a download lands).
 		// Apply reuses the binary's own restart path (in-place re-exec on
@@ -205,7 +355,7 @@ templ updateCard(d SystemPageData) {
 templ autoUpdateCard(d SystemPageData) {
 	<form
 		method="POST"
-		action="/admin/configs/system/auto-update"
+		action="/admin/advanced/software-update/auto-update"
 		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm"
 	>
 		<div class="flex items-start justify-between gap-4">
@@ -234,7 +384,7 @@ templ systemUpdateScript() {
 	<script type="text/javascript">
 	(function () {
 		var statusEl = document.getElementById('sys-status');
-		var latestEl = document.getElementById('sys-latest');
+		var badgeEl = document.getElementById('sys-update-badge');
 		var wrapEl = document.getElementById('sys-progress-wrap');
 		var barEl = document.getElementById('sys-progress-bar');
 		var pctEl = document.getElementById('sys-progress-pct');
@@ -243,22 +393,93 @@ templ systemUpdateScript() {
 		var applyVer = document.getElementById('sys-apply-ver');
 		var checkBtn = document.getElementById('sys-check');
 		var restartingEl = document.getElementById('sys-restarting');
+		var notesWrap = document.getElementById('sys-notes-wrap');
+		var notesHead = document.getElementById('sys-notes-head');
+		var notesBody = document.getElementById('sys-notes-body');
+		var noassetWrap = document.getElementById('sys-noasset-wrap');
+		var noassetName = document.getElementById('sys-noasset-name');
+		var wickBadgeEl = document.getElementById('sys-wick-badge'); // present only on official builds
 
 		function showProgress(show) {
 			if (!wrapEl) return;
 			wrapEl.classList.toggle('hidden', !show);
 		}
+		// renderNotes fills the "What's new" block from the live status:
+		// "vCurrent → vLatest · Released <date>" + the release body. Shown
+		// only once there's a newer/staged version with notes.
+		function fmtDate(s) {
+			if (!s) return '';
+			var m = /^(\d{4}-\d{2}-\d{2})/.exec(s);
+			return m ? m[1] : '';
+		}
+		function renderNotes(st) {
+			if (!notesWrap) return;
+			var has = st.release_notes && (st.has_staged || st.phase === 'staged' || st.phase === 'downloading' || st.phase === 'no-asset');
+			notesWrap.classList.toggle('hidden', !has);
+			if (!has) return;
+			var latest = st.latest_version || st.staged_version || '—';
+			var head = (st.current_version || '—') + ' → ' + latest;
+			var d = fmtDate(st.published_at);
+			if (d) head += ' · Released ' + d;
+			if (notesHead) notesHead.textContent = head;
+			if (notesBody) {
+				// Render the changelog markdown to HTML via the shared
+				// renderer. The content is trusted (our own release/site),
+				// and renderMarkdown escapes text + emits safe links. Fall
+				// back to raw text if the bundle failed to load.
+				if (window.WickMarkdown && window.WickMarkdown.renderMarkdown) {
+					notesBody.innerHTML = window.WickMarkdown.renderMarkdown(st.release_notes);
+				} else {
+					notesBody.textContent = st.release_notes;
+				}
+			}
+		}
+		function renderNoAsset(st) {
+			if (!noassetWrap) return;
+			var show = st.phase === 'no-asset';
+			noassetWrap.classList.toggle('hidden', !show);
+			if (show && noassetName && st.wanted_asset) noassetName.textContent = st.wanted_asset;
+		}
 		function setPct(p) {
 			if (barEl) barEl.style.width = p + '%';
 			if (pctEl) pctEl.textContent = p + '%';
 		}
+		// updateBadge mirrors the Go updateBadgeText/Class: green "Latest"
+		// when up to date, amber "Update available → vX" when newer exists,
+		// hidden otherwise. Applied to the app-version badge and (on
+		// official builds) the wick-version badge, which track together.
+		function applyBadge(el, st) {
+			if (!el) return;
+			var text = '', amber = true;
+			if (st.phase === 'up-to-date') { text = 'Latest'; amber = false; }
+			else if (st.phase === 'staged' || st.phase === 'downloading' || st.phase === 'no-asset' || st.has_staged) {
+				var v = st.latest_version || st.staged_version || '';
+				text = v ? 'Update available → ' + v : 'Update available';
+			}
+			el.classList.toggle('hidden', text === '');
+			if (!text) return;
+			el.textContent = text;
+			el.className = 'rounded-full px-2 py-0.5 text-xs font-medium ' +
+				(amber ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+				       : 'bg-pos-100 text-pos-400');
+		}
+		function renderBadge(st) {
+			applyBadge(badgeEl, st);
+			applyBadge(wickBadgeEl, st);
+		}
 		function render(st) {
 			if (!st) return;
-			if (latestEl && st.latest_version) latestEl.textContent = st.latest_version;
 			if (applyVer && st.staged_version) applyVer.textContent = st.staged_version;
+			renderBadge(st);
+			renderNotes(st);
+			renderNoAsset(st);
 			switch (st.phase) {
 				case 'checking':
 					if (statusEl) statusEl.textContent = 'Checking for updates…';
+					showProgress(false);
+					break;
+				case 'no-asset':
+					if (statusEl) statusEl.textContent = (st.latest_version || 'A new version') + ' is available, but there\'s no build for this platform.';
 					showProgress(false);
 					break;
 				case 'downloading':
@@ -287,23 +508,35 @@ templ systemUpdateScript() {
 			}
 		}
 
-		// Live status stream.
+		function triggerCheck() {
+			if (checkBtn) checkBtn.disabled = true;
+			if (statusEl) statusEl.textContent = 'Checking for updates…';
+			fetch('/admin/advanced/software-update/check', { method: 'POST' })
+				.catch(function () { if (statusEl) statusEl.textContent = 'Could not start the check.'; })
+				.finally(function () { setTimeout(function () { if (checkBtn) checkBtn.disabled = false; }, 2000); });
+		}
+
+		// Live status stream. Track the latest phase so the auto-check on
+		// load doesn't re-fire while a download/apply is already underway.
+		var lastPhase = '';
 		try {
-			var es = new EventSource('/admin/configs/system/status');
+			var es = new EventSource('/admin/advanced/software-update/status');
 			es.addEventListener('status', function (e) {
-				try { render(JSON.parse(e.data)); } catch (_) {}
+				try { var st = JSON.parse(e.data); lastPhase = st.phase; render(st); } catch (_) {}
 			});
 		} catch (_) { /* SSE unsupported — buttons still work, just no live bar */ }
 
-		if (checkBtn) {
-			checkBtn.addEventListener('click', function () {
-				checkBtn.disabled = true;
-				if (statusEl) statusEl.textContent = 'Checking for updates…';
-				fetch('/admin/configs/system/check', { method: 'POST' })
-					.catch(function () { if (statusEl) statusEl.textContent = 'Could not start the check.'; })
-					.finally(function () { setTimeout(function () { checkBtn.disabled = false; }, 2000); });
-			});
-		}
+		if (checkBtn) checkBtn.addEventListener('click', triggerCheck);
+
+		// Auto-check once on page load so "Latest release" populates without
+		// a manual click. Wait a beat for the first SSE frame; only fire if
+		// nothing is already in flight (idle / up-to-date / no-asset) so we
+		// don't interrupt an ongoing download or a staged-ready state.
+		setTimeout(function () {
+			if (lastPhase === '' || lastPhase === 'idle' || lastPhase === 'up-to-date' || lastPhase === 'no-asset') {
+				triggerCheck();
+			}
+		}, 800);
 
 		// Poll /health until the restarted service answers, then reload.
 		// The restart drops this connection first, so the first OK response
@@ -326,7 +559,7 @@ templ systemUpdateScript() {
 			applyBtn.addEventListener('click', function () {
 				applyBtn.disabled = true;
 				if (checkBtn) checkBtn.disabled = true;
-				fetch('/admin/configs/system/apply', { method: 'POST' })
+				fetch('/admin/advanced/software-update/apply', { method: 'POST' })
 					.then(function (r) { return r.json(); })
 					.then(function (d) {
 						if (d && d.restart) {

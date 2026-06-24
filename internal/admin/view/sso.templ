@@ -10,10 +10,10 @@ import (
 // inline edit form — there's only Google for now, but the UI scales
 // to any providers Bootstrap registers.
 templ SSOPage(rows []entity.SSOProvider, callbackURL string, user *entity.User) {
-	@AdminLayout("Admin · SSO", "configs", user) {
+	@AdminLayout("Admin · SSO", "advanced", user) {
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
-				<a href="/admin/configs" class="hover:text-green-600">Configs</a>
+				<a href="/admin/advanced" class="hover:text-green-600">Advanced</a>
 				<span>/</span>
 				<span class="text-black-900 dark:text-white-100">SSO</span>
 			</div>
@@ -144,7 +144,7 @@ templ domainChipsScript() {
 templ ssoCard(row entity.SSOProvider, callbackURL string) {
 	<form
 		method="POST"
-		action={ templ.SafeURL("/admin/configs/sso/" + row.Provider) }
+		action={ templ.SafeURL("/admin/advanced/sso/" + row.Provider) }
 		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm"
 	>
 		<div class="flex items-start justify-between gap-4">

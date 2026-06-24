@@ -197,16 +197,16 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("POST /admin/jobs/{path}/tags", admin(h.setJobTags))
 
 	mux.Handle("GET /admin/tags", admin(h.tagsPage))
-	mux.Handle("GET /admin/configs", admin(h.configsHubPage))
-	mux.Handle("GET /admin/configs/sso", admin(h.ssoPage))
-	mux.Handle("POST /admin/configs/sso/{provider}", admin(h.updateSSO))
+	mux.Handle("GET /admin/advanced", admin(h.configsHubPage))
+	mux.Handle("GET /admin/advanced/sso", admin(h.ssoPage))
+	mux.Handle("POST /admin/advanced/sso/{provider}", admin(h.updateSSO))
 
-	// System: version, self-update (SSE progress), apply+restart, auto-update toggle.
-	mux.Handle("GET /admin/configs/system", admin(h.systemPage))
-	mux.Handle("GET /admin/configs/system/status", admin(h.systemUpdateStatus))
-	mux.Handle("POST /admin/configs/system/check", admin(h.systemUpdateCheck))
-	mux.Handle("POST /admin/configs/system/apply", admin(h.systemUpdateApply))
-	mux.Handle("POST /admin/configs/system/auto-update", admin(h.systemSetAutoUpdate))
+	// Software Update: version, self-update (SSE progress), apply+restart, auto-update toggle.
+	mux.Handle("GET /admin/advanced/software-update", admin(h.systemPage))
+	mux.Handle("GET /admin/advanced/software-update/status", admin(h.systemUpdateStatus))
+	mux.Handle("POST /admin/advanced/software-update/check", admin(h.systemUpdateCheck))
+	mux.Handle("POST /admin/advanced/software-update/apply", admin(h.systemUpdateApply))
+	mux.Handle("POST /admin/advanced/software-update/auto-update", admin(h.systemSetAutoUpdate))
 
 	// Variables (app-level configs)
 	mux.Handle("GET /admin/variables", admin(h.variablesPage))

@@ -240,6 +240,21 @@ export function renderMarkdown(text: string): string {
       continue;
     }
 
+    /* Thematic break: a line of only ---, ***, or ___ (3+). Render an
+       <hr> instead of leaking the dashes/asterisks into a paragraph. */
+    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
+      flushList();
+      flushTable();
+      out.push('<hr class="my-3 border-0 border-t border-white-300 dark:border-navy-600"/>');
+      continue;
+    }
+
+    /* A lone bullet marker (just "*" or "-" with no content) is noise —
+       skip it rather than printing a stray asterisk. */
+    if (/^\s*[-*+]\s*$/.test(line)) {
+      continue;
+    }
+
     flushTable();
     flushList();
     out.push(`<p class="text-sm text-black-900 dark:text-white-100 leading-relaxed">${inlineMarkdown(line)}</p>`);

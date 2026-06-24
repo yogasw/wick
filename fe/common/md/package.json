@@ -5,6 +5,8 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
+    "build": "vite build",
+    "build:watch": "vite build --watch",
     "test:unit": "vitest run"
   }
 }

@@ -88,6 +88,18 @@ func New(cfg *userconfig.Config, save func() error, appName, currentVersion, rep
 	if cfg == nil || save == nil {
 		return nil, errors.New("updater: cfg and save are required")
 	}
+	// WICK_RELEASE_REPO overrides the baked release source — useful for
+	// testing self-update against a different public repo without a
+	// rebuild (e.g. point a downstream app at yogasw/wick, whose releases
+	// ship matching wick-agent-* assets). WICK_RELEASE_PAT optionally
+	// overrides the download token for a private test repo. Both empty in
+	// normal use, so production keeps the ldflag-baked repo/pat.
+	if envRepo := os.Getenv("WICK_RELEASE_REPO"); envRepo != "" {
+		repoFull = envRepo
+		if envPat := os.Getenv("WICK_RELEASE_PAT"); envPat != "" {
+			pat = envPat
+		}
+	}
 	owner, repo := parseRepo(repoFull)
 	if owner == "" {
 		owner, repo = parseRepo(moduleRepo())
@@ -127,15 +139,28 @@ func (u *Updater) HasStaged() bool {
 // StagedVersion is the tag (e.g. "v1.2.3") of the pending update.
 func (u *Updater) StagedVersion() string { return u.cfg.StagedUpdateVersion }
 
+// CurrentVersion is the running binary's normalised version ("vX.Y.Z",
+// or "" for dev/unknown builds). Used to compute the changelog range.
+func (u *Updater) CurrentVersion() string { return u.currentVersion }
+
 // LatestInfo describes the GitHub release latest tag plus the assets
 // that match this binary's GOOS/GOARCH. Returned by CheckLatest so the
 // caller (tray) can show the version before kicking off the download.
 type LatestInfo struct {
 	Version       string // normalised "vX.Y.Z"
+	Notes         string // release body (markdown) — what changed
+	PublishedAt   string // RFC3339 release date, "" if unknown
 	AlreadyLatest bool   // true when current >= latest (Download is a no-op)
 	AlreadyStaged bool   // true when this exact version is already staged on disk
-	bin           *ghAsset
-	sum           *ghAsset
+	// NoAssetForOS is true when a newer release exists but carries no
+	// asset matching this binary's OS/arch (e.g. a Linux-only release on
+	// a Windows host). This is NOT an error — the version + notes are
+	// still valid; the user just can't auto-download. WantedAsset names
+	// the file that was expected, for a helpful message.
+	NoAssetForOS bool
+	WantedAsset  string
+	bin          *ghAsset
+	sum          *ghAsset
 }
 
 // CheckLatest fetches the latest release and compares it to the
@@ -164,7 +189,7 @@ func (u *Updater) CheckLatest(ctx context.Context) (LatestInfo, error) {
 		return LatestInfo{}, fmt.Errorf("fetch latest: %w", err)
 	}
 	latest := normalizeVer(rel.TagName)
-	info := LatestInfo{Version: latest}
+	info := LatestInfo{Version: latest, Notes: rel.Body, PublishedAt: rel.PublishedAt}
 	if !semverNewer(latest, u.currentVersion) {
 		info.AlreadyLatest = true
 		return info, nil
@@ -175,7 +200,13 @@ func (u *Updater) CheckLatest(ctx context.Context) (LatestInfo, error) {
 	}
 	info.bin, info.sum = u.pickAssets(rel.Assets, latest)
 	if info.bin == nil {
-		return info, fmt.Errorf("no asset matched %s", u.assetName(latest))
+		// A newer release exists but ships no build for this OS/arch.
+		// Surface it as an informational state (version + notes still
+		// usable), not a hard error — the caller shows "update available,
+		// no build for your platform" with a recommendation.
+		info.NoAssetForOS = true
+		info.WantedAsset = u.assetName(latest)
+		return info, nil
 	}
 	return info, nil
 }
@@ -590,8 +621,10 @@ func CleanupOldBinary() {
 // ----- GitHub API -----
 
 type ghRelease struct {
-	TagName string    `json:"tag_name"`
-	Assets  []ghAsset `json:"assets"`
+	TagName     string    `json:"tag_name"`
+	Body        string    `json:"body"`         // release notes (markdown)
+	PublishedAt string    `json:"published_at"` // RFC3339, e.g. "2026-06-24T01:05:49Z"
+	Assets      []ghAsset `json:"assets"`
 }
 
 type ghAsset struct {

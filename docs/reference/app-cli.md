@@ -258,7 +258,7 @@ Set the connector build profile this instance registers at boot. The value is st
 
 The four runtime connectors (Wick Manager, Workflow, Notifications, Custom Connector) are never profile-gated and always register regardless of this setting.
 
-The active profile can also be read and written via the admin Configs page (`/admin/variables`, key `profile`).
+The active profile can also be read and written via the admin Advanced page (`/admin/variables`, key `profile`).
 
 ### `<app> config allowed-origins`
 
