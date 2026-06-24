@@ -28,6 +28,16 @@ func (u *Updater) extractStaged(asset []byte) ([]byte, error) {
 	return asset, nil
 }
 
+// installDirWritable / materializeInnerBinary are the Linux binary-swap
+// helpers; Windows never reaches the .deb branch in ApplyStagedAndRestart
+// (it stages an .msi), so these are unreachable stubs that just satisfy
+// the all-platform compile of updater.go.
+func installDirWritable(string) bool { return false }
+
+func (u *Updater) materializeInnerBinary(string) (string, error) {
+	return "", fmt.Errorf("deb binary-swap not supported on windows")
+}
+
 // stagedExt is the file extension for the staged update file on disk.
 // Windows keeps the .msi; msiexec /i requires the .msi extension.
 func stagedExt() string { return ".msi" }

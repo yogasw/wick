@@ -268,8 +268,14 @@ func (u *Updater) CheckNow(ctx context.Context) (Result, error) {
 // written to cacheDir recording the expected post-install version.
 // The next launch reads it via CheckUpdateOutcome to decide if the
 // install succeeded — installer exit codes alone are not trusted
-// (msiexec /qn, dpkg postinst, and inner-binary swaps all have ways
-// to silently no-op).
+// (msiexec /qn and inner-binary swaps both have ways to silently
+// no-op).
+//
+// Swap mechanism per platform: Windows runs the MSI via a detached
+// helper; everything else (Linux, Termux, macOS) does an in-place
+// binary swap + syscall.Exec — for a .deb we first peel out the inner
+// ELF. No path escalates privilege; an unwritable install dir fails
+// with a clear message instead.
 func (u *Updater) ApplyStagedAndRestart(stops ...func()) error {
 	if !u.HasStaged() {
 		return errors.New("no staged update")
@@ -313,15 +319,25 @@ func (u *Updater) ApplyStagedAndRestart(stops ...func()) error {
 		}
 		return swapWindows(exe, staged, u.cacheDir, sentinel)
 	}
-	if runtime.GOOS == "linux" && strings.HasSuffix(staged, ".deb") {
-		sentinel.Method = "dpkg"
-		sentinel.InstallerLog = filepath.Join(u.cacheDir, "dpkg-install.log")
-		sentinel.HelperScript = filepath.Join(u.cacheDir, "update-helper.sh")
-		sentinel.HelperLog = filepath.Join(u.cacheDir, "update-helper.log")
-		if err := writeSentinel(u.cacheDir, sentinel); err != nil {
-			return fmt.Errorf("write sentinel: %w", err)
+	// Linux .deb (and every other Unix case): binary-swap in place. Self-
+	// update never escalates privilege — it mirrors install.sh, which
+	// installs unprivileged to a user-owned dir (Termux $PREFIX/bin,
+	// ~/.local/bin). So instead of handing the .deb to dpkg via pkexec/
+	// sudo, we peel out the inner ELF and rename+exec it. dpkg's ./usr/bin
+	// layout is also remapped by Termux anyway, making dpkg the wrong tool
+	// there. If the install dir isn't user-writable (e.g. a system /usr/bin
+	// install owned by root), we refuse with a clear message rather than
+	// prompting for a password — the user updates the same way they
+	// installed (re-run the installer with their own privilege).
+	if strings.HasSuffix(staged, ".deb") {
+		if !installDirWritable(exe) {
+			return fmt.Errorf("cannot update in place: %s is not writable by the current user — re-run the installer to update (it does not require this app to escalate privilege)", filepath.Dir(exe))
 		}
-		return swapLinuxDeb(exe, staged, u.cacheDir, sentinel)
+		extracted, err := u.materializeInnerBinary(staged)
+		if err != nil {
+			return fmt.Errorf("extract inner binary from deb: %w", err)
+		}
+		staged = extracted
 	}
 	sentinel.Method = "binary-swap"
 	if err := writeSentinel(u.cacheDir, sentinel); err != nil {
