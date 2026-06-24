@@ -6,7 +6,13 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Custom MCP connector — tool grouping via `_meta`**: When an upstream MCP server ships a top-level `_meta.categories` legend and sets `_meta.category` on individual tools in its `tools/list` response, wick now groups the exposed operations into titled sections matching the server's intended layout. Section order follows the legend; tools with no category collect into a single untitled trailing section. Servers that ship no `_meta` keep the historical flat single-section layout — no action needed.
+
+### Fixed
+
+*   **Custom MCP connector — bearer / secret-header 401 after save**: Connector credentials stored as master-encrypted tokens (the `wick_cenc_` prefix, used for server-level secrets) were not being decrypted before the outbound request was made. Only the per-user `wick_enc_` prefix was matched in the decrypt path, so the ciphertext was sent verbatim as the `Authorization: Bearer` value (or custom header value), causing the upstream server to return 401. Both prefixes are now recognised and decrypted correctly.
 
 ---
 
