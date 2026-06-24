@@ -48,9 +48,14 @@ func (h *Handler) systemPage(w http.ResponseWriter, r *http.Request) {
 		vm.StagedVersion = st.StagedVersion
 		vm.Phase = string(st.Phase)
 		vm.Percent = st.Percent
+		vm.ReleaseNotes = st.ReleaseNotes
+		vm.PublishedAt = st.PublishedAt
+		vm.WantedAsset = st.WantedAsset
 		vm.Error = st.Error
 		if upd := h.sys.Coordinator.Updater(); upd != nil {
 			vm.Configured = upd.Configured()
+			vm.IsOfficial = upd.IsOfficial()
+			vm.ChangelogURL = upd.ChangelogURL()
 		}
 	}
 	view.SystemPage(vm, user).Render(r.Context(), w)
@@ -187,7 +192,7 @@ func (h *Handler) systemSetAutoUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/admin/configs/system", http.StatusFound)
+	http.Redirect(w, r, "/admin/advanced/software-update", http.StatusFound)
 }
 
 func writeJSON(w http.ResponseWriter, code int, body any) {
