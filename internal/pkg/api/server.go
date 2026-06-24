@@ -82,6 +82,8 @@ import (
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
+	"github.com/yogasw/wick/internal/updater"
+	"github.com/yogasw/wick/internal/userconfig"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
@@ -94,6 +96,44 @@ import (
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
+
+// Release-info package vars hold the GitHub release source for the web
+// self-updater. They are set once from app.main (which owns the ldflag-
+// injected app.GitHubRepo / app.GitHubPAT / app.BuildAppVersion) before
+// NewServer runs. Empty values leave the updater unconfigured, so the
+// admin System page renders a "not configured" state and never offers
+// check/apply. Kept here (not in a struct param) so NewServer's zero-arg
+// signature — relied on by every caller and test — stays unchanged.
+var (
+	releaseAppVersion string
+	releaseRepo       string
+	releasePAT        string
+
+	// Build metadata shown on the System page (same fields as wick_info).
+	// Set alongside the release info from app.main.
+	buildWickVersion string
+	buildCommit      string
+	buildTime        string
+)
+
+// SetReleaseInfo wires the release source for the web self-updater.
+// Call before NewServer. currentVersion is the running binary's version
+// string (e.g. app.BuildAppVersion); repo is "owner/repo"; pat is the
+// read-only download token (may be empty for public repos).
+func SetReleaseInfo(currentVersion, repo, pat string) {
+	releaseAppVersion = currentVersion
+	releaseRepo = repo
+	releasePAT = pat
+}
+
+// SetBuildInfo wires the static build metadata shown on the System page
+// (wick version, commit, build time) — the same trio wick_info reports.
+// Call before NewServer.
+func SetBuildInfo(wickVersion, commit, builtAt string) {
+	buildWickVersion = wickVersion
+	buildCommit = commit
+	buildTime = builtAt
+}
 
 // genMCPInternalToken returns a random per-boot secret (in-memory only)
 // authenticating agent spawns to the loopback MCP server.
@@ -1118,6 +1158,7 @@ func NewServer() *Server {
 	// OAuth-issued tokens both flow through the same middleware —
 	// dispatch by prefix.
 	mcpHandler := mcp.NewHandler(connectorsSvc).
+		WithBuildInfo(releaseAppVersion, buildCommit, buildTime).
 		WithAppURL(configsSvc.AppURL).
 		WithDB(db).
 		WithAskUser(askUsersMgr).
@@ -1282,13 +1323,37 @@ func NewServer() *Server {
 		})
 	}
 
+	// ── Self-updater (web System page) ──────────────────────────
+	// Build the updater + its web coordinator from the release info set
+	// by app.main. The updater persists staged-update state into the
+	// per-app userconfig (same file the tray uses) via a load/save pair
+	// scoped to the resolved app name, so a download here and an apply on
+	// the next boot agree. When release info is empty, updater.New still
+	// succeeds but Configured() is false — the System page degrades to a
+	// "not configured" notice and the coordinator's Check is a no-op.
+	updAppName := appname.Resolve()
+	updCfg, _ := userconfig.Load(updAppName)
+	saveUpdCfg := func() error { return userconfig.Save(updAppName, updCfg) }
+	upd, err := updater.New(&updCfg, saveUpdCfg, updAppName, releaseAppVersion, releaseRepo, releasePAT)
+	if err != nil {
+		log.Warn().Err(err).Msg("web updater init failed — System page update controls disabled")
+	}
+	updCoord := updater.NewCoordinator(upd, releaseAppVersion)
+	sysCfg := admin.SystemConfig{
+		Coordinator: updCoord,
+		AppName:     updAppName,
+		WickVersion: buildWickVersion,
+		Commit:      buildCommit,
+		BuildTime:   buildTime,
+	}
+
 	// ── Admin ────────────────────────────────────────────────────
 	skillsStore := agentskills.NewStore(db)
 	var wfLister admin.WorkflowLister
 	if wfMgr != nil {
 		wfLister = wfListerAdapter{svc: wfMgr.Service}
 	}
-	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore)
+	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore, sysCfg)
 
 	// ── Shared services ─────────────────────────────────────────
 	bookmarkSvc := bookmark.NewService(db)
