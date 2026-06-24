@@ -6,16 +6,25 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Added
-*   **Software Update page — release notes + update status**: The self-update page (now under **Setup → Advanced → Software Update**) shows a rendered changelog of everything between the running version and the latest release, the release date, and an at-a-glance status badge on the App/Wick version (green **Latest** or amber **Update available → vX**). For the official build the changelog range is pulled from the published changelog site; downstream apps fall back to their GitHub release notes. A **View full changelog** link opens the full page.
-*   **"No build for this platform" notice**: When a newer release exists but ships no asset for the running OS/arch, the page now shows the version + changelog with an informational notice (build from source or ask the maintainer) instead of a hard error.
-*   The page auto-checks for updates on load, so the latest version + changelog populate without a manual click.
-
-### Changed
-*   The admin **Configs** section is renamed **Advanced** (`/admin/advanced`); the self-update card within it is now **Software Update** (`/admin/advanced/software-update`).
-*   Changelog/markdown on the Software Update page renders as formatted HTML via a shared `@wick-fe/common-md` bundle served from `/public/lib/`, reusable by any server-rendered page.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.24.0](https://github.com/yogasw/wick/compare/v0.23.6...v0.24.0) — Software Update UI
+
+_Released on 2026-06-24_
+
+### Added
+*   **Software Update page — release notes + update status**: The self-update page (now under **Setup → Advanced → Software Update**) displays a rendered changelog between the running and latest versions, the release date, and an at-a-glance status badge (green **Latest** or amber **Update available → vX**). For official builds, the changelog range is pulled from the published changelog site; downstream apps fall back to their GitHub release notes. A **View full changelog** link opens the full page.
+*   **"No build for this platform" notice**: When a newer release exists but ships no asset for the running OS/arch, the page now shows the version and changelog with an informational notice (recommending to build from source or ask the maintainer) instead of a hard error.
+*   The page auto-checks for updates on load, so the latest version and changelog populate without a manual click.
+
+### Changed
+*   The admin **Configs** section is renamed to **Advanced** (`/admin/advanced`); the self-update card within it is now **Software Update** (`/admin/advanced/software-update`).
+*   Changelog and other markdown on the Software Update page now renders as formatted HTML via a shared `@wick-fe/common-md` bundle, served from `/public/lib/` and reusable by any server-rendered page. The shared markdown renderer also learns to interpret thematic breaks (---) as `<hr>`.
+
+---
+
 
 ## [v0.23.6](https://github.com/yogasw/wick/compare/v0.23.5...v0.23.6) — Self-Update
 
