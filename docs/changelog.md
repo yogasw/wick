@@ -6,15 +6,24 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.24.1](https://github.com/yogasw/wick/compare/v0.24.0...v0.24.1) — MCP & Connectors
+
+_Released on 2026-06-24_
+
 ### Added
 
-*   **Custom MCP connector — tool grouping via `_meta`**: When an upstream MCP server ships a top-level `_meta.categories` legend and sets `_meta.category` on individual tools in its `tools/list` response, wick now groups the exposed operations into titled sections matching the server's intended layout. Section order follows the legend; tools with no category collect into a single untitled trailing section. Servers that ship no `_meta` keep the historical flat single-section layout — no action needed.
+*   **Custom MCP connector — tool grouping via `_meta`**: Upstream MCP servers can now specify a top-level `_meta.categories` legend and set `_meta.category` on individual tools in their `tools/list` response. Wick now groups the exposed operations into titled sections matching the server's intended layout. Section order follows the legend; tools with no category collect into a single untitled trailing section. Servers that do not ship `_meta` will retain the historical flat single-section layout, requiring no action.
 
 ### Fixed
 
-*   **Custom MCP connector — bearer / secret-header 401 after save**: Connector credentials stored as master-encrypted tokens (the `wick_cenc_` prefix, used for server-level secrets) were not being decrypted before the outbound request was made. Only the per-user `wick_enc_` prefix was matched in the decrypt path, so the ciphertext was sent verbatim as the `Authorization: Bearer` value (or custom header value), causing the upstream server to return 401. Both prefixes are now recognised and decrypted correctly.
+*   **Custom MCP connector — bearer / secret-header 401 after save**: Connector credentials stored as master-encrypted tokens (`wick_cenc_` prefix, used for server-level secrets) were not being decrypted before outbound requests. Previously, only the per-user `wick_enc_` prefix was matched during decryption, resulting in the ciphertext being sent verbatim as the `Authorization: Bearer` or custom header value, leading to 401 errors from upstream servers. Both prefixes are now recognised and decrypted correctly.
 
 ---
+
 
 ## [v0.24.0](https://github.com/yogasw/wick/compare/v0.23.6...v0.24.0) — Software Update UI
 
