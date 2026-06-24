@@ -31,7 +31,8 @@ _Released on 2026-06-24_
 *   **Auto-update default changed to off**: `auto_update` in `config.json` now defaults to `false` (opt-in). Existing installs that previously relied on the default-on behaviour should enable auto-update explicitly — via **Preferences → Auto-update** in the tray, or the **Automatic updates** toggle on the new System page.
 
 ### Fixed
-*   **Windows MSI relaunch preserves args**: Applying an update via the MSI helper now restarts the process with its original arguments, so a headless `<app> all` or `<app> server` service re-serves after an update without manual intervention.
+*   **Self-update on Termux / unprivileged Linux**: Applying an update no longer shells out to `dpkg` via `pkexec`/`sudo`. Self-update now mirrors the installer — it never escalates privilege. On Linux/Termux it extracts the inner binary from the staged `.deb` and swaps it in place (`syscall.Exec`), so updates work on Termux (user-owned prefix, no `pkexec`/`sudo`) and any unprivileged install. If the install directory isn't user-writable, Apply fails with a clear message instead of prompting for a password.
+*   **Relaunch preserves args after update**: Both the Windows (MSI helper) and Linux (binary swap) restart paths now relaunch with the process's original arguments, so a headless `<app> all` / `<app> server` service re-serves after an update without manual intervention.
 
 ---
 
