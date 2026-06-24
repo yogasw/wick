@@ -10,6 +10,20 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.23.5](https://github.com/yogasw/wick/compare/v0.23.4...v0.23.5) — Updater
+
+_Released on 2026-06-24_
+
+### Fixed
+- Self-update mechanism for Termux and unprivileged Linux environments. Previously, self-update failed on Termux due to attempts to use `dpkg -i` via `pkexec/sudo`, which are not available or required for user-owned installations in Termux. The application would hang on "Restarting...". The new mechanism now performs an unprivileged installation by extracting the inner ELF binary from the staged `.deb` file and swapping it in place using `syscall.Exec`, mirroring the `install.sh` script's approach.
+- The updater now provides a clear error message if the install directory is not user-writable (e.g., a root-owned `/usr/bin` installation), guiding the user to re-run the installer.
+
+### Improved
+- Linux relaunch during self-update now preserves the original process arguments. This ensures that headless services started with specific arguments (e.g., `all` or `server`) continue to operate correctly after an update, matching the behavior on Windows.
+
+---
+
+
 ## [v0.23.4](https://github.com/yogasw/wick/compare/v0.23.3...v0.23.4) — Self-Update
 
 _Released on 2026-06-24_
