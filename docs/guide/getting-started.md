@@ -20,7 +20,7 @@ After installing Go, restart your terminal so `go` is available in `PATH`.
 The Wick CLI scaffolds and builds projects (`wick init`, `wick build`, `wick dev`). Install via Go:
 
 ```bash
-go install github.com/yogasw/wick@v0.23.6
+go install github.com/yogasw/wick@v0.24.0
 ```
 
 Verify:
@@ -83,7 +83,7 @@ All variables have working defaults. The only ones you may want to change before
 | `APP_ADMIN_EMAILS` | `admin@example.com` | Your email, gets admin on first login |
 | `APP_ADMIN_PASSWORD` | *(auto-generated)* | Leave blank → 5-word passphrase saved to `~/.<app>/INITIAL_CREDENTIALS.txt`; first login forces a password rotation |
 
-Everything else (app name, URL, SSO, OAuth) is editable from `/admin/configs` after the app starts.
+Everything else (app name, URL, SSO, OAuth) is editable from `/admin/advanced` after the app starts.
 
 ## 5. Start dev server
 

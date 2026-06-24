@@ -43,5 +43,5 @@ func (h *Handler) updateSSO(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	http.Redirect(w, r, "/admin/configs/sso", http.StatusFound)
+	http.Redirect(w, r, "/admin/advanced/sso", http.StatusFound)
 }

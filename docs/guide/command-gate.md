@@ -287,7 +287,7 @@ The shared `spec.json` carries two things:
 }
 ```
 
-- `rules` — glob patterns evaluated by the gate without a socket round-trip. Edit from `/admin/configs` under the `agents` group; the daemon rewrites `spec.json` on save and on every Build invocation.
+- `rules` — glob patterns evaluated by the gate without a socket round-trip. Edit from `/admin/advanced` under the `agents` group; the daemon rewrites `spec.json` on save and on every Build invocation.
 - `auto_approved` — exact matches added by **Always allow** in the modal. Same hot-path: gate reads, matches, emits allow — no daemon round-trip.
 
 ## Diagnostics
