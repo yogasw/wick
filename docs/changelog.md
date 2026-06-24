@@ -6,7 +6,14 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **Admin System page — web-based self-update**: A new **System** card under `/admin/configs` lets any admin check for updates, watch a live download-progress bar (SSE), and restart the service to apply a new release — all from the browser. Previously, self-update was tray-only; this brings the same flow to headless (`<app> all` / `<app> server`) deployments. The page also shows version detail (app name/version, wick version, commit, build time, access type, DB status) matching what `wick_info` reports over MCP. See [Admin Panel — System](/guide/admin-panel#system-adminconfigssystem).
+
+### Changed
+*   **Auto-update default changed to off**: `auto_update` in `config.json` now defaults to `false` (opt-in). Existing installs that previously relied on the default-on behaviour should enable auto-update explicitly — via **Preferences → Auto-update** in the tray, or the **Automatic updates** toggle on the new System page.
+
+### Fixed
+*   **Windows MSI relaunch preserves args**: Applying an update via the MSI helper now restarts the process with its original arguments, so a headless `<app> all` or `<app> server` service re-serves after an update without manual intervention.
 
 ---
 
