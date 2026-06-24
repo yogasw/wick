@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/pkg/entity"
 )
 
@@ -48,11 +49,28 @@ type SSOClaims struct {
 	Issuer   string   `json:"iss"`
 }
 
-// MCPTool is one entry from a tools/list response.
+// MCPTool is one entry from a tools/list response. Meta carries the
+// MCP _meta block; its category field (when the server sets one) names
+// the group the tool belongs to, matched by title against the top-level
+// _meta.categories legend.
 type MCPTool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"inputSchema"`
+	Meta        *MCPToolMeta   `json:"_meta,omitempty"`
+}
+
+// MCPToolMeta is the per-tool _meta block from a tools/list entry.
+type MCPToolMeta struct {
+	Category string `json:"category,omitempty"`
+}
+
+// MCPCategory is one entry in the top-level _meta.categories legend a
+// server may attach to its tools/list result. Category titles on tools
+// (MCPToolMeta.Category) reference these by Title.
+type MCPCategory struct {
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
 }
 
 // ProbeResult is what Test connection returns to the UI. NeedsLogin
@@ -70,6 +88,10 @@ type ProbeResult struct {
 	ServerName    string `json:"server_name,omitempty"`
 	ServerVersion string `json:"server_version,omitempty"`
 	Instructions  string `json:"instructions,omitempty"`
+	// Categories is the server's _meta.categories legend (title +
+	// description), when it groups its tools. Empty when the server ships
+	// no grouping — every tool then lands in one untitled section.
+	Categories []MCPCategory `json:"categories,omitempty"`
 }
 
 // mcpClient speaks per-call JSON-RPC over streamable HTTP to a
@@ -180,7 +202,11 @@ func (c *mcpClient) buildHeaders(srv serverConfig, user *SSOClaims) (http.Header
 }
 
 func (c *mcpClient) decrypt(v string) (string, error) {
-	if c.secrets == nil || !strings.HasPrefix(v, "wick_enc_") {
+	// Server-level credentials are master-encrypted, so the stored token
+	// carries the wick_cenc_ prefix — not the per-user wick_enc_ one. Match
+	// both: checking only wick_enc_ here let master tokens through verbatim,
+	// so the Bearer header shipped the ciphertext and the server 401'd.
+	if c.secrets == nil || !(enc.IsToken(v) || enc.IsMasterToken(v)) {
 		return v, nil
 	}
 	return c.secrets.DecryptSecret(v)
@@ -397,6 +423,9 @@ func (c *mcpClient) Probe(ctx context.Context, srv serverConfig, user *SSOClaims
 	}
 	var parsed struct {
 		Tools []MCPTool `json:"tools"`
+		Meta  struct {
+			Categories []MCPCategory `json:"categories"`
+		} `json:"_meta"`
 	}
 	if err := json.Unmarshal(result, &parsed); err != nil {
 		return fail(fmt.Errorf("decode tools/list: %w", err))
@@ -407,6 +436,7 @@ func (c *mcpClient) Probe(ctx context.Context, srv serverConfig, user *SSOClaims
 		ServerName:    ident.Name,
 		ServerVersion: ident.Version,
 		Instructions:  ident.Instructions,
+		Categories:    parsed.Meta.Categories,
 	}
 }
 

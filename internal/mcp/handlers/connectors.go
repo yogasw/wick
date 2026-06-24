@@ -521,6 +521,7 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		ConnectorID:     connectorID,
 		OperationKey:    opKey,
 		Input:           input,
+		RawInput:        rawParams,
 		Source:          entity.ConnectorRunSourceMCP,
 		UserID:          user.ID,
 		IsAdmin:         user.IsAdmin(),

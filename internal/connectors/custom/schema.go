@@ -218,6 +218,12 @@ type DefOp struct {
 	Inputs      []DefField `json:"inputs"`
 	Request     *OpRequest `json:"request,omitempty"`
 	MCPSource   *MCPSource `json:"mcp_source,omitempty"`
+	// Category is the section title this op belongs to, carried from a
+	// live MCP tool's _meta.category so toolsToCats can re-group the flat
+	// op list. Transient for MCP defs (rebuilt each probe); curl/manual
+	// defs leave it empty — their grouping lives in the stored DefCategory
+	// shape, not on the op.
+	Category string `json:"-"`
 }
 
 // DefCategory is one titled section of a custom connector's operations —

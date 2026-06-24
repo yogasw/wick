@@ -929,10 +929,16 @@ type ExecuteParams struct {
 	ConnectorID  string
 	OperationKey string
 	Input        map[string]string
-	Source       entity.ConnectorRunSource
-	UserID       string
-	IPAddress    string
-	UserAgent    string
+	// RawInput is the caller's arguments with original JSON types preserved
+	// (bool, number, string, …), keyed identically to Input. Optional — only
+	// the MCP tools/call path sets it. It is forwarded to the connector via
+	// Ctx.SetRawInput so MCP-proxy connectors can relay a scalar in its
+	// original type instead of the stringified Input form. nil elsewhere.
+	RawInput  map[string]any
+	Source    entity.ConnectorRunSource
+	UserID    string
+	IPAddress string
+	UserAgent string
 	// IsAdmin indicates whether the caller holds admin role. When false,
 	// operations marked AdminOnly in the connector_operations table are
 	// blocked before execution starts.
@@ -1179,6 +1185,10 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		ctxMasker = masker
 	}
 	cctx := connector.NewCtx(ctx, c.ID, configs, input, s.httpClient, p.Progress, ctxMasker)
+	// Hand the connector the caller's original argument types (when the
+	// caller supplied them) so MCP-proxy ops can forward bools/numbers in
+	// their native JSON type rather than the stringified Input form.
+	cctx.SetRawInput(p.RawInput)
 	value, execErr := op.Execute(cctx)
 	latencyMs := int(time.Since(startedAt).Milliseconds())
 
