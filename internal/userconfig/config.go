@@ -206,7 +206,10 @@ func defaults() Config {
 	return Config{
 		AutoStartServer: false,
 		AutoStartWorker: false,
-		AutoUpdate:      true,
+		// Opt-in: the user must enable auto-update explicitly (tray
+		// Preferences or the admin System page). Background update checks
+		// stay off until then.
+		AutoUpdate: false,
 	}
 }
 

@@ -96,7 +96,7 @@ The same `internal/mcpconfig` package backs both the tray menu and the headless 
 
 The tray ships with a GitHub release self-updater. It is opt-in at build time — pass `--release-github-pat` and `--release-github-repo` to [`wick build`](/reference/build) (or set `RELEASE_GITHUB_PAT` / `RELEASE_GITHUB_REPOSITORY` in CI). When unconfigured, About shows `Updates: not configured` and `Check for updates` is hidden.
 
-Behavior with `auto_update` enabled (default):
+Behavior with `auto_update` enabled (opt-in, default off):
 
 1. On launch, if a binary was staged in the previous session, apply it and re-exec — before the tray menu appears.
 2. Otherwise spawn a background check against `<owner>/<repo>/releases/latest`.
@@ -144,7 +144,7 @@ Schema:
   "auto_start_app": false,
   "auto_start_server": false,
   "auto_start_worker": false,
-  "auto_update": true,
+  "auto_update": false,
   "port": 0,
   "log_retention_days": 0,
   "database_path": "",

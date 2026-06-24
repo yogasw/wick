@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin/view"
@@ -17,6 +18,7 @@ import (
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/sso"
+	"github.com/yogasw/wick/internal/updater"
 	"github.com/yogasw/wick/pkg/tool"
 
 	"gorm.io/gorm"
@@ -88,6 +90,44 @@ type Handler struct {
 	projects   ProjectLister
 	workflows  WorkflowLister
 	skillsDB   SkillLister
+
+	// sys bundles everything the System config page needs: the update
+	// coordinator (nil-safe — page shows "not configured" when absent),
+	// the resolved app name for the auto-update toggle, and the static
+	// build metadata mirrored from wick_info.
+	sys SystemConfig
+}
+
+// SystemConfig carries the System-page dependencies into the admin
+// Handler. Grouped so NewHandler doesn't grow a long tail of positional
+// params each time the page needs another build field.
+type SystemConfig struct {
+	Coordinator *updater.Coordinator
+	AppName     string
+	WickVersion string
+	Commit      string
+	BuildTime   string
+}
+
+// dbInfo mirrors the MCP wick_info db probe: returns (type, status)
+// from a live gorm handle. nil db → ("none", "disabled"). Kept local
+// to admin so the System page doesn't import the mcp handlers package.
+func (h *Handler) dbInfo() (dbType, dbStatus string) {
+	db := h.repo.db
+	if db == nil {
+		return "none", "disabled"
+	}
+	dbType = db.Dialector.Name()
+	sqlDB, err := db.DB()
+	if err != nil {
+		return dbType, "error: " + err.Error()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := sqlDB.PingContext(ctx); err != nil {
+		return dbType, "error: " + err.Error()
+	}
+	return dbType, "connected"
 }
 
 func NewHandler(
@@ -103,6 +143,7 @@ func NewHandler(
 	projects ProjectLister,
 	workflows WorkflowLister,
 	skillsDB SkillLister,
+	sys SystemConfig,
 ) *Handler {
 	return &Handler{
 		repo:       newRepo(db),
@@ -117,6 +158,7 @@ func NewHandler(
 		projects:   projects,
 		workflows:  workflows,
 		skillsDB:   skillsDB,
+		sys:        sys,
 	}
 }
 
@@ -158,6 +200,13 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/configs", admin(h.configsHubPage))
 	mux.Handle("GET /admin/configs/sso", admin(h.ssoPage))
 	mux.Handle("POST /admin/configs/sso/{provider}", admin(h.updateSSO))
+
+	// System: version, self-update (SSE progress), apply+restart, auto-update toggle.
+	mux.Handle("GET /admin/configs/system", admin(h.systemPage))
+	mux.Handle("GET /admin/configs/system/status", admin(h.systemUpdateStatus))
+	mux.Handle("POST /admin/configs/system/check", admin(h.systemUpdateCheck))
+	mux.Handle("POST /admin/configs/system/apply", admin(h.systemUpdateApply))
+	mux.Handle("POST /admin/configs/system/auto-update", admin(h.systemSetAutoUpdate))
 
 	// Variables (app-level configs)
 	mux.Handle("GET /admin/variables", admin(h.variablesPage))

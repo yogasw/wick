@@ -10,6 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	"github.com/yogasw/wick/app"
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/jobs"
@@ -22,6 +23,11 @@ import (
 func main() {
 	netboot.Setup()
 	userconfig.ResolveDBPath(appname.Resolve(), "")
+
+	// Mirror app.Run's release/build wiring so the System page renders
+	// version detail + self-update in lab too.
+	api.SetReleaseInfo(app.BuildAppVersion, app.GitHubRepo, app.GitHubPAT)
+	api.SetBuildInfo(app.BuildWickVersion, app.BuildCommit, app.BuildTime)
 
 	tools.RegisterBuiltins()
 	jobs.RegisterBuiltins()

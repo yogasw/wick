@@ -180,19 +180,33 @@ func (u *Updater) CheckLatest(ctx context.Context) (LatestInfo, error) {
 	return info, nil
 }
 
+// ProgressFunc reports download progress. done is bytes received so
+// far; total is the asset size from Content-Length (0 when the server
+// omits it). It is called frequently and from the download goroutine —
+// it MUST NOT block.
+type ProgressFunc func(done, total int64)
+
 // Download fetches the binary asset described by info, verifies its
 // SHA256 against the sibling .sha256 file, and stages it under the
 // updater's cache dir. Persists the staged path/version into the
 // userconfig so a subsequent Apply or auto-apply on next launch can
 // pick it up. No-op if info indicates AlreadyLatest or AlreadyStaged.
 func (u *Updater) Download(ctx context.Context, info LatestInfo) error {
+	return u.DownloadWithProgress(ctx, info, nil)
+}
+
+// DownloadWithProgress is Download with a progress callback for the
+// binary asset transfer. The sha256 sibling is tiny so it is not
+// reported. onProgress may be nil (then this is exactly Download).
+// Used by the web System page to drive a live percent bar over SSE.
+func (u *Updater) DownloadWithProgress(ctx context.Context, info LatestInfo, onProgress ProgressFunc) error {
 	if info.AlreadyLatest || info.AlreadyStaged {
 		return nil
 	}
 	if info.bin == nil {
 		return errors.New("download: no binary asset in LatestInfo")
 	}
-	binData, err := u.downloadAsset(ctx, info.bin.URL)
+	binData, err := u.downloadAssetTo(ctx, info.bin.URL, onProgress)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
@@ -417,7 +431,14 @@ func swapWindows(current, staged, cacheDir string, sentinel Sentinel) error {
 	logPath := sentinel.InstallerLog
 	helperPath := sentinel.HelperScript
 	helperLog := sentinel.HelperLog
-	if err := writeWindowsHelper(helperPath, helperLog, current, staged, logPath); err != nil {
+	// Preserve the subcommand + flags the process was launched with
+	// (e.g. `all --host 0.0.0.0`) so the post-install relaunch resumes
+	// the same run mode. Without this the helper relaunched the bare exe,
+	// which on a headless service launch (`all`) drops back to no-args
+	// (tray/idle) and never re-serves — the Unix syscall.Exec path keeps
+	// args via os.Args, so this brings Windows to parity.
+	relaunchArgs := windowsArgString(os.Args[1:])
+	if err := writeWindowsHelper(helperPath, helperLog, current, staged, logPath, relaunchArgs); err != nil {
 		return fmt.Errorf("write update helper: %w", err)
 	}
 	pid := os.Getpid()
@@ -450,7 +471,7 @@ func swapWindows(current, staged, cacheDir string, sentinel Sentinel) error {
 // All paths are quoted so spaces in `Program Files` etc. don't break
 // the script. The script never deletes the staged MSI on failure so
 // the user can re-run it manually from %LocalAppData%\<app>\updates.
-func writeWindowsHelper(helperPath, helperLog, expectedExe, stagedMsi, msiLog string) error {
+func writeWindowsHelper(helperPath, helperLog, expectedExe, stagedMsi, msiLog, relaunchArgs string) error {
 	script := fmt.Sprintf(`@echo off
 setlocal
 set "HLOG=%s"
@@ -485,20 +506,36 @@ if "%%SZ%%"=="0" (
   exit /b 3
 )
 
->> "%%HLOG%%" echo [%%date%% %%time%%] OK: launching %s
-start "" "%s"
+>> "%%HLOG%%" echo [%%date%% %%time%%] OK: launching %s %s
+start "" "%s" %s
 exit /b 0
 `,
-		helperLog,
-		stagedMsi,
-		msiLog,
-		msiLog,
-		expectedExe,
-		expectedExe,
-		expectedExe,
-		expectedExe,
+		helperLog,    // set "HLOG=%s"
+		stagedMsi,    // msiexec /i "%s"
+		msiLog,       // /L*v "%s"
+		msiLog,       // FAIL: …see %s
+		expectedExe,  // if not exist "%s"
+		expectedExe,  // for %%I in ("%s")
+		expectedExe,  // OK: launching %s …
+		relaunchArgs, // … %s   (logged args)
+		expectedExe,  // start "" "%s"
+		relaunchArgs, // start … %s
 	)
 	return os.WriteFile(helperPath, []byte(script), 0o755)
+}
+
+// windowsArgString renders argv for a cmd.exe `start` line: each arg
+// double-quoted (so spaces/flags survive) with embedded quotes doubled
+// per cmd quoting rules. Empty argv → "" so the launch line stays valid.
+func windowsArgString(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	parts := make([]string, len(args))
+	for i, a := range args {
+		parts[i] = `"` + strings.ReplaceAll(a, `"`, `""`) + `"`
+	}
+	return strings.Join(parts, " ")
 }
 
 func copyFile(src, dst string) error {
@@ -576,6 +613,15 @@ func (u *Updater) fetchLatest(ctx context.Context) (*ghRelease, error) {
 }
 
 func (u *Updater) downloadAsset(ctx context.Context, url string) ([]byte, error) {
+	return u.downloadAssetTo(ctx, url, nil)
+}
+
+// downloadAssetTo fetches url into memory, invoking onProgress (when
+// non-nil) as bytes arrive. total comes from Content-Length and is 0
+// when the server omits it — callers render an indeterminate bar in
+// that case. The progress reader emits at most one callback per ~64 KB
+// chunk so a fast transfer doesn't flood the SSE fan-out.
+func (u *Updater) downloadAssetTo(ctx context.Context, url string, onProgress ProgressFunc) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -593,7 +639,43 @@ func (u *Updater) downloadAsset(ctx context.Context, url string) ([]byte, error)
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("download %d: %s", resp.StatusCode, string(body))
 	}
-	return io.ReadAll(resp.Body)
+	if onProgress == nil {
+		return io.ReadAll(resp.Body)
+	}
+	reader := &progressReader{r: resp.Body, total: resp.ContentLength, fn: onProgress}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	// Emit a final 100% tick so the bar lands on done == total even when
+	// the last chunk was smaller than the report threshold.
+	onProgress(reader.done, reader.total)
+	return data, nil
+}
+
+// progressReader wraps an io.Reader and reports cumulative bytes read
+// through fn. It coalesces callbacks to one per ~64 KB so a fast
+// transfer doesn't fire thousands of times.
+type progressReader struct {
+	r          io.Reader
+	total      int64
+	done       int64
+	lastReport int64
+	fn         ProgressFunc
+}
+
+const progressReportEvery = 64 * 1024
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.done += int64(n)
+		if p.done-p.lastReport >= progressReportEvery {
+			p.lastReport = p.done
+			p.fn(p.done, p.total)
+		}
+	}
+	return n, err
 }
 
 func (u *Updater) pickAssets(assets []ghAsset, version string) (bin, sum *ghAsset) {

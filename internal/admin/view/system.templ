@@ -1,0 +1,351 @@
+package view
+
+import "github.com/yogasw/wick/internal/entity"
+
+// orDash returns s, or an em dash when s is empty — keeps version rows
+// from rendering a blank cell.
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+// statusLine is the first-paint status sentence for the updates card,
+// derived from the coordinator phase baked into the page. The SSE
+// handler overwrites it live after load.
+func statusLine(d SystemPageData) string {
+	switch d.Phase {
+	case "downloading":
+		return "Downloading…"
+	case "up-to-date":
+		return "You are on the latest version."
+	case "staged":
+		if d.StagedVersion != "" {
+			return d.StagedVersion + " is ready to apply."
+		}
+		return "A new version is ready to apply."
+	case "applying":
+		return "Applying update…"
+	case "error":
+		if d.Error != "" {
+			return "Update failed: " + d.Error
+		}
+		return "Update failed."
+	}
+	if d.HasStaged {
+		if d.StagedVersion != "" {
+			return d.StagedVersion + " is ready to apply."
+		}
+		return "A new version is ready to apply."
+	}
+	return "Click “Check for updates” to look for a new release."
+}
+
+// SystemPageData is everything the System page needs for first paint.
+// The live download progress arrives over SSE after load, but these
+// fields make the no-JS / first-render state correct: version rows, the
+// auto-update toggle, and whether a staged update is ready to apply.
+type SystemPageData struct {
+	// App identity + build (mirrors wick_info).
+	AppName        string // configured app name (e.g. "wick-lab")
+	CurrentVersion string // running app version
+	WickVersion    string // embedded wick framework version
+	Commit         string // build commit (short)
+	BuildTime      string // build timestamp
+	AccessType     string // "http" (web) or "cli"
+	DBType         string // "sqlite" / "postgres" / "none"
+	DBStatus       string // "connected" / "error: …" / "disabled"
+
+	// Update state.
+	Configured    bool   // a release source is set; check/apply are usable
+	LatestVersion string // last-known latest tag (may be empty)
+	HasStaged     bool   // a downloaded binary is ready to apply
+	StagedVersion string // version of the staged binary
+	Phase         string // coordinator phase at load time
+	Percent       int    // download percent at load time
+	Error         string // last error, if any
+	AutoUpdate    bool   // auto-update toggle state
+}
+
+// SystemPage renders version info, the update controls (Check →
+// progress → Apply & restart), and the auto-update toggle. The inline
+// script opens an SSE stream for live progress and, on Apply, swaps to a
+// "Restarting…" panel that polls /health until the new build answers,
+// then reloads.
+templ SystemPage(d SystemPageData, user *entity.User) {
+	@AdminLayout("Admin · System", "configs", user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
+				<a href="/admin/configs" class="hover:text-green-600">Configs</a>
+				<span>/</span>
+				<span class="text-black-900 dark:text-white-100">System</span>
+			</div>
+			<h1 class="mt-2 text-[1.375rem] font-semibold text-black-900 dark:text-white-100">System</h1>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Check for a new release, download it, and restart the service to apply. The service re-execs in place — running sessions reconnect once it's back.</p>
+			<div class="mt-6 flex flex-col gap-4">
+				@versionCard(d)
+				if d.Configured {
+					@updateCard(d)
+				} else {
+					@notConfiguredCard()
+				}
+				@autoUpdateCard(d)
+			</div>
+		</main>
+		@systemUpdateScript()
+	}
+}
+
+// versionCard mirrors wick_info — app identity, build metadata, and
+// runtime info — grouped into App / Build / Runtime sections, with the
+// update-check Latest tag alongside the app version.
+templ versionCard(d SystemPageData) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
+		<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Version</h2>
+		<p class="mt-3 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Application</p>
+		<dl class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+			@versionRow("App name", orDash(d.AppName), "")
+			@versionRow("App version", orDash(d.CurrentVersion), "")
+			@versionRow("Latest release", orDash(d.LatestVersion), "sys-latest")
+		</dl>
+		<p class="mt-5 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Build</p>
+		<dl class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+			@versionRow("Wick version", orDash(d.WickVersion), "")
+			@versionRow("Commit", orDash(d.Commit), "")
+			@versionRow("Built", orDash(d.BuildTime), "")
+		</dl>
+		<p class="mt-5 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Runtime</p>
+		<dl class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+			@versionRow("Access", orDash(d.AccessType), "")
+			@versionRow("Database", dbLine(d), "")
+		</dl>
+	</div>
+}
+
+// dbLine joins the db type + status into one cell, e.g. "sqlite · connected".
+func dbLine(d SystemPageData) string {
+	t := orDash(d.DBType)
+	if d.DBStatus == "" {
+		return t
+	}
+	return t + " · " + d.DBStatus
+}
+
+// versionRow is one term/definition pair in the version grid. id is set
+// only on the Latest row so the SSE handler can live-update it.
+templ versionRow(label, value, id string) {
+	<div class="flex flex-col gap-0.5">
+		<dt class="text-xs text-black-700 dark:text-black-600">{ label }</dt>
+		if id != "" {
+			<dd id={ id } class="font-mono text-sm text-black-900 dark:text-white-100">{ value }</dd>
+		} else {
+			<dd class="font-mono text-sm text-black-900 dark:text-white-100">{ value }</dd>
+		}
+	</div>
+}
+
+// notConfiguredCard explains why update controls are hidden when no
+// release source was baked into this build.
+templ notConfiguredCard() {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-6 text-sm text-black-800 dark:text-black-600">
+		<p class="font-medium text-black-900 dark:text-white-100">Updater not configured</p>
+		<p class="mt-1">This build has no release source set, so it can't check for or download updates. Rebuild with <code class="font-mono">--release-github-repo</code> (and a download PAT for private repos) to enable self-update.</p>
+	</div>
+}
+
+// updateCard holds the Check button, the progress bar, status line, and
+// the Apply & restart button. All live regions carry stable ids the
+// inline script targets from SSE.
+templ updateCard(d SystemPageData) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
+		<div class="flex items-start justify-between gap-4">
+			<div>
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Updates</h2>
+				<p id="sys-status" class="mt-1 text-sm text-black-800 dark:text-black-600">{ statusLine(d) }</p>
+			</div>
+			<button
+				id="sys-check"
+				type="button"
+				class="shrink-0 rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
+			>Check for updates</button>
+		</div>
+		// Progress track — hidden until a download starts. The fill width
+		// is driven inline by the SSE handler.
+		<div id="sys-progress-wrap" class="mt-4 hidden">
+			<div class="h-2 w-full overflow-hidden rounded-full bg-white-300 dark:bg-navy-800">
+				<div id="sys-progress-bar" class="h-full w-0 rounded-full bg-green-500 transition-[width] duration-200"></div>
+			</div>
+			<p id="sys-progress-pct" class="mt-1.5 text-xs font-mono text-black-700 dark:text-black-600">0%</p>
+		</div>
+		// Apply row — shown when a staged update is ready (server-side at
+		// load, or flipped on by the SSE handler when a download lands).
+		// Apply reuses the binary's own restart path (in-place re-exec on
+		// Linux/macOS, MSI helper on Windows), so the wording stays generic.
+		<div id="sys-apply-wrap" class={ "mt-4", templ.KV("hidden", !d.HasStaged) }>
+			<button
+				id="sys-apply"
+				type="button"
+				data-staged={ d.StagedVersion }
+				class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600"
+			>Apply &amp; restart</button>
+			<p class="mt-1.5 text-xs text-black-700 dark:text-black-600">Restarts to apply <span id="sys-apply-ver" class="font-mono">{ orDash(d.StagedVersion) }</span>. This page reconnects automatically once it's back.</p>
+		</div>
+		// Restarting overlay panel — revealed by the apply handler.
+		<div id="sys-restarting" class="mt-4 hidden items-center gap-3 rounded-lg bg-white-200 dark:bg-navy-800 px-4 py-3">
+			<span class="h-4 w-4 animate-spin rounded-full border-2 border-white-400 border-t-green-500"></span>
+			<span class="text-sm text-black-800 dark:text-black-600">Restarting service… this page reloads when it's back.</span>
+		</div>
+	</div>
+}
+
+// autoUpdateCard is the standalone toggle form. Default OFF; when on the
+// service checks (and downloads) a newer release on boot but still waits
+// for a manual Apply & restart.
+templ autoUpdateCard(d SystemPageData) {
+	<form
+		method="POST"
+		action="/admin/configs/system/auto-update"
+		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm"
+	>
+		<div class="flex items-start justify-between gap-4">
+			<div>
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Automatic updates</h2>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">When on, the service checks for and downloads a newer release on boot. Applying it still needs a manual restart above.</p>
+			</div>
+			<label class="flex shrink-0 items-center gap-2 text-sm text-black-900 dark:text-white-100">
+				<input type="checkbox" name="enabled" value="true" checked?={ d.AutoUpdate } class="h-4 w-4 rounded border-white-400 dark:border-navy-600 text-green-500 focus:ring-green-500"/>
+				Enabled
+			</label>
+		</div>
+		<div class="mt-5 flex justify-end">
+			<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">Save</button>
+		</div>
+	</form>
+}
+
+// systemUpdateScript wires the live update UX: an EventSource on the
+// status stream drives the progress bar + status line and reveals the
+// Apply button when a download lands; Check POSTs to kick a check; Apply
+// POSTs then swaps to the restarting panel and polls /health (comparing
+// the reported version to currentVersion) before reloading. Vanilla JS,
+// self-contained like the boot-gate page.
+templ systemUpdateScript() {
+	<script type="text/javascript">
+	(function () {
+		var statusEl = document.getElementById('sys-status');
+		var latestEl = document.getElementById('sys-latest');
+		var wrapEl = document.getElementById('sys-progress-wrap');
+		var barEl = document.getElementById('sys-progress-bar');
+		var pctEl = document.getElementById('sys-progress-pct');
+		var applyWrap = document.getElementById('sys-apply-wrap');
+		var applyBtn = document.getElementById('sys-apply');
+		var applyVer = document.getElementById('sys-apply-ver');
+		var checkBtn = document.getElementById('sys-check');
+		var restartingEl = document.getElementById('sys-restarting');
+
+		function showProgress(show) {
+			if (!wrapEl) return;
+			wrapEl.classList.toggle('hidden', !show);
+		}
+		function setPct(p) {
+			if (barEl) barEl.style.width = p + '%';
+			if (pctEl) pctEl.textContent = p + '%';
+		}
+		function render(st) {
+			if (!st) return;
+			if (latestEl && st.latest_version) latestEl.textContent = st.latest_version;
+			if (applyVer && st.staged_version) applyVer.textContent = st.staged_version;
+			switch (st.phase) {
+				case 'checking':
+					if (statusEl) statusEl.textContent = 'Checking for updates…';
+					showProgress(false);
+					break;
+				case 'downloading':
+					if (statusEl) statusEl.textContent = 'Downloading ' + (st.latest_version || '') + '…';
+					showProgress(true);
+					setPct(st.percent || 0);
+					break;
+				case 'up-to-date':
+					if (statusEl) statusEl.textContent = 'You are on the latest version.';
+					showProgress(false);
+					break;
+				case 'staged':
+					if (statusEl) statusEl.textContent = (st.staged_version || 'A new version') + ' is ready to apply.';
+					showProgress(false);
+					if (applyWrap) applyWrap.classList.remove('hidden');
+					break;
+				case 'applying':
+					if (statusEl) statusEl.textContent = 'Applying update…';
+					break;
+				case 'error':
+					if (statusEl) statusEl.textContent = 'Update failed: ' + (st.error || 'unknown error');
+					showProgress(false);
+					break;
+				default:
+					if (st.has_staged && applyWrap) applyWrap.classList.remove('hidden');
+			}
+		}
+
+		// Live status stream.
+		try {
+			var es = new EventSource('/admin/configs/system/status');
+			es.addEventListener('status', function (e) {
+				try { render(JSON.parse(e.data)); } catch (_) {}
+			});
+		} catch (_) { /* SSE unsupported — buttons still work, just no live bar */ }
+
+		if (checkBtn) {
+			checkBtn.addEventListener('click', function () {
+				checkBtn.disabled = true;
+				if (statusEl) statusEl.textContent = 'Checking for updates…';
+				fetch('/admin/configs/system/check', { method: 'POST' })
+					.catch(function () { if (statusEl) statusEl.textContent = 'Could not start the check.'; })
+					.finally(function () { setTimeout(function () { checkBtn.disabled = false; }, 2000); });
+			});
+		}
+
+		// Poll /health until the restarted service answers, then reload.
+		// The restart drops this connection first, so the first OK response
+		// after that gap is the new build coming back up.
+		function pollHealthThenReload() {
+			var tries = 0;
+			(function tick() {
+				tries++;
+				fetch('/health', { cache: 'no-store' })
+					.then(function (r) { return r.ok ? r.text() : Promise.reject(); })
+					.then(function () { location.reload(); })
+					.catch(function () {
+						if (tries > 120) { location.reload(); return; } // ~4min cap
+						setTimeout(tick, 2000);
+					});
+			})();
+		}
+
+		if (applyBtn) {
+			applyBtn.addEventListener('click', function () {
+				applyBtn.disabled = true;
+				if (checkBtn) checkBtn.disabled = true;
+				fetch('/admin/configs/system/apply', { method: 'POST' })
+					.then(function (r) { return r.json(); })
+					.then(function (d) {
+						if (d && d.restart) {
+							if (applyWrap) applyWrap.classList.add('hidden');
+							if (restartingEl) { restartingEl.classList.remove('hidden'); restartingEl.classList.add('flex'); }
+							// Give the server a moment to begin tearing down,
+							// then poll for the new build.
+							setTimeout(pollHealthThenReload, 1500);
+						} else {
+							if (statusEl) statusEl.textContent = (d && (d.error || d.message)) || 'Could not apply the update.';
+							applyBtn.disabled = false;
+						}
+					})
+					.catch(function () {
+						if (statusEl) statusEl.textContent = 'Apply failed — see server logs.';
+						applyBtn.disabled = false;
+					});
+			});
+		}
+	})();
+	</script>
+}

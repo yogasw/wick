@@ -10,6 +10,22 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.23.3](https://github.com/yogasw/wick/compare/v0.23.2...v0.23.3) — Self-Update & Admin
+
+_Released on 2026-06-24_
+
+### Added
+*   **Admin System page — web-based self-update**: A new **System** card under `/admin/configs` lets any admin check for updates, watch a live download-progress bar (SSE), and restart the service to apply a new release — all from the browser. Previously, self-update was tray-only; this brings the same flow to headless (`<app> all` / `<app> server`) deployments. The page also shows version detail (app name/version, wick version, commit, build time, access type, DB status) matching what `wick_info` reports over MCP. See [Admin Panel — System](/guide/admin-panel#system-adminconfigssystem).
+
+### Changed
+*   **Auto-update default changed to off**: `auto_update` in `config.json` now defaults to `false` (opt-in). Existing installs that previously relied on the default-on behaviour should enable auto-update explicitly — via **Preferences → Auto-update** in the tray, or the **Automatic updates** toggle on the new System page.
+
+### Fixed
+*   **Windows MSI relaunch preserves args**: Applying an update via the MSI helper now restarts the process with its original arguments, so a headless `<app> all` or `<app> server` service re-serves after an update without manual intervention.
+
+---
+
+
 ## [v0.23.2](https://github.com/yogasw/wick/compare/v0.23.1...v0.23.2) — Access Control & UI
 
 _Released on 2026-06-23_

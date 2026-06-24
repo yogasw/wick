@@ -115,6 +115,25 @@ Env vars seed the row on first boot only; subsequent edits via this page are dur
 
 Operational guide: [Environment Variables](../reference/env-vars).
 
+### System (`/admin/configs/system`)
+
+The System card in the Configs hub opens a page with three panels:
+
+**Version** — mirrors the fields `wick_info` exposes over MCP: app name, app version, latest known release tag, wick framework version, commit, build time, access type, and database status (type · connected / error).
+
+**Updates** — available when the binary was built with a release source (`--release-github-repo`). Workflow:
+
+1. Click **Check for updates** — the server checks GitHub releases and downloads the matching asset in the background. A live progress bar (SSE) fills as the download runs. The "Latest release" field in the Version card updates once the check resolves.
+2. When the download completes, **Apply & restart** appears. Click it — the service re-execs in place (Linux/macOS: `syscall.Exec` preserves the PID; Windows MSI: a helper relaunches the process). The page polls `/health` and reloads automatically once the new build answers.
+
+When no release source is configured the Updates card is replaced by a "not configured" notice.
+
+**Automatic updates** — when enabled, the service checks for and downloads a new release on each boot, so the staged binary is ready for the next restart without a manual check. Applying it still requires a deliberate **Apply & restart** from this page. Default: **off** (opt-in).
+
+::: tip Headless service mode
+The System page is the primary update surface for deployments running as a headless service (`<app> all` or `<app> server`). The desktop tray offers the same check/apply flow for GUI installs, with a matching opt-in auto-update toggle under **Preferences**.
+:::
+
 ## Startup script
 
 `/admin/variables` exposes a `startup_script` textarea and `startup_script_enabled` toggle. When enabled, wick runs the script in a fresh shell every time the server boots — `sh` on Linux/macOS, PowerShell on Windows. Output (stdout + stderr) lands in `~/.<appName>/logs/startup-script-YYYY-MM-DD.log`.

@@ -23,6 +23,12 @@ templ ConfigsHubPage(user *entity.User) {
 					"Single sign-on credentials. Currently supports Google OAuth — add the client ID/secret here to enable the Login with Google button.",
 					"🔐",
 				)
+				@configCard(
+					"/admin/configs/system",
+					"System",
+					"Check for updates, watch the download progress, and restart the service to apply. Toggle automatic update checks.",
+					"🔄",
+				)
 			</div>
 		</main>
 	}
