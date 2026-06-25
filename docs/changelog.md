@@ -6,6 +6,18 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+### Added
+
+*   **MCP — `wick_execute` batch mode**: Pass a `calls` array to run up to 100 connector ops in a single round-trip. Calls run in parallel (server-side concurrency fixed at 5); a failing or timed-out call never stops the rest. Each entry in the response carries `{index, tool_id, ok, result|error, timed_out, duration_ms}` plus summary counts. Set `timeout_ms` to cap per-call time (default 3 min, max 5 min). Single-call shape is unchanged. See [Batch execution](/guide/mcp#batch-execution).
+
+### Fixed
+
+*   **Channels — Telegram & REST per-user instances**: Each user can now configure their own Telegram bot or REST endpoint independently. Wick starts one keyed instance per owner at boot and hot-adds new instances when a user saves their config — matching the existing Slack per-user model.
+*   **Slack — access-denied DM**: When a message is blocked by the access-control whitelist, wick now DMs the blocked user with a reason (`identity` or `channels`) instead of leaving the 🚫 reaction as a silent dead-end.
+*   **Slack — multi-instance bot footer**: The "Sent using @bot" footer now resolves the bot display name from each instance's own token, so per-user Slack instances credit their own bot rather than a stale shared value.
+*   **Pool — double-reply on first turn**: The injected origin-context turn is now deferred until after the first user message lands, preventing the agent from being spawned early and producing a duplicate reply (affected Slack, Telegram, and REST sessions).
+*   **`MapToStruct` — bool config fields**: Reflected config loading no longer panics when boolean fields are absent from the stored JSON.
+
 ### Fixed
 
 *   **PWA service worker — pending-hang on boot**: Static assets (`/sw.js`, `/public/*`, `/modules/*`) are now exempt from the boot gate. Previously, an already-installed service worker would intercept these asset fetches on a reload while boot was still in progress; the gate held every request, leaving `app.css`, `icon.svg`, and similar files stuck at "pending" until the boot restore finished. Because these paths are served from `embed.FS` and depend on nothing the boot gate sets up, exempting them lets the SW resolve its cache immediately regardless of boot state.
