@@ -1,11 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/connectors"
@@ -488,36 +491,104 @@ func opDescription(op connector.Operation) string {
 	return op.Description
 }
 
+// maxBatchCalls caps how many calls one wick_execute batch may carry. The
+// LLM may submit up to this many; the server runs them a few at a time
+// (batchConcurrency) so a big batch can't exhaust memory or sockets.
+const maxBatchCalls = 100
+
+// batchConcurrency is how many calls run at once, fixed server-side. It is
+// deliberately NOT exposed to the caller — bounding it here protects the
+// process regardless of how large a batch the LLM submits.
+const batchConcurrency = 5
+
+// defaultBatchTimeout / maxBatchTimeout bound a per-call deadline. The caller
+// may set timeout_ms; absent → default, above max → clamped.
+const (
+	defaultBatchTimeout = 3 * time.Minute
+	maxBatchTimeout     = 5 * time.Minute
+)
+
+// batchCall is one entry in a wick_execute batch request.
+type batchCall struct {
+	ToolID    string         `json:"tool_id"`
+	Params    map[string]any `json:"params"`
+	SessionID string         `json:"session_id"`
+}
+
+// batchResult is one entry in the per-call result array. Result and Error
+// are mutually exclusive; TimedOut marks a call aborted by its deadline.
+type batchResult struct {
+	Index      int             `json:"index"`
+	ToolID     string          `json:"tool_id"`
+	OK         bool            `json:"ok"`
+	Result     json.RawMessage `json:"result,omitempty"`
+	Error      string          `json:"error,omitempty"`
+	TimedOut   bool            `json:"timed_out,omitempty"`
+	DurationMS int64           `json:"duration_ms"`
+}
+
 func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, user *entity.User, tagIDs []string) {
+	// Batch mode: "calls" present and non-empty.
+	if rawCalls, ok := args["calls"].([]any); ok && len(rawCalls) > 0 {
+		wickExecuteBatch(w, r, req, rsp, svc, layout, args, rawCalls, user, tagIDs)
+		return
+	}
+
+	// Single-call mode (unchanged behaviour).
 	toolID, _ := args["tool_id"].(string)
 	toolID = strings.TrimSpace(toolID)
 	if toolID == "" {
 		rsp.ToolError(w, req.ID, "tool_id is required", toolID)
 		return
 	}
+	rawParams, _ := args["params"].(map[string]any)
+	resJSON, execErr := executeOne(r, svc, layout, toolID, rawParams, callSessionID(args), user, tagIDs)
+	if execErr != nil {
+		rsp.ToolError(w, req.ID, execErr.Error(), toolID)
+		return
+	}
+	rsp.WriteResult(w, req.ID, ToolCallResult{
+		Content: []ToolContent{{Type: "text", Text: resJSON}},
+		IsError: false,
+	})
+}
+
+// callSessionID reads the optional top-level session_id used by single-call
+// mode for session-workspace (sw_) connectors.
+func callSessionID(args map[string]any) string {
+	s, _ := args["session_id"].(string)
+	return strings.TrimSpace(s)
+}
+
+// executeOne runs a single tool_id+params against the connector service and
+// returns the response JSON, applying the same access checks as the legacy
+// single-call path. ctx flows from the caller so batch can impose a per-call
+// deadline. On failure the returned error message already includes the
+// connector's response body when present.
+func executeOne(r *http.Request, svc *connectors.Service, layout agentconfig.Layout, toolID string, rawParams map[string]any, sessionID string, user *entity.User, tagIDs []string) (string, error) {
+	return executeOneCtx(r.Context(), r, svc, layout, toolID, rawParams, sessionID, user, tagIDs)
+}
+
+func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service, layout agentconfig.Layout, toolID string, rawParams map[string]any, sessionID string, user *entity.User, tagIDs []string) (string, error) {
 	connectorID, opKey, accountID, err := ParseToolIDFull(toolID)
 	if err != nil {
-		rsp.ToolError(w, req.ID, err.Error(), toolID)
-		return
+		return "", err
 	}
 	// Session-workspace instance: run against the ephemeral instance's own
 	// config (no DB row, no tag visibility — the session itself is the
 	// authorization scope).
-	sessionTarget, isSession, err := SessionInstanceFor(layout, args, connectorID)
+	sessionTarget, isSession, err := SessionInstanceForID(layout, sessionID, connectorID)
 	if err != nil {
-		rsp.ToolError(w, req.ID, err.Error(), toolID)
-		return
+		return "", err
 	}
 	if !isSession {
-		allowed, err := svc.IsVisibleTo(r.Context(), connectorID, tagIDs, user.IsAdmin())
-		if err != nil || !allowed {
-			rsp.ToolError(w, req.ID, "tool_id not found or not accessible", toolID)
-			return
+		allowed, verr := svc.IsVisibleTo(ctx, connectorID, tagIDs, user.IsAdmin())
+		if verr != nil || !allowed {
+			return "", errors.New("tool_id not found or not accessible")
 		}
 	}
-	rawParams, _ := args["params"].(map[string]any)
 	input := StringifyArgs(rawParams)
-	res, execErr := svc.Execute(r.Context(), connectors.ExecuteParams{
+	res, execErr := svc.Execute(ctx, connectors.ExecuteParams{
 		ConnectorID:     connectorID,
 		OperationKey:    opKey,
 		Input:           input,
@@ -535,13 +606,143 @@ func WickExecute(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Res
 		if res != nil && res.ResponseJSON != "" {
 			body = res.ResponseJSON
 		}
-		rsp.ToolError(w, req.ID, body, toolID)
+		return "", errors.New(body)
+	}
+	return res.ResponseJSON, nil
+}
+
+// wickExecuteBatch runs many calls in parallel, each with its own optional
+// deadline, and returns a per-call result array. A failed or timed-out call
+// never stops the others — the response is always partial-tolerant.
+func wickExecuteBatch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, args map[string]any, rawCalls []any, user *entity.User, tagIDs []string) {
+	if len(rawCalls) > maxBatchCalls {
+		rsp.ToolError(w, req.ID, fmt.Sprintf("batch too large: %d calls (max %d)", len(rawCalls), maxBatchCalls), "")
 		return
 	}
+	calls := make([]batchCall, 0, len(rawCalls))
+	for i, rc := range rawCalls {
+		m, ok := rc.(map[string]any)
+		if !ok {
+			rsp.ToolError(w, req.ID, fmt.Sprintf("calls[%d] is not an object", i), "")
+			return
+		}
+		tid, _ := m["tool_id"].(string)
+		tid = strings.TrimSpace(tid)
+		if tid == "" {
+			rsp.ToolError(w, req.ID, fmt.Sprintf("calls[%d].tool_id is required", i), "")
+			return
+		}
+		params, _ := m["params"].(map[string]any)
+		sid, _ := m["session_id"].(string)
+		calls = append(calls, batchCall{ToolID: tid, Params: params, SessionID: strings.TrimSpace(sid)})
+	}
+
+	// Per-call timeout: caller's value, defaulted and clamped server-side.
+	perCallTimeout := defaultBatchTimeout
+	if ms := intArg(args, "timeout_ms"); ms > 0 {
+		perCallTimeout = time.Duration(ms) * time.Millisecond
+		if perCallTimeout > maxBatchTimeout {
+			perCallTimeout = maxBatchTimeout
+		}
+	}
+
+	results := runBatch(r.Context(), calls, perCallTimeout,
+		func(ctx context.Context, c batchCall) (string, error) {
+			return executeOneCtx(ctx, r, svc, layout, c.ToolID, c.Params, c.SessionID, user, tagIDs)
+		})
+
+	var okCount, errCount, timeoutCount int
+	for _, br := range results {
+		switch {
+		case br.TimedOut:
+			timeoutCount++
+			errCount++
+		case br.OK:
+			okCount++
+		default:
+			errCount++
+		}
+	}
+	payload := map[string]any{
+		"results":         results,
+		"ok_count":        okCount,
+		"error_count":     errCount,
+		"timed_out_count": timeoutCount,
+	}
+	out, err := json.Marshal(payload)
+	if err != nil {
+		rsp.ToolError(w, req.ID, "failed to encode batch result: "+err.Error(), "")
+		return
+	}
+	// The batch as a whole is NOT an error — partial failures are reported
+	// inside the array. Only a malformed request is isError (handled above).
 	rsp.WriteResult(w, req.ID, ToolCallResult{
-		Content: []ToolContent{{Type: "text", Text: res.ResponseJSON}},
+		Content: []ToolContent{{Type: "text", Text: string(out)}},
 		IsError: false,
 	})
+}
+
+// runBatch executes calls with a fixed server-side concurrency
+// (batchConcurrency) and returns a per-call result slice in input order. Each
+// call gets its own per-call deadline (when timeout > 0) and runs through
+// exec, which is injected so the orchestration can be tested without a live
+// connector service. A failed/timed-out/panicking call never stops the
+// others — its outcome is recorded and the batch always completes.
+func runBatch(parent context.Context, calls []batchCall, timeout time.Duration, exec func(context.Context, batchCall) (string, error)) []batchResult {
+	results := make([]batchResult, len(calls))
+	sem := make(chan struct{}, batchConcurrency)
+	var wg sync.WaitGroup
+	for i := range calls {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(idx int, c batchCall) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer func() {
+				if rec := recover(); rec != nil {
+					results[idx] = batchResult{Index: idx, ToolID: c.ToolID, OK: false, Error: fmt.Sprintf("panic: %v", rec)}
+				}
+			}()
+
+			callCtx := parent
+			var cancel context.CancelFunc
+			if timeout > 0 {
+				callCtx, cancel = context.WithTimeout(callCtx, timeout)
+				defer cancel()
+			}
+			start := time.Now()
+			resJSON, execErr := exec(callCtx, c)
+			br := batchResult{Index: idx, ToolID: c.ToolID, DurationMS: time.Since(start).Milliseconds()}
+			if execErr != nil {
+				br.OK = false
+				br.Error = execErr.Error()
+				// Distinguish a deadline abort from a normal failure so the
+				// caller can retry timed-out calls without re-running ones
+				// that failed for a real reason.
+				if callCtx.Err() == context.DeadlineExceeded {
+					br.TimedOut = true
+				}
+			} else {
+				br.OK = true
+				br.Result = json.RawMessage(resJSON)
+			}
+			results[idx] = br
+		}(i, calls[i])
+	}
+	wg.Wait()
+	return results
+}
+
+// intArg reads an integer-valued JSON argument (numbers arrive as float64
+// over JSON-RPC). Returns 0 when absent or not a number.
+func intArg(args map[string]any, key string) int {
+	switch v := args[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return 0
 }
 
 // FormatToolID produces the opaque tool identifier.

@@ -3,6 +3,7 @@ package entity
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -216,8 +217,38 @@ func MapToStruct(m map[string]string, dst any) {
 		if val == "" {
 			val = tag["default"]
 		}
-		if val != "" {
-			v.Field(i).SetString(val)
+		if val == "" {
+			continue
+		}
+		setFieldFromString(v.Field(i), val)
+	}
+}
+
+// setFieldFromString assigns the string form val to f, converting by the
+// field's kind. The inverse of goValueToString. Unparseable values are
+// skipped (field keeps its zero value) rather than panicking.
+func setFieldFromString(f reflect.Value, val string) {
+	if !f.CanSet() {
+		return
+	}
+	switch f.Kind() {
+	case reflect.String:
+		f.SetString(val)
+	case reflect.Bool:
+		if b, err := strconv.ParseBool(val); err == nil {
+			f.SetBool(b)
+		}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if n, err := strconv.ParseInt(val, 10, 64); err == nil {
+			f.SetInt(n)
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if n, err := strconv.ParseUint(val, 10, 64); err == nil {
+			f.SetUint(n)
+		}
+	case reflect.Float32, reflect.Float64:
+		if x, err := strconv.ParseFloat(val, 64); err == nil {
+			f.SetFloat(x)
 		}
 	}
 }

@@ -462,6 +462,18 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts)
 	}
 
+	// A non-user turn (e.g. the one-time origin-context block channels
+	// inject before the first user message) must NOT spawn the agent on
+	// its own. It is now buffered; the user turn that follows will spawn
+	// and Drain picks up both as one combined prompt. Spawning here would
+	// run the agent against just the context — it would reply "I don't
+	// see a request" and then reply again when the real message lands
+	// (two replies for one prompt). Channels always send the user turn
+	// right after, so the buffered context is never stranded.
+	if role != "user" {
+		return nil
+	}
+
 	// Resolve the provider for this session so the slot check can enforce
 	// the per-provider cap alongside the global one.
 	pType, pName := p.providerForSession(sessionID, agentName)

@@ -29,7 +29,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	agentrest "github.com/yogasw/wick/internal/agents/channels/rest"
 	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
+	agenttelegram "github.com/yogasw/wick/internal/agents/channels/telegram"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentproject "github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/entity"
@@ -46,6 +48,19 @@ func currentUserIDForChannel(c *tool.Ctx) string {
 		return ""
 	}
 	return u.ID
+}
+
+// channelProjectAccess builds the project visibility filter for the logged-in
+// user, mirroring the app-wide access rule (admin/owner sees all, otherwise
+// own + shared + tag-shared).
+func channelProjectAccess(c *tool.Ctx) agentproject.Access {
+	u := login.GetUser(c.Context())
+	acc := agentproject.Access{TagIDs: login.GetUserTagIDs(c.Context())}
+	if u != nil {
+		acc.UserID = u.ID
+		acc.IsAdmin = u.IsAdmin()
+	}
+	return acc
 }
 
 // channelsPage renders the list of available channels (Slack, Telegram).
@@ -97,7 +112,7 @@ func slackChannelPage(c *tool.Ctx) {
 		return
 	}
 	userID := currentUserIDForChannel(c)
-	rows := loadChannelRowsForUser("slack", userID, agentconfig.SeedSlackChannelConfig(), "project_id")
+	rows := loadChannelRowsForUser("slack", userID, agentconfig.SeedSlackChannelConfig(), "project_id", channelProjectAccess(c))
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
 		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
@@ -115,7 +130,7 @@ func restChannelPage(c *tool.Ctx) {
 		return
 	}
 	userID := currentUserIDForChannel(c)
-	rows := loadChannelRowsForUser("rest", userID, agentconfig.SeedRestChannelConfig(), "project_id")
+	rows := loadChannelRowsForUser("rest", userID, agentconfig.SeedRestChannelConfig(), "project_id", channelProjectAccess(c))
 
 	appURL := ""
 	if globalConfigs != nil {
@@ -146,7 +161,7 @@ func telegramChannelPage(c *tool.Ctx) {
 		return
 	}
 	userID := currentUserIDForChannel(c)
-	rows := loadChannelRowsForUser("telegram", userID, agentconfig.SeedTelegramChannelConfig(), "project_id")
+	rows := loadChannelRowsForUser("telegram", userID, agentconfig.SeedTelegramChannelConfig(), "project_id", channelProjectAccess(c))
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
 		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
@@ -335,7 +350,7 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 // loadChannelRowsForUser returns entity.Config rows with values populated from
 // a specific user's agent_channels JSON config. App Owner users pass userID=""
 // which falls back to the owner row. Secret tokens are decrypted before render.
-func loadChannelRowsForUser(channelType, userID string, seed []entity.Config, projectKey string) []entity.Config {
+func loadChannelRowsForUser(channelType, userID string, seed []entity.Config, projectKey string, acc agentproject.Access) []entity.Config {
 	rows := make([]entity.Config, len(seed))
 	copy(rows, seed)
 	if globalDB != nil {
@@ -355,7 +370,9 @@ func loadChannelRowsForUser(channelType, userID string, seed []entity.Config, pr
 		}
 	}
 	if globalLayout.BaseDir != "" && projectKey != "" {
-		ids, err := agentproject.List(globalLayout)
+		// Only projects this user may access populate the default-project
+		// dropdown — own + shared + tag-shared (admins see all).
+		ids, err := agentproject.ListVisibleTo(globalLayout, acc)
 		if err == nil && len(ids) > 0 {
 			var opts []string
 			for _, id := range ids {
@@ -393,6 +410,14 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 	if userID == "" {
 		iKey = channelType + ":__owner__"
 	}
+	startInstance := func(ch agentchannels.Channel) {
+		go func() {
+			if err := ch.Start(ctx); err != nil {
+				log.Warn().Str("instance", iKey).Err(err).Msg("agents: channel instance stopped")
+			}
+		}()
+	}
+
 	switch channelType {
 	case "slack":
 		cfg, pubURL, err := store.LoadSlackForUser(userID)
@@ -416,11 +441,83 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 			ch.SetPublicURL(pubURL)
 			src := agentslack.NewConfigSourceKeyed(store, ch, userID)
 			globalChannels.AddKeyed(iKey, ch, src)
-			go func() {
-				if err := ch.Start(ctx); err != nil {
-					log.Warn().Str("instance", iKey).Err(err).Msg("agents: channel instance stopped")
-				}
-			}()
+			startInstance(ch)
+		}
+
+	case "telegram":
+		cfg, err := store.LoadTelegramForUser(userID)
+		if err != nil {
+			return
+		}
+		if cfg.BotToken == "" {
+			if globalChannels.HasKey(iKey) {
+				globalChannels.RemoveKeyed(iKey)
+			}
+			return
+		}
+		if globalChannels.HasKey(iKey) {
+			ch := globalChannels.ChannelByKey(iKey)
+			if tgCh, ok := ch.(*agenttelegram.Channel); ok {
+				tgCh.Reload(ctx, cfg)
+			}
+		} else {
+			ch := agenttelegram.NewWithOwner(cfg, userID)
+			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
+			src := agenttelegram.NewConfigSourceKeyed(store, ch, userID)
+			globalChannels.AddKeyed(iKey, ch, src)
+			startInstance(ch)
+		}
+
+	case "rest":
+		cfg, err := store.LoadRestForUser(userID)
+		if err != nil {
+			return
+		}
+		if cfg.Enabled != "true" {
+			if globalChannels.HasKey(iKey) {
+				globalChannels.RemoveKeyed(iKey)
+			}
+			return
+		}
+		if globalChannels.HasKey(iKey) {
+			ch := globalChannels.ChannelByKey(iKey)
+			if restCh, ok := ch.(*agentrest.Channel); ok {
+				restCh.Reload(ctx, cfg)
+			}
+		} else {
+			// REST needs the boot-time Authenticator — reuse it from any
+			// existing rest instance in the registry.
+			auth := existingRestAuth()
+			if auth == nil {
+				log.Warn().Str("instance", iKey).Msg("agents: cannot create rest instance, no authenticator available")
+				return
+			}
+			ch := agentrest.NewWithOwner(cfg, auth, userID)
+			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
+			src := agentrest.NewConfigSourceKeyed(store, ch, userID)
+			globalChannels.AddKeyed(iKey, ch, src)
+			startInstance(ch)
 		}
 	}
+}
+
+// existingRestAuth pulls the Authenticator from any rest instance already
+// registered at boot, so a newly-created per-user rest instance can reuse it.
+func existingRestAuth() agentrest.Authenticator {
+	if globalChannels == nil {
+		return nil
+	}
+	if ch := globalChannels.ChannelByKey("rest:__owner__"); ch != nil {
+		if restCh, ok := ch.(*agentrest.Channel); ok {
+			return restCh.Auth()
+		}
+	}
+	for _, ch := range globalChannels.Channels() {
+		if restCh, ok := ch.(*agentrest.Channel); ok {
+			if a := restCh.Auth(); a != nil {
+				return a
+			}
+		}
+	}
+	return nil
 }

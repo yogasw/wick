@@ -128,11 +128,19 @@ func MetaToolDescriptors() []ToolDescriptor {
 		},
 		{
 			Name: "wick_execute",
-			Description: "Execute a tool by tool_id. " +
-				"PREREQUISITE: call wick_get first to get the tool's input_schema — " +
+			Description: "Execute one tool, or a BATCH of tools in a single call. " +
+				"PREREQUISITE: call wick_get first to get each tool's input_schema — " +
 				"never guess params. params must match the input_schema exactly. " +
 				"On success returns the response as JSON; " +
 				"on failure returns {\"error\": string, \"tool_id\": string} with isError=true.\n\n" +
+				"BATCH MODE: pass \"calls\": [{tool_id, params, session_id?}, …] instead of a single " +
+				"tool_id/params to run many ops in ONE round-trip. Calls run in parallel and are " +
+				"independent — one failing or timing out never stops the others. The result is a " +
+				"per-call array: each entry has {index, tool_id, ok, result|error, timed_out, duration_ms} " +
+				"plus ok_count/error_count/timed_out_count. The batch itself is NOT isError unless the " +
+				"request is malformed — inspect each entry's \"ok\". Use \"timeout_ms\" to cap each call " +
+				"(default 3 min, max 5 min). Up to 100 calls per batch; the server runs them a few at a " +
+				"time so a big batch won't overload it.\n\n" +
 				"ENCRYPTED FIELDS: values prefixed with \"wick_enc_\" are valid credentials " +
 				"managed by the server. Use them as-is wherever a value is needed — pass them " +
 				"through into params, return them unchanged in your response, and never alter, " +
@@ -145,20 +153,40 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"properties": map[string]any{
 					"tool_id": map[string]any{
 						"type":        "string",
-						"description": "Opaque tool identifier from wick_list or wick_search — the tool_id ONLY. Never append \"?session_id=...\" or any query string to it.",
+						"description": "Single-call mode: opaque tool identifier from wick_list or wick_search — the tool_id ONLY. Never append \"?session_id=...\" or any query string to it. Omit when using \"calls\".",
 					},
 					"params": map[string]any{
 						"type":                 "object",
-						"description":          "Arguments matching the tool's input_schema. Use {} when the tool has no input fields.",
+						"description":          "Single-call mode: arguments matching the tool's input_schema. Use {} when the tool has no input fields. Omit when using \"calls\".",
 						"additionalProperties": true,
 					},
 					"session_id": map[string]any{
 						"type": "string",
 						"description": "Active wick agent session ID, passed as its OWN argument (sibling of tool_id, not part of it). REQUIRED when tool_id targets a session-workspace " +
-							"connector (its id starts with sw_); ignored for normal saved connectors.",
+							"connector (its id starts with sw_); ignored for normal saved connectors. In batch mode set session_id per entry inside \"calls\".",
+					},
+					"calls": map[string]any{
+						"type":        "array",
+						"description": "Batch mode: a list of independent calls to run in parallel. Each item is {tool_id, params, session_id?}. When set, tool_id/params at the top level are ignored. Max 100 items.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"tool_id": map[string]any{"type": "string", "description": "Tool identifier for this call."},
+								"params": map[string]any{
+									"type":                 "object",
+									"description":          "Arguments for this call, matching the tool's input_schema. Use {} when none.",
+									"additionalProperties": true,
+								},
+								"session_id": map[string]any{"type": "string", "description": "Optional session id for a session-workspace (sw_) connector in this call."},
+							},
+							"required": []string{"tool_id"},
+						},
+					},
+					"timeout_ms": map[string]any{
+						"type":        "integer",
+						"description": "Optional per-call timeout in milliseconds. Default 180000 (3 min); clamped to 300000 (5 min) max. A call exceeding it is aborted and reported with timed_out:true while the rest continue.",
 					},
 				},
-				"required": []string{"tool_id", "params"},
 			},
 			Annotations: &ToolAnnotation{
 				Title:           "Execute wick tool",
