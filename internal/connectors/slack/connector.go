@@ -773,7 +773,7 @@ func sendMessage(c *connector.Ctx) (any, error) {
 			},
 		}
 	}
-	outBlocks = append(outBlocks, signedFooterBlock())
+	outBlocks = append(outBlocks, signedFooterBlock(c))
 	body["blocks"] = outBlocks
 	if v := strings.TrimSpace(c.Input("thread_ts")); v != "" {
 		body["thread_ts"] = v

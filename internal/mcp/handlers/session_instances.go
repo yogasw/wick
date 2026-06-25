@@ -18,11 +18,18 @@ import (
 // missing instance) is an error — the agent must pass the owning
 // session_id, exactly like the rest of the session-scoped tools.
 func SessionInstanceFor(layout agentconfig.Layout, args map[string]any, connectorID string) (*connectors.SessionInstanceTarget, bool, error) {
+	sid, _ := args["session_id"].(string)
+	return SessionInstanceForID(layout, sid, connectorID)
+}
+
+// SessionInstanceForID is SessionInstanceFor with the session id passed
+// directly, used by the batch path where each call carries its own
+// session_id rather than a shared args map.
+func SessionInstanceForID(layout agentconfig.Layout, sessionID, connectorID string) (*connectors.SessionInstanceTarget, bool, error) {
 	if !sessionworkspace.IsInstanceID(connectorID) {
 		return nil, false, nil
 	}
-	sid, _ := args["session_id"].(string)
-	sid = strings.TrimSpace(sid)
+	sid := strings.TrimSpace(sessionID)
 	if sid == "" {
 		return nil, false, fmt.Errorf("session_id is required to use the session connector %q", connectorID)
 	}

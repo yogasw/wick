@@ -37,7 +37,7 @@ Wick does **not** advertise N×M static tools (one entry per connector × operat
 | `wick_list` | `readOnlyHint` | List every connector instance and connected OAuth account visible to the caller. Each entry has `id`, `connector` (label), `description`, `total_tools`, `status`, `kind`, and `parent_id`. Pass `session_id` to also include this session's workspace connectors (`sw_…` entries) and a `session_config_bases` array (connectors that can be cloned into a session workspace but haven't been added yet). |
 | `wick_search` | `readOnlyHint` | Substring search over label, name, description. Pass `session_id` to also match this session's workspace connectors. |
 | `wick_get` | `readOnlyHint` | Drill into a connector one level at a time via an optional `selector` argument. Pass only `id` to list the connector's categories; add `selector=<category title>` to list that category's operations (no schemas yet); add `selector=<op key>` to get that one op's `input_schema`. Flat connectors with no named categories skip straight to listing ops. For session-workspace connectors (`sw_…` id), also pass `session_id` as a separate argument. |
-| `wick_execute` | `destructiveHint` | Run an operation by `tool_id` + `params`. Composite tool IDs (`conn:…/op@accountID`) inject the account token automatically. |
+| `wick_execute` | `destructiveHint` | Run an operation by `tool_id` + `params`, or run a **batch** of operations in one call by passing a `calls` array. See [Batch execution](#batch-execution). Composite tool IDs (`conn:…/op@accountID`) inject the account token automatically. |
 | `wick_info` | `readOnlyHint` | Return server version and build info |
 | `wick_encrypt` | `readOnlyHint` | Redirect to the in-app encrypt UI — no crypto over MCP. See [Encrypted credentials](#encrypted-credentials) |
 | `wick_decrypt` | `readOnlyHint` | Redirect to the in-app decrypt UI — no crypto over MCP |
@@ -156,6 +156,58 @@ When multiple users have connected personal accounts to one instance, the LLM se
 ### Auth check on every call
 
 `wick_execute` and `wick_get` re-validate `IsVisibleTo(connector_id, user_tag_ids, is_admin)` on every call — they never trust a list-time cache. The `connector_operations` enable state is also re-checked. Removing a user's tag or disabling an op takes effect on the very next call.
+
+## Batch execution
+
+`wick_execute` accepts either a single tool call or a **batch** in one round-trip. Pass a `calls` array instead of `tool_id`/`params` at the top level:
+
+```json
+{
+  "calls": [
+    { "tool_id": "conn:uuid/op_a", "params": { "x": 1 } },
+    { "tool_id": "conn:uuid/op_b", "params": { "y": 2 } },
+    { "tool_id": "conn:uuid/op_c", "params": {}, "session_id": "sw_..." }
+  ],
+  "timeout_ms": 60000
+}
+```
+
+Calls run in parallel, independently — one failing or timing out never stops the rest. The response is always a per-call result array (never `isError` unless the request itself is malformed):
+
+```json
+{
+  "results": [
+    { "index": 0, "tool_id": "conn:uuid/op_a", "ok": true,  "result": {…},            "duration_ms": 210 },
+    { "index": 1, "tool_id": "conn:uuid/op_b", "ok": false, "error": "not found",     "duration_ms": 85  },
+    { "index": 2, "tool_id": "conn:uuid/op_c", "ok": false, "timed_out": true,        "duration_ms": 60000 }
+  ],
+  "ok_count": 1,
+  "error_count": 1,
+  "timed_out_count": 1
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `index` | Position in the original `calls` array (0-based). |
+| `ok` | `true` when the call succeeded. |
+| `result` | Raw response JSON from the connector op. Present only when `ok: true`. |
+| `error` | Error message string. Present only when `ok: false` and not a timeout. |
+| `timed_out` | `true` when the per-call deadline expired. |
+| `duration_ms` | Wall time for that call. |
+| `ok_count` / `error_count` / `timed_out_count` | Totals for quick scanning. |
+
+**Limits and timeouts:**
+
+| Parameter | Default | Max |
+|-----------|---------|-----|
+| `calls` length | — | 100 per request |
+| `timeout_ms` | 180 000 (3 min) | 300 000 (5 min) |
+| Server concurrency | — | 5 (fixed, not configurable) |
+
+`timeout_ms` sets a per-call deadline, not a batch deadline. The server bounds how many calls run at once; you do not need to tune concurrency.
+
+Always call `wick_get` to fetch each op's `input_schema` before building the batch — the same prerequisite as single-call mode. Inspect each entry's `ok` field rather than treating the whole batch as pass/fail.
 
 ## Encrypted credentials
 

@@ -71,6 +71,8 @@ type Channel struct {
 
 	mu    sync.Mutex
 	turns map[string]*turn
+
+	ownerUserID string // wick user who owns this channel row; empty = App Owner
 }
 
 // New constructs a REST Channel. auth resolves the Bearer on every
@@ -83,8 +85,20 @@ func New(cfg agentconfig.RestChannelConfig, auth Authenticator) *Channel {
 	}
 }
 
+// NewWithOwner creates a REST Channel tied to a specific wick user owner.
+// ownerUserID="" means the App Owner's channel (user_id = NULL row).
+func NewWithOwner(cfg agentconfig.RestChannelConfig, auth Authenticator, ownerUserID string) *Channel {
+	ch := New(cfg, auth)
+	ch.ownerUserID = ownerUserID
+	return ch
+}
+
 // Name satisfies Channel.
 func (c *Channel) Name() string { return "rest" }
+
+// Auth returns the Authenticator wired into this channel. Used by the
+// live-sync path to mint a new keyed instance reusing the boot-time auth.
+func (c *Channel) Auth() Authenticator { return c.auth }
 
 // IsConfigured returns true when the operator has flipped the enable
 // switch in the UI. Auth is per-request, so there is no token to check.

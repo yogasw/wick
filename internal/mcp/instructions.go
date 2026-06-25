@@ -26,4 +26,11 @@ WORKFLOW
   the op key). Never guess parameters — derive them from that schema.
 - If a connector status is "needs_setup", do not call wick_execute. Tell the user to
   complete the setup in the Wick admin dashboard first.
+- To run several ops at once, pass wick_execute a "calls" array ([{tool_id, params,
+  session_id?}, …]) instead of a single tool_id/params. Calls run in parallel and are
+  independent — a failure or timeout in one never blocks the rest. The reply is a per-call
+  array; check each entry's "ok" (and "timed_out") rather than treating the batch as a
+  single pass/fail. Use "timeout_ms" to bound slow calls (default 3 min, max 5 min). Up to
+  100 calls per batch; the server bounds how many run at once, so you don't set concurrency.
+  Still fetch each op's input_schema first.
 `

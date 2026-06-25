@@ -121,7 +121,7 @@ Operational guide: [Environment Variables](../reference/env-vars).
 
 The **Software Update** page (previously called "System" at `/admin/configs/system`) has three panels:
 
-**Version** — mirrors the fields `wick_info` exposes over MCP: app name, app version, latest known release tag, wick framework version, commit, build time, access type, and database status (type · connected / error). The App/Wick version fields carry a status badge — green **Latest** when already on the newest release, amber **Update available → vX** when a newer release exists.
+**Version** — mirrors the fields `wick_info` exposes over MCP, grouped into three sections: **Application** (app name, app version, build time — the build time describes when the running application binary was compiled), **Wick** (the embedded wick framework version), and **Runtime** (access type and database status — type · connected / error). The App/Wick version fields carry a status badge — green **Latest** when already on the newest release, amber **Update available → vX** when a newer release exists.
 
 **Updates** — available when the binary was built with a release source (`--release-github-repo`). Workflow:
 

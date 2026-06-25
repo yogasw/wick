@@ -11,8 +11,9 @@ import (
 
 // ConfigSource implements agentchannels.ConfigSource for *Channel.
 type ConfigSource struct {
-	store agentchannels.TelegramConfigStore
-	ch    *Channel
+	store  agentchannels.TelegramConfigStore
+	ch     *Channel
+	loadFn func() agentconfig.TelegramChannelConfig // optional override
 }
 
 // NewConfigSource binds a Telegram channel to a config store so the
@@ -21,7 +22,32 @@ func NewConfigSource(store agentchannels.TelegramConfigStore, ch *Channel) *Conf
 	return &ConfigSource{store: store, ch: ch}
 }
 
+// NewConfigSourceKeyed creates a ConfigSource that loads config for a specific
+// user's Telegram channel row. userID="" loads the App Owner row.
+func NewConfigSourceKeyed(store agentchannels.TelegramConfigStore, ch *Channel, userID string) *ConfigSource {
+	type perUserLoader interface {
+		LoadTelegramForUser(string) (agentconfig.TelegramChannelConfig, error)
+	}
+	if loader, ok := store.(perUserLoader); ok {
+		return &ConfigSource{
+			store: store,
+			ch:    ch,
+			loadFn: func() agentconfig.TelegramChannelConfig {
+				cfg, err := loader.LoadTelegramForUser(userID)
+				if err != nil {
+					return agentconfig.TelegramChannelConfig{}
+				}
+				return cfg
+			},
+		}
+	}
+	return NewConfigSource(store, ch)
+}
+
 func (s *ConfigSource) load() agentconfig.TelegramChannelConfig {
+	if s.loadFn != nil {
+		return s.loadFn()
+	}
 	cfg, err := s.store.LoadTelegram()
 	if err != nil {
 		return agentconfig.TelegramChannelConfig{}

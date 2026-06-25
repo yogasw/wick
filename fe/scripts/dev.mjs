@@ -19,6 +19,13 @@ const workspaces = [
   "@wick-fe/agents-skills",
   "@wick-fe/agents-workflow",
   "@wick-fe/manager",
+  // common/md is the one common/* lib that ships its OWN standalone bundle
+  // (web/public/lib/wick-markdown.js, served as /public/lib/wick-markdown.js)
+  // instead of being imported into an agents SPA. Nothing else builds it, so
+  // without it here `npm run dev` leaves the file missing and pages that load
+  // the markdown renderer (e.g. the Software Update "What's new" changelog)
+  // 404 on the script and fall back to raw, unrendered markdown.
+  "@wick-fe/common-md",
 ];
 
 const procs = workspaces.map((ws) => {

@@ -471,39 +471,55 @@ func evalScopeRule(rule [][]string, granted map[string]struct{}) (bool, [][]stri
 	return len(missing) == 0, missing
 }
 
-// botUserID holds the Slack user_id of the active bot. Seeded by the
-// agent slack channel on connect/reload (one bot per process), and
-// read by signedFooterBlock to render "Sent using <@BotID>".
+// botIDByToken caches the Slack user_id resolved from each connector
+// instance's token, so the "Sent using <@BotID>" footer reflects THAT
+// instance's bot — not a process-global value that the last-connected
+// agent Slack channel would clobber under multi-instance setups.
 //
-// Stored as atomic.Value so reads are lock-free on the hot send path.
-// Empty until the channel performs auth.test successfully.
-var botUserID atomic.Value // string
+// Keyed by token; one auth.test per distinct token, then cached. Reads
+// are lock-free via atomic.Value swapping an immutable map.
+var botIDByToken atomic.Value // map[string]string
 
-// SetBotUserID is called by the agent slack channel after auth.test
-// confirms the bot identity. No-op on empty input. Safe from any
-// goroutine.
-func SetBotUserID(id string) {
-	if id == "" {
-		return
+// botUserIDForToken returns the bot user_id for the connector instance's
+// token, resolving it via auth.test on first use and caching the result.
+// Returns "" when the token is empty or auth.test fails — the footer then
+// falls back to the app name.
+func botUserIDForToken(c *connector.Ctx) string {
+	token, err := pickToken(c)
+	if err != nil || token == "" {
+		return ""
 	}
-	botUserID.Store(id)
+	if m, ok := botIDByToken.Load().(map[string]string); ok {
+		if id, hit := m[token]; hit {
+			return id
+		}
+	}
+	// Miss: resolve via auth.test (uses the instance's own token).
+	id := ""
+	if raw, _, terr := slackGetWithHeaders(c, "auth.test", nil); terr == nil {
+		if obj, ok := raw.(map[string]any); ok {
+			if uid, ok := obj["user_id"].(string); ok {
+				id = uid
+			}
+		}
+	}
+	// Copy-on-write the cache (small, write-rare).
+	old, _ := botIDByToken.Load().(map[string]string)
+	next := make(map[string]string, len(old)+1)
+	for k, v := range old {
+		next[k] = v
+	}
+	next[token] = id // cache "" too, so a failing token isn't re-probed every send
+	botIDByToken.Store(next)
+	return id
 }
 
-// BotUserID returns the cached bot user_id, or "" when the channel has
-// not yet connected.
-func BotUserID() string {
-	if v, ok := botUserID.Load().(string); ok {
-		return v
-	}
-	return ""
-}
-
-// signedFooterBlock builds the Block Kit context block that gets
-// appended to every send_message — "Sent using <@BotID>" when the
-// bot user is known (seeded by the agent slack channel on connect),
-// falling back to the app name.
-func signedFooterBlock() map[string]any {
-	botID := BotUserID()
+// signedFooterBlock builds the Block Kit context block appended to every
+// send_message — "Sent using <@BotID>" for the calling connector
+// instance's own bot, falling back to the app name when the bot user is
+// unknown (empty token or auth.test failure).
+func signedFooterBlock(c *connector.Ctx) map[string]any {
+	botID := botUserIDForToken(c)
 	var footerText string
 	if botID != "" {
 		footerText = "Sent using <@" + botID + ">"

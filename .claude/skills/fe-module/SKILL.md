@@ -261,7 +261,7 @@ Before writing or editing any API function, UI component, or store:
 ## Dev / build / test
 
 ```bash
-cd fe && npm run dev            # build:watch ALL workspaces in parallel (scripts/dev.mjs)
+cd fe && npm run dev            # build:watch the workspaces listed in scripts/dev.mjs, in parallel
 cd fe && npm run dev:workflow   # per-app Vite HMR (no templ chrome)
 cd fe && npm run dev:manager    # manager SPA only
 cd fe && npm run dev:scm
@@ -275,9 +275,19 @@ WICK_DEV_REPO_ROOT=$(pwd)/.. go run ./cmd/lab server
 # VS Code: launch "wicklab" (already has WICK_DEV_REPO_ROOT set)
 ```
 
-`npm run dev` uses `fe/scripts/dev.mjs` which spawns all workspaces in parallel.
-`npm --workspaces run build:watch` is BROKEN for watch mode — it runs seri and blocks
-on the first workspace forever. Always use `npm run dev`.
+`npm run dev` uses `fe/scripts/dev.mjs`, which spawns `build:watch` for the workspaces
+in its **hardcoded `workspaces` array** — NOT every workspace automatically. A workspace
+absent from that list is never built by `dev`. `npm --workspaces run build:watch` is
+BROKEN for watch mode — it runs seri and blocks on the first workspace forever. Always
+use `npm run dev`.
+
+Most `common/*` libs are imported into an agents SPA, so they rebuild transitively when
+that SPA does. The exception is `@wick-fe/common-md`: it ships its OWN standalone bundle
+to `web/public/lib/wick-markdown.js` (served as `/public/lib/wick-markdown.js`, loaded
+directly by templ pages like Software Update's "What's new"). Nothing imports it, so it
+MUST be listed in `dev.mjs` explicitly — otherwise the file is missing in local dev and
+the script 404s, leaving markdown unrendered. Any future `common/*` that emits a
+standalone served asset needs the same treatment.
 
 With `WICK_DEV_REPO_ROOT` set, the browser **auto-reloads** on every rebuild via the
 SSE endpoint `/_dev/reload` (Go-side fsnotify on dist/, client injected in `ui.Layout`).

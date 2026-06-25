@@ -63,22 +63,28 @@ func TestChunkTextBreaksOnNewline(t *testing.T) {
 
 func TestAllowed(t *testing.T) {
 	s := &Channel{}
+	// allowed wraps allowedCfg, discarding the deny-reason for the boolean
+	// assertions below (reason is covered by TestAllowedReason).
+	allowed := func(userID string, groups []string, channelID string) bool {
+		ok, _ := s.allowedCfg(s.cfg, userID, groups, channelID)
+		return ok
+	}
 
 	// default — all modes "all", any user / group / channel passes
 	s.cfg.UsersMode = "all"
 	s.cfg.GroupsMode = "all"
 	s.cfg.ChannelsMode = "all"
-	if !s.allowedCfg(s.cfg, "U123", nil, "C123") {
+	if !allowed("U123", nil, "C123") {
 		t.Error("all mode: should allow any user")
 	}
 
 	// users whitelist
 	s.cfg.UsersMode = "whitelist"
 	s.cfg.AllowedUsers = `[{"id":"U001","name":"a"},{"id":"U002","name":"b"}]`
-	if !s.allowedCfg(s.cfg, "U001", nil, "C1") {
+	if !allowed("U001", nil, "C1") {
 		t.Error("users whitelist: U001 should be allowed")
 	}
-	if s.allowedCfg(s.cfg, "U999", nil, "C1") {
+	if allowed("U999", nil, "C1") {
 		t.Error("users whitelist: U999 should be denied")
 	}
 
@@ -86,13 +92,13 @@ func TestAllowed(t *testing.T) {
 	s.cfg.UsersMode = "all"
 	s.cfg.GroupsMode = "whitelist"
 	s.cfg.AllowedGroups = `[{"id":"G001","name":"g1"},{"id":"G002","name":"g2"}]`
-	if !s.allowedCfg(s.cfg, "Uany", []string{"G001"}, "C1") {
+	if !allowed("Uany", []string{"G001"}, "C1") {
 		t.Error("groups whitelist: member of G001 should be allowed")
 	}
-	if s.allowedCfg(s.cfg, "Uany", []string{"G999"}, "C1") {
+	if allowed("Uany", []string{"G999"}, "C1") {
 		t.Error("groups whitelist: member of G999 should be denied")
 	}
-	if s.allowedCfg(s.cfg, "Uany", nil, "C1") {
+	if allowed("Uany", nil, "C1") {
 		t.Error("groups whitelist: no groups should be denied")
 	}
 
@@ -101,15 +107,15 @@ func TestAllowed(t *testing.T) {
 	s.cfg.AllowedUsers = `[{"id":"U001","name":"a"}]`
 	s.cfg.GroupsMode = "whitelist"
 	s.cfg.AllowedGroups = `[{"id":"G001","name":"g1"}]`
-	if !s.allowedCfg(s.cfg, "U001", nil, "C1") {
+	if !allowed("U001", nil, "C1") {
 		t.Error("OR semantic: U001 in users whitelist should pass even with no group")
 	}
 	// pass via groups
-	if !s.allowedCfg(s.cfg, "U999", []string{"G001"}, "C1") {
+	if !allowed("U999", []string{"G001"}, "C1") {
 		t.Error("OR semantic: member of G001 should pass even when not in users whitelist")
 	}
 	// neither matches
-	if s.allowedCfg(s.cfg, "U999", []string{"G999"}, "C1") {
+	if allowed("U999", []string{"G999"}, "C1") {
 		t.Error("OR semantic: no match in users or groups should be denied")
 	}
 
@@ -118,11 +124,40 @@ func TestAllowed(t *testing.T) {
 	s.cfg.GroupsMode = "all"
 	s.cfg.ChannelsMode = "whitelist"
 	s.cfg.AllowedChannels = `[{"id":"CABC","name":"#general"}]`
-	if !s.allowedCfg(s.cfg, "U1", nil, "CABC") {
+	if !allowed("U1", nil, "CABC") {
 		t.Error("channels whitelist: CABC should be allowed")
 	}
-	if s.allowedCfg(s.cfg, "U1", nil, "CXYZ") {
+	if allowed("U1", nil, "CXYZ") {
 		t.Error("channels whitelist: CXYZ should be denied")
+	}
+}
+
+// TestAllowedReason verifies the deny-reason returned alongside the boolean,
+// which drives the access-denied DM wording.
+func TestAllowedReason(t *testing.T) {
+	s := &Channel{}
+
+	// identity deny: user not in the users whitelist.
+	s.cfg.UsersMode = "whitelist"
+	s.cfg.AllowedUsers = `[{"id":"U001","name":"a"}]`
+	s.cfg.GroupsMode = "all"
+	s.cfg.ChannelsMode = "all"
+	if ok, reason := s.allowedCfg(s.cfg, "U999", nil, "C1"); ok || reason != "identity" {
+		t.Errorf("identity deny: got ok=%v reason=%q, want false/identity", ok, reason)
+	}
+
+	// channels deny: identity passes, channel not whitelisted.
+	s.cfg.UsersMode = "all"
+	s.cfg.ChannelsMode = "whitelist"
+	s.cfg.AllowedChannels = `[{"id":"CABC","name":"#general"}]`
+	if ok, reason := s.allowedCfg(s.cfg, "U1", nil, "CXYZ"); ok || reason != "channels" {
+		t.Errorf("channels deny: got ok=%v reason=%q, want false/channels", ok, reason)
+	}
+
+	// allowed: empty reason.
+	s.cfg.ChannelsMode = "all"
+	if ok, reason := s.allowedCfg(s.cfg, "U1", nil, "C1"); !ok || reason != "" {
+		t.Errorf("allowed: got ok=%v reason=%q, want true/empty", ok, reason)
 	}
 }
 
