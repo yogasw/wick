@@ -6,7 +6,18 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+*   **PWA service worker — pending-hang on boot**: Static assets (`/sw.js`, `/public/*`, `/modules/*`) are now exempt from the boot gate. Previously, an already-installed service worker would intercept these asset fetches on a reload while boot was still in progress; the gate held every request, leaving `app.css`, `icon.svg`, and similar files stuck at "pending" until the boot restore finished. Because these paths are served from `embed.FS` and depend on nothing the boot gate sets up, exempting them lets the SW resolve its cache immediately regardless of boot state.
+*   **PWA service worker — stale-while-revalidate and navigation fetch hang**: Added an 8-second `AbortController` timeout to both the SWR background refresh and the network-first navigation path. Without it, a stalled TCP connection (dead keep-alive socket, momentarily busy server) left `fetch()` hanging indefinitely with no error, so the asset or page never settled — visible as an asset or navigation stuck at "pending" forever. The timeout converts the stall into a rejection, allowing the SW to fall back to cache or surface a real network error instead.
+
+### Changed
+
+*   **`wick build` — build time always stamped**: `BuildTime` is now injected as an `-X` ldflag (RFC3339 UTC, set at `wick build` invocation time) for every build path. Previously it relied solely on Go's `vcs.time` VCS metadata, which is absent inside the `wick init` scaffold (a git-less directory) used by the release pipeline, leaving the "Built" field showing "unknown" in all release binaries. The "Built" field on the Software Update page and in `wick_info` MCP output now always shows the actual compile time.
+
+### Removed
+
+*   **Admin — Software Update page — Commit row**: The **Commit** field has been removed from the Version panel. Build time is now always available (see above) and more meaningful to end-users; the commit SHA is a build-internals detail not useful at the operator level.
 
 ---
 
