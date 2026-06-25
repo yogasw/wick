@@ -28,7 +28,6 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
-	slackconnector "github.com/yogasw/wick/internal/connectors/slack"
 )
 
 const (
@@ -258,7 +257,6 @@ func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string)
 			teamName = resp.Team
 			teamDomain = extractTeamDomain(resp.URL)
 			botUserName = resolveBotDisplayName(api, botUserID, resp.User)
-			slackconnector.SetBotUserID(botUserID)
 		}
 	}
 
@@ -442,7 +440,6 @@ func (s *Channel) refreshBotUserID(ctx context.Context) {
 	s.teamName = resp.Team
 	s.teamDomain = extractTeamDomain(resp.URL)
 	s.cfgMu.Unlock()
-	slackconnector.SetBotUserID(resp.UserID)
 	if prev != resp.UserID {
 		log.Info().Str("channel", "slack").Str("bot_user_id", resp.UserID).Str("prev", prev).Msg("bot user id refreshed on connect")
 	}
@@ -810,14 +807,16 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	if err != nil {
 		log.Warn().Str("channel", "slack").Str("user", ev.User).Err(err).Msg("resolve groups failed; falling back to empty")
 	}
-	if !s.allowedCfg(cfg, ev.User, groupIDs, ev.Channel) {
+	if ok, reason := s.allowedCfg(cfg, ev.User, groupIDs, ev.Channel); !ok {
 		log.Warn().Str("channel", "slack").
 			Str("user", ev.User).
 			Str("slack_channel", ev.Channel).
 			Str("channel_type", ev.ChannelType).
 			Strs("groups", groupIDs).
+			Str("reason", reason).
 			Msg("access denied, ignoring message")
 		s.setReaction(reactionBlocked, ev.Channel, ev.TimeStamp, "")
+		s.notifyAccessDenied(ctx, ev.User, ev.Channel, reason)
 		return
 	}
 	log.Info().Str("channel", "slack").
@@ -874,7 +873,8 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	})
 
 	userText := normalizeUserText(ev.Text)
-	if !s.sessionOnDisk(threadTS) {
+	isNewSession := !s.sessionOnDisk(threadTS)
+	if isNewSession {
 		ctxText := s.buildSessionContext(ev, threadTS)
 		if ctxText != "" {
 			if err := s.sendFn(context.Background(), threadTS, "main", "slack", "system", ctxText); err != nil {
@@ -894,13 +894,19 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		s.postReply(ev.Channel, threadTS, "Agent error: could not queue message. Check the dashboard for details.")
 		return
 	}
-	if s.ownerFn != nil && s.wickUserIDFn != nil {
-		if wickUserID, ok := s.wickUserIDFn(context.Background(), ev.User); ok {
-			s.ownerFn(context.Background(), threadTS, wickUserID)
+	// Stamp the session owner once, on the first message that creates the
+	// session. wickUserIDFn hits the DB, so skipping it on every follow-up
+	// reply (where the owner is already set) avoids needless per-message
+	// queries. EnsureSessionOwner is a no-op if an owner already exists.
+	if isNewSession && s.ownerFn != nil {
+		if s.wickUserIDFn != nil {
+			if wickUserID, ok := s.wickUserIDFn(context.Background(), ev.User); ok {
+				s.ownerFn(context.Background(), threadTS, wickUserID)
+			}
 		}
-	}
-	if s.ownerFn != nil && s.ownerUserID != "" {
-		s.ownerFn(context.Background(), threadTS, s.ownerUserID)
+		if s.ownerUserID != "" {
+			s.ownerFn(context.Background(), threadTS, s.ownerUserID)
+		}
 	}
 	// Message accepted by the pool: cancel pending queue timer (and remove
 	// ⏳ if it had already fired), then surface the "thinking" banner so
@@ -1355,7 +1361,8 @@ func (s *Channel) approverAllowed(cfg agentconfig.SlackChannelConfig, userID str
 	switch cfg.GateApprovers {
 	case "trigger_users", "":
 		groupIDs, _ := s.resolveUserGroups(userID)
-		return s.allowedCfg(cfg, userID, groupIDs, "")
+		ok, _ := s.allowedCfg(cfg, userID, groupIDs, "")
+		return ok
 	case "admins":
 		s.cfgMu.Lock()
 		api := s.api
@@ -1470,7 +1477,10 @@ func isRateLimit(err error) bool {
 //   - if only ONE is active → it gates alone
 //   - if NEITHER is active → pass
 //   - channels whitelist is AND'd on top (independent dimension)
-func (s *Channel) allowedCfg(cfg agentconfig.SlackChannelConfig, userID string, groupIDs []string, channelID string) bool {
+// allowedCfg reports whether the user may trigger the agent, plus a short
+// machine reason ("identity" / "channels") when denied. reason is "" when
+// allowed. Used to tailor the access-denied DM.
+func (s *Channel) allowedCfg(cfg agentconfig.SlackChannelConfig, userID string, groupIDs []string, channelID string) (bool, string) {
 	usersActive := cfg.UsersMode == "whitelist"
 	groupsActive := cfg.GroupsMode == "whitelist"
 
@@ -1503,13 +1513,55 @@ func (s *Channel) allowedCfg(cfg agentconfig.SlackChannelConfig, userID string, 
 			Str("user", userID).Strs("groups", groupIDs).
 			Bool("users_active", usersActive).Bool("groups_active", groupsActive).
 			Msg("denied by identity whitelists")
-		return false
+		return false, "identity"
 	}
 	if channelID != "" && cfg.ChannelsMode == "whitelist" && !pickerHas(cfg.AllowedChannels, channelID) {
 		log.Debug().Str("channel", "slack").Str("reject", "channels").Str("slack_channel", channelID).Msg("denied by channels whitelist")
-		return false
+		return false, "channels"
 	}
-	return true
+	return true, ""
+}
+
+// notifyAccessDenied DMs the user who was blocked, explaining why, so the
+// 🚫 reaction on their message isn't a silent dead-end. Best-effort: any
+// API failure is logged and swallowed (the reaction already conveys the
+// block). reason comes from allowedCfg ("identity" / "channels").
+func (s *Channel) notifyAccessDenied(ctx context.Context, userID, channelID, reason string) {
+	if userID == "" {
+		return
+	}
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return
+	}
+
+	var msg string
+	switch reason {
+	case "channels":
+		msg = "🚫 I can't run in this channel — it isn't on the allow-list for this workspace. " +
+			"Ask an admin to add it, or message me in an approved channel."
+	default: // "identity"
+		msg = "🚫 You're not on the allow-list to use this assistant in this workspace. " +
+			"Ask an admin to grant you (or one of your user groups) access."
+	}
+
+	dmCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	ch, _, _, err := api.OpenConversationContext(dmCtx, &slackgo.OpenConversationParameters{
+		Users:    []string{userID},
+		ReturnIM: true,
+	})
+	if err != nil || ch == nil {
+		log.Warn().Str("channel", "slack").Str("user", userID).Err(err).
+			Msg("access-denied DM: conversations.open failed")
+		return
+	}
+	if _, _, err := api.PostMessageContext(dmCtx, ch.ID, slackgo.MsgOptionText(msg, false)); err != nil {
+		log.Warn().Str("channel", "slack").Str("user", userID).Err(err).
+			Msg("access-denied DM: postMessage failed")
+	}
 }
 
 // pickerHas reports whether jsonList (a JSON array of {id,name} entries

@@ -58,6 +58,8 @@ type Channel struct {
 
 	turns map[string]*turn
 
+	ownerUserID string // wick user who owns this channel row; empty = App Owner
+
 	runCancel context.CancelFunc
 	runWg     sync.WaitGroup
 }
@@ -80,6 +82,14 @@ func New(cfg agentconfig.TelegramChannelConfig) *Channel {
 			log.Warn().Err(err).Msg("telegram: invalid bot token, starting in dormant mode")
 		}
 	}
+	return tc
+}
+
+// NewWithOwner creates a Telegram Channel tied to a specific wick user owner.
+// ownerUserID="" means the App Owner's channel (user_id = NULL row).
+func NewWithOwner(cfg agentconfig.TelegramChannelConfig, ownerUserID string) *Channel {
+	tc := New(cfg)
+	tc.ownerUserID = ownerUserID
 	return tc
 }
 

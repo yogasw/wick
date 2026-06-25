@@ -156,6 +156,73 @@ func List(layout config.Layout) ([]string, error) {
 	return storage.ScanDirNames(layout.ProjectsDir())
 }
 
+// Access carries the caller identity used to filter project visibility.
+// Build it in the handler from the request context so this package keeps
+// no login/http imports:
+//
+//	project.Access{
+//	    UserID:  user.ID,
+//	    TagIDs:  login.GetUserTagIDs(ctx),
+//	    IsAdmin: user.IsAdmin(),
+//	}
+type Access struct {
+	UserID  string
+	TagIDs  []string
+	IsAdmin bool
+}
+
+// CanAccess reports whether meta is visible to acc. Mirrors the
+// Service.CanAccessTool rule (admin bypass, untagged = open, otherwise tag
+// match) and adds the project owner rule. Checked in order:
+//
+//   - admins/owners see every project
+//   - a project with no owner and no tags is shared (everyone)
+//   - the owner sees their own project
+//   - a user carrying any of the project's tags sees it (tag share)
+func CanAccess(meta Meta, acc Access) bool {
+	if acc.IsAdmin {
+		return true
+	}
+	if meta.OwnerUserID == "" && len(meta.Tags) == 0 {
+		return true
+	}
+	if meta.OwnerUserID != "" && meta.OwnerUserID == acc.UserID {
+		return true
+	}
+	for _, pt := range meta.Tags {
+		for _, ut := range acc.TagIDs {
+			if pt == ut {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ListVisibleTo returns the IDs of projects acc may see, sorted like List.
+// Use this for every user-facing project enumeration (channel default
+// dropdown, pickers) instead of List, which returns all projects on disk.
+func ListVisibleTo(layout config.Layout, acc Access) ([]string, error) {
+	ids, err := List(layout)
+	if err != nil {
+		return nil, err
+	}
+	if acc.IsAdmin {
+		return ids, nil
+	}
+	out := ids[:0:len(ids)]
+	for _, id := range ids {
+		var m Meta
+		if rerr := storage.ReadJSON(layout.ProjectMeta(id), &m); rerr != nil {
+			continue
+		}
+		if CanAccess(m, acc) {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
 // Exists reports whether a project with the given id exists on disk.
 func Exists(layout config.Layout, id string) bool {
 	if id == "" {
