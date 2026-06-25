@@ -5,6 +5,7 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -128,10 +129,18 @@ func bootPhaseMessage(phase string) string {
 //   - /health — load-balancer / k8s readiness probes must keep succeeding,
 //     otherwise the pod is killed mid-restore and never finishes.
 //   - /boot-status — the JSON the gate page polls to know when to reload.
+//   - /sw.js and static asset trees (/public/, /modules/) — these are served
+//     from embed.FS and depend on nothing the boot restore sets up, so there
+//     is no reason to hold them. Holding them was actively harmful: an
+//     already-registered service worker intercepts these on reload and
+//     `await fetch`es them; while the gate held, those fetches sat unanswered
+//     until boot finished (slow when MCP connectors are still connecting),
+//     leaving app.css/icon.svg stuck "pending". Serving them through lets the
+//     SW resolve its cache immediately regardless of boot progress.
 //
-// The page itself is self-contained (inline CSS, meta-refresh fallback +
-// fetch poll) so it needs no static assets, which keeps the exemption list
-// to just the two endpoints above.
+// The boot page itself is self-contained (inline CSS, meta-refresh fallback +
+// fetch poll) so it never needs these assets — the exemptions only matter for
+// the already-installed-SW reload path described above.
 func (s *Server) bootGateHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.bootGate == nil || s.bootGate.Ready() {
@@ -139,13 +148,20 @@ func (s *Server) bootGateHandler(next http.Handler) http.Handler {
 			return
 		}
 		switch r.URL.Path {
-		case "/health":
+		case "/health", "/sw.js":
 			next.ServeHTTP(w, r)
 			return
 		case "/boot-status":
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Cache-Control", "no-store")
 			_ = json.NewEncoder(w).Encode(s.bootStatusJSON(false))
+			return
+		}
+		// Static asset trees are embed.FS-backed and boot-independent — serve
+		// them through so an already-registered SW never stalls on them.
+		if strings.HasPrefix(r.URL.Path, "/public/") ||
+			strings.HasPrefix(r.URL.Path, "/modules/") {
+			next.ServeHTTP(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

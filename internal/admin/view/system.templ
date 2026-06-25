@@ -122,12 +122,11 @@ templ versionCard(d SystemPageData) {
 		<dl class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
 			@versionRow("App name", orDash(d.AppName), "")
 			@appVersionRow(d)
+			@versionRow("Built", orDash(d.BuildTime), "")
 		</dl>
-		<p class="mt-5 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Build</p>
+		<p class="mt-5 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Wick</p>
 		<dl class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
 			@wickVersionRow(d)
-			@versionRow("Commit", orDash(d.Commit), "")
-			@versionRow("Built", orDash(d.BuildTime), "")
 		</dl>
 		<p class="mt-5 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Runtime</p>
 		<dl class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">

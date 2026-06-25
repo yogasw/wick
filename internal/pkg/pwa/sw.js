@@ -1,8 +1,9 @@
 // wick service worker — minimal, enables PWA installability and a small
 // static cache. Kept conservative on purpose: navigations always go to the
 // network so we never serve a stale Cloudflare Access login page from cache.
-const CACHE = 'wick-static-v4';
+const CACHE = 'wick-static-v5';
 const ASSETS = [
+  '/public/img/icon.svg',
   '/public/img/icon-192.png',
   '/public/img/icon-512.png',
   '/public/img/icon-maskable-512.png',
@@ -59,15 +60,33 @@ self.addEventListener('fetch', (event) => {
     // to the network on a cold miss), and ALWAYS kick off a network fetch in
     // the background to refresh the cache for next time. A failed background
     // fetch is swallowed so an offline reload still serves the cached copy.
+    //
+    // The background fetch is given a hard timeout. Without it, a stalled
+    // connection (dead keep-alive socket, a momentarily busy server) leaves
+    // fetch() hanging forever; on a COLD cache there is nothing to fall back
+    // to, so respondWith() never settles and the asset sticks at "pending"
+    // indefinitely — the random first-load hangs. AbortController bounds it so
+    // a stall fails fast and we serve cache (or surface a real error) instead.
     event.respondWith(
       caches.match(req).then((cached) => {
-        const fetching = fetch(req).then((res) => {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8000);
+        const fetching = fetch(req, { signal: ctrl.signal }).then((res) => {
+          clearTimeout(timer);
           if (res && res.ok) {
             const copy = res.clone();
             caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
           }
           return res;
-        }).catch(() => cached);
+        }).catch(() => {
+          clearTimeout(timer);
+          return cached;
+        });
+        // On a cache HIT we answer instantly with `cached`, but the background
+        // refresh must be kept alive past respondWith() — extend the event's
+        // lifetime so Chrome doesn't tear the fetch down (or leave it dangling)
+        // the moment we've answered.
+        if (cached) event.waitUntil(fetching);
         return cached || fetching;
       })
     );
@@ -75,11 +94,27 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Network-first for navigations and dynamic responses.
-  event.respondWith(
-    fetch(req).catch(() =>
-      caches.match(req).then((cached) => cached || Response.error())
-    )
-  );
+  //
+  // The fetch is bounded by a timeout. A `go run` server reuses HTTP
+  // keep-alive sockets; when Go closes an idle connection that Chrome still
+  // believes is live, the next request on that dead socket stalls at the TCP
+  // layer for tens of seconds with NO error — fetch neither resolves nor
+  // rejects, so .catch never fires and the navigation hangs at "pending"
+  // forever. That is the "server's been up for ages, then suddenly stuck"
+  // case. AbortController converts the stall into a rejection so we fall back
+  // to cache (or surface a real error) instead of hanging indefinitely.
+  event.respondWith((async () => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      return await fetch(req, { signal: ctrl.signal });
+    } catch (_) {
+      const cached = await caches.match(req);
+      return cached || Response.error();
+    } finally {
+      clearTimeout(timer);
+    }
+  })());
 });
 
 // sameOriginClients returns every window of this origin the service worker
