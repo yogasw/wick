@@ -6,9 +6,17 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.25.0](https://github.com/yogasw/wick/compare/v0.24.1...v0.25.0) — Platform Updates
+
+_Released on 2026-06-25_
+
 ### Added
 
-*   **MCP — `wick_execute` batch mode**: Pass a `calls` array to run up to 100 connector ops in a single round-trip. Calls run in parallel (server-side concurrency fixed at 5); a failing or timed-out call never stops the rest. Each entry in the response carries `{index, tool_id, ok, result|error, timed_out, duration_ms}` plus summary counts. Set `timeout_ms` to cap per-call time (default 3 min, max 5 min). Single-call shape is unchanged. See [Batch execution](/guide/mcp#batch-execution).
+*   **MCP — `wick_execute` batch mode**: Pass a `calls` array to run up to 100 connector operations in a single round-trip. Calls run in parallel (server-side concurrency fixed at 5); a failing or timed-out call never stops the rest. Each entry in the response carries `{index, tool_id, ok, result|error, timed_out, duration_ms}` plus summary counts. Set `timeout_ms` to cap per-call time (default 3 min, max 5 min). Single-call shape is unchanged. See [Batch execution](/guide/mcp#batch-execution).
 
 ### Fixed
 
@@ -17,11 +25,14 @@ All notable changes to Wick are documented here.
 *   **Slack — multi-instance bot footer**: The "Sent using @bot" footer now resolves the bot display name from each instance's own token, so per-user Slack instances credit their own bot rather than a stale shared value.
 *   **Pool — double-reply on first turn**: The injected origin-context turn is now deferred until after the first user message lands, preventing the agent from being spawned early and producing a duplicate reply (affected Slack, Telegram, and REST sessions).
 *   **`MapToStruct` — bool config fields**: Reflected config loading no longer panics when boolean fields are absent from the stored JSON.
+*   **Projects — Centralized Visibility Filter**: Admins can view all projects; other users see their own, untagged-shared, and tag-shared projects. Channel default-project dropdowns now list only accessible projects.
+*   **Sessions — Owner Stamping**: Session owner is now stamped once upon creation, not on every message, optimizing performance.
 
 ### Fixed
 
 *   **PWA service worker — pending-hang on boot**: Static assets (`/sw.js`, `/public/*`, `/modules/*`) are now exempt from the boot gate. Previously, an already-installed service worker would intercept these asset fetches on a reload while boot was still in progress; the gate held every request, leaving `app.css`, `icon.svg`, and similar files stuck at "pending" until the boot restore finished. Because these paths are served from `embed.FS` and depend on nothing the boot gate sets up, exempting them lets the SW resolve its cache immediately regardless of boot state.
-*   **PWA service worker — stale-while-revalidate and navigation fetch hang**: Added an 8-second `AbortController` timeout to both the SWR background refresh and the network-first navigation path. Without it, a stalled TCP connection (dead keep-alive socket, momentarily busy server) left `fetch()` hanging indefinitely with no error, so the asset or page never settled — visible as an asset or navigation stuck at "pending" forever. The timeout converts the stall into a rejection, allowing the SW to fall back to cache or surface a real network error instead.
+*   **PWA service worker — stale-while-revalidate and navigation fetch hang**: Added an 8-second `AbortController` timeout to both the SWR background refresh and the network-first navigation path. Without it, a stalled TCP connection (dead keep-alive socket, momentarily busy server) left `fetch()` hanging indefinitely with no error, so the asset or page never settled — visible as an asset or navigation stuck at "pending" forever. The timeout converts the stall into a rejection, allowing the SW to fall back to cache or surface a real network error instead. The SWR background refresh is now kept alive past `respondWith` via `waitUntil`.
+*   **Software Update page — Changelog rendering**: Fixed an issue where the "What's new" changelog rendered as raw Markdown due to a missing `/public/lib/wick-markdown.js` asset.
 
 ### Changed
 
@@ -29,9 +40,10 @@ All notable changes to Wick are documented here.
 
 ### Removed
 
-*   **Admin — Software Update page — Commit row**: The **Commit** field has been removed from the Version panel. Build time is now always available (see above) and more meaningful to end-users; the commit SHA is a build-internals detail not useful at the operator level.
+*   **Admin — Software Update page — Commit row**: The **Commit** field has been removed from the Version panel. Build time is now always available (see above) and more meaningful to end-users; the commit SHA is a build-internals detail not useful at the operator level. The version fields on the Software Update page are now grouped as Application / Wick / Runtime.
 
 ---
+
 
 ## [v0.24.1](https://github.com/yogasw/wick/compare/v0.24.0...v0.24.1) — MCP & Connectors
 
