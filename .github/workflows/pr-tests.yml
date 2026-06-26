@@ -1,17 +1,22 @@
 name: PR Tests
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    branches-ignore:
-      - release
-    paths:
-      - '**.go'
-      - '**.templ'
-      - 'go.mod'
-      - 'go.sum'
-      - 'fe/**'
-      - '.github/workflows/pr-tests.yml'
+  # Auto-run on every PR is DISABLED — the mandatory test gate moved to
+  # local pre-push (.githooks/pre-push) + the release pipeline. Kept as a
+  # manual escape hatch (run from the Actions tab). To re-enable per-PR CI,
+  # delete workflow_dispatch and uncomment the pull_request block below.
+  workflow_dispatch:
+  # pull_request:
+  #   types: [opened, synchronize, reopened]
+  #   branches-ignore:
+  #     - release
+  #   paths:
+  #     - '**.go'
+  #     - '**.templ'
+  #     - 'go.mod'
+  #     - 'go.sum'
+  #     - 'fe/**'
+  #     - '.github/workflows/pr-tests.yml'
 
 jobs:
   # Detect which area changed so the Go and FE jobs only run when their

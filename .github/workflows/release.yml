@@ -77,6 +77,52 @@ jobs:
 
             console.log("PR author is authorized. Proceeding with release.");
 
+  unit-tests:
+    name: Go Unit Tests
+    needs: check-source-branch
+    if: needs.check-source-branch.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        id: go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Resolve templ version from go.mod
+        id: templ
+        run: echo "version=$(go list -m -f '{{.Version}}' github.com/a-h/templ)" >> $GITHUB_OUTPUT
+
+      - name: Install templ (version pinned to go.mod)
+        run: |
+          echo "Using templ ${{ steps.templ.outputs.version }}"
+          go install github.com/a-h/templ/cmd/templ@${{ steps.templ.outputs.version }}
+
+      - name: Generate templ files
+        run: templ generate ./...
+
+      - name: Build
+        run: go build ./internal/... ./cmd/... ./pkg/...
+
+      # Per-PR CI is disabled, so the release pipeline is the CI gate: run
+      # the full suite (with -race) before anything gets tagged or released.
+      - name: Run unit tests
+        run: go test -count=1 -timeout 10m ./internal/... ./cmd/... ./pkg/...
+
+      - name: Run race detector (full suite)
+        run: go test -race -count=1 -timeout 15m ./internal/... ./cmd/... ./pkg/...
+
   prepare:
     name: Prepare Release
     needs: check-source-branch
@@ -288,7 +334,9 @@ jobs:
 
   sync-and-tag:
     name: Sync Docs and Tag
-    needs: [prepare, generate-summary]
+    # unit-tests is a hard gate — nothing gets tagged unless the full suite
+    # passes (per-PR CI is disabled, so this is the only automated check).
+    needs: [prepare, generate-summary, unit-tests]
     runs-on: ubuntu-latest
 
     permissions:
