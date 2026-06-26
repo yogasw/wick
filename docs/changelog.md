@@ -6,7 +6,13 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **CLI — `wick upgrade --yes` / `-y` flag**: Pass `-y` to skip all confirmation prompts (CLI binary, go.mod dep, Dockerfile) and run the upgrade non-interactively. Useful in scripts or CI pipelines.
+
+### Changed
+
+*   **CLI — `wick upgrade` no longer auto-starts dev server**: After upgrading, wick exits cleanly instead of launching the `dev` task. Start the dev server manually with `wick dev` if needed.
 
 ---
 
