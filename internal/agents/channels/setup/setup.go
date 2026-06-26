@@ -99,6 +99,7 @@ func Slack(reg *agentchannels.Registry, store SlackStore, sendFn agentchannels.S
 		ch.SetSendFunc(sendFn)
 		ch.SetPublicURL(pubURL)
 		key := instanceKey("slack", ownerID)
+		ch.SetSessionPrefix(key + ":")
 		src := agentslack.NewConfigSourceKeyed(store, ch, uid)
 		reg.AddKeyed(key, ch, src)
 		if ch.IsConfigured() {
@@ -164,6 +165,7 @@ func Telegram(reg *agentchannels.Registry, store TelegramStore, sendFn agentchan
 		ch := agenttelegram.NewWithOwner(cfg, uid)
 		ch.SetSendFunc(sendFn)
 		key := instanceKey("telegram", ownerID)
+		ch.SetSessionPrefix(key + ":")
 		src := agenttelegram.NewConfigSourceKeyed(store, ch, uid)
 		reg.AddKeyed(key, ch, src)
 		if ch.IsConfigured() {
