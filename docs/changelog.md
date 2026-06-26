@@ -6,7 +6,15 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+*   **Channels — multi-bot session isolation (Slack / Telegram / REST)**: Two bot instances (e.g. two per-user Slack bots, even across different Slack workspaces) that happen to share the same thread timestamp, conversation key, or chat ID no longer collide on the same wick session. Each per-user channel instance now namespaces its session ID by its registry key, so pool sessions, on-disk session directories, and reply routing are isolated per instance. **Note:** existing Slack, Telegram, and REST sessions get a one-time context reset after upgrading — the new session IDs don't match the old ones, so the next message starts a fresh context.
+
+*   **Channels — HTTP route fan-in for multi-instance bots**: When multiple per-user channel instances expose the same HTTP webhook path (e.g. two Slack bots both mounting `/integrations/slack/send`), requests are now fanned into the correct instance rather than the previous last-write-wins behaviour that silently dropped all but one instance.
+
+### Improved
+
+*   **Slack — "is thinking…" banner heartbeat**: The assistant-status banner (`is thinking…`) is now re-asserted every 45 seconds during long tool-use turns. Slack auto-clears the status after ~2 minutes of inactivity, so without the heartbeat the banner would vanish mid-run on slow tool chains. The heartbeat stops automatically on `done` / `error`.
 
 ---
 
