@@ -138,12 +138,14 @@ func (c *Channel) handleResponses(w http.ResponseWriter, r *http.Request) {
 	)
 	switch {
 	case strings.TrimSpace(req.PreviousResponseID) != "":
+		// The resp_ id round-trips the full "<scope>-<key>" tail, so the
+		// user-namespace is already baked in — just re-prefix.
 		base := strings.TrimPrefix(strings.TrimSpace(req.PreviousResponseID), responsesIDPrefix)
 		sessionID = "rest-" + base
 		reused = true
 	default:
 		if key := resolveConversation(req.Conversation, req.Metadata); key != "" {
-			sessionID = "rest-" + key
+			sessionID = restSessionID(userID, key)
 			reused = true
 		} else {
 			sessionID = "rest-" + uuid.NewString()

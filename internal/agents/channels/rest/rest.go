@@ -23,6 +23,8 @@ package rest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -319,7 +321,10 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		sessionID = "rest-" + uuid.NewString()
 	} else {
 		prompt = lastUserMessage(req.Messages)
-		sessionID = "rest-" + explicitSession
+		// Namespace the client-chosen conversation key by the authenticated
+		// user so two callers (different tokens/owners) reusing the same
+		// conversation string never collide on one pool session.
+		sessionID = restSessionID(userID, explicitSession)
 		reused = true
 	}
 	if strings.TrimSpace(prompt) == "" {
@@ -354,6 +359,26 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// restSessionID builds the internal wick session id for a client-chosen
+// conversation key, namespaced by the authenticated user so two callers
+// (different PATs/owners) reusing the same conversation string never
+// collide on one pool session.
+//
+// Form: "rest-<scope>-<key>" where scope is the first 8 hex chars of
+// sha256(userID). The "<scope>-<key>" tail round-trips opaquely in the
+// client-facing id (resp_<tail> / chat completion id), so previous_response_id
+// chaining and conversation reuse keep working for the same authenticated
+// user without leaking the raw user id. Empty userID → no scope, preserving
+// the legacy single-owner id form ("rest-<key>").
+func restSessionID(userID, key string) string {
+	if strings.TrimSpace(userID) == "" {
+		return "rest-" + key
+	}
+	sum := sha256.Sum256([]byte(userID))
+	scope := hex.EncodeToString(sum[:])[:8]
+	return "rest-" + scope + "-" + key
 }
 
 // resolveConversation picks the conversation key from the explicit

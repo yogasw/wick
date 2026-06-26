@@ -41,19 +41,22 @@ func TestIsTextArtifactExt(t *testing.T) {
 }
 
 func TestResolveWithinCwd(t *testing.T) {
-	cwd := "/sess/cwd"
-	rel, ok := resolveWithinCwd(cwd, "/sess/cwd/sub/a.png")
+	// Build absolute paths with filepath so the test is valid on Windows too
+	// ("/sess/cwd" is NOT absolute on Windows — it needs a drive letter).
+	cwd := filepath.Join(t.TempDir(), "sess", "cwd")
+	rel, ok := resolveWithinCwd(cwd, filepath.Join(cwd, "sub", "a.png"))
 	if !ok || rel != "sub/a.png" {
 		t.Fatalf("abs inside: rel=%q ok=%v", rel, ok)
 	}
-	rel, ok = resolveWithinCwd(cwd, "sub/b.png")
+	rel, ok = resolveWithinCwd(cwd, filepath.Join("sub", "b.png"))
 	if !ok || rel != "sub/b.png" {
 		t.Fatalf("relative: rel=%q ok=%v", rel, ok)
 	}
-	if _, ok := resolveWithinCwd(cwd, "/etc/passwd"); ok {
+	outside := filepath.Join(t.TempDir(), "etc", "passwd")
+	if _, ok := resolveWithinCwd(cwd, outside); ok {
 		t.Fatal("outside cwd must be rejected")
 	}
-	if _, ok := resolveWithinCwd(cwd, "../escape"); ok {
+	if _, ok := resolveWithinCwd(cwd, filepath.Join("..", "escape")); ok {
 		t.Fatal("traversal must be rejected")
 	}
 }
@@ -81,13 +84,21 @@ func TestDeriveArtifacts(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(cwd, "chart.png"), []byte("\x89PNG"), 0o644)
 	_ = os.WriteFile(filepath.Join(cwd, "main.go"), []byte("package x"), 0o644)
 
+	// Marshal the tool input so Windows paths (which contain backslashes)
+	// are JSON-escaped correctly — a raw concat produces invalid JSON like
+	// {"file_path":"C:\Users\..."} and deriveArtifacts silently drops it.
+	toolInput := func(path string) string {
+		b, _ := json.Marshal(map[string]string{"file_path": path})
+		return string(b)
+	}
 	idx := agentstore.TurnTraceIndex{
 		TurnID: tid,
 		Events: []agentstore.TurnEventIndex{
-			{Type: "tool_use", ToolName: "Write", ToolInput: `{"file_path":"` + filepath.Join(cwd, "chart.svg") + `","content":"<svg/>"}`},
-			{Type: "tool_use", ToolName: "Read", ToolInput: `{"file_path":"` + filepath.Join(cwd, "chart.png") + `"}`},
-			{Type: "tool_use", ToolName: "Read", ToolInput: `{"file_path":"` + filepath.Join(cwd, "main.go") + `"}`},
-			{Type: "tool_use", ToolName: "Read", ToolInput: `{"file_path":"/etc/passwd"}`},
+			{Type: "tool_use", ToolName: "Write", ToolInput: toolInput(filepath.Join(cwd, "chart.svg"))},
+			{Type: "tool_use", ToolName: "Read", ToolInput: toolInput(filepath.Join(cwd, "chart.png"))},
+			{Type: "tool_use", ToolName: "Read", ToolInput: toolInput(filepath.Join(cwd, "main.go"))},
+			// Absolute path outside cwd — must be rejected by resolveWithinCwd.
+			{Type: "tool_use", ToolName: "Read", ToolInput: toolInput(filepath.Join(t.TempDir(), "passwd"))},
 		},
 	}
 	writeJSON(t, layout.SessionThinking(sid, tid), idx)

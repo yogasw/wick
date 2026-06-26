@@ -261,18 +261,71 @@ func (r *Registry) Channels() []Channel {
 	return out
 }
 
+// candidate pairs an HTTP handler with the channel instance that produced
+// it, so a fan-in dispatcher can ask the instance whether a request is
+// destined for it (RequestRouter).
+type candidate struct {
+	ch Channel
+	h  http.Handler
+}
+
 // HTTPHandlers returns the webhook handlers exposed by channels that
 // implement HTTPHandlerProvider. Caller mounts them on the public mux.
+//
+// When several keyed instances of the same channel type expose the same
+// route (e.g. two per-user Slack bots both mounting
+// /integrations/slack/send), they are merged into one fan-in dispatcher
+// instead of the previous last-write-wins map merge — which silently
+// dropped every instance but the last. The dispatcher routes each request
+// to the instance that claims it via RequestRouter.OwnsRequest, falling
+// back to the first registered instance when none claims it.
 func (r *Registry) HTTPHandlers() map[string]http.Handler {
-	out := map[string]http.Handler{}
+	byPath := map[string][]candidate{}
 	for _, c := range r.Channels() {
 		if h, ok := c.(MultiHTTPHandlerProvider); ok {
-			maps.Copy(out, h.HTTPHandlers())
+			for path, hh := range h.HTTPHandlers() {
+				byPath[path] = append(byPath[path], candidate{ch: c, h: hh})
+			}
 		} else if h, ok := c.(HTTPHandlerProvider); ok {
-			out[h.HTTPPath()] = h.HTTPHandler()
+			byPath[h.HTTPPath()] = append(byPath[h.HTTPPath()], candidate{ch: c, h: h.HTTPHandler()})
 		}
 	}
+
+	out := make(map[string]http.Handler, len(byPath))
+	for path, cands := range byPath {
+		if len(cands) == 1 {
+			out[path] = cands[0].h
+			continue
+		}
+		log.Info().Str("path", path).Int("instances", len(cands)).
+			Msg("multiple channel instances on one route; mounting fan-in dispatcher")
+		out[path] = fanInHandler(cands)
+	}
 	return out
+}
+
+// fanInHandler routes a request to the first candidate whose channel
+// claims it via RequestRouter.OwnsRequest. Candidates that do not
+// implement RequestRouter (or when none claim) act as a fallback: the
+// first such candidate, else the first candidate overall, serves it.
+func fanInHandler(cands []candidate) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		for _, c := range cands {
+			if rr, ok := c.ch.(RequestRouter); ok && rr.OwnsRequest(req) {
+				c.h.ServeHTTP(w, req)
+				return
+			}
+		}
+		// No instance explicitly claimed it — fall back to the first
+		// non-RequestRouter (catch-all) instance, else the first overall.
+		for _, c := range cands {
+			if _, ok := c.ch.(RequestRouter); !ok {
+				c.h.ServeHTTP(w, req)
+				return
+			}
+		}
+		cands[0].h.ServeHTTP(w, req)
+	})
 }
 
 // StartAll starts every configured channel in its own goroutine.

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Bridge hook — see .githooks/post-commit. Delegates to graphify's own
+# post-checkout in .git/hooks/ when graphify is installed; no-ops otherwise.
+
+LOCAL_HOOK="$(git rev-parse --git-dir 2>/dev/null)/hooks/post-checkout"
+[ -x "$LOCAL_HOOK" ] && exec "$LOCAL_HOOK" "$@"
+exit 0

@@ -57,6 +57,23 @@ func (s *Channel) SetWickUserIDFn(fn WickUserIDFn) {
 	s.cfgMu.Unlock()
 }
 
+// OwnsRequest satisfies channels.RequestRouter. When multiple Slack bots
+// share the /integrations/slack/send route, the agent's proxy call carries
+// X-Wick-Session-Id (the namespaced session key, e.g. "slack:<owner>:<ts>");
+// this instance claims the request when that id starts with its own
+// sessionPrefix. Requests without the header are left unclaimed so the
+// registry's fallback (first/App-Owner instance) serves them.
+func (s *Channel) OwnsRequest(r *http.Request) bool {
+	s.cfgMu.Lock()
+	prefix := s.sessionPrefix
+	s.cfgMu.Unlock()
+	sid := r.Header.Get("X-Wick-Session-Id")
+	if sid == "" || prefix == "" {
+		return false
+	}
+	return strings.HasPrefix(sid, prefix)
+}
+
 // sendHandler returns an http.Handler for the local agent send proxy.
 // It accepts JSON {"channel_id","text","sender_user_id"?} from localhost
 // and posts to Slack using wick's own authenticated client — no bot token

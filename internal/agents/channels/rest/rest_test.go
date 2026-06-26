@@ -396,10 +396,11 @@ func TestChatCompletions_StatefulSessionReuse(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
+	wantSession := restSessionID("user-1", "abc")
 	var systemCalls, userCalls int
 	for _, c := range *captured {
-		if c.SessionID != "rest-abc" {
-			t.Errorf("sessionID drift: %q", c.SessionID)
+		if c.SessionID != wantSession {
+			t.Errorf("sessionID drift: %q want %q", c.SessionID, wantSession)
 		}
 		switch c.Role {
 		case "system":
@@ -521,7 +522,7 @@ func TestChatCompletions_ConversationFieldKeysSession(t *testing.T) {
 	if userCall == nil {
 		t.Fatal("no user-role dispatch captured")
 	}
-	want := "rest-e54e13b7e6774a89b64341963335c2a7"
+	want := restSessionID("user-1", "e54e13b7e6774a89b64341963335c2a7")
 	if userCall.SessionID != want {
 		t.Errorf("sessionID=%q want %q (conversation field not routed)", userCall.SessionID, want)
 	}
@@ -552,16 +553,18 @@ func TestResponses_ConversationFieldKeysSession(t *testing.T) {
 	if userCall == nil {
 		t.Fatal("no user-role dispatch captured")
 	}
-	want := "rest-e54e13b7e6774a89b64341963335c2a7"
+	want := restSessionID("user-1", "e54e13b7e6774a89b64341963335c2a7")
 	if userCall.SessionID != want {
 		t.Errorf("sessionID=%q want %q", userCall.SessionID, want)
 	}
-	// Response id should echo the same base so callers can chain via
-	// previous_response_id or just keep sending the same conversation.
+	// Response id should echo the namespaced base (scope-key) so the same
+	// authenticated caller can chain via previous_response_id or keep
+	// sending the same conversation. The scope is opaque to the client.
 	var body responsesResponse
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
-	if body.ID != "resp_e54e13b7e6774a89b64341963335c2a7" {
-		t.Errorf("response id=%q want resp_<conversation>", body.ID)
+	wantID := responsesIDPrefix + strings.TrimPrefix(want, "rest-")
+	if body.ID != wantID {
+		t.Errorf("response id=%q want %q", body.ID, wantID)
 	}
 }
 
@@ -702,7 +705,7 @@ func TestChatCompletions_ParallelDistinctSessions(t *testing.T) {
 		if code != 200 {
 			t.Errorf("request %d: code=%d", i, code)
 		}
-		want := "reply-for-rest-s-" + string(rune('a'+i))
+		want := "reply-for-" + restSessionID("u", "s-"+string(rune('a'+i)))
 		if results[i] != want {
 			t.Errorf("request %d: reply=%q want %q (cross-session contamination?)", i, results[i], want)
 		}

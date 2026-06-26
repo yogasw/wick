@@ -10,6 +10,22 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.25.1](https://github.com/yogasw/wick/compare/v0.25.0...v0.25.1) — Multi-Bot Channels
+
+_Released on 2026-06-26_
+
+### Fixed
+
+*   **Channels — multi-bot session isolation (Slack / Telegram / REST)**: Two bot instances (e.g., two per-user Slack bots, even across different Slack workspaces) that happen to share the same thread timestamp, conversation key, or chat ID no longer collide on the same wick session. Each per-user channel instance now namespaces its session ID by its registry key (e.g., Slack/Telegram sessions are prefixed with `slack:<owner>:<threadTS>`, and REST conversations use a hash of the authenticated user) to isolate pool sessions, on-disk session directories, and reply routing. **Note:** Existing Slack, Telegram, and REST sessions will experience a one-time context reset after upgrading, as the new session IDs will not match the old ones, causing the next message to start a fresh context.
+*   **Channels — HTTP route fan-in for multi-instance bots**: When multiple per-user channel instances expose the same HTTP webhook path (e.g., two Slack bots both mounting `/integrations/slack/send`), requests are now fanned into the correct instance via `RequestRouter.OwnsRequest` rather than the previous last-write-wins behavior that silently dropped all but one instance.
+
+### Improved
+
+*   **Slack — "is thinking…" banner heartbeat**: The assistant-status banner (`is thinking…`) is now re-asserted every 45 seconds during long tool-use turns (with an immediate refresh on `ToolUse` or `ToolResult` events). Slack auto-clears the status after approximately 2 minutes of inactivity, so without the heartbeat the banner would vanish mid-run on slow tool chains. The heartbeat stops automatically on `done` / `error` or when a turn is superseded.
+
+---
+
+
 ## [v0.25.0](https://github.com/yogasw/wick/compare/v0.24.1...v0.25.0) — Platform Updates
 
 _Released on 2026-06-25_
