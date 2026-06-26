@@ -3,10 +3,23 @@ package setup
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
 )
+
+// setTestHome points os.UserHomeDir() at dir. Windows reads USERPROFILE,
+// other OSes read HOME — setting only HOME leaves Windows reading the real
+// home, so skillsForProvider would scan the actual ~/.claude skills.
+func setTestHome(t *testing.T, dir string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", dir)
+	} else {
+		t.Setenv("HOME", dir)
+	}
+}
 
 func writeSkillFixture(t *testing.T, home, providerDir, name string) {
 	t.Helper()
@@ -30,7 +43,7 @@ func skillNames(skills []provider.Skill) map[string]bool {
 
 func TestSkillsForProvider_ListsSkillInProviderDir(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	writeSkillFixture(t, home, ".claude", "bitbucket-pr-review")
 
 	names := skillNames(skillsForProvider("claude"))
@@ -41,7 +54,7 @@ func TestSkillsForProvider_ListsSkillInProviderDir(t *testing.T) {
 
 func TestSkillsForProvider_SharedAgentsSkillVisible(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	writeSkillFixture(t, home, ".agents", "shared-skill")
 
 	names := skillNames(skillsForProvider("claude"))
@@ -52,7 +65,7 @@ func TestSkillsForProvider_SharedAgentsSkillVisible(t *testing.T) {
 
 func TestSkillsForProvider_OtherProviderSkillExcluded(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	writeSkillFixture(t, home, ".codex", "codex-only")
 
 	names := skillNames(skillsForProvider("claude"))
