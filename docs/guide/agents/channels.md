@@ -111,7 +111,7 @@ The bot uses reactions only for states the operator can't see anywhere else. Que
 
 ### Progress banner (assistant threads)
 
-When the workspace has Slack AI features enabled and the bot holds the `chat:write` scope, wick also calls [`assistant.threads.setStatus`](https://api.slack.com/methods/assistant.threads.setStatus) to render an "is thinking…" banner above the input. The banner is cleared on `done` / `blocked` / `error`. Workspaces without AI features get a one-line debug log and rely on the reaction emoji alone.
+When the workspace has Slack AI features enabled and the bot holds the `chat:write` scope, wick also calls [`assistant.threads.setStatus`](https://api.slack.com/methods/assistant.threads.setStatus) to render an "is thinking…" banner above the input. The banner is cleared on `done` / `blocked` / `error`. Because Slack auto-clears the status after ~2 minutes of inactivity, wick re-asserts it every 45 seconds during long tool-use turns so the banner stays visible throughout multi-step runs. Workspaces without AI features get a one-line debug log and rely on the reaction emoji alone.
 
 ### Chunked reply
 

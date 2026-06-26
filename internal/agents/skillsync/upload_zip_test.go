@@ -5,8 +5,22 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+// setTestHome points os.UserHomeDir() at dir for the duration of the test.
+// os.UserHomeDir reads USERPROFILE on Windows and HOME elsewhere, so set the
+// right one per-OS — setting only HOME makes these tests pass on Linux/macOS
+// but resolve to the real home on Windows.
+func setTestHome(t *testing.T, dir string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", dir)
+	} else {
+		t.Setenv("HOME", dir)
+	}
+}
 
 type zipEntry struct {
 	name string
@@ -211,7 +225,7 @@ func TestPlanZipExtraction_NoMetadataFallbackMultiRoot(t *testing.T) {
 
 func TestUploadProcessed_ZipImportsToClaudeSkills(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	if err := os.MkdirAll(filepath.Join(home, ".claude", "skills"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -237,7 +251,7 @@ func TestUploadProcessed_ZipImportsToClaudeSkills(t *testing.T) {
 
 func TestUploadProcessed_CreatesDefaultDirWhenNoneExist(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	folder, res, err := UploadProcessed("notes.md", []byte("hello"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
