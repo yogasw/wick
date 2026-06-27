@@ -77,6 +77,19 @@ type SystemPageData struct {
 	ChangelogURL  string // link to the full changelog (site or GitHub releases)
 	Error         string // last error, if any
 	AutoUpdate    bool   // auto-update toggle state
+
+	// Wick framework update state (non-official builds). Sourced from the
+	// background version cache — the public wick repo is always checkable,
+	// independent of whether THIS app set a release source. Rendered
+	// server-side at first paint, so no live fetch on load. On official
+	// builds these go unused (app == framework; the app fields above carry
+	// the framework's update state too).
+	WickUpdateKnown bool   // a wick version check has resolved
+	WickUpdate      bool   // a newer wick framework release exists
+	WickLatest      string // latest wick release tag
+	WickNotes       string // wick changelog (current→latest), markdown
+	WickPublishedAt string // latest wick release date (RFC3339)
+	WickChangelogURL string // full wick changelog link
 }
 
 // SystemPage renders version info, the update controls (Check →
@@ -95,13 +108,13 @@ templ SystemPage(d SystemPageData, user *entity.User) {
 			<h1 class="mt-2 text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Software Update</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Check for a new release, download it, and restart the service to apply. The service re-execs in place — running sessions reconnect once it's back.</p>
 			<div class="mt-6 flex flex-col gap-4">
+				@autoUpdateCard(d)
 				@versionCard(d)
 				if d.Configured {
 					@updateCard(d)
 				} else {
 					@notConfiguredCard()
 				}
-				@autoUpdateCard(d)
 			</div>
 		</main>
 		// Shared markdown renderer (built from fe/common/md, served from the
@@ -128,6 +141,22 @@ templ versionCard(d SystemPageData) {
 		<dl class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
 			@wickVersionRow(d)
 		</dl>
+		// What's new for the wick framework — the changelog between the
+		// embedded version and the latest public release. Only on NON-official
+		// builds with an actual update (on official, app == framework, so the
+		// update card's own "What's new" covers it). Rendered SERVER-SIDE from
+		// the background version cache — no live fetch on load; the markdown is
+		// rendered to HTML client-side via WickMarkdown for nice formatting.
+		if !d.IsOfficial && d.WickUpdate && d.WickNotes != "" {
+			<div class="mt-4 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
+				<p class="text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">What's new</p>
+				<p class="mt-1 text-sm font-medium text-black-900 dark:text-white-100">{ wickNotesHeadline(d) }</p>
+				<div id="sys-wick-notes-body" class="mt-2 max-h-64 overflow-auto break-words text-sm text-black-800 dark:text-black-600">{ d.WickNotes }</div>
+				if d.WickChangelogURL != "" {
+					<a href={ templ.SafeURL(d.WickChangelogURL) } target="_blank" rel="noopener" class="mt-3 inline-block text-xs font-medium text-green-600 dark:text-green-400 hover:underline">View full changelog →</a>
+				}
+			</div>
+		}
 		<p class="mt-5 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Runtime</p>
 		<dl class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
 			@versionRow("Access", orDash(d.AccessType), "")
@@ -146,6 +175,17 @@ func showNotes(d SystemPageData) bool {
 // showNoAsset reports whether the "no build for your platform" banner
 // should render at first paint.
 func showNoAsset(d SystemPageData) bool { return d.Phase == "no-asset" }
+
+// wickNotesHeadline is the "vWick → vLatest · Released <date>" line above
+// the wick framework changelog (downstream builds). Mirrors notesHeadline
+// but for the wick row's cached check.
+func wickNotesHeadline(d SystemPageData) string {
+	head := orDash(d.WickVersion) + " → " + orDash(d.WickLatest)
+	if dt := fmtReleaseDate(d.WickPublishedAt); dt != "" {
+		head += " · Released " + dt
+	}
+	return head
+}
 
 // notesHeadline is the "vCurrent → vLatest · Released <date>" line above
 // the release notes. Falls back gracefully when a field is missing.
@@ -214,25 +254,52 @@ templ appVersionRow(d SystemPageData) {
 	</div>
 }
 
-// wickVersionRow shows the embedded wick framework version. For the
-// official build (wick-agent), app and framework are one codebase and
-// one release, so the framework moves with the app — we reuse the same
-// update badge. For a downstream app built against wick, the framework
-// version is whatever it bundled; its "latest" isn't tracked by the
-// app's release repo, so we show it plain with a "bundled" note instead
-// of a misleading update badge.
+// wickVersionRow shows the embedded wick framework version with a
+// latest-check badge. The wick framework lives in a PUBLIC repo, so its
+// version is always checkable against the latest release — independent of
+// whether THIS app set its own release source. On the OFFICIAL build app
+// == framework, so the badge tracks the app's own update state via SSE
+// (#sys-wick-badge, live-filled). On a DOWNSTREAM build the badge is
+// rendered server-side from the background version cache (no live fetch),
+// plus a "bundled" note clarifying the framework version is whatever this
+// build embedded, not the app's own release.
 templ wickVersionRow(d SystemPageData) {
 	<div class="flex flex-col gap-0.5">
 		<dt class="text-xs text-black-700 dark:text-black-600">Wick version</dt>
 		<dd class="flex flex-wrap items-center gap-2">
 			<span class="font-mono text-sm text-black-900 dark:text-white-100">{ orDash(d.WickVersion) }</span>
 			if d.IsOfficial {
-				<span id="sys-wick-badge" class={ updateBadgeClass(d), templ.KV("hidden", updateBadgeText(d) == "") }>{ updateBadgeText(d) }</span>
+				<span id="sys-wick-badge" class="hidden"></span>
 			} else {
+				if d.WickUpdateKnown {
+					<span class={ wickBadgeClass(d.WickUpdate) }>{ wickBadgeText(d) }</span>
+				}
 				<span class="rounded-full bg-white-200 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">bundled</span>
 			}
 		</dd>
 	</div>
+}
+
+// wickBadgeText: "Update available → vX" when a newer wick release
+// exists, else "Latest". For the downstream (non-official) wick row,
+// rendered server-side from the cached check.
+func wickBadgeText(d SystemPageData) string {
+	if d.WickUpdate {
+		if d.WickLatest != "" {
+			return "Update available → " + d.WickLatest
+		}
+		return "Update available"
+	}
+	return "Latest"
+}
+
+// wickBadgeClass: amber for an available wick update, green for current.
+func wickBadgeClass(update bool) string {
+	base := "rounded-full px-2 py-0.5 text-xs font-medium "
+	if update {
+		return base + "bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+	}
+	return base + "bg-pos-100 text-pos-400"
 }
 
 // updateBadgeText returns the badge label for the current phase, or ""
@@ -379,6 +446,12 @@ templ autoUpdateCard(d SystemPageData) {
 // POSTs then swaps to the restarting panel and polls /health (comparing
 // the reported version to currentVersion) before reloading. Vanilla JS,
 // self-contained like the boot-gate page.
+//
+// The wick-framework version row + "What's new" are rendered SERVER-SIDE
+// from the background version cache (no live fetch). On the official build
+// app == framework, so the app updater's SSE also drives the wick badge
+// (#sys-wick-badge, present only on official). On downstream builds that
+// element is absent and the badge/notes are static server-rendered.
 templ systemUpdateScript() {
 	<script type="text/javascript">
 	(function () {
@@ -397,7 +470,13 @@ templ systemUpdateScript() {
 		var notesBody = document.getElementById('sys-notes-body');
 		var noassetWrap = document.getElementById('sys-noasset-wrap');
 		var noassetName = document.getElementById('sys-noasset-name');
-		var wickBadgeEl = document.getElementById('sys-wick-badge'); // present only on official builds
+		// Wick framework badge — present only on the official build, where
+		// it tracks the app's own update state via SSE. On downstream builds
+		// it's server-rendered (static), so this is null and SSE skips it.
+		var wickBadgeEl = document.getElementById('sys-wick-badge');
+		// Server-rendered wick changelog body (downstream builds). Markdown
+		// is rendered to HTML once on load — no fetch.
+		var wickNotesBody = document.getElementById('sys-wick-notes-body');
 
 		function showProgress(show) {
 			if (!wrapEl) return;
@@ -464,6 +543,10 @@ templ systemUpdateScript() {
 		}
 		function renderBadge(st) {
 			applyBadge(badgeEl, st);
+			// On the official build app and framework move together, so the
+			// app updater's SSE drives the wick badge too. #sys-wick-badge
+			// exists ONLY on official builds (downstream renders it static
+			// server-side), so this is a safe no-op elsewhere.
 			applyBadge(wickBadgeEl, st);
 		}
 		function render(st) {
@@ -536,6 +619,14 @@ templ systemUpdateScript() {
 				triggerCheck();
 			}
 		}, 800);
+
+		// Downstream wick "What's new" is server-rendered from the version
+		// cache; its body holds raw changelog markdown. Render it to HTML
+		// once on load for nice formatting (content is trusted — our own
+		// changelog site; renderMarkdown escapes text + emits safe links).
+		if (wickNotesBody && window.WickMarkdown && window.WickMarkdown.renderMarkdown) {
+			wickNotesBody.innerHTML = window.WickMarkdown.renderMarkdown(wickNotesBody.textContent);
+		}
 
 		// Poll /health until the restarted service answers, then reload.
 		// The restart drops this connection first, so the first OK response
