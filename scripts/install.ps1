@@ -38,10 +38,40 @@ function Start-Agent {
   }
 }
 
-$Tag = if ($env:VERSION -and $env:VERSION -ne 'latest') {
-  $env:VERSION
+if ($env:VERSION -and $env:VERSION -ne 'latest') {
+  $Tag = $env:VERSION
 } else {
-  (Invoke-RestMethod -Headers $Headers "https://api.github.com/repos/$Repo/releases/latest").tag_name
+  $ApiUrl = "https://api.github.com/repos/$Repo/releases/latest"
+  try {
+    $Tag = (Invoke-RestMethod -Headers $Headers $ApiUrl).tag_name
+  } catch {
+    # Surface GitHub's own reason (rate limit / not found) instead of a
+    # bare "could not resolve". The JSON body lives on the HTTP error
+    # response stream, which Invoke-RestMethod doesn't expose directly.
+    $resp = $_.Exception.Response
+    $code = if ($resp) { [int]$resp.StatusCode } else { 0 }
+    $ghMsg = $null
+    if ($resp) {
+      try {
+        $reader = New-Object IO.StreamReader($resp.GetResponseStream())
+        $raw = $reader.ReadToEnd()
+        $ghMsg = ($raw | ConvertFrom-Json).message
+      } catch {}
+    }
+    Write-Host "could not resolve latest tag for $Repo" -ForegroundColor Red
+    if ($code) { Write-Host "  GitHub API responded HTTP $code" }
+    if ($ghMsg) { Write-Host "    $ghMsg" }
+    if ($code -eq 403 -or $code -eq 429) {
+      $self = 'https://yogasw.github.io/wick/install.ps1'
+      Write-Host ""
+      Write-Host "  This is GitHub's unauthenticated API limit (60 req/hr per IP)."
+      Write-Host "  Fix it one of these ways:"
+      Write-Host "    * pass a token : `$env:TOKEN='ghp_xxx'; iwr -useb $self | iex"
+      Write-Host "    * pin a version: `$env:VERSION='vX.Y.Z'; iwr -useb $self | iex  (skips the API)"
+      Write-Host "    * or just wait for the hourly reset and retry."
+    }
+    throw "aborted: could not resolve latest tag (HTTP $code)"
+  }
 }
 if (-not $Tag) { throw "could not resolve latest tag for $Repo" }
 $Ver = $Tag.TrimStart('v')

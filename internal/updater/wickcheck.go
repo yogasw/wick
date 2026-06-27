@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -78,7 +79,12 @@ func fetchWickLatestRelease(ctx context.Context) (tag, publishedAt string, err e
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("github releases/latest: status %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if isRateLimited(resp) {
+			return "", "", fmt.Errorf("github releases/latest: rate limit (%d): %s — unauthenticated API is capped at 60/hr per IP; retry after %s",
+				resp.StatusCode, githubMessage(body), rateLimitResetHint(resp))
+		}
+		return "", "", fmt.Errorf("github releases/latest: %d: %s", resp.StatusCode, githubMessage(body))
 	}
 	var info struct {
 		TagName     string `json:"tag_name"`
