@@ -1339,12 +1339,20 @@ func NewServer() *Server {
 		log.Warn().Err(err).Msg("web updater init failed — System page update controls disabled")
 	}
 	updCoord := updater.NewCoordinator(upd, releaseAppVersion)
+	// Background-refreshed version cache for the user-menu dropdown. Seeded
+	// with the boot versions now; a goroutine (started in Run) fills the
+	// "latest"/update flags and re-checks periodically, so the dropdown
+	// reads it with zero network cost. App update is only known when the
+	// app's updater is configured; the wick framework (public repo) is
+	// always checkable.
+	verCache := updater.NewVersionCache(updCoord, releaseAppVersion, buildWickVersion)
 	sysCfg := admin.SystemConfig{
-		Coordinator: updCoord,
-		AppName:     updAppName,
-		WickVersion: buildWickVersion,
-		Commit:      buildCommit,
-		BuildTime:   buildTime,
+		Coordinator:  updCoord,
+		VersionCache: verCache,
+		AppName:      updAppName,
+		WickVersion:  buildWickVersion,
+		Commit:       buildCommit,
+		BuildTime:    buildTime,
 	}
 
 	// ── Admin ────────────────────────────────────────────────────
@@ -1522,7 +1530,7 @@ func NewServer() *Server {
 	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
 	r.Handle("/mini-tools", http.HandlerFunc(homeHandler.Launcher))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, verCache: verCache}
 }
 
 type Server struct {
@@ -1541,6 +1549,10 @@ type Server struct {
 	gateBin         string // resolved gate binary path; used for hook cleanup on shutdown
 	jobsSvc         *manager.Service
 	wfMgr           *wfsetup.Manager
+	// verCache holds the background-refreshed version + update snapshot the
+	// user-menu dropdown renders. Run starts its refresh goroutine; the
+	// version middleware injects its snapshot into each request context.
+	verCache *updater.VersionCache
 	// bootGate tracks the async boot steps that must finish before the HTTP
 	// surface opens. Until it lifts, bootGateHandler serves a lightweight
 	// "Booting…" page (HTTP 503, auto refreshing) for every non-exempt
@@ -1575,6 +1587,23 @@ func (s *Server) appNameHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := ui.WithAppName(r.Context(), s.configsSvc.AppName())
 		ctx = ui.WithAppDescription(ctx, s.configsSvc.AppDescription())
+		if s.verCache != nil {
+			snap := s.verCache.Snapshot()
+			ctx = ui.WithVersionInfo(ctx, ui.VersionInfo{
+				AppVersion:      snap.AppVersion,
+				AppDev:          snap.AppDev,
+				AppLatest:       snap.AppLatest,
+				AppUpdate:       snap.AppUpdate,
+				AppUpdateKnown:  snap.AppUpdateKnown,
+				WickVersion:     snap.WickVersion,
+				WickDev:         snap.WickDev,
+				WickLatest:      snap.WickLatest,
+				WickUpdate:      snap.WickUpdate,
+				WickUpdateKnown: snap.WickUpdateKnown,
+				IsOfficial:      snap.IsOfficial,
+				WebURL:          snap.WebURL,
+			})
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -1812,6 +1841,12 @@ func (s *Server) Run(ctx context.Context, port int) error {
 
 	// Start channel listeners and watch for config changes.
 	s.startChannels(ctx)
+
+	// Refresh the user-menu version cache: once on boot, then every 6h.
+	// Lives off the request path so opening the dropdown costs no network.
+	if s.verCache != nil {
+		go s.verCache.Run(ctx, 6*time.Hour)
+	}
 
 	// Admin-defined startup script (e.g. ngrok / cloudflared tunnel).
 	// Lifetime is tied to the server ctx — tray stop or process exit
