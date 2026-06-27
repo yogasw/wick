@@ -6,6 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+*   **`wick_execute` batch mode over SSE/Streamable-HTTP transport**: A `calls: [...]` batch payload sent over the SSE transport was never routed to the batch handler — `sseWickExecute` fell through to the single-call path and rejected the request with "tool_id is required". Batch calls now work correctly over both the stdio and SSE/Streamable-HTTP transports.
+
 ### Improved
 
 *   **Software Update page — single action slot**: The per-phase controls (check button, download progress bar, Apply & restart button, Restarting indicator) are now consolidated into a single top-right action slot that swaps content as the phase changes, replacing the previous stacked layout. The "no build for this platform" notice (including the expected asset name) now appears inline in the status line under the Updates heading rather than as a separate box.
