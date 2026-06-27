@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"regexp"
@@ -16,16 +17,19 @@ import (
 const wickModule = "github.com/yogasw/wick"
 
 func upgradeCmd() *cobra.Command {
-	return &cobra.Command{
+	var yes bool
+	cmd := &cobra.Command{
 		Use:   "upgrade",
-		Short: "Upgrade wick dependency to latest, tidy, then run dev",
+		Short: "Upgrade wick cli binary and go.mod dependency to latest",
 		RunE: func(c *cobra.Command, args []string) error {
-			return runUpgrade()
+			return runUpgrade(yes)
 		},
 	}
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "assume yes to all prompts")
+	return cmd
 }
 
-func runUpgrade() error {
+func runUpgrade(yes bool) error {
 	latest, err := fetchLatestWickVersion()
 	if err != nil {
 		return fmt.Errorf("fetch latest: %w", err)
@@ -52,10 +56,7 @@ func runUpgrade() error {
 	reader := bufio.NewReader(os.Stdin)
 
 	if binStale || binVersion == "dev" {
-		fmt.Printf("upgrade cli binary %s -> %s? [Y/n]: ", binVersion, latest)
-		ans, _ := reader.ReadString('\n')
-		ans = strings.TrimSpace(strings.ToLower(ans))
-		if ans == "" || ans == "y" || ans == "yes" {
+		if confirm(yes, reader, fmt.Sprintf("upgrade cli binary %s -> %s?", binVersion, latest)) {
 			if err := installCLI(latest); err != nil {
 				return err
 			}
@@ -72,10 +73,7 @@ func runUpgrade() error {
 		return nil
 	}
 
-	fmt.Printf("upgrade go.mod dep %s -> %s? [Y/n]: ", depVersion, latest)
-	ans, _ := reader.ReadString('\n')
-	ans = strings.TrimSpace(strings.ToLower(ans))
-	if ans != "" && ans != "y" && ans != "yes" {
+	if !confirm(yes, reader, fmt.Sprintf("upgrade go.mod dep %s -> %s?", depVersion, latest)) {
 		fmt.Println("dep upgrade skipped")
 		return nil
 	}
@@ -87,14 +85,26 @@ func runUpgrade() error {
 		return err
 	}
 
-	upgradeDockerfile(latest, reader)
+	upgradeDockerfile(latest, yes, reader)
 
-	return runTask("dev")
+	return nil
+}
+
+// confirm prompts the user with a [Y/n] question. When yes is true it skips
+// the prompt and returns true. Empty input (just Enter) defaults to yes.
+func confirm(yes bool, reader *bufio.Reader, prompt string) bool {
+	if yes {
+		return true
+	}
+	fmt.Printf("%s [Y/n]: ", prompt)
+	ans, _ := reader.ReadString('\n')
+	ans = strings.TrimSpace(strings.ToLower(ans))
+	return ans == "" || ans == "y" || ans == "yes"
 }
 
 // upgradeDockerfile checks whether a Dockerfile in the current directory
 // references an older wick version and offers to update it.
-func upgradeDockerfile(latest string, reader *bufio.Reader) {
+func upgradeDockerfile(latest string, yes bool, reader *bufio.Reader) {
 	const dockerfileName = "Dockerfile"
 	data, err := os.ReadFile(dockerfileName)
 	if err != nil {
@@ -112,10 +122,7 @@ func upgradeDockerfile(latest string, reader *bufio.Reader) {
 		return
 	}
 
-	fmt.Printf("Dockerfile: wick@%s -> %s? [Y/n]: ", current, latest)
-	ans, _ := reader.ReadString('\n')
-	ans = strings.TrimSpace(strings.ToLower(ans))
-	if ans != "" && ans != "y" && ans != "yes" {
+	if !confirm(yes, reader, fmt.Sprintf("Dockerfile: wick@%s -> %s?", current, latest)) {
 		fmt.Println("Dockerfile upgrade skipped")
 		return
 	}
@@ -215,7 +222,18 @@ func fetchFromGitHub() (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("status %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		msg := githubAPIMessage(body)
+		// 403 with no remaining quota is the unauthenticated rate limit, not
+		// a server fault — surface GitHub's own "...for 1.2.3.4" reason so
+		// the user knows it's their IP's hourly cap, recoverable by waiting
+		// or authenticating. (The go proxy is tried in parallel and usually
+		// covers for this, so this path only bites when both fail.)
+		if (resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0") ||
+			resp.StatusCode == http.StatusTooManyRequests {
+			return "", fmt.Errorf("rate limit (%d): %s — unauthenticated GitHub API is capped at 60/hr per IP", resp.StatusCode, msg)
+		}
+		return "", fmt.Errorf("status %d: %s", resp.StatusCode, msg)
 	}
 	var info struct {
 		TagName string `json:"tag_name"`
@@ -227,6 +245,19 @@ func fetchFromGitHub() (string, error) {
 		return "", fmt.Errorf("empty tag")
 	}
 	return info.TagName, nil
+}
+
+// githubAPIMessage extracts the "message" field from a GitHub API error
+// body (e.g. "API rate limit exceeded for 1.2.3.4"), falling back to the
+// raw trimmed body when it isn't JSON.
+func githubAPIMessage(body []byte) string {
+	var m struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &m); err == nil && m.Message != "" {
+		return m.Message
+	}
+	return strings.TrimSpace(string(body))
 }
 
 // semverGT reports whether a > b for vX.Y.Z strings.

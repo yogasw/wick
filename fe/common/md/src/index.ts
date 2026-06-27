@@ -117,6 +117,18 @@ export function renderMarkdown(text: string): string {
       );
       return;
     }
+    /* An imagecard fence becomes a thumbnail-gallery placeholder; the SPA
+       parses the body (one `url | caption` per line) into hotlinked image
+       cards with a favicon + domain chip, and a click opens the lightbox
+       carousel. The raw urls stay as the body so on a non-rich channel
+       (Slack/Telegram) they still degrade to readable links. */
+    if (lang === "imagecard") {
+      out.push(
+        `<div class="wick-imagecard my-2" data-imagecard data-imagecard-src="${esc(code)}">` +
+        `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 rounded-lg leading-relaxed"><code>${esc(code)}</code></pre></div>`,
+      );
+      return;
+    }
     const langLabel = lang
       ? `<span class="text-[10px] text-black-600 dark:text-black-700 uppercase tracking-wide">${esc(lang)}</span>`
       : "";
@@ -237,6 +249,21 @@ export function renderMarkdown(text: string): string {
       } else {
         out.push("<tr>" + cells.map((c) => `<td class="border border-white-300 dark:border-navy-600 px-3 py-1.5 text-black-900 dark:text-white-100">${inlineMarkdown(c.trim())}</td>`).join("") + "</tr>");
       }
+      continue;
+    }
+
+    /* Thematic break: a line of only ---, ***, or ___ (3+). Render an
+       <hr> instead of leaking the dashes/asterisks into a paragraph. */
+    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
+      flushList();
+      flushTable();
+      out.push('<hr class="my-3 border-0 border-t border-white-300 dark:border-navy-600"/>');
+      continue;
+    }
+
+    /* A lone bullet marker (just "*" or "-" with no content) is noise —
+       skip it rather than printing a stray asterisk. */
+    if (/^\s*[-*+]\s*$/.test(line)) {
       continue;
     }
 

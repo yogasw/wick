@@ -44,6 +44,7 @@ import (
 	"github.com/yogasw/wick/internal/pkg/worker"
 	"github.com/yogasw/wick/internal/systemtray"
 	"github.com/yogasw/wick/internal/tools"
+	"github.com/yogasw/wick/internal/updater"
 	"github.com/yogasw/wick/internal/userconfig"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/entity"
@@ -357,10 +358,90 @@ func uninstallCmd() *cobra.Command {
 //	worker   — run the background job worker
 //	mcp serve — run MCP server over stdio
 //
+// bootSelfUpdate runs the headless-service self-update boot sequence:
+// inspect any sentinel from a prior apply (log success/stale), apply a
+// staged update if one is waiting (re-execs on Linux/macOS — this call
+// then never returns), and kick a background download when auto-update
+// is enabled. No-op when the build has no release source configured.
+//
+// ctx is the server context; a download triggered here rides it so a
+// shutdown cancels the transfer cleanly.
+func bootSelfUpdate(ctx context.Context) {
+	if GitHubRepo == "" {
+		return // no release source baked in — nothing to do
+	}
+	appName := appname.Resolve()
+	cfg, err := userconfig.Load(appName)
+	if err != nil {
+		log.Warn().Err(err).Msg("self-update: load userconfig")
+		return
+	}
+	save := func() error { return userconfig.Save(appName, cfg) }
+	upd, err := updater.New(&cfg, save, appName, BuildAppVersion, GitHubRepo, GitHubPAT)
+	if err != nil {
+		log.Warn().Err(err).Msg("self-update: init updater")
+		return
+	}
+	if !upd.Configured() {
+		return
+	}
+
+	if outcome, oerr := upd.CheckUpdateOutcome(BuildAppVersion); oerr != nil {
+		log.Warn().Err(oerr).Msg("self-update: read sentinel")
+	} else if outcome != nil {
+		switch {
+		case outcome.Success:
+			log.Info().Str("from", outcome.From).Str("to", outcome.To).Msg("self-update: applied successfully")
+			upd.ClearOutcome()
+		case outcome.Stale:
+			log.Error().Str("from", outcome.From).Str("to", outcome.To).
+				Str("installer_log", outcome.InstallerLog).Str("helper_log", outcome.HelperLog).
+				Msg("self-update: previous update did not apply — see logs")
+			upd.ClearOutcome()
+		case outcome.Pending:
+			log.Info().Msg("self-update: still in progress, leaving sentinel for next launch")
+		default:
+			log.Info().Str("reason", outcome.Reason).Msg("self-update: outcome")
+			upd.ClearOutcome()
+		}
+	}
+
+	// Apply a staged update from a prior check/auto-download. On Linux/
+	// macOS this re-execs in place and never returns; the new image picks
+	// up here again with HasStaged()==false and proceeds to serve.
+	if upd.HasStaged() {
+		log.Info().Str("version", upd.StagedVersion()).Msg("self-update: applying staged update")
+		if err := upd.ApplyStagedAndRestart(); err != nil {
+			log.Error().Err(err).Msg("self-update: apply failed — continuing on current binary")
+		}
+	}
+
+	// Auto-update: download a newer release in the background so it's
+	// staged for the next restart. Applying still requires a deliberate
+	// restart (boot apply above or the System page button).
+	if cfg.AutoUpdate {
+		go func() {
+			if res, err := upd.CheckNow(ctx); err != nil {
+				log.Warn().Err(err).Msg("self-update: background check failed")
+			} else if res.Downloaded {
+				log.Info().Str("version", res.LatestVersion).Msg("self-update: new version downloaded — restart to apply")
+			}
+		}()
+	}
+}
+
 // Blocks until shutdown.
 func Run() {
 	defaultPort := config.Load().App.Port
 	var port int
+
+	// Wire the release source into the API package so the admin System
+	// page can self-update + restart in service mode (`all`). Set once
+	// here before any api.NewServer() runs. Empty values (no
+	// --release-github-repo at build) leave the web updater unconfigured.
+	api.SetReleaseInfo(BuildAppVersion, GitHubRepo, GitHubPAT)
+	// Static build metadata for the System page (same trio as wick_info).
+	api.SetBuildInfo(BuildWickVersion, BuildCommit, BuildTime)
 	root := &cobra.Command{
 		Use:   BuildAppName,
 		Short: BuildAppName + " " + BuildAppVersion + " (wick " + BuildWickVersion + ")",
@@ -474,6 +555,12 @@ func Run() {
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 			ctx = serverLogger.WithContext(ctx)
+
+			// Self-update boot, headless service edition (mirrors the tray
+			// boot path in internal/systemtray). On Linux/macOS the swap
+			// re-execs in place via syscall.Exec, so the daemon PID is
+			// preserved and `status`/`stop` keep working after an apply.
+			bootSelfUpdate(ctx)
 
 			srv := api.NewServer()
 

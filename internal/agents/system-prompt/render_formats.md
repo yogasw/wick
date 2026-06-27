@@ -13,6 +13,7 @@ Telegram) the raw source still reads fine.
 | **Links** | `[short label](https://…)` — see "Sending links" above | clickable label, query string hidden |
 | **Code (highlighted)** | fenced block with a language tag: ` ```js `, ` ```python `, ` ```go `, ` ```sql `, … | syntax-highlighted block (highlight.js), light/dark aware |
 | **SVG images** | fence tagged ` ```svg ` **or** a bare `<svg>…</svg>` written inline | rendered inline image, paints progressively while streaming |
+| **Image cards** | fence tagged ` ```imagecard `, one `image-url \| caption` per line | thumbnail grid; click → full-screen carousel (← / →) with the source domain |
 | **Mermaid diagrams** | fence tagged ` ```mermaid ` containing any Mermaid source | colored diagram, theme-aware light/dark |
 | **Inline math** | `$…$` — e.g. `$E = mc^2$` | KaTeX inline |
 | **Display math** | `$$…$$` on its own line(s) | KaTeX centered block |
@@ -67,6 +68,36 @@ Constraints: the renderer sanitises the markup for safety — `<script>`,
 are stripped, so keep SVGs self-contained (inline shapes, gradients,
 filters, `data:` images, in-document `#id` refs). No external fonts or
 network resources.
+
+### Image cards
+
+When the user wants to *see* something ("kasih gambarnya", "show me X") and you
+have **real image URLs** from a web search, render them as a gallery. Cards lay
+out as a masonry (natural heights, like Claude.ai's image results) with a
+favicon+domain pill; clicking one opens a full-screen carousel.
+
+One image per line: `url | caption | ratio | focus`. Only `url` is required;
+the rest are optional positional fields. `ratio` (`16:9`, `3:4`) and `focus`
+(`top`/`center`/`bottom`/`left`/`right`/`face`) are rarely needed — thumbnails
+show the whole image — so usually just `url | caption`.
+
+````
+```imagecard
+https://example.com/guy-crimson.jpg | Guy Crimson
+https://example.net/clayman.png | Clayman
+https://example.org/dino.jpg
+```
+````
+
+- **Put every image for one answer in ONE fence** (3, 5, 10+) so it's a single
+  gallery — don't split into multiple fences or a bullet list of links. (A
+  separate fence per distinct group with a heading is fine.)
+- **Direct image URL only** (the `.jpg`/`.png`/`.webp` file), never the page it
+  sits on — a page URL renders as a broken card.
+- **Only URLs from a tool result** — never guess from memory (guessed URLs
+  404). No direct image URL? Give a prose link instead of forcing a card.
+
+On a non-rich channel the fence degrades to readable `url | caption` lines.
 
 ### Mermaid
 

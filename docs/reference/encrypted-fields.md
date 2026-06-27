@@ -161,7 +161,7 @@ Plaintext never lands in the audit log.
 | `WICK_ENC_KEY` | Hex-encoded 32-byte master key. Wins over the DB-stored key when set — production injects from a vault here so the secret never lives in the DB. |
 | `WICK_ENC_DISABLE` | `true` / `1` / `yes` / `on` → disables encryption entirely (every call is a passthrough). Use only when the deployment has no LLM-facing surface. |
 
-DB-stored key lives at `configs.encryption_key` (auto-generated on first boot, regeneratable from `/admin/configs`). Rotation invalidates every existing `wick_enc_` token — that's by design and acceptable because LLM sessions don't persist tokens long-term.
+DB-stored key lives at `configs.encryption_key` (auto-generated on first boot, regeneratable from `/admin/advanced`). Rotation invalidates every existing `wick_enc_` token — that's by design and acceptable because LLM sessions don't persist tokens long-term.
 
 ## Common pitfalls
 

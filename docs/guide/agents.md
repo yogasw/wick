@@ -42,6 +42,7 @@ After boot, head to `/tools/agents`.
 | **Presets** | Edit reusable agent instructions. Each preset is one `agent.md` file. The built-in `default` preset is the fallback when a session has no project (or the project has no `DefaultPreset`); it cannot be deleted, only edited. |
 | **Providers** | Per-instance status cards: binary path, version, env vars, extra args, "Rescan" button. Add custom instances when you need two PATs for the same CLI. |
 | **Skills** | Browse, preview, sync, and delete skill files across all provider skill dirs. |
+| **Connectors** | Browse and manage LLM-callable connectors from inside the Agents shell. Opens at `/tools/agents/connectors`. Direct links to `/manager/connectors/*` redirect here automatically (deep links preserved). |
 | **Channels** | Slack + Telegram bot config (tokens, access control, default project). Web UI is always-on. |
 
 Sessions auto-create on the first message in a Slack thread, a Telegram chat, or a fresh web conversation. You don't pre-allocate them.
@@ -90,9 +91,9 @@ Daily wick logs (server, worker, app, gate tail) live one level up at `~/.<app>/
 
 ## Agents config (general knobs)
 
-The agents subsystem reads its top-level knobs from the `configs` table under owner `agents`. Edit from `/admin/configs` → group **Agents**.
+The agents subsystem reads its top-level knobs from the `configs` table under owner `agents`. Edit from `/admin/advanced` → group **Agents**.
 
-> **📸 Screenshot needed:** `agents-general-config.png` — capture `/admin/configs` filtered to the `agents` group, showing the General fields table. Save to `docs/public/screenshots/agents-general-config.png`.
+> **📸 Screenshot needed:** `agents-general-config.png` — capture `/admin/advanced` filtered to the `agents` group, showing the General fields table. Save to `docs/public/screenshots/agents-general-config.png`.
 
 Source: [`config.GeneralConfig`](https://github.com/yogasw/wick/blob/master/internal/agents/config/general.go)
 
@@ -118,6 +119,7 @@ Assistant bubbles in the **web Conversation tab** render as GitHub-flavored mark
 | **Markdown** | normal GFM — headings, lists, **bold**, `inline code`, tables, blockquotes, `~~strikethrough~~` | styled rich text |
 | **Links** | `[short label](https://…)` | clickable label (the noisy query string is hidden) |
 | **Code (highlighted)** | fenced block with a language tag: ` ```js `, ` ```python `, ` ```go `, ` ```sql `, … | syntax-highlighted block via [highlight.js](https://highlightjs.org/), light/dark aware |
+| **Image cards** | ` ```imagecard ` fence, one `url \| caption` per line (`ratio` and `focus` are optional extra fields) | masonry thumbnail gallery; favicon + domain pill on each card; click → full-screen carousel with prev/next arrows, position counter, ← / → keyboard navigation, and source-domain caption; click outside to close |
 | **Mermaid diagrams** | a ` ```mermaid ` fence — `flowchart`, `sequenceDiagram`, `classDiagram`, `stateDiagram-v2`, `erDiagram`, `gantt`, `pie`, `journey`, … | colored [Mermaid](https://mermaid.js.org/) diagram, theme-aware light/dark |
 | **Inline math** | `$…$` — e.g. `$E = mc^2$` | [KaTeX](https://katex.org/) inline (a bare `$5 and $10` stays currency, not math) |
 | **Display math** | `$$…$$` on its own line(s) | KaTeX centered block |

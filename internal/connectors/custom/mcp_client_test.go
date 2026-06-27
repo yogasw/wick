@@ -101,6 +101,10 @@ type fakeCodec struct{}
 
 func (fakeCodec) EncryptSecret(plain string) (string, error) { return "wick_enc_" + plain, nil }
 func (fakeCodec) DecryptSecret(token string) (string, error) {
+	// Strip whichever token prefix is present. The real configs codec mints
+	// MASTER tokens (wick_cenc_) for server-level secrets, so the client's
+	// decrypt path must recognize that prefix too — not only wick_enc_.
+	token = strings.TrimPrefix(token, "wick_cenc_")
 	return strings.TrimPrefix(token, "wick_enc_"), nil
 }
 
@@ -248,6 +252,26 @@ func TestBearerAuthDecryptsToken(t *testing.T) {
 	init := f.callFor("initialize")
 	if got := init.header.Get("Authorization"); got != "Bearer real-token" {
 		t.Errorf("Authorization = %q, want decrypted token", got)
+	}
+}
+
+// TestBearerAuthDecryptsMasterToken locks the 401-after-save regression:
+// server-level secrets are stored as MASTER tokens (wick_cenc_), and the
+// client's decrypt path must decrypt those — checking only the per-user
+// wick_enc_ prefix shipped the ciphertext as the Bearer value and 401'd.
+func TestBearerAuthDecryptsMasterToken(t *testing.T) {
+	f := &fakeMCP{}
+	srv := httptest.NewServer(f.handler())
+	defer srv.Close()
+
+	res := newMCPClient(srv, fakeCodec{}, nil).Probe(context.Background(),
+		serverConfig{URL: srv.URL, AuthScheme: "bearer", AuthSecret: "wick_cenc_real-token"}, nil)
+	if !res.OK {
+		t.Fatalf("Probe failed: %s", res.Error)
+	}
+	init := f.callFor("initialize")
+	if got := init.header.Get("Authorization"); got != "Bearer real-token" {
+		t.Errorf("Authorization = %q, want decrypted master token", got)
 	}
 }
 

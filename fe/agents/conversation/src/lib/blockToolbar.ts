@@ -32,10 +32,29 @@ function downloadBlob(blob: Blob, filename: string): void {
 /* Rasterise an inline <svg> to a PNG and hand it to cb. */
 function svgToPng(svg: SVGSVGElement, cb: (blob: Blob | null) => void): void {
   const xml = new XMLSerializer().serializeToString(svg);
+  /* Export at the diagram's INTRINSIC size, not its on-screen size. On a
+     phone the SVG is squeezed to fit the viewport, so getBoundingClientRect
+     would bake the narrow phone width into the PNG (the "looks like my phone
+     screen" bug). Prefer the viewBox / width-height attributes — the chart's
+     true canvas — and only fall back to the displayed rect when none exist. */
   const rect = svg.getBoundingClientRect();
-  const w = Math.max(1, Math.ceil(rect.width || svg.viewBox.baseVal.width || 800));
-  const h = Math.max(1, Math.ceil(rect.height || svg.viewBox.baseVal.height || 600));
+  const vb = svg.viewBox?.baseVal;
+  const attrW = parseFloat(svg.getAttribute("width") || "");
+  const attrH = parseFloat(svg.getAttribute("height") || "");
+  const w = Math.max(
+    1,
+    Math.ceil((vb && vb.width) || (Number.isFinite(attrW) ? attrW : 0) || rect.width || 800),
+  );
+  const h = Math.max(
+    1,
+    Math.ceil((vb && vb.height) || (Number.isFinite(attrH) ? attrH : 0) || rect.height || 600),
+  );
   const img = new Image();
+  /* crossOrigin lets same-origin / CORS-enabled sub-resources draw without
+     tainting. It can't save a chart that pulls a non-CORS external image or
+     web font — that still taints the canvas and toBlob throws below; the
+     caller falls back to an SVG download in that case. */
+  img.crossOrigin = "anonymous";
   const blob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   img.onload = () => {
@@ -46,17 +65,42 @@ function svgToPng(svg: SVGSVGElement, cb: (blob: Blob | null) => void): void {
     const ctx = canvas.getContext("2d");
     if (!ctx) { URL.revokeObjectURL(url); cb(null); return; }
     ctx.scale(scale, scale);
-    ctx.drawImage(img, 0, 0, w, h);
-    URL.revokeObjectURL(url);
-    canvas.toBlob(cb, "image/png");
+    try {
+      ctx.drawImage(img, 0, 0, w, h);
+      URL.revokeObjectURL(url);
+      // toBlob throws SecurityError when the canvas is tainted (external,
+      // non-CORS resource in the SVG). Surface null so the caller can fall
+      // back to a vector download instead of failing silently.
+      canvas.toBlob((b) => cb(b), "image/png");
+    } catch {
+      URL.revokeObjectURL(url);
+      cb(null);
+    }
   };
   img.onerror = () => { URL.revokeObjectURL(url); cb(null); };
   img.src = url;
 }
 
+/* Downloads the raw <svg> as a .svg file. Used as the fallback when PNG
+   rasterisation fails (tainted canvas) — the vector is self-contained, opens
+   in any browser/editor, and keeps the chart's full width. */
+function downloadSvg(svg: SVGSVGElement, filename: string): void {
+  const xml = new XMLSerializer().serializeToString(svg);
+  downloadBlob(
+    new Blob([xml], { type: "image/svg+xml;charset=utf-8" }),
+    filename.replace(/\.[^.]+$/, "") + ".svg",
+  );
+}
+
 function downloadPng(svg: SVGSVGElement, filename: string): void {
   svgToPng(svg, (blob) => {
-    if (blob) downloadBlob(blob, filename);
+    if (blob) {
+      downloadBlob(blob, filename);
+    } else {
+      // PNG export failed (tainted canvas / load error). Don't leave the user
+      // with nothing — hand them the vector instead.
+      downloadSvg(svg, filename);
+    }
   });
 }
 

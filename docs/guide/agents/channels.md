@@ -111,7 +111,7 @@ The bot uses reactions only for states the operator can't see anywhere else. Que
 
 ### Progress banner (assistant threads)
 
-When the workspace has Slack AI features enabled and the bot holds the `chat:write` scope, wick also calls [`assistant.threads.setStatus`](https://api.slack.com/methods/assistant.threads.setStatus) to render an "is thinking…" banner above the input. The banner is cleared on `done` / `blocked` / `error`. Workspaces without AI features get a one-line debug log and rely on the reaction emoji alone.
+When the workspace has Slack AI features enabled and the bot holds the `chat:write` scope, wick also calls [`assistant.threads.setStatus`](https://api.slack.com/methods/assistant.threads.setStatus) to render an "is thinking…" banner above the input. The banner is cleared on `done` / `blocked` / `error`. Because Slack auto-clears the status after ~2 minutes of inactivity, wick re-asserts it every 45 seconds during long tool-use turns so the banner stays visible throughout multi-step runs. Workspaces without AI features get a one-line debug log and rely on the reaction emoji alone.
 
 ### Chunked reply
 
@@ -224,6 +224,12 @@ Telegram doesn't support Socket Mode like Slack. Wick uses long polling with a 6
 Gate approval requests appear as an inline-keyboard message in the chat. Buttons: **Approve once**, **Allow this session**, **Always**, **Block**. Telegram limits `callback_data` to 64 bytes, so wick stores the full gate fields server-side and sends only a short token in the button ([telegram.go:55-59](https://github.com/yogasw/wick/blob/master/internal/agents/channels/telegram/telegram.go#L55)).
 
 When you tap a button, the original approval message is **edited in place** to show the outcome — no spam in the chat history.
+
+### Per-user instances
+
+Telegram follows the same per-user model as Slack. Each user who saves a Telegram config (bot token + settings) gets their own channel instance keyed by their user ID. The App Owner's row uses `user_id = NULL`. On boot, wick starts one Telegram long-polling instance per configured owner; a new user saving their config triggers a hot-add without a server restart.
+
+Each instance polls its own bot token independently. A credential change by one user does not affect other users' running bots.
 
 ### Chunked reply
 
@@ -432,6 +438,12 @@ Two safeguards:
 ```
 
 `id` is `resp_<conversation>` so a client can reuse it either as `previous_response_id` or pass the same `conversation` back — both land in the same wick session.
+
+### Per-user instances
+
+REST follows the same per-user model as Slack. Each user who saves a REST config gets their own channel instance keyed by their user ID. The App Owner's row uses `user_id = NULL`. On boot, wick starts one REST instance per configured owner; a new user saving their config triggers a hot-add without a server restart.
+
+All per-user REST instances share the same HTTP endpoint (`/integrations/rest/api/v1/openai/*`). Auth is always per-request via Bearer token, so the right user's config row is selected based on the PAT owner. Removing a user's `bot_token`-equivalent (disabling the channel) stops only that user's instance.
 
 ### Hot-reload
 

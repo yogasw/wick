@@ -1,12 +1,25 @@
 package ui
 
-import "github.com/yogasw/wick/internal/entity"
+import (
+	"strings"
+
+	"github.com/yogasw/wick/internal/entity"
+)
 
 // Navbar is the shared top navigation bar used across all pages (tools, profile, etc.)
+// Logo links to "/" by default; callers that have their own home (e.g. the
+// Mini Tools launcher) use NavbarHome to point the logo back to that page.
 templ Navbar(user *entity.User) {
+	@NavbarHome(user, "/")
+}
+
+// NavbarHome is Navbar with an explicit logo target. The logo returns the
+// user to homeHref instead of always bouncing through "/" (which redirects
+// to the Agents flagship UI).
+templ NavbarHome(user *entity.User, homeHref string) {
 	<nav class="sticky top-0 z-50 flex h-16 items-center border-b border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
 		<div class="mx-auto flex w-full max-w-container items-center justify-between px-6">
-			<a href="/" class="inline-flex items-center gap-2 text-base font-semibold text-black-900 dark:text-white-100 transition-colors hover:text-green-600 dark:hover:text-green-400">
+			<a href={ templ.SafeURL(homeHref) } class="inline-flex items-center gap-2 text-base font-semibold text-black-900 dark:text-white-100 transition-colors hover:text-green-600 dark:hover:text-green-400">
 				<span class="inline-block h-2 w-2 rounded-full bg-green-500"></span>
 				{ AppNameFromContext(ctx) }
 			</a>
@@ -27,7 +40,7 @@ templ Navbar(user *entity.User) {
 					{{ g := GuestThemeFromContext(ctx) }}
 					@ThemePicker(ThemeByID(g.Current), g.Light, g.Dark)
 				}
-				@UserMenu(user)
+				@UserMenu(user, false)
 			</div>
 		</div>
 	</nav>
@@ -106,7 +119,12 @@ templ ThemePicker(current Theme, lightPref, darkPref string) {
 
 // UserMenu renders the user avatar dropdown used in all navbars.
 // Shows avatar + dropdown (Profile, Sign out) when logged in, or a Sign in link.
-templ UserMenu(user *entity.User) {
+// UserMenu is the avatar dropdown (profile, tokens, …, sign out). Set
+// showTheme when the surrounding chrome has no standalone ThemePicker (e.g.
+// the agents sidebar) — it then renders a Theme section inside the menu.
+// Pass false where a ThemePicker already sits next to the avatar (the home
+// navbar, manager, profile layouts) to avoid a duplicate control.
+templ UserMenu(user *entity.User, showTheme bool) {
 	if user != nil {
 		<div class="relative">
 			<details class="group">
@@ -192,7 +210,32 @@ templ UserMenu(user *entity.User) {
 								Admin panel
 							</a>
 						}
+						// Software Update shortcut — only for admins, and only when
+						// an update is actually available (app or wick framework),
+						// since that's the only time there's something to apply.
+						// Non-admins still SEE that an update exists via the 🆕 in
+						// the version row below; they just don't get this action.
+						// Green "actionable" accent + 🆕 marker.
+						if user.IsAdmin() && VersionInfoFromContext(ctx).AnyUpdate() {
+							<a
+								href="/admin/advanced/software-update"
+								class="flex items-center gap-2.5 px-4 py-2 text-sm font-medium text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+							>
+								<svg class="h-4 w-4 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v11.25m0 0 4.5-4.5m-4.5 4.5-4.5-4.5M3.75 19.5h16.5"/>
+								</svg>
+								<span>Software Update</span>
+								<span class="ml-auto text-sm leading-none">🆕</span>
+							</a>
+						}
 					</div>
+					if showTheme {
+						<div class="flex items-center justify-between gap-2 border-t border-white-300 dark:border-navy-600 px-4 py-2.5">
+							<span class="text-sm text-black-800 dark:text-black-600">Theme</span>
+							@ThemePicker(ThemeByID(EffectiveTheme(user.Metadata.Theme)), EffectiveLightTheme(user.Metadata.LightTheme), EffectiveDarkTheme(user.Metadata.DarkTheme))
+						</div>
+					}
+					@versionSection(VersionInfoFromContext(ctx))
 					<div class="border-t border-white-300 dark:border-navy-600 py-1">
 						<form action="/auth/logout" method="POST">
 							<button
@@ -215,3 +258,116 @@ templ UserMenu(user *entity.User) {
 		</a>
 	}
 }
+
+// versionSection is the version + update-status block at the bottom of
+// the user menu, each version with a small "Latest" / "Update" badge.
+// Reads a background-refreshed cache (zero network cost on open) and
+// links to the public wick site. On the OFFICIAL build app == framework
+// == one release, so it collapses to a SINGLE "Wick" line; downstream
+// builds show App and Wick separately. Omitted when no version is known.
+templ versionSection(v VersionInfo) {
+	if v.AppVersion != "" || v.WickVersion != "" {
+		<a
+			href={ templ.SafeURL(versionWebURL(v)) }
+			target="_blank"
+			rel="noopener"
+			class="block border-t border-white-300 dark:border-navy-600 px-4 py-2.5 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+			title="View the wick framework"
+		>
+			if v.IsOfficial {
+				@versionRowMenu("Wick", v.WickVersion, v.WickLatest, v.WickDev, v.WickUpdateKnown, v.WickUpdate)
+			} else {
+				@versionRowMenu("App", v.AppVersion, v.AppLatest, v.AppDev, v.AppUpdateKnown, v.AppUpdate)
+				@versionRowMenu("Wick", v.WickVersion, v.WickLatest, v.WickDev, v.WickUpdateKnown, v.WickUpdate)
+			}
+		</a>
+	}
+}
+
+// versionRowMenu is one labelled version line with a status badge. The
+// version is truncated to one line (full value in the hover tooltip) so a
+// long Go pseudo-version can't wrap and shove the badge off the row; the
+// badge is shrink-0 and never wraps. Badge: neutral "dev" for a
+// dev/pseudo build, green "Latest" / amber "Update" when the version was
+// compared, nothing when the comparison is unknown (e.g. updater not
+// configured). Renders nothing when the version is empty.
+templ versionRowMenu(label, version, latest string, dev, known, update bool) {
+	if version != "" {
+		<div class="flex min-w-0 items-center gap-2 py-0.5">
+			<span class="w-10 shrink-0 text-xs text-black-700 dark:text-black-600">{ label }</span>
+			<span class="truncate font-mono text-xs text-black-900 dark:text-white-100" title={ version }>{ versionDisplay(version) }</span>
+			if dev {
+				<span class="shrink-0 rounded-full bg-white-200 dark:bg-navy-600 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-black-700 dark:text-black-600">dev</span>
+			}
+			if known {
+				if update {
+					// Compact 🆕 marker instead of a wide "Update available → vX"
+					// pill, so a long target version can't crowd out the version
+					// in the narrow dropdown. The full text is in the hover
+					// tooltip. No colored pill — the emoji carries the meaning.
+					<span class="shrink-0 text-sm leading-none" title={ versionBadgeText(update, latest) }>🆕</span>
+				} else {
+					<span class={ "shrink-0", latestBadgeClass() }>Latest</span>
+				}
+			}
+		</div>
+	}
+}
+
+// versionDisplay shortens a long Go pseudo-version for the row label to
+// "semver-<shorthash>" (e.g. "v0.8.2-73742075") — the useful parts: the
+// base release plus the commit that identifies a dev build. The verbose
+// timestamp middle and "+dirty" suffix are dropped (full string stays in
+// the row's title tooltip). Plain release tags ("v0.25.1") and short
+// sentinels ("dev") pass through unchanged.
+func versionDisplay(v string) string {
+	base := v
+	// Strip "+dirty" / "+<meta>" build-metadata suffix first.
+	if i := strings.IndexByte(base, '+'); i >= 0 {
+		base = base[:i]
+	}
+	// Split off the pre-release part after the first '-'. No '-' → a plain
+	// release tag or sentinel ("v0.25.1", "dev"): return as-is.
+	dash := strings.IndexByte(base, '-')
+	if dash <= 0 {
+		return base
+	}
+	semver, pre := base[:dash], base[dash+1:]
+	// A Go pseudo-version's pre-release is "0.<timestamp>-<hash>" — it has
+	// its own '-'. Collapse it to "semver-<hash>". A pre-release WITHOUT a
+	// '-' (e.g. "v1.2.3-rc1") is already short + meaningful, keep it whole.
+	if h := strings.LastIndexByte(pre, '-'); h >= 0 {
+		return semver + "-" + pre[h+1:]
+	}
+	return base
+}
+
+// versionWebURL returns the version row's link target, defaulting to the
+// public wick site when the cache didn't carry one.
+func versionWebURL(v VersionInfo) string {
+	if v.WebURL != "" {
+		return v.WebURL
+	}
+	return "https://yogasw.github.io/wick"
+}
+
+// versionBadgeText is the badge's hover tooltip: "Update available →
+// vX.Y.Z" (or just "Update available" when the target tag is unknown)
+// when a newer release exists. The visible marker is a 🆕 emoji; this
+// gives the detail on hover.
+func versionBadgeText(update bool, latest string) string {
+	if update {
+		if latest != "" {
+			return "Update available → " + latest
+		}
+		return "Update available"
+	}
+	return "Latest"
+}
+
+// latestBadgeClass styles the up-to-date "Latest" pill (green). The
+// update case uses a 🆕 emoji marker instead of a pill.
+func latestBadgeClass() string {
+	return "rounded-full px-1.5 py-0.5 text-[0.625rem] font-medium leading-none bg-pos-100 text-pos-400"
+}
+

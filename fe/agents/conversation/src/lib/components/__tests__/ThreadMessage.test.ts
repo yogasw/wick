@@ -53,10 +53,13 @@ describe("ThreadMessage - assistant turn", () => {
     render(ThreadMessage, {
       props: { turn: makeTurn({ role: "assistant", text: "answer", timestamp: local.getTime() }) },
     });
-    const stamp = screen.getByText("15:36");
+    /* turnTime uses toLocaleTimeString, whose hh-mm separator is locale-driven
+       (":" on en-GB, "." on en-ID), so match either rather than pinning ":". */
+    const stamp = screen.getByText(/^15[:.]36$/);
     expect(stamp).toBeDefined();
     expect(stamp.className).not.toContain("opacity-0");
-    expect(screen.queryByText(/15:36:42/)).toBeNull();
+    /* no seconds shown */
+    expect(screen.queryByText(/15[:.]36[:.]42/)).toBeNull();
     expect(screen.queryByText(/2026/)).toBeNull();
   });
 

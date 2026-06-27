@@ -30,7 +30,7 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 						{Href: "/admin/tools", Label: "Tools", Active: activeTab == "tools"},
 						{Href: "/admin/connectors", Label: "Connectors", Active: activeTab == "connectors"},
 						{Href: "/admin/jobs", Label: "Jobs", Active: activeTab == "jobs"},
-						{Href: "/launcher", Label: "Launcher", Active: false},
+						{Href: "/mini-tools", Label: "Mini Tools", Active: false},
 					})
 					@adminDropdown("Agents", isAgentsActive(activeTab), []dropdownItem{
 						{Href: "/admin/projects", Label: "Projects", Active: activeTab == "projects"},
@@ -42,7 +42,7 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 						{Href: "/admin/connections", Label: "Connected Apps", Active: activeTab == "connections"},
 					})
 					@adminDropdown("Setup", isSetupActive(activeTab), []dropdownItem{
-						{Href: "/admin/configs", Label: "Configs", Active: activeTab == "configs"},
+						{Href: "/admin/advanced", Label: "Advanced", Active: activeTab == "advanced"},
 						{Href: "/admin/tags", Label: "Tags", Active: activeTab == "tags"},
 					})
 				</div>
@@ -55,7 +55,7 @@ templ AdminLayout(title string, activeTab string, user *entity.User) {
 						<span class="dark:hidden">🌙</span>
 						<span class="hidden dark:inline">☀️</span>
 					</button>
-					@ui.UserMenu(user)
+					@ui.UserMenu(user, false)
 				</div>
 			</div>
 		</nav>
@@ -92,7 +92,7 @@ func isAccessActive(tab string) bool {
 }
 
 func isSetupActive(tab string) bool {
-	return tab == "configs" || tab == "tags"
+	return tab == "advanced" || tab == "tags"
 }
 
 templ adminDropdown(label string, active bool, items []dropdownItem) {

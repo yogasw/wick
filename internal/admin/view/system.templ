@@ -1,0 +1,708 @@
+package view
+
+import (
+	"strconv"
+	"time"
+
+	"github.com/yogasw/wick/internal/entity"
+)
+
+// orDash returns s, or an em dash when s is empty — keeps version rows
+// from rendering a blank cell.
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+// statusLine is the first-paint status sentence for the updates card,
+// derived from the coordinator phase baked into the page. The SSE
+// handler overwrites it live after load.
+func statusLine(d SystemPageData) string {
+	switch d.Phase {
+	case "downloading":
+		return "Downloading…"
+	case "up-to-date":
+		return "You are on the latest version."
+	case "no-asset":
+		msg := orDash(d.LatestVersion) + " is available, but there's no build for this platform"
+		if d.WantedAsset != "" {
+			msg += " (expected " + d.WantedAsset + ")"
+		}
+		return msg + "."
+	case "staged":
+		if d.StagedVersion != "" {
+			return d.StagedVersion + " is ready to apply."
+		}
+		return "A new version is ready to apply."
+	case "applying":
+		return "Applying update…"
+	case "error":
+		if d.Error != "" {
+			return "Update failed: " + d.Error
+		}
+		return "Update failed."
+	}
+	if d.HasStaged {
+		if d.StagedVersion != "" {
+			return d.StagedVersion + " is ready to apply."
+		}
+		return "A new version is ready to apply."
+	}
+	return "Click “Check for updates” to look for a new release."
+}
+
+// SystemPageData is everything the System page needs for first paint.
+// The live download progress arrives over SSE after load, but these
+// fields make the no-JS / first-render state correct: version rows, the
+// auto-update toggle, and whether a staged update is ready to apply.
+type SystemPageData struct {
+	// App identity + build (mirrors wick_info).
+	AppName        string // configured app name (e.g. "wick-lab")
+	CurrentVersion string // running app version
+	WickVersion    string // embedded wick framework version
+	Commit         string // build commit (short)
+	BuildTime      string // build timestamp
+	AccessType     string // "http" (web) or "cli"
+	DBType         string // "sqlite" / "postgres" / "none"
+	DBStatus       string // "connected" / "error: …" / "disabled"
+
+	// Update state.
+	Configured    bool   // a release source is set; check/apply are usable
+	IsOfficial    bool   // release repo is the canonical wick repo (wick-agent)
+	LatestVersion string // last-known latest tag (may be empty)
+	HasStaged     bool   // a downloaded binary is ready to apply
+	StagedVersion string // version of the staged binary
+	Phase         string // coordinator phase at load time
+	Percent       int    // download percent at load time
+	ReleaseNotes  string // latest release body (what changed)
+	PublishedAt   string // latest release date (RFC3339)
+	WantedAsset   string // asset that was missing when no build exists for this OS
+	ChangelogURL  string // link to the full changelog (site or GitHub releases)
+	Error         string // last error, if any
+	AutoUpdate    bool   // auto-update toggle state
+
+	// Wick framework update state (non-official builds). Sourced from the
+	// background version cache — the public wick repo is always checkable,
+	// independent of whether THIS app set a release source. Rendered
+	// server-side at first paint, so no live fetch on load. On official
+	// builds these go unused (app == framework; the app fields above carry
+	// the framework's update state too).
+	WickUpdateKnown bool   // a wick version check has resolved
+	WickUpdate      bool   // a newer wick framework release exists
+	WickLatest      string // latest wick release tag
+	WickNotes       string // wick changelog (current→latest), markdown
+	WickPublishedAt string // latest wick release date (RFC3339)
+	WickChangelogURL string // full wick changelog link
+}
+
+// SystemPage renders version info, the update controls (Check →
+// progress → Apply & restart), and the auto-update toggle. The inline
+// script opens an SSE stream for live progress and, on Apply, swaps to a
+// "Restarting…" panel that polls /health until the new build answers,
+// then reloads.
+templ SystemPage(d SystemPageData, user *entity.User) {
+	@AdminLayout("Admin · Software Update", "advanced", user) {
+		<main class="mx-auto w-full max-w-container px-6 py-8">
+			<div class="flex items-center gap-2 text-sm text-black-700 dark:text-black-600">
+				<a href="/admin/advanced" class="hover:text-green-600">Advanced</a>
+				<span>/</span>
+				<span class="text-black-900 dark:text-white-100">Software Update</span>
+			</div>
+			<h1 class="mt-2 text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Software Update</h1>
+			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Check for a new release, download it, and restart the service to apply. The service re-execs in place — running sessions reconnect once it's back.</p>
+			<div class="mt-6 flex flex-col gap-4">
+				@autoUpdateCard(d)
+				@versionCard(d)
+				if d.Configured {
+					@updateCard(d)
+				} else {
+					@notConfiguredCard()
+				}
+			</div>
+		</main>
+		// Shared markdown renderer (built from fe/common/md, served from the
+		// global /public/ static root). Exposes window.WickMarkdown.render-
+		// Markdown for the "What's new" block; any page can load this one URL.
+		<script src="/public/lib/wick-markdown.js"></script>
+		@systemUpdateScript()
+	}
+}
+
+// versionCard mirrors wick_info — app identity, build metadata, and
+// runtime info — grouped into App / Build / Runtime sections, with the
+// update-check Latest tag alongside the app version.
+templ versionCard(d SystemPageData) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
+		<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Version</h2>
+		<p class="mt-3 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Application</p>
+		<dl class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+			@versionRow("App name", orDash(d.AppName), "")
+			@appVersionRow(d)
+			@versionRow("Built", orDash(d.BuildTime), "")
+		</dl>
+		<p class="mt-5 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Wick</p>
+		<dl class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+			@wickVersionRow(d)
+		</dl>
+		// What's new for the wick framework — the changelog between the
+		// embedded version and the latest public release. Only on NON-official
+		// builds with an actual update (on official, app == framework, so the
+		// update card's own "What's new" covers it). Rendered SERVER-SIDE from
+		// the background version cache — no live fetch on load; the markdown is
+		// rendered to HTML client-side via WickMarkdown for nice formatting.
+		if !d.IsOfficial && d.WickUpdate && d.WickNotes != "" {
+			<div class="mt-4 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
+				<p class="text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">What's new</p>
+				<p class="mt-1 text-sm font-medium text-black-900 dark:text-white-100">{ wickNotesHeadline(d) }</p>
+				<div id="sys-wick-notes-body" class="mt-2 max-h-64 overflow-auto break-words text-sm text-black-800 dark:text-black-600">{ d.WickNotes }</div>
+				if d.WickChangelogURL != "" {
+					<a href={ templ.SafeURL(d.WickChangelogURL) } target="_blank" rel="noopener" class="mt-3 inline-block text-xs font-medium text-green-600 dark:text-green-400 hover:underline">View full changelog →</a>
+				}
+			</div>
+		}
+		<p class="mt-5 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Runtime</p>
+		<dl class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+			@versionRow("Access", orDash(d.AccessType), "")
+			@versionRow("Database", dbLine(d), "")
+		</dl>
+	</div>
+}
+
+// showNotes reports whether the "What's new" block should render at
+// first paint — only when a check has surfaced a newer/staged release
+// with notes to show.
+func showNotes(d SystemPageData) bool {
+	return d.ReleaseNotes != "" && (d.HasStaged || d.Phase == "staged" || d.Phase == "downloading" || d.Phase == "no-asset")
+}
+
+
+// wickNotesHeadline is the "vWick → vLatest · Released <date>" line above
+// the wick framework changelog (downstream builds). Mirrors notesHeadline
+// but for the wick row's cached check.
+func wickNotesHeadline(d SystemPageData) string {
+	head := orDash(d.WickVersion) + " → " + orDash(d.WickLatest)
+	if dt := fmtReleaseDate(d.WickPublishedAt); dt != "" {
+		head += " · Released " + dt
+	}
+	return head
+}
+
+// notesHeadline is the "vCurrent → vLatest · Released <date>" line above
+// the release notes. Falls back gracefully when a field is missing.
+func notesHeadline(d SystemPageData) string {
+	cur := orDash(d.CurrentVersion)
+	latest := d.LatestVersion
+	if latest == "" {
+		latest = d.StagedVersion
+	}
+	head := cur + " → " + orDash(latest)
+	if d := fmtReleaseDate(d.PublishedAt); d != "" {
+		head += " · Released " + d
+	}
+	return head
+}
+
+// fmtReleaseDate turns an RFC3339 timestamp into a plain YYYY-MM-DD.
+// Returns "" when empty or unparseable so the caller can omit it.
+func fmtReleaseDate(s string) string {
+	if s == "" {
+		return ""
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.Format("2006-01-02")
+	}
+	// Already a date-ish string or unknown format — show the leading 10
+	// chars (YYYY-MM-DD) if they look like a date, else nothing.
+	if len(s) >= 10 {
+		return s[:10]
+	}
+	return ""
+}
+
+// dbLine joins the db type + status into one cell, e.g. "sqlite · connected".
+func dbLine(d SystemPageData) string {
+	t := orDash(d.DBType)
+	if d.DBStatus == "" {
+		return t
+	}
+	return t + " · " + d.DBStatus
+}
+
+// versionRow is one term/definition pair in the version grid.
+templ versionRow(label, value, id string) {
+	<div class="flex flex-col gap-0.5">
+		<dt class="text-xs text-black-700 dark:text-black-600">{ label }</dt>
+		if id != "" {
+			<dd id={ id } class="font-mono text-sm text-black-900 dark:text-white-100">{ value }</dd>
+		} else {
+			<dd class="font-mono text-sm text-black-900 dark:text-white-100">{ value }</dd>
+		}
+	</div>
+}
+
+// appVersionRow shows the running version with an update-status badge:
+// "Latest" (green) when current, or "Update available → vX" (amber) when
+// a newer release exists. The badge (#sys-update-badge) is live-updated
+// by the SSE handler; it starts hidden and the check on load fills it.
+templ appVersionRow(d SystemPageData) {
+	<div class="flex flex-col gap-0.5">
+		<dt class="text-xs text-black-700 dark:text-black-600">App version</dt>
+		<dd class="flex flex-wrap items-center gap-2">
+			<span class="font-mono text-sm text-black-900 dark:text-white-100">{ orDash(d.CurrentVersion) }</span>
+			<span id="sys-update-badge" class={ updateBadgeClass(d), templ.KV("hidden", updateBadgeText(d) == "") }>{ updateBadgeText(d) }</span>
+		</dd>
+	</div>
+}
+
+// wickVersionRow shows the embedded wick framework version with a
+// latest-check badge. The wick framework lives in a PUBLIC repo, so its
+// version is always checkable against the latest release — independent of
+// whether THIS app set its own release source. On the OFFICIAL build app
+// == framework, so the badge tracks the app's own update state via SSE
+// (#sys-wick-badge, live-filled). On a DOWNSTREAM build the badge is
+// rendered server-side from the background version cache (no live fetch),
+// plus a "bundled" note clarifying the framework version is whatever this
+// build embedded, not the app's own release.
+templ wickVersionRow(d SystemPageData) {
+	<div class="flex flex-col gap-0.5">
+		<dt class="text-xs text-black-700 dark:text-black-600">Wick version</dt>
+		<dd class="flex flex-wrap items-center gap-2">
+			<span class="font-mono text-sm text-black-900 dark:text-white-100">{ orDash(d.WickVersion) }</span>
+			if d.IsOfficial {
+				<span id="sys-wick-badge" class="hidden"></span>
+			} else {
+				if d.WickUpdateKnown {
+					<span class={ wickBadgeClass(d.WickUpdate) }>{ wickBadgeText(d) }</span>
+				}
+				<span class="rounded-full bg-white-200 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">bundled</span>
+			}
+		</dd>
+	</div>
+}
+
+// wickBadgeText: "Update available → vX" when a newer wick release
+// exists, else "Latest". For the downstream (non-official) wick row,
+// rendered server-side from the cached check.
+func wickBadgeText(d SystemPageData) string {
+	if d.WickUpdate {
+		if d.WickLatest != "" {
+			return "Update available → " + d.WickLatest
+		}
+		return "Update available"
+	}
+	return "Latest"
+}
+
+// wickBadgeClass: amber for an available wick update, green for current.
+func wickBadgeClass(update bool) string {
+	base := "rounded-full px-2 py-0.5 text-xs font-medium "
+	if update {
+		return base + "bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+	}
+	return base + "bg-pos-100 text-pos-400"
+}
+
+// updateBadgeText returns the badge label for the current phase, or ""
+// to hide it (idle / checking / before any check).
+func updateBadgeText(d SystemPageData) string {
+	switch d.Phase {
+	case "up-to-date":
+		return "Latest"
+	case "staged", "downloading", "no-asset":
+		if d.LatestVersion != "" {
+			return "Update available → " + d.LatestVersion
+		}
+		return "Update available"
+	}
+	if d.HasStaged {
+		if d.StagedVersion != "" {
+			return "Update available → " + d.StagedVersion
+		}
+		return "Update available"
+	}
+	return ""
+}
+
+// updateBadgeClass picks the badge color: green when up to date, amber
+// when an update is available.
+func updateBadgeClass(d SystemPageData) string {
+	base := "rounded-full px-2 py-0.5 text-xs font-medium "
+	if d.Phase == "up-to-date" {
+		return base + "bg-pos-100 text-pos-400"
+	}
+	return base + "bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+}
+
+// notConfiguredCard explains why update controls are hidden when no
+// release source was baked into this build.
+templ notConfiguredCard() {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-6 text-sm text-black-800 dark:text-black-600">
+		<p class="font-medium text-black-900 dark:text-white-100">Updater not configured</p>
+		<p class="mt-1">This build has no release source set, so it can't check for or download updates. Rebuild with <code class="font-mono">--release-github-repo</code> (and a download PAT for private repos) to enable self-update.</p>
+	</div>
+}
+
+// updateCard holds the Check button, the progress bar, status line, and
+// the Apply & restart button. All live regions carry stable ids the
+// inline script targets from SSE.
+templ updateCard(d SystemPageData) {
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm">
+		<div class="flex items-start justify-between gap-4">
+			<div>
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Updates</h2>
+				<p id="sys-status" class="mt-1 text-sm text-black-800 dark:text-black-600">{ statusLine(d) }</p>
+			</div>
+			// Single action slot in the top-right corner. Its content swaps
+			// per phase — Check → (download progress) → Apply & restart →
+			// Restarting — instead of stacking separate controls down the
+			// card. Server-rendered for first paint; the SSE handler rebuilds
+			// it live via renderAction().
+			<div id="sys-action" class="shrink-0">
+				@actionSlot(d)
+			</div>
+		</div>
+		// What's new — the upgrade headline (current → latest · released
+		// date) plus the release notes from the app's own GitHub release.
+		// Hidden until a check surfaces a newer/staged version; populated
+		// server-side at load and live-updated by the SSE handler.
+		<div id="sys-notes-wrap" class={ "mt-4 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4", templ.KV("hidden", !showNotes(d)) }>
+			<p class="text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">What's new</p>
+			<p id="sys-notes-head" class="mt-1 text-sm font-medium text-black-900 dark:text-white-100">{ notesHeadline(d) }</p>
+			// Rendered changelog. Filled by the SSE handler via
+			// WickMarkdown.renderMarkdown (markdown → HTML); falls back to
+			// raw text if the bundle didn't load. Scrolls within the box so
+			// a long range doesn't stretch the page.
+			<div id="sys-notes-body" class="mt-2 max-h-64 overflow-auto break-words text-sm text-black-800 dark:text-black-600">{ d.ReleaseNotes }</div>
+			if d.ChangelogURL != "" {
+				<a href={ templ.SafeURL(d.ChangelogURL) } target="_blank" rel="noopener" class="mt-3 inline-block text-xs font-medium text-green-600 dark:text-green-400 hover:underline">View full changelog →</a>
+			}
+		</div>
+	</div>
+}
+
+// actionSlot renders the top-right action for the current phase: the
+// single control that swaps Check → download progress → Apply & restart
+// → Restarting. Server-side first paint; the SSE handler mirrors this
+// via renderAction(). Phase messages themselves live in the status line
+// (#sys-status) — this slot is purely the control.
+templ actionSlot(d SystemPageData) {
+	switch actionState(d) {
+		case "downloading":
+			// Compact progress in the corner — bar + percent, no button.
+			<div class="w-40">
+				<div class="h-2 w-full overflow-hidden rounded-full bg-white-300 dark:bg-navy-800">
+					<div id="sys-progress-bar" class="h-full rounded-full bg-green-500 transition-[width] duration-200" style={ pctWidth(d.Percent) }></div>
+				</div>
+				<p id="sys-progress-pct" class="mt-1.5 text-right text-xs font-mono text-black-700 dark:text-black-600">{ pctText(d.Percent) }</p>
+			</div>
+		case "staged":
+			<button
+				id="sys-apply"
+				type="button"
+				data-staged={ d.StagedVersion }
+				class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600"
+			>Apply &amp; restart</button>
+		case "applying":
+			<span class="inline-flex items-center gap-2 text-sm text-black-800 dark:text-black-600">
+				<span class="h-4 w-4 animate-spin rounded-full border-2 border-white-400 border-t-green-500"></span>
+				Restarting…
+			</span>
+		case "checking":
+			<button type="button" disabled class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-700 dark:text-black-600 opacity-60">Checking…</button>
+		default:
+			// idle / up-to-date / no-asset / error → offer a (re)check.
+			<button
+				id="sys-check"
+				type="button"
+				class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
+			>Check for updates</button>
+	}
+}
+
+// actionState collapses the coordinator phase + staged flag into the slot
+// state. Mirrored in JS renderAction().
+func actionState(d SystemPageData) string {
+	switch d.Phase {
+	case "downloading", "staged", "applying", "checking":
+		return d.Phase
+	}
+	if d.HasStaged {
+		return "staged"
+	}
+	return "idle"
+}
+
+func pctWidth(p int) string {
+	if p < 0 {
+		p = 0
+	}
+	if p > 100 {
+		p = 100
+	}
+	return "width:" + strconv.Itoa(p) + "%"
+}
+
+func pctText(p int) string { return strconv.Itoa(p) + "%" }
+
+// autoUpdateCard is the standalone toggle form. Default OFF; when on the
+// service checks (and downloads) a newer release on boot but still waits
+// for a manual Apply & restart.
+templ autoUpdateCard(d SystemPageData) {
+	<form
+		method="POST"
+		action="/admin/advanced/software-update/auto-update"
+		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm"
+	>
+		<div class="flex items-start justify-between gap-4">
+			<div>
+				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Automatic updates</h2>
+				<p class="mt-1 text-sm text-black-800 dark:text-black-600">When on, the service checks for and downloads a newer release on boot. Applying it still needs a manual restart above.</p>
+			</div>
+			<label class="flex shrink-0 items-center gap-2 text-sm text-black-900 dark:text-white-100">
+				<input type="checkbox" name="enabled" value="true" checked?={ d.AutoUpdate } class="h-4 w-4 rounded border-white-400 dark:border-navy-600 text-green-500 focus:ring-green-500"/>
+				Enabled
+			</label>
+		</div>
+		<div class="mt-5 flex justify-end">
+			<button type="submit" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">Save</button>
+		</div>
+	</form>
+}
+
+// systemUpdateScript wires the live update UX: an EventSource on the
+// status stream drives the progress bar + status line and reveals the
+// Apply button when a download lands; Check POSTs to kick a check; Apply
+// POSTs then swaps to the restarting panel and polls /health (comparing
+// the reported version to currentVersion) before reloading. Vanilla JS,
+// self-contained like the boot-gate page.
+//
+// The wick-framework version row + "What's new" are rendered SERVER-SIDE
+// from the background version cache (no live fetch). On the official build
+// app == framework, so the app updater's SSE also drives the wick badge
+// (#sys-wick-badge, present only on official). On downstream builds that
+// element is absent and the badge/notes are static server-rendered.
+templ systemUpdateScript() {
+	<script type="text/javascript">
+	(function () {
+		var statusEl = document.getElementById('sys-status');
+		var badgeEl = document.getElementById('sys-update-badge');
+		var actionEl = document.getElementById('sys-action'); // single top-right action slot
+		var notesWrap = document.getElementById('sys-notes-wrap');
+		var notesHead = document.getElementById('sys-notes-head');
+		var notesBody = document.getElementById('sys-notes-body');
+		// Wick framework badge — present only on the official build, where
+		// it tracks the app's own update state via SSE. On downstream builds
+		// it's server-rendered (static), so this is null and SSE skips it.
+		var wickBadgeEl = document.getElementById('sys-wick-badge');
+		// Server-rendered wick changelog body (downstream builds). Markdown
+		// is rendered to HTML once on load — no fetch.
+		var wickNotesBody = document.getElementById('sys-wick-notes-body');
+
+		var applying = false; // latched once Apply is clicked, until reload
+
+		function fmtDate(s) {
+			if (!s) return '';
+			var m = /^(\d{4}-\d{2}-\d{2})/.exec(s);
+			return m ? m[1] : '';
+		}
+		function renderNotes(st) {
+			if (!notesWrap) return;
+			var has = st.release_notes && (st.has_staged || st.phase === 'staged' || st.phase === 'downloading' || st.phase === 'no-asset');
+			notesWrap.classList.toggle('hidden', !has);
+			if (!has) return;
+			var latest = st.latest_version || st.staged_version || '—';
+			var head = (st.current_version || '—') + ' → ' + latest;
+			var d = fmtDate(st.published_at);
+			if (d) head += ' · Released ' + d;
+			if (notesHead) notesHead.textContent = head;
+			if (notesBody) {
+				if (window.WickMarkdown && window.WickMarkdown.renderMarkdown) {
+					notesBody.innerHTML = window.WickMarkdown.renderMarkdown(st.release_notes);
+				} else {
+					notesBody.textContent = st.release_notes;
+				}
+			}
+		}
+		// statusText is the phase message shown under "Updates" — including
+		// the no-build-for-this-platform notice, which used to be a separate
+		// box but now lives inline here.
+		function statusText(st) {
+			switch (st.phase) {
+				case 'checking':    return 'Checking for updates…';
+				case 'downloading': return 'Downloading ' + (st.latest_version || '') + '…';
+				case 'up-to-date':  return 'You are on the latest version.';
+				case 'staged':      return (st.staged_version || 'A new version') + ' is ready to apply.';
+				case 'applying':    return 'Applying update…';
+				case 'no-asset':    return (st.latest_version || 'A new version') + ' is available, but there\'s no build for this platform' + (st.wanted_asset ? ' (expected ' + st.wanted_asset + ')' : '') + '.';
+				case 'error':       return 'Update failed: ' + (st.error || 'unknown error');
+			}
+			if (st.has_staged) return (st.staged_version || 'A new version') + ' is ready to apply.';
+			return 'Click “Check for updates” to look for a new release.';
+		}
+		// renderAction rebuilds the single top-right slot for the phase — the
+		// JS twin of the Go actionSlot templ. Buttons are recreated each
+		// time, so clicks are handled by delegation on actionEl (below).
+		function actionState(st) {
+			if (applying) return 'applying';
+			switch (st.phase) {
+				case 'downloading': case 'staged': case 'applying': case 'checking': return st.phase;
+			}
+			return st.has_staged ? 'staged' : 'idle';
+		}
+		function renderAction(st) {
+			if (!actionEl) return;
+			var s = actionState(st);
+			if (s === 'downloading') {
+				var p = Math.max(0, Math.min(100, st.percent || 0));
+				actionEl.innerHTML =
+					'<div class="w-40"><div class="h-2 w-full overflow-hidden rounded-full bg-white-300 dark:bg-navy-800">' +
+					'<div class="h-full rounded-full bg-green-500 transition-[width] duration-200" style="width:' + p + '%"></div></div>' +
+					'<p class="mt-1.5 text-right text-xs font-mono text-black-700 dark:text-black-600">' + p + '%</p></div>';
+			} else if (s === 'staged') {
+				actionEl.innerHTML = '<button id="sys-apply" type="button" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">Apply &amp; restart</button>';
+			} else if (s === 'applying') {
+				actionEl.innerHTML = '<span class="inline-flex items-center gap-2 text-sm text-black-800 dark:text-black-600"><span class="h-4 w-4 animate-spin rounded-full border-2 border-white-400 border-t-green-500"></span>Restarting…</span>';
+			} else if (s === 'checking') {
+				actionEl.innerHTML = '<button type="button" disabled class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-700 dark:text-black-600 opacity-60">Checking…</button>';
+			} else {
+				actionEl.innerHTML = '<button id="sys-check" type="button" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600">Check for updates</button>';
+			}
+		}
+		function applyBadge(el, st) {
+			if (!el) return;
+			var text = '', amber = true;
+			if (st.phase === 'up-to-date') { text = 'Latest'; amber = false; }
+			else if (st.phase === 'staged' || st.phase === 'downloading' || st.phase === 'no-asset' || st.has_staged) {
+				var v = st.latest_version || st.staged_version || '';
+				text = v ? 'Update available → ' + v : 'Update available';
+			}
+			el.classList.toggle('hidden', text === '');
+			if (!text) return;
+			el.textContent = text;
+			el.className = 'rounded-full px-2 py-0.5 text-xs font-medium ' +
+				(amber ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+				       : 'bg-pos-100 text-pos-400');
+		}
+		function render(st) {
+			if (!st) return;
+			applyBadge(badgeEl, st);
+			applyBadge(wickBadgeEl, st);
+			renderNotes(st);
+			if (statusEl) statusEl.textContent = statusText(st);
+			renderAction(st);
+			// Whenever the page is in the applying phase — whether this tab
+			// clicked Apply or it loaded mid-restart / another tab triggered
+			// it — start polling for the new build so it auto-reloads. Idem-
+			// potent: startHealthPoll only kicks one loop.
+			if (st.phase === 'applying') {
+				applying = true;
+				renderAction({ phase: 'applying' });
+				startHealthPoll();
+			}
+		}
+
+		function triggerCheck() {
+			if (statusEl) statusEl.textContent = 'Checking for updates…';
+			renderAction({ phase: 'checking' });
+			fetch('/admin/advanced/software-update/check', { method: 'POST' })
+				.catch(function () { if (statusEl) statusEl.textContent = 'Could not start the check.'; });
+		}
+
+		// startHealthPoll watches /health and reloads the page once the
+		// service comes back. It is idempotent (polling guard) so it can be
+		// called from triggerApply AND from render() when the phase is
+		// 'applying' — so a tab that merely LOADS mid-restart still auto-
+		// reloads, instead of getting stuck on "Restarting…" until a manual
+		// refresh. It waits for /health to go DOWN first, then reloads on the
+		// first success after that — otherwise the brief window where the old
+		// server is still answering would reload us straight back onto the
+		// old build. A time cap reloads anyway as a fallback.
+		var polling = false;
+		function startHealthPoll() {
+			if (polling) return;
+			polling = true;
+			var tries = 0, sawDown = false;
+			(function tick() {
+				tries++;
+				fetch('/health', { cache: 'no-store' })
+					.then(function (r) {
+						if (r.ok) {
+							// Up. Reload only once we've seen it go down — that's
+							// the new build answering, not the pre-restart one.
+							if (sawDown) { location.reload(); return; }
+						} else {
+							sawDown = true; // non-2xx counts as down
+						}
+						if (tries > 150) { location.reload(); return; } // ~5min cap
+						setTimeout(tick, 2000);
+					})
+					.catch(function () {
+						sawDown = true; // connection refused — server is down
+						if (tries > 150) { location.reload(); return; }
+						setTimeout(tick, 2000);
+					});
+			})();
+		}
+		function triggerApply() {
+			applying = true;
+			renderAction({ phase: 'applying' });
+			if (statusEl) statusEl.textContent = 'Applying update…';
+			fetch('/admin/advanced/software-update/apply', { method: 'POST' })
+				.then(function (r) { return r.json(); })
+				.then(function (d) {
+					if (d && d.restart) {
+						setTimeout(startHealthPoll, 1500);
+					} else {
+						applying = false;
+						if (statusEl) statusEl.textContent = (d && (d.error || d.message)) || 'Could not apply the update.';
+						renderAction({ phase: 'staged', has_staged: true });
+					}
+				})
+				.catch(function () {
+					applying = false;
+					if (statusEl) statusEl.textContent = 'Apply failed — see server logs.';
+					renderAction({ phase: 'staged', has_staged: true });
+				});
+		}
+
+		// One delegated listener on the slot — the Check / Apply buttons are
+		// recreated by renderAction, so we can't bind them once up front.
+		if (actionEl) {
+			actionEl.addEventListener('click', function (e) {
+				var btn = e.target.closest('button');
+				if (!btn) return;
+				if (btn.id === 'sys-check') triggerCheck();
+				else if (btn.id === 'sys-apply') triggerApply();
+			});
+		}
+
+		// Live status stream. Track the latest phase so the auto-check on
+		// load doesn't re-fire while a download/apply is already underway.
+		var lastPhase = '';
+		try {
+			var es = new EventSource('/admin/advanced/software-update/status');
+			es.addEventListener('status', function (e) {
+				try { var st = JSON.parse(e.data); lastPhase = st.phase; render(st); } catch (_) {}
+			});
+		} catch (_) { /* SSE unsupported — buttons still work, just no live bar */ }
+
+		// Auto-check once on page load so "Latest release" populates without
+		// a manual click. Only fire if nothing is already in flight.
+		setTimeout(function () {
+			if (lastPhase === '' || lastPhase === 'idle' || lastPhase === 'up-to-date' || lastPhase === 'no-asset') {
+				triggerCheck();
+			}
+		}, 800);
+
+		// Downstream wick "What's new" is server-rendered from the version
+		// cache; its body holds raw changelog markdown. Render it to HTML
+		// once on load for nice formatting (content is trusted — our own
+		// changelog site; renderMarkdown escapes text + emits safe links).
+		if (wickNotesBody && window.WickMarkdown && window.WickMarkdown.renderMarkdown) {
+			wickNotesBody.innerHTML = window.WickMarkdown.renderMarkdown(wickNotesBody.textContent);
+		}
+	})();
+	</script>
+}

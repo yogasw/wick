@@ -32,12 +32,16 @@ type SlackStore interface {
 type TelegramStore interface {
 	agentchannels.TelegramConfigStore
 	agentchannels.ChannelEnsurer
+	LoadTelegramForUser(userID string) (agentconfig.TelegramChannelConfig, error)
+	ListChannelOwners(channelType string) ([]*string, error)
 }
 
 // RestStore mirrors SlackStore for the OpenAI-compatible REST channel.
 type RestStore interface {
 	agentchannels.RestConfigStore
 	agentchannels.ChannelEnsurer
+	LoadRestForUser(userID string) (agentconfig.RestChannelConfig, error)
+	ListChannelOwners(channelType string) ([]*string, error)
 }
 
 // Store is the union of every per-channel store interface used by All.
@@ -95,6 +99,7 @@ func Slack(reg *agentchannels.Registry, store SlackStore, sendFn agentchannels.S
 		ch.SetSendFunc(sendFn)
 		ch.SetPublicURL(pubURL)
 		key := instanceKey("slack", ownerID)
+		ch.SetSessionPrefix(key + ":")
 		src := agentslack.NewConfigSourceKeyed(store, ch, uid)
 		reg.AddKeyed(key, ch, src)
 		if ch.IsConfigured() {
@@ -103,45 +108,68 @@ func Slack(reg *agentchannels.Registry, store SlackStore, sendFn agentchannels.S
 	}
 }
 
-// Rest constructs the OpenAI-compatible REST channel and registers it
-// with a hot-reload ConfigSource. auth resolves the per-request Bearer
-// (Personal Access Token) and is required — without it the channel
-// refuses to serve.
-func Rest(reg *agentchannels.Registry, store RestStore, sendFn agentchannels.SendFunc, auth agentrest.Authenticator) *agentrest.Channel {
+// Rest registers one keyed REST instance per configured owner, mirroring
+// Slack. auth resolves the per-request Bearer (Personal Access Token) and
+// is required — without it the channel refuses to serve. The HTTP endpoint
+// itself is shared; each keyed instance carries that owner's config row.
+func Rest(reg *agentchannels.Registry, store RestStore, sendFn agentchannels.SendFunc, auth agentrest.Authenticator) {
 	if err := store.EnsureChannel("rest"); err != nil {
 		log.Warn().Err(err).Msg("agents: rest channel ensure failed")
 	}
-	cfg, err := store.LoadRest()
+	owners, err := store.ListChannelOwners("rest")
 	if err != nil {
-		log.Warn().Err(err).Msg("agents: failed to load rest config from agent_channels")
+		log.Warn().Err(err).Msg("agents: rest list channel owners failed; loading App Owner only")
+		owners = []*string{nil}
 	}
-	ch := agentrest.New(cfg, auth)
-	ch.SetSendFunc(sendFn)
-	reg.Add(ch, agentrest.NewConfigSource(store, ch))
-	if ch.IsConfigured() {
-		log.Info().Msg("agents: rest channel enabled, serving POST /integrations/rest/api/v1/openai/chat/completions")
-	} else {
-		log.Info().Msg("agents: rest channel not enabled (toggle in Channels → REST)")
+	for _, ownerID := range owners {
+		uid := ""
+		if ownerID != nil {
+			uid = *ownerID
+		}
+		cfg, err := store.LoadRestForUser(uid)
+		if err != nil {
+			log.Warn().Err(err).Str("user_id", uid).Msg("agents: failed to load rest config for user")
+			continue
+		}
+		ch := agentrest.NewWithOwner(cfg, auth, uid)
+		ch.SetSendFunc(sendFn)
+		key := instanceKey("rest", ownerID)
+		src := agentrest.NewConfigSourceKeyed(store, ch, uid)
+		reg.AddKeyed(key, ch, src)
+		if ch.IsConfigured() {
+			log.Info().Str("instance", key).Msg("agents: rest channel enabled")
+		}
 	}
-	return ch
 }
 
-// Telegram mirrors Slack — see that comment.
-func Telegram(reg *agentchannels.Registry, store TelegramStore, sendFn agentchannels.SendFunc) *agenttelegram.Channel {
+// Telegram registers one keyed instance per configured owner — see Slack.
+func Telegram(reg *agentchannels.Registry, store TelegramStore, sendFn agentchannels.SendFunc) {
 	if err := store.EnsureChannel("telegram"); err != nil {
 		log.Warn().Err(err).Msg("agents: telegram channel ensure failed")
 	}
-	cfg, err := store.LoadTelegram()
+	owners, err := store.ListChannelOwners("telegram")
 	if err != nil {
-		log.Warn().Err(err).Msg("agents: failed to load telegram config from agent_channels")
+		log.Warn().Err(err).Msg("agents: telegram list channel owners failed; loading App Owner only")
+		owners = []*string{nil}
 	}
-	ch := agenttelegram.New(cfg)
-	ch.SetSendFunc(sendFn)
-	reg.Add(ch, agenttelegram.NewConfigSource(store, ch))
-	if ch.IsConfigured() {
-		log.Info().Msg("agents: telegram channel configured, will start with server")
-	} else {
-		log.Info().Msg("agents: telegram channel not configured, skipping (set BotToken in Channels → Telegram)")
+	for _, ownerID := range owners {
+		uid := ""
+		if ownerID != nil {
+			uid = *ownerID
+		}
+		cfg, err := store.LoadTelegramForUser(uid)
+		if err != nil {
+			log.Warn().Err(err).Str("user_id", uid).Msg("agents: failed to load telegram config for user")
+			continue
+		}
+		ch := agenttelegram.NewWithOwner(cfg, uid)
+		ch.SetSendFunc(sendFn)
+		key := instanceKey("telegram", ownerID)
+		ch.SetSessionPrefix(key + ":")
+		src := agenttelegram.NewConfigSourceKeyed(store, ch, uid)
+		reg.AddKeyed(key, ch, src)
+		if ch.IsConfigured() {
+			log.Info().Str("instance", key).Msg("agents: telegram channel configured")
+		}
 	}
-	return ch
 }

@@ -1,6 +1,6 @@
 # Admin Panel
 
-Wick ships a full-featured admin panel at `/admin/*` — no separate codebase, no extra service. Admins manage users, modules, tags, configs, and the MCP auth surface from one place. Non-admins never see these pages.
+Wick ships a full-featured admin panel at `/admin/*` — no separate codebase, no extra service. Admins manage users, modules, tags, runtime config, and the MCP auth surface from one place. Non-admins never see these pages.
 
 This page collects screenshots of every admin surface in one place. Each subsection has a one-paragraph summary plus a link to the operational guide.
 
@@ -9,7 +9,7 @@ A user becomes admin in one of two ways: their email is in `APP_ADMIN_EMAILS` at
 :::
 
 ::: tip App Owner
-Above admin sits a single **App Owner**: the first user ever registered is auto-promoted (`is_owner`). The owner is a superset of admin — `IsAdmin()` is true for both — but **only the owner can see every user's agent sessions**. Admins and regular users see only the sessions, projects, workflows, and skills they own; per-session routes return `404` for sessions they don't own. There is no env var for this — it's assigned automatically to the first account.
+Above admin sits a single **App Owner**: the first user ever registered is auto-promoted (`is_owner`). The owner is a superset of admin — `IsAdmin()` is true for both — but **only the owner can see every user's agent sessions**. Admins and regular users see only the sessions, projects, workflows, and skills they own or can reach via project tag grants; per-session routes return `404` for sessions outside their access. There is no env var for this — it's assigned automatically to the first account.
 :::
 
 ::: info Admin session visibility (`admin_see_all`)
@@ -37,7 +37,7 @@ Approve newly-registered users, demote/promote roles, and attach access tags. Th
 
 ## Mini Tools (Tools, Connectors, Jobs)
 
-The Tools, Connectors, and Jobs admin pages are grouped under a **Mini Tools** dropdown in the admin navigation bar. A **Launcher** link in the same dropdown opens the tools grid at `/launcher`.
+The Tools, Connectors, and Jobs admin pages are grouped under a **Mini Tools** dropdown in the admin navigation bar. A **Mini Tools** link is also available to all users in the Agents sidebar at the bottom, and opens the tools grid at `/mini-tools`.
 
 ### Tools
 
@@ -106,14 +106,40 @@ Three orthogonal flags per tag:
 - `IsFilter` — gates access; rows with ≥1 filter tag are visible only to users carrying a matching tag.
 - `IsSystem` — code-owned, immutable from the UI. Used by built-in jobs and connectors that ship with wick.
 
-## Configs
+## Advanced
 
-![Admin Configs](/screenshots/admin-configs.png)
-*Configs — runtime variables (app name, app URL, SSO providers, OAuth secrets) editable without redeploying. The DB value always wins over env-var seeds.*
+![Admin Advanced](/screenshots/admin-configs.png)
+*Advanced — runtime variables (app name, app URL, SSO providers, OAuth secrets) editable without redeploying. The DB value always wins over env-var seeds.*
+
+The **Advanced** section (previously "Configs") lives at `/admin/advanced` and groups the runtime configuration surfaces that don't fit in the main admin nav: Variables, SSO, and Software Update.
 
 Env vars seed the row on first boot only; subsequent edits via this page are durable. SSO providers (Google, etc.) are configured here — no `client_id`/`client_secret` baked into the binary.
 
 Operational guide: [Environment Variables](../reference/env-vars).
+
+### Software Update (`/admin/advanced/software-update`)
+
+The **Software Update** page (previously called "System" at `/admin/configs/system`) has three panels:
+
+**Version** — mirrors the fields `wick_info` exposes over MCP, grouped into three sections: **Application** (app name, app version, build time — the build time describes when the running application binary was compiled), **Wick** (the embedded wick framework version), and **Runtime** (access type and database status — type · connected / error). The App/Wick version fields carry a status badge — green **Latest** when already on the newest release, amber **Update available → vX** when a newer release exists. For non-official (downstream) builds, the Wick row also shows a **"What's new"** changelog block between the embedded version and the latest public wick release — rendered server-side from the background version cache, so no live request runs on page load.
+
+**Updates** — available when the binary was built with a release source (`--release-github-repo`). Workflow:
+
+1. The page auto-checks for updates on load, populating the latest version, release date, and a rendered changelog of everything between the running version and the latest release.
+2. Click **Check for updates** to re-poll manually — the server checks GitHub releases and downloads the matching asset in the background. A live progress bar (SSE) fills as the download runs.
+3. When the download completes, **Apply & restart** appears. Click it — the service re-execs in place (Linux/macOS: `syscall.Exec` preserves the PID; Windows MSI: a helper relaunches the process). The page polls `/health` and reloads automatically once the new build answers.
+
+When a newer release exists but ships no asset for the running OS/arch, the page shows the version and changelog with an informational notice ("No build for this platform — build from source or contact the maintainer") instead of a hard error.
+
+When no release source is configured the Updates card is replaced by a "not configured" notice.
+
+A **View full changelog** link is shown alongside the rendered release notes to open the complete changelog page.
+
+**Automatic updates** — when enabled, the service checks for and downloads a new release on each boot, so the staged binary is ready for the next restart without a manual check. Applying it still requires a deliberate **Apply & restart** from this page. Default: **off** (opt-in).
+
+::: tip Headless service mode
+The Software Update page is the primary update surface for deployments running as a headless service (`<app> all` or `<app> server`). The desktop tray offers the same check/apply flow for GUI installs, with a matching opt-in auto-update toggle under **Preferences**.
+:::
 
 ## Startup script
 

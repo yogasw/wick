@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<!--
+  Mockup: Profile → Channels tab (per-user channel settings)
+  Pairs with plan-multi-channel-per-user.md (T6). Update both together.
+  Stack reference only: real impl uses templ + Tailwind tokens (green/navy, Inter, 8px grid).
+-->
+<html lang="en" class="">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Profile · Channels</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: Inter, system-ui, sans-serif; }
+  .tab-active { color:#0c8a4d; border-bottom:2px solid #0c8a4d; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+<div class="mx-auto max-w-5xl px-6 py-8">
+
+  <!-- Profile tabs -->
+  <nav class="flex gap-6 border-b border-slate-200 text-sm font-medium text-slate-500">
+    <a class="pb-3" href="#">Account</a>
+    <a class="pb-3" href="#">Access Tokens</a>
+    <a class="pb-3" href="#">Connected Apps</a>
+    <a class="pb-3" href="#">MCP</a>
+    <a class="pb-3 tab-active" href="#">Channels</a>
+    <a class="pb-3" href="#">Agents</a>
+  </nav>
+
+  <header class="mt-6">
+    <h1 class="text-2xl font-semibold">Channels</h1>
+    <p class="mt-1 text-sm text-slate-500">
+      Connect your own Slack, Telegram, or REST endpoint. These settings are private to your account —
+      each user manages their own channels.
+    </p>
+  </header>
+
+  <!-- Channel cards -->
+  <div class="mt-6 grid grid-cols-1 gap-5 lg:grid-cols-2">
+
+    <!-- Slack -->
+    <section class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div class="flex items-start justify-between">
+        <div>
+          <h2 class="text-base font-semibold">Slack</h2>
+          <p class="mt-1 text-sm text-slate-500">Your Slack workspace bot.</p>
+        </div>
+        <span class="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">Connected</span>
+      </div>
+      <form class="mt-5 flex flex-col gap-4">
+        <div class="flex flex-col gap-1.5">
+          <label class="text-sm font-medium">Bot token</label>
+          <input type="password" value="xoxb-••••••••••••" class="rounded-lg border border-slate-300 px-3 py-2.5 text-sm"/>
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-sm font-medium">App token</label>
+          <input type="password" placeholder="xapp-..." class="rounded-lg border border-slate-300 px-3 py-2.5 text-sm"/>
+        </div>
+        <div class="flex justify-end gap-2">
+          <button type="button" class="rounded-lg border border-slate-300 px-4 py-2 text-sm">Test</button>
+          <button type="submit" class="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white">Save</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Telegram (NEW: now per-user) -->
+    <section class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div class="flex items-start justify-between">
+        <div>
+          <h2 class="text-base font-semibold">Telegram</h2>
+          <p class="mt-1 text-sm text-slate-500">Your own Telegram bot (long-poll).</p>
+        </div>
+        <span class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-500">Not configured</span>
+      </div>
+      <form class="mt-5 flex flex-col gap-4">
+        <div class="flex flex-col gap-1.5">
+          <label class="text-sm font-medium">Bot token</label>
+          <input type="password" placeholder="123456:ABC-DEF..." class="rounded-lg border border-slate-300 px-3 py-2.5 text-sm"/>
+        </div>
+        <div class="flex justify-end gap-2">
+          <button type="button" class="rounded-lg border border-slate-300 px-4 py-2 text-sm">Test</button>
+          <button type="submit" class="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white">Save</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- REST (NEW: per-user via PAT) -->
+    <section class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-2">
+      <div class="flex items-start justify-between">
+        <div>
+          <h2 class="text-base font-semibold">REST (OpenAI-compatible)</h2>
+          <p class="mt-1 text-sm text-slate-500">
+            One shared endpoint. Authenticate with your Personal Access Token — requests are
+            attributed to you automatically. No bot token needed.
+          </p>
+        </div>
+        <label class="inline-flex cursor-pointer items-center gap-2">
+          <input type="checkbox" checked class="h-4 w-4 accent-emerald-600"/>
+          <span class="text-sm">Enabled</span>
+        </label>
+      </div>
+      <div class="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+        <div class="text-xs font-medium uppercase text-slate-500">Endpoint</div>
+        <code class="mt-1 block font-mono text-xs">POST https://your-wick/integrations/rest/api/v1/openai/chat/completions</code>
+        <div class="mt-3 text-xs font-medium uppercase text-slate-500">Auth</div>
+        <code class="mt-1 block font-mono text-xs">Authorization: Bearer wick_pat_•••• &nbsp; (create one in Access Tokens tab)</code>
+      </div>
+      <p class="mt-3 text-xs text-slate-500">
+        Per-user config (allowed models, default project) — <em>TBD, pending product decision (plan T2)</em>.
+      </p>
+    </section>
+
+  </div>
+
+  <p class="mt-8 text-center text-xs text-slate-400">
+    Mockup only — pairs with plan-multi-channel-per-user.md. Colors here are placeholders; real impl uses design-system tokens.
+  </p>
+</div>
+</body>
+</html>

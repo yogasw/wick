@@ -58,6 +58,15 @@ type Channel struct {
 
 	turns map[string]*turn
 
+	ownerUserID string // wick user who owns this channel row; empty = App Owner
+
+	// sessionPrefix namespaces this instance's session keys so multiple
+	// Telegram bots (per-user owners, different bot tokens) never collide on
+	// a shared chat id. Set by the setup composer to the registry instance
+	// key plus a separator (e.g. "telegram:__owner__:"). Empty for a lone
+	// unkeyed channel. The bare chatID stays on each turn for replies.
+	sessionPrefix string
+
 	runCancel context.CancelFunc
 	runWg     sync.WaitGroup
 }
@@ -83,10 +92,26 @@ func New(cfg agentconfig.TelegramChannelConfig) *Channel {
 	return tc
 }
 
+// NewWithOwner creates a Telegram Channel tied to a specific wick user owner.
+// ownerUserID="" means the App Owner's channel (user_id = NULL row).
+func NewWithOwner(cfg agentconfig.TelegramChannelConfig, ownerUserID string) *Channel {
+	tc := New(cfg)
+	tc.ownerUserID = ownerUserID
+	return tc
+}
+
 // SetSendFunc satisfies channels.SendFuncSetter.
 func (t *Channel) SetSendFunc(fn agentchannels.SendFunc) {
 	t.mu.Lock()
 	t.sendFn = fn
+	t.mu.Unlock()
+}
+
+// SetSessionPrefix namespaces this instance's session keys so two Telegram
+// bots never share a pool session on a coincidentally-equal chat id.
+func (t *Channel) SetSessionPrefix(prefix string) {
+	t.mu.Lock()
+	t.sessionPrefix = prefix
 	t.mu.Unlock()
 }
 
@@ -270,11 +295,11 @@ func (t *Channel) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	}
 
 	chatID := msg.Chat.ID
-	sessionID := fmt.Sprintf("tg-%d", chatID)
 
 	t.mu.Lock()
 	allowed := t.cfg.AllowedIDs
 	sendFn := t.sendFn
+	sessionID := t.sessionPrefix + fmt.Sprintf("tg-%d", chatID)
 	t.mu.Unlock()
 
 	if !t.isChatAllowed(chatID, allowed) {

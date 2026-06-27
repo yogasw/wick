@@ -14,6 +14,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,7 +29,6 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
-	slackconnector "github.com/yogasw/wick/internal/connectors/slack"
 )
 
 const (
@@ -46,6 +46,12 @@ const (
 	// fast enough that the operator wouldn't see it anyway. Only sessions
 	// that are still waiting after this delay get the queue indicator.
 	queueReactionDelay = 3 * time.Second
+
+	// statusRefreshInterval re-asserts the assistant "is thinking…" status
+	// while a turn is in flight. Slack removes the status after a 2-minute
+	// timeout if no message is posted, so a long tool-use turn (no text
+	// deltas) would otherwise look idle. Kept well under the 2-minute limit.
+	statusRefreshInterval = 45 * time.Second
 )
 
 // turn holds the per-turn state for a Slack session (thread). A new turn
@@ -57,6 +63,7 @@ const (
 // between the old and new turn boundaries are not dropped.
 type turn struct {
 	channelID  string
+	threadTS   string // native Slack thread_ts — used for replies/status (NOT the namespaced session key)
 	msgTS      string // ts of the user message — used for reactions
 	buf        strings.Builder
 	hasStarted bool // true after first TextDelta (banner already set)
@@ -67,6 +74,13 @@ type turn struct {
 	// queueShown is set when queueTimer actually fired and added ⏳, so
 	// downstream cleanup knows to remove it.
 	queueShown bool
+	// statusTicker re-asserts the "is thinking…" banner every
+	// statusRefreshInterval while the turn is still running. Slack auto-
+	// removes the assistant status after a 2-minute timeout (and on any
+	// posted reply), so a long tool-use turn with no text deltas would
+	// otherwise look idle. Stopped (and set to nil) on Done/Error.
+	statusTicker *time.Ticker
+	statusStop   chan struct{}
 	// approval tracking
 	pendingApprovalID    string // gate request UUID while waiting for decision
 	pendingApprovalMsgTS string // ts of the Slack approval message (for update)
@@ -89,6 +103,18 @@ type Channel struct {
 	sendFn     agentchannels.SendFunc
 	ownerFn    func(ctx context.Context, sessionID, userID string)
 	ownerUserID string // wick user who owns this channel row; empty = App Owner
+
+	// sessionPrefix namespaces this instance's session keys so multiple
+	// Slack bots (per-user owners, possibly across different workspaces)
+	// never collide on a shared threadTS. Set by the registry/setup composer
+	// to the instance key plus a separator (e.g. "slack:__owner__:" or
+	// "slack:<wickUserID>:"). Empty for a lone unkeyed channel.
+	//
+	// Invariant: the value passed to sendFn and stored as the turns map key
+	// is always sessionPrefix+threadTS; the bare threadTS is kept on each
+	// turn for Slack API calls (replies, reactions, status). See sessionKey
+	// and the turn.threadTS field.
+	sessionPrefix string
 
 	cfgMu          sync.Mutex
 	cfg            agentconfig.SlackChannelConfig
@@ -166,6 +192,27 @@ func (s *Channel) SetSendFunc(fn agentchannels.SendFunc) { s.sendFn = fn }
 // SetOwnerFn wires a function that stamps a wick user ID on a session.
 func (s *Channel) SetOwnerFn(fn func(ctx context.Context, sessionID, userID string)) {
 	s.ownerFn = fn
+}
+
+// SetSessionPrefix namespaces this instance's session keys. Called by the
+// setup composer with the registry instance key + separator so two Slack
+// bots never share a session/pool entry on a coincidentally-equal threadTS
+// (e.g. the same timestamp produced in two different workspaces). Safe to
+// call once before Start.
+func (s *Channel) SetSessionPrefix(prefix string) {
+	s.cfgMu.Lock()
+	s.sessionPrefix = prefix
+	s.cfgMu.Unlock()
+}
+
+// sessionKey returns the namespaced session key for a Slack thread:
+// sessionPrefix + threadTS. This is the value handed to the pool and used
+// as the turns map key, guaranteeing per-instance isolation.
+func (s *Channel) sessionKey(threadTS string) string {
+	s.cfgMu.Lock()
+	p := s.sessionPrefix
+	s.cfgMu.Unlock()
+	return p + threadTS
 }
 
 // API returns the live Slack web-API client. Returns nil when the
@@ -258,7 +305,6 @@ func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string)
 			teamName = resp.Team
 			teamDomain = extractTeamDomain(resp.URL)
 			botUserName = resolveBotDisplayName(api, botUserID, resp.User)
-			slackconnector.SetBotUserID(botUserID)
 		}
 	}
 
@@ -442,7 +488,6 @@ func (s *Channel) refreshBotUserID(ctx context.Context) {
 	s.teamName = resp.Team
 	s.teamDomain = extractTeamDomain(resp.URL)
 	s.cfgMu.Unlock()
-	slackconnector.SetBotUserID(resp.UserID)
 	if prev != resp.UserID {
 		log.Info().Str("channel", "slack").Str("bot_user_id", resp.UserID).Str("prev", prev).Msg("bot user id refreshed on connect")
 	}
@@ -810,14 +855,16 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	if err != nil {
 		log.Warn().Str("channel", "slack").Str("user", ev.User).Err(err).Msg("resolve groups failed; falling back to empty")
 	}
-	if !s.allowedCfg(cfg, ev.User, groupIDs, ev.Channel) {
+	if ok, reason := s.allowedCfg(cfg, ev.User, groupIDs, ev.Channel); !ok {
 		log.Warn().Str("channel", "slack").
 			Str("user", ev.User).
 			Str("slack_channel", ev.Channel).
 			Str("channel_type", ev.ChannelType).
 			Strs("groups", groupIDs).
+			Str("reason", reason).
 			Msg("access denied, ignoring message")
 		s.setReaction(reactionBlocked, ev.Channel, ev.TimeStamp, "")
+		s.notifyAccessDenied(ctx, ev.User, ev.Channel, reason)
 		return
 	}
 	log.Info().Str("channel", "slack").
@@ -832,14 +879,22 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		return
 	}
 
+	// Namespace the session by instance so two bots (possibly in different
+	// workspaces) never collide on an equal threadTS. The bare threadTS is
+	// kept on the turn for Slack API calls.
+	sessionID := s.sessionKey(threadTS)
+
 	s.mu.Lock()
-	old := s.turns[threadTS]
-	t := &turn{channelID: ev.Channel, msgTS: ev.TimeStamp}
+	old := s.turns[sessionID]
+	t := &turn{channelID: ev.Channel, threadTS: threadTS, msgTS: ev.TimeStamp}
 	if old != nil {
 		t.buf.WriteString(old.buf.String())
 		t.hasStarted = old.hasStarted
+		// A new turn supersedes the old one: stop its status heartbeat so the
+		// goroutine doesn't outlive the turn it was refreshing.
+		s.stopStatusHeartbeat(old)
 	}
-	s.turns[threadTS] = t
+	s.turns[sessionID] = t
 	s.mu.Unlock()
 
 	if old != nil {
@@ -860,7 +915,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	msgTS := ev.TimeStamp
 	t.queueTimer = time.AfterFunc(queueReactionDelay, func() {
 		s.mu.Lock()
-		cur := s.turns[threadTS]
+		cur := s.turns[sessionID]
 		// Only mark/show if this turn is still current.
 		stillCurrent := cur != nil && cur.msgTS == msgTS
 		if stillCurrent {
@@ -874,49 +929,114 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	})
 
 	userText := normalizeUserText(ev.Text)
-	if !s.sessionOnDisk(threadTS) {
+	isNewSession := !s.sessionOnDisk(sessionID)
+	if isNewSession {
 		ctxText := s.buildSessionContext(ev, threadTS)
 		if ctxText != "" {
-			if err := s.sendFn(context.Background(), threadTS, "main", "slack", "system", ctxText); err != nil {
-				log.Warn().Str("channel", "slack").Str("session", threadTS).Err(err).Msg("inject session context failed")
+			if err := s.sendFn(context.Background(), sessionID, "main", "slack", "system", ctxText); err != nil {
+				log.Warn().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("inject session context failed")
 			}
 		}
 		if hook := s.onSessionStart; hook != nil {
-			hook(threadTS, "slack", ctxText)
+			hook(sessionID, "slack", ctxText)
 		}
 	}
 
-	if err := s.sendFn(context.Background(), threadTS, "main", "slack", "user", userText); err != nil {
-		log.Error().Str("channel", "slack").Str("session", threadTS).Err(err).Msg("pool send failed")
-		old := s.cancelQueueTimer(threadTS, ev.Channel, ev.TimeStamp)
-		_ = old
+	if err := s.sendFn(context.Background(), sessionID, "main", "slack", "user", userText); err != nil {
+		log.Error().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("pool send failed")
+		s.cancelQueueTimer(sessionID, ev.Channel, ev.TimeStamp)
 		s.setReaction(reactionError, ev.Channel, ev.TimeStamp, "")
 		s.postReply(ev.Channel, threadTS, "Agent error: could not queue message. Check the dashboard for details.")
 		return
 	}
-	if s.ownerFn != nil && s.wickUserIDFn != nil {
-		if wickUserID, ok := s.wickUserIDFn(context.Background(), ev.User); ok {
-			s.ownerFn(context.Background(), threadTS, wickUserID)
+	// Stamp the session owner once, on the first message that creates the
+	// session. wickUserIDFn hits the DB, so skipping it on every follow-up
+	// reply (where the owner is already set) avoids needless per-message
+	// queries. EnsureSessionOwner is a no-op if an owner already exists.
+	if isNewSession && s.ownerFn != nil {
+		if s.wickUserIDFn != nil {
+			if wickUserID, ok := s.wickUserIDFn(context.Background(), ev.User); ok {
+				s.ownerFn(context.Background(), sessionID, wickUserID)
+			}
 		}
-	}
-	if s.ownerFn != nil && s.ownerUserID != "" {
-		s.ownerFn(context.Background(), threadTS, s.ownerUserID)
+		if s.ownerUserID != "" {
+			s.ownerFn(context.Background(), sessionID, s.ownerUserID)
+		}
 	}
 	// Message accepted by the pool: cancel pending queue timer (and remove
 	// ⏳ if it had already fired), then surface the "thinking" banner so
 	// the operator sees a working signal even while the agent is still
 	// thinking. No "running" emoji — agent status lives in Wick's web UI
 	// and the assistant thread banner.
-	s.cancelQueueTimer(threadTS, ev.Channel, ev.TimeStamp)
+	s.cancelQueueTimer(sessionID, ev.Channel, ev.TimeStamp)
 	s.setAssistantStatus(ev.Channel, threadTS, "is thinking…")
+	// Keep the banner alive across long tool-use turns: Slack drops the
+	// assistant status after 2 minutes with no posted reply, so re-assert
+	// it periodically until Done/Error stops the heartbeat.
+	s.startStatusHeartbeat(sessionID)
+}
+
+// startStatusHeartbeat launches a goroutine that re-asserts the assistant
+// "is thinking…" status every statusRefreshInterval while sessionID's turn
+// is still the current one. It is a no-op if a heartbeat is already running
+// for the turn. Stopped by stopStatusHeartbeat (called on Done/Error) or
+// automatically when the turn is replaced/removed.
+func (s *Channel) startStatusHeartbeat(sessionID string) {
+	s.mu.Lock()
+	t := s.turns[sessionID]
+	if t == nil || t.statusTicker != nil {
+		s.mu.Unlock()
+		return
+	}
+	ticker := time.NewTicker(statusRefreshInterval)
+	stop := make(chan struct{})
+	t.statusTicker = ticker
+	t.statusStop = stop
+	channelID := t.channelID
+	threadTS := t.threadTS
+	s.mu.Unlock()
+
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				// Only refresh while this turn is still current; a replaced
+				// turn cancels via stopStatusHeartbeat, but guard anyway.
+				s.mu.Lock()
+				cur := s.turns[sessionID]
+				stillCurrent := cur != nil && cur.statusStop == stop
+				s.mu.Unlock()
+				if !stillCurrent {
+					return
+				}
+				s.setAssistantStatus(channelID, threadTS, "is thinking…")
+			}
+		}
+	}()
+}
+
+// stopStatusHeartbeat halts the status-refresh goroutine for the turn, if
+// any. Safe to call when no heartbeat is running.
+func (s *Channel) stopStatusHeartbeat(t *turn) {
+	if t == nil || t.statusTicker == nil {
+		return
+	}
+	t.statusTicker.Stop()
+	close(t.statusStop)
+	t.statusTicker = nil
+	t.statusStop = nil
 }
 
 // cancelQueueTimer stops the pending queue-reaction timer for the named
-// turn. If the timer already fired and the ⏳ reaction was added, it is
-// removed too. Returns true when the reaction was visible at call time.
-func (s *Channel) cancelQueueTimer(threadTS, channelID, msgTS string) bool {
+// turn. sessionID is the namespaced session key (turns map key); channelID
+// and msgTS are native Slack identifiers for the reaction removal. If the
+// timer already fired and the ⏳ reaction was added, it is removed too.
+// Returns true when the reaction was visible at call time.
+func (s *Channel) cancelQueueTimer(sessionID, channelID, msgTS string) bool {
 	s.mu.Lock()
-	t := s.turns[threadTS]
+	t := s.turns[sessionID]
 	var wasShown bool
 	if t != nil {
 		if t.queueTimer != nil {
@@ -941,12 +1061,15 @@ func (s *Channel) cancelQueueTimer(threadTS, channelID, msgTS string) bool {
 }
 
 // NotifyState updates reaction + posts reply for the latest turn of sessionKey.
+// sessionKey is the namespaced session key (turns map key); replies and the
+// status banner use the turn's native threadTS, never the namespaced key.
 func (s *Channel) NotifyState(sessionKey, state, text string) {
 	s.mu.Lock()
 	t := s.turns[sessionKey]
-	var channelID, msgTS string
+	var channelID, threadTS, msgTS string
 	if t != nil {
 		channelID = t.channelID
+		threadTS = t.threadTS
 		msgTS = t.msgTS
 	}
 	s.mu.Unlock()
@@ -957,30 +1080,30 @@ func (s *Channel) NotifyState(sessionKey, state, text string) {
 	switch state {
 	case "running":
 		// Reaction already cleared at dispatch; just refresh the banner.
-		s.setAssistantStatus(channelID, sessionKey, "is thinking…")
+		s.setAssistantStatus(channelID, threadTS, "is thinking…")
 	case "done":
-		s.setAssistantStatus(channelID, sessionKey, "")
+		s.setAssistantStatus(channelID, threadTS, "")
 		if text != "" {
-			s.postChunked(channelID, sessionKey, text)
+			s.postChunked(channelID, threadTS, text)
 		}
 	case "blocked":
 		s.setReaction(reactionBlocked, channelID, msgTS, "")
-		s.setAssistantStatus(channelID, sessionKey, "")
+		s.setAssistantStatus(channelID, threadTS, "")
 		note := text
 		if note == "" {
 			note = "Agent turn completed with blocked commands. See the dashboard for details."
 		} else {
 			note += "\n\n_Some commands were blocked — see the dashboard for details._"
 		}
-		s.postChunked(channelID, sessionKey, note)
+		s.postChunked(channelID, threadTS, note)
 	case "error":
 		s.setReaction(reactionError, channelID, msgTS, "")
-		s.setAssistantStatus(channelID, sessionKey, "")
+		s.setAssistantStatus(channelID, threadTS, "")
 		msg := "Agent error."
 		if text != "" {
 			msg = fmt.Sprintf("Agent error: %s", text)
 		}
-		s.postReply(channelID, sessionKey, msg+"\n\nSee the dashboard for details.")
+		s.postReply(channelID, threadTS, msg+"\n\nSee the dashboard for details.")
 	}
 }
 
@@ -1027,6 +1150,23 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 			s.NotifyState(sessionKey, "running", "")
 		}
 
+	case event.ToolUse, event.ToolResult:
+		// Tool activity is a liveness signal but produces no text delta, so
+		// the periodic heartbeat is what really holds the banner. Re-assert
+		// immediately too, so the banner stays fresh right when a long tool
+		// call begins.
+		s.mu.Lock()
+		t := s.turns[sessionKey]
+		var channelID, threadTS string
+		if t != nil {
+			channelID = t.channelID
+			threadTS = t.threadTS
+		}
+		s.mu.Unlock()
+		if channelID != "" {
+			s.setAssistantStatus(channelID, threadTS, "is thinking…")
+		}
+
 	case event.Done:
 		var text string
 		hasError := ev.ErrorMsg != ""
@@ -1036,6 +1176,7 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 			s.mu.Unlock()
 			return
 		}
+		s.stopStatusHeartbeat(t)
 		text = t.buf.String()
 		t.buf.Reset()
 		t.hasStarted = false
@@ -1050,9 +1191,12 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 
 	case event.Error:
 		s.mu.Lock()
-		_, hasTurn := s.turns[sessionKey]
+		t := s.turns[sessionKey]
+		if t != nil {
+			s.stopStatusHeartbeat(t)
+		}
 		s.mu.Unlock()
-		if !hasTurn {
+		if t == nil {
 			return
 		}
 		msg := ev.ErrorMsg
@@ -1174,6 +1318,10 @@ func (s *Channel) buildSessionContext(ev *slackevents.MessageEvent, threadTS str
 
 	// // Shared curl base — always include X-Wick-Session-User so the proxy
 	// // can auto-inject sender_user_id without Claude needing to specify it.
+	// // When re-enabling with multiple Slack bots configured, ALSO send
+	// // -H "X-Wick-Session-Id: <sessionID>" so the registry fan-in dispatcher
+	// // (Channel.OwnsRequest) routes the proxy call to THIS bot and not a
+	// // sibling instance sharing the /integrations/slack/send route.
 	// curlBase := fmt.Sprintf(
 	// 	`curl -s -X POST "http://localhost:$WICK_PORT/integrations/slack/send" -H "Content-Type: application/json" -H "X-Wick-Session-User: %s"`,
 	// 	ev.User,
@@ -1210,7 +1358,7 @@ func (s *Channel) OnApprovalRequest(sessionID string, req gate.ApprovalRequest) 
 	}
 	t.pendingApprovalID = req.ID
 	channelID := t.channelID
-	threadTS := sessionID
+	threadTS := t.threadTS
 	s.mu.Unlock()
 
 	s.cfgMu.Lock()
@@ -1318,13 +1466,22 @@ func (s *Channel) handleInteraction(ctx context.Context, cb slackgo.InteractionC
 
 	cfg := s.snapshot()
 	if !s.approverAllowed(cfg, cb.User.ID) {
+		// Thread the ephemeral under the native thread_ts, not the namespaced
+		// session key. Fall back to the click's own message ts if the turn is
+		// gone (session expired between prompt and click).
+		s.mu.Lock()
+		threadTS := cb.Message.Timestamp
+		if t := s.turns[sessionID]; t != nil && t.threadTS != "" {
+			threadTS = t.threadTS
+		}
+		s.mu.Unlock()
 		s.cfgMu.Lock()
 		api := s.api
 		s.cfgMu.Unlock()
 		if api != nil {
 			_, err := api.PostEphemeral(cb.Channel.ID, cb.User.ID,
 				slackgo.MsgOptionText("Not authorized to approve this action.", false),
-				slackgo.MsgOptionTS(sessionID),
+				slackgo.MsgOptionTS(threadTS),
 			)
 			if err != nil {
 				log.Debug().Str("channel", "slack").Err(err).Msg("post unauthorized ephemeral failed")
@@ -1355,7 +1512,8 @@ func (s *Channel) approverAllowed(cfg agentconfig.SlackChannelConfig, userID str
 	switch cfg.GateApprovers {
 	case "trigger_users", "":
 		groupIDs, _ := s.resolveUserGroups(userID)
-		return s.allowedCfg(cfg, userID, groupIDs, "")
+		ok, _ := s.allowedCfg(cfg, userID, groupIDs, "")
+		return ok
 	case "admins":
 		s.cfgMu.Lock()
 		api := s.api
@@ -1470,7 +1628,10 @@ func isRateLimit(err error) bool {
 //   - if only ONE is active → it gates alone
 //   - if NEITHER is active → pass
 //   - channels whitelist is AND'd on top (independent dimension)
-func (s *Channel) allowedCfg(cfg agentconfig.SlackChannelConfig, userID string, groupIDs []string, channelID string) bool {
+// allowedCfg reports whether the user may trigger the agent, plus a short
+// machine reason ("identity" / "channels") when denied. reason is "" when
+// allowed. Used to tailor the access-denied DM.
+func (s *Channel) allowedCfg(cfg agentconfig.SlackChannelConfig, userID string, groupIDs []string, channelID string) (bool, string) {
 	usersActive := cfg.UsersMode == "whitelist"
 	groupsActive := cfg.GroupsMode == "whitelist"
 
@@ -1503,13 +1664,55 @@ func (s *Channel) allowedCfg(cfg agentconfig.SlackChannelConfig, userID string, 
 			Str("user", userID).Strs("groups", groupIDs).
 			Bool("users_active", usersActive).Bool("groups_active", groupsActive).
 			Msg("denied by identity whitelists")
-		return false
+		return false, "identity"
 	}
 	if channelID != "" && cfg.ChannelsMode == "whitelist" && !pickerHas(cfg.AllowedChannels, channelID) {
 		log.Debug().Str("channel", "slack").Str("reject", "channels").Str("slack_channel", channelID).Msg("denied by channels whitelist")
-		return false
+		return false, "channels"
 	}
-	return true
+	return true, ""
+}
+
+// notifyAccessDenied DMs the user who was blocked, explaining why, so the
+// 🚫 reaction on their message isn't a silent dead-end. Best-effort: any
+// API failure is logged and swallowed (the reaction already conveys the
+// block). reason comes from allowedCfg ("identity" / "channels").
+func (s *Channel) notifyAccessDenied(ctx context.Context, userID, channelID, reason string) {
+	if userID == "" {
+		return
+	}
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return
+	}
+
+	var msg string
+	switch reason {
+	case "channels":
+		msg = "🚫 I can't run in this channel — it isn't on the allow-list for this workspace. " +
+			"Ask an admin to add it, or message me in an approved channel."
+	default: // "identity"
+		msg = "🚫 You're not on the allow-list to use this assistant in this workspace. " +
+			"Ask an admin to grant you (or one of your user groups) access."
+	}
+
+	dmCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	ch, _, _, err := api.OpenConversationContext(dmCtx, &slackgo.OpenConversationParameters{
+		Users:    []string{userID},
+		ReturnIM: true,
+	})
+	if err != nil || ch == nil {
+		log.Warn().Str("channel", "slack").Str("user", userID).Err(err).
+			Msg("access-denied DM: conversations.open failed")
+		return
+	}
+	if _, _, err := api.PostMessageContext(dmCtx, ch.ID, slackgo.MsgOptionText(msg, false)); err != nil {
+		log.Warn().Str("channel", "slack").Str("user", userID).Err(err).
+			Msg("access-denied DM: postMessage failed")
+	}
 }
 
 // pickerHas reports whether jsonList (a JSON array of {id,name} entries
@@ -1562,12 +1765,15 @@ func (s *Channel) resolveUserGroups(userID string) ([]string, error) {
 }
 
 func (s *Channel) handleMetaCmd(_ context.Context, meta agentchannels.MetaResult, channelID, threadTS string) {
+	// Dashboard links point at the namespaced on-disk session id, not the
+	// bare threadTS — that's the folder the pool actually wrote.
+	sessionID := s.sessionKey(threadTS)
 	switch meta.Cmd {
 	case "dashboard", "link":
-		url := s.dashboardURL(threadTS)
+		url := s.dashboardURL(sessionID)
 		s.postReply(channelID, threadTS, fmt.Sprintf("Dashboard: %s", url))
 	case "status":
-		s.postReply(channelID, threadTS, "_Use the dashboard to view real-time agent status._\n"+s.dashboardURL(threadTS))
+		s.postReply(channelID, threadTS, "_Use the dashboard to view real-time agent status._\n"+s.dashboardURL(sessionID))
 	case "reset":
 		s.postReply(channelID, threadTS, "_Reset acknowledged. The next message will start a fresh context._")
 	case "agent":
@@ -1577,11 +1783,11 @@ func (s *Channel) handleMetaCmd(_ context.Context, meta agentchannels.MetaResult
 		}
 		s.postReply(channelID, threadTS, fmt.Sprintf("_Switching to agent `%s` is not yet wired. Coming soon._", meta.Arg))
 	case "log":
-		s.postReply(channelID, threadTS, "_Command log: see the dashboard for full details._\n"+s.dashboardURL(threadTS))
+		s.postReply(channelID, threadTS, "_Command log: see the dashboard for full details._\n"+s.dashboardURL(sessionID))
 	}
 }
 
-func (s *Channel) dashboardURL(threadTS string) string {
+func (s *Channel) dashboardURL(sessionID string) string {
 	s.cfgMu.Lock()
 	pubURL := s.pubURL
 	s.cfgMu.Unlock()
@@ -1589,5 +1795,5 @@ func (s *Channel) dashboardURL(threadTS string) string {
 	if base == "" {
 		return "(dashboard URL not configured — set PublicURL in Settings → Agents)"
 	}
-	return fmt.Sprintf("%s/tools/agents/sessions/%s", base, threadTS)
+	return fmt.Sprintf("%s/tools/agents/sessions/%s", base, url.PathEscape(sessionID))
 }

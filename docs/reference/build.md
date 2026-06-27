@@ -153,8 +153,32 @@ The scripts detect OS + arch from `uname` / `$PROCESSOR_ARCHITECTURE`, query the
 
 After `wick init`, edit the `REPO=` line in both scripts to match the actual GitHub repo owner (the placeholder is `owner/<name>` until you set it). Override the release version with `VERSION=v1.2.3` instead of latest.
 
+::: warning GitHub API rate limit (60 req/hr per IP)
+The install scripts call the GitHub Releases API to resolve `latest`. Unauthenticated callers share a 60-request-per-hour quota per IP. On shared egress (CI runners, NAT gateways, Termux on campus Wi-Fi) this limit can be exhausted by other users on the same IP.
+
+When the quota is hit the scripts surface GitHub's own error message and suggest three fixes:
+
+```bash
+# Linux / macOS — fix 1: pass a PAT (5 000/hr authenticated limit)
+TOKEN=ghp_xxx sh -c "$(curl -fsSL https://...install.sh)"
+
+# fix 2: pin a version (skips the API call entirely)
+VERSION=v1.2.3 sh -c "$(curl -fsSL https://...install.sh)"
+
+# fix 3: wait for the hourly reset (reset time is printed by the script)
+```
+
+```powershell
+# Windows PowerShell — same two env vars
+$env:TOKEN = 'ghp_xxx'; iwr -useb https://...install.ps1 | iex
+$env:VERSION = 'v1.2.3'; iwr -useb https://...install.ps1 | iex
+```
+
+The `VERSION=` workaround is the simplest in CI — pin it to the release you want to deploy and the API is never called.
+:::
+
 ::: tip wick-agent is just the wick repo's own install script
-The wick repo ships its own `scripts/install.sh` + `scripts/install.ps1` baked with `APP="wick-agent"` and `REPO="yogasw/wick"`. Running them installs the **wick-agent runtime** (Slack / Telegram / Web agent host) — not the wick CLI used to scaffold projects. The CLI is installed via `go install github.com/yogasw/wick@v0.22.1`.
+The wick repo ships its own `scripts/install.sh` + `scripts/install.ps1` baked with `APP="wick-agent"` and `REPO="yogasw/wick"`. Running them installs the **wick-agent runtime** (Slack / Telegram / Web agent host) — not the wick CLI used to scaffold projects. The CLI is installed via `go install github.com/yogasw/wick@v0.25.3`.
 :::
 
 ## ldflags injection
@@ -164,11 +188,12 @@ The wick repo ships its own `scripts/install.sh` + `scripts/install.ps1` baked w
 ```
 -X github.com/yogasw/wick/app.BuildAppName=<name>
 -X github.com/yogasw/wick/app.BuildAppVersion=<version>
+-X github.com/yogasw/wick/app.BuildTime=<RFC3339 UTC timestamp of the build>
 -X github.com/yogasw/wick/app.GitHubPATEnc=<base64+xor>  (if non-empty)
 -X github.com/yogasw/wick/app.GitHubRepo=<owner/repo>    (if non-empty)
 ```
 
-`BuildCommit` and `BuildTime` are populated by `debug.ReadBuildInfo()` — VCS metadata baked in by the Go toolchain when the build happens inside a git checkout.
+`BuildCommit` is populated by `debug.ReadBuildInfo()` — VCS metadata baked in by the Go toolchain when the build happens inside a git checkout. `BuildTime` is injected directly as an `-X` ldflag set to `time.Now().UTC()` (RFC3339) at the moment `wick build` runs. This means the "Built" field is always populated in every build path, including release-pipeline builds that run inside a `wick init` scaffold (a git-less directory) where Go's own `vcs.time` stamping is absent.
 
 **PAT obfuscation:** the PAT is XOR'd with a fixed key and base64-encoded before injection, so plain `strings <binary> | grep ghp_` does not surface the token. This is obfuscation, not encryption — a determined attacker who reads the binary can extract the key and decode. Real defense is scoping the PAT to read-only on the releases repo (a leak only enables downloading already-public release assets).
 

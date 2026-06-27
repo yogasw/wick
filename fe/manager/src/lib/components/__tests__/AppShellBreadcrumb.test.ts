@@ -126,55 +126,53 @@ describe("AppShell breadcrumb", () => {
     expect(screen.queryByLabelText("Sections")).toBeNull();
   });
 
-  it("connectors index shows Home / Connectors", async () => {
+  it("connectors index renders no breadcrumb (heading already says Connectors)", async () => {
     routeStore.set("/");
     render(App);
-    const b = bar();
-    expect(b.querySelector("button")?.textContent).toBe("Home");
-    expect(b.textContent).toContain("Connectors");
-    expect(b.textContent).not.toContain("Jobs");
-    expect(b.textContent).not.toContain("Audit");
+    /* Empty items → AppShell renders no Breadcrumb at all. */
+    expect(screen.queryByLabelText("Breadcrumb")).toBeNull();
+    expect(screen.queryByLabelText("Sections")).toBeNull();
   });
 
-  it("connector list shows Home / <connector display name>", async () => {
+  it("connector list shows Connectors / <connector display name>", async () => {
     routeStore.set("/connectors/google_workspace");
     render(App);
     const b = bar();
     await vi.waitFor(() => expect(b.textContent).toContain("Google Workspace"));
-    expect(b.textContent).toContain("Home");
+    expect(b.querySelector("button")?.textContent).toBe("Connectors");
     expect(b.textContent).not.toContain("google_workspace");
   });
 
-  it("connector detail shows Home / <connector name> / <row label>", async () => {
+  it("connector detail shows Connectors / <connector name> / <row label>", async () => {
     routeStore.set("/connectors/google_workspace/row-1");
     render(App);
     const b = bar();
     await vi.waitFor(() => expect(b.textContent).toContain("Acme Workspace"));
-    expect(b.textContent).toContain("Home");
+    expect(b.textContent).toContain("Connectors");
     expect(b.textContent).toContain("Google Workspace");
     expect(b.textContent).not.toContain("row-1");
   });
 
-  it("connector test shows Home / <name> / <label> / Test", async () => {
+  it("connector test shows Connectors / <name> / <label> / Test", async () => {
     routeStore.set("/connectors/google_workspace/row-1/test");
     render(App);
     const b = await screen.findByLabelText("Breadcrumb");
     await vi.waitFor(() => expect(b.textContent).toContain("Acme Workspace"));
-    expect(b.textContent).toContain("Home");
+    expect(b.textContent).toContain("Connectors");
     expect(b.textContent).toContain("Google Workspace");
     expect(b.textContent).toContain("Test");
-    /* Four items (Home / name / label / Test) render three separators. */
+    /* Four items (Connectors / name / label / Test) render three separators. */
     expect(b.querySelectorAll("span[aria-hidden='true']")).toHaveLength(3);
     /* The current item (Test) is plain text, not a link. */
     expect(screen.queryByRole("button", { name: "Test" })).toBeNull();
   });
 
-  it("connector history shows Home / <name> / <label> / History", async () => {
+  it("connector history shows Connectors / <name> / <label> / History", async () => {
     routeStore.set("/connectors/google_workspace/row-1/history");
     render(App);
     const b = await screen.findByLabelText("Breadcrumb");
     await vi.waitFor(() => expect(b.textContent).toContain("Acme Workspace"));
-    expect(b.textContent).toContain("Home");
+    expect(b.textContent).toContain("Connectors");
     expect(b.textContent).toContain("History");
   });
 
@@ -197,18 +195,19 @@ describe("AppShell breadcrumb", () => {
     expect(b.textContent).not.toContain("Home");
   });
 
-  it("audit shows Home / Audit Log", async () => {
+  it("audit shows Audit Log only (no Home/Connectors root)", async () => {
     routeStore.set("/audit");
     render(App);
     const b = bar();
-    expect(b.textContent).toContain("Home");
     expect(b.textContent).toContain("Audit Log");
+    expect(b.textContent).not.toContain("Home");
+    expect(b.textContent).not.toContain("Connectors");
   });
 
-  it("Home link navigates to the connectors index", async () => {
-    routeStore.set("/audit");
+  it("Connectors crumb navigates to the connectors index", async () => {
+    routeStore.set("/connectors/google_workspace/row-1");
     render(App);
-    await fireEvent.click(screen.getByRole("button", { name: "Home" }));
+    await fireEvent.click(await screen.findByRole("button", { name: "Connectors" }));
     expect(pushMock).toHaveBeenCalledWith("/");
   });
 });

@@ -48,7 +48,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Use kind to decide which identity to run as: kind='connector' for shared/bot credentials, kind='account' for personal identity. " +
 				"status is 'ready' (all required configs filled) or 'needs_setup' (missing config — do NOT call wick_execute; tell the user to open the admin dashboard to complete setup). " +
 				"WORKFLOW: (1) wick_list to see what connectors and accounts exist, " +
-				"(2) wick_get with the id (connector id or connector_id/account_id for account entries) to see its tools + input_schemas, " +
+				"(2) wick_get with the id to see its categories, then with a category to list its ops, then with an op key to get that op's input_schema, " +
 				"(3) wick_execute with tool_id + params. " +
 				"Pass session_id to also include this session's workspace connectors (ephemeral sw_… instances created via wick_session_workspace); in the wick agent the session is resolved automatically, so you normally do not need to pass it.",
 			InputSchema: map[string]any{
@@ -71,7 +71,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Case-insensitive match on connector label, tool name, and description. " +
 				"Returns matching tools nested under their connector (id, description, status), with tool_id per hit. " +
 				"status is 'ready' or 'needs_setup' — do NOT call wick_execute on a needs_setup connector; tell the user to open the admin dashboard to complete setup. " +
-				"WORKFLOW: after finding a match, call wick_get with the connector id to get full schemas, " +
+				"WORKFLOW: after finding a match, call wick_get with the connector id + the op key (selector) to get its input_schema, " +
 				"then wick_execute. Pass session_id to also search this session's workspace connectors.",
 			InputSchema: map[string]any{
 				"type": "object",
@@ -94,10 +94,13 @@ func MetaToolDescriptors() []ToolDescriptor {
 		},
 		{
 			Name: "wick_get",
-			Description: "Get a connector's full tool list with input_schemas. " +
-				"Pass the connector id from wick_list or wick_search. " +
-				"ALWAYS call this before wick_execute to know the required params. " +
-				"Never guess params — read input_schema from this response first. " +
+			Description: "Drill into a connector's operations, one level at a time, so you never load more than you need into context. Three levels via the `selector` argument:\n" +
+				"(1) id ONLY → lists the connector's CATEGORIES (title, description, op count). No ops, no schemas.\n" +
+				"(2) id + selector=<category title> → lists the OPERATIONS in that category (tool_id, name, description). Still no input_schema.\n" +
+				"(3) id + selector=<op key> → returns that ONE operation with its input_schema. This is the only level that carries a schema.\n" +
+				"Flow: call with id only to see categories, again with a category to see its ops, then with the op key to get the schema. " +
+				"(An ungrouped connector has no categories, so level 1 lists its ops directly — go straight to level 3 with an op key.) " +
+				"ALWAYS fetch the op schema (level 3) before wick_execute — never guess params. " +
 				"For a session-workspace connector (id starts with sw_), also pass " +
 				"session_id as a SEPARATE argument — never append it to id.",
 			InputSchema: map[string]any{
@@ -106,6 +109,10 @@ func MetaToolDescriptors() []ToolDescriptor {
 					"id": map[string]any{
 						"type":        "string",
 						"description": "Connector id from wick_list or wick_search — the id ONLY (e.g. \"sw_abc\" or a uuid). Never append \"?session_id=...\" or any query string to it.",
+					},
+					"selector": map[string]any{
+						"type":        "string",
+						"description": "Optional drill-down. A category title (from a prior id-only call) lists that category's operations; an op key (from a category listing) returns that one op's input_schema. Omit to list the connector's categories.",
 					},
 					"session_id": map[string]any{
 						"type":        "string",
@@ -121,11 +128,19 @@ func MetaToolDescriptors() []ToolDescriptor {
 		},
 		{
 			Name: "wick_execute",
-			Description: "Execute a tool by tool_id. " +
-				"PREREQUISITE: call wick_get first to get the tool's input_schema — " +
+			Description: "Execute one tool, or a BATCH of tools in a single call. " +
+				"PREREQUISITE: call wick_get first to get each tool's input_schema — " +
 				"never guess params. params must match the input_schema exactly. " +
 				"On success returns the response as JSON; " +
 				"on failure returns {\"error\": string, \"tool_id\": string} with isError=true.\n\n" +
+				"BATCH MODE: pass \"calls\": [{tool_id, params, session_id?}, …] instead of a single " +
+				"tool_id/params to run many ops in ONE round-trip. Calls run in parallel and are " +
+				"independent — one failing or timing out never stops the others. The result is a " +
+				"per-call array: each entry has {index, tool_id, ok, result|error, timed_out, duration_ms} " +
+				"plus ok_count/error_count/timed_out_count. The batch itself is NOT isError unless the " +
+				"request is malformed — inspect each entry's \"ok\". Use \"timeout_ms\" to cap each call " +
+				"(default 3 min, max 5 min). Up to 100 calls per batch; the server runs them a few at a " +
+				"time so a big batch won't overload it.\n\n" +
 				"ENCRYPTED FIELDS: values prefixed with \"wick_enc_\" are valid credentials " +
 				"managed by the server. Use them as-is wherever a value is needed — pass them " +
 				"through into params, return them unchanged in your response, and never alter, " +
@@ -138,20 +153,40 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"properties": map[string]any{
 					"tool_id": map[string]any{
 						"type":        "string",
-						"description": "Opaque tool identifier from wick_list or wick_search — the tool_id ONLY. Never append \"?session_id=...\" or any query string to it.",
+						"description": "Single-call mode: opaque tool identifier from wick_list or wick_search — the tool_id ONLY. Never append \"?session_id=...\" or any query string to it. Omit when using \"calls\".",
 					},
 					"params": map[string]any{
 						"type":                 "object",
-						"description":          "Arguments matching the tool's input_schema. Use {} when the tool has no input fields.",
+						"description":          "Single-call mode: arguments matching the tool's input_schema. Use {} when the tool has no input fields. Omit when using \"calls\".",
 						"additionalProperties": true,
 					},
 					"session_id": map[string]any{
 						"type": "string",
 						"description": "Active wick agent session ID, passed as its OWN argument (sibling of tool_id, not part of it). REQUIRED when tool_id targets a session-workspace " +
-							"connector (its id starts with sw_); ignored for normal saved connectors.",
+							"connector (its id starts with sw_); ignored for normal saved connectors. In batch mode set session_id per entry inside \"calls\".",
+					},
+					"calls": map[string]any{
+						"type":        "array",
+						"description": "Batch mode: a list of independent calls to run in parallel. Each item is {tool_id, params, session_id?}. When set, tool_id/params at the top level are ignored. Max 100 items.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"tool_id": map[string]any{"type": "string", "description": "Tool identifier for this call."},
+								"params": map[string]any{
+									"type":                 "object",
+									"description":          "Arguments for this call, matching the tool's input_schema. Use {} when none.",
+									"additionalProperties": true,
+								},
+								"session_id": map[string]any{"type": "string", "description": "Optional session id for a session-workspace (sw_) connector in this call."},
+							},
+							"required": []string{"tool_id"},
+						},
+					},
+					"timeout_ms": map[string]any{
+						"type":        "integer",
+						"description": "Optional per-call timeout in milliseconds. Default 180000 (3 min); clamped to 300000 (5 min) max. A call exceeding it is aborted and reported with timed_out:true while the rest continue.",
 					},
 				},
-				"required": []string{"tool_id", "params"},
 			},
 			Annotations: &ToolAnnotation{
 				Title:           "Execute wick tool",

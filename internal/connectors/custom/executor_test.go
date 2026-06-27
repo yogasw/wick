@@ -239,6 +239,64 @@ func TestToolsToOps(t *testing.T) {
 	}
 }
 
+// TestToolsToOpsCarriesCategory: a tool's _meta.category rides onto the
+// resulting DefOp so toolsToCats can re-group it.
+func TestToolsToOpsCarriesCategory(t *testing.T) {
+	tools := []MCPTool{
+		{Name: "send_email", Meta: &MCPToolMeta{Category: "Gmail"}},
+		{Name: "list_files", Meta: &MCPToolMeta{Category: "Drive"}},
+		{Name: "ungrouped"}, // no _meta
+	}
+	ops := toolsToOps("srv-1", tools, nil)
+	if len(ops) != 3 {
+		t.Fatalf("got %d ops, want 3", len(ops))
+	}
+	if ops[0].Category != "Gmail" || ops[1].Category != "Drive" || ops[2].Category != "" {
+		t.Fatalf("categories = %q/%q/%q, want Gmail/Drive/<empty>",
+			ops[0].Category, ops[1].Category, ops[2].Category)
+	}
+}
+
+// TestToolsToCatsGroups: ops re-group into titled sections by category;
+// section order follows the legend, descriptions come from it, and ops
+// with no category fall into one untitled section emitted last.
+func TestToolsToCatsGroups(t *testing.T) {
+	ops := []DefOp{
+		{Key: "list_files", Category: "Drive"},
+		{Key: "send_email", Category: "Gmail"},
+		{Key: "loose"}, // untitled
+		{Key: "share_file", Category: "Drive"},
+	}
+	legend := []MCPCategory{
+		{Title: "Gmail", Description: "Read & send email"},
+		{Title: "Drive", Description: "Manage Drive files"},
+	}
+	cats := toolsToCats(ops, legend)
+	if len(cats) != 3 {
+		t.Fatalf("got %d categories, want 3 (Gmail, Drive, untitled): %#v", len(cats), cats)
+	}
+	// Legend order wins: Gmail before Drive even though Drive's op came first.
+	if cats[0].Title != "Gmail" || cats[0].Description != "Read & send email" {
+		t.Errorf("cats[0] = %+v, want Gmail/Read & send email", cats[0])
+	}
+	if cats[1].Title != "Drive" || len(cats[1].Ops) != 2 {
+		t.Errorf("cats[1] = title %q ops %d, want Drive with 2 ops", cats[1].Title, len(cats[1].Ops))
+	}
+	if cats[2].Title != "" || len(cats[2].Ops) != 1 {
+		t.Errorf("cats[2] = title %q ops %d, want untitled with 1 op", cats[2].Title, len(cats[2].Ops))
+	}
+}
+
+// TestToolsToCatsNoLegend: with no _meta at all, every op lands in one
+// untitled section — the historical behaviour preserved.
+func TestToolsToCatsNoLegend(t *testing.T) {
+	ops := []DefOp{{Key: "a"}, {Key: "b"}}
+	cats := toolsToCats(ops, nil)
+	if len(cats) != 1 || cats[0].Title != "" || len(cats[0].Ops) != 2 {
+		t.Fatalf("got %#v, want one untitled section with 2 ops", cats)
+	}
+}
+
 func TestParseExcluded(t *testing.T) {
 	if got := parseExcluded(""); len(got) != 0 {
 		t.Errorf("empty column: got %#v", got)
@@ -274,6 +332,68 @@ func TestCoerceArgsUsesOriginalNames(t *testing.T) {
 	}
 	if out["no_label"] != "x" {
 		t.Errorf("label-less field must fall back to key, got %#v", out)
+	}
+}
+
+// TestCoerceArgsPreservesRawScalarTypes: when a server advertises a
+// boolean/number parameter as "string" in its inputSchema (so the field
+// maps to a text widget) but validates the tools/call against the real
+// type, the stringified form is rejected. If the caller actually sent a
+// bool or number, coerceArgs must forward it in its original JSON type.
+// Strings stay strings so wick_enc_ decryption and textarea JSON parsing
+// are untouched.
+func TestCoerceArgsPreservesRawScalarTypes(t *testing.T) {
+	fields := []DefField{
+		{Key: "use_proxy", Label: "use_proxy", Widget: "text"}, // advertised string, sent bool
+		{Key: "count", Label: "count", Widget: "text"},         // advertised string, sent number
+		{Key: "name", Label: "name", Widget: "text"},           // genuine string
+		{Key: "toggle", Label: "toggle", Widget: "checkbox"},   // sent real bool
+	}
+	// Input is the stringified form (what StringifyArgs produces).
+	in := map[string]string{
+		"use_proxy": "true",
+		"count":     "5",
+		"name":      "yoga",
+		"toggle":    "false",
+	}
+	c := connector.NewCtx(context.Background(), "i", nil, in, nil, nil, nil)
+	// RawInput is the caller's original typed payload.
+	c.SetRawInput(map[string]any{
+		"use_proxy": true,
+		"count":     float64(5),
+		"name":      "yoga",
+		"toggle":    false,
+	})
+
+	out := coerceArgs(fields, c)
+
+	if v, ok := out["use_proxy"].(bool); !ok || !v {
+		t.Errorf("use_proxy = %#v, want bool true (not stringified)", out["use_proxy"])
+	}
+	if v, ok := out["count"].(float64); !ok || v != 5 {
+		t.Errorf("count = %#v, want float64 5", out["count"])
+	}
+	if v, ok := out["name"].(string); !ok || v != "yoga" {
+		t.Errorf("name = %#v, want string passthrough", out["name"])
+	}
+	if v, ok := out["toggle"].(bool); !ok || v {
+		t.Errorf("toggle = %#v, want bool false", out["toggle"])
+	}
+}
+
+// TestCoerceArgsRawInputAbsentFallsBack: with no RawInput recorded (e.g.
+// the panel-test path), coerceArgs must behave exactly as before —
+// widget-driven coercion off the string input map.
+func TestCoerceArgsRawInputAbsentFallsBack(t *testing.T) {
+	fields := []DefField{{Key: "use_proxy", Label: "use_proxy", Widget: "text"}}
+	in := map[string]string{"use_proxy": "true"}
+	c := connector.NewCtx(context.Background(), "i", nil, in, nil, nil, nil)
+	// No SetRawInput call — rawInput stays nil.
+
+	out := coerceArgs(fields, c)
+
+	if v, ok := out["use_proxy"].(string); !ok || v != "true" {
+		t.Errorf("use_proxy = %#v, want string \"true\" (widget fallback)", out["use_proxy"])
 	}
 }
 

@@ -7,7 +7,7 @@ import "katex/dist/katex.min.css";
 import "./richRender.css";
 import { mount } from "svelte";
 import { attachToolbar } from "./blockToolbar.js";
-import { renderMarkdown } from "./markdown.js";
+import { renderMarkdown, esc } from "./markdown.js";
 import HtmlArtifact from "./components/HtmlArtifact.svelte";
 
 type MermaidModule = {
@@ -326,6 +326,194 @@ function renderSvg(node: HTMLElement): void {
   }
 }
 
+/* host of a url, www-stripped, "" on a malformed url. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+type ImageCard = {
+  url: string;
+  caption: string;
+  host: string;
+  /* CSS aspect-ratio the thumbnail is cropped to, e.g. "3 / 4". The model
+     supplies it as "W:H" per image; falls back to a portrait default. */
+  ratio: string;
+  /* object-position for the crop, so the model can keep the subject in frame
+     (a poster with a banner up top → focus "bottom"/"center"). */
+  focus: string;
+};
+
+const DEFAULT_RATIO = "3 / 4"; /* portrait — suits character art, the common case */
+const DEFAULT_FOCUS = "center";
+
+/* Map the model's ratio token ("16:9", "3/4", "1:1") to a CSS aspect-ratio
+   value ("16 / 9"). Returns the portrait default when absent/unparseable so a
+   bad token never breaks layout. */
+function parseRatio(tok: string): string {
+  const m = tok.trim().match(/^(\d+(?:\.\d+)?)\s*[:/x]\s*(\d+(?:\.\d+)?)$/i);
+  if (!m) return DEFAULT_RATIO;
+  const w = parseFloat(m[1]);
+  const h = parseFloat(m[2]);
+  if (!w || !h) return DEFAULT_RATIO;
+  return `${w} / ${h}`;
+}
+
+/* Normalise a focus token to a CSS object-position keyword. "face" is treated
+   as "top" (faces usually sit in the upper half). Unknown → center. */
+function parseFocus(tok: string): string {
+  const t = tok.trim().toLowerCase();
+  if (t === "face") return "top";
+  if (["top", "bottom", "left", "right", "center"].includes(t)) return t;
+  /* allow two-word positions like "top left" */
+  if (/^(top|bottom|center)\s+(left|right|center)$/.test(t)) return t;
+  return DEFAULT_FOCUS;
+}
+
+/* Parse an imagecard fence body: one `url | caption | ratio | focus` per line.
+   Only the url is required; caption/ratio/focus are optional positional fields.
+   Blank lines and lines without an http(s) url are skipped, so a half-streamed
+   final line never produces a broken card. */
+function parseImageCards(src: string): ImageCard[] {
+  const out: ImageCard[] = [];
+  for (const raw of src.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const parts = line.split("|").map((p) => p.trim());
+    const url = parts[0] ?? "";
+    if (!/^https?:\/\//i.test(url)) continue;
+    out.push({
+      url,
+      caption: parts[1] ?? "",
+      host: hostOf(url),
+      ratio: parts[2] ? parseRatio(parts[2]) : DEFAULT_RATIO,
+      focus: parts[3] ? parseFocus(parts[3]) : DEFAULT_FOCUS,
+    });
+  }
+  return out;
+}
+
+/* Turns each [data-imagecard] placeholder into a Claude.ai-style masonry of
+   thumbnails. Every image keeps its NATURAL aspect ratio (width 100%, height
+   auto — no crop, no letterbox), so tall and short images sit side by side at
+   their real proportions and the browser balances the columns. The layout uses
+   CSS multi-column applied as INLINE STYLE (not Tailwind classes) because this
+   DOM is built in JS at runtime — Tailwind's purge never sees these class names,
+   so `columns-*` / `break-inside-avoid` would be stripped from the bundle.
+   Inline style sidesteps purge entirely.
+
+   Each card hotlinks the image directly (the operator opted into hotlinking
+   over a backend proxy). A broken/blocked image swaps to a domain chip rather
+   than a broken-image icon, so an unreachable url still reads as a link.
+
+   A small favicon + domain pill sits in the bottom-left corner (favicon
+   fallback chain: the site's /favicon.ico → Google's s2 favicon service → a
+   letter avatar); the full caption rides on the card's `title` so it surfaces
+   on hover rather than covering the image. The fence's optional ratio/focus
+   fields are parsed and forwarded to the lightbox but do NOT crop the
+   thumbnail — the masonry intentionally shows the whole image. Clicking a card
+   dispatches `wick-imagecard-open` with the full set + clicked index;
+   ThreadMessage catches it and opens the lightbox gallery. */
+function renderImageCards(node: HTMLElement): void {
+  const els = node.querySelectorAll<HTMLElement>("[data-imagecard]:not([data-enriched])");
+  for (const el of els) {
+    const cards = parseImageCards(el.getAttribute("data-imagecard-src") ?? "");
+    /* mid-stream the body may not have a complete url yet — leave the raw
+       fallback visible and retry on the next paint (no data-enriched stamp). */
+    if (!cards.length) continue;
+    el.setAttribute("data-enriched", "");
+    el.innerHTML = "";
+
+    /* CSS columns masonry via inline style (purge-proof). 2 columns on a
+       narrow bubble, 3 once there's room; gutter matches the card margin. */
+    const grid = document.createElement("div");
+    grid.style.columnGap = "0.5rem";
+    grid.style.columnCount = el.clientWidth >= 480 ? "3" : "2";
+    el.appendChild(grid);
+
+    cards.forEach((card, i) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.setAttribute("data-imagecard-item", "");
+      btn.title = card.caption || card.host;
+      btn.className =
+        "group relative block w-full overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-sm hover:shadow-md transition-shadow cursor-zoom-in text-left";
+      /* keep a card from splitting across a column boundary + space below it */
+      btn.style.breakInside = "avoid";
+      btn.style.marginBottom = "0.5rem";
+
+      const img = document.createElement("img");
+      img.src = card.url;
+      img.alt = card.caption || card.host;
+      img.loading = "lazy";
+      img.referrerPolicy = "no-referrer";
+      /* natural aspect ratio — no fixed height, no crop */
+      img.className = "block w-full h-auto bg-white-200 dark:bg-navy-900";
+      /* broken / hotlink-blocked image → replace the whole card body with a
+         domain chip so it degrades to a readable link, not a broken icon. */
+      img.onerror = () => {
+        btn.classList.remove("cursor-zoom-in");
+        btn.innerHTML =
+          `<span class="flex min-h-[5rem] w-full items-center justify-center px-3 py-6 text-center text-xs text-black-600 dark:text-black-500 break-all">` +
+          `${esc(card.host || card.url)}</span>`;
+        btn.onclick = () => window.open(card.url, "_blank", "noopener");
+      };
+      btn.appendChild(img);
+
+      /* favicon + domain pill in the bottom-left corner (the caption lives on
+         btn.title so it shows on hover instead of covering the image). */
+      if (card.host) {
+        const pill = document.createElement("span");
+        pill.className =
+          "absolute bottom-2 left-2 inline-flex items-center gap-1.5 rounded-full bg-black/60 px-2 py-1 text-[11px] text-white-100 backdrop-blur-sm max-w-[calc(100%-1rem)]";
+
+        const fav = document.createElement("img");
+        fav.src = `https://${card.host}/favicon.ico`;
+        fav.alt = "";
+        fav.className = "h-3.5 w-3.5 rounded-sm shrink-0 bg-white-100/30";
+        let triedS2 = false;
+        fav.onerror = () => {
+          if (!triedS2) {
+            triedS2 = true;
+            fav.src = `https://www.google.com/s2/favicons?domain=${card.host}&sz=32`;
+          } else {
+            /* both favicon sources failed → a single-letter avatar */
+            const letter = document.createElement("span");
+            letter.className =
+              "inline-flex h-3.5 w-3.5 items-center justify-center rounded-sm bg-white-100/30 text-[8px] font-semibold shrink-0";
+            letter.textContent = (card.host[0] || "?").toUpperCase();
+            fav.replaceWith(letter);
+          }
+        };
+        pill.appendChild(fav);
+
+        const label = document.createElement("span");
+        label.className = "truncate";
+        label.textContent = card.host;
+        pill.appendChild(label);
+        btn.appendChild(pill);
+      }
+
+      btn.addEventListener("click", () => {
+        el.dispatchEvent(
+          new CustomEvent("wick-imagecard-open", {
+            bubbles: true,
+            detail: {
+              index: i,
+              items: cards.map((c) => ({ url: c.url, name: c.caption || c.host, kind: "image", sourceUrl: c.url })),
+            },
+          }),
+        );
+      });
+
+      grid.appendChild(btn);
+    });
+  }
+}
+
 async function renderMath(node: HTMLElement): Promise<void> {
   const els = node.querySelectorAll<HTMLElement>("[data-math]:not([data-enriched])");
   if (!els.length) return;
@@ -444,23 +632,60 @@ function enrichAll(node: HTMLElement): void {
   renderHtmlArtifacts(node);
   void renderMermaid(node);
   renderSvg(node);
+  renderImageCards(node);
   void highlightCode(node);
   void renderMath(node);
 }
 
-/* Svelte action for STATIC (committed) messages: enrich the markdown already
-   placed in innerHTML by {@html}. Runs SYNCHRONOUSLY on mount so a committed
-   message (or a page reload) never flashes raw mermaid/svg source before the
-   render — only updates (rare for committed turns) are debounced. */
+/* Svelte action for STATIC (committed) messages: enrich the markdown placed in
+   innerHTML by {@html}. The action body runs after the element mounts, but the
+   {@html} child population and the action's first pass aren't strictly ordered
+   across re-renders — and a history reload (loadConversation after `done`) can
+   re-set innerHTML, dropping every [data-enriched] marker. Relying on the
+   action's `update` to recover doesn't work: when turn.text is reference-equal
+   (same string from history) Svelte skips both the {@html} re-eval AND the
+   action update, but when it DOES re-set innerHTML the markers vanish with no
+   `update` firing for the unchanged text. Result: a diagram intermittently
+   stays as raw "rendering…"/source. Fix: re-enrich on mount, again next frame
+   (catch a late {@html} paint), and on any child mutation via an observer so a
+   re-populated bubble self-heals. */
 export function enrich(node: HTMLElement, _text: string) {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  enrichAll(node);
+  let raf = 0;
+  let alive = true;
+  const opts: MutationObserverInit = { childList: true, subtree: true };
+
+  const mo = typeof MutationObserver !== "undefined"
+    ? new MutationObserver(() => { clearTimeout(timer); timer = setTimeout(run, 50); })
+    : null;
+
+  // enrichAll mutates the DOM (swaps innerHTML of diagram/code blocks); detach
+  // the observer across our own writes and drop the records they queue, so we
+  // never re-trigger ourselves into a loop. Reattach to keep watching for the
+  // NEXT external {@html} re-population.
+  function run() {
+    if (!alive) return;
+    mo?.disconnect();
+    enrichAll(node);
+    mo?.observe(node, opts);
+  }
+
+  run();
+  // A late {@html} paint can land after the synchronous mount pass — re-run on
+  // the next frame to enrich anything that wasn't in the DOM yet.
+  raf = requestAnimationFrame(run);
+
   return {
     update(_next: string) {
       clearTimeout(timer);
-      timer = setTimeout(() => enrichAll(node), 120);
+      timer = setTimeout(run, 120);
     },
-    destroy() { clearTimeout(timer); },
+    destroy() {
+      alive = false;
+      clearTimeout(timer);
+      cancelAnimationFrame(raf);
+      mo?.disconnect();
+    },
   };
 }
 
@@ -479,12 +704,14 @@ export function enrich(node: HTMLElement, _text: string) {
 const ENRICHED_SEL =
   "[data-mermaid][data-enriched], [data-mermaid][data-mermaid-rendered], " +
   "[data-svg][data-enriched], [data-svg][data-svg-rendered], " +
+  "[data-imagecard][data-enriched], " +
   "[data-html-artifact][data-enriched], [data-math][data-enriched], code[data-code-lang][data-enriched]";
 
 function srcKey(el: Element): string {
   return (
     el.getAttribute("data-mermaid-src") ??
     el.getAttribute("data-svg-src") ??
+    el.getAttribute("data-imagecard-src") ??
     el.getAttribute("data-html-src") ??
     el.getAttribute("data-math-src") ??
     (el.classList.contains("hljs") ? el.textContent ?? "" : "")
@@ -501,9 +728,10 @@ export function renderLive(node: HTMLElement, text: string) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let last = "";
 
-  function kindOf(el: Element): "m" | "s" | "h" | "t" | "c" {
+  function kindOf(el: Element): "m" | "s" | "i" | "h" | "t" | "c" {
     return el.getAttribute("data-mermaid") !== null ? "m"
       : el.getAttribute("data-svg") !== null ? "s"
+      : el.getAttribute("data-imagecard") !== null ? "i"
       : el.getAttribute("data-html-artifact") !== null ? "h"
       : el.getAttribute("data-math") !== null ? "t" : "c";
   }
@@ -528,7 +756,7 @@ export function renderLive(node: HTMLElement, text: string) {
     tmp.innerHTML = renderMarkdown(t);
 
     /* transplant unchanged rendered blocks so they are not reset to raw text */
-    tmp.querySelectorAll("[data-mermaid], [data-svg], [data-html-artifact], [data-math]").forEach((fresh) => {
+    tmp.querySelectorAll("[data-mermaid], [data-svg], [data-imagecard], [data-html-artifact], [data-math]").forEach((fresh) => {
       const kind = kindOf(fresh);
       let done = cache.get(`${kind}:${srcKey(fresh)}`);
       /* growing partial: reuse the in-flight frame and update its source so the

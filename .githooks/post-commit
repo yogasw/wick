@@ -1,0 +1,9 @@
+#!/bin/sh
+# Bridge hook. core.hooksPath points at .githooks (for the versioned
+# pre-push gate), which means Git no longer reads .git/hooks/. graphify
+# installs its own post-commit there (only when graphify is installed), so
+# delegate to it if present. Silently no-op when graphify isn't installed.
+
+LOCAL_HOOK="$(git rev-parse --git-dir 2>/dev/null)/hooks/post-commit"
+[ -x "$LOCAL_HOOK" ] && exec "$LOCAL_HOOK" "$@"
+exit 0

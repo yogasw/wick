@@ -298,18 +298,74 @@ func (s *Service) liveMCPOps(parent context.Context, def *entity.CustomConnector
 		return nil, false
 	}
 	s.adoptServerDescription(ctx, def, res.Instructions)
-	return toolsToCats(toolsToOps(serverID, res.Tools, parseExcluded(row.ExcludedTools))), true
+	return toolsToCats(toolsToOps(serverID, res.Tools, parseExcluded(row.ExcludedTools)), res.Categories), true
 }
 
-// toolsToCats wraps a flat MCP op list into a single untitled section.
-// MCP-sourced connectors expose their whole live tool catalog under one
-// default section; an admin re-groups them later in the UI (a later FE
-// phase). An empty op list yields no categories at all.
-func toolsToCats(ops []DefOp) []DefCategory {
+// toolsToCats groups a flat MCP op list into titled sections by each op's
+// Category (carried from the live tool's _meta.category), using the
+// server's _meta.categories legend for section descriptions. Section order
+// follows the legend first (so the server's intended ordering wins), then
+// any categories seen on ops but absent from the legend, in first-seen
+// order. Ops with no category collect into one trailing untitled section —
+// the historical behaviour for servers that ship no grouping at all. An
+// empty op list yields no categories.
+func toolsToCats(ops []DefOp, legend []MCPCategory) []DefCategory {
 	if len(ops) == 0 {
 		return nil
 	}
-	return []DefCategory{{Ops: ops}}
+	// Index ops by their category title, preserving first-seen order for
+	// titles the legend doesn't mention.
+	byTitle := map[string][]DefOp{}
+	var order []string
+	seen := map[string]bool{}
+	for _, op := range ops {
+		if !seen[op.Category] {
+			seen[op.Category] = true
+			order = append(order, op.Category)
+		}
+		byTitle[op.Category] = append(byTitle[op.Category], op)
+	}
+	descOf := map[string]string{}
+	var legendOrder []string
+	for _, c := range legend {
+		t := strings.TrimSpace(c.Title)
+		if t == "" {
+			continue
+		}
+		if _, ok := descOf[t]; !ok {
+			legendOrder = append(legendOrder, t)
+		}
+		descOf[t] = c.Description
+	}
+	// Emit legend titles first (only those that actually have ops), then
+	// op-only titles, then the untitled bucket last.
+	var titles []string
+	emitted := map[string]bool{}
+	for _, t := range legendOrder {
+		if len(byTitle[t]) > 0 && !emitted[t] {
+			titles = append(titles, t)
+			emitted[t] = true
+		}
+	}
+	for _, t := range order {
+		if t == "" || emitted[t] {
+			continue
+		}
+		titles = append(titles, t)
+		emitted[t] = true
+	}
+	if len(byTitle[""]) > 0 {
+		titles = append(titles, "")
+	}
+	cats := make([]DefCategory, 0, len(titles))
+	for _, t := range titles {
+		cats = append(cats, DefCategory{
+			Title:       t,
+			Description: descOf[t],
+			Ops:         byTitle[t],
+		})
+	}
+	return cats
 }
 
 // adoptServerDescription replaces the auto-generated placeholder with
@@ -358,6 +414,10 @@ func toolsToOps(serverID string, tools []MCPTool, excluded map[string]bool) []De
 			continue
 		}
 		seen[key] = true
+		category := ""
+		if t.Meta != nil {
+			category = strings.TrimSpace(t.Meta.Category)
+		}
 		op := DefOp{
 			Key:         key,
 			Name:        humanize(key),
@@ -365,6 +425,7 @@ func toolsToOps(serverID string, tools []MCPTool, excluded map[string]bool) []De
 			Destructive: destructiveToolRe.MatchString(t.Name),
 			Inputs:      mapInputSchema(t.InputSchema),
 			MCPSource:   &MCPSource{ServerID: serverID, ToolName: t.Name},
+			Category:    category,
 		}
 		if op.Description == "" {
 			op.Description = "Proxy of MCP tool " + t.Name + "."
@@ -553,6 +614,22 @@ func coerceArgs(fields []DefField, c *connector.Ctx) map[string]any {
 		name := f.Label
 		if name == "" {
 			name = f.Key
+		}
+		// Prefer the caller's original JSON type for scalars the string
+		// round-trip would otherwise flatten. A server may advertise a
+		// boolean/number parameter as "string" in its inputSchema (so the
+		// field lands on the text widget below) yet validate the tools/call
+		// against the real boolean/number type — relaying the stringified
+		// form then fails the server's own validation. When the caller
+		// actually sent a bool or number, forward it unchanged. Strings and
+		// objects deliberately fall through to the widget logic so wick_enc_
+		// decryption and textarea JSON parsing still run.
+		if rv, ok := c.RawInputValue(f.Key); ok {
+			switch rv.(type) {
+			case bool, float64, json.Number:
+				out[name] = rv
+				continue
+			}
 		}
 		switch f.Widget {
 		case "number":

@@ -51,6 +51,14 @@ type Ctx struct {
 	// without an enc service or with WICK_ENC_DISABLE — c.Mask /
 	// c.MaskIgnoreCase then become passthroughs.
 	masker Masker
+	// rawInput holds the caller's arguments with their original JSON types
+	// (bool, number, string, …) preserved, keyed exactly as `input`. It is
+	// optional: only the MCP tools/call path populates it (via SetRawInput),
+	// and only the MCP-proxy connector path reads it (via RawInputValue) to
+	// forward a scalar to an upstream MCP server in its original type rather
+	// than the stringified form. nil on every other path — readers MUST fall
+	// back to the string `input` map when a key is absent.
+	rawInput map[string]any
 }
 
 // Masker is the narrow slice of the encrypted-fields service
@@ -255,4 +263,28 @@ func (c *Ctx) InputBool(key string) bool {
 		return true
 	}
 	return false
+}
+
+// SetRawInput records the caller's arguments with their original JSON
+// types preserved (see the rawInput field). The framework calls this
+// once, right after constructing the Ctx, only on paths that have the
+// untyped argument map at hand (MCP tools/call). It is a no-op-friendly
+// setter: passing nil leaves rawInput nil and every RawInputValue read
+// reports "absent", so connectors transparently keep using the string
+// input map.
+func (c *Ctx) SetRawInput(raw map[string]any) { c.rawInput = raw }
+
+// RawInputValue returns the caller's original, untyped value for key —
+// the value as it arrived in the tools/call request, before wick flattens
+// arguments to strings. ok is false when no raw input was recorded for
+// this call or the key is absent, in which case callers MUST fall back to
+// the typed string accessors (Input / InputInt / InputBool). Connectors
+// that proxy to an upstream MCP server use this to forward a bool or
+// number in its original JSON type instead of a stringified form.
+func (c *Ctx) RawInputValue(key string) (any, bool) {
+	if c.rawInput == nil {
+		return nil, false
+	}
+	v, ok := c.rawInput[key]
+	return v, ok
 }

@@ -257,6 +257,20 @@ type MultiHTTPHandlerProvider interface {
 	HTTPHandlers() map[string]http.Handler
 }
 
+// RequestRouter lets a channel instance claim an incoming HTTP request
+// when several keyed instances of the same channel type expose the same
+// route (e.g. two per-user Slack bots both mounting /integrations/slack/send).
+// The registry wraps such duplicate routes in a fan-in dispatcher that
+// asks each candidate OwnsRequest; the first instance returning true serves
+// it. An instance that does not implement this interface is treated as a
+// catch-all fallback (matches when no other instance claims the request),
+// preserving single-instance behaviour.
+type RequestRouter interface {
+	// OwnsRequest reports whether r is destined for this instance. It must
+	// not consume r.Body (the dispatcher may hand r to another instance).
+	OwnsRequest(r *http.Request) bool
+}
+
 // ConfigSource is per-channel hot-reload glue. Hash returns a stable
 // fingerprint of the currently-applied config; the registry watcher
 // compares against the previous hash on each tick and calls Reload

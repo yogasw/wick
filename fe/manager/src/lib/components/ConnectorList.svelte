@@ -287,7 +287,7 @@
           <p class="text-sm text-black-700 dark:text-black-600">No rows yet. Click <strong>+ New row</strong> to create one.</p>
         </div>
       {:else}
-        <div class="mt-4 flex flex-col gap-2">
+        <div class="mt-4 flex flex-col gap-2 pb-6">
           {#each rows as row (row.id)}
             {@const chip = statusChip(row)}
             <div class="group relative rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 hover:border-green-400">

@@ -6,9 +6,264 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+*   **GitHub API rate-limit error messages (install scripts + updater)**: When the GitHub Releases API returns a 403/429 due to the unauthenticated 60-req/hr-per-IP quota, `install.sh`, `install.ps1`, and the in-app updater/upgrade paths now surface GitHub's own message (e.g. "API rate limit exceeded for 1.2.3.4") together with the reset time. The install scripts additionally print three workarounds: pass `TOKEN=ghp_xxx` (authenticated 5 000/hr), pin `VERSION=vX.Y.Z` (skips the API), or wait for the hourly reset.
 
 ---
+
+## [v0.25.3](https://github.com/yogasw/wick/compare/v0.25.2...v0.25.3) — Chat & Updates
+
+_Released on 2026-06-27_
+
+### Added
+
+*   **Chat — image card gallery (`imagecard` fence)**: A new ` ```imagecard ` fenced block renders web-search image results as a masonry gallery — each image at natural height, with a favicon + domain pill. One `url | caption` per line; `url` is the only required field. Clicking any card opens a full-screen carousel with prev/next arrows, position counter ("N / M"), ← / → keyboard navigation, source-domain caption, and click-outside-to-close. On non-rich channels (Slack, Telegram) the fence degrades to readable `url | caption` lines.
+
+### Fixed
+
+*   **`wick_execute` batch mode over SSE/Streamable-HTTP transport**: A `calls: [...]` batch payload sent over the SSE transport was never routed to the batch handler and was rejected with "tool_id is required". Batch calls now work correctly over both the stdio and SSE/Streamable-HTTP transports.
+*   **Flaky tests**: Addressed two pre-existing flaky tests: one related to HH:mm timestamp locale dependency and another for a DetailView polling interval that was no longer active.
+
+### Improved
+
+*   **Software Update page — single action slot**: The per-phase controls (check button, download progress bar, Apply & restart button, Restarting indicator) are now consolidated into a single top-right action slot that swaps content as the phase changes, replacing the previous stacked layout. The "no build for this platform" notice (including the expected asset name) now appears inline in the status line under the Updates heading rather than as a separate box.
+*   **Software Update page — auto-reload on restart (any tab)**: The page now starts polling `/health` and reloads automatically whenever it detects the service is in the applying phase — not only in the tab that clicked Apply. A tab that loads mid-restart (e.g., after a manual server restart) will self-reload onto the new build without a manual refresh. The poll waits for `/health` to go down before accepting the first successful response, so the reload always lands on the new build rather than the pre-restart process.
+
+---
+
+
+## [v0.25.2](https://github.com/yogasw/wick/compare/v0.25.1...v0.25.2) — Upgrade & UI
+
+_Released on 2026-06-27_
+
+### Added
+
+*   **CLI — `wick upgrade --yes` / `-y` flag**: Pass `-y` to skip all confirmation prompts (CLI binary, go.mod dep, Dockerfile) and run the upgrade non-interactively. Useful in scripts or CI pipelines.
+*   **User menu — version + update status dropdown**: The user menu now shows a version section at the bottom listing the running app version and (on non-official builds) the embedded wick framework version, each with a status badge — green **Latest** or amber **Update available → vX**. All users can see this; no admin role required.
+*   **User menu — "Software Update" shortcut for admins**: When any update is available (app or wick framework), admins see a green **Software Update** entry at the top of the user menu linking directly to `/admin/advanced/software-update`. Non-admins see the version badges but not this action entry.
+*   **Software Update page — wick framework "What's new" (non-official builds)**: For downstream apps built against wick, the Version panel now shows a rendered changelog block ("What's new") between the embedded wick version and the latest public release. This is populated server-side from the background version cache — no live request on page load.
+
+### Changed
+
+*   **CLI — `wick upgrade` no longer auto-starts dev server**: After upgrading, wick exits cleanly instead of launching the `dev` task. Start the dev server manually with `wick dev` if needed.
+*   **Version cache — background refresh**: App and wick framework version checks now run in the background (on boot, then every 6 hours) and are stored in an in-process cache. The user menu dropdown and Software Update page both read from this cache, so neither triggers a network call on the request path.
+
+### Removed
+
+*   **`GET /admin/advanced/software-update/wick-check` endpoint**: This live-check endpoint has been removed. The wick framework version check is now served from the background version cache instead.
+*   **Unused CI cache warm workflow**: The `ci-cache-warm` workflow, which only warmed shared caches for `pr-tests.yml`, has been removed. With per-PR CI disabled and the test gate moved to local pre-push hooks and the release pipeline, this workflow was running unnecessarily on every master push.
+
+---
+
+
+## [v0.25.1](https://github.com/yogasw/wick/compare/v0.25.0...v0.25.1) — Multi-Bot Channels
+
+_Released on 2026-06-26_
+
+### Fixed
+
+*   **Channels — multi-bot session isolation (Slack / Telegram / REST)**: Two bot instances (e.g., two per-user Slack bots, even across different Slack workspaces) that happen to share the same thread timestamp, conversation key, or chat ID no longer collide on the same wick session. Each per-user channel instance now namespaces its session ID by its registry key (e.g., Slack/Telegram sessions are prefixed with `slack:<owner>:<threadTS>`, and REST conversations use a hash of the authenticated user) to isolate pool sessions, on-disk session directories, and reply routing. **Note:** Existing Slack, Telegram, and REST sessions will experience a one-time context reset after upgrading, as the new session IDs will not match the old ones, causing the next message to start a fresh context.
+*   **Channels — HTTP route fan-in for multi-instance bots**: When multiple per-user channel instances expose the same HTTP webhook path (e.g., two Slack bots both mounting `/integrations/slack/send`), requests are now fanned into the correct instance via `RequestRouter.OwnsRequest` rather than the previous last-write-wins behavior that silently dropped all but one instance.
+
+### Improved
+
+*   **Slack — "is thinking…" banner heartbeat**: The assistant-status banner (`is thinking…`) is now re-asserted every 45 seconds during long tool-use turns (with an immediate refresh on `ToolUse` or `ToolResult` events). Slack auto-clears the status after approximately 2 minutes of inactivity, so without the heartbeat the banner would vanish mid-run on slow tool chains. The heartbeat stops automatically on `done` / `error` or when a turn is superseded.
+
+---
+
+
+## [v0.25.0](https://github.com/yogasw/wick/compare/v0.24.1...v0.25.0) — Platform Updates
+
+_Released on 2026-06-25_
+
+### Added
+
+*   **MCP — `wick_execute` batch mode**: Pass a `calls` array to run up to 100 connector operations in a single round-trip. Calls run in parallel (server-side concurrency fixed at 5); a failing or timed-out call never stops the rest. Each entry in the response carries `{index, tool_id, ok, result|error, timed_out, duration_ms}` plus summary counts. Set `timeout_ms` to cap per-call time (default 3 min, max 5 min). Single-call shape is unchanged. See [Batch execution](/guide/mcp#batch-execution).
+
+### Fixed
+
+*   **Channels — Telegram & REST per-user instances**: Each user can now configure their own Telegram bot or REST endpoint independently. Wick starts one keyed instance per owner at boot and hot-adds new instances when a user saves their config — matching the existing Slack per-user model.
+*   **Slack — access-denied DM**: When a message is blocked by the access-control whitelist, wick now DMs the blocked user with a reason (`identity` or `channels`) instead of leaving the 🚫 reaction as a silent dead-end.
+*   **Slack — multi-instance bot footer**: The "Sent using @bot" footer now resolves the bot display name from each instance's own token, so per-user Slack instances credit their own bot rather than a stale shared value.
+*   **Pool — double-reply on first turn**: The injected origin-context turn is now deferred until after the first user message lands, preventing the agent from being spawned early and producing a duplicate reply (affected Slack, Telegram, and REST sessions).
+*   **`MapToStruct` — bool config fields**: Reflected config loading no longer panics when boolean fields are absent from the stored JSON.
+*   **Projects — Centralized Visibility Filter**: Admins can view all projects; other users see their own, untagged-shared, and tag-shared projects. Channel default-project dropdowns now list only accessible projects.
+*   **Sessions — Owner Stamping**: Session owner is now stamped once upon creation, not on every message, optimizing performance.
+
+### Fixed
+
+*   **PWA service worker — pending-hang on boot**: Static assets (`/sw.js`, `/public/*`, `/modules/*`) are now exempt from the boot gate. Previously, an already-installed service worker would intercept these asset fetches on a reload while boot was still in progress; the gate held every request, leaving `app.css`, `icon.svg`, and similar files stuck at "pending" until the boot restore finished. Because these paths are served from `embed.FS` and depend on nothing the boot gate sets up, exempting them lets the SW resolve its cache immediately regardless of boot state.
+*   **PWA service worker — stale-while-revalidate and navigation fetch hang**: Added an 8-second `AbortController` timeout to both the SWR background refresh and the network-first navigation path. Without it, a stalled TCP connection (dead keep-alive socket, momentarily busy server) left `fetch()` hanging indefinitely with no error, so the asset or page never settled — visible as an asset or navigation stuck at "pending" forever. The timeout converts the stall into a rejection, allowing the SW to fall back to cache or surface a real network error instead. The SWR background refresh is now kept alive past `respondWith` via `waitUntil`.
+*   **Software Update page — Changelog rendering**: Fixed an issue where the "What's new" changelog rendered as raw Markdown due to a missing `/public/lib/wick-markdown.js` asset.
+
+### Changed
+
+*   **`wick build` — build time always stamped**: `BuildTime` is now injected as an `-X` ldflag (RFC3339 UTC, set at `wick build` invocation time) for every build path. Previously it relied solely on Go's `vcs.time` VCS metadata, which is absent inside the `wick init` scaffold (a git-less directory) used by the release pipeline, leaving the "Built" field showing "unknown" in all release binaries. The "Built" field on the Software Update page and in `wick_info` MCP output now always shows the actual compile time.
+
+### Removed
+
+*   **Admin — Software Update page — Commit row**: The **Commit** field has been removed from the Version panel. Build time is now always available (see above) and more meaningful to end-users; the commit SHA is a build-internals detail not useful at the operator level. The version fields on the Software Update page are now grouped as Application / Wick / Runtime.
+
+---
+
+
+## [v0.24.1](https://github.com/yogasw/wick/compare/v0.24.0...v0.24.1) — MCP & Connectors
+
+_Released on 2026-06-24_
+
+### Added
+
+*   **Custom MCP connector — tool grouping via `_meta`**: Upstream MCP servers can now specify a top-level `_meta.categories` legend and set `_meta.category` on individual tools in their `tools/list` response. Wick now groups the exposed operations into titled sections matching the server's intended layout. Section order follows the legend; tools with no category collect into a single untitled trailing section. Servers that do not ship `_meta` will retain the historical flat single-section layout, requiring no action.
+
+### Fixed
+
+*   **Custom MCP connector — bearer / secret-header 401 after save**: Connector credentials stored as master-encrypted tokens (`wick_cenc_` prefix, used for server-level secrets) were not being decrypted before outbound requests. Previously, only the per-user `wick_enc_` prefix was matched during decryption, resulting in the ciphertext being sent verbatim as the `Authorization: Bearer` or custom header value, leading to 401 errors from upstream servers. Both prefixes are now recognised and decrypted correctly.
+
+---
+
+
+## [v0.24.0](https://github.com/yogasw/wick/compare/v0.23.6...v0.24.0) — Software Update UI
+
+_Released on 2026-06-24_
+
+### Added
+*   **Software Update page — release notes + update status**: The self-update page (now under **Setup → Advanced → Software Update**) displays a rendered changelog between the running and latest versions, the release date, and an at-a-glance status badge (green **Latest** or amber **Update available → vX**). For official builds, the changelog range is pulled from the published changelog site; downstream apps fall back to their GitHub release notes. A **View full changelog** link opens the full page.
+*   **"No build for this platform" notice**: When a newer release exists but ships no asset for the running OS/arch, the page now shows the version and changelog with an informational notice (recommending to build from source or ask the maintainer) instead of a hard error.
+*   The page auto-checks for updates on load, so the latest version and changelog populate without a manual click.
+
+### Changed
+*   The admin **Configs** section is renamed to **Advanced** (`/admin/advanced`); the self-update card within it is now **Software Update** (`/admin/advanced/software-update`).
+*   Changelog and other markdown on the Software Update page now renders as formatted HTML via a shared `@wick-fe/common-md` bundle, served from `/public/lib/` and reusable by any server-rendered page. The shared markdown renderer also learns to interpret thematic breaks (---) as `<hr>`.
+
+---
+
+
+## [v0.23.6](https://github.com/yogasw/wick/compare/v0.23.5...v0.23.6) — Self-Update
+
+_Released on 2026-06-24_
+
+### Added
+*   Added or improved self-update functionality/testing.
+
+---
+
+
+## [v0.23.5](https://github.com/yogasw/wick/compare/v0.23.4...v0.23.5) — Updater
+
+_Released on 2026-06-24_
+
+### Fixed
+- Self-update mechanism for Termux and unprivileged Linux environments. Previously, self-update failed on Termux due to attempts to use `dpkg -i` via `pkexec/sudo`, which are not available or required for user-owned installations in Termux. The application would hang on "Restarting...". The new mechanism now performs an unprivileged installation by extracting the inner ELF binary from the staged `.deb` file and swapping it in place using `syscall.Exec`, mirroring the `install.sh` script's approach.
+- The updater now provides a clear error message if the install directory is not user-writable (e.g., a root-owned `/usr/bin` installation), guiding the user to re-run the installer.
+
+### Improved
+- Linux relaunch during self-update now preserves the original process arguments. This ensures that headless services started with specific arguments (e.g., `all` or `server`) continue to operate correctly after an update, matching the behavior on Windows.
+
+---
+
+
+## [v0.23.4](https://github.com/yogasw/wick/compare/v0.23.3...v0.23.4) — Self-Update
+
+_Released on 2026-06-24_
+
+### Improved
+*   Internal test release to validate the self-update mechanism.
+
+---
+
+
+## [v0.23.3](https://github.com/yogasw/wick/compare/v0.23.2...v0.23.3) — Self-Update & Admin
+
+_Released on 2026-06-24_
+
+### Added
+*   **Admin System page — web-based self-update**: A new **System** card under `/admin/configs` lets any admin check for updates, watch a live download-progress bar (SSE), and restart the service to apply a new release — all from the browser. Previously, self-update was tray-only; this brings the same flow to headless (`<app> all` / `<app> server`) deployments. The page also shows version detail (app name/version, wick version, commit, build time, access type, DB status) matching what `wick_info` reports over MCP. See [Admin Panel — System](/guide/admin-panel#system-adminconfigssystem).
+
+### Changed
+*   **Auto-update default changed to off**: `auto_update` in `config.json` now defaults to `false` (opt-in). Existing installs that previously relied on the default-on behaviour should enable auto-update explicitly — via **Preferences → Auto-update** in the tray, or the **Automatic updates** toggle on the new System page.
+
+### Fixed
+*   **Self-update on Termux / unprivileged Linux**: Applying an update no longer shells out to `dpkg` via `pkexec`/`sudo`. Self-update now mirrors the installer — it never escalates privilege. On Linux/Termux it extracts the inner binary from the staged `.deb` and swaps it in place (`syscall.Exec`), so updates work on Termux (user-owned prefix, no `pkexec`/`sudo`) and any unprivileged install. If the install directory isn't user-writable, Apply fails with a clear message instead of prompting for a password.
+*   **Relaunch preserves args after update**: Both the Windows (MSI helper) and Linux (binary swap) restart paths now relaunch with the process's original arguments, so a headless `<app> all` / `<app> server` service re-serves after an update without manual intervention.
+
+---
+
+
+## [v0.23.2](https://github.com/yogasw/wick/compare/v0.23.1...v0.23.2) — Access Control & UI
+
+_Released on 2026-06-23_
+
+### Fixed
+*   **PWA Stale Layout**: Non-hashed static assets (`app.css`, `app.js`, `dialog.js`, `palette.js`, `push.js`) are now served stale-while-revalidate instead of cache-first. This ensures updated assets are picked up automatically after a deploy on the next normal page load, resolving the issue where new deploys did not surface until a hard refresh.
+*   **Cross-Tenant Project Access Leaks**: Project detail, update, delete, and SSE stream routes now enforce `callerProjectAccess().allowProject()`. This prevents scoped users from reading, modifying, or deleting projects they lack access to, even if the project ID is known. Endpoints return 404 (Not Found) to avoid confirming project existence to unauthorized callers.
+*   **Ownerless Projects**: Projects with no owner (`OwnerUserID == ""`) are now treated as admin-only resources. Non-admins can only access such projects if an explicit tag grant covers them, closing a loophole that previously exposed every ownerless project and its sessions to all authenticated users.
+*   **SSE Stream Access Control**: The global SSE stream (`/sse`), which lists all active sessions, is now restricted to admins. Session-scoped SSE streams (`?session=<id>`) require the caller to own or have tag-granted access to that specific session.
+*   **Session Subroute Access**: Remaining cross-tenant leaks for session subroutes (e.g., approvals, asks, workspace connector configurations, and SCM Git routes) are closed. Access to these routes now requires the caller to own or have tag-granted access to the specific session ID. This was implemented using a new `Router.Use` middleware.
+*   **Conversation UI Overlap**: Resolved floating header overlap in Raw, Commands, and Approvals views by adding appropriate top offsets (`pt-14`, `md:pt-16`), ensuring their content starts below the header bar.
+*   **Markdown Enrichment Self-Healing**: Improved Markdown rendering for committed-turn bubbles. Blocks like Mermaid/SVG now self-heal and re-enrich correctly after history reloads or content changes (e.g., `innerHTML` reset), preventing them from intermittently displaying as raw "rendering…" text.
+
+---
+
+
+## [v0.23.1](https://github.com/yogasw/wick/compare/v0.23.0...v0.23.1) — Agents
+
+_Released on 2026-06-23_
+
+### Fixed
+
+*   **Session detail access for tag-granted project members**: Users who could see a session in the sidebar via project tag grants could not open its detail/conversation page (the route returned 404). The `ownsSession()` function now also checks project-scoped access (`callerProjectAccess().allowSession()`), ensuring consistency between session list visibility and detail access. The App Owner, `admin_see_all` admins, and ownerless unscoped sessions are unaffected.
+*   Updated `admin-panel.md` to clarify that tag-granted project members can now open session detail pages, not just their own.
+
+---
+
+
+## [v0.23.0](https://github.com/yogasw/wick/compare/v0.22.2...v0.23.0) — MCP & Connectors
+
+_Released on 2026-06-23_
+
+### Added
+
+*   **Google Workspace Input Structs**: Added input structs for Google Workspace operations across Calendar, Docs, Drive, Gmail, Meet, Sheets, and Slides, enhancing connector capabilities.
+
+### Changed
+
+*   **`wick_get` — three-level drill-down via `selector`**: `wick_get` now navigates connector operations across three levels instead of returning all schemas at once.
+    *   Call with `id` only to get the connector's **category list**.
+    *   Add `selector=<category title>` to list that category's **operations** (no schemas).
+    *   Add `selector=<op key>` to retrieve that **one op's `input_schema`**.
+    *   Flat connectors with no named categories list their ops directly at level 1.
+    *   The `category` and `op_key` argument names are accepted as aliases for `selector`.
+    *   Session-workspace instances follow the same three levels.
+    *   This change keeps large connectors (e.g., Google Workspace with 50+ ops) from dumping every schema into the LLM's context on a single call.
+*   **Documentation**: Updated `mcp.md` and the changelog to reflect the `wick_get` three-level drill-down with the `selector` argument.
+
+### Improved
+
+*   **Agent UI**:
+    *   **Kebab Menu**: Improved behavior to flip up near the viewport bottom and portal the popup to `<body>` to escape per-row stacking contexts.
+    *   **Workflow List**: Swapped the manual workflow-list dropdown to use the Kebab Menu, and pinned `<main>` with `min-h-0` for smoother scrolling without a gap.
+    *   **Connector List**: Added bottom padding and refined the search input to a bare style, removing the double border.
+    *   **Theme Picker**: Introduced a theme picker in the agents sidebar via `UserMenu(showTheme)`.
+
+---
+
+
+## [v0.22.2](https://github.com/yogasw/wick/compare/v0.22.1...v0.22.2) — Connectors UI
+
+_Released on 2026-06-22_
+
+### Changed
+
+*   **Connectors moved into the Agents UI**: The connectors manager is now hosted at `/tools/agents/connectors` inside the Agents sidebar shell. All browser-facing `/manager/connectors*` URLs now 302-redirect to this new location, preserving deep links via `?deep=`. The `/manager/api/connectors*` JSON routes and all write/mutation routes remain at `/manager` and are unaffected.
+*   **Agents sidebar — Connectors link**: A dedicated **Connectors** navigation item has been added to the Agents sidebar, visible to all users.
+*   **`/launcher` renamed to `/mini-tools`**: The tools-grid launcher page has been moved from `/launcher` to `/mini-tools`. A **Mini Tools** link is now visible at the bottom of the Agents sidebar for all users (previously, only admins saw a Settings link there).
+*   **Home tile — Connectors**: The "Connectors" tile on the Mini Tools home grid now links directly to `/tools/agents/connectors` instead of `/manager/connectors`.
+*   **Connectors SPA breadcrumb**: The connectors index page now displays no breadcrumb (as the heading already states "Connectors"). Sub-pages root at "Connectors". The Audit Log page shows only "Audit Log" with no root breadcrumb.
+*   **Chat block toolbar — mobile + PNG fixes**: The per-block hover toolbar is now consistently visible at 70% opacity on touch/no-hover devices (phones, tablets), resolving its previous hidden state until hover. PNG export functionality now utilizes the SVG's intrinsic viewBox/width-height rather than the on-screen size, addressing the "looks like my phone screen" export bug. If rasterization still fails (e.g., due to a tainted canvas), the chart is now downloaded as an `.svg` file instead of silently producing no output.
+
+---
+
 
 ## [v0.22.1](https://github.com/yogasw/wick/compare/v0.22.0...v0.22.1) — Connectors
 
@@ -41,8 +296,8 @@ _Released on 2026-06-20_
 ### Changed
 
 *   **Connector visibility — live tag resolution**: The connector list now resolves each row's filter-tag IDs live from the database rather than from the session-cookie snapshot. A row created or duplicated in the current session is visible immediately without logout/login.
-*   **Home — default landing page**: Navigating to `/` now redirects to the agent UI (`/tools/agents/`). The tools/connectors grid previously at `/` is now at `/launcher` and remains fully reachable.
-*   **Admin nav — Mini Tools dropdown**: The standalone Tools, Connectors, and Jobs tabs in the admin navigation bar are grouped into a single **Mini Tools** dropdown. A Launcher shortcut is included in the same dropdown. See [Admin Panel](./guide/admin-panel#mini-tools-tools-connectors-jobs).
+*   **Home — default landing page**: Navigating to `/` now redirects to the agent UI (`/tools/agents/`). The tools/connectors grid previously at `/` is now at `/mini-tools` (was `/launcher` in v0.22.0; renamed in the subsequent release) and remains fully reachable.
+*   **Admin nav — Mini Tools dropdown**: The standalone Tools, Connectors, and Jobs tabs in the admin navigation bar are grouped into a single **Mini Tools** dropdown. See [Admin Panel](./guide/admin-panel#mini-tools-tools-connectors-jobs).
 
 ---
 
