@@ -119,6 +119,7 @@ Assistant bubbles in the **web Conversation tab** render as GitHub-flavored mark
 | **Markdown** | normal GFM — headings, lists, **bold**, `inline code`, tables, blockquotes, `~~strikethrough~~` | styled rich text |
 | **Links** | `[short label](https://…)` | clickable label (the noisy query string is hidden) |
 | **Code (highlighted)** | fenced block with a language tag: ` ```js `, ` ```python `, ` ```go `, ` ```sql `, … | syntax-highlighted block via [highlight.js](https://highlightjs.org/), light/dark aware |
+| **Image cards** | ` ```imagecard ` fence, one `url \| caption` per line (`ratio` and `focus` are optional extra fields) | masonry thumbnail gallery; favicon + domain pill on each card; click → full-screen carousel with prev/next arrows, position counter, ← / → keyboard navigation, and source-domain caption; click outside to close |
 | **Mermaid diagrams** | a ` ```mermaid ` fence — `flowchart`, `sequenceDiagram`, `classDiagram`, `stateDiagram-v2`, `erDiagram`, `gantt`, `pie`, `journey`, … | colored [Mermaid](https://mermaid.js.org/) diagram, theme-aware light/dark |
 | **Inline math** | `$…$` — e.g. `$E = mc^2$` | [KaTeX](https://katex.org/) inline (a bare `$5 and $10` stays currency, not math) |
 | **Display math** | `$$…$$` on its own line(s) | KaTeX centered block |
