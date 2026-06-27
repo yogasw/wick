@@ -117,6 +117,18 @@ export function renderMarkdown(text: string): string {
       );
       return;
     }
+    /* An imagecard fence becomes a thumbnail-gallery placeholder; the SPA
+       parses the body (one `url | caption` per line) into hotlinked image
+       cards with a favicon + domain chip, and a click opens the lightbox
+       carousel. The raw urls stay as the body so on a non-rich channel
+       (Slack/Telegram) they still degrade to readable links. */
+    if (lang === "imagecard") {
+      out.push(
+        `<div class="wick-imagecard my-2" data-imagecard data-imagecard-src="${esc(code)}">` +
+        `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 rounded-lg leading-relaxed"><code>${esc(code)}</code></pre></div>`,
+      );
+      return;
+    }
     const langLabel = lang
       ? `<span class="text-[10px] text-black-600 dark:text-black-700 uppercase tracking-wide">${esc(lang)}</span>`
       : "";
