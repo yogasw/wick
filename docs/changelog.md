@@ -6,6 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+### Added
+
+*   **Chat — image card gallery (`imagecard` fence)**: A new ` ```imagecard ` fenced block renders web-search image results as a masonry gallery — each image at natural height, with a favicon + domain pill. One `url | caption` per line; `url` is the only required field. Clicking any card opens a full-screen carousel with prev/next arrows, position counter ("N / M"), ← / → keyboard navigation, source-domain caption, and click-outside-to-close. On non-rich channels (Slack, Telegram) the fence degrades to readable `url | caption` lines.
+
 ### Fixed
 
 *   **`wick_execute` batch mode over SSE/Streamable-HTTP transport**: A `calls: [...]` batch payload sent over the SSE transport was never routed to the batch handler — `sseWickExecute` fell through to the single-call path and rejected the request with "tool_id is required". Batch calls now work correctly over both the stdio and SSE/Streamable-HTTP transports.
