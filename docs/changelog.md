@@ -6,6 +6,14 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.25.2](https://github.com/yogasw/wick/compare/v0.25.1...v0.25.2) — Upgrade & UI
+
+_Released on 2026-06-27_
+
 ### Added
 
 *   **CLI — `wick upgrade --yes` / `-y` flag**: Pass `-y` to skip all confirmation prompts (CLI binary, go.mod dep, Dockerfile) and run the upgrade non-interactively. Useful in scripts or CI pipelines.
@@ -21,8 +29,10 @@ All notable changes to Wick are documented here.
 ### Removed
 
 *   **`GET /admin/advanced/software-update/wick-check` endpoint**: This live-check endpoint has been removed. The wick framework version check is now served from the background version cache instead.
+*   **Unused CI cache warm workflow**: The `ci-cache-warm` workflow, which only warmed shared caches for `pr-tests.yml`, has been removed. With per-PR CI disabled and the test gate moved to local pre-push hooks and the release pipeline, this workflow was running unnecessarily on every master push.
 
 ---
+
 
 ## [v0.25.1](https://github.com/yogasw/wick/compare/v0.25.0...v0.25.1) — Multi-Bot Channels
 
