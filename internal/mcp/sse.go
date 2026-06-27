@@ -293,6 +293,23 @@ func (h *Handler) sseStaticTool(sess *sseSession, run func(*bufferingWriter)) {
 // heartbeats, and the final response.
 func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcRequest, p toolCallParams, user *entity.User, tagIDs []string) {
 	args := p.Arguments
+
+	// Batch mode is single-frame (no progress streaming): the parallel
+	// orchestration lives in handlers.WickExecute → wickExecuteBatch. Reuse
+	// it by buffering the canonical JSON response and framing it as one SSE
+	// event, exactly like the static meta-tools. Without this the SSE
+	// transport would never reach the batch branch and a "calls" payload
+	// falls through to the single-call path below, failing with
+	// "tool_id is required".
+	if rawCalls, ok := args["calls"].([]any); ok && len(rawCalls) > 0 {
+		rsp := h.responder()
+		hreq := handlers.RPCRequest{ID: req.ID, Params: req.Params}
+		h.sseStaticTool(sess, func(buf *bufferingWriter) {
+			handlers.WickExecute(buf, r, hreq, rsp, h.connectors, h.layout, args, user, tagIDs)
+		})
+		return
+	}
+
 	toolID, _ := args["tool_id"].(string)
 	toolID = strings.TrimSpace(toolID)
 	if toolID == "" {

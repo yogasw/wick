@@ -10,6 +10,27 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.25.3](https://github.com/yogasw/wick/compare/v0.25.2...v0.25.3) — Chat & Updates
+
+_Released on 2026-06-27_
+
+### Added
+
+*   **Chat — image card gallery (`imagecard` fence)**: A new ` ```imagecard ` fenced block renders web-search image results as a masonry gallery — each image at natural height, with a favicon + domain pill. One `url | caption` per line; `url` is the only required field. Clicking any card opens a full-screen carousel with prev/next arrows, position counter ("N / M"), ← / → keyboard navigation, source-domain caption, and click-outside-to-close. On non-rich channels (Slack, Telegram) the fence degrades to readable `url | caption` lines.
+
+### Fixed
+
+*   **`wick_execute` batch mode over SSE/Streamable-HTTP transport**: A `calls: [...]` batch payload sent over the SSE transport was never routed to the batch handler and was rejected with "tool_id is required". Batch calls now work correctly over both the stdio and SSE/Streamable-HTTP transports.
+*   **Flaky tests**: Addressed two pre-existing flaky tests: one related to HH:mm timestamp locale dependency and another for a DetailView polling interval that was no longer active.
+
+### Improved
+
+*   **Software Update page — single action slot**: The per-phase controls (check button, download progress bar, Apply & restart button, Restarting indicator) are now consolidated into a single top-right action slot that swaps content as the phase changes, replacing the previous stacked layout. The "no build for this platform" notice (including the expected asset name) now appears inline in the status line under the Updates heading rather than as a separate box.
+*   **Software Update page — auto-reload on restart (any tab)**: The page now starts polling `/health` and reloads automatically whenever it detects the service is in the applying phase — not only in the tab that clicked Apply. A tab that loads mid-restart (e.g., after a manual server restart) will self-reload onto the new build without a manual refresh. The poll waits for `/health` to go down before accepting the first successful response, so the reload always lands on the new build rather than the pre-restart process.
+
+---
+
+
 ## [v0.25.2](https://github.com/yogasw/wick/compare/v0.25.1...v0.25.2) — Upgrade & UI
 
 _Released on 2026-06-27_

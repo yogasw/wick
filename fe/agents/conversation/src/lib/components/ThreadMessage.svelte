@@ -42,15 +42,33 @@
   let traceEvents = $state<TurnEvent[] | null>(null);
   let traceError = $state(false);
 
-  type LightboxItem = { url: string; name: string; kind: "image" | "pdf" | "html" | "markdown" | "text" | "file" };
-  let lightbox = $state<LightboxItem | null>(null);
+  type LightboxItem = { url: string; name: string; kind: "image" | "pdf" | "html" | "markdown" | "text" | "file"; sourceUrl?: string };
+  /* The viewer is always a gallery. A single attachment / artifact opens as a
+     one-element gallery; an image-card grid opens with every card so the user
+     can page through them (← / → / prev-next). */
+  let lightbox = $state<{ items: LightboxItem[]; index: number } | null>(null);
 
+  /* single-item entry point for attachments + artifacts (ArtifactGallery
+     onOpen passes one item) — a one-element gallery. */
   function openLightbox(item: LightboxItem) {
-    lightbox = item;
+    lightbox = { items: [item], index: 0 };
+  }
+
+  function openGallery(items: LightboxItem[], index: number) {
+    if (items.length) lightbox = { items, index };
   }
 
   function closeLightbox() {
     lightbox = null;
+  }
+
+  /* The image-card grid is rendered imperatively by richRender (outside Svelte),
+     so a clicked card can't call openGallery directly. It dispatches a
+     `wick-imagecard-open` CustomEvent that bubbles to this bubble's root; we
+     catch it here and open the gallery with the card's siblings. */
+  function onImageCardOpen(e: Event) {
+    const d = (e as CustomEvent).detail as { items?: LightboxItem[]; index?: number } | undefined;
+    if (d?.items?.length) openGallery(d.items, d.index ?? 0);
   }
 
   const resolvedTraceEvents = $derived(traceEvents ?? safeEvents);
@@ -249,7 +267,7 @@
         {#if stamp}
           <span class="self-start text-[10px] leading-none text-black-500 dark:text-black-600">{stamp}</span>
         {/if}
-        <div use:enrich={turn.text} class="rounded-2xl rounded-tl-sm bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
+        <div use:enrich={turn.text} onwick-imagecard-open={onImageCardOpen} class="rounded-2xl rounded-tl-sm bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
           {@html renderMarkdown(turn.text)}
           {#if turn.interrupted}
             <div class="mt-2 flex items-center gap-1.5 border-t border-white-300 dark:border-navy-600 pt-2">
@@ -284,4 +302,4 @@
   </div>
 {/if}
 
-<MediaLightbox item={lightbox} onClose={closeLightbox} />
+<MediaLightbox items={lightbox?.items ?? null} index={lightbox?.index ?? 0} onClose={closeLightbox} />

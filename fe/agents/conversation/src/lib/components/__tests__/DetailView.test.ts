@@ -507,13 +507,19 @@ describe("DetailView — process list polling (G4)", () => {
     }
   });
 
-  test("loadProcesses polls again after 5s", () => {
+  /* Processes are loaded once on mount and thereafter refreshed by the SSE
+     `lifecycle` event (see DetailView onMount), NOT a 5s interval — the timer
+     poll was removed because it stacked redundant fetches on top of SSE. This
+     test pins that: a load happens on mount, and advancing the clock adds none. */
+  test("loadProcesses runs on mount and does not poll on a timer", () => {
     vi.useFakeTimers();
     try {
       render(DetailView, { props: DEFAULT_PROPS });
-      expect(getProcesses).toHaveBeenCalledTimes(1);
+      const afterMount = getProcesses.mock.calls.length;
+      expect(afterMount).toBeGreaterThanOrEqual(1);
       vi.advanceTimersByTime(5000);
-      expect(getProcesses).toHaveBeenCalledTimes(2);
+      /* no interval polling → advancing the clock adds no further fetches */
+      expect(getProcesses).toHaveBeenCalledTimes(afterMount);
     } finally {
       vi.useRealTimers();
     }

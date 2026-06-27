@@ -145,6 +145,21 @@ describe("renderMarkdown — rich blocks", () => {
     expect(html).not.toContain("data-code-lang");
   });
 
+  test("imagecard fence becomes an image-card placeholder with raw source", () => {
+    const html = renderMarkdown(
+      "```imagecard\nhttps://abc.com/a.jpg | Caption A\nhttps://abc.net/b.png\n```",
+    );
+    expect(html).toContain("data-imagecard");
+    expect(html).toContain("data-imagecard-src=");
+    /* both urls ride in the source so the SPA can build the cards */
+    expect(html).toContain("abc.com/a.jpg");
+    expect(html).toContain("abc.net/b.png");
+    /* degrades to the raw urls as a fallback (non-rich channels) */
+    expect(html).toContain("Caption A");
+    /* an image-card block is not a highlightable code block */
+    expect(html).not.toContain("data-code-lang");
+  });
+
   test("non-mermaid code fence carries its language for highlighting", () => {
     const html = renderMarkdown("```js\nconst x = 1;\n```");
     expect(html).toContain('data-code-lang="js"');
