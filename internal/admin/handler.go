@@ -103,10 +103,14 @@ type Handler struct {
 // params each time the page needs another build field.
 type SystemConfig struct {
 	Coordinator *updater.Coordinator
-	AppName     string
-	WickVersion string
-	Commit      string
-	BuildTime   string
+	// VersionCache is the background-refreshed version + update snapshot.
+	// The System page reads the wick-framework version, update status, and
+	// cached changelog from it instead of doing a live request on load.
+	VersionCache *updater.VersionCache
+	AppName      string
+	WickVersion  string
+	Commit       string
+	BuildTime    string
 }
 
 // dbInfo mirrors the MCP wick_info db probe: returns (type, status)

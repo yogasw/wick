@@ -207,25 +207,40 @@ The gate-specific checks are detailed in the [Command Gate guide](../guide/comma
 
 ### `wick upgrade`
 
-Bump the `github.com/yogasw/wick` dependency in the current project's `go.mod` to the latest released version, then tidy and run `dev`.
+Upgrade the wick CLI binary and the `github.com/yogasw/wick` dependency in the current project's `go.mod` to the latest released version, then tidy. Prompts before each step; pass `-y` to skip all prompts.
 
 ```bash
-$ wick upgrade
-current: v0.1.13
-latest:  v0.4.2
-upgrade v0.1.13 -> v0.2.0? [y/N]: y
-> go get github.com/yogasw/wick@v0.25.1
-> go mod tidy
-> <dev task from wick.yml>
+wick upgrade          # interactive — confirms each step
+wick upgrade --yes    # non-interactive — assumes yes to all prompts
+wick upgrade -y       # same, short form
 ```
+
+Example session (interactive):
+
+```
+$ wick upgrade
+upgrade cli binary v0.1.13 -> v0.4.2? [Y/n]: y
+upgrade go.mod dep v0.1.13 -> v0.4.2? [Y/n]: y
+> go get github.com/yogasw/wick@v0.25.2
+> go mod tidy
+Dockerfile: wick@v0.1.13 -> v0.4.2? [Y/n]: y
+```
+
+Flags:
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--yes` | `-y` | `false` | Assume yes to all confirmation prompts |
 
 Steps:
 
-1. Read the pinned version from the `require` block in `./go.mod`.
+1. Read the installed CLI binary version and the pinned version from `./go.mod`.
 2. Fetch the latest version from `https://proxy.golang.org/github.com/yogasw/wick/@latest`.
-3. If already on latest, exit without prompting.
-4. Otherwise prompt `[y/N]`; only `y`/`yes` proceeds.
-5. Run `go get github.com/yogasw/wick@v0.25.1`, then `go mod tidy`, then the `dev` task from [`wick.yml`](./wick-yml).
+3. If CLI binary is stale (or `dev`), prompt to reinstall it.
+4. If `go.mod` dep is stale, prompt to run `go get` + `go mod tidy`.
+5. If a `Dockerfile` in the current directory references an older wick version, prompt to update it.
+
+Each prompt defaults to yes (press Enter to accept). Pass `-y`/`--yes` to skip all prompts non-interactively (useful in scripts or CI).
 
 Run from a project directory (one that has a `go.mod` requiring `github.com/yogasw/wick`).
 

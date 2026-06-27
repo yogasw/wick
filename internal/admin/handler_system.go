@@ -58,6 +58,19 @@ func (h *Handler) systemPage(w http.ResponseWriter, r *http.Request) {
 			vm.ChangelogURL = upd.ChangelogURL()
 		}
 	}
+	// Wick framework update state from the background cache — no live
+	// request on page load. On official builds the app fields already
+	// carry the framework's state (app == framework), so this only feeds
+	// the non-official wick row + "What's new" block.
+	if h.sys.VersionCache != nil {
+		snap := h.sys.VersionCache.Snapshot()
+		vm.WickUpdateKnown = snap.WickUpdateKnown
+		vm.WickUpdate = snap.WickUpdate
+		vm.WickLatest = snap.WickLatest
+		vm.WickNotes = snap.WickNotes
+		vm.WickPublishedAt = snap.WickPublishedAt
+		vm.WickChangelogURL = snap.WickChangelogURL
+	}
 	view.SystemPage(vm, user).Render(r.Context(), w)
 }
 
