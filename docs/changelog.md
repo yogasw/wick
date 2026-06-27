@@ -6,7 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Improved
+
+*   **Software Update page — single action slot**: The per-phase controls (check button, download progress bar, Apply & restart button, Restarting indicator) are now consolidated into a single top-right action slot that swaps content as the phase changes, replacing the previous stacked layout. The "no build for this platform" notice (including the expected asset name) now appears inline in the status line under the Updates heading rather than as a separate box.
+*   **Software Update page — auto-reload on restart (any tab)**: The page now starts polling `/health` and reloads automatically whenever it detects the service is in the applying phase — not only in the tab that clicked Apply. A tab that loads mid-restart (e.g., after a manual server restart) will self-reload onto the new build without a manual refresh. The poll waits for `/health` to go down before accepting the first successful response, so the reload always lands on the new build rather than the pre-restart process.
 
 ---
 
