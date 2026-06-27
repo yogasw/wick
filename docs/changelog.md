@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+*   **GitHub API rate-limit error messages (install scripts + updater)**: When the GitHub Releases API returns a 403/429 due to the unauthenticated 60-req/hr-per-IP quota, `install.sh`, `install.ps1`, and the in-app updater/upgrade paths now surface GitHub's own message (e.g. "API rate limit exceeded for 1.2.3.4") together with the reset time. The install scripts additionally print three workarounds: pass `TOKEN=ghp_xxx` (authenticated 5 000/hr), pin `VERSION=vX.Y.Z` (skips the API), or wait for the hourly reset.
 
 ---
 
