@@ -1,6 +1,7 @@
 package view
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/yogasw/wick/internal/entity"
@@ -25,7 +26,11 @@ func statusLine(d SystemPageData) string {
 	case "up-to-date":
 		return "You are on the latest version."
 	case "no-asset":
-		return orDash(d.LatestVersion) + " is available, but there's no build for this platform."
+		msg := orDash(d.LatestVersion) + " is available, but there's no build for this platform"
+		if d.WantedAsset != "" {
+			msg += " (expected " + d.WantedAsset + ")"
+		}
+		return msg + "."
 	case "staged":
 		if d.StagedVersion != "" {
 			return d.StagedVersion + " is ready to apply."
@@ -172,9 +177,6 @@ func showNotes(d SystemPageData) bool {
 	return d.ReleaseNotes != "" && (d.HasStaged || d.Phase == "staged" || d.Phase == "downloading" || d.Phase == "no-asset")
 }
 
-// showNoAsset reports whether the "no build for your platform" banner
-// should render at first paint.
-func showNoAsset(d SystemPageData) bool { return d.Phase == "no-asset" }
 
 // wickNotesHeadline is the "vWick → vLatest · Released <date>" line above
 // the wick framework changelog (downstream builds). Mirrors notesHeadline
@@ -352,19 +354,14 @@ templ updateCard(d SystemPageData) {
 				<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Updates</h2>
 				<p id="sys-status" class="mt-1 text-sm text-black-800 dark:text-black-600">{ statusLine(d) }</p>
 			</div>
-			<button
-				id="sys-check"
-				type="button"
-				class="shrink-0 rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
-			>Check for updates</button>
-		</div>
-		// Progress track — hidden until a download starts. The fill width
-		// is driven inline by the SSE handler.
-		<div id="sys-progress-wrap" class="mt-4 hidden">
-			<div class="h-2 w-full overflow-hidden rounded-full bg-white-300 dark:bg-navy-800">
-				<div id="sys-progress-bar" class="h-full w-0 rounded-full bg-green-500 transition-[width] duration-200"></div>
+			// Single action slot in the top-right corner. Its content swaps
+			// per phase — Check → (download progress) → Apply & restart →
+			// Restarting — instead of stacking separate controls down the
+			// card. Server-rendered for first paint; the SSE handler rebuilds
+			// it live via renderAction().
+			<div id="sys-action" class="shrink-0">
+				@actionSlot(d)
 			</div>
-			<p id="sys-progress-pct" class="mt-1.5 text-xs font-mono text-black-700 dark:text-black-600">0%</p>
 		</div>
 		// What's new — the upgrade headline (current → latest · released
 		// date) plus the release notes from the app's own GitHub release.
@@ -382,38 +379,72 @@ templ updateCard(d SystemPageData) {
 				<a href={ templ.SafeURL(d.ChangelogURL) } target="_blank" rel="noopener" class="mt-3 inline-block text-xs font-medium text-green-600 dark:text-green-400 hover:underline">View full changelog →</a>
 			}
 		</div>
-		// No-build-for-this-platform notice. Informational (amber), NOT an
-		// error: a newer version exists but the release has no asset for
-		// this OS/arch. The user can't auto-update; we recommend building
-		// from source or asking the maintainer to publish this platform.
-		<div id="sys-noasset-wrap" class={ "mt-4 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 p-4 text-sm", templ.KV("hidden", !showNoAsset(d)) }>
-			<p class="font-medium text-black-900 dark:text-white-100">No build for this platform</p>
-			<p class="mt-1 text-black-800 dark:text-black-600">
-				A newer version is available, but this release has no download for your operating system
-				(expected <code id="sys-noasset-name" class="font-mono">{ orDash(d.WantedAsset) }</code>).
-				You can still update by building from source, or ask the maintainer to publish a build for this platform.
-			</p>
-		</div>
-		// Apply row — shown when a staged update is ready (server-side at
-		// load, or flipped on by the SSE handler when a download lands).
-		// Apply reuses the binary's own restart path (in-place re-exec on
-		// Linux/macOS, MSI helper on Windows), so the wording stays generic.
-		<div id="sys-apply-wrap" class={ "mt-4", templ.KV("hidden", !d.HasStaged) }>
+	</div>
+}
+
+// actionSlot renders the top-right action for the current phase: the
+// single control that swaps Check → download progress → Apply & restart
+// → Restarting. Server-side first paint; the SSE handler mirrors this
+// via renderAction(). Phase messages themselves live in the status line
+// (#sys-status) — this slot is purely the control.
+templ actionSlot(d SystemPageData) {
+	switch actionState(d) {
+		case "downloading":
+			// Compact progress in the corner — bar + percent, no button.
+			<div class="w-40">
+				<div class="h-2 w-full overflow-hidden rounded-full bg-white-300 dark:bg-navy-800">
+					<div id="sys-progress-bar" class="h-full rounded-full bg-green-500 transition-[width] duration-200" style={ pctWidth(d.Percent) }></div>
+				</div>
+				<p id="sys-progress-pct" class="mt-1.5 text-right text-xs font-mono text-black-700 dark:text-black-600">{ pctText(d.Percent) }</p>
+			</div>
+		case "staged":
 			<button
 				id="sys-apply"
 				type="button"
 				data-staged={ d.StagedVersion }
 				class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600"
 			>Apply &amp; restart</button>
-			<p class="mt-1.5 text-xs text-black-700 dark:text-black-600">Restarts to apply <span id="sys-apply-ver" class="font-mono">{ orDash(d.StagedVersion) }</span>. This page reconnects automatically once it's back.</p>
-		</div>
-		// Restarting overlay panel — revealed by the apply handler.
-		<div id="sys-restarting" class="mt-4 hidden items-center gap-3 rounded-lg bg-white-200 dark:bg-navy-800 px-4 py-3">
-			<span class="h-4 w-4 animate-spin rounded-full border-2 border-white-400 border-t-green-500"></span>
-			<span class="text-sm text-black-800 dark:text-black-600">Restarting service… this page reloads when it's back.</span>
-		</div>
-	</div>
+		case "applying":
+			<span class="inline-flex items-center gap-2 text-sm text-black-800 dark:text-black-600">
+				<span class="h-4 w-4 animate-spin rounded-full border-2 border-white-400 border-t-green-500"></span>
+				Restarting…
+			</span>
+		case "checking":
+			<button type="button" disabled class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-700 dark:text-black-600 opacity-60">Checking…</button>
+		default:
+			// idle / up-to-date / no-asset / error → offer a (re)check.
+			<button
+				id="sys-check"
+				type="button"
+				class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600"
+			>Check for updates</button>
+	}
 }
+
+// actionState collapses the coordinator phase + staged flag into the slot
+// state. Mirrored in JS renderAction().
+func actionState(d SystemPageData) string {
+	switch d.Phase {
+	case "downloading", "staged", "applying", "checking":
+		return d.Phase
+	}
+	if d.HasStaged {
+		return "staged"
+	}
+	return "idle"
+}
+
+func pctWidth(p int) string {
+	if p < 0 {
+		p = 0
+	}
+	if p > 100 {
+		p = 100
+	}
+	return "width:" + strconv.Itoa(p) + "%"
+}
+
+func pctText(p int) string { return strconv.Itoa(p) + "%" }
 
 // autoUpdateCard is the standalone toggle form. Default OFF; when on the
 // service checks (and downloads) a newer release on boot but still waits
@@ -457,19 +488,10 @@ templ systemUpdateScript() {
 	(function () {
 		var statusEl = document.getElementById('sys-status');
 		var badgeEl = document.getElementById('sys-update-badge');
-		var wrapEl = document.getElementById('sys-progress-wrap');
-		var barEl = document.getElementById('sys-progress-bar');
-		var pctEl = document.getElementById('sys-progress-pct');
-		var applyWrap = document.getElementById('sys-apply-wrap');
-		var applyBtn = document.getElementById('sys-apply');
-		var applyVer = document.getElementById('sys-apply-ver');
-		var checkBtn = document.getElementById('sys-check');
-		var restartingEl = document.getElementById('sys-restarting');
+		var actionEl = document.getElementById('sys-action'); // single top-right action slot
 		var notesWrap = document.getElementById('sys-notes-wrap');
 		var notesHead = document.getElementById('sys-notes-head');
 		var notesBody = document.getElementById('sys-notes-body');
-		var noassetWrap = document.getElementById('sys-noasset-wrap');
-		var noassetName = document.getElementById('sys-noasset-name');
 		// Wick framework badge — present only on the official build, where
 		// it tracks the app's own update state via SSE. On downstream builds
 		// it's server-rendered (static), so this is null and SSE skips it.
@@ -478,13 +500,8 @@ templ systemUpdateScript() {
 		// is rendered to HTML once on load — no fetch.
 		var wickNotesBody = document.getElementById('sys-wick-notes-body');
 
-		function showProgress(show) {
-			if (!wrapEl) return;
-			wrapEl.classList.toggle('hidden', !show);
-		}
-		// renderNotes fills the "What's new" block from the live status:
-		// "vCurrent → vLatest · Released <date>" + the release body. Shown
-		// only once there's a newer/staged version with notes.
+		var applying = false; // latched once Apply is clicked, until reload
+
 		function fmtDate(s) {
 			if (!s) return '';
 			var m = /^(\d{4}-\d{2}-\d{2})/.exec(s);
@@ -501,10 +518,6 @@ templ systemUpdateScript() {
 			if (d) head += ' · Released ' + d;
 			if (notesHead) notesHead.textContent = head;
 			if (notesBody) {
-				// Render the changelog markdown to HTML via the shared
-				// renderer. The content is trusted (our own release/site),
-				// and renderMarkdown escapes text + emits safe links. Fall
-				// back to raw text if the bundle failed to load.
 				if (window.WickMarkdown && window.WickMarkdown.renderMarkdown) {
 					notesBody.innerHTML = window.WickMarkdown.renderMarkdown(st.release_notes);
 				} else {
@@ -512,20 +525,51 @@ templ systemUpdateScript() {
 				}
 			}
 		}
-		function renderNoAsset(st) {
-			if (!noassetWrap) return;
-			var show = st.phase === 'no-asset';
-			noassetWrap.classList.toggle('hidden', !show);
-			if (show && noassetName && st.wanted_asset) noassetName.textContent = st.wanted_asset;
+		// statusText is the phase message shown under "Updates" — including
+		// the no-build-for-this-platform notice, which used to be a separate
+		// box but now lives inline here.
+		function statusText(st) {
+			switch (st.phase) {
+				case 'checking':    return 'Checking for updates…';
+				case 'downloading': return 'Downloading ' + (st.latest_version || '') + '…';
+				case 'up-to-date':  return 'You are on the latest version.';
+				case 'staged':      return (st.staged_version || 'A new version') + ' is ready to apply.';
+				case 'applying':    return 'Applying update…';
+				case 'no-asset':    return (st.latest_version || 'A new version') + ' is available, but there\'s no build for this platform' + (st.wanted_asset ? ' (expected ' + st.wanted_asset + ')' : '') + '.';
+				case 'error':       return 'Update failed: ' + (st.error || 'unknown error');
+			}
+			if (st.has_staged) return (st.staged_version || 'A new version') + ' is ready to apply.';
+			return 'Click “Check for updates” to look for a new release.';
 		}
-		function setPct(p) {
-			if (barEl) barEl.style.width = p + '%';
-			if (pctEl) pctEl.textContent = p + '%';
+		// renderAction rebuilds the single top-right slot for the phase — the
+		// JS twin of the Go actionSlot templ. Buttons are recreated each
+		// time, so clicks are handled by delegation on actionEl (below).
+		function actionState(st) {
+			if (applying) return 'applying';
+			switch (st.phase) {
+				case 'downloading': case 'staged': case 'applying': case 'checking': return st.phase;
+			}
+			return st.has_staged ? 'staged' : 'idle';
 		}
-		// updateBadge mirrors the Go updateBadgeText/Class: green "Latest"
-		// when up to date, amber "Update available → vX" when newer exists,
-		// hidden otherwise. Applied to the app-version badge and (on
-		// official builds) the wick-version badge, which track together.
+		function renderAction(st) {
+			if (!actionEl) return;
+			var s = actionState(st);
+			if (s === 'downloading') {
+				var p = Math.max(0, Math.min(100, st.percent || 0));
+				actionEl.innerHTML =
+					'<div class="w-40"><div class="h-2 w-full overflow-hidden rounded-full bg-white-300 dark:bg-navy-800">' +
+					'<div class="h-full rounded-full bg-green-500 transition-[width] duration-200" style="width:' + p + '%"></div></div>' +
+					'<p class="mt-1.5 text-right text-xs font-mono text-black-700 dark:text-black-600">' + p + '%</p></div>';
+			} else if (s === 'staged') {
+				actionEl.innerHTML = '<button id="sys-apply" type="button" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">Apply &amp; restart</button>';
+			} else if (s === 'applying') {
+				actionEl.innerHTML = '<span class="inline-flex items-center gap-2 text-sm text-black-800 dark:text-black-600"><span class="h-4 w-4 animate-spin rounded-full border-2 border-white-400 border-t-green-500"></span>Restarting…</span>';
+			} else if (s === 'checking') {
+				actionEl.innerHTML = '<button type="button" disabled class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-700 dark:text-black-600 opacity-60">Checking…</button>';
+			} else {
+				actionEl.innerHTML = '<button id="sys-check" type="button" class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600">Check for updates</button>';
+			}
+		}
 		function applyBadge(el, st) {
 			if (!el) return;
 			var text = '', amber = true;
@@ -541,61 +585,97 @@ templ systemUpdateScript() {
 				(amber ? 'bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
 				       : 'bg-pos-100 text-pos-400');
 		}
-		function renderBadge(st) {
-			applyBadge(badgeEl, st);
-			// On the official build app and framework move together, so the
-			// app updater's SSE drives the wick badge too. #sys-wick-badge
-			// exists ONLY on official builds (downstream renders it static
-			// server-side), so this is a safe no-op elsewhere.
-			applyBadge(wickBadgeEl, st);
-		}
 		function render(st) {
 			if (!st) return;
-			if (applyVer && st.staged_version) applyVer.textContent = st.staged_version;
-			renderBadge(st);
+			applyBadge(badgeEl, st);
+			applyBadge(wickBadgeEl, st);
 			renderNotes(st);
-			renderNoAsset(st);
-			switch (st.phase) {
-				case 'checking':
-					if (statusEl) statusEl.textContent = 'Checking for updates…';
-					showProgress(false);
-					break;
-				case 'no-asset':
-					if (statusEl) statusEl.textContent = (st.latest_version || 'A new version') + ' is available, but there\'s no build for this platform.';
-					showProgress(false);
-					break;
-				case 'downloading':
-					if (statusEl) statusEl.textContent = 'Downloading ' + (st.latest_version || '') + '…';
-					showProgress(true);
-					setPct(st.percent || 0);
-					break;
-				case 'up-to-date':
-					if (statusEl) statusEl.textContent = 'You are on the latest version.';
-					showProgress(false);
-					break;
-				case 'staged':
-					if (statusEl) statusEl.textContent = (st.staged_version || 'A new version') + ' is ready to apply.';
-					showProgress(false);
-					if (applyWrap) applyWrap.classList.remove('hidden');
-					break;
-				case 'applying':
-					if (statusEl) statusEl.textContent = 'Applying update…';
-					break;
-				case 'error':
-					if (statusEl) statusEl.textContent = 'Update failed: ' + (st.error || 'unknown error');
-					showProgress(false);
-					break;
-				default:
-					if (st.has_staged && applyWrap) applyWrap.classList.remove('hidden');
+			if (statusEl) statusEl.textContent = statusText(st);
+			renderAction(st);
+			// Whenever the page is in the applying phase — whether this tab
+			// clicked Apply or it loaded mid-restart / another tab triggered
+			// it — start polling for the new build so it auto-reloads. Idem-
+			// potent: startHealthPoll only kicks one loop.
+			if (st.phase === 'applying') {
+				applying = true;
+				renderAction({ phase: 'applying' });
+				startHealthPoll();
 			}
 		}
 
 		function triggerCheck() {
-			if (checkBtn) checkBtn.disabled = true;
 			if (statusEl) statusEl.textContent = 'Checking for updates…';
+			renderAction({ phase: 'checking' });
 			fetch('/admin/advanced/software-update/check', { method: 'POST' })
-				.catch(function () { if (statusEl) statusEl.textContent = 'Could not start the check.'; })
-				.finally(function () { setTimeout(function () { if (checkBtn) checkBtn.disabled = false; }, 2000); });
+				.catch(function () { if (statusEl) statusEl.textContent = 'Could not start the check.'; });
+		}
+
+		// startHealthPoll watches /health and reloads the page once the
+		// service comes back. It is idempotent (polling guard) so it can be
+		// called from triggerApply AND from render() when the phase is
+		// 'applying' — so a tab that merely LOADS mid-restart still auto-
+		// reloads, instead of getting stuck on "Restarting…" until a manual
+		// refresh. It waits for /health to go DOWN first, then reloads on the
+		// first success after that — otherwise the brief window where the old
+		// server is still answering would reload us straight back onto the
+		// old build. A time cap reloads anyway as a fallback.
+		var polling = false;
+		function startHealthPoll() {
+			if (polling) return;
+			polling = true;
+			var tries = 0, sawDown = false;
+			(function tick() {
+				tries++;
+				fetch('/health', { cache: 'no-store' })
+					.then(function (r) {
+						if (r.ok) {
+							// Up. Reload only once we've seen it go down — that's
+							// the new build answering, not the pre-restart one.
+							if (sawDown) { location.reload(); return; }
+						} else {
+							sawDown = true; // non-2xx counts as down
+						}
+						if (tries > 150) { location.reload(); return; } // ~5min cap
+						setTimeout(tick, 2000);
+					})
+					.catch(function () {
+						sawDown = true; // connection refused — server is down
+						if (tries > 150) { location.reload(); return; }
+						setTimeout(tick, 2000);
+					});
+			})();
+		}
+		function triggerApply() {
+			applying = true;
+			renderAction({ phase: 'applying' });
+			if (statusEl) statusEl.textContent = 'Applying update…';
+			fetch('/admin/advanced/software-update/apply', { method: 'POST' })
+				.then(function (r) { return r.json(); })
+				.then(function (d) {
+					if (d && d.restart) {
+						setTimeout(startHealthPoll, 1500);
+					} else {
+						applying = false;
+						if (statusEl) statusEl.textContent = (d && (d.error || d.message)) || 'Could not apply the update.';
+						renderAction({ phase: 'staged', has_staged: true });
+					}
+				})
+				.catch(function () {
+					applying = false;
+					if (statusEl) statusEl.textContent = 'Apply failed — see server logs.';
+					renderAction({ phase: 'staged', has_staged: true });
+				});
+		}
+
+		// One delegated listener on the slot — the Check / Apply buttons are
+		// recreated by renderAction, so we can't bind them once up front.
+		if (actionEl) {
+			actionEl.addEventListener('click', function (e) {
+				var btn = e.target.closest('button');
+				if (!btn) return;
+				if (btn.id === 'sys-check') triggerCheck();
+				else if (btn.id === 'sys-apply') triggerApply();
+			});
 		}
 
 		// Live status stream. Track the latest phase so the auto-check on
@@ -608,12 +688,8 @@ templ systemUpdateScript() {
 			});
 		} catch (_) { /* SSE unsupported — buttons still work, just no live bar */ }
 
-		if (checkBtn) checkBtn.addEventListener('click', triggerCheck);
-
 		// Auto-check once on page load so "Latest release" populates without
-		// a manual click. Wait a beat for the first SSE frame; only fire if
-		// nothing is already in flight (idle / up-to-date / no-asset) so we
-		// don't interrupt an ongoing download or a staged-ready state.
+		// a manual click. Only fire if nothing is already in flight.
 		setTimeout(function () {
 			if (lastPhase === '' || lastPhase === 'idle' || lastPhase === 'up-to-date' || lastPhase === 'no-asset') {
 				triggerCheck();
@@ -626,48 +702,6 @@ templ systemUpdateScript() {
 		// changelog site; renderMarkdown escapes text + emits safe links).
 		if (wickNotesBody && window.WickMarkdown && window.WickMarkdown.renderMarkdown) {
 			wickNotesBody.innerHTML = window.WickMarkdown.renderMarkdown(wickNotesBody.textContent);
-		}
-
-		// Poll /health until the restarted service answers, then reload.
-		// The restart drops this connection first, so the first OK response
-		// after that gap is the new build coming back up.
-		function pollHealthThenReload() {
-			var tries = 0;
-			(function tick() {
-				tries++;
-				fetch('/health', { cache: 'no-store' })
-					.then(function (r) { return r.ok ? r.text() : Promise.reject(); })
-					.then(function () { location.reload(); })
-					.catch(function () {
-						if (tries > 120) { location.reload(); return; } // ~4min cap
-						setTimeout(tick, 2000);
-					});
-			})();
-		}
-
-		if (applyBtn) {
-			applyBtn.addEventListener('click', function () {
-				applyBtn.disabled = true;
-				if (checkBtn) checkBtn.disabled = true;
-				fetch('/admin/advanced/software-update/apply', { method: 'POST' })
-					.then(function (r) { return r.json(); })
-					.then(function (d) {
-						if (d && d.restart) {
-							if (applyWrap) applyWrap.classList.add('hidden');
-							if (restartingEl) { restartingEl.classList.remove('hidden'); restartingEl.classList.add('flex'); }
-							// Give the server a moment to begin tearing down,
-							// then poll for the new build.
-							setTimeout(pollHealthThenReload, 1500);
-						} else {
-							if (statusEl) statusEl.textContent = (d && (d.error || d.message)) || 'Could not apply the update.';
-							applyBtn.disabled = false;
-						}
-					})
-					.catch(function () {
-						if (statusEl) statusEl.textContent = 'Apply failed — see server logs.';
-						applyBtn.disabled = false;
-					});
-			});
 		}
 	})();
 	</script>
