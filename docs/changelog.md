@@ -9,10 +9,18 @@ All notable changes to Wick are documented here.
 ### Added
 
 *   **CLI — `wick upgrade --yes` / `-y` flag**: Pass `-y` to skip all confirmation prompts (CLI binary, go.mod dep, Dockerfile) and run the upgrade non-interactively. Useful in scripts or CI pipelines.
+*   **User menu — version + update status dropdown**: The user menu now shows a version section at the bottom listing the running app version and (on non-official builds) the embedded wick framework version, each with a status badge — green **Latest** or amber **Update available → vX**. All users can see this; no admin role required.
+*   **User menu — "Software Update" shortcut for admins**: When any update is available (app or wick framework), admins see a green **Software Update** entry at the top of the user menu linking directly to `/admin/advanced/software-update`. Non-admins see the version badges but not this action entry.
+*   **Software Update page — wick framework "What's new" (non-official builds)**: For downstream apps built against wick, the Version panel now shows a rendered changelog block ("What's new") between the embedded wick version and the latest public release. This is populated server-side from the background version cache — no live request on page load.
 
 ### Changed
 
 *   **CLI — `wick upgrade` no longer auto-starts dev server**: After upgrading, wick exits cleanly instead of launching the `dev` task. Start the dev server manually with `wick dev` if needed.
+*   **Version cache — background refresh**: App and wick framework version checks now run in the background (on boot, then every 6 hours) and are stored in an in-process cache. The user menu dropdown and Software Update page both read from this cache, so neither triggers a network call on the request path.
+
+### Removed
+
+*   **`GET /admin/advanced/software-update/wick-check` endpoint**: This live-check endpoint has been removed. The wick framework version check is now served from the background version cache instead.
 
 ---
 
