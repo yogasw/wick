@@ -6,7 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+*   Version check and Software Update page no longer show a misleading update badge when GitHub `/releases/latest` returns a plugin release tag (`<name>/vX.Y.Z`) instead of a core wick tag. The check now degrades gracefully — showing the current version without a badge — rather than comparing against an unrelated tag.
+*   The "Wick vX.Y.Z" badge in the sidebar now links to the changelog page instead of the site homepage.
 
 ---
 
