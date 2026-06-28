@@ -133,15 +133,19 @@ jobs:
             fi
             entries='[]'
             for kind in connector tool job; do
-              # Disable pipefail for this extraction: a grep that matches nothing
-              # exits 1, and under `set -o pipefail` that would kill the whole
-              # job even though "no plugin folder changed" is a normal outcome.
-              names=$(set +o pipefail; echo "$changed" \
+              # A grep that matches nothing exits 1. The runner shell runs with
+              # BOTH `-o pipefail` AND `-e` (errexit), so a no-match would kill
+              # the job even though "no plugin of this kind changed" is normal.
+              # `{ ...; } || true` swallows the non-zero status at the PARENT
+              # level (where -e lives) — a subshell `set +o pipefail` alone does
+              # NOT, because errexit still acts on the command-substitution's
+              # exit code. So: pipefail off inside, and || true outside.
+              names=$( { set +o pipefail; echo "$changed" \
                 | grep "^wick-plugins/$kind/" \
                 | sed "s#^wick-plugins/$kind/##" \
                 | cut -d/ -f1 \
                 | sort -u \
-                | grep -v '^_')
+                | grep -v '^_'; } || true )
               for n in $names; do
                 if [ -f "$kind/$n/main.go" ]; then
                   entries=$(echo "$entries" | jq -c --arg k "$kind" --arg n "$n" '. + [{kind:$k,name:$n}]')
