@@ -11,6 +11,7 @@ import (
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/wickdocs"
+	"github.com/yogasw/wick/plugins/tags"
 )
 
 // Config is httpbin's per-instance settings. base_url defaults to the public
@@ -42,6 +43,11 @@ func Module() connector.Module {
 			Name:        "HTTPBin",
 			Description: "Sample connector hitting httpbin.org — GET, POST, and status-code echo. No credentials needed.",
 			Icon:        "🧪",
+			// DefaultTags work like a built-in connector's, from the shared
+			// plugins/tags catalog: Connector drops it into the connector group,
+			// API files it under that section. The app reads these from the
+			// manifest and categorizes the plugin identically to a built-in.
+			DefaultTags: []entity.DefaultTag{tags.Connector, tags.API},
 		},
 		Configs: entity.StructToConfigs(Config{}),
 		Operations: []connector.Category{

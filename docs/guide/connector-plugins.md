@@ -38,7 +38,7 @@ Plugins are managed from the **app** binary (`<your-app> plugin ...`). The full 
 
 Every install **verifies** the plugin before it's wired in — the binary's sha256 must match its manifest, the OS/arch must match the host, and (when a trusted key is configured) the signature must check out. A hot-reload poller inside the app picks up an install / enable / disable / remove within a few seconds — **no restart needed**.
 
-In the manager UI, plugins available to install appear in the **same connector list** under "Available to install", alongside built-in and already-installed connectors. Installing one is a single click.
+In the manager UI, available-to-install plugins appear **in the same category grid as built-in and already-installed connectors** — there is no separate "Available to install" section. Each plugin card shows a **Download** button; if no build exists for the host OS/arch the button is shown as disabled with a reason. Use the **Installed** filter chip to see only connectors that are ready to use (built-ins + downloaded plugins, no undownloaded catalog entries). Category chips (API, Communication, …) span both built-ins and plugins; the chip list is derived from each connector's tags.
 
 ### Where plugins come from
 
@@ -58,9 +58,18 @@ Building is the producer side and uses the **`wick` dev CLI** (`wick plugin buil
 ```bash
 # from a plugins repo
 wick plugin build slack --all          # cross-build every OS/arch → one zip each
+wick plugin build slack --target linux/arm64,darwin/amd64   # comma-separated list
 ```
 
 Each build produces `slack-<version>-<os>-<arch>.zip` containing the binary plus a `plugin.json` generated **from the binary itself**, so the manifest can never drift from the code. Optionally sign each build (`--sign-key` for an ed25519 manifest signature, `--cosign-key` for a cosign binary signature).
+
+After publishing releases, regenerate the marketplace catalog with:
+
+```bash
+wick plugin catalog --repo owner/plugins-repo --out plugins/plugins.json
+```
+
+See [CLI → wick plugin catalog](/reference/cli#wick-plugin-catalog).
 
 Authoring + release flow (folder layout, the `key` == folder rule, the PR → release CI that publishes a release and updates the catalog) lives in the `plugins` repo's `README.md` and `RELEASE.md`.
 

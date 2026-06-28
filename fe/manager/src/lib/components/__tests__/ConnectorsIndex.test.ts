@@ -147,6 +147,30 @@ describe("ConnectorsIndex", () => {
     expect(screen.getByText("Dev tooling + source control")).toBeTruthy();
   });
 
+  it("stays grouped into section cards when a category chip is active", async () => {
+    const { container } = render(ConnectorsIndex);
+    await screen.findByText("Slack");
+    await fireEvent.click(screen.getByRole("button", { name: "Communication" }));
+    // Only the Communication section remains — still a section card, not flat.
+    const sections = container.querySelectorAll("[data-group]");
+    expect(sections.length).toBe(1);
+    expect(sections[0].getAttribute("data-group-name")).toBe("Communication");
+    expect(screen.getByText("Slack")).toBeTruthy();
+    expect(screen.queryByText("GitHub")).toBeNull();
+  });
+
+  it("stays grouped on search too", async () => {
+    const { container } = render(ConnectorsIndex);
+    await screen.findByText("Slack");
+    await fireEvent.input(screen.getByLabelText("Search connectors"), { target: { value: "git" } });
+    expect(screen.getByText("GitHub")).toBeTruthy();
+    // GitHub is in Development → its section card is still rendered.
+    const names = Array.from(container.querySelectorAll("[data-group]")).map((s) =>
+      s.getAttribute("data-group-name"),
+    );
+    expect(names).toContain("Development");
+  });
+
   it("renders each connector description and op-count stats", async () => {
     render(ConnectorsIndex);
     await screen.findByText("Slack");

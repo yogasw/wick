@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/yogasw/wick/pkg/entity"
 )
 
 // Catalog discovers connector plugins that are AVAILABLE to install from a
@@ -45,6 +47,11 @@ type Available struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Version     string `json:"version"`
+	// DefaultTags are the plugin's Meta.DefaultTags, carried verbatim from the
+	// released manifest — the SAME []entity.DefaultTag a built-in connector
+	// declares. The app derives the category from them with connectorCategory,
+	// exactly as for built-ins, so a plugin groups under its real category.
+	DefaultTags []entity.DefaultTag `json:"default_tags,omitempty"`
 	// Assets maps "<goos>/<goarch>" → direct download URL of the release zip.
 	Assets map[string]string `json:"assets"`
 }

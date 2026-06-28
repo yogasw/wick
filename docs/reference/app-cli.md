@@ -245,16 +245,18 @@ Set the connector build profile this instance registers at boot. The value is st
 
 ```bash
 ./bin/myapp config profile full    # all builtin connectors (default)
-./bin/myapp config profile agent   # curated subset: GitHub, HTTP REST, Slack
+./bin/myapp config profile agent   # curated subset: HTTP REST, Slack
 ./bin/myapp config profile lite    # no builtin connectors registered
 # profile = agent (restart to apply)
 ```
 
 | Profile | Builtin connectors registered at boot |
 |---|---|
-| `full` (default) | All 7: GitHub, HTTP REST, Slack, Bitbucket, Loki, Phoenix, Google Workspace |
-| `agent` | GitHub, HTTP REST, Slack |
+| `full` (default) | All 4: HTTP REST, Slack, Loki, Phoenix |
+| `agent` | HTTP REST, Slack |
 | `lite` | None |
+
+> **GitHub, Bitbucket, and Google Workspace are no longer builtin connectors** — they ship as downloadable plugins and are not profile-eligible. Install them separately with `<app> plugin install github` / `bitbucket` / `google_workspace`.
 
 The four runtime connectors (Wick Manager, Workflow, Notifications, Custom Connector) are never profile-gated and always register regardless of this setting.
 

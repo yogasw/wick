@@ -18,6 +18,26 @@
       "preLaunchTask": "debug: prep"
     },
     {
+      // Build EVERY plugin from current source into wick-lab's plugin dir, THEN
+      // launch the lab — so you debug with all plugins installed and their
+      // manifests reflecting the latest source (e.g. new Meta.DefaultTags)
+      // without cutting a release. Runs the "debug: prep + plugins" compound task.
+      "name": "wicklab + plugins",
+      "type": "go",
+      "request": "launch",
+      "mode": "auto",
+      "program": "${workspaceFolder}/cmd/lab",
+      "output": "${workspaceFolder}/bin/wick-lab",
+      "cwd": "${workspaceFolder}/cmd/lab",
+      "args": ["server"],
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "WICK_DEV_REPO_ROOT": "${workspaceFolder}",
+        "WICK_STRICT_MCP": "1"
+      },
+      "preLaunchTask": "debug: prep + plugins"
+    },
+    {
       "name": "Run Lab Worker",
       "type": "go",
       "request": "launch",

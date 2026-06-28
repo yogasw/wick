@@ -452,6 +452,9 @@ export interface PluginEntry {
   installed: boolean;
   enabled: boolean;
   arch_ok: boolean;
+  host?: string; // this server's os/arch, for the "no build for X" notice
+  os_arch?: string[]; // os/arch the plugin ships a build for
+  category?: string; // derived from the plugin's DefaultTags, like built-in connectors
   signed: string;
 }
 

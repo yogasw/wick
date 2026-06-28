@@ -299,8 +299,17 @@ func (s *Service) TagInstanceOwner(ctx context.Context, instanceID, userID strin
 	}
 }
 
+// CustomTagPrefix prefixes every per-def access tag ("custom:<key>"). These are
+// access-control tags, NOT categories — UI that groups by category must skip
+// them (see IsCustomTag).
+const CustomTagPrefix = "custom:"
+
 // FilterTagName returns the per-def access tag name.
-func FilterTagName(defKey string) string { return "custom:" + defKey }
+func FilterTagName(defKey string) string { return CustomTagPrefix + defKey }
+
+// IsCustomTag reports whether a tag name is a per-def custom access tag rather
+// than a real category tag.
+func IsCustomTag(name string) bool { return strings.HasPrefix(name, CustomTagPrefix) }
 
 // categoryCatalog maps the review form's category picker onto the
 // shared default-tag catalog so custom cards group with built-ins.
