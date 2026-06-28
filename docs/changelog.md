@@ -6,6 +6,12 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+### Added
+
+*   **Connector plugin platform**: External connectors can now be distributed as standalone Go binaries and installed without rebuilding the host app.
+    *   **`wick plugin build`** — compile one or more connector plugins from a `wick-plugins`-style monorepo and pack each binary + manifest into a versioned release zip (`<name>-<version>-<goos>-<goarch>.zip`). Supports `--all` (all OS/arch), `--changed` (diff-based), and optional ed25519 signing (`--sign-key`). See [CLI Reference — `wick plugin build`](./reference/cli#wick-plugin-build).
+    *   **`<app> plugin install|search|list|enable|disable|remove`** — lifecycle commands on the running app binary for discovering the marketplace catalog, installing from a registry name / URL / local path, and toggling plugins without a restart. A hot-reload poller detects newly installed or updated binaries and wires them into the connector registry automatically. See [App CLI Reference — plugin](./reference/app-cli#app-plugin).
+
 ### Fixed
 
 *   **GitHub API rate-limit error messages (install scripts + updater)**: When the GitHub Releases API returns a 403/429 due to the unauthenticated 60-req/hr-per-IP quota, `install.sh`, `install.ps1`, and the in-app updater/upgrade paths now surface GitHub's own message (e.g. "API rate limit exceeded for 1.2.3.4") together with the reset time. The install scripts additionally print three workarounds: pass `TOKEN=ghp_xxx` (authenticated 5 000/hr), pin `VERSION=vX.Y.Z` (skips the API), or wait for the hourly reset.
