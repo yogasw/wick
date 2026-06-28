@@ -113,17 +113,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - id: go
+        uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      # The *_templ.go files are gitignored — generate them before building the
-      # wick CLI, or packages like internal/*/view won't compile (same step the
-      # core release runs).
+          cache: true # module download cache (keyed on go.sum by setup-go)
+      # Go build cache — keyed on go.sum so it's reused on every run where deps
+      # don't change; restore-keys falls back to the newest build so a dep bump
+      # still gets a warm start instead of a cold compile.
+      - name: Cache Go build
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-build-${{ steps.go.outputs.go-version }}-
+      - name: Resolve templ version
+        id: templ
+        run: echo "version=$(go list -m -f '{{.Version}}' github.com/a-h/templ)" >> "$GITHUB_OUTPUT"
+      # templ binary cache — keyed on the pinned templ version only, so it's
+      # reused across runs and PRs until templ itself is bumped (not on every
+      # dep change). Skip the install on a hit.
+      - name: Cache templ binary
+        id: cache-templ
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ-${{ steps.go.outputs.go-version }}-${{ steps.templ.outputs.version }}
+      - name: Install templ
+        if: steps.cache-templ.outputs.cache-hit != 'true'
+        run: go install github.com/a-h/templ/cmd/templ@${{ steps.templ.outputs.version }}
+      # *_templ.go is gitignored — generate before building the wick CLI or the
+      # internal/*/view packages won't compile.
       - name: Generate templ
-        run: |
-          templ_ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
-          go install github.com/a-h/templ/cmd/templ@${templ_ver}
-          templ generate ./...
+        run: templ generate ./...
       - name: Test plugin platform + build tooling
         run: |
           go build -o "$RUNNER_TEMP/wick" .
@@ -144,9 +167,11 @@ jobs:
         with:
           fetch-depth: 0 # need tags to check whether this version is already out
 
-      - uses: actions/setup-go@v5
+      - id: go
+        uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true # module download cache (keyed on go.sum by setup-go)
 
       # Idempotent gate (same idea as core's VERSION/tag check): if the tag
       # <name>/v<version> already exists, this version is already released — skip
@@ -167,6 +192,32 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Build cache + templ binary cache — same stable keys as the test job, so a
+      # run reuses them instead of recompiling/redownloading. Only needed when we
+      # actually build (skip=false).
+      - name: Cache Go build
+        if: steps.ver.outputs.skip == 'false'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-build-${{ steps.go.outputs.go-version }}-
+      - name: Resolve templ version
+        if: steps.ver.outputs.skip == 'false'
+        id: templ
+        run: echo "version=$(go list -m -f '{{.Version}}' github.com/a-h/templ)" >> "$GITHUB_OUTPUT"
+      - name: Cache templ binary
+        if: steps.ver.outputs.skip == 'false'
+        id: cache-templ
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ-${{ steps.go.outputs.go-version }}-${{ steps.templ.outputs.version }}
+      - name: Install templ
+        if: steps.ver.outputs.skip == 'false' && steps.cache-templ.outputs.cache-hit != 'true'
+        run: go install github.com/a-h/templ/cmd/templ@${{ steps.templ.outputs.version }}
+
       # Build the wick dev CLI from THIS checkout (not a published release):
       # pkg/plugin isn't in a wick release yet, and the repo-root go.work wires
       # the nested plugins module to local source. Once a wick release contains
@@ -177,8 +228,6 @@ jobs:
         run: |
           # *_templ.go is gitignored — generate before building the CLI or the
           # internal/*/view packages won't compile.
-          templ_ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
-          go install github.com/a-h/templ/cmd/templ@${templ_ver}
           templ generate ./...
           go build -o "$RUNNER_TEMP/wick" .
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
