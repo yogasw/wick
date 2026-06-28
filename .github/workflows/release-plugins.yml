@@ -28,6 +28,8 @@ name: Release plugins
 # move this file there and drop the `wick-plugins/` path prefixes.
 
 on:
+  # 1) A plugin-only change: PR into release touching wick-plugins/**. Runs
+  #    independently — a plugin still releases without any core release.
   pull_request:
     branches: [release]
     types: [opened, synchronize, reopened]
@@ -35,6 +37,11 @@ on:
       - 'wick-plugins/connector/**'
       - 'wick-plugins/tool/**'
       - 'wick-plugins/job/**'
+  # 2) A core release just landed: release.yml fires this via repository_dispatch
+  #    AFTER the core tag is published, so plugins rebuild against the new wick
+  #    version (they `go install wick@<ver>`). This is the core→plugin ordering.
+  repository_dispatch:
+    types: [core-released]
   workflow_dispatch:
     inputs:
       name:
@@ -116,14 +123,35 @@ jobs:
         working-directory: wick-plugins
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          entries='[]'
+          ev="${{ github.event_name }}"
+
+          # Helper: append every buildable plugin (has main.go, not a _ scaffold)
+          # of every kind to $entries. Used when we rebuild ALL (core-released).
+          add_all() {
+            for kind in connector tool job; do
+              [ -d "$kind" ] || continue
+              for d in "$kind"/*/; do
+                n=$(basename "$d")
+                case "$n" in _*) continue ;; esac
+                [ -f "$kind/$n/main.go" ] || continue
+                entries=$(echo "$entries" | jq -c --arg k "$kind" --arg n "$n" '. + [{kind:$k,name:$n}]')
+              done
+            done
+          }
+
+          if [ "$ev" = "workflow_dispatch" ]; then
+            # Manual: one named plugin.
             entries='[{"kind":"${{ github.event.inputs.kind }}","name":"${{ github.event.inputs.name }}"}]'
+          elif [ "$ev" = "repository_dispatch" ]; then
+            # A core release just landed → rebuild EVERY plugin against the new
+            # wick version (the build job go-installs wick@<ver>). Idempotent:
+            # the build job skips any plugin whose tag already exists, so only
+            # plugins that actually bumped VERSION cut a new release.
+            echo "core-released (v${{ github.event.client_payload.version }}) → rebuild all plugins"
+            add_all
           else
-            # Distinct <kind>/<name> folders changed in THIS PR (base..head) that
-            # still have a main.go (skip _ scaffolds). git paths are repo-relative
-            # so strip the wick-plugins/ prefix. The PR base sha comes from the
-            # event; guard against it being empty (non-PR context) so the diff
-            # isn't malformed.
+            # pull_request: only the <kind>/<name> folders changed in THIS PR.
             base="${{ github.event.pull_request.base.sha }}"
             if [ -z "$base" ]; then
               echo "no PR base sha — nothing to detect"
@@ -131,17 +159,20 @@ jobs:
             else
               changed=$(git diff --name-only "$base"...HEAD 2>/dev/null || git diff --name-only "$base" 2>/dev/null || true)
             fi
-            entries='[]'
             for kind in connector tool job; do
-              # Disable pipefail for this extraction: a grep that matches nothing
-              # exits 1, and under `set -o pipefail` that would kill the whole
-              # job even though "no plugin folder changed" is a normal outcome.
-              names=$(set +o pipefail; echo "$changed" \
+              # A grep that matches nothing exits 1. The runner shell runs with
+              # BOTH `-o pipefail` AND `-e` (errexit), so a no-match would kill
+              # the job even though "no plugin of this kind changed" is normal.
+              # `{ ...; } || true` swallows the non-zero status at the PARENT
+              # level (where -e lives) — a subshell `set +o pipefail` alone does
+              # NOT, because errexit still acts on the command-substitution's
+              # exit code. So: pipefail off inside, and || true outside.
+              names=$( { set +o pipefail; echo "$changed" \
                 | grep "^wick-plugins/$kind/" \
                 | sed "s#^wick-plugins/$kind/##" \
                 | cut -d/ -f1 \
                 | sort -u \
-                | grep -v '^_')
+                | grep -v '^_'; } || true )
               for n in $names; do
                 if [ -f "$kind/$n/main.go" ]; then
                   entries=$(echo "$entries" | jq -c --arg k "$kind" --arg n "$n" '. + [{kind:$k,name:$n}]')
