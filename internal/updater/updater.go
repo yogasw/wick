@@ -633,6 +633,11 @@ type ghAsset struct {
 	URL  string `json:"url"`
 }
 
+// fetchLatest returns the latest release via /releases/latest. The wick repo
+// also hosts plugin releases tagged "<name>/vX.Y.Z", but the plugin workflow
+// publishes them with make_latest:false, so "Latest" is always the app's own
+// semver tag (vX.Y.Z). isCoreWickTag guards the rare case where a non-semver
+// tag slips into Latest, so the updater never compares against a plugin.
 func (u *Updater) fetchLatest(ctx context.Context) (*ghRelease, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/releases/latest", githubAPI, u.owner, u.repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -666,6 +671,9 @@ func (u *Updater) fetchLatest(ctx context.Context) (*ghRelease, error) {
 	var rel ghRelease
 	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
 		return nil, err
+	}
+	if !isCoreWickTag(rel.TagName) {
+		return nil, fmt.Errorf("github releases/latest: %q is not a release version (vX.Y.Z)", rel.TagName)
 	}
 	return &rel, nil
 }

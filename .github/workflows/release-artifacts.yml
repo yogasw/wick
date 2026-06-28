@@ -33,7 +33,11 @@ on:
 # (delete+save) concurrently. cancel-in-progress: false → queue, don't abort a
 # release mid-flight.
 concurrency:
-  group: wick-workflow
+  # Per-workflow group (see release.yml for the full rationale). This is the
+  # workflow that kept getting cancelled under the old shared 'wick-workflow'
+  # group. Its cache keys (wick-cli-*/wixl) are disjoint from core/plugins, so a
+  # dedicated group is safe and never aborts a binary build mid-flight.
+  group: wick-release-artifacts
   cancel-in-progress: false
 
 jobs:
