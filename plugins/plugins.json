@@ -1,5 +1,89 @@
 [
   {
+    "key": "bitbucket",
+    "name": "Bitbucket",
+    "description": "Search repositories, inspect commits and pull requests, and create branch/commit/PR changes in Bitbucket Cloud.",
+    "version": "0.1.0",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "Development",
+        "Description": "Source hosts and developer platforms.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 52
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.1.0/bitbucket-0.1.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.1.0/bitbucket-0.1.0-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "github",
+    "name": "GitHub",
+    "description": "Comprehensive GitHub REST API connector: repos, issues, PRs (incl. diff/merge), releases, tags, forks, stars, file contents/edits, the authenticated user, and a token health check.",
+    "version": "0.1.0",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "Development",
+        "Description": "Source hosts and developer platforms.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 52
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/github/v0.1.0/github-0.1.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/github/v0.1.0/github-0.1.0-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "google_workspace",
+    "name": "Google Workspace",
+    "description": "Manage Drive files, Sheets data, Docs content, and Slides; read, send, and label Gmail; manage Calendar events with Meet links; and read Meet recordings and transcripts — all with one Google OAuth account.",
+    "version": "0.1.0",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "API",
+        "Description": "Build, mock, and inspect HTTP APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 30
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/google_workspace/v0.1.0/google_workspace-0.1.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/google_workspace/v0.1.0/google_workspace-0.1.0-linux-arm64.zip"
+    }
+  },
+  {
     "key": "httpbin",
     "name": "HTTPBin",
     "description": "Sample connector hitting httpbin.org — GET, POST, and status-code echo. No credentials needed.",
