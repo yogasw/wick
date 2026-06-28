@@ -263,10 +263,22 @@ jobs:
           go build -o "$RUNNER_TEMP/wick" .
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-      - name: Build all targets → zips
+      # Same BUILD_TARGETS Actions variable as release-artifacts.yml so binary
+      # and plugin releases build the exact same os/arch set from one knob.
+      # `all` → every supported target; unset → the shared default.
+      - name: Build targets → zips
         if: steps.ver.outputs.skip == 'false'
         working-directory: plugins
-        run: wick plugin build --kind "${{ matrix.kind }}" "${{ matrix.name }}" --all
+        env:
+          TARGETS: ${{ vars.BUILD_TARGETS }}
+        run: |
+          set -euo pipefail
+          : "${TARGETS:=darwin/amd64,darwin/arm64,windows/amd64}"
+          if [ "$TARGETS" = "all" ]; then
+            wick plugin build --kind "${{ matrix.kind }}" "${{ matrix.name }}" --all
+          else
+            wick plugin build --kind "${{ matrix.kind }}" "${{ matrix.name }}" --target "$TARGETS"
+          fi
 
       - name: Release
         if: steps.ver.outputs.skip == 'false'

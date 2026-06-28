@@ -184,6 +184,54 @@ func TestBuildOnePlugin_KeyFolderMismatch(t *testing.T) {
 	}
 }
 
+// TestResolvePluginTargets covers --target accepting a comma-separated list
+// (how CI threads the BUILD_TARGETS Actions variable through), single targets,
+// --all, and the host fallback — plus the validation errors.
+func TestResolvePluginTargets(t *testing.T) {
+	t.Setenv("GOOS", "")
+	t.Setenv("GOARCH", "")
+
+	tests := []struct {
+		name    string
+		target  string
+		goos    string
+		goarch  string
+		all     bool
+		want    []string
+		wantErr string
+	}{
+		{name: "all", all: true, want: pluginBuildTargets},
+		{name: "single", target: "linux/arm64", want: []string{"linux/arm64"}},
+		{name: "list", target: "darwin/amd64,darwin/arm64,windows/amd64",
+			want: []string{"darwin/amd64", "darwin/arm64", "windows/amd64"}},
+		{name: "list with spaces", target: "darwin/amd64, windows/amd64 ",
+			want: []string{"darwin/amd64", "windows/amd64"}},
+		{name: "list with empty items", target: "linux/amd64,,linux/arm64,",
+			want: []string{"linux/amd64", "linux/arm64"}},
+		{name: "goos/goarch", goos: "linux", goarch: "amd64", want: []string{"linux/amd64"}},
+		{name: "bad item", target: "linux/amd64,bogus", wantErr: "must be <os>/<arch>"},
+		{name: "all + target", target: "linux/amd64", all: true, wantErr: "mutually exclusive"},
+		{name: "target + goos", target: "linux/amd64", goos: "linux", wantErr: "mutually exclusive"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolvePluginTargets(tc.target, tc.goos, tc.goarch, tc.all)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want error containing %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func runGo(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	cmd := safeexec.Command("go", args...)
