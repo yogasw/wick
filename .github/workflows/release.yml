@@ -5,13 +5,15 @@ on:
     branches:
       - release
     types: [opened, synchronize, reopened]
-    # A PR that ONLY touches plugins/** is a plugin release — handled by
-    # release-plugins.yml, not here. Skipping it keeps a plugin-only PR from
-    # rebuilding the core binary. (Do NOT make this workflow a required status
-    # check while path-filtered: a skipped run never reports and would block the
-    # PR. Keep required checks on the always-run test gate.)
-    paths-ignore:
-      - 'plugins/**'
+    # SINGLE entry point for every release PR — no path filter. check-source-branch
+    # decides core-vs-plugin from the VERSION tag:
+    #   • VERSION bumped (tag missing) → CORE release: core jobs run, then
+    #     notify-plugins dispatches the plugin pipeline AFTER core lands (plugins
+    #     rebuild against the new wick).
+    #   • VERSION unchanged (tag exists) → not a core release: core jobs skip and
+    #     dispatch-plugins triggers the plugin pipeline immediately.
+    # The plugin pipeline is always reached via repository_dispatch, so the two
+    # workflows never run at the same time on the same PR.
 
 jobs:
   check-source-branch:
@@ -594,15 +596,14 @@ jobs:
             sleep 10
           done
 
-  # After a core release fully lands, signal the plugin release pipeline so it
-  # rebuilds plugins against the just-published wick version (plugins build via
-  # `go install github.com/yogasw/wick@<ver>`, so they must run AFTER the core
-  # tag exists). The plugin workflow ALSO has its own pull_request trigger, so a
-  # plugin-only change still releases without a core release — this dispatch is
-  # only the "core released → refresh plugins" ordering, not the only path.
+  # CORE-RELEASE path (skip=false): after the core release fully lands, signal
+  # the plugin pipeline so it rebuilds plugins against the just-published wick
+  # version (plugins build against wick, so they must run AFTER the core tag
+  # exists). The plugin pipeline is dispatch-only, so this is its trigger here.
   notify-plugins:
-    name: Trigger plugin release
-    needs: [prepare, create-release, merge-to-master]
+    name: Trigger plugin release (after core)
+    needs: [check-source-branch, prepare, create-release, merge-to-master]
+    if: needs.check-source-branch.outputs.skip == 'false'
     runs-on: ubuntu-latest
     steps:
       - name: Dispatch core-released to plugin pipeline
@@ -613,3 +614,24 @@ jobs:
             --method POST \
             --field event_type=core-released \
             --field client_payload[version]="${{ needs.prepare.outputs.version }}"
+
+  # PLUGIN-ONLY path (skip=true): the core VERSION wasn't bumped, so this PR is
+  # not a core release — the core jobs above are all skipped. Trigger the plugin
+  # pipeline immediately (no core release to wait for). This + notify-plugins are
+  # mutually exclusive on `skip`, so exactly one fires per PR — and the plugin
+  # pipeline never runs concurrently with the core jobs.
+  dispatch-plugins:
+    name: Trigger plugin release (plugin-only)
+    needs: check-source-branch
+    if: needs.check-source-branch.outputs.skip == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch core-released to plugin pipeline
+        env:
+          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          # version is informational only on this path (no new core release).
+          gh api repos/${{ github.repository }}/dispatches \
+            --method POST \
+            --field event_type=core-released \
+            --field client_payload[version]=""
