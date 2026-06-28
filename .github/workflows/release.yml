@@ -593,3 +593,23 @@ jobs:
             echo "Attempt $i failed, retrying in 10s..."
             sleep 10
           done
+
+  # After a core release fully lands, signal the plugin release pipeline so it
+  # rebuilds plugins against the just-published wick version (plugins build via
+  # `go install github.com/yogasw/wick@<ver>`, so they must run AFTER the core
+  # tag exists). The plugin workflow ALSO has its own pull_request trigger, so a
+  # plugin-only change still releases without a core release — this dispatch is
+  # only the "core released → refresh plugins" ordering, not the only path.
+  notify-plugins:
+    name: Trigger plugin release
+    needs: [prepare, create-release, merge-to-master]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch core-released to plugin pipeline
+        env:
+          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          gh api repos/${{ github.repository }}/dispatches \
+            --method POST \
+            --field event_type=core-released \
+            --field client_payload[version]="${{ needs.prepare.outputs.version }}"
