@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"os"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -73,7 +74,10 @@ func TestNewManagerCreatesSocketDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("socket dir not created: %v", err)
 	}
-	if info.Mode().Perm() != 0o700 {
+	// Unix permission bits aren't honored on Windows (MkdirAll's mode is
+	// effectively ignored — the dir always reports 0777), so only assert the
+	// 0700 mode on platforms where it's meaningful.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
 		t.Fatalf("socket dir perm = %o, want 0700", info.Mode().Perm())
 	}
 	if m.socketDir != dir {

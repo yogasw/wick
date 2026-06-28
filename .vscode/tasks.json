@@ -80,6 +80,36 @@
       "problemMatcher": ["$go"]
     },
     {
+      // Build EVERY connector plugin for the host OS/arch and drop each unzipped
+      // { binary, plugin.json } into wick-lab's plugin dir
+      // (~/.wick-lab/plugins/connectors/<name>/), where the running lab scans.
+      // Builds from current source via the dev `wick` CLI, so manifests reflect
+      // the latest code (e.g. new Meta.DefaultTags) without cutting a release.
+      // The running lab's hot-reload poller registers them within ~5s.
+      "label": "plugin: build all → lab",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-c",
+        "set -euo pipefail; root=\"$HOME/.wick-lab/plugins/connectors\"; tmp=\"$(mktemp -d)\"; cli=\"$tmp/wick\"; go build -o \"$cli\" .; (cd plugins && \"$cli\" plugin build --kind connector --all-plugins --output \"$tmp\"); mkdir -p \"$root\"; for zip in \"$tmp\"/*.zip; do [ -e \"$zip\" ] || { echo 'no plugins built'; break; }; base=$(basename \"$zip\"); name=\"${base%%-*}\"; dest=\"$root/$name\"; rm -rf \"$dest\"; mkdir -p \"$dest\"; unzip -oq \"$zip\" -d \"$dest\"; echo \"installed $name -> $dest\"; done"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$go"]
+    },
+    {
+      // Wipe every installed connector plugin from wick-lab so the next launch
+      // starts clean. The running lab's poller drops them within ~5s.
+      "label": "plugin: clear lab",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-c",
+        "root=\"$HOME/.wick-lab/plugins/connectors\"; rm -rf \"$root\"; mkdir -p \"$root\"; echo \"cleared $root\""
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
       "label": "fe: install",
       "type": "shell",
       "command": "npm install --no-audit --no-fund",
@@ -124,6 +154,14 @@
     {
       "label": "debug: prep with fe",
       "dependsOn": ["templ: generate", "css: build", "gate: build", "fe: build"],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    },
+    {
+      // debug: prep + build every plugin into the lab plugin dir. preLaunchTask
+      // for the "wicklab + plugins" launch config.
+      "label": "debug: prep + plugins",
+      "dependsOn": ["templ: generate", "css: build", "gate: build", "plugin: build all → lab"],
       "dependsOrder": "parallel",
       "problemMatcher": []
     },

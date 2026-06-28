@@ -2,18 +2,24 @@ package cli
 
 import (
 	"archive/zip"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	"github.com/yogasw/wick/internal/safeexec"
+	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
 // pluginBuildTargets is the canonical OS/arch matrix `wick plugin build --all`
@@ -59,8 +65,135 @@ Run this from a plugins monorepo (one folder per plugin, grouped by kind):
 The consumption side — installing, enabling, disabling plugins — lives in the
 app binary itself: '<your-app> plugin install|list|enable|disable|remove'.`,
 	}
-	cmd.AddCommand(pluginBuildCmd())
+	cmd.AddCommand(pluginBuildCmd(), pluginCatalogCmd())
 	return cmd
+}
+
+// pluginCatalogCmd regenerates the marketplace catalog (plugins.json) from the
+// live GitHub releases — the Go, struct-typed replacement for the jq pipeline
+// that used to build it in release-plugins.yml. It folds every "<key>/v<ver>"
+// release into one entry per plugin (highest version), maps each zip asset to
+// its os/arch download URL, and lifts Name/Description from the released
+// manifest. The shape is connplugin.Available, shared with the reader, so the
+// generated JSON can't drift from what the app parses.
+func pluginCatalogCmd() *cobra.Command {
+	var (
+		repo  string
+		token string
+		out   string
+	)
+	cmd := &cobra.Command{
+		Use:   "catalog",
+		Short: "Regenerate plugins.json from the repo's GitHub releases",
+		Long: `Build the marketplace catalog (plugins.json) from live GitHub releases.
+
+Lists every "<plugin>/v<version>" release in --repo, keeps the highest version
+per plugin, maps each release zip to its os/arch download URL, and reads
+Name/Description from the released manifest. Writes the result to --out.
+
+  wick plugin catalog --repo yogasw/wick --out plugins/plugins.json
+
+--token (or GITHUB_TOKEN) raises the API rate limit; unauthenticated works for
+public repos but is capped at 60 requests/hour per IP.`,
+		RunE: func(c *cobra.Command, _ []string) error {
+			if repo == "" {
+				return errors.New("--repo <owner/name> is required")
+			}
+			if token == "" {
+				token = os.Getenv("GITHUB_TOKEN")
+			}
+			releases, err := fetchAllReleases(c.Context(), repo, token)
+			if err != nil {
+				return fmt.Errorf("list releases: %w", err)
+			}
+			entries := connplugin.BuildCatalog(releases, liveManifestFetcher(c.Context(), token))
+			data, err := connplugin.MarshalCatalog(entries)
+			if err != nil {
+				return err
+			}
+			if out == "" || out == "-" {
+				_, err = os.Stdout.Write(data)
+				return err
+			}
+			if err := os.WriteFile(out, data, 0o644); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "wrote %d plugin(s) to %s\n", len(entries), out)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&repo, "repo", "", "GitHub repo as owner/name (e.g. yogasw/wick)")
+	cmd.Flags().StringVar(&token, "token", "", "GitHub token (env: GITHUB_TOKEN); optional for public repos")
+	cmd.Flags().StringVarP(&out, "out", "o", "plugins/plugins.json", "Output path for the catalog ('-' for stdout)")
+	return cmd
+}
+
+// fetchAllReleases pages through GET /repos/{repo}/releases.
+func fetchAllReleases(ctx context.Context, repo, token string) ([]connplugin.GHRelease, error) {
+	var all []connplugin.GHRelease
+	client := &http.Client{Timeout: 30 * time.Second}
+	for page := 1; page <= 20; page++ { // 20*100 = 2000 releases, far beyond any real repo
+		url := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=100&page=%d", repo, page)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "application/vnd.github+json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("github %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		var batch []connplugin.GHRelease
+		if err := json.Unmarshal(body, &batch); err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		all = append(all, batch...)
+		if len(batch) < 100 {
+			break // last page
+		}
+	}
+	return all, nil
+}
+
+// liveManifestFetcher downloads a release zip and reads its plugin.json.
+func liveManifestFetcher(ctx context.Context, token string) connplugin.ManifestFetcher {
+	client := &http.Client{Timeout: 60 * time.Second}
+	return func(zipURL string) (*wickplugin.Manifest, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, zipURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("download %d", resp.StatusCode)
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+		if err != nil {
+			return nil, err
+		}
+		return connplugin.ManifestFromZipBytes(data)
+	}
 }
 
 // pluginBuildCmd compiles plugin binaries from a plugins-style monorepo

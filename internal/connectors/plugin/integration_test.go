@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,16 @@ import (
 	"github.com/yogasw/wick/pkg/connector"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
+
+// echoBinName is the plugin binary filename, with the ".exe" suffix Windows
+// requires to exec it — mirrors what cmd/cli plugin build writes per-GOOS, so
+// the test binary is named (and recorded in the manifest) exactly as in prod.
+func echoBinName() string {
+	if runtime.GOOS == "windows" {
+		return "echo.exe"
+	}
+	return "echo"
+}
 
 // buildEcho compiles cmd/plugins/echo into a temp dir laid out as the loader
 // expects: <dir>/connectors/echo/{echo, plugin.json}. Returns <dir>/connectors.
@@ -23,7 +34,7 @@ func buildEcho(tb testing.TB) string {
 	if err := os.MkdirAll(connDir, 0o755); err != nil {
 		tb.Fatal(err)
 	}
-	bin := filepath.Join(connDir, "echo")
+	bin := filepath.Join(connDir, echoBinName())
 	build := safeexec.Command("go", "build", "-o", bin, "github.com/yogasw/wick/cmd/plugins/echo")
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
@@ -46,7 +57,7 @@ func buildEchoSigned(t *testing.T, keyPath string) string {
 	if err := os.MkdirAll(connDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	bin := filepath.Join(connDir, "echo")
+	bin := filepath.Join(connDir, echoBinName())
 	build := safeexec.Command("go", "build", "-o", bin, "github.com/yogasw/wick/cmd/plugins/echo")
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/connectors"
+	customconn "github.com/yogasw/wick/internal/connectors/custom"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tags"
@@ -113,7 +114,11 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 // system connectors with no other category, else "Other".
 func connectorCategory(list []tool.DefaultTag, system bool) (name string, sortOrder int, desc string) {
 	for _, t := range list {
-		if t.Name == tags.Connector.Name || t.Name == tags.System.Name {
+		// Skip the role tag, the System tag, and per-def custom access tags
+		// ("custom:<key>"): none of those are categories. A custom connector
+		// with no real category tag falls through to "Other" below — it must
+		// never show up as its own "custom:beo_echo" category chip.
+		if t.Name == tags.Connector.Name || t.Name == tags.System.Name || customconn.IsCustomTag(t.Name) {
 			continue
 		}
 		return t.Name, t.SortOrder, t.Description
