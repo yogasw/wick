@@ -48,7 +48,11 @@ permissions:
 # queues behind the first instead of being cancelled (never abort a release
 # mid-flight).
 concurrency:
-  group: wick-workflow
+  # Per-workflow group (see release.yml for the full rationale). Serial against
+  # itself; runs in parallel with core/artifacts. Cache keys (go-build/templ) are
+  # disjoint from the other workflows, so there's no cross-workflow race. Ordering
+  # after the core tag is guaranteed by the repository_dispatch trigger, not here.
+  group: wick-release-plugins
   cancel-in-progress: false
 
 # secrets.ADMIN_TOKEN: a PAT that can push to the protected master branch. The
@@ -160,8 +164,11 @@ jobs:
         run: templ generate ./...
       - name: Test plugin platform + build tooling
         run: |
+          # This build is NOT redundant: it produces the wick binary that
+          # plugin_test.go shells out to (`wick plugin build`).
           go build -o "$RUNNER_TEMP/wick" .
-          go test -count=1 -timeout 10m ./pkg/plugin/... ./internal/connectors/plugin/... ./cmd/cli/...
+          # No -count=1: let Go's test cache skip unchanged packages ("(cached)").
+          go test -timeout 10m ./pkg/plugin/... ./internal/connectors/plugin/... ./cmd/cli/...
           # The plugins module is separate (go.work); make sure it compiles.
           (cd plugins && go build ./... && go build ./connector/_template/)
 
@@ -288,6 +295,11 @@ jobs:
           name: ${{ matrix.name }} v${{ steps.ver.outputs.v }}
           files: plugins/bin/${{ matrix.name }}-*.zip
           fail_on_unmatched_files: true
+          # Plugins share this repo's Releases with the core wick binary. Without
+          # this, the most recent release (often a plugin) steals the "Latest"
+          # badge from the wick release people actually come here to download.
+          # Pin "Latest" to core only — plugin releases never claim it.
+          make_latest: false
           # The release tag is created on the PR head commit. That's the code
           # under review; the same commit lands on master via the normal PR
           # merge. ADMIN_TOKEN so tag creation isn't blocked by ruleset config.
