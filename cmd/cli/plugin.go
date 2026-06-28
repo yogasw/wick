@@ -168,7 +168,7 @@ cmd/plugin-keygen tool.`,
 		},
 	}
 	cmd.Flags().StringVar(&kind, "kind", "connector", "Plugin kind: connector|tool|job (selects the <kind>/ source folder)")
-	cmd.Flags().StringVarP(&target, "target", "t", "", "Single target <os>/<arch> (e.g. linux/arm64). Mutually exclusive with --goos/--goarch and --all")
+	cmd.Flags().StringVarP(&target, "target", "t", "", "Target(s) <os>/<arch>, comma-separated for many (e.g. linux/arm64 or darwin/amd64,windows/amd64). Mutually exclusive with --goos/--goarch and --all")
 	cmd.Flags().StringVar(&goos, "goos", "", "Target GOOS (env: GOOS). Mutually exclusive with --target")
 	cmd.Flags().StringVar(&goarch, "goarch", "", "Target GOARCH (env: GOARCH). Mutually exclusive with --target")
 	cmd.Flags().BoolVar(&buildAll, "all", false, "Build every supported os/arch (linux/arm64, linux/amd64, darwin/arm64, darwin/amd64, windows/amd64)")
@@ -281,11 +281,24 @@ func resolvePluginTargets(target, goos, goarch string, buildAll bool) ([]string,
 		if goos != "" || goarch != "" {
 			return nil, errors.New("--target is mutually exclusive with --goos/--goarch")
 		}
-		parts := strings.SplitN(target, "/", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return nil, errors.New("--target must be <os>/<arch> (e.g. linux/arm64)")
+		// Comma-separated list: one or many <os>/<arch>. This is how CI passes
+		// the BUILD_TARGETS Actions variable through in a single invocation.
+		var targets []string
+		for _, t := range strings.Split(target, ",") {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			parts := strings.SplitN(t, "/", 2)
+			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+				return nil, fmt.Errorf("--target item %q must be <os>/<arch> (e.g. linux/arm64)", t)
+			}
+			targets = append(targets, t)
 		}
-		return []string{target}, nil
+		if len(targets) == 0 {
+			return nil, errors.New("--target is empty")
+		}
+		return targets, nil
 	}
 	tos := firstNonEmpty(goos, os.Getenv("GOOS"), runtime.GOOS)
 	tarch := firstNonEmpty(goarch, os.Getenv("GOARCH"), runtime.GOARCH)

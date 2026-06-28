@@ -10,6 +10,21 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.26.1](https://github.com/yogasw/wick/compare/v0.26.0...v0.26.1) — Plugin Builds
+
+_Released on 2026-06-28_
+
+### Improved
+*   Unified plugin build targets with the shared `BUILD_TARGETS` variable.
+    *   Previously, plugin releases hardcoded build targets independently of the `BUILD_TARGETS` Actions variable, which already gated the `wick` binary build.
+    *   Now, a single `BUILD_TARGETS` variable controls both `wick` binary and plugin OS/architecture sets, streamlining the build configuration.
+*   The `wick plugin build --target` command now accepts a comma-separated list of targets (e.g., `linux/arm64,darwin/amd64,windows/amd64`).
+*   The `release-plugins.yml` workflow now reads `vars.BUILD_TARGETS` with the same default and "all" semantics as `release-artifacts.yml`.
+*   Added `TestResolvePluginTargets` to cover the new `--target` parsing for lists, spaces, empty items, and error handling.
+
+---
+
+
 ## [v0.26.0](https://github.com/yogasw/wick/compare/v0.25.3...v0.26.0) — Connector Plugins
 
 _Released on 2026-06-28_
