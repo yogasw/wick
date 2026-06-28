@@ -178,7 +178,7 @@ The `VERSION=` workaround is the simplest in CI — pin it to the release you wa
 :::
 
 ::: tip wick-agent is just the wick repo's own install script
-The wick repo ships its own `scripts/install.sh` + `scripts/install.ps1` baked with `APP="wick-agent"` and `REPO="yogasw/wick"`. Running them installs the **wick-agent runtime** (Slack / Telegram / Web agent host) — not the wick CLI used to scaffold projects. The CLI is installed via `go install github.com/yogasw/wick@v0.26.2`.
+The wick repo ships its own `scripts/install.sh` + `scripts/install.ps1` baked with `APP="wick-agent"` and `REPO="yogasw/wick"`. Running them installs the **wick-agent runtime** (Slack / Telegram / Web agent host) — not the wick CLI used to scaffold projects. The CLI is installed via `go install github.com/yogasw/wick@v0.27.0`.
 :::
 
 ## ldflags injection
