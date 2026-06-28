@@ -301,7 +301,7 @@ Common flags:
 | Flag | Default | Effect |
 |---|---|---|
 | `--kind` | `connector` | Source folder kind: `connector`, `tool`, or `job` |
-| `--target` | host | Single target `<os>/<arch>`, e.g. `linux/arm64` |
+| `--target` | host | Single target or comma-separated list, e.g. `linux/arm64,darwin/amd64` |
 | `--goos` / `--goarch` | — | Split form of `--target`; mutually exclusive with it |
 | `--all` | `false` | Build all supported targets (`linux/arm64`, `linux/amd64`, `darwin/arm64`, `darwin/amd64`, `windows/amd64`) |
 | `--all-plugins` | `false` | Build every plugin folder under `<kind>/` (skip `_`-prefixed scaffolds) |
@@ -314,6 +314,27 @@ Common flags:
 The manifest (`plugin.json`) is generated from the freshly-built binary via `--dump-manifest`, so the manifest can never drift from the binary it describes.
 
 See also the consumption side: [`<app> plugin`](./app-cli#app-plugin) commands on the running binary.
+
+---
+
+### `wick plugin catalog`
+
+Regenerate the marketplace catalog (`plugins.json`) from GitHub releases. This is the Go, struct-typed replacement for the `jq` pipeline that previously built the catalog in CI. The generated JSON uses the same `Available` shape the app reads, so the catalog can never drift from what the app parses.
+
+```bash
+wick plugin catalog --repo owner/plugins-repo --out plugins/plugins.json
+wick plugin catalog --repo owner/plugins-repo -o -    # write to stdout
+```
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--repo` | — | GitHub repo as `owner/name` (required) |
+| `--token` | — | GitHub token (env: `GITHUB_TOKEN`); optional for public repos, raises rate limit from 60 to 5 000 req/hr |
+| `-o`, `--out` | `plugins/plugins.json` | Output path; `-` writes to stdout |
+
+The command pages through all releases in the repo, keeps the highest semver version per plugin key, maps each zip asset to its OS/arch download URL, and lifts `Name`/`Description` from the plugin manifest inside the first release zip.
+
+Tag convention: plugin releases are tagged `<key>/v<version>` (e.g. `slack/v0.2.1`). Core wick releases (`v<version>`, no slash) are ignored.
 
 ---
 

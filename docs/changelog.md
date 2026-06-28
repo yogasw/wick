@@ -6,7 +6,17 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **`wick plugin catalog`** — new CLI command that regenerates `plugins.json` from live GitHub releases. Replaces the `jq` pipeline in `release-plugins.yml`; the output uses the same `Available` struct the app reads, so the catalog shape can never drift from what the app parses. See [`wick plugin catalog`](./reference/cli#wick-plugin-catalog).
+*   **Plugin DefaultTags** — plugins now declare `Meta.DefaultTags` using the shared `plugins/tags` catalog, so they appear in the same category grid as built-in connectors (API, Communication, …) without any manual tag wiring.
+
+### Changed
+
+*   **Connector list — plugins merged into category grid**: Available-to-install plugins no longer appear in a separate "Available to install" section below the connector list. They flow into the same category grid as built-ins, with a **Download** button instead of a detail link. If no build exists for the host OS/arch the button is disabled with a reason. An **Installed** filter chip shows only connectors that are ready to use (built-ins + downloaded plugins). Category chips are derived from each connector's tags and span both built-ins and plugins.
+*   **Plugin install directory** — the plugin scan directory now resolves via `appname.Resolve()` (matching the `wick.db` tree), fixing a silent mismatch where plugins installed into `~/.wick-agent/` were not found when the binary was named differently (e.g. an MCP stdio subprocess). Override with `WICK_PLUGINS_DIR`.
+*   **Hot-reload always active** — the plugin hot-reload poller now starts even when zero plugins are installed at boot, so a plugin installed for the first time is picked up immediately without a restart.
+*   **`wick plugin build --target`** — accepts a comma-separated list of targets, e.g. `linux/arm64,darwin/amd64,windows/amd64`.
 
 ---
 
