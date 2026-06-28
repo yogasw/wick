@@ -1534,8 +1534,14 @@ func NewServer() *Server {
 	// Connector-plugin marketplace surface (admin-only): merged Installed +
 	// Available list from the registry, plus install/enable/disable/remove.
 	// Self-contained handler with its own DB + registry so the manager
-	// Handler signature stays untouched.
-	manager.NewPluginsHandler(db).RegisterRoutes(r, authMidd)
+	// Handler signature stays untouched. Wire the reloader so install / enable /
+	// disable / remove reconcile immediately. Guard the typed-nil: passing a nil
+	// *Reloader into the interface would make it non-nil (and panic on Reload).
+	pluginsHandler := manager.NewPluginsHandler(db)
+	if pluginReloader != nil {
+		pluginsHandler.SetReloader(pluginReloader)
+	}
+	pluginsHandler.RegisterRoutes(r, authMidd)
 
 	// Tool routes — per-tool visibility enforced via RequireToolAccess.
 	// Public tools are reachable without login; Private tools require

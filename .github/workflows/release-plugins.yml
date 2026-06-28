@@ -42,18 +42,20 @@ on:
 permissions:
   contents: write # create releases (the catalog commit uses ADMIN_TOKEN — see below)
 
-# ONE shared concurrency group across ALL wick release workflows (core + plugin)
-# so only a single run executes at a time globally — nothing else can touch the
-# caches (delete+save) concurrently. cancel-in-progress: false → a second run
-# queues behind the first instead of being cancelled (never abort a release
-# mid-flight).
 concurrency:
-  # Per-workflow group (see release.yml for the full rationale). Serial against
-  # itself; runs in parallel with core/artifacts. Cache keys (go-build/templ) are
-  # disjoint from the other workflows, so there's no cross-workflow race. Ordering
-  # after the core tag is guaranteed by the repository_dispatch trigger, not here.
+  # Per-workflow group: serial against itself, parallel with core/artifacts
+  # (cache keys go-build/templ are disjoint from the other workflows). Ordering
+  # after the core tag is guaranteed by the repository_dispatch trigger.
+  #
+  # cancel-in-progress: TRUE here (unlike core/artifacts). A single core release
+  # can dispatch core-released more than once — release.yml fires on both
+  # `opened` and `synchronize`, and merge-to-master's update-branch push triggers
+  # another `synchronize`. Every dispatch rebuilds the SAME plugin set against the
+  # SAME core version, so a later one supersedes the earlier: cancel the in-flight
+  # run instead of doing the identical work twice. Safe because the build is
+  # idempotent (tag-exists gate) — a cancelled run releases nothing a re-run won't.
   group: wick-release-plugins
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 # secrets.ADMIN_TOKEN: a PAT that can push to the protected master branch. The
 # default GITHUB_TOKEN cannot push to a protected branch and (on pull_request)
@@ -319,98 +321,32 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.ADMIN_TOKEN }}
 
-      # No Go here: the catalog is built from the releases API (gh + jq) and the
-      # names/descriptions are read from the released zips (curl + unzip + jq).
-      # Nothing reads the source tree, so a brand-new plugin not yet on master is
-      # handled correctly.
+      - id: go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
-      # Rebuild the catalog from the LIVE releases: list every <name>/v<ver>
-      # release + its zip assets, fold to one entry per plugin (latest version),
-      # and map each zip's os/arch to its download URL. This is the source the
-      # in-app marketplace reads, so it always reflects what's actually
-      # downloadable.
+      # Rebuild the catalog from the LIVE releases with `wick plugin catalog`,
+      # NOT a jq pipeline: the catalog SHAPE is the connplugin.Available Go struct
+      # (one source of truth, shared with the reader), so the JSON can't drift
+      # from what the app parses. The command lists every "<name>/v<ver>" release,
+      # keeps the highest version per plugin, maps each zip to its os/arch URL,
+      # and lifts Name/Description from the released manifest. Reads only the
+      # releases API + zips — never the source tree — so a brand-new plugin not
+      # yet on master is handled correctly.
+      - name: Build wick CLI from source
+        run: |
+          templ_ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install github.com/a-h/templ/cmd/templ@${templ_ver}
+          templ generate ./...
+          go build -o "$RUNNER_TEMP/wick" .
       - name: Generate plugins.json from releases
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        shell: bash
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          # All releases (paginated), newest first.
-          gh api --paginate "repos/$REPO/releases" > /tmp/releases.json
-
-          # Fold into one entry per plugin KEY (= the tag prefix, which equals
-          # the source folder = Meta.Key), keeping the highest semver. Asset
-          # names are <key>-<ver>-<goos>-<goarch>.zip. `name` is seeded to the
-          # key and refined to Meta.Name by the next step (which has the
-          # manifest); `description` likewise.
-          jq -s '
-            # Tolerant version sort key: each dot segment → its leading digits as
-            # a number (so "0.1.0-rc1" → [0,1,0], not a tonumber crash); missing
-            # → 0. Good enough to pick the highest release per plugin.
-            def vkey: split(".") | map((capture("^(?<d>[0-9]+)").d // "0") | tonumber);
-            add
-            | map(select(.tag_name | test("/v")))
-            | map({
-                key: (.tag_name | split("/")[0]),
-                version: (.tag_name | split("/v")[1]),
-                assets: (.assets // [])
-              })
-            | reduce .[] as $r ({};
-                ($r.key) as $k
-                | (.[$k].version // "0") as $cur
-                | if ($r.version | vkey) > ($cur | vkey)
-                  then . + {($k): $r} else . end)
-            | to_entries
-            | map(.value)
-            | sort_by(.key)
-            | map({
-                key,
-                name: .key,
-                description: "",
-                version,
-                assets: (
-                  .assets
-                  | map(select(.name | endswith(".zip")))
-                  | map({
-                      key: (.name | sub("^[^-]+-[^-]+-"; "") | sub("\\.zip$"; "") | sub("-"; "/")),
-                      value: .browser_download_url
-                    })
-                  | from_entries
-                )
-              })
-          ' /tmp/releases.json > plugins/plugins.json
-
-          echo "Regenerated catalog:"
-          cat plugins/plugins.json
-
-      # Meta.Name + Meta.Description aren't in the bare release JSON, but they ARE
-      # inside each release's plugin.json (the zip carries Module.Meta). Read them
-      # from the RELEASED ARTIFACT, not the source tree — a brand-new plugin's
-      # folder may not be on master yet when this runs, but its release already
-      # exists. Download the first asset, unzip plugin.json, lift Meta.
-      - name: Backfill name + description from released manifests
-        shell: bash
-        run: |
-          set -euo pipefail
-          tmp=$(mktemp)
-          cp plugins/plugins.json "$tmp"
-          n=$(jq 'length' "$tmp")
-          for i in $(seq 0 $((n - 1))); do
-            url=$(jq -r ".[$i].assets | to_entries[0].value // empty" "$tmp")
-            [ -n "$url" ] || continue
-            work=$(mktemp -d)
-            if curl -fsSL "$url" -o "$work/p.zip" && unzip -oq "$work/p.zip" plugin.json -d "$work" 2>/dev/null; then
-              nm=$(jq -r '.module.Meta.Name // ""' "$work/plugin.json")
-              desc=$(jq -r '.module.Meta.Description // ""' "$work/plugin.json")
-              jq --argjson i "$i" --arg n "$nm" --arg d "$desc" \
-                '.[$i] |= (.name = (if $n=="" then .name else $n end) | .description = $d)' \
-                "$tmp" > "$tmp.next" && mv "$tmp.next" "$tmp"
-            fi
-            rm -rf "$work"
-          done
-          mv "$tmp" plugins/plugins.json
-          echo "Catalog with names + descriptions:"; cat plugins/plugins.json
+          "$RUNNER_TEMP/wick" plugin catalog --repo "${{ github.repository }}" --out plugins/plugins.json
+          echo "Regenerated catalog:"; cat plugins/plugins.json
 
       - name: Commit catalog to master if changed
         shell: bash

@@ -47,6 +47,21 @@ func TestConnectorCategory(t *testing.T) {
 			wantName: "Observability",
 			wantSort: tags.Observability.SortOrder,
 		},
+		{
+			// A custom connector's per-def access tag ("custom:<key>") is NOT a
+			// category — it must be skipped so the card lands in "Other", never
+			// a "custom:beo_echo" chip of its own.
+			name:     "custom access tag is skipped, falls back to Other",
+			tags:     []tool.DefaultTag{tags.Connector, {Name: "custom:beo_echo"}},
+			wantName: "Other",
+			wantSort: 1<<31 - 1,
+		},
+		{
+			name:     "real category wins over a custom access tag",
+			tags:     []tool.DefaultTag{tags.Connector, {Name: "custom:beo_echo"}, tags.Communication},
+			wantName: "Communication",
+			wantSort: tags.Communication.SortOrder,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
