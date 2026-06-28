@@ -1,47 +1,34 @@
 name: Release plugins
 
-# Plugin release pipeline — SEPARATE from the core wick release, but gated the
-# SAME way: a PR into the `release` branch.
+# Plugin release pipeline. DISPATCH-ONLY — it never triggers itself off a PR.
+# release.yml is the single entry point for every release PR and fires this via
+# repository_dispatch in exactly one of two cases:
 #
-#   - Mirrors release.yml's model (PR → release) so a plugin release is just as
-#     deliberate as a core release — not an automatic push. The path filter
-#     means a PR that only touches plugins/** runs THIS workflow, and the
-#     core release.yml uses paths-ignore: plugins/** so it does NOT run for
-#     a plugin-only PR (and vice-versa). One PR → one of the two pipelines.
-#   - Within plugins/, only the plugin folders changed in the PR are built
-#     (detect diffs the PR base..head), so one connector edit doesn't rebuild
-#     every connector. A plugin whose <name>/v<version> tag already exists is
-#     skipped (idempotent — same VERSION-gate idea as core).
-#   - Each built plugin is cross-built for every target and its zips attach to a
-#     GitHub Release tagged <name>/v<version>. Those tags start with the plugin
-#     name, so they never match the core 'v*' tag triggers — no cross-firing.
-#   - update-catalog then regenerates plugins/plugins.json from the live
-#     releases and commits it, so the in-app marketplace updates automatically.
+#   • CORE release (VERSION bumped): release.yml runs the core jobs, then
+#     notify-plugins dispatches here AFTER the core tag is published — so plugins
+#     rebuild against the new wick.
+#   • PLUGIN-only (VERSION unchanged): release.yml's core jobs skip and
+#     dispatch-plugins fires here immediately.
 #
-# CAVEAT — branch protection: do NOT mark a PATH-FILTERED workflow as a
-# "required status check". When the path doesn't match, GitHub never starts the
-# check, and a required check that never runs leaves the PR stuck "pending"
-# forever. Keep required checks on the always-run test gate, not on these
-# path-filtered release workflows.
+# Because the trigger is always a repository_dispatch from release.yml, this
+# workflow and the core jobs never run at the same time on one PR.
+#
+#   - Each built plugin is cross-built for every target; zips attach to a GitHub
+#     Release tagged <name>/v<version>. Those tags start with the plugin name so
+#     they never match the core 'v*' tag triggers.
+#   - A plugin whose <name>/v<version> tag already exists is skipped (idempotent).
+#   - update-catalog then regenerates plugins/plugins.json from the live releases
+#     and commits it, so the in-app marketplace updates automatically.
 #
 # plugins/ is a permanent nested module inside the wick repo. Releases + the
 # plugins/plugins.json catalog live in this repo (yogasw/wick).
 
 on:
-  # 1) A plugin-only change: PR into release touching plugins/**. Runs
-  #    independently — a plugin still releases without any core release.
-  pull_request:
-    branches: [release]
-    types: [opened, synchronize, reopened]
-    paths:
-      - 'plugins/connector/**'
-      - 'plugins/tool/**'
-      - 'plugins/job/**'
-  # 2) A core release just landed: release.yml fires this via repository_dispatch
-  #    AFTER the core tag is published, so plugins rebuild against the new wick
-  #    version (they `go install wick@<ver>`). This is the core→plugin ordering.
+  # Fired by release.yml (core-released event) for BOTH the core-release and the
+  # plugin-only paths. This is the only automatic trigger — never a bare PR.
   repository_dispatch:
     types: [core-released]
+  # Manual escape hatch: rebuild one named plugin on demand.
   workflow_dispatch:
     inputs:
       name:
@@ -62,61 +49,19 @@ permissions:
 # the core release workflow.
 
 jobs:
-  # SECURITY GATE — must pass before any plugin code is compiled/run or any
-  # secret/token is used. Mirrors release.yml's check-source-branch: this
-  # workflow runs ADMIN_TOKEN and pushes to master, so it must NOT run for a
-  # fork PR or a non-admin author.
-  #
-  #   - head.repo must be THIS repo (rejects forks — a fork PR's head.repo
-  #     differs, and we never want fork code near ADMIN_TOKEN),
-  #   - PR head branch must be `master` (release flow is master → release),
-  #   - PR author must have admin permission.
-  #
-  # On workflow_dispatch (manual, already trusted — only collaborators can
-  # dispatch) the gate auto-passes.
-  guard:
-    name: Verify trusted source
-    runs-on: ubuntu-latest
-    steps:
-      - name: Reject fork / non-master head
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const pr = context.payload.pull_request;
-            if (pr.head.repo.full_name !== context.repo.owner + '/' + context.repo.repo) {
-              core.setFailed(`PR head is a fork (${pr.head.repo.full_name}) — plugin release runs trusted-only.`);
-              return;
-            }
-            if (pr.head.ref !== 'master') {
-              core.setFailed(`PR must be from the master branch, was: ${pr.head.ref}`);
-            }
-      - name: Verify PR author is admin
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.ADMIN_TOKEN }}
-          script: |
-            const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              username: context.payload.pull_request.user.login,
-            });
-            if (perm.permission !== 'admin') {
-              core.setFailed(`PR author ${context.payload.pull_request.user.login} is not admin (${perm.permission}).`);
-            }
-
+  # No source guard here. This workflow is dispatch-only: the core-released event
+  # comes from release.yml, which has ALREADY enforced "PR from master + author
+  # is admin + not a fork" in its check-source-branch job before dispatching. The
+  # only other trigger is workflow_dispatch, which GitHub restricts to users with
+  # write access. So every path into this workflow is already trusted.
   detect:
-    name: Detect changed plugins
-    needs: guard
+    name: Detect plugins to build
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}
       any: ${{ steps.set.outputs.any }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # need history to diff the PR range
 
       - id: set
         shell: bash
@@ -143,42 +88,12 @@ jobs:
           if [ "$ev" = "workflow_dispatch" ]; then
             # Manual: one named plugin.
             entries='[{"kind":"${{ github.event.inputs.kind }}","name":"${{ github.event.inputs.name }}"}]'
-          elif [ "$ev" = "repository_dispatch" ]; then
-            # A core release just landed → rebuild EVERY plugin against the new
-            # wick version (the build job go-installs wick@<ver>). Idempotent:
-            # the build job skips any plugin whose tag already exists, so only
-            # plugins that actually bumped VERSION cut a new release.
-            echo "core-released (v${{ github.event.client_payload.version }}) → rebuild all plugins"
-            add_all
           else
-            # pull_request: only the <kind>/<name> folders changed in THIS PR.
-            base="${{ github.event.pull_request.base.sha }}"
-            if [ -z "$base" ]; then
-              echo "no PR base sha — nothing to detect"
-              changed=""
-            else
-              changed=$(git diff --name-only "$base"...HEAD 2>/dev/null || git diff --name-only "$base" 2>/dev/null || true)
-            fi
-            for kind in connector tool job; do
-              # A grep that matches nothing exits 1. The runner shell runs with
-              # BOTH `-o pipefail` AND `-e` (errexit), so a no-match would kill
-              # the job even though "no plugin of this kind changed" is normal.
-              # `{ ...; } || true` swallows the non-zero status at the PARENT
-              # level (where -e lives) — a subshell `set +o pipefail` alone does
-              # NOT, because errexit still acts on the command-substitution's
-              # exit code. So: pipefail off inside, and || true outside.
-              names=$( { set +o pipefail; echo "$changed" \
-                | grep "^plugins/$kind/" \
-                | sed "s#^plugins/$kind/##" \
-                | cut -d/ -f1 \
-                | sort -u \
-                | grep -v '^_'; } || true )
-              for n in $names; do
-                if [ -f "$kind/$n/main.go" ]; then
-                  entries=$(echo "$entries" | jq -c --arg k "$kind" --arg n "$n" '. + [{kind:$k,name:$n}]')
-                fi
-              done
-            done
+            # repository_dispatch (core-released) — the only automatic trigger.
+            # Rebuild EVERY plugin; the build job's tag-exists check is idempotent,
+            # so only plugins whose VERSION actually changed cut a new release.
+            echo "core-released (v${{ github.event.client_payload.version }}) → consider all plugins"
+            add_all
           fi
           echo "matrix={\"include\":$entries}" >> "$GITHUB_OUTPUT"
           if [ "$(echo "$entries" | jq 'length')" -gt 0 ]; then
