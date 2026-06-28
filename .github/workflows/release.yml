@@ -147,7 +147,10 @@ jobs:
 
   prepare:
     name: Prepare Release
-    needs: check-source-branch
+    # Core release runs unit-tests FIRST — prepare (and everything after it)
+    # only starts once the suite passes, so no release prep happens for a build
+    # that would fail tests.
+    needs: [check-source-branch, unit-tests]
     if: needs.check-source-branch.outputs.skip == 'false'
     runs-on: ubuntu-latest
 
