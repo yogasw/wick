@@ -5,13 +5,13 @@ on:
     branches:
       - release
     types: [opened, synchronize, reopened]
-    # A PR that ONLY touches wick-plugins/** is a plugin release — handled by
+    # A PR that ONLY touches plugins/** is a plugin release — handled by
     # release-plugins.yml, not here. Skipping it keeps a plugin-only PR from
     # rebuilding the core binary. (Do NOT make this workflow a required status
     # check while path-filtered: a skipped run never reports and would block the
     # PR. Keep required checks on the always-run test gate.)
     paths-ignore:
-      - 'wick-plugins/**'
+      - 'plugins/**'
 
 jobs:
   check-source-branch:
@@ -122,14 +122,14 @@ jobs:
       - name: Build
         run: go build ./internal/... ./cmd/... ./pkg/...
 
-      # The wick-plugins/ starter is a SEPARATE module (nested), so ./... above
+      # The plugins/ starter is a SEPARATE module (nested), so ./... above
       # never compiles it. The repo-root go.work wires it to this checkout's
       # pkg/plugin, so build it here to catch a pkg/plugin change that breaks the
       # plugin author contract before release. Note: connector/_template starts
       # with "_", which `go ./...` ignores — build it by explicit path, and let
       # ./... cover any real (non-"_") plugins added later.
-      - name: Build connector plugins (wick-plugins module)
-        working-directory: wick-plugins
+      - name: Build connector plugins (plugins module)
+        working-directory: plugins
         run: |
           go build ./connector/_template/
           go build ./... 2>/dev/null || true

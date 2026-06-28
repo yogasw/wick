@@ -1,4 +1,4 @@
-// Command httpbin is a real, working sample connector for the wick-plugins
+// Command httpbin is a real, working sample connector for the plugins
 // monorepo. It wraps httpbin.org (a free public HTTP request/response testing
 // service) so you can install it, run it, and see the whole plugin flow work
 // end-to-end without any credentials.

@@ -1,9 +1,9 @@
 ---
 name: plugin-module
-description: Use when building, packaging, or releasing a connector (or later a tool/job) as an EXTERNAL wick PLUGIN — a separate binary in the wick-plugins monorepo that wick downloads and runs over gRPC, instead of an in-tree module compiled into wick. Covers the wick-plugins repo layout (one folder per plugin under connector/<key>/), the key==folder one-identity rule, `wick plugin build` (zip output, --kind, --all, signing), the marketplace catalog (plugins.json), install/enable/disable via the app, and the PR→release CI flow. The MODULE contract itself (Meta, Configs, Operations, Ctx, wick:"..." tags) is identical to in-tree modules — defer to the connector-module / tool-module skills for that; this skill is ONLY the plugin packaging + shipping layer on top.
+description: Use when building, packaging, or releasing a connector (or later a tool/job) as an EXTERNAL wick PLUGIN — a separate binary in the plugins monorepo that wick downloads and runs over gRPC, instead of an in-tree module compiled into wick. Covers the plugins repo layout (one folder per plugin under connector/<key>/), the key==folder one-identity rule, `wick plugin build` (zip output, --kind, --all, signing), the marketplace catalog (plugins.json), install/enable/disable via the app, and the PR→release CI flow. The MODULE contract itself (Meta, Configs, Operations, Ctx, wick:"..." tags) is identical to in-tree modules — defer to the connector-module / tool-module skills for that; this skill is ONLY the plugin packaging + shipping layer on top.
 allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 paths:
-  - "wick-plugins/**"
+  - "plugins/**"
   - "cmd/cli/plugin.go"
   - "cmd/cli/plugin_manifest.go"
   - "cmd/cli/plugin_cosign.go"
@@ -27,7 +27,7 @@ paths:
 
 | | In-tree (connector-module skill) | Plugin (this skill) |
 |---|---|---|
-| Lives in | `internal/connectors/<name>/` | `wick-plugins/connector/<key>/` (separate repo/module) |
+| Lives in | `internal/connectors/<name>/` | `plugins/connector/<key>/` (nested module in the wick repo) |
 | Registered by | `RegisterBuiltins()` at compile time | downloaded → scanned from `~/.wick/plugins/connectors/<key>/` at runtime |
 | Runs | in the wick process (function call) | own subprocess, gRPC over UDS (`hashicorp/go-plugin`) |
 | `main()` | none — it's a package | `package main` → `wickplugin.Serve(Module())` |
@@ -38,10 +38,10 @@ way. The only code difference is the `main.go` wrapper and that it's a separate 
 module. So: write the connector exactly as connector-module teaches, then wrap +
 package per below.
 
-## The wick-plugins repo
+## The plugins repo
 
 ```
-wick-plugins/
+plugins/
 ├── go.mod                 # ONE module; repo-root go.work wires it to local wick
 │                          # (pkg/plugin isn't in a published wick release yet, so
 │                          #  there is NO `replace` in go.mod — go.work handles it)
@@ -73,12 +73,12 @@ catalog match. They must all be the same string, so:
 
 ## Authoring a new plugin connector
 
-1. `cp -r wick-plugins/connector/_template wick-plugins/connector/<key>`
+1. `cp -r plugins/connector/_template plugins/connector/<key>`
 2. Edit `connector.go` — set `Meta.Key` to `<key>` (must match the folder), write the
    `Module` exactly as the **connector-module** skill describes (Configs, Operations,
    per-op typed Input, `http.NewRequestWithContext(c.Context(), ...)`, etc.).
 3. `main.go` stays a one-liner: `wickplugin.Serve(Module())`.
-4. `echo 0.1.0 > wick-plugins/connector/<key>/VERSION`
+4. `echo 0.1.0 > plugins/connector/<key>/VERSION`
 5. Build + smoke-test locally (below).
 
 `main.go`/`Module()` split is convention; `wickplugin.Serve` is the whole runtime —
@@ -90,8 +90,8 @@ Production side, run from the `wick` dev CLI (NOT the app). Output is a **zip**,
 native installer.
 
 ```bash
-# one plugin, host target → one zip in wick-plugins/bin
-cd wick-plugins && wick plugin build <key> --target $(go env GOOS)/$(go env GOARCH)
+# one plugin, host target → one zip in plugins/bin
+cd plugins && wick plugin build <key> --target $(go env GOOS)/$(go env GOARCH)
 
 # one plugin, every os/arch → N zips (linux/arm64 first — Termux)
 wick plugin build <key> --all
@@ -137,7 +137,7 @@ cards; catalog entries not yet installed get a Download button.
 
 ## The marketplace catalog (`plugins.json`)
 
-`wick-plugins/plugins.json` on the default branch is the catalog. wick fetches it RAW
+`plugins/plugins.json` on the default branch is the catalog. wick fetches it RAW
 (`raw.githubusercontent.com/.../master/plugins.json`) — **not** the GitHub Releases
 API, so no rate limit / no token. Listing is metadata-only; the binary is pulled from
 the per-os/arch release URL in `assets` only on install.
@@ -152,12 +152,12 @@ the per-os/arch release URL in `assets` only on install.
 
 ## Releasing: PR → `release` (CI does the rest)
 
-You do steps 1–3; CI does 4–8. See `wick-plugins/RELEASE.md` for the full flow.
+You do steps 1–3; CI does 4–8. See `plugins/RELEASE.md` for the full flow.
 
 ```
 1. author + set Meta.Key == folder
 2. bump VERSION
-3. open PR  master → release  touching wick-plugins/connector/<key>/**
+3. open PR  master → release  touching plugins/connector/<key>/**
    ── .github/workflows/release-plugins.yml ──
 4. guard      reject fork / non-master / non-admin  (ADMIN_TOKEN)
 5. detect     diff PR base..head → changed plugins only
@@ -167,9 +167,9 @@ You do steps 1–3; CI does 4–8. See `wick-plugins/RELEASE.md` for the full fl
 8. update-catalog  regenerate plugins.json from live releases + commit to master
 ```
 
-Two pipelines, same gate: a PR that only touches `wick-plugins/**` runs
+Two pipelines, same gate: a PR that only touches `plugins/**` runs
 `release-plugins.yml`; a core-only PR runs the core `release.yml` (which has
-`paths-ignore: wick-plugins/**`). A mixed PR runs both.
+`paths-ignore: plugins/**`). A mixed PR runs both.
 
 ## Constraints / gotchas
 
@@ -189,7 +189,7 @@ Two pipelines, same gate: a PR that only touches `wick-plugins/**` runs
 ```bash
 # build the dev CLI from source (go.work resolves local pkg/plugin)
 go build -o /tmp/wick .
-cd wick-plugins && /tmp/wick plugin build <key> --target $(go env GOOS)/$(go env GOARCH)
+cd plugins && /tmp/wick plugin build <key> --target $(go env GOOS)/$(go env GOARCH)
 # unzip the result and confirm the manifest verifies against the binary:
 #   unzip bin/<key>-*.zip -d /tmp/x  &&  the binary's plugin.json must pass VerifyManifest
 go test ./pkg/plugin/... ./internal/connectors/plugin/... ./cmd/cli/...

@@ -83,9 +83,8 @@ func pluginInstallCmd() *cobra.Command {
   <url>   a direct http(s) link to a .zip / .tar.gz
   <file>  a local .zip / .tar.gz archive
 
-Override the registry with WICK_PLUGIN_REGISTRY=owner/repo (default
-yogasw/wick-plugins) and raise the GitHub rate limit with
-WICK_PLUGIN_REGISTRY_TOKEN.`,
+The marketplace catalog is a plugins.json fetched raw from the wick repo's
+default branch; override its URL with WICK_PLUGIN_CATALOG.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			src := args[0]

@@ -17,15 +17,15 @@ Tracker lengkap di [TODO.md](./TODO.md). Ringkas:
 - ✅ **Control surface — SHIPPED.** Produksi: `wick plugin build` (generik
   `--kind`, output zip; `cmd/cli/plugin.go`). Konsumsi: `<app> plugin
   install/list/enable/disable/remove` (`app/plugin_cmd.go`) — install verify +
-  reloader reconcile tanpa restart. Scaffold `wick-plugins/` (1 go.mod +
+  reloader reconcile tanpa restart. Scaffold `plugins/` (1 go.mod +
   `connector/_template` + CI). Detail §21 + TODO.md.
 - ✅ **Fase 5 (marketplace) — SHIPPED (catalog via raw JSON, BUKAN GitHub API).**
-  `Catalog.List/Resolve` (`registry.go`) tarik 1 `plugins.json` dari wick-plugins master
+  `Catalog.List/Resolve` (`registry.go`) tarik 1 `plugins.json` dari plugins master
   via **raw.githubusercontent.com** (no API → no rate-limit, no token); download binary
   dari release URL di JSON. UI **nyatu di list connector** (`ConnectorsIndex.svelte`,
   bukan halaman terpisah): built-in + downloaded = card biasa, yg belum diinstall = section
   "Available to install" + tombol Download (`internal/manager/plugins_api.go`, admin).
-  **Belum:** repo wick-plugins di-publish + isi release-nya.
+  **Belum:** repo plugins di-publish + isi release-nya.
 - ✅ **proto range negotiation** — `MinProtoVersion..ProtoVersion`, `VerifyManifest`
   range-check. ✅ **kind (tool/job)** — `Manifest.Kind` + route-by-kind (reuse Connector
   service, no proto baru). ✅ **polyglot** — `POLYGLOT.md` (kontrak language-agnostic).
@@ -777,7 +777,7 @@ Breaking selalu lewat review manusia. Additive = auto.
 
 ### 20.1 Layout repo connector (monorepo-of-connectors, opsi rekomendasi)
 
-> **DIREVISI di §21** — layout final = **1 go.mod di root** (`wick-plugins/connector/<nama>/`),
+> **DIREVISI di §21** — layout final = **1 go.mod di root** (`plugins/connector/<nama>/`),
 > BUKAN go.mod per-folder seperti sketsa di bawah. Sketsa lama ditinggalkan
 > sebagai catatan; pakai §21.
 
@@ -901,10 +901,10 @@ di kedua kasus.
 
 ---
 
-## 21. Monorepo `wick-plugins` — 1 go.mod, build per-plugin lewat `wick plugin build`
+## 21. Monorepo `plugins` — 1 go.mod, build per-plugin lewat `wick plugin build`
 
 > **STATUS: ✅ SHIPPED.** `wick plugin build` (`cmd/cli/plugin.go`) + scaffold
-> `wick-plugins/` ada. Konsumsi (`<app> plugin install/enable/disable`) ada di
+> `plugins/` ada. Konsumsi (`<app> plugin install/enable/disable`) ada di
 > `app/plugin_cmd.go`. Detail di TODO.md.
 
 > **Ini layout final** (mengganti sketsa §20.1). Satu repo, **satu `go.mod`** di
@@ -916,8 +916,8 @@ di kedua kasus.
 ### 21.1 Layout repo
 
 ```
-wick-plugins/                       # 1 repo, 1 go.mod (SATU Go module)
-├── go.mod                          # module github.com/yogasw/wick-plugins
+plugins/                       # 1 repo, 1 go.mod (SATU Go module)
+├── go.mod                          # module github.com/yogasw/plugins
 ├── go.sum                          # 1 sum, semua connector share dep + versi wick
 ├── connector/
 │   ├── _template/                  # scaffold: copy folder ini buat connector baru
@@ -941,7 +941,7 @@ wick-plugins/                       # 1 repo, 1 go.mod (SATU Go module)
 - `VERSION` per connector = sumber versi artifact (atau git tag `gmail/v1.4.2`).
 - **`go.mod`-nya BERSIH (no `replace`)** — selagi masih nested di repo wick, build
   lokal + CI resolve `github.com/yogasw/wick` ke checkout ini lewat **`go.work`**
-  di root repo (`use . ./wick-plugins`), bukan `replace` di go.mod. Jadi go.mod
+  di root repo (`use . ./plugins`), bukan `replace` di go.mod. Jadi go.mod
   siap di-extract ke repo sendiri kapan aja: tinggal bump `require` ke release wick
   yang udah punya `pkg/plugin`, ngga ada `replace` yang perlu dihapus.
 - **`_template` di-skip `go ./...`** — Go ngabaikan folder ber-prefix `_`. Itu
@@ -1013,7 +1013,7 @@ ditulis tangan.
 > path-filter, cuma connector yang foldernya ke-touch yang di-rebuild & di-zip.
 
 ```yaml
-# wick-plugins/.github/workflows/release.yml (sketsa)
+# plugins/.github/workflows/release.yml (sketsa)
 on:
   push:
     branches: [main]
@@ -1056,5 +1056,5 @@ jobs:
 > **Beda `_template` (plugin) vs `template/` (core), jangan ketuker:**
 > `template/` = fork seluruh app, register connector/tool/job di `app.Run()`,
 > **compile-time** (rebuild app buat nambah). `connector/_template/` di
-> `wick-plugins` = scaffold **1 binary plugin** yang di-`plugin.Serve`,
+> `plugins` = scaffold **1 binary plugin** yang di-`plugin.Serve`,
 > **runtime** (download/enable/disable tanpa rebuild core). Tujuan beda total.

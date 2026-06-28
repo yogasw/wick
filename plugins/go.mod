@@ -1,4 +1,4 @@
-module github.com/yogasw/wick-plugins
+module github.com/yogasw/wick/plugins
 
 go 1.25.0
 
@@ -22,8 +22,8 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 )
 
-// NOTE: no `replace` here on purpose. The repo-root go.work wires this module to
-// the local wick checkout for dev + CI, so this go.mod stays clean and ready to
-// extract into its own repo. The require above pins the wick version a STANDALONE
-// clone would use; bump it to the first release that contains pkg/plugin once
-// that ships.
+// This is a SEPARATE Go module living inside the wick repo (so `go build ./...`
+// on wick never drags the plugins in, and each plugin pins its own wick
+// version). The repo-root go.work wires it to the local wick checkout — no
+// `replace` needed here. The require above is the wick version a clone resolves
+// when go.work is absent; bump it to the first release that contains pkg/plugin.

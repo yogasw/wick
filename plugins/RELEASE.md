@@ -12,15 +12,15 @@ triggers only one pipeline.
 
 | PR into `release` touches… | Workflow that runs | What it builds |
 |---|---|---|
-| only `wick-plugins/**` | `release-plugins.yml` (`paths: wick-plugins/**`) | only the changed plugin(s) → zips → release → catalog |
-| only core (anything else) | `release.yml` (`paths-ignore: wick-plugins/**`) | the wick binary |
+| only `plugins/**` | `release-plugins.yml` (`paths: plugins/**`) | only the changed plugin(s) → zips → release → catalog |
+| only core (anything else) | `release.yml` (`paths-ignore: plugins/**`) | the wick binary |
 | both | both run | both, independently |
 
 Why no cross-firing:
 
-- **Plugin pipeline**: PR → `release`, `paths: wick-plugins/connector|tool|job/**`.
+- **Plugin pipeline**: PR → `release`, `paths: plugins/connector|tool|job/**`.
   A core-only PR doesn't match → plugins aren't built.
-- **Core pipeline**: PR → `release`, `paths-ignore: wick-plugins/**`. A
+- **Core pipeline**: PR → `release`, `paths-ignore: plugins/**`. A
   plugin-only PR is fully ignored → the core binary isn't rebuilt.
 - Plugin release tags are `<name>/v<ver>` (e.g. `httpbin/v0.1.0`) — they start
   with the plugin name, so they never match the core `v*` tag triggers either.
@@ -37,7 +37,7 @@ Why no cross-firing:
               Meta.Key MUST equal the folder name)
 2. Version    echo 0.2.0 > connector/<name>/VERSION
 3. PR         open a PR from master → release that touches
-              wick-plugins/connector/<name>/**
+              plugins/connector/<name>/**
         │
         ▼  release-plugins.yml runs (only this plugin; skipped if its
            <name>/v0.2.0 tag already exists — bump VERSION for a new release)
@@ -64,8 +64,8 @@ Steps 4–8 are **fully automated**. You only do 1–3 (author, bump VERSION, op
 # from the wick repo root (go.work resolves the local pkg/plugin)
 go build -o /tmp/wick .
 
-cd wick-plugins
-/tmp/wick plugin build --kind connector <name> --all        # → wick-plugins/bin/*.zip
+cd plugins
+/tmp/wick plugin build --kind connector <name> --all        # → plugins/bin/*.zip
 gh release create "<name>/v$(cat connector/<name>/VERSION)" bin/<name>-*.zip
 # then either edit plugins.json by hand, or re-run the update-catalog job.
 ```
@@ -87,10 +87,9 @@ gh release create "<name>/v$(cat connector/<name>/VERSION)" bin/<name>-*.zip
   `--cosign-key <key>` (binary, external cosign CLI) to the build step. The host
   rejects a tampered binary regardless (sha256 in the manifest is always checked).
 
-## When wick-plugins is extracted to its own repo
+## Building the wick CLI in CI
 
-Move `.github/workflows/release-plugins.yml` into that repo and drop the
-`wick-plugins/` path prefixes (paths become `connector/**`, working-dir becomes
-`.`). Replace "build wick CLI from source" with
-`go install github.com/yogasw/wick@<version>` once a wick release contains
-`pkg/plugin`.
+The build job compiles the `wick` CLI from source via `go.work` (so it uses the
+in-tree `pkg/plugin`). Once a wick release contains `pkg/plugin`, this can switch
+to `go install github.com/yogasw/wick@<version>` — the version arrives via the
+core-released dispatch. Until then it builds from this checkout.
