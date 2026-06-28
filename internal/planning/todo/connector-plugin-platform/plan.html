@@ -65,8 +65,8 @@
   <p class="sub" style="margin-top:0">Dokumen ini = <b>desain</b>. Tracker progres lengkap di <code>TODO.md</code>. Ringkas:</p>
   <div class="verdict">
     <div class="v-good"><b>✅ Engine (Fase 0–4)</b><br>proto/gRPC · handshake · manifest+ed25519 sign · loader · manager (lazy/idle-kill/cap/LRU/breaker) · warm pool · rlimit · streaming · DB enable/disable overlay · boot-scan + hot-reload poller. Wired di <code>internal/connectors/plugin/</code>. 2 pilot in-tree (slack, googleworkspace).</div>
-    <div class="v-good"><b>✅ Control surface — SHIPPED</b><br>Produksi: <code>wick plugin build</code> (generik <code>--kind</code>, output zip strip <code>-s -w</code> → 13MB; <code>cmd/cli/plugin.go</code>). Konsumsi: <code>&lt;app&gt; plugin search/install/list/enable/disable/remove</code> (<code>app/plugin_cmd.go</code>). Scaffold <code>wick-plugins/</code> + sample <code>httpbin</code> (§18).</div>
-    <div class="v-good"><b>✅ Marketplace — SHIPPED (catalog raw JSON, BUKAN GitHub API)</b><br><code>Catalog.List/Resolve</code> tarik 1 <code>plugins.json</code> dari wick-plugins master via raw.githubusercontent.com (no API → no rate-limit). UI <b>nyatu di list connector</b> (<code>ConnectorsIndex</code>): yg belum diinstall muncul "Available to install" + Download. Plus ✅ proto range-nego, ✅ kind tool/job, ✅ polyglot doc, ✅ cosign (external CLI). <b>Belum:</b> repo wick-plugins di-publish + isi release.</div>
+    <div class="v-good"><b>✅ Control surface — SHIPPED</b><br>Produksi: <code>wick plugin build</code> (generik <code>--kind</code>, output zip strip <code>-s -w</code> → 13MB; <code>cmd/cli/plugin.go</code>). Konsumsi: <code>&lt;app&gt; plugin search/install/list/enable/disable/remove</code> (<code>app/plugin_cmd.go</code>). Scaffold <code>plugins/</code> + sample <code>httpbin</code> (§18).</div>
+    <div class="v-good"><b>✅ Marketplace — SHIPPED (catalog raw JSON, BUKAN GitHub API)</b><br><code>Catalog.List/Resolve</code> tarik 1 <code>plugins.json</code> dari plugins master via raw.githubusercontent.com (no API → no rate-limit). UI <b>nyatu di list connector</b> (<code>ConnectorsIndex</code>): yg belum diinstall muncul "Available to install" + Download. Plus ✅ proto range-nego, ✅ kind tool/job, ✅ polyglot doc, ✅ cosign (external CLI). <b>Belum:</b> repo plugins di-publish + isi release.</div>
   </div>
 </div>
 
@@ -74,7 +74,7 @@
   <a href="#arch">1·Arsitektur</a><a href="#core">2·Metadata vs Proses</a><a href="#hybrid">3·Hybrid</a>
   <a href="#ver">4·Versioning</a><a href="#artifact">5·2-Artifact</a><a href="#life">6·Lifecycle</a><a href="#spawn">7·Spawn</a>
   <a href="#prc">8·Untung/Rugi</a><a href="#light">9·Enteng?</a><a href="#build">10·Build</a>
-  <a href="#lat">11·Latency</a><a href="#sec">12·Keamanan</a><a href="#ground">13·Kode Nyata</a><a href="#mig">14·Migrasi</a><a href="#platform">15·Platform Generik</a><a href="#proto">16·Proto Sync</a><a href="#cicd">17·CI/CD</a><a href="#monorepo">18·Monorepo wick-plugins</a>
+  <a href="#lat">11·Latency</a><a href="#sec">12·Keamanan</a><a href="#ground">13·Kode Nyata</a><a href="#mig">14·Migrasi</a><a href="#platform">15·Platform Generik</a><a href="#proto">16·Proto Sync</a><a href="#cicd">17·CI/CD</a><a href="#monorepo">18·Monorepo plugins</a>
 </div>
 
 <h2 id="arch">1 · Sekarang vs Target</h2>
@@ -617,13 +617,13 @@ check-proto:
   </div>
 </div>
 
-<h2 id="monorepo">18 · Monorepo <code>wick-plugins</code> — 1 go.mod, build per-connector</h2>
+<h2 id="monorepo">18 · Monorepo <code>plugins</code> — 1 go.mod, build per-connector</h2>
 <p class="sub"><b>Layout final</b> (ganti sketsa §17 yg go.mod-per-folder). 1 repo, <b>1 <code>go.mod</code></b> di root, plugin dikelompokkan per-kind (<code>connector/</code>, <code>tool/</code>, <code>job/</code>). Build pakai <code>wick plugin build</code> (generik via <code>--kind</code>, default <code>connector</code>) di CLI <code>wick</code> — BUKAN <code>wick build connector</code>. CI <b>cuma rebuild yg berubah</b> — BUKAN build semua kayak release core.</p>
 <div class="grid g2">
   <div class="card good">
     <h3>📁 Layout — 1 module, banyak binary</h3>
-    <pre><code>wick-plugins/              # 1 repo, 1 go.mod
-├── go.mod                 # module …/wick-plugins
+    <pre><code>plugins/              # 1 repo, 1 go.mod
+├── go.mod                 # module …/plugins
 ├── go.sum                 # 1 sum, share dep + versi wick
 ├── connector/
 │   ├── _template/         # scaffold: copy buat connector baru
@@ -679,7 +679,7 @@ release:
 
 <div class="card good">
   <h3>✅ Status — SHIPPED</h3>
-  <p><code>wick plugin build</code> (<code>cmd/cli/plugin.go</code>, generik <code>--kind</code>) + konsumsi <code>&lt;app&gt; plugin install/list/enable/disable/remove</code> (<code>app/plugin_cmd.go</code>) + scaffold <code>wick-plugins/</code> (1 go.mod, <code>connector/_template</code> yg beneran ke-build, README, CI changed-only) semua ADA. Round-trip test lulus (source→zip→VerifyManifest). <b>Belum:</b> repo <code>wick-plugins</code> masih in-tree (belum di-extract), marketplace UI, Fase 5. Tracker: <code>TODO.md</code>.</p>
+  <p><code>wick plugin build</code> (<code>cmd/cli/plugin.go</code>, generik <code>--kind</code>) + konsumsi <code>&lt;app&gt; plugin install/list/enable/disable/remove</code> (<code>app/plugin_cmd.go</code>) + scaffold <code>plugins/</code> (1 go.mod, <code>connector/_template</code> yg beneran ke-build, README, CI changed-only) semua ADA. Round-trip test lulus (source→zip→VerifyManifest). <b>Belum:</b> repo <code>plugins</code> masih in-tree (belum di-extract), marketplace UI, Fase 5. Tracker: <code>TODO.md</code>.</p>
 </div>
 
 <p class="sub" style="margin-top:40px;text-align:center">Wick Plugin Platform — Architecture Plan · detail lengkap di <code>PLAN.md</code></p>

@@ -15,8 +15,8 @@ import (
 )
 
 // Catalog discovers connector plugins that are AVAILABLE to install from a
-// single curated JSON file checked into the wick-plugins repo's default branch
-// (e.g. raw.githubusercontent.com/yogasw/wick-plugins/master/plugins.json).
+// single curated JSON file checked into the wick repo's default branch
+// (raw.githubusercontent.com/yogasw/wick/master/plugins/plugins.json).
 //
 // This is deliberately NOT the GitHub Releases API: listing is a plain raw-file
 // fetch, so it never hits the API rate limit and needs no token. The JSON
@@ -53,14 +53,14 @@ type Available struct {
 func (a Available) AssetFor(host string) string { return a.Assets[host] }
 
 const (
-	defaultCatalogURL     = "https://raw.githubusercontent.com/yogasw/wick-plugins/master/plugins.json"
+	defaultCatalogURL     = "https://raw.githubusercontent.com/yogasw/wick/master/plugins/plugins.json"
 	defaultCatalogTTL     = 15 * time.Minute
 	catalogRequestTimeout = 20 * time.Second
 )
 
 // DefaultRegistry builds a Catalog from env overrides:
 //
-//	WICK_PLUGIN_CATALOG  full URL to plugins.json (default: wick-plugins master)
+//	WICK_PLUGIN_CATALOG  full URL to plugins.json (default: wick repo master, plugins/plugins.json)
 //
 // Named DefaultRegistry for call-site compatibility with the earlier API.
 func DefaultRegistry() *Catalog {

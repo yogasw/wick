@@ -298,7 +298,7 @@ List connector plugins available in the marketplace catalog. Optionally filter b
 ./bin/myapp plugin search slack
 ```
 
-The catalog is a single `plugins.json` file fetched raw from the wick-plugins repo's default branch (not the GitHub API, so no rate limit and no token needed). Override the catalog URL with `WICK_PLUGIN_CATALOG=<url>`.
+The catalog is a single `plugins.json` file fetched raw from the wick repo's default branch (`plugins/plugins.json`, not the GitHub API — so no rate limit and no token needed). Override the catalog URL with `WICK_PLUGIN_CATALOG=<url>`.
 
 ### `<app> plugin install <name|url|path>`
 

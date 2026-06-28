@@ -16,7 +16,7 @@ import (
 
 // samplePluginMain is a minimal connector plugin source the test compiles. It
 // imports the real pkg/plugin + pkg/connector so the built binary's
-// --dump-manifest produces a genuine envelope — exactly what a wick-plugins repo
+// --dump-manifest produces a genuine envelope — exactly what a plugins repo
 // connector/<name>/main.go looks like.
 const samplePluginMain = `package main
 
@@ -85,7 +85,7 @@ func findModuleRoot(t *testing.T) string {
 func TestBuildOnePlugin_HostTarget(t *testing.T) {
 	moduleRoot := findModuleRoot(t)
 
-	// Lay out a wick-plugins-style repo: go.mod (replace -> local wick) +
+	// Lay out a plugins-style repo: go.mod (replace -> local wick) +
 	// connector/sample/{main.go,VERSION}.
 	repo := t.TempDir()
 	connSrc := filepath.Join(repo, "connector", "sample")

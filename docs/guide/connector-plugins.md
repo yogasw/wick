@@ -4,7 +4,7 @@ outline: deep
 
 # Connector Plugins
 
-Ship a connector as an **external plugin** — a standalone binary that wick downloads and runs in its own process, talking to the core over gRPC. The connector lives in a separate repo (`wick-plugins`), builds and versions on its own schedule, and installs into a running app without recompiling or redeploying wick.
+Ship a connector as an **external plugin** — a standalone binary that wick downloads and runs in its own process, talking to the core over gRPC. The connector lives under `plugins/` in the wick repo, builds and versions on its own schedule, and installs into a running app without recompiling or redeploying wick.
 
 From the LLM's point of view a plugin connector is indistinguishable from a built-in one: same `tool_id` shape in `wick_list` / `wick_execute`, same [encrypted fields](/reference/encrypted-fields), same run audit trail, same [tag-based access control](/guide/connector-module#sharing-connectors-with-tags). The difference is purely how it's packaged and shipped.
 
@@ -14,7 +14,7 @@ Use a plugin when you want a connector to **release independently of the core** 
 
 | | [Connector module](/guide/connector-module) | [Custom connector](/guide/custom-connectors) | Connector plugin |
 |---|---|---|---|
-| Lives in | Go code compiled into wick | A database row (admin UI) | A separate binary in `wick-plugins` |
+| Lives in | Go code compiled into wick | A database row (admin UI) | A separate binary in `plugins` |
 | Runs | In the wick process | In the wick process | Its own subprocess (gRPC) |
 | Add / update | Code change + redeploy | Edit in UI, click Reload | `install` / bump version — no core rebuild |
 | Versioned | With the core | With the database | Independently, per plugin |
@@ -42,7 +42,7 @@ In the manager UI, plugins available to install appear in the **same connector l
 
 ### Where plugins come from
 
-`search` and `install <name>` read a **catalog** — a `plugins.json` file published in the `wick-plugins` repo and fetched directly (not via the GitHub API, so there's no rate limit and no token needed). Each entry points at the per-OS/arch download URL of a GitHub release; the binary is only downloaded when you install. Point wick at a different catalog with `WICK_PLUGIN_CATALOG=<url>`.
+`search` and `install <name>` read a **catalog** — a `plugins.json` file published in the `plugins` repo and fetched directly (not via the GitHub API, so there's no rate limit and no token needed). Each entry points at the per-OS/arch download URL of a GitHub release; the binary is only downloaded when you install. Point wick at a different catalog with `WICK_PLUGIN_CATALOG=<url>`.
 
 You can also install without the catalog — from a local directory, a `.zip`/`.tar.gz` file, or a direct URL:
 
@@ -53,16 +53,16 @@ You can also install without the catalog — from a local directory, a `.zip`/`.
 
 ## Building a plugin
 
-Building is the producer side and uses the **`wick` dev CLI** (`wick plugin build`), run from a `wick-plugins` checkout. See [CLI → wick plugin build](/reference/cli#wick-plugin-build) for the full flag list. In short:
+Building is the producer side and uses the **`wick` dev CLI** (`wick plugin build`), run from a `plugins` checkout. See [CLI → wick plugin build](/reference/cli#wick-plugin-build) for the full flag list. In short:
 
 ```bash
-# from a wick-plugins repo
+# from a plugins repo
 wick plugin build slack --all          # cross-build every OS/arch → one zip each
 ```
 
 Each build produces `slack-<version>-<os>-<arch>.zip` containing the binary plus a `plugin.json` generated **from the binary itself**, so the manifest can never drift from the code. Optionally sign each build (`--sign-key` for an ed25519 manifest signature, `--cosign-key` for a cosign binary signature).
 
-Authoring + release flow (folder layout, the `key` == folder rule, the PR → release CI that publishes a release and updates the catalog) lives in the `wick-plugins` repo's `README.md` and `RELEASE.md`.
+Authoring + release flow (folder layout, the `key` == folder rule, the PR → release CI that publishes a release and updates the catalog) lives in the `plugins` repo's `README.md` and `RELEASE.md`.
 
 ## Security
 

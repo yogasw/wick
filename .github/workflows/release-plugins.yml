@@ -5,17 +5,17 @@ name: Release plugins
 #
 #   - Mirrors release.yml's model (PR → release) so a plugin release is just as
 #     deliberate as a core release — not an automatic push. The path filter
-#     means a PR that only touches wick-plugins/** runs THIS workflow, and the
-#     core release.yml uses paths-ignore: wick-plugins/** so it does NOT run for
+#     means a PR that only touches plugins/** runs THIS workflow, and the
+#     core release.yml uses paths-ignore: plugins/** so it does NOT run for
 #     a plugin-only PR (and vice-versa). One PR → one of the two pipelines.
-#   - Within wick-plugins, only the plugin folders changed in the PR are built
+#   - Within plugins/, only the plugin folders changed in the PR are built
 #     (detect diffs the PR base..head), so one connector edit doesn't rebuild
 #     every connector. A plugin whose <name>/v<version> tag already exists is
 #     skipped (idempotent — same VERSION-gate idea as core).
 #   - Each built plugin is cross-built for every target and its zips attach to a
 #     GitHub Release tagged <name>/v<version>. Those tags start with the plugin
 #     name, so they never match the core 'v*' tag triggers — no cross-firing.
-#   - update-catalog then regenerates wick-plugins/plugins.json from the live
+#   - update-catalog then regenerates plugins/plugins.json from the live
 #     releases and commits it, so the in-app marketplace updates automatically.
 #
 # CAVEAT — branch protection: do NOT mark a PATH-FILTERED workflow as a
@@ -24,19 +24,19 @@ name: Release plugins
 # forever. Keep required checks on the always-run test gate, not on these
 # path-filtered release workflows.
 #
-# wick-plugins is currently NESTED in this repo; when extracted to its own repo,
-# move this file there and drop the `wick-plugins/` path prefixes.
+# plugins/ is a permanent nested module inside the wick repo. Releases + the
+# plugins/plugins.json catalog live in this repo (yogasw/wick).
 
 on:
-  # 1) A plugin-only change: PR into release touching wick-plugins/**. Runs
+  # 1) A plugin-only change: PR into release touching plugins/**. Runs
   #    independently — a plugin still releases without any core release.
   pull_request:
     branches: [release]
     types: [opened, synchronize, reopened]
     paths:
-      - 'wick-plugins/connector/**'
-      - 'wick-plugins/tool/**'
-      - 'wick-plugins/job/**'
+      - 'plugins/connector/**'
+      - 'plugins/tool/**'
+      - 'plugins/job/**'
   # 2) A core release just landed: release.yml fires this via repository_dispatch
   #    AFTER the core tag is published, so plugins rebuild against the new wick
   #    version (they `go install wick@<ver>`). This is the core→plugin ordering.
@@ -120,7 +120,7 @@ jobs:
 
       - id: set
         shell: bash
-        working-directory: wick-plugins
+        working-directory: plugins
         run: |
           set -euo pipefail
           entries='[]'
@@ -168,8 +168,8 @@ jobs:
               # NOT, because errexit still acts on the command-substitution's
               # exit code. So: pipefail off inside, and || true outside.
               names=$( { set +o pipefail; echo "$changed" \
-                | grep "^wick-plugins/$kind/" \
-                | sed "s#^wick-plugins/$kind/##" \
+                | grep "^plugins/$kind/" \
+                | sed "s#^plugins/$kind/##" \
                 | cut -d/ -f1 \
                 | sort -u \
                 | grep -v '^_'; } || true )
@@ -205,8 +205,8 @@ jobs:
         run: |
           go build -o "$RUNNER_TEMP/wick" .
           go test -count=1 -timeout 10m ./pkg/plugin/... ./internal/connectors/plugin/... ./cmd/cli/...
-          # The wick-plugins module is separate (go.work); make sure it compiles.
-          (cd wick-plugins && go build ./... && go build ./connector/_template/)
+          # The plugins module is separate (go.work); make sure it compiles.
+          (cd plugins && go build ./... && go build ./connector/_template/)
 
   build:
     name: Build ${{ matrix.kind }}/${{ matrix.name }}
@@ -234,7 +234,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          v=$(cat "wick-plugins/${{ matrix.kind }}/${{ matrix.name }}/VERSION")
+          v=$(cat "plugins/${{ matrix.kind }}/${{ matrix.name }}/VERSION")
           echo "v=$v" >> "$GITHUB_OUTPUT"
           tag="${{ matrix.name }}/v$v"
           if git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
@@ -246,8 +246,9 @@ jobs:
 
       # Build the wick dev CLI from THIS checkout (not a published release):
       # pkg/plugin isn't in a wick release yet, and the repo-root go.work wires
-      # the nested wick-plugins module to local source. Once wick-plugins is its
-      # own repo, replace this with `go install github.com/yogasw/wick@<ver>`.
+      # the nested plugins module to local source. Once a wick release contains
+      # pkg/plugin, switch this to `go install github.com/yogasw/wick@<ver>` (the
+      # version arrives via the core-released dispatch payload).
       - name: Build wick CLI from source
         if: steps.ver.outputs.skip == 'false'
         run: |
@@ -256,7 +257,7 @@ jobs:
 
       - name: Build all targets → zips
         if: steps.ver.outputs.skip == 'false'
-        working-directory: wick-plugins
+        working-directory: plugins
         run: wick plugin build --kind "${{ matrix.kind }}" "${{ matrix.name }}" --all
 
       - name: Release
@@ -265,7 +266,7 @@ jobs:
         with:
           tag_name: ${{ matrix.name }}/v${{ steps.ver.outputs.v }}
           name: ${{ matrix.name }} v${{ steps.ver.outputs.v }}
-          files: wick-plugins/bin/${{ matrix.name }}-*.zip
+          files: plugins/bin/${{ matrix.name }}-*.zip
           fail_on_unmatched_files: true
           # The release tag is created on the PR head commit. That's the code
           # under review; the same commit lands on master via the normal PR
@@ -346,10 +347,10 @@ jobs:
                   | from_entries
                 )
               })
-          ' /tmp/releases.json > wick-plugins/plugins.json
+          ' /tmp/releases.json > plugins/plugins.json
 
           echo "Regenerated catalog:"
-          cat wick-plugins/plugins.json
+          cat plugins/plugins.json
 
       # Meta.Name + Meta.Description aren't in the bare release JSON, but they ARE
       # inside each release's plugin.json (the zip carries Module.Meta). Read them
@@ -361,7 +362,7 @@ jobs:
         run: |
           set -euo pipefail
           tmp=$(mktemp)
-          cp wick-plugins/plugins.json "$tmp"
+          cp plugins/plugins.json "$tmp"
           n=$(jq 'length' "$tmp")
           for i in $(seq 0 $((n - 1))); do
             url=$(jq -r ".[$i].assets | to_entries[0].value // empty" "$tmp")
@@ -376,20 +377,20 @@ jobs:
             fi
             rm -rf "$work"
           done
-          mv "$tmp" wick-plugins/plugins.json
-          echo "Catalog with names + descriptions:"; cat wick-plugins/plugins.json
+          mv "$tmp" plugins/plugins.json
+          echo "Catalog with names + descriptions:"; cat plugins/plugins.json
 
       - name: Commit catalog to master if changed
         shell: bash
         run: |
           set -euo pipefail
-          if git diff --quiet -- wick-plugins/plugins.json; then
+          if git diff --quiet -- plugins/plugins.json; then
             echo "catalog unchanged"
             exit 0
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add wick-plugins/plugins.json
+          git add plugins/plugins.json
           git commit -m "chore(plugins): regenerate catalog after release [skip ci]"
           # Push to master explicitly (we checked it out above). [skip ci] keeps
           # any push-triggered workflow from re-firing on this chore commit.

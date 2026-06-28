@@ -42,7 +42,7 @@ belong to the running app, not the dev CLI:
 - `<app> plugin remove <key>` — deletes the plugin dir.
 - Tests: `app/plugin_cmd_test.go` (`TestInstallFromDir`, `TestInstallRejectsWrongArch`).
 
-**Starter repo:** `wick-plugins/` (in-tree for now; extract to its own repo
+**Starter repo:** `plugins/` (in-tree for now; extract to its own repo
 later) — 1 `go.mod`, `connector/_template/` (a complete working connector:
 HTTP GET + DELETE), README, and `.github/workflows/release.yml` (changed-only,
 per-kind, `<name>/v<version>` releases).
@@ -55,7 +55,7 @@ per-kind, `<name>/v<version>` releases).
 > `wick build connector`.
 
 **Marketplace catalog (NEW — raw JSON, not GitHub API):** `internal/connectors/plugin/registry.go`
-— `Catalog.List/Resolve` fetches one curated `plugins.json` from the wick-plugins default
+— `Catalog.List/Resolve` fetches one curated `plugins.json` from the plugins default
 branch via **raw.githubusercontent.com** (no API → no rate limit, no token). Each entry
 carries per-os/arch release download URLs; the binary is pulled only on install. ETag +
 15-min cache. Override with `WICK_PLUGIN_CATALOG`. Drives `<app> plugin search`/`install
@@ -76,19 +76,19 @@ templ/HTML stack. httpbin sample: 19→13 MB.
 
 **Skill (NEW):** `.claude/skills/plugin-module/SKILL.md` — the packaging+shipping layer
 on top of `connector-module`/`tool-module` (which still own the module contract). Covers
-wick-plugins layout, key==folder slug rule, `wick plugin build`, `<app> plugin
+plugins layout, key==folder slug rule, `wick plugin build`, `<app> plugin
 install/enable`, the `plugins.json` catalog, and the PR→release CI flow. Every command
 + enforcement claim verified against the code.
 
 **CI split + auto-catalog (NEW):** two isolated pipelines in one repo —
-`release-plugins.yml` (push, path `wick-plugins/**`) builds only changed plugins,
+`release-plugins.yml` (push, path `plugins/**`) builds only changed plugins,
 releases `<name>/v<ver>`, then regenerates `plugins.json` from live releases and
 commits it. Core release (PR→`release` / `v*` tags) is untouched by plugin pushes
-and vice-versa. Flow + constraints in `wick-plugins/RELEASE.md`.
+and vice-versa. Flow + constraints in `plugins/RELEASE.md`.
 
 ### Still open (control surface)
 
-- [ ] Publish the `wick-plugins` repo + its releases (the catalog 404s until `plugins.json` is reachable at the raw URL — expected pre-publish).
+- [ ] Publish the `plugins` repo + its releases (the catalog 404s until `plugins.json` is reachable at the raw URL — expected pre-publish).
 - [ ] Plugin folder names can't contain `-` (catalog parses `<name>-<ver>-<os>-<arch>.zip`); documented in RELEASE.md — could be made robust later.
 
 ## Roadmap (PLAN.md §14)
@@ -100,7 +100,7 @@ and vice-versa. Flow + constraints in `wick-plugins/RELEASE.md`.
 | 2 | Registry + manifest + verify checksum/sig | ✅ done | signed manifest envelope (`pkg/plugin/manifest.go`), ed25519 (`signing.go`), `VerifyManifest`; **driven** by `<app> plugin install` (verify-on-install) + `wick plugin build --sign-key` (sign-on-build) |
 | 3 | Lifecycle: lazy spawn, idle-kill, cap concurrent, LRU evict, enable/disable | ✅ done | lease model + in-flight tracking; cap+bounded-queue; crash backoff/circuit-breaker; UDS hardening; DB enable/disable overlay (`StateStore`); **driven** by `<app> plugin enable/disable/remove` (reloader reconciles) |
 | 4 | Sandbox + streaming + warm pool | ✅ done (scoped) | see honest scoping below |
-| 5 | Buka marketplace pihak ketiga | 🟡 discovery done | `Registry` (GitHub Releases API, curated repo, ETag cache) + `<app> plugin search`/`install <name>` shipped. **Missing:** the `wick-plugins` registry repo published with releases + admin marketplace UI + signing trust policy for 3rd-party |
+| 5 | Buka marketplace pihak ketiga | 🟡 discovery done | `Registry` (GitHub Releases API, curated repo, ETag cache) + `<app> plugin search`/`install <name>` shipped. **Missing:** the `plugins` registry repo published with releases + admin marketplace UI + signing trust policy for 3rd-party |
 
 ## Fase 4 — honest scoping (what shipped vs deferred)
 
@@ -117,17 +117,17 @@ and vice-versa. Flow + constraints in `wick-plugins/RELEASE.md`.
 | Item | PLAN ref | Status | Notes |
 |---|---|---|---|
 | **`<app> plugin` CLI (consumption)** | §6.1 | ✅ done | `app/plugin_cmd.go` — `install`/`list`/`enable`/`disable`/`remove`; wires `SetEnabled` + `VerifyManifest`; reloader poller reconciles. See SHIPPED section at top |
-| **go.work + CI integration** | §21 | ✅ done | repo-root `go.work` (`use . ./wick-plugins`) builds the nested module against local `pkg/plugin`; release.yml `unit-tests` job builds the scaffold (`connector/_template` by explicit path — `_`-dirs are invisible to `go ./...`) so a `pkg/plugin` change that breaks the author contract fails CI |
-| Marketplace catalog (raw JSON, NOT GitHub API) | §6.2 | ✅ done | `internal/connectors/plugin/registry.go` — `Catalog.List/Resolve` fetches a single curated `plugins.json` from the wick-plugins default branch via **raw.githubusercontent.com** (no API → no rate limit, no token), ETag + 15min cache. Each entry carries per-os/arch release download URLs; binary pulled only on install. Env: `WICK_PLUGIN_CATALOG`. Tests in `registry_test.go` |
+| **go.work + CI integration** | §21 | ✅ done | repo-root `go.work` (`use . ./plugins`) builds the nested module against local `pkg/plugin`; release.yml `unit-tests` job builds the scaffold (`connector/_template` by explicit path — `_`-dirs are invisible to `go ./...`) so a `pkg/plugin` change that breaks the author contract fails CI |
+| Marketplace catalog (raw JSON, NOT GitHub API) | §6.2 | ✅ done | `internal/connectors/plugin/registry.go` — `Catalog.List/Resolve` fetches a single curated `plugins.json` from the plugins default branch via **raw.githubusercontent.com** (no API → no rate limit, no token), ETag + 15min cache. Each entry carries per-os/arch release download URLs; binary pulled only on install. Env: `WICK_PLUGIN_CATALOG`. Tests in `registry_test.go` |
 | Admin UI: marketplace in the connector list | §6.2 | ✅ done | Merged into `ConnectorsIndex.svelte` (ONE list, not a separate page): built-in + downloaded plugins render as normal cards; catalog entries not yet installed show under "Available to install" with a Download button → `installPlugin` → reloader registers within ~5s. Backend: `internal/manager/plugins_api.go` (admin-gated GET/install/enable/disable/remove). FE builds clean |
 | Plugin binary size | §8/§9 | ✅ addressed | `wick plugin build` strips `-s -w` (19→13MB). Decoupled `pkg/connector`/`pkg/job` from `pkg/tool` (moved `DefaultTag`→`pkg/entity`, alias kept) so plugins no longer drag templ/HTML stack. 13MB is the gRPC+protobuf+go-plugin floor (Terraform providers are 15-30MB) — can't go lower without dropping gRPC. (Further size cuts deferred per user) |
 | proto_version range negotiation | §19.2 | ✅ done | `MinProtoVersion..ProtoVersion` inclusive range; `VerifyManifest` range-checks; `SupportedProtoVersions()` builds `VersionedPlugins`; `ProtoVersionSupported()`. Adding a future v2 = register its descriptor + bump the const. Tests in `handshake_test.go` |
 | Generalize platform: tool + job kinds | §18 | 🟡 contract done | `Manifest.Kind` (connector\|tool\|job) + `NormalizeKind`; `wick plugin build --kind` stamps it; loader/reloader route by kind (skip non-connector in the connectors dir). Reuses the Connector gRPC service for all kinds (no new proto — protoc unavailable). **Deferred:** host-side tool/job execution adapters (their own runners) |
-| Polyglot plugins (non-Go) | §16 | ✅ documented | `wick-plugins/POLYGLOT.md` — full language-agnostic contract: go-plugin handshake line format, magic cookie, AutoMTLS, the proto service, hand-written manifest. Implementable today; no Go-specific assumption in the wire protocol |
+| Polyglot plugins (non-Go) | §16 | ✅ documented | `plugins/POLYGLOT.md` — full language-agnostic contract: go-plugin handshake line format, magic cookie, AutoMTLS, the proto service, hand-written manifest. Implementable today; no Go-specific assumption in the wire protocol |
 | cosign signing | §13, §15 | ✅ done | `wick plugin build --cosign-key` signs the binary via the **external cosign CLI** (sidecar `.sig`/`.pem` in the zip), soft-skips with a warning if cosign is absent. Intentionally NOT a sigstore-go dependency — that would re-bloat every plugin binary. ed25519 manifest signing (`--sign-key`) unchanged |
-| **`wick-plugins` monorepo starter** | §21 | 🟡 in-tree | scaffold at `wick-plugins/` (nested module). Repo-root `go.work` wires it to this checkout's `pkg/plugin` — so its `go.mod` is **clean (no `replace`)** and extract-ready. `connector/_template/` (working connector), README, CI. **Still to do:** extract to its own repo once a wick release contains `pkg/plugin` (then bump the `require` to that version; nothing else changes) |
+| **`plugins` monorepo starter** | §21 | 🟡 in-tree | scaffold at `plugins/` (nested module). Repo-root `go.work` wires it to this checkout's `pkg/plugin` — so its `go.mod` is **clean (no `replace`)** and extract-ready. `connector/_template/` (working connector), README, CI. **Still to do:** extract to its own repo once a wick release contains `pkg/plugin` (then bump the `require` to that version; nothing else changes) |
 | **`wick plugin build` subcommand** | §21.2 | ✅ done | `cmd/cli/plugin.go`; generic over `--kind connector\|tool\|job`; compiles `<kind>/<name>/`, `--dump-manifest`, **zip** output; `--all` cross-build, `--changed --since`, `--all-plugins`, `--sign-key`. Round-trip test in `cmd/cli/plugin_test.go`. (NOT `wick build connector` — generic + on `plugin` group) |
-| CI/CD: changed-only build & release + auto-catalog | §21.4 | ✅ done | `.github/workflows/release-plugins.yml` (ROOT). **Gated like core: PR → `release`** (not push), `paths: wick-plugins/connector\|tool\|job/**`; core `release.yml` gets `paths-ignore: wick-plugins/**` → plugin-only PR runs only plugin pipeline, core-only only core, mixed both. Chain: **`guard` (reject fork + head=master + author=admin via ADMIN_TOKEN) → `detect` (PR base..head diff) → `test` (hard gate) → `build` (matrix, idempotent skip if tag exists, ADMIN_TOKEN release) → `update-catalog` (checks out master, regenerates `plugins.json` from releases API + backfills name/desc from released zips, pushes master with ADMIN_TOKEN, `[skip ci]`)**. Audited twice (correctness + security): fork-PR/secret-exfil closed by `guard`, pipefail-crash + non-numeric-version-jq-crash fixed, darwin cross-build verified (pure Go). Caveat: don't make path-filtered workflows required checks; needs `ADMIN_TOKEN` secret. See `wick-plugins/RELEASE.md` |
+| CI/CD: changed-only build & release + auto-catalog | §21.4 | ✅ done | `.github/workflows/release-plugins.yml` (ROOT). **Gated like core: PR → `release`** (not push), `paths: plugins/connector\|tool\|job/**`; core `release.yml` gets `paths-ignore: plugins/**` → plugin-only PR runs only plugin pipeline, core-only only core, mixed both. Chain: **`guard` (reject fork + head=master + author=admin via ADMIN_TOKEN) → `detect` (PR base..head diff) → `test` (hard gate) → `build` (matrix, idempotent skip if tag exists, ADMIN_TOKEN release) → `update-catalog` (checks out master, regenerates `plugins.json` from releases API + backfills name/desc from released zips, pushes master with ADMIN_TOKEN, `[skip ci]`)**. Audited twice (correctness + security): fork-PR/secret-exfil closed by `guard`, pipefail-crash + non-numeric-version-jq-crash fixed, darwin cross-build verified (pure Go). Caveat: don't make path-filtered workflows required checks; needs `ADMIN_TOKEN` secret. See `plugins/RELEASE.md` |
 | Core binary slimming (build-tags) | — | ⬜ dropped | investigated: connectors are only ~1MB of the 45MB binary (substrate stays); real weight is embedded frontend assets (~22MB). Not worth it for connectors |
 
 ## Config knobs shipped

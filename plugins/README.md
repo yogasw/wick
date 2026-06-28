@@ -1,4 +1,4 @@
-# wick-plugins
+# plugins
 
 External plugins for [wick](https://github.com/yogasw/wick), built and released
 independently of the core binary. One folder per plugin, grouped by kind.
@@ -14,7 +14,7 @@ independently of the core binary. One folder per plugin, grouped by kind.
 ## Layout
 
 ```
-wick-plugins/
+plugins/
 ├── go.mod                 # ONE module — every plugin shares deps + the wick version
 ├── connector/
 │   └── _template/         # scaffold: copy this to start a new connector
@@ -32,12 +32,10 @@ Each `<kind>/<name>/` is its own `package main` that calls `wickplugin.Serve`.
 One `go.mod` at the root keeps every plugin on the same wick version and one
 `go.sum` — add a plugin by copying a folder, not by `go mod init`.
 
-> **While this lives inside the wick repo** (not yet extracted), the repo-root
-> `go.work` resolves `github.com/yogasw/wick` to the local checkout, so builds
-> use the in-tree `pkg/plugin` even though it isn't in a published wick release
-> yet. That's why `go.mod` has **no `replace`** — it's already in its
-> extract-ready shape. When `pkg/plugin` ships in a wick release, bump the
-> `require` to that version; nothing else changes.
+> This is a **nested Go module inside the wick repo** (it stays here — not a
+> separate repo). The repo-root `go.work` resolves `github.com/yogasw/wick` to
+> the local checkout, so builds use the in-tree `pkg/plugin` even before it's in
+> a published wick release. That's why `go.mod` needs **no `replace`**.
 
 > `connector/_template` starts with `_` so Go tooling (`go build ./...`) and
 > `wick plugin build --all-plugins` skip it — it's a scaffold, not a shippable
@@ -101,7 +99,7 @@ shows under "Available to install" in the connector list. It is a plain JSON fil
 on the default branch, fetched raw:
 
 ```
-https://raw.githubusercontent.com/yogasw/wick-plugins/master/plugins.json
+https://raw.githubusercontent.com/yogasw/wick/master/plugins/plugins.json
 ```
 
 Each entry carries the connector's name/description/version and a direct

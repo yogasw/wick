@@ -28,7 +28,7 @@ var pluginBuildTargets = []string{
 }
 
 // pluginKinds are the plugin kinds wick understands. Each maps 1:1 to a source
-// folder in a wick-plugins monorepo (connector/, tool/, job/). Only connector
+// folder in a plugins monorepo (connector/, tool/, job/). Only connector
 // has a host contract today; tool/job build identically (the binary's own
 // --dump-manifest carries its declared kind) and are accepted now so the repo
 // layout and CLI are forward-compatible.
@@ -49,9 +49,9 @@ func pluginCmd() *cobra.Command {
 		Short: "Build wick plugins (connector/tool/job) for release",
 		Long: `Production-side tooling for the wick plugin platform.
 
-Run this from a wick-plugins monorepo (one folder per plugin, grouped by kind):
+Run this from a plugins monorepo (one folder per plugin, grouped by kind):
 
-  wick-plugins/
+  plugins/
   ├── connector/  { _template/, gmail/, slack/ }
   ├── tool/       (later)
   └── job/        (later)
@@ -63,7 +63,7 @@ app binary itself: '<your-app> plugin install|list|enable|disable|remove'.`,
 	return cmd
 }
 
-// pluginBuildCmd compiles plugin binaries from a wick-plugins-style monorepo
+// pluginBuildCmd compiles plugin binaries from a plugins-style monorepo
 // (<kind>/<name>/main.go each a `package main` that calls plugin.Serve) and
 // packs each built binary plus its generated plugin.json into a release zip:
 //

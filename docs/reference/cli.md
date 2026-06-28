@@ -284,9 +284,9 @@ Used by [`release.yml`](./build#auto-bumping-the-version) when `AUTO_VERSION=tru
 
 ### `wick plugin build`
 
-Compile connector plugins from a `wick-plugins`-style monorepo and pack each binary plus its auto-generated manifest (`plugin.json`) into a release zip: `<name>-<version>-<goos>-<goarch>.zip`.
+Compile connector plugins from a `plugins`-style monorepo and pack each binary plus its auto-generated manifest (`plugin.json`) into a release zip: `<name>-<version>-<goos>-<goarch>.zip`.
 
-Run this from the root of a `wick-plugins` monorepo where plugins live under `connector/<name>/main.go`.
+Run this from the root of a `plugins` monorepo where plugins live under `connector/<name>/main.go`.
 
 ```bash
 wick plugin build gmail slack           # build specific plugins for the host arch
