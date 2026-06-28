@@ -601,8 +601,8 @@ jobs:
           name: ${{ needs.generate-summary.outputs.title }}
           body: ${{ steps.body.outputs.body }}
           # Core wick is the release people come here to download — always claim
-          # "Latest". Plugin releases set make_latest: false so they never steal it.
-          make_latest: true
+          # "Latest". Plugin releases set make_latest: "false" so they never steal it.
+          make_latest: "true"
 
   merge-to-master:
     name: Merge to Master
