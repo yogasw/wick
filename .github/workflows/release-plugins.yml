@@ -42,6 +42,15 @@ on:
 permissions:
   contents: write # create releases (the catalog commit uses ADMIN_TOKEN — see below)
 
+# ONE shared concurrency group across ALL wick release workflows (core + plugin)
+# so only a single run executes at a time globally — nothing else can touch the
+# caches (delete+save) concurrently. cancel-in-progress: false → a second run
+# queues behind the first instead of being cancelled (never abort a release
+# mid-flight).
+concurrency:
+  group: wick-workflow
+  cancel-in-progress: false
+
 # secrets.ADMIN_TOKEN: a PAT that can push to the protected master branch. The
 # default GITHUB_TOKEN cannot push to a protected branch and (on pull_request)
 # `github.ref_name` is the PR merge ref, not a real branch — both reasons the
@@ -111,25 +120,71 @@ jobs:
     needs: detect
     if: needs.detect.outputs.any == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      actions: write # gh cache delete (refresh caches under stable keys)
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - id: go
+        uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      # The *_templ.go files are gitignored — generate them before building the
-      # wick CLI, or packages like internal/*/view won't compile (same step the
-      # core release runs).
-      - name: Generate templ
+          cache: true # module download cache (keyed on go.sum by setup-go)
+
+      # Stable cache keys (no version suffix). Each run: restore → build →
+      # delete the key → save it fresh. actions/cache is immutable per key, so
+      # the delete-then-save is what lets the SAME key always hold the latest
+      # contents. If a tool/dep version changes, the next run just re-downloads
+      # and the fresh result is saved back under the same key — self-healing,
+      # no manual version bump.
+      - name: Restore Go build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build
+
+      - name: Restore templ binary
+        id: templ-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ
+      - name: Install templ
+        if: steps.templ-cache.outputs.cache-hit != 'true'
         run: |
-          templ_ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
-          go install github.com/a-h/templ/cmd/templ@${templ_ver}
-          templ generate ./...
+          ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install github.com/a-h/templ/cmd/templ@${ver}
+
+      # *_templ.go is gitignored — generate before building the wick CLI or the
+      # internal/*/view packages won't compile.
+      - name: Generate templ
+        run: templ generate ./...
       - name: Test plugin platform + build tooling
         run: |
           go build -o "$RUNNER_TEMP/wick" .
           go test -count=1 -timeout 10m ./pkg/plugin/... ./internal/connectors/plugin/... ./cmd/cli/...
           # The plugins module is separate (go.work); make sure it compiles.
           (cd plugins && go build ./... && go build ./connector/_template/)
+
+      # Refresh the caches under their stable keys: delete the old, save the new.
+      - name: Refresh caches
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh cache delete go-build --repo "${{ github.repository }}" || true
+          gh cache delete templ --repo "${{ github.repository }}" || true
+      - name: Save Go build cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build
+      - name: Save templ binary
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ
 
   build:
     name: Build ${{ matrix.kind }}/${{ matrix.name }}
@@ -144,9 +199,11 @@ jobs:
         with:
           fetch-depth: 0 # need tags to check whether this version is already out
 
-      - uses: actions/setup-go@v5
+      - id: go
+        uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true # module download cache (keyed on go.sum by setup-go)
 
       # Idempotent gate (same idea as core's VERSION/tag check): if the tag
       # <name>/v<version> already exists, this version is already released — skip
@@ -166,6 +223,29 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # RESTORE-ONLY (no save/delete). The matrix runs many legs in parallel —
+      # if each refreshed the shared 'go-build'/'templ' key they'd race. The test
+      # job is the single writer; here we only READ the caches it maintains.
+      # templ is installed on a miss but not saved (test job owns saving it).
+      - name: Restore Go build cache
+        if: steps.ver.outputs.skip == 'false'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build
+      - name: Restore templ binary
+        if: steps.ver.outputs.skip == 'false'
+        id: templ-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ
+      - name: Install templ
+        if: steps.ver.outputs.skip == 'false' && steps.templ-cache.outputs.cache-hit != 'true'
+        run: |
+          ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install github.com/a-h/templ/cmd/templ@${ver}
 
       # Build the wick dev CLI from THIS checkout (not a published release):
       # pkg/plugin isn't in a wick release yet, and the repo-root go.work wires
