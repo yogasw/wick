@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/yogasw/wick/internal/safeexec"
 	"github.com/yogasw/wick/pkg/connector"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
@@ -24,12 +24,12 @@ func buildEcho(tb testing.TB) string {
 		tb.Fatal(err)
 	}
 	bin := filepath.Join(connDir, "echo")
-	build := exec.Command("go", "build", "-o", bin, "github.com/yogasw/wick/cmd/plugins/echo")
+	build := safeexec.Command("go", "build", "-o", bin, "github.com/yogasw/wick/cmd/plugins/echo")
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		tb.Fatalf("build echo: %v", err)
 	}
-	manifest, err := exec.Command(bin, "--dump-manifest").Output()
+	manifest, err := safeexec.Command(bin, "--dump-manifest").Output()
 	if err != nil {
 		tb.Fatalf("dump-manifest: %v", err)
 	}
@@ -47,12 +47,12 @@ func buildEchoSigned(t *testing.T, keyPath string) string {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(connDir, "echo")
-	build := exec.Command("go", "build", "-o", bin, "github.com/yogasw/wick/cmd/plugins/echo")
+	build := safeexec.Command("go", "build", "-o", bin, "github.com/yogasw/wick/cmd/plugins/echo")
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		t.Fatalf("build echo: %v", err)
 	}
-	manifest, err := exec.Command(bin, "--dump-manifest", "--sign-key", keyPath).Output()
+	manifest, err := safeexec.Command(bin, "--dump-manifest", "--sign-key", keyPath).Output()
 	if err != nil {
 		t.Fatalf("dump-manifest: %v", err)
 	}
