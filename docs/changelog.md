@@ -6,12 +6,26 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.26.2](https://github.com/yogasw/wick/compare/v0.26.1...v0.26.2) — Release Management
+
+_Released on 2026-06-28_
+
 ### Fixed
 
 *   Version check and Software Update page no longer show a misleading update badge when GitHub `/releases/latest` returns a plugin release tag (`<name>/vX.Y.Z`) instead of a core wick tag. The check now degrades gracefully — showing the current version without a badge — rather than comparing against an unrelated tag.
 *   The "Wick vX.Y.Z" badge in the sidebar now links to the changelog page instead of the site homepage.
+*   **Release Workflow Improvements:**
+    *   **Reliability:** Eliminated release-artifacts job cancellations by configuring per-workflow concurrency for release pipelines, preventing races between simultaneous releases.
+    *   **Stability:** Ensured core Wick releases always receive the "Latest" badge by explicitly setting `make_latest: true` for core and `false` for plugin releases.
+    *   **Robustness:** Added `update-branch` and a 3-attempt retry mechanism to the `merge-to-master` step, resolving 405 "Base branch was modified" errors.
+    *   **Performance:** Enabled Go's test cache by removing the `-count=1` flag from `go test` commands, allowing unchanged packages to be skipped during subsequent test runs. Removed redundant `go build` steps before tests.
 
 ---
+
 
 ## [v0.26.1](https://github.com/yogasw/wick/compare/v0.26.0...v0.26.1) — Plugin Builds
 
