@@ -1,0 +1,365 @@
+name: Release plugins
+
+# Plugin release pipeline — SEPARATE from the core wick release, but gated the
+# SAME way: a PR into the `release` branch.
+#
+#   - Mirrors release.yml's model (PR → release) so a plugin release is just as
+#     deliberate as a core release — not an automatic push. The path filter
+#     means a PR that only touches wick-plugins/** runs THIS workflow, and the
+#     core release.yml uses paths-ignore: wick-plugins/** so it does NOT run for
+#     a plugin-only PR (and vice-versa). One PR → one of the two pipelines.
+#   - Within wick-plugins, only the plugin folders changed in the PR are built
+#     (detect diffs the PR base..head), so one connector edit doesn't rebuild
+#     every connector. A plugin whose <name>/v<version> tag already exists is
+#     skipped (idempotent — same VERSION-gate idea as core).
+#   - Each built plugin is cross-built for every target and its zips attach to a
+#     GitHub Release tagged <name>/v<version>. Those tags start with the plugin
+#     name, so they never match the core 'v*' tag triggers — no cross-firing.
+#   - update-catalog then regenerates wick-plugins/plugins.json from the live
+#     releases and commits it, so the in-app marketplace updates automatically.
+#
+# CAVEAT — branch protection: do NOT mark a PATH-FILTERED workflow as a
+# "required status check". When the path doesn't match, GitHub never starts the
+# check, and a required check that never runs leaves the PR stuck "pending"
+# forever. Keep required checks on the always-run test gate, not on these
+# path-filtered release workflows.
+#
+# wick-plugins is currently NESTED in this repo; when extracted to its own repo,
+# move this file there and drop the `wick-plugins/` path prefixes.
+
+on:
+  pull_request:
+    branches: [release]
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'wick-plugins/connector/**'
+      - 'wick-plugins/tool/**'
+      - 'wick-plugins/job/**'
+  workflow_dispatch:
+    inputs:
+      name:
+        description: 'Plugin folder name to force-build (e.g. httpbin)'
+        required: true
+      kind:
+        description: 'connector | tool | job'
+        required: false
+        default: connector
+
+permissions:
+  contents: write # create releases (the catalog commit uses ADMIN_TOKEN — see below)
+
+# secrets.ADMIN_TOKEN: a PAT that can push to the protected master branch. The
+# default GITHUB_TOKEN cannot push to a protected branch and (on pull_request)
+# `github.ref_name` is the PR merge ref, not a real branch — both reasons the
+# catalog commit must use ADMIN_TOKEN and target master explicitly, exactly like
+# the core release workflow.
+
+jobs:
+  # SECURITY GATE — must pass before any plugin code is compiled/run or any
+  # secret/token is used. Mirrors release.yml's check-source-branch: this
+  # workflow runs ADMIN_TOKEN and pushes to master, so it must NOT run for a
+  # fork PR or a non-admin author.
+  #
+  #   - head.repo must be THIS repo (rejects forks — a fork PR's head.repo
+  #     differs, and we never want fork code near ADMIN_TOKEN),
+  #   - PR head branch must be `master` (release flow is master → release),
+  #   - PR author must have admin permission.
+  #
+  # On workflow_dispatch (manual, already trusted — only collaborators can
+  # dispatch) the gate auto-passes.
+  guard:
+    name: Verify trusted source
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject fork / non-master head
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (pr.head.repo.full_name !== context.repo.owner + '/' + context.repo.repo) {
+              core.setFailed(`PR head is a fork (${pr.head.repo.full_name}) — plugin release runs trusted-only.`);
+              return;
+            }
+            if (pr.head.ref !== 'master') {
+              core.setFailed(`PR must be from the master branch, was: ${pr.head.ref}`);
+            }
+      - name: Verify PR author is admin
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.ADMIN_TOKEN }}
+          script: |
+            const { data: perm } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.payload.pull_request.user.login,
+            });
+            if (perm.permission !== 'admin') {
+              core.setFailed(`PR author ${context.payload.pull_request.user.login} is not admin (${perm.permission}).`);
+            }
+
+  detect:
+    name: Detect changed plugins
+    needs: guard
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+      any: ${{ steps.set.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need history to diff the PR range
+
+      - id: set
+        shell: bash
+        working-directory: wick-plugins
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            entries='[{"kind":"${{ github.event.inputs.kind }}","name":"${{ github.event.inputs.name }}"}]'
+          else
+            # Distinct <kind>/<name> folders changed in THIS PR (base..head) that
+            # still have a main.go (skip _ scaffolds). git paths are repo-relative
+            # so strip the wick-plugins/ prefix. The PR base sha comes from the
+            # event; guard against it being empty (non-PR context) so the diff
+            # isn't malformed.
+            base="${{ github.event.pull_request.base.sha }}"
+            if [ -z "$base" ]; then
+              echo "no PR base sha — nothing to detect"
+              changed=""
+            else
+              changed=$(git diff --name-only "$base"...HEAD 2>/dev/null || git diff --name-only "$base" 2>/dev/null || true)
+            fi
+            entries='[]'
+            for kind in connector tool job; do
+              # Disable pipefail for this extraction: a grep that matches nothing
+              # exits 1, and under `set -o pipefail` that would kill the whole
+              # job even though "no plugin folder changed" is a normal outcome.
+              names=$(set +o pipefail; echo "$changed" \
+                | grep "^wick-plugins/$kind/" \
+                | sed "s#^wick-plugins/$kind/##" \
+                | cut -d/ -f1 \
+                | sort -u \
+                | grep -v '^_')
+              for n in $names; do
+                if [ -f "$kind/$n/main.go" ]; then
+                  entries=$(echo "$entries" | jq -c --arg k "$kind" --arg n "$n" '. + [{kind:$k,name:$n}]')
+                fi
+              done
+            done
+          fi
+          echo "matrix={\"include\":$entries}" >> "$GITHUB_OUTPUT"
+          if [ "$(echo "$entries" | jq 'length')" -gt 0 ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Building: $entries"
+
+  # Hard test gate before anything is released — mirrors core release.yml, where
+  # the release is blocked unless the suite passes. Per-PR CI is disabled, so
+  # this is the only automated check guarding a plugin release.
+  test:
+    name: Plugin platform tests
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test plugin platform + build tooling
+        run: |
+          go build -o "$RUNNER_TEMP/wick" .
+          go test -count=1 -timeout 10m ./pkg/plugin/... ./internal/connectors/plugin/... ./cmd/cli/...
+          # The wick-plugins module is separate (go.work); make sure it compiles.
+          (cd wick-plugins && go build ./... && go build ./connector/_template/)
+
+  build:
+    name: Build ${{ matrix.kind }}/${{ matrix.name }}
+    needs: [detect, test]
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need tags to check whether this version is already out
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Idempotent gate (same idea as core's VERSION/tag check): if the tag
+      # <name>/v<version> already exists, this version is already released — skip
+      # build + release so re-running the PR on synchronize doesn't duplicate it.
+      # Bump the plugin's VERSION to cut a new release.
+      - name: Resolve version + check tag
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          v=$(cat "wick-plugins/${{ matrix.kind }}/${{ matrix.name }}/VERSION")
+          echo "v=$v" >> "$GITHUB_OUTPUT"
+          tag="${{ matrix.name }}/v$v"
+          if git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "tag $tag already exists — skipping"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Build the wick dev CLI from THIS checkout (not a published release):
+      # pkg/plugin isn't in a wick release yet, and the repo-root go.work wires
+      # the nested wick-plugins module to local source. Once wick-plugins is its
+      # own repo, replace this with `go install github.com/yogasw/wick@<ver>`.
+      - name: Build wick CLI from source
+        if: steps.ver.outputs.skip == 'false'
+        run: |
+          go build -o "$RUNNER_TEMP/wick" .
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Build all targets → zips
+        if: steps.ver.outputs.skip == 'false'
+        working-directory: wick-plugins
+        run: wick plugin build --kind "${{ matrix.kind }}" "${{ matrix.name }}" --all
+
+      - name: Release
+        if: steps.ver.outputs.skip == 'false'
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0 (pinned, matches core)
+        with:
+          tag_name: ${{ matrix.name }}/v${{ steps.ver.outputs.v }}
+          name: ${{ matrix.name }} v${{ steps.ver.outputs.v }}
+          files: wick-plugins/bin/${{ matrix.name }}-*.zip
+          fail_on_unmatched_files: true
+          # The release tag is created on the PR head commit. That's the code
+          # under review; the same commit lands on master via the normal PR
+          # merge. ADMIN_TOKEN so tag creation isn't blocked by ruleset config.
+          token: ${{ secrets.ADMIN_TOKEN }}
+
+  update-catalog:
+    name: Regenerate plugins.json
+    needs: build
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # Check out MASTER (where plugins.json lives and where the raw catalog URL
+      # reads from), NOT the PR ref. ADMIN_TOKEN can push to protected master.
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.ADMIN_TOKEN }}
+
+      # No Go here: the catalog is built from the releases API (gh + jq) and the
+      # names/descriptions are read from the released zips (curl + unzip + jq).
+      # Nothing reads the source tree, so a brand-new plugin not yet on master is
+      # handled correctly.
+
+      # Rebuild the catalog from the LIVE releases: list every <name>/v<ver>
+      # release + its zip assets, fold to one entry per plugin (latest version),
+      # and map each zip's os/arch to its download URL. This is the source the
+      # in-app marketplace reads, so it always reflects what's actually
+      # downloadable.
+      - name: Generate plugins.json from releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # All releases (paginated), newest first.
+          gh api --paginate "repos/$REPO/releases" > /tmp/releases.json
+
+          # Fold into one entry per plugin KEY (= the tag prefix, which equals
+          # the source folder = Meta.Key), keeping the highest semver. Asset
+          # names are <key>-<ver>-<goos>-<goarch>.zip. `name` is seeded to the
+          # key and refined to Meta.Name by the next step (which has the
+          # manifest); `description` likewise.
+          jq -s '
+            # Tolerant version sort key: each dot segment → its leading digits as
+            # a number (so "0.1.0-rc1" → [0,1,0], not a tonumber crash); missing
+            # → 0. Good enough to pick the highest release per plugin.
+            def vkey: split(".") | map((capture("^(?<d>[0-9]+)").d // "0") | tonumber);
+            add
+            | map(select(.tag_name | test("/v")))
+            | map({
+                key: (.tag_name | split("/")[0]),
+                version: (.tag_name | split("/v")[1]),
+                assets: (.assets // [])
+              })
+            | reduce .[] as $r ({};
+                ($r.key) as $k
+                | (.[$k].version // "0") as $cur
+                | if ($r.version | vkey) > ($cur | vkey)
+                  then . + {($k): $r} else . end)
+            | to_entries
+            | map(.value)
+            | sort_by(.key)
+            | map({
+                key,
+                name: .key,
+                description: "",
+                version,
+                assets: (
+                  .assets
+                  | map(select(.name | endswith(".zip")))
+                  | map({
+                      key: (.name | sub("^[^-]+-[^-]+-"; "") | sub("\\.zip$"; "") | sub("-"; "/")),
+                      value: .browser_download_url
+                    })
+                  | from_entries
+                )
+              })
+          ' /tmp/releases.json > wick-plugins/plugins.json
+
+          echo "Regenerated catalog:"
+          cat wick-plugins/plugins.json
+
+      # Meta.Name + Meta.Description aren't in the bare release JSON, but they ARE
+      # inside each release's plugin.json (the zip carries Module.Meta). Read them
+      # from the RELEASED ARTIFACT, not the source tree — a brand-new plugin's
+      # folder may not be on master yet when this runs, but its release already
+      # exists. Download the first asset, unzip plugin.json, lift Meta.
+      - name: Backfill name + description from released manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp)
+          cp wick-plugins/plugins.json "$tmp"
+          n=$(jq 'length' "$tmp")
+          for i in $(seq 0 $((n - 1))); do
+            url=$(jq -r ".[$i].assets | to_entries[0].value // empty" "$tmp")
+            [ -n "$url" ] || continue
+            work=$(mktemp -d)
+            if curl -fsSL "$url" -o "$work/p.zip" && unzip -oq "$work/p.zip" plugin.json -d "$work" 2>/dev/null; then
+              nm=$(jq -r '.module.Meta.Name // ""' "$work/plugin.json")
+              desc=$(jq -r '.module.Meta.Description // ""' "$work/plugin.json")
+              jq --argjson i "$i" --arg n "$nm" --arg d "$desc" \
+                '.[$i] |= (.name = (if $n=="" then .name else $n end) | .description = $d)' \
+                "$tmp" > "$tmp.next" && mv "$tmp.next" "$tmp"
+            fi
+            rm -rf "$work"
+          done
+          mv "$tmp" wick-plugins/plugins.json
+          echo "Catalog with names + descriptions:"; cat wick-plugins/plugins.json
+
+      - name: Commit catalog to master if changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- wick-plugins/plugins.json; then
+            echo "catalog unchanged"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add wick-plugins/plugins.json
+          git commit -m "chore(plugins): regenerate catalog after release [skip ci]"
+          # Push to master explicitly (we checked it out above). [skip ci] keeps
+          # any push-triggered workflow from re-firing on this chore commit.
+          git push origin HEAD:master

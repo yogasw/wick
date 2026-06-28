@@ -87,7 +87,19 @@ func loadWith(dir string, register registerFn, mgr *Manager, enabled func(string
 	}
 	count := 0
 	for _, f := range found {
+		if err := wickplugin.ValidateKey(f.Key); err != nil {
+			log.Warn().Str("plugin", f.Key).Err(err).Msg("connector plugin loader: skipped (invalid key)")
+			continue
+		}
 		if enabled != nil && !enabled(f.Key) {
+			continue
+		}
+		// Route by kind: this loader owns connectors only. A tool/job manifest
+		// that lands in the connectors dir is skipped (not mis-registered as a
+		// connector) — tool/job kinds get their own loader + dir when their
+		// host adapters land (§18).
+		if k := wickplugin.NormalizeKind(f.Manifest.Kind); k != wickplugin.KindConnector {
+			log.Warn().Str("plugin", f.Key).Str("kind", k).Msg("connector plugin loader: skipped non-connector kind")
 			continue
 		}
 		if err := wickplugin.VerifyManifest(f.Manifest, f.BinaryPath); err != nil {

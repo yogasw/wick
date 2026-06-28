@@ -1,4 +1,4 @@
-package app
+package plugin
 
 import (
 	"crypto/sha256"
@@ -13,7 +13,9 @@ import (
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
-func makeSrc(t *testing.T, key, content string, arch string) string {
+// makeSrc lays out a {binary, plugin.json} dir the installer accepts: the
+// manifest's sha256 matches the binary content and os_arch is `arch`.
+func makeSrc(t *testing.T, key, content, arch string) string {
 	t.Helper()
 	src := t.TempDir()
 	bin := filepath.Join(src, key)
@@ -43,7 +45,7 @@ func TestInstallFromDir(t *testing.T) {
 	src := makeSrc(t, "demo", "binbytes", host)
 	dest := t.TempDir()
 
-	if err := installPlugin(src, dest); err != nil {
+	if err := InstallFromDir(src, dest); err != nil {
 		t.Fatalf("install should succeed: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "demo", "demo")); err != nil {
@@ -58,7 +60,7 @@ func TestInstallRejectsWrongArch(t *testing.T) {
 	t.Setenv("WICK_PLUGIN_REQUIRE_SIGNATURE", "0")
 	src := makeSrc(t, "demo", "binbytes", "plan9/foo")
 	dest := t.TempDir()
-	if err := installPlugin(src, dest); err == nil {
+	if err := InstallFromDir(src, dest); err == nil {
 		t.Fatal("install must reject wrong-arch plugin")
 	}
 }

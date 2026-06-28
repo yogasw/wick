@@ -92,6 +92,10 @@ func (r *Reloader) reconcile(ctx context.Context) {
 			}
 			continue
 		}
+		// Connectors dir owns connector-kind plugins only; skip foreign kinds.
+		if k := wickplugin.NormalizeKind(f.Manifest.Kind); k != wickplugin.KindConnector {
+			continue
+		}
 		present[f.Key] = true
 		if r.seen[f.Key] == f.Manifest.SHA256 {
 			continue

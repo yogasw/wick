@@ -1,8 +1,8 @@
 <script lang="ts">
   import { Button } from "@wick-fe/common-ui";
-  import { listConnectors } from "$lib/api.js";
+  import { listConnectors, listPlugins, installPlugin } from "$lib/api.js";
   import { push } from "$lib/router.js";
-  import type { ConnectorDef } from "$lib/types.js";
+  import type { ConnectorDef, PluginEntry } from "$lib/types.js";
 
   type Group = {
     name: string;
@@ -69,6 +69,51 @@
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
+    }
+    // Available plugins are best-effort: a marketplace fetch failure must not
+    // break the connector list. Loaded separately so a slow/blocked catalog
+    // doesn't gate the page.
+    loadAvailable();
+  }
+
+  let available = $state<PluginEntry[]>([]);
+  let installing = $state<string>("");
+  let availableError = $state("");
+
+  async function loadAvailable() {
+    availableError = "";
+    try {
+      const r = await listPlugins();
+      // Only plugins not already installed are "available to install".
+      available = (r.available ?? []).filter((p) => p.arch_ok);
+      if (r.registry_error) availableError = r.registry_error;
+    } catch (e) {
+      availableError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  let filteredAvailable = $derived.by(() => {
+    const q = query.toLowerCase().trim();
+    if (!q) return available;
+    return available.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.key.toLowerCase().includes(q) ||
+        p.description.toLowerCase().includes(q),
+    );
+  });
+
+  async function onInstall(p: PluginEntry) {
+    installing = p.key;
+    try {
+      await installPlugin(p.key);
+      // The reloader registers it within ~5s; refresh both lists so it moves
+      // from Available into the connector grid.
+      await load();
+    } catch (e) {
+      availableError = e instanceof Error ? e.message : String(e);
+    } finally {
+      installing = "";
     }
   }
 
@@ -261,6 +306,50 @@
           </section>
         {/each}
       </div>
+    {/if}
+
+    <!-- Available to install: connectors that exist as plugins in the catalog
+         but are not yet downloaded. One list with the connectors above — these
+         just need a Download first. -->
+    {#if filteredAvailable.length > 0 || availableError}
+      <section class="mt-10">
+        <h2 class="mb-4 text-sm font-semibold uppercase tracking-wide text-black-800 dark:text-black-600">
+          Available to install
+        </h2>
+        {#if availableError}
+          <div class="rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-5 py-4 shadow-sm">
+            <p class="text-xs leading-relaxed text-cau-400">
+              Marketplace unavailable — {availableError}
+            </p>
+          </div>
+        {/if}
+        {#if filteredAvailable.length > 0}
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {#each filteredAvailable as p (p.key)}
+            <div
+              class="flex flex-col rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm"
+            >
+              <div class="mb-2 flex items-center justify-between gap-2">
+                <span class="truncate text-sm font-semibold text-black-900 dark:text-white-100">{p.name}</span>
+                <span class="flex-shrink-0 rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-800 dark:text-black-600">
+                  Plugin · v{p.version}
+                </span>
+              </div>
+              <p class="mb-4 flex-1 text-xs leading-relaxed text-black-700 dark:text-black-600">
+                {p.description || p.key}
+              </p>
+              <Button
+                variant="primary"
+                disabled={installing === p.key}
+                onclick={() => onInstall(p)}
+              >
+                {installing === p.key ? "Downloading…" : "Download"}
+              </Button>
+            </div>
+          {/each}
+        </div>
+        {/if}
+      </section>
     {/if}
   {/if}
 </div>

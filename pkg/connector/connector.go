@@ -47,7 +47,6 @@ import (
 	"context"
 
 	"github.com/yogasw/wick/pkg/entity"
-	"github.com/yogasw/wick/pkg/tool"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
@@ -93,7 +92,7 @@ type Meta struct {
 	// so the home page groups it under "Connector". Add module-specific
 	// tags (e.g. `tags.System` for built-in maintenance connectors) on
 	// top of that.
-	DefaultTags []tool.DefaultTag
+	DefaultTags []entity.DefaultTag
 }
 
 // ExecuteFunc is the per-operation handler signature. It receives a
