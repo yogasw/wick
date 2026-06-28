@@ -4,15 +4,16 @@ import (
 	"context"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
+	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
-	sessionconfigpurge "github.com/yogasw/wick/internal/jobs/session-config-purge"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
-	"github.com/yogasw/wick/internal/agents/providersync"
+	sessionconfigpurge "github.com/yogasw/wick/internal/jobs/session-config-purge"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
@@ -71,19 +72,35 @@ func NewServer() *Server {
 
 	connectors.RegisterProfile(configsSvc.Profile())
 
+	pluginStore := connplugin.NewStateStore(db)
+	var pluginMgr *connplugin.Manager
+	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute, pluginStore.Enabled); err != nil {
+		log.Warn().Err(err).Msg("connector plugins: load failed")
+	} else if mgr != nil {
+		log.Info().Int("plugins", n).Msg("connector plugins: loaded")
+		pluginMgr = mgr
+	}
+
 	jobsSvc := manager.NewServiceFromDB(db)
 	jobsSvc.SetConfigReader(configsSvc)
 
-	return &Server{jobsSvc: jobsSvc}
+	return &Server{jobsSvc: jobsSvc, pluginMgr: pluginMgr}
 }
 
 type Server struct {
-	jobsSvc *manager.Service
+	jobsSvc   *manager.Service
+	pluginMgr *connplugin.Manager
 }
 
 // Run bootstraps jobs and starts the scheduler loop. Cancel ctx to
 // stop. Returns nil on clean shutdown or the bootstrap error.
 func (s *Server) Run(ctx context.Context) error {
+	defer func() {
+		if s.pluginMgr != nil {
+			s.pluginMgr.KillAll()
+		}
+	}()
+
 	logger := zerolog.Ctx(ctx)
 	allJobs := jobs.All()
 	if err := job.ValidateJobs(allJobs); err != nil {

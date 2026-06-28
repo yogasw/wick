@@ -442,3 +442,21 @@ export interface AuditFilter {
   to: string;
   page: number;
 }
+
+/* Plugin marketplace — one installable/installed connector plugin. */
+export interface PluginEntry {
+  key: string;
+  name: string;
+  description: string;
+  version: string;
+  installed: boolean;
+  enabled: boolean;
+  arch_ok: boolean;
+  signed: string;
+}
+
+export interface PluginsList {
+  installed: PluginEntry[];
+  available: PluginEntry[];
+  registry_error?: string;
+}

@@ -1,0 +1,405 @@
+name: Release plugins
+
+# Plugin release pipeline. DISPATCH-ONLY — it never triggers itself off a PR.
+# release.yml is the single entry point for every release PR and fires this via
+# repository_dispatch in exactly one of two cases:
+#
+#   • CORE release (VERSION bumped): release.yml runs the core jobs, then
+#     notify-plugins dispatches here AFTER the core tag is published — so plugins
+#     rebuild against the new wick.
+#   • PLUGIN-only (VERSION unchanged): release.yml's core jobs skip and
+#     dispatch-plugins fires here immediately.
+#
+# Because the trigger is always a repository_dispatch from release.yml, this
+# workflow and the core jobs never run at the same time on one PR.
+#
+#   - Each built plugin is cross-built for every target; zips attach to a GitHub
+#     Release tagged <name>/v<version>. Those tags start with the plugin name so
+#     they never match the core 'v*' tag triggers.
+#   - A plugin whose <name>/v<version> tag already exists is skipped (idempotent).
+#   - update-catalog then regenerates plugins/plugins.json from the live releases
+#     and commits it, so the in-app marketplace updates automatically.
+#
+# plugins/ is a permanent nested module inside the wick repo. Releases + the
+# plugins/plugins.json catalog live in this repo (yogasw/wick).
+
+on:
+  # Fired by release.yml (core-released event) for BOTH the core-release and the
+  # plugin-only paths. This is the only automatic trigger — never a bare PR.
+  repository_dispatch:
+    types: [core-released]
+  # Manual escape hatch: rebuild one named plugin on demand.
+  workflow_dispatch:
+    inputs:
+      name:
+        description: 'Plugin folder name to force-build (e.g. httpbin)'
+        required: true
+      kind:
+        description: 'connector | tool | job'
+        required: false
+        default: connector
+
+permissions:
+  contents: write # create releases (the catalog commit uses ADMIN_TOKEN — see below)
+
+# ONE shared concurrency group across ALL wick release workflows (core + plugin)
+# so only a single run executes at a time globally — nothing else can touch the
+# caches (delete+save) concurrently. cancel-in-progress: false → a second run
+# queues behind the first instead of being cancelled (never abort a release
+# mid-flight).
+concurrency:
+  group: wick-workflow
+  cancel-in-progress: false
+
+# secrets.ADMIN_TOKEN: a PAT that can push to the protected master branch. The
+# default GITHUB_TOKEN cannot push to a protected branch and (on pull_request)
+# `github.ref_name` is the PR merge ref, not a real branch — both reasons the
+# catalog commit must use ADMIN_TOKEN and target master explicitly, exactly like
+# the core release workflow.
+
+jobs:
+  # No source guard here. This workflow is dispatch-only: the core-released event
+  # comes from release.yml, which has ALREADY enforced "PR from master + author
+  # is admin + not a fork" in its check-source-branch job before dispatching. The
+  # only other trigger is workflow_dispatch, which GitHub restricts to users with
+  # write access. So every path into this workflow is already trusted.
+  detect:
+    name: Detect plugins to build
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+      any: ${{ steps.set.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: set
+        shell: bash
+        working-directory: plugins
+        run: |
+          set -euo pipefail
+          entries='[]'
+          ev="${{ github.event_name }}"
+
+          # Helper: append every buildable plugin (has main.go, not a _ scaffold)
+          # of every kind to $entries. Used when we rebuild ALL (core-released).
+          add_all() {
+            for kind in connector tool job; do
+              [ -d "$kind" ] || continue
+              for d in "$kind"/*/; do
+                n=$(basename "$d")
+                case "$n" in _*) continue ;; esac
+                [ -f "$kind/$n/main.go" ] || continue
+                entries=$(echo "$entries" | jq -c --arg k "$kind" --arg n "$n" '. + [{kind:$k,name:$n}]')
+              done
+            done
+          }
+
+          if [ "$ev" = "workflow_dispatch" ]; then
+            # Manual: one named plugin.
+            entries='[{"kind":"${{ github.event.inputs.kind }}","name":"${{ github.event.inputs.name }}"}]'
+          else
+            # repository_dispatch (core-released) — the only automatic trigger.
+            # Rebuild EVERY plugin; the build job's tag-exists check is idempotent,
+            # so only plugins whose VERSION actually changed cut a new release.
+            echo "core-released (v${{ github.event.client_payload.version }}) → consider all plugins"
+            add_all
+          fi
+          echo "matrix={\"include\":$entries}" >> "$GITHUB_OUTPUT"
+          if [ "$(echo "$entries" | jq 'length')" -gt 0 ]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Building: $entries"
+
+  # Hard test gate before anything is released — mirrors core release.yml, where
+  # the release is blocked unless the suite passes. Per-PR CI is disabled, so
+  # this is the only automated check guarding a plugin release.
+  test:
+    name: Plugin platform tests
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write # gh cache delete (refresh caches under stable keys)
+    steps:
+      - uses: actions/checkout@v4
+      - id: go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true # module download cache (keyed on go.sum by setup-go)
+
+      # Stable cache keys (no version suffix). Each run: restore → build →
+      # delete the key → save it fresh. actions/cache is immutable per key, so
+      # the delete-then-save is what lets the SAME key always hold the latest
+      # contents. If a tool/dep version changes, the next run just re-downloads
+      # and the fresh result is saved back under the same key — self-healing,
+      # no manual version bump.
+      - name: Restore Go build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build
+
+      - name: Restore templ binary
+        id: templ-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ
+      - name: Install templ
+        if: steps.templ-cache.outputs.cache-hit != 'true'
+        run: |
+          ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install github.com/a-h/templ/cmd/templ@${ver}
+
+      # *_templ.go is gitignored — generate before building the wick CLI or the
+      # internal/*/view packages won't compile.
+      - name: Generate templ
+        run: templ generate ./...
+      - name: Test plugin platform + build tooling
+        run: |
+          go build -o "$RUNNER_TEMP/wick" .
+          go test -count=1 -timeout 10m ./pkg/plugin/... ./internal/connectors/plugin/... ./cmd/cli/...
+          # The plugins module is separate (go.work); make sure it compiles.
+          (cd plugins && go build ./... && go build ./connector/_template/)
+
+      # Refresh the caches under their stable keys: delete the old, save the new.
+      - name: Refresh caches
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh cache delete go-build --repo "${{ github.repository }}" || true
+          gh cache delete templ --repo "${{ github.repository }}" || true
+      - name: Save Go build cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build
+      - name: Save templ binary
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ
+
+  build:
+    name: Build ${{ matrix.kind }}/${{ matrix.name }}
+    needs: [detect, test]
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need tags to check whether this version is already out
+
+      - id: go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true # module download cache (keyed on go.sum by setup-go)
+
+      # Idempotent gate (same idea as core's VERSION/tag check): if the tag
+      # <name>/v<version> already exists, this version is already released — skip
+      # build + release so re-running the PR on synchronize doesn't duplicate it.
+      # Bump the plugin's VERSION to cut a new release.
+      - name: Resolve version + check tag
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          v=$(cat "plugins/${{ matrix.kind }}/${{ matrix.name }}/VERSION")
+          echo "v=$v" >> "$GITHUB_OUTPUT"
+          tag="${{ matrix.name }}/v$v"
+          if git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "tag $tag already exists — skipping"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # RESTORE-ONLY (no save/delete). The matrix runs many legs in parallel —
+      # if each refreshed the shared 'go-build'/'templ' key they'd race. The test
+      # job is the single writer; here we only READ the caches it maintains.
+      # templ is installed on a miss but not saved (test job owns saving it).
+      - name: Restore Go build cache
+        if: steps.ver.outputs.skip == 'false'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build
+      - name: Restore templ binary
+        if: steps.ver.outputs.skip == 'false'
+        id: templ-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ
+      - name: Install templ
+        if: steps.ver.outputs.skip == 'false' && steps.templ-cache.outputs.cache-hit != 'true'
+        run: |
+          ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install github.com/a-h/templ/cmd/templ@${ver}
+
+      # Build the wick dev CLI from THIS checkout (not a published release):
+      # pkg/plugin isn't in a wick release yet, and the repo-root go.work wires
+      # the nested plugins module to local source. Once a wick release contains
+      # pkg/plugin, switch this to `go install github.com/yogasw/wick@<ver>` (the
+      # version arrives via the core-released dispatch payload).
+      - name: Build wick CLI from source
+        if: steps.ver.outputs.skip == 'false'
+        run: |
+          # *_templ.go is gitignored — generate before building the CLI or the
+          # internal/*/view packages won't compile.
+          templ_ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install github.com/a-h/templ/cmd/templ@${templ_ver}
+          templ generate ./...
+          go build -o "$RUNNER_TEMP/wick" .
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Build all targets → zips
+        if: steps.ver.outputs.skip == 'false'
+        working-directory: plugins
+        run: wick plugin build --kind "${{ matrix.kind }}" "${{ matrix.name }}" --all
+
+      - name: Release
+        if: steps.ver.outputs.skip == 'false'
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0 (pinned, matches core)
+        with:
+          tag_name: ${{ matrix.name }}/v${{ steps.ver.outputs.v }}
+          name: ${{ matrix.name }} v${{ steps.ver.outputs.v }}
+          files: plugins/bin/${{ matrix.name }}-*.zip
+          fail_on_unmatched_files: true
+          # The release tag is created on the PR head commit. That's the code
+          # under review; the same commit lands on master via the normal PR
+          # merge. ADMIN_TOKEN so tag creation isn't blocked by ruleset config.
+          token: ${{ secrets.ADMIN_TOKEN }}
+
+  update-catalog:
+    name: Regenerate plugins.json
+    needs: build
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      # Check out MASTER (where plugins.json lives and where the raw catalog URL
+      # reads from), NOT the PR ref. ADMIN_TOKEN can push to protected master.
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.ADMIN_TOKEN }}
+
+      # No Go here: the catalog is built from the releases API (gh + jq) and the
+      # names/descriptions are read from the released zips (curl + unzip + jq).
+      # Nothing reads the source tree, so a brand-new plugin not yet on master is
+      # handled correctly.
+
+      # Rebuild the catalog from the LIVE releases: list every <name>/v<ver>
+      # release + its zip assets, fold to one entry per plugin (latest version),
+      # and map each zip's os/arch to its download URL. This is the source the
+      # in-app marketplace reads, so it always reflects what's actually
+      # downloadable.
+      - name: Generate plugins.json from releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # All releases (paginated), newest first.
+          gh api --paginate "repos/$REPO/releases" > /tmp/releases.json
+
+          # Fold into one entry per plugin KEY (= the tag prefix, which equals
+          # the source folder = Meta.Key), keeping the highest semver. Asset
+          # names are <key>-<ver>-<goos>-<goarch>.zip. `name` is seeded to the
+          # key and refined to Meta.Name by the next step (which has the
+          # manifest); `description` likewise.
+          jq -s '
+            # Tolerant version sort key: each dot segment → its leading digits as
+            # a number (so "0.1.0-rc1" → [0,1,0], not a tonumber crash); missing
+            # → 0. Good enough to pick the highest release per plugin.
+            def vkey: split(".") | map((capture("^(?<d>[0-9]+)").d // "0") | tonumber);
+            add
+            | map(select(.tag_name | test("/v")))
+            | map({
+                key: (.tag_name | split("/")[0]),
+                version: (.tag_name | split("/v")[1]),
+                assets: (.assets // [])
+              })
+            | reduce .[] as $r ({};
+                ($r.key) as $k
+                | (.[$k].version // "0") as $cur
+                | if ($r.version | vkey) > ($cur | vkey)
+                  then . + {($k): $r} else . end)
+            | to_entries
+            | map(.value)
+            | sort_by(.key)
+            | map({
+                key,
+                name: .key,
+                description: "",
+                version,
+                assets: (
+                  .assets
+                  | map(select(.name | endswith(".zip")))
+                  | map({
+                      key: (.name | sub("^[^-]+-[^-]+-"; "") | sub("\\.zip$"; "") | sub("-"; "/")),
+                      value: .browser_download_url
+                    })
+                  | from_entries
+                )
+              })
+          ' /tmp/releases.json > plugins/plugins.json
+
+          echo "Regenerated catalog:"
+          cat plugins/plugins.json
+
+      # Meta.Name + Meta.Description aren't in the bare release JSON, but they ARE
+      # inside each release's plugin.json (the zip carries Module.Meta). Read them
+      # from the RELEASED ARTIFACT, not the source tree — a brand-new plugin's
+      # folder may not be on master yet when this runs, but its release already
+      # exists. Download the first asset, unzip plugin.json, lift Meta.
+      - name: Backfill name + description from released manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp)
+          cp plugins/plugins.json "$tmp"
+          n=$(jq 'length' "$tmp")
+          for i in $(seq 0 $((n - 1))); do
+            url=$(jq -r ".[$i].assets | to_entries[0].value // empty" "$tmp")
+            [ -n "$url" ] || continue
+            work=$(mktemp -d)
+            if curl -fsSL "$url" -o "$work/p.zip" && unzip -oq "$work/p.zip" plugin.json -d "$work" 2>/dev/null; then
+              nm=$(jq -r '.module.Meta.Name // ""' "$work/plugin.json")
+              desc=$(jq -r '.module.Meta.Description // ""' "$work/plugin.json")
+              jq --argjson i "$i" --arg n "$nm" --arg d "$desc" \
+                '.[$i] |= (.name = (if $n=="" then .name else $n end) | .description = $d)' \
+                "$tmp" > "$tmp.next" && mv "$tmp.next" "$tmp"
+            fi
+            rm -rf "$work"
+          done
+          mv "$tmp" plugins/plugins.json
+          echo "Catalog with names + descriptions:"; cat plugins/plugins.json
+
+      - name: Commit catalog to master if changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- plugins/plugins.json; then
+            echo "catalog unchanged"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add plugins/plugins.json
+          git commit -m "chore(plugins): regenerate catalog after release [skip ci]"
+          # Push to master explicitly (we checked it out above). [skip ci] keeps
+          # any push-triggered workflow from re-firing on this chore commit.
+          git push origin HEAD:master

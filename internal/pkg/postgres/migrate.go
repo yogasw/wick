@@ -48,6 +48,7 @@ func Migrate(db *gorm.DB) {
 		&entity.WorkflowVersion{},
 		&entity.WorkflowTestCase{},
 		&entity.Skill{},
+		&entity.PluginState{},
 	)
 	if err != nil {
 		log.Fatal().Msgf("failed to run migration: %s", err.Error())

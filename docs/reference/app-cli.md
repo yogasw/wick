@@ -285,6 +285,77 @@ LAN access — detected 2 IPv4 address(es) on this device:
 
 ---
 
+## Plugin
+
+Manage external connector plugins — binaries distributed separately from the main app and installed without a rebuild. A hot-reload poller running inside the app detects changes and wires plugins into the connector registry automatically — no restart needed for install, enable, disable, or remove (changes take effect within a few seconds).
+
+### `<app> plugin search [query]`
+
+List connector plugins available in the marketplace catalog. Optionally filter by name or description keyword.
+
+```bash
+./bin/myapp plugin search
+./bin/myapp plugin search slack
+```
+
+The catalog is a single `plugins.json` file fetched raw from the wick repo's default branch (`plugins/plugins.json`, not the GitHub API — so no rate limit and no token needed). Override the catalog URL with `WICK_PLUGIN_CATALOG=<url>`.
+
+### `<app> plugin install <name|url|path>`
+
+Install a connector plugin.
+
+```bash
+./bin/myapp plugin install slack              # resolve from the marketplace registry
+./bin/myapp plugin install ./slack-plugin/   # local directory {binary, plugin.json}
+./bin/myapp plugin install https://…/slack-0.1.0-linux-arm64.zip   # direct URL
+```
+
+The three install sources:
+
+| Argument | Behavior |
+|---|---|
+| `<name>` | Looks up the latest matching release in the registry, downloads the arch-matching zip, verifies the manifest, and installs |
+| `<path>` | Installs from a local directory containing the binary and `plugin.json` |
+| `<url>` or `<file>` | Downloads / extracts a `.zip` or `.tar.gz` archive, verifies, and installs |
+
+### `<app> plugin list`
+
+List installed connector plugins with their version, arch compatibility, signature status, and enabled/disabled state.
+
+```bash
+./bin/myapp plugin list
+# slack                0.1.0        arch:yes  signed:valid   enabled
+# googleworkspace      0.2.1        arch:yes  signed:valid   enabled
+```
+
+### `<app> plugin enable <key>`
+
+Enable a previously disabled plugin. The hot-reload poller picks it up without a restart.
+
+```bash
+./bin/myapp plugin enable slack
+```
+
+### `<app> plugin disable <key>`
+
+Disable a plugin without removing it. The change takes effect on the next reload cycle.
+
+```bash
+./bin/myapp plugin disable slack
+```
+
+### `<app> plugin remove <key>`
+
+Uninstall a plugin by deleting its directory under the plugins folder.
+
+```bash
+./bin/myapp plugin remove slack
+```
+
+Plugins are stored under `~/.<app>/plugins/` by default.
+
+---
+
 ## MCP
 
 The binary ships an [MCP](https://modelcontextprotocol.io) server over stdio so Claude Desktop / Cursor / Gemini / Codex / Claude Code can call wick tools as a model context provider.

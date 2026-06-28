@@ -47,7 +47,6 @@ import (
 	"context"
 
 	"github.com/yogasw/wick/pkg/entity"
-	"github.com/yogasw/wick/pkg/tool"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
 
@@ -93,7 +92,7 @@ type Meta struct {
 	// so the home page groups it under "Connector". Add module-specific
 	// tags (e.g. `tags.System` for built-in maintenance connectors) on
 	// top of that.
-	DefaultTags []tool.DefaultTag
+	DefaultTags []entity.DefaultTag
 }
 
 // ExecuteFunc is the per-operation handler signature. It receives a
@@ -124,7 +123,7 @@ type Operation struct {
 	Name        string
 	Description string
 	Input       []entity.Config
-	Execute     ExecuteFunc
+	Execute     ExecuteFunc `json:"-"`
 	Destructive bool
 	// Docs carries the opt-in self-documentation fields the workflow
 	// MCP `workflow_node_detail` op surfaces to AI clients (examples,
@@ -251,7 +250,7 @@ type OAuthMeta struct {
 	// GetUserIdentity exchanges a fresh access token for a unique user ID
 	// and human-readable display name. Called after the code→token exchange
 	// to route the token to the correct connector row.
-	GetUserIdentity func(ctx context.Context, accessToken string) (userID, displayName string, err error)
+	GetUserIdentity func(ctx context.Context, accessToken string) (userID, displayName string, err error) `json:"-"`
 }
 
 // Module is the internal, fully-resolved registration record wick keeps
@@ -276,7 +275,7 @@ type Module struct {
 	// Description header); code that needs to iterate every op regardless
 	// of group calls AllOps().
 	Operations  []Category
-	HealthCheck HealthCheckFunc
+	HealthCheck HealthCheckFunc `json:"-"`
 	// OAuth is non-nil when this connector supports user OAuth.
 	OAuth *OAuthMeta
 	// AllowSessionConfig lets this connector be cloned into a per-session

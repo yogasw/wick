@@ -5,6 +5,37 @@
 > per kebutuhan, dan berkomunikasi dengan core lewat gRPC (pakai
 > `hashicorp/go-plugin`).
 
+## Status implementasi (per branch `feat/connector-plugin-platform`)
+
+Tracker lengkap di [TODO.md](./TODO.md). Ringkas:
+
+- ✅ **Engine (Fase 0–4)** — proto/gRPC, handshake, manifest + ed25519 signing,
+  loader, manager (lazy-spawn / idle-kill / cap / LRU / circuit-breaker), warm
+  pool, rlimit sandbox, streaming, DB enable/disable overlay, boot-scan +
+  hot-reload poller. Wired di `internal/connectors/plugin/`. 2 pilot in-tree
+  (`slack`, `googleworkspace`).
+- ✅ **Control surface — SHIPPED.** Produksi: `wick plugin build` (generik
+  `--kind`, output zip; `cmd/cli/plugin.go`). Konsumsi: `<app> plugin
+  install/list/enable/disable/remove` (`app/plugin_cmd.go`) — install verify +
+  reloader reconcile tanpa restart. Scaffold `plugins/` (1 go.mod +
+  `connector/_template` + CI). Detail §21 + TODO.md.
+- ✅ **Fase 5 (marketplace) — SHIPPED (catalog via raw JSON, BUKAN GitHub API).**
+  `Catalog.List/Resolve` (`registry.go`) tarik 1 `plugins.json` dari plugins master
+  via **raw.githubusercontent.com** (no API → no rate-limit, no token); download binary
+  dari release URL di JSON. UI **nyatu di list connector** (`ConnectorsIndex.svelte`,
+  bukan halaman terpisah): built-in + downloaded = card biasa, yg belum diinstall = section
+  "Available to install" + tombol Download (`internal/manager/plugins_api.go`, admin).
+  **Belum:** repo plugins di-publish + isi release-nya.
+- ✅ **proto range negotiation** — `MinProtoVersion..ProtoVersion`, `VerifyManifest`
+  range-check. ✅ **kind (tool/job)** — `Manifest.Kind` + route-by-kind (reuse Connector
+  service, no proto baru). ✅ **polyglot** — `POLYGLOT.md` (kontrak language-agnostic).
+  ✅ **cosign** — `--cosign-key` (external CLI, no sigstore Go dep).
+- ✅ **Ukuran binary** — `wick plugin build` strip `-s -w` (19→13MB) + `pkg/connector`
+  ngga lagi nyeret `pkg/tool`/templ (`DefaultTag` pindah ke `pkg/entity`). 13MB = lantai
+  gRPC. (Pangkas lebih lanjut di-pending user.)
+- ⬜ **Deferred:** host-side tool/job execution adapter, streaming incremental-to-LLM,
+  sandbox cgroups (Termux non-root), out-of-tree repo extraction.
+
 ---
 
 ## 1. Kondisi sekarang (baseline)
@@ -746,8 +777,12 @@ Breaking selalu lewat review manusia. Additive = auto.
 
 ### 20.1 Layout repo connector (monorepo-of-connectors, opsi rekomendasi)
 
+> **DIREVISI di §21** — layout final = **1 go.mod di root** (`plugins/connector/<nama>/`),
+> BUKAN go.mod per-folder seperti sketsa di bawah. Sketsa lama ditinggalkan
+> sebagai catatan; pakai §21.
+
 ```
-wick-connectors/                 # 1 repo, tiap subfolder = 1 connector
+wick-connectors/                 # (LAMA) 1 repo, tiap subfolder = go.mod sendiri
 ├── github/    { go.mod, *.go, VERSION }
 ├── slack/     { go.mod, *.go, VERSION }
 └── .github/workflows/release.yml
@@ -863,3 +898,163 @@ di kedua kasus.
 > Ringkas: edit-satu-satu cuma kejadian kalau ngk ada otomasi. Dengan fan-out +
 > auto-bump VERSION (script) + repository_dispatch dari release workflow, breaking
 > proto = 1 trigger → semua connector rebuild & rilis sendiri.
+
+---
+
+## 21. Monorepo `plugins` — 1 go.mod, build per-plugin lewat `wick plugin build`
+
+> **STATUS: ✅ SHIPPED.** `wick plugin build` (`cmd/cli/plugin.go`) + scaffold
+> `plugins/` ada. Konsumsi (`<app> plugin install/enable/disable`) ada di
+> `app/plugin_cmd.go`. Detail di TODO.md.
+
+> **Ini layout final** (mengganti sketsa §20.1). Satu repo, **satu `go.mod`** di
+> root, semua plugin dikelompokkan per-kind (`connector/`, `tool/`, `job/`). Build
+> pakai subcommand **`wick plugin build`** (generik via `--kind`, default
+> `connector`) — di CLI `wick` (sisi produksi/dev), BUKAN `wick build connector`.
+> CI **cuma rebuild yang berubah**, BUKAN build semua kayak release core sekarang.
+
+### 21.1 Layout repo
+
+```
+plugins/                       # 1 repo, 1 go.mod (SATU Go module)
+├── go.mod                          # module github.com/yogasw/plugins
+├── go.sum                          # 1 sum, semua connector share dep + versi wick
+├── connector/
+│   ├── _template/                  # scaffold: copy folder ini buat connector baru
+│   │   ├── main.go                 #   package main + plugin.Serve(mod) + --dump-manifest
+│   │   ├── connector.go            #   connector.Module (Meta + Operations + Configs)
+│   │   └── VERSION                 #   sumber versi connector ini
+│   ├── gmail/   { main.go, connector.go, VERSION }
+│   └── slack/   { main.go, connector.go, VERSION }
+├── tool/                           # (NANTI) kind=tool, infra sama
+├── job/                            # (NANTI) kind=job, infra sama
+└── .github/workflows/release.yml
+```
+
+- **1 `go.mod`** = 1 `go.sum`, semua connector pegang versi `wick` + dep yang sama.
+  Tambah connector = `cp -r connector/_template connector/<nama>`, ngk perlu
+  `go mod init` baru. (Beda dari §20.1 lama yang go.mod per-folder.)
+- **Tiap `connector/<nama>/` = binary sendiri** — `package main` + `func main()`
+  yang panggil `plugin.Serve(mod)` (dari `pkg/plugin`). Walau 1 module, tiap folder
+  punya entrypoint sendiri → di-`go build ./connector/<nama>` jadi binary terpisah,
+  bisa di-spawn/download/version sendiri (sesuai §3, §7 — RAM idle 0, isolasi crash).
+- `VERSION` per connector = sumber versi artifact (atau git tag `gmail/v1.4.2`).
+- **`go.mod`-nya BERSIH (no `replace`)** — selagi masih nested di repo wick, build
+  lokal + CI resolve `github.com/yogasw/wick` ke checkout ini lewat **`go.work`**
+  di root repo (`use . ./plugins`), bukan `replace` di go.mod. Jadi go.mod
+  siap di-extract ke repo sendiri kapan aja: tinggal bump `require` ke release wick
+  yang udah punya `pkg/plugin`, ngga ada `replace` yang perlu dihapus.
+- **`_template` di-skip `go ./...`** — Go ngabaikan folder ber-prefix `_`. Itu
+  sengaja (biar `--all-plugins` + release ngga nganggep scaffold sbg connector
+  beneran). Konsekuensinya CI build `_template` lewat path eksplisit
+  (`go build ./connector/_template/`), connector beneran (nama non-`_`) ke-cover
+  `./...`.
+
+### 21.2 Build = `wick plugin build [name...]` (generik via `--kind`)
+
+Subcommand di grup `wick plugin` (CLI scaffolder `wick`, `cmd/cli/plugin.go`).
+**Generik** — `--kind connector|tool|job` milih folder source-nya. Output =
+**zip** (binary + manifest), bukan `.dmg`/`.deb`/`.exe` native.
+
+```bash
+# build 1 plugin buat 1 target → 1 zip (default --kind connector)
+wick plugin build gmail --target linux/arm64
+
+# build 1 plugin semua os/arch → N zip (linux/arm64 duluan — Termux)
+wick plugin build gmail --all
+
+# build SEMUA plugin di connector/ (loop folder) — full rebuild manual
+wick plugin build --all-plugins
+
+# build cuma yang berubah vs base ref (git diff) — dipakai CI
+wick plugin build --changed --since origin/main
+
+# kind lain (nanti): pilih folder source-nya
+wick plugin build --kind tool mytool
+```
+
+**Alur internal tiap connector (1 zip):**
+```
+1. go build ./connector/<nama>        → binary (pakai builder.Config{GOOS,GOARCH,Output})
+2. ./<binary> --dump-manifest         → plugin.json  (anti-drift, §5.1)
+3. sha256sum binary                   → .sha256
+4. (opsi) sign                        → .sig         (ed25519 / cosign, §12)
+5. zip {binary, plugin.json, .sha256, .sig}
+   → bin/<nama>-<version>-<goos>-<goarch>.zip
+```
+
+> **Implementasi (shipped):** `wick plugin build` punya jalur build sendiri
+> (`go build` per target → `--dump-manifest` → zip), BUKAN nebeng `builder.Build`
+> (yg output-nya native installer `.dmg`/`.deb`/`.exe`, beda bentuk). Cross-arch
+> manifest dibuat lewat helper-build host-arch lalu sha256/os_arch/signature
+> ditulis-ulang buat target asli (binary cross ngk bisa dijalanin di host buat
+> `--dump-manifest`).
+
+### 21.3 Hasil = zip per connector, tinggal attach ke release
+
+```
+bin/
+├── gmail-1.4.2-linux-arm64.zip      # ← 1 connector × 1 target = 1 zip
+├── gmail-1.4.2-linux-amd64.zip
+├── slack-0.9.1-linux-arm64.zip
+└── slack-0.9.1-linux-amd64.zip
+```
+
+Nama = `<nama>-<version>-<goos>-<goarch>.zip`. Host (core wick) pas **Install**
+pilih zip yang cocok dengan device (Termux → `linux-arm64`), unzip ke
+`plugins/connectors/<nama>/`, verify `sha256`+`sig`, lalu hot-reload register
+(§6). Versi + nama kebaca dari nama file & `plugin.json` di dalam zip → ngk
+ditulis tangan.
+
+### 21.4 CI/CD — cuma yang berubah, BUKAN build semua
+
+> **Kontras dgn release core sekarang** (`.github/workflows/release.yml`): core
+> build matrix **semua OS/arch sekaligus** tiap rilis. Plugins **kebalikannya** —
+> path-filter, cuma connector yang foldernya ke-touch yang di-rebuild & di-zip.
+
+```yaml
+# plugins/.github/workflows/release.yml (sketsa)
+on:
+  push:
+    branches: [main]
+    paths: ['connector/**']                 # cuma kalau ada connector berubah
+jobs:
+  detect:                                    # connector mana yg berubah
+    run: git diff --name-only ${{ github.event.before }} HEAD \
+           | grep '^connector/' | cut -d/ -f2 | sort -u    → outputs.changed
+  build:
+    needs: detect
+    if: needs.detect.outputs.changed != ''
+    strategy:
+      matrix:
+        name: ${{ fromJson(needs.detect.outputs.changed) }}   # CUMA yg berubah
+        os_arch: [linux/arm64, linux/amd64, darwin/arm64]      # WAJIB arm64 (Termux)
+    steps:
+      - run: wick plugin build --kind ${{ matrix.kind }} ${{ matrix.name }} --target ${{ matrix.os_arch }}
+        #     → bin/<name>-<ver>-<os>-<arch>.zip (binary+manifest+sha256+sig)
+  release:
+    needs: build
+    run: gh release create "${name}/v${VER}" bin/${name}-*.zip
+```
+
+- Connector **ngk berubah → ngk ke-build, ngk ke-release**. Hemat CI (beda dari
+  core yang full-matrix tiap kali).
+- `gh release create` → muncul di **GitHub Releases API** → otomatis jadi entri
+  **Available** di marketplace wick (§6.2). Push connector → CI zip yang berubah
+  → langsung nongol. Zero langkah manual.
+
+### 21.5 Nyambung ke yang lain
+
+| Aspek | Section | Catatan |
+|---|---|---|
+| Download → enable/disable di core | §6.1, §6.2 | ✅ **Driver ada**: `<app> plugin install/enable/disable/remove` (`app/plugin_cmd.go`) — install = unzip + `VerifyManifest` + taruh di `DefaultDir()`, reloader poller (~5s) reconcile tanpa restart |
+| Verify zip (sha256 + sig) | §12 | `VerifyManifest` udah ada di `pkg/plugin`, tinggal dipanggil di install path |
+| `--dump-manifest` anti-drift | §5.1 | manifest digenerate dari binary, mustahil beda |
+| Generalisasi tool/job | §18 | `tool/` + `job/` nyusul di repo yg sama, build pakai `wick build tool/job <nama>`, infra sama |
+| Scaffold `_template` | §5.1, §17.6 | beda dari `template/` core (yg compile-time, fork seluruh app) — ini scaffold **1 plugin binary** runtime |
+
+> **Beda `_template` (plugin) vs `template/` (core), jangan ketuker:**
+> `template/` = fork seluruh app, register connector/tool/job di `app.Run()`,
+> **compile-time** (rebuild app buat nambah). `connector/_template/` di
+> `plugins` = scaffold **1 binary plugin** yang di-`plugin.Serve`,
+> **runtime** (download/enable/disable tanpa rebuild core). Tujuan beda total.
