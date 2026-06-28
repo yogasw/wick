@@ -201,6 +201,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # The *_templ.go files are gitignored — generate them before building the
+      # wick CLI, or packages like internal/*/view won't compile (same step the
+      # core release runs).
+      - name: Generate templ
+        run: |
+          templ_ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install github.com/a-h/templ/cmd/templ@${templ_ver}
+          templ generate ./...
       - name: Test plugin platform + build tooling
         run: |
           go build -o "$RUNNER_TEMP/wick" .
@@ -252,6 +260,11 @@ jobs:
       - name: Build wick CLI from source
         if: steps.ver.outputs.skip == 'false'
         run: |
+          # *_templ.go is gitignored — generate before building the CLI or the
+          # internal/*/view packages won't compile.
+          templ_ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install github.com/a-h/templ/cmd/templ@${templ_ver}
+          templ generate ./...
           go build -o "$RUNNER_TEMP/wick" .
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
