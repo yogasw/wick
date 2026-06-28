@@ -10,6 +10,16 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.27.1](https://github.com/yogasw/wick/compare/v0.27.0...v0.27.1) — CI
+
+_Released on 2026-06-28_
+
+### Fixed
+*   Resolved an issue in the CI pipeline where plugin releases were incorrectly marked as "Latest" on GitHub. The `make_latest` input for the release action is now explicitly quoted ("false" for plugins, "true" for core) to ensure proper string parsing, preventing plugin releases from inadvertently stealing the "Latest" badge from core Wick releases.
+
+---
+
+
 ## [v0.27.0](https://github.com/yogasw/wick/compare/v0.26.2...v0.27.0) — Plugins & Connectors
 
 _Released on 2026-06-28_
