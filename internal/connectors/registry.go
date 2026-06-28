@@ -10,9 +10,11 @@
 //     a typed Creds struct (`wick:"..."` tags), a typed Input struct,
 //     and an `Execute(c *connector.Ctx) (any, error)` function.
 //  2. Register here inside RegisterBuiltins() (default-on for every
-//     wick app — github, httprest) or RegisterLabSamples() (cmd/lab
+//     wick app — httprest, slack) or RegisterLabSamples() (cmd/lab
 //     only — crudcrud), or in the downstream project's main.go via
-//     app.RegisterConnector.
+//     app.RegisterConnector. (Connectors shipped as external plugins —
+//     github, bitbucket, google_workspace — live under plugins/connector/
+//     and are NOT registered here.)
 //
 // Connector definitions live in code; per-instance rows (credentials,
 // labels, tags) live in the connector_instances table — populated by
@@ -20,10 +22,7 @@
 package connectors
 
 import (
-	"github.com/yogasw/wick/internal/connectors/bitbucket"
 	"github.com/yogasw/wick/internal/connectors/crudcrud"
-	"github.com/yogasw/wick/internal/connectors/github"
-	"github.com/yogasw/wick/internal/connectors/googleworkspace"
 	"github.com/yogasw/wick/internal/connectors/httprest"
 	"github.com/yogasw/wick/internal/connectors/loki"
 	"github.com/yogasw/wick/internal/connectors/phoenix"
@@ -112,12 +111,6 @@ func notify(m connector.Module) {
 func builtinModules() []connector.Module {
 	return []connector.Module{
 		{
-			Meta:        withConnectorTag(github.Meta(), tags.Development),
-			Configs:     entity.StructToConfigs(github.Configs{}),
-			Operations:  github.Operations(),
-			HealthCheck: github.HealthCheck,
-		},
-		{
 			Meta:               withConnectorTag(httprest.Meta(), tags.API),
 			Configs:            entity.StructToConfigs(httprest.Configs{}),
 			Operations:         httprest.Operations(),
@@ -131,11 +124,6 @@ func builtinModules() []connector.Module {
 			OAuth:       slack.SlackOAuthMeta(),
 		},
 		{
-			Meta:       withConnectorTag(bitbucket.Meta(), tags.Development),
-			Configs:    entity.StructToConfigs(bitbucket.Configs{}),
-			Operations: bitbucket.Operations(),
-		},
-		{
 			Meta:       withConnectorTag(loki.Meta(), tags.Observability),
 			Configs:    entity.StructToConfigs(loki.Configs{}),
 			Operations: loki.Operations(),
@@ -145,17 +133,9 @@ func builtinModules() []connector.Module {
 			Configs:    entity.StructToConfigs(phoenix.Configs{}),
 			Operations: phoenix.Operations(),
 		},
-		{
-			Meta:        withConnectorTag(googleworkspace.Meta(), tags.API),
-			Configs:     entity.StructToConfigs(googleworkspace.Configs{}),
-			Operations:  googleworkspace.Operations(),
-			HealthCheck: googleworkspace.HealthCheck,
-			OAuth:       googleworkspace.OAuthMeta(),
-			// OAuth-only — no bot-token path. New rows start SSO-on and let
-			// tag-scoped users connect their own account, so there's no extra
-			// Enable-SSO step before the first Connect.
-			DefaultAccess: connector.AccessDefaults{EnableSSO: true, AllowOthersConnectSSO: true},
-		},
+		// google_workspace moved out-of-tree to a downloadable plugin
+		// (plugins/connector/google_workspace). It is no longer compiled
+		// into the binary; install it via `<app> plugin install google_workspace`.
 	}
 }
 
@@ -170,10 +150,11 @@ const (
 )
 
 // agentConnectors is the curated allow-list for the "agent" profile.
-// Widen or narrow it with a one-line edit here.
+// Widen or narrow it with a one-line edit here. Only builtins can appear
+// here (the allow-list filters builtinModules); github moved to a plugin
+// so it's no longer eligible — install it via `<app> plugin install github`.
 func agentConnectors() map[string]bool {
 	return map[string]bool{
-		github.Meta().Key:   true,
 		httprest.Meta().Key: true,
 		slack.Meta().Key:    true,
 	}

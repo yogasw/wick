@@ -10,6 +10,33 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.27.0](https://github.com/yogasw/wick/compare/v0.26.2...v0.27.0) — Plugins & Connectors
+
+_Released on 2026-06-28_
+
+### Added
+
+*   **`wick plugin catalog`** — A new CLI command that regenerates `plugins.json` from live GitHub releases. This replaces the `jq` pipeline previously used in `release-plugins.yml`, and its output uses the same `Available` struct the app reads, preventing catalog shape drift. See [`wick plugin catalog`](./reference/cli#wick-plugin-catalog).
+*   **Plugin DefaultTags** — Plugins now declare `Meta.DefaultTags` using the shared `plugins/tags` catalog. This ensures they appear in the same category grid as built-in connectors (e.g., API, Communication) without requiring any manual tag configuration.
+
+### Changed
+
+*   **GitHub, Bitbucket, and Google Workspace moved to external plugins**: These three connectors are no longer compiled directly into the `wick` binary. They now ship as independently versioned and downloadable plugin binaries located under `plugins/connector/`.
+    *   You can install them on a running app using commands like `<app> plugin install github`, `<app> plugin install bitbucket`, and `<app> plugin install google_workspace`. Each can then be enabled from the manager UI.
+    *   Existing credential rows and OAuth tokens are preserved on upgrade; the connector will reappear automatically once the matching plugin is installed and enabled.
+    *   The `agent` build profile no longer includes GitHub; it now contains only `httprest` and `slack`.
+    *   The `full` profile now registers 4 built-in connectors (HTTP REST, Slack, Loki, Phoenix), down from 7.
+*   **Connector list — plugins merged into category grid**: Available-to-install plugins no longer appear in a separate "Available to install" section below the connector list. Instead, they are integrated into the same category grid as built-in connectors, displaying a **Download** button instead of a detail link.
+    *   If no build exists for the host OS/architecture, the button will be disabled with a clear reason.
+    *   An **Installed** filter chip is available to show only connectors that are ready to use (including both built-ins and downloaded plugins).
+    *   Category chips are derived from each connector's tags and span both built-in and plugin connectors.
+*   **Plugin install directory** — The plugin scan directory now resolves via `appname.Resolve()`, aligning with the `wick.db` tree. This fixes a silent mismatch where plugins installed into `~/.wick-agent/` were not found when the binary was named differently (e.g., in a debug build or an MCP stdio subprocess). You can override this behavior with `WICK_PLUGINS_DIR`.
+*   **Hot-reload always active** — The plugin hot-reload poller now starts even when zero plugins are installed at boot. This ensures that a plugin installed for the first time is picked up immediately without requiring a restart. Additionally, install, enable, disable, and remove operations now trigger an immediate reload.
+*   **`wick plugin build --target`** — This command now accepts a comma-separated list of targets, such as `linux/arm64,darwin/amd64,windows/amd64`.
+
+---
+
+
 ## [v0.26.2](https://github.com/yogasw/wick/compare/v0.26.1...v0.26.2) — Release Management
 
 _Released on 2026-06-28_

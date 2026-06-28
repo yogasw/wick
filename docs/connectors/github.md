@@ -10,11 +10,19 @@ Operations cover the full PR-review and release loop — reading repos / issues 
 
 | | |
 |---|---|
-| **Source** | [`internal/connectors/github/`](https://github.com/yogasw/wick/tree/master/internal/connectors/github) |
+| **Source** | [`plugins/connector/github/`](https://github.com/yogasw/wick/tree/master/plugins/connector/github) |
 | **Key** | `github` |
 | **Icon** | 🐙 |
-| **Tier** | builtin (every wick app) |
+| **Tier** | plugin — install with `<app> plugin install github` |
 | **Health check** | ✅ — verifies the token via `GET /user` |
+
+> This connector is no longer compiled into the wick binary. Install it as a plugin:
+>
+> ```bash
+> <app> plugin install github
+> ```
+>
+> Existing credential rows are preserved on upgrade — the connector reappears automatically once the plugin is installed and enabled. See [Connector Plugins](/guide/connector-plugins) for the full install flow.
 
 ## Configs
 

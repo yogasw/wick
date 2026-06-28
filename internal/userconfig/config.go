@@ -223,7 +223,7 @@ func Dir(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, hiddenName(name)), nil
+	return filepath.Join(home, HiddenName(name)), nil
 }
 
 // Path returns the absolute config file path for the given project
@@ -358,10 +358,12 @@ func binaryName() string {
 	return name
 }
 
-// hiddenName turns an app name into a path-safe hidden directory name.
+// HiddenName turns an app name into a path-safe hidden directory name.
 // Slugifies: lowercase, spaces → "-", strips chars that break Windows
 // paths (< > : " / \ | ? *) and leading dots. "My App" → ".my-app".
-func hiddenName(name string) string {
+// Exported so other packages derive the same ~/.<appName> dir from a resolved
+// app name (e.g. the connector-plugin dir, which must match wick.db's tree).
+func HiddenName(name string) string {
 	name = filepath.Base(strings.TrimSpace(name))
 	name = strings.TrimLeft(name, ".")
 	name = strings.ToLower(name)

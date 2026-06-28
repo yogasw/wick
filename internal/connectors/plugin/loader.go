@@ -131,9 +131,11 @@ func Load(dir string, idleTimeout time.Duration, enabled func(string) bool) (*Ma
 		}
 		binaries[f.Key] = f.BinaryPath
 	}
-	if len(binaries) == 0 {
-		return nil, 0, nil
-	}
+	// Always return a Manager, even with zero plugins on disk. Returning nil
+	// here used to leave pluginMgr nil, which skipped building the hot-reload
+	// poller — so a plugin installed AFTER a pluginless boot was never picked
+	// up (no poller to register it, ever). An empty Manager costs nothing and
+	// keeps the reload path alive for the first install.
 	mgr := NewManager(binaries, idleTimeout)
 	n, err := loadWith(dir, connectors.Register, mgr, enabled)
 	if err != nil {

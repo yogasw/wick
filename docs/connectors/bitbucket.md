@@ -10,9 +10,17 @@ Operations cover the common review flows: searching repos, reading commits and d
 
 | | |
 |---|---|
-| **Source** | [`internal/connectors/bitbucket/`](https://github.com/yogasw/wick/tree/master/internal/connectors/bitbucket) |
+| **Source** | [`plugins/connector/bitbucket/`](https://github.com/yogasw/wick/tree/master/plugins/connector/bitbucket) |
 | **Key** | `bitbucket` |
-| **Tier** | builtin (every wick app) |
+| **Tier** | plugin — install with `<app> plugin install bitbucket` |
+
+> This connector is no longer compiled into the wick binary. Install it as a plugin:
+>
+> ```bash
+> <app> plugin install bitbucket
+> ```
+>
+> Existing credential rows are preserved on upgrade — the connector reappears automatically once the plugin is installed and enabled. See [Connector Plugins](/guide/connector-plugins) for the full install flow.
 
 ## Configs
 
