@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+
+	"golang.org/x/mod/semver"
 )
 
 // wickRepoOwner/wickRepoName are the canonical public wick framework
@@ -66,6 +69,12 @@ func CheckWickVersion(ctx context.Context, current string) (WickVersionStatus, e
 // fetchWickLatestRelease GETs the latest release tag + publish date from
 // the public wick repo. No PAT: the repo is public, and the System page
 // check must work on builds with no release source configured.
+//
+// Uses /releases/latest: the wick repo also hosts plugin releases tagged
+// "<name>/vX.Y.Z", but the plugin release workflow publishes them with
+// make_latest:false, so the "Latest" release is always a core wick tag (vX.Y.Z)
+// and this endpoint returns it. A non-core tag here would only happen if a
+// plugin slipped through without make_latest:false; isCoreWickTag guards that.
 func fetchWickLatestRelease(ctx context.Context) (tag, publishedAt string, err error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/releases/latest", githubAPI, wickRepoOwner, wickRepoName)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -96,5 +105,22 @@ func fetchWickLatestRelease(ctx context.Context) (tag, publishedAt string, err e
 	if info.TagName == "" {
 		return "", "", fmt.Errorf("github releases/latest: empty tag")
 	}
+	if !isCoreWickTag(info.TagName) {
+		// A plugin release (or other non-core tag) holds "Latest" — usually a
+		// stale release published before plugins set make_latest:false. Treat as
+		// "can't tell", not a wrong answer: the caller degrades to showing the
+		// version plain with no badge rather than comparing against a plugin.
+		return "", "", fmt.Errorf("github releases/latest: %q is not a core wick release (vX.Y.Z)", info.TagName)
+	}
 	return info.TagName, info.PublishedAt, nil
+}
+
+// isCoreWickTag reports whether tag is a core wick release tag (vX.Y.Z) rather
+// than a plugin release (<name>/vX.Y.Z). Plugin tags always contain a "/"; core
+// tags never do and are valid semver.
+func isCoreWickTag(tag string) bool {
+	if strings.Contains(tag, "/") {
+		return false
+	}
+	return semver.IsValid(normalizeVer(tag))
 }

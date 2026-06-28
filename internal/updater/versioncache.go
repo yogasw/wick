@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// wickWebURL is where the version row in the user menu links to — the
-// public wick site. "View the framework" lands here.
-const wickWebURL = "https://yogasw.github.io/wick"
+// wickWebURL is where the version row in the user menu links to — the public
+// wick changelog, so clicking the "Wick vX.Y.Z" badge lands on "what changed".
+const wickWebURL = "https://yogasw.github.io/wick/changelog.html"
 
 // VersionSnapshot is the cached version + update state shown in the user
 // menu dropdown. It is a plain value type, refreshed in the background so

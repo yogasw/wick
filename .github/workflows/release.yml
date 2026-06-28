@@ -21,7 +21,15 @@ on:
 # queues behind the first instead of being cancelled (never abort a release
 # mid-flight).
 concurrency:
-  group: wick-workflow
+  # Per-workflow group, NOT one shared 'wick-workflow'. A shared group meant any
+  # third queued run cancelled the pending one ("higher priority waiting request"
+  # for wick-workflow) — that's how release-artifacts kept getting cancelled. The
+  # original reason for one group was cache contention, but the cache keys are
+  # now disjoint per workflow (go-build-core/templ-core here; go-build/templ in
+  # plugins; wick-cli-*/wixl in artifacts), so nothing races across workflows.
+  # The one ordering that matters — plugins build AFTER the core tag — is enforced
+  # by repository_dispatch (notify-plugins), not by concurrency.
+  group: wick-release-core
   cancel-in-progress: false
 
 jobs:
@@ -144,15 +152,13 @@ jobs:
       - name: Generate templ files
         run: templ generate ./...
 
-      - name: Build
-        run: go build ./internal/... ./cmd/... ./pkg/...
-
-      # The plugins/ starter is a SEPARATE module (nested), so ./... above
-      # never compiles it. The repo-root go.work wires it to this checkout's
-      # pkg/plugin, so build it here to catch a pkg/plugin change that breaks the
-      # plugin author contract before release. Note: connector/_template starts
-      # with "_", which `go ./...` ignores — build it by explicit path, and let
-      # ./... cover any real (non-"_") plugins added later.
+      # No separate `go build` of the main module — `go test` below compiles
+      # every package it tests, so an explicit build is redundant work. The
+      # plugins module IS built separately: it's a nested module (go.work) that
+      # `go test ./internal/...` never touches, so this is the only check that
+      # connector/_template + the plugins module still compile against pkg/plugin.
+      # connector/_template starts with "_", which `go ./...` ignores — build it
+      # by explicit path, and let ./... cover any real (non-"_") plugins.
       - name: Build connector plugins (plugins module)
         working-directory: plugins
         run: |
@@ -162,11 +168,14 @@ jobs:
       # Per-PR CI is disabled, so the release pipeline is the CI gate: run
       # the full suite (with -race) before anything gets tagged or released.
       # cmd/cli's plugin_test.go exercises `wick plugin build` end-to-end.
+      # No -count=1: Go's test cache skips packages whose inputs are unchanged
+      # (shown as "(cached)"), exactly like a local `go test`. The build cache is
+      # restored across runs, so the test result cache lives in it too.
       - name: Run unit tests
-        run: go test -count=1 -timeout 10m ./internal/... ./cmd/... ./pkg/...
+        run: go test -timeout 10m ./internal/... ./cmd/... ./pkg/...
 
       - name: Run race detector (full suite)
-        run: go test -race -count=1 -timeout 15m ./internal/... ./cmd/... ./pkg/...
+        run: go test -race -timeout 15m ./internal/... ./cmd/... ./pkg/...
 
       # Refresh the stable caches: delete the old key, save the fresh result.
       # (actions/cache is immutable per key, so save would no-op without delete.)
@@ -591,6 +600,9 @@ jobs:
           tag_name: v${{ needs.prepare.outputs.version }}
           name: ${{ needs.generate-summary.outputs.title }}
           body: ${{ steps.body.outputs.body }}
+          # Core wick is the release people come here to download — always claim
+          # "Latest". Plugin releases set make_latest: false so they never steal it.
+          make_latest: true
 
   merge-to-master:
     name: Merge to Master
@@ -615,10 +627,25 @@ jobs:
             --head $BRANCH \
             --repo yogasw/wick)
           PR_NUMBER=$(echo "$PR_URL" | grep -o '[0-9]*$')
-          gh api repos/yogasw/wick/pulls/$PR_NUMBER/merge \
-            --method PUT \
-            --field merge_method=squash \
-            --field commit_title="chore: sync go.mod.tmpl and docs for v${VERSION}"
+
+          # master can move between create and merge (another run, another PR),
+          # which makes the merge fail with 405 "Base branch was modified".
+          # update-branch fast-forwards the sync branch onto current master,
+          # then retry so we merge against the base GitHub now expects. Same
+          # hardening as the "Merge trigger PR to release" step below.
+          gh api repos/yogasw/wick/pulls/$PR_NUMBER/update-branch \
+            --method PUT || true
+          sleep 15
+          for i in 1 2 3; do
+            echo "Merge-to-master attempt $i..."
+            gh api repos/yogasw/wick/pulls/$PR_NUMBER/merge \
+              --method PUT \
+              --field merge_method=squash \
+              --field commit_title="chore: sync go.mod.tmpl and docs for v${VERSION}" && break
+            echo "Attempt $i failed, refreshing branch and retrying in 10s..."
+            gh api repos/yogasw/wick/pulls/$PR_NUMBER/update-branch --method PUT || true
+            sleep 10
+          done
           gh api repos/yogasw/wick/git/refs/heads/release-sync/v${VERSION} \
             --method DELETE
 
