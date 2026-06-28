@@ -10,6 +10,45 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.26.0](https://github.com/yogasw/wick/compare/v0.25.3...v0.26.0) — Connector Plugins
+
+_Released on 2026-06-28_
+
+### Added
+
+*   **Connector plugin platform**: External connectors can now be distributed as standalone Go binaries and installed without rebuilding the host app.
+    *   **`wick plugin build`** — compile one or more connector plugins from a `plugins`-style monorepo and pack each binary + manifest into a versioned release zip (`<name>-<version>-<goos>-<goarch>.zip`). Supports `--all` (all OS/arch), `--changed` (diff-based), and optional ed25519 signing (`--sign-key`). The build process enforces `Meta.Key` matching the folder name, strips debug info from binaries for smaller size, and decouples core dependencies. See [CLI Reference — `wick plugin build`](./reference/cli#wick-plugin-build).
+    *   **`<app> plugin install|search|list|enable|disable|remove`** — lifecycle commands on the running app binary for discovering the marketplace catalog, installing from a registry name / URL / local path, and toggling plugins without a restart. A hot-reload poller detects newly installed or updated binaries and wires them into the connector registry automatically. See [App CLI Reference — plugin](./reference/app-cli#app-plugin).
+    *   **Internal Architecture**:
+        *   Introduced gRPC proto contract and codegen for inter-process communication between the host app and plugin binaries.
+        *   Implemented a host-side `PluginManager` with lazy spawning, idle-kill, concurrency caps (LRU eviction, bounded queue), crash backoff circuit-breaker, and resource limits (`rlimit`).
+        *   Added ed25519 signing primitives, manifest envelope with self-packing, and verification (`VerifyManifest`) for plugin integrity and trust.
+        *   Integrated a poll-based hot-reload reconciler that honors `enable/disable` states stored in an overlay table.
+        *   Supported streaming execution (`ExecuteStream`) for large results and a warm pool to keep hot connectors pinned and eager-spawned at boot.
+        *   Provided `Ctx.Configs()`/`Inputs()` read-only accessors for plugin transport and `ResolveIdentity` RPC for OAuth identity resolution.
+        *   Refactored the plugin monorepo path from `wick-plugins/` to `plugins/` (module `github.com/yogasw/wick/plugins`) and updated catalog/release asset URLs accordingly.
+    *   **Pilot Connectors**: Initial pilot binaries for Slack and Google Workspace connectors, with OAuth enabled.
+    *   **`wick plugin-keygen`** command for generating ed25519 signing keys.
+
+### Fixed
+
+*   **GitHub API rate-limit error messages (install scripts + updater)**: When the GitHub Releases API returns a 403/429 due to the unauthenticated 60-req/hr-per-IP quota, `install.sh`, `install.ps1`, and the in-app updater/upgrade paths now surface GitHub's own message (e.g. "API rate limit exceeded for 1.2.3.4") together with the reset time. The install scripts additionally print three workarounds: pass `TOKEN=ghp_xxx` (authenticated 5 000/hr), pin `VERSION=vX.Y.Z` (skips the API), or wait for the hourly reset.
+*   **Plugin Platform Stability**:
+    *   Improved JSON serialization for connector module manifests to ensure `Operation` and `Module` fields are correctly marshaled and unmarshaled via `json:"-"` tags, preventing silent data loss.
+    *   Refined hot-reload logic to drop worker hot-reload, as workers do not have a connector execution surface.
+    *   Enhanced security and reliability by switching the plugin manager and related tests to use `safeexec.Command` instead of `os/exec`.
+    *   Ensured `Manager.KillAll` is idempotent and closes race windows during plugin subprocess termination.
+    *   Correctly guarded nil operation handlers and ensured queued waiters are woken, rejecting new spawns during shutdown.
+*   **CI and Release Process**:
+    *   Improved robustness of plugin release detection in CI to prevent job failures when a plugin kind has no changes, by wrapping command substitutions to swallow non-zero exit statuses.
+    *   Ensured `templ` files are generated before building the `wick` CLI from source in CI, resolving build failures on fresh checkouts.
+    *   Streamlined release workflows to use a single entry point (`release.yml`), preventing concurrent core and plugin releases by dispatching the plugin pipeline only after a core release or for plugin-only changes.
+    *   Enforced unit test completion before release preparation steps in core releases, ensuring the core chain is strictly sequential after tests pass.
+    *   Improved CI cache efficiency and stability by using stable, version-free keys, implementing a delete-before-save strategy for cache refreshes, and serializing all release workflows into a single concurrency group to prevent cache race conditions.
+
+---
+
+
 ## [v0.25.3](https://github.com/yogasw/wick/compare/v0.25.2...v0.25.3) — Chat & Updates
 
 _Released on 2026-06-27_

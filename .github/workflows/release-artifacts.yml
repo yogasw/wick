@@ -28,10 +28,21 @@ on:
     tags:
       - 'v*'
 
+# Shared concurrency group across ALL wick release workflows (core + plugin +
+# this) so only one runs at a time globally — nothing else touches the caches
+# (delete+save) concurrently. cancel-in-progress: false → queue, don't abort a
+# release mid-flight.
+concurrency:
+  group: wick-workflow
+  cancel-in-progress: false
+
 jobs:
   prepare:
     name: Prepare
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write # gh cache delete (refresh cache under stable key)
     steps:
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -39,16 +50,28 @@ jobs:
           go-version: '1.25'
           cache: false
 
-      - name: Cache wick CLI binary
-        id: cache-wick
-        uses: actions/cache@v4
+      # Stable cache key 'wick-cli-linux' (no tag — per-tag keys just pile up and
+      # never get reused). The install ALWAYS runs (not gated on cache-hit) so the
+      # binary always matches THIS tag; the cache is then refreshed under the same
+      # key (delete old, save new). Restore is only a warm hint here.
+      - name: Restore wick CLI binary
+        uses: actions/cache/restore@v4
         with:
           path: ~/go/bin/wick
-          key: wick-cli-${{ github.ref_name }}-linux-amd64
+          key: wick-cli-linux
 
       - name: Install wick CLI
-        if: steps.cache-wick.outputs.cache-hit != 'true'
         run: go install github.com/yogasw/wick@${{ github.ref_name }}
+
+      - name: Refresh wick CLI cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh cache delete wick-cli-linux --repo "${{ github.repository }}" || true
+      - name: Save wick CLI binary
+        uses: actions/cache/save@v4
+        with:
+          path: ~/go/bin/wick
+          key: wick-cli-linux
 
       - name: Add Go bin to PATH
         run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
@@ -78,6 +101,7 @@ jobs:
 
     permissions:
       contents: read
+      actions: write # gh cache delete (macOS wick-cli refresh)
 
     strategy:
       fail-fast: false
@@ -173,17 +197,32 @@ jobs:
           go-version: '1.25'
           cache: false
 
-      - name: Cache wick CLI binary (macOS)
+      # Stable per-arch key 'wick-cli-darwin-<arch>' (no tag — per-tag piles up).
+      # Per-arch so the two macOS legs (amd64/arm64) write DIFFERENT keys and
+      # never race. Install ALWAYS runs so the binary matches this tag; cache is
+      # refreshed under the same key after.
+      - name: Restore wick CLI binary (macOS)
         if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'macos-latest'
-        id: cache-wick-mac
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/go/bin/wick
-          key: wick-cli-${{ github.ref_name }}-darwin
+          key: wick-cli-darwin-${{ matrix.arch }}
 
       - name: Install wick CLI (macOS)
-        if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'macos-latest' && steps.cache-wick-mac.outputs.cache-hit != 'true'
+        if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'macos-latest'
         run: go install github.com/yogasw/wick@${{ github.ref_name }}
+
+      - name: Refresh wick CLI cache (macOS)
+        if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'macos-latest'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh cache delete "wick-cli-darwin-${{ matrix.arch }}" --repo "${{ github.repository }}" || true
+      - name: Save wick CLI binary (macOS)
+        if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'macos-latest'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/go/bin/wick
+          key: wick-cli-darwin-${{ matrix.arch }}
 
       - name: Add Go bin to PATH (macOS)
         if: steps.gate.outputs.enabled == 'true' && matrix.runner == 'macos-latest'

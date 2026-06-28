@@ -60,11 +60,21 @@
 <p class="sub">Pindah dari connector <b>in-process</b> ke <b>plugin eksternal</b>: build terpisah, versioning sendiri, download per kebutuhan.</p>
 <p><span class="pill">pola: HashiCorp go-plugin</span> <span class="pill">transport: gRPC / UDS</span> <span class="pill">strategi: hybrid</span> <span class="pill">spawn: lazy + idle-kill</span></p>
 
+<div class="card" style="border-left:4px solid var(--warn);margin:16px 0">
+  <h3 style="color:var(--warn);margin-top:0">📍 Status implementasi <span class="pill" style="color:var(--mut)">branch feat/connector-plugin-platform</span></h3>
+  <p class="sub" style="margin-top:0">Dokumen ini = <b>desain</b>. Tracker progres lengkap di <code>TODO.md</code>. Ringkas:</p>
+  <div class="verdict">
+    <div class="v-good"><b>✅ Engine (Fase 0–4)</b><br>proto/gRPC · handshake · manifest+ed25519 sign · loader · manager (lazy/idle-kill/cap/LRU/breaker) · warm pool · rlimit · streaming · DB enable/disable overlay · boot-scan + hot-reload poller. Wired di <code>internal/connectors/plugin/</code>. 2 pilot in-tree (slack, googleworkspace).</div>
+    <div class="v-good"><b>✅ Control surface — SHIPPED</b><br>Produksi: <code>wick plugin build</code> (generik <code>--kind</code>, output zip strip <code>-s -w</code> → 13MB; <code>cmd/cli/plugin.go</code>). Konsumsi: <code>&lt;app&gt; plugin search/install/list/enable/disable/remove</code> (<code>app/plugin_cmd.go</code>). Scaffold <code>plugins/</code> + sample <code>httpbin</code> (§18).</div>
+    <div class="v-good"><b>✅ Marketplace — SHIPPED (catalog raw JSON, BUKAN GitHub API)</b><br><code>Catalog.List/Resolve</code> tarik 1 <code>plugins.json</code> dari plugins master via raw.githubusercontent.com (no API → no rate-limit). UI <b>nyatu di list connector</b> (<code>ConnectorsIndex</code>): yg belum diinstall muncul "Available to install" + Download. Plus ✅ proto range-nego, ✅ kind tool/job, ✅ polyglot doc, ✅ cosign (external CLI). <b>Belum:</b> repo plugins di-publish + isi release.</div>
+  </div>
+</div>
+
 <div class="toc">
   <a href="#arch">1·Arsitektur</a><a href="#core">2·Metadata vs Proses</a><a href="#hybrid">3·Hybrid</a>
   <a href="#ver">4·Versioning</a><a href="#artifact">5·2-Artifact</a><a href="#life">6·Lifecycle</a><a href="#spawn">7·Spawn</a>
   <a href="#prc">8·Untung/Rugi</a><a href="#light">9·Enteng?</a><a href="#build">10·Build</a>
-  <a href="#lat">11·Latency</a><a href="#sec">12·Keamanan</a><a href="#ground">13·Kode Nyata</a><a href="#mig">14·Migrasi</a><a href="#platform">15·Platform Generik</a><a href="#proto">16·Proto Sync</a><a href="#cicd">17·CI/CD</a>
+  <a href="#lat">11·Latency</a><a href="#sec">12·Keamanan</a><a href="#ground">13·Kode Nyata</a><a href="#mig">14·Migrasi</a><a href="#platform">15·Platform Generik</a><a href="#proto">16·Proto Sync</a><a href="#cicd">17·CI/CD</a><a href="#monorepo">18·Monorepo plugins</a>
 </div>
 
 <h2 id="arch">1 · Sekarang vs Target</h2>
@@ -605,6 +615,71 @@ check-proto:
    └─ sama (additive) → ngk ngapa-ngapain</code></pre>
     <div class="ok">Breaking → otomatis dorong rebuild semua. Additive → connector ngk keganggu. Dua-duanya zero edit manual.</div>
   </div>
+</div>
+
+<h2 id="monorepo">18 · Monorepo <code>plugins</code> — 1 go.mod, build per-connector</h2>
+<p class="sub"><b>Layout final</b> (ganti sketsa §17 yg go.mod-per-folder). 1 repo, <b>1 <code>go.mod</code></b> di root, plugin dikelompokkan per-kind (<code>connector/</code>, <code>tool/</code>, <code>job/</code>). Build pakai <code>wick plugin build</code> (generik via <code>--kind</code>, default <code>connector</code>) di CLI <code>wick</code> — BUKAN <code>wick build connector</code>. CI <b>cuma rebuild yg berubah</b> — BUKAN build semua kayak release core.</p>
+<div class="grid g2">
+  <div class="card good">
+    <h3>📁 Layout — 1 module, banyak binary</h3>
+    <pre><code>plugins/              # 1 repo, 1 go.mod
+├── go.mod                 # module …/plugins
+├── go.sum                 # 1 sum, share dep + versi wick
+├── connector/
+│   ├── _template/         # scaffold: copy buat connector baru
+│   │   ├── main.go        #  package main + plugin.Serve(mod)
+│   │   ├── connector.go   #  connector.Module
+│   │   └── VERSION
+│   ├── gmail/  { main.go, connector.go, VERSION }
+│   └── slack/  { main.go, connector.go, VERSION }
+├── tool/                  # (NANTI) infra sama
+├── job/                   # (NANTI) infra sama
+└── .github/workflows/release.yml</code></pre>
+    <div class="ok"><b>1 go.mod</b> → tambah connector = <code>cp -r connector/_template connector/&lt;nama&gt;</code>, ngk perlu <code>go mod init</code>. Tiap folder = <code>package main</code> sendiri → <b>binary terpisah</b>, bisa di-spawn/download/version sendiri.</div>
+  </div>
+  <div class="card">
+    <h3>⚙️ <code>wick plugin build</code> → zip</h3>
+    <pre><code># 1 plugin, 1 target → 1 zip (default --kind connector)
+wick plugin build gmail --target linux/arm64
+
+# 1 plugin semua os/arch → N zip
+wick plugin build gmail --all
+
+# CUMA yg berubah (CI) — git diff
+wick plugin build --changed --since origin/main
+
+# kind lain (nanti)
+wick plugin build --kind tool mytool</code></pre>
+    <p class="sub">Alur tiap plugin (1 zip):</p>
+    <pre><code>1. go build ./connector/&lt;nama&gt;   → binary
+2. ./bin --dump-manifest         → plugin.json
+   (sha256 + signature ADA DI DALAM plugin.json)
+3. zip{binary, plugin.json}
+   → bin/&lt;nama&gt;-&lt;ver&gt;-&lt;os&gt;-&lt;arch&gt;.zip</code></pre>
+  </div>
+</div>
+<div class="note"><b>Jalur build sendiri (shipped):</b> <code>wick plugin build</code> ngk nebeng <code>builder.Build</code> (output-nya native installer, beda bentuk). Cross-arch: binary cross ngk bisa dijalanin di host buat <code>--dump-manifest</code>, jadi build helper host-arch dulu buat dump manifest, lalu sha256/os_arch/signature ditulis-ulang buat target asli.</div>
+
+<h3>CI/CD — cuma yang berubah, BUKAN build semua</h3>
+<div class="card bad">
+  <h3>Kontras dgn release core sekarang</h3>
+  <p>Core <code>release.yml</code> build matrix <b>semua OS/arch sekaligus</b> tiap rilis. Plugins <b>kebalikannya</b> — path-filter, cuma connector yg foldernya ke-touch yg di-rebuild &amp; di-zip.</p>
+  <pre><code>on: push paths: ['connector/**']     # cuma kalau connector berubah
+detect:  git diff → folder berubah   → outputs.changed
+build (matrix: name × os_arch):
+  name = CUMA yg berubah              # bukan semua connector
+  wick plugin build --kind ${kind} ${name} --target ${os_arch}
+   → bin/${name}-${ver}-${os}-${arch}.zip
+release:
+  gh release create "${name}/v${VER}" bin/${name}-*.zip</code></pre>
+  <div class="ok">Connector ngk berubah → ngk ke-build, ngk ke-release. Hemat CI (beda dari core full-matrix). <code>gh release</code> → muncul di GitHub Releases API → otomatis jadi entri <b>Available</b> di marketplace (§6). Zero langkah manual.</div>
+</div>
+
+<div class="note"><b>Beda <code>_template</code> (plugin) vs <code>template/</code> (core) — jangan ketuker:</b> <code>template/</code> = fork seluruh app, register di <code>app.Run()</code>, <b>compile-time</b> (rebuild app buat nambah). <code>connector/_template/</code> = scaffold <b>1 binary plugin</b> yg di-<code>plugin.Serve</code>, <b>runtime</b> (download/enable/disable tanpa rebuild core). Tujuan beda total.</div>
+
+<div class="card good">
+  <h3>✅ Status — SHIPPED</h3>
+  <p><code>wick plugin build</code> (<code>cmd/cli/plugin.go</code>, generik <code>--kind</code>) + konsumsi <code>&lt;app&gt; plugin install/list/enable/disable/remove</code> (<code>app/plugin_cmd.go</code>) + scaffold <code>plugins/</code> (1 go.mod, <code>connector/_template</code> yg beneran ke-build, README, CI changed-only) semua ADA. Round-trip test lulus (source→zip→VerifyManifest). <b>Belum:</b> repo <code>plugins</code> masih in-tree (belum di-extract), marketplace UI, Fase 5. Tracker: <code>TODO.md</code>.</p>
 </div>
 
 <p class="sub" style="margin-top:40px;text-align:center">Wick Plugin Platform — Architecture Plan · detail lengkap di <code>PLAN.md</code></p>

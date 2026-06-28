@@ -54,6 +54,7 @@ import (
 	customconn "github.com/yogasw/wick/internal/connectors/custom"
 	customconnector "github.com/yogasw/wick/internal/connectors/customconnector"
 	"github.com/yogasw/wick/internal/connectors/notifications"
+	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
@@ -235,6 +236,16 @@ func NewServer() *Server {
 	}
 
 	connectors.RegisterProfile(configsSvc.Profile())
+
+	pluginStore := connplugin.NewStateStore(db)
+	var pluginMgr *connplugin.Manager
+	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute, pluginStore.Enabled); err != nil {
+		log.Warn().Err(err).Msg("connector plugins: load failed")
+	} else if mgr != nil {
+		log.Info().Int("plugins", n).Msg("connector plugins: loaded")
+		pluginMgr = mgr
+		go pluginMgr.WarmUp()
+	}
 
 	// Seed connector_oauth:slack rows for the generic connector OAuth framework.
 	// The manager reads/writes these at owner="connector_oauth:slack" so they
@@ -953,6 +964,13 @@ func NewServer() *Server {
 	connectorsSvc.SetConfigs(configsSvc)
 	metricsRec := metrics.NewSimpleRecorder()
 	connectorsSvc.SetMetrics(metricsRec)
+
+	// Hot-reload poller: built here where pluginMgr + connectorsSvc are
+	// both in scope, started in Run with the server lifetime ctx.
+	var pluginReloader *connplugin.Reloader
+	if pluginMgr != nil {
+		pluginReloader = connplugin.NewReloader(connplugin.DefaultDir(), connectorsSvc, pluginMgr, 0, pluginStore)
+	}
 	// Wire the connectors service into the agents tool so the session
 	// Config tab can read connector field schemas + AllowSessionConfig.
 	agentstool.SetConnectors(connectorsSvc)
@@ -1219,6 +1237,9 @@ func NewServer() *Server {
 	}()
 	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, authSvc, allItems)
 	managerHandler.SetCustomConnectors(customConnSvc)
+	if pluginMgr != nil {
+		managerHandler.SetPluginResolver(pluginMgr)
+	}
 
 	// Build the hidden-key set from the "agents" module's seed. Any config
 	// field tagged with `wick:"hidden"` is managed from a dedicated UI page
@@ -1510,6 +1531,12 @@ func NewServer() *Server {
 	managerHandler.Register(r, authMidd)
 	jobrunnerHandler.Register(r, authMidd)
 
+	// Connector-plugin marketplace surface (admin-only): merged Installed +
+	// Available list from the registry, plus install/enable/disable/remove.
+	// Self-contained handler with its own DB + registry so the manager
+	// Handler signature stays untouched.
+	manager.NewPluginsHandler(db).RegisterRoutes(r, authMidd)
+
 	// Tool routes — per-tool visibility enforced via RequireToolAccess.
 	// Public tools are reachable without login; Private tools require
 	// approval and (when set) matching tags.
@@ -1530,15 +1557,17 @@ func NewServer() *Server {
 	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
 	r.Handle("/mini-tools", http.HandlerFunc(homeHandler.Launcher))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, verCache: verCache}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache}
 }
 
 type Server struct {
-	router       *http.ServeMux
-	configsSvc   *configs.Service
-	authMidd     *login.Middleware
-	agentsPool   *agentpool.Pool
-	agentsLayout agentconfig.Layout
+	router         *http.ServeMux
+	configsSvc     *configs.Service
+	authMidd       *login.Middleware
+	agentsPool     *agentpool.Pool
+	agentsLayout   agentconfig.Layout
+	pluginMgr      *connplugin.Manager
+	pluginReloader *connplugin.Reloader
 	// syncSessionMeta reloads one session into the in-memory registry
 	// and broadcasts its meta over SSE. Built in NewServer (where the
 	// registry + broadcaster are in scope) and reused by Run to wire
@@ -1788,6 +1817,9 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		ctx = log.With().Str("component", "server").Logger().WithContext(ctx)
 	}
 	logger := zerolog.Ctx(ctx)
+	if s.pluginReloader != nil {
+		go s.pluginReloader.Start(ctx)
+	}
 	// Opt-in profiling on loopback only. Set WICK_PPROF=1 to expose
 	// /debug/pprof on 127.0.0.1:6060 (heap, goroutine, profile) for
 	// diagnosing memory/CPU. Never bound to the public listener.
@@ -1897,6 +1929,12 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		logger.Info().Msg("server is shutting down...")
 		if s.agentsPool != nil {
 			s.agentsPool.Stop()
+		}
+		if s.pluginReloader != nil {
+			s.pluginReloader.Stop()
+		}
+		if s.pluginMgr != nil {
+			s.pluginMgr.KillAll()
 		}
 		sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

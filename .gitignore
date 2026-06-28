@@ -79,3 +79,17 @@ ci-timing.txt
 node_modules/
 index-*
 vite.config.ts.timestamp-*
+
+# connector plugin runtime artifacts (built binaries + generated manifests)
+/plugins/connectors/
+
+# stray plugin binaries if built at repo root with `go build ./cmd/plugins/<name>`
+/echo
+/slack
+/googleworkspace
+
+# plugin signing keys (never commit)
+*.key
+
+# stray plugin/keygen binaries if built at repo root
+/plugin-keygen

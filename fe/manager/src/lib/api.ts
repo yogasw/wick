@@ -347,3 +347,18 @@ export async function getConnectorHistory(
   const r = await apiGet<HistoryResult>(path);
   return { ...r, runs: r.runs ?? [], ops: r.ops ?? [], users: r.users ?? [] };
 }
+
+/* Plugin marketplace (admin-only). Backed by internal/manager/plugins_api.go. */
+export async function listPlugins(): Promise<import("./types.js").PluginsList> {
+  return apiGet<import("./types.js").PluginsList>("/manager/api/plugins");
+}
+export async function installPlugin(name: string): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>("/manager/api/plugins/install", { name });
+}
+export async function setPluginEnabled(key: string, enabled: boolean): Promise<{ ok: boolean }> {
+  const verb = enabled ? "enable" : "disable";
+  return apiPost<{ ok: boolean }>(`/manager/api/plugins/${encodeURIComponent(key)}/${verb}`);
+}
+export async function removePlugin(key: string): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>(`/manager/api/plugins/${encodeURIComponent(key)}/remove`);
+}

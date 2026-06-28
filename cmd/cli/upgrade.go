@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"regexp"
@@ -221,7 +222,18 @@ func fetchFromGitHub() (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("status %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		msg := githubAPIMessage(body)
+		// 403 with no remaining quota is the unauthenticated rate limit, not
+		// a server fault — surface GitHub's own "...for 1.2.3.4" reason so
+		// the user knows it's their IP's hourly cap, recoverable by waiting
+		// or authenticating. (The go proxy is tried in parallel and usually
+		// covers for this, so this path only bites when both fail.)
+		if (resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0") ||
+			resp.StatusCode == http.StatusTooManyRequests {
+			return "", fmt.Errorf("rate limit (%d): %s — unauthenticated GitHub API is capped at 60/hr per IP", resp.StatusCode, msg)
+		}
+		return "", fmt.Errorf("status %d: %s", resp.StatusCode, msg)
 	}
 	var info struct {
 		TagName string `json:"tag_name"`
@@ -233,6 +245,19 @@ func fetchFromGitHub() (string, error) {
 		return "", fmt.Errorf("empty tag")
 	}
 	return info.TagName, nil
+}
+
+// githubAPIMessage extracts the "message" field from a GitHub API error
+// body (e.g. "API rate limit exceeded for 1.2.3.4"), falling back to the
+// raw trimmed body when it isn't JSON.
+func githubAPIMessage(body []byte) string {
+	var m struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &m); err == nil && m.Message != "" {
+		return m.Message
+	}
+	return strings.TrimSpace(string(body))
 }
 
 // semverGT reports whether a > b for vX.Y.Z strings.

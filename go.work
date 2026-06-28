@@ -1,0 +1,10 @@
+go 1.25.0
+
+// Workspace so the nested plugins module (github.com/yogasw/wick/plugins) builds
+// against THIS checkout's pkg/plugin without a `replace` directive in
+// plugins/go.mod. Local dev + CI resolve github.com/yogasw/wick to ./
+// automatically. plugins/ is a permanent nested module inside the wick repo.
+use (
+	.
+	./plugins
+)

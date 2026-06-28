@@ -29,6 +29,7 @@ func Execute(tpl, designSystem, installScripts embed.FS) {
 	root.AddCommand(mcpCmd())
 	root.AddCommand(doctorCmd())
 	root.AddCommand(workflowCmd())
+	root.AddCommand(pluginCmd())
 	root.AddCommand(versionCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

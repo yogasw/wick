@@ -221,7 +221,7 @@ Example session (interactive):
 $ wick upgrade
 upgrade cli binary v0.1.13 -> v0.4.2? [Y/n]: y
 upgrade go.mod dep v0.1.13 -> v0.4.2? [Y/n]: y
-> go get github.com/yogasw/wick@v0.25.3
+> go get github.com/yogasw/wick@v0.26.0
 > go mod tidy
 Dockerfile: wick@v0.1.13 -> v0.4.2? [Y/n]: y
 ```
@@ -279,6 +279,41 @@ version: 0.6.5
 Errors out if `wick.yml` has no `version:` line with a numeric value, or the last segment is not an integer.
 
 Used by [`release.yml`](./build#auto-bumping-the-version) when `AUTO_VERSION=true` — `prepare` calls it to resolve the next tag, `release` calls it again on a fresh checkout (idempotent — same baseline, same bump) to commit the diff back to the source branch.
+
+---
+
+### `wick plugin build`
+
+Compile connector plugins from a `plugins`-style monorepo and pack each binary plus its auto-generated manifest (`plugin.json`) into a release zip: `<name>-<version>-<goos>-<goarch>.zip`.
+
+Run this from the root of a `plugins` monorepo where plugins live under `connector/<name>/main.go`.
+
+```bash
+wick plugin build gmail slack           # build specific plugins for the host arch
+wick plugin build --all-plugins         # every folder under connector/
+wick plugin build --changed             # only folders changed since origin/main
+wick plugin build --all-plugins --all   # all plugins × all OS/arch targets
+wick plugin build gmail --sign-key wick.key   # sign the manifest with an ed25519 key
+```
+
+Common flags:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--kind` | `connector` | Source folder kind: `connector`, `tool`, or `job` |
+| `--target` | host | Single target `<os>/<arch>`, e.g. `linux/arm64` |
+| `--goos` / `--goarch` | — | Split form of `--target`; mutually exclusive with it |
+| `--all` | `false` | Build all supported targets (`linux/arm64`, `linux/amd64`, `darwin/arm64`, `darwin/amd64`, `windows/amd64`) |
+| `--all-plugins` | `false` | Build every plugin folder under `<kind>/` (skip `_`-prefixed scaffolds) |
+| `--changed` | `false` | Build only folders whose files changed since `--since` |
+| `--since` | `origin/main` | Git ref to diff against for `--changed` |
+| `--sign-key` | — | Path to an ed25519 private key; signs each manifest. Generate with `cmd/plugin-keygen`. |
+| `--cosign-key` | — | Path to a cosign private key; signs each binary via the external `cosign` CLI |
+| `-o`, `--output` | `bin` | Output directory for the zip files |
+
+The manifest (`plugin.json`) is generated from the freshly-built binary via `--dump-manifest`, so the manifest can never drift from the binary it describes.
+
+See also the consumption side: [`<app> plugin`](./app-cli#app-plugin) commands on the running binary.
 
 ---
 

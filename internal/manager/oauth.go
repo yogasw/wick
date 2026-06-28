@@ -45,6 +45,14 @@ import (
 	"github.com/yogasw/wick/pkg/connector"
 )
 
+// pluginIdentityResolver resolves an OAuth token's owner via a connector
+// plugin subprocess. *connectorsplugin.Manager satisfies it. nil when no
+// plugins are loaded.
+type pluginIdentityResolver interface {
+	IsPlugin(key string) bool
+	ResolveIdentity(ctx context.Context, key, accessToken string) (userID, displayName string, err error)
+}
+
 // oauthStateEntry stores a pending OAuth state with its expiry and optional
 // connector row ID so the callback knows which row to update.
 type oauthStateEntry struct {
@@ -226,8 +234,17 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve display name via GetUserIdentity.
-	userID, displayName, err := mod.OAuth.GetUserIdentity(r.Context(), accessToken)
+	// Resolve display name. Plugin connectors resolve over gRPC (their
+	// GetUserIdentity func cannot cross the process boundary); in-process
+	// connectors call GetUserIdentity directly.
+	var userID, displayName string
+	if h.pluginResolver != nil && h.pluginResolver.IsPlugin(key) {
+		userID, displayName, err = h.pluginResolver.ResolveIdentity(r.Context(), key, accessToken)
+	} else if mod.OAuth.GetUserIdentity != nil {
+		userID, displayName, err = mod.OAuth.GetUserIdentity(r.Context(), accessToken)
+	} else {
+		err = fmt.Errorf("connector %q has no identity resolver", key)
+	}
 	if err != nil {
 		if fallbackUserID == "" {
 			log.Error().Err(err).Str("connector", key).Msg("manager oauth: GetUserIdentity failed, no fallback user ID")

@@ -340,6 +340,17 @@ func (s *Service) UpsertModule(ctx context.Context, m connector.Module) error {
 	return s.seedModuleRows(ctx, m)
 }
 
+// RemoveModule drops a module definition at runtime (the reverse of
+// UpsertModule), used by the plugin hot-reloader when a plugin is
+// uninstalled. The connector vanishes from the LLM surface immediately;
+// any DB instance rows persist and become inert (Module() returns false)
+// until a module with the same key is registered again.
+func (s *Service) RemoveModule(key string) {
+	s.mu.Lock()
+	delete(s.modules, key)
+	s.mu.Unlock()
+}
+
 // Modules returns the registered definitions, useful for the
 // "+ New instance" picker in the admin UI.
 func (s *Service) Modules() []connector.Module {

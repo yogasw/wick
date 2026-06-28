@@ -63,12 +63,39 @@ gh_download() {
 
 if [ "${VERSION:-latest}" = "latest" ]; then
   echo "→ resolving latest tag for $REPO..."
-  TAG=$(curl_auth -fsSL --max-time 15 "https://api.github.com/repos/$REPO/releases/latest" \
-        | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+  # Capture body + HTTP status separately so a 403/404 surfaces GitHub's
+  # own message (e.g. "rate limit exceeded for 1.2.3.4") instead of a
+  # bare "could not resolve" — without -f, curl prints the JSON body on
+  # error too. Status is appended on its own trailer line and split off.
+  api_url="https://api.github.com/repos/$REPO/releases/latest"
+  resp=$(curl_auth -sSL --max-time 15 -w '\n%{http_code}' "$api_url" 2>/dev/null || true)
+  http_code=$(printf '%s' "$resp" | tail -1)
+  body=$(printf '%s' "$resp" | sed '$d')
+  TAG=$(printf '%s' "$body" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
 else
   TAG="$VERSION"
 fi
-[ -z "$TAG" ] && { echo "could not resolve latest tag for $REPO" >&2; exit 1; }
+if [ -z "$TAG" ]; then
+  echo "could not resolve latest tag for $REPO" >&2
+  if [ -n "${http_code:-}" ] && [ "$http_code" != "200" ]; then
+    echo "  GitHub API responded HTTP $http_code:" >&2
+    # GitHub's JSON "message" carries the human reason (rate limit / not found).
+    msg=$(printf '%s' "$body" | sed -n 's/.*"message": *"\([^"]*\)".*/\1/p')
+    [ -n "$msg" ] && echo "    $msg" >&2 || printf '%s\n' "$body" | sed 's/^/    /' >&2
+  fi
+  case "${http_code:-}" in
+    403|429)
+      echo "" >&2
+      echo "  This is GitHub's unauthenticated API limit (60 req/hr per IP)." >&2
+      _self="https://yogasw.github.io/wick/install.sh"
+      echo "  Fix it one of these ways:" >&2
+      echo "    • pass a token : TOKEN=ghp_xxx sh -c \"\$(curl -fsSL $_self)\"" >&2
+      echo "    • pin a version: VERSION=vX.Y.Z sh -c \"\$(curl -fsSL $_self)\"  (skips the API)" >&2
+      echo "    • or just wait for the hourly reset and retry." >&2
+      ;;
+  esac
+  exit 1
+fi
 VER="${TAG#v}"
 BASE="https://github.com/$REPO/releases/download/$TAG"
 

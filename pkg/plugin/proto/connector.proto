@@ -1,0 +1,43 @@
+syntax = "proto3";
+package wick.connector.v1;
+option go_package = "github.com/yogasw/wick/pkg/plugin/proto;proto";
+
+service Connector {
+  rpc Schema           (SchemaRequest)    returns (SchemaResponse);
+  rpc Execute          (ExecuteRequest)   returns (ExecuteResponse);
+  rpc ExecuteStream    (ExecuteRequest)   returns (stream Chunk);
+  rpc CheckPermissions (PermsRequest)     returns (PermsResponse);
+  rpc ResolveIdentity  (IdentityRequest)  returns (IdentityResponse);
+  rpc Health           (HealthRequest)    returns (HealthResponse);
+}
+
+message Error { string code = 1; string message = 2; }
+
+message ExecuteRequest {
+  string operation = 1;
+  bytes  args_json = 2;
+  map<string,string> creds = 3;
+  string request_id = 4;
+  string session_id = 5;
+}
+message ExecuteResponse { bytes result_json = 1; Error error = 2; map<string,string> meta = 3; }
+message Chunk {
+  bytes  data = 1;
+  bool   eof = 2;
+  Error  error = 3;
+  int32  progress = 4;
+  int32  total = 5;
+  string message = 6;
+}
+
+message OpHealth { string key = 1; bool ok = 2; string reason = 3; }
+message PermsRequest  { map<string,string> creds = 1; }
+message PermsResponse { repeated OpHealth ops = 1; Error error = 2; }
+
+message IdentityRequest  { string access_token = 1; }
+message IdentityResponse { string user_id = 1; string display_name = 2; Error error = 3; }
+
+message SchemaRequest  {}
+message SchemaResponse { bytes manifest_json = 1; }
+message HealthRequest  {}
+message HealthResponse { bool healthy = 1; string detail = 2; }

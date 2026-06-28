@@ -1,0 +1,118 @@
+package plugin
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	pb "github.com/yogasw/wick/pkg/plugin/proto"
+)
+
+// ErrPluginOp wraps an operation-level error returned by the plugin (vs a
+// transport error). Callers can errors.Is against it.
+var ErrPluginOp = errors.New("plugin operation error")
+
+// ExecCall is the host-side call descriptor the adapter closure fills from
+// a *connector.Ctx (operation + plaintext input + plaintext creds).
+type ExecCall struct {
+	Operation string
+	Input     map[string]string
+	Creds     map[string]string
+	RequestID string
+	SessionID string
+}
+
+// GRPCConn is the host-facing surface of a connector plugin client. The
+// manager hands this to the adapter closure; *grpcClient implements it.
+type GRPCConn interface {
+	Execute(ctx context.Context, call ExecCall) ([]byte, error)
+	ExecuteStream(ctx context.Context, call ExecCall) ([]byte, error)
+	Schema(ctx context.Context) ([]byte, error)
+	ResolveIdentity(ctx context.Context, accessToken string) (userID, displayName string, err error)
+}
+
+// grpcClient is the host's handle to one connector plugin's gRPC service.
+// It is what GRPCClient() dispenses; the manager keeps it alive per plugin.
+type grpcClient struct {
+	inner pb.ConnectorClient
+}
+
+// Execute runs one operation in the plugin and returns the raw result JSON.
+func (c *grpcClient) Execute(ctx context.Context, call ExecCall) ([]byte, error) {
+	args, err := json.Marshal(call.Input)
+	if err != nil {
+		return nil, fmt.Errorf("marshal input: %w", err)
+	}
+	resp, err := c.inner.Execute(ctx, &pb.ExecuteRequest{
+		Operation: call.Operation,
+		ArgsJson:  args,
+		Creds:     call.Creds,
+		RequestId: call.RequestID,
+		SessionId: call.SessionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("plugin transport: %w", err)
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%w: [%s] %s", ErrPluginOp, resp.Error.Code, resp.Error.Message)
+	}
+	return resp.ResultJson, nil
+}
+
+// ExecuteStream runs one operation and reassembles the streamed result. It
+// removes the default gRPC message ceiling for large results.
+func (c *grpcClient) ExecuteStream(ctx context.Context, call ExecCall) ([]byte, error) {
+	args, err := json.Marshal(call.Input)
+	if err != nil {
+		return nil, fmt.Errorf("marshal input: %w", err)
+	}
+	stream, err := c.inner.ExecuteStream(ctx, &pb.ExecuteRequest{
+		Operation: call.Operation,
+		ArgsJson:  args,
+		Creds:     call.Creds,
+		RequestId: call.RequestID,
+		SessionId: call.SessionID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("plugin transport: %w", err)
+	}
+	var out []byte
+	for {
+		chunk, err := stream.Recv()
+		if err != nil {
+			return nil, fmt.Errorf("plugin transport: %w", err)
+		}
+		if chunk.Error != nil {
+			return nil, fmt.Errorf("%w: [%s] %s", ErrPluginOp, chunk.Error.Code, chunk.Error.Message)
+		}
+		if len(chunk.Data) > 0 {
+			out = append(out, chunk.Data...)
+		}
+		if chunk.Eof {
+			return out, nil
+		}
+	}
+}
+
+// ResolveIdentity asks the plugin who an OAuth access token belongs to.
+func (c *grpcClient) ResolveIdentity(ctx context.Context, accessToken string) (userID, displayName string, err error) {
+	resp, err := c.inner.ResolveIdentity(ctx, &pb.IdentityRequest{AccessToken: accessToken})
+	if err != nil {
+		return "", "", fmt.Errorf("plugin transport: %w", err)
+	}
+	if resp.Error != nil {
+		return "", "", fmt.Errorf("%w: [%s] %s", ErrPluginOp, resp.Error.Code, resp.Error.Message)
+	}
+	return resp.UserId, resp.DisplayName, nil
+}
+
+// Schema fetches the manifest JSON from a live plugin (used by the loader
+// when no plugin.json is present on disk — Phase 2 hot path).
+func (c *grpcClient) Schema(ctx context.Context) ([]byte, error) {
+	resp, err := c.inner.Schema(ctx, &pb.SchemaRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return resp.ManifestJson, nil
+}

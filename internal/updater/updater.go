@@ -39,6 +39,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -649,10 +650,18 @@ func (u *Updater) fetchLatest(ctx context.Context) (*ghRelease, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			return nil, fmt.Errorf("github auth failed (%d) — RELEASE_GITHUB_DOWNLOAD_PAT may be expired; rotate it and publish a new release", resp.StatusCode)
+		// Rate limit (403/429 with the dedicated header) is distinct from a
+		// bad/expired PAT — GitHub returns 403 for both, so disambiguate via
+		// X-RateLimit-Remaining before blaming the token. The JSON body
+		// ("rate limit exceeded for 1.2.3.4") is included either way.
+		if isRateLimited(resp) {
+			return nil, fmt.Errorf("github rate limit hit (%d): %s — unauthenticated requests are capped at 60/hr per IP; set a release PAT or retry after %s",
+				resp.StatusCode, githubMessage(body), rateLimitResetHint(resp))
 		}
-		return nil, fmt.Errorf("github %d: %s", resp.StatusCode, string(body))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, fmt.Errorf("github auth failed (%d): %s — RELEASE_GITHUB_DOWNLOAD_PAT may be expired; rotate it and publish a new release", resp.StatusCode, githubMessage(body))
+		}
+		return nil, fmt.Errorf("github %d: %s", resp.StatusCode, githubMessage(body))
 	}
 	var rel ghRelease
 	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
@@ -745,6 +754,49 @@ func (u *Updater) pickAssets(assets []ghAsset, version string) (bin, sum *ghAsse
 // ----- helpers -----
 
 func newClient() *http.Client { return &http.Client{Timeout: httpTimeout} }
+
+// githubMessage pulls the human-readable "message" field out of a GitHub
+// API error body, falling back to the raw (trimmed) body when it isn't
+// JSON. This is what carries "API rate limit exceeded for 1.2.3.4" — the
+// detail that makes a 403 actionable instead of mysterious.
+func githubMessage(body []byte) string {
+	var m struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &m); err == nil && m.Message != "" {
+		return m.Message
+	}
+	return strings.TrimSpace(string(body))
+}
+
+// isRateLimited reports whether a 403/429 is the API rate limit rather
+// than an auth failure. GitHub uses 403 for both, so the X-RateLimit-
+// Remaining: 0 header is the reliable discriminator. 429 is always a
+// rate/abuse limit.
+func isRateLimited(resp *http.Response) bool {
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	if resp.StatusCode == http.StatusForbidden && resp.Header.Get("X-RateLimit-Remaining") == "0" {
+		return true
+	}
+	return false
+}
+
+// rateLimitResetHint turns the X-RateLimit-Reset epoch header into a
+// short human hint ("15:59 local"). Returns "the hourly reset" when the
+// header is absent or unparseable so the message still reads sensibly.
+func rateLimitResetHint(resp *http.Response) string {
+	raw := resp.Header.Get("X-RateLimit-Reset")
+	if raw == "" {
+		return "the hourly reset"
+	}
+	sec, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return "the hourly reset"
+	}
+	return time.Unix(sec, 0).Local().Format("15:04 MST")
+}
 
 func parseRepo(full string) (owner, repo string) {
 	full = strings.TrimSpace(full)

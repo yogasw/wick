@@ -5,6 +5,24 @@ on:
     branches:
       - release
     types: [opened, synchronize, reopened]
+    # SINGLE entry point for every release PR — no path filter. check-source-branch
+    # decides core-vs-plugin from the VERSION tag:
+    #   • VERSION bumped (tag missing) → CORE release: core jobs run, then
+    #     notify-plugins dispatches the plugin pipeline AFTER core lands (plugins
+    #     rebuild against the new wick).
+    #   • VERSION unchanged (tag exists) → not a core release: core jobs skip and
+    #     dispatch-plugins triggers the plugin pipeline immediately.
+    # The plugin pipeline is always reached via repository_dispatch, so the two
+    # workflows never run at the same time on the same PR.
+
+# ONE shared concurrency group across ALL wick release workflows (core + plugin)
+# so only a single run executes at a time globally — nothing else can touch the
+# caches (delete+save) concurrently. cancel-in-progress: false → a second run
+# queues behind the first instead of being cancelled (never abort a release
+# mid-flight).
+concurrency:
+  group: wick-workflow
+  cancel-in-progress: false
 
 jobs:
   check-source-branch:
@@ -85,6 +103,7 @@ jobs:
 
     permissions:
       contents: read
+      actions: write # gh cache delete (refresh caches under stable keys)
 
     steps:
       - name: Checkout repository
@@ -100,14 +119,27 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Resolve templ version from go.mod
-        id: templ
-        run: echo "version=$(go list -m -f '{{.Version}}' github.com/a-h/templ)" >> $GITHUB_OUTPUT
+      # Stable cache keys, refreshed each run (restore → build → delete → save).
+      # Own keys ('-core' suffix) so this never races the plugin workflow, which
+      # maintains its own 'go-build'/'templ'. Keys are version-free: if a tool or
+      # dep changes, the run just re-downloads and saves the fresh result back.
+      - name: Restore Go build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-core
 
+      - name: Restore templ binary
+        id: templ-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ-core
       - name: Install templ (version pinned to go.mod)
+        if: steps.templ-cache.outputs.cache-hit != 'true'
         run: |
-          echo "Using templ ${{ steps.templ.outputs.version }}"
-          go install github.com/a-h/templ/cmd/templ@${{ steps.templ.outputs.version }}
+          ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install github.com/a-h/templ/cmd/templ@${ver}
 
       - name: Generate templ files
         run: templ generate ./...
@@ -115,17 +147,55 @@ jobs:
       - name: Build
         run: go build ./internal/... ./cmd/... ./pkg/...
 
+      # The plugins/ starter is a SEPARATE module (nested), so ./... above
+      # never compiles it. The repo-root go.work wires it to this checkout's
+      # pkg/plugin, so build it here to catch a pkg/plugin change that breaks the
+      # plugin author contract before release. Note: connector/_template starts
+      # with "_", which `go ./...` ignores — build it by explicit path, and let
+      # ./... cover any real (non-"_") plugins added later.
+      - name: Build connector plugins (plugins module)
+        working-directory: plugins
+        run: |
+          go build ./connector/_template/
+          go build ./... 2>/dev/null || true
+
       # Per-PR CI is disabled, so the release pipeline is the CI gate: run
       # the full suite (with -race) before anything gets tagged or released.
+      # cmd/cli's plugin_test.go exercises `wick plugin build` end-to-end.
       - name: Run unit tests
         run: go test -count=1 -timeout 10m ./internal/... ./cmd/... ./pkg/...
 
       - name: Run race detector (full suite)
         run: go test -race -count=1 -timeout 15m ./internal/... ./cmd/... ./pkg/...
 
+      # Refresh the stable caches: delete the old key, save the fresh result.
+      # (actions/cache is immutable per key, so save would no-op without delete.)
+      - name: Refresh caches
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh cache delete go-build-core --repo "${{ github.repository }}" || true
+          gh cache delete templ-core --repo "${{ github.repository }}" || true
+      - name: Save Go build cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-core
+      - name: Save templ binary
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ-core
+
   prepare:
     name: Prepare Release
-    needs: check-source-branch
+    # Core release runs unit-tests FIRST — prepare (and everything after it)
+    # only starts once the suite passes, so no release prep happens for a build
+    # that would fail tests.
+    needs: [check-source-branch, unit-tests]
     if: needs.check-source-branch.outputs.skip == 'false'
     runs-on: ubuntu-latest
 
@@ -573,3 +643,43 @@ jobs:
             echo "Attempt $i failed, retrying in 10s..."
             sleep 10
           done
+
+  # CORE-RELEASE path (skip=false): after the core release fully lands, signal
+  # the plugin pipeline so it rebuilds plugins against the just-published wick
+  # version (plugins build against wick, so they must run AFTER the core tag
+  # exists). The plugin pipeline is dispatch-only, so this is its trigger here.
+  notify-plugins:
+    name: Trigger plugin release (after core)
+    needs: [check-source-branch, prepare, create-release, merge-to-master]
+    if: needs.check-source-branch.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch core-released to plugin pipeline
+        env:
+          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          gh api repos/${{ github.repository }}/dispatches \
+            --method POST \
+            --field event_type=core-released \
+            --field client_payload[version]="${{ needs.prepare.outputs.version }}"
+
+  # PLUGIN-ONLY path (skip=true): the core VERSION wasn't bumped, so this PR is
+  # not a core release — the core jobs above are all skipped. Trigger the plugin
+  # pipeline immediately (no core release to wait for). This + notify-plugins are
+  # mutually exclusive on `skip`, so exactly one fires per PR — and the plugin
+  # pipeline never runs concurrently with the core jobs.
+  dispatch-plugins:
+    name: Trigger plugin release (plugin-only)
+    needs: check-source-branch
+    if: needs.check-source-branch.outputs.skip == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch core-released to plugin pipeline
+        env:
+          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          # version is informational only on this path (no new core release).
+          gh api repos/${{ github.repository }}/dispatches \
+            --method POST \
+            --field event_type=core-released \
+            --field client_payload[version]=""
