@@ -301,7 +301,7 @@ jobs:
           # this, the most recent release (often a plugin) steals the "Latest"
           # badge from the wick release people actually come here to download.
           # Pin "Latest" to core only — plugin releases never claim it.
-          make_latest: false
+          make_latest: "false"
           # The release tag is created on the PR head commit. That's the code
           # under review; the same commit lands on master via the normal PR
           # merge. ADMIN_TOKEN so tag creation isn't blocked by ruleset config.
