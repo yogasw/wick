@@ -282,6 +282,41 @@ Used by [`release.yml`](./build#auto-bumping-the-version) when `AUTO_VERSION=tru
 
 ---
 
+### `wick plugin build`
+
+Compile connector plugins from a `wick-plugins`-style monorepo and pack each binary plus its auto-generated manifest (`plugin.json`) into a release zip: `<name>-<version>-<goos>-<goarch>.zip`.
+
+Run this from the root of a `wick-plugins` monorepo where plugins live under `connector/<name>/main.go`.
+
+```bash
+wick plugin build gmail slack           # build specific plugins for the host arch
+wick plugin build --all-plugins         # every folder under connector/
+wick plugin build --changed             # only folders changed since origin/main
+wick plugin build --all-plugins --all   # all plugins × all OS/arch targets
+wick plugin build gmail --sign-key wick.key   # sign the manifest with an ed25519 key
+```
+
+Common flags:
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--kind` | `connector` | Source folder kind: `connector`, `tool`, or `job` |
+| `--target` | host | Single target `<os>/<arch>`, e.g. `linux/arm64` |
+| `--goos` / `--goarch` | — | Split form of `--target`; mutually exclusive with it |
+| `--all` | `false` | Build all supported targets (`linux/arm64`, `linux/amd64`, `darwin/arm64`, `darwin/amd64`, `windows/amd64`) |
+| `--all-plugins` | `false` | Build every plugin folder under `<kind>/` (skip `_`-prefixed scaffolds) |
+| `--changed` | `false` | Build only folders whose files changed since `--since` |
+| `--since` | `origin/main` | Git ref to diff against for `--changed` |
+| `--sign-key` | — | Path to an ed25519 private key; signs each manifest. Generate with `cmd/plugin-keygen`. |
+| `--cosign-key` | — | Path to a cosign private key; signs each binary via the external `cosign` CLI |
+| `-o`, `--output` | `bin` | Output directory for the zip files |
+
+The manifest (`plugin.json`) is generated from the freshly-built binary via `--dump-manifest`, so the manifest can never drift from the binary it describes.
+
+See also the consumption side: [`<app> plugin`](./app-cli#app-plugin) commands on the running binary.
+
+---
+
 ## Task shortcuts (from `wick.yml`)
 
 Each of these runs the matching task in `wick.yml`. The commands shown in the "Default behavior" column are what the template ships — edit `wick.yml` to change them.

@@ -110,6 +110,14 @@ func NewCtx(ctx context.Context, instanceID string, configs, input map[string]st
 	}
 }
 
+// NewPluginCtx builds a Ctx inside a connector plugin subprocess from the
+// plaintext creds + input the host sent over gRPC. There is no masker or
+// progress reporter here — masking stays host-side; progress is bridged by
+// the streaming server when used.
+func NewPluginCtx(ctx context.Context, configs, input map[string]string) *Ctx {
+	return &Ctx{ctx: ctx, HTTP: http.DefaultClient, configs: configs, input: input}
+}
+
 // Context returns the context.Context bound to this call. The MCP
 // transport derives this ctx from the inbound HTTP request and may
 // further wrap it with a deadline (e.g. the SSE path's per-call
@@ -175,6 +183,29 @@ func (c *Ctx) ReportProgress(progress, total int, message string) {
 		return
 	}
 	c.progress.Report(progress, total, message)
+}
+
+// ── Full-map accessors ───────────────────────────────────────────────
+
+// Configs returns a copy of the resolved per-instance credential map. The
+// connector plugin adapter uses it to ship the full creds set (including
+// host-injected OAuth keys like access_token) over gRPC. Returns a copy so
+// callers cannot mutate the Ctx's internal state.
+func (c *Ctx) Configs() map[string]string {
+	out := make(map[string]string, len(c.configs))
+	for k, v := range c.configs {
+		out[k] = v
+	}
+	return out
+}
+
+// Inputs returns a copy of the per-call input map (same rationale as Configs).
+func (c *Ctx) Inputs() map[string]string {
+	out := make(map[string]string, len(c.input))
+	for k, v := range c.input {
+		out[k] = v
+	}
+	return out
 }
 
 // ── Credential reads ─────────────────────────────────────────────────

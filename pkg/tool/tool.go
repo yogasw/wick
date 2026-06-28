@@ -55,17 +55,11 @@ type Tool struct {
 }
 
 // DefaultTag is the spec used by Tool.DefaultTags to seed tags on startup.
-//
-// IsSystem marks the tag as code-owned — see entity.Tag godoc for the
-// admin-UI implications (cannot be assigned to users from the picker).
-type DefaultTag struct {
-	Name        string
-	Description string
-	IsGroup     bool
-	IsFilter    bool
-	IsSystem    bool
-	SortOrder   int
-}
+// It is now defined in pkg/entity (a leaf package free of the templ render
+// stack) so pkg/connector and pkg/job can use it without dragging pkg/tool —
+// and thus templ — into every connector plugin binary. This alias keeps the
+// long-standing `tool.DefaultTag` name working for all existing callers.
+type DefaultTag = entity.DefaultTag
 
 // HandlerFunc is the tool-side handler signature. A handler receives a
 // *Ctx that exposes request helpers (Form, Query, BindJSON) and

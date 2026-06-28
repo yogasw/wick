@@ -10,7 +10,6 @@ import (
 	"context"
 
 	"github.com/yogasw/wick/pkg/entity"
-	"github.com/yogasw/wick/pkg/tool"
 )
 
 // Meta holds the static metadata for a job instance. Downstream code
@@ -26,7 +25,7 @@ type Meta struct {
 	// DefaultTags works the same as tool.Tool.DefaultTags — seeded on
 	// startup, linked to the job's path, and used for tag-based access
 	// control in the admin UI.
-	DefaultTags []tool.DefaultTag
+	DefaultTags []entity.DefaultTag
 	// AutoEnable forces Job.Enabled = true on every Bootstrap. Intended
 	// for built-in maintenance jobs that ship pre-enabled and have no
 	// user-facing toggle (typically combined with DefaultTags carrying
