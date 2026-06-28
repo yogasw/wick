@@ -78,6 +78,7 @@ export default withMermaid(defineConfig({
           { text: 'Background Job', link: '/guide/job-module' },
           { text: 'Connector Module', link: '/guide/connector-module' },
           { text: 'Custom Connectors', link: '/guide/custom-connectors' },
+          { text: 'Connector Plugins', link: '/guide/connector-plugins' },
         ],
       },
       {
