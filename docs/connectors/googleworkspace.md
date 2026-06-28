@@ -10,12 +10,20 @@ This replaces the older code-only `google_drive` connector. The connector now sh
 
 | | |
 |---|---|
-| **Source** | [`internal/connectors/googleworkspace/`](https://github.com/yogasw/wick/tree/master/internal/connectors/googleworkspace) |
+| **Source** | [`plugins/connector/google_workspace/`](https://github.com/yogasw/wick/tree/master/plugins/connector/google_workspace) |
 | **Key** | `google_workspace` |
 | **Icon** | 🗂️ |
-| **Tier** | builtin (every wick app) |
+| **Tier** | plugin — install with `<app> plugin install google_workspace` |
 | **Health check** | ✅ — probes the token's granted scopes via Google `tokeninfo` and reports per-op availability |
 | **OAuth** | ✅ — per-instance Google OAuth app credentials live on this row |
+
+> This connector is no longer compiled into the wick binary. Install it as a plugin:
+>
+> ```bash
+> <app> plugin install google_workspace
+> ```
+>
+> Existing credential rows and OAuth tokens are preserved on upgrade — the connector reappears automatically once the plugin is installed and enabled. See [Connector Plugins](/guide/connector-plugins) for the full install flow.
 
 ## Configs
 
