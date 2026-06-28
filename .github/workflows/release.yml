@@ -15,6 +15,15 @@ on:
     # The plugin pipeline is always reached via repository_dispatch, so the two
     # workflows never run at the same time on the same PR.
 
+# ONE shared concurrency group across ALL wick release workflows (core + plugin)
+# so only a single run executes at a time globally — nothing else can touch the
+# caches (delete+save) concurrently. cancel-in-progress: false → a second run
+# queues behind the first instead of being cancelled (never abort a release
+# mid-flight).
+concurrency:
+  group: wick-workflow
+  cancel-in-progress: false
+
 jobs:
   check-source-branch:
     name: Validate PR Source Branch
@@ -94,6 +103,7 @@ jobs:
 
     permissions:
       contents: read
+      actions: write # gh cache delete (refresh caches under stable keys)
 
     steps:
       - name: Checkout repository
@@ -109,14 +119,27 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Resolve templ version from go.mod
-        id: templ
-        run: echo "version=$(go list -m -f '{{.Version}}' github.com/a-h/templ)" >> $GITHUB_OUTPUT
+      # Stable cache keys, refreshed each run (restore → build → delete → save).
+      # Own keys ('-core' suffix) so this never races the plugin workflow, which
+      # maintains its own 'go-build'/'templ'. Keys are version-free: if a tool or
+      # dep changes, the run just re-downloads and saves the fresh result back.
+      - name: Restore Go build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-core
 
+      - name: Restore templ binary
+        id: templ-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ-core
       - name: Install templ (version pinned to go.mod)
+        if: steps.templ-cache.outputs.cache-hit != 'true'
         run: |
-          echo "Using templ ${{ steps.templ.outputs.version }}"
-          go install github.com/a-h/templ/cmd/templ@${{ steps.templ.outputs.version }}
+          ver=$(go list -m -f '{{.Version}}' github.com/a-h/templ)
+          go install github.com/a-h/templ/cmd/templ@${ver}
 
       - name: Generate templ files
         run: templ generate ./...
@@ -144,6 +167,28 @@ jobs:
 
       - name: Run race detector (full suite)
         run: go test -race -count=1 -timeout 15m ./internal/... ./cmd/... ./pkg/...
+
+      # Refresh the stable caches: delete the old key, save the fresh result.
+      # (actions/cache is immutable per key, so save would no-op without delete.)
+      - name: Refresh caches
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh cache delete go-build-core --repo "${{ github.repository }}" || true
+          gh cache delete templ-core --repo "${{ github.repository }}" || true
+      - name: Save Go build cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-core
+      - name: Save templ binary
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/go/bin/templ
+          key: templ-core
 
   prepare:
     name: Prepare Release

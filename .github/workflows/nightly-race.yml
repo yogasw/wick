@@ -9,8 +9,12 @@ name: Nightly Race
 # schedule only fires on the upstream repo).
 
 on:
-  schedule:
-    - cron: '0 18 * * *' # 18:00 UTC daily
+  # Nightly schedule is DISABLED — not in use yet and the daily run isn't worth
+  # the minutes right now. The full -race suite already runs in release.yml's
+  # unit-tests on every release. Kept as a manual escape hatch; re-enable by
+  # uncommenting the schedule.
+  # schedule:
+  #   - cron: '0 18 * * *' # 18:00 UTC daily
   workflow_dispatch: {}
 
 jobs:
