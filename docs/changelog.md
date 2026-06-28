@@ -13,6 +13,9 @@ All notable changes to Wick are documented here.
 
 ### Changed
 
+*   **GitHub, Bitbucket, and Google Workspace moved to external plugins**: These three connectors are no longer compiled into the wick binary. They now ship as independently versioned and downloadable plugin binaries under `plugins/connector/`. Install them on a running app with `<app> plugin install github` (and/or `bitbucket`, `google_workspace`), then enable each from the manager UI. Existing credential rows and OAuth tokens are preserved on upgrade — the connector reappears automatically once the matching plugin is installed and enabled.
+    *   The `agent` build profile no longer includes GitHub; it now contains only `httprest` and `slack`.
+    *   The `full` profile registers 4 builtin connectors (HTTP REST, Slack, Loki, Phoenix), down from 7.
 *   **Connector list — plugins merged into category grid**: Available-to-install plugins no longer appear in a separate "Available to install" section below the connector list. They flow into the same category grid as built-ins, with a **Download** button instead of a detail link. If no build exists for the host OS/arch the button is disabled with a reason. An **Installed** filter chip shows only connectors that are ready to use (built-ins + downloaded plugins). Category chips are derived from each connector's tags and span both built-ins and plugins.
 *   **Plugin install directory** — the plugin scan directory now resolves via `appname.Resolve()` (matching the `wick.db` tree), fixing a silent mismatch where plugins installed into `~/.wick-agent/` were not found when the binary was named differently (e.g. an MCP stdio subprocess). Override with `WICK_PLUGINS_DIR`.
 *   **Hot-reload always active** — the plugin hot-reload poller now starts even when zero plugins are installed at boot, so a plugin installed for the first time is picked up immediately without a restart.
