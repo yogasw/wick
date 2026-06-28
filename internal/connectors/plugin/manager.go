@@ -7,13 +7,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"sync"
 	"time"
 
 	goplugin "github.com/hashicorp/go-plugin"
 	"github.com/rs/zerolog/log"
 
+	"github.com/yogasw/wick/internal/safeexec"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 
@@ -152,7 +152,7 @@ func (m *Manager) spawn(key string) (*entry, error) {
 	client := goplugin.NewClient(&goplugin.ClientConfig{
 		HandshakeConfig:  wickplugin.Handshake,
 		VersionedPlugins: wickplugin.VersionedPlugins,
-		Cmd:              exec.Command(bin),
+		Cmd:              safeexec.Command(bin),
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		AutoMTLS:         true,
 		UnixSocketConfig: &goplugin.UnixSocketConfig{TempDir: m.socketDir},
