@@ -17,7 +17,7 @@ type StorageConfig struct {
 	// dropdown (options injected at render from the live project list).
 	// New sessions with no explicit project — channels, API, quick-create
 	// — bind here. Empty = unscoped (per-session temp cwd).
-	DefaultProjectID string `wick:"dropdown;key=default_project_id;desc=Default project for new sessions when none is picked (channels, API, quick-create). Leave empty for unscoped."`
+	DefaultProjectID string `wick:"dropdown;key=default_project_id;group=General;desc=Default project for new sessions when none is picked (channels, API, quick-create). Leave empty for unscoped."`
 }
 
 // DefaultStorageConfig returns the empty default.

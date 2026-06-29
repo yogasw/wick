@@ -24,10 +24,10 @@ package config
 // channels (Slack/HTTP/cron) flip their own mode without changing the
 // global config; until then the global mode applies everywhere.
 type GateConfig struct {
-	GateEnabled    bool   `wick:"bool;desc=Master switch for the COMMAND gate (PreToolUse hook). Off = commands run unguarded (permission bypass). Does NOT affect ask_user — that has its own switch below."`
-	PermissionMode string `wick:"dropdown=on|bypass;desc=Permission policy. on = install PreToolUse hook so the user approves each tool call. bypass = run unguarded (use for Slack/HTTP where no human can approve)."`
-	AskUserMode    string `wick:"dropdown=on|off;desc=Ask-user policy (independent of the command gate). on = route ask_user MCP calls to the web UI. off = return an error so the agent picks a sensible default instead of blocking."`
-	AllowedCmds    string `wick:"kvlist=pattern|scope;desc=Command whitelist for the permission gate. pattern supports a trailing * wildcard (e.g. 'git *'). scope (optional) restricts path args to a directory prefix."`
+	GateEnabled    bool   `wick:"bool;group=Permission Gate|Command gate and ask-user policy. Tune these for non-interactive channels (Slack/HTTP) where no human can approve.;desc=Master switch for the COMMAND gate (PreToolUse hook). Off = commands run unguarded (permission bypass). Does NOT affect ask_user — that has its own switch below."`
+	PermissionMode string `wick:"dropdown=on|bypass;group=Permission Gate;desc=Permission policy. on = install PreToolUse hook so the user approves each tool call. bypass = run unguarded (use for Slack/HTTP where no human can approve)."`
+	AskUserMode    string `wick:"dropdown=on|off;group=Permission Gate;desc=Ask-user policy (independent of the command gate). on = route ask_user MCP calls to the web UI. off = return an error so the agent picks a sensible default instead of blocking."`
+	AllowedCmds    string `wick:"kvlist=pattern|scope;group=Permission Gate;desc=Command whitelist for the permission gate. pattern supports a trailing * wildcard (e.g. 'git *'). scope (optional) restricts path args to a directory prefix."`
 }
 
 // DefaultGateConfig returns the seed values for the gate config.

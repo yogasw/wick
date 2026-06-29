@@ -109,6 +109,23 @@ The agent's progress is mirrored on the user's message ([slack.go:34-39](https:/
 
 The bot uses reactions only for states the operator can't see anywhere else. Queue state lives only on the message until the pool takes it; once accepted, the queue reaction is cleared and the assistant banner (`is thinking…`) carries progress. On a successful `done` the banner is cleared too — the reply itself is the signal. Blocked / error remain as reactions so the post-mortem state is visible at a glance.
 
+### Reaction auto-reply
+
+React 🤖 (`robot_face`) on a **thread's top (parent) message** to make that thread auto-reply: every new reply in the thread is dispatched to the agent **without an @mention**, for as long as the 🤖 stays on the parent. Remove the 🤖 → auto-reply off (a run already in flight finishes; only the next reply is dropped). It is one switch on the parent — not a reaction per bubble. Threads are still started by `@mention` only; the switch never creates a new session, so it only acts on threads that already have one.
+
+Enable it on the Slack channel config page: toggle **`reaction_trigger_enabled`**, then pick **`reaction_channels_mode`** — `all` (any channel the bot is in honours 🤖) or `whitelist` (only the channels listed in `reaction_channels`, the default). The reaction channel list is independent of the access whitelist; reactors still have to pass the same access control as a normal message.
+
+For Slack to deliver the events this relies on, the app must subscribe to the right events + scopes (the shipped [`slack-app-manifest.json`](https://github.com/yogasw/wick/blob/master/docs/slack-app-manifest.json) already includes them):
+
+| Purpose | Event subscription | Bot scope |
+|---|---|---|
+| Turn the 🤖 switch **on** | `reaction_added` | `reactions:read` |
+| Turn the 🤖 switch **off** | `reaction_removed` | `reactions:read` |
+| Pick up a new channel reply while the switch is on | `message.channels` | `channels:history` |
+| Resolve the reacted message's parent thread + read its text | _(Web API call)_ | `channels:history` |
+
+Without `reactions:read` + the two reaction events, the switch silently never arms. Without `message.channels`, replies in a channel thread are never seen even with the switch on. The **Test Integration** button surfaces missing scopes per-probe.
+
 ### Progress banner (assistant threads)
 
 When the workspace has Slack AI features enabled and the bot holds the `chat:write` scope, wick also calls [`assistant.threads.setStatus`](https://api.slack.com/methods/assistant.threads.setStatus) to render an "is thinking…" banner above the input. The banner is cleared on `done` / `blocked` / `error`. Because Slack auto-clears the status after ~2 minutes of inactivity, wick re-asserts it every 45 seconds during long tool-use turns so the banner stays visible throughout multi-step runs. Workspaces without AI features get a one-line debug log and rely on the reaction emoji alone.
@@ -191,7 +208,7 @@ When **only one project exists**, Slack uses it without asking — the operator 
 
 ### App manifest
 
-A ready-made Slack app manifest is shipped at [`docs/slack-app-manifest.json`](https://github.com/yogasw/wick/blob/master/docs/slack-app-manifest.json). Drop it into the Slack app create flow and you get the right scopes (`app_mentions:read`, `chat:write`, `reactions:write`, etc.) without hand-toggling.
+A ready-made Slack app manifest is shipped at [`docs/slack-app-manifest.json`](https://github.com/yogasw/wick/blob/master/docs/slack-app-manifest.json). Drop it into the Slack app create flow and you get the right scopes (`app_mentions:read`, `chat:write`, `reactions:write`, `reactions:read`, `channels:history`, etc.) and event subscriptions (`app_mention`, `message.im`, `message.mpim`, `message.channels`, `reaction_added`, `reaction_removed`) without hand-toggling — including everything the [reaction auto-reply](#reaction-auto-reply) switch needs.
 
 ### Sender context and file attachments
 

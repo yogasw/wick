@@ -5,6 +5,9 @@ import (
 	"testing"
 
 	slackgo "github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
+
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 )
 
 func TestFormatAttachmentsEmpty(t *testing.T) {
@@ -217,6 +220,188 @@ func TestAllowedReason(t *testing.T) {
 	s.cfg.ChannelsMode = "all"
 	if ok, reason := s.allowedCfg(s.cfg, "U1", nil, "C1"); !ok || reason != "" {
 		t.Errorf("allowed: got ok=%v reason=%q, want true/empty", ok, reason)
+	}
+}
+
+func TestAutoReplySwitchState(t *testing.T) {
+	s := &Channel{autoReply: map[string]bool{}}
+
+	if s.autoReplyOn("slack:__owner__:111.222") {
+		t.Fatal("fresh channel: switch should be OFF")
+	}
+	s.setAutoReply("slack:__owner__:111.222", true)
+	if !s.autoReplyOn("slack:__owner__:111.222") {
+		t.Error("after setAutoReply(true): switch should be ON")
+	}
+	// Another thread is independent.
+	if s.autoReplyOn("slack:__owner__:333.444") {
+		t.Error("unrelated thread should stay OFF")
+	}
+	s.setAutoReply("slack:__owner__:111.222", false)
+	if s.autoReplyOn("slack:__owner__:111.222") {
+		t.Error("after setAutoReply(false): switch should be OFF")
+	}
+	// Removing an absent key is a harmless no-op.
+	s.setAutoReply("slack:__owner__:never", false)
+}
+
+func TestIsBotUser(t *testing.T) {
+	s := &Channel{botUserID: "UBOT"}
+	if !s.isBotUser("UBOT") {
+		t.Error("the bot's own user id should be recognised")
+	}
+	if s.isBotUser("UHUMAN") {
+		t.Error("a human user id is not the bot")
+	}
+	// Empty ids never match — guards against an unresolved bot id treating
+	// every empty-author event as a self-reaction.
+	if s.isBotUser("") {
+		t.Error("empty user id should not match")
+	}
+	s.botUserID = ""
+	if s.isBotUser("") {
+		t.Error("empty bot id should not match empty user id")
+	}
+}
+
+func TestMentionsBot(t *testing.T) {
+	s := &Channel{botUserID: "UBOT"}
+	if !s.mentionsBot("<@UBOT> hai") {
+		t.Error("leading mention should be detected")
+	}
+	if !s.mentionsBot("hey <@UBOT> tolong cek ini") {
+		t.Error("inline mention should be detected")
+	}
+	if s.mentionsBot("<@UHUMAN> bukan bot") {
+		t.Error("a mention of someone else is not the bot")
+	}
+	if s.mentionsBot("no mention here") {
+		t.Error("plain text has no mention")
+	}
+	// Unresolved bot id → fail open (false) so a real reply is never dropped
+	// during the brief post-connect window.
+	s.botUserID = ""
+	if s.mentionsBot("<@UBOT> hai") {
+		t.Error("empty bot id should report no mention (fail open)")
+	}
+}
+
+// TestReactionAddedFastGuards covers the cheap branches of handleReactionAdded
+// that short-circuit before any Slack API call: wrong emoji, feature
+// disabled, the bot's own reaction, and a channel outside ReactionChannels.
+// None of these should arm the switch. (The API-dependent guards — parent
+// check, session-exists, access control — are exercised by integration tests
+// where a live client is available.)
+func TestReactionAddedFastGuards(t *testing.T) {
+	react := func(s *Channel, emoji, user, channel string) {
+		s.handleReactionAdded(nil, &slackevents.ReactionAddedEvent{
+			Reaction: emoji,
+			User:     user,
+			Item:     slackevents.Item{Channel: channel, Timestamp: "111.222"},
+		})
+	}
+
+	base := func() *Channel {
+		s := &Channel{autoReply: map[string]bool{}, botUserID: "UBOT"}
+		s.cfg.ReactionTriggerEnabled = true
+		s.cfg.ReactionChannelsMode = "whitelist"
+		s.cfg.ReactionChannels = `[{"id":"C1","name":"#ops"}]`
+		return s
+	}
+
+	// wrong emoji
+	s := base()
+	react(s, "thumbsup", "U1", "C1")
+	if len(s.autoReply) != 0 {
+		t.Error("non-trigger emoji must not arm the switch")
+	}
+
+	// feature disabled
+	s = base()
+	s.cfg.ReactionTriggerEnabled = false
+	react(s, reactionTrigger, "U1", "C1")
+	if len(s.autoReply) != 0 {
+		t.Error("disabled feature must not arm the switch")
+	}
+
+	// bot's own reaction
+	s = base()
+	react(s, reactionTrigger, "UBOT", "C1")
+	if len(s.autoReply) != 0 {
+		t.Error("the bot's own reaction must not arm the switch")
+	}
+
+	// channel not in ReactionChannels
+	s = base()
+	react(s, reactionTrigger, "U1", "C2")
+	if len(s.autoReply) != 0 {
+		t.Error("a channel outside ReactionChannels must not arm the switch")
+	}
+}
+
+// TestReactionChannelAllowed covers the mode gate: "all" accepts any channel,
+// "whitelist" (and any unknown/empty mode, which fails closed) accepts only
+// the listed channels.
+func TestReactionChannelAllowed(t *testing.T) {
+	cfg := agentconfig.SlackChannelConfig{
+		ReactionChannels: `[{"id":"C1","name":"#ops"}]`,
+	}
+
+	cfg.ReactionChannelsMode = "all"
+	if !reactionChannelAllowed(cfg, "Cany") {
+		t.Error("all mode: any channel should be allowed")
+	}
+
+	cfg.ReactionChannelsMode = "whitelist"
+	if !reactionChannelAllowed(cfg, "C1") {
+		t.Error("whitelist: listed channel C1 should be allowed")
+	}
+	if reactionChannelAllowed(cfg, "C2") {
+		t.Error("whitelist: unlisted channel C2 should be denied")
+	}
+
+	// Empty/unknown mode fails closed (whitelist semantics).
+	cfg.ReactionChannelsMode = ""
+	if reactionChannelAllowed(cfg, "C2") {
+		t.Error("empty mode should fail closed (deny unlisted)")
+	}
+	if !reactionChannelAllowed(cfg, "C1") {
+		t.Error("empty mode should still allow a listed channel")
+	}
+}
+
+// TestReactionRemovedGuards verifies the OFF path: wrong emoji and the bot's
+// own reaction are ignored, and removing the trigger clears an armed switch.
+func TestReactionRemovedGuards(t *testing.T) {
+	s := &Channel{autoReply: map[string]bool{}, botUserID: "UBOT"}
+	key := s.sessionKey("111.222") // no prefix set → bare ts
+	s.setAutoReply(key, true)
+
+	// wrong emoji leaves it armed
+	s.handleReactionRemoved(&slackevents.ReactionRemovedEvent{
+		Reaction: "thumbsup", User: "U1",
+		Item: slackevents.Item{Channel: "C1", Timestamp: "111.222"},
+	})
+	if !s.autoReplyOn(key) {
+		t.Error("non-trigger emoji removal must not disarm the switch")
+	}
+
+	// bot's own removal leaves it armed
+	s.handleReactionRemoved(&slackevents.ReactionRemovedEvent{
+		Reaction: reactionTrigger, User: "UBOT",
+		Item: slackevents.Item{Channel: "C1", Timestamp: "111.222"},
+	})
+	if !s.autoReplyOn(key) {
+		t.Error("the bot's own removal must not disarm the switch")
+	}
+
+	// a genuine trigger removal disarms it
+	s.handleReactionRemoved(&slackevents.ReactionRemovedEvent{
+		Reaction: reactionTrigger, User: "U1",
+		Item: slackevents.Item{Channel: "C1", Timestamp: "111.222"},
+	})
+	if s.autoReplyOn(key) {
+		t.Error("trigger removal by an allowed reactor must disarm the switch")
 	}
 }
 

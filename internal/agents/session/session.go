@@ -89,6 +89,14 @@ type Meta struct {
 	// legacy sessions created before ownership tracking was added.
 	// When non-empty, only the owning user (or app owner) may access it.
 	UserID string `json:"user_id,omitempty"`
+	// AutoReply marks a Slack channel thread as auto-reply: while true,
+	// replies in the thread are dispatched to the agent without an
+	// @mention. Set when the thread is created (the bot also drops a 🤖
+	// marker on the parent) and toggled by adding/removing that marker.
+	// Persisted here so the switch survives a wick restart even though
+	// the channel's in-memory state is lost. Only meaningful for Slack
+	// channel sessions; absent/false everywhere else.
+	AutoReply bool `json:"auto_reply,omitempty"`
 }
 
 // IsSubscribed returns true when userID has opted in to receive
