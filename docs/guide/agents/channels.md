@@ -193,6 +193,23 @@ When **only one project exists**, Slack uses it without asking — the operator 
 
 A ready-made Slack app manifest is shipped at [`docs/slack-app-manifest.json`](https://github.com/yogasw/wick/blob/master/docs/slack-app-manifest.json). Drop it into the Slack app create flow and you get the right scopes (`app_mentions:read`, `chat:write`, `reactions:write`, etc.) without hand-toggling.
 
+### Sender context and file attachments
+
+Each inbound user turn is enriched before it reaches the agent:
+
+**Sender label.** Every message is prefixed with a resolved display label of the form `Real Name (@handle, UXXXXXXXX): <text>`. This is resolved once per user ID via `users.info` and cached for the session. The label is useful in multi-user threads where the agent needs to know who spoke, and for routing replies to the correct per-user connector when multiple users have connected their own Slack OAuth accounts. If the `users.info` lookup fails, the raw user ID is used as a fallback so the prefix is never missing.
+
+**File / attachment metadata.** When a user posts a message with attached files (images, PDFs, documents, `file_share` events), the attachment manifest is appended to the user turn:
+
+```
+[Attached files — fetch via the slack connector (files.info / the link) if you need the contents]
+- filename.pdf (PDF) · 42.3kB · https://…/permalink
+```
+
+Each entry carries the file title or name, pretty type (e.g. "PDF", "PNG"), human-readable size, and the best available link (Slack permalink, with `url_private` as a fallback). The file bytes are not downloaded into the turn — the agent can fetch them on demand via the `slack` connector (`files.info`, `get_permalink`, or the link directly) if it needs the content.
+
+`file_share` message subtypes (attachment-only posts with no body text) are now passed through instead of being silently dropped.
+
 ## Telegram
 
 > **📸 Screenshot needed:** `agents-telegram-config.png` — capture `/tools/agents/channels/telegram` showing the form (Bot Token, Allowed IDs, Project). Save to `docs/public/screenshots/agents-telegram-config.png`.
