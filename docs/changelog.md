@@ -6,7 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Connector-type disable/enable switch** — admins can now hide an entire connector type from the LLM with one toggle (header kebab → **Disable connector** on the connector detail page). Disabling a type removes every instance and operation from `wick_list` / `wick_execute` immediately; the connector stays in the manager UI with a **Disabled** badge so it can be re-enabled at any time. Distinct from the per-row `Disabled` flag. API: `POST /manager/api/connectors/{key}/type-disable` and `/type-enable`. See [Connector Plugins — Disabling a connector type](/guide/connector-plugins#disabling-a-connector-type).
+*   **Plugin update / uninstall from the manager UI** — the connector detail page header kebab now shows **Update to v{X}** when the marketplace catalog carries a newer version (with an **Update** badge on the connector list card) and **Uninstall plugin** for plugin-backed connectors. Both are admin-only. An update hot-swaps the binary without a restart; an uninstall removes the binary while keeping rows and config in the database. API: `POST /manager/api/plugins/{key}/update`. See [Connector Plugins — Updating and uninstalling from the manager UI](/guide/connector-plugins#updating-and-uninstalling-from-the-manager-ui).
 
 ---
 
