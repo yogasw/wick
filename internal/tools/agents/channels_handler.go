@@ -410,6 +410,11 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 	if userID == "" {
 		iKey = channelType + ":__owner__"
 	}
+	// sessPrefix mirrors setup.sessionPrefix: the registry key uses ":" as its
+	// separator, but ":" is outside the session-id charset enforced by
+	// storage.ValidateSessionID and is illegal in Windows filenames, so replace
+	// it with "-". Boot-time and hot-reload paths must agree on this prefix.
+	sessPrefix := strings.ReplaceAll(iKey, ":", "-") + "-"
 	startInstance := func(ch agentchannels.Channel) {
 		go func() {
 			if err := ch.Start(ctx); err != nil {
@@ -439,6 +444,7 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 			ch := agentslack.NewWithOwner(cfg, userID)
 			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
 			ch.SetPublicURL(pubURL)
+			ch.SetSessionPrefix(sessPrefix)
 			src := agentslack.NewConfigSourceKeyed(store, ch, userID)
 			globalChannels.AddKeyed(iKey, ch, src)
 			startInstance(ch)
@@ -463,6 +469,7 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 		} else {
 			ch := agenttelegram.NewWithOwner(cfg, userID)
 			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
+			ch.SetSessionPrefix(sessPrefix)
 			src := agenttelegram.NewConfigSourceKeyed(store, ch, userID)
 			globalChannels.AddKeyed(iKey, ch, src)
 			startInstance(ch)
