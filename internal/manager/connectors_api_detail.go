@@ -53,7 +53,10 @@ type connectorListJSON struct {
 	MCP         bool               `json:"mcp"`
 	MCPStatus   string             `json:"mcp_status,omitempty"`
 	NeedsReload bool               `json:"needs_reload"`
-	Rows        []connectorRowJSON `json:"rows"`
+	// DisabledType is the connector-TYPE off-switch (header kebab). When true
+	// the connector is hidden from the LLM but still manageable here.
+	DisabledType bool               `json:"disabled_type"`
+	Rows         []connectorRowJSON `json:"rows"`
 }
 
 // configFieldJSON is the per-field config schema + value the SPA configs
@@ -182,10 +185,11 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		OpCount:     len(mod.AllOps()),
 		Custom:      customInfo != nil,
 		DefID:       defID,
-		MCP:         mcp,
-		MCPStatus:   mcpStatus,
-		NeedsReload: h.connectorNeedsReload(ctx, key),
-		Rows:        make([]connectorRowJSON, 0, len(rows)),
+		MCP:          mcp,
+		MCPStatus:    mcpStatus,
+		NeedsReload:  h.connectorNeedsReload(ctx, key),
+		DisabledType: !h.connectors.TypeEnabled(key),
+		Rows:         make([]connectorRowJSON, 0, len(rows)),
 	}
 	for _, row := range rows {
 		rowJSON := connectorRowJSON{
@@ -502,6 +506,28 @@ func (h *Handler) apiToggleConnectorDisabled(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"disabled": !row.Disabled})
+}
+
+// apiSetConnectorTypeDisabled serves
+// POST /manager/api/connectors/{key}/type-disable and /type-enable. It flips
+// the connector-TYPE off-switch (admin-only): a disabled type vanishes from
+// the LLM surface (every instance + operation) while the manager UI keeps
+// listing it with a "Disabled" badge so it can be re-enabled. Distinct from
+// the per-row {id}/disable flag. Returns a closure so one handler body serves
+// both routes.
+func (h *Handler) apiSetConnectorTypeDisabled(disabled bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		key := r.PathValue("key")
+		if _, ok := h.connectors.Module(key); !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown connector"})
+			return
+		}
+		if err := h.connectors.SetTypeEnabled(key, !disabled); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"disabled_type": disabled})
+	}
 }
 
 // apiDeleteConnectorRow serves

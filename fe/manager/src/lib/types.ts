@@ -14,6 +14,10 @@ export interface ConnectorDef {
   custom_source: string;
   needs_reload: boolean;
   disabled: boolean;
+  /* Connector-TYPE off-switch (header kebab) — hidden from the LLM, still
+     listed here with a Disabled badge. Distinct from `disabled` (every
+     instance row is off). */
+  disabled_type?: boolean;
 }
 
 export interface ConnectorRow {
@@ -48,6 +52,8 @@ export interface ConnectorList {
   mcp?: boolean;
   mcp_status?: string;
   needs_reload?: boolean;
+  /* Connector-TYPE off-switch (header kebab). True = hidden from the LLM. */
+  disabled_type?: boolean;
   rows: ConnectorRow[] | null;
 }
 
@@ -456,6 +462,8 @@ export interface PluginEntry {
   os_arch?: string[]; // os/arch the plugin ships a build for
   category?: string; // derived from the plugin's DefaultTags, like built-in connectors
   signed: string;
+  update_available?: boolean; // catalog carries a newer version than the one on disk
+  latest_version?: string; // that newer catalog version
 }
 
 export interface PluginsList {
