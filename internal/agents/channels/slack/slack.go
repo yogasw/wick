@@ -502,6 +502,41 @@ func (s *Channel) refreshBotUserID(ctx context.Context) {
 	}
 }
 
+// BotUserID returns this instance's resolved bot Slack user ID (U...),
+// or "" if auth.test hasn't succeeded yet. Exposed so the connector
+// "Sent using @bot" footer can name the bot of the instance that OWNS a
+// session — regardless of which connector instance does the actual send.
+func (s *Channel) BotUserID() string {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.botUserID
+}
+
+// OwnsSession reports whether sessionID belongs to this instance.
+//
+// The App Owner instance's prefix is the bare "slack-", which is ALSO a
+// prefix of every per-user session ("slack-<uuid>-<ts>"). A plain
+// HasPrefix would make the App Owner instance claim per-user sessions and
+// stamp the wrong bot. So the App Owner case additionally requires that the
+// remainder carry no further "-" segment: a Slack thread_ts is digits + ".",
+// never "-", so "slack-<ts>" has none while "slack-<uuid>-<ts>" does.
+// Per-user prefixes already end in "-<uuid>-" and are unambiguous.
+func (s *Channel) OwnsSession(sessionID string) bool {
+	s.cfgMu.Lock()
+	p := s.sessionPrefix
+	s.cfgMu.Unlock()
+	if p == "" || !strings.HasPrefix(sessionID, p) {
+		return false
+	}
+	rest := sessionID[len(p):]
+	// App Owner prefix ("<channel>-") owns only sessions whose remainder is a
+	// bare transport key with no extra "-" (which would mark a per-user id).
+	if strings.Count(p, "-") == 1 {
+		return !strings.Contains(rest, "-")
+	}
+	return true
+}
+
 // Status satisfies channels.StatusReporter — returns identity + transport
 // state for the admin UI panel under the Test Integration button.
 func (s *Channel) Status() []agentchannels.StatusField {

@@ -11,8 +11,6 @@
 package setup
 
 import (
-	"strings"
-
 	"github.com/rs/zerolog/log"
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
@@ -77,14 +75,36 @@ func instanceKey(channelType string, ownerUserID *string) string {
 	return channelType + ":" + *ownerUserID
 }
 
-// sessionPrefix derives a charset-safe session-key prefix from the registry
-// instanceKey. The registry key uses ":" as its separator (e.g.
-// "slack:<owner>"), but ":" is outside the session-id charset
-// ([A-Za-z0-9._-]) enforced by storage.ValidateSessionID and is illegal in
-// Windows filenames — so it is replaced with "-". The result is still unique
-// per instance because owner IDs never contain ":".
+// sessionPrefix derives a charset-safe session-key prefix that namespaces an
+// instance's session ids (the prefix becomes part of the on-disk session
+// folder name and the pool/turns key). ":" from the registry key is illegal
+// in session ids ([A-Za-z0-9._-]) and Windows filenames, so it never appears
+// here.
+//
+//   - App Owner instance (no owner user): "<channelType>-" — the cleaner
+//     "slack-<ts>" form, dropping the noisy "__owner__" segment.
+//   - Per-user instance: "<channelType>-<ownerUserID>-" — keeps the owner so
+//     two users' bots (possibly in different workspaces) never collide on a
+//     shared threadTS.
+//
+// The two forms can't collide: an owner user id is a UUID, never empty, so a
+// per-user prefix is always longer and distinct from the bare App Owner one.
 func sessionPrefix(channelType string, ownerUserID *string) string {
-	return strings.ReplaceAll(instanceKey(channelType, ownerUserID), ":", "-") + "-"
+	owner := ""
+	if ownerUserID != nil {
+		owner = *ownerUserID
+	}
+	return SessionPrefix(channelType, owner)
+}
+
+// SessionPrefix is the exported form used by the hot-reload path
+// (tools/agents) so boot-time and dynamic-add channels agree on the exact
+// prefix. ownerUserID "" = the App Owner instance.
+func SessionPrefix(channelType, ownerUserID string) string {
+	if ownerUserID == "" {
+		return channelType + "-"
+	}
+	return channelType + "-" + ownerUserID + "-"
 }
 
 // Slack loads all configured user channel rows and registers one keyed instance per user.

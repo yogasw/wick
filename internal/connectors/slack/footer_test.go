@@ -3,12 +3,11 @@ package slack
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/entity"
 )
 
 // footerText pulls the rendered footer string out of the context block.
@@ -23,54 +22,53 @@ func footerText(t *testing.T, block map[string]any) string {
 	return s
 }
 
-// TestSignedFooter_PerInstanceBot verifies the footer reflects the calling
-// connector instance's OWN bot, resolved from its token — not a process
-// global. Two instances with different tokens must yield different @mentions.
-func TestSignedFooter_PerInstanceBot(t *testing.T) {
-	botIDByToken = atomic.Value{} // reset cache for isolation
-
-	// auth.test echoes a user_id derived from the bearer token so each
-	// instance maps to a distinct bot.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		uid := "Uunknown"
-		switch {
-		case strings.Contains(r.Header.Get("Authorization"), "xoxb-alice"):
-			uid = "UALICE"
-		case strings.Contains(r.Header.Get("Authorization"), "xoxb-bob"):
-			uid = "UBOB"
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"user_id":"` + uid + `"}`))
-	}))
-	defer srv.Close()
-	withBaseURL(t, srv.URL)
-
-	alice := connector.NewCtx(context.Background(), "row-alice",
-		map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-alice"},
+// newFooterCtx builds a connector Ctx for footer tests, optionally stamping
+// the pre-resolved session-owner bot id.
+func newFooterCtx(ownerBotID string) *connector.Ctx {
+	c := connector.NewCtx(context.Background(), "row",
+		map[string]string{"auth_mode": "user_token", "user_token": "xoxp-yoga", "bot_token": "xoxb-bot"},
 		map[string]string{}, http.DefaultClient, nil, nil)
-	bob := connector.NewCtx(context.Background(), "row-bob",
-		map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-bob"},
-		map[string]string{}, http.DefaultClient, nil, nil)
-
-	if got := footerText(t, signedFooterBlock(alice)); got != "Sent using <@UALICE>" {
-		t.Errorf("alice footer = %q, want Sent using <@UALICE>", got)
+	if ownerBotID != "" {
+		c.SetOwnerBotID(ownerBotID)
 	}
-	if got := footerText(t, signedFooterBlock(bob)); got != "Sent using <@UBOB>" {
-		t.Errorf("bob footer = %q, want Sent using <@UBOB>", got)
+	return c
+}
+
+// TestSignedFooter_OwnerBot verifies the footer names the SESSION OWNER's
+// bot, regardless of the connector's own (here user_token) auth mode — so a
+// user-token send can never surface the human (@Yoga) as the footer.
+func TestSignedFooter_OwnerBot(t *testing.T) {
+	c := newFooterCtx("UOWNER")
+	if got := footerText(t, signedFooterBlock(c)); got != "Sent using <@UOWNER>" {
+		t.Errorf("footer = %q, want Sent using <@UOWNER>", got)
 	}
 }
 
-// TestSignedFooter_FallbackOnEmptyToken verifies the app-name fallback when
-// the instance has no token (auth.test never called).
-func TestSignedFooter_FallbackOnEmptyToken(t *testing.T) {
-	botIDByToken = atomic.Value{}
-
-	c := connector.NewCtx(context.Background(), "row-empty",
-		map[string]string{"auth_mode": "bot_token", "bot_token": ""},
-		map[string]string{}, http.DefaultClient, nil, nil)
-
+// TestSignedFooter_NoOwnerFallsBackToAppName verifies that a call with no
+// resolved owner bot (cron/UI/REST, or unresolved) falls back to the app
+// name, never to a token-derived identity.
+func TestSignedFooter_NoOwnerFallsBackToAppName(t *testing.T) {
+	c := newFooterCtx("") // no owner bot
 	got := footerText(t, signedFooterBlock(c))
 	if !strings.HasPrefix(got, "Sent using *") {
-		t.Errorf("empty-token footer = %q, want app-name fallback", got)
+		t.Errorf("no-owner footer = %q, want app-name fallback", got)
+	}
+}
+
+// TestSessionIDInputKey pins the SendMessageInput.SessionID field's derived
+// input key to "session_id" — the connector's footer resolution and the MCP
+// service both read input["session_id"], so the reflected key must match.
+func TestSessionIDInputKey(t *testing.T) {
+	got := entity.StructToConfigs(SendMessageInput{})
+	found := false
+	keys := make([]string, 0, len(got))
+	for _, c := range got {
+		keys = append(keys, c.Key)
+		if c.Key == "session_id" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("SendMessageInput has no 'session_id' input key; got %v", keys)
 	}
 }
