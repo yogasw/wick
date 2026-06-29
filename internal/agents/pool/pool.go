@@ -353,6 +353,41 @@ func (p *Pool) SessionExists(sessionID string) bool {
 	return err == nil
 }
 
+// AutoReplyOn reports the persisted Slack auto-reply flag (meta.json). It
+// reads the session meta fresh so a restart picks up the last saved state.
+// Missing session or read error → false (fail closed).
+func (p *Pool) AutoReplyOn(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err != nil {
+		return false
+	}
+	return sess.Meta.AutoReply
+}
+
+// SetAutoReply persists the Slack auto-reply flag on the session meta. A
+// missing session or save error is logged and swallowed — the in-memory
+// fallback in the channel keeps the turn working even if persistence fails.
+func (p *Pool) SetAutoReply(sessionID string, on bool) {
+	if sessionID == "" {
+		return
+	}
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err != nil {
+		log.Warn().Str("session", sessionID).Bool("on", on).Err(err).Msg("pool: set auto-reply — session load failed")
+		return
+	}
+	if sess.Meta.AutoReply == on {
+		return
+	}
+	sess.Meta.AutoReply = on
+	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
+		log.Warn().Str("session", sessionID).Bool("on", on).Err(err).Msg("pool: set auto-reply — save failed")
+	}
+}
+
 func (p *Pool) Send(ctx context.Context, sessionID, agentName, source, role, text string) error {
 	return p.send(ctx, sessionID, agentName, source, role, text, "", nil)
 }

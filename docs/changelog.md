@@ -6,6 +6,15 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+### Added
+
+*   **Slack channel — reaction auto-reply switch**: React 🤖 (`robot_face`) on a **thread's top (parent) message** to make every new reply in that thread dispatch to the agent without an `@mention`. Remove the reaction to stop (a run already in flight finishes; only the next reply is dropped). The switch persists to session meta and survives a wick restart — re-reacting is not needed after a restart.
+    *   Enable on the Slack channel config page: toggle **`reaction_trigger_enabled`**, then set **`reaction_channels_mode`** (`all` or `whitelist`, default `whitelist`). The `reaction_channels` picker controls which channels honour the switch.
+    *   Threads are still created by `@mention` only — the switch never starts a new session, it only gates replies to an existing one.
+    *   Slack app must subscribe to `reaction_added`, `reaction_removed`, and `message.channels` events, with scopes `reactions:read` + `channels:history`. The shipped `docs/slack-app-manifest.json` already includes them. See the [Reaction auto-reply](guide/agents/channels#reaction-auto-reply) section of the channels guide.
+
+*   **Config field grouping (`wick:"group=..."` tag)**: Config struct fields can now be grouped into titled section cards in the admin Settings UI by adding `group=Title` (or `group=Title|Description`) to the `wick:"..."` tag. All fields sharing the same title render together under one card, in first-seen order. The optional description is written once at the top of the card. Fields with no group fall into the default "Configuration" card. Applies to Slack channel config, Agents settings, connector/tool/job detail pages. See the [group — config field grouping](reference/config-tags#group-config-field-grouping) section of the config tag reference.
+
 ### Changed
 
 *   **Connector plugin marketplace — any logged-in user can browse**: `GET /manager/api/plugins` now requires only a valid session, not admin. Every user can see the installed + available plugin catalog. Lifecycle actions (install / update / enable / disable / remove) remain admin-only; non-admins see a "Requires admin" disabled state on the Download button and the connector detail kebab hides the Update / Uninstall / Disable options.

@@ -69,6 +69,9 @@ export interface ConfigField {
   visible_when: string;
   col_options?: Record<string, string>;
   env_override: string;
+  /** Optional "Title" or "Title|Description" — groups simple fields into a
+      titled card so shared context lives once on the group, not per field. */
+  group?: string;
 }
 
 export interface ConnectorOp {

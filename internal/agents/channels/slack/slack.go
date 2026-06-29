@@ -42,6 +42,13 @@ const (
 	reactionBlocked = "no_entry_sign"          // 🚫
 	reactionError   = "x"                      // ❌
 
+	// reactionTrigger is the emoji that toggles a thread's auto-reply mode.
+	// Putting 🤖 on a thread's parent (top) message makes every new reply in
+	// that thread go to the agent without an @mention; removing it stops.
+	// Slack delivers this as the bare emoji name (no colons). Threads are
+	// still created only by @mention — the switch never boots a session.
+	reactionTrigger = "robot_face" // 🤖
+
 	// queueReactionDelay suppresses the ⏳ reaction when the pool dispatches
 	// fast enough that the operator wouldn't see it anyway. Only sessions
 	// that are still waiting after this delay get the queue indicator.
@@ -131,6 +138,14 @@ type Channel struct {
 	mu    sync.Mutex
 	turns map[string]*turn
 
+	// autoReply is the set of namespaced session keys whose thread has the
+	// 🤖 switch on its parent message. While a key is present, channel
+	// replies in that thread are dispatched to the agent without requiring
+	// an @mention (see handleMessage). Toggled by handleReactionAdded /
+	// handleReactionRemoved. In-memory only — switches reset on restart;
+	// re-react to re-arm. Guarded by mu.
+	autoReply map[string]bool
+
 	// userTokenCache maps Slack user ID → resolved xoxp token.
 	// Avoids repeated connectorToken lookups on every send call.
 	userTokenMu    sync.RWMutex
@@ -182,6 +197,7 @@ func New(cfg agentconfig.SlackChannelConfig) *Channel {
 		turns:            make(map[string]*turn),
 		userTokenCache:   make(map[string]string),
 		userDisplayCache: make(map[string]string),
+		autoReply:        make(map[string]bool),
 	}
 	ch.applyConfig(cfg, "")
 	return ch
@@ -754,8 +770,23 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				"ts":           ev.TimeStamp,
 				"is_dm":        ev.ChannelType == "im" || ev.ChannelType == "mpim",
 			})
+			// Agent session dispatch is DM-only by default. The one
+			// exception is a channel thread whose parent carries the 🤖
+			// auto-reply switch: there, plain replies (no @mention) are
+			// dispatched to the thread's existing session.
+			//
+			// Mentions in a channel ALSO arrive as a MessageEvent (in addition
+			// to the AppMentionEvent that already dispatched them). On an
+			// auto-reply thread that MessageEvent would otherwise pass the gate
+			// below and dispatch the SAME message a second time — so skip any
+			// channel message that mentions the bot; AppMentionEvent owns it.
 			if ev.ChannelType != "im" && ev.ChannelType != "mpim" {
-				return
+				if s.mentionsBot(ev.Text) {
+					return
+				}
+				if !s.autoReplyOn(s.sessionKey(threadKey(ev.ThreadTimeStamp, ev.TimeStamp))) {
+					return
+				}
 			}
 			// MessageEvent stashes a file_share's files under .Message
 			// (slackevents only populates the top-level Files field on
@@ -770,6 +801,10 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				"user": ev.User,
 				"tab":  ev.Tab,
 			})
+		case *slackevents.ReactionAddedEvent:
+			s.handleReactionAdded(ctx, ev)
+		case *slackevents.ReactionRemovedEvent:
+			s.handleReactionRemoved(ev)
 		}
 	}
 }
@@ -782,6 +817,196 @@ func threadKey(threadTS, msgTS string) string {
 		return threadTS
 	}
 	return msgTS
+}
+
+// autoReplyOn reports whether the named session's thread has the 🤖
+// auto-reply switch on. sessionID is the namespaced session key (which, for
+// the app-owner channel, equals the on-disk session ID). The in-memory map
+// is a fast cache; on a miss (e.g. right after a restart) it falls back to
+// the persisted flag in the session meta so the switch survives restart.
+func (s *Channel) autoReplyOn(sessionID string) bool {
+	s.mu.Lock()
+	on, cached := s.autoReply[sessionID]
+	s.mu.Unlock()
+	if cached {
+		return on
+	}
+	if s.sessions == nil {
+		return false
+	}
+	on = s.sessions.AutoReplyOn(sessionID)
+	if on {
+		// Warm the cache so repeated replies don't re-read meta.json.
+		s.mu.Lock()
+		s.autoReply[sessionID] = true
+		s.mu.Unlock()
+	}
+	return on
+}
+
+// setAutoReply flips the auto-reply switch for a session: it updates the
+// in-memory cache and persists the flag to the session meta so it survives
+// a wick restart. sessionID is the namespaced session key.
+func (s *Channel) setAutoReply(sessionID string, on bool) {
+	s.mu.Lock()
+	if on {
+		s.autoReply[sessionID] = true
+	} else {
+		delete(s.autoReply, sessionID)
+	}
+	s.mu.Unlock()
+	if s.sessions != nil {
+		s.sessions.SetAutoReply(sessionID, on)
+	}
+}
+
+// handleReactionAdded turns a thread's auto-reply switch ON when the 🤖
+// emoji lands on the thread's parent message. The reaction itself is never
+// dispatched as a turn — it only arms future replies. Every guard that
+// fails is a silent no-op: a reaction is ambient, not a command, so an
+// off-target 🤖 should not nag the reactor.
+//
+// Guards: feature enabled · emoji is the trigger · reactor is not the bot ·
+// the channel is in ReactionChannels · the reacted item is a thread parent ·
+// the thread already has a session · the reactor passes access control.
+func (s *Channel) handleReactionAdded(ctx context.Context, ev *slackevents.ReactionAddedEvent) {
+	l := log.With().Str("channel", "slack").Str("emoji", ev.Reaction).
+		Str("user", ev.User).Str("slack_channel", ev.Item.Channel).
+		Str("item_ts", ev.Item.Timestamp).Logger()
+	l.Debug().Msg("reaction_added received")
+
+	if ev.Reaction != reactionTrigger {
+		l.Debug().Str("want", reactionTrigger).Msg("reaction: ignored — not the trigger emoji")
+		return
+	}
+	cfg := s.snapshot()
+	if !cfg.ReactionTriggerEnabled {
+		l.Debug().Msg("reaction: ignored — reaction_trigger_enabled is off")
+		return
+	}
+	if s.isBotUser(ev.User) {
+		l.Debug().Msg("reaction: ignored — reactor is the bot itself")
+		return
+	}
+	channelID := ev.Item.Channel
+	if channelID == "" || !reactionChannelAllowed(cfg, channelID) {
+		l.Debug().Str("mode", cfg.ReactionChannelsMode).Msg("reaction: ignored — channel not allowed by ReactionChannels(Mode)")
+		return
+	}
+
+	// Resolve the thread the reacted message belongs to. The switch lives on
+	// the parent only: if the 🤖 is on a reply bubble, ignore it.
+	parentTS, isParent := s.reactionThreadParent(channelID, ev.Item.Timestamp)
+	if !isParent {
+		l.Debug().Str("parent_ts", parentTS).Msg("reaction: ignored — reacted message is not a thread parent (or history lookup failed)")
+		return
+	}
+	sessionID := s.sessionKey(parentTS)
+
+	// Reply-only: the switch governs an existing thread, never boots one.
+	if !s.sessionOnDisk(sessionID) {
+		l.Debug().Str("session", sessionID).Msg("reaction: ignored — no existing session for this thread (reply-only)")
+		return
+	}
+
+	// Re-check access: only reactors who could trigger a message may arm
+	// the thread for everyone.
+	groupIDs, err := s.resolveUserGroups(ev.User)
+	if err != nil {
+		l.Warn().Err(err).Msg("reaction: resolve groups failed; treating as empty")
+	}
+	if ok, reason := s.allowedCfg(cfg, ev.User, groupIDs, channelID); !ok {
+		l.Debug().Str("reason", reason).Msg("reaction: ignored — reactor failed access control")
+		return
+	}
+
+	s.setAutoReply(sessionID, true)
+	l.Info().Str("thread_ts", parentTS).Str("session", sessionID).Msg("auto-reply switch ON")
+	_ = ctx
+}
+
+// reactionChannelAllowed reports whether the 🤖 switch is honoured in
+// channelID. Mode "all" accepts any channel the bot is in; "whitelist" (the
+// default) accepts only the channels in ReactionChannels. An empty/unknown
+// mode is treated as whitelist so a misconfigured row fails closed.
+func reactionChannelAllowed(cfg agentconfig.SlackChannelConfig, channelID string) bool {
+	if cfg.ReactionChannelsMode == "all" {
+		return true
+	}
+	return pickerHas(cfg.ReactionChannels, channelID)
+}
+
+// handleReactionRemoved turns a thread's auto-reply switch OFF when the 🤖
+// emoji is removed from its parent. A turn already in flight is NOT aborted —
+// removing the switch only stops the next reply from being picked up. Cheap
+// guards only (emoji + bot); the rest is a map delete that is harmless when
+// the key is absent, so no API round-trip is needed here.
+func (s *Channel) handleReactionRemoved(ev *slackevents.ReactionRemovedEvent) {
+	if ev.Reaction != reactionTrigger || s.isBotUser(ev.User) {
+		return
+	}
+	parentTS := ev.Item.Timestamp
+	if parentTS == "" {
+		return
+	}
+	sessionID := s.sessionKey(parentTS)
+	if !s.autoReplyOn(sessionID) {
+		return
+	}
+	s.setAutoReply(sessionID, false)
+	log.Info().Str("channel", "slack").Str("slack_channel", ev.Item.Channel).Str("thread_ts", parentTS).Str("user", ev.User).Msg("auto-reply switch OFF")
+}
+
+// isBotUser reports whether userID is this channel's own bot, so a reaction
+// the bot itself places (or any other event it originates) never triggers
+// the switch.
+func (s *Channel) isBotUser(userID string) bool {
+	s.cfgMu.Lock()
+	botID := s.botUserID
+	s.cfgMu.Unlock()
+	return userID != "" && userID == botID
+}
+
+// reactionThreadParent resolves the reacted message's owning thread root and
+// reports whether the reacted message IS that root. The switch only lives on
+// the parent, so a 🤖 on a reply bubble returns isParent=false.
+//
+// It fetches the single message at itemTS via conversations.history. A
+// top-level message has an empty thread_ts (or one equal to its own ts); a
+// reply carries its parent's thread_ts. On any API failure we conservatively
+// treat the item as a non-parent (isParent=false) so we never arm the wrong
+// thread.
+func (s *Channel) reactionThreadParent(channelID, itemTS string) (parentTS string, isParent bool) {
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil || channelID == "" || itemTS == "" {
+		return "", false
+	}
+	// Latest+Inclusive+Limit:1 fetches exactly the message at itemTS. Setting
+	// Oldest==Latest is unreliable (Slack can return an empty window), so we
+	// bound only the top and take the first row.
+	resp, err := api.GetConversationHistory(&slackgo.GetConversationHistoryParameters{
+		ChannelID: channelID,
+		Latest:    itemTS,
+		Inclusive: true,
+		Limit:     1,
+	})
+	if err != nil || resp == nil || len(resp.Messages) == 0 {
+		log.Warn().Str("channel", "slack").Str("slack_channel", channelID).Str("ts", itemTS).
+			Int("messages", func() int { if resp == nil { return -1 }; return len(resp.Messages) }()).
+			Err(err).Msg("reaction: conversations.history returned nothing — cannot resolve parent")
+		return "", false
+	}
+	m := resp.Messages[0]
+	log.Debug().Str("channel", "slack").Str("slack_channel", channelID).Str("item_ts", itemTS).
+		Str("msg_ts", m.Timestamp).Str("thread_ts", m.ThreadTimestamp).
+		Msg("reaction: resolved reacted message")
+	// A parent has no thread_ts, or a thread_ts that equals its own ts.
+	if m.ThreadTimestamp == "" || m.ThreadTimestamp == itemTS {
+		return itemTS, true
+	}
+	return m.ThreadTimestamp, false
 }
 
 // pingFallbackText stands in for an empty mention/ping so the agent
@@ -911,6 +1136,22 @@ func stripBotMention(text string) string {
 		return strings.TrimSpace(text[idx+1:])
 	}
 	return text
+}
+
+// mentionsBot reports whether text contains an @mention of this bot
+// (<@BOTID>). A channel message that mentions the bot also arrives as an
+// AppMentionEvent, so on an auto-reply thread the duplicate MessageEvent must
+// be skipped to avoid dispatching the same message twice. Returns false when
+// the bot's own user ID isn't resolved yet (fail open — the auto-reply gate
+// still applies), so a brief post-connect window can't drop a real reply.
+func (s *Channel) mentionsBot(text string) bool {
+	s.cfgMu.Lock()
+	botID := s.botUserID
+	s.cfgMu.Unlock()
+	if botID == "" {
+		return false
+	}
+	return strings.Contains(text, "<@"+botID+">")
 }
 
 // HTTPHandler returns the webhook handler. Verifies HMAC-SHA256 + handles
@@ -1123,6 +1364,20 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		s.setReaction(reactionError, ev.Channel, ev.TimeStamp, "")
 		s.postReply(ev.Channel, threadTS, "Agent error: could not queue message. Check the dashboard for details.")
 		return
+	}
+	// Arm auto-reply for a brand-new CHANNEL thread, after the send has
+	// created the session on disk so the persisted flag sticks. The agent
+	// marks the parent with 🤖; every later reply is then answered without a
+	// mention. The marker doubles as the on/off switch — remove it to stop,
+	// re-add to resume (handleReactionRemoved / handleReactionAdded). DMs are
+	// already always-on, so they get neither the switch nor the marker.
+	if isNewSession && ev.ChannelType == "channel" && cfg.ReactionTriggerEnabled && reactionChannelAllowed(cfg, ev.Channel) {
+		s.setAutoReply(sessionID, true)
+		// threadTS is the parent message for a new thread; mark it.
+		s.setReaction(reactionTrigger, ev.Channel, threadTS, "")
+		log.Info().Str("channel", "slack").Str("slack_channel", ev.Channel).
+			Str("thread_ts", threadTS).Str("session", sessionID).
+			Msg("auto-reply armed on new thread (🤖 marker posted)")
 	}
 	// Stamp the session owner once, on the first message that creates the
 	// session. wickUserIDFn hits the DB, so skipping it on every follow-up

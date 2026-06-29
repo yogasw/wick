@@ -54,6 +54,13 @@ type Config struct {
 	// only while the named field's current value equals <value>. Not
 	// persisted — pure presentation hint.
 	VisibleWhen string `gorm:"-" json:"visible_when,omitempty"`
+	// Group is an optional section heading for the admin Settings page,
+	// sourced from the `wick:"group=..."` tag. Simple (non-kvlist,
+	// non-picker) rows that share a Group render together under one card
+	// titled with the Group name, in first-seen order; rows with no Group
+	// fall into the default "Configuration" card. Pure presentation hint —
+	// not persisted, JSON-exposed for the SPA inspector.
+	Group string `gorm:"-" json:"group,omitempty"`
 	// Mode locks the workflow editor's Fixed ⇄ Expression toggle for this
 	// field, sourced from the `wick:"mode=fixed"` / `wick:"mode=expression"`
 	// tag. Empty = operator chooses freely (toggle enabled, defaults to
