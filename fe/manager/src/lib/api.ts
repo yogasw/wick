@@ -359,7 +359,8 @@ export async function getConnectorHistory(
   return { ...r, runs: r.runs ?? [], ops: r.ops ?? [], users: r.users ?? [] };
 }
 
-/* Plugin marketplace (admin-only). Backed by internal/manager/plugins_api.go. */
+/* Plugin marketplace. Listing is readable by any logged-in user; the
+   actions below are admin-only server-side. Backed by internal/manager/plugins_api.go. */
 export async function listPlugins(): Promise<import("./types.js").PluginsList> {
   return apiGet<import("./types.js").PluginsList>("/manager/api/plugins");
 }

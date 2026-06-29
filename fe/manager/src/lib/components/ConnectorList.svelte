@@ -36,6 +36,11 @@
      Uninstall items + the "update available" hint. Loaded best-effort
      (admin-only endpoint); a failure just hides plugin actions. */
   let plugin = $state<PluginEntry | null>(null);
+  /* Whether the viewer may run the header kebab's admin actions (type
+     enable/disable, plugin update/uninstall). The list endpoint is readable
+     by everyone now, so a successful fetch no longer implies admin — gate the
+     action items on this flag instead. */
+  let isAdmin = $state(false);
   let typeBusy = $state(false);
   let pluginBusy = $state(false);
   let confirmUninstall = $state(false);
@@ -43,9 +48,11 @@
   async function loadPlugin() {
     try {
       const r = await listPlugins();
+      isAdmin = r.is_admin;
       plugin = (r.installed ?? []).find((p) => p.key === connectorKey) ?? null;
     } catch {
-      plugin = null; // not admin, or marketplace unavailable — hide plugin actions
+      // Marketplace unavailable — hide plugin actions but leave isAdmin as-is.
+      plugin = null;
     }
   }
 
@@ -253,8 +260,11 @@
   }
 
   /* Header kebab items: the type on/off switch for every connector, plus
-     Update (when a newer version exists) + Uninstall for plugins. */
+     Update (when a newer version exists) + Uninstall for plugins. Every item
+     is an admin-only action server-side, so non-admins get an empty menu (the
+     kebab itself is hidden when empty). */
   let headerMenu = $derived.by(() => {
+    if (!isAdmin) return [];
     const items: { label: string; onclick: () => void; danger?: boolean; disabled?: boolean }[] = [
       {
         label: data?.disabled_type ? "Enable connector" : "Disable connector",
@@ -397,8 +407,10 @@
           >+ New row</button>
         {/if}
         <!-- Connector-type actions: Disable/Enable (all connectors) +
-             Update/Uninstall (plugins only). -->
-        <KebabMenu items={headerMenu} ariaLabel="Connector actions" width={200} />
+             Update/Uninstall (plugins only). Admin-only — hidden when empty. -->
+        {#if headerMenu.length > 0}
+          <KebabMenu items={headerMenu} ariaLabel="Connector actions" width={200} />
+        {/if}
       </div>
     </div>
 
@@ -442,7 +454,7 @@
                   {/if}
                   <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {chip.cls}">{chip.label}</span>
                   {#if canConnect(row)}
-                    <Button variant="secondary" size="sm" disabled={connectingId === row.id} onclick={() => connect(row)}>
+                    <Button variant="primary" size="sm" disabled={connectingId === row.id} onclick={() => connect(row)}>
                       {connectingId === row.id ? "Connecting…" : connectLabel(row)}
                     </Button>
                   {/if}

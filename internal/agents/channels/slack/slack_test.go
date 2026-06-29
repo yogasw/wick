@@ -3,7 +3,66 @@ package slack
 import (
 	"strings"
 	"testing"
+
+	slackgo "github.com/slack-go/slack"
 )
+
+func TestFormatAttachmentsEmpty(t *testing.T) {
+	if got := formatAttachments(nil); got != "" {
+		t.Errorf("nil files should yield empty string, got %q", got)
+	}
+	if got := formatAttachments([]slackgo.File{}); got != "" {
+		t.Errorf("empty files should yield empty string, got %q", got)
+	}
+}
+
+func TestFormatAttachmentsRendersMetadataAndLink(t *testing.T) {
+	files := []slackgo.File{
+		{Title: "order.png", PrettyType: "PNG", Size: 2048, Permalink: "https://acme.slack.com/files/U1/F1/order.png"},
+	}
+	got := formatAttachments(files)
+	for _, want := range []string{
+		"[Attached files",
+		"order.png",
+		"(PNG)",
+		"2.0KB",
+		"https://acme.slack.com/files/U1/F1/order.png",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestFormatAttachmentsFallbacks(t *testing.T) {
+	// No Title → Name; no Permalink → URLPrivate.
+	files := []slackgo.File{{Name: "log.txt", URLPrivate: "https://files.slack.com/log.txt"}}
+	got := formatAttachments(files)
+	if !strings.Contains(got, "log.txt") {
+		t.Errorf("name fallback missing: %s", got)
+	}
+	if !strings.Contains(got, "https://files.slack.com/log.txt") {
+		t.Errorf("url_private fallback missing: %s", got)
+	}
+}
+
+func TestFormatSenderLabel(t *testing.T) {
+	tests := []struct {
+		name, userID, handle, real, want string
+	}{
+		{"full", "U1", "yoga", "Yoga Setiawan", "Yoga Setiawan (@yoga, U1)"},
+		{"handle only", "U1", "yoga", "", "@yoga (U1)"},
+		{"real only", "U1", "", "Yoga Setiawan", "Yoga Setiawan (U1)"},
+		{"id only", "U1", "", "", "U1"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatSenderLabel(tc.userID, tc.handle, tc.real); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestNormalizeUserText(t *testing.T) {
 	if got := normalizeUserText("hello"); got != "hello" {

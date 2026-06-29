@@ -6,7 +6,15 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Changed
+
+*   **Connector plugin marketplace — any logged-in user can browse**: `GET /manager/api/plugins` now requires only a valid session, not admin. Every user can see the installed + available plugin catalog. Lifecycle actions (install / update / enable / disable / remove) remain admin-only; non-admins see a "Requires admin" disabled state on the Download button and the connector detail kebab hides the Update / Uninstall / Disable options.
+*   **Access policy + per-session config — editable by instance owner**: The Access Policy section and session-config override on a connector detail page are now editable by the instance **owner** (creator) in addition to admins. `AllowOthersConfigure` users are intentionally excluded — the policy controls who receives that grant. The API response carries a new `can_manage_policy` field that the UI reads to show or hide those sections.
+
+### Improved
+
+*   **Slack channel — sender label on every turn**: Inbound Slack messages are now prefixed with a resolved `Real Name (@handle, UXXXXXXXX):` label, cached per user via `users.info`. Useful in multi-user threads and for matching the sender to their per-user connector when replying. Falls back to the bare user ID if the API call fails.
+*   **Slack channel — file attachment context**: When a user posts files (images, PDFs, `file_share` events), attachment metadata (name, type, size, Slack permalink) is appended to the user turn so the agent knows what was shared and has a link to fetch the content via the Slack connector. `file_share`-only messages (no body text) are no longer silently dropped.
 
 ---
 

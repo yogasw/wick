@@ -114,6 +114,10 @@ export interface ConnectorDetail {
   has_health_check: boolean;
   can_configure: boolean;
   is_admin: boolean;
+  /* True for an admin OR the instance owner — gates the Access policy +
+     per-session config sections. Broader than is_admin (owner included),
+     narrower than can_configure (excludes AllowOthersConfigure users). */
+  can_manage_policy: boolean;
   fields: ConfigField[] | null;
   operations: ConnectorOp[] | null;
   categories: ConnectorCategory[] | null;
@@ -470,4 +474,8 @@ export interface PluginsList {
   installed: PluginEntry[];
   available: PluginEntry[];
   registry_error?: string;
+  /* Whether the viewer may install / update / enable / disable / remove.
+     Non-admins still receive the full list; the action buttons render
+     disabled with a "requires admin" hint. */
+  is_admin: boolean;
 }

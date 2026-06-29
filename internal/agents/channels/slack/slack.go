@@ -136,6 +136,14 @@ type Channel struct {
 	userTokenMu    sync.RWMutex
 	userTokenCache map[string]string
 
+	// userDisplayCache maps Slack user ID → a resolved "Name (@handle, U…)"
+	// label, prefixed onto every inbound turn so the agent always knows who
+	// spoke (matters in multi-user threads, and for picking the right
+	// connector when replying). Cached because resolving needs a users.info
+	// API call per user; the directory rarely changes mid-session.
+	userDisplayMu    sync.RWMutex
+	userDisplayCache map[string]string
+
 	// tokenRefreshFn rebuilds the full userID→token map from connector rows.
 	// Wired at startup via SetTokenRefreshFn; triggered on-demand when a
 	// lookup misses and on a 5-minute background ticker.
@@ -171,8 +179,9 @@ type Channel struct {
 // corresponding Set* setters before Start.
 func New(cfg agentconfig.SlackChannelConfig) *Channel {
 	ch := &Channel{
-		turns:          make(map[string]*turn),
-		userTokenCache: make(map[string]string),
+		turns:            make(map[string]*turn),
+		userTokenCache:   make(map[string]string),
+		userDisplayCache: make(map[string]string),
 	}
 	ch.applyConfig(cfg, "")
 	return ch
@@ -678,6 +687,9 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				"thread":     threadKey(ev.ThreadTimeStamp, ev.TimeStamp),
 				"ts":         ev.TimeStamp,
 			})
+			// ev.Files carries any images/attachments posted with the mention.
+			// MessageEvent has no Files field, so pass them alongside — without
+			// this the agent never learns the user attached anything.
 			s.handleMessage(ctx, &slackevents.MessageEvent{
 				Type:            ev.Type,
 				User:            ev.User,
@@ -686,9 +698,12 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				ThreadTimeStamp: ev.ThreadTimeStamp,
 				Channel:         ev.Channel,
 				ChannelType:     "channel",
-			})
+			}, ev.Files)
 		case *slackevents.MessageEvent:
-			if ev.BotID != "" || ev.SubType != "" {
+			// SubType "file_share" carries attachments with no real text —
+			// let it through (with its files) instead of dropping it. Other
+			// subtypes (edits, joins, …) are still ignored.
+			if ev.BotID != "" || (ev.SubType != "" && ev.SubType != "file_share") {
 				return
 			}
 			// Workflow surface gets every non-bot message regardless of
@@ -707,7 +722,14 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 			if ev.ChannelType != "im" && ev.ChannelType != "mpim" {
 				return
 			}
-			s.handleMessage(ctx, ev)
+			// MessageEvent stashes a file_share's files under .Message
+			// (slackevents only populates the top-level Files field on
+			// app_mention, not plain messages).
+			var files []slackgo.File
+			if ev.Message != nil {
+				files = ev.Message.Files
+			}
+			s.handleMessage(ctx, ev, files)
 		case *slackevents.AppHomeOpenedEvent:
 			s.emitWorkflow(ctx, "app_home_opened", map[string]any{
 				"user": ev.User,
@@ -738,6 +760,111 @@ func normalizeUserText(text string) string {
 		return pingFallbackText
 	}
 	return text
+}
+
+// senderLabel resolves a Slack user ID into a "Name (@handle, U…)" label,
+// cached per user. On a cache miss it calls users.info; if that fails it
+// falls back to the bare user ID so the prefix is never empty. The label
+// prefixes every inbound turn so the agent knows who spoke — in a shared
+// thread, and for matching the sender to a connector when replying.
+func (s *Channel) senderLabel(userID string) string {
+	if userID == "" {
+		return ""
+	}
+	s.userDisplayMu.RLock()
+	label, ok := s.userDisplayCache[userID]
+	s.userDisplayMu.RUnlock()
+	if ok {
+		return label
+	}
+
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+
+	label = userID // fallback when the API is unavailable or the lookup fails
+	if api != nil {
+		if u, err := api.GetUserInfo(userID); err == nil && u != nil {
+			label = formatSenderLabel(userID, u.Name, u.RealName)
+		}
+	}
+
+	s.userDisplayMu.Lock()
+	s.userDisplayCache[userID] = label
+	s.userDisplayMu.Unlock()
+	return label
+}
+
+// formatSenderLabel builds the "Name (@handle, U…)" prefix from the parts a
+// users.info lookup returns, degrading gracefully when a part is missing. The
+// user ID is always present (it's the fallback), so the result is never empty.
+func formatSenderLabel(userID, handle, real string) string {
+	switch {
+	case real != "" && handle != "":
+		return fmt.Sprintf("%s (@%s, %s)", real, handle, userID)
+	case handle != "":
+		return fmt.Sprintf("@%s (%s)", handle, userID)
+	case real != "":
+		return fmt.Sprintf("%s (%s)", real, userID)
+	default:
+		return userID
+	}
+}
+
+// formatAttachments renders a Slack message's files as a text block appended
+// to the user turn, so the agent knows what was attached and has a permalink
+// to fetch each file via the slack connector. The bytes are NOT downloaded —
+// only the metadata + link are surfaced. Returns "" when there are no files.
+//
+// Each line carries: title/name, pretty type, human size, and the best
+// available link (permalink for in-Slack view; url_private as a fallback the
+// connector can GET with the bot token).
+func formatAttachments(files []slackgo.File) string {
+	if len(files) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n[Attached files — fetch via the slack connector (files.info / the link) if you need the contents]")
+	for _, f := range files {
+		name := f.Title
+		if name == "" {
+			name = f.Name
+		}
+		link := f.Permalink
+		if link == "" {
+			link = f.URLPrivate
+		}
+		b.WriteString("\n- ")
+		b.WriteString(name)
+		if f.PrettyType != "" {
+			b.WriteString(" (")
+			b.WriteString(f.PrettyType)
+			b.WriteString(")")
+		}
+		if f.Size > 0 {
+			b.WriteString(" · ")
+			b.WriteString(humanSize(int64(f.Size)))
+		}
+		if link != "" {
+			b.WriteString(" · ")
+			b.WriteString(link)
+		}
+	}
+	return b.String()
+}
+
+// humanSize formats a byte count as a compact human-readable string.
+func humanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // stripBotMention removes the leading <@BOTID> mention Slack prepends to app_mention text.
@@ -835,7 +962,7 @@ func (s *Channel) snapshot() agentconfig.SlackChannelConfig {
 	return c
 }
 
-func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEvent) {
+func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, files []slackgo.File) {
 	threadTS := ev.ThreadTimeStamp
 	if threadTS == "" {
 		threadTS = ev.TimeStamp
@@ -929,6 +1056,19 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	})
 
 	userText := normalizeUserText(ev.Text)
+	// Prefix the sender so the agent always knows who spoke — essential in
+	// multi-user threads and for matching the sender to a connector (bot vs
+	// the user's SSO-connected account) when replying. Skip for the bare-ping
+	// fallback, which is a meta instruction rather than something the user said.
+	if strings.TrimSpace(ev.Text) != "" {
+		if who := s.senderLabel(ev.User); who != "" {
+			userText = who + ": " + userText
+		}
+	}
+	// Append an attachment manifest so the agent knows the user posted files
+	// (images, PDFs, …) and has a permalink to fetch each one — the bytes
+	// themselves aren't downloaded here. Empty when the message had no files.
+	userText += formatAttachments(files)
 	isNewSession := !s.sessionOnDisk(sessionID)
 	if isNewSession {
 		ctxText := s.buildSessionContext(ev, threadTS)
