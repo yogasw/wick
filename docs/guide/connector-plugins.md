@@ -55,6 +55,8 @@ Admin-only. Returns the new version on success.
 
 In the manager UI, available-to-install plugins appear **in the same category grid as built-in and already-installed connectors** — there is no separate "Available to install" section. Each plugin card shows a **Download** button; if no build exists for the host OS/arch the button is shown as disabled with a reason. Use the **Installed** filter chip to see only connectors that are ready to use (built-ins + downloaded plugins, no undownloaded catalog entries). Category chips (API, Communication, …) span both built-ins and plugins; the chip list is derived from each connector's tags.
 
+**Visibility vs. actions.** The marketplace mirrors built-in connectors: **any logged-in user can browse** the catalog (installed + available), but the lifecycle **actions are admin-only**. For a non-admin the **Download** button reads "Requires admin" (disabled), and the connector detail page hides the Update / Uninstall / Disable kebab entirely.
+
 ### Where plugins come from
 
 `search` and `install <name>` read a **catalog** — a `plugins.json` file published in the `plugins` repo and fetched directly (not via the GitHub API, so there's no rate limit and no token needed). Each entry points at the per-OS/arch download URL of a GitHub release; the binary is only downloaded when you install. Point wick at a different catalog with `WICK_PLUGIN_CATALOG=<url>`.
