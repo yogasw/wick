@@ -30,6 +30,10 @@ type connectorDef struct {
 	CustomSource    string `json:"custom_source"`
 	NeedsReload     bool   `json:"needs_reload"`
 	Disabled        bool   `json:"disabled"`
+	// DisabledType is the connector-TYPE off-switch (manager header kebab),
+	// distinct from Disabled (which is "every instance row is off"). A
+	// disabled type is hidden from the LLM but still listed here with a badge.
+	DisabledType bool `json:"disabled_type"`
 }
 
 // apiConnectors serves the connector-definition catalog as JSON for the
@@ -66,6 +70,8 @@ func (h *Handler) apiConnectors(w http.ResponseWriter, r *http.Request) {
 		countByKey[row.Key] = c
 	}
 
+	disabledTypes := h.connectors.DisabledTypeKeys()
+
 	type defWithSort struct {
 		def     connectorDef
 		catSort int
@@ -94,6 +100,7 @@ func (h *Handler) apiConnectors(w http.ResponseWriter, r *http.Request) {
 			DisabledCount:   cnt.disabled,
 			System:          system,
 			Disabled:        cnt.disabled > 0 && cnt.active == 0 && cnt.needsSetup == 0,
+			DisabledType:    disabledTypes[m.Meta.Key],
 		}
 		if info := h.customDefInfo(ctx, m.Meta.Key, user); info != nil {
 			def.Custom = true

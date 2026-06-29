@@ -11,6 +11,8 @@
 package setup
 
 import (
+	"strings"
+
 	"github.com/rs/zerolog/log"
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
@@ -75,6 +77,16 @@ func instanceKey(channelType string, ownerUserID *string) string {
 	return channelType + ":" + *ownerUserID
 }
 
+// sessionPrefix derives a charset-safe session-key prefix from the registry
+// instanceKey. The registry key uses ":" as its separator (e.g.
+// "slack:<owner>"), but ":" is outside the session-id charset
+// ([A-Za-z0-9._-]) enforced by storage.ValidateSessionID and is illegal in
+// Windows filenames — so it is replaced with "-". The result is still unique
+// per instance because owner IDs never contain ":".
+func sessionPrefix(channelType string, ownerUserID *string) string {
+	return strings.ReplaceAll(instanceKey(channelType, ownerUserID), ":", "-") + "-"
+}
+
 // Slack loads all configured user channel rows and registers one keyed instance per user.
 func Slack(reg *agentchannels.Registry, store SlackStore, sendFn agentchannels.SendFunc) {
 	if err := store.EnsureChannel("slack"); err != nil {
@@ -99,7 +111,7 @@ func Slack(reg *agentchannels.Registry, store SlackStore, sendFn agentchannels.S
 		ch.SetSendFunc(sendFn)
 		ch.SetPublicURL(pubURL)
 		key := instanceKey("slack", ownerID)
-		ch.SetSessionPrefix(key + ":")
+		ch.SetSessionPrefix(sessionPrefix("slack", ownerID))
 		src := agentslack.NewConfigSourceKeyed(store, ch, uid)
 		reg.AddKeyed(key, ch, src)
 		if ch.IsConfigured() {
@@ -165,7 +177,7 @@ func Telegram(reg *agentchannels.Registry, store TelegramStore, sendFn agentchan
 		ch := agenttelegram.NewWithOwner(cfg, uid)
 		ch.SetSendFunc(sendFn)
 		key := instanceKey("telegram", ownerID)
-		ch.SetSessionPrefix(key + ":")
+		ch.SetSessionPrefix(sessionPrefix("telegram", ownerID))
 		src := agenttelegram.NewConfigSourceKeyed(store, ch, uid)
 		reg.AddKeyed(key, ch, src)
 		if ch.IsConfigured() {

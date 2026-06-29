@@ -11,9 +11,13 @@
     reloadConnector,
     resyncMcpTools,
     disconnectConnectorAccount,
+    setConnectorTypeDisabled,
+    listPlugins,
+    updatePlugin,
+    removePlugin as uninstallPlugin,
   } from "$lib/api.js";
   import { startConnectorOAuth, type OAuthConnect } from "./connectorOAuth.js";
-  import type { ConnectorList, ConnectorRow, ConnectorAccount } from "$lib/types.js";
+  import type { ConnectorList, ConnectorRow, ConnectorAccount, PluginEntry } from "$lib/types.js";
   import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
   type Props = { connectorKey: string };
@@ -26,6 +30,24 @@
   let confirmRow = $state<ConnectorRow | null>(null);
   let reloadBusy = $state(false);
   let resyncBusy = $state(false);
+
+  /* Plugin overlay for THIS connector key: non-null when the connector is a
+     downloaded plugin (not a built-in). Drives the header kebab's Update /
+     Uninstall items + the "update available" hint. Loaded best-effort
+     (admin-only endpoint); a failure just hides plugin actions. */
+  let plugin = $state<PluginEntry | null>(null);
+  let typeBusy = $state(false);
+  let pluginBusy = $state(false);
+  let confirmUninstall = $state(false);
+
+  async function loadPlugin() {
+    try {
+      const r = await listPlugins();
+      plugin = (r.installed ?? []).find((p) => p.key === connectorKey) ?? null;
+    } catch {
+      plugin = null; // not admin, or marketplace unavailable — hide plugin actions
+    }
+  }
 
   /* Per-row kebab (⋮) menu items. History/Disable/Duplicate/Delete —
      Duplicate + Delete only when the connector isn't fixed. */
@@ -185,9 +207,91 @@
     }
   }
 
+  /* Connector-TYPE off-switch (header kebab). Disabling hides the whole
+     connector from the LLM; the page stays open so it can be re-enabled. */
+  async function toggleType() {
+    if (!data || typeBusy) return;
+    typeBusy = true;
+    const next = !data.disabled_type;
+    try {
+      await setConnectorTypeDisabled(connectorKey, next);
+      data = { ...data, disabled_type: next };
+      toastOk(next ? "Connector disabled" : "Connector enabled");
+    } catch (e) {
+      toastError("Action failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      typeBusy = false;
+    }
+  }
+
+  async function doUpdate() {
+    if (pluginBusy) return;
+    pluginBusy = true;
+    try {
+      const r = await updatePlugin(connectorKey);
+      toastOk(r.version ? `Updated to v${r.version}` : "Plugin updated");
+      await Promise.all([load(true), loadPlugin()]);
+    } catch (e) {
+      toastError("Update failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      pluginBusy = false;
+    }
+  }
+
+  async function confirmDoUninstall() {
+    confirmUninstall = false;
+    if (pluginBusy) return;
+    pluginBusy = true;
+    try {
+      await uninstallPlugin(connectorKey);
+      toastOk("Plugin uninstalled");
+      push("/"); // connector is gone — back to the index
+    } catch (e) {
+      toastError("Uninstall failed", e instanceof Error ? e.message : String(e));
+      pluginBusy = false;
+    }
+  }
+
+  /* Header kebab items: the type on/off switch for every connector, plus
+     Update (when a newer version exists) + Uninstall for plugins. */
+  let headerMenu = $derived.by(() => {
+    const items: { label: string; onclick: () => void; danger?: boolean; disabled?: boolean }[] = [
+      {
+        label: data?.disabled_type ? "Enable connector" : "Disable connector",
+        onclick: toggleType,
+        disabled: typeBusy,
+      },
+    ];
+    if (plugin) {
+      if (plugin.update_available) {
+        items.push({
+          label: pluginBusy
+            ? "Updating…"
+            : `Update to v${plugin.latest_version ?? ""}`.trimEnd(),
+          onclick: doUpdate,
+          disabled: pluginBusy,
+        });
+      }
+      items.push({
+        label: "Uninstall plugin",
+        onclick: () => (confirmUninstall = true),
+        danger: true,
+        disabled: pluginBusy,
+      });
+    }
+    return items;
+  });
+
+  const inactiveCls = "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600";
+
   function statusChip(row: ConnectorRow): { label: string; cls: string } {
+    // Connector type off → every instance reads "Inactive", not "Published",
+    // so the green chip can't imply a row is live while the type is disabled.
+    if (data?.disabled_type) {
+      return { label: "Inactive", cls: inactiveCls };
+    }
     if (row.disabled) {
-      return { label: "Disabled", cls: "bg-white-300 dark:bg-navy-600 text-black-700 dark:text-black-600" };
+      return { label: "Disabled", cls: inactiveCls };
     }
     if (row.status === "needs_setup") {
       return { label: "Needs setup", cls: "bg-prog-100 text-prog-400" };
@@ -215,6 +319,7 @@
 
   $effect(() => {
     load();
+    loadPlugin();
     return clearBreadcrumbNames;
   });
 </script>
@@ -225,6 +330,12 @@
   <div class="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">{error}</div>
 {:else if data}
   <div class="space-y-6">
+    {#if data.disabled_type}
+      <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-neg-400 bg-neg-100 px-4 py-3 text-sm text-neg-400">
+        <span class="font-medium">This connector is disabled — hidden from the LLM. Every instance below is inactive until you re-enable it.</span>
+        <Button size="sm" variant="secondary" disabled={typeBusy} onclick={toggleType}>{typeBusy ? "Enabling…" : "Enable connector"}</Button>
+      </div>
+    {/if}
     {#if data.needs_reload}
       <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cau-400 bg-cau-100 px-4 py-3 text-sm text-cau-400">
         <span class="font-medium">Definition updated — reload to apply the latest changes.</span>
@@ -241,6 +352,15 @@
             <h1 class="text-lg font-bold text-black-900 dark:text-white-100">{data.name}</h1>
             {#if data.custom}
               <span class="flex-shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-green-500 border border-green-600/40 bg-green-900/20">Custom</span>
+            {/if}
+            {#if plugin}
+              <span class="flex-shrink-0 rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[11px] font-medium text-black-800 dark:text-black-600">Plugin · v{plugin.version}</span>
+            {/if}
+            {#if data.disabled_type}
+              <span class="flex-shrink-0 rounded-full bg-neg-100 px-2 py-0.5 text-[11px] font-medium text-neg-400">Disabled</span>
+            {/if}
+            {#if plugin?.update_available}
+              <span class="flex-shrink-0 rounded-full bg-prog-100 px-2 py-0.5 text-[11px] font-medium text-prog-400">Update available · v{plugin.latest_version}</span>
             {/if}
             {#if mcpChip}
               <span class="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium {mcpChip.cls}"><span class="h-1.5 w-1.5 rounded-full {mcpChip.dot}"></span>{mcpChip.label}</span>
@@ -276,6 +396,9 @@
             class="whitespace-nowrap rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
           >+ New row</button>
         {/if}
+        <!-- Connector-type actions: Disable/Enable (all connectors) +
+             Update/Uninstall (plugins only). -->
+        <KebabMenu items={headerMenu} ariaLabel="Connector actions" width={200} />
       </div>
     </div>
 
@@ -287,7 +410,9 @@
           <p class="text-sm text-black-700 dark:text-black-600">No rows yet. Click <strong>+ New row</strong> to create one.</p>
         </div>
       {:else}
-        <div class="mt-4 flex flex-col gap-2 pb-6">
+        <!-- Dim the instances while the connector type is disabled — they're
+             inert (hidden from the LLM) but still editable to fix config. -->
+        <div class="mt-4 flex flex-col gap-2 pb-6 {data.disabled_type ? 'opacity-60' : ''}">
           {#each rows as row (row.id)}
             {@const chip = statusChip(row)}
             <div class="group relative rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 hover:border-green-400">
@@ -368,5 +493,15 @@
     destructive
     onConfirm={confirmDisconnectAccount}
     onCancel={() => (confirmAcc = null)}
+  />
+
+  <ConfirmDialog
+    open={confirmUninstall}
+    title="Uninstall this plugin?"
+    body="The plugin binary is removed from disk. Instances and their config stay and become inert; reinstall to restore them."
+    confirmLabel="Uninstall"
+    destructive
+    onConfirm={confirmDoUninstall}
+    onCancel={() => (confirmUninstall = false)}
   />
 {/if}

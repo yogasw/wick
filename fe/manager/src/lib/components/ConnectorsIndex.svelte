@@ -133,6 +133,10 @@
   }
 
   let available = $state<PluginEntry[]>([]);
+  // Installed plugins keyed by connector key — drives the "update available"
+  // indicator on built-in/installed cards (which are ConnectorDefs, not
+  // PluginEntries, so they don't carry version info themselves).
+  let installedPlugins = $state<Record<string, PluginEntry>>({});
   let installing = $state<string>("");
   let availableError = $state("");
 
@@ -144,6 +148,9 @@
       // server's OS/arch — those render with a disabled Download + a reason,
       // so the user knows the plugin exists rather than seeing an empty list.
       available = r.available ?? [];
+      const byKey: Record<string, PluginEntry> = {};
+      for (const p of r.installed ?? []) byKey[p.key] = p;
+      installedPlugins = byKey;
       if (r.registry_error) availableError = r.registry_error;
     } catch (e) {
       availableError = e instanceof Error ? e.message : String(e);
@@ -154,13 +161,34 @@
     installing = p.key;
     try {
       await installPlugin(p.key);
-      // The reloader registers it within ~5s; refresh both lists so it moves
-      // from Available into the connector grid.
-      await load();
+      // Install reconciles synchronously server-side, but refresh both lists
+      // and confirm the connector is registered before clearing the spinner —
+      // otherwise a freshly installed plugin can briefly show neither in
+      // Available nor in the connector grid (the "appears only after reopening"
+      // bug). Poll a few times as a fallback if registration lags.
+      await refreshUntilInstalled(p.key);
     } catch (e) {
       availableError = e instanceof Error ? e.message : String(e);
     } finally {
       installing = "";
+    }
+  }
+
+  /* Reload connectors + plugins until `key` shows up as a registered connector,
+     or attempts run out. Each attempt awaits BOTH lists (unlike load(), which
+     fires loadAvailable un-awaited) so the grid is consistent before we stop. */
+  async function refreshUntilInstalled(key: string) {
+    for (let i = 0; i < 4; i++) {
+      try {
+        connectors = await listConnectors();
+      } catch (e) {
+        error = e instanceof Error ? e.message : String(e);
+      }
+      await loadAvailable();
+      loading = false;
+      if (connectors.some((c) => c.key === key)) return;
+      // Registration lagging behind install — wait a beat and retry.
+      await new Promise((r) => setTimeout(r, 1000));
     }
   }
 
@@ -186,6 +214,10 @@
      count means "not synced yet", not "no tools" — don't print a misleading
      count for them. */
   function statsLine(c: ConnectorDef): string {
+    // Disabled type → don't imply live instances ("N active"); say it plainly.
+    if (c.disabled_type) {
+      return `${c.op_count} operation(s) · disabled`;
+    }
     const base =
       c.custom && c.custom_source === "MCP" && c.op_count === 0
         ? `tools sync live · ${c.active_count} active`
@@ -300,7 +332,7 @@
       {#if card.available}
         <div
           data-plugin-card
-          class="flex h-full flex-col gap-3 rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4 shadow-sm"
+          class="flex h-full flex-col gap-3 rounded-xl border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4 shadow-md"
         >
           <div class="flex items-start gap-3">
             <span class="relative flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">
@@ -336,7 +368,9 @@
           href={cardHref(card.key)}
           data-conn-card
           onclick={(e) => openConnector(e, card.key)}
-          class="flex h-full items-start gap-3 rounded-xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4 shadow-sm transition-all duration-150 hover:-translate-y-px hover:border-green-400 hover:shadow-md"
+          class="flex h-full items-start gap-3 rounded-xl border p-4 shadow-md transition-all duration-150 hover:-translate-y-px hover:shadow-lg {card.disabled_type
+            ? 'border-dashed border-neg-400/50 bg-white-100 dark:bg-navy-700 opacity-70 hover:border-neg-400'
+            : 'border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 hover:border-green-400'}"
         >
           <span class="relative flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-lg font-semibold text-green-700 dark:text-green-300">
             {#if card.icon && (card.icon.startsWith("data:image/") || card.icon.startsWith("<svg"))}
@@ -354,6 +388,12 @@
               {/if}
               {#if card.system}
                 <span class="flex-shrink-0 rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-800 dark:text-black-600">System</span>
+              {/if}
+              {#if card.disabled_type}
+                <span class="flex-shrink-0 rounded-full bg-neg-100 px-2 py-0.5 text-[10px] font-medium text-neg-400">Disabled</span>
+              {/if}
+              {#if installedPlugins[card.key]?.update_available}
+                <span class="flex-shrink-0 rounded-full bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400" title={`Update available · v${installedPlugins[card.key].latest_version}`}>⬆ Update</span>
               {/if}
             </span>
             {#if card.description}

@@ -38,6 +38,21 @@ Plugins are managed from the **app** binary (`<your-app> plugin ...`). The full 
 
 Every install **verifies** the plugin before it's wired in — the binary's sha256 must match its manifest, the OS/arch must match the host, and (when a trusted key is configured) the signature must check out. A hot-reload poller inside the app picks up an install / enable / disable / remove within a few seconds — **no restart needed**.
 
+### Updating and uninstalling from the manager UI
+
+The connector detail page (Manager → Connectors → {connector}) adds lifecycle actions in its header kebab menu (admin-only):
+
+- **Update to v{X}** — shown when the marketplace catalog carries a newer version than the one on disk. Clicking it downloads and hot-swaps the binary; no restart needed. The connector list shows an **Update** badge on the card when an update is waiting.
+- **Uninstall plugin** — removes the binary from disk. Existing rows and their configuration stay in the database and become inert (they won't execute). Reinstall the plugin to restore them.
+
+The same update operation is also available over the API:
+
+```
+POST /manager/api/plugins/{key}/update
+```
+
+Admin-only. Returns the new version on success.
+
 In the manager UI, available-to-install plugins appear **in the same category grid as built-in and already-installed connectors** — there is no separate "Available to install" section. Each plugin card shows a **Download** button; if no build exists for the host OS/arch the button is shown as disabled with a reason. Use the **Installed** filter chip to see only connectors that are ready to use (built-ins + downloaded plugins, no undownloaded catalog entries). Category chips (API, Communication, …) span both built-ins and plugins; the chip list is derived from each connector's tags.
 
 ### Where plugins come from
@@ -72,6 +87,26 @@ wick plugin catalog --repo owner/plugins-repo --out plugins/plugins.json
 See [CLI → wick plugin catalog](/reference/cli#wick-plugin-catalog).
 
 Authoring + release flow (folder layout, the `key` == folder rule, the PR → release CI that publishes a release and updates the catalog) lives in the `plugins` repo's `README.md` and `RELEASE.md`.
+
+## Disabling a connector type
+
+Any connector — built-in or plugin — can be hidden from the LLM entirely with the **connector-type disable** switch. This is separate from the per-row `Disabled` flag: it gates the whole connector type so every instance and every operation disappears from `wick_list` / `wick_execute`. The rows themselves remain in the manager UI with a **Disabled** badge and can still be configured and re-enabled at any time.
+
+**Manager UI** — open the connector detail page, click the kebab menu in the header, and choose **Disable connector** (or **Enable connector** to reverse). The banner at the top of the page confirms the disabled state and offers a quick re-enable button. Cards on the connector index also render with a dashed border and a **Disabled** badge.
+
+**API** (admin-only):
+
+```
+POST /manager/api/connectors/{key}/type-disable
+POST /manager/api/connectors/{key}/type-enable
+```
+
+Both return `{"disabled_type": true|false}`.
+
+::: tip When to use this vs per-row Disable
+- **Connector type disable** — you want to stop the entire connector from being visible to any LLM until it's reconfigured or re-enabled. All rows become inert instantly.
+- **Per-row Disable** (kebab → Disable on a row in the list) — you want to hide one specific credential set without affecting other rows of the same connector.
+:::
 
 ## Security
 

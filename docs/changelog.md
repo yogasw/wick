@@ -10,6 +10,32 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.27.2](https://github.com/yogasw/wick/compare/v0.27.1...v0.27.2) — Connectors
+
+_Released on 2026-06-29_
+
+### Added
+
+*   **Connector-type disable/enable switch** — Admins can now hide an entire connector type from the LLM with one toggle (header kebab → **Disable connector** on the connector detail page).
+    *   Disabling a type immediately removes all its instances and operations from `wick_list` and `wick_execute`, making it invisible to the agent.
+    *   The connector remains visible in the manager UI with a **Disabled** badge, allowing it to be re-enabled at any time. This is distinct from the per-row `Disabled` flag.
+    *   The connector list card now shows a **Disabled** badge and dimmed dashed styling. The detail page displays a disabled banner, inactive instance chips, and dimmed rows for disabled types.
+    *   API: `POST /manager/api/connectors/{key}/type-disable` and `/type-enable`.
+*   **Plugin update / uninstall from the manager UI** — The connector detail page header kebab now offers new options:
+    *   **Update to v{X}** appears when the marketplace catalog has a newer version, indicated by an **Update** badge on the connector list card. An update hot-swaps the plugin binary without requiring a service restart.
+    *   **Uninstall plugin** removes the plugin binary while preserving its associated rows and configuration in the database.
+    *   Both operations are admin-only.
+    *   API: `POST /manager/api/plugins/{key}/update`.
+
+### Fixed
+
+*   **Connector Index Card Display** — Corrected an issue where `listConnectors()` didn't map the `disabled_type` field, preventing the index card from accurately reflecting a disabled connector type.
+*   **Plugin Install Refresh** — Ensured that the install refresh process now awaits both list updates and confirms connector registration before clearing the spinner, resolving an issue where newly installed connectors only appeared after reopening the UI.
+*   **Session Key Prefix** — Changed the session-key prefix from ":" to "-" to ensure compatibility with session IDs and Windows filenames, which consider ":" an illegal character.
+
+---
+
+
 ## [v0.27.1](https://github.com/yogasw/wick/compare/v0.27.0...v0.27.1) — CI
 
 _Released on 2026-06-28_

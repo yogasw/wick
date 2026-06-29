@@ -45,6 +45,7 @@ export async function listConnectors(): Promise<ConnectorDef[]> {
     custom_source: c.custom_source ?? "",
     needs_reload: c.needs_reload ?? false,
     disabled: c.disabled ?? false,
+    disabled_type: c.disabled_type ?? false,
   }));
 }
 
@@ -63,6 +64,16 @@ export async function getConnector(key: string): Promise<ConnectorList> {
 
 export async function reloadConnector(key: string): Promise<{ ok: boolean }> {
   return apiPost<{ ok: boolean }>(`${connBase(key)}/reload`);
+}
+
+/* Connector-TYPE off-switch (admin-only): hide/show the whole connector type
+   from the LLM. Distinct from the per-row toggleConnectorDisabled. */
+export async function setConnectorTypeDisabled(
+  key: string,
+  disabled: boolean,
+): Promise<{ disabled_type: boolean }> {
+  const verb = disabled ? "type-disable" : "type-enable";
+  return apiPost<{ disabled_type: boolean }>(`${connBase(key)}/${verb}`);
 }
 
 export async function getConnectorRow(key: string, id: string): Promise<ConnectorDetail> {
@@ -354,6 +365,11 @@ export async function listPlugins(): Promise<import("./types.js").PluginsList> {
 }
 export async function installPlugin(name: string): Promise<{ ok: boolean }> {
   return apiPost<{ ok: boolean }>("/manager/api/plugins/install", { name });
+}
+export async function updatePlugin(key: string): Promise<{ ok: boolean; version?: string }> {
+  return apiPost<{ ok: boolean; version?: string }>(
+    `/manager/api/plugins/${encodeURIComponent(key)}/update`,
+  );
 }
 export async function setPluginEnabled(key: string, enabled: boolean): Promise<{ ok: boolean }> {
   const verb = enabled ? "enable" : "disable";
