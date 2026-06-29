@@ -15,6 +15,7 @@ All notable changes to Wick are documented here.
 
 *   **Slack channel — sender label on every turn**: Inbound Slack messages are now prefixed with a resolved `Real Name (@handle, UXXXXXXXX):` label, cached per user via `users.info`. Useful in multi-user threads and for matching the sender to their per-user connector when replying. Falls back to the bare user ID if the API call fails.
 *   **Slack channel — file attachment context**: When a user posts files (images, PDFs, `file_share` events), attachment metadata (name, type, size, Slack permalink) is appended to the user turn so the agent knows what was shared and has a link to fetch the content via the Slack connector. `file_share`-only messages (no body text) are no longer silently dropped.
+*   **Slack connector — session-aware "Sent using" footer**: The "Sent using @bot" footer on `send_message` and `update_message` now names the bot that **owns the agent session**, not the connector instance doing the sending. Any Slack connector row used inside a Slack-channel session credits the correct bot. Both ops accept an optional `session_id` input; the MCP transport also auto-injects it via the `X-Wick-Session-Id` header so no manual wiring is needed in workflow nodes. `update_message` now consistently re-appends the footer on every edit.
 
 ---
 
