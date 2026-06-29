@@ -83,7 +83,7 @@ func TestMCPConfigArgs(t *testing.T) {
 // TestMCPConfigArg_SessionHeader verifies the session id is emitted as the
 // X-Wick-Session-Id header when supplied, and omitted when empty.
 func TestMCPConfigArg_SessionHeader(t *testing.T) {
-	withSession := mcpConfigArg("http://127.0.0.1:9425/mcp", "secret123", "slack-__owner__-1700000000.000100")
+	withSession := mcpConfigArg("http://127.0.0.1:9425/mcp", "secret123", "slack-1700000000.000100")
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(withSession), &parsed); err != nil {
 		t.Fatalf("not valid JSON: %v", err)
@@ -91,7 +91,7 @@ func TestMCPConfigArg_SessionHeader(t *testing.T) {
 	servers, _ := parsed["mcpServers"].(map[string]any)
 	wick, _ := servers["wick"].(map[string]any)
 	headers, _ := wick["headers"].(map[string]any)
-	if headers["X-Wick-Session-Id"] != "slack-__owner__-1700000000.000100" {
+	if headers["X-Wick-Session-Id"] != "slack-1700000000.000100" {
 		t.Errorf("session header = %v, want the session id", headers["X-Wick-Session-Id"])
 	}
 
