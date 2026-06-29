@@ -6,12 +6,35 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Added
-
-*   **Connector-type disable/enable switch** — admins can now hide an entire connector type from the LLM with one toggle (header kebab → **Disable connector** on the connector detail page). Disabling a type removes every instance and operation from `wick_list` / `wick_execute` immediately; the connector stays in the manager UI with a **Disabled** badge so it can be re-enabled at any time. Distinct from the per-row `Disabled` flag. API: `POST /manager/api/connectors/{key}/type-disable` and `/type-enable`. See [Connector Plugins — Disabling a connector type](/guide/connector-plugins#disabling-a-connector-type).
-*   **Plugin update / uninstall from the manager UI** — the connector detail page header kebab now shows **Update to v{X}** when the marketplace catalog carries a newer version (with an **Update** badge on the connector list card) and **Uninstall plugin** for plugin-backed connectors. Both are admin-only. An update hot-swaps the binary without a restart; an uninstall removes the binary while keeping rows and config in the database. API: `POST /manager/api/plugins/{key}/update`. See [Connector Plugins — Updating and uninstalling from the manager UI](/guide/connector-plugins#updating-and-uninstalling-from-the-manager-ui).
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.27.2](https://github.com/yogasw/wick/compare/v0.27.1...v0.27.2) — Connectors
+
+_Released on 2026-06-29_
+
+### Added
+
+*   **Connector-type disable/enable switch** — Admins can now hide an entire connector type from the LLM with one toggle (header kebab → **Disable connector** on the connector detail page).
+    *   Disabling a type immediately removes all its instances and operations from `wick_list` and `wick_execute`, making it invisible to the agent.
+    *   The connector remains visible in the manager UI with a **Disabled** badge, allowing it to be re-enabled at any time. This is distinct from the per-row `Disabled` flag.
+    *   The connector list card now shows a **Disabled** badge and dimmed dashed styling. The detail page displays a disabled banner, inactive instance chips, and dimmed rows for disabled types.
+    *   API: `POST /manager/api/connectors/{key}/type-disable` and `/type-enable`.
+*   **Plugin update / uninstall from the manager UI** — The connector detail page header kebab now offers new options:
+    *   **Update to v{X}** appears when the marketplace catalog has a newer version, indicated by an **Update** badge on the connector list card. An update hot-swaps the plugin binary without requiring a service restart.
+    *   **Uninstall plugin** removes the plugin binary while preserving its associated rows and configuration in the database.
+    *   Both operations are admin-only.
+    *   API: `POST /manager/api/plugins/{key}/update`.
+
+### Fixed
+
+*   **Connector Index Card Display** — Corrected an issue where `listConnectors()` didn't map the `disabled_type` field, preventing the index card from accurately reflecting a disabled connector type.
+*   **Plugin Install Refresh** — Ensured that the install refresh process now awaits both list updates and confirms connector registration before clearing the spinner, resolving an issue where newly installed connectors only appeared after reopening the UI.
+*   **Session Key Prefix** — Changed the session-key prefix from ":" to "-" to ensure compatibility with session IDs and Windows filenames, which consider ":" an illegal character.
+
+---
+
 
 ## [v0.27.1](https://github.com/yogasw/wick/compare/v0.27.0...v0.27.1) — CI
 
