@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/mod/semver"
+
 	"github.com/yogasw/wick/pkg/entity"
 )
 
@@ -58,6 +60,19 @@ type Available struct {
 
 // AssetFor returns the download URL matching host (e.g. "linux/arm64"), or "".
 func (a Available) AssetFor(host string) string { return a.Assets[host] }
+
+// VersionNewer reports whether catalog version a is strictly newer than the
+// installed version b, by semver. Versions may be bare ("1.4.2") or "v"-prefixed;
+// both are normalized. Unparseable versions fall back to a plain string !=
+// comparison so a malformed tag still surfaces *some* update hint rather than
+// silently hiding one.
+func VersionNewer(a, b string) bool {
+	na, nb := "v"+strings.TrimPrefix(a, "v"), "v"+strings.TrimPrefix(b, "v")
+	if semver.IsValid(na) && semver.IsValid(nb) {
+		return semver.Compare(na, nb) > 0
+	}
+	return a != b && a != ""
+}
 
 const (
 	defaultCatalogURL     = "https://raw.githubusercontent.com/yogasw/wick/master/plugins/plugins.json"

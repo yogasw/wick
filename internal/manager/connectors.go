@@ -27,6 +27,9 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	auth := func(next http.HandlerFunc) http.Handler {
 		return authMidd.RequireAuth(next)
 	}
+	admin := func(next http.HandlerFunc) http.Handler {
+		return authMidd.RequireAdmin(next)
+	}
 
 	// Connectors index page → SPA shell (client route "/"). The JSON twin
 	// below stays; the SPA reads it.
@@ -42,6 +45,10 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/api/connectors/{key}/new", auth(h.apiCreateConnectorRow))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/label", auth(h.apiSetConnectorLabel))
 	mux.Handle("POST /manager/api/connectors/{key}/reload", auth(h.apiConnectorReload))
+	// Connector-TYPE off-switch (admin-only): hide/show the whole connector
+	// type from the LLM. Distinct from the per-row {id}/disable below.
+	mux.Handle("POST /manager/api/connectors/{key}/type-disable", admin(h.apiSetConnectorTypeDisabled(true)))
+	mux.Handle("POST /manager/api/connectors/{key}/type-enable", admin(h.apiSetConnectorTypeDisabled(false)))
 	mux.Handle("POST /manager/api/connectors/{key}/resync-tools", auth(h.apiResyncMCPTools))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/configs/{configKey}", auth(h.apiSetConnectorConfig))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/disable", auth(h.apiToggleConnectorDisabled))

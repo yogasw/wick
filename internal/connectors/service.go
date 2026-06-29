@@ -117,6 +117,11 @@ type Service struct {
 	// freshly created connector rows. nil disables tag seeding (tests
 	// that don't care about the home-page grouping can leave it unset).
 	tags tagSeeder
+
+	// typeState is the connector-TYPE enable/disable overlay (the manager
+	// header kebab's Disable/Enable). nil -> every type is enabled. Wired
+	// via SetTypeStateDB; built-in and plugin connectors share it.
+	typeState *typeStateStore
 }
 
 // tagSeeder is the slice of the tags service Bootstrap needs. Keeping
@@ -185,7 +190,35 @@ func (s *Service) SetMetrics(rec metrics.Recorder) {
 // NewServiceFromDB is a convenience constructor for the web server and
 // worker — both already hold a *gorm.DB.
 func NewServiceFromDB(db *gorm.DB) *Service {
-	return NewService(NewRepo(db))
+	s := NewService(NewRepo(db))
+	s.typeState = newTypeStateStore(db)
+	return s
+}
+
+// SetTypeStateDB wires the connector-type enable/disable overlay after
+// construction (for call sites that build the Service via NewService). nil db
+// leaves every type enabled.
+func (s *Service) SetTypeStateDB(db *gorm.DB) {
+	s.typeState = newTypeStateStore(db)
+}
+
+// TypeEnabled reports whether the connector type key is enabled. Default-on:
+// an unknown key or a nil overlay returns true.
+func (s *Service) TypeEnabled(key string) bool {
+	return s.typeState.Enabled(key)
+}
+
+// SetTypeEnabled flips the connector-type switch. Disabling hides the whole
+// connector type from the LLM surface (every instance + operation); the
+// manager UI still lists it with a "Disabled" badge so it can be re-enabled.
+func (s *Service) SetTypeEnabled(key string, enabled bool) error {
+	return s.typeState.SetEnabled(key, enabled)
+}
+
+// DisabledTypeKeys returns the set of connector type keys explicitly disabled,
+// for the manager list to badge them in one shot.
+func (s *Service) DisabledTypeKeys() map[string]bool {
+	return s.typeState.disabledKeys()
 }
 
 // Bootstrap registers code-side connector definitions for dispatch and
@@ -1044,6 +1077,13 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			return nil, fmt.Errorf("no implementation registered for connector key %q", c.Key)
 		}
 		mod = m
+	}
+
+	// Type-level off-switch (manager header kebab). Disabling a connector
+	// type hides every instance from the LLM and blocks execution, even if
+	// an individual row stayed enabled.
+	if !s.TypeEnabled(c.Key) {
+		return nil, fmt.Errorf("connector type %q is disabled", c.Key)
 	}
 
 	var op *connector.Operation

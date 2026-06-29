@@ -119,6 +119,11 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 		if !ok {
 			continue
 		}
+		// Type-level off-switch: a disabled connector type is hidden from the
+		// LLM entirely (the manager UI still shows it with a Disabled badge).
+		if !svc.TypeEnabled(row.Key) {
+			continue
+		}
 		states, err := svc.OperationStates(r.Context(), row.ID, row.Key)
 		if err != nil {
 			continue
@@ -227,6 +232,11 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 		if !ok {
 			continue
 		}
+		// Type-level off-switch: a disabled connector type is hidden from the
+		// LLM entirely (the manager UI still shows it with a Disabled badge).
+		if !svc.TypeEnabled(row.Key) {
+			continue
+		}
 		states, err := svc.OperationStates(r.Context(), row.ID, row.Key)
 		if err != nil {
 			continue
@@ -317,6 +327,12 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 	row, err := svc.Get(r.Context(), connectorID)
 	if err != nil {
 		rsp.ToolError(w, req.ID, "get connector: "+err.Error(), connectorID)
+		return
+	}
+	// Type-level off-switch: a disabled connector type is invisible to the LLM,
+	// matching wick_list (the manager UI still shows it with a Disabled badge).
+	if !svc.TypeEnabled(row.Key) {
+		rsp.ToolError(w, req.ID, "connector not found or not accessible", connectorID)
 		return
 	}
 	// Custom MCP connectors lazily re-sync their live tool catalog here
