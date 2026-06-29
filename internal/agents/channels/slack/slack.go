@@ -502,6 +502,27 @@ func (s *Channel) refreshBotUserID(ctx context.Context) {
 	}
 }
 
+// BotUserID returns this instance's resolved bot Slack user ID (U...),
+// or "" if auth.test hasn't succeeded yet. Exposed so the connector
+// "Sent using @bot" footer can name the bot of the instance that OWNS a
+// session — regardless of which connector instance does the actual send.
+func (s *Channel) BotUserID() string {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.botUserID
+}
+
+// OwnsSession reports whether sessionID belongs to this instance, i.e. it
+// carries this instance's session prefix (slack-<owner>-…). Used to map a
+// session back to the bot that owns it without re-parsing the prefix (owner
+// ids are UUIDs containing '-', so prefix matching is the only safe test).
+func (s *Channel) OwnsSession(sessionID string) bool {
+	s.cfgMu.Lock()
+	p := s.sessionPrefix
+	s.cfgMu.Unlock()
+	return p != "" && strings.HasPrefix(sessionID, p)
+}
+
 // Status satisfies channels.StatusReporter — returns identity + transport
 // state for the admin UI panel under the Test Integration button.
 func (s *Channel) Status() []agentchannels.StatusField {

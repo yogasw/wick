@@ -46,7 +46,7 @@ func TestMCPConfigArgs(t *testing.T) {
 
 	// Default (non-strict): --mcp-config keeps the user's servers, plus
 	// --allowedTools pre-approves wick's tools for the headless agent.
-	def := mcpConfigArgs(ep, tok, false)
+	def := mcpConfigArgs(ep, tok, "", false)
 	if _, ok := argValue(def, "--mcp-config"); !ok {
 		t.Fatalf("default args missing --mcp-config: %v", def)
 	}
@@ -67,7 +67,7 @@ func TestMCPConfigArgs(t *testing.T) {
 
 	// Opt-in strict isolation still carries both --strict-mcp-config and
 	// the pre-approved wick tools.
-	strict := mcpConfigArgs(ep, tok, true)
+	strict := mcpConfigArgs(ep, tok, "", true)
 	if strict[0] != "--strict-mcp-config" {
 		t.Fatalf("strict args = %v, want leading --strict-mcp-config", strict)
 	}
@@ -75,8 +75,29 @@ func TestMCPConfigArgs(t *testing.T) {
 		t.Fatalf("strict args missing --allowedTools: %v", strict)
 	}
 
-	if mcpConfigArgs("", tok, false) != nil || mcpConfigArgs(ep, "", false) != nil {
+	if mcpConfigArgs("", tok, "", false) != nil || mcpConfigArgs(ep, "", "", false) != nil {
 		t.Fatal("empty endpoint or token must yield nil args")
+	}
+}
+
+// TestMCPConfigArg_SessionHeader verifies the session id is emitted as the
+// X-Wick-Session-Id header when supplied, and omitted when empty.
+func TestMCPConfigArg_SessionHeader(t *testing.T) {
+	withSession := mcpConfigArg("http://127.0.0.1:9425/mcp", "secret123", "slack-__owner__-1700000000.000100")
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(withSession), &parsed); err != nil {
+		t.Fatalf("not valid JSON: %v", err)
+	}
+	servers, _ := parsed["mcpServers"].(map[string]any)
+	wick, _ := servers["wick"].(map[string]any)
+	headers, _ := wick["headers"].(map[string]any)
+	if headers["X-Wick-Session-Id"] != "slack-__owner__-1700000000.000100" {
+		t.Errorf("session header = %v, want the session id", headers["X-Wick-Session-Id"])
+	}
+
+	noSession := mcpConfigArg("http://127.0.0.1:9425/mcp", "secret123", "")
+	if strings.Contains(noSession, "X-Wick-Session-Id") {
+		t.Errorf("empty session must omit the header, got: %s", noSession)
 	}
 }
 
@@ -102,7 +123,7 @@ func TestMCPEndpointFromEnv(t *testing.T) {
 }
 
 func TestMCPConfigArg(t *testing.T) {
-	got := mcpConfigArg("http://127.0.0.1:9425/mcp", "secret123")
+	got := mcpConfigArg("http://127.0.0.1:9425/mcp", "secret123", "")
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
 		t.Fatalf("not valid JSON: %v\n%s", err, got)
