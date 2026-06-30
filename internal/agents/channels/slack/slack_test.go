@@ -123,6 +123,106 @@ func TestChunkTextBreaksOnNewline(t *testing.T) {
 	}
 }
 
+func TestReconcilePlan(t *testing.T) {
+	big := strings.Repeat("a", maxSlackChunk+50) // overflows one chunk
+
+	t.Run("empty text does nothing", func(t *testing.T) {
+		p := reconcilePlan("", "1.0", "")
+		if p.postFresh || p.update || len(p.continuations) > 0 {
+			t.Fatalf("expected no-op plan, got %+v", p)
+		}
+	})
+
+	t.Run("no live message posts fresh", func(t *testing.T) {
+		p := reconcilePlan("hello", "", "")
+		if !p.postFresh || p.update {
+			t.Fatalf("expected postFresh, got %+v", p)
+		}
+	})
+
+	t.Run("final equals last sent skips update", func(t *testing.T) {
+		p := reconcilePlan("done answer", "1.0", "done answer")
+		if p.update {
+			t.Fatalf("expected skip (update=false), got %+v", p)
+		}
+		if p.postFresh || len(p.continuations) > 0 {
+			t.Fatalf("expected pure skip, got %+v", p)
+		}
+	})
+
+	t.Run("final differs from last sent updates once", func(t *testing.T) {
+		p := reconcilePlan("final answer", "1.0", "partial ans")
+		if !p.update || p.first != "final answer" {
+			t.Fatalf("expected update to final, got %+v", p)
+		}
+		if len(p.continuations) > 0 {
+			t.Fatalf("single chunk should have no continuations, got %d", len(p.continuations))
+		}
+	})
+
+	t.Run("overflow updates first and posts continuations", func(t *testing.T) {
+		p := reconcilePlan(big, "1.0", "stale")
+		if !p.update {
+			t.Fatalf("expected update, got %+v", p)
+		}
+		if len(p.continuations) != 1 {
+			t.Fatalf("expected 1 continuation chunk, got %d", len(p.continuations))
+		}
+		if p.first+p.continuations[0] != big {
+			t.Fatal("first + continuation must reassemble to original text")
+		}
+	})
+}
+
+func TestToolStatusLabelSanitizes(t *testing.T) {
+	// Quotes / $ / ; / backticks make Slack's setStatus return
+	// invalid_arguments, so the summary must strip them.
+	got := toolStatusLabel("Bash", `{"command":"echo \"hi $USER\"; ls"}`)
+	for _, bad := range []string{`"`, "$", ";", "`"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("label %q must not contain %q", got, bad)
+		}
+	}
+}
+
+func TestToolStatusLabel(t *testing.T) {
+	tests := []struct {
+		name  string
+		tool  string
+		input string
+		want  string
+	}{
+		{"bash command", "Bash", `{"command":"npm test"}`, "Running: npm test"},
+		{"bash multiline collapsed", "Bash", `{"command":"go build ./...\n&& go test"}`, "Running: go build ./... && go test"},
+		{"bash no input", "Bash", ``, "Running"},
+		{"read basename only", "Read", `{"file_path":"/d/code/work/wick/internal/slack.go"}`, "Reading slack.go"},
+		{"edit", "Edit", `{"file_path":"a/b/main.go"}`, "Editing main.go"},
+		{"grep pattern", "Grep", `{"pattern":"func main"}`, "Searching: func main"},
+		{"glob", "Glob", `{"pattern":"**/*.go"}`, "Finding files: **/*.go"},
+		{"websearch", "WebSearch", `{"query":"slack rate limit"}`, "Searching the web: slack rate limit"},
+		{"todo", "TodoWrite", `{"todos":[]}`, "Updating plan"},
+		{"empty tool falls back to Working", "", ``, statusLabelWorking},
+		{"unknown mcp tool", "mcp__foo__bar", `{}`, "Running mcp__foo__bar"},
+		{"bad json falls back", "Read", `{not json`, "Reading"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := toolStatusLabel(tc.tool, tc.input); got != tc.want {
+				t.Errorf("toolStatusLabel(%q, %q) = %q, want %q", tc.tool, tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestToolStatusLabelClips(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	got := toolStatusLabel("Bash", `{"command":"`+long+`"}`)
+	// "Running: " (9) + 100 summary runes + "…" ≈ 110 chars.
+	if len([]rune(got)) > 115 {
+		t.Errorf("expected clipped label, got len=%d %q", len([]rune(got)), got)
+	}
+}
+
 func TestAllowed(t *testing.T) {
 	s := &Channel{}
 	// allowed wraps allowedCfg, discarding the deny-reason for the boolean
