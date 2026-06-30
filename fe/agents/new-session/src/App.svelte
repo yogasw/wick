@@ -36,6 +36,35 @@
 
   const scopedProjectId = new URLSearchParams(window.location.search).get("project") ?? "";
 
+  // The provider key stored in agents.json / project defaults is
+  // "type/name". The dropdown value carries that full key so a custom
+  // instance (claude/abc) is distinct from the base default
+  // (claude/claude), not collapsed to its type.
+  function providerKey(p: ProviderOption): string {
+    return `${p.type}/${p.name}`;
+  }
+
+  // Apply a project's saved defaults to the composer selects. Called
+  // when the user picks a project (and on initial scoped load) so the
+  // footer's "auto-prefill provider + preset" promise actually holds.
+  // Only overrides a select when the project has a non-empty default and
+  // the value is still selectable; otherwise the current pick stands.
+  function applyProjectDefaults(projectId: string) {
+    const proj = projects.find((p) => p.id === projectId);
+    if (!proj) return;
+    if (proj.default_provider) {
+      const key = proj.default_provider.includes("/")
+        ? proj.default_provider
+        : `${proj.default_provider}/${proj.default_provider}`;
+      if (providers.some((p) => providerKey(p) === key)) {
+        selectedProvider = key;
+      }
+    }
+    if (proj.default_preset) {
+      selectedPreset = proj.default_preset === "default" ? "" : proj.default_preset;
+    }
+  }
+
   $effect(() => {
     let cancelled = false;
     (async () => {
@@ -47,7 +76,7 @@
       if (cancelled) return;
       if (provRes.status === "fulfilled") {
         providers = provRes.value;
-        if (providers.length > 0) selectedProvider = providers[0].type;
+        if (providers.length > 0) selectedProvider = providerKey(providers[0]);
       }
       loadingProviders = false;
       if (presetRes.status === "fulfilled") {
@@ -57,7 +86,10 @@
         projects = projRes.value;
         if (scopedProjectId) {
           const match = projects.find((p) => p.id === scopedProjectId);
-          if (match) selectedProject = match.id;
+          if (match) {
+            selectedProject = match.id;
+            applyProjectDefaults(match.id);
+          }
         }
       }
       textareaEl?.focus();
@@ -248,7 +280,12 @@
 
         {#if projects.length > 0}
           <label class="sr-only" for="ns-project">Project</label>
-          <select id="ns-project" bind:value={selectedProject} class={selectClass}>
+          <select
+            id="ns-project"
+            bind:value={selectedProject}
+            onchange={() => applyProjectDefaults(selectedProject)}
+            class={selectClass}
+          >
             <option value="">{"— no project —"}</option>
             {#each projects as proj (proj.id)}
               <option value={proj.id}>{FOLDER_ICON} {proj.name}</option>
@@ -258,8 +295,8 @@
 
         <label class="sr-only" for="ns-provider">Provider</label>
         <select id="ns-provider" bind:value={selectedProvider} class={selectClass}>
-          {#each providers as p (p.type)}
-            <option value={p.type}>{p.type} {"·"} {p.name}</option>
+          {#each providers as p (providerKey(p))}
+            <option value={providerKey(p)}>{p.name === p.type ? p.type : `${p.type} · ${p.name}`}</option>
           {/each}
         </select>
 

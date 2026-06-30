@@ -29,6 +29,44 @@ Each instance carries:
 
 The default seed: when the instance list is empty, [`Load`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/provider.go#L89) auto-creates one default per type whose `Name` equals the type. So a fresh install always shows three cards (`claude/claude`, `codex/codex`, `gemini/gemini`).
 
+## Instance names and the type/name key
+
+Every provider instance is identified by a `type/name` key — the type plus a slash plus the instance name. Examples: `claude/claude` (the default), `claude/work`, `codex/fast`. This key is what project defaults, the new-session composer dropdown, and `agents.json` store.
+
+**Name rules:** letters, digits, and `_` only. Spaces in the create/rename form auto-convert to `_`; any other character outside `[A-Za-z0-9_]` is rejected with an inline error. The name must be unique within its type.
+
+Bare type strings (`claude`, `codex`, `gemini`) stored in older project defaults are promoted to the canonical default instance key (`claude/claude`) automatically at runtime — no migration needed.
+
+## Renaming an instance
+
+On the provider detail page, click the pencil icon next to the instance title to rename it inline:
+
+- Type the new name — spaces auto-convert to `_`, invalid characters are flagged immediately.
+- Confirm: wick calls `POST /providers/rename/{type}/{old-name}` with the new name.
+- **Project defaults auto-migrate:** every project whose `Defaults.Provider` matched the old `type/name` key is rewritten to the new key and saved. The response includes a `projects_migrated` count; the UI reports how many projects were updated.
+- **Live sessions are not migrated:** a session's `agents.json` entry keeps the old provider key. The agent continues running with the old instance until it is killed and the user re-selects the provider manually when creating a new session or via the session settings. This is intentional — wick does not know which sessions are mid-conversation vs. idle.
+
+## Env / args catalog picker
+
+The provider detail page's **Env** and **Extra Args** fields include a **Browse catalog** button that opens a searchable modal of known env vars and CLI flags for that provider type. Each entry shows the variable name, a description, and its default value.
+
+**How it works:**
+
+- Selecting one or more entries and clicking **Add selected** inserts them as rows in the KV editor below — no need to remember exact variable names.
+- For the **Env** field, value cells for known variables render as a dropdown of accepted options (e.g. `1` / `0` for bool flags, enum choices for model-selection vars) instead of a plain text input. Variables not in the catalog still get a free-text input.
+- Already-added variables appear checked and disabled in the modal (prevents duplicates).
+- The catalog is fetched once per page load from `GET /providers/catalog/{type}` and cached for the session. Unknown provider types return an empty catalog — the manual KV editor still works.
+
+**Catalog coverage per type:**
+
+The exact lists live in each provider subpackage's `catalog.go` (`internal/agents/provider/{claude,codex,gemini}/catalog.go`), sourced from each CLI's official docs. A summary:
+
+| Provider | Env vars | CLI args |
+|---|---|---|
+| `claude` | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `MAX_THINKING_TOKENS`, `CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CONFIG_DIR`, `DISABLE_AUTOUPDATER` + the rest of the `CLAUDE_CODE_*` feature toggles, telemetry, and rendering vars | `--model`, `--permission-mode` |
+| `codex` | `CODEX_HOME`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `CODEX_NON_INTERACTIVE`, `RUST_LOG`, TLS cert vars | `--model`, `--sandbox`, `--ask-for-approval`, `--add-dir`, `--profile`, `--search`, `--oss`, plus `-c key=value` config overrides (`model_reasoning_effort`, `sandbox_mode`, `approval_policy`, `web_search`, …) |
+| `gemini` | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_GENAI_USE_VERTEXAI`, `GEMINI_MODEL`, `GEMINI_SANDBOX`, trust + telemetry vars | `--model`, `--approval-mode`, `--yolo` |
+
 ## Web UI
 
 > **📸 Screenshot needed:** `agents-providers-list.png` — capture `/tools/agents/providers` showing the three default cards (claude / codex / gemini) with version + path resolved, plus the "Add Instance" + "Rescan all" + "Auto-rescan" header. Save to `docs/public/screenshots/agents-providers-list.png`.
@@ -235,8 +273,15 @@ Quick cheatsheet for what each provider supports — useful when picking a defau
 | Tool gate hook | ✓ via PreToolUse hook | — | — |
 | MCP servers | ✓ | ✓ via TOML config | ✓ |
 
+## API reference
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/providers/catalog/{type}` | Returns the curated env + args picker entries for `claude`, `codex`, or `gemini`. Admin only. |
+| `POST` | `/providers/rename/{type}/{name}` | Renames an instance. Body: `new_name=<name>`. Migrates project defaults; live sessions unaffected. Admin only. |
+
 ## See also
 
-- [Projects](./projects) — `default_provider` field per project.
+- [Projects](./projects) — `default_provider` field per project; how project defaults auto-migrate on rename.
 - [Pool & Sessions](./pool) — how `provider_type` / `provider_name` are forwarded to the spawner.
 - [Command Gate](../command-gate) — gate sidecar lives next to the main binary, separate from providers.

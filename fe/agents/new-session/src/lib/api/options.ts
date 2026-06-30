@@ -16,6 +16,8 @@ export type ProjectOption = {
   name: string;
   path: string;
   managed: boolean;
+  default_provider: string;
+  default_preset: string;
 };
 
 export const getProviderOptions = (base: string) =>
@@ -30,7 +32,14 @@ export const getPresetOptions = (base: string) =>
 
 export const getProjectOptions = (base: string) =>
   apiGetE<ProjectOption[] | null>(`${base}/projects/options`).pipe(
-    Effect.map((r) => (r ?? []).map((p) => ({ ...p, managed: p.managed ?? false }))),
+    Effect.map((r) =>
+      (r ?? []).map((p) => ({
+        ...p,
+        managed: p.managed ?? false,
+        default_provider: p.default_provider ?? "",
+        default_preset: p.default_preset ?? "",
+      })),
+    ),
   );
 
 export async function createSession(

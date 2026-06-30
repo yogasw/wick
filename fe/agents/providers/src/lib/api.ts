@@ -374,6 +374,36 @@ export async function apiDeleteProvider(type: string, name: string): Promise<voi
   return del<void>(getBase() + `/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
 }
 
+export type RenameProviderResult = {
+  status: string;
+  name: string;
+  projects_migrated: number;
+};
+
+export async function apiRenameProvider(type: string, name: string, newName: string): Promise<RenameProviderResult> {
+  const form = new URLSearchParams();
+  form.set("new_name", newName);
+  const resp = await fetch(
+    getBase() + `/providers/rename/${encodeURIComponent(type)}/${encodeURIComponent(name)}`,
+    {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+      body: form.toString(),
+    },
+  );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    let msg = text || `HTTP ${resp.status}`;
+    try {
+      const j = JSON.parse(text) as { error?: string };
+      if (j.error) msg = j.error;
+    } catch { /* not JSON — keep raw text */ }
+    throw new ApiError(resp.status, msg);
+  }
+  return resp.json() as Promise<RenameProviderResult>;
+}
+
 export async function apiCreateProvider(fields: {
   type: string;
   name: string;
@@ -407,6 +437,29 @@ export async function apiCreateProvider(fields: {
     const text = await resp.text().catch(() => "");
     throw new ApiError(resp.status, text || `HTTP ${resp.status}`);
   }
+}
+
+export type CatalogValueKind = "bool" | "enum" | "string" | "int";
+
+export type CatalogEntry = {
+  key: string;
+  description: string;
+  kind: CatalogValueKind;
+  options?: string[];
+  placeholder?: string;
+};
+
+export type ProviderCatalog = {
+  env: CatalogEntry[];
+  args: CatalogEntry[];
+};
+
+// apiGetProviderCatalog fetches the curated env + args picker entries for
+// a provider type. Type-only — no per-instance state. Returns empty
+// arrays for unknown types so the picker just has nothing to offer.
+export async function apiGetProviderCatalog(base: string, type: string): Promise<ProviderCatalog> {
+  const r = await get<ProviderCatalog | null>(`${base}/providers/catalog/${encodeURIComponent(type)}`);
+  return r ?? { env: [], args: [] };
 }
 
 export async function apiProbeGate(type: string, name: string): Promise<void> {

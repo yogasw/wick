@@ -258,11 +258,34 @@ func Find(t Type, name string) (Instance, error) {
 	return Instance{}, fmt.Errorf("runtime %s/%s not configured", t, name)
 }
 
+// ValidInstanceName reports whether name is a legal instance name.
+// Names become the second half of the "type/name" provider key, which
+// is parsed by splitting on "/" — so a name may not be empty and may
+// only contain [A-Za-z0-9_]. "_" is the single word separator (e.g.
+// "abc_a"); spaces, slashes, and other punctuation are rejected so the
+// key round-trips cleanly through agents.json, project defaults, and
+// the spawn path.
+func ValidInstanceName(name string) error {
+	if name == "" {
+		return errors.New("instance name required")
+	}
+	for _, r := range name {
+		ok := (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '_'
+		if !ok {
+			return fmt.Errorf("invalid instance name %q: use letters, digits or '_' only", name)
+		}
+	}
+	return nil
+}
+
 // Save persists a new or updated instance. Empty Name is rejected.
 // Replaces any existing entry with the same {Type, Name}.
 func Save(ins Instance) error {
-	if ins.Name == "" {
-		return errors.New("instance name required")
+	if err := ValidInstanceName(ins.Name); err != nil {
+		return err
 	}
 	if !isSupported(ins.Type) {
 		return fmt.Errorf("unsupported runtime type %q", ins.Type)
@@ -301,6 +324,71 @@ func Save(ins Instance) error {
 		})
 	}()
 	return nil
+}
+
+// Rename changes an instance's Name from oldName to newName within the
+// same type, persisting through userconfig. The new name is validated
+// and must not collide with an existing instance of the same type.
+//
+// Rename only touches the provider store — it does NOT rewrite the
+// "type/name" provider keys already persisted in project defaults or
+// session agents.json. Callers that want project defaults to follow a
+// rename must do that separately (see project.RewriteProvider); live
+// sessions keep the old key and must be re-pointed by the user.
+//
+// Renaming a not-yet-materialized default instance (Name == type, only
+// living in memory) is supported: the new row is created on save.
+func Rename(t Type, oldName, newName string) error {
+	if err := ValidInstanceName(newName); err != nil {
+		return err
+	}
+	if oldName == "" {
+		return errors.New("current instance name required")
+	}
+	if oldName == newName {
+		return nil
+	}
+	if !isSupported(t) {
+		return fmt.Errorf("unsupported runtime type %q", t)
+	}
+	cfg, err := userconfig.Load(AppName)
+	if err != nil {
+		return err
+	}
+	list := pickList(&cfg.Providers, t)
+	if list == nil {
+		return fmt.Errorf("unsupported runtime type %q", t)
+	}
+	// Reject collision with an existing persisted instance.
+	for i := range *list {
+		if (*list)[i].Name == newName {
+			return fmt.Errorf("instance %s/%s already exists", t, newName)
+		}
+	}
+	for i := range *list {
+		if (*list)[i].Name == oldName {
+			(*list)[i].Name = newName
+			if err := userconfig.Save(AppName, cfg); err != nil {
+				return err
+			}
+			invalidateInstanceCache()
+			InvalidateProbeCache(t, oldName)
+			InvalidateProbeCache(t, newName)
+			return nil
+		}
+	}
+	// Not persisted yet — auto-seeded default (Name == type) only lives
+	// in memory. Materialize it under the new name so the rename sticks.
+	if oldName == string(t) {
+		*list = append(*list, userconfig.ProviderInstance{Name: newName})
+		if err := userconfig.Save(AppName, cfg); err != nil {
+			return err
+		}
+		invalidateInstanceCache()
+		InvalidateProbeCache(t, newName)
+		return nil
+	}
+	return fmt.Errorf("instance %s/%s not found", t, oldName)
 }
 
 // SetHookEnabled flips the user's enable/disable intent for one hook
