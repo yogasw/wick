@@ -128,7 +128,16 @@ Without `reactions:read` + the two reaction events, the switch silently never ar
 
 ### Progress banner (assistant threads)
 
-When the workspace has Slack AI features enabled and the bot holds the `chat:write` scope, wick also calls [`assistant.threads.setStatus`](https://api.slack.com/methods/assistant.threads.setStatus) to render an "is thinking…" banner above the input. The banner is cleared on `done` / `blocked` / `error`. Because Slack auto-clears the status after ~2 minutes of inactivity, wick re-asserts it every 45 seconds during long tool-use turns so the banner stays visible throughout multi-step runs. Workspaces without AI features get a one-line debug log and rely on the reaction emoji alone.
+When the workspace has Slack AI features enabled and the bot holds the `chat:write` scope, wick calls [`assistant.threads.setStatus`](https://api.slack.com/methods/assistant.threads.setStatus) to show a live progress banner above the composer:
+
+- **Footer state** — coarse phase label ("Thinking", "Working", or "Idle") with an animated `…` suffix that cycles dots while the turn runs.
+- **Activity bubble** (`loading_messages`) — a rotating list of the last ~5 activity lines (e.g. "Thinking", "Running: npm test", "Reading slack.go") so the user can see what step the agent is on. The bubble re-asserts itself on every heartbeat tick to override Slack's default "is thinking…" copy and to survive Slack's ~2-minute status timeout.
+
+The banner is cleared on `done` / `blocked` / `error`. Workspaces without AI features get a one-line debug log and rely on the reaction emoji alone.
+
+### Streaming reply
+
+Rather than waiting until the full response is ready, wick posts an empty placeholder as soon as the first text token arrives and then edits it in place via `chat.update` as the reply streams in (~1.5 s flush interval). The final edit lands on `done`. This means users see the reply grow word-by-word in Slack, matching the streaming feel of the web UI. Chunking still applies (see below) — long replies are split across multiple threaded messages, each of which streams independently.
 
 ### Chunked reply
 
