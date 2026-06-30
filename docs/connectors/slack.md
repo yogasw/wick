@@ -53,9 +53,9 @@ All read ops are `connector.Op` (non-destructive).
 
 | Op | Input | What it does |
 |---|---|---|
-| `send_message` | `channel`, `text`, `blocks`, `thread_ts`, `reply_broadcast`, `unfurl_links`, `mrkdwn` | Post a message to a channel / DM / thread. |
+| `send_message` | `channel`, `text`, `blocks`, `thread_ts`, `reply_broadcast`, `unfurl_links`, `mrkdwn`, `session_id?` | Post a message to a channel / DM / thread. |
 | `send_ephemeral` | `channel`, `user`, `text`, `blocks`, `thread_ts` | Visible only to `user`. |
-| `update_message` | `channel`, `ts`, `text`, `blocks` | Edit an existing message. |
+| `update_message` | `channel`, `ts`, `text`, `blocks`, `session_id?` | Edit an existing message. Re-appends the "Sent using" footer. |
 | `delete_message` | `channel`, `ts` | Delete by ts. |
 | `add_reaction` | `channel`, `ts`, `name` | Emoji reaction (name without colons). |
 | `remove_reaction` | `channel`, `ts`, `name` | Remove a reaction. |
@@ -64,6 +64,7 @@ Every write op is `connector.OpDestructive` — enabled by default on every new 
 
 ## Quirks worth knowing
 
+- **`session_id` on `send_message` / `update_message`** — optional field that tells wick which agent session owns this call. When set (or auto-injected via the `X-Wick-Session-Id` MCP header), the "Sent using @bot" footer names the bot that owns the session rather than falling back to the app name. Leave it empty when calling outside an agent session.
 - `channel` accepts a channel ID (`C…`), DM ID (`D…`), user ID (`U…` — auto-opens DM), or `#name` (only resolves when the bot is already a member).
 - `thread_ts` is always the **parent** message ts — replying to a reply still uses the root ts.
 - `get_channel_history` returns only top-level messages. Walk thread replies with `get_thread_replies` against each parent `ts`.

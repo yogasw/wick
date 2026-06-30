@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -122,6 +123,14 @@ type Service struct {
 	// header kebab's Disable/Enable). nil -> every type is enabled. Wired
 	// via SetTypeStateDB; built-in and plugin connectors share it.
 	typeState *typeStateStore
+
+	// sessionOwnerBot resolves an agent session id to the bot user id of
+	// the channel instance that owns it (e.g. the Slack bot whose thread
+	// spawned the session). Wired at boot via SetSessionOwnerBotResolver
+	// where the channel registry is in scope; nil leaves OwnerBotID empty
+	// so connectors fall back to their own identity. Returns ("", false)
+	// when the session isn't channel-backed or the instance is gone.
+	sessionOwnerBot func(sessionID string) (botUserID string, ok bool)
 }
 
 // tagSeeder is the slice of the tags service Bootstrap needs. Keeping
@@ -136,6 +145,15 @@ type tagSeeder interface {
 // seeding.
 func (s *Service) SetTags(t tagSeeder) {
 	s.tags = t
+}
+
+// SetSessionOwnerBotResolver wires the hook that maps an agent session id
+// to the bot user id of the channel instance owning it. Called once at boot
+// from the API server where the channel registry is available. The Slack
+// connector's "Sent using @bot" footer uses the resolved id so a send
+// always names the session owner's bot rather than the sending connector's.
+func (s *Service) SetSessionOwnerBotResolver(fn func(sessionID string) (string, bool)) {
+	s.sessionOwnerBot = fn
 }
 
 // SetEnc wires the encrypted-fields cipher in after construction. Call
@@ -983,6 +1001,11 @@ type ExecuteParams struct {
 	UserID    string
 	IPAddress string
 	UserAgent string
+	// SessionID is the agent session this call was made within, when the
+	// caller supplied it (MCP tools/call session_id). Empty on panel-test
+	// and retry. Forwarded to the connector Ctx so identity-aware ops (e.g.
+	// the Slack footer) can resolve the session-owning bot.
+	SessionID string
 	// IsAdmin indicates whether the caller holds admin role. When false,
 	// operations marked AdminOnly in the connector_operations table are
 	// blocked before execution starts.
@@ -1240,6 +1263,23 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// caller supplied them) so MCP-proxy ops can forward bools/numbers in
 	// their native JSON type rather than the stringified Input form.
 	cctx.SetRawInput(p.RawInput)
+	// Resolve the session-owning bot and stamp it onto the Ctx so the Slack
+	// footer names the owner's bot regardless of which connector sends.
+	// Session id priority: an explicit `session_id` op input (the LLM passes
+	// it when it knows the session) overrides the per-spawn header / top-level
+	// value carried in p.SessionID. All optional — no session, no resolver, or
+	// no match just leaves OwnerBotID empty and the footer uses the app name.
+	if s.sessionOwnerBot != nil {
+		sessionID := p.SessionID
+		if v := strings.TrimSpace(input["session_id"]); v != "" {
+			sessionID = v
+		}
+		if sessionID != "" {
+			if id, ok := s.sessionOwnerBot(sessionID); ok {
+				cctx.SetOwnerBotID(id)
+			}
+		}
+	}
 	value, execErr := op.Execute(cctx)
 	latencyMs := int(time.Since(startedAt).Milliseconds())
 

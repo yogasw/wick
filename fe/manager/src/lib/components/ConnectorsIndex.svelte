@@ -139,11 +139,15 @@
   let installedPlugins = $state<Record<string, PluginEntry>>({});
   let installing = $state<string>("");
   let availableError = $state("");
+  // Whether the viewer may install. Non-admins still browse the full list;
+  // the Download button renders disabled with a "requires admin" hint.
+  let isAdmin = $state(false);
 
   async function loadAvailable() {
     availableError = "";
     try {
       const r = await listPlugins();
+      isAdmin = r.is_admin;
       // Show ALL available plugins, including ones with no build for this
       // server's OS/arch — those render with a disabled Download + a reason,
       // so the user knows the plugin exists rather than seeing an empty list.
@@ -357,10 +361,17 @@
           </div>
           <Button
             variant="primary"
-            disabled={installing === card.key || !card.arch_ok}
+            disabled={installing === card.key || !card.arch_ok || !isAdmin}
+            title={!isAdmin ? "Requires admin to install" : undefined}
             onclick={() => onInstall(card)}
           >
-            {installing === card.key ? "Downloading…" : !card.arch_ok ? "Unavailable for your OS" : "Download"}
+            {installing === card.key
+              ? "Downloading…"
+              : !card.arch_ok
+                ? "Unavailable for your OS"
+                : !isAdmin
+                  ? "Requires admin"
+                  : "Download"}
           </Button>
         </div>
       {:else}

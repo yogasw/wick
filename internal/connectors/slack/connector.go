@@ -102,6 +102,7 @@ type SendMessageInput struct {
 	ReplyBroadcast bool   `wick:"desc=When replying in a thread, also broadcast to the channel. Default: false."`
 	UnfurlLinks    bool   `wick:"desc=Enable link unfurling. Default: true."`
 	Mrkdwn         bool   `wick:"desc=Enable Slack markdown rendering. Default: true."`
+	SessionID      string `wick:"desc=Optional. The current agent session_id (from your session context). When set, the 'Sent using @bot' footer names the bot that owns this session. Leave empty if unknown — the footer then falls back to the app name."`
 }
 
 type SendEphemeralInput struct {
@@ -113,10 +114,11 @@ type SendEphemeralInput struct {
 }
 
 type UpdateMessageInput struct {
-	Channel string `wick:"required;desc=Channel ID containing the message."`
-	TS      string `wick:"required;desc=Timestamp of the message to edit."`
-	Text    string `wick:"textarea;desc=New plain-text body."`
-	Blocks  string `wick:"textarea;desc=New Block Kit JSON array (string)."`
+	Channel   string `wick:"required;desc=Channel ID containing the message."`
+	TS        string `wick:"required;desc=Timestamp of the message to edit."`
+	Text      string `wick:"textarea;desc=New plain-text body."`
+	Blocks    string `wick:"textarea;desc=New Block Kit JSON array (string)."`
+	SessionID string `wick:"desc=Optional. The current agent session_id. When set, the 'Sent using @bot' footer names the bot that owns this session. Leave empty if unknown."`
 }
 
 type DeleteMessageInput struct {
@@ -847,13 +849,29 @@ func updateMessage(c *connector.Ctx) (any, error) {
 	if text != "" {
 		body["text"] = text
 	}
+	// chat.update REPLACES the whole block set, so re-append the signed
+	// footer — otherwise editing a send_message-posted message drops the
+	// "Sent using <@bot>" line. Mirror sendMessage: wrap plain text in a
+	// section first, then append the footer.
+	var outBlocks []any
 	if blocks != "" {
 		parsed, err := parseBlocks(blocks)
 		if err != nil {
 			return nil, err
 		}
-		body["blocks"] = parsed
+		if arr, ok := parsed.([]any); ok {
+			outBlocks = arr
+		}
+	} else if text != "" {
+		outBlocks = []any{
+			map[string]any{
+				"type": "section",
+				"text": map[string]any{"type": "mrkdwn", "text": text},
+			},
+		}
 	}
+	outBlocks = append(outBlocks, signedFooterBlock(c))
+	body["blocks"] = outBlocks
 	raw, err := slackPost(c, "chat.update", body)
 	if err != nil {
 		return nil, err

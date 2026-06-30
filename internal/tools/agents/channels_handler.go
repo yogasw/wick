@@ -30,6 +30,7 @@ import (
 	"github.com/rs/zerolog/log"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentrest "github.com/yogasw/wick/internal/agents/channels/rest"
+	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
 	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
 	agenttelegram "github.com/yogasw/wick/internal/agents/channels/telegram"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
@@ -410,11 +411,10 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 	if userID == "" {
 		iKey = channelType + ":__owner__"
 	}
-	// sessPrefix mirrors setup.sessionPrefix: the registry key uses ":" as its
-	// separator, but ":" is outside the session-id charset enforced by
-	// storage.ValidateSessionID and is illegal in Windows filenames, so replace
-	// it with "-". Boot-time and hot-reload paths must agree on this prefix.
-	sessPrefix := strings.ReplaceAll(iKey, ":", "-") + "-"
+	// Boot-time and hot-reload paths must agree on this prefix, so reuse the
+	// same helper the setup composer uses ("slack-" for App Owner,
+	// "slack-<userID>-" per user).
+	sessPrefix := channelsetup.SessionPrefix(channelType, userID)
 	startInstance := func(ch agentchannels.Channel) {
 		go func() {
 			if err := ch.Start(ctx); err != nil {

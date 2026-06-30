@@ -1,79 +1,76 @@
-# Slack "Sent using @bot" — multi-instance resolution tiers
+# Slack "Sent using @bot" — session-owner resolution
 
-> With per-user Slack instances (each user's own bot), "Sent using @xxx" must show the bot belonging to the **session owner's** Slack instance — not a process-global last-writer-wins value. This design covers both directions: agent replies in a Slack thread (Tier 2) and agent sends to Slack via the connector from a non-Slack session (Tier 1).
+> Footer "Sent using @xxx" harus selalu nunjuk bot milik **owner sesi** — bukan bot connector yang kebetulan dipakai kirim, dan bukan nama user/SSO si pengirim. Prinsip: **pilih connector apapun buat kirim, hasil "Sent using" tetap sama** = bot owner sesi. Doc ini nyatet desain final yang udah diimplementasi (status: DONE).
 
-## TODO (urut kerjakan)
+## TODO
 
-- [ ] **T1** — Owner-stamping: pastikan tiap session dari channel Slack nge-record owner wick-user + originating channel jelas. Slack channel udah panggil `ownerFn`; tambah fallback set kalau belum ke-set + format per-channel.
-- [ ] **T2** — Tier 2 (reply di thread): VERIFY footer udah bener per-instance (`s.botUserID` instance-local). Kemungkinan udah benar — tinggal test, jangan ubah.
-- [ ] **T3** — Tier 1 (connector send): ganti global `botUserID` → resolve bot dari **session owner**. Footer pakai bot instance milik owner. Kalau owner gak punya Slack instance → fallback app name.
-- [ ] **T4** — Buang/pensiunkan global `slackconnector.SetBotUserID/BotUserID` last-writer-wins (atau jadiin per-owner map).
-- [ ] **T5** — Test: 2 instance Slack beda bot, session owner A → footer @botA, owner B → @botB.
+- [x] **T1** — Resolver session → bot owner: framework resolve bot dari instance channel slack yang nge-create sesi, di-stamp ke connector Ctx.
+- [x] **T2** — Tier 2 (reply di thread): footer pakai `s.botUserID` instance-local. Udah bener dari awal — gak diubah.
+- [x] **T3** — Tier 1 (connector send): footer pakai `c.OwnerBotID()` (owner sesi), fallback app name buat sesi non-channel.
+- [x] **T4** — `update_message` ikut re-append footer (chat.update REPLACES block set).
+- [x] **T5** — Test: `footer_test.go` (OwnerBot, NoOwner→appname, EmptyOwner→appname).
+- [x] **T6** — **session_id nyampe ke connector** (2 jalur, dua-duanya opsional):
+  - Input `session_id` di `send_message`/`update_message` — LLM isi dari konteks sesi (utama).
+  - Header `X-Wick-Session-Id` auto-inject pas agent spawn — fallback kalau LLM gak isi.
+  - Prioritas resolve di `Service.Execute`: `input.session_id` > `ExecuteParams.SessionID` (header). Kosong dua-duanya → app name.
+  - TANPA ini resolver gak pernah jalan → footer selalu app name.
+- [x] **T7** — Buang `__owner__` dari session_id App Owner: prefix jadi `slack-<ts>` (bukan `slack-__owner__-<ts>`). Registry key tetap `slack:__owner__` (internal). `setup.SessionPrefix` di-export + dipakai hot-reload path biar konsisten.
+
+> **Akar masalah sebenarnya (ditemukan saat verify live)**: footer fix (T1-T5) bener, tapi `ExecuteParams.SessionID` selalu kosong karena (a) MCP config cuma kirim header `Authorization`, gak ada session identity; (b) LLM gak pass `session_id` argumen ke `send_message`. Akibatnya `OwnerBotID` selalu kosong → footer app name. T6 nutup gap ini lewat header per-spawn — server tau sesi tanpa ngarep LLM.
 
 ---
 
-## Peta sekarang (hasil trace)
+## Dua jalur "Sent using @"
 
-Dua jalur "Sent using @":
-
-| Jalur | Kapan | Footer dibangun di | Sumber bot ID | Multi-instance? |
+| Jalur | Kapan | Footer dibangun di | Sumber bot ID | Status |
 |---|---|---|---|---|
-| **Thread reply** | Agent bales pesan yg masuk dari Slack | `signedContextBlock` ([slack/send.go:286](../../../agents/channels/slack/send.go#L286)) | `s.botUserID` **instance-local** | ✅ udah bener |
-| **Connector send_message** | Agent kirim KE Slack via connector (session non-Slack / proaktif) | `signedFooterBlock` ([connectors/slack/service.go:505](../../../connectors/slack/service.go#L505)) | **global** `botUserID` atomic ([service.go:480](../../../connectors/slack/service.go#L480)) | ❌ last-writer-wins |
+| **Tier 2 — Thread reply** | Agent bales pesan masuk dari Slack | `signedContextBlock` ([slack/send.go](../../../agents/channels/slack/send.go)) | `s.botUserID` instance-local | ✅ bener dari awal |
+| **Tier 1 — Connector send/update** | Agent kirim KE Slack via connector `send_message`/`update_message` | `signedFooterBlock(c)` ([connectors/slack/service.go](../../../connectors/slack/service.go)) | `c.OwnerBotID()` → fallback app name | ✅ done |
 
-### Kenapa thread-reply udah bener
-- Pesan masuk lewat socket/webhook instance tertentu → `handleMessage` instance `s` ([slack.go:793](../../../agents/channels/slack/slack.go#L793)).
-- `DispatchAgentEvent` fan-out ke semua instance, tapi tiap instance filter `s.turns[sessionKey]` → cuma instance yang nerima yg react ([slack.go:948](../../../agents/channels/slack/slack.go#L948), `t==nil`→return).
-- Jadi `s.botUserID` = bot instance yg nerima = bot owner. **Benar tanpa ubah apa-apa** — cuma butuh test (T2).
+### Kenapa Tier 2 udah bener
+- Pesan masuk lewat instance tertentu → `s.botUserID` = bot instance penerima = bot owner.
+- `DispatchAgentEvent` fan-out, tapi tiap instance filter `s.turns[sessionKey]` → cuma instance yang nerima yang react. `s.botUserID` dijamin bener tanpa ubah apa-apa.
 
-### Kenapa connector-send salah
-- `slackconnector.SetBotUserID` ([service.go:485](../../../connectors/slack/service.go#L485)) dipanggil tiap instance `applyConfig` → **satu nilai global**, instance terakhir connect/reload menang ([slack.go:261,445](../../../agents/channels/slack/slack.go#L261)).
-- `send_message` connector → `signedFooterBlock` baca global itu → footer bisa nunjuk bot user lain.
-- Connector gak tau session owner siapa → gak bisa pilih instance yg bener.
+### Bug yang diperbaiki di Tier 1
+1. **Footer nunjuk @user** (mis. @Yoga) pas `auth_mode=user_token` — footer dulu resolve via `pickToken` yang ngikut auth_mode → token xoxp → `auth.test` balikin user manusia.
+2. **Footer gak konsisten** antar connector — tiap connector punya bot beda, footer ikut bot pengirim, bukan owner sesi.
 
----
-
-## Data yang udah ada (dipakai, jangan bikin baru)
-
-- **Session owner**: `session.Meta.UserID` (wick user yg create) + `Meta.Origin` ("slack"/"telegram"/"rest"/"ui") + `Meta.ChannelID` ([session.go:54-92](../../../agents/session/session.go#L54)).
-- **Owner stamping**: `pool.EnsureSessionOwner` ([pool.go:985](../../../agents/pool/pool.go#L985)) — set `Meta.UserID` kalau kosong. Slack manggil via `ownerFn` ([slack.go:899-906](../../../agents/channels/slack/slack.go#L899)).
-- **Slack user → wick user**: `wickUserIDFn` ([server.go:1108](../../../pkg/api/server.go#L1108)) scan connector account rows.
-- **Instance per owner**: registry keyed `slack:<userID>` / `slack:__owner__`. `ChannelByKey` bisa ambil instance.
-- **Bot ID per instance**: `slack.Channel.botUserID` (instance-local, di-set `applyConfig`).
+Dua-duanya hilang karena footer sekarang resolve dari **owner sesi**, bukan token connector.
 
 ---
 
-## Desain Tier 1 (connector send → resolve bot dari token instance) ✅ REVISI
+## Desain final (Tier 1)
 
-**Temuan kunci**: connector `Ctx` GAK bawa session owner (cuma `InstanceID()`, `Cfg`, `Input` — [pkg/connector/ctx.go](../../../../pkg/connector/ctx.go)). TAPI connector slack instance **punya `BotToken` sendiri** di `c.Cfg("bot_token")` — "one row = one Slack identity" ([connectors/slack/connector.go:28-35](../../../connectors/slack/connector.go#L28)). Connector slack udah per-user by design.
+**Temuan kunci**: session_id slack formatnya `slack-<owner>-<threadTS>` (`sessionPrefix + threadTS`, [setup.go:86](../../../agents/channels/setup/setup.go#L86)). Dari string itu langsung ketauan: ini sesi slack + instance mana yang create. Bot-nya udah ke-resolve di `s.botUserID` pas channel connect — gak perlu auth.test baru, gak ada DB, gak ada stale.
 
-Jadi gak perlu session owner sama sekali. Footer cukup resolve bot dari **token instance connector itu sendiri**:
+**Alur:**
 
-1. `signedFooterBlock` jadi method yang terima `c *connector.Ctx` (bukan global).
-2. Ambil `c.Cfg("bot_token")` → resolve bot user ID via `auth.test` (cache per-token, jangan call tiap send).
-3. Footer `Sent using <@botID>`. Token kosong / auth gagal → fallback `Sent using *<appname>*`.
+```
+send_message / update_message (connector apapun)
+  → MCP bawa session_id ke ExecuteParams.SessionID
+  → Service.sessionOwnerBot(sessionID) resolve bot owner
+       (iterate channelReg.Channels() → *slack.Channel.OwnsSession(sid) → BotUserID())
+  → di-stamp ke Ctx via cctx.SetSession(sid, ownerBot)
+  → signedFooterBlock(c): c.OwnerBotID() dulu, fallback botUserIDForToken(c), fallback app name
+```
 
-Ini ngilangin global last-writer-wins total — tiap connector instance pakai bot-nya sendiri, otomatis bener buat multi-user. **Buang** `SetBotUserID`/`BotUserID` global (T4) — gak ada yg butuh lagi selain footer (grep confirm: cuma `signedFooterBlock` + di-set dari slack channel applyConfig).
+**Komponen (file:line saat ditulis):**
 
-Cache: map `botToken → botUserID` (atau pakai instance config yg udah ada). auth.test sekali per token, simpan.
+1. **Accessor bot owner** — `slack.Channel.BotUserID()` + `OwnsSession(sessionID)` ([slack.go](../../../agents/channels/slack/slack.go)). Prefix-match (bukan parse) karena owner = UUID yang ngandung `-`.
+2. **Ctx bawa session** — `connector.Ctx.SetSession(sessionID, ownerBotID)` + `SessionID()` + `OwnerBotID()` ([pkg/connector/ctx.go](../../../../pkg/connector/ctx.go)).
+3. **ExecuteParams.SessionID** + resolve sekali di `Service.Execute` ([connectors/service.go](../../../connectors/service.go)). Resolver di-inject via `SetSessionOwnerBotResolver`.
+4. **Wiring** — `server.go` panggil `connectorsSvc.SetSessionOwnerBotResolver(...)` (satu-satunya tempat connector ketemu channel registry → layering aman, gak ada import langsung) ([pkg/api/server.go](../../../pkg/api/server.go)).
+5. **Footer resolver-first** — `signedFooterBlock` ([connectors/slack/service.go](../../../connectors/slack/service.go)).
+
+**Fallback chain footer (sengaja simpel):**
+1. `c.OwnerBotID()` — bot owner sesi (sesi channel-backed).
+2. `*<appname>*` — sesi non-channel (cron/UI/REST) atau owner gak ke-resolve.
+
+> Sengaja **gak** resolve bot dari token connector buat sesi non-slack. Itu nambah auth.test call + cache token + risiko @user (kalau auth_mode=user_token). Buat sesi non-slack, app name udah cukup. Footer logic tinggal `OwnerBotID → app name`, gak ada token resolution sama sekali.
 
 ---
 
-## Desain owner-stamping (T1)
-
-Sekarang `ownerFn` di-stamp pas Slack user ke-map ke wick user, atau fallback `s.ownerUserID`. Gap:
-- Kalau Slack user gak ke-map DAN `s.ownerUserID` kosong (App Owner instance, anon trigger) → owner kosong → Tier 1 gak bisa resolve.
-
-Tambahan:
-- Pastikan instance per-user (`s.ownerUserID != ""`) selalu stamp `s.ownerUserID` sebagai owner — instance ini emang punya user jelas.
-- Format per-channel extensible: pertimbangkan `Meta.Origin` + simpan instance key (mis. `Meta.ChannelID = "slack:<owner>"`) biar kedepan tau persis instance mana yg create. (Saat ini `ChannelID` ada tapi belum diisi konsisten.)
-
----
-
-## Non-goals (sekarang)
-- Refactor `/integrations/slack/send` jadi routing per-instance — itu proxy DM, bukan jalur "Sent using @" utama. Tier 1 lewat connector, bukan proxy ini. (Catat sebagai follow-up kalau proxy DM juga perlu multi-instance.)
-- Pindah UI ke Profile (udah diputusin: halaman channels tetap).
-
-## Risk
-- Connector mungkin gak bawa session owner di ctx → kalau gitu, butuh nambah owner ke connector ctx (lebih invasif). Cek di T3 langkah 0 sebelum komit ke opsi.
-- Global `BotUserID` mungkin dipakai tempat lain selain footer — grep sebelum hapus.
+## Yang sengaja TIDAK diubah / non-goal
+- AI tetap bebas milih connector buat kirim — gak dipaksa. Footer independen dari pilihan itu.
+- Tier 2 thread-reply — udah bener, gak disentuh.
+- Proxy DM `/integrations/slack/send` — sengaja act-as-user (xoxp), bukan jalur "Sent using @bot". Follow-up kalau perlu multi-instance.

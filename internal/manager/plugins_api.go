@@ -62,12 +62,17 @@ func (h *PluginsHandler) reload(ctx context.Context) {
 }
 
 // RegisterRoutes wires the marketplace endpoints under /manager/api/plugins.
-// Every route is admin-only.
+// Listing is readable by any logged-in user (mirrors built-in connectors:
+// everyone can browse, only admins can act). The state-changing actions —
+// install / update / enable / disable / remove — stay admin-only.
 func (h *PluginsHandler) RegisterRoutes(mux *http.ServeMux, authMidd *login.Middleware) {
+	auth := func(next http.HandlerFunc) http.Handler {
+		return authMidd.RequireAuth(next)
+	}
 	admin := func(next http.HandlerFunc) http.Handler {
 		return authMidd.RequireAdmin(next)
 	}
-	mux.Handle("GET /manager/api/plugins", admin(h.apiList))
+	mux.Handle("GET /manager/api/plugins", auth(h.apiList))
 	mux.Handle("POST /manager/api/plugins/install", admin(h.apiInstall))
 	mux.Handle("POST /manager/api/plugins/{key}/update", admin(h.apiUpdate))
 	mux.Handle("POST /manager/api/plugins/{key}/enable", admin(h.apiEnable))
@@ -101,13 +106,22 @@ type pluginsListResponse struct {
 	// RegistryError is set (and Available empty) when the marketplace fetch
 	// failed — the SPA shows installed plugins regardless and surfaces this.
 	RegistryError string `json:"registry_error,omitempty"`
+	// IsAdmin tells the SPA whether the viewer may act (install / update /
+	// enable / disable / remove). Non-admins still get the full list but the
+	// action buttons render disabled with a "requires admin" hint.
+	IsAdmin bool `json:"is_admin"`
 }
 
 func (h *PluginsHandler) apiList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	host := runtime.GOOS + "/" + runtime.GOARCH
 
-	resp := pluginsListResponse{Installed: []pluginEntry{}, Available: []pluginEntry{}}
+	user := login.GetUser(ctx)
+	resp := pluginsListResponse{
+		Installed: []pluginEntry{},
+		Available: []pluginEntry{},
+		IsAdmin:   user != nil && user.IsAdmin(),
+	}
 
 	// Catalog fetched once up front: used both to flag updates on installed
 	// plugins and to build the Available list. A fetch error is non-fatal —

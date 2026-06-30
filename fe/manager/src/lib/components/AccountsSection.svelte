@@ -106,7 +106,7 @@
     <div class="flex items-center justify-between gap-3">
       <h2 class="text-base font-semibold text-black-900 dark:text-white-100">Connected accounts</h2>
       {#if canConnect}
-        <Button variant="secondary" size="md" disabled={connecting} onclick={connect}>
+        <Button variant="primary" size="md" disabled={connecting} onclick={connect}>
           {connecting ? "Connecting…" : connectLabel}
         </Button>
       {/if}

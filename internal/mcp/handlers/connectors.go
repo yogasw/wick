@@ -603,6 +603,13 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 			return "", errors.New("tool_id not found or not accessible")
 		}
 	}
+	// Fall back to the X-Wick-Session-Id header when the call carried no
+	// explicit session_id argument. The agent runtime sets this header per
+	// spawn, so identity-aware ops (e.g. the Slack "Sent using @bot" footer)
+	// work even when the LLM didn't pass session_id.
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(r.Header.Get("X-Wick-Session-Id"))
+	}
 	input := StringifyArgs(rawParams)
 	res, execErr := svc.Execute(ctx, connectors.ExecuteParams{
 		ConnectorID:     connectorID,
@@ -616,6 +623,7 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 		UserAgent:       r.Header.Get("User-Agent"),
 		AccountID:       accountID,
 		SessionInstance: sessionTarget,
+		SessionID:       sessionID,
 	})
 	if execErr != nil {
 		body := execErr.Error()

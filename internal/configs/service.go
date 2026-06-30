@@ -328,6 +328,7 @@ func (s *Service) ListOwned(owner string) []entity.Config {
 			v.Hidden = m.Hidden
 			v.VisibleWhen = m.VisibleWhen
 			v.ColOptions = m.ColOptions
+			v.Group = m.Group
 		}
 		// App-level rows can be overridden by env. Surface the override
 		// to the UI so the operator sees where the value comes from and

@@ -77,6 +77,7 @@ func StructToConfigs(cfg any) []Config {
 			Description:   tag["desc"],
 			Hidden:        tag["hidden"] == "true",
 			VisibleWhen:   tag["visible_when"],
+			Group:         tag["group"],
 			Mode:          normalizeMode(tag["mode"]),
 		})
 	}

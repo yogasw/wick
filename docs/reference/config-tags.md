@@ -72,6 +72,7 @@ type Config struct {
 | `visible_when=field:value` | Show this field in the admin UI only while another field equals the named value. Use `field:a\|b\|c` (pipe-separated) to allow a set. Pure presentation hint — value is still seeded / saved normally. |
 | `mode=fixed` / `mode=expression` | Lock the workflow editor's Fixed ⇄ Expression toggle for this field. `mode=fixed` forces fixed-literal mode; `mode=expression` forces template mode. Omit the tag (default) to leave the toggle enabled. Pure presentation hint for the workflow canvas inspector — has no effect on the admin Settings page. Not persisted. |
 | `hidden` | Skip the field in the default admin Settings page. Row is still seeded to DB and readable via `c.Cfg(...)`, so runtime works normally — use for fields managed by a dedicated page (e.g. channel setup composers). |
+| `group=Title` / `group=Title\|Description` | Group fields into a titled card on the admin Settings page. All fields sharing the same `Title` are rendered together under one card, in first-seen order. Fields with no `group` fall into the default "Configuration" card. The optional `Description` (pipe-separated) is written once at the top of the card — use it for a one-sentence summary of the group's purpose. Not persisted. Pure presentation. |
 
 ## Key derivation
 
@@ -182,3 +183,29 @@ type Config struct {
 ```
 
 The field still seeds and persists normally — `visible_when` only toggles the form row. Useful for cutting noise in config pages with many feature-flagged dependants.
+
+## group — config field grouping
+
+Use `group` to cluster related fields under a titled section card on the admin Settings page. The first field in a group supplies the optional description; subsequent fields with the same title just carry `group=Title`.
+
+```go
+type Config struct {
+    // First field in a group — sets the title + description for the card.
+    Mode    string `wick:"dropdown=socket|http;group=Connection|Transport credentials. Socket mode needs bot + app token; HTTP mode needs bot token + signing secret.;desc=Connection mode."`
+    // Subsequent fields — same title, no description needed.
+    Token   string `wick:"secret;group=Connection;desc=Bot token (xoxb-...)."`
+    Secret  string `wick:"secret;group=Connection;desc=Signing secret. Required for http mode."`
+
+    // A separate group for access controls.
+    UsersMode    string `wick:"dropdown=all|whitelist;group=Access Control|Who may trigger the agent.;desc=Restrict which users can trigger."`
+    AllowedUsers string `wick:"picker=slack.users;visible_when=users_mode:whitelist;group=Access Control;desc=Allowed users."`
+}
+```
+
+**Cascading `visible_when`:** a picker or kvlist field inside a group also respects `visible_when` normally — it only appears when its dependency value matches, even inside the group card.
+
+**Fields without a group** fall into the default "Configuration" card, which is always rendered last.
+
+::: tip Grouping vs hidden
+`group` organises visible fields. `hidden` hides a field entirely regardless of groups. A field can be both — it simply won't appear in any group card.
+:::

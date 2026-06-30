@@ -26,6 +26,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -120,7 +121,14 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if s.MCPToken != "" && os.Getenv("WICK_DISABLE_SHARED_MCP") == "" {
 		if endpoint := mcpEndpointFromEnv(); endpoint != "" && mcpConfigSupported(bin) {
 			strict := os.Getenv("WICK_STRICT_MCP") != "" && strictMCPConfigSupported(bin)
-			args = append(args, mcpConfigArgs(endpoint, s.MCPToken, strict)...)
+			// The session id is the basename of the per-session storage dir.
+			// Sending it as a header lets the MCP server attribute connector
+			// calls to this session without the LLM having to pass it.
+			sessionID := ""
+			if opt.SessionDir != "" {
+				sessionID = filepath.Base(opt.SessionDir)
+			}
+			args = append(args, mcpConfigArgs(endpoint, s.MCPToken, sessionID, strict)...)
 		}
 	}
 	// Trust the workspace explicitly so claude doesn't refuse to run

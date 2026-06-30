@@ -75,6 +75,14 @@ type SwitchPool interface {
 // grounded.
 type SessionChecker interface {
 	SessionExists(sessionID string) bool
+	// AutoReplyOn reports the persisted auto-reply flag for a session
+	// (Slack's 🤖 thread switch). False for sessions that never set it or
+	// don't exist. Survives restart because it lives in the session's
+	// meta.json, not channel memory.
+	AutoReplyOn(sessionID string) bool
+	// SetAutoReply persists the auto-reply flag on the session's meta.json.
+	// No-op (nil error swallowed by caller) when the session doesn't exist.
+	SetAutoReply(sessionID string, on bool)
 }
 
 // SessionStartHook fires once when a channel sees a brand-new session

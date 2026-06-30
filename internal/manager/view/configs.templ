@@ -19,52 +19,57 @@ templ JobStatusBadge(status entity.JobStatus, enabled bool) {
 // ConfigsTable renders all configs as an always-visible block form.
 // editKey and cancelHref are kept for API compatibility but unused.
 templ ConfigsTable(rows []entity.Config, actionBase string, _ string, _ string) {
-	if len(rows) == 0 {
-		<p class="mt-4 text-sm text-black-700 dark:text-black-600">No configuration fields.</p>
-	} else {
-		@configsForm(splitSimple(rows), splitKVList(rows), actionBase)
-	}
+	@ConfigsTableFull(rows, actionBase)
 }
 
-templ configsForm(simpleRows []entity.Config, kvRows []entity.Config, actionBase string) {
-	@configsFormFull(simpleRows, kvRows, nil, actionBase)
-}
-
-// ConfigsTableFull is the picker-aware entry point. Callers that need
-// picker fields render through here; ConfigsTable above stays unchanged
-// for the legacy two-section layout.
+// ConfigsTableFull groups every row (simple / picker / kvlist) into per-group
+// cards. ConfigsTable is a thin alias kept for callers passing the legacy
+// editKey/cancelHref args (now unused — grouping made the two layouts one).
 templ ConfigsTableFull(rows []entity.Config, actionBase string) {
 	if len(rows) == 0 {
 		<p class="mt-4 text-sm text-black-700 dark:text-black-600">No configuration fields.</p>
 	} else {
-		@configsFormFull(splitSimple(rows), splitKVList(rows), splitPicker(rows), actionBase)
+		<div class="mt-4 flex flex-col gap-3" data-configs-form data-action-base={ actionBase }>
+			for _, grp := range groupRows(rows) {
+				@fieldGroupCard(grp)
+			}
+			@configsSaveScript()
+			@pickerScript()
+		</div>
 	}
 }
 
-templ configsFormFull(simpleRows []entity.Config, kvRows []entity.Config, pickerRowsList []entity.Config, actionBase string) {
-	<div class="mt-4 flex flex-col gap-3" data-configs-form data-action-base={ actionBase }>
-		if len(simpleRows) > 0 {
-			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-				<div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-					<h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Configuration</h3>
+// fieldGroupCard renders one card per group: a 2-col grid of simple fields,
+// then any picker / kvlist fields that share the group as sub-blocks under
+// the grid — so a dependent picker (reaction_channels) stays with its toggle
+// instead of being orphaned at the bottom of the page. Untitled groups use
+// the default "Configuration" heading.
+templ fieldGroupCard(grp fieldGroup) {
+	<!-- overflow-visible (not hidden) so a picker's absolute results dropdown
+	     can extend past the card edge; the header carries rounded-t-xl itself
+	     so its background still follows the card's top corners. -->
+	<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+		<div class="rounded-t-xl px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+			<h3 class="text-sm font-semibold text-black-900 dark:text-white-100">{ grp.Title }</h3>
+			if grp.Desc != "" {
+				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{ descText(grp.Desc) }</p>
+			}
+		</div>
+		<div class="p-5 flex flex-col gap-4">
+			if len(grp.Simple) > 0 {
+				<div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+					for _, row := range grp.Simple {
+						@simpleField(row)
+					}
 				</div>
-				<div class="p-5">
-					<div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
-						for _, row := range simpleRows {
-							@simpleField(row)
-						}
-					</div>
-				</div>
-			</div>
-		}
-		for _, row := range kvRows {
-			@kvlistBlock(row, cfgKVCols(row), cfgKVRows(row))
-		}
-		for _, row := range pickerRowsList {
-			@pickerBlock(row, pickerRows(row))
-		}
-		@configsSaveScript()
-		@pickerScript()
+			}
+			for _, row := range grp.Pickers {
+				@pickerSubBlock(row, pickerRows(row))
+			}
+			for _, row := range grp.KvLists {
+				@kvlistSubBlock(row, cfgKVCols(row), cfgKVRows(row))
+			}
+		</div>
 	</div>
 }
 
@@ -304,6 +309,8 @@ func colOptsJSON(m map[string]string) string {
 	return b.String()
 }
 
+// kvlistBlock is the standalone card form; kvlistSubBlock is the in-group
+// form. Both share kvlistHeader + kvlistInner so markup + JS hooks match.
 templ kvlistBlock(row entity.Config, cols []string, data []map[string]string) {
 	<div
 		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden"
@@ -316,51 +323,79 @@ templ kvlistBlock(row entity.Config, cols []string, data []map[string]string) {
 		}
 	>
 		<div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-			<div class="flex items-center gap-2">
-				<span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">{ row.Key }</span>
-				if row.Required && row.Value == "" {
-					<span data-missing-badge class="rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-semibold text-neg-400">missing</span>
-				}
-				<span class="text-[11px] text-black-700 dark:text-black-600 font-normal">
-					for i, col := range cols {
-						{ col }
-						if i < len(cols)-1 {
-							{ " · " }
-						}
-					}
-				</span>
-				<span data-save-status class="ml-auto text-[10px] transition-all"></span>
-			</div>
-			if row.Description != "" {
-				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{ descText(row.Description) }</p>
-			}
+			@kvlistHeader(row, cols)
 		</div>
 		<div class="p-5">
-			<div class="rounded-lg border border-white-300 dark:border-navy-600 overflow-hidden mb-3">
-				<div class="flex border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-					for _, col := range cols {
-						<div class="flex-1 min-w-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600 border-r border-white-300 dark:border-navy-600 last:border-r-0 capitalize">{ col }</div>
-					}
-					<div class="w-10 shrink-0"></div>
-				</div>
-				<div data-kv-rows>
-					if len(data) == 0 {
-						<div class="px-4 py-5 text-center text-xs text-black-700 dark:text-black-600" data-kv-empty>
-							No rows yet — click <strong>+ Add Row</strong> to start
-						</div>
-					}
-					for _, entry := range data {
-						@kvDataRow(cols, row.ColOptions, entry)
-					}
-				</div>
-			</div>
-			<button
-				type="button"
-				onclick="kvBlockAddRow(this)"
-				class="w-full rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-700 dark:text-black-600 hover:border-green-500 hover:text-green-500 transition-colors"
-			>+ Add Row</button>
+			@kvlistInner(row, cols, data)
 		</div>
 	</div>
+}
+
+templ kvlistSubBlock(row entity.Config, cols []string, data []map[string]string) {
+	<div
+		class="rounded-lg border border-white-300 dark:border-navy-600 overflow-hidden"
+		data-kvlist-key={ row.Key }
+		data-kv-cols={ strings.Join(cols, "|") }
+		data-cfg-key={ row.Key }
+		data-cfg-visible-when={ row.VisibleWhen }
+		if len(row.ColOptions) > 0 {
+			data-col-opts={ colOptsJSON(row.ColOptions) }
+		}
+	>
+		<div class="px-4 py-2.5 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+			@kvlistHeader(row, cols)
+		</div>
+		<div class="p-4">
+			@kvlistInner(row, cols, data)
+		</div>
+	</div>
+}
+
+templ kvlistHeader(row entity.Config, cols []string) {
+	<div class="flex items-center gap-2">
+		<span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">{ row.Key }</span>
+		if row.Required && row.Value == "" {
+			<span data-missing-badge class="rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-semibold text-neg-400">missing</span>
+		}
+		<span class="text-[11px] text-black-700 dark:text-black-600 font-normal">
+			for i, col := range cols {
+				{ col }
+				if i < len(cols)-1 {
+					{ " · " }
+				}
+			}
+		</span>
+		<span data-save-status class="ml-auto text-[10px] transition-all"></span>
+	</div>
+	if row.Description != "" {
+		<p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{ descText(row.Description) }</p>
+	}
+}
+
+templ kvlistInner(row entity.Config, cols []string, data []map[string]string) {
+	<div class="rounded-lg border border-white-300 dark:border-navy-600 overflow-hidden mb-3">
+		<div class="flex border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+			for _, col := range cols {
+				<div class="flex-1 min-w-0 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600 border-r border-white-300 dark:border-navy-600 last:border-r-0 capitalize">{ col }</div>
+			}
+			<div class="w-10 shrink-0"></div>
+		</div>
+		<div data-kv-rows>
+			if len(data) == 0 {
+				<div class="px-4 py-5 text-center text-xs text-black-700 dark:text-black-600" data-kv-empty>
+					No rows yet — click <strong>+ Add Row</strong> to start
+				</div>
+			}
+			for _, entry := range data {
+				@kvDataRow(cols, row.ColOptions, entry)
+			}
+		</div>
+	</div>
+	<button
+		type="button"
+		onclick="kvBlockAddRow(this)"
+		class="w-full rounded-lg border border-dashed border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-700 dark:text-black-600 hover:border-green-500 hover:text-green-500 transition-colors"
+	>+ Add Row</button>
 }
 
 templ kvDataRow(cols []string, colOpts map[string]string, entry map[string]string) {
@@ -407,6 +442,10 @@ templ kvDataRow(cols []string, colOpts map[string]string, entry map[string]strin
 // against the channel's lookup endpoint and adds chips ({id,name}).
 // Value stored is JSON [{id,name},...] — identical shape to kvlist with
 // id|name cols, so allowedCfg parsers can read either.
+//
+// pickerBlock is the standalone card form (legacy, ungrouped). pickerSubBlock
+// is the lighter form rendered inside a group card. Both share pickerInner so
+// the markup + JS hooks stay identical.
 templ pickerBlock(row entity.Config, chips []map[string]string) {
 	<div
 		class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm"
@@ -416,51 +455,83 @@ templ pickerBlock(row entity.Config, chips []map[string]string) {
 		data-cfg-visible-when={ row.VisibleWhen }
 	>
 		<div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-			<div class="flex items-center gap-2">
-				<span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">{ row.Key }</span>
-				if row.Required && row.Value == "" {
-					<span data-missing-badge class="rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-semibold text-neg-400">missing</span>
-				}
-				<span data-save-status class="ml-auto text-[10px] transition-all"></span>
-			</div>
-			if row.Description != "" {
-				<p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{ descText(row.Description) }</p>
-			}
+			@blockHeader(row)
 		</div>
 		<div class="p-5">
-			<div class="relative">
-				<input
-					type="text"
-					data-picker-input
-					placeholder="Search…"
-					autocomplete="off"
-					class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
-				/>
-				<div
-					data-picker-results
-					class="absolute z-10 left-0 right-0 mt-1 hidden max-h-64 overflow-y-auto rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg"
-				></div>
-			</div>
-			<div data-picker-chips class="mt-3 flex flex-wrap gap-2">
-				for _, chip := range chips {
-					<span
-						data-picker-chip
-						data-chip-id={ chip["id"] }
-						data-chip-name={ chip["name"] }
-						class="inline-flex items-center gap-1.5 rounded-full bg-green-100 dark:bg-navy-800 border border-green-300 dark:border-navy-600 px-3 py-1 text-xs font-mono text-green-700 dark:text-green-400"
-					>
-						{ chip["name"] }
-						<span class="text-[10px] text-black-700 dark:text-black-600">{ chip["id"] }</span>
-						<button
-							type="button"
-							data-picker-chip-remove
-							aria-label="Remove"
-							class="ml-1 text-black-700 dark:text-black-600 hover:text-neg-400 leading-none"
-						>×</button>
-					</span>
-				}
-			</div>
+			@pickerInner(row, chips)
 		</div>
+	</div>
+}
+
+// pickerSubBlock is the in-group form: a hairline-bordered sub-block (no
+// shadow, no heavy card chrome) so it reads as part of the group card rather
+// than a nested card. Same data hooks as pickerBlock.
+templ pickerSubBlock(row entity.Config, chips []map[string]string) {
+	<!-- no overflow-hidden: the search-results dropdown is absolutely
+	     positioned and must escape the sub-block bounds. -->
+	<div
+		class="rounded-lg border border-white-300 dark:border-navy-600"
+		data-picker-key={ row.Key }
+		data-picker-source={ row.Options }
+		data-cfg-key={ row.Key }
+		data-cfg-visible-when={ row.VisibleWhen }
+	>
+		<div class="rounded-t-lg px-4 py-2.5 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+			@blockHeader(row)
+		</div>
+		<div class="p-4">
+			@pickerInner(row, chips)
+		</div>
+	</div>
+}
+
+// blockHeader renders the shared key + missing/save-status line and optional
+// description used by picker / kvlist blocks (card and sub-block forms).
+templ blockHeader(row entity.Config) {
+	<div class="flex items-center gap-2">
+		<span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">{ row.Key }</span>
+		if row.Required && row.Value == "" {
+			<span data-missing-badge class="rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-semibold text-neg-400">missing</span>
+		}
+		<span data-save-status class="ml-auto text-[10px] transition-all"></span>
+	</div>
+	if row.Description != "" {
+		<p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{ descText(row.Description) }</p>
+	}
+}
+
+templ pickerInner(row entity.Config, chips []map[string]string) {
+	<div class="relative">
+		<input
+			type="text"
+			data-picker-input
+			placeholder="Search…"
+			autocomplete="off"
+			class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+		/>
+		<div
+			data-picker-results
+			class="absolute z-10 left-0 right-0 mt-1 hidden max-h-64 overflow-y-auto rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg"
+		></div>
+	</div>
+	<div data-picker-chips class="mt-3 flex flex-wrap gap-2">
+		for _, chip := range chips {
+			<span
+				data-picker-chip
+				data-chip-id={ chip["id"] }
+				data-chip-name={ chip["name"] }
+				class="inline-flex items-center gap-1.5 rounded-full bg-green-100 dark:bg-navy-800 border border-green-300 dark:border-navy-600 px-3 py-1 text-xs font-mono text-green-700 dark:text-green-400"
+			>
+				{ chip["name"] }
+				<span class="text-[10px] text-black-700 dark:text-black-600">{ chip["id"] }</span>
+				<button
+					type="button"
+					data-picker-chip-remove
+					aria-label="Remove"
+					class="ml-1 text-black-700 dark:text-black-600 hover:text-neg-400 leading-none"
+				>×</button>
+			</span>
+		}
 	</div>
 }
 
@@ -775,19 +846,53 @@ templ configsSaveScript() {
 		}
 
 		function applyVisibility(form){
-			form.querySelectorAll('[data-cfg-visible-when]').forEach(function(el){
+			// Index every gated element by its field key so visibility can
+			// cascade: a field is shown only when its own rule matches AND
+			// the field it depends on is itself shown. Without the cascade,
+			// a child (reaction_channels) stays visible after its parent
+			// (reaction_trigger_enabled) is toggled off, because the child's
+			// own dependency (reaction_channels_mode) still holds a matching
+			// value while being hidden.
+			var byKey={};
+			form.querySelectorAll('[data-cfg-key]').forEach(function(el){
+				byKey[el.getAttribute('data-cfg-key')]=el;
+			});
+
+			// ruleMatches: does el's own visible_when predicate hold right now?
+			function ruleMatches(el){
 				var rule=el.getAttribute('data-cfg-visible-when')||'';
-				if(rule===''){el.style.display='';return;}
+				if(rule==='')return true;
 				var idx=rule.indexOf(':');
-				if(idx<0){el.style.display='';return;}
+				if(idx<0)return true;
 				var key=rule.slice(0,idx).trim();
-				// Value half supports a|b|c (pipe-separated OR) so a
-				// field can be gated on a set of allowed dependency
-				// values. Single value still works because split returns
-				// a one-element array.
+				// Value half supports a|b|c (pipe-separated OR).
 				var allowed=rule.slice(idx+1).split('|').map(function(s){return s.trim();});
-				var have=currentFieldValue(form,key);
-				el.style.display=(allowed.indexOf(have)>=0)?'':'none';
+				return allowed.indexOf(currentFieldValue(form,key))>=0;
+			}
+
+			// visible: rule holds AND the dependency field is itself visible.
+			// Memoised + cycle-guarded so a malformed chain can't loop.
+			var memo={},stack={};
+			function visible(el){
+				var k=el.getAttribute('data-cfg-key');
+				if(k && memo.hasOwnProperty(k))return memo[k];
+				if(k && stack[k])return true; // cycle: fail open
+				if(k)stack[k]=true;
+				var ok=ruleMatches(el);
+				if(ok){
+					var rule=el.getAttribute('data-cfg-visible-when')||'';
+					var idx=rule.indexOf(':');
+					if(idx>=0){
+						var dep=byKey[rule.slice(0,idx).trim()];
+						if(dep && dep!==el)ok=visible(dep);
+					}
+				}
+				if(k){delete stack[k];memo[k]=ok;}
+				return ok;
+			}
+
+			form.querySelectorAll('[data-cfg-visible-when]').forEach(function(el){
+				el.style.display=visible(el)?'':'none';
 			});
 		}
 

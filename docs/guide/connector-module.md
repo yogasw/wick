@@ -333,7 +333,7 @@ connector.Module{
 | `MultiAccount` | Each connect adds a new account entry instead of replacing the existing token. |
 | `AllowOthersConfigure` | Non-admin users with tag access may edit credentials and settings. |
 
-These are **starting values only** — admins can change them per row afterwards from the Access Policy section. The defaults do not retroactively apply to rows that already exist.
+These are **starting values only** — admins or the instance owner (creator) can change them per row afterwards from the Access Policy section. The defaults do not retroactively apply to rows that already exist.
 
 ### Row-level disable (whole connector off)
 
@@ -359,7 +359,7 @@ Implementation: `Service.SetDisabled` (`internal/connectors/service.go`) writes 
 2. **Top actions** — History, Duplicate, Disable/Enable, Delete.
 3. **Label form** — rename without redeploying.
 4. **Credentials** — auto-rendered from your `Configs` struct via `entity.StructToConfigs`. For OAuth connectors, also shows the Connect Account button and any connected accounts.
-5. **Access Policy** — four flags controlling who can configure or connect OAuth accounts:
+5. **Access Policy** — four flags controlling who can configure or connect OAuth accounts. Editable by admins or the instance owner (creator); `AllowOthersConfigure` users are intentionally excluded here because the policy controls who gets that grant:
    - `Enable SSO` — turns on the OAuth Connect Account flow for this instance.
    - `Multi-account` — each user connect creates a new account entry (vs replacing the single token).
    - `Allow others to configure` — non-admin users with tag access may edit credentials.

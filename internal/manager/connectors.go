@@ -495,9 +495,9 @@ func (h *Handler) setConnectorAccessPolicy(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	// Only admins can change the access policy.
-	if user == nil || !user.IsAdmin() {
-		http.Error(w, "admin only", http.StatusForbidden)
+	// Admin or the instance owner can change the access policy.
+	if !h.canManageAccessPolicy(user, row) {
+		http.Error(w, "admin or owner only", http.StatusForbidden)
 		return
 	}
 	allowConfigure := boolParam(r, "allow_others_configure")
@@ -525,8 +525,8 @@ func (h *Handler) setConnectorSessionConfig(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	if user == nil || !user.IsAdmin() {
-		http.Error(w, "admin only", http.StatusForbidden)
+	if !h.canManageAccessPolicy(user, row) {
+		http.Error(w, "admin or owner only", http.StatusForbidden)
 		return
 	}
 	if !h.connectors.SessionConfigCapable(row.Key) {
@@ -797,6 +797,28 @@ func (h *Handler) canConfigureRow(user *entity.User, row *entity.Connector) bool
 		}
 	}
 	return row.AllowOthersConfigure
+}
+
+// canManageAccessPolicy reports whether the user may change the access policy
+// (SSO toggles, allow-others flags) + session-config override on a row.
+// Allow order: admin → owner tag. Deliberately NOT AllowOthersConfigure — the
+// access policy governs who else may access/configure the instance, so letting
+// a granted-configure user edit it would be a privilege escalation. The owner
+// (creator) gets full control of their own instance; everyone else needs admin.
+func (h *Handler) canManageAccessPolicy(user *entity.User, row *entity.Connector) bool {
+	if user == nil {
+		return false
+	}
+	if user.IsAdmin() {
+		return true
+	}
+	if h.tags != nil {
+		owns, _ := h.tags.UserOwnsConnector(context.Background(), user.ID, row.ID)
+		if owns {
+			return true
+		}
+	}
+	return false
 }
 
 // canConfigureSecretField reports whether the user may write a secret config

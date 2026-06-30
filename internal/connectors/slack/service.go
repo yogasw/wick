@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync/atomic"
 
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/pkg/connector"
@@ -471,55 +470,17 @@ func evalScopeRule(rule [][]string, granted map[string]struct{}) (bool, [][]stri
 	return len(missing) == 0, missing
 }
 
-// botIDByToken caches the Slack user_id resolved from each connector
-// instance's token, so the "Sent using <@BotID>" footer reflects THAT
-// instance's bot — not a process-global value that the last-connected
-// agent Slack channel would clobber under multi-instance setups.
-//
-// Keyed by token; one auth.test per distinct token, then cached. Reads
-// are lock-free via atomic.Value swapping an immutable map.
-var botIDByToken atomic.Value // map[string]string
-
-// botUserIDForToken returns the bot user_id for the connector instance's
-// token, resolving it via auth.test on first use and caching the result.
-// Returns "" when the token is empty or auth.test fails — the footer then
-// falls back to the app name.
-func botUserIDForToken(c *connector.Ctx) string {
-	token, err := pickToken(c)
-	if err != nil || token == "" {
-		return ""
-	}
-	if m, ok := botIDByToken.Load().(map[string]string); ok {
-		if id, hit := m[token]; hit {
-			return id
-		}
-	}
-	// Miss: resolve via auth.test (uses the instance's own token).
-	id := ""
-	if raw, _, terr := slackGetWithHeaders(c, "auth.test", nil); terr == nil {
-		if obj, ok := raw.(map[string]any); ok {
-			if uid, ok := obj["user_id"].(string); ok {
-				id = uid
-			}
-		}
-	}
-	// Copy-on-write the cache (small, write-rare).
-	old, _ := botIDByToken.Load().(map[string]string)
-	next := make(map[string]string, len(old)+1)
-	for k, v := range old {
-		next[k] = v
-	}
-	next[token] = id // cache "" too, so a failing token isn't re-probed every send
-	botIDByToken.Store(next)
-	return id
-}
-
 // signedFooterBlock builds the Block Kit context block appended to every
-// send_message — "Sent using <@BotID>" for the calling connector
-// instance's own bot, falling back to the app name when the bot user is
-// unknown (empty token or auth.test failure).
+// send_message / update_message — "Sent using <@BotID>".
+//
+// The bot is the one that OWNS this call's session (c.OwnerBotID()),
+// resolved by the framework from the channel registry. This makes the
+// footer name the session owner's bot no matter which connector instance
+// sends — the whole point: "pick any connector, the 'Sent using' is the
+// same". For sessions that aren't channel-backed (cron, UI, REST) there is
+// no owner bot, so the footer falls back to the app name.
 func signedFooterBlock(c *connector.Ctx) map[string]any {
-	botID := botUserIDForToken(c)
+	botID := c.OwnerBotID()
 	var footerText string
 	if botID != "" {
 		footerText = "Sent using <@" + botID + ">"

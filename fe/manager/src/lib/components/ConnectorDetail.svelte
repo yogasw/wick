@@ -172,7 +172,7 @@
       />
     </section>
 
-    {#if data.is_admin}
+    {#if data.can_manage_policy}
       <AccessPolicySection connectorKey={connectorKey} connectorId={connectorId} data={data} onchanged={refresh} />
     {/if}
 

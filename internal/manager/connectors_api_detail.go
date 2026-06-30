@@ -133,6 +133,10 @@ type connectorDetailJSON struct {
 	HasHealthCheck bool                    `json:"has_health_check"`
 	CanConfigure   bool                    `json:"can_configure"`
 	IsAdmin        bool                    `json:"is_admin"`
+	// CanManagePolicy is true for an admin OR the instance owner — gates the
+	// Access policy + session-config sections (more than can_configure, which
+	// also covers AllowOthersConfigure users who must NOT edit the policy).
+	CanManagePolicy bool `json:"can_manage_policy"`
 	Fields         []configFieldJSON       `json:"fields"`
 	Operations     []connectorOpJSON       `json:"operations"`
 	Categories     []connectorCategoryJSON `json:"categories"`
@@ -285,6 +289,7 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 
 	isAdmin := user != nil && user.IsAdmin()
 	canConfigure := h.canConfigureRow(user, row)
+	canManagePolicy := h.canManageAccessPolicy(user, row)
 
 	accounts := h.rowAccountsJSON(ctx, *row, user)
 
@@ -304,6 +309,7 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 		HasHealthCheck:        mod.HealthCheck != nil,
 		CanConfigure:          canConfigure,
 		IsAdmin:               isAdmin,
+		CanManagePolicy:       canManagePolicy,
 		Fields:                fields,
 		Operations:            ops,
 		Categories:            categories,

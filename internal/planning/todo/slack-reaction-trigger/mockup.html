@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slack Reaction Trigger — Visual Design</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  /* Tokens mirror wick design-system: green (accent), navy (dark surface),
+     black ramp (text), white ramp (light surface), status pos/cau/neg/prog. */
+  :root {
+    --green-200:#D1ECE5; --green-500:#27B199; --green-600:#288372; --green-700:#24584E; --green-800:#1B312C;
+    --navy-500:#01416C; --navy-600:#103352; --navy-700:#14263A; --navy-800:#121923;
+    --black-600:#BFBFBF; --black-700:#A0A0A0; --black-800:#565656; --black-900:#0A0A0A;
+    --white-100:#FFFFFF; --white-200:#FAFAFA; --white-300:#ECECEC; --white-400:#DFDFDF;
+    --pos-100:#E3F3EF; --pos-400:#288C7A; --cau-100:#FBF1DD; --cau-400:#D78E08;
+    --neg-100:#FCE7E2; --neg-400:#EB5757; --prog-100:#EEFAFE; --prog-400:#56CCF2;
+  }
+  body { font-family: 'Inter', system-ui, sans-serif; background: var(--white-200); color: var(--black-900); }
+  pre, code, .mono { font-family: 'JetBrains Mono', 'Consolas', monospace; }
+
+  .card     { background: var(--white-100); border: 1px solid var(--white-300); border-radius: 12px; }
+  .card-sub { background: var(--white-200); border: 1px solid var(--white-300); border-radius: 8px; }
+
+  .chip       { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+  .chip-run   { background: var(--pos-100); color: var(--pos-400); border:1px solid var(--pos-400); }
+  .chip-idle  { background: var(--cau-100); color: var(--cau-400); border:1px solid var(--cau-400); }
+  .chip-dead  { background: var(--neg-100); color: var(--neg-400); border:1px solid var(--neg-400); }
+  .chip-muted { background: var(--white-300); color: var(--black-800); border:1px solid var(--white-400); }
+  .badge      { display:inline-block; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; }
+  .badge-prov { background: var(--green-200); color: var(--green-700); }
+
+  .btn         { display:inline-flex; align-items:center; gap:6px; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; border:none; }
+  .btn-primary { background: var(--green-500); color: var(--white-100); }
+  .btn-ghost   { background: var(--white-100); color: var(--black-900); border:1px solid var(--white-400); }
+
+  .input    { width:100%; padding:8px 12px; border:1px solid var(--white-400); border-radius:8px; font-size:13px; background:var(--white-100); color:var(--black-900); }
+  .label    { font-size:12px; font-weight:600; color: var(--black-800); margin-bottom:4px; display:block; }
+  .helper   { font-size:11px; color: var(--black-800); margin-top:4px; }
+  .section-h{ font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--black-800); }
+
+  /* Slack-ish surface */
+  .slack       { background:#fff; border:1px solid var(--white-300); border-radius:12px; }
+  .slack-head  { background:#3F0E40; color:#fff; border-radius:12px 12px 0 0; padding:10px 16px; font-weight:700; font-size:14px; }
+  .sl-msg      { display:flex; gap:10px; padding:8px 16px; }
+  .sl-msg:hover{ background:#F8F8F8; }
+  .sl-av       { width:36px; height:36px; border-radius:8px; flex:0 0 36px; display:flex; align-items:center; justify-content:center; font-weight:700; color:#fff; font-size:13px; }
+  .sl-name     { font-weight:700; font-size:14px; color:#1d1c1d; }
+  .sl-time     { font-size:11px; color:#616061; margin-left:6px; }
+  .sl-body     { font-size:14px; color:#1d1c1d; line-height:1.45; }
+  .sl-react    { display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border-radius:12px; font-size:12px; font-weight:600; cursor:pointer; margin-top:6px; }
+  .sl-react-on { background:#E8F5FC; border:1px solid #1264A3; color:#1264A3; }
+  .sl-react-off{ background:#F4F4F4; border:1px solid #E0E0E0; color:#616061; }
+  .sl-thread   { border-left:3px solid var(--green-500); margin-left:46px; padding-left:12px; }
+  .sl-status   { font-size:12px; color:#616061; font-style:italic; padding:4px 16px 4px 62px; }
+  .sl-bot-badge{ background:#1264A3; color:#fff; font-size:9px; font-weight:700; padding:1px 4px; border-radius:3px; margin-left:5px; text-transform:uppercase; }
+
+  .step      { display:flex; gap:12px; align-items:flex-start; }
+  .step-num  { flex:0 0 26px; height:26px; border-radius:999px; background:var(--green-500); color:#fff; font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center; }
+  .step-stop { background:var(--neg-400); }
+  .arrow     { color:var(--black-700); font-size:20px; text-align:center; }
+</style>
+</head>
+<body>
+
+<header class="max-w-6xl mx-auto px-6 pt-10 pb-4">
+  <span class="badge badge-prov">Slack Channel</span>
+  <h1 class="text-3xl font-bold mt-2">Reaction Auto-Reply Switch</h1>
+  <p class="text-sm mt-2" style="color:var(--black-800); max-width:720px">
+    When a thread is started by <code>@bot</code>, the agent <b>automatically arms auto-reply</b> and
+    drops a 🤖 on the <b>parent (top) message</b>. While the 🤖 stays, every new reply goes to the
+    agent <b>without a mention</b>. The user <b>removes 🤖 to stop</b> and can <b>re-add it to
+    resume</b> — no manual reaction needed to turn it on. The flag is saved in the session meta, so
+    it <b>survives a restart</b>. Threads are still started by <code>@bot</code> only — auto-arm
+    never opens a new session.
+  </p>
+</header>
+
+<main class="max-w-6xl mx-auto px-6 pb-20 space-y-8">
+
+  <!-- BEFORE / AFTER -->
+  <section class="grid md:grid-cols-2 gap-6">
+
+    <!-- BEFORE: live thread, no switch — replies are quiet -->
+    <div class="card overflow-hidden">
+      <div class="slack-head">＃ ops-alerts <span class="opacity-60 font-normal text-xs">· switch OFF</span></div>
+      <div class="py-2">
+        <div class="sl-msg">
+          <div class="sl-av" style="background:#4A154B">RW</div>
+          <div>
+            <div><span class="sl-name">Rina W.</span><span class="sl-time">10:30 AM</span> <span class="badge chip-muted">parent</span></div>
+            <div class="sl-body"><span style="color:#1264A3;font-weight:600">@wick</span> bantu pantau insiden DB pagi ini</div>
+            <div class="sl-react sl-react-off">🤖 <span>0</span></div>
+          </div>
+        </div>
+        <div class="sl-msg sl-thread">
+          <div class="sl-av" style="background:var(--green-600)">W</div>
+          <div>
+            <div><span class="sl-name">wick</span><span class="sl-bot-badge">app</span><span class="sl-time">10:30 AM</span></div>
+            <div class="sl-body">Siap, aku pantau.</div>
+          </div>
+        </div>
+        <div class="sl-msg sl-thread">
+          <div class="sl-av" style="background:#4A154B">RW</div>
+          <div>
+            <div><span class="sl-name">Rina W.</span><span class="sl-time">10:42 AM</span></div>
+            <div class="sl-body">tolong rangkum insiden &amp; langkah mitigasinya</div>
+          </div>
+        </div>
+      </div>
+      <div class="px-4 pb-4">
+        <span class="chip chip-muted">🤖 not on parent → replies stay quiet (need @mention)</span>
+      </div>
+    </div>
+
+    <!-- AFTER: 🤖 on the parent → every reply auto-answered -->
+    <div class="card overflow-hidden">
+      <div class="slack-head">＃ ops-alerts <span class="opacity-60 font-normal text-xs">· switch ON</span></div>
+      <div class="py-2">
+        <div class="sl-msg">
+          <div class="sl-av" style="background:#4A154B">RW</div>
+          <div>
+            <div><span class="sl-name">Rina W.</span><span class="sl-time">10:30 AM</span> <span class="badge badge-prov">parent · auto-reply ON</span></div>
+            <div class="sl-body"><span style="color:#1264A3;font-weight:600">@wick</span> bantu pantau insiden DB pagi ini</div>
+            <div class="sl-react sl-react-on">🤖 <span>1</span></div>
+          </div>
+        </div>
+        <div class="sl-msg sl-thread">
+          <div class="sl-av" style="background:#4A154B">RW</div>
+          <div>
+            <div><span class="sl-name">Rina W.</span><span class="sl-time">10:42 AM</span></div>
+            <div class="sl-body">tolong rangkum insiden &amp; langkah mitigasinya</div>
+          </div>
+        </div>
+        <div class="sl-msg sl-thread">
+          <div class="sl-av" style="background:var(--green-600)">W</div>
+          <div>
+            <div><span class="sl-name">wick</span><span class="sl-bot-badge">app</span><span class="sl-time">10:42 AM</span></div>
+            <div class="sl-body">Ringkasan: pool exhausted akibat query N+1 di billing. Mitigasi: pool 50→120, hotfix eager-load, alert p95.</div>
+          </div>
+        </div>
+        <div class="sl-msg sl-thread">
+          <div class="sl-av" style="background:#4A154B">RW</div>
+          <div>
+            <div><span class="sl-name">Rina W.</span><span class="sl-time">10:45 AM</span></div>
+            <div class="sl-body">root cause-nya apa?</div>
+          </div>
+        </div>
+        <div class="sl-msg sl-thread">
+          <div class="sl-av" style="background:var(--green-600)">W</div>
+          <div>
+            <div><span class="sl-name">wick</span><span class="sl-bot-badge">app</span><span class="sl-time">10:45 AM</span></div>
+            <div class="sl-body">Deploy 08:10 menambah loop tanpa eager-load → tiap request buka N koneksi.</div>
+          </div>
+        </div>
+      </div>
+      <div class="px-4 pb-4">
+        <span class="chip chip-run">every reply auto-answered while 🤖 stays on the parent · no mention</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- FLOW: AUTO-ARM -->
+  <section class="card p-6">
+    <div class="section-h mb-4">Flow — new @bot thread → AUTO-ARM (primary path)</div>
+    <div class="space-y-4">
+      <div class="step"><div class="step-num">1</div><div class="text-sm pt-0.5"><b>@bot mention</b> creates a new channel thread → <code>handleMessage</code>, the send creates the session on disk.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="text-sm pt-0.5"><b>Gate.</b> new session · channel (not DM) · <code>ReactionTriggerEnabled</code> · channel allowed (<code>all</code> = any, <code>whitelist</code> = in <code>ReactionChannels</code>).</div></div>
+      <div class="step"><div class="step-num">3</div><div class="text-sm pt-0.5"><b>Arm + mark.</b> <code>setAutoReply(true)</code> persists <code>Meta.AutoReply=true</code> and the bot drops the 🤖 marker on the parent. No manual reaction needed.</div></div>
+    </div>
+  </section>
+
+  <!-- FLOW: NEW REPLY WHILE ON -->
+  <section class="card p-6">
+    <div class="section-h mb-4">Flow — new reply arrives while armed (auto-reply)</div>
+    <div class="space-y-4">
+      <div class="step"><div class="step-num">1</div><div class="text-sm pt-0.5"><b>message</b> event in the channel (existing handler, extended). Not a mention.</div></div>
+      <div class="step"><div class="step-num">2</div><div class="text-sm pt-0.5">Resolve <code>threadTS</code> → <code>sessionID</code>. <code>autoReplyOn</code>? Cache hit → use it; miss → read <code>Meta.AutoReply</code> and warm the cache (this is what makes it <b>survive restart</b>). Not armed → today's DM-only behaviour.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="text-sm pt-0.5">Armed → re-check reply author passes <code>allowedCfg</code>, then <code>handleMessage</code> appends the reply as a user turn to the live session.</div></div>
+    </div>
+  </section>
+
+  <!-- FLOW: SWITCH OFF + RE-ARM -->
+  <section class="card p-6">
+    <div class="section-h mb-4">Flow — 🤖 removed (OFF) · re-added (manual re-arm)</div>
+    <div class="space-y-4">
+      <div class="step"><div class="step-num step-stop">1</div><div class="text-sm pt-0.5"><b>reaction_removed</b> on the parent (emoji + reactor ≠ bot) → <code>setAutoReply(false)</code>: clears cache + persists <code>Meta.AutoReply=false</code>. Future replies go quiet.</div></div>
+      <div class="step"><div class="step-num step-stop">2</div><div class="text-sm pt-0.5"><b>No abort.</b> A turn already in flight finishes and answers — only the <i>next</i> reply is dropped.</div></div>
+      <div class="step"><div class="step-num">3</div><div class="text-sm pt-0.5"><b>reaction_added</b> by a user (passes <code>allowedCfg</code>, item is the parent, session exists) → <code>setAutoReply(true)</code> again. Re-arm is manual; the bot's own reaction is skipped.</div></div>
+    </div>
+  </section>
+
+  <!-- CONFIG PANEL -->
+  <section class="grid md:grid-cols-2 gap-6">
+    <div class="card p-6">
+      <div class="section-h mb-4">Config — Slack channel</div>
+      <div class="space-y-4">
+        <div class="flex items-center justify-between card-sub p-3">
+          <div>
+            <div class="text-sm font-semibold">Reaction trigger</div>
+            <div class="helper">React 🤖 to invoke the agent without a mention.</div>
+          </div>
+          <div style="width:42px;height:24px;border-radius:999px;background:var(--green-500);position:relative">
+            <div style="width:18px;height:18px;border-radius:999px;background:#fff;position:absolute;top:3px;right:3px"></div>
+          </div>
+        </div>
+        <div>
+          <label class="label">Reaction channels mode</label>
+          <div class="input flex items-center gap-2" style="background:var(--white-100)"><code>whitelist</code> <span class="badge chip-muted ml-auto">all · whitelist</span></div>
+          <div class="helper"><b>all</b> = any channel the bot is in honours 🤖. <b>whitelist</b> (default) = only the channels below.</div>
+        </div>
+        <div>
+          <label class="label">Reaction channels <span class="helper">— shown when mode = whitelist</span></label>
+          <div class="input flex items-center gap-2 flex-wrap" style="min-height:38px">
+            <span class="chip chip-muted">＃ ops-alerts ✕</span>
+            <span class="chip chip-muted">＃ support-escalation ✕</span>
+            <span style="color:var(--black-700);font-size:13px">+ add…</span>
+          </div>
+          <div class="helper">Independent of the access whitelist. Only these channels react to 🤖.</div>
+        </div>
+        <div>
+          <label class="label">Trigger emoji</label>
+          <div class="input flex items-center gap-2" style="background:var(--white-200);color:var(--black-700)">🤖 <code>robot_face</code> <span class="badge chip-muted ml-auto">fixed</span></div>
+          <div class="helper">Hardcoded for now. Configurable later if needed.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card p-6">
+      <div class="section-h mb-4">Required Slack scope</div>
+      <div class="card-sub p-3 mb-4">
+        <code class="text-sm">reactions:read</code>
+        <div class="helper">Without it, Slack never delivers <code>reaction_added</code> / <code>reaction_removed</code> — the feature is silently inert. Surface this in the Status panel.</div>
+      </div>
+      <div class="section-h mb-3">Gate (add &amp; remove)</div>
+      <ul class="text-sm space-y-2" style="color:var(--black-900)">
+        <li>✅ emoji == <code>robot_face</code></li>
+        <li>✅ reactor ≠ bot (no self-trigger loop)</li>
+        <li>✅ <code>ReactionTriggerEnabled</code> on</li>
+        <li>✅ channel allowed — mode <code>all</code> (any) or <code>whitelist</code> (∈ <code>ReactionChannels</code>)</li>
+        <li>✅ reactor passes <code>allowedCfg</code> (Users/Groups)</li>
+        <li>✅ item is the <b>parent</b> message (not a reply bubble)</li>
+        <li>✅ <b>session already exists</b> for the thread <span class="badge chip-muted">add only</span></li>
+      </ul>
+      <div class="helper mt-3">A reaction is ambient, not a command — a failed gate is silently ignored (no "access denied" DM, unlike a real message). The switch governs <i>future</i> replies; it never sends the reacted message itself and never aborts a running turn.</div>
+    </div>
+  </section>
+
+  <!-- EDGE CASES -->
+  <section class="card p-6">
+    <div class="section-h mb-4">Edge cases</div>
+    <div class="grid md:grid-cols-2 gap-3 text-sm">
+      <div class="card-sub p-3"><b>🤖 on a reply bubble, not the parent</b> — ignore. The switch only lives on the thread root.</div>
+      <div class="card-sub p-3"><b>Thread has no session</b> (never @mentioned) — ignore. The switch never boots a thread.</div>
+      <div class="card-sub p-3"><b>Remove while a turn is running</b> — that turn finishes &amp; answers; only the next reply is dropped. No abort.</div>
+      <div class="card-sub p-3"><b>Disabled / channel not listed</b> — silently ignore.</div>
+      <div class="card-sub p-3"><b>Bot restart</b> — the <code>autoReply</code> set is in-memory; switches reset on restart. Re-react to re-arm. (Persist later if needed.)</div>
+      <div class="card-sub p-3"><b>Reply author not allowed</b> — re-checked per reply via <code>allowedCfg</code>; a non-allowed member's reply is skipped even with the switch on.</div>
+    </div>
+  </section>
+
+</main>
+</body>
+</html>

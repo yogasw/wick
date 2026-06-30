@@ -31,36 +31,70 @@ func descText(s string) string {
 // text-like inputs (text, email, url, number, date, etc.).
 const cfgInputClass = "w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
 
-// splitSimple returns configs whose Type is neither "kvlist" nor "picker".
-// Callers are responsible for filtering hidden rows before passing — this
-// function renders whatever it receives.
-func splitSimple(rows []entity.Config) []entity.Config {
-	out := make([]entity.Config, 0, len(rows))
-	for _, r := range rows {
-		if r.Type != "kvlist" && r.Type != "picker" {
-			out = append(out, r)
-		}
-	}
-	return out
+// fieldGroup is one rendered card under a section title. A group holds the
+// simple fields (rendered as a 2-col grid) plus any picker / kvlist fields
+// that share the same group= tag, rendered as sub-blocks inside the same
+// card so a dependent picker (e.g. reaction_channels) sits with its toggle
+// instead of being orphaned at the bottom of the page.
+//
+// Desc is an optional one-time blurb shown under the heading so the shared
+// context lives on the group instead of being repeated on every field.
+type fieldGroup struct {
+	Title   string
+	Desc    string
+	Simple  []entity.Config
+	Pickers []entity.Config
+	KvLists []entity.Config
 }
 
-// splitKVList returns only configs with Type == "kvlist".
-func splitKVList(rows []entity.Config) []entity.Config {
-	out := make([]entity.Config, 0)
-	for _, r := range rows {
-		if r.Type == "kvlist" {
-			out = append(out, r)
-		}
+// defaultGroupTitle is the heading used for rows that declare no
+// `wick:"group=..."`. Matches the legacy single-card title so an
+// ungrouped config page looks exactly as it did before grouping.
+const defaultGroupTitle = "Configuration"
+
+// parseGroup splits a `wick:"group=..."` value into a section title and an
+// optional description. Grammar: "Title" or "Title|Description". The
+// description is the place to write the context shared by every field in
+// the group, so individual fields need not repeat it. An empty value maps
+// to the default heading with no description.
+func parseGroup(raw string) (title, desc string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return defaultGroupTitle, ""
 	}
-	return out
+	if i := strings.IndexByte(raw, '|'); i >= 0 {
+		return strings.TrimSpace(raw[:i]), strings.TrimSpace(raw[i+1:])
+	}
+	return raw, ""
 }
 
-// splitPicker returns only configs with Type == "picker".
-func splitPicker(rows []entity.Config) []entity.Config {
-	out := make([]entity.Config, 0)
+// groupRows partitions ALL rows (simple, picker, kvlist) into cards by their
+// Group tag, preserving first-seen group order so the page layout is stable
+// and authoring-order-driven. Within a group, each field type lands in its
+// own slot so the templ can render simple fields as a grid and picker/kvlist
+// fields as sub-blocks under them. Rows with an empty Group collapse into
+// the default "Configuration" card at its first-seen position. The first
+// non-empty description seen for a group wins.
+func groupRows(rows []entity.Config) []fieldGroup {
+	idx := map[string]int{}
+	var out []fieldGroup
 	for _, r := range rows {
-		if r.Type == "picker" {
-			out = append(out, r)
+		title, desc := parseGroup(r.Group)
+		i, ok := idx[title]
+		if !ok {
+			i = len(out)
+			idx[title] = i
+			out = append(out, fieldGroup{Title: title, Desc: desc})
+		} else if out[i].Desc == "" && desc != "" {
+			out[i].Desc = desc
+		}
+		switch r.Type {
+		case "picker":
+			out[i].Pickers = append(out[i].Pickers, r)
+		case "kvlist":
+			out[i].KvLists = append(out[i].KvLists, r)
+		default:
+			out[i].Simple = append(out[i].Simple, r)
 		}
 	}
 	return out

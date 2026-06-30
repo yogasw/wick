@@ -59,6 +59,14 @@ type Ctx struct {
 	// than the stringified form. nil on every other path — readers MUST fall
 	// back to the string `input` map when a key is absent.
 	rawInput map[string]any
+	// ownerBotID is the bot user id of the channel instance that owns this
+	// call's session, pre-resolved by the framework (the connectors Service
+	// is wired with a resolver that looks the session up in the channel
+	// registry). Empty when the session isn't channel-backed, unknown, or no
+	// resolver is wired. The Slack connector footer prefers this over its own
+	// token-derived bot so a send names the session owner's bot, not the
+	// sending connector's. Read via OwnerBotID().
+	ownerBotID string
 }
 
 // Masker is the narrow slice of the encrypted-fields service
@@ -288,3 +296,17 @@ func (c *Ctx) RawInputValue(key string) (any, bool) {
 	v, ok := c.rawInput[key]
 	return v, ok
 }
+
+// ── Session context ──────────────────────────────────────────────────
+
+// SetOwnerBotID records the bot user id of the channel instance that owns
+// this call's session, pre-resolved by the framework. The framework calls
+// this once right after building the Ctx when it could resolve a session
+// owner; other paths leave it empty.
+func (c *Ctx) SetOwnerBotID(botUserID string) { c.ownerBotID = botUserID }
+
+// OwnerBotID returns the bot user id of the channel instance that owns this
+// call's session, pre-resolved by the framework. Empty when the session is
+// not channel-backed, unknown, or no resolver is wired — callers must fall
+// back to their own identity resolution.
+func (c *Ctx) OwnerBotID() string { return c.ownerBotID }

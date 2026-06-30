@@ -965,6 +965,28 @@ func NewServer() *Server {
 	metricsRec := metrics.NewSimpleRecorder()
 	connectorsSvc.SetMetrics(metricsRec)
 
+	// Map an agent session to the Slack bot that owns it, so the Slack
+	// connector's "Sent using @bot" footer always names the session
+	// owner's bot — regardless of which connector instance does the send.
+	// A Slack session id carries its instance's prefix (slack-<owner>-…);
+	// we find the channel that claims it and read its resolved bot id.
+	connectorsSvc.SetSessionOwnerBotResolver(func(sessionID string) (string, bool) {
+		if sessionID == "" {
+			return "", false
+		}
+		for _, ch := range channelReg.Channels() {
+			sc, ok := ch.(*slackch.Channel)
+			if !ok || !sc.OwnsSession(sessionID) {
+				continue
+			}
+			if bot := sc.BotUserID(); bot != "" {
+				return bot, true
+			}
+			return "", false
+		}
+		return "", false
+	})
+
 	// Hot-reload poller: built here where pluginMgr + connectorsSvc are
 	// both in scope, started in Run with the server lifetime ctx.
 	var pluginReloader *connplugin.Reloader

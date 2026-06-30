@@ -16,6 +16,7 @@
         "app_mentions:read",
         "chat:write",
         "reactions:write",
+        "reactions:read",
         "usergroups:read",
         "channels:history",
         "groups:history",
@@ -30,7 +31,10 @@
       "bot_events": [
         "app_mention",
         "message.im",
-        "message.mpim"
+        "message.mpim",
+        "message.channels",
+        "reaction_added",
+        "reaction_removed"
       ]
     },
     "interactivity": {

@@ -37,6 +37,20 @@ func TestSessionPrefixIsCharsetSafe(t *testing.T) {
 	}
 }
 
+// TestSessionPrefixAppOwnerIsClean pins the App Owner instance's session
+// prefix to the clean "<channelType>-" form — no "__owner__" segment. The
+// registry instance key still uses ":__owner__", but that internal detail
+// must not leak into session ids / on-disk folder names.
+func TestSessionPrefixAppOwnerIsClean(t *testing.T) {
+	if got := sessionPrefix("slack", nil); got != "slack-" {
+		t.Errorf("app-owner slack prefix = %q, want %q (no __owner__)", got, "slack-")
+	}
+	owner := "ec0c0b8b-e73c-4561-9d19-bfa9c481a816"
+	if got := sessionPrefix("slack", &owner); got != "slack-"+owner+"-" {
+		t.Errorf("per-user slack prefix = %q, want %q", got, "slack-"+owner+"-")
+	}
+}
+
 // TestSessionPrefixUniquePerOwner guards the namespacing guarantee: two owners
 // of the same channel type get distinct prefixes, so a coincidentally-equal
 // thread_ts never collides across instances.
