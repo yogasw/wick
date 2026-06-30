@@ -55,6 +55,13 @@ self.addEventListener('fetch', (event) => {
   catch (_) { return; }
   if (url.origin !== self.location.origin) return;
 
+  // /9router/* is a reverse-proxied third-party app (the embedded 9router
+  // dashboard). Its assets are rewritten on the fly by the wick proxy, so
+  // caching them here would pin a stale, pre-rewrite copy and break the
+  // app. Always go straight to the network — let the proxy be the source
+  // of truth.
+  if (url.pathname === '/9router' || url.pathname.startsWith('/9router/')) return;
+
   if (staticAssetRe.test(url.pathname)) {
     // Stale-while-revalidate: return the cached copy immediately (or fall back
     // to the network on a cold miss), and ALWAYS kick off a network fetch in

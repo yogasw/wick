@@ -39,6 +39,7 @@ import (
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/tags"
+	router9 "github.com/yogasw/wick/internal/tools/agents/9router"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -320,6 +321,14 @@ func Register(r tool.Router) {
 	r.GET("/skills/{provider}/{path...}", skillProviderPath)
 	r.POST("/skills-sync/{provider}/{path...}", skillProviderSync)
 	r.POST("/skills/{name}/sync", skillEntrySync)
+
+	// 9router — embedded dashboard managed inside the Agents shell.
+	// Self-contained in the 9router package; we only hand it the sidebar
+	// builder (so its pages render inside our shell with the nav active)
+	// and a config store (so it can persist the auto-start flag).
+	router9.Register(r, func(c *tool.Ctx, activePage string) view.AgentsLayoutVM {
+		return sidebarVM(c, activePage, "")
+	}, router9ConfigStore{})
 
 	r.POST("/providers/storage/sync/{type}/{name}", syncProviderStorage)
 	r.GET("/providers/storage", storagePage)

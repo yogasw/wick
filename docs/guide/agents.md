@@ -44,6 +44,7 @@ After boot, head to `/tools/agents`.
 | **Skills** | Browse, preview, sync, and delete skill files across all provider skill dirs. |
 | **Connectors** | Browse and manage LLM-callable connectors from inside the Agents shell. Opens at `/tools/agents/connectors`. Direct links to `/manager/connectors/*` redirect here automatically (deep links preserved). |
 | **Channels** | Slack + Telegram bot config (tokens, access control, default project). Web UI is always-on. |
+| **9router** | Install, run, and manage the [9router](https://github.com/decolua/9router) LLM-router/proxy from inside wick. Dashboard embedded via reverse proxy — no extra port needed. Admin-only. |
 
 Sessions auto-create on the first message in a Slack thread, a Telegram chat, or a fresh web conversation. You don't pre-allocate them.
 
@@ -262,6 +263,7 @@ Each check reports `✓` / `✗` / `!`. Exit `0` when required checks pass, `1` 
 - [**Channels**](./agents/channels) — Slack, Telegram, web UI; access control; meta-commands.
 - [**Pool & Sessions**](./agents/pool) — slot allocation, idle-kill, resume, message buffer.
 - [**Source Control**](./agents/source-control) — git SCM panel on the session detail page.
+- [**9router**](./agents/9router) — embedded LLM router/proxy dashboard; install and manage via Settings tab.
 - [**Command Gate**](./command-gate) — shell-command approval system.
 
 ## See also

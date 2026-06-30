@@ -8,6 +8,8 @@ All notable changes to Wick are documented here.
 
 ### Added
 
+*   **9router embedded dashboard** (admin-only): A new **Agents → 9router** page (`/tools/agents/9router`) lets admins install, run, and manage the [9router](https://github.com/decolua/9router) npm LLM-router/proxy without shell access. The dashboard is reverse-proxied through the wick origin at `/9router/` with URL rewriting, so no extra port or tunnel is needed. Settings tab: Install / Update (via `npm install -g 9router`), Start / Stop / Restart buttons, **Auto-start on boot** toggle (makes 9router a boot-gate step so the dashboard is ready on first page load), and a live Logs panel. Theme tracks wick's light/dark setting automatically. Requires `npm` on host PATH. See [9router guide](guide/agents/9router).
+
 *   **Provider instance catalog picker**: The provider detail page's **Env** and **Extra Args** fields now include a **Browse catalog** button that opens a searchable multi-select modal of known env vars and CLI flags for that provider type (`claude`, `codex`, `gemini`), with descriptions and default values. Selecting entries inserts them directly into the KV editor. Value cells for known env vars render as option dropdowns instead of plain text inputs. New endpoint: `GET /providers/catalog/{type}`.
 
 *   **Provider instance rename**: Rename a provider instance from its detail page (pencil icon on the title). The new name must use letters, digits, or `_` only; spaces auto-convert to `_`. On save, every project whose default provider matched the old `type/name` key is rewritten to the new key automatically. Live sessions keep the old provider key and must be re-selected by the user. New endpoint: `POST /providers/rename/{type}/{name}`.

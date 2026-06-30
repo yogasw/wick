@@ -1,0 +1,322 @@
+package view
+
+// Router9VM is the model for the single 9router page. It hosts two
+// client-toggled tabs: Dashboard (the proxied iframe) and Settings
+// (install/update, start/stop/restart, auto-start, live logs).
+type Router9VM struct {
+	Layout    AgentsLayoutVM
+	Base      string // /tools/agents
+	Autostart bool
+}
+
+templ Router9Page(vm Router9VM) {
+	@AgentsLayout(vm.Layout) {
+		<div id="router9" data-base={ vm.Base } class="flex h-full flex-col">
+			<!-- Header (Connectors-style) -->
+			<div class="flex items-start justify-between gap-4 px-6 pt-6 pb-4 shrink-0">
+				<div class="flex items-center gap-3">
+					<div class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-green-200 dark:bg-green-800 text-green-700 dark:text-green-300" aria-hidden="true">
+						<svg viewBox="0 0 16 16" class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="1.5">
+							<circle cx="4" cy="4" r="2"></circle>
+							<circle cx="4" cy="12" r="2"></circle>
+							<path d="M13 4v3a2 2 0 0 1-2 2H6M6 6l-2 2 2 2" stroke-linecap="round" stroke-linejoin="round"></path>
+						</svg>
+					</div>
+					<div>
+						<h1 class="text-[1.375rem] font-semibold text-black-900 dark:text-white-100">9router</h1>
+						<p class="mt-0.5 text-sm text-black-800 dark:text-black-600">Install, run, and manage the 9router dashboard — embedded here, no extra exposed port.</p>
+					</div>
+				</div>
+				<div class="flex flex-shrink-0 items-center gap-2">
+					<span id="r9-status" class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium bg-white-300 dark:bg-navy-600 text-black-800 dark:text-black-600">
+						<span id="r9-status-dot" class="h-1.5 w-1.5 rounded-full bg-current"></span>
+						<svg id="r9-status-spin" class="hidden h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+							<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" class="opacity-25"></circle>
+							<path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
+						</svg>
+						<span id="r9-status-text">Checking…</span>
+					</span>
+					<div class="flex rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-0.5">
+						<button id="r9-tab-dash" type="button" class="rounded-md px-3 py-1.5 text-[0.8125rem] font-medium transition-colors">Dashboard</button>
+						<button id="r9-tab-set" type="button" class="rounded-md px-3 py-1.5 text-[0.8125rem] font-medium transition-colors">Settings</button>
+					</div>
+				</div>
+			</div>
+
+			<!-- Dashboard tab: full-bleed iframe -->
+			<div id="r9-panel-dash" class="relative min-h-0 flex-1 bg-black">
+				<iframe id="r9-frame" class="h-full w-full border-0" style="display:none;" title="9router Dashboard"></iframe>
+				<div id="r9-placeholder" class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-black-700">
+					<svg id="r9-ph-icon" class="h-10 w-10 opacity-30" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+						<circle cx="6" cy="6" r="3"></circle>
+						<circle cx="6" cy="18" r="3"></circle>
+						<path d="M20 4v5a3 3 0 0 1-3 3H9M9 6h11"></path>
+					</svg>
+					<svg id="r9-ph-spin" class="hidden h-10 w-10 animate-spin opacity-40" viewBox="0 0 24 24" fill="none">
+						<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" class="opacity-25"></circle>
+						<path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"></path>
+					</svg>
+					<p id="r9-hint" class="text-sm opacity-50">Checking 9router…</p>
+				</div>
+			</div>
+
+			<!-- Settings tab -->
+			<div id="r9-panel-set" class="hidden min-h-0 flex-1 overflow-y-auto">
+				<div class="mx-auto w-full max-w-3xl px-6 pb-8 space-y-5">
+					<!-- Controls -->
+					<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5">
+						<div class="flex flex-wrap items-center justify-between gap-3">
+							<div class="flex items-center gap-2 text-sm text-black-800 dark:text-black-600">
+								<span class="font-medium text-black-900 dark:text-white-100">Package</span>
+								<span id="r9-version" class="hidden text-xs"></span>
+							</div>
+							<div class="flex flex-wrap items-center gap-2">
+								<button id="r9-install" type="button" class="hidden inline-flex items-center gap-1.5 rounded-lg bg-green-500 px-4 py-2 text-[0.8125rem] font-medium text-white-100 hover:bg-green-600 active:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 disabled:opacity-50">
+									<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M12 5v14M19 12l-7 7-7-7"></path></svg>
+									Install
+								</button>
+								<button id="r9-start" type="button" class="hidden inline-flex items-center gap-1.5 rounded-lg bg-green-500 px-4 py-2 text-[0.8125rem] font-medium text-white-100 hover:bg-green-600 active:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 disabled:opacity-50">
+									<svg class="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path></svg>
+									Start
+								</button>
+								<button id="r9-stop" type="button" class="hidden inline-flex items-center gap-1.5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-2 text-[0.8125rem] font-medium text-black-900 dark:text-white-100 hover:border-black-700 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50">
+									<svg class="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12"></rect></svg>
+									Stop
+								</button>
+								<button id="r9-restart" type="button" class="hidden inline-flex items-center gap-1.5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-2 text-[0.8125rem] font-medium text-black-900 dark:text-white-100 hover:border-black-700 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50">
+									<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5"></path></svg>
+									Restart
+								</button>
+								<button id="r9-update" type="button" class="hidden inline-flex items-center gap-1.5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-2 text-[0.8125rem] font-medium text-black-900 dark:text-white-100 hover:border-black-700 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50">
+									<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"></path><path d="M21 3v6h-6"></path></svg>
+									Update
+								</button>
+							</div>
+						</div>
+						<div id="r9-message" class="hidden mt-3 rounded-lg px-3 py-2 text-[0.8125rem]"></div>
+					</div>
+
+					<!-- Auto-start -->
+					<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5">
+						<label class="flex items-start gap-3 cursor-pointer">
+							<input id="r9-autostart" type="checkbox" checked?={ vm.Autostart } class="mt-0.5 h-4 w-4 rounded border-white-400 dark:border-navy-600 text-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800"/>
+							<span>
+								<span class="block text-sm font-medium text-black-900 dark:text-white-100">Auto-start on boot</span>
+								<span class="block mt-0.5 text-xs text-black-700 dark:text-black-600">When enabled, wick launches 9router automatically each time the server starts.</span>
+							</span>
+						</label>
+					</div>
+
+					<!-- Logs -->
+					<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden">
+						<div class="flex items-center justify-between border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-2.5">
+							<span class="text-sm font-medium text-black-900 dark:text-white-100">Logs</span>
+							<label class="flex items-center gap-1.5 text-xs text-black-700 dark:text-black-600 cursor-pointer">
+								<input id="r9-autoscroll" type="checkbox" checked class="h-3.5 w-3.5 rounded border-white-400 dark:border-navy-600 text-green-500"/>
+								Auto-scroll
+							</label>
+						</div>
+						<pre id="r9-logs" class="m-0 max-h-80 min-h-40 overflow-auto bg-black px-4 py-3 text-[0.75rem] leading-relaxed text-green-300 whitespace-pre-wrap break-words select-text cursor-text" style="user-select:text;-webkit-user-select:text;">Loading logs…</pre>
+					</div>
+				</div>
+			</div>
+		</div>
+		@router9Script()
+	}
+}
+
+templ router9Script() {
+	<script>
+	(function () {
+	  const root = document.getElementById('router9');
+	  if (!root) return;
+	  const base = root.dataset.base || '';
+	  const el = (id) => document.getElementById(id);
+	  const ctrls = ['r9-install', 'r9-start', 'r9-stop', 'r9-restart', 'r9-update'].map(el);
+	  const ACTIVE = ['bg-green-200', 'dark:bg-green-800', 'text-green-700', 'dark:text-green-300'];
+	  const IDLE = ['text-black-800', 'dark:text-black-600'];
+
+	  // ── theme sync (same-origin localStorage) ──
+	  // The iframe is same-origin, so it shares this localStorage. 9router
+	  // persists its theme as a Zustand store: {"state":{"theme":"light"|"dark"},...}.
+	  // We don't hard-code its key name — instead we scan every entry that
+	  // matches that shape and set the theme to match wick's. wick marks
+	  // dark themes with the "dark" class on <html>.
+	  function wickTheme() {
+	    return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+	  }
+	  function syncTheme() {
+	    const want = wickTheme();
+	    let touched = false;
+	    for (let i = 0; i < localStorage.length; i++) {
+	      const k = localStorage.key(i);
+	      let v;
+	      try { v = JSON.parse(localStorage.getItem(k)); } catch (_) { continue; }
+	      if (v && v.state && typeof v.state.theme === 'string') {
+	        if (v.state.theme !== want) {
+	          v.state.theme = want;
+	          localStorage.setItem(k, JSON.stringify(v));
+	          touched = true;
+	        }
+	      }
+	    }
+	    return touched;
+	  }
+	  // One-way: wick is the source of truth. syncTheme() runs before the
+	  // iframe loads (so 9router picks up wick's theme on every open /
+	  // refresh) and whenever wick's theme class changes live; on a live
+	  // change we reload the iframe so 9router re-reads the store. A theme
+	  // picked inside 9router only affects 9router and is overwritten by
+	  // wick's on the next sync — wick's richer 12-theme set never gets
+	  // downgraded to a generic light/dark.
+	  new MutationObserver(() => {
+	    if (syncTheme()) {
+	      const f = el('r9-frame');
+	      if (f && f.style.display !== 'none' && f.src) f.contentWindow.location.reload();
+	    }
+	  }).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+
+	  // Swap the static status dot for a spinning indicator while a
+	  // transition is in flight (checking / starting / busy action).
+	  function setLoading(on) {
+	    el('r9-status-dot').classList.toggle('hidden', on);
+	    el('r9-status-spin').classList.toggle('hidden', !on);
+	    el('r9-ph-icon').classList.toggle('hidden', on);
+	    el('r9-ph-spin').classList.toggle('hidden', !on);
+	  }
+	  setLoading(true); // initial "Checking…" before the first status lands
+
+	  // ── tabs ──
+	  let tab = 'dash';
+	  function setTab(t) {
+	    tab = t;
+	    const dash = t === 'dash';
+	    el('r9-panel-dash').classList.toggle('hidden', !dash);
+	    el('r9-panel-set').classList.toggle('hidden', dash);
+	    el('r9-tab-dash').classList.remove(...ACTIVE, ...IDLE);
+	    el('r9-tab-set').classList.remove(...ACTIVE, ...IDLE);
+	    el('r9-tab-dash').classList.add(...(dash ? ACTIVE : IDLE));
+	    el('r9-tab-set').classList.add(...(dash ? IDLE : ACTIVE));
+	  }
+	  el('r9-tab-dash').addEventListener('click', () => setTab('dash'));
+	  el('r9-tab-set').addEventListener('click', () => setTab('set'));
+	  setTab('dash');
+
+	  // ── controls ──
+	  el('r9-install').addEventListener('click', () => act('/9router/install', 'Installing 9router… this can take a minute.'));
+	  el('r9-update').addEventListener('click', () => act('/9router/install', 'Updating 9router…'));
+	  el('r9-start').addEventListener('click', () => act('/9router/start', 'Starting 9router…'));
+	  el('r9-stop').addEventListener('click', () => act('/9router/stop', 'Stopping 9router…'));
+	  el('r9-restart').addEventListener('click', () => act('/9router/restart', 'Restarting 9router…'));
+
+	  el('r9-autostart').addEventListener('change', (e) => {
+	    const on = e.target.checked;
+	    fetch(base + '/9router/autostart', { method: 'POST', body: new URLSearchParams({ on: on ? 'true' : 'false' }) })
+	      .then((r) => { if (!r.ok) throw new Error('save failed'); msg('info', on ? 'Auto-start enabled.' : 'Auto-start disabled.'); })
+	      .catch((err) => { msg('error', err.message); e.target.checked = !on; });
+	  });
+
+	  function refresh() {
+	    fetch(base + '/9router/status').then((r) => r.json()).then((s) => {
+	      ctrls.forEach((b) => b.classList.add('hidden'));
+	      const st = el('r9-status'), ver = el('r9-version'), txt = el('r9-status-text');
+	      st.classList.remove('text-green-600', 'dark:text-green-300', 'text-amber-600', 'dark:text-amber-400', 'text-black-800', 'dark:text-black-600');
+	      // s.state: not-installed | starting | running | stopped
+	      const state = s.state || (s.installed ? (s.running ? 'running' : 'stopped') : 'not-installed');
+	      if (state !== 'not-installed') {
+	        ver.textContent = s.version ? 'v' + s.version : '';
+	        ver.classList.remove('hidden');
+	        el('r9-update').classList.remove('hidden');
+	      } else {
+	        ver.classList.add('hidden');
+	      }
+	      setLoading(state === 'starting');
+	      switch (state) {
+	        case 'not-installed':
+	          txt.textContent = 'Not installed';
+	          st.classList.add('text-black-800', 'dark:text-black-600');
+	          el('r9-install').classList.remove('hidden');
+	          el('r9-update').classList.add('hidden');
+	          hint('9router is not installed. Open Settings to install it.');
+	          showFrame(false);
+	          break;
+	        case 'starting':
+	          txt.textContent = 'Starting…';
+	          st.classList.add('text-amber-600', 'dark:text-amber-400');
+	          el('r9-stop').classList.remove('hidden');
+	          hint('Starting 9router…');
+	          showFrame(false);
+	          break;
+	        case 'running':
+	          txt.textContent = 'Running';
+	          st.classList.add('text-green-600', 'dark:text-green-300');
+	          el('r9-stop').classList.remove('hidden');
+	          el('r9-restart').classList.remove('hidden');
+	          showFrame(true);
+	          break;
+	        default: // stopped
+	          txt.textContent = 'Stopped';
+	          st.classList.add('text-black-800', 'dark:text-black-600');
+	          el('r9-start').classList.remove('hidden');
+	          hint('Stopped. Open Settings and click Start to launch the dashboard.');
+	          showFrame(false);
+	      }
+	    }).catch((e) => msg('error', e.message));
+	  }
+
+	  function act(path, busy) {
+	    ctrls.forEach((b) => (b.disabled = true));
+	    setLoading(true);
+	    el('r9-status-text').textContent = 'Working…';
+	    msg('info', busy);
+	    fetch(base + path, { method: 'POST' })
+	      .then((r) => (r.ok ? r.text() : r.text().then((t) => Promise.reject(new Error(t || 'request failed')))))
+	      .then(() => { clearMsg(); refresh(); })
+	      .catch((e) => { msg('error', e.message); refresh(); })
+	      .finally(() => ctrls.forEach((b) => (b.disabled = false)));
+	  }
+
+	  function pullLogs() {
+	    if (tab !== 'set') return;
+	    const pre = el('r9-logs');
+	    // Don't clobber an active text selection inside the log pane —
+	    // overwriting textContent while the user is dragging to copy would
+	    // drop the selection. Skip this refresh until they let go.
+	    const sel = window.getSelection();
+	    if (sel && !sel.isCollapsed && pre.contains(sel.anchorNode)) return;
+	    fetch(base + '/9router/logs').then((r) => r.json()).then((d) => {
+	      const next = d.logs && d.logs.length ? d.logs : (d.running ? '(no output yet)' : '(9router is not running)');
+	      if (pre.textContent === next) return; // no change, no reflow
+	      pre.textContent = next;
+	      if (el('r9-autoscroll').checked) pre.scrollTop = pre.scrollHeight;
+	    }).catch(() => {});
+	  }
+
+	  function showFrame(v) {
+	    const f = el('r9-frame'), ph = el('r9-placeholder');
+	    // Dashboard is proxied at the wick ROOT (/9router/), not under the
+	    // tool, so 9router's root-absolute URLs rewrite to one prefix.
+	    if (v) {
+	      syncTheme(); // align 9router's stored theme with wick before it loads
+	      if (!f.src) f.src = '/9router/';
+	      f.style.display = ''; ph.style.display = 'none';
+	    } else { f.style.display = 'none'; f.removeAttribute('src'); ph.style.display = ''; }
+	  }
+	  function hint(t) { el('r9-hint').textContent = t; }
+
+	  function msg(kind, text) {
+	    const m = el('r9-message');
+	    m.textContent = text;
+	    m.className = 'mt-3 rounded-lg px-3 py-2 text-[0.8125rem] ' +
+	      (kind === 'error' ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400' : 'bg-white-200 dark:bg-navy-800 text-black-800 dark:text-black-600');
+	    m.classList.remove('hidden');
+	  }
+	  function clearMsg() { el('r9-message').classList.add('hidden'); }
+
+	  refresh();
+	  pullLogs();
+	  setInterval(pullLogs, 2000);
+	  setInterval(refresh, 5000);
+	})();
+	</script>
+}

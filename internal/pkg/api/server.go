@@ -1237,6 +1237,23 @@ func NewServer() *Server {
 	}
 	tr.mount(toolsMux)
 
+	// Auto-start the embedded 9router process at boot when the admin
+	// enabled it. MUST run after tr.mount — that's when each tool's
+	// Register() runs, and 9router's Register wires the config store the
+	// autostart hook reads. (Earlier this ran before mount and always saw
+	// a nil store.) When enabled, it joins the boot gate so the "Booting…"
+	// screen shows "Starting 9router…" and the app waits for it to be
+	// ready instead of opening to a misleading "Stopped" state. Skipped
+	// entirely (no gate step, instant) when auto-start is off.
+	if agentstool.Router9AutostartEnabled() {
+		bootGate.Register("9router")
+		go func() {
+			defer bootGate.Done("9router")
+			bootGate.SetPhase("starting-9router")
+			agentstool.Router9Autostart()
+		}()
+	}
+
 	tagsSvc := tags.NewService(db)
 	// Late-bind tags into the custom-connector service and link the
 	// per-def access tags ([custom:<key> filter, Connector, category])
@@ -1573,6 +1590,13 @@ func NewServer() *Server {
 		toolMetas = append(toolMetas, login.ToolMeta{Path: t.Path, DefaultVisibility: t.DefaultVisibility})
 	}
 	r.Handle("/tools/", authMidd.RequireToolAccess(toolMetas)(toolsMux))
+
+	// 9router dashboard proxy, mounted at the wick root (not under the
+	// tool) so the embedded Next.js app's root-absolute URLs rewrite to a
+	// single prefix. Admin-only — it fronts a local process that can run
+	// shell-equivalent actions. The page chrome + controls live under
+	// /tools/agents/9router; this serves only the proxied iframe content.
+	r.Handle(agentstool.Router9MountPrefix()+"/", authMidd.RequireAdmin(agentstool.Router9RootProxy()))
 
 	// API — JSON endpoints
 	r.Handle("GET /api/tools", http.HandlerFunc(homeHandler.APITools))
