@@ -55,6 +55,28 @@ When disabled, 9router must be started manually from the Settings tab each time 
 
 A live **Logs** panel streams 9router's stdout/stderr output. Use it to diagnose startup errors, inspect request routing, or confirm that 9router reached ready state.
 
+## How the embedding works (and its limits)
+
+9router is a Next.js single-page app with **no base-path support** — it emits root-absolute URLs (`/login`, `/_next/...`, `fetch("/api/...")`, `url(/_next/static/media/...)` in CSS, and OAuth `redirect_uri = origin + "/callback"`). On their own those would resolve against the wick root and 404, because wick only serves the dashboard under `/9router/`.
+
+Wick's reverse proxy rewrites the response on the fly to keep everything under that prefix:
+
+- **Redirects** — the `Location` header is prefixed (`/dashboard` → `/9router/dashboard`).
+- **HTML** — a `<base href="/9router/">` tag is injected, and root-absolute `href`/`src`/`action` values (including the escaped forms inside the React flight stream) are prefixed.
+- **JS bundles** — quoted absolute path literals are prefixed, including template-literal forms like `` `${origin}/callback` `` used by the OAuth flow.
+- **CSS** — `url(/_next/static/media/...)` font/image references are prefixed.
+
+The service worker skips `/9router/*` and the rewritten responses are sent `Cache-Control: no-store`, so a stale pre-rewrite copy is never cached.
+
+### When a 9router path still 404s
+
+This rewriting is best-effort. A path that 9router assembles from fragments at runtime, in a shape the rewriter doesn't recognise, can slip through and hit the wick root as a 404. If that happens:
+
+1. Open the browser **Network** tab and find the 404 request. Its path (e.g. `/callback`, `/some-new-route`) is the missing prefix.
+2. Add that prefix to `jsPathPrefixes` in `internal/tools/agents/9router/rewrite.go` and rebuild.
+
+Paths that point at a **different local service** (for example 9router's own OAuth helper on a hardcoded `localhost:<port>`) are intentionally left untouched — they are not served by wick and must reach their own port directly.
+
 ## Requirements
 
 - `npm` must be on the host PATH for Install/Update to work.

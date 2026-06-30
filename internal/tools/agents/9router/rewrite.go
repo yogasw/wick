@@ -26,6 +26,11 @@ var jsPathPrefixes = []string{
 	"/onboarding",
 	"/setup",
 	"/providers",
+	// OAuth: the sign-in flow builds redirect_uri as origin + "/callback"
+	// and hits /oauth/* — these must land back under the prefix or the
+	// provider redirect 404s on return.
+	"/callback",
+	"/oauth/",
 	// Root-level static files 9router serves from "/".
 	"/favicon.ico",
 	"/favicon.svg",
@@ -99,7 +104,12 @@ func rewriteResponse(r *http.Response) error {
 // the three string delimiters webpack output uses. Idempotent: a path
 // already under MountPrefix is left alone.
 func rewriteJS(js string) string {
-	for _, q := range []string{`"`, `'`, "`"} {
+	// Delimiters that can precede a root-absolute path in a JS bundle:
+	// the three string quote styles, and "}" for template literals like
+	// `${origin}/callback` where the path follows an interpolation. The
+	// "}" case is gated by the path prefix that follows (e.g. }/callback),
+	// so it can't run wild over arbitrary "}/..." occurrences.
+	for _, q := range []string{`"`, `'`, "`", "}"} {
 		for _, p := range jsPathPrefixes {
 			from := q + p
 			to := q + MountPrefix + p
