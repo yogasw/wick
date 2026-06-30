@@ -6,6 +6,14 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.28.0](https://github.com/yogasw/wick/compare/v0.27.2...v0.28.0) — Slack & Connectors
+
+_Released on 2026-06-30_
+
 ### Added
 
 *   **Slack channel — reaction auto-reply switch**: React 🤖 (`robot_face`) on a **thread's top (parent) message** to make every new reply in that thread dispatch to the agent without an `@mention`. Remove the reaction to stop (a run already in flight finishes; only the next reply is dropped). The switch persists to session meta and survives a wick restart — re-reacting is not needed after a restart.
@@ -29,6 +37,7 @@ All notable changes to Wick are documented here.
 *   **Slack connector — session-aware "Sent using" footer**: The "Sent using @bot" footer on `send_message` and `update_message` now names the bot that **owns the agent session**, not the connector instance doing the sending. Any Slack connector row used inside a Slack-channel session credits the correct bot. Both ops accept an optional `session_id` input; the MCP transport also auto-injects it via the `X-Wick-Session-Id` header so no manual wiring is needed in workflow nodes. `update_message` now consistently re-appends the footer on every edit.
 
 ---
+
 
 ## [v0.27.2](https://github.com/yogasw/wick/compare/v0.27.1...v0.27.2) — Connectors
 
