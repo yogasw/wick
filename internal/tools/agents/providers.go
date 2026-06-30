@@ -12,6 +12,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/capability"
 	"github.com/yogasw/wick/internal/agents/gate"
+	agentproject "github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/mcpconfig"
@@ -597,6 +598,70 @@ func deleteProviderInstance(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// renameProviderInstance changes one instance's name and re-points
+// every project default that referenced the old "type/name" key to the
+// new one. Live sessions keep the old key on purpose — a session can
+// outlive any single project default and there may be many; the user
+// re-selects the provider manually in those sessions. The JSON response
+// reports how many project defaults were migrated so the UI can tell
+// the user what changed.
+//
+// POST /providers/{type}/{name}/rename   body: new_name=...
+func renameProviderInstance(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	if !requireAdmin(c) {
+		return
+	}
+	t := provider.Type(c.PathValue("type"))
+	oldName := c.PathValue("name")
+	newName := strings.TrimSpace(c.Form("new_name"))
+	if t == "" || oldName == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "type and name required"})
+		return
+	}
+	if err := provider.ValidInstanceName(newName); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := provider.Rename(t, oldName, newName); err != nil {
+		c.JSON(http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	}
+	// Migrate project defaults: old/new keys are the "type/name" form
+	// stored in Meta.Defaults.Provider.
+	oldKey := string(t) + "/" + oldName
+	newKey := string(t) + "/" + newName
+	migrated, err := agentproject.RewriteProvider(globalLayout, oldKey, newKey)
+	if err != nil {
+		log.Ctx(c.Context()).Warn().Err(err).Str("old", oldKey).Str("new", newKey).Msg("rename: rewrite project defaults")
+	}
+	c.JSON(http.StatusOK, map[string]any{
+		"status":            "renamed",
+		"name":              newName,
+		"projects_migrated": migrated,
+	})
+}
+
+// providerCatalogJSON returns the curated env + args picker entries for
+// one provider type, so the detail page can offer click-to-add known
+// env vars (with the right value widget per entry) instead of making the
+// operator memorise variable names. Type-only — no per-instance state.
+//
+// GET /providers/catalog/{type}
+func providerCatalogJSON(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	t := provider.Type(c.PathValue("type"))
+	if t == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "type required"})
+		return
+	}
+	c.JSON(http.StatusOK, provider.CatalogFor(t))
 }
 
 // masterGateEnabled reads agents.gate_enabled from configs. Defaults

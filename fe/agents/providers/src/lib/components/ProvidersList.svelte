@@ -40,6 +40,22 @@
   let formExtraArgs = $state("");
   let formEnv = $state("");
 
+  // The name becomes the second half of the "type/name" provider key,
+  // so spaces would break the key downstream. We auto-convert spaces to
+  // '_' as the user types (a space is almost always meant as a word
+  // separator), and reject anything else not in [A-Za-z0-9_] inline so
+  // it's caught before submit rather than as a save error. '_' is the
+  // only allowed separator.
+  function onNameInput() {
+    formName = formName.replace(/\s+/g, "_");
+  }
+  let formNameError = $derived.by(() => {
+    const v = formName.trim();
+    if (v === "") return "";
+    if (!/^[A-Za-z0-9_]+$/.test(v)) return "Use letters, digits or '_' only";
+    return "";
+  });
+
   let pollInterval: ReturnType<typeof setInterval> | null = null;
 
   async function load(silent = false): Promise<void> {
@@ -234,7 +250,7 @@
 
   async function doCreate(e: SubmitEvent): Promise<void> {
     e.preventDefault();
-    if (!formType || !formName.trim()) {
+    if (!formType || !formName.trim() || formNameError) {
       return;
     }
     setBusy("create", true);
@@ -722,7 +738,20 @@
         </div>
         <div>
           <label for="add-provider-name" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Name <span class="text-red-500">*</span></label>
-          <input id="add-provider-name" type="text" bind:value={formName} required placeholder="e.g. work, personal" class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100" />
+          <input
+            id="add-provider-name"
+            type="text"
+            bind:value={formName}
+            oninput={onNameInput}
+            required
+            placeholder="e.g. work, personal, claude_waba"
+            class="w-full rounded-lg border bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100 {formNameError ? 'border-red-400 dark:border-red-600' : 'border-white-400 dark:border-navy-600'}"
+          />
+          {#if formNameError}
+            <p class="mt-1 text-[11px] text-red-600 dark:text-red-400">{formNameError}</p>
+          {:else}
+            <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Letters, digits and '_' only. Spaces auto-convert to '_'.</p>
+          {/if}
         </div>
         <div>
           <label for="add-provider-binary" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Binary path (optional)</label>
@@ -738,7 +767,7 @@
         </div>
         <div class="flex justify-end gap-3 pt-2">
           <button type="button" onclick={() => { addOpen = false; }} class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">Cancel</button>
-          <button type="submit" disabled={busy["create"]} class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50">{busy["create"] ? "Creating…" : "Create"}</button>
+          <button type="submit" disabled={busy["create"] || !!formNameError} class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50">{busy["create"] ? "Creating…" : "Create"}</button>
         </div>
       </form>
     </div>

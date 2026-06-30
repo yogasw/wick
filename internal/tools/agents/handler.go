@@ -289,6 +289,8 @@ func Register(r tool.Router) {
 	r.POST("/providers/detail/{type}/{name}/{key}", saveProviderConfigKey)
 	r.GET("/providers/{type}/{name}", providerDetailPage)
 	r.POST("/providers", saveProviderInstance)
+	r.POST("/providers/rename/{type}/{name}", renameProviderInstance)
+	r.GET("/providers/catalog/{type}", providerCatalogJSON)
 	r.DELETE("/providers/{type}/{name}", deleteProviderInstance)
 	r.GET("/providers/spawns/{file}", providerSpawnDetail)
 	r.POST("/providers/gate/toggle", toggleGate)
@@ -800,6 +802,49 @@ func newSessionCompose(c *tool.Ctx) {
 	}))
 }
 
+// resolveSessionProvider decides which provider a new session's agent
+// spawns with, in priority order:
+//
+//  1. the explicit form value (composer dropdown), when non-empty;
+//  2. the project's Defaults.Provider, when the session is scoped to a
+//     project that has one set;
+//  3. the first healthy instance reported by the cache;
+//  4. the canonical "claude" type as a last resort.
+//
+// The result is normalized to the "type/name" form the spawn path
+// expects (bare "claude" → "claude/claude"). Without this, a custom
+// instance set as a project default never reached agents.json — the
+// session always span with the base provider. See the provider switch
+// path in pool.go which splits "type/name" back apart on spawn.
+func resolveSessionProvider(c *tool.Ctx, formValue, projectID string) string {
+	prov := strings.TrimSpace(formValue)
+	if prov == "" && projectID != "" {
+		if p, perr := project.Load(globalLayout, projectID); perr == nil {
+			prov = strings.TrimSpace(p.Meta.Defaults.Provider)
+		}
+	}
+	if prov == "" {
+		if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
+			prov = ps[0].Type + "/" + ps[0].Name
+		}
+	}
+	if prov == "" {
+		prov = "claude"
+	}
+	return normalizeProviderKey(prov)
+}
+
+// normalizeProviderKey returns the "type/name" form the spawn path
+// expects. A bare "type" (no slash) becomes "type/type" — the canonical
+// default instance for that type. Mirrors the same-named helper in the
+// provider package's switch path so both routes agree on the key shape.
+func normalizeProviderKey(key string) string {
+	if strings.Contains(key, "/") {
+		return key
+	}
+	return key + "/" + key
+}
+
 // startNewSession is the compose form's POST target. It creates the
 // session, attaches the agent with the chosen provider, and queues the
 // first message in one go — matching ChatGPT/Claude's "session exists
@@ -823,14 +868,8 @@ func startNewSession(c *tool.Ctx) {
 		renderCompose(c, "", "Type a message or attach a file to start the session.")
 		return
 	}
-	prov := c.Form("provider")
-	if prov == "" {
-		prov = "claude"
-		if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
-			prov = ps[0].Type
-		}
-	}
 	projectID := c.Form("project_id")
+	prov := resolveSessionProvider(c, c.Form("provider"), projectID)
 	presetName := c.Form("preset")
 	if presetName == "" {
 		presetName = "default"
@@ -969,10 +1008,7 @@ func createSession(c *tool.Ctx) {
 		return
 	}
 	projectID := c.Form("project_id")
-	prov := c.Form("provider")
-	if prov == "" {
-		prov = "claude"
-	}
+	prov := resolveSessionProvider(c, c.Form("provider"), projectID)
 	id := uuid.New().String()
 	presetName := "default"
 	if projectID != "" {
@@ -1604,11 +1640,13 @@ func projectOptionsJSON(c *tool.Ctx) {
 		return
 	}
 	type option struct {
-		ID      string `json:"id"`
-		Name    string `json:"name"`
-		Path    string `json:"path"`
-		Managed bool   `json:"managed"`
-		Pinned  bool   `json:"pinned"`
+		ID              string `json:"id"`
+		Name            string `json:"name"`
+		Path            string `json:"path"`
+		Managed         bool   `json:"managed"`
+		Pinned          bool   `json:"pinned"`
+		DefaultProvider string `json:"default_provider"`
+		DefaultPreset   string `json:"default_preset"`
 	}
 	access := callerProjectAccess(c)
 	pinned := pinnedProjectID(c)
@@ -1623,7 +1661,15 @@ func projectOptionsJSON(c *tool.Ctx) {
 		if path == "" {
 			path = globalLayout.ProjectManagedPath(id)
 		}
-		opts = append(opts, option{ID: id, Name: p.Meta.Name, Path: path, Managed: managed, Pinned: id == pinned})
+		opts = append(opts, option{
+			ID:              id,
+			Name:            p.Meta.Name,
+			Path:            path,
+			Managed:         managed,
+			Pinned:          id == pinned,
+			DefaultProvider: p.Meta.Defaults.Provider,
+			DefaultPreset:   p.Meta.Defaults.Preset,
+		})
 	}
 	c.JSON(http.StatusOK, opts)
 }
