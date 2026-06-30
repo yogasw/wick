@@ -43,6 +43,8 @@ func (e errAuth) Error() string { return string(e) }
 type fakeSessions struct{ exists bool }
 
 func (f fakeSessions) SessionExists(string) bool { return f.exists }
+func (f fakeSessions) AutoReplyOn(string) bool    { return false }
+func (f fakeSessions) SetAutoReply(string, bool)  {}
 
 // captured sendFn payload — one entry per call.
 type sentCall struct {
