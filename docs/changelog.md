@@ -6,7 +6,15 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Provider instance catalog picker**: The provider detail page's **Env** and **Extra Args** fields now include a **Browse catalog** button that opens a searchable multi-select modal of known env vars and CLI flags for that provider type (`claude`, `codex`, `gemini`), with descriptions and default values. Selecting entries inserts them directly into the KV editor. Value cells for known env vars render as option dropdowns instead of plain text inputs. New endpoint: `GET /providers/catalog/{type}`.
+
+*   **Provider instance rename**: Rename a provider instance from its detail page (pencil icon on the title). The new name must use letters, digits, or `_` only; spaces auto-convert to `_`. On save, every project whose default provider matched the old `type/name` key is rewritten to the new key automatically. Live sessions keep the old provider key and must be re-selected by the user. New endpoint: `POST /providers/rename/{type}/{name}`.
+
+### Changed
+
+*   **Provider dropdowns list real instances**: The provider selector in the New Session composer and the Project Settings form now shows actual `type/name` instances (e.g. `claude/work`) rather than bare provider types. Picking a project in the composer auto-fills its saved default provider. Older bare-type defaults (`claude`, `codex`, `gemini`) are promoted to their canonical instance key at runtime without any data migration.
 
 ---
 
