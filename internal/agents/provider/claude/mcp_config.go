@@ -39,11 +39,15 @@ const wickMCPAllowedTools = "mcp__wick"
 
 // mcpConfigArgs builds the claude argv for the wick MCP HTTP server.
 // strict=true isolates to only wick; always pre-approves wick's tools.
-func mcpConfigArgs(endpoint, token string, strict bool) []string {
+// sessionID, when non-empty, is sent as the X-Wick-Session-Id header on
+// every MCP call so the server knows which session a connector call belongs
+// to WITHOUT relying on the LLM to pass a session_id argument — used e.g. to
+// resolve the session-owning Slack bot for the "Sent using @bot" footer.
+func mcpConfigArgs(endpoint, token, sessionID string, strict bool) []string {
 	if endpoint == "" || token == "" {
 		return nil
 	}
-	cfg := mcpConfigArg(endpoint, token)
+	cfg := mcpConfigArg(endpoint, token, sessionID)
 	args := []string{}
 	if strict {
 		args = append(args, "--strict-mcp-config")
@@ -62,15 +66,19 @@ func mcpEndpointFromEnv() string {
 	return "http://127.0.0.1:" + port + "/mcp"
 }
 
-func mcpConfigArg(endpoint, token string) string {
+func mcpConfigArg(endpoint, token, sessionID string) string {
+	headers := map[string]string{
+		"Authorization": "Bearer " + token,
+	}
+	if sessionID != "" {
+		headers["X-Wick-Session-Id"] = sessionID
+	}
 	cfg := map[string]any{
 		"mcpServers": map[string]any{
 			"wick": map[string]any{
-				"type": "http",
-				"url":  endpoint,
-				"headers": map[string]string{
-					"Authorization": "Bearer " + token,
-				},
+				"type":    "http",
+				"url":     endpoint,
+				"headers": headers,
 			},
 		},
 	}

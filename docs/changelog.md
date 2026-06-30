@@ -10,6 +10,35 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.28.0](https://github.com/yogasw/wick/compare/v0.27.2...v0.28.0) — Slack & Connectors
+
+_Released on 2026-06-30_
+
+### Added
+
+*   **Slack channel — reaction auto-reply switch**: React 🤖 (`robot_face`) on a **thread's top (parent) message** to make every new reply in that thread dispatch to the agent without an `@mention`. Remove the reaction to stop (a run already in flight finishes; only the next reply is dropped). The switch persists to session meta and survives a wick restart — re-reacting is not needed after a restart.
+    *   Enable on the Slack channel config page: toggle **`reaction_trigger_enabled`**, then set **`reaction_channels_mode`** (`all` or `whitelist`, default `whitelist`). The `reaction_channels` picker controls which channels honour the switch.
+    *   Threads are still created by `@mention` only — the switch never starts a new session, it only gates replies to an existing one.
+    *   Slack app must subscribe to `reaction_added`, `reaction_removed`, and `message.channels` events, with scopes `reactions:read` + `channels:history`. The shipped `docs/slack-app-manifest.json` already includes them. See the [Reaction auto-reply](guide/agents/channels#reaction-auto-reply) section of the channels guide.
+
+*   **Config field grouping (`wick:"group=..."` tag)**: Config struct fields can now be grouped into titled section cards in the admin Settings UI by adding `group=Title` (or `group=Title|Description`) to the `wick:"..."` tag. All fields sharing the same title render together under one card, in first-seen order. The optional description is written once at the top of the card. Fields with no group fall into the default "Configuration" card. Applies to Slack channel config, Agents settings, connector/tool/job detail pages. See the [group — config field grouping](reference/config-tags#group-config-field-grouping) section of the config tag reference.
+
+### Changed
+
+*   **Connector plugin marketplace — any logged-in user can browse**: `GET /manager/api/plugins` now requires only a valid session, not admin. Every user can see the installed + available plugin catalog. Lifecycle actions (install / update / enable / disable / remove) remain admin-only; non-admins see a "Requires admin" disabled state on the Download button and the connector detail kebab hides the Update / Uninstall / Disable options.
+*   **Access policy + per-session config — editable by instance owner**: The Access Policy section and session-config override on a connector detail page are now editable by the instance **owner** (creator) in addition to admins. `AllowOthersConfigure` users are intentionally excluded — the policy controls who receives that grant. The API response carries a new `can_manage_policy` field that the UI reads to show or hide those sections.
+
+### Improved
+
+*   **Slack channel — live agent status in assistant threads**: While an agent turn runs, the assistant-thread banner now shows richer progress feedback. The footer state cycles through "Thinking" / "Working" / "Idle" with an animated dot suffix. The loading bubble (`loading_messages`) rotates the last ~5 activity lines (e.g. "Thinking", "Running: npm test", "Reading slack.go") so users can follow the agent's current step without any configuration change.
+*   **Slack channel — streaming reply**: The agent's reply streams into Slack as it is produced — wick posts a placeholder on the first text token and edits it in place every ~1.5 s via `chat.update`, instead of posting a single message at end of turn. No configuration change required.
+*   **Slack channel — sender label on every turn**: Inbound Slack messages are now prefixed with a resolved `Real Name (@handle, UXXXXXXXX):` label, cached per user via `users.info`. Useful in multi-user threads and for matching the sender to their per-user connector when replying. Falls back to the bare user ID if the API call fails.
+*   **Slack channel — file attachment context**: When a user posts files (images, PDFs, `file_share` events), attachment metadata (name, type, size, Slack permalink) is appended to the user turn so the agent knows what was shared and has a link to fetch the content via the Slack connector. `file_share`-only messages (no body text) are no longer silently dropped.
+*   **Slack connector — session-aware "Sent using" footer**: The "Sent using @bot" footer on `send_message` and `update_message` now names the bot that **owns the agent session**, not the connector instance doing the sending. Any Slack connector row used inside a Slack-channel session credits the correct bot. Both ops accept an optional `session_id` input; the MCP transport also auto-injects it via the `X-Wick-Session-Id` header so no manual wiring is needed in workflow nodes. `update_message` now consistently re-appends the footer on every edit.
+
+---
+
+
 ## [v0.27.2](https://github.com/yogasw/wick/compare/v0.27.1...v0.27.2) — Connectors
 
 _Released on 2026-06-29_

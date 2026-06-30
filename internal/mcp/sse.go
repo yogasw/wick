@@ -368,6 +368,12 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 	}
 	resCh := make(chan execOut, 1)
 	go func() {
+		sid, _ := args["session_id"].(string)
+		sid = strings.TrimSpace(sid)
+		if sid == "" {
+			// Fall back to the per-spawn session header (see executeOneCtx).
+			sid = strings.TrimSpace(r.Header.Get("X-Wick-Session-Id"))
+		}
 		res, err := h.connectors.Execute(execCtx, connectors.ExecuteParams{
 			ConnectorID:     connectorID,
 			OperationKey:    opKey,
@@ -379,6 +385,7 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 			Progress:        reporter,
 			AccountID:       accountID,
 			SessionInstance: sessionTarget,
+			SessionID:       sid,
 		})
 		resCh <- execOut{res: res, err: err}
 	}()

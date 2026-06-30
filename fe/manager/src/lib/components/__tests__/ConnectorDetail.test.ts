@@ -21,6 +21,7 @@ function makeData(over: Partial<DetailType> = {}): DetailType {
     has_health_check: true,
     can_configure: true,
     is_admin: false,
+    can_manage_policy: false,
     fields: [
       { key: "api_url", type: "url", value: "https://x.test", options: "", required: true, is_secret: false, has_value: true, description: "", visible_when: "", env_override: "" },
     ],
@@ -119,12 +120,19 @@ describe("ConnectorDetail", () => {
     expect(screen.queryByLabelText("Enable Send")).toBeNull();
   });
 
-  it("renders the access policy section only for admins", async () => {
-    vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ is_admin: true }));
+  it("renders the access policy section for admins or the instance owner", async () => {
+    vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ can_manage_policy: true }));
     render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
     await screen.findByText("row-a");
     expect(screen.getByText("Access policy")).toBeTruthy();
     expect(screen.getByLabelText("Allow others to configure")).toBeTruthy();
+  });
+
+  it("hides the access policy section when the user can't manage it", async () => {
+    vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ can_manage_policy: false }));
+    render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
+    await screen.findByText("row-a");
+    expect(screen.queryByText("Access policy")).toBeNull();
   });
 
   it("deep-links to the test runner per operation with ?op=", async () => {
@@ -196,7 +204,7 @@ describe("ConnectorDetail", () => {
 
   it("saves the access policy when a toggle changes", async () => {
     vi.mocked(api.setConnectorAccessPolicy).mockResolvedValue(undefined);
-    vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ is_admin: true }));
+    vi.mocked(api.getConnectorRow).mockResolvedValue(makeData({ can_manage_policy: true }));
     render(ConnectorDetail, { connectorKey: "slack", connectorId: "row-a" });
     await screen.findByText("row-a");
     await fireEvent.click(screen.getByLabelText("Allow others to configure"));

@@ -3,7 +3,69 @@ package slack
 import (
 	"strings"
 	"testing"
+
+	slackgo "github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
+
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 )
+
+func TestFormatAttachmentsEmpty(t *testing.T) {
+	if got := formatAttachments(nil); got != "" {
+		t.Errorf("nil files should yield empty string, got %q", got)
+	}
+	if got := formatAttachments([]slackgo.File{}); got != "" {
+		t.Errorf("empty files should yield empty string, got %q", got)
+	}
+}
+
+func TestFormatAttachmentsRendersMetadataAndLink(t *testing.T) {
+	files := []slackgo.File{
+		{Title: "order.png", PrettyType: "PNG", Size: 2048, Permalink: "https://acme.slack.com/files/U1/F1/order.png"},
+	}
+	got := formatAttachments(files)
+	for _, want := range []string{
+		"[Attached files",
+		"order.png",
+		"(PNG)",
+		"2.0KB",
+		"https://acme.slack.com/files/U1/F1/order.png",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestFormatAttachmentsFallbacks(t *testing.T) {
+	// No Title → Name; no Permalink → URLPrivate.
+	files := []slackgo.File{{Name: "log.txt", URLPrivate: "https://files.slack.com/log.txt"}}
+	got := formatAttachments(files)
+	if !strings.Contains(got, "log.txt") {
+		t.Errorf("name fallback missing: %s", got)
+	}
+	if !strings.Contains(got, "https://files.slack.com/log.txt") {
+		t.Errorf("url_private fallback missing: %s", got)
+	}
+}
+
+func TestFormatSenderLabel(t *testing.T) {
+	tests := []struct {
+		name, userID, handle, real, want string
+	}{
+		{"full", "U1", "yoga", "Yoga Setiawan", "Yoga Setiawan (@yoga, U1)"},
+		{"handle only", "U1", "yoga", "", "@yoga (U1)"},
+		{"real only", "U1", "", "Yoga Setiawan", "Yoga Setiawan (U1)"},
+		{"id only", "U1", "", "", "U1"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatSenderLabel(tc.userID, tc.handle, tc.real); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestNormalizeUserText(t *testing.T) {
 	if got := normalizeUserText("hello"); got != "hello" {
@@ -58,6 +120,106 @@ func TestChunkTextBreaksOnNewline(t *testing.T) {
 	}
 	if strings.Contains(chunks[0], "b") {
 		t.Error("first chunk should not contain 'b' content after newline break")
+	}
+}
+
+func TestReconcilePlan(t *testing.T) {
+	big := strings.Repeat("a", maxSlackChunk+50) // overflows one chunk
+
+	t.Run("empty text does nothing", func(t *testing.T) {
+		p := reconcilePlan("", "1.0", "")
+		if p.postFresh || p.update || len(p.continuations) > 0 {
+			t.Fatalf("expected no-op plan, got %+v", p)
+		}
+	})
+
+	t.Run("no live message posts fresh", func(t *testing.T) {
+		p := reconcilePlan("hello", "", "")
+		if !p.postFresh || p.update {
+			t.Fatalf("expected postFresh, got %+v", p)
+		}
+	})
+
+	t.Run("final equals last sent skips update", func(t *testing.T) {
+		p := reconcilePlan("done answer", "1.0", "done answer")
+		if p.update {
+			t.Fatalf("expected skip (update=false), got %+v", p)
+		}
+		if p.postFresh || len(p.continuations) > 0 {
+			t.Fatalf("expected pure skip, got %+v", p)
+		}
+	})
+
+	t.Run("final differs from last sent updates once", func(t *testing.T) {
+		p := reconcilePlan("final answer", "1.0", "partial ans")
+		if !p.update || p.first != "final answer" {
+			t.Fatalf("expected update to final, got %+v", p)
+		}
+		if len(p.continuations) > 0 {
+			t.Fatalf("single chunk should have no continuations, got %d", len(p.continuations))
+		}
+	})
+
+	t.Run("overflow updates first and posts continuations", func(t *testing.T) {
+		p := reconcilePlan(big, "1.0", "stale")
+		if !p.update {
+			t.Fatalf("expected update, got %+v", p)
+		}
+		if len(p.continuations) != 1 {
+			t.Fatalf("expected 1 continuation chunk, got %d", len(p.continuations))
+		}
+		if p.first+p.continuations[0] != big {
+			t.Fatal("first + continuation must reassemble to original text")
+		}
+	})
+}
+
+func TestToolStatusLabelSanitizes(t *testing.T) {
+	// Quotes / $ / ; / backticks make Slack's setStatus return
+	// invalid_arguments, so the summary must strip them.
+	got := toolStatusLabel("Bash", `{"command":"echo \"hi $USER\"; ls"}`)
+	for _, bad := range []string{`"`, "$", ";", "`"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("label %q must not contain %q", got, bad)
+		}
+	}
+}
+
+func TestToolStatusLabel(t *testing.T) {
+	tests := []struct {
+		name  string
+		tool  string
+		input string
+		want  string
+	}{
+		{"bash command", "Bash", `{"command":"npm test"}`, "Running: npm test"},
+		{"bash multiline collapsed", "Bash", `{"command":"go build ./...\n&& go test"}`, "Running: go build ./... && go test"},
+		{"bash no input", "Bash", ``, "Running"},
+		{"read basename only", "Read", `{"file_path":"/d/code/work/wick/internal/slack.go"}`, "Reading slack.go"},
+		{"edit", "Edit", `{"file_path":"a/b/main.go"}`, "Editing main.go"},
+		{"grep pattern", "Grep", `{"pattern":"func main"}`, "Searching: func main"},
+		{"glob", "Glob", `{"pattern":"**/*.go"}`, "Finding files: **/*.go"},
+		{"websearch", "WebSearch", `{"query":"slack rate limit"}`, "Searching the web: slack rate limit"},
+		{"todo", "TodoWrite", `{"todos":[]}`, "Updating plan"},
+		{"empty tool falls back to Working", "", ``, statusLabelWorking},
+		{"unknown mcp tool", "mcp__foo__bar", `{}`, "Running mcp__foo__bar"},
+		{"bad json falls back", "Read", `{not json`, "Reading"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := toolStatusLabel(tc.tool, tc.input); got != tc.want {
+				t.Errorf("toolStatusLabel(%q, %q) = %q, want %q", tc.tool, tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestToolStatusLabelClips(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	got := toolStatusLabel("Bash", `{"command":"`+long+`"}`)
+	// "Running: " (9) + 100 summary runes + "…" ≈ 110 chars.
+	if len([]rune(got)) > 115 {
+		t.Errorf("expected clipped label, got len=%d %q", len([]rune(got)), got)
 	}
 }
 
@@ -158,6 +320,188 @@ func TestAllowedReason(t *testing.T) {
 	s.cfg.ChannelsMode = "all"
 	if ok, reason := s.allowedCfg(s.cfg, "U1", nil, "C1"); !ok || reason != "" {
 		t.Errorf("allowed: got ok=%v reason=%q, want true/empty", ok, reason)
+	}
+}
+
+func TestAutoReplySwitchState(t *testing.T) {
+	s := &Channel{autoReply: map[string]bool{}}
+
+	if s.autoReplyOn("slack:__owner__:111.222") {
+		t.Fatal("fresh channel: switch should be OFF")
+	}
+	s.setAutoReply("slack:__owner__:111.222", true)
+	if !s.autoReplyOn("slack:__owner__:111.222") {
+		t.Error("after setAutoReply(true): switch should be ON")
+	}
+	// Another thread is independent.
+	if s.autoReplyOn("slack:__owner__:333.444") {
+		t.Error("unrelated thread should stay OFF")
+	}
+	s.setAutoReply("slack:__owner__:111.222", false)
+	if s.autoReplyOn("slack:__owner__:111.222") {
+		t.Error("after setAutoReply(false): switch should be OFF")
+	}
+	// Removing an absent key is a harmless no-op.
+	s.setAutoReply("slack:__owner__:never", false)
+}
+
+func TestIsBotUser(t *testing.T) {
+	s := &Channel{botUserID: "UBOT"}
+	if !s.isBotUser("UBOT") {
+		t.Error("the bot's own user id should be recognised")
+	}
+	if s.isBotUser("UHUMAN") {
+		t.Error("a human user id is not the bot")
+	}
+	// Empty ids never match — guards against an unresolved bot id treating
+	// every empty-author event as a self-reaction.
+	if s.isBotUser("") {
+		t.Error("empty user id should not match")
+	}
+	s.botUserID = ""
+	if s.isBotUser("") {
+		t.Error("empty bot id should not match empty user id")
+	}
+}
+
+func TestMentionsBot(t *testing.T) {
+	s := &Channel{botUserID: "UBOT"}
+	if !s.mentionsBot("<@UBOT> hai") {
+		t.Error("leading mention should be detected")
+	}
+	if !s.mentionsBot("hey <@UBOT> tolong cek ini") {
+		t.Error("inline mention should be detected")
+	}
+	if s.mentionsBot("<@UHUMAN> bukan bot") {
+		t.Error("a mention of someone else is not the bot")
+	}
+	if s.mentionsBot("no mention here") {
+		t.Error("plain text has no mention")
+	}
+	// Unresolved bot id → fail open (false) so a real reply is never dropped
+	// during the brief post-connect window.
+	s.botUserID = ""
+	if s.mentionsBot("<@UBOT> hai") {
+		t.Error("empty bot id should report no mention (fail open)")
+	}
+}
+
+// TestReactionAddedFastGuards covers the cheap branches of handleReactionAdded
+// that short-circuit before any Slack API call: wrong emoji, feature
+// disabled, the bot's own reaction, and a channel outside ReactionChannels.
+// None of these should arm the switch. (The API-dependent guards — parent
+// check, session-exists, access control — are exercised by integration tests
+// where a live client is available.)
+func TestReactionAddedFastGuards(t *testing.T) {
+	react := func(s *Channel, emoji, user, channel string) {
+		s.handleReactionAdded(nil, &slackevents.ReactionAddedEvent{
+			Reaction: emoji,
+			User:     user,
+			Item:     slackevents.Item{Channel: channel, Timestamp: "111.222"},
+		})
+	}
+
+	base := func() *Channel {
+		s := &Channel{autoReply: map[string]bool{}, botUserID: "UBOT"}
+		s.cfg.ReactionTriggerEnabled = true
+		s.cfg.ReactionChannelsMode = "whitelist"
+		s.cfg.ReactionChannels = `[{"id":"C1","name":"#ops"}]`
+		return s
+	}
+
+	// wrong emoji
+	s := base()
+	react(s, "thumbsup", "U1", "C1")
+	if len(s.autoReply) != 0 {
+		t.Error("non-trigger emoji must not arm the switch")
+	}
+
+	// feature disabled
+	s = base()
+	s.cfg.ReactionTriggerEnabled = false
+	react(s, reactionTrigger, "U1", "C1")
+	if len(s.autoReply) != 0 {
+		t.Error("disabled feature must not arm the switch")
+	}
+
+	// bot's own reaction
+	s = base()
+	react(s, reactionTrigger, "UBOT", "C1")
+	if len(s.autoReply) != 0 {
+		t.Error("the bot's own reaction must not arm the switch")
+	}
+
+	// channel not in ReactionChannels
+	s = base()
+	react(s, reactionTrigger, "U1", "C2")
+	if len(s.autoReply) != 0 {
+		t.Error("a channel outside ReactionChannels must not arm the switch")
+	}
+}
+
+// TestReactionChannelAllowed covers the mode gate: "all" accepts any channel,
+// "whitelist" (and any unknown/empty mode, which fails closed) accepts only
+// the listed channels.
+func TestReactionChannelAllowed(t *testing.T) {
+	cfg := agentconfig.SlackChannelConfig{
+		ReactionChannels: `[{"id":"C1","name":"#ops"}]`,
+	}
+
+	cfg.ReactionChannelsMode = "all"
+	if !reactionChannelAllowed(cfg, "Cany") {
+		t.Error("all mode: any channel should be allowed")
+	}
+
+	cfg.ReactionChannelsMode = "whitelist"
+	if !reactionChannelAllowed(cfg, "C1") {
+		t.Error("whitelist: listed channel C1 should be allowed")
+	}
+	if reactionChannelAllowed(cfg, "C2") {
+		t.Error("whitelist: unlisted channel C2 should be denied")
+	}
+
+	// Empty/unknown mode fails closed (whitelist semantics).
+	cfg.ReactionChannelsMode = ""
+	if reactionChannelAllowed(cfg, "C2") {
+		t.Error("empty mode should fail closed (deny unlisted)")
+	}
+	if !reactionChannelAllowed(cfg, "C1") {
+		t.Error("empty mode should still allow a listed channel")
+	}
+}
+
+// TestReactionRemovedGuards verifies the OFF path: wrong emoji and the bot's
+// own reaction are ignored, and removing the trigger clears an armed switch.
+func TestReactionRemovedGuards(t *testing.T) {
+	s := &Channel{autoReply: map[string]bool{}, botUserID: "UBOT"}
+	key := s.sessionKey("111.222") // no prefix set → bare ts
+	s.setAutoReply(key, true)
+
+	// wrong emoji leaves it armed
+	s.handleReactionRemoved(&slackevents.ReactionRemovedEvent{
+		Reaction: "thumbsup", User: "U1",
+		Item: slackevents.Item{Channel: "C1", Timestamp: "111.222"},
+	})
+	if !s.autoReplyOn(key) {
+		t.Error("non-trigger emoji removal must not disarm the switch")
+	}
+
+	// bot's own removal leaves it armed
+	s.handleReactionRemoved(&slackevents.ReactionRemovedEvent{
+		Reaction: reactionTrigger, User: "UBOT",
+		Item: slackevents.Item{Channel: "C1", Timestamp: "111.222"},
+	})
+	if !s.autoReplyOn(key) {
+		t.Error("the bot's own removal must not disarm the switch")
+	}
+
+	// a genuine trigger removal disarms it
+	s.handleReactionRemoved(&slackevents.ReactionRemovedEvent{
+		Reaction: reactionTrigger, User: "U1",
+		Item: slackevents.Item{Channel: "C1", Timestamp: "111.222"},
+	})
+	if s.autoReplyOn(key) {
+		t.Error("trigger removal by an allowed reactor must disarm the switch")
 	}
 }
 

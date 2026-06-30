@@ -42,16 +42,56 @@ const (
 	reactionBlocked = "no_entry_sign"          // 🚫
 	reactionError   = "x"                      // ❌
 
+	// reactionTrigger is the emoji that toggles a thread's auto-reply mode.
+	// Putting 🤖 on a thread's parent (top) message makes every new reply in
+	// that thread go to the agent without an @mention; removing it stops.
+	// Slack delivers this as the bare emoji name (no colons). Threads are
+	// still created only by @mention — the switch never boots a session.
+	reactionTrigger = "robot_face" // 🤖
+
 	// queueReactionDelay suppresses the ⏳ reaction when the pool dispatches
 	// fast enough that the operator wouldn't see it anyway. Only sessions
 	// that are still waiting after this delay get the queue indicator.
 	queueReactionDelay = 3 * time.Second
 
-	// statusRefreshInterval re-asserts the assistant "is thinking…" status
-	// while a turn is in flight. Slack removes the status after a 2-minute
-	// timeout if no message is posted, so a long tool-use turn (no text
-	// deltas) would otherwise look idle. Kept well under the 2-minute limit.
-	statusRefreshInterval = 45 * time.Second
+	// statusAnimInterval drives the animated assistant banner. On each tick
+	// the banner repaints with a (varied) phrase plus a cycling "." / ".." /
+	// "..." suffix, so the operator sees the agent is alive even on a long
+	// tool-use turn with no text deltas. It doubles as the keep-alive Slack
+	// needs (it drops the status after ~2 minutes with no reply), so it is
+	// kept well under that. ~1.5s is slow enough to avoid flicker / rate
+	// limits while still feeling live. Adjustable.
+	statusAnimInterval = 1500 * time.Millisecond
+
+	// streamEditInterval throttles the live message edit during a turn. Text
+	// deltas accumulate in turn.buf; a ticker flushes the buffer with one
+	// chat.update per interval (NOT one per delta), so the reply grows like
+	// typing without tripping Slack's ~1/sec chat.update rate limit.
+	// Adjustable — raise it if the bot runs across many busy channels.
+	streamEditInterval = 1500 * time.Millisecond
+)
+
+// Footer (status field) state labels — the short word shown in the composer
+// footer, with an animated dot suffix appended. Change these to rename the
+// footer states. footerState() maps a detailed activity label to one of them.
+const (
+	footerThinking = "Thinking" // reasoning / streaming text
+	footerWorking  = "Working"  // a tool is running
+	footerIdle     = "Idle"     // no activity yet
+)
+
+// Back-compat aliases used elsewhere as the generic phase labels.
+const (
+	statusLabelThinking = footerThinking
+	statusLabelWorking  = footerWorking
+)
+
+const (
+	// traceMax caps how many recent activity lines the loading bubble keeps
+	// (Slack rotates through them). bubbleLineMax clips each line so a long
+	// command stays short and Slack accepts it.
+	traceMax      = 5
+	bubbleLineMax = 40
 )
 
 // turn holds the per-turn state for a Slack session (thread). A new turn
@@ -74,13 +114,34 @@ type turn struct {
 	// queueShown is set when queueTimer actually fired and added ⏳, so
 	// downstream cleanup knows to remove it.
 	queueShown bool
-	// statusTicker re-asserts the "is thinking…" banner every
-	// statusRefreshInterval while the turn is still running. Slack auto-
-	// removes the assistant status after a 2-minute timeout (and on any
-	// posted reply), so a long tool-use turn with no text deltas would
-	// otherwise look idle. Stopped (and set to nil) on Done/Error.
+	// statusTicker re-asserts the loading bubble every statusAnimInterval
+	// while the turn is running: it keeps the bubble alive (Slack drops the
+	// status after a 2-minute timeout and on any posted reply) and re-sends
+	// loading_messages so it never reverts to Slack's defaults. Stopped (and
+	// set to nil) on Done/Error.
 	statusTicker *time.Ticker
 	statusStop   chan struct{}
+	// statusLabel is the latest detailed activity, used for the footer state.
+	statusLabel string
+	// trace is the recent activity history shown (rotating) in the loading
+	// bubble — most recent last, capped at traceMax. Each push appends the
+	// latest activity line ("Thinking", "Bash: …", "Read: …").
+	trace []string
+	// dotPhase cycles 0→1→2→3 each animation tick for the footer's animated
+	// "." / ".." / "..." suffix.
+	dotPhase int
+	// liveTS is the ts of the streaming reply message edited in place via
+	// chat.update while the turn produces text. Empty until the first flush
+	// posts it. Reset on Done so the next turn starts a fresh message.
+	liveTS string
+	// lastSent is the body text last written to the live message. The Done
+	// reconcile compares the final text against it: equal → skip the update
+	// entirely (0 API calls); different → one final chat.update.
+	lastSent string
+	// editTicker flushes turn.buf to the live message every streamEditInterval
+	// while text is still streaming. Stopped (and set to nil) on Done/Error.
+	editTicker *time.Ticker
+	editStop   chan struct{}
 	// approval tracking
 	pendingApprovalID    string // gate request UUID while waiting for decision
 	pendingApprovalMsgTS string // ts of the Slack approval message (for update)
@@ -100,8 +161,8 @@ type turn struct {
 // Hot-reload: call Reload(ctx, newCfg, pubURL) to apply new credentials
 // without restarting the server.
 type Channel struct {
-	sendFn     agentchannels.SendFunc
-	ownerFn    func(ctx context.Context, sessionID, userID string)
+	sendFn      agentchannels.SendFunc
+	ownerFn     func(ctx context.Context, sessionID, userID string)
 	ownerUserID string // wick user who owns this channel row; empty = App Owner
 
 	// sessionPrefix namespaces this instance's session keys so multiple
@@ -131,10 +192,26 @@ type Channel struct {
 	mu    sync.Mutex
 	turns map[string]*turn
 
+	// autoReply is the set of namespaced session keys whose thread has the
+	// 🤖 switch on its parent message. While a key is present, channel
+	// replies in that thread are dispatched to the agent without requiring
+	// an @mention (see handleMessage). Toggled by handleReactionAdded /
+	// handleReactionRemoved. In-memory only — switches reset on restart;
+	// re-react to re-arm. Guarded by mu.
+	autoReply map[string]bool
+
 	// userTokenCache maps Slack user ID → resolved xoxp token.
 	// Avoids repeated connectorToken lookups on every send call.
 	userTokenMu    sync.RWMutex
 	userTokenCache map[string]string
+
+	// userDisplayCache maps Slack user ID → a resolved "Name (@handle, U…)"
+	// label, prefixed onto every inbound turn so the agent always knows who
+	// spoke (matters in multi-user threads, and for picking the right
+	// connector when replying). Cached because resolving needs a users.info
+	// API call per user; the directory rarely changes mid-session.
+	userDisplayMu    sync.RWMutex
+	userDisplayCache map[string]string
 
 	// tokenRefreshFn rebuilds the full userID→token map from connector rows.
 	// Wired at startup via SetTokenRefreshFn; triggered on-demand when a
@@ -171,8 +248,10 @@ type Channel struct {
 // corresponding Set* setters before Start.
 func New(cfg agentconfig.SlackChannelConfig) *Channel {
 	ch := &Channel{
-		turns:          make(map[string]*turn),
-		userTokenCache: make(map[string]string),
+		turns:            make(map[string]*turn),
+		userTokenCache:   make(map[string]string),
+		userDisplayCache: make(map[string]string),
+		autoReply:        make(map[string]bool),
 	}
 	ch.applyConfig(cfg, "")
 	return ch
@@ -493,6 +572,41 @@ func (s *Channel) refreshBotUserID(ctx context.Context) {
 	}
 }
 
+// BotUserID returns this instance's resolved bot Slack user ID (U...),
+// or "" if auth.test hasn't succeeded yet. Exposed so the connector
+// "Sent using @bot" footer can name the bot of the instance that OWNS a
+// session — regardless of which connector instance does the actual send.
+func (s *Channel) BotUserID() string {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.botUserID
+}
+
+// OwnsSession reports whether sessionID belongs to this instance.
+//
+// The App Owner instance's prefix is the bare "slack-", which is ALSO a
+// prefix of every per-user session ("slack-<uuid>-<ts>"). A plain
+// HasPrefix would make the App Owner instance claim per-user sessions and
+// stamp the wrong bot. So the App Owner case additionally requires that the
+// remainder carry no further "-" segment: a Slack thread_ts is digits + ".",
+// never "-", so "slack-<ts>" has none while "slack-<uuid>-<ts>" does.
+// Per-user prefixes already end in "-<uuid>-" and are unambiguous.
+func (s *Channel) OwnsSession(sessionID string) bool {
+	s.cfgMu.Lock()
+	p := s.sessionPrefix
+	s.cfgMu.Unlock()
+	if p == "" || !strings.HasPrefix(sessionID, p) {
+		return false
+	}
+	rest := sessionID[len(p):]
+	// App Owner prefix ("<channel>-") owns only sessions whose remainder is a
+	// bare transport key with no extra "-" (which would mark a per-user id).
+	if strings.Count(p, "-") == 1 {
+		return !strings.Contains(rest, "-")
+	}
+	return true
+}
+
 // Status satisfies channels.StatusReporter — returns identity + transport
 // state for the admin UI panel under the Test Integration button.
 func (s *Channel) Status() []agentchannels.StatusField {
@@ -678,6 +792,9 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				"thread":     threadKey(ev.ThreadTimeStamp, ev.TimeStamp),
 				"ts":         ev.TimeStamp,
 			})
+			// ev.Files carries any images/attachments posted with the mention.
+			// MessageEvent has no Files field, so pass them alongside — without
+			// this the agent never learns the user attached anything.
 			s.handleMessage(ctx, &slackevents.MessageEvent{
 				Type:            ev.Type,
 				User:            ev.User,
@@ -686,9 +803,12 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				ThreadTimeStamp: ev.ThreadTimeStamp,
 				Channel:         ev.Channel,
 				ChannelType:     "channel",
-			})
+			}, ev.Files)
 		case *slackevents.MessageEvent:
-			if ev.BotID != "" || ev.SubType != "" {
+			// SubType "file_share" carries attachments with no real text —
+			// let it through (with its files) instead of dropping it. Other
+			// subtypes (edits, joins, …) are still ignored.
+			if ev.BotID != "" || (ev.SubType != "" && ev.SubType != "file_share") {
 				return
 			}
 			// Workflow surface gets every non-bot message regardless of
@@ -704,15 +824,41 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				"ts":           ev.TimeStamp,
 				"is_dm":        ev.ChannelType == "im" || ev.ChannelType == "mpim",
 			})
+			// Agent session dispatch is DM-only by default. The one
+			// exception is a channel thread whose parent carries the 🤖
+			// auto-reply switch: there, plain replies (no @mention) are
+			// dispatched to the thread's existing session.
+			//
+			// Mentions in a channel ALSO arrive as a MessageEvent (in addition
+			// to the AppMentionEvent that already dispatched them). On an
+			// auto-reply thread that MessageEvent would otherwise pass the gate
+			// below and dispatch the SAME message a second time — so skip any
+			// channel message that mentions the bot; AppMentionEvent owns it.
 			if ev.ChannelType != "im" && ev.ChannelType != "mpim" {
-				return
+				if s.mentionsBot(ev.Text) {
+					return
+				}
+				if !s.autoReplyOn(s.sessionKey(threadKey(ev.ThreadTimeStamp, ev.TimeStamp))) {
+					return
+				}
 			}
-			s.handleMessage(ctx, ev)
+			// MessageEvent stashes a file_share's files under .Message
+			// (slackevents only populates the top-level Files field on
+			// app_mention, not plain messages).
+			var files []slackgo.File
+			if ev.Message != nil {
+				files = ev.Message.Files
+			}
+			s.handleMessage(ctx, ev, files)
 		case *slackevents.AppHomeOpenedEvent:
 			s.emitWorkflow(ctx, "app_home_opened", map[string]any{
 				"user": ev.User,
 				"tab":  ev.Tab,
 			})
+		case *slackevents.ReactionAddedEvent:
+			s.handleReactionAdded(ctx, ev)
+		case *slackevents.ReactionRemovedEvent:
+			s.handleReactionRemoved(ev)
 		}
 	}
 }
@@ -725,6 +871,201 @@ func threadKey(threadTS, msgTS string) string {
 		return threadTS
 	}
 	return msgTS
+}
+
+// autoReplyOn reports whether the named session's thread has the 🤖
+// auto-reply switch on. sessionID is the namespaced session key (which, for
+// the app-owner channel, equals the on-disk session ID). The in-memory map
+// is a fast cache; on a miss (e.g. right after a restart) it falls back to
+// the persisted flag in the session meta so the switch survives restart.
+func (s *Channel) autoReplyOn(sessionID string) bool {
+	s.mu.Lock()
+	on, cached := s.autoReply[sessionID]
+	s.mu.Unlock()
+	if cached {
+		return on
+	}
+	if s.sessions == nil {
+		return false
+	}
+	on = s.sessions.AutoReplyOn(sessionID)
+	if on {
+		// Warm the cache so repeated replies don't re-read meta.json.
+		s.mu.Lock()
+		s.autoReply[sessionID] = true
+		s.mu.Unlock()
+	}
+	return on
+}
+
+// setAutoReply flips the auto-reply switch for a session: it updates the
+// in-memory cache and persists the flag to the session meta so it survives
+// a wick restart. sessionID is the namespaced session key.
+func (s *Channel) setAutoReply(sessionID string, on bool) {
+	s.mu.Lock()
+	if on {
+		s.autoReply[sessionID] = true
+	} else {
+		delete(s.autoReply, sessionID)
+	}
+	s.mu.Unlock()
+	if s.sessions != nil {
+		s.sessions.SetAutoReply(sessionID, on)
+	}
+}
+
+// handleReactionAdded turns a thread's auto-reply switch ON when the 🤖
+// emoji lands on the thread's parent message. The reaction itself is never
+// dispatched as a turn — it only arms future replies. Every guard that
+// fails is a silent no-op: a reaction is ambient, not a command, so an
+// off-target 🤖 should not nag the reactor.
+//
+// Guards: feature enabled · emoji is the trigger · reactor is not the bot ·
+// the channel is in ReactionChannels · the reacted item is a thread parent ·
+// the thread already has a session · the reactor passes access control.
+func (s *Channel) handleReactionAdded(ctx context.Context, ev *slackevents.ReactionAddedEvent) {
+	l := log.With().Str("channel", "slack").Str("emoji", ev.Reaction).
+		Str("user", ev.User).Str("slack_channel", ev.Item.Channel).
+		Str("item_ts", ev.Item.Timestamp).Logger()
+	l.Debug().Msg("reaction_added received")
+
+	if ev.Reaction != reactionTrigger {
+		l.Debug().Str("want", reactionTrigger).Msg("reaction: ignored — not the trigger emoji")
+		return
+	}
+	cfg := s.snapshot()
+	if !cfg.ReactionTriggerEnabled {
+		l.Debug().Msg("reaction: ignored — reaction_trigger_enabled is off")
+		return
+	}
+	if s.isBotUser(ev.User) {
+		l.Debug().Msg("reaction: ignored — reactor is the bot itself")
+		return
+	}
+	channelID := ev.Item.Channel
+	if channelID == "" || !reactionChannelAllowed(cfg, channelID) {
+		l.Debug().Str("mode", cfg.ReactionChannelsMode).Msg("reaction: ignored — channel not allowed by ReactionChannels(Mode)")
+		return
+	}
+
+	// Resolve the thread the reacted message belongs to. The switch lives on
+	// the parent only: if the 🤖 is on a reply bubble, ignore it.
+	parentTS, isParent := s.reactionThreadParent(channelID, ev.Item.Timestamp)
+	if !isParent {
+		l.Debug().Str("parent_ts", parentTS).Msg("reaction: ignored — reacted message is not a thread parent (or history lookup failed)")
+		return
+	}
+	sessionID := s.sessionKey(parentTS)
+
+	// Reply-only: the switch governs an existing thread, never boots one.
+	if !s.sessionOnDisk(sessionID) {
+		l.Debug().Str("session", sessionID).Msg("reaction: ignored — no existing session for this thread (reply-only)")
+		return
+	}
+
+	// Re-check access: only reactors who could trigger a message may arm
+	// the thread for everyone.
+	groupIDs, err := s.resolveUserGroups(ev.User)
+	if err != nil {
+		l.Warn().Err(err).Msg("reaction: resolve groups failed; treating as empty")
+	}
+	if ok, reason := s.allowedCfg(cfg, ev.User, groupIDs, channelID); !ok {
+		l.Debug().Str("reason", reason).Msg("reaction: ignored — reactor failed access control")
+		return
+	}
+
+	s.setAutoReply(sessionID, true)
+	l.Info().Str("thread_ts", parentTS).Str("session", sessionID).Msg("auto-reply switch ON")
+	_ = ctx
+}
+
+// reactionChannelAllowed reports whether the 🤖 switch is honoured in
+// channelID. Mode "all" accepts any channel the bot is in; "whitelist" (the
+// default) accepts only the channels in ReactionChannels. An empty/unknown
+// mode is treated as whitelist so a misconfigured row fails closed.
+func reactionChannelAllowed(cfg agentconfig.SlackChannelConfig, channelID string) bool {
+	if cfg.ReactionChannelsMode == "all" {
+		return true
+	}
+	return pickerHas(cfg.ReactionChannels, channelID)
+}
+
+// handleReactionRemoved turns a thread's auto-reply switch OFF when the 🤖
+// emoji is removed from its parent. A turn already in flight is NOT aborted —
+// removing the switch only stops the next reply from being picked up. Cheap
+// guards only (emoji + bot); the rest is a map delete that is harmless when
+// the key is absent, so no API round-trip is needed here.
+func (s *Channel) handleReactionRemoved(ev *slackevents.ReactionRemovedEvent) {
+	if ev.Reaction != reactionTrigger || s.isBotUser(ev.User) {
+		return
+	}
+	parentTS := ev.Item.Timestamp
+	if parentTS == "" {
+		return
+	}
+	sessionID := s.sessionKey(parentTS)
+	if !s.autoReplyOn(sessionID) {
+		return
+	}
+	s.setAutoReply(sessionID, false)
+	log.Info().Str("channel", "slack").Str("slack_channel", ev.Item.Channel).Str("thread_ts", parentTS).Str("user", ev.User).Msg("auto-reply switch OFF")
+}
+
+// isBotUser reports whether userID is this channel's own bot, so a reaction
+// the bot itself places (or any other event it originates) never triggers
+// the switch.
+func (s *Channel) isBotUser(userID string) bool {
+	s.cfgMu.Lock()
+	botID := s.botUserID
+	s.cfgMu.Unlock()
+	return userID != "" && userID == botID
+}
+
+// reactionThreadParent resolves the reacted message's owning thread root and
+// reports whether the reacted message IS that root. The switch only lives on
+// the parent, so a 🤖 on a reply bubble returns isParent=false.
+//
+// It fetches the single message at itemTS via conversations.history. A
+// top-level message has an empty thread_ts (or one equal to its own ts); a
+// reply carries its parent's thread_ts. On any API failure we conservatively
+// treat the item as a non-parent (isParent=false) so we never arm the wrong
+// thread.
+func (s *Channel) reactionThreadParent(channelID, itemTS string) (parentTS string, isParent bool) {
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil || channelID == "" || itemTS == "" {
+		return "", false
+	}
+	// Latest+Inclusive+Limit:1 fetches exactly the message at itemTS. Setting
+	// Oldest==Latest is unreliable (Slack can return an empty window), so we
+	// bound only the top and take the first row.
+	resp, err := api.GetConversationHistory(&slackgo.GetConversationHistoryParameters{
+		ChannelID: channelID,
+		Latest:    itemTS,
+		Inclusive: true,
+		Limit:     1,
+	})
+	if err != nil || resp == nil || len(resp.Messages) == 0 {
+		log.Warn().Str("channel", "slack").Str("slack_channel", channelID).Str("ts", itemTS).
+			Int("messages", func() int {
+				if resp == nil {
+					return -1
+				}
+				return len(resp.Messages)
+			}()).
+			Err(err).Msg("reaction: conversations.history returned nothing — cannot resolve parent")
+		return "", false
+	}
+	m := resp.Messages[0]
+	log.Debug().Str("channel", "slack").Str("slack_channel", channelID).Str("item_ts", itemTS).
+		Str("msg_ts", m.Timestamp).Str("thread_ts", m.ThreadTimestamp).
+		Msg("reaction: resolved reacted message")
+	// A parent has no thread_ts, or a thread_ts that equals its own ts.
+	if m.ThreadTimestamp == "" || m.ThreadTimestamp == itemTS {
+		return itemTS, true
+	}
+	return m.ThreadTimestamp, false
 }
 
 // pingFallbackText stands in for an empty mention/ping so the agent
@@ -740,6 +1081,111 @@ func normalizeUserText(text string) string {
 	return text
 }
 
+// senderLabel resolves a Slack user ID into a "Name (@handle, U…)" label,
+// cached per user. On a cache miss it calls users.info; if that fails it
+// falls back to the bare user ID so the prefix is never empty. The label
+// prefixes every inbound turn so the agent knows who spoke — in a shared
+// thread, and for matching the sender to a connector when replying.
+func (s *Channel) senderLabel(userID string) string {
+	if userID == "" {
+		return ""
+	}
+	s.userDisplayMu.RLock()
+	label, ok := s.userDisplayCache[userID]
+	s.userDisplayMu.RUnlock()
+	if ok {
+		return label
+	}
+
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+
+	label = userID // fallback when the API is unavailable or the lookup fails
+	if api != nil {
+		if u, err := api.GetUserInfo(userID); err == nil && u != nil {
+			label = formatSenderLabel(userID, u.Name, u.RealName)
+		}
+	}
+
+	s.userDisplayMu.Lock()
+	s.userDisplayCache[userID] = label
+	s.userDisplayMu.Unlock()
+	return label
+}
+
+// formatSenderLabel builds the "Name (@handle, U…)" prefix from the parts a
+// users.info lookup returns, degrading gracefully when a part is missing. The
+// user ID is always present (it's the fallback), so the result is never empty.
+func formatSenderLabel(userID, handle, real string) string {
+	switch {
+	case real != "" && handle != "":
+		return fmt.Sprintf("%s (@%s, %s)", real, handle, userID)
+	case handle != "":
+		return fmt.Sprintf("@%s (%s)", handle, userID)
+	case real != "":
+		return fmt.Sprintf("%s (%s)", real, userID)
+	default:
+		return userID
+	}
+}
+
+// formatAttachments renders a Slack message's files as a text block appended
+// to the user turn, so the agent knows what was attached and has a permalink
+// to fetch each file via the slack connector. The bytes are NOT downloaded —
+// only the metadata + link are surfaced. Returns "" when there are no files.
+//
+// Each line carries: title/name, pretty type, human size, and the best
+// available link (permalink for in-Slack view; url_private as a fallback the
+// connector can GET with the bot token).
+func formatAttachments(files []slackgo.File) string {
+	if len(files) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n[Attached files — fetch via the slack connector (files.info / the link) if you need the contents]")
+	for _, f := range files {
+		name := f.Title
+		if name == "" {
+			name = f.Name
+		}
+		link := f.Permalink
+		if link == "" {
+			link = f.URLPrivate
+		}
+		b.WriteString("\n- ")
+		b.WriteString(name)
+		if f.PrettyType != "" {
+			b.WriteString(" (")
+			b.WriteString(f.PrettyType)
+			b.WriteString(")")
+		}
+		if f.Size > 0 {
+			b.WriteString(" · ")
+			b.WriteString(humanSize(int64(f.Size)))
+		}
+		if link != "" {
+			b.WriteString(" · ")
+			b.WriteString(link)
+		}
+	}
+	return b.String()
+}
+
+// humanSize formats a byte count as a compact human-readable string.
+func humanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
 // stripBotMention removes the leading <@BOTID> mention Slack prepends to app_mention text.
 func stripBotMention(text string) string {
 	if !strings.HasPrefix(text, "<@") {
@@ -749,6 +1195,22 @@ func stripBotMention(text string) string {
 		return strings.TrimSpace(text[idx+1:])
 	}
 	return text
+}
+
+// mentionsBot reports whether text contains an @mention of this bot
+// (<@BOTID>). A channel message that mentions the bot also arrives as an
+// AppMentionEvent, so on an auto-reply thread the duplicate MessageEvent must
+// be skipped to avoid dispatching the same message twice. Returns false when
+// the bot's own user ID isn't resolved yet (fail open — the auto-reply gate
+// still applies), so a brief post-connect window can't drop a real reply.
+func (s *Channel) mentionsBot(text string) bool {
+	s.cfgMu.Lock()
+	botID := s.botUserID
+	s.cfgMu.Unlock()
+	if botID == "" {
+		return false
+	}
+	return strings.Contains(text, "<@"+botID+">")
 }
 
 // HTTPHandler returns the webhook handler. Verifies HMAC-SHA256 + handles
@@ -835,7 +1297,7 @@ func (s *Channel) snapshot() agentconfig.SlackChannelConfig {
 	return c
 }
 
-func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEvent) {
+func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEvent, files []slackgo.File) {
 	threadTS := ev.ThreadTimeStamp
 	if threadTS == "" {
 		threadTS = ev.TimeStamp
@@ -892,10 +1354,17 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		t.hasStarted = old.hasStarted
 		// A new turn supersedes the old one: stop its status heartbeat so the
 		// goroutine doesn't outlive the turn it was refreshing.
-		s.stopStatusHeartbeat(old)
+		s.stopStatusAnimation(old)
 	}
 	s.turns[sessionID] = t
 	s.mu.Unlock()
+
+	// Set the status (with our loading_messages) BEFORE spawning the agent —
+	// Slack's guidance is to set status immediately when a message arrives,
+	// and the loading_messages override only takes effect if it lands before
+	// Slack paints its own default loading bubble. startStatusAnimation paints
+	// the first frame synchronously and starts the dot-animation ticker.
+	s.startStatusAnimation(sessionID)
 
 	if old != nil {
 		if old.queueTimer != nil {
@@ -929,6 +1398,19 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	})
 
 	userText := normalizeUserText(ev.Text)
+	// Prefix the sender so the agent always knows who spoke — essential in
+	// multi-user threads and for matching the sender to a connector (bot vs
+	// the user's SSO-connected account) when replying. Skip for the bare-ping
+	// fallback, which is a meta instruction rather than something the user said.
+	if strings.TrimSpace(ev.Text) != "" {
+		if who := s.senderLabel(ev.User); who != "" {
+			userText = who + ": " + userText
+		}
+	}
+	// Append an attachment manifest so the agent knows the user posted files
+	// (images, PDFs, …) and has a permalink to fetch each one — the bytes
+	// themselves aren't downloaded here. Empty when the message had no files.
+	userText += formatAttachments(files)
 	isNewSession := !s.sessionOnDisk(sessionID)
 	if isNewSession {
 		ctxText := s.buildSessionContext(ev, threadTS)
@@ -948,6 +1430,20 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		s.setReaction(reactionError, ev.Channel, ev.TimeStamp, "")
 		s.postReply(ev.Channel, threadTS, "Agent error: could not queue message. Check the dashboard for details.")
 		return
+	}
+	// Arm auto-reply for a brand-new CHANNEL thread, after the send has
+	// created the session on disk so the persisted flag sticks. The agent
+	// marks the parent with 🤖; every later reply is then answered without a
+	// mention. The marker doubles as the on/off switch — remove it to stop,
+	// re-add to resume (handleReactionRemoved / handleReactionAdded). DMs are
+	// already always-on, so they get neither the switch nor the marker.
+	if isNewSession && ev.ChannelType == "channel" && cfg.ReactionTriggerEnabled && reactionChannelAllowed(cfg, ev.Channel) {
+		s.setAutoReply(sessionID, true)
+		// threadTS is the parent message for a new thread; mark it.
+		s.setReaction(reactionTrigger, ev.Channel, threadTS, "")
+		log.Info().Str("channel", "slack").Str("slack_channel", ev.Channel).
+			Str("thread_ts", threadTS).Str("session", sessionID).
+			Msg("auto-reply armed on new thread (🤖 marker posted)")
 	}
 	// Stamp the session owner once, on the first message that creates the
 	// session. wickUserIDFn hits the DB, so skipping it on every follow-up
@@ -969,31 +1465,177 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	// thinking. No "running" emoji — agent status lives in Wick's web UI
 	// and the assistant thread banner.
 	s.cancelQueueTimer(sessionID, ev.Channel, ev.TimeStamp)
-	s.setAssistantStatus(ev.Channel, threadTS, "is thinking…")
-	// Keep the banner alive across long tool-use turns: Slack drops the
-	// assistant status after 2 minutes with no posted reply, so re-assert
-	// it periodically until Done/Error stops the heartbeat.
-	s.startStatusHeartbeat(sessionID)
+	// Banner animation was already started above (before sendFn) so the
+	// loading_messages override lands before Slack's default bubble. Nothing
+	// to do here.
 }
 
-// startStatusHeartbeat launches a goroutine that re-asserts the assistant
-// "is thinking…" status every statusRefreshInterval while sessionID's turn
-// is still the current one. It is a no-op if a heartbeat is already running
-// for the turn. Stopped by stopStatusHeartbeat (called on Done/Error) or
-// automatically when the turn is replaced/removed.
-func (s *Channel) startStatusHeartbeat(sessionID string) {
+// paintBubble updates the two independent slots (proven to render separately):
+//   - footer (status field)      = coarse state + animated dots, e.g. "Working.."
+//   - bubble (loading_messages[]) = recent activity trace, clipped per line;
+//     Slack rotates through the entries.
+func (s *Channel) paintBubble(channelID, threadTS, label string, trace []string, dot int) {
+	if channelID == "" {
+		return
+	}
+	footerLoadingText := footerState(label) + strings.Repeat(".", dot%4)
+	s.setAssistantStatusWithLoading(channelID, threadTS, footerLoadingText, bubbleLoadingMessages(trace))
+}
+
+// bubbleLoadingMessages returns the recent trace (last traceMax) as the
+// loading_messages array — one entry per activity line, which Slack rotates
+// through in the bubble. Each entry is clipped to bubbleLineMax. Falls back to
+// "Thinking" when empty.
+func bubbleLoadingMessages(trace []string) []string {
+	if len(trace) == 0 {
+		return []string{footerThinking}
+	}
+	out := make([]string, 0, len(trace))
+	for _, line := range trace {
+		if r := []rune(line); len(r) > bubbleLineMax {
+			line = strings.TrimSpace(string(r[:bubbleLineMax])) + "…"
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// footerState maps a detailed activity label to a short footer state:
+// empty → Idle; "Thinking" → Thinking; anything else (a tool line) → Working.
+func footerState(label string) string {
+	switch label {
+	case "":
+		return footerIdle
+	case footerThinking:
+		return footerThinking
+	default:
+		return footerWorking
+	}
+}
+
+// setStatusLabel updates the phase shown in the loading bubble for sessionKey
+// and repaints immediately on a real change so a phase switch is visible
+// without waiting for the next ticker tick. Starts the keep-alive animation
+// lazily if it is not already running.
+func (s *Channel) setStatusLabel(sessionKey, label string) {
+	s.mu.Lock()
+	t := s.turns[sessionKey]
+	if t == nil {
+		s.mu.Unlock()
+		return
+	}
+	changed := t.statusLabel != label
+	t.statusLabel = label
+	// Append to the rotating trace on a real change (skip consecutive dups),
+	// keeping only the last traceMax entries.
+	if changed && label != "" && (len(t.trace) == 0 || t.trace[len(t.trace)-1] != label) {
+		t.trace = append(t.trace, label)
+		if len(t.trace) > traceMax {
+			t.trace = t.trace[len(t.trace)-traceMax:]
+		}
+	}
+	channelID, threadTS, dot := t.channelID, t.threadTS, t.dotPhase
+	traceCopy := append([]string(nil), t.trace...)
+	running := t.statusTicker != nil
+	s.mu.Unlock()
+
+	if changed {
+		s.paintBubble(channelID, threadTS, label, traceCopy, dot)
+	}
+	if !running {
+		s.startStatusAnimation(sessionKey)
+	}
+}
+
+// startStatusAnimation launches a goroutine that re-asserts the loading
+// bubble every statusAnimInterval while sessionID's turn is still current.
+// It is the keep-alive (Slack drops the status after ~2 minutes) and re-sends
+// loading_messages so the bubble never reverts to Slack's defaults. No-op if
+// already running. Stopped by stopStatusAnimation (Done/Error) or when the
+// turn is replaced/removed.
+func (s *Channel) startStatusAnimation(sessionID string) {
 	s.mu.Lock()
 	t := s.turns[sessionID]
 	if t == nil || t.statusTicker != nil {
 		s.mu.Unlock()
 		return
 	}
-	ticker := time.NewTicker(statusRefreshInterval)
+	if t.statusLabel == "" {
+		t.statusLabel = statusLabelThinking
+	}
+	ticker := time.NewTicker(statusAnimInterval)
 	stop := make(chan struct{})
 	t.statusTicker = ticker
 	t.statusStop = stop
 	channelID := t.channelID
 	threadTS := t.threadTS
+	firstLabel := t.statusLabel
+	firstDot := t.dotPhase
+	firstTrace := append([]string(nil), t.trace...)
+	s.mu.Unlock()
+
+	// Paint immediately so the bubble appears without waiting a full interval.
+	s.paintBubble(channelID, threadTS, firstLabel, firstTrace, firstDot)
+
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				// Only repaint while this turn is still current; a replaced
+				// turn cancels via stopStatusAnimation, but guard anyway.
+				s.mu.Lock()
+				cur := s.turns[sessionID]
+				stillCurrent := cur != nil && cur.statusStop == stop
+				var label string
+				var dot int
+				var traceCopy []string
+				if stillCurrent {
+					cur.dotPhase++
+					label = cur.statusLabel
+					dot = cur.dotPhase
+					traceCopy = append([]string(nil), cur.trace...)
+				}
+				s.mu.Unlock()
+				if !stillCurrent {
+					return
+				}
+				s.paintBubble(channelID, threadTS, label, traceCopy, dot)
+			}
+		}
+	}()
+}
+
+// stopStatusAnimation halts the banner-animation goroutine for the turn, if
+// any. Safe to call when no animation is running.
+func (s *Channel) stopStatusAnimation(t *turn) {
+	if t == nil || t.statusTicker == nil {
+		return
+	}
+	t.statusTicker.Stop()
+	close(t.statusStop)
+	t.statusTicker = nil
+	t.statusStop = nil
+}
+
+// startEditTicker launches a goroutine that flushes the accumulated text
+// buffer to the live Slack message every streamEditInterval, so the reply
+// grows in place (chat.update) rather than appearing once at the end. It is
+// a no-op if a ticker is already running for the turn. Mirrors
+// startStatusAnimation: the same mu guard and stillCurrent check, stopped by
+// stopEditTicker on Done/Error or when the turn is replaced.
+func (s *Channel) startEditTicker(sessionKey string) {
+	s.mu.Lock()
+	t := s.turns[sessionKey]
+	if t == nil || t.editTicker != nil {
+		s.mu.Unlock()
+		return
+	}
+	ticker := time.NewTicker(streamEditInterval)
+	stop := make(chan struct{})
+	t.editTicker = ticker
+	t.editStop = stop
 	s.mu.Unlock()
 
 	go func() {
@@ -1002,31 +1644,104 @@ func (s *Channel) startStatusHeartbeat(sessionID string) {
 			case <-stop:
 				return
 			case <-ticker.C:
-				// Only refresh while this turn is still current; a replaced
-				// turn cancels via stopStatusHeartbeat, but guard anyway.
 				s.mu.Lock()
-				cur := s.turns[sessionID]
-				stillCurrent := cur != nil && cur.statusStop == stop
+				cur := s.turns[sessionKey]
+				stillCurrent := cur != nil && cur.editStop == stop
 				s.mu.Unlock()
 				if !stillCurrent {
 					return
 				}
-				s.setAssistantStatus(channelID, threadTS, "is thinking…")
+				s.flushLiveMessage(sessionKey)
 			}
 		}
 	}()
 }
 
-// stopStatusHeartbeat halts the status-refresh goroutine for the turn, if
-// any. Safe to call when no heartbeat is running.
-func (s *Channel) stopStatusHeartbeat(t *turn) {
-	if t == nil || t.statusTicker == nil {
+// stopEditTicker halts the live-edit goroutine for the turn, if any. Safe to
+// call when no ticker is running.
+func (s *Channel) stopEditTicker(t *turn) {
+	if t == nil || t.editTicker == nil {
 		return
 	}
-	t.statusTicker.Stop()
-	close(t.statusStop)
-	t.statusTicker = nil
-	t.statusStop = nil
+	t.editTicker.Stop()
+	close(t.editStop)
+	t.editTicker = nil
+	t.editStop = nil
+}
+
+// flushLiveMessage posts (first call) or edits (subsequent calls) the live
+// streaming reply for sessionKey from the current contents of turn.buf. It
+// shows only the first chunk while streaming — overflow is reconciled into
+// continuation replies at Done. No-op when the buffer is unchanged since the
+// last flush, empty, or the turn is gone.
+func (s *Channel) flushLiveMessage(sessionKey string) {
+	s.mu.Lock()
+	t := s.turns[sessionKey]
+	if t == nil {
+		s.mu.Unlock()
+		return
+	}
+	body := t.buf.String()
+	channelID := t.channelID
+	threadTS := t.threadTS
+	liveTS := t.liveTS
+	lastSent := t.lastSent
+	s.mu.Unlock()
+
+	if body == "" || body == lastSent {
+		return
+	}
+	// While streaming, only the first chunk is shown in the live message;
+	// any overflow lands as continuation replies during the Done reconcile.
+	shown := body
+	if len(shown) > maxSlackChunk {
+		shown = chunkText(body, maxSlackChunk)[0]
+	}
+
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return
+	}
+
+	if liveTS == "" {
+		var newTS string
+		s.withBackoff(func() error {
+			_, ts, err := api.PostMessage(
+				channelID,
+				slackgo.MsgOptionText(shown, false),
+				slackgo.MsgOptionTS(threadTS),
+			)
+			if err == nil {
+				newTS = ts
+			}
+			return err
+		})
+		if newTS == "" {
+			return // post failed; retry on next tick
+		}
+		s.mu.Lock()
+		if cur := s.turns[sessionKey]; cur != nil {
+			cur.liveTS = newTS
+			cur.lastSent = shown
+		}
+		s.mu.Unlock()
+		return
+	}
+
+	s.withBackoff(func() error {
+		_, _, _, err := api.UpdateMessage(
+			channelID, liveTS,
+			slackgo.MsgOptionText(shown, false),
+		)
+		return err
+	})
+	s.mu.Lock()
+	if cur := s.turns[sessionKey]; cur != nil {
+		cur.lastSent = shown
+	}
+	s.mu.Unlock()
 }
 
 // cancelQueueTimer stops the pending queue-reaction timer for the named
@@ -1066,11 +1781,13 @@ func (s *Channel) cancelQueueTimer(sessionID, channelID, msgTS string) bool {
 func (s *Channel) NotifyState(sessionKey, state, text string) {
 	s.mu.Lock()
 	t := s.turns[sessionKey]
-	var channelID, threadTS, msgTS string
+	var channelID, threadTS, msgTS, liveTS, lastSent string
 	if t != nil {
 		channelID = t.channelID
 		threadTS = t.threadTS
 		msgTS = t.msgTS
+		liveTS = t.liveTS
+		lastSent = t.lastSent
 	}
 	s.mu.Unlock()
 	if channelID == "" {
@@ -1079,13 +1796,12 @@ func (s *Channel) NotifyState(sessionKey, state, text string) {
 
 	switch state {
 	case "running":
-		// Reaction already cleared at dispatch; just refresh the banner.
-		s.setAssistantStatus(channelID, threadTS, "is thinking…")
+		// No-op for the banner: the animation ticker owns the status text and
+		// the phase label is set from OnAgentEvent. Kept as a state for callers
+		// but there is nothing extra to paint here.
 	case "done":
 		s.setAssistantStatus(channelID, threadTS, "")
-		if text != "" {
-			s.postChunked(channelID, threadTS, text)
-		}
+		s.finalizeReply(sessionKey, channelID, threadTS, text, liveTS, lastSent)
 	case "blocked":
 		s.setReaction(reactionBlocked, channelID, msgTS, "")
 		s.setAssistantStatus(channelID, threadTS, "")
@@ -1107,12 +1823,105 @@ func (s *Channel) NotifyState(sessionKey, state, text string) {
 	}
 }
 
+// finalizeReply settles the turn's reply at Done. It reconciles the live
+// streaming message (if one was posted) against the final text:
+//   - No live message (turn finished before the first edit tick) → post the
+//     whole text fresh via postChunked, identical to the old behaviour.
+//   - Live message exists and the final text fits one chunk → update it only
+//     when the body changed since the last flush (text == lastSent → skip,
+//     0 API calls).
+//   - Live message exists but the final text overflows one chunk → update the
+//     live message to the first chunk and post the remainder as continuation
+//     replies.
+//
+// liveTS/lastSent are passed by the caller (read under mu); the turn's live
+// state is cleared afterwards so a follow-up turn on the same session starts
+// a fresh message.
+func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, lastSent string) {
+	defer func() {
+		s.mu.Lock()
+		if cur := s.turns[sessionKey]; cur != nil {
+			cur.liveTS = ""
+			cur.lastSent = ""
+		}
+		s.mu.Unlock()
+	}()
+
+	plan := reconcilePlan(text, liveTS, lastSent)
+	if plan.postFresh {
+		s.postChunked(channelID, threadTS, text)
+		return
+	}
+
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return
+	}
+
+	if plan.update {
+		s.withBackoff(func() error {
+			_, _, _, err := api.UpdateMessage(
+				channelID, liveTS,
+				slackgo.MsgOptionText(plan.first, false),
+			)
+			return err
+		})
+	}
+	for _, chunk := range plan.continuations {
+		s.postReply(channelID, threadTS, "_(cont.)_\n"+chunk)
+	}
+}
+
+// replyPlan is the decision finalizeReply executes: whether to post the whole
+// text fresh (no live message), update the live message to first, and which
+// overflow chunks to post as continuation replies. Pure so it can be tested
+// without the Slack client.
+type replyPlan struct {
+	postFresh     bool     // post the whole text via postChunked (no live msg)
+	update        bool     // chat.update the live message to first
+	first         string   // first chunk shown in the live message
+	continuations []string // overflow chunks posted as "_(cont.)_" replies
+}
+
+// reconcilePlan computes how to settle a finished turn given the final text,
+// the live message ts (empty = never posted), and the body last flushed to it.
+//   - text == ""        → nothing.
+//   - liveTS == ""      → postFresh (identical to the pre-streaming behaviour).
+//   - first == lastSent → skip the update (0 calls); still post any overflow.
+//   - otherwise         → update to first + post overflow as continuations.
+func reconcilePlan(text, liveTS, lastSent string) replyPlan {
+	if text == "" {
+		return replyPlan{}
+	}
+	if liveTS == "" {
+		return replyPlan{postFresh: true}
+	}
+	chunks := chunkText(text, maxSlackChunk)
+	return replyPlan{
+		update:        chunks[0] != lastSent,
+		first:         chunks[0],
+		continuations: chunks[1:],
+	}
+}
+
 // setAssistantStatus updates the Slack AI thread status banner via
 // assistant.threads.setStatus. status="" clears the banner. Errors are
 // logged at debug only — the workspace may not have Slack AI enabled
 // or the bot may lack the assistant:write/chat:write scope; reaction
 // emojis remain as the primary progress signal.
 func (s *Channel) setAssistantStatus(channelID, threadTS, status string) {
+	s.setAssistantStatusWithLoading(channelID, threadTS, status, nil)
+}
+
+// setAssistantStatusWithLoading is setAssistantStatus plus an optional
+// loading_messages list. Slack rotates loading_messages in the thread's
+// loading bubble; passing our own list replaces Slack's built-in defaults
+// ("Reviewing findings…", "Processing…", …). It must be sent on EVERY status
+// update — omitting it on a later call lets Slack fall back to its defaults,
+// so the custom bubble would flash for one interval and then revert.
+func (s *Channel) setAssistantStatusWithLoading(channelID, threadTS, status string, loadingMessages []string) {
 	s.cfgMu.Lock()
 	api := s.api
 	s.cfgMu.Unlock()
@@ -1120,9 +1929,10 @@ func (s *Channel) setAssistantStatus(channelID, threadTS, status string) {
 		return
 	}
 	err := api.SetAssistantThreadsStatus(slackgo.AssistantThreadsSetStatusParameters{
-		ChannelID: channelID,
-		ThreadTS:  threadTS,
-		Status:    status,
+		ChannelID:       channelID,
+		ThreadTS:        threadTS,
+		Status:          status,
+		LoadingMessages: loadingMessages,
 	})
 	if err != nil {
 		log.Info().Str("channel", "slack").Str("slack_channel", channelID).Str("thread_ts", threadTS).Str("status", status).Err(err).Msg("assistant.threads.setStatus failed")
@@ -1148,24 +1958,28 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.mu.Unlock()
 		if notifyRunning {
 			s.NotifyState(sessionKey, "running", "")
+			// Begin live-editing the reply: post once now, then chat.update
+			// every streamEditInterval as more text streams in.
+			s.startEditTicker(sessionKey)
 		}
+		// Streaming text → "Thinking" phase. setStatusLabel only repaints on a
+		// real change, so this is cheap on every delta.
+		s.setStatusLabel(sessionKey, statusLabelThinking)
 
-	case event.ToolUse, event.ToolResult:
-		// Tool activity is a liveness signal but produces no text delta, so
-		// the periodic heartbeat is what really holds the banner. Re-assert
-		// immediately too, so the banner stays fresh right when a long tool
-		// call begins.
-		s.mu.Lock()
-		t := s.turns[sessionKey]
-		var channelID, threadTS string
-		if t != nil {
-			channelID = t.channelID
-			threadTS = t.threadTS
-		}
-		s.mu.Unlock()
-		if channelID != "" {
-			s.setAssistantStatus(channelID, threadTS, "is thinking…")
-		}
+	case event.Thinking:
+		// Reasoning delta → "Thinking" phase (animated banner shows the dots).
+		s.setStatusLabel(sessionKey, statusLabelThinking)
+
+	case event.ToolUse:
+		// A tool is starting → show what it's doing ("Running: npm test",
+		// "Reading slack.go", …). The label is held until the next phase; the
+		// animation ticker supplies the moving dots and the keep-alive.
+		s.setStatusLabel(sessionKey, toolStatusLabel(ev.ToolName, ev.ToolInput))
+
+	case event.ToolResult:
+		// Tool finished → back to the generic working phase while the agent
+		// decides the next step.
+		s.setStatusLabel(sessionKey, statusLabelWorking)
 
 	case event.Done:
 		var text string
@@ -1176,7 +1990,8 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 			s.mu.Unlock()
 			return
 		}
-		s.stopStatusHeartbeat(t)
+		s.stopStatusAnimation(t)
+		s.stopEditTicker(t)
 		text = t.buf.String()
 		t.buf.Reset()
 		t.hasStarted = false
@@ -1193,7 +2008,8 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.mu.Lock()
 		t := s.turns[sessionKey]
 		if t != nil {
-			s.stopStatusHeartbeat(t)
+			s.stopStatusAnimation(t)
+			s.stopEditTicker(t)
 		}
 		s.mu.Unlock()
 		if t == nil {
@@ -1590,6 +2406,91 @@ func chunkText(s string, max int) []string {
 	return chunks
 }
 
+// toolStatusLabel turns a ToolUse event into a banner phase like
+// "Running: npm test", "Reading slack.go", or "Searching". It maps the tool
+// name to a verb and pulls one identifying field out of the JSON tool input
+// (command / file_path / pattern / …) as a short summary. The animated banner
+// appends the cycling dot suffix; this returns the label only (no trailing
+// dots). Falls back to a generic per-tool verb when the input is missing or
+// unparseable, and to "Working" for unknown tools. Pure — unit-tested.
+func toolStatusLabel(toolName, toolInput string) string {
+	const maxSummary = 100
+
+	var args map[string]any
+	if toolInput != "" {
+		_ = json.Unmarshal([]byte(toolInput), &args)
+	}
+	str := func(key string) string {
+		if v, ok := args[key].(string); ok {
+			return strings.TrimSpace(v)
+		}
+		return ""
+	}
+	// Collapse whitespace/newlines, strip characters Slack rejects in the
+	// assistant status field (it returns invalid_arguments for quotes and
+	// other shell punctuation), and clip so a multi-line command stays a
+	// single short banner line.
+	summarize := func(v string) string {
+		v = strings.Map(func(r rune) rune {
+			switch r {
+			case '"', '`', '\'', '$', ';', '\\', '\n', '\t', '\r':
+				return ' '
+			}
+			return r
+		}, v)
+		v = strings.Join(strings.Fields(v), " ")
+		if r := []rune(v); len(r) > maxSummary {
+			v = strings.TrimSpace(string(r[:maxSummary])) + "…"
+		}
+		return v
+	}
+	base := func(p string) string {
+		p = strings.TrimRight(p, "/\\")
+		if i := strings.LastIndexAny(p, "/\\"); i >= 0 {
+			return p[i+1:]
+		}
+		return p
+	}
+	withSummary := func(verb, raw string) string {
+		if v := summarize(raw); v != "" {
+			return verb + ": " + v
+		}
+		return verb
+	}
+
+	switch toolName {
+	case "Bash":
+		return withSummary("Running", str("command"))
+	case "Read":
+		if f := base(str("file_path")); f != "" {
+			return "Reading " + f
+		}
+		return "Reading"
+	case "Edit", "Write", "NotebookEdit":
+		if f := base(str("file_path")); f != "" {
+			return "Editing " + f
+		}
+		return "Editing"
+	case "Grep":
+		return withSummary("Searching", str("pattern"))
+	case "Glob":
+		return withSummary("Finding files", str("pattern"))
+	case "WebFetch":
+		return withSummary("Fetching", str("url"))
+	case "WebSearch":
+		return withSummary("Searching the web", str("query"))
+	case "Task", "Agent":
+		return withSummary("Delegating", str("description"))
+	case "TodoWrite":
+		return "Updating plan"
+	case "":
+		return statusLabelWorking
+	default:
+		// Unknown/MCP tool — show its name so the operator still sees activity.
+		return "Running " + toolName
+	}
+}
+
 func (s *Channel) withBackoff(fn func() error) {
 	const maxRetries = 5
 	for attempt := 0; attempt < maxRetries; attempt++ {
@@ -1628,6 +2529,7 @@ func isRateLimit(err error) bool {
 //   - if only ONE is active → it gates alone
 //   - if NEITHER is active → pass
 //   - channels whitelist is AND'd on top (independent dimension)
+//
 // allowedCfg reports whether the user may trigger the agent, plus a short
 // machine reason ("identity" / "channels") when denied. reason is "" when
 // allowed. Used to tailor the access-denied DM.

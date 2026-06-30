@@ -49,6 +49,7 @@ beforeEach(() => {
     has_health_check: false,
     can_configure: false,
     is_admin: false,
+    can_manage_policy: false,
     fields: [],
     operations: [],
     categories: [],
