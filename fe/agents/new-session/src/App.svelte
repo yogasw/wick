@@ -2,7 +2,7 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastOk, toastError } from "@wick-fe/common-stores";
-  import { ToastHost } from "@wick-fe/common-ui";
+  import { ToastHost, Select } from "@wick-fe/common-ui";
   import { getProviderOptions, getPresetOptions, getProjectOptions, createSession } from "$lib/api/options.js";
   import type { ProviderOption, PresetOption, ProjectOption } from "$lib/api/options.js";
 
@@ -10,9 +10,6 @@
   const base = appEl?.dataset.base ?? "";
 
   const FOLDER_ICON = "📁";
-  const SELECT_BASE = "rounded-lg border px-2.5 py-1.5 text-xs focus:border-green-500 focus:outline-none cursor-pointer";
-  const SELECT_INHERITED = "border-green-400 dark:border-green-700 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 font-semibold";
-  const SELECT_NEUTRAL = "border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-black-900 dark:text-white-100";
 
   let providers = $state<ProviderOption[]>([]);
   let presets = $state<PresetOption[]>([]);
@@ -107,7 +104,21 @@
 
   const isScoped = $derived(!!scopedProjectId && projects.some((p) => p.id === scopedProjectId));
   const scopedProject = $derived(projects.find((p) => p.id === scopedProjectId));
-  const selectClass = $derived(`${SELECT_BASE} ${isScoped ? SELECT_INHERITED : SELECT_NEUTRAL}`);
+  // Option lists for the themed Select dropdowns.
+  const projectOptions = $derived([
+    { label: "— no project —", value: "" },
+    ...projects.map((p) => ({ label: `${FOLDER_ICON} ${p.name}`, value: p.id })),
+  ]);
+  const providerOptions = $derived(
+    providers.map((p) => ({
+      label: p.name === p.type ? p.type : `${p.type} · ${p.name}`,
+      value: providerKey(p),
+    })),
+  );
+  const presetOptions = $derived([
+    { label: "— preset (default) —", value: "" },
+    ...presets.map((pr) => ({ label: pr.name, value: pr.name })),
+  ]);
 
   function autoResize(el: HTMLTextAreaElement) {
     el.style.height = "auto";
@@ -279,35 +290,28 @@
         </button>
 
         {#if projects.length > 0}
-          <label class="sr-only" for="ns-project">Project</label>
-          <select
-            id="ns-project"
-            bind:value={selectedProject}
-            onchange={() => applyProjectDefaults(selectedProject)}
-            class={selectClass}
-          >
-            <option value="">{"— no project —"}</option>
-            {#each projects as proj (proj.id)}
-              <option value={proj.id}>{FOLDER_ICON} {proj.name}</option>
-            {/each}
-          </select>
+          <Select
+            size="sm"
+            value={selectedProject}
+            options={projectOptions}
+            onChange={(v) => { selectedProject = v; applyProjectDefaults(v); }}
+          />
         {/if}
 
-        <label class="sr-only" for="ns-provider">Provider</label>
-        <select id="ns-provider" bind:value={selectedProvider} class={selectClass}>
-          {#each providers as p (providerKey(p))}
-            <option value={providerKey(p)}>{p.name === p.type ? p.type : `${p.type} · ${p.name}`}</option>
-          {/each}
-        </select>
+        <Select
+          size="sm"
+          value={selectedProvider}
+          options={providerOptions}
+          onChange={(v) => (selectedProvider = v)}
+        />
 
         {#if presets.length > 0}
-          <label class="sr-only" for="ns-preset">Preset</label>
-          <select id="ns-preset" bind:value={selectedPreset} class={selectClass}>
-            <option value="">{"— preset (default) —"}</option>
-            {#each presets as pr (pr.name)}
-              <option value={pr.name}>{pr.name}</option>
-            {/each}
-          </select>
+          <Select
+            size="sm"
+            value={selectedPreset}
+            options={presetOptions}
+            onChange={(v) => (selectedPreset = v)}
+          />
         {/if}
 
         <button
