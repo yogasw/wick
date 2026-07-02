@@ -296,6 +296,8 @@ func Register(r tool.Router) {
 	r.GET("/providers/catalog/{type}", providerCatalogJSON)
 	r.DELETE("/providers/{type}/{name}", deleteProviderInstance)
 	r.GET("/providers/spawns/{file}", providerSpawnDetail)
+	r.GET("/providers/spawns/{file}/reveal", providerSpawnReveal)
+	r.GET("/api/providers/spawns/{file}", apiSpawnDetail)
 	r.POST("/providers/gate/toggle", toggleGate)
 	r.POST("/providers/gate/modes", saveGateModes)
 	r.POST("/providers/rescan", rescanAllProviders)
@@ -1072,10 +1074,11 @@ type switchProviderReq struct {
 	Provider string `json:"provider"`
 }
 
-// switchProvider creates a new session with the same project but a
-// different provider. Provider sessions cannot be resumed across CLI
-// implementations (ResumeID is provider-specific), so a fresh session
-// is always the right call. Returns the new session URL for redirect.
+// switchProvider changes the active provider on the current session
+// in-place — the same path a "#codex" chat message takes: persist to
+// agents.json, record a system turn, kill the running subprocess so the
+// next message respawns with the new provider. The session id is
+// unchanged; the caller just refreshes its state.
 func switchProvider(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -1091,31 +1094,33 @@ func switchProvider(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	u := login.GetUser(c.Context())
-	callerID := ""
-	if u != nil {
-		callerID = u.ID
+	agentName := sess.Meta.ActiveAgent
+	if agentName == "" && len(sess.Agents) > 0 {
+		agentName = sess.Agents[0].Name
 	}
-	newID := uuid.New().String()
-	_, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
-		ID:        newID,
-		ProjectID: sess.Meta.ProjectID,
-		Origin:    session.OriginUI,
-		UserID:    callerID,
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if agentName == "" {
+		c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": "no agent in session"})
 		return
 	}
-	if err := globalMgr.AddAgent(newID, "main", req.Provider); err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	bcast := globalBcast
+	// UI passes no Reply: the single system turn (published via Notify) carries
+	// the switch pill + note, so we don't want a duplicate assistant bubble.
+	if err := provider.Switch(globalLayout, globalPool, id, agentName, req.Provider, provider.SwitchOptions{
+		Source: "ui",
+		Notify: func(tag string, steps []string) {
+			if bcast != nil {
+				bcast.PublishSystemTurn(id, agentName, "Provider switched → "+tag, steps)
+			}
+		},
+	}); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, map[string]string{
-		"status":   "switched",
-		"provider": req.Provider,
-		"redirect": c.Base() + "/sessions/" + newID,
-	})
+	if err := globalMgr.RefreshSession(id); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": "refresh session: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "switched", "provider": req.Provider})
 }
 
 type moveSessionReq struct {
@@ -1209,6 +1214,8 @@ func sendMessage(c *tool.Ctx) {
 			return
 		}
 		bcast := globalBcast
+		// No Reply on the UI path — the system turn (via Notify) is the only
+		// bubble the switch should produce.
 		if err := provider.Switch(globalLayout, globalPool, id, agentName, r.Tag, provider.SwitchOptions{
 			Source:   "ui",
 			UserText: req.Text,
@@ -1216,12 +1223,6 @@ func sendMessage(c *tool.Ctx) {
 				if bcast != nil {
 					bcast.PublishRaw(id, agentName, "user_message", req.Text)
 					bcast.PublishSystemTurn(id, agentName, "Provider switched → "+tag, steps)
-				}
-			},
-			Reply: func(text string) {
-				if bcast != nil {
-					bcast.PublishRaw(id, agentName, "text_delta", text)
-					bcast.PublishRaw(id, agentName, "done", "")
 				}
 			},
 		}); err != nil {

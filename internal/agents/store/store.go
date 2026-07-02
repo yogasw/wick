@@ -87,7 +87,17 @@ type ConversationTurn struct {
 	HasArtifact bool         `json:"has_artifact,omitempty"` // assistant turn — true when Artifacts derived
 	Artifacts   []Artifact   `json:"artifacts,omitempty"`    // assistant turn, derived read-time
 	IsError     bool         `json:"is_error,omitempty"`     // system turn — provider/runtime error, render as a failure
+
+	// Kind tags a structured system turn so the UI can render it specially
+	// and callers can identify it (e.g. "provider_switch"). Empty for a
+	// plain system message. Extras carries arbitrary metadata for that kind
+	// (provider_switch: from, to, note) without growing the schema per feature.
+	Kind   string            `json:"kind,omitempty"`   // system turn only
+	Extras map[string]string `json:"extras,omitempty"` // system turn only
 }
+
+// SystemTurnKind values for ConversationTurn.Kind.
+const KindProviderSwitch = "provider_switch"
 
 // TurnTraceIndex is the lightweight index written to thinking/<turn_id>.json.
 // Events below the inline threshold have their Text embedded here.

@@ -1051,58 +1051,88 @@ func toggleAutoRescan(c *tool.Ctx) {
 	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
 }
 
-// providerSpawnDetail renders the timeline of one spawn log file. The
-// `file` path param is the bare filename (no directory) — the
-// SpawnLogger resolves it under its own BaseDir.
+// providerSpawnDetail serves the Providers SPA shell for the
+// /providers/spawns/{file} route. The SPA router (prefix /providers) picks up
+// /spawns/<file> and renders SpawnDetail, which fetches apiSpawnDetail. Serving
+// the shell here means a direct load / refresh of the URL boots straight into
+// the detail view.
 func providerSpawnDetail(c *tool.Ctx) {
+	providerDetailPage(c)
+}
+
+// apiSpawnDetail returns the JSON detail for one spawn log: metadata, the full
+// event timeline, a session-deleted flag, and the MASKED reproduce variants.
+// Real secrets are only served by the separate reveal endpoint.
+func apiSpawnDetail(c *tool.Ctx) {
 	if !requireAdmin(c) {
 		return
 	}
-	if globalSpawnLog == nil {
-		c.Error(http.StatusServiceUnavailable, "spawn logger not ready")
-		return
-	}
-	name := c.PathValue("file")
-	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
-		c.Error(http.StatusBadRequest, "invalid spawn log filename")
-		return
-	}
-	all, err := globalSpawnLog.List("", "", "")
-	if err != nil {
-		c.Error(http.StatusInternalServerError, err.Error())
-		return
-	}
-	var meta provider.SpawnLogFile
-	for _, f := range all {
-		if filenameOf(f.Path) == name {
-			meta = f
-			break
-		}
-	}
-	if meta.Path == "" {
-		c.NotFound()
+	meta, ok := findSpawnFile(c, c.PathValue("file"))
+	if !ok {
 		return
 	}
 	events, err := globalSpawnLog.Read(meta.Path)
 	if err != nil {
-		c.Error(http.StatusInternalServerError, err.Error())
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	// Flag a stale spawn whose session has since been deleted, so the
-	// detail page can warn that the cwd path no longer exists.
 	sessionDeleted := false
 	if meta.SessionID != "" {
 		if _, ok := globalMgr.Registry().Session(meta.SessionID); !ok {
 			sessionDeleted = true
 		}
 	}
-	c.HTML(view.ProviderSpawnDetail(view.ProviderSpawnDetailVM{
-		Layout:         sidebarVM(c, "providers", ""),
-		Base:           c.Base(),
-		File:           meta,
-		Events:         events,
+	eventDTOs := make([]SpawnEventDTO, 0, len(events))
+	for _, ev := range events {
+		eventDTOs = append(eventDTOs, spawnEventDTO(ev))
+	}
+	c.JSON(http.StatusOK, SpawnDetailResponse{
+		File:           spawnLogFileDTO(meta),
+		Events:         eventDTOs,
 		SessionDeleted: sessionDeleted,
-	}))
+		Repro:          view.BuildReproVariants(meta.ProviderType, meta.Binary, meta.Argv, meta.Env),
+	})
+}
+
+// findSpawnFile validates the filename param and resolves it to a spawn log
+// file. On any failure it writes the HTTP error/404 and returns ok=false.
+func findSpawnFile(c *tool.Ctx, name string) (provider.SpawnLogFile, bool) {
+	if globalSpawnLog == nil {
+		c.Error(http.StatusServiceUnavailable, "spawn logger not ready")
+		return provider.SpawnLogFile{}, false
+	}
+	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+		c.Error(http.StatusBadRequest, "invalid spawn log filename")
+		return provider.SpawnLogFile{}, false
+	}
+	all, err := globalSpawnLog.List("", "", "")
+	if err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return provider.SpawnLogFile{}, false
+	}
+	for _, f := range all {
+		if filenameOf(f.Path) == name {
+			return f, true
+		}
+	}
+	c.NotFound()
+	return provider.SpawnLogFile{}, false
+}
+
+// providerSpawnReveal returns the reproduce commands with UNMASKED secret env
+// values, resolved live from config. Admin-gated (same as the detail page) —
+// this is the only place the real secrets leave the server, and only on an
+// explicit request, never embedded in the spawn-log page HTML.
+func providerSpawnReveal(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	meta, ok := findSpawnFile(c, c.PathValue("file"))
+	if !ok {
+		return
+	}
+	env := provider.UnmaskSpawnEnv(provider.Type(meta.ProviderType), meta.ProviderName, meta.Env)
+	c.JSON(http.StatusOK, view.BuildReproVariants(meta.ProviderType, meta.Binary, meta.Argv, env))
 }
 
 // poolMaxConcurrent surfaces the live MaxConcurrent slot count. The

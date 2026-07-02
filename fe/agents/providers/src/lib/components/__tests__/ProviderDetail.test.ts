@@ -43,7 +43,7 @@ function makeDetail(): ProviderDetailResponse {
   };
 }
 
-const defaultProps = { base: "", type: "claude", name: "default", onBack: vi.fn() };
+const defaultProps = { base: "", type: "claude", name: "default", onBack: vi.fn(), onOpenSpawn: vi.fn() };
 
 beforeEach(() => {
   vi.mocked(api.apiGetProviderDetail).mockResolvedValue(makeDetail());

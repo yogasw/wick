@@ -323,18 +323,20 @@
 
   async function handleProviderChange(provider: string) {
     try {
-      const res = await run(
+      // In-place switch (same path as a "#codex" chat message): persists to
+      // agents.json + kills the subprocess so the next message respawns with
+      // the new provider. Session id is unchanged — no navigation. A single
+      // system turn arrives over SSE (no assistant bubble).
+      await run(
         switchProvider(base, sessionId, provider).pipe(Effect.provide(WickClientLayer)),
       );
-      if (res.redirect) {
-        if (res.redirect.startsWith("/sessions/")) {
-          push(res.redirect);
-        } else {
-          window.location.href = res.redirect;
-        }
-      } else {
-        activeProvider = provider;
-      }
+      // Reflect the switch in both the composer selector and the header pill.
+      activeProvider = provider;
+      agentLabel = provider;
+      // Refetch the authoritative history: the backend collapses back-to-back
+      // switches on disk, so this replaces any stale switch bubbles still shown
+      // from earlier live SSE turns with the pruned, canonical transcript.
+      void loadConversation();
     } catch (e: unknown) {
       toastError(`Provider: ${e instanceof Error ? e.message : String(e)}`);
     }

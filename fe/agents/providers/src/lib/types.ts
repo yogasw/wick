@@ -54,6 +54,34 @@ export interface SpawnLogFileDTO {
   ExitReason: string;
 }
 
+export interface SpawnEvent {
+  Type: string;
+  At: string;
+  ProviderType: string;
+  ProviderName: string;
+  AgentName: string;
+  Workspace: string;
+  ResumeID: string;
+  Binary: string;
+  Args: string[];
+  Env: string[];
+  PID: number;
+  Origin: string;
+  FirstUserMessage: string;
+  ExitReason: string;
+  DurationMs: number;
+  Error: string;
+  Message: string;
+}
+
+export interface SpawnDetailResponse {
+  File: SpawnLogFileDTO;
+  Events: SpawnEvent[];
+  SessionDeleted: boolean;
+  /** Masked reproduce commands keyed "<shell>-<h|i>-<full|short>". */
+  Repro: Record<string, string>;
+}
+
 export interface MCPClientDTO {
   ID: string;
   Label: string;

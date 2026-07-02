@@ -8,6 +8,8 @@ import type {
   ProviderCapDTO,
   HookCapabilityDTO,
   SpawnLogFileDTO,
+  SpawnEvent,
+  SpawnDetailResponse,
   MCPClientDTO,
   MCPStatusDTO,
   GateStatusDTO,
@@ -61,6 +63,33 @@ interface WireSpawnLogFile {
   first_user_message?: string;
   binary?: string;
   exit_reason?: string;
+}
+
+interface WireSpawnEvent {
+  type: string;
+  at: string;
+  provider_type?: string;
+  provider_name?: string;
+  agent_name?: string;
+  workspace?: string;
+  resume_id?: string;
+  binary?: string;
+  args?: string[];
+  env?: string[];
+  pid?: number;
+  origin?: string;
+  first_user_message?: string;
+  exit_reason?: string;
+  duration_ms?: number;
+  error?: string;
+  message?: string;
+}
+
+interface WireSpawnDetailResponse {
+  file: WireSpawnLogFile;
+  events: WireSpawnEvent[] | null;
+  session_deleted: boolean;
+  repro: Record<string, string> | null;
 }
 
 interface WireMCPClient {
@@ -514,6 +543,45 @@ export function normalizeProviderDetail(r: WireProviderDetailResponse): Provider
 export async function apiGetProviderDetail(base: string, type: string, name: string): Promise<ProviderDetailResponse> {
   const r = await get<WireProviderDetailResponse>(`${base}/api/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
   return normalizeProviderDetail(r);
+}
+
+function mapSpawnEvent(w: WireSpawnEvent): SpawnEvent {
+  return {
+    Type: w.type ?? "",
+    At: w.at ?? "",
+    ProviderType: w.provider_type ?? "",
+    ProviderName: w.provider_name ?? "",
+    AgentName: w.agent_name ?? "",
+    Workspace: w.workspace ?? "",
+    ResumeID: w.resume_id ?? "",
+    Binary: w.binary ?? "",
+    Args: w.args ?? [],
+    Env: w.env ?? [],
+    PID: w.pid ?? 0,
+    Origin: w.origin ?? "",
+    FirstUserMessage: w.first_user_message ?? "",
+    ExitReason: w.exit_reason ?? "",
+    DurationMs: w.duration_ms ?? 0,
+    Error: w.error ?? "",
+    Message: w.message ?? "",
+  };
+}
+
+// apiGetSpawnDetail fetches one spawn log's metadata, event timeline, and the
+// MASKED reproduce variants. apiRevealSpawn fetches the UNMASKED variants (same
+// keys), admin-gated — called only when the user picks "Live" env.
+export async function apiGetSpawnDetail(base: string, file: string): Promise<SpawnDetailResponse> {
+  const r = await get<WireSpawnDetailResponse>(`${base}/api/providers/spawns/${encodeURIComponent(file)}`);
+  return {
+    File: mapSpawn(r.file),
+    Events: (r.events ?? []).map(mapSpawnEvent),
+    SessionDeleted: r.session_deleted ?? false,
+    Repro: r.repro ?? {},
+  };
+}
+
+export async function apiRevealSpawn(base: string, file: string): Promise<Record<string, string>> {
+  return get<Record<string, string>>(`${base}/providers/spawns/${encodeURIComponent(file)}/reveal`);
 }
 
 export async function apiSaveProviderDetail(base: string, type: string, name: string, fields: Record<string, string>): Promise<void> {

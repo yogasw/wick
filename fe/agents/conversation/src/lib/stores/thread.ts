@@ -215,7 +215,21 @@ export function createThreadStore(): ThreadStore {
           events: steps.map((s) => ({ type: "step", text: s })),
           attachments: [],
         };
-        turns.update((ts) => [...ts, systemTurn]);
+        // Collapse back-to-back switches live: if this is a provider-switch turn
+        // and the tail of the thread is already switch turns (no real chat since),
+        // drop them so only the latest remains — mirrors the backend's on-disk
+        // prune so the UI doesn't stack a card per switch before the refetch.
+        const isSwitch = (t: ConversationTurn) =>
+          t.role === "system" && t.text.startsWith("Provider switched");
+        if (isSwitch(systemTurn)) {
+          turns.update((ts) => {
+            let end = ts.length;
+            while (end > 0 && isSwitch(ts[end - 1])) end--;
+            return [...ts.slice(0, end), systemTurn];
+          });
+        } else {
+          turns.update((ts) => [...ts, systemTurn]);
+        }
         break;
       }
 

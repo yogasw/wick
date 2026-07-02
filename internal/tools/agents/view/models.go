@@ -2,7 +2,6 @@ package view
 
 import (
 	"github.com/yogasw/wick/internal/agents/project"
-	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/session"
 )
 
@@ -153,14 +152,3 @@ type GateStatusVM struct {
 	BypassLocked bool
 }
 
-// ProviderSpawnDetailVM holds data for one spawn-log file timeline.
-type ProviderSpawnDetailVM struct {
-	Layout AgentsLayoutVM
-	Base   string
-	File   provider.SpawnLogFile
-	Events []provider.SpawnEvent
-	// SessionDeleted is true when the spawn's session no longer exists
-	// (deleted since the spawn ran) — the detail page shows a notice and
-	// the cwd path is stale.
-	SessionDeleted bool
-}

@@ -76,6 +76,60 @@ type SpawnLogFileDTO struct {
 	ExitReason       string `json:"exit_reason,omitempty"`
 }
 
+// SpawnEventDTO is one event line from a spawn log's timeline.
+type SpawnEventDTO struct {
+	Type             string   `json:"type"`
+	At               string   `json:"at"`
+	ProviderType     string   `json:"provider_type,omitempty"`
+	ProviderName     string   `json:"provider_name,omitempty"`
+	AgentName        string   `json:"agent_name,omitempty"`
+	Workspace        string   `json:"workspace,omitempty"`
+	ResumeID         string   `json:"resume_id,omitempty"`
+	Binary           string   `json:"binary,omitempty"`
+	Args             []string `json:"args,omitempty"`
+	Env              []string `json:"env,omitempty"`
+	PID              int      `json:"pid,omitempty"`
+	Origin           string   `json:"origin,omitempty"`
+	FirstUserMessage string   `json:"first_user_message,omitempty"`
+	ExitReason       string   `json:"exit_reason,omitempty"`
+	DurationMs       int64    `json:"duration_ms,omitempty"`
+	Error            string   `json:"error,omitempty"`
+	Message          string   `json:"message,omitempty"`
+}
+
+// SpawnDetailResponse is the full spawn-log detail: metadata, the event
+// timeline, whether the session was since deleted, and the MASKED reproduce
+// commands keyed by view.ReproKey (shell-mode-path). Unmasked variants come
+// from the separate reveal endpoint.
+type SpawnDetailResponse struct {
+	File           SpawnLogFileDTO   `json:"file"`
+	Events         []SpawnEventDTO   `json:"events"`
+	SessionDeleted bool              `json:"session_deleted"`
+	Repro          map[string]string `json:"repro"`
+}
+
+func spawnEventDTO(e provider.SpawnEvent) SpawnEventDTO {
+	return SpawnEventDTO{
+		Type:             e.Type,
+		At:               e.At.UTC().Format(time.RFC3339),
+		ProviderType:     e.ProviderType,
+		ProviderName:     e.ProviderName,
+		AgentName:        e.AgentName,
+		Workspace:        e.Workspace,
+		ResumeID:         e.ResumeID,
+		Binary:           e.Binary,
+		Args:             e.Args,
+		Env:              e.Env,
+		PID:              e.PID,
+		Origin:           e.Origin,
+		FirstUserMessage: e.FirstUserMessage,
+		ExitReason:       e.ExitReason,
+		DurationMs:       e.DurationMs,
+		Error:            e.Error,
+		Message:          e.Message,
+	}
+}
+
 // MCPClientDTO is one MCP client install state.
 type MCPClientDTO struct {
 	ID          string `json:"id"`

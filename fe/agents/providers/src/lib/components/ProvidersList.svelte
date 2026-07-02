@@ -23,9 +23,10 @@
 
   type Props = {
     onNavigate: (type: string, name: string) => void;
+    onOpenSpawn: (file: string) => void;
     base: string;
   };
-  let { onNavigate, base }: Props = $props();
+  let { onNavigate, onOpenSpawn, base }: Props = $props();
 
   let data = $state<ProvidersListResponse | null>(null);
   let loading = $state(true);
@@ -712,9 +713,9 @@
             {#each data.Spawns as s (s.Path)}
               <tr
                 class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 cursor-pointer"
-                onclick={() => { window.location.href = `${base}/providers/spawns/${encodeURIComponent(spawnFile(s))}`; }}
+                onclick={() => onOpenSpawn(spawnFile(s))}
               >
-                <td class="px-5 py-2 font-mono text-link-400 whitespace-nowrap hover:underline">{s.StartedAt}</td>
+                <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600 whitespace-nowrap">{new Date(s.StartedAt).toLocaleString()}</td>
                 <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">{s.ProviderType}/{s.ProviderName}</td>
                 <td class="px-5 py-2 font-mono text-black-900 dark:text-white-100">{shortID(s.SessionID)}</td>
                 <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">{s.PID > 0 ? s.PID : "—"}</td>
