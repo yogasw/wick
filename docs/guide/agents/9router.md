@@ -87,7 +87,68 @@ Paths that point at a **different local service** (for example 9router's own OAu
 
 All controls — Install, Update, Start, Stop, Restart, Auto-start toggle, and Logs — are gated to admin users. The proxy endpoint at `/9router/` is also behind admin auth, so the dashboard is never reachable by non-admin sessions.
 
+## Master switch and settings
+
+Two fields in **Settings → Agents** (or `/admin/advanced` → group **9router**) control the feature globally:
+
+| Field | Default | What it does |
+|---|---|---|
+| `Router9Enabled` | `true` | Master switch. Off = dashboard, `/9router/v1` proxy, auto-start, and all controls are disabled. Access visibility is managed separately under **Admin → Tools**. |
+| `Router9Autostart` | `false` | Auto-start 9router on boot. When on, 9router joins the boot-gate sequence and the wick "Booting…" screen waits for 9router to be ready before opening. |
+
+## Routing providers through 9router
+
+Provider instances (`claude`, `codex`) can be told to route their upstream LLM calls through the embedded 9router proxy instead of hitting the provider's own API directly. This lets you apply 9router's routing rules, rate limits, and key management to every agent spawn without touching the provider's global config.
+
+### Enabling the toggle
+
+On the provider detail page (**Agents → Providers → open an instance**), scroll to the **9router** section. Enable the **Use 9router** toggle. This is **admin-only** — the section is not visible to non-admin users.
+
+When the toggle is on, wick injects the appropriate env vars into the CLI's spawn environment so it talks to wick's own `/9router/v1` proxy instead of the provider's cloud endpoint:
+
+| Provider | Injected env vars |
+|---|---|
+| `claude` | `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>/9router/v1`, `ANTHROPIC_AUTH_TOKEN=<key>` |
+| `codex` | `OPENAI_API_KEY=<key>` (env), plus `-c` config overrides: `model_provider=9router`, `model_providers.9router.base_url=http://127.0.0.1:<port>/9router/v1`, `model_providers.9router.wire_api=responses`, `auth_mode=apikey` |
+
+The `<port>` is `WICK_PORT` (wick's own HTTP port), so the CLI talks to wick's loopback address and the request is forwarded through the `/9router/v1` subtree to the running 9router process.
+
+### Model slots
+
+Each provider type exposes named model slots. You can pick a concrete 9router model ID for each slot — all slots are optional; an unset slot is left to 9router's own default.
+
+| Provider | Slots | Maps to |
+|---|---|---|
+| `claude` | `opus`, `sonnet`, `haiku` | `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` |
+| `codex` | `model` (primary), `subagent` | codex `-c model=…` and `-c subagent_model=…` config overrides |
+
+The model picker in the form shows the available slots for the instance's type. Use a 9router route ID (e.g. `cc/claude-opus-4-6`) that 9router resolves to the real upstream model.
+
+### Custom API key
+
+By default, wick uses `sk_9router` as the 9router auth token. To use a custom key (useful when 9router is configured with a real secret), enter it in the **Custom API Key** field. The value is stored encrypted at rest; the detail page shows only whether a key is set, never the plaintext.
+
+Leave the field blank to revert to the default token.
+
+### Requirements
+
+- 9router must be running (started from the Settings tab or auto-started on boot) before any spawn that has **Use 9router** enabled — otherwise the CLI will fail to reach the proxy.
+- Only `claude` and `codex` instances support the toggle. `gemini` instances do not show the 9router section.
+
+## Unauthenticated `/9router/v1` proxy
+
+Wick mounts an **unauthenticated** OpenAI-compatible API proxy at:
+
+```
+<wick-origin>/9router/v1/
+```
+
+This path is intentionally exempt from the wick session cookie requirement. Spawned AI CLIs must reach this endpoint without a browser session — they authenticate to 9router using the 9router API key instead of a wick session. The proxy is also exempt from the host allowlist check when accessed over loopback (`127.0.0.1`), matching the same exemption `/mcp` has.
+
+The admin-gated dashboard proxy at `/9router/` (no `/v1`) is a separate mount and remains admin-cookie-protected.
+
 ## See also
 
+- [Providers](./providers) — configure provider instances, including the Use 9router toggle.
 - [Web Terminal](../webtty) — another embedded process proxied through wick (gotty).
 - [AI Agents overview](../agents) — the Agents shell that hosts 9router, Skills Manager, Channels, and more.

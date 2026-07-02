@@ -26,6 +26,9 @@ Each instance carries:
 | `ExtraArgs` | Appended to every spawn argv. | [provider.go:55](https://github.com/yogasw/wick/blob/master/internal/agents/provider/provider.go#L55) |
 | `Env` | Extra env vars. **This is where `ANTHROPIC_API_KEY` goes for a per-instance PAT.** | [provider.go:56](https://github.com/yogasw/wick/blob/master/internal/agents/provider/provider.go#L56) |
 | `Disabled` | Toggle without deleting. | [provider.go:57](https://github.com/yogasw/wick/blob/master/internal/agents/provider/provider.go#L57) |
+| `Use9router` | Route this instance's CLI through the embedded 9router proxy instead of the provider's own API. `claude`/`codex` only. See [9router provider integration](./9router#routing-providers-through-9router). | [provider.go](https://github.com/yogasw/wick/blob/master/internal/agents/provider/provider.go) |
+| `Router9Models` | Per-slot 9router model IDs (e.g. `opus → cc/claude-opus-4-6`). All slots optional. | [router9.go](https://github.com/yogasw/wick/blob/master/internal/agents/provider/router9.go) |
+| `Router9APIKey` | Custom 9router API key, stored encrypted. Empty = default `sk_9router`. | [router9.go](https://github.com/yogasw/wick/blob/master/internal/agents/provider/router9.go) |
 
 The default seed: when the instance list is empty, [`Load`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/provider.go#L89) auto-creates one default per type whose `Name` equals the type. So a fresh install always shows three cards (`claude/claude`, `codex/codex`, `gemini/gemini`).
 
@@ -169,7 +172,9 @@ Two events per spawn: `start` (with PID, argv, binary, first user message) and `
 
 Source: [`spawnlog.go`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/spawnlog.go).
 
-The Spawn detail page in the UI (link from the recent-spawns table) renders the start + exit events plus the resolved provider source label.
+The Spawn detail page in the UI (link from the recent-spawns table) renders the start + exit events plus the resolved provider source label. Each row in the Recent Spawns table is now clickable — it opens the corresponding spawn detail page directly.
+
+The detail page also shows an **Injected env** panel when wick added env vars to the spawn (instance env + 9router routing overrides). Secret values (keys, tokens, passwords) are partially masked — the first and last character are visible, the middle is replaced with `*`. Non-secret routing vars (e.g. `ANTHROPIC_BASE_URL`) pass through unmasked so you can verify the routing destination.
 
 ## Spawn / probe log keys
 
@@ -279,9 +284,12 @@ Quick cheatsheet for what each provider supports — useful when picking a defau
 |---|---|---|
 | `GET` | `/providers/catalog/{type}` | Returns the curated env + args picker entries for `claude`, `codex`, or `gemini`. Admin only. |
 | `POST` | `/providers/rename/{type}/{name}` | Renames an instance. Body: `new_name=<name>`. Migrates project defaults; live sessions unaffected. Admin only. |
+| `GET` | `/providers/router9/slots/{type}` | Returns the 9router model slots for a provider type. Admin only. |
+| `POST` | `/providers/detail/{type}/{name}/router9` | Saves 9router settings (toggle + model slots + API key) for one instance. Admin only. |
 
 ## See also
 
 - [Projects](./projects) — `default_provider` field per project; how project defaults auto-migrate on rename.
 - [Pool & Sessions](./pool) — how `provider_type` / `provider_name` are forwarded to the spawner.
+- [9router](./9router) — routing provider spawns through the embedded 9router proxy.
 - [Command Gate](../command-gate) — gate sidecar lives next to the main binary, separate from providers.

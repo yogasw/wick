@@ -110,6 +110,8 @@ Source: [`config.GeneralConfig`](https://github.com/yogasw/wick/blob/master/inte
 | `AutoRescan` | `true` | Re-probe provider binaries when cached version is older than 24h. Off = manual Rescan only. |
 | `PreemptIdle` | `true` | When the pool is full and a new session is queued, kill the longest-idle active subprocess to free its slot instead of waiting out the idle TTL. Killed sessions resume via `--resume` on their next message. A 1 s background loop keeps retrying preemption while the queue is non-empty so a session that goes idle after a queued send still releases its slot promptly. |
 | `SystemPrompt` | _(embedded baseline)_ | Global interaction rules appended to every preset's `agent.md` on spawn. Adds to the preset — never replaces it. Edit and reset the default from `/tools/agents/settings`; the shipped baseline is [`internal/agents/system-prompt/default.md`](https://github.com/yogasw/wick/blob/master/internal/agents/system-prompt/default.md). |
+| `Router9Enabled` | `true` | Master switch for the embedded 9router. Off = dashboard, `/9router/v1` proxy, auto-start, and all controls are disabled. Access visibility is managed separately under **Admin → Tools**. |
+| `Router9Autostart` | `false` | Auto-start the embedded 9router process on boot. When on, 9router joins the boot-gate sequence. Only effective when `Router9Enabled` is on. |
 
 ## Chat rendering
 

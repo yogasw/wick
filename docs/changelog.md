@@ -10,6 +10,10 @@ All notable changes to Wick are documented here.
 
 *   **9router embedded dashboard** (admin-only): A new **Agents → 9router** page (`/tools/agents/9router`) lets admins install, run, and manage the [9router](https://github.com/decolua/9router) npm LLM-router/proxy without shell access. The dashboard is reverse-proxied through the wick origin at `/9router/` with URL rewriting, so no extra port or tunnel is needed. Settings tab: Install / Update (via `npm install -g 9router`), Start / Stop / Restart buttons, **Auto-start on boot** toggle (makes 9router a boot-gate step so the dashboard is ready on first page load), and a live Logs panel. Theme tracks wick's light/dark setting automatically. Requires `npm` on host PATH. See [9router guide](guide/agents/9router).
 
+*   **Route providers through 9router**: `claude` and `codex` provider instances now have a **Use 9router** toggle on their detail page (admin-only). When enabled, the spawned CLI routes its LLM calls through wick's embedded 9router proxy (`/9router/v1`) instead of the provider's own cloud endpoint. Per-type model slots (claude: opus / sonnet / haiku; codex: model / subagent — all optional) map to concrete 9router route IDs. A custom API key field stores the 9router auth token encrypted at rest; blank defaults to `sk_9router`. See [9router — routing providers through 9router](guide/agents/9router#routing-providers-through-9router).
+
+*   **Unauthenticated `/9router/v1` proxy**: Spawned AI CLIs now reach 9router through wick's own loopback address at `/9router/v1/` — no wick session cookie required. Auth is handled by the 9router API key. The endpoint is loopback-exempted from the host allowlist (same as `/mcp`).
+
 *   **Provider instance catalog picker**: The provider detail page's **Env** and **Extra Args** fields now include a **Browse catalog** button that opens a searchable multi-select modal of known env vars and CLI flags for that provider type (`claude`, `codex`, `gemini`), with descriptions and default values. Selecting entries inserts them directly into the KV editor. Value cells for known env vars render as option dropdowns instead of plain text inputs. New endpoint: `GET /providers/catalog/{type}`.
 
 *   **Provider instance rename**: Rename a provider instance from its detail page (pencil icon on the title). The new name must use letters, digits, or `_` only; spaces auto-convert to `_`. On save, every project whose default provider matched the old `type/name` key is rewritten to the new key automatically. Live sessions keep the old provider key and must be re-selected by the user. New endpoint: `POST /providers/rename/{type}/{name}`.
@@ -17,6 +21,10 @@ All notable changes to Wick are documented here.
 ### Changed
 
 *   **Provider dropdowns list real instances**: The provider selector in the New Session composer and the Project Settings form now shows actual `type/name` instances (e.g. `claude/work`) rather than bare provider types. Picking a project in the composer auto-fills its saved default provider. Older bare-type defaults (`claude`, `codex`, `gemini`) are promoted to their canonical instance key at runtime without any data migration.
+
+*   **Spawn detail — injected env panel**: The spawn detail page now shows an **Injected env** card listing the environment variables wick added for that spawn (instance env + 9router routing overrides). Secret values (keys, tokens, passwords) are partially masked. Recent Spawns table rows are now clickable links to the detail page.
+
+*   **Conversation — provider errors and warnings visible**: Provider error turns (e.g. authentication failures, rate-limit messages from the CLI) now render as a distinct red error chip in the conversation instead of being silently dropped. Unrecognized CLI frames appear as a collapsible **Raw event** block inside the turn trace. Previously both were discarded.
 
 ---
 
