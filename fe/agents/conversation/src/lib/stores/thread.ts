@@ -230,9 +230,40 @@ export function createThreadStore(): ThreadStore {
         break;
       }
 
-      case "done":
-      case "error": {
+      case "done": {
+        // End of turn: commit the streamed live turn. The caller reloads
+        // the authoritative history right after; setHistory dedups the
+        // just-committed live turn against its persisted twin so the reply
+        // never renders twice (the race that caused intermittent doubles).
         finalize();
+        break;
+      }
+
+      case "error":
+      case "warning": {
+        // A fatal error ends the turn (commit any partial text); a warning
+        // is non-fatal and leaves the live turn running.
+        if (ev.type === "error") finalize();
+        // Surface the error/warning inline as a system error turn so it
+        // shows immediately (matches persisted history on reload).
+        const msg = (ev.data ?? "").trim();
+        if (msg) {
+          const errTurn: ConversationTurn = {
+            turn_id: `${ev.type}-${Date.now()}`,
+            role: "system",
+            agent: "",
+            provider: "",
+            text: msg,
+            timestamp: Date.now(),
+            truncated: false,
+            interrupted: false,
+            has_trace: false,
+            events: [],
+            attachments: [],
+            is_error: true,
+          };
+          turns.update((ts) => [...ts, errTurn]);
+        }
         break;
       }
 
@@ -269,7 +300,25 @@ export function createThreadStore(): ThreadStore {
     lifecycle,
     meta,
     setHistory(newTurns) {
-      turns.set(newTurns);
+      // The persisted history is authoritative. But a locally-committed
+      // turn (live-*/error-*/warning-*) may not be in `newTurns` yet if the
+      // reload raced the disk flush — dropping it would flicker the reply
+      // out. So keep any local turn whose (role, text) is NOT already in the
+      // persisted set, and drop the ones that ARE (their persisted twin
+      // replaces them). This kills the intermittent double without losing a
+      // reply when the reload lands early.
+      turns.update((cur) => {
+        const persistedKeys = new Set(newTurns.map((t) => `${t.role} ${t.text}`));
+        const isLocal = (t: ConversationTurn) =>
+          t.turn_id.startsWith("live-") ||
+          t.turn_id.startsWith("error-") ||
+          t.turn_id.startsWith("warning-") ||
+          t.turn_id.startsWith("local-user-");
+        const pendingLocal = cur.filter(
+          (t) => isLocal(t) && !persistedKeys.has(`${t.role} ${t.text}`),
+        );
+        return [...newTurns, ...pendingLocal];
+      });
     },
     appendUserTurn,
     handleEvent,

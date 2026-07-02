@@ -114,7 +114,7 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 		payload.At = now
 	case event.Thinking:
 		payload.At = now
-	case event.Error:
+	case event.Error, event.Warning:
 		payload.Data = ev.ErrorMsg
 	}
 	log.Debug().

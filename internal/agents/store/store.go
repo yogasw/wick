@@ -86,6 +86,7 @@ type ConversationTurn struct {
 	Attachments []Attachment `json:"attachments,omitempty"`  // user turn only
 	HasArtifact bool         `json:"has_artifact,omitempty"` // assistant turn — true when Artifacts derived
 	Artifacts   []Artifact   `json:"artifacts,omitempty"`    // assistant turn, derived read-time
+	IsError     bool         `json:"is_error,omitempty"`     // system turn — provider/runtime error, render as a failure
 }
 
 // TurnTraceIndex is the lightweight index written to thinking/<turn_id>.json.
@@ -347,7 +348,44 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		if err := s.flushAssistantTurn(false); err != nil {
 			return false, err
 		}
+		// Persist the error itself as a system turn so it survives a reload
+		// and renders in history — otherwise it's only a transient SSE event
+		// that vanishes (the user just sees "reconnecting…"). Skip when the
+		// error carries no message (nothing useful to show).
+		if msg := strings.TrimSpace(ev.ErrorMsg); msg != "" {
+			if err := s.appendErrorTurn(msg); err != nil {
+				return false, err
+			}
+		}
 		return true, nil
+
+	case event.Warning:
+		// Non-fatal error the CLI reported mid-stream — record it as an error
+		// turn so it shows in history, but do NOT flush/end the turn: the
+		// subprocess is still running and more output will follow.
+		if msg := strings.TrimSpace(ev.ErrorMsg); msg != "" {
+			if err := s.appendErrorTurn(msg); err != nil {
+				return false, err
+			}
+		}
+		return false, nil
+
+	case event.Trace:
+		// Unrecognized frame — keep it in the turn's trace (expandable in
+		// the UI) instead of the main thread. Buffered like other trace
+		// events; flushed with the turn. Never ends the turn.
+		raw := ev.Text
+		if raw == "" {
+			raw = ev.Raw
+		}
+		if strings.TrimSpace(raw) != "" {
+			now := s.now().UTC()
+			s.mu.Lock()
+			s.eventBuf = append(s.eventBuf, TurnEvent{Type: "raw", Text: raw, At: now})
+			s.mu.Unlock()
+			_ = s.appendInflight(InflightEntry{Type: "raw", Text: raw, At: now})
+		}
+		return false, nil
 	}
 
 	return false, nil
@@ -454,6 +492,29 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		// non-fatal: log left to caller's discretion via raw.jsonl audit
 	}
 	return nil
+}
+
+// appendErrorTurn writes a provider/runtime error as a system turn to
+// conversation.jsonl so it renders in history (IsError flags it for the UI
+// to style as a failure). Called from the Error event path after any
+// partial assistant text has been flushed.
+func (s *Store) appendErrorTurn(msg string) error {
+	now := s.now().UTC()
+	turn := ConversationTurn{
+		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
+		Timestamp: now,
+		Role:      "system",
+		Agent:     s.agentName,
+		Provider:  s.provider,
+		Text:      msg,
+		IsError:   true,
+	}
+	return storage.AppendJSONL(
+		s.layout.SessionConversation(s.sessionID),
+		"wick-conv-v1",
+		s.sessionID,
+		turn,
+	)
 }
 
 // writeTraceIndex writes thinking/<turn_id>.json (the index) and, for

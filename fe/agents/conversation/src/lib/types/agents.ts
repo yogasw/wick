@@ -92,6 +92,8 @@ export type ConversationTurn = {
   attachments: Attachment[];
   has_artifact?: boolean;
   artifacts?: Artifact[];
+  // system turn only — a provider/runtime error, rendered as a failure.
+  is_error?: boolean;
 };
 
 export type ApprovalRequest = {
@@ -167,6 +169,7 @@ export type SSEStatus = "connecting" | "connected" | "error";
 
 export type ThreadBlock =
   | { kind: "thinking"; text: string }
+  | { kind: "raw"; text: string }
   | { kind: "tool"; toolUseId: string; toolName: string; toolInput: string; result?: string; isError?: boolean; startedAt?: number; endedAt?: number };
 
 export type LiveTurn = { text: string; blocks: ThreadBlock[] };
