@@ -1,6 +1,10 @@
 package view
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/yogasw/wick/internal/agents/provider"
+)
 
 // Shell-specific renderers for the Spawn Log "Reproduce" block. Each turns a
 // binary + argv + injected env into a single copy-pasteable command for one
@@ -43,32 +47,41 @@ func isDriveLetter(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
-// StripResumeArgv drops the resume-session tokens so the command starts a fresh
-// session instead of continuing the logged one. Per provider: claude uses
-// `--resume <id>` (value flag), codex uses `resume <id>` (subcommand + id).
-// Other tokens are preserved.
-func StripResumeArgv(providerType string, argv []string) []string {
-	dropValueFlag := map[string]bool{}
-	dropSubcmdValue := map[string]bool{}
-	switch providerType {
-	case "claude", "gemini":
-		dropValueFlag["--resume"] = true
-	case "codex":
-		dropSubcmdValue["resume"] = true
+// dropTokens returns argv with the given tokens removed. `flags` and `subcmds`
+// are dropped outright; `valueFlags` and `subcmdValues` also drop the following
+// token (their value/id). `--flag=value` forms of a valueFlag are dropped too.
+func dropTokens(argv, flags, valueFlags, subcmds, subcmdValues []string) []string {
+	set := func(ss []string) map[string]bool {
+		m := make(map[string]bool, len(ss))
+		for _, s := range ss {
+			m[s] = true
+		}
+		return m
 	}
+	flagSet, valueSet, subcmdSet, subcmdValSet := set(flags), set(valueFlags), set(subcmds), set(subcmdValues)
 	out := make([]string, 0, len(argv))
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
-		if dropValueFlag[a] || dropSubcmdValue[a] {
-			i++ // skip the following id
+		if valueSet[a] || subcmdValSet[a] {
+			i++ // also skip the following value / id token
 			continue
 		}
-		if k, _, ok := strings.Cut(a, "="); ok && dropValueFlag[k] {
+		if k, _, ok := strings.Cut(a, "="); ok && valueSet[k] {
+			continue
+		}
+		if flagSet[a] || subcmdSet[a] {
 			continue
 		}
 		out = append(out, a)
 	}
 	return out
+}
+
+// StripResumeArgv drops the resume-session tokens (per provider.ReproSpec) so
+// the command starts a fresh session instead of continuing the logged one.
+func StripResumeArgv(providerType string, argv []string) []string {
+	s := provider.ReproSpecFor(provider.Type(providerType))
+	return dropTokens(argv, nil, s.ResumeValueFlags, nil, s.ResumeSubcmds)
 }
 
 // HasResumeArgv reports whether argv carries a resume-session token for the
@@ -127,67 +140,13 @@ func BuildReproVariants(providerType, binary string, argv, env []string) map[str
 	return out
 }
 
-// InteractiveArgv strips the headless/programmatic flags wick adds so the
-// command runs in the CLI's normal interactive chat mode instead of emitting
-// a JSON stream. Everything else (--mcp-config, --add-dir, --resume, …) is
-// kept so the session context is identical. providerType is the spawn log's
-// ProviderType ("claude" | "codex" | "gemini").
-//
-// Per provider, the flags dropped:
-//   - claude: -p, --verbose, --include-partial-messages, and the value flags
-//     --input-format / --output-format (each drops its following value token).
-//   - codex:  the `exec` subcommand and --json.
-//   - gemini: -p.
+// InteractiveArgv strips the headless/programmatic tokens wick adds (per
+// provider.ReproSpec) so the command runs in the CLI's normal interactive chat
+// mode instead of emitting a JSON stream. Everything else (--mcp-config,
+// --add-dir, --resume, …) is kept so the session context is identical.
 func InteractiveArgv(providerType string, argv []string) []string {
-	// dropFlag: bare flags removed outright.
-	// dropValueFlag: flags that also consume the next token (the value).
-	var dropFlag, dropValueFlag, dropSubcmd map[string]bool
-	// dropSubcmdValue: subcommand tokens that also consume the following token
-	// (a positional, e.g. codex's `resume <id>`).
-	var dropSubcmdValue map[string]bool
-	switch providerType {
-	case "claude":
-		dropFlag = map[string]bool{"-p": true, "--print": true, "--verbose": true, "--include-partial-messages": true}
-		dropValueFlag = map[string]bool{"--input-format": true, "--output-format": true}
-	case "codex":
-		// `codex exec` is the headless entry point; interactive is plain `codex`.
-		// Drop the exec subcommand and all exec-only flags — several
-		// (--skip-git-repo-check, --sandbox, --ask-for-approval) are unknown to
-		// the root command and would error. Keep `-c` overrides + the message.
-		dropFlag = map[string]bool{"--json": true, "--skip-git-repo-check": true}
-		dropValueFlag = map[string]bool{"--sandbox": true, "--ask-for-approval": true}
-		dropSubcmd = map[string]bool{"exec": true}
-		dropSubcmdValue = map[string]bool{"resume": true}
-	case "gemini":
-		dropFlag = map[string]bool{"-p": true, "--prompt": true}
-	default:
-		return argv
-	}
-
-	out := make([]string, 0, len(argv))
-	for i := 0; i < len(argv); i++ {
-		a := argv[i]
-		if dropSubcmd[a] {
-			continue
-		}
-		if dropSubcmdValue[a] {
-			i++ // also skip the positional that follows (e.g. the resume id)
-			continue
-		}
-		if dropValueFlag[a] {
-			i++ // also skip the value token
-			continue
-		}
-		// `--flag=value` form of a value flag.
-		if k, _, ok := strings.Cut(a, "="); ok && dropValueFlag[k] {
-			continue
-		}
-		if dropFlag[a] {
-			continue
-		}
-		out = append(out, a)
-	}
-	return out
+	s := provider.ReproSpecFor(provider.Type(providerType))
+	return dropTokens(argv, s.HeadlessFlags, s.HeadlessValueFlags, s.HeadlessSubcmds, nil)
 }
 
 // ShellReproduceBash renders a POSIX/bash command: inline VAR='v' assignments

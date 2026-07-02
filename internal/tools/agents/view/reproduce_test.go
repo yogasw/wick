@@ -211,9 +211,10 @@ func TestInteractiveArgv(t *testing.T) {
 		t.Errorf("claude: got %v want %v", got, want)
 	}
 
-	// codex: drop the `exec` subcommand + all exec-only flags
-	// (--json, --skip-git-repo-check, --sandbox<v>, --ask-for-approval<v>) and
-	// the `resume <id>` subcommand; keep `-c` overrides + the trailing message.
+	// codex: InteractiveArgv drops only the headless tokens — the `exec`
+	// subcommand + exec-only flags (--json, --skip-git-repo-check,
+	// --sandbox<v>, --ask-for-approval<v>). Resume is a SEPARATE axis
+	// (StripResumeArgv), so `resume <id>` is preserved here.
 	codex := []string{
 		"exec", "--json", "--skip-git-repo-check",
 		"--sandbox", "danger-full-access",
@@ -221,7 +222,7 @@ func TestInteractiveArgv(t *testing.T) {
 		"-c", "x=1", "resume", "abc123", "coba wick list",
 	}
 	got = InteractiveArgv("codex", codex)
-	want = []string{"-c", "x=1", "coba wick list"}
+	want = []string{"-c", "x=1", "resume", "abc123", "coba wick list"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("codex: got %v want %v", got, want)
 	}
