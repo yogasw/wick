@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -40,17 +39,30 @@ func manager() *Manager {
 // not from under the tool base.
 func RootProxy() http.Handler { return manager().ProxyHandler() }
 
+// APIProxy returns the OpenAI-compatible API reverse-proxy handler for
+// mounting at MountPrefix+"/v1/". server.go wires it WITHOUT auth so
+// local AI CLIs (codex/claude) pointed at wick's /9router/v1 base URL
+// can reach 9router directly. The longer route pattern (/9router/v1/)
+// takes precedence over the admin-gated dashboard mount (/9router/).
+func APIProxy() http.Handler { return manager().APIProxyHandler() }
+
 // SidebarFunc builds the Agents shell layout VM for a 9router page,
 // marking the given nav item active. The agents package owns the shell,
 // so it passes this in rather than this package reaching back into it.
 type SidebarFunc func(c *tool.Ctx, activePage string) view.AgentsLayoutVM
 
-// ConfigStore persists the small set of 9router knobs (just auto-start
-// today). The hosting package backs it with the app's config service so
-// this package stays free of storage imports.
+// ConfigStore persists the small set of 9router knobs and answers the
+// access questions the control endpoints need. The hosting package backs
+// it with the app's config service + auth so this package stays free of
+// storage/login imports.
 type ConfigStore interface {
 	GetAutostart() bool
 	SetAutostart(ctx context.Context, on bool) error
+	// Enabled is the master switch — false disables every control endpoint.
+	Enabled() bool
+	// AccessAllowed reports whether the request's user may drive controls
+	// (admin or a granted access tag).
+	AccessAllowed(ctx context.Context) bool
 }
 
 var store ConfigStore
@@ -104,10 +116,13 @@ func Autostart() {
 
 // page renders the single 9router page: a Dashboard tab (iframe) and a
 // Settings tab (install/start/stop/restart + auto-start + logs), toggled
-// client-side. FullBleed so the iframe fills the content area. Not
-// admin-gated here — the nav link is already admin-only; control
-// endpoints are gated individually.
+// client-side. FullBleed so the iframe fills the content area. Gated the
+// same as the controls: 404 when the master switch is off, 403 for callers
+// without access (admin or a granted tag).
 func page(c *tool.Ctx, sidebar SidebarFunc) {
+	if !allowed(c) {
+		return
+	}
 	layout := sidebar(c, "9router")
 	layout.FullBleed = true
 	autostart := false
@@ -123,52 +138,58 @@ func page(c *tool.Ctx, sidebar SidebarFunc) {
 
 // ── control endpoints (admin only) ───────────────────────────────────
 
-func adminOnly(c *tool.Ctx) bool {
-	u := login.GetUser(c.Context())
-	if u == nil || !u.IsAdmin() {
-		c.Error(http.StatusForbidden, "admins only")
+// allowed gates every control endpoint: the master switch must be on and
+// the caller must be an admin (via the store). A disabled master returns
+// 404 so the feature looks absent; a non-admin caller gets 403.
+func allowed(c *tool.Ctx) bool {
+	if store == nil || !store.Enabled() {
+		c.Error(http.StatusNotFound, "9router disabled")
+		return false
+	}
+	if !store.AccessAllowed(c.Context()) {
+		c.Error(http.StatusForbidden, "forbidden")
 		return false
 	}
 	return true
 }
 
 func status(c *tool.Ctx) {
-	if !adminOnly(c) {
+	if !allowed(c) {
 		return
 	}
 	manager().Status(c.W, c.R)
 }
 
 func logs(c *tool.Ctx) {
-	if !adminOnly(c) {
+	if !allowed(c) {
 		return
 	}
 	manager().Logs(c.W, c.R)
 }
 
 func install(c *tool.Ctx) {
-	if !adminOnly(c) {
+	if !allowed(c) {
 		return
 	}
 	manager().Install(c.W, c.R)
 }
 
 func start(c *tool.Ctx) {
-	if !adminOnly(c) {
+	if !allowed(c) {
 		return
 	}
 	manager().Start(c.W, c.R)
 }
 
 func stop(c *tool.Ctx) {
-	if !adminOnly(c) {
+	if !allowed(c) {
 		return
 	}
 	manager().Stop(c.W, c.R)
 }
 
 func restart(c *tool.Ctx) {
-	if !adminOnly(c) {
+	if !allowed(c) {
 		return
 	}
 	manager().Restart(c.W, c.R)
@@ -177,7 +198,7 @@ func restart(c *tool.Ctx) {
 // setAutostart persists the auto-start flag from form value "on"
 // ("true"/"false").
 func setAutostart(c *tool.Ctx) {
-	if !adminOnly(c) {
+	if !allowed(c) {
 		return
 	}
 	if store == nil {

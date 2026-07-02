@@ -292,7 +292,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		})
 	}
 
-	writeStartEvent := func(pid int, binary string, argv []string, firstMsg string) {
+	writeStartEvent := func(pid int, binary string, argv, env []string, firstMsg string) {
 		if f.SpawnLogger == nil || spawnLogPath == "" {
 			return
 		}
@@ -306,6 +306,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			PID:              pid,
 			Binary:           binary,
 			Args:             argv,
+			Env:              env,
 			FirstUserMessage: provider.TruncateFirstMessage(firstMsg),
 		})
 	}
@@ -318,7 +319,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		if meta.PID == 0 && len(meta.Argv) == 0 {
 			return
 		}
-		writeStartEvent(meta.PID, meta.Binary, meta.Argv, meta.FirstUserMessage)
+		writeStartEvent(meta.PID, meta.Binary, meta.Argv, meta.Env, meta.FirstUserMessage)
 	}
 
 	onExit := func(r provider.ExitReason) {
@@ -357,8 +358,8 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		State:   st,
 		OnEvent: onEvent,
 		OnExit:  onExit,
-		OnSpawn: func(binary string, argv []string, pid int, firstMsg string) {
-			writeStartEvent(pid, binary, argv, firstMsg)
+		OnSpawn: func(binary string, argv []string, env []string, pid int, firstMsg string) {
+			writeStartEvent(pid, binary, argv, env, firstMsg)
 		},
 		Instance:       &insCopy,
 		GateBinary:     gateBin,

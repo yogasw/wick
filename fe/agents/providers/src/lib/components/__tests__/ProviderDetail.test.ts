@@ -39,6 +39,7 @@ function makeDetail(): ProviderDetailResponse {
     ],
     Page: 1,
     HasNext: false,
+    Router9: { Supported: true, Enabled: false, Models: {}, KeySet: false },
   };
 }
 

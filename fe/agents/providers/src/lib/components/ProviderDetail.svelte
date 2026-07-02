@@ -13,9 +13,11 @@
     apiRenameProvider,
     apiProbeGate,
     apiGetProviderCatalog,
+    apiSaveRouter9,
   } from "$lib/api.js";
   import type { CatalogEntry, ProviderCatalog } from "$lib/api.js";
   import type { ProviderDetailResponse, ConfigFieldDTO } from "$lib/types.js";
+  import Router9Config from "$lib/components/Router9Config.svelte";
 
   type Props = {
     base: string;
@@ -182,6 +184,14 @@
   let valueListFields = $derived(data ? data.ConfigFields.filter(isValueListEditor) : []);
   let keyValueFields = $derived(data ? data.ConfigFields.filter(isKeyValueEditor) : []);
 
+  // 9router local state, seeded from the loaded detail (data.Router9) in load().
+  const router9Supported = $derived(data?.Router9.Supported ?? (type === "claude" || type === "codex"));
+  let r9Use = $state(false);
+  let r9Models = $state<Record<string, string>>({});
+  let r9Key = $state("");
+  let r9KeyMasked = $state(false);
+  let r9Saving = $state(false);
+
   async function load(silent = false) {
     if (!silent) { loading = true; error = null; }
     try {
@@ -198,6 +208,11 @@
       fieldValues = vals;
       editorRows = rows;
       secretTouched = {};
+      // Seed 9router widget state from the loaded detail payload.
+      r9Use = data.Router9.Enabled;
+      r9Models = { ...data.Router9.Models };
+      r9KeyMasked = data.Router9.KeySet;
+      r9Key = ""; // never prefill a secret; blank = keep existing
     } catch (e) {
       if (!silent) error = e instanceof Error ? e.message : "Failed to load provider detail";
     } finally {
@@ -236,6 +251,23 @@
       toastError(e instanceof Error ? e.message : "Save failed");
     } finally {
       saving = false;
+    }
+  }
+
+  async function saveRouter9() {
+    r9Saving = true;
+    try {
+      await apiSaveRouter9(base, type, name, {
+        use_9router: r9Use,
+        models: r9Models,
+        api_key: r9Key,
+      });
+      toastOk("9router settings saved");
+      await load(true);
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      r9Saving = false;
     }
   }
 
@@ -451,13 +483,15 @@
   let hookEvents = $derived(data ? Object.keys(data.Hooks) : []);
 </script>
 
-{#if confirmDelete}
-  <ConfirmDialog
-    message={`Delete provider ${type}/${name}? This cannot be undone.`}
-    onConfirm={doDelete}
-    onCancel={() => { confirmDelete = false; }}
-  />
-{/if}
+<ConfirmDialog
+  open={confirmDelete}
+  title={`Delete ${type}/${name}?`}
+  body="This removes the provider instance and cannot be undone."
+  confirmLabel="Delete"
+  destructive={true}
+  onConfirm={doDelete}
+  onCancel={() => { confirmDelete = false; }}
+/>
 
 <Modal open={showRename} title={`Rename ${type}/${name}`} size="md" onClose={() => { showRename = false; }}>
   <div class="space-y-3">
@@ -702,6 +736,32 @@
             disabled={saving}
             class="rounded-lg bg-green-600 hover:bg-green-700 px-4 py-1.5 text-xs font-medium text-white-100 disabled:opacity-50"
           >{saving ? "Saving…" : "Save All"}</button>
+        </div>
+      </div>
+    {/if}
+
+    {#if router9Supported}
+      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+          <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">9router</h3>
+        </div>
+        <div class="p-5">
+          <Router9Config
+            {base}
+            {type}
+            supported={router9Supported}
+            bind:use9router={r9Use}
+            bind:models={r9Models}
+            bind:apiKey={r9Key}
+            apiKeyMasked={r9KeyMasked}
+          />
+        </div>
+        <div class="px-5 py-3 border-t border-white-300 dark:border-navy-600 flex justify-end">
+          <button
+            onclick={saveRouter9}
+            disabled={r9Saving}
+            class="rounded-lg bg-green-600 hover:bg-green-700 px-4 py-1.5 text-xs font-medium text-white-100 disabled:opacity-50"
+          >{r9Saving ? "Saving…" : "Save 9router"}</button>
         </div>
       </div>
     {/if}

@@ -92,6 +92,9 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
 	hideConsole(cmd)
 
+	// Masked view of the env wick injected (instance ExtraEnv), for the log.
+	addedEnv := provider.MaskSpawnEnv(opt.ExtraEnv)
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("stdin pipe: %w", err)
@@ -115,7 +118,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		return nil, fmt.Errorf("start gemini: %w", err)
 	}
 	log.Info().Int("pid", cmd.Process.Pid).Str("bin", bin).Msg("agents.spawn: started (gemini)")
-	return &process{cmd: cmd, stdin: stdin, stdout: stdout}, nil
+	return &process{cmd: cmd, stdin: stdin, stdout: stdout, env: addedEnv}, nil
 }
 
 // applyHookConfig installs / removes the per-workspace hook config
@@ -152,10 +155,12 @@ type process struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
+	env    []string // wick-injected env (masked), for the spawn log
 }
 
 func (p *process) Stdout() io.Reader     { return p.stdout }
 func (p *process) Stdin() io.WriteCloser { return p.stdin }
+func (p *process) Env() []string         { return p.env }
 func (p *process) Wait() error           { return p.cmd.Wait() }
 func (p *process) Pid() int {
 	if p.cmd == nil || p.cmd.Process == nil {

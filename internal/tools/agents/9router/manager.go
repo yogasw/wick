@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -47,6 +48,10 @@ type Manager struct {
 	starting bool // true between spawn and dashboard-ready (drives "Starting" status)
 	prefix   string
 	proxy    *httputil.ReverseProxy
+	// apiProxy forwards the OpenAI-compatible API subtree (/v1/*) to the
+	// backend WITHOUT the HTML/JS/CSS body rewrite the dashboard proxy
+	// applies — API responses are JSON and must pass through byte-for-byte.
+	apiProxy *httputil.ReverseProxy
 	upgrader websocket.Upgrader
 	log      zerolog.Logger
 	logs     *logBuffer
@@ -79,12 +84,41 @@ func New() *Manager {
 		http.Error(w, "9router backend unavailable", http.StatusBadGateway)
 	}
 
+	// apiProxy is a plain pass-through to the same backend: no
+	// Accept-Encoding stripping, no body rewrite. Used for /v1/* so the
+	// OpenAI-compatible JSON (and SSE streams) reach clients untouched.
+	//
+	// Uses Rewrite (not the deprecated Director): Rewrite runs AFTER
+	// hop-by-hop header stripping and does NOT auto-forward X-Forwarded-*
+	// from the inbound request. That is exactly what we need — 9router gates
+	// its API by origin (loopback = no key, remote = key required), and by
+	// deliberately NOT calling pr.SetXForwarded() the proxied request reaches
+	// 9router looking local, so wick's own /9router/v1 mount is the trust
+	// boundary and 9router's local-auth passthrough applies. Director would
+	// have preserved client-supplied X-Forwarded-For (spoofable → 401).
+	apiProxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(backendURL)
+			pr.Out.Host = backendURL.Host
+			// Strip any inbound forwarding hints; do NOT SetXForwarded().
+			pr.Out.Header.Del("X-Forwarded-For")
+			pr.Out.Header.Del("X-Forwarded-Host")
+			pr.Out.Header.Del("X-Forwarded-Proto")
+			pr.Out.Header.Del("Forwarded")
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			logger.Error().Err(err).Str("path", r.URL.Path).Msg("9router: api proxy error")
+			http.Error(w, "9router backend unavailable", http.StatusBadGateway)
+		},
+	}
+
 	logger.Info().Int("port", port).Str("prefix", MountPrefix).Msg("9router: manager configured")
 	return &Manager{
-		prefix: MountPrefix,
-		proxy:  proxy,
-		log:    logger,
-		logs:   newLogBuffer(),
+		prefix:   MountPrefix,
+		proxy:    proxy,
+		apiProxy: apiProxy,
+		log:      logger,
+		logs:     newLogBuffer(),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -186,6 +220,20 @@ func (m *Manager) isRunning() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.cmd != nil
+}
+
+// backendReachable reports whether the 9router dashboard port answers a
+// TCP connect. Unlike isRunning (which only knows about a process wick
+// itself spawned via m.cmd), this also returns true for a 9router started
+// externally or one that survived a wick restart — which is what the API
+// proxy actually cares about. Cheap: a 300ms loopback dial.
+func (m *Manager) backendReachable() bool {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func (m *Manager) isStarting() bool {
@@ -344,6 +392,35 @@ func (m *Manager) ProxyHandler() http.Handler {
 			return
 		}
 		m.proxy.ServeHTTP(w, r)
+	})
+	if m.prefix != "" {
+		return http.StripPrefix(m.prefix, h)
+	}
+	return h
+}
+
+// APIProxyHandler serves the OpenAI-compatible API subtree by proxying
+// to the local 9router process. Unlike ProxyHandler it does NOT rewrite
+// bodies (API responses are JSON / SSE) and is mounted UNAUTHENTICATED
+// so codex/claude subprocesses (and other local clients) can reach it
+// without a wick session cookie — auth is 9router's own API key.
+//
+// Path handling mirrors ProxyHandler: the wick-root prefix ("/9router")
+// is stripped, so /9router/v1/models forwards to /v1/models on the
+// backend. When the process is not running it returns 503 so callers get
+// a clear signal instead of a connection error.
+func (m *Manager) APIProxyHandler() http.Handler {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Probe the backend port rather than m.cmd: a 9router started
+		// externally (or one that outlived a wick restart) is still a valid
+		// target for the API proxy even though wick didn't spawn it.
+		if !m.backendReachable() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error": "9router not running — start it first",
+			})
+			return
+		}
+		m.apiProxy.ServeHTTP(w, r)
 	})
 	if m.prefix != "" {
 		return http.StripPrefix(m.prefix, h)

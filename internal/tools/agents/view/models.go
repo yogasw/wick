@@ -39,6 +39,11 @@ type AgentsLayoutVM struct {
 	// behaviors. Empty when the bundle has not been built yet (dev
 	// machine before npm run build).
 	ShellAssetURL string
+	// Router9Visible controls the "9router" sidebar entry. True when the
+	// master switch is on AND the caller may access it (admin or a granted
+	// access tag) — so non-admins with the tag see the link, and everyone
+	// loses it when 9router is disabled.
+	Router9Visible bool
 }
 
 // ProjectName returns the display name for a project id, or the id

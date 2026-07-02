@@ -134,6 +134,17 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	}
 	args = append(args, s.ExtraArgs...)
 	args = append(args, opt.ExtraArgs...)
+
+	// 9router: when the instance routes through the embedded proxy, inject
+	// the model_provider wiring + concrete model here instead of making the
+	// user hand-type it in extra_args. Built by a pure helper so it stays
+	// unit-testable without spawning a real binary.
+	router9Extra, router9Env, err := router9Args(opt.Instance)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, router9Extra...)
+
 	if soulPath != "" {
 		// model_instructions_file points codex at our preset file as the
 		// model instructions. The earlier `instructions_files` key was
@@ -155,7 +166,12 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	cmd := safeexec.CommandContext(ctx, bin, args...)
 	cmd.Dir = opt.Workspace
 	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
+	cmd.Env = append(cmd.Env, router9Env...)
 	hideConsole(cmd)
+
+	// Track only the env wick injected (instance env + 9router), masked,
+	// for the spawn log. The full OS environ is noise and must not be logged.
+	addedEnv := provider.MaskSpawnEnv(append(append([]string{}, opt.ExtraEnv...), router9Env...))
 
 	// Codex reads its prompt from argv (positional [PROMPT]), never from
 	// stdin. We must give the child an already-closed stdin so codex sees
@@ -183,7 +199,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		return nil, fmt.Errorf("start codex: %w", err)
 	}
 	log.Info().Int("pid", cmd.Process.Pid).Str("bin", bin).Msg("agents.spawn: started (codex)")
-	return &process{cmd: cmd, stdout: stdout}, nil
+	return &process{cmd: cmd, stdout: stdout, env: addedEnv}, nil
 }
 
 // applyHookConfig installs / removes the per-workspace hook config
@@ -216,6 +232,45 @@ func (s Spawner) applyHookConfig(opt provider.SpawnOptions) bool {
 	return true
 }
 
+// router9Args builds the codex -c args + child env for an instance that
+// routes through the embedded 9router proxy. Returns (nil, nil, nil) when
+// 9router is off. Errors only when WICK_PORT is unset (can't resolve the
+// proxy base). Models are OPTIONAL: an unset slot is simply omitted so
+// 9router picks its own default. The API key is exported as env, never
+// argv (argv is logged).
+func router9Args(ins *provider.Instance) (args, env []string, err error) {
+	if ins == nil || !ins.Use9router {
+		return nil, nil, nil
+	}
+	base := provider.Router9BaseURL()
+	if base == "" {
+		return nil, nil, fmt.Errorf("codex 9router: WICK_PORT unset — cannot resolve proxy base URL")
+	}
+	// Slots: "model" → --model, "subagent" → agents.subagent.model. Both
+	// are optional — an empty slot is omitted (no --model / no subagent
+	// line) so 9router applies its own default rather than being forced.
+	//
+	// Auth mirrors 9router's documented codex setup: auth_mode=apikey +
+	// OPENAI_API_KEY (codex's default env key for the provider — no custom
+	// env_key). The key goes to env, never argv.
+	args = []string{
+		"-c", "model_provider=9router",
+		"-c", "model_providers.9router.name=9Router",
+		"-c", "model_providers.9router.base_url=" + tomlLiteral(base),
+		"-c", "model_providers.9router.wire_api=responses",
+		"-c", "auth_mode=apikey",
+	}
+	if model := strings.TrimSpace(ins.Router9Models["model"]); model != "" {
+		args = append(args, "--model", model)
+	}
+	if subagent := strings.TrimSpace(ins.Router9Models["subagent"]); subagent != "" {
+		args = append(args, "-c", "agents.subagent.model="+tomlLiteral(subagent))
+		args = append(args, "-c", "agents.subagent.description="+tomlLiteral("Subagent model routed through 9router"))
+	}
+	env = []string{"OPENAI_API_KEY=" + provider.Router9AuthKey(*ins)}
+	return args, env, nil
+}
+
 // tomlLiteral wraps s in a TOML literal string (single quotes) so
 // backslashes and other escape-prone chars in a Windows path pass
 // through verbatim. TOML literal strings cannot contain a single
@@ -234,7 +289,10 @@ func tomlLiteral(s string) string {
 type process struct {
 	cmd    *exec.Cmd
 	stdout io.ReadCloser
+	env    []string // wick-injected env (masked), for the spawn log
 }
+
+func (p *process) Env() []string { return p.env }
 
 func (p *process) Stdout() io.Reader     { return p.stdout }
 func (p *process) Stdin() io.WriteCloser { return noopWriteCloser{} }
@@ -244,7 +302,7 @@ type noopWriteCloser struct{}
 
 func (noopWriteCloser) Write(b []byte) (int, error) { return len(b), nil }
 func (noopWriteCloser) Close() error                { return nil }
-func (p *process) Wait() error           { return p.cmd.Wait() }
+func (p *process) Wait() error                      { return p.cmd.Wait() }
 func (p *process) Pid() int {
 	if p.cmd == nil || p.cmd.Process == nil {
 		return 0

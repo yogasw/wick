@@ -145,7 +145,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 							@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
 						}
 						@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")
-						if user != nil && user.IsAdmin() {
+						if vm.Router9Visible {
 							@agentsNavLink(vm.Base+"/9router", "9router", vm.ActivePage == "9router")
 						}
 					</div>

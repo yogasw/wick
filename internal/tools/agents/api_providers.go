@@ -146,6 +146,17 @@ type ProviderDetailResponse struct {
 	Spawns       []SpawnLogFileDTO            `json:"spawns"`
 	Page         int                          `json:"page"`
 	HasNext      bool                         `json:"has_next"`
+	Router9      Router9DetailDTO             `json:"router9"`
+}
+
+// Router9DetailDTO carries the instance's current 9router settings so the
+// detail page can seed its widget. The API key is never returned — only a
+// flag indicating one is stored.
+type Router9DetailDTO struct {
+	Supported bool              `json:"supported"`
+	Enabled   bool              `json:"enabled"`
+	Models    map[string]string `json:"models"`
+	KeySet    bool              `json:"key_set"`
 }
 
 // StorageFileDTO is one storage file row (without the binary content blob).
@@ -485,7 +496,23 @@ func apiProviderDetail(c *tool.Ctx) {
 		Spawns:       spawnDTOs,
 		Page:         page,
 		HasNext:      hasNext,
+		Router9:      router9DetailDTO(st.Instance),
 	})
+}
+
+// router9DetailDTO projects an instance's 9router settings for the FE.
+// The stored API key is never surfaced — only KeySet.
+func router9DetailDTO(ins provider.Instance) Router9DetailDTO {
+	models := map[string]string{}
+	for k, v := range ins.Router9Models {
+		models[k] = v
+	}
+	return Router9DetailDTO{
+		Supported: len(provider.Router9Slots(ins.Type)) > 0,
+		Enabled:   ins.Use9router,
+		Models:    models,
+		KeySet:    ins.Router9APIKey != "",
+	}
 }
 
 // apiProvidersStorage handles GET /api/providers/storage and returns the

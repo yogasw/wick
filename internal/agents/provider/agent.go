@@ -139,7 +139,7 @@ type Options struct {
 	// respawn-per-turn providers (codex), whose process does not exist
 	// at Start() time — so the spawn log can record the actual argv /
 	// pid / Reproduce command for every turn instead of a blank start.
-	OnSpawn func(binary string, argv []string, pid int, firstMessage string)
+	OnSpawn func(binary string, argv []string, env []string, pid int, firstMessage string)
 
 	// Instance is the per-instance config the spawner should consult
 	// every spawn (hook intent, env, …). Forwarded into SpawnOptions
@@ -480,7 +480,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 	// spawn to here), so without this the spawn log shows a blank start
 	// with no Reproduce command — see Options.OnSpawn.
 	if a.cfg.OnSpawn != nil {
-		a.cfg.OnSpawn(proc.Binary(), proc.Argv(), proc.Pid(), text)
+		a.cfg.OnSpawn(proc.Binary(), proc.Argv(), proc.Env(), proc.Pid(), text)
 	}
 
 	go a.run(subCtx)
@@ -647,6 +647,17 @@ func (a *Agent) Argv() []string {
 		return nil
 	}
 	return a.proc.Argv()
+}
+
+// Env returns the wick-injected env (masked) of the running subprocess.
+// Empty when not running or when the spawner is a test fake.
+func (a *Agent) Env() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.proc == nil {
+		return nil
+	}
+	return a.proc.Env()
 }
 
 // InFlightEvents returns events buffered in the current in-progress turn

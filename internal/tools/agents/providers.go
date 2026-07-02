@@ -272,6 +272,7 @@ func saveProviderDetail(c *tool.Ctx) {
 		}
 		ins.CodexConfig.SandboxMode = provider.CodexSandboxMode(strings.TrimSpace(c.Form("sandbox_mode")))
 	}
+	applyRouter9Form(&ins, c)
 	if err := provider.Save(ins); err != nil {
 		c.Redirect(c.Base()+"/providers/detail/"+string(t)+"/"+name+"?error="+err.Error(), http.StatusSeeOther)
 		return
@@ -304,6 +305,82 @@ func saveProviderConfigKey(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// applyRouter9Form reads the 9router fields from a create/detail form and
+// merges them into ins, encrypting the API key. Toggle absent = off.
+// Model slots arrive as router9_model_<slot> fields; which slots exist is
+// defined by provider.Router9Slots(ins.Type).
+func applyRouter9Form(ins *provider.Instance, c *tool.Ctx) {
+	ins.Use9router = c.Form("use_9router") == "on" || c.Form("use_9router") == "true"
+	models := map[string]string{}
+	for _, slot := range provider.Router9Slots(ins.Type) {
+		if v := strings.TrimSpace(c.Form("router9_model_" + slot.Key)); v != "" {
+			models[slot.Key] = v
+		}
+	}
+	if len(models) > 0 {
+		ins.Router9Models = models
+	}
+	// Empty or masked placeholder = leave the stored key untouched.
+	if raw := strings.TrimSpace(c.Form("router9_api_key")); raw != "" && !strings.ContainsRune(raw, '•') {
+		ins.Router9APIKey = encryptSecretValue(raw)
+	}
+}
+
+// providerRouter9Slots returns the model slots a provider type exposes
+// under 9router (defined in the BE so counts differ per type). The FE
+// renders one model picker per slot.
+// GET /providers/router9/slots/{type}
+func providerRouter9Slots(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	slots := provider.Router9Slots(provider.Type(c.PathValue("type")))
+	if slots == nil {
+		slots = []provider.Router9Slot{}
+	}
+	c.JSON(http.StatusOK, map[string]any{"slots": slots})
+}
+
+// saveProviderRouter9 persists the 9router settings (toggle + per-slot
+// models + optional key) for one instance in a single request.
+// POST /providers/detail/{type}/{name}/router9
+func saveProviderRouter9(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	if !requireAdmin(c) {
+		return
+	}
+	t := provider.Type(c.PathValue("type"))
+	name := c.PathValue("name")
+	ins, err := provider.Find(t, name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
+		return
+	}
+	applyRouter9Form(&ins, c)
+	if err := provider.Save(ins); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// encryptSecretValue wraps a plaintext secret as a wick_cenc_ token via
+// the configs service. Empty / already-token / masked values pass through
+// unchanged. No-op (returns the input) when the configs service is unwired.
+func encryptSecretValue(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || strings.ContainsRune(v, '•') || globalConfigs == nil {
+		return v
+	}
+	enc, err := globalConfigs.EncryptSecret(v)
+	if err != nil {
+		return v
+	}
+	return enc
+}
+
 // saveProviderInstance creates or updates one named runtime instance
 // from form fields. Empty BinaryPath = LookPath the canonical type
 // name on PATH.
@@ -333,6 +410,7 @@ func saveProviderInstance(c *tool.Ctx) {
 			SandboxMode: provider.CodexSandboxMode(strings.TrimSpace(c.Form("sandbox_mode"))),
 		}
 	}
+	applyRouter9Form(&ins, c)
 	if mode := strings.TrimSpace(c.Form("storage_mode")); mode != "" {
 		ins.Storage = &provider.StorageConfig{
 			Mode:            mode,

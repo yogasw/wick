@@ -137,4 +137,12 @@ export interface ProviderDetailResponse {
   Spawns: SpawnLogFileDTO[];
   Page: number;
   HasNext: boolean;
+  Router9: Router9DetailDTO;
+}
+
+export interface Router9DetailDTO {
+  Supported: boolean;
+  Enabled: boolean;
+  Models: Record<string, string>;
+  KeySet: boolean;
 }

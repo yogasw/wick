@@ -29,6 +29,13 @@ templ ProviderSpawnDetail(vm ProviderSpawnDetailVM) {
 					<pre class="font-mono text-xs bg-white-200 dark:bg-navy-800 rounded-md p-3 text-black-900 dark:text-white-100 whitespace-pre-wrap break-all select-all">{ shellCommand(vm.File.Binary, vm.File.Argv) }</pre>
 				</div>
 			}
+			if len(vm.File.Env) > 0 {
+				<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm p-4 space-y-2">
+					<h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Injected env</h2>
+					<p class="text-xs text-black-700 dark:text-black-600">Environment variables wick added for this spawn (instance env + provider routing). Secret values are partially masked.</p>
+					<pre class="font-mono text-xs bg-white-200 dark:bg-navy-800 rounded-md p-3 text-black-900 dark:text-white-100 whitespace-pre-wrap break-all select-all">{ strings.Join(vm.File.Env, "\n") }</pre>
+				</div>
+			}
 			<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
 				if len(vm.Events) == 0 {
 					<div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">No events.</div>
@@ -63,6 +70,9 @@ templ ProviderSpawnDetail(vm ProviderSpawnDetailVM) {
 								}
 								if len(ev.Args) > 0 {
 									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">args: { strings.Join(ev.Args, " ") }</p>
+								}
+								if len(ev.Env) > 0 {
+									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">env: { strings.Join(ev.Env, " ") }</p>
 								}
 								if ev.FirstUserMessage != "" {
 									<p class="mt-1 font-mono text-xs text-black-800 dark:text-black-600 break-all">msg: { ev.FirstUserMessage }</p>

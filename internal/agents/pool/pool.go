@@ -174,6 +174,7 @@ type SpawnStartMeta struct {
 	PID              int
 	Binary           string
 	Argv             []string
+	Env              []string
 	FirstUserMessage string
 }
 
@@ -786,6 +787,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 			PID:              a.PID(),
 			Binary:           a.Binary(),
 			Argv:             a.Argv(),
+			Env:              a.Env(),
 			FirstUserMessage: combined,
 		})
 	}

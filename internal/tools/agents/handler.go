@@ -287,7 +287,9 @@ func Register(r tool.Router) {
 	r.GET("/providers", providersPage)
 	r.GET("/providers/detail/{type}/{name}", providerDetailPage)
 	r.POST("/providers/detail/{type}/{name}/save", saveProviderDetail)
+	r.POST("/providers/detail/{type}/{name}/router9", saveProviderRouter9)
 	r.POST("/providers/detail/{type}/{name}/{key}", saveProviderConfigKey)
+	r.GET("/providers/router9/slots/{type}", providerRouter9Slots)
 	r.GET("/providers/{type}/{name}", providerDetailPage)
 	r.POST("/providers", saveProviderInstance)
 	r.POST("/providers/rename/{type}/{name}", renameProviderInstance)
@@ -616,6 +618,7 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		ScopedProjectID:  scopedProjectID,
 		PinnedProjectID:  pinnedProjectID(c),
 		ShellAssetURL:    spaAssetURL("shell"),
+		Router9Visible:   Router9Enabled() && router9AdminOnly(c.Context()),
 	}
 }
 
