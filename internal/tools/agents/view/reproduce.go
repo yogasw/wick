@@ -95,13 +95,22 @@ func InteractiveArgv(providerType string, argv []string) []string {
 	// dropFlag: bare flags removed outright.
 	// dropValueFlag: flags that also consume the next token (the value).
 	var dropFlag, dropValueFlag, dropSubcmd map[string]bool
+	// dropSubcmdValue: subcommand tokens that also consume the following token
+	// (a positional, e.g. codex's `resume <id>`).
+	var dropSubcmdValue map[string]bool
 	switch providerType {
 	case "claude":
 		dropFlag = map[string]bool{"-p": true, "--print": true, "--verbose": true, "--include-partial-messages": true}
 		dropValueFlag = map[string]bool{"--input-format": true, "--output-format": true}
 	case "codex":
-		dropFlag = map[string]bool{"--json": true}
+		// `codex exec` is the headless entry point; interactive is plain `codex`.
+		// Drop the exec subcommand and all exec-only flags — several
+		// (--skip-git-repo-check, --sandbox, --ask-for-approval) are unknown to
+		// the root command and would error. Keep `-c` overrides + the message.
+		dropFlag = map[string]bool{"--json": true, "--skip-git-repo-check": true}
+		dropValueFlag = map[string]bool{"--sandbox": true, "--ask-for-approval": true}
 		dropSubcmd = map[string]bool{"exec": true}
+		dropSubcmdValue = map[string]bool{"resume": true}
 	case "gemini":
 		dropFlag = map[string]bool{"-p": true, "--prompt": true}
 	default:
@@ -112,6 +121,10 @@ func InteractiveArgv(providerType string, argv []string) []string {
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		if dropSubcmd[a] {
+			continue
+		}
+		if dropSubcmdValue[a] {
+			i++ // also skip the positional that follows (e.g. the resume id)
 			continue
 		}
 		if dropValueFlag[a] {

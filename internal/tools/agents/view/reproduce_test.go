@@ -161,10 +161,17 @@ func TestInteractiveArgv(t *testing.T) {
 		t.Errorf("claude: got %v want %v", got, want)
 	}
 
-	// codex: drop the `exec` subcommand and --json.
-	codex := []string{"exec", "--json", "--sandbox", "workspace-write", "-c", "x=1"}
+	// codex: drop the `exec` subcommand + all exec-only flags
+	// (--json, --skip-git-repo-check, --sandbox<v>, --ask-for-approval<v>) and
+	// the `resume <id>` subcommand; keep `-c` overrides + the trailing message.
+	codex := []string{
+		"exec", "--json", "--skip-git-repo-check",
+		"--sandbox", "danger-full-access",
+		"--ask-for-approval", "never",
+		"-c", "x=1", "resume", "abc123", "coba wick list",
+	}
 	got = InteractiveArgv("codex", codex)
-	want = []string{"--sandbox", "workspace-write", "-c", "x=1"}
+	want = []string{"-c", "x=1", "coba wick list"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("codex: got %v want %v", got, want)
 	}
