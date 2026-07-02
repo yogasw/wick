@@ -33,19 +33,19 @@
   });
 
   /* ── Reproduce card state ─────────────────────────────────────── */
-  type Axis = "mode" | "env" | "shell" | "path";
-  let sel = $state<Record<Axis, string>>({ mode: "headless", env: "masked", shell: "bash", path: "full" });
+  type Axis = "mode" | "env" | "shell" | "path" | "resume";
+  let sel = $state<Record<Axis, string>>({ mode: "headless", env: "masked", shell: "bash", path: "full", resume: "res" });
   let live = $state<Record<string, string> | null>(null); // unmasked, fetched once
   let liveLoading = $state(false);
   let liveError = $state("");
-  // per-variant user edits, keyed "<env>:<shell-mode-path>" so switching keeps them
+  // per-variant user edits, keyed "<env>:<variant>" so switching keeps them
   let edited = $state<Record<string, string>>({});
   let copied = $state(false);
 
-  // Mirrors Go view.ReproKey: "<shell>-<h|i>-<full|short>".
+  // Mirrors Go view.ReproKey: "<shell>-<h|i>-<full|short>-<res|new>".
   function variantKey(): string {
     const mode = sel.mode === "interactive" ? "i" : "h";
-    return `${sel.shell}-${mode}-${sel.path}`;
+    return `${sel.shell}-${mode}-${sel.path}-${sel.resume}`;
   }
 
   let command = $derived.by(() => {
@@ -95,6 +95,7 @@
     { axis: "env", label: "Env", opts: [["masked", "Masked"], ["live", "Live"]] },
     { axis: "shell", label: "Shell", opts: [["bash", "bash"], ["powershell", "PowerShell"], ["cmd", "cmd.exe"]] },
     { axis: "path", label: "Path", opts: [["full", "Full"], ["short", "Short"]] },
+    { axis: "resume", label: "Resume", opts: [["res", "Keep"], ["new", "Fresh"]] },
   ];
 </script>
 

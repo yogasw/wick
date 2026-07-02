@@ -43,12 +43,41 @@ func isDriveLetter(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
-// ReproKey names a reproduce variant by its three axes. Used as the map key in
-// BuildReproVariants and mirrored by the front-end data attributes / reveal keys.
+// StripResumeArgv drops the resume-session tokens so the command starts a fresh
+// session instead of continuing the logged one. Per provider: claude uses
+// `--resume <id>` (value flag), codex uses `resume <id>` (subcommand + id).
+// Other tokens are preserved.
+func StripResumeArgv(providerType string, argv []string) []string {
+	dropValueFlag := map[string]bool{}
+	dropSubcmdValue := map[string]bool{}
+	switch providerType {
+	case "claude", "gemini":
+		dropValueFlag["--resume"] = true
+	case "codex":
+		dropSubcmdValue["resume"] = true
+	}
+	out := make([]string, 0, len(argv))
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		if dropValueFlag[a] || dropSubcmdValue[a] {
+			i++ // skip the following id
+			continue
+		}
+		if k, _, ok := strings.Cut(a, "="); ok && dropValueFlag[k] {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// ReproKey names a reproduce variant by its four axes. Used as the map key in
+// BuildReproVariants and mirrored by the front-end / reveal keys.
 //   shell: "bash" | "powershell" | "cmd"
 //   interactive: headless "h" vs interactive "i"
 //   short: full path "full" vs basename "short"
-func ReproKey(shell string, interactive, short bool) string {
+//   resume: keep resume "res" vs fresh session "new"
+func ReproKey(shell string, interactive, short, resume bool) string {
 	mode := "h"
 	if interactive {
 		mode = "i"
@@ -57,24 +86,35 @@ func ReproKey(shell string, interactive, short bool) string {
 	if short {
 		path = "short"
 	}
-	return shell + "-" + mode + "-" + path
+	res := "res"
+	if !resume {
+		res = "new"
+	}
+	return shell + "-" + mode + "-" + path + "-" + res
 }
 
-// BuildReproVariants renders all 12 reproduce commands (3 shells × headless/
-// interactive × full/short path) for the given binary, argv, and env. The same
-// function serves the masked page render and the unmasked reveal endpoint —
-// callers just pass masked vs unmasked env so the keys line up exactly.
+// BuildReproVariants renders all 24 reproduce commands (3 shells × headless/
+// interactive × full/short path × keep/strip resume) for the given binary,
+// argv, and env. The same function serves the masked page render and the
+// unmasked reveal endpoint — callers pass masked vs unmasked env so the keys
+// line up exactly.
 func BuildReproVariants(providerType, binary string, argv, env []string) map[string]string {
-	iArgv := InteractiveArgv(providerType, argv)
-	out := make(map[string]string, 12)
-	for _, m := range []struct {
-		interactive bool
-		av          []string
-	}{{false, argv}, {true, iArgv}} {
-		for _, short := range []bool{false, true} {
-			out[ReproKey("bash", m.interactive, short)] = ShellReproduceBash(binary, m.av, env, short)
-			out[ReproKey("powershell", m.interactive, short)] = ShellReproducePwsh(binary, m.av, env, short)
-			out[ReproKey("cmd", m.interactive, short)] = ShellReproduceCmd(binary, m.av, env, short)
+	out := make(map[string]string, 24)
+	for _, resume := range []bool{true, false} {
+		base := argv
+		if !resume {
+			base = StripResumeArgv(providerType, argv)
+		}
+		iArgv := InteractiveArgv(providerType, base)
+		for _, m := range []struct {
+			interactive bool
+			av          []string
+		}{{false, base}, {true, iArgv}} {
+			for _, short := range []bool{false, true} {
+				out[ReproKey("bash", m.interactive, short, resume)] = ShellReproduceBash(binary, m.av, env, short)
+				out[ReproKey("powershell", m.interactive, short, resume)] = ShellReproducePwsh(binary, m.av, env, short)
+				out[ReproKey("cmd", m.interactive, short, resume)] = ShellReproduceCmd(binary, m.av, env, short)
+			}
 		}
 	}
 	return out
@@ -149,6 +189,7 @@ func InteractiveArgv(providerType string, argv []string) []string {
 // (C:\… → /c/…) so it resolves in git-bash/msys2.
 func ShellReproduceBash(binary string, argv, env []string, short bool) string {
 	var b strings.Builder
+	b.WriteString("# run in bash / git-bash / msys2\n")
 	for _, e := range env {
 		k, v, ok := splitEnvKV(e)
 		if !ok {
@@ -187,6 +228,7 @@ func winBinary(binary string, short bool) string {
 // literal in PowerShell (it echoes, doesn't execute); `& 'path'` runs it.
 func ShellReproducePwsh(binary string, argv, env []string, short bool) string {
 	var b strings.Builder
+	b.WriteString("# run in PowerShell\n")
 	for _, e := range env {
 		k, v, ok := splitEnvKV(e)
 		if !ok {
@@ -214,6 +256,7 @@ func ShellReproducePwsh(binary string, argv, env []string, short bool) string {
 // PowerShell or bash reproduce such args more reliably.
 func ShellReproduceCmd(binary string, argv, env []string, short bool) string {
 	var b strings.Builder
+	b.WriteString("REM run in cmd.exe\n")
 	for _, e := range env {
 		k, v, ok := splitEnvKV(e)
 		if !ok {
@@ -257,17 +300,58 @@ func shellCommand(binary string, argv []string) string {
 	return strings.Join(parts, " ")
 }
 
-// pwshQuote wraps in single quotes (PowerShell literal string), doubling any
-// embedded single quote. PowerShell single-quoted strings don't interpret $,
-// backtick, or double-quotes, so this is the safe choice for JSON args.
+// pwshQuote quotes a token for a PowerShell call to a NATIVE exe.
+//
+// A PowerShell single-quoted string keeps the value literal *within
+// PowerShell*, but when the arg contains double quotes (e.g. a JSON
+// --mcp-config) Windows PowerShell 5.1 strips them while rebuilding the native
+// command line, so the child sees an unquoted blob. For those args, wrap in
+// double quotes and escape inner quotes as \" — which survives into the child's
+// argv. Args with no double quote stay single-quoted (handles spaces, $, etc.).
 func pwshQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	if !strings.Contains(s, `"`) {
+		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	}
+	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
 }
 
-// cmdQuote wraps in double quotes for cmd.exe, doubling embedded double quotes
-// (the cmd convention inside a quoted token) so JSON args survive.
+// cmdQuote wraps a token in double quotes for a Windows command line, escaping
+// inner double quotes as \" — the convention the C runtime / Node argv parser
+// (which claude.exe / codex.cmd use) expects. cmd.exe's own `""` doubling does
+// NOT survive into a non-MSVCRT child's argv, which mangled JSON args like
+// --mcp-config into an unquoted blob. Backslashes immediately before a closing
+// quote must also be doubled so they don't escape it.
 func cmdQuote(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+	var b strings.Builder
+	b.WriteByte('"')
+	backslashes := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case '\\':
+			backslashes++
+		case '"':
+			// Escape the run of backslashes preceding this quote, then the quote.
+			b.WriteString(strings.Repeat(`\`, backslashes*2+1))
+			b.WriteByte('"')
+			backslashes = 0
+			continue
+		default:
+			if backslashes > 0 {
+				b.WriteString(strings.Repeat(`\`, backslashes))
+				backslashes = 0
+			}
+		}
+		if c != '\\' {
+			b.WriteByte(c)
+		}
+	}
+	// Double any trailing backslashes so they don't escape the closing quote.
+	if backslashes > 0 {
+		b.WriteString(strings.Repeat(`\`, backslashes*2))
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // cmdEscapePercent doubles % so `set "K=V"` doesn't expand %VAR%.

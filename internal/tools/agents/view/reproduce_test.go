@@ -12,13 +12,23 @@ func TestQuoting(t *testing.T) {
 	if got := shellQuote(json); got != "'"+json+"'" {
 		t.Errorf("bash: %q", got)
 	}
-	if got := pwshQuote(json); got != "'"+json+"'" {
-		t.Errorf("pwsh: %q", got)
+	// pwsh: a JSON arg (has double quotes) wraps in "..." with inner \" so it
+	// survives PowerShell's native-exe argument passing.
+	if got := pwshQuote(json); got != `"`+strings.ReplaceAll(json, `"`, `\"`)+`"` {
+		t.Errorf("pwsh json: %q", got)
 	}
-	// cmd doubles internal double-quotes.
-	wantCmd := `"` + strings.ReplaceAll(json, `"`, `""`) + `"`
+	// pwsh: a quote-free arg stays single-quoted.
+	if got := pwshQuote("plain val"); got != "'plain val'" {
+		t.Errorf("pwsh plain: %q", got)
+	}
+	// cmd escapes internal double-quotes as \" (Node/MSVCRT argv convention).
+	wantCmd := `"` + strings.ReplaceAll(json, `"`, `\"`) + `"`
 	if got := cmdQuote(json); got != wantCmd {
 		t.Errorf("cmd: got %q want %q", got, wantCmd)
+	}
+	// A trailing backslash before the closing quote is doubled.
+	if got := cmdQuote(`C:\dir\`); got != `"C:\dir\\"` {
+		t.Errorf("cmd trailing backslash: got %q", got)
 	}
 
 	// Single-quote handling.
@@ -57,16 +67,16 @@ func TestShellReproduce(t *testing.T) {
 	if !strings.Contains(pwsh, "\n& 'claude.exe'") {
 		t.Errorf("pwsh should invoke binary with call operator &:\n%s", pwsh)
 	}
-	if !strings.HasSuffix(pwsh, `'{"a":"b"}'`) {
-		t.Errorf("pwsh json arg not single-quoted:\n%s", pwsh)
+	if !strings.HasSuffix(pwsh, `"{\"a\":\"b\"}"`) {
+		t.Errorf("pwsh json arg not backslash-escaped:\n%s", pwsh)
 	}
 
 	cmd := ShellReproduceCmd(bin, argv, env, false)
 	if !strings.Contains(cmd, `set "CLAUDE_CONFIG_DIR=C:/x"`+"\n") {
 		t.Errorf("cmd env prefix missing:\n%s", cmd)
 	}
-	if !strings.HasSuffix(cmd, `"{""a"":""b""}"`) {
-		t.Errorf("cmd json arg quotes not doubled:\n%s", cmd)
+	if !strings.HasSuffix(cmd, `"{\"a\":\"b\"}"`) {
+		t.Errorf("cmd json arg quotes not backslash-escaped:\n%s", cmd)
 	}
 }
 
@@ -99,39 +109,64 @@ func TestBinaryPath(t *testing.T) {
 		t.Errorf("bash full must not contain backslashes:\n%s", bashFull)
 	}
 	bashShort := ShellReproduceBash(full, nil, nil, true)
-	if strings.TrimSpace(bashShort) != "claude.exe" {
-		t.Errorf("bash short should be basename: %q", bashShort)
+	if !strings.HasSuffix(bashShort, "claude.exe") {
+		t.Errorf("bash short should end in basename: %q", bashShort)
 	}
 
 	// pwsh/cmd keep the full path as-is (both accept backslashes).
 	if got := ShellReproducePwsh(full, nil, nil, false); !strings.Contains(got, full) {
 		t.Errorf("pwsh full should keep Windows path:\n%s", got)
 	}
-	if got := ShellReproduceCmd(full, nil, nil, true); strings.TrimSpace(got) != `"claude.exe"` {
-		t.Errorf("cmd short should be quoted basename: %q", got)
+	if got := ShellReproduceCmd(full, nil, nil, true); !strings.HasSuffix(got, `"claude.exe"`) {
+		t.Errorf("cmd short should end in quoted basename: %q", got)
 	}
 }
 
 func TestBuildReproVariants(t *testing.T) {
-	m := BuildReproVariants("claude", `C:\bin\claude.exe`, []string{"-p", "--add-dir", "x"}, []string{"K=v"})
-	// 3 shells × 2 modes × 2 paths = 12 keys.
-	if len(m) != 12 {
-		t.Fatalf("want 12 variants, got %d: %v", len(m), keysOf(m))
+	m := BuildReproVariants("claude", `C:\bin\claude.exe`, []string{"-p", "--add-dir", "x", "--resume", "abc"}, []string{"K=v"})
+	// 3 shells × 2 modes × 2 paths × 2 resume = 24 keys.
+	if len(m) != 24 {
+		t.Fatalf("want 24 variants, got %d: %v", len(m), keysOf(m))
 	}
-	// A known key exists and headless keeps -p; interactive drops it.
-	if !strings.Contains(m["bash-h-full"], "-p") {
-		t.Errorf("headless should keep -p:\n%s", m["bash-h-full"])
+	// headless keeps -p; interactive drops it.
+	if !strings.Contains(m["bash-h-full-res"], "-p") {
+		t.Errorf("headless should keep -p:\n%s", m["bash-h-full-res"])
 	}
-	if strings.Contains(m["bash-i-full"], "-p") {
-		t.Errorf("interactive should drop -p:\n%s", m["bash-i-full"])
+	if strings.Contains(m["bash-i-full-res"], "-p") {
+		t.Errorf("interactive should drop -p:\n%s", m["bash-i-full-res"])
 	}
 	// short path key uses basename.
-	if !strings.Contains(m["cmd-h-short"], `"claude.exe"`) {
-		t.Errorf("cmd short should use basename:\n%s", m["cmd-h-short"])
+	if !strings.Contains(m["cmd-h-short-res"], `"claude.exe"`) {
+		t.Errorf("cmd short should use basename:\n%s", m["cmd-h-short-res"])
+	}
+	// resume axis: "res" keeps --resume, "new" drops it.
+	if !strings.Contains(m["bash-h-full-res"], "--resume") {
+		t.Errorf("res variant should keep --resume:\n%s", m["bash-h-full-res"])
+	}
+	if strings.Contains(m["bash-h-full-new"], "--resume") {
+		t.Errorf("new variant should drop --resume:\n%s", m["bash-h-full-new"])
 	}
 	// key naming matches ReproKey.
-	if ReproKey("powershell", true, true) != "powershell-i-short" {
-		t.Errorf("ReproKey mismatch: %q", ReproKey("powershell", true, true))
+	if ReproKey("powershell", true, true, false) != "powershell-i-short-new" {
+		t.Errorf("ReproKey mismatch: %q", ReproKey("powershell", true, true, false))
+	}
+}
+
+func TestStripResumeArgv(t *testing.T) {
+	// claude: --resume <id> dropped, rest kept.
+	got := StripResumeArgv("claude", []string{"-p", "--resume", "abc", "--add-dir", "x"})
+	if strings.Join(got, " ") != "-p --add-dir x" {
+		t.Errorf("claude: %v", got)
+	}
+	// codex: resume <id> subcommand dropped.
+	got = StripResumeArgv("codex", []string{"exec", "-c", "x=1", "resume", "id123", "msg"})
+	if strings.Join(got, " ") != "exec -c x=1 msg" {
+		t.Errorf("codex: %v", got)
+	}
+	// no resume present → unchanged.
+	got = StripResumeArgv("claude", []string{"-p", "x"})
+	if strings.Join(got, " ") != "-p x" {
+		t.Errorf("no-resume: %v", got)
 	}
 }
 
