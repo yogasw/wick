@@ -78,8 +78,10 @@ export interface SpawnDetailResponse {
   File: SpawnLogFileDTO;
   Events: SpawnEvent[];
   SessionDeleted: boolean;
-  /** Masked reproduce commands keyed "<shell>-<h|i>-<full|short>". */
+  /** Masked reproduce commands keyed "<shell>-<h|i>-<full|short>-<res|new>". */
   Repro: Record<string, string>;
+  /** True when the spawn had a resume id — the Keep/Fresh toggle is meaningful. */
+  HasResume: boolean;
 }
 
 export interface MCPClientDTO {

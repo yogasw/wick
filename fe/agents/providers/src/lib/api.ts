@@ -90,6 +90,7 @@ interface WireSpawnDetailResponse {
   events: WireSpawnEvent[] | null;
   session_deleted: boolean;
   repro: Record<string, string> | null;
+  has_resume: boolean;
 }
 
 interface WireMCPClient {
@@ -577,6 +578,7 @@ export async function apiGetSpawnDetail(base: string, file: string): Promise<Spa
     Events: (r.events ?? []).map(mapSpawnEvent),
     SessionDeleted: r.session_deleted ?? false,
     Repro: r.repro ?? {},
+    HasResume: r.has_resume ?? false,
   };
 }
 

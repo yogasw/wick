@@ -106,6 +106,9 @@ type SpawnDetailResponse struct {
 	Events         []SpawnEventDTO   `json:"events"`
 	SessionDeleted bool              `json:"session_deleted"`
 	Repro          map[string]string `json:"repro"`
+	// HasResume is true when the spawn carried a --resume/resume id, so the
+	// Keep/Fresh toggle is meaningful. False on a session's first spawn.
+	HasResume bool `json:"has_resume"`
 }
 
 func spawnEventDTO(e provider.SpawnEvent) SpawnEventDTO {

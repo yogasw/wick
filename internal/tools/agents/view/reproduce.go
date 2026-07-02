@@ -71,6 +71,13 @@ func StripResumeArgv(providerType string, argv []string) []string {
 	return out
 }
 
+// HasResumeArgv reports whether argv carries a resume-session token for the
+// provider — i.e. whether the Keep/Fresh toggle would make any difference. The
+// first spawn of a session has no resume id, so the toggle should be hidden.
+func HasResumeArgv(providerType string, argv []string) bool {
+	return len(StripResumeArgv(providerType, argv)) != len(argv)
+}
+
 // ReproKey names a reproduce variant by its four axes. Used as the map key in
 // BuildReproVariants and mirrored by the front-end / reveal keys.
 //   shell: "bash" | "powershell" | "cmd"

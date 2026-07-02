@@ -170,6 +170,21 @@ func TestStripResumeArgv(t *testing.T) {
 	}
 }
 
+func TestHasResumeArgv(t *testing.T) {
+	if !HasResumeArgv("claude", []string{"-p", "--resume", "abc"}) {
+		t.Error("claude with --resume should report true")
+	}
+	if HasResumeArgv("claude", []string{"-p", "--add-dir", "x"}) {
+		t.Error("claude without --resume should report false")
+	}
+	if !HasResumeArgv("codex", []string{"exec", "resume", "id"}) {
+		t.Error("codex with resume should report true")
+	}
+	if HasResumeArgv("codex", []string{"exec", "-c", "x=1"}) {
+		t.Error("codex without resume should report false")
+	}
+}
+
 func keysOf(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

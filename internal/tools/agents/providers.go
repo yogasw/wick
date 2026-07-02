@@ -1091,6 +1091,7 @@ func apiSpawnDetail(c *tool.Ctx) {
 		Events:         eventDTOs,
 		SessionDeleted: sessionDeleted,
 		Repro:          view.BuildReproVariants(meta.ProviderType, meta.Binary, meta.Argv, meta.Env),
+		HasResume:      view.HasResumeArgv(meta.ProviderType, meta.Argv),
 	})
 }
 

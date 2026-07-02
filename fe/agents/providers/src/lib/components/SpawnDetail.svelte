@@ -90,13 +90,16 @@
     }
   }
 
-  const segGroups: { axis: Axis; label: string; opts: [string, string][] }[] = [
+  type SegGroup = { axis: Axis; label: string; opts: [string, string][] };
+  // The Resume control only appears when the spawn actually had a resume id;
+  // otherwise Keep and Fresh render identically, so it would just confuse.
+  let segGroups = $derived<SegGroup[]>([
     { axis: "mode", label: "Mode", opts: [["headless", "Headless"], ["interactive", "Interactive"]] },
     { axis: "env", label: "Env", opts: [["masked", "Masked"], ["live", "Live"]] },
     { axis: "shell", label: "Shell", opts: [["bash", "bash"], ["powershell", "PowerShell"], ["cmd", "cmd.exe"]] },
     { axis: "path", label: "Path", opts: [["full", "Full"], ["short", "Short"]] },
-    { axis: "resume", label: "Resume", opts: [["res", "Keep"], ["new", "Fresh"]] },
-  ];
+    ...(data?.HasResume ? [{ axis: "resume" as Axis, label: "Resume", opts: [["res", "Keep"], ["new", "Fresh"]] as [string, string][] }] : []),
+  ]);
 </script>
 
 <div class="space-y-6">
