@@ -54,6 +54,36 @@ export interface SpawnLogFileDTO {
   ExitReason: string;
 }
 
+export interface SpawnEvent {
+  Type: string;
+  At: string;
+  ProviderType: string;
+  ProviderName: string;
+  AgentName: string;
+  Workspace: string;
+  ResumeID: string;
+  Binary: string;
+  Args: string[];
+  Env: string[];
+  PID: number;
+  Origin: string;
+  FirstUserMessage: string;
+  ExitReason: string;
+  DurationMs: number;
+  Error: string;
+  Message: string;
+}
+
+export interface SpawnDetailResponse {
+  File: SpawnLogFileDTO;
+  Events: SpawnEvent[];
+  SessionDeleted: boolean;
+  /** Masked reproduce commands keyed "<shell>-<h|i>-<full|short>-<res|new>". */
+  Repro: Record<string, string>;
+  /** True when the spawn had a resume id — the Keep/Fresh toggle is meaningful. */
+  HasResume: boolean;
+}
+
 export interface MCPClientDTO {
   ID: string;
   Label: string;
@@ -137,4 +167,12 @@ export interface ProviderDetailResponse {
   Spawns: SpawnLogFileDTO[];
   Page: number;
   HasNext: boolean;
+  Router9: Router9DetailDTO;
+}
+
+export interface Router9DetailDTO {
+  Supported: boolean;
+  Enabled: boolean;
+  Models: Record<string, string>;
+  KeySet: boolean;
 }

@@ -114,6 +114,10 @@
           result: ev.text,
           isError: ev.is_error,
         });
+      } else if (ev.type === "raw") {
+        // Unrecognized CLI frame kept for visibility — show as a raw block.
+        flush();
+        blocks.push({ kind: "raw", text: ev.text ?? "" });
       }
     }
     flush();
@@ -151,13 +155,24 @@
 {#if isSystem}
   <div class="flex justify-center py-1">
     <div class="flex flex-col items-center gap-1 max-w-full">
-      <div class="inline-flex items-start gap-1.5 rounded-2xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-xs text-black-700 dark:text-black-600 max-w-full">
-        <svg viewBox="0 0 12 12" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
-          <circle cx="6" cy="6" r="4.5"></circle>
-          <path d="M6 4v2l1 1" stroke-linecap="round"></path>
-        </svg>
-        <span class="whitespace-pre-wrap break-words min-w-0">{turn.text}</span>
-      </div>
+      {#if turn.is_error}
+        <div class="inline-flex items-start gap-1.5 rounded-2xl border border-neg-400/40 bg-neg-400/10 px-3 py-1 text-xs text-neg-400 max-w-full">
+          <svg viewBox="0 0 12 12" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M6 1L11 10.5H1z" stroke-linejoin="round"></path>
+            <path d="M6 5v2" stroke-linecap="round"></path>
+            <circle cx="6" cy="8.6" r="0.4" fill="currentColor" stroke="none"></circle>
+          </svg>
+          <span class="whitespace-pre-wrap break-words min-w-0">{turn.text}</span>
+        </div>
+      {:else}
+        <div class="inline-flex items-start gap-1.5 rounded-2xl border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-xs text-black-700 dark:text-black-600 max-w-full">
+          <svg viewBox="0 0 12 12" class="h-3 w-3 mt-0.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="6" cy="6" r="4.5"></circle>
+            <path d="M6 4v2l1 1" stroke-linecap="round"></path>
+          </svg>
+          <span class="whitespace-pre-wrap break-words min-w-0">{turn.text}</span>
+        </div>
+      {/if}
       {#if safeSteps.length > 0}
         <div class="flex flex-col items-center gap-0.5 mt-0.5">
           {#each safeSteps as ev}
@@ -254,6 +269,11 @@
                   <div data-thinking-block class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700 whitespace-pre-wrap break-words">
                     {block.text}
                   </div>
+                {:else if block.kind === "raw"}
+                  <details class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs">
+                    <summary class="cursor-pointer px-3 py-2 text-black-600 dark:text-black-700 select-none">Raw event</summary>
+                    <pre class="px-3 pb-2 overflow-x-auto text-[11px] text-black-700 dark:text-black-600 whitespace-pre-wrap break-words">{block.text}</pre>
+                  </details>
                 {:else}
                   <ToolCard {block} />
                 {/if}

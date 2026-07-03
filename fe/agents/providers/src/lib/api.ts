@@ -8,6 +8,8 @@ import type {
   ProviderCapDTO,
   HookCapabilityDTO,
   SpawnLogFileDTO,
+  SpawnEvent,
+  SpawnDetailResponse,
   MCPClientDTO,
   MCPStatusDTO,
   GateStatusDTO,
@@ -61,6 +63,34 @@ interface WireSpawnLogFile {
   first_user_message?: string;
   binary?: string;
   exit_reason?: string;
+}
+
+interface WireSpawnEvent {
+  type: string;
+  at: string;
+  provider_type?: string;
+  provider_name?: string;
+  agent_name?: string;
+  workspace?: string;
+  resume_id?: string;
+  binary?: string;
+  args?: string[];
+  env?: string[];
+  pid?: number;
+  origin?: string;
+  first_user_message?: string;
+  exit_reason?: string;
+  duration_ms?: number;
+  error?: string;
+  message?: string;
+}
+
+interface WireSpawnDetailResponse {
+  file: WireSpawnLogFile;
+  events: WireSpawnEvent[] | null;
+  session_deleted: boolean;
+  repro: Record<string, string> | null;
+  has_resume: boolean;
 }
 
 interface WireMCPClient {
@@ -135,6 +165,12 @@ interface WireProviderDetailResponse {
   spawns: WireSpawnLogFile[] | null;
   page: number;
   has_next: boolean;
+  router9?: {
+    supported?: boolean;
+    enabled?: boolean;
+    models?: Record<string, string> | null;
+    key_set?: boolean;
+  } | null;
 }
 
 class ApiError extends Error {
@@ -374,12 +410,45 @@ export async function apiDeleteProvider(type: string, name: string): Promise<voi
   return del<void>(getBase() + `/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
 }
 
+export type RenameProviderResult = {
+  status: string;
+  name: string;
+  projects_migrated: number;
+};
+
+export async function apiRenameProvider(type: string, name: string, newName: string): Promise<RenameProviderResult> {
+  const form = new URLSearchParams();
+  form.set("new_name", newName);
+  const resp = await fetch(
+    getBase() + `/providers/rename/${encodeURIComponent(type)}/${encodeURIComponent(name)}`,
+    {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+      body: form.toString(),
+    },
+  );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    let msg = text || `HTTP ${resp.status}`;
+    try {
+      const j = JSON.parse(text) as { error?: string };
+      if (j.error) msg = j.error;
+    } catch { /* not JSON — keep raw text */ }
+    throw new ApiError(resp.status, msg);
+  }
+  return resp.json() as Promise<RenameProviderResult>;
+}
+
 export async function apiCreateProvider(fields: {
   type: string;
   name: string;
   binary?: string;
   extra_args?: string;
   env?: string;
+  use_9router?: boolean;
+  router9_models?: Record<string, string>;
+  router9_api_key?: string;
 }): Promise<void> {
   const form = new URLSearchParams();
   form.set("type", fields.type);
@@ -392,6 +461,15 @@ export async function apiCreateProvider(fields: {
   }
   if (fields.env) {
     form.set("env", fields.env);
+  }
+  if (fields.use_9router) {
+    form.set("use_9router", "on");
+  }
+  for (const [slot, model] of Object.entries(fields.router9_models ?? {})) {
+    if (model.trim() !== "") form.set(`router9_model_${slot}`, model.trim());
+  }
+  if (fields.router9_api_key) {
+    form.set("router9_api_key", fields.router9_api_key);
   }
   const resp = await fetch(getBase() + "/providers", {
     method: "POST",
@@ -407,6 +485,29 @@ export async function apiCreateProvider(fields: {
     const text = await resp.text().catch(() => "");
     throw new ApiError(resp.status, text || `HTTP ${resp.status}`);
   }
+}
+
+export type CatalogValueKind = "bool" | "enum" | "string" | "int";
+
+export type CatalogEntry = {
+  key: string;
+  description: string;
+  kind: CatalogValueKind;
+  options?: string[];
+  placeholder?: string;
+};
+
+export type ProviderCatalog = {
+  env: CatalogEntry[];
+  args: CatalogEntry[];
+};
+
+// apiGetProviderCatalog fetches the curated env + args picker entries for
+// a provider type. Type-only — no per-instance state. Returns empty
+// arrays for unknown types so the picker just has nothing to offer.
+export async function apiGetProviderCatalog(base: string, type: string): Promise<ProviderCatalog> {
+  const r = await get<ProviderCatalog | null>(`${base}/providers/catalog/${encodeURIComponent(type)}`);
+  return r ?? { env: [], args: [] };
 }
 
 export async function apiProbeGate(type: string, name: string): Promise<void> {
@@ -431,12 +532,58 @@ export function normalizeProviderDetail(r: WireProviderDetailResponse): Provider
     Spawns: (r.spawns ?? []).map(mapSpawn),
     Page: r.page ?? 0,
     HasNext: r.has_next ?? false,
+    Router9: {
+      Supported: r.router9?.supported ?? false,
+      Enabled: r.router9?.enabled ?? false,
+      Models: r.router9?.models ?? {},
+      KeySet: r.router9?.key_set ?? false,
+    },
   };
 }
 
 export async function apiGetProviderDetail(base: string, type: string, name: string): Promise<ProviderDetailResponse> {
   const r = await get<WireProviderDetailResponse>(`${base}/api/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
   return normalizeProviderDetail(r);
+}
+
+function mapSpawnEvent(w: WireSpawnEvent): SpawnEvent {
+  return {
+    Type: w.type ?? "",
+    At: w.at ?? "",
+    ProviderType: w.provider_type ?? "",
+    ProviderName: w.provider_name ?? "",
+    AgentName: w.agent_name ?? "",
+    Workspace: w.workspace ?? "",
+    ResumeID: w.resume_id ?? "",
+    Binary: w.binary ?? "",
+    Args: w.args ?? [],
+    Env: w.env ?? [],
+    PID: w.pid ?? 0,
+    Origin: w.origin ?? "",
+    FirstUserMessage: w.first_user_message ?? "",
+    ExitReason: w.exit_reason ?? "",
+    DurationMs: w.duration_ms ?? 0,
+    Error: w.error ?? "",
+    Message: w.message ?? "",
+  };
+}
+
+// apiGetSpawnDetail fetches one spawn log's metadata, event timeline, and the
+// MASKED reproduce variants. apiRevealSpawn fetches the UNMASKED variants (same
+// keys), admin-gated — called only when the user picks "Live" env.
+export async function apiGetSpawnDetail(base: string, file: string): Promise<SpawnDetailResponse> {
+  const r = await get<WireSpawnDetailResponse>(`${base}/api/providers/spawns/${encodeURIComponent(file)}`);
+  return {
+    File: mapSpawn(r.file),
+    Events: (r.events ?? []).map(mapSpawnEvent),
+    SessionDeleted: r.session_deleted ?? false,
+    Repro: r.repro ?? {},
+    HasResume: r.has_resume ?? false,
+  };
+}
+
+export async function apiRevealSpawn(base: string, file: string): Promise<Record<string, string>> {
+  return get<Record<string, string>>(`${base}/providers/spawns/${encodeURIComponent(file)}/reveal`);
 }
 
 export async function apiSaveProviderDetail(base: string, type: string, name: string, fields: Record<string, string>): Promise<void> {
@@ -585,6 +732,106 @@ export async function apiStorageUpload(
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     throw new ApiError(resp.status, text || `HTTP ${resp.status}`);
+  }
+}
+
+// ── 9router ──────────────────────────────────────────────────────────
+
+export type Router9Status = {
+  installed: boolean;
+  running: boolean;
+  version: string;
+  // "not-installed" | "starting" | "running" | "stopped"
+  state: string;
+};
+
+// apiRouter9Status reports install + run state so the provider form can
+// gate the "Use 9router" toggle (must be installed + running to enable).
+export async function apiRouter9Status(base: string): Promise<Router9Status> {
+  const r = await get<Partial<Router9Status>>(`${base}/9router/status`);
+  return {
+    installed: r.installed ?? false,
+    running: r.running ?? false,
+    version: r.version ?? "",
+    state: r.state ?? "stopped",
+  };
+}
+
+// apiRouter9Start spawns the 9router process (installed required). Waits
+// for the dashboard to answer before resolving.
+export async function apiRouter9Start(base: string): Promise<void> {
+  return post<void>(`${base}/9router/start`);
+}
+
+export type Router9Model = {
+  id: string;
+  // owned_by groups models in the picker (e.g. "combo", "kc", "gc").
+  ownedBy: string;
+};
+
+// apiRouter9Models lists the models 9router serves, via the unauthenticated
+// OpenAI-compatible proxy at the wick root (/9router/v1/models). Returns
+// [] when the endpoint is unreachable (process not running) so the caller
+// can show an empty picker + a hint instead of throwing.
+export async function apiRouter9Models(): Promise<Router9Model[]> {
+  try {
+    const r = await get<{ data?: Array<{ id?: string; owned_by?: string }> }>("/9router/v1/models");
+    return (r.data ?? [])
+      .map((m) => ({ id: m.id ?? "", ownedBy: m.owned_by ?? "" }))
+      .filter((m) => m.id !== "");
+  } catch {
+    return [];
+  }
+}
+
+export type Router9Slot = {
+  key: string;
+  label: string;
+  placeholder: string;
+};
+
+// apiRouter9Slots returns the model slots a provider type exposes under
+// 9router. Defined in the BE so the count/shape differs per provider.
+export async function apiRouter9Slots(base: string, type: string): Promise<Router9Slot[]> {
+  const r = await get<{ slots?: Router9Slot[] }>(`${base}/providers/router9/slots/${encodeURIComponent(type)}`);
+  return r.slots ?? [];
+}
+
+// apiSaveRouter9 persists an instance's 9router settings (toggle + per-slot
+// models + optional key) in one request. Slot models are sent as
+// router9_model_<slot>. A blank key keeps the stored one.
+export async function apiSaveRouter9(
+  base: string,
+  type: string,
+  name: string,
+  fields: { use_9router: boolean; models: Record<string, string>; api_key?: string },
+): Promise<void> {
+  const form = new URLSearchParams();
+  form.set("use_9router", fields.use_9router ? "on" : "false");
+  for (const [slot, model] of Object.entries(fields.models)) {
+    if (model.trim() !== "") form.set(`router9_model_${slot}`, model.trim());
+  }
+  if (fields.api_key && fields.api_key.trim() !== "") {
+    form.set("router9_api_key", fields.api_key);
+  }
+  const resp = await fetch(
+    `${base}/providers/detail/${encodeURIComponent(type)}/${encodeURIComponent(name)}/router9`,
+    {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+      body: form.toString(),
+      redirect: "follow",
+    },
+  );
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    let msg = text || `HTTP ${resp.status}`;
+    try {
+      const j = JSON.parse(text) as { error?: string };
+      if (j.error) msg = j.error;
+    } catch { /* keep raw */ }
+    throw new ApiError(resp.status, msg);
   }
 }
 

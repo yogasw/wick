@@ -33,7 +33,7 @@ func TestOnSpawnFiresOnRespawn(t *testing.T) {
 		Spawner:       sp,
 		State:         st,
 		SendMode:      SendRespawnQueue,
-		OnSpawn: func(binary string, argv []string, pid int, firstMessage string) {
+		OnSpawn: func(binary string, argv []string, env []string, pid int, firstMessage string) {
 			mu.Lock()
 			defer mu.Unlock()
 			calls++

@@ -123,6 +123,10 @@ vi.mock("../../api/processes.js", () => ({
   getProcesses: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   killProcess: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   dequeueProcess: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  // liveProcesses is a pure filter (not an Effect) — keep the real behaviour
+  // so processCount/badge reflect the idle-fallback exclusion under test.
+  liveProcesses: (procs: unknown[]) =>
+    (procs ?? []).filter((p) => (p as { kind?: string }).kind !== "idle"),
 }));
 
 vi.mock("../../api/workspace.js", () => ({
@@ -515,7 +519,7 @@ describe("DetailView — process list polling (G4)", () => {
     vi.useFakeTimers();
     try {
       render(DetailView, { props: DEFAULT_PROPS });
-      const afterMount = getProcesses.mock.calls.length;
+      const afterMount = vi.mocked(getProcesses).mock.calls.length;
       expect(afterMount).toBeGreaterThanOrEqual(1);
       vi.advanceTimersByTime(5000);
       /* no interval polling → advancing the clock adds no further fetches */

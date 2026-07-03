@@ -46,3 +46,9 @@ export function aceModeFor(path: string): string {
   const e = extOf(path);
   return `ace/mode/${MODE_BY_EXT[e] ?? "text"}`;
 }
+
+/** Ace mode id for a bare language name (e.g. "go", "python", "sh"). */
+export function aceModeForLanguage(lang: string): string {
+  const mode = MODE_BY_EXT[lang.toLowerCase()] ?? lang.toLowerCase();
+  return `ace/mode/${mode}`;
+}

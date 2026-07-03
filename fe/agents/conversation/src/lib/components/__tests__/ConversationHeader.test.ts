@@ -268,4 +268,31 @@ describe("ConversationHeader", () => {
       expect(root.className).toMatch(/absolute|relative/);
     });
   });
+
+  describe("agent label", () => {
+    test("bare type shows just the type", () => {
+      const { container } = render(ConversationHeader, {
+        props: { ...baseProps, agentLabel: "codex" },
+      });
+      expect(container.textContent).toContain("codex");
+      expect(container.textContent).not.toContain("codex/");
+    });
+
+    test("type/type collapses to the type only", () => {
+      const { container } = render(ConversationHeader, {
+        props: { ...baseProps, agentLabel: "codex/codex" },
+      });
+      expect(container.textContent).toContain("codex");
+      // instance half is suppressed when name === type
+      expect(container.textContent).not.toContain("codex/");
+    });
+
+    test("named instance shows type and instance name", () => {
+      const { container } = render(ConversationHeader, {
+        props: { ...baseProps, agentLabel: "codex/gemini_flash" },
+      });
+      expect(container.textContent).toContain("codex");
+      expect(container.textContent).toContain("gemini_flash");
+    });
+  });
 });

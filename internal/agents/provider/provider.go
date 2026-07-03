@@ -78,6 +78,18 @@ type Instance struct {
 
 	// CodexConfig holds codex-specific spawn options. nil for non-codex instances.
 	CodexConfig *CodexConfig
+
+	// Use9router routes this instance's CLI through the embedded 9router
+	// proxy instead of the provider's own upstream. Only claude/codex.
+	Use9router bool
+
+	// Router9Models maps a per-provider model slot (see Router9Slots) to
+	// the concrete 9router model id. Required (primary slot) when
+	// Use9router is true; "auto" is rejected by 9router.
+	Router9Models map[string]string
+
+	// Router9APIKey is a custom 9router API key. Empty = default sk_9router.
+	Router9APIKey string
 }
 
 // CodexSandboxMode maps to codex's --sandbox flag values.
@@ -169,10 +181,32 @@ const HookEventPreToolUse = "PreToolUse"
 
 // ── Config helpers ────────────────────────────────────────────────────
 
-// AppName is the userconfig project name the agents module reads/writes
+// appName is the userconfig project name the agents module reads/writes
 // under. Wired by the bootstrap: a server with APP_NAME=foo stores its
 // agents config in ~/.foo/config.json.
-var AppName = ""
+//
+// Guarded by appNameMu: Save spawns a background rescan goroutine that
+// reads it, and tests swap it under t.Cleanup — the two race without a
+// lock (caught by -race). Access only via AppName / SetAppName.
+var (
+	appNameMu sync.RWMutex
+	appName   = ""
+)
+
+// AppName returns the current userconfig project name.
+func AppName() string {
+	appNameMu.RLock()
+	defer appNameMu.RUnlock()
+	return appName
+}
+
+// SetAppName wires the userconfig project name. Called once by the
+// bootstrap, and by tests (under t.Cleanup) to isolate config.
+func SetAppName(name string) {
+	appNameMu.Lock()
+	defer appNameMu.Unlock()
+	appName = name
+}
 
 // instanceCache holds the resolved per-instance config in memory so
 // every spawn doesn't hit the userconfig file. Invalidated on Save /
@@ -188,7 +222,7 @@ var rescanGroup singleflight.Group
 // caller-supplied lock contract. Called by FindCached on a miss and
 // by mutating ops (Save/Delete/SetHookEnabled) after writing.
 func reloadInstanceCacheLocked() {
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		// Fail-soft: leave cache as-is. Callers will fall back to the
 		// uncached Load path on miss.
@@ -198,7 +232,7 @@ func reloadInstanceCacheLocked() {
 	if instanceCache == nil {
 		instanceCache = map[string][]Instance{}
 	}
-	instanceCache[AppName] = mergeWithDefaults(cfg.Providers)
+	instanceCache[AppName()] = mergeWithDefaults(cfg.Providers)
 }
 
 // invalidateInstanceCache forces the next FindCached / LoadCachedInstances
@@ -206,14 +240,14 @@ func reloadInstanceCacheLocked() {
 func invalidateInstanceCache() {
 	instanceCacheMu.Lock()
 	defer instanceCacheMu.Unlock()
-	delete(instanceCache, AppName)
+	delete(instanceCache, AppName())
 }
 
 // Load returns every configured instance across all supported types,
 // auto-seeding the per-type default entry when its list is empty so
 // the UI always has at least one row per supported runtime.
 func Load() ([]Instance, error) {
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return nil, err
 	}
@@ -228,14 +262,14 @@ func Find(t Type, name string) (Instance, error) {
 		name = string(t)
 	}
 	instanceCacheMu.RLock()
-	cached, ok := instanceCache[AppName]
+	cached, ok := instanceCache[AppName()]
 	instanceCacheMu.RUnlock()
 	if !ok {
 		instanceCacheMu.Lock()
-		if _, stillMiss := instanceCache[AppName]; stillMiss {
+		if _, stillMiss := instanceCache[AppName()]; stillMiss {
 			reloadInstanceCacheLocked()
 		}
-		cached = instanceCache[AppName]
+		cached = instanceCache[AppName()]
 		instanceCacheMu.Unlock()
 	}
 	for _, ins := range cached {
@@ -258,16 +292,39 @@ func Find(t Type, name string) (Instance, error) {
 	return Instance{}, fmt.Errorf("runtime %s/%s not configured", t, name)
 }
 
+// ValidInstanceName reports whether name is a legal instance name.
+// Names become the second half of the "type/name" provider key, which
+// is parsed by splitting on "/" — so a name may not be empty and may
+// only contain [A-Za-z0-9_]. "_" is the single word separator (e.g.
+// "abc_a"); spaces, slashes, and other punctuation are rejected so the
+// key round-trips cleanly through agents.json, project defaults, and
+// the spawn path.
+func ValidInstanceName(name string) error {
+	if name == "" {
+		return errors.New("instance name required")
+	}
+	for _, r := range name {
+		ok := (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '_'
+		if !ok {
+			return fmt.Errorf("invalid instance name %q: use letters, digits or '_' only", name)
+		}
+	}
+	return nil
+}
+
 // Save persists a new or updated instance. Empty Name is rejected.
 // Replaces any existing entry with the same {Type, Name}.
 func Save(ins Instance) error {
-	if ins.Name == "" {
-		return errors.New("instance name required")
+	if err := ValidInstanceName(ins.Name); err != nil {
+		return err
 	}
 	if !isSupported(ins.Type) {
 		return fmt.Errorf("unsupported runtime type %q", ins.Type)
 	}
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
 	}
@@ -283,7 +340,7 @@ func Save(ins Instance) error {
 	if !updated {
 		*list = append(*list, toUserInstance(ins))
 	}
-	if err := userconfig.Save(AppName, cfg); err != nil {
+	if err := userconfig.Save(AppName(), cfg); err != nil {
 		return err
 	}
 	invalidateInstanceCache()
@@ -303,6 +360,71 @@ func Save(ins Instance) error {
 	return nil
 }
 
+// Rename changes an instance's Name from oldName to newName within the
+// same type, persisting through userconfig. The new name is validated
+// and must not collide with an existing instance of the same type.
+//
+// Rename only touches the provider store — it does NOT rewrite the
+// "type/name" provider keys already persisted in project defaults or
+// session agents.json. Callers that want project defaults to follow a
+// rename must do that separately (see project.RewriteProvider); live
+// sessions keep the old key and must be re-pointed by the user.
+//
+// Renaming a not-yet-materialized default instance (Name == type, only
+// living in memory) is supported: the new row is created on save.
+func Rename(t Type, oldName, newName string) error {
+	if err := ValidInstanceName(newName); err != nil {
+		return err
+	}
+	if oldName == "" {
+		return errors.New("current instance name required")
+	}
+	if oldName == newName {
+		return nil
+	}
+	if !isSupported(t) {
+		return fmt.Errorf("unsupported runtime type %q", t)
+	}
+	cfg, err := userconfig.Load(AppName())
+	if err != nil {
+		return err
+	}
+	list := pickList(&cfg.Providers, t)
+	if list == nil {
+		return fmt.Errorf("unsupported runtime type %q", t)
+	}
+	// Reject collision with an existing persisted instance.
+	for i := range *list {
+		if (*list)[i].Name == newName {
+			return fmt.Errorf("instance %s/%s already exists", t, newName)
+		}
+	}
+	for i := range *list {
+		if (*list)[i].Name == oldName {
+			(*list)[i].Name = newName
+			if err := userconfig.Save(AppName(), cfg); err != nil {
+				return err
+			}
+			invalidateInstanceCache()
+			InvalidateProbeCache(t, oldName)
+			InvalidateProbeCache(t, newName)
+			return nil
+		}
+	}
+	// Not persisted yet — auto-seeded default (Name == type) only lives
+	// in memory. Materialize it under the new name so the rename sticks.
+	if oldName == string(t) {
+		*list = append(*list, userconfig.ProviderInstance{Name: newName})
+		if err := userconfig.Save(AppName(), cfg); err != nil {
+			return err
+		}
+		invalidateInstanceCache()
+		InvalidateProbeCache(t, newName)
+		return nil
+	}
+	return fmt.Errorf("instance %s/%s not found", t, oldName)
+}
+
 // SetHookEnabled flips the user's enable/disable intent for one hook
 // event on one instance, persisting through userconfig. Used by the
 // per-card Enable/Disable button on the Providers page after a
@@ -311,7 +433,7 @@ func SetHookEnabled(t Type, name, event string, enabled bool) error {
 	if name == "" || event == "" {
 		return errors.New("instance name and event required")
 	}
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
 	}
@@ -327,7 +449,7 @@ func SetHookEnabled(t Type, name, event string, enabled bool) error {
 			(*list)[i].Hooks = map[string]userconfig.HookInstanceConfig{}
 		}
 		(*list)[i].Hooks[event] = userconfig.HookInstanceConfig{Enabled: enabled}
-		if err := userconfig.Save(AppName, cfg); err != nil {
+		if err := userconfig.Save(AppName(), cfg); err != nil {
 			return err
 		}
 		invalidateInstanceCache()
@@ -344,7 +466,7 @@ func SetHookEnabled(t Type, name, event string, enabled bool) error {
 			Name:  name,
 			Hooks: map[string]userconfig.HookInstanceConfig{event: {Enabled: enabled}},
 		})
-		if err := userconfig.Save(AppName, cfg); err != nil {
+		if err := userconfig.Save(AppName(), cfg); err != nil {
 			return err
 		}
 		invalidateInstanceCache()
@@ -360,7 +482,7 @@ func Delete(t Type, name string) error {
 	if name == "" {
 		return errors.New("instance name required")
 	}
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
 	}
@@ -368,7 +490,7 @@ func Delete(t Type, name string) error {
 	for i := range *list {
 		if (*list)[i].Name == name {
 			*list = append((*list)[:i], (*list)[i+1:]...)
-			if err := userconfig.Save(AppName, cfg); err != nil {
+			if err := userconfig.Save(AppName(), cfg); err != nil {
 				return err
 			}
 			invalidateInstanceCache()
@@ -565,6 +687,9 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 				Storage:       storageFromUser(raw.Storage),
 				MaxConcurrent: raw.MaxConcurrent,
 				SendMode:      raw.SendMode,
+				Use9router:    raw.Use9router,
+				Router9Models: raw.Router9Models,
+				Router9APIKey: raw.Router9APIKey,
 			}
 			if t == TypeCodex {
 				ins.CodexConfig = &CodexConfig{
@@ -612,6 +737,9 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 		Storage:       storageToUser(ins.Storage),
 		MaxConcurrent: ins.MaxConcurrent,
 		SendMode:      ins.SendMode,
+		Use9router:    ins.Use9router,
+		Router9Models: ins.Router9Models,
+		Router9APIKey: ins.Router9APIKey,
 	}
 	if ins.CodexConfig != nil {
 		raw.SandboxMode = string(ins.CodexConfig.SandboxMode)

@@ -44,10 +44,12 @@ Each project carries defaults that new sessions inherit when you don't override 
 | Default | Effect |
 |---|---|
 | **Preset** | Preset bound at session-create time. Falls back to `default`. |
-| **Provider** | Provider type (`claude` / `codex` / `gemini`, or `type/name`) used when a session doesn't specify one. |
+| **Provider** | Provider instance (`type/name`, e.g. `claude/work`) used when a session doesn't specify one. The dropdown lists every healthy instance, not just base types. Bare type values from older projects are promoted to the canonical default instance automatically. |
 | **System prompt addon** | Free-text appended to the preset's system prompt for every session in this project. |
 
-In the New Session composer, picking a project pre-fills the provider + preset from these defaults (shown as green "inherited" dropdowns); you can still override any of them per session.
+In the New Session composer, picking a project pre-fills the provider + preset from these defaults; you can still override either per session. The provider dropdown in the composer also shows full `type/name` instances — selecting a project auto-selects its saved default provider when that instance is available.
+
+If the saved default provider instance is renamed or deleted after a project is created, the settings form shows it as `type/name (unavailable)` so the value isn't silently overwritten.
 
 ## Web UI
 

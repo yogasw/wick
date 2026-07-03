@@ -122,15 +122,16 @@ describe("switchProvider", () => {
     expect(r.method).toBe("POST");
   });
 
-  test("returns redirect url when provider switch creates new session", async () => {
+  test("switches in-place on the same session (no redirect)", async () => {
     const result = await Effect.runPromise(
-      switchProvider("/tools/agents", "sess-1", "openai").pipe(
+      switchProvider("/tools/agents", "sess-1", "codex/gemini_flash").pipe(
         Effect.provide(
-          mockLayer(200, { status: "redirect", redirect: "/sessions/sess-2" }),
+          mockLayer(200, { status: "switched", provider: "codex/gemini_flash" }),
         ),
       ),
     );
-    expect(result.redirect).toBe("/sessions/sess-2");
+    expect(result.status).toBe("switched");
+    expect(result.provider).toBe("codex/gemini_flash");
   });
 });
 
