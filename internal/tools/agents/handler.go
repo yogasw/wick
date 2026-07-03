@@ -332,7 +332,7 @@ func Register(r tool.Router) {
 	// and a config store (so it can persist the auto-start flag).
 	router9.Register(r, func(c *tool.Ctx, activePage string) view.AgentsLayoutVM {
 		return sidebarVM(c, activePage, "")
-	}, router9ConfigStore{})
+	}, router9ConfigStore{}, func() string { return spaAssetURL("router9") })
 
 	r.POST("/providers/storage/sync/{type}/{name}", syncProviderStorage)
 	r.GET("/providers/storage", storagePage)

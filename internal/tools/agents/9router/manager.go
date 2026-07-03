@@ -12,9 +12,11 @@
 package router9
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -55,7 +57,21 @@ type Manager struct {
 	upgrader websocket.Upgrader
 	log      zerolog.Logger
 	logs     *logBuffer
+	bcast    *broadcaster
+	// externalAllowed reports whether the /9router/v1 API may be reached
+	// from off-machine. Injected by the hosting package (backed by the
+	// Router9ExternalAPI config knob) so this package stays storage-free.
+	// nil until wired → treated as false (local-only, the safe default).
+	externalAllowed func() bool
 }
+
+// forwardClientHeader is an internal, per-request sentinel the API
+// handler stamps with the real client IP when external access is enabled.
+// The apiProxy Rewrite reads it and re-emits it as a trusted
+// X-Forwarded-For to the backend. It never leaves wick: Rewrite deletes
+// it before the request goes upstream. Named with a wick-private prefix
+// so it can't collide with a real client header.
+const forwardClientHeader = "X-Wick-9r-Client"
 
 // MountPrefix is the wick-root path the 9router dashboard is proxied
 // under. It MUST be a top-level path (not nested under /tools/...) so
@@ -100,11 +116,26 @@ func New() *Manager {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(backendURL)
 			pr.Out.Host = backendURL.Host
-			// Strip any inbound forwarding hints; do NOT SetXForwarded().
+			// Always drop client-supplied forwarding hints — they are
+			// spoofable and 9router trusts XFF when the TCP peer is loopback
+			// (which wick always is). The handler decides, per request,
+			// whether to re-add a *trusted* client address via the internal
+			// forwardClientHeader sentinel below.
 			pr.Out.Header.Del("X-Forwarded-For")
 			pr.Out.Header.Del("X-Forwarded-Host")
 			pr.Out.Header.Del("X-Forwarded-Proto")
+			pr.Out.Header.Del("X-Real-Ip")
 			pr.Out.Header.Del("Forwarded")
+			// External mode: the handler stamped the real client address on
+			// forwardClientHeader. Translate it into X-Forwarded-For so
+			// 9router's custom-server sees a non-local peer and enforces its
+			// API key (its aH() gate returns false for a via-proxy request).
+			// Local mode leaves the sentinel absent → request looks local →
+			// 9router's no-key passthrough applies.
+			if ip := pr.Out.Header.Get(forwardClientHeader); ip != "" {
+				pr.Out.Header.Del(forwardClientHeader)
+				pr.Out.Header.Set("X-Forwarded-For", ip)
+			}
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			logger.Error().Err(err).Str("path", r.URL.Path).Msg("9router: api proxy error")
@@ -119,6 +150,7 @@ func New() *Manager {
 		apiProxy: apiProxy,
 		log:      logger,
 		logs:     newLogBuffer(),
+		bcast:    newBroadcaster(),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -420,12 +452,234 @@ func (m *Manager) APIProxyHandler() http.Handler {
 			})
 			return
 		}
-		m.apiProxy.ServeHTTP(w, r)
+
+		// Classify the caller. A loopback peer is wick's own spawn (or another
+		// local process) and is always allowed as a no-key local request.
+		// A non-loopback peer reached us from off-machine (tunnel / public URL).
+		external := !isLoopbackHost(r.RemoteAddr)
+		if external && !m.externalAPIAllowed() {
+			// External access disabled: refuse off-machine callers outright
+			// instead of forwarding them as local (which would grant no-key
+			// access to the whole internet). Still surfaced to any watcher.
+			m.publishRejected(r, external)
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "9router API is not exposed externally — enable it in Settings",
+			})
+			return
+		}
+		if external {
+			// Hand the backend a *trusted* client address so 9router's
+			// custom-server marks the request via-proxy and enforces its own
+			// API key for non-local traffic. The Rewrite translates this
+			// sentinel into X-Forwarded-For and strips it before forwarding.
+			if ip := clientIP(r); ip != "" {
+				r.Header.Set(forwardClientHeader, ip)
+			}
+		}
+
+		m.proxyAPI(w, r, external)
 	})
 	if m.prefix != "" {
 		return http.StripPrefix(m.prefix, h)
 	}
 	return h
+}
+
+// proxyAPI forwards the request to 9router. When a browser is watching the
+// Requests tab, it also captures the FULL request/response bodies and
+// broadcasts a live event to subscribers. When nobody is watching, it does
+// none of that work — the request is proxied byte-for-byte untouched, and
+// nothing is buffered or stored anywhere (no disk, no ring buffer). The
+// captured bodies live only in the watching browser's memory.
+func (m *Manager) proxyAPI(w http.ResponseWriter, r *http.Request, external bool) {
+	if !m.bcast.hasSubscribers() {
+		// Fast path: no watcher → pure pass-through, zero capture overhead.
+		m.apiProxy.ServeHTTP(w, r)
+		return
+	}
+
+	// Read the full request body so we can both broadcast it and replay it
+	// to the backend.
+	var reqBody []byte
+	if r.Body != nil {
+		reqBody, _ = io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		r.Body = io.NopCloser(bytes.NewReader(reqBody))
+		r.ContentLength = int64(len(reqBody))
+		r.Header.Del("Content-Length")
+	}
+
+	start := time.Now()
+	cw := &captureWriter{ResponseWriter: w, status: http.StatusOK}
+	m.apiProxy.ServeHTTP(cw, r)
+	dur := time.Since(start)
+
+	m.bcast.publish(ReqEvent{
+		Time:       nowClock(),
+		Method:     r.Method,
+		Path:       r.URL.Path,
+		Host:       r.Host,
+		RemoteAddr: r.RemoteAddr,
+		ClientIP:   clientIP(r),
+		External:   external,
+		Auth:       authFromRequest(r),
+		UserAgent:  r.Header.Get("User-Agent"),
+		Model:      sniffModel(reqBody),
+		Status:     cw.status,
+		DurationMS: dur.Milliseconds(),
+		ReqBody:    string(reqBody),
+		RespBody:   string(cw.body),
+	})
+}
+
+// publishRejected broadcasts a request that never reached the backend
+// (e.g. a rejected external caller) so watchers still see the attempt.
+// No-op when nobody is watching.
+func (m *Manager) publishRejected(r *http.Request, external bool) {
+	if !m.bcast.hasSubscribers() {
+		return
+	}
+	m.bcast.publish(ReqEvent{
+		Time:       nowClock(),
+		Method:     r.Method,
+		Path:       r.URL.Path,
+		Host:       r.Host,
+		RemoteAddr: r.RemoteAddr,
+		ClientIP:   clientIP(r),
+		External:   external,
+		Auth:       authFromRequest(r),
+		UserAgent:  r.Header.Get("User-Agent"),
+		Status:     http.StatusForbidden,
+	})
+}
+
+// clientIP returns the best-effort real client address for an inbound
+// request: the TCP peer's IP (RemoteAddr), which is unspoofable at wick's
+// edge. Trusted forwarding from a fronting reverse proxy is out of scope
+// here — wick is the trust boundary for 9router.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return strings.TrimSpace(r.RemoteAddr)
+	}
+	return host
+}
+
+// nowClock returns the wall-clock timestamp string used for an event.
+func nowClock() string { return time.Now().Format("15:04:05") }
+
+// externalAPIAllowed reports whether off-machine callers may reach the
+// /9router/v1 API. nil getter (unwired) → false, the safe default.
+func (m *Manager) externalAPIAllowed() bool {
+	return m.externalAllowed != nil && m.externalAllowed()
+}
+
+// SetExternalAllowed wires the getter backing the external-API decision.
+// Called once at registration with the config-backed accessor.
+func (m *Manager) SetExternalAllowed(fn func() bool) { m.externalAllowed = fn }
+
+// ReqStream is the Server-Sent Events endpoint the Requests tab connects
+// to. It subscribes the caller to live request events and streams each as
+// a `data: <json>\n\n` frame until the client disconnects. While at least
+// one client is connected the proxy captures bodies; when the last one
+// leaves, capture stops. Nothing is replayed on connect — a fresh
+// subscriber only sees requests that happen from now on.
+func (m *Manager) ReqStream(w http.ResponseWriter, r *http.Request) {
+	// Use ResponseController, not a direct w.(http.Flusher) assertion: the
+	// server wraps the writer in a logging middleware type that forwards
+	// Flush only via Unwrap(). ResponseController walks that chain to the
+	// real flusher; a direct assertion would fail and 500.
+	rc := http.NewResponseController(w)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // disable proxy buffering
+	w.WriteHeader(http.StatusOK)
+	if err := rc.Flush(); err != nil {
+		// Header is already sent; nothing to signal to the client but the
+		// stream can't work here, so bail rather than spin uselessly.
+		m.log.Warn().Err(err).Msg("9router: reqstream flush unsupported")
+		return
+	}
+
+	ch, unsubscribe := m.bcast.subscribe()
+	defer unsubscribe()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case e, ok := <-ch:
+			if !ok {
+				return
+			}
+			b, err := json.Marshal(e)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+				return
+			}
+			_ = rc.Flush()
+		}
+	}
+}
+
+// LogStream is the Server-Sent Events endpoint the Settings tab connects to
+// for live 9router process output. On connect it sends the current buffer
+// as one snapshot event, then streams each new stdout/stderr chunk as it
+// arrives (tail -f), plus a reset sentinel when the process (re)starts so
+// the client clears stale output. Replaces the old poll-the-whole-buffer
+// endpoint.
+func (m *Manager) LogStream(w http.ResponseWriter, r *http.Request) {
+	rc := http.NewResponseController(w)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	if err := rc.Flush(); err != nil {
+		m.log.Warn().Err(err).Msg("9router: logstream flush unsupported")
+		return
+	}
+
+	initial, ch, unsubscribe := m.logs.subscribe()
+	defer unsubscribe()
+
+	// sendChunk emits one SSE frame. A chunk may contain newlines; SSE
+	// treats each \n as a separate data line within the same event, which
+	// the client rejoins — so we JSON-encode to keep it one opaque payload.
+	send := func(chunk string) bool {
+		b, err := json.Marshal(chunk)
+		if err != nil {
+			return true
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+			return false
+		}
+		_ = rc.Flush()
+		return true
+	}
+
+	if initial != "" && !send(initial) {
+		return
+	}
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case chunk, ok := <-ch:
+			if !ok {
+				return
+			}
+			if !send(chunk) {
+				return
+			}
+		}
+	}
 }
 
 func (m *Manager) proxyWebSocket(w http.ResponseWriter, r *http.Request) {

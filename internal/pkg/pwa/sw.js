@@ -1,7 +1,7 @@
 // wick service worker — minimal, enables PWA installability and a small
 // static cache. Kept conservative on purpose: navigations always go to the
 // network so we never serve a stale Cloudflare Access login page from cache.
-const CACHE = 'wick-static-v5';
+const CACHE = 'wick-static-v6';
 const ASSETS = [
   '/public/img/icon.svg',
   '/public/img/icon-192.png',
@@ -60,7 +60,18 @@ self.addEventListener('fetch', (event) => {
   // caching them here would pin a stale, pre-rewrite copy and break the
   // app. Always go straight to the network — let the proxy be the source
   // of truth.
-  if (url.pathname === '/9router' || url.pathname.startsWith('/9router/')) return;
+  //
+  // /_next/* is the SAME app's asset namespace: 9router's Next.js bundle
+  // emits some root-absolute /_next/ URLs at runtime that land here at the
+  // wick root (the server re-proxies them to the dashboard). They match
+  // staticAssetRe below, so without this skip the SW would try to cache them
+  // and, on a cold miss, serve a stale 404 "from service worker" — exactly
+  // the /_next/*.js|css|woff2 404s. Bypass so they reach the server proxy.
+  if (
+    url.pathname === '/9router' ||
+    url.pathname.startsWith('/9router/') ||
+    url.pathname.startsWith('/_next/')
+  ) return;
 
   if (staticAssetRe.test(url.pathname)) {
     // Stale-while-revalidate: return the cached copy immediately (or fall back

@@ -29,6 +29,10 @@
     /** When set, renders a bordered editor sized by min/max lines around `rows`.
         When omitted, the editor fills its host container. */
     rows?: number;
+    /** Focus the editor on mount so keyboard shortcuts (e.g. Ctrl+F for the
+        in-editor find box) work immediately — useful when the editor opens in
+        a modal and the user hasn't clicked into it yet. */
+    autofocus?: boolean;
   };
 
   let {
@@ -39,6 +43,7 @@
     readonly = false,
     theme = { light: "chrome", dark: "twilight" },
     rows,
+    autofocus = false,
   }: Props = $props();
 
   let host: HTMLDivElement | undefined = $state();
@@ -73,6 +78,11 @@
         await import("ace-builds/src-noconflict/mode-golang");
         await import("ace-builds/src-noconflict/mode-python");
         await import("ace-builds/src-noconflict/mode-sh");
+        await import("ace-builds/src-noconflict/mode-json");
+        // ext-searchbox gives Ace its own in-editor find widget so Ctrl+F /
+        // Cmd+F searches within the editor instead of triggering the browser
+        // page-find. Ace binds the keys automatically once this is loaded.
+        await import("ace-builds/src-noconflict/ext-searchbox");
         await import("ace-builds/src-noconflict/theme-chrome");
         await import("ace-builds/src-noconflict/theme-twilight");
         await import("ace-builds/src-noconflict/theme-github");
@@ -109,6 +119,7 @@
           attributes: true,
           attributeFilter: ["class"],
         });
+        if (autofocus) editor.focus();
         mounted = true;
       } catch (e) {
         console.error("Ace load failed — falling back to textarea:", e);

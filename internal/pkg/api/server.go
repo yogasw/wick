@@ -83,11 +83,11 @@ import (
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
-	"github.com/yogasw/wick/internal/updater"
-	"github.com/yogasw/wick/internal/userconfig"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
+	"github.com/yogasw/wick/internal/updater"
+	"github.com/yogasw/wick/internal/userconfig"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/job"
 	"github.com/yogasw/wick/pkg/tool"
@@ -1610,6 +1610,21 @@ func NewServer() *Server {
 	// /tools/agents/9router; this serves only the proxied iframe content.
 	r.Handle(agentstool.Router9MountPrefix()+"/", authMidd.RequireAdmin(agentstool.Router9RootProxy()))
 
+	// 9router emits some root-absolute /_next/* asset URLs (fonts/CSS/chunks)
+	// at runtime that the body rewriter can't catch, so they land here at the
+	// wick root instead of under /9router. Serve them from the dashboard proxy.
+	// /_next/ is unique to Next.js, so this can't shadow any wick route.
+	//
+	// Admin-gated like the dashboard it fronts: 9router is an admin-only tool,
+	// so its whole surface — including these assets — must not be reachable by
+	// the public when wick is exposed via a tunnel (the host allowlist lets a
+	// configured public host through, so auth is the real gate here). The
+	// earlier 404s that looked like an auth failure were actually a re-root bug
+	// (RawPath left un-prefixed → StripPrefix missed); with that fixed, the
+	// iframe's same-origin sub-resource requests carry the admin session cookie
+	// and load normally.
+	r.Handle("/_next/", authMidd.RequireAdmin(agentstool.Router9NextAssetProxy()))
+
 	// API — JSON endpoints
 	r.Handle("GET /api/tools", http.HandlerFunc(homeHandler.APITools))
 
@@ -1763,7 +1778,13 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 		// exempt it from the host allowlist for the same reason as /mcp, so
 		// spawns work even when app_url is a remote/tunnel domain. Scoped to
 		// the /9router/v1 subtree + loopback Host only.
-		if router9LoopbackExempt(r.URL.Path, r.Host) {
+		//
+		// When the admin has explicitly exposed the API externally, the
+		// exemption widens to any host on that subtree: a tunnel/public host
+		// then reaches the proxy, which forwards the caller as non-local so
+		// 9router enforces its own API key. Off (default) keeps the exemption
+		// loopback-only and the proxy itself rejects off-machine callers.
+		if router9APIExempt(r.URL.Path, r.Host) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1802,12 +1823,18 @@ func mcpLoopbackExempt(path, host string) bool {
 // AI CLIs point their base URL at 127.0.0.1:<port>/9router/v1, so — like
 // /mcp — these must bypass the host allowlist to work when app_url is a
 // remote/tunnel domain. Scoped to the /9router/v1 subtree + loopback only.
-func router9LoopbackExempt(path, host string) bool {
+func router9APIExempt(path, host string) bool {
 	prefix := agentstool.Router9MountPrefix() + "/v1"
 	if path != prefix && !strings.HasPrefix(path, prefix+"/") {
 		return false
 	}
-	return isLoopbackHost(host)
+	// Loopback callers (local spawns) are always exempt. Off-machine callers
+	// are exempt only when the admin exposed the API externally — the proxy
+	// then forwards them as non-local so 9router's own API key gates them.
+	if isLoopbackHost(host) {
+		return true
+	}
+	return agentstool.Router9ExternalAPIEnabled()
 }
 
 // isLoopbackHost reports whether host (a Host header, with or without a

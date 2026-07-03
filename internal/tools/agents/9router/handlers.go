@@ -58,28 +58,49 @@ type SidebarFunc func(c *tool.Ctx, activePage string) view.AgentsLayoutVM
 type ConfigStore interface {
 	GetAutostart() bool
 	SetAutostart(ctx context.Context, on bool) error
+	GetExternalAPI() bool
+	SetExternalAPI(ctx context.Context, on bool) error
 	// Enabled is the master switch — false disables every control endpoint.
 	Enabled() bool
 	// AccessAllowed reports whether the request's user may drive controls
 	// (admin or a granted access tag).
 	AccessAllowed(ctx context.Context) bool
+	// ExternalAPIAllowed reports whether the /9router/v1 API may be reached
+	// from off-machine (tunnel / public URL). Off = the proxy answers only
+	// loopback callers and forwards them as local (no key); remote callers
+	// are rejected. On = remote callers are forwarded with their real client
+	// address so 9router enforces its own API key for non-local traffic.
+	ExternalAPIAllowed() bool
 }
 
 var store ConfigStore
 
+// assetURL resolves the hashed Vite bundle path for the 9router SPA. Wired
+// by the agents package (which owns the embed) so this package doesn't
+// import the SPA loader. nil until wired → empty string (shell shows a
+// "bundle not built" hint).
+var assetURL func() string
+
 // Register wires every 9router route onto r, relative to the tool base:
-// the dashboard page, the settings page, control + autostart endpoints,
-// the logs endpoint, and the dashboard proxy. cs persists settings.
-func Register(r tool.Router, sidebar SidebarFunc, cs ConfigStore) {
+// the SPA page, control + autostart/external endpoints, the logs + request
+// stream endpoints, and the dashboard proxy. cs persists settings; asset
+// resolves the SPA bundle URL.
+func Register(r tool.Router, sidebar SidebarFunc, cs ConfigStore, asset func() string) {
 	store = cs
+	assetURL = asset
+	// Back the API proxy's external-access decision with the config knob.
+	manager().SetExternalAllowed(cs.ExternalAPIAllowed)
 	r.GET("/9router", func(c *tool.Ctx) { page(c, sidebar) })
 	r.GET("/9router/status", status)
 	r.GET("/9router/logs", logs)
+	r.GET("/9router/logstream", logstream)
 	r.POST("/9router/install", install)
 	r.POST("/9router/start", start)
 	r.POST("/9router/stop", stop)
 	r.POST("/9router/restart", restart)
 	r.POST("/9router/autostart", setAutostart)
+	r.POST("/9router/external", setExternal)
+	r.GET("/9router/reqstream", reqstream)
 	// Note: the dashboard iframe is NOT served from under the tool. It is
 	// proxied at the wick root (MountPrefix) and wired in server.go, so
 	// 9router's root-absolute URLs rewrite to one prefix. See RootProxy.
@@ -114,25 +135,33 @@ func Autostart() {
 
 // ── pages ────────────────────────────────────────────────────────────
 
-// page renders the single 9router page: a Dashboard tab (iframe) and a
-// Settings tab (install/start/stop/restart + auto-start + logs), toggled
-// client-side. FullBleed so the iframe fills the content area. Gated the
-// same as the controls: 404 when the master switch is off, 403 for callers
-// without access (admin or a granted tag).
+// page renders the 9router SPA thin-shell inside the agents chrome. The
+// SPA (fe/agents/router9) owns the Dashboard / Requests / Settings tabs;
+// this handler only supplies the layout, base, seed toggles, and the Vite
+// bundle URL. FullBleed so the iframe/stream fills the content area. Gated
+// the same as the controls: 404 when the master switch is off, 403 for
+// callers without access (admin or a granted tag).
 func page(c *tool.Ctx, sidebar SidebarFunc) {
 	if !allowed(c) {
 		return
 	}
 	layout := sidebar(c, "9router")
 	layout.FullBleed = true
-	autostart := false
+	autostart, external := false, false
 	if store != nil {
 		autostart = store.GetAutostart()
+		external = store.GetExternalAPI()
+	}
+	asset := ""
+	if assetURL != nil {
+		asset = assetURL()
 	}
 	c.HTML(view.Router9Page(view.Router9VM{
-		Layout:    layout,
-		Base:      c.Base(),
-		Autostart: autostart,
+		Layout:      layout,
+		Base:        c.Base(),
+		AssetURL:    asset,
+		Autostart:   autostart,
+		ExternalAPI: external,
 	}))
 }
 
@@ -165,6 +194,15 @@ func logs(c *tool.Ctx) {
 		return
 	}
 	manager().Logs(c.W, c.R)
+}
+
+// logstream is the SSE endpoint streaming live 9router process output to
+// the Settings tab (snapshot on connect, then incremental tail). Admin-gated.
+func logstream(c *tool.Ctx) {
+	if !allowed(c) {
+		return
+	}
+	manager().LogStream(c.W, c.R)
 }
 
 func install(c *tool.Ctx) {
@@ -211,4 +249,36 @@ func setAutostart(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]bool{"autostart": on})
+}
+
+// setExternal persists the external-API flag from form value "on"
+// ("true"/"false"). When on, the /9router/v1 proxy forwards remote
+// callers to 9router with their real client address so 9router enforces
+// its own API key; when off, remote callers are rejected and only local
+// spawns reach the API.
+func setExternal(c *tool.Ctx) {
+	if !allowed(c) {
+		return
+	}
+	if store == nil {
+		c.Error(http.StatusServiceUnavailable, "config store unavailable")
+		return
+	}
+	on := c.Form("on") == "true"
+	if err := store.SetExternalAPI(c.Context(), on); err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, map[string]bool{"external": on})
+}
+
+// reqstream is the SSE endpoint streaming live /9router/v1 API requests to
+// the Requests tab. Nothing is stored: events are captured only while a
+// client is connected and delivered in real time. Admin-gated like every
+// control.
+func reqstream(c *tool.Ctx) {
+	if !allowed(c) {
+		return
+	}
+	manager().ReqStream(c.W, c.R)
 }

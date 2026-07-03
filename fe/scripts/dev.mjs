@@ -14,6 +14,7 @@ const workspaces = [
   "@wick-fe/agents-presets",
   "@wick-fe/agents-project-settings",
   "@wick-fe/agents-providers",
+  "@wick-fe/agents-router9",
   "@wick-fe/agents-scm",
   "@wick-fe/agents-shell",
   "@wick-fe/agents-skills",

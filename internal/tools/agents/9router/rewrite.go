@@ -19,7 +19,13 @@ import (
 // here if a new 9router route 404s through the proxy.
 var jsPathPrefixes = []string{
 	"/api/",
-	"/_next/",
+	// NOTE: "/_next/" is deliberately NOT rewritten here. Next.js assembles
+	// many /_next/ asset URLs (fonts, split CSS, chunks) from fragments at
+	// runtime, which a string rewrite can't reliably catch. Instead the wick
+	// root serves /_next/* directly from the dashboard proxy (see
+	// Router9NextAssetProxy in router9.go) — one catch-all that covers every
+	// /_next/ asset regardless of how its URL was built. /_next/ is unique to
+	// Next.js so serving it at the root can't shadow a wick route.
 	"/dashboard",
 	"/login",
 	"/logout",
