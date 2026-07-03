@@ -1,0 +1,36 @@
+package view
+
+// Router9VM feeds the thin-shell that hosts the 9router SPA inside the
+// standard agents layout. AssetURL is the hashed Vite bundle path resolved
+// at boot via spaAssetURL("router9"). Autostart / ExternalAPI seed the
+// Settings toggles so they render correctly before the first status poll.
+type Router9VM struct {
+	Layout      AgentsLayoutVM
+	Base        string // /tools/agents
+	AssetURL    string
+	Autostart   bool
+	ExternalAPI bool
+}
+
+// Router9Page renders the 9router SPA shell inside the agents chrome. The
+// SPA reads data-base / data-autostart / data-external from the #app div.
+templ Router9Page(vm Router9VM) {
+	@AgentsLayout(vm.Layout) {
+		if vm.AssetURL == "" {
+			<div class="p-8 text-sm text-rose-600 dark:text-rose-400">
+				9router bundle not built yet. Run
+				<code class="font-mono">npm --workspace=@wick-fe/agents-router9 run build</code>
+				in <code class="font-mono">fe/</code> and refresh.
+			</div>
+		} else {
+			<div
+				id="app"
+				data-base={ vm.Base }
+				data-autostart={ boolStr(vm.Autostart) }
+				data-external={ boolStr(vm.ExternalAPI) }
+				class="h-full"
+			></div>
+			<script type="module" src={ vm.AssetURL }></script>
+		}
+	}
+}

@@ -16,7 +16,11 @@
 <ToastHost />
 
 {#if detailParams}
-  <DetailView {base} sessionId={detailParams.id} />
+  <!-- key on the session id so navigating between sessions remounts DetailView
+       (fresh onMount → SSE reconnects + history reloads for the new session). -->
+  {#key detailParams.id}
+    <DetailView {base} sessionId={detailParams.id} />
+  {/key}
 {:else}
   <ListView {base} />
 {/if}

@@ -13,7 +13,7 @@ export const getProjectOptions = (base: string) =>
   );
 
 export const switchProvider = (base: string, sessionId: string, provider: string) =>
-  apiPostE<{ status: string; provider?: string; redirect?: string }>(
+  apiPostE<{ status: string; provider?: string }>(
     `${base}/sessions/${encodeURIComponent(sessionId)}/provider`,
     { provider },
   );

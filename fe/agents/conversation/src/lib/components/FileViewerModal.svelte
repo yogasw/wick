@@ -1,8 +1,7 @@
 <script lang="ts">
   import type { FileContent } from "../types/agents.js";
   import { renderMarkdown } from "../markdown.js";
-  import { extOf } from "../aceMode.js";
-  import CodeEditor from "./CodeEditor.svelte";
+  import { CodeEditor, extOf } from "@wick-fe/common-ui";
 
   const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"];
 

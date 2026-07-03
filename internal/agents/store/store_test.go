@@ -176,8 +176,43 @@ func TestApplyErrorFlushesPartial(t *testing.T) {
 		t.Fatal("error did not flush")
 	}
 	lines := readConvLines(t, layout)
-	if len(lines) != 1 || lines[0].Text != "partial" {
-		t.Fatalf("turn: %+v", lines)
+	// The partial assistant text is flushed, then the error itself is
+	// persisted as a system error turn so it renders in history.
+	if len(lines) != 2 {
+		t.Fatalf("want 2 turns (partial + error), got: %+v", lines)
+	}
+	if lines[0].Role != "assistant" || lines[0].Text != "partial" {
+		t.Fatalf("turn[0]: %+v", lines[0])
+	}
+	if lines[1].Role != "system" || lines[1].Text != "boom" || !lines[1].IsError {
+		t.Fatalf("turn[1] should be the error: %+v", lines[1])
+	}
+}
+
+func TestApplyWarningPersistsWithoutEndingTurn(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	// A warning records an error turn but does NOT flush/end the turn.
+	flushed, _ := st.Apply(event.AgentEvent{Type: event.Warning, ErrorMsg: "role subagent must define a description"})
+	if flushed {
+		t.Fatal("warning must not end the turn")
+	}
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 || lines[0].Role != "system" || !lines[0].IsError {
+		t.Fatalf("want 1 error turn, got: %+v", lines)
+	}
+}
+
+func TestApplyTraceBuffersRawEvent(t *testing.T) {
+	st, _ := newStore(t, "backend", false)
+	// A Trace event is buffered into the turn trace, not the main thread,
+	// and does not end the turn.
+	flushed, _ := st.Apply(event.AgentEvent{Type: event.Trace, Text: `{"type":"mystery"}`, Raw: `{"type":"mystery"}`})
+	if flushed {
+		t.Fatal("trace must not end the turn")
+	}
+	evs := st.InFlightEvents()
+	if len(evs) != 1 || evs[0].Type != "raw" || evs[0].Text != `{"type":"mystery"}` {
+		t.Fatalf("want 1 raw trace event, got: %+v", evs)
 	}
 }
 

@@ -78,6 +78,18 @@ type Instance struct {
 
 	// CodexConfig holds codex-specific spawn options. nil for non-codex instances.
 	CodexConfig *CodexConfig
+
+	// Use9router routes this instance's CLI through the embedded 9router
+	// proxy instead of the provider's own upstream. Only claude/codex.
+	Use9router bool
+
+	// Router9Models maps a per-provider model slot (see Router9Slots) to
+	// the concrete 9router model id. Required (primary slot) when
+	// Use9router is true; "auto" is rejected by 9router.
+	Router9Models map[string]string
+
+	// Router9APIKey is a custom 9router API key. Empty = default sk_9router.
+	Router9APIKey string
 }
 
 // CodexSandboxMode maps to codex's --sandbox flag values.
@@ -653,6 +665,9 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 				Storage:       storageFromUser(raw.Storage),
 				MaxConcurrent: raw.MaxConcurrent,
 				SendMode:      raw.SendMode,
+				Use9router:    raw.Use9router,
+				Router9Models: raw.Router9Models,
+				Router9APIKey: raw.Router9APIKey,
 			}
 			if t == TypeCodex {
 				ins.CodexConfig = &CodexConfig{
@@ -700,6 +715,9 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 		Storage:       storageToUser(ins.Storage),
 		MaxConcurrent: ins.MaxConcurrent,
 		SendMode:      ins.SendMode,
+		Use9router:    ins.Use9router,
+		Router9Models: ins.Router9Models,
+		Router9APIKey: ins.Router9APIKey,
 	}
 	if ins.CodexConfig != nil {
 		raw.SandboxMode = string(ins.CodexConfig.SandboxMode)

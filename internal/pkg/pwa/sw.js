@@ -1,7 +1,7 @@
 // wick service worker — minimal, enables PWA installability and a small
 // static cache. Kept conservative on purpose: navigations always go to the
 // network so we never serve a stale Cloudflare Access login page from cache.
-const CACHE = 'wick-static-v5';
+const CACHE = 'wick-static-v7';
 const ASSETS = [
   '/public/img/icon.svg',
   '/public/img/icon-192.png',
@@ -54,6 +54,31 @@ self.addEventListener('fetch', (event) => {
   try { url = new URL(req.url); }
   catch (_) { return; }
   if (url.origin !== self.location.origin) return;
+
+  // /9router/* is a reverse-proxied third-party app (the embedded 9router
+  // dashboard). Its assets are rewritten on the fly by the wick proxy, so
+  // caching them here would pin a stale, pre-rewrite copy and break the
+  // app. Always go straight to the network — let the proxy be the source
+  // of truth.
+  //
+  // /_next/* is the SAME app's asset namespace: 9router's Next.js bundle
+  // emits some root-absolute /_next/ URLs at runtime that land here at the
+  // wick root (the server re-proxies them to the dashboard). They match
+  // staticAssetRe below, so without this skip the SW would try to cache them
+  // and, on a cold miss, serve a stale 404 "from service worker" — exactly
+  // the /_next/*.js|css|woff2 404s. Bypass so they reach the server proxy.
+  if (
+    url.pathname === '/9router' ||
+    url.pathname.startsWith('/9router/') ||
+    url.pathname.startsWith('/_next/')
+  ) return;
+
+  // The agents Process panel refreshes /sessions/<id>/processes on every SSE
+  // lifecycle transition. Routing those through the SW's network-first path
+  // gives each one a duplicate "(from sw.js)" entry in DevTools and adds a
+  // proxy hop for a request that must always be live (never cached). Let it
+  // go straight to the network — the panel is SSE-driven and short-lived.
+  if (url.pathname.endsWith('/processes')) return;
 
   if (staticAssetRe.test(url.pathname)) {
     // Stale-while-revalidate: return the cached copy immediately (or fall back

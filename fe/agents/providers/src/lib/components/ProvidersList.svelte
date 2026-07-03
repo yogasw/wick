@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ConfirmDialog } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
+  import Router9Config from "$lib/components/Router9Config.svelte";
   import {
     apiGetProviders,
     apiRescanAll,
@@ -22,9 +23,10 @@
 
   type Props = {
     onNavigate: (type: string, name: string) => void;
+    onOpenSpawn: (file: string) => void;
     base: string;
   };
-  let { onNavigate, base }: Props = $props();
+  let { onNavigate, onOpenSpawn, base }: Props = $props();
 
   let data = $state<ProvidersListResponse | null>(null);
   let loading = $state(true);
@@ -39,6 +41,12 @@
   let formBinary = $state("");
   let formExtraArgs = $state("");
   let formEnv = $state("");
+  let formUse9router = $state(false);
+  let formRouter9Models = $state<Record<string, string>>({});
+  let formRouter9Key = $state("");
+
+  // 9router only makes sense for the CLIs wick can rewire (claude/codex).
+  const router9Supported = $derived(formType === "claude" || formType === "codex");
 
   // The name becomes the second half of the "type/name" provider key,
   // so spaces would break the key downstream. We auto-convert spaces to
@@ -245,6 +253,9 @@
     formBinary = "";
     formExtraArgs = "";
     formEnv = "";
+    formUse9router = false;
+    formRouter9Models = {};
+    formRouter9Key = "";
     addOpen = true;
   }
 
@@ -261,6 +272,9 @@
         binary: formBinary.trim(),
         extra_args: formExtraArgs.trim(),
         env: formEnv,
+        use_9router: formUse9router && router9Supported,
+        router9_models: formRouter9Models,
+        router9_api_key: formRouter9Key,
       });
       toastOk(`Created ${formName.trim()}`);
       addOpen = false;
@@ -697,10 +711,11 @@
           </thead>
           <tbody>
             {#each data.Spawns as s (s.Path)}
-              <tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800">
-                <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600 whitespace-nowrap">
-                  <a href={`${base}/providers/spawns/${encodeURIComponent(spawnFile(s))}`} class="hover:underline">{s.StartedAt}</a>
-                </td>
+              <tr
+                class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 cursor-pointer"
+                onclick={() => onOpenSpawn(spawnFile(s))}
+              >
+                <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600 whitespace-nowrap">{new Date(s.StartedAt).toLocaleString()}</td>
                 <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">{s.ProviderType}/{s.ProviderName}</td>
                 <td class="px-5 py-2 font-mono text-black-900 dark:text-white-100">{shortID(s.SessionID)}</td>
                 <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">{s.PID > 0 ? s.PID : "—"}</td>
@@ -730,7 +745,7 @@
       <form onsubmit={doCreate} class="space-y-4">
         <div>
           <label for="add-provider-type" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Type <span class="text-red-500">*</span></label>
-          <select id="add-provider-type" bind:value={formType} required class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100">
+          <select id="add-provider-type" bind:value={formType} onchange={() => { formRouter9Models = {}; }} required class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100">
             {#each data?.SupportedKeys ?? [] as k (k)}
               <option value={k}>{k}</option>
             {/each}
@@ -765,6 +780,14 @@
           <label for="add-provider-env" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Env (one KEY=VALUE per line)</label>
           <textarea id="add-provider-env" bind:value={formEnv} rows="3" placeholder="ANTHROPIC_API_KEY=sk-..." class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100"></textarea>
         </div>
+        <Router9Config
+          {base}
+          type={formType}
+          supported={router9Supported}
+          bind:use9router={formUse9router}
+          bind:models={formRouter9Models}
+          bind:apiKey={formRouter9Key}
+        />
         <div class="flex justify-end gap-3 pt-2">
           <button type="button" onclick={() => { addOpen = false; }} class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">Cancel</button>
           <button type="submit" disabled={busy["create"] || !!formNameError} class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600 disabled:opacity-50">{busy["create"] ? "Creating…" : "Create"}</button>

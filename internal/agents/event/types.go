@@ -41,8 +41,20 @@ const (
 	// Done marks end-of-turn — subprocess is idle until next input.
 	Done
 	// Error indicates the CLI emitted an error event (not a parse
-	// failure — those are returned via Parser.Parse error).
+	// failure — those are returned via Parser.Parse error). Fatal:
+	// consumers treat it as end-of-turn.
 	Error
+	// Warning is a NON-fatal error the CLI reported mid-stream (e.g. a
+	// malformed skill/agent-role definition it chose to ignore). It is
+	// recorded to history like an error but does NOT end the turn — the
+	// subprocess keeps running. ErrorMsg carries the detail.
+	Warning
+	// Trace is an event the parser doesn't map to a first-class type but
+	// that is worth keeping visible — recorded into the turn's trace
+	// (expandable in the UI) rather than the main thread. Raw carries the
+	// verbatim line. Non-fatal; never ends the turn. Pure control frames
+	// (started/ping/snapshots) stay Unknown and are skipped.
+	Trace
 )
 
 // String makes log lines readable. Not used for serialization.
@@ -62,6 +74,10 @@ func (t EventType) String() string {
 		return "done"
 	case Error:
 		return "error"
+	case Warning:
+		return "warning"
+	case Trace:
+		return "trace"
 	default:
 		return "unknown"
 	}

@@ -39,6 +39,7 @@ import (
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/tags"
+	router9 "github.com/yogasw/wick/internal/tools/agents/9router"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -286,13 +287,17 @@ func Register(r tool.Router) {
 	r.GET("/providers", providersPage)
 	r.GET("/providers/detail/{type}/{name}", providerDetailPage)
 	r.POST("/providers/detail/{type}/{name}/save", saveProviderDetail)
+	r.POST("/providers/detail/{type}/{name}/router9", saveProviderRouter9)
 	r.POST("/providers/detail/{type}/{name}/{key}", saveProviderConfigKey)
+	r.GET("/providers/router9/slots/{type}", providerRouter9Slots)
 	r.GET("/providers/{type}/{name}", providerDetailPage)
 	r.POST("/providers", saveProviderInstance)
 	r.POST("/providers/rename/{type}/{name}", renameProviderInstance)
 	r.GET("/providers/catalog/{type}", providerCatalogJSON)
 	r.DELETE("/providers/{type}/{name}", deleteProviderInstance)
 	r.GET("/providers/spawns/{file}", providerSpawnDetail)
+	r.GET("/providers/spawns/{file}/reveal", providerSpawnReveal)
+	r.GET("/api/providers/spawns/{file}", apiSpawnDetail)
 	r.POST("/providers/gate/toggle", toggleGate)
 	r.POST("/providers/gate/modes", saveGateModes)
 	r.POST("/providers/rescan", rescanAllProviders)
@@ -320,6 +325,14 @@ func Register(r tool.Router) {
 	r.GET("/skills/{provider}/{path...}", skillProviderPath)
 	r.POST("/skills-sync/{provider}/{path...}", skillProviderSync)
 	r.POST("/skills/{name}/sync", skillEntrySync)
+
+	// 9router — embedded dashboard managed inside the Agents shell.
+	// Self-contained in the 9router package; we only hand it the sidebar
+	// builder (so its pages render inside our shell with the nav active)
+	// and a config store (so it can persist the auto-start flag).
+	router9.Register(r, func(c *tool.Ctx, activePage string) view.AgentsLayoutVM {
+		return sidebarVM(c, activePage, "")
+	}, router9ConfigStore{}, func() string { return spaAssetURL("router9") })
 
 	r.POST("/providers/storage/sync/{type}/{name}", syncProviderStorage)
 	r.GET("/providers/storage", storagePage)
@@ -607,6 +620,7 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		ScopedProjectID:  scopedProjectID,
 		PinnedProjectID:  pinnedProjectID(c),
 		ShellAssetURL:    spaAssetURL("shell"),
+		Router9Visible:   Router9Enabled() && router9AdminOnly(c.Context()),
 	}
 }
 
@@ -1060,10 +1074,11 @@ type switchProviderReq struct {
 	Provider string `json:"provider"`
 }
 
-// switchProvider creates a new session with the same project but a
-// different provider. Provider sessions cannot be resumed across CLI
-// implementations (ResumeID is provider-specific), so a fresh session
-// is always the right call. Returns the new session URL for redirect.
+// switchProvider changes the active provider on the current session
+// in-place — the same path a "#codex" chat message takes: persist to
+// agents.json, record a system turn, kill the running subprocess so the
+// next message respawns with the new provider. The session id is
+// unchanged; the caller just refreshes its state.
 func switchProvider(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -1079,31 +1094,33 @@ func switchProvider(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	u := login.GetUser(c.Context())
-	callerID := ""
-	if u != nil {
-		callerID = u.ID
+	agentName := sess.Meta.ActiveAgent
+	if agentName == "" && len(sess.Agents) > 0 {
+		agentName = sess.Agents[0].Name
 	}
-	newID := uuid.New().String()
-	_, err := globalMgr.CreateSession(c.Context(), session.CreateOptions{
-		ID:        newID,
-		ProjectID: sess.Meta.ProjectID,
-		Origin:    session.OriginUI,
-		UserID:    callerID,
-	})
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if agentName == "" {
+		c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": "no agent in session"})
 		return
 	}
-	if err := globalMgr.AddAgent(newID, "main", req.Provider); err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	bcast := globalBcast
+	// UI passes no Reply: the single system turn (published via Notify) carries
+	// the switch pill + note, so we don't want a duplicate assistant bubble.
+	if err := provider.Switch(globalLayout, globalPool, id, agentName, req.Provider, provider.SwitchOptions{
+		Source: "ui",
+		Notify: func(tag string, steps []string) {
+			if bcast != nil {
+				bcast.PublishSystemTurn(id, agentName, "Provider switched → "+tag, steps)
+			}
+		},
+	}); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, map[string]string{
-		"status":   "switched",
-		"provider": req.Provider,
-		"redirect": c.Base() + "/sessions/" + newID,
-	})
+	if err := globalMgr.RefreshSession(id); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": "refresh session: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "switched", "provider": req.Provider})
 }
 
 type moveSessionReq struct {
@@ -1197,6 +1214,8 @@ func sendMessage(c *tool.Ctx) {
 			return
 		}
 		bcast := globalBcast
+		// No Reply on the UI path — the system turn (via Notify) is the only
+		// bubble the switch should produce.
 		if err := provider.Switch(globalLayout, globalPool, id, agentName, r.Tag, provider.SwitchOptions{
 			Source:   "ui",
 			UserText: req.Text,
@@ -1204,12 +1223,6 @@ func sendMessage(c *tool.Ctx) {
 				if bcast != nil {
 					bcast.PublishRaw(id, agentName, "user_message", req.Text)
 					bcast.PublishSystemTurn(id, agentName, "Provider switched → "+tag, steps)
-				}
-			},
-			Reply: func(text string) {
-				if bcast != nil {
-					bcast.PublishRaw(id, agentName, "text_delta", text)
-					bcast.PublishRaw(id, agentName, "done", "")
 				}
 			},
 		}); err != nil {
@@ -1373,6 +1386,14 @@ func sessionProcesses(c *tool.Ctx) {
 		Lifecycle string `json:"lifecycle"`
 		Substate  string `json:"substate"`
 		Alive     bool   `json:"alive"` // OS-verified: PID exists AND is our process
+		// Kind distinguishes a real running/queued process from the idle
+		// fallback below. "process" = a live slot (active snapshot or FIFO
+		// queue). "idle" = no process at all; the row exists only to carry
+		// the session's provider/agent name (from agents.json) so the
+		// composer toolbar can render it. The UI counts and shows cards for
+		// "process" rows only — an "idle" row must not inflate the process
+		// count nor render a (misleading) "dead" card.
+		Kind string `json:"kind"`
 	}
 	var out []procEntry
 	if globalPool != nil {
@@ -1388,15 +1409,31 @@ func sessionProcesses(c *tool.Ctx) {
 			if e.SessionID != id {
 				continue
 			}
-			// PID alive AND identity matches (recycled PID owned by another
-			// process reads as not-alive). 0 = test fake / pre-PID spawn.
+			// Alive reflects the real OS state: PID exists AND is our process
+			// (a recycled PID owned by someone else reads as not-alive).
+			// 0 = test fake / pre-PID spawn — can't probe, treat as alive.
 			//
-			// Respawn-mode agents (codex) have NO live process between turns
-			// by design — the one-shot turn process exits and the agent idles
-			// until the next message. A dead PID there is healthy, not a
-			// zombie, so don't flag it dead; the lifecycle/substate
-			// (idle/working) already conveys the real status.
-			alive := e.Respawns || e.PID == 0 || processctl.ProcessAlive(e.PID)
+			// We do NOT special-case respawn-mode (codex) here. The old
+			// assumption was that codex has no live process between turns, so a
+			// dead PID was "healthy" and it was blanket-marked alive — but the
+			// codex CLI can stay resident (idle-alive) after a turn's stdout
+			// closes, and blanket alive=true then lied about a process that was
+			// really still running (couldn't be killed, status wrong). Probing
+			// the PID tells the truth: a resident codex reads alive (and is
+			// killable via its tracked PID); one that actually exited reads dead.
+			alive := e.PID == 0 || processctl.ProcessAlive(e.PID)
+			// This endpoint lists ACTIVE processes. An entry whose OS process
+			// has actually exited (alive=false) is not a running process — it's
+			// a slot the pool hasn't reaped yet. Don't surface it: both the
+			// process card and the "Process N" rail badge read this list, so a
+			// dead entry here shows a stale "dead" card and keeps the badge
+			// count too high. Skipping it makes both drop the moment the process
+			// dies (the SSE lifecycle refresh re-fetches this list), without
+			// waiting for the pool's reconcile to release the slot. A working or
+			// still-resident process reads alive=true and is kept.
+			if !alive {
+				continue
+			}
 			prov := e.ProviderType
 			if e.ProviderName != "" && e.ProviderName != e.ProviderType {
 				prov = e.ProviderType + "/" + e.ProviderName
@@ -1410,6 +1447,7 @@ func sessionProcesses(c *tool.Ctx) {
 				Lifecycle: e.Lifecycle,
 				Substate:  e.Substate,
 				Alive:     alive,
+				Kind:      "process",
 			})
 		}
 		// Same session filter, applied to the FIFO queue: a request still
@@ -1429,12 +1467,19 @@ func sessionProcesses(c *tool.Ctx) {
 				// "alive" probe doesn't apply. Mark alive so the UI renders
 				// the "queued" status instead of flipping it to "dead".
 				Alive: true,
+				// A queued request is a real pending process — it counts and
+				// shows a card. Only the idle fallback below is "idle".
+				Kind: "process",
 			})
 		}
 	}
 	// Fallback: when no active/queued process exists (session idle),
 	// surface agents from agents.json so the UI can still show
-	// provider/agent name in the composer toolbar.
+	// provider/agent name in the composer toolbar. Kind "idle" marks
+	// these as NOT processes — the UI reads the provider/name for the
+	// toolbar but must not count them or render a process card, so a
+	// killed/exited session drops its card + "Process N" badge the moment
+	// the pool goes empty instead of lingering as a stale "dead" row.
 	if len(out) == 0 {
 		if sess, ok := globalMgr.Registry().Session(id); ok {
 			for _, a := range sess.Agents {
@@ -1446,6 +1491,7 @@ func sessionProcesses(c *tool.Ctx) {
 					PID:       0,
 					Lifecycle: string(a.Status),
 					Alive:     false,
+					Kind:      "idle",
 				})
 			}
 		}

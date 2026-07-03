@@ -83,11 +83,11 @@ import (
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
-	"github.com/yogasw/wick/internal/updater"
-	"github.com/yogasw/wick/internal/userconfig"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
+	"github.com/yogasw/wick/internal/updater"
+	"github.com/yogasw/wick/internal/userconfig"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/job"
 	"github.com/yogasw/wick/pkg/tool"
@@ -822,6 +822,9 @@ func NewServer() *Server {
 		v := configsSvc.GetOwned("agents", "auto_rescan")
 		return v != "false"
 	})
+	// Wire the secret decrypter so spawners can unwrap the stored 9router
+	// API key (wick_cenc_ token) back to plaintext at spawn time.
+	provider.SetSecretDecrypter(configsSvc.DecryptSecret)
 	// Prime the persistent status cache once in the background so the
 	// first load of /tools/agents/providers renders from cache instead
 	// of waiting on three cold `--version` spawns. Subsequent boots
@@ -1237,6 +1240,23 @@ func NewServer() *Server {
 	}
 	tr.mount(toolsMux)
 
+	// Auto-start the embedded 9router process at boot when the admin
+	// enabled it. MUST run after tr.mount — that's when each tool's
+	// Register() runs, and 9router's Register wires the config store the
+	// autostart hook reads. (Earlier this ran before mount and always saw
+	// a nil store.) When enabled, it joins the boot gate so the "Booting…"
+	// screen shows "Starting 9router…" and the app waits for it to be
+	// ready instead of opening to a misleading "Stopped" state. Skipped
+	// entirely (no gate step, instant) when auto-start is off.
+	if agentstool.Router9Enabled() && agentstool.Router9AutostartEnabled() {
+		bootGate.Register("9router")
+		go func() {
+			defer bootGate.Done("9router")
+			bootGate.SetPhase("starting-9router")
+			agentstool.Router9Autostart()
+		}()
+	}
+
 	tagsSvc := tags.NewService(db)
 	// Late-bind tags into the custom-connector service and link the
 	// per-def access tags ([custom:<key> filter, Connector, category])
@@ -1574,6 +1594,37 @@ func NewServer() *Server {
 	}
 	r.Handle("/tools/", authMidd.RequireToolAccess(toolMetas)(toolsMux))
 
+	// 9router OpenAI-compatible API proxy, mounted UNAUTHENTICATED at
+	// <root>/9router/v1/. Local AI CLIs (codex/claude) spawned by wick are
+	// pointed at this base URL and must reach 9router without a wick session
+	// cookie — auth is 9router's own API key. The longer route pattern
+	// (/9router/v1/) wins over the admin-gated dashboard mount below in
+	// http.ServeMux's longest-match routing. Registered first for clarity.
+	r.Handle(agentstool.Router9MountPrefix()+"/v1/", agentstool.Router9APIProxy())
+
+	// 9router dashboard proxy, mounted at the wick root (not under the
+	// tool) so the embedded Next.js app's root-absolute URLs rewrite to a
+	// single prefix. Admin-only — it fronts a local process that can run
+	// shell-equivalent actions. Router9RootProxy also 404s when the master
+	// switch is off. The page chrome + controls live under
+	// /tools/agents/9router; this serves only the proxied iframe content.
+	r.Handle(agentstool.Router9MountPrefix()+"/", authMidd.RequireAdmin(agentstool.Router9RootProxy()))
+
+	// 9router emits some root-absolute /_next/* asset URLs (fonts/CSS/chunks)
+	// at runtime that the body rewriter can't catch, so they land here at the
+	// wick root instead of under /9router. Serve them from the dashboard proxy.
+	// /_next/ is unique to Next.js, so this can't shadow any wick route.
+	//
+	// Admin-gated like the dashboard it fronts: 9router is an admin-only tool,
+	// so its whole surface — including these assets — must not be reachable by
+	// the public when wick is exposed via a tunnel (the host allowlist lets a
+	// configured public host through, so auth is the real gate here). The
+	// earlier 404s that looked like an auth failure were actually a re-root bug
+	// (RawPath left un-prefixed → StripPrefix missed); with that fixed, the
+	// iframe's same-origin sub-resource requests carry the admin session cookie
+	// and load normally.
+	r.Handle("/_next/", authMidd.RequireAdmin(agentstool.Router9NextAssetProxy()))
+
 	// API — JSON endpoints
 	r.Handle("GET /api/tools", http.HandlerFunc(homeHandler.APITools))
 
@@ -1722,6 +1773,21 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// The 9router OpenAI-compatible API proxy is reached by AI CLIs
+		// (codex/claude) over loopback (127.0.0.1:<port>/9router/v1/...) —
+		// exempt it from the host allowlist for the same reason as /mcp, so
+		// spawns work even when app_url is a remote/tunnel domain. Scoped to
+		// the /9router/v1 subtree + loopback Host only.
+		//
+		// When the admin has explicitly exposed the API externally, the
+		// exemption widens to any host on that subtree: a tunnel/public host
+		// then reaches the proxy, which forwards the caller as non-local so
+		// 9router enforces its own API key. Off (default) keeps the exemption
+		// loopback-only and the proxy itself rejects off-machine callers.
+		if router9APIExempt(r.URL.Path, r.Host) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		allowed := collectAllowedHosts(s.configsSvc.AppURL(), s.configsSvc.AllowedOrigins())
 		if len(allowed) == 0 {
 			next.ServeHTTP(w, r)
@@ -1750,6 +1816,25 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 // app_url. Scoped to /mcp only.
 func mcpLoopbackExempt(path, host string) bool {
 	return path == "/mcp" && isLoopbackHost(host)
+}
+
+// router9LoopbackExempt reports whether the request targets the 9router
+// API proxy subtree over loopback (127.0.0.1 / ::1 / localhost). Spawned
+// AI CLIs point their base URL at 127.0.0.1:<port>/9router/v1, so — like
+// /mcp — these must bypass the host allowlist to work when app_url is a
+// remote/tunnel domain. Scoped to the /9router/v1 subtree + loopback only.
+func router9APIExempt(path, host string) bool {
+	prefix := agentstool.Router9MountPrefix() + "/v1"
+	if path != prefix && !strings.HasPrefix(path, prefix+"/") {
+		return false
+	}
+	// Loopback callers (local spawns) are always exempt. Off-machine callers
+	// are exempt only when the admin exposed the API externally — the proxy
+	// then forwards them as non-local so 9router's own API key gates them.
+	if isLoopbackHost(host) {
+		return true
+	}
+	return agentstool.Router9ExternalAPIEnabled()
 }
 
 // isLoopbackHost reports whether host (a Host header, with or without a

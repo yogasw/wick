@@ -12,7 +12,8 @@
     }
   },
   "dependencies": {
-    "@wick-fe/common-stores": "*"
+    "@wick-fe/common-stores": "*",
+    "ace-builds": "^1.44.0"
   },
   "scripts": {
     "test:unit": "vitest run"
