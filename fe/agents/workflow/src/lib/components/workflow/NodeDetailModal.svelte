@@ -27,7 +27,7 @@
   import KvListField from "./fields/KvListField.svelte";
   import Field from "./fields/Field.svelte";
   import SchemaForm from "./fields/SchemaForm.svelte";
-  import CodeEditor from "./fields/CodeEditor.svelte";
+  import { CodeEditor } from "@wick-fe/common-ui";
   import DatatableForm from "./nodes/DatatableForm.svelte";
 
   // Catalog-derived helpers for the channel / connector forms below.
@@ -1148,6 +1148,7 @@
                     value={node.code ?? ""}
                     language={node.type === "python" ? "python" : "go"}
                     rows={14}
+                    theme={{ light: "github", dark: "tomorrow_night" }}
                     onChange={(v) => patch("code", v)}
                   />
                   <span class="text-[11px] text-black-700 dark:text-black-600">

@@ -172,6 +172,7 @@ type SpawnLogFile struct {
 	FirstUserMessage string
 	Binary           string
 	Argv             []string
+	Env              []string
 	// ExitReason is "" while the spawn is still alive (no exit event
 	// recorded yet), else "clean" / "idle" / "stopped" / "error".
 	ExitReason string
@@ -284,6 +285,9 @@ func (s *SpawnLogger) enrichFromEvents(f *SpawnLogFile) {
 			}
 			if len(ev.Args) > 0 {
 				f.Argv = ev.Args
+			}
+			if len(ev.Env) > 0 {
+				f.Env = ev.Env
 			}
 		case "exit":
 			f.ExitReason = ev.ExitReason

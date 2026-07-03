@@ -45,10 +45,18 @@ func NewCodexParser() *CodexParser {
 }
 
 type codexRaw struct {
-	Type     string      `json:"type"`
-	ThreadID string      `json:"thread_id,omitempty"`
-	Item     *codexItem  `json:"item,omitempty"`
-	Message  string      `json:"message,omitempty"`
+	Type     string     `json:"type"`
+	ThreadID string     `json:"thread_id,omitempty"`
+	Item     *codexItem `json:"item,omitempty"`
+	Message  string     `json:"message,omitempty"`
+	// Error carries the failure detail for turn.failed events, where the
+	// message is nested (`{"type":"turn.failed","error":{"message":"..."}}`)
+	// rather than at top level like a plain `{"type":"error","message":...}`.
+	Error *codexError `json:"error,omitempty"`
+}
+
+type codexError struct {
+	Message string `json:"message,omitempty"`
 }
 
 type codexItem struct {
@@ -73,6 +81,9 @@ type codexItem struct {
 	// web_search fields (codex built-in browser tool)
 	Query  string             `json:"query,omitempty"`
 	Action *codexWebSearchAct `json:"action,omitempty"`
+	// error item fields — codex wraps some runtime errors as a completed
+	// item of type "error" carrying the detail in message.
+	Message string `json:"message,omitempty"`
 }
 
 // codexWebSearchAct is the action sub-object on a web_search item.
@@ -228,6 +239,18 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 				ToolUseID: item.ID,
 				Raw:       trimmed,
 			}, nil
+		case "error":
+			// codex wraps some runtime errors as a completed item of type
+			// "error" (e.g. a malformed agent-role definition it chose to
+			// ignore). These are NON-fatal — the turn keeps going — so emit a
+			// Warning, not an Error, and let it land in history without ending
+			// the turn.
+			log.Debug().Str("message", item.Message).Msg("codex.parse: item warning")
+			return AgentEvent{
+				Type:     Warning,
+				ErrorMsg: item.Message,
+				Raw:      trimmed,
+			}, nil
 		}
 		return AgentEvent{Type: Unknown, Raw: trimmed}, nil
 
@@ -303,10 +326,44 @@ func (p *CodexParser) Parse(line string) (AgentEvent, error) {
 			ErrorMsg: raw.Message,
 			Raw:      trimmed,
 		}, nil
+
+	case "turn.failed":
+		// A failed turn carries its detail nested under error.message
+		// (e.g. an upstream 403). Surface it as an Error event so the store
+		// records it in history instead of silently dropping it as Unknown.
+		msg := ""
+		if raw.Error != nil {
+			msg = raw.Error.Message
+		}
+		log.Debug().Str("message", msg).Msg("codex.parse: turn.failed event")
+		return AgentEvent{
+			Type:     Error,
+			ErrorMsg: msg,
+			Raw:      trimmed,
+		}, nil
 	}
 
-	log.Debug().Str("type", raw.Type).Msg("codex.parse: unknown type, pass-through")
-	return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+	// Known control frames carry no user-facing signal — skip them (they
+	// still land in raw.jsonl for debugging). Anything else is an
+	// unrecognized frame worth keeping visible, so route it to the turn
+	// trace (expandable in the UI) instead of dropping it.
+	if codexControlFrames[raw.Type] {
+		log.Debug().Str("type", raw.Type).Msg("codex.parse: control frame, skipped")
+		return AgentEvent{Type: Unknown, Raw: trimmed}, nil
+	}
+	log.Debug().Str("type", raw.Type).Msg("codex.parse: unrecognized type → trace")
+	return AgentEvent{Type: Trace, Text: trimmed, Raw: trimmed}, nil
+}
+
+// codexControlFrames are the known housekeeping frame types that carry no
+// user-facing content. They stay Unknown (skipped from the trace); every
+// other unrecognized type is surfaced as a Trace event.
+var codexControlFrames = map[string]bool{
+	"turn.started":   true,
+	"turn.completed": true, // also handled explicitly above; belt-and-braces
+	"thread.started": true,
+	"item.updated":   true,
+	"ping":           true,
 }
 
 // diffTail returns the suffix of `cur` that comes after `prev` when `cur`

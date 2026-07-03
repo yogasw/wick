@@ -44,9 +44,27 @@
     if (projectMenuOpen) providerMenuOpen = false;
   }
 
-  function selectProvider(type: string) {
+  /* Send the full "type/name" key so a named instance (e.g. codex/gemini_flash)
+     switches to that exact instance. A default instance (name === type)
+     collapses to the bare type ("codex"), which the backend also accepts. */
+  function providerKey(p: ProviderOption): string {
+    return p.name && p.name !== p.type ? `${p.type}/${p.name}` : p.type;
+  }
+
+  /* Normalize a key to "type/name" so "codex" and "codex/codex" compare equal. */
+  function normalizeKey(key: string): string {
+    return key.includes("/") ? key : `${key}/${key}`;
+  }
+
+  /* The option matching the session's active provider — can't switch to it. */
+  function isCurrent(p: ProviderOption): boolean {
+    return activeProvider != null && normalizeKey(activeProvider) === `${p.type}/${p.name}`;
+  }
+
+  function selectProvider(p: ProviderOption) {
+    if (isCurrent(p)) return;
     providerMenuOpen = false;
-    onProviderChange(type);
+    onProviderChange(providerKey(p));
   }
 
   function selectProject(id: string | null) {
@@ -134,15 +152,25 @@
       {#if providerMenuOpen}
         <div class="absolute bottom-full left-0 mb-1 z-20 min-w-[140px] rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1">
           {#each providers as p}
+            {@const current = isCurrent(p)}
             <button
               type="button"
-              aria-label={p.type}
-              onclick={() => selectProvider(p.type)}
-              class="w-full text-left px-3 py-2 text-xs text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors flex items-center justify-between gap-2"
+              aria-label={providerKey(p)}
+              aria-current={current ? "true" : undefined}
+              disabled={current}
+              onclick={() => selectProvider(p)}
+              class="w-full text-left px-3 py-2 text-xs flex items-center justify-between gap-2 transition-colors {current
+                ? 'text-black-700 dark:text-black-600 cursor-default'
+                : 'text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700'}"
             >
-              {p.type}
-              {#if p.name && p.name !== p.type}
-                <span class="text-black-600 dark:text-black-700">{p.name}</span>
+              <span class="flex items-center gap-2">
+                {p.type}
+                {#if p.name && p.name !== p.type}
+                  <span class="text-black-600 dark:text-black-700">{p.name}</span>
+                {/if}
+              </span>
+              {#if current}
+                <span class="text-green-600 dark:text-green-400">current</span>
               {/if}
             </button>
           {/each}

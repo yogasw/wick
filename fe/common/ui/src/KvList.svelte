@@ -67,7 +67,7 @@
   const showColLabels = $derived(showHeader ?? (columns.length > 1));
 
   const inputClass =
-    "w-full rounded border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1 text-xs font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-1 focus:ring-green-200 dark:focus:ring-green-800";
+    "w-full rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2.5 py-1.5 text-xs font-mono text-black-900 dark:text-white-100 outline-none focus:border-green-500 focus:ring-1 focus:ring-green-200 dark:focus:ring-green-800 transition-colors";
 
   function setCell(index: number, col: string, value: string) {
     onChange((rows ?? []).map((r, i) => (i === index ? { ...r, [col]: value } : r)));
@@ -103,12 +103,12 @@
         {@render row({ row: r, index, remove: () => removeRow(index), set: (col, value) => setCell(index, col, value) })}
       </div>
     {:else}
-      <div class="rounded-lg border border-white-300 dark:border-navy-600 p-2">
-        <div class="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <div class="group rounded-lg border border-white-300 dark:border-navy-600 bg-white-200/50 dark:bg-navy-800/40 p-2.5 transition-colors hover:border-white-400 dark:hover:border-navy-500">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
           {#each columns as col}
             <div class="min-w-0 flex-1 space-y-1">
               {#if showColLabels}
-                <span class="block text-[10px] font-medium capitalize text-black-700 dark:text-black-600">{col}</span>
+                <span class="block text-[10px] font-medium uppercase tracking-wide text-black-700 dark:text-black-600">{col}</span>
               {/if}
               {#if cell}
                 {@render cell({ row: r, index, col, value: r[col] ?? "", set: (v) => setCell(index, col, v) })}
@@ -127,10 +127,14 @@
           {/each}
           <button
             type="button"
-            class="shrink-0 self-end px-2 text-base leading-none text-black-700 dark:text-black-600 hover:text-neg-400 sm:self-auto"
+            class="flex h-7 w-7 shrink-0 items-center justify-center self-end rounded-md text-black-700 dark:text-black-600 transition-colors hover:bg-neg-400/10 hover:text-neg-400"
             aria-label="Remove row"
             onclick={() => removeRow(index)}
-          >×</button>
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
         </div>
       </div>
     {/if}

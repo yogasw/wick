@@ -76,6 +76,63 @@ type SpawnLogFileDTO struct {
 	ExitReason       string `json:"exit_reason,omitempty"`
 }
 
+// SpawnEventDTO is one event line from a spawn log's timeline.
+type SpawnEventDTO struct {
+	Type             string   `json:"type"`
+	At               string   `json:"at"`
+	ProviderType     string   `json:"provider_type,omitempty"`
+	ProviderName     string   `json:"provider_name,omitempty"`
+	AgentName        string   `json:"agent_name,omitempty"`
+	Workspace        string   `json:"workspace,omitempty"`
+	ResumeID         string   `json:"resume_id,omitempty"`
+	Binary           string   `json:"binary,omitempty"`
+	Args             []string `json:"args,omitempty"`
+	Env              []string `json:"env,omitempty"`
+	PID              int      `json:"pid,omitempty"`
+	Origin           string   `json:"origin,omitempty"`
+	FirstUserMessage string   `json:"first_user_message,omitempty"`
+	ExitReason       string   `json:"exit_reason,omitempty"`
+	DurationMs       int64    `json:"duration_ms,omitempty"`
+	Error            string   `json:"error,omitempty"`
+	Message          string   `json:"message,omitempty"`
+}
+
+// SpawnDetailResponse is the full spawn-log detail: metadata, the event
+// timeline, whether the session was since deleted, and the MASKED reproduce
+// commands keyed by view.ReproKey (shell-mode-path). Unmasked variants come
+// from the separate reveal endpoint.
+type SpawnDetailResponse struct {
+	File           SpawnLogFileDTO   `json:"file"`
+	Events         []SpawnEventDTO   `json:"events"`
+	SessionDeleted bool              `json:"session_deleted"`
+	Repro          map[string]string `json:"repro"`
+	// HasResume is true when the spawn carried a --resume/resume id, so the
+	// Keep/Fresh toggle is meaningful. False on a session's first spawn.
+	HasResume bool `json:"has_resume"`
+}
+
+func spawnEventDTO(e provider.SpawnEvent) SpawnEventDTO {
+	return SpawnEventDTO{
+		Type:             e.Type,
+		At:               e.At.UTC().Format(time.RFC3339),
+		ProviderType:     e.ProviderType,
+		ProviderName:     e.ProviderName,
+		AgentName:        e.AgentName,
+		Workspace:        e.Workspace,
+		ResumeID:         e.ResumeID,
+		Binary:           e.Binary,
+		Args:             e.Args,
+		Env:              e.Env,
+		PID:              e.PID,
+		Origin:           e.Origin,
+		FirstUserMessage: e.FirstUserMessage,
+		ExitReason:       e.ExitReason,
+		DurationMs:       e.DurationMs,
+		Error:            e.Error,
+		Message:          e.Message,
+	}
+}
+
 // MCPClientDTO is one MCP client install state.
 type MCPClientDTO struct {
 	ID          string `json:"id"`
@@ -146,6 +203,17 @@ type ProviderDetailResponse struct {
 	Spawns       []SpawnLogFileDTO            `json:"spawns"`
 	Page         int                          `json:"page"`
 	HasNext      bool                         `json:"has_next"`
+	Router9      Router9DetailDTO             `json:"router9"`
+}
+
+// Router9DetailDTO carries the instance's current 9router settings so the
+// detail page can seed its widget. The API key is never returned — only a
+// flag indicating one is stored.
+type Router9DetailDTO struct {
+	Supported bool              `json:"supported"`
+	Enabled   bool              `json:"enabled"`
+	Models    map[string]string `json:"models"`
+	KeySet    bool              `json:"key_set"`
 }
 
 // StorageFileDTO is one storage file row (without the binary content blob).
@@ -485,7 +553,23 @@ func apiProviderDetail(c *tool.Ctx) {
 		Spawns:       spawnDTOs,
 		Page:         page,
 		HasNext:      hasNext,
+		Router9:      router9DetailDTO(st.Instance),
 	})
+}
+
+// router9DetailDTO projects an instance's 9router settings for the FE.
+// The stored API key is never surfaced — only KeySet.
+func router9DetailDTO(ins provider.Instance) Router9DetailDTO {
+	models := map[string]string{}
+	for k, v := range ins.Router9Models {
+		models[k] = v
+	}
+	return Router9DetailDTO{
+		Supported: len(provider.Router9Slots(ins.Type)) > 0,
+		Enabled:   ins.Use9router,
+		Models:    models,
+		KeySet:    ins.Router9APIKey != "",
+	}
 }
 
 // apiProvidersStorage handles GET /api/providers/storage and returns the

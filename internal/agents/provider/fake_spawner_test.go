@@ -76,6 +76,7 @@ func (p *fakeProcess) Stdin() io.WriteCloser { return &fakeStdin{p: p} }
 func (p *fakeProcess) Pid() int              { return p.pid }
 func (p *fakeProcess) Binary() string        { return "" }
 func (p *fakeProcess) Argv() []string        { return nil }
+func (p *fakeProcess) Env() []string         { return nil }
 
 // Wait blocks until Kill or until stdout writer closes. Mimics how
 // real exec.Cmd.Wait blocks on subprocess exit.
@@ -190,6 +191,7 @@ func (p *stubbornProcess) Stdin() io.WriteCloser { return &stubbornStdin{p: p} }
 func (p *stubbornProcess) Pid() int              { return p.pid }
 func (p *stubbornProcess) Binary() string        { return "" }
 func (p *stubbornProcess) Argv() []string        { return nil }
+func (p *stubbornProcess) Env() []string         { return nil }
 func (p *stubbornProcess) Wait() error           { <-p.done; return nil }
 
 // Kill marks the process dead but deliberately does NOT close the

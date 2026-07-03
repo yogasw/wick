@@ -11,3 +11,5 @@ export { default as Modal } from "./Modal.svelte";
 export { default as Breadcrumb } from "./Breadcrumb.svelte";
 export type { BreadcrumbItem } from "./Breadcrumb.svelte";
 export { default as KebabMenu } from "./KebabMenu.svelte";
+export { default as CodeEditor } from "./CodeEditor.svelte";
+export { aceModeFor, aceModeForLanguage, extOf } from "./aceMode.js";

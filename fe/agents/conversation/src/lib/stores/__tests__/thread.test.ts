@@ -292,6 +292,33 @@ describe("createThreadStore", () => {
     expect(get(store.turns)).toHaveLength(2);
   });
 
+  test("back-to-back provider switches collapse to the latest one", () => {
+    store.handleEvent(ev("system_turn", { data: JSON.stringify({ text: "Provider switched → codex", steps: [] }) }));
+    store.handleEvent(ev("system_turn", { data: JSON.stringify({ text: "Provider switched → claude/gemini", steps: [] }) }));
+    store.handleEvent(ev("system_turn", { data: JSON.stringify({ text: "Provider switched → claude/new", steps: [] }) }));
+    const turns = get(store.turns);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].text).toBe("Provider switched → claude/new");
+  });
+
+  test("a real turn between switches stops the collapse", () => {
+    store.handleEvent(ev("system_turn", { data: JSON.stringify({ text: "Provider switched → codex", steps: [] }) }));
+    store.setHistory([
+      ...get(store.turns),
+      makeTurn({ turn_id: "chat-1", role: "assistant", text: "hi" }),
+    ]);
+    store.handleEvent(ev("system_turn", { data: JSON.stringify({ text: "Provider switched → claude/new", steps: [] }) }));
+    const turns = get(store.turns);
+    // switch1 + chat + switch2 — the chat broke the run, nothing collapsed.
+    expect(turns).toHaveLength(3);
+  });
+
+  test("a non-switch system turn does not collapse prior switches", () => {
+    store.handleEvent(ev("system_turn", { data: JSON.stringify({ text: "Provider switched → codex", steps: [] }) }));
+    store.handleEvent(ev("system_turn", { data: JSON.stringify({ text: "Agent spawned", steps: [] }) }));
+    expect(get(store.turns)).toHaveLength(2);
+  });
+
   /* ── session_meta ───────────────────────────────────────────────── */
 
   test("session_meta updates meta.title", () => {

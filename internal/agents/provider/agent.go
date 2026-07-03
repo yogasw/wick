@@ -139,7 +139,7 @@ type Options struct {
 	// respawn-per-turn providers (codex), whose process does not exist
 	// at Start() time — so the spawn log can record the actual argv /
 	// pid / Reproduce command for every turn instead of a blank start.
-	OnSpawn func(binary string, argv []string, pid int, firstMessage string)
+	OnSpawn func(binary string, argv []string, env []string, pid int, firstMessage string)
 
 	// Instance is the per-instance config the spawner should consult
 	// every spawn (hook intent, env, …). Forwarded into SpawnOptions
@@ -289,16 +289,16 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
-		Workspace:       a.cfg.Workspace,
-		SessionDir:      a.cfg.SessionDir,
-		ResumeID:        a.resumeID,
-		ExtraEnv:        a.cfg.ExtraEnv,
-		ExtraArgs:       a.cfg.ExtraArgs,
-		Instance:        a.cfg.Instance,
-		GateBinary:      a.cfg.GateBinary,
-		Preset:          a.cfg.Preset,
-		MaxTurns:        a.cfg.MaxTurns,
-		ThinkingTokens:  a.cfg.ThinkingTokens,
+		Workspace:      a.cfg.Workspace,
+		SessionDir:     a.cfg.SessionDir,
+		ResumeID:       a.resumeID,
+		ExtraEnv:       a.cfg.ExtraEnv,
+		ExtraArgs:      a.cfg.ExtraArgs,
+		Instance:       a.cfg.Instance,
+		GateBinary:     a.cfg.GateBinary,
+		Preset:         a.cfg.Preset,
+		MaxTurns:       a.cfg.MaxTurns,
+		ThinkingTokens: a.cfg.ThinkingTokens,
 	})
 	if err != nil {
 		cancel()
@@ -442,17 +442,17 @@ func (a *Agent) respawnWithMessage(text string) error {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
-		Workspace:       a.cfg.Workspace,
-		SessionDir:      a.cfg.SessionDir,
-		ResumeID:        resumeID,
-		ExtraEnv:        a.cfg.ExtraEnv,
-		ExtraArgs:       a.cfg.ExtraArgs,
-		Instance:        a.cfg.Instance,
-		GateBinary:      a.cfg.GateBinary,
-		Preset:          a.cfg.Preset,
-		InitialMessage:  text,
-		MaxTurns:        a.cfg.MaxTurns,
-		ThinkingTokens:  a.cfg.ThinkingTokens,
+		Workspace:      a.cfg.Workspace,
+		SessionDir:     a.cfg.SessionDir,
+		ResumeID:       resumeID,
+		ExtraEnv:       a.cfg.ExtraEnv,
+		ExtraArgs:      a.cfg.ExtraArgs,
+		Instance:       a.cfg.Instance,
+		GateBinary:     a.cfg.GateBinary,
+		Preset:         a.cfg.Preset,
+		InitialMessage: text,
+		MaxTurns:       a.cfg.MaxTurns,
+		ThinkingTokens: a.cfg.ThinkingTokens,
 	})
 	if err != nil {
 		// Spawn failed — clear turnActive so a retry isn't parked forever.
@@ -480,7 +480,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 	// spawn to here), so without this the spawn log shows a blank start
 	// with no Reproduce command — see Options.OnSpawn.
 	if a.cfg.OnSpawn != nil {
-		a.cfg.OnSpawn(proc.Binary(), proc.Argv(), proc.Pid(), text)
+		a.cfg.OnSpawn(proc.Binary(), proc.Argv(), proc.Env(), proc.Pid(), text)
 	}
 
 	go a.run(subCtx)
@@ -540,7 +540,14 @@ func (a *Agent) Stop() error {
 	}
 	a.mu.Unlock()
 
-	if running {
+	// Terminate the subprocess whenever one is still referenced — not only
+	// when running is true. Respawn-mode (codex) sets running=false once a
+	// turn's stdout closes, but the CLI can stay resident (idle-alive) with
+	// a.proc still pointing at it. Gating on `running` alone left that
+	// process orphaned: Kill was a no-op and codex.exe lingered. Killing an
+	// already-dead proc is harmless (Kill returns nil), so calling
+	// terminateProc for any non-nil proc is safe.
+	if running || proc != nil {
 		if cancel != nil {
 			cancel()
 		}
@@ -647,6 +654,17 @@ func (a *Agent) Argv() []string {
 		return nil
 	}
 	return a.proc.Argv()
+}
+
+// Env returns the wick-injected env (masked) of the running subprocess.
+// Empty when not running or when the spawner is a test fake.
+func (a *Agent) Env() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.proc == nil {
+		return nil
+	}
+	return a.proc.Env()
 }
 
 // InFlightEvents returns events buffered in the current in-progress turn

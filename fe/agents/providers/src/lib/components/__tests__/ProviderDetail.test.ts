@@ -39,10 +39,11 @@ function makeDetail(): ProviderDetailResponse {
     ],
     Page: 1,
     HasNext: false,
+    Router9: { Supported: true, Enabled: false, Models: {}, KeySet: false },
   };
 }
 
-const defaultProps = { base: "", type: "claude", name: "default", onBack: vi.fn() };
+const defaultProps = { base: "", type: "claude", name: "default", onBack: vi.fn(), onOpenSpawn: vi.fn() };
 
 beforeEach(() => {
   vi.mocked(api.apiGetProviderDetail).mockResolvedValue(makeDetail());

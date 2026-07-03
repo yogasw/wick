@@ -2,7 +2,7 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastOk, toastError } from "@wick-fe/common-stores";
-  import { ToastHost } from "@wick-fe/common-ui";
+  import { ToastHost, Select } from "@wick-fe/common-ui";
   import { getProviderOptions, getPresetOptions, getProjectOptions, createSession } from "$lib/api/options.js";
   import type { ProviderOption, PresetOption, ProjectOption } from "$lib/api/options.js";
 
@@ -10,9 +10,6 @@
   const base = appEl?.dataset.base ?? "";
 
   const FOLDER_ICON = "📁";
-  const SELECT_BASE = "rounded-lg border px-2.5 py-1.5 text-xs focus:border-green-500 focus:outline-none cursor-pointer";
-  const SELECT_INHERITED = "border-green-400 dark:border-green-700 bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 font-semibold";
-  const SELECT_NEUTRAL = "border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-black-900 dark:text-white-100";
 
   let providers = $state<ProviderOption[]>([]);
   let presets = $state<PresetOption[]>([]);
@@ -36,6 +33,35 @@
 
   const scopedProjectId = new URLSearchParams(window.location.search).get("project") ?? "";
 
+  // The provider key stored in agents.json / project defaults is
+  // "type/name". The dropdown value carries that full key so a custom
+  // instance (claude/abc) is distinct from the base default
+  // (claude/claude), not collapsed to its type.
+  function providerKey(p: ProviderOption): string {
+    return `${p.type}/${p.name}`;
+  }
+
+  // Apply a project's saved defaults to the composer selects. Called
+  // when the user picks a project (and on initial scoped load) so the
+  // footer's "auto-prefill provider + preset" promise actually holds.
+  // Only overrides a select when the project has a non-empty default and
+  // the value is still selectable; otherwise the current pick stands.
+  function applyProjectDefaults(projectId: string) {
+    const proj = projects.find((p) => p.id === projectId);
+    if (!proj) return;
+    if (proj.default_provider) {
+      const key = proj.default_provider.includes("/")
+        ? proj.default_provider
+        : `${proj.default_provider}/${proj.default_provider}`;
+      if (providers.some((p) => providerKey(p) === key)) {
+        selectedProvider = key;
+      }
+    }
+    if (proj.default_preset) {
+      selectedPreset = proj.default_preset === "default" ? "" : proj.default_preset;
+    }
+  }
+
   $effect(() => {
     let cancelled = false;
     (async () => {
@@ -47,7 +73,7 @@
       if (cancelled) return;
       if (provRes.status === "fulfilled") {
         providers = provRes.value;
-        if (providers.length > 0) selectedProvider = providers[0].type;
+        if (providers.length > 0) selectedProvider = providerKey(providers[0]);
       }
       loadingProviders = false;
       if (presetRes.status === "fulfilled") {
@@ -57,7 +83,10 @@
         projects = projRes.value;
         if (scopedProjectId) {
           const match = projects.find((p) => p.id === scopedProjectId);
-          if (match) selectedProject = match.id;
+          if (match) {
+            selectedProject = match.id;
+            applyProjectDefaults(match.id);
+          }
         }
       }
       textareaEl?.focus();
@@ -75,7 +104,21 @@
 
   const isScoped = $derived(!!scopedProjectId && projects.some((p) => p.id === scopedProjectId));
   const scopedProject = $derived(projects.find((p) => p.id === scopedProjectId));
-  const selectClass = $derived(`${SELECT_BASE} ${isScoped ? SELECT_INHERITED : SELECT_NEUTRAL}`);
+  // Option lists for the themed Select dropdowns.
+  const projectOptions = $derived([
+    { label: "— no project —", value: "" },
+    ...projects.map((p) => ({ label: `${FOLDER_ICON} ${p.name}`, value: p.id })),
+  ]);
+  const providerOptions = $derived(
+    providers.map((p) => ({
+      label: p.name === p.type ? p.type : `${p.type} · ${p.name}`,
+      value: providerKey(p),
+    })),
+  );
+  const presetOptions = $derived([
+    { label: "— preset (default) —", value: "" },
+    ...presets.map((pr) => ({ label: pr.name, value: pr.name })),
+  ]);
 
   function autoResize(el: HTMLTextAreaElement) {
     el.style.height = "auto";
@@ -247,30 +290,28 @@
         </button>
 
         {#if projects.length > 0}
-          <label class="sr-only" for="ns-project">Project</label>
-          <select id="ns-project" bind:value={selectedProject} class={selectClass}>
-            <option value="">{"— no project —"}</option>
-            {#each projects as proj (proj.id)}
-              <option value={proj.id}>{FOLDER_ICON} {proj.name}</option>
-            {/each}
-          </select>
+          <Select
+            size="sm"
+            value={selectedProject}
+            options={projectOptions}
+            onChange={(v) => { selectedProject = v; applyProjectDefaults(v); }}
+          />
         {/if}
 
-        <label class="sr-only" for="ns-provider">Provider</label>
-        <select id="ns-provider" bind:value={selectedProvider} class={selectClass}>
-          {#each providers as p (p.type)}
-            <option value={p.type}>{p.type} {"·"} {p.name}</option>
-          {/each}
-        </select>
+        <Select
+          size="sm"
+          value={selectedProvider}
+          options={providerOptions}
+          onChange={(v) => (selectedProvider = v)}
+        />
 
         {#if presets.length > 0}
-          <label class="sr-only" for="ns-preset">Preset</label>
-          <select id="ns-preset" bind:value={selectedPreset} class={selectClass}>
-            <option value="">{"— preset (default) —"}</option>
-            {#each presets as pr (pr.name)}
-              <option value={pr.name}>{pr.name}</option>
-            {/each}
-          </select>
+          <Select
+            size="sm"
+            value={selectedPreset}
+            options={presetOptions}
+            onChange={(v) => (selectedPreset = v)}
+          />
         {/if}
 
         <button

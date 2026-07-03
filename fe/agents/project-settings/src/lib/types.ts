@@ -3,6 +3,11 @@ export interface PinnedSession {
   label: string;
 }
 
+export interface ProviderListItem {
+  type: string;
+  name: string;
+}
+
 export interface ProjectSettingsData {
   id: string;
   name: string;
@@ -18,6 +23,7 @@ export interface ProjectSettingsData {
   chat_count: number;
   created_at: string;
   preset_list: string[];
+  provider_list: ProviderListItem[];
   pinned: PinnedSession[];
   meta_json: string;
   action: string;

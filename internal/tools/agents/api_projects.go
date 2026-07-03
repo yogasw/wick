@@ -27,15 +27,37 @@ type ProjectSettingsResponse struct {
 	ChatCount       int                    `json:"chat_count"`
 	CreatedAt       string                 `json:"created_at"`
 	PresetList      []string               `json:"preset_list"`
+	ProviderList    []ProviderListItem     `json:"provider_list"`
 	Pinned          []ProjectPinnedSession `json:"pinned"`
 	MetaJSON        string                 `json:"meta_json"`
 	Action          string                 `json:"action"`
+}
+
+// ProviderListItem is one selectable provider instance for the project
+// defaults dropdown. The "type/name" pair is what Defaults.Provider
+// stores; the SPA renders the value as "type/name" so a custom instance
+// (e.g. claude/abc) is selectable, not just the base type.
+type ProviderListItem struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
 }
 
 // ProjectPinnedSession is one pinned session row in the API response.
 type ProjectPinnedSession struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
+}
+
+// projectProviderList returns the selectable provider instances for the
+// project defaults dropdown, sourced from the same cached status the
+// new-session composer uses so both selectors agree on what's healthy.
+func projectProviderList(c *tool.Ctx) []ProviderListItem {
+	ps := providerChoicesCached(c.Context())
+	out := make([]ProviderListItem, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, ProviderListItem{Type: p.Type, Name: p.Name})
+	}
+	return out
 }
 
 /* ── handlers ────────────────────────────────────────────────────────────── */
@@ -48,15 +70,17 @@ func apiProjectDetail(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	presetList := globalMgr.Registry().PresetNames()
+	providerList := projectProviderList(c)
 
 	if id == "new" {
 		c.JSON(http.StatusOK, ProjectSettingsResponse{
 			IsNew:           true,
 			Icon:            "📁",
 			DefaultPreset:   "default",
-			DefaultProvider: "claude",
+			DefaultProvider: "",
 			Managed:         true,
 			PresetList:      presetList,
+			ProviderList:    providerList,
 			Action:          c.Base() + "/projects",
 			Pinned:          []ProjectPinnedSession{},
 		})
@@ -83,6 +107,7 @@ func apiProjectDetail(c *tool.Ctx) {
 		SystemAddon:     p.Meta.Defaults.SystemAddon,
 		CreatedAt:       p.Meta.CreatedAt.Format("2006-01-02"),
 		PresetList:      presetList,
+		ProviderList:    providerList,
 		Action:          c.Base() + "/projects/" + id,
 		Pinned:          []ProjectPinnedSession{},
 	}

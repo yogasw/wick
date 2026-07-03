@@ -92,6 +92,8 @@ export type ConversationTurn = {
   attachments: Attachment[];
   has_artifact?: boolean;
   artifacts?: Artifact[];
+  // system turn only — a provider/runtime error, rendered as a failure.
+  is_error?: boolean;
 };
 
 export type ApprovalRequest = {
@@ -137,6 +139,11 @@ export type ProcessInfo = {
   lifecycle: string;
   substate?: string;
   alive: boolean;
+  // "process" = a real running/queued slot (counts, renders a card).
+  // "idle" = no process at all; row carries only the provider/agent name
+  // for the composer toolbar and must NOT be counted or shown as a card.
+  // Optional for backward compat with older payloads (treated as process).
+  kind?: "process" | "idle";
 };
 
 export type FileContent = {
@@ -167,6 +174,7 @@ export type SSEStatus = "connecting" | "connected" | "error";
 
 export type ThreadBlock =
   | { kind: "thinking"; text: string }
+  | { kind: "raw"; text: string }
   | { kind: "tool"; toolUseId: string; toolName: string; toolInput: string; result?: string; isError?: boolean; startedAt?: number; endedAt?: number };
 
 export type LiveTurn = { text: string; blocks: ThreadBlock[] };

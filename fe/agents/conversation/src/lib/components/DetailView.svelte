@@ -23,7 +23,7 @@
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
   import { sendMessage } from "../api/messages.js";
   import { listFiles, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
-  import { getProcesses, killProcess, dequeueProcess } from "../api/processes.js";
+  import { getProcesses, killProcess, dequeueProcess, liveProcesses as filterLiveProcesses } from "../api/processes.js";
   import {
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
     duplicateWorkspace, renameWorkspace, removeWorkspace,
@@ -156,6 +156,9 @@
   // events would otherwise stack into a pile of pending fetches. Skip while
   // one is already in flight.
   let processesInFlight = false;
+  // Set when a refresh is requested while one is already in flight, so the
+  // load re-runs once on completion (see loadProcesses).
+  let processReloadPending = false;
 
   /* ── workspace panel state ────────────────────────────────────── */
   let wsInstances = $state<WsInstance[]>([]);
@@ -277,7 +280,14 @@
   }
 
   function loadProcesses() {
-    if (processesInFlight) return;
+    // In-flight guard: if a fetch is already running, don't fire a second one
+    // — but remember that a refresh was asked for, so we run once more when
+    // the current one lands. Without the re-arm, a lifecycle event arriving
+    // mid-flight would be dropped and the panel could settle on a stale state.
+    if (processesInFlight) {
+      processReloadPending = true;
+      return;
+    }
     processesInFlight = true;
     run(getProcesses(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
@@ -289,7 +299,28 @@
         }
       })
       .catch((e: unknown) => toastError(`Processes: ${e instanceof Error ? e.message : String(e)}`))
-      .finally(() => { processesInFlight = false; });
+      .finally(() => {
+        processesInFlight = false;
+        if (processReloadPending) {
+          processReloadPending = false;
+          loadProcesses();
+        }
+      });
+  }
+
+  /* /processes is driven by SSE `lifecycle` events, not a timer. A single
+     turn fires several transitions in quick succession (spawning → working →
+     idle), and re-fetching on each one is the request burst seen in the
+     network panel. Coalesce them: one fetch ~200ms after the last transition
+     in a burst. The mount + post-kill loads stay immediate so the panel is
+     populated the instant it opens. */
+  let processReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleProcessReload() {
+    if (processReloadTimer !== null) clearTimeout(processReloadTimer);
+    processReloadTimer = setTimeout(() => {
+      processReloadTimer = null;
+      loadProcesses();
+    }, 200);
   }
 
   function loadWorkspace() {
@@ -323,18 +354,20 @@
 
   async function handleProviderChange(provider: string) {
     try {
-      const res = await run(
+      // In-place switch (same path as a "#codex" chat message): persists to
+      // agents.json + kills the subprocess so the next message respawns with
+      // the new provider. Session id is unchanged — no navigation. A single
+      // system turn arrives over SSE (no assistant bubble).
+      await run(
         switchProvider(base, sessionId, provider).pipe(Effect.provide(WickClientLayer)),
       );
-      if (res.redirect) {
-        if (res.redirect.startsWith("/sessions/")) {
-          push(res.redirect);
-        } else {
-          window.location.href = res.redirect;
-        }
-      } else {
-        activeProvider = provider;
-      }
+      // Reflect the switch in both the composer selector and the header pill.
+      activeProvider = provider;
+      agentLabel = provider;
+      // Refetch the authoritative history: the backend collapses back-to-back
+      // switches on disk, so this replaces any stale switch bubbles still shown
+      // from earlier live SSE turns with the pruned, canonical transcript.
+      void loadConversation();
     } catch (e: unknown) {
       toastError(`Provider: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -588,7 +621,7 @@
       } else if (ev.type === "done" || ev.type === "error") {
         void loadConversation();
       } else if (ev.type === "lifecycle") {
-        loadProcesses();
+        scheduleProcessReload();
         scheduleFileReload();
       } else if (ev.type === "git_status") {
         try {
@@ -700,12 +733,13 @@
     loadProjectOptions();
     loadPendingAsk();
     // No interval polling for /processes: the SSE `lifecycle` event already
-    // fires whenever a process starts/stops, and triggers loadProcesses().
-    // Polling on top of that just stacked redundant fetches.
+    // fires whenever a process starts/stops, and triggers a (debounced)
+    // loadProcesses(). Polling on top of that just stacked redundant fetches.
   });
 
   onDestroy(() => {
     if (fileReloadTimer !== null) clearTimeout(fileReloadTimer);
+    if (processReloadTimer !== null) clearTimeout(processReloadTimer);
     closeSSE?.();
     unsubTurns();
     unsubLive();
@@ -740,7 +774,13 @@
   const sideOpen = $derived(railTab !== null);
 
   const contextCount = $derived(filesVal.filter((f) => !f.isDir).length);
-  const processCount = $derived(processes.length);
+  // Idle-fallback rows (kind === "idle") carry only the provider/agent name
+  // for the composer toolbar — they are not real processes, so exclude them
+  // from the process panel and the "Process N" rail badge. A session whose
+  // subprocess was killed/exited falls back to an idle row, which drops both
+  // the card and the count instead of lingering as a stale "dead" entry.
+  const liveProcesses = $derived(filterLiveProcesses(processes));
+  const processCount = $derived(liveProcesses.length);
   const workspaceCount = $derived(wsInstances.length);
   function railCount(id: RailTab): number {
     if (id === "context") return contextCount;
@@ -955,7 +995,7 @@
         />
       {:else if railTab === "process"}
         <ProcessPanel
-          {processes}
+          processes={liveProcesses}
           onKill={(sid) => { confirmKill = { sid, queued: false }; }}
           onDequeue={(sid) => { confirmKill = { sid, queued: true }; }}
         />
@@ -1053,7 +1093,7 @@
             />
           {:else if railTab === "process"}
             <ProcessPanel
-              {processes}
+              processes={liveProcesses}
               onKill={(sid) => { confirmKill = { sid, queued: false }; }}
               onDequeue={(sid) => { confirmKill = { sid, queued: true }; }}
             />

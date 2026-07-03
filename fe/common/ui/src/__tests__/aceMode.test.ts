@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { aceModeFor } from "../../aceMode.js";
+import { aceModeFor, aceModeForLanguage } from "../aceMode.js";
 
 describe("aceModeFor", () => {
   test("maps common code extensions to ace modes", () => {
@@ -41,5 +41,18 @@ describe("aceModeFor", () => {
   test("is case-insensitive on the extension", () => {
     expect(aceModeFor("MAIN.GO")).toBe("ace/mode/golang");
     expect(aceModeFor("Index.HTML")).toBe("ace/mode/html");
+  });
+});
+
+describe("aceModeForLanguage", () => {
+  test("maps a bare language name to an ace mode", () => {
+    expect(aceModeForLanguage("go")).toBe("ace/mode/golang");
+    expect(aceModeForLanguage("python")).toBe("ace/mode/python");
+    expect(aceModeForLanguage("sh")).toBe("ace/mode/sh");
+    expect(aceModeForLanguage("bash")).toBe("ace/mode/sh");
+  });
+
+  test("passes an unknown language through as its own mode name", () => {
+    expect(aceModeForLanguage("nim")).toBe("ace/mode/nim");
   });
 });

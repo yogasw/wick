@@ -123,11 +123,16 @@
             : "",
   );
 
-  // Split agentLabel into instance name + provider type for two-tone display
-  // Format: "Wick claude" → instance="Wick", type="claude"
-  // Format: "claude" → instance="", type="claude"
+  // Split agentLabel into provider type + instance name for two-tone display.
+  //   "codex/gemini_flash" → type="codex", instance="gemini_flash"
+  //   "codex/codex" or "codex" → type="codex", instance=""  (collapse when equal)
+  //   legacy space form "Wick claude" → instance="Wick", type="claude"
   const agentParts = $derived(() => {
     if (!agentLabel) return { instance: "", type: "" };
+    if (agentLabel.includes("/")) {
+      const [type, name] = agentLabel.split("/");
+      return { instance: name === type ? "" : name, type };
+    }
     const parts = agentLabel.split(" ");
     if (parts.length >= 2) return { instance: parts[0], type: parts.slice(1).join(" ") };
     return { instance: "", type: agentLabel };
@@ -185,11 +190,9 @@
   <!-- Right: instance + provider + lifecycle + sse + kill + delete -->
   <div class="flex items-center gap-2 shrink-0">
     {#if agentLabel}
+      <span class="hidden md:inline text-xs font-medium text-black-700 dark:text-black-600">{agentParts().type}</span>
       {#if agentParts().instance}
-        <span class="hidden md:inline text-xs font-medium text-black-700 dark:text-black-600">{agentParts().instance}</span>
-        <span class="hidden md:inline text-xs text-black-500 dark:text-black-600">{agentParts().type}</span>
-      {:else}
-        <span class="hidden md:inline text-xs text-black-500 dark:text-black-600">{agentParts().type}</span>
+        <span class="hidden md:inline text-xs text-black-500 dark:text-black-600">{agentParts().instance}</span>
       {/if}
     {/if}
 

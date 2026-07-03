@@ -4,8 +4,11 @@ import ComposerToolbar from "../ComposerToolbar.svelte";
 import type { ProviderOption, ProjectOption } from "../../types/agents.js";
 
 const PROVIDERS: ProviderOption[] = [
-  { type: "anthropic", name: "Claude Sonnet", version: "claude-sonnet-4" },
-  { type: "openai", name: "GPT-4o", version: "gpt-4o" },
+  // Default instance: name === type.
+  { type: "codex", name: "codex", version: "1.0" },
+  // Named instance: name differs from type.
+  { type: "codex", name: "gemini_flash", version: "1.0" },
+  { type: "gemini", name: "gemini", version: "1.0" },
 ];
 
 const PROJECTS: ProjectOption[] = [
@@ -33,7 +36,7 @@ describe("ComposerToolbar", () => {
       props: {
         providers: PROVIDERS,
         projects: PROJECTS,
-        activeProvider: "anthropic",
+        activeProvider: "codex",
         activeProjectId: null,
         onProviderChange: vi.fn(),
         onProjectChange: vi.fn(),
@@ -41,16 +44,16 @@ describe("ComposerToolbar", () => {
     });
     const providerBtn = screen.getByRole("button", { name: /select provider/i });
     await fireEvent.click(providerBtn);
-    expect(screen.getByText("openai")).toBeDefined();
+    expect(screen.getByText("gemini_flash")).toBeDefined();
   });
 
-  test("clicking a provider option calls onProviderChange with provider type", async () => {
+  test("clicking a named instance sends the full type/name key", async () => {
     const onProviderChange = vi.fn();
     render(ComposerToolbar, {
       props: {
         providers: PROVIDERS,
         projects: PROJECTS,
-        activeProvider: "anthropic",
+        activeProvider: "codex",
         activeProjectId: null,
         onProviderChange,
         onProjectChange: vi.fn(),
@@ -59,11 +62,34 @@ describe("ComposerToolbar", () => {
     const providerBtn = screen.getByRole("button", { name: /select provider/i });
     await fireEvent.click(providerBtn);
 
-    const openaiOption = screen.getByRole("button", { name: /openai/i });
-    await fireEvent.click(openaiOption);
+    // The named codex instance: aria-label is "codex/gemini_flash".
+    const namedOption = screen.getByRole("button", { name: "codex/gemini_flash" });
+    await fireEvent.click(namedOption);
 
     expect(onProviderChange).toHaveBeenCalledOnce();
-    expect(onProviderChange).toHaveBeenCalledWith("openai");
+    expect(onProviderChange).toHaveBeenCalledWith("codex/gemini_flash");
+  });
+
+  test("clicking a default instance sends the bare type", async () => {
+    const onProviderChange = vi.fn();
+    render(ComposerToolbar, {
+      props: {
+        providers: PROVIDERS,
+        projects: PROJECTS,
+        activeProvider: "codex",
+        activeProjectId: null,
+        onProviderChange,
+        onProjectChange: vi.fn(),
+      },
+    });
+    const providerBtn = screen.getByRole("button", { name: /select provider/i });
+    await fireEvent.click(providerBtn);
+
+    const geminiOption = screen.getByRole("button", { name: "gemini" });
+    await fireEvent.click(geminiOption);
+
+    expect(onProviderChange).toHaveBeenCalledOnce();
+    expect(onProviderChange).toHaveBeenCalledWith("gemini");
   });
 
   test("renders project button with active project name", () => {

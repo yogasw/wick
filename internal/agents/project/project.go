@@ -156,6 +156,46 @@ func List(layout config.Layout) ([]string, error) {
 	return storage.ScanDirNames(layout.ProjectsDir())
 }
 
+// RewriteProvider re-points every project whose Defaults.Provider equals
+// oldKey to newKey, persisting each change. Used when a provider
+// instance is renamed so project defaults follow the new "type/name"
+// automatically (live sessions are intentionally left alone — they keep
+// the old key and must be re-pointed by the user). Returns the number
+// of projects updated. A best-effort op: a single project's load/save
+// failure is logged via the returned error only if EVERY candidate
+// failed; partial success still returns the count of those that saved.
+func RewriteProvider(layout config.Layout, oldKey, newKey string) (int, error) {
+	if oldKey == "" || oldKey == newKey {
+		return 0, nil
+	}
+	ids, err := List(layout)
+	if err != nil {
+		return 0, err
+	}
+	updated := 0
+	var lastErr error
+	for _, id := range ids {
+		p, err := Load(layout, id)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if p.Meta.Defaults.Provider != oldKey {
+			continue
+		}
+		p.Meta.Defaults.Provider = newKey
+		if err := SaveMeta(layout, id, p.Meta); err != nil {
+			lastErr = err
+			continue
+		}
+		updated++
+	}
+	if updated == 0 && lastErr != nil {
+		return 0, lastErr
+	}
+	return updated, nil
+}
+
 // Access carries the caller identity used to filter project visibility.
 // Build it in the handler from the request context so this package keeps
 // no login/http imports:

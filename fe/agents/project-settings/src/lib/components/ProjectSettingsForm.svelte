@@ -25,8 +25,39 @@
   let folderMode = $state<"managed" | "custom">("managed");
   let customPath = $state("");
   let preset = $state("default");
-  let provider = $state("claude");
+  let provider = $state("");
   let systemAddon = $state("");
+
+  // Promote a bare provider type ("claude") to its canonical default
+  // instance key ("claude/claude"). Mirrors normalizeProviderKey on the
+  // backend so the dropdown value round-trips to the spawn path. Empty
+  // stays empty.
+  function normalizeProviderKey(key: string): string {
+    if (!key) return "";
+    return key.includes("/") ? key : `${key}/${key}`;
+  }
+
+  // Build the provider dropdown from the healthy instances the backend
+  // reports. Each option's value is the "type/name" key stored in
+  // Defaults.Provider; the label drops the redundant name for the
+  // canonical default (claude/claude → Claude). If the currently-saved
+  // provider isn't in the list (instance deleted/renamed), surface it as
+  // a trailing "(unavailable)" option so the form doesn't silently
+  // change the saved value to something else.
+  let providerOptions = $derived.by(() => {
+    const list = data?.provider_list ?? [];
+    const opts = list.map((p) => {
+      const value = `${p.type}/${p.name}`;
+      const label = p.name === p.type
+        ? p.type.charAt(0).toUpperCase() + p.type.slice(1)
+        : value;
+      return { value, label };
+    });
+    if (provider && !opts.some((o) => o.value === provider)) {
+      opts.push({ value: provider, label: `${provider} (unavailable)` });
+    }
+    return opts;
+  });
 
   async function load() {
     loading = true;
@@ -40,7 +71,11 @@
       folderMode = d.managed ? "managed" : "custom";
       customPath = d.custom_path;
       preset = d.default_preset;
-      provider = d.default_provider;
+      // Normalize to the "type/name" key the spawn path expects. Older
+      // projects stored a bare type (e.g. "claude"); promote it to the
+      // canonical default instance "claude/claude". Empty stays empty so
+      // the dropdown falls back to the first available instance.
+      provider = normalizeProviderKey(d.default_provider);
       systemAddon = d.system_addon;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -235,9 +270,9 @@
                   bind:value={provider}
                   class="w-full rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1.5 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"
                 >
-                  <option value="claude">Claude</option>
-                  <option value="codex">Codex</option>
-                  <option value="gemini">Gemini</option>
+                  {#each providerOptions as opt (opt.value)}
+                    <option value={opt.value}>{opt.label}</option>
+                  {/each}
                 </select>
               </div>
               <div>

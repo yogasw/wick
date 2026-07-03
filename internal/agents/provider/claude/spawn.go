@@ -160,6 +160,16 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	}
 	args = append(args, s.ExtraArgs...)
 	args = append(args, opt.ExtraArgs...)
+	// 9router: when enabled, front the Anthropic API with wick's /9router/v1
+	// proxy. Everything (base URL, auth token, per-tier models) is wired via
+	// env in spawnEnv using Claude Code's own gateway vars — no --model on
+	// argv. Models are optional (omitted when unset). Only the proxy base
+	// URL is required, so fail fast if WICK_PORT is unset.
+	if opt.Instance != nil && opt.Instance.Use9router {
+		if provider.Router9BaseURL() == "" {
+			return nil, fmt.Errorf("claude 9router: WICK_PORT unset — cannot resolve proxy base URL")
+		}
+	}
 	args = append(args, maxTurnsArgs(opt.MaxTurns)...)
 	if opt.Preset != "" {
 		args = append(args, "--append-system-prompt", opt.Preset)
@@ -172,6 +182,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	cmd.Dir = opt.Workspace
 	cmd.Env = spawnEnv(os.Environ(), opt)
 	hideConsole(cmd)
+
+	// Env wick injected on top of the inherited environment (ExtraEnv,
+	// thinking, 9router), masked, for the spawn log. Passing a nil base to
+	// spawnEnv yields only the added entries.
+	addedEnv := provider.MaskSpawnEnv(spawnEnv(nil, opt))
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -222,7 +237,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		Int("pid", cmd.Process.Pid).
 		Str("bin", bin).
 		Msg("agents.spawn: started")
-	return &process{cmd: cmd, stdin: stdin, stdout: stdout, stderrB: stderrB}, nil
+	return &process{cmd: cmd, stdin: stdin, stdout: stdout, stderrB: stderrB, env: addedEnv}, nil
 }
 
 // spawnEnv assembles the subprocess environment from base (typically
@@ -236,6 +251,29 @@ func spawnEnv(base []string, opt provider.SpawnOptions) []string {
 	env := append(append([]string{}, base...), opt.ExtraEnv...)
 	if opt.ThinkingTokens != "" {
 		env = append(env, "MAX_THINKING_TOKENS="+opt.ThinkingTokens)
+	}
+	// 9router: point Claude Code at wick's /9router/v1 proxy using its own
+	// gateway env vars. ANTHROPIC_AUTH_TOKEN (NOT _API_KEY — that is for
+	// direct Anthropic) carries the 9router key; the per-tier models map via
+	// ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL. Each tier is emitted only
+	// when its slot is set — an empty slot is skipped so the CLI keeps its
+	// own default (no fallback to the primary model).
+	if opt.Instance != nil && opt.Instance.Use9router {
+		if base := provider.Router9BaseURL(); base != "" {
+			env = append(env,
+				"ANTHROPIC_BASE_URL="+base,
+				"ANTHROPIC_AUTH_TOKEN="+provider.Router9AuthKey(*opt.Instance),
+			)
+			if opus := strings.TrimSpace(opt.Instance.Router9Models["opus"]); opus != "" {
+				env = append(env, "ANTHROPIC_DEFAULT_OPUS_MODEL="+opus)
+			}
+			if sonnet := strings.TrimSpace(opt.Instance.Router9Models["sonnet"]); sonnet != "" {
+				env = append(env, "ANTHROPIC_DEFAULT_SONNET_MODEL="+sonnet)
+			}
+			if haiku := strings.TrimSpace(opt.Instance.Router9Models["haiku"]); haiku != "" {
+				env = append(env, "ANTHROPIC_DEFAULT_HAIKU_MODEL="+haiku)
+			}
+		}
 	}
 	return env
 }
@@ -326,10 +364,12 @@ type process struct {
 	stdin   io.WriteCloser
 	stdout  io.ReadCloser
 	stderrB *stderrTail
+	env     []string // wick-injected env (masked), for the spawn log
 }
 
 func (p *process) Stdout() io.Reader     { return p.stdout }
 func (p *process) Stdin() io.WriteCloser { return p.stdin }
+func (p *process) Env() []string         { return p.env }
 func (p *process) Wait() error           { return p.cmd.Wait() }
 
 // StderrTail returns the tail of the subprocess's stderr (optional

@@ -50,6 +50,12 @@ type Process interface {
 	// argv[0] = binary). Logged at spawn-start so the operator can
 	// reproduce the spawn manually outside wick.
 	Argv() []string
+	// Env returns the env vars wick INJECTED for this spawn (KEY=VALUE),
+	// NOT the full inherited OS environment — just what the instance
+	// config + provider wiring added (e.g. ANTHROPIC_BASE_URL, the 9router
+	// key). Secret-looking values are masked. Logged at spawn-start so the
+	// operator can verify routing/auth from the Backends UI. May be nil.
+	Env() []string
 }
 
 // Spawner builds a Process from spawn parameters. The agent package

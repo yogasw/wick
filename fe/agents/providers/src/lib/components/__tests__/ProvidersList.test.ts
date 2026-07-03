@@ -72,32 +72,32 @@ beforeEach(() => {
 
 describe("ProvidersList", () => {
   it("renders provider cards after load", async () => {
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     expect(await screen.findByText("openai/gpt4")).toBeTruthy();
     expect(screen.getByText("claude/claude")).toBeTruthy();
   });
 
   it("shows version for found provider", async () => {
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText("openai/gpt4");
     expect(screen.getByText("1.2.3")).toBeTruthy();
   });
 
   it("shows disabled label for disabled provider", async () => {
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText("openai/gpt4");
     expect(screen.getAllByText("disabled").length).toBeGreaterThan(0);
   });
 
   it("shows Configured stat card", async () => {
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText("openai/gpt4");
     expect(screen.getByText("Configured")).toBeTruthy();
     expect(screen.getByText("Active Slots")).toBeTruthy();
   });
 
   it("shows Command Gate master section", async () => {
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText("openai/gpt4");
     const gates = screen.getAllByText("Command Gate");
     expect(gates.length).toBeGreaterThan(0);
@@ -105,7 +105,7 @@ describe("ProvidersList", () => {
   });
 
   it("shows MCP Wick section with app badge", async () => {
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText(/MCP Wick/);
     expect(screen.getByText("wick-agent")).toBeTruthy();
     const mcpBtn = screen.getByText(/MCP Wick/);
@@ -115,7 +115,7 @@ describe("ProvidersList", () => {
 
   it("calls onNavigate when Detail is clicked", async () => {
     const onNavigate = vi.fn();
-    render(ProvidersList, { props: { onNavigate, base: "" } });
+    render(ProvidersList, { props: { onNavigate, onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText("openai/gpt4");
     const btns = screen.getAllByText("Detail");
     fireEvent.click(btns[0]);
@@ -123,21 +123,21 @@ describe("ProvidersList", () => {
   });
 
   it("calls apiRescanAll when Rescan all clicked", async () => {
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText("openai/gpt4");
     fireEvent.click(screen.getByText("Rescan all"));
     expect(api.apiRescanAll).toHaveBeenCalled();
   });
 
   it("calls apiGateToggle when Turn off clicked", async () => {
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText("openai/gpt4");
     fireEvent.click(screen.getByText("Turn off"));
     expect(api.apiGateToggle).toHaveBeenCalled();
   });
 
   it("calls apiAutoRescanToggle and shows off state", async () => {
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText("openai/gpt4");
     const btn = screen.getByText("Auto-rescan: off");
     fireEvent.click(btn);
@@ -145,7 +145,7 @@ describe("ProvidersList", () => {
   });
 
   it("opens the Add Custom modal", async () => {
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText("openai/gpt4");
     fireEvent.click(screen.getByText("+ Add Custom"));
     expect(await screen.findByText("New Provider Instance")).toBeTruthy();
@@ -154,7 +154,7 @@ describe("ProvidersList", () => {
 
 describe("ProvidersList - hook capability section", () => {
   it("shows Enable button when gate on and intent off, calls apiHookEnable", async () => {
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "/wick" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "/wick" } });
     await screen.findByText("openai/gpt4");
     const enableBtns = screen.getAllByText("Enable");
     fireEvent.click(enableBtns[0]);
@@ -166,7 +166,7 @@ describe("ProvidersList - hook capability section", () => {
     d.Providers[0].HookEnabled = { PreToolUse: true };
     d.Providers[0].Hooks = { PreToolUse: { Supported: true, Verified: true, ProbedAt: "2024-01-01", Error: "", Scope: "global" } };
     vi.mocked(api.apiGetProviders).mockResolvedValue(d);
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "/wick" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "/wick" } });
     await screen.findByText("openai/gpt4");
     fireEvent.click(screen.getByText("Disable"));
     expect(api.apiHookDisable).toHaveBeenCalledWith("/wick", "claude", "claude", "PreToolUse");
@@ -178,7 +178,7 @@ describe("ProvidersList - hook capability section", () => {
     const d = makeData();
     d.Gate = { ...d.Gate, Enabled: true, BypassLocked: true };
     vi.mocked(api.apiGetProviders).mockResolvedValue(d);
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText("openai/gpt4");
     expect(screen.queryByText("Enable")).toBeNull();
     expect(screen.getAllByText("locked (bypass)").length).toBeGreaterThan(0);
@@ -190,28 +190,28 @@ describe("ProvidersList - active processes panel", () => {
     const d = makeData();
     d.LiveProcesses = [{ SessionID: "abcdef123456", AgentName: "claude", PID: 77, Lifecycle: "working", Substate: "active" }];
     vi.mocked(api.apiGetProviders).mockResolvedValue(d);
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText("Active Processes");
     expect(screen.getByText("abcdef12")).toBeTruthy();
     expect(screen.getByText("77")).toBeTruthy();
   });
 
   it("hides the panel when LiveProcesses is empty", async () => {
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText("openai/gpt4");
     expect(screen.queryByText("Active Processes")).toBeNull();
   });
 });
 
 describe("ProvidersList - recent spawns", () => {
-  it("renders spawn rows linking to the server-rendered detail page", async () => {
+  it("clicking a spawn row calls onOpenSpawn with the log filename", async () => {
     const d = makeData();
     d.Spawns = [{
       Path: "/var/spawns/spawn-xyz.log",
       ProviderType: "claude",
       ProviderName: "claude",
       SessionID: "sess-12345678",
-      StartedAt: "2024-01-01 00:00:00",
+      StartedAt: "2024-01-01T00:00:00Z",
       PID: 5,
       Origin: "web",
       FirstUserMessage: "hello",
@@ -219,15 +219,18 @@ describe("ProvidersList - recent spawns", () => {
       ExitReason: "",
     }];
     vi.mocked(api.apiGetProviders).mockResolvedValue(d);
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "/wick" } });
+    const onOpenSpawn = vi.fn();
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn, base: "/wick" } });
     await screen.findByText("Recent Spawns");
-    const link = screen.getByText("2024-01-01 00:00:00").closest("a");
-    expect(link?.getAttribute("href")).toBe("/wick/providers/spawns/spawn-xyz.log");
+    // Row shows the short session id; clicking the row opens the spawn detail.
+    const row = screen.getByText("sess-123").closest("tr")!;
+    await fireEvent.click(row);
+    expect(onOpenSpawn).toHaveBeenCalledWith("spawn-xyz.log");
     expect(screen.getByText("running")).toBeTruthy();
   });
 
   it("shows empty state when no spawns", async () => {
-    render(ProvidersList, { props: { onNavigate: vi.fn(), base: "" } });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSpawn: vi.fn(), base: "" } });
     await screen.findByText("openai/gpt4");
     expect(screen.getByText("No spawns recorded yet.")).toBeTruthy();
   });
