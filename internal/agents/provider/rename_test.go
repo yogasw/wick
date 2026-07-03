@@ -38,11 +38,11 @@ func isolateConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows reads this
-	prev := AppName
-	AppName = "wick-rename-test"
+	prev := AppName()
+	SetAppName("wick-rename-test")
 	invalidateInstanceCache()
 	t.Cleanup(func() {
-		AppName = prev
+		SetAppName(prev)
 		invalidateInstanceCache()
 	})
 }

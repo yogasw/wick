@@ -181,10 +181,32 @@ const HookEventPreToolUse = "PreToolUse"
 
 // ── Config helpers ────────────────────────────────────────────────────
 
-// AppName is the userconfig project name the agents module reads/writes
+// appName is the userconfig project name the agents module reads/writes
 // under. Wired by the bootstrap: a server with APP_NAME=foo stores its
 // agents config in ~/.foo/config.json.
-var AppName = ""
+//
+// Guarded by appNameMu: Save spawns a background rescan goroutine that
+// reads it, and tests swap it under t.Cleanup — the two race without a
+// lock (caught by -race). Access only via AppName / SetAppName.
+var (
+	appNameMu sync.RWMutex
+	appName   = ""
+)
+
+// AppName returns the current userconfig project name.
+func AppName() string {
+	appNameMu.RLock()
+	defer appNameMu.RUnlock()
+	return appName
+}
+
+// SetAppName wires the userconfig project name. Called once by the
+// bootstrap, and by tests (under t.Cleanup) to isolate config.
+func SetAppName(name string) {
+	appNameMu.Lock()
+	defer appNameMu.Unlock()
+	appName = name
+}
 
 // instanceCache holds the resolved per-instance config in memory so
 // every spawn doesn't hit the userconfig file. Invalidated on Save /
@@ -200,7 +222,7 @@ var rescanGroup singleflight.Group
 // caller-supplied lock contract. Called by FindCached on a miss and
 // by mutating ops (Save/Delete/SetHookEnabled) after writing.
 func reloadInstanceCacheLocked() {
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		// Fail-soft: leave cache as-is. Callers will fall back to the
 		// uncached Load path on miss.
@@ -210,7 +232,7 @@ func reloadInstanceCacheLocked() {
 	if instanceCache == nil {
 		instanceCache = map[string][]Instance{}
 	}
-	instanceCache[AppName] = mergeWithDefaults(cfg.Providers)
+	instanceCache[AppName()] = mergeWithDefaults(cfg.Providers)
 }
 
 // invalidateInstanceCache forces the next FindCached / LoadCachedInstances
@@ -218,14 +240,14 @@ func reloadInstanceCacheLocked() {
 func invalidateInstanceCache() {
 	instanceCacheMu.Lock()
 	defer instanceCacheMu.Unlock()
-	delete(instanceCache, AppName)
+	delete(instanceCache, AppName())
 }
 
 // Load returns every configured instance across all supported types,
 // auto-seeding the per-type default entry when its list is empty so
 // the UI always has at least one row per supported runtime.
 func Load() ([]Instance, error) {
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return nil, err
 	}
@@ -240,14 +262,14 @@ func Find(t Type, name string) (Instance, error) {
 		name = string(t)
 	}
 	instanceCacheMu.RLock()
-	cached, ok := instanceCache[AppName]
+	cached, ok := instanceCache[AppName()]
 	instanceCacheMu.RUnlock()
 	if !ok {
 		instanceCacheMu.Lock()
-		if _, stillMiss := instanceCache[AppName]; stillMiss {
+		if _, stillMiss := instanceCache[AppName()]; stillMiss {
 			reloadInstanceCacheLocked()
 		}
-		cached = instanceCache[AppName]
+		cached = instanceCache[AppName()]
 		instanceCacheMu.Unlock()
 	}
 	for _, ins := range cached {
@@ -302,7 +324,7 @@ func Save(ins Instance) error {
 	if !isSupported(ins.Type) {
 		return fmt.Errorf("unsupported runtime type %q", ins.Type)
 	}
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
 	}
@@ -318,7 +340,7 @@ func Save(ins Instance) error {
 	if !updated {
 		*list = append(*list, toUserInstance(ins))
 	}
-	if err := userconfig.Save(AppName, cfg); err != nil {
+	if err := userconfig.Save(AppName(), cfg); err != nil {
 		return err
 	}
 	invalidateInstanceCache()
@@ -363,7 +385,7 @@ func Rename(t Type, oldName, newName string) error {
 	if !isSupported(t) {
 		return fmt.Errorf("unsupported runtime type %q", t)
 	}
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
 	}
@@ -380,7 +402,7 @@ func Rename(t Type, oldName, newName string) error {
 	for i := range *list {
 		if (*list)[i].Name == oldName {
 			(*list)[i].Name = newName
-			if err := userconfig.Save(AppName, cfg); err != nil {
+			if err := userconfig.Save(AppName(), cfg); err != nil {
 				return err
 			}
 			invalidateInstanceCache()
@@ -393,7 +415,7 @@ func Rename(t Type, oldName, newName string) error {
 	// in memory. Materialize it under the new name so the rename sticks.
 	if oldName == string(t) {
 		*list = append(*list, userconfig.ProviderInstance{Name: newName})
-		if err := userconfig.Save(AppName, cfg); err != nil {
+		if err := userconfig.Save(AppName(), cfg); err != nil {
 			return err
 		}
 		invalidateInstanceCache()
@@ -411,7 +433,7 @@ func SetHookEnabled(t Type, name, event string, enabled bool) error {
 	if name == "" || event == "" {
 		return errors.New("instance name and event required")
 	}
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
 	}
@@ -427,7 +449,7 @@ func SetHookEnabled(t Type, name, event string, enabled bool) error {
 			(*list)[i].Hooks = map[string]userconfig.HookInstanceConfig{}
 		}
 		(*list)[i].Hooks[event] = userconfig.HookInstanceConfig{Enabled: enabled}
-		if err := userconfig.Save(AppName, cfg); err != nil {
+		if err := userconfig.Save(AppName(), cfg); err != nil {
 			return err
 		}
 		invalidateInstanceCache()
@@ -444,7 +466,7 @@ func SetHookEnabled(t Type, name, event string, enabled bool) error {
 			Name:  name,
 			Hooks: map[string]userconfig.HookInstanceConfig{event: {Enabled: enabled}},
 		})
-		if err := userconfig.Save(AppName, cfg); err != nil {
+		if err := userconfig.Save(AppName(), cfg); err != nil {
 			return err
 		}
 		invalidateInstanceCache()
@@ -460,7 +482,7 @@ func Delete(t Type, name string) error {
 	if name == "" {
 		return errors.New("instance name required")
 	}
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
 	}
@@ -468,7 +490,7 @@ func Delete(t Type, name string) error {
 	for i := range *list {
 		if (*list)[i].Name == name {
 			*list = append((*list)[:i], (*list)[i+1:]...)
-			if err := userconfig.Save(AppName, cfg); err != nil {
+			if err := userconfig.Save(AppName(), cfg); err != nil {
 				return err
 			}
 			invalidateInstanceCache()

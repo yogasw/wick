@@ -814,7 +814,7 @@ func NewServer() *Server {
 	// registry's in-memory cache. Wire the reload hook so a restore refreshes
 	// the sidebar immediately instead of waiting for the next boot.
 	providerstoragetool.SetReloadRegistryHook(agentsMgr.Registry().Reload)
-	provider.AppName = appname.Resolve()
+	provider.SetAppName(appname.Resolve())
 	// Wire the auto-rescan toggle: provider package consults this
 	// before triggering background stale-version re-probes. Defaults
 	// true when configs row is empty.

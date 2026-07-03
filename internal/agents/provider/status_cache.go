@@ -50,7 +50,7 @@ func cacheKey(t Type, name string) string { return string(t) + "/" + name }
 // loadAll reads every persisted status as the raw map. Keeps the
 // userconfig file load to one read per call site.
 func loadAll() map[string]userconfig.ProviderStatus {
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		log.Warn().Err(err).Msg("agents.cache: load userconfig failed")
 		return nil
@@ -65,7 +65,7 @@ var cacheMu sync.Mutex
 func saveOne(t Type, name string, ps userconfig.ProviderStatus) {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		log.Warn().Err(err).Msg("agents.cache: load for save failed")
 		return
@@ -74,7 +74,7 @@ func saveOne(t Type, name string, ps userconfig.ProviderStatus) {
 		cfg.ProviderStatuses = map[string]userconfig.ProviderStatus{}
 	}
 	cfg.ProviderStatuses[cacheKey(t, name)] = ps
-	if err := userconfig.Save(AppName, cfg); err != nil {
+	if err := userconfig.Save(AppName(), cfg); err != nil {
 		log.Warn().Err(err).Str("type", string(t)).Str("name", name).Msg("agents.cache: persist failed")
 	}
 }
@@ -230,7 +230,7 @@ func RescanOne(ctx context.Context, t Type, name string) Status {
 func MergeHookCapability(t Type, name, event string, hc HookCapability) {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		log.Warn().Err(err).Msg("agents.cache: load for merge capability failed")
 		return
@@ -255,7 +255,7 @@ func MergeHookCapability(t Type, name, event string, hc HookCapability) {
 		Scope:     hc.Scope,
 	}
 	cfg.ProviderStatuses[key] = ps
-	if err := userconfig.Save(AppName, cfg); err != nil {
+	if err := userconfig.Save(AppName(), cfg); err != nil {
 		log.Warn().Err(err).Str("type", string(t)).Str("name", name).Msg("agents.cache: persist capability failed")
 	}
 }

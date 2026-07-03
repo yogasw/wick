@@ -13,14 +13,14 @@ import (
 // test's temp dir. Restores the previous AppName on cleanup.
 func setIsolatedAppName(t *testing.T) {
 	t.Helper()
-	prev := AppName
+	prev := AppName()
 	dir := t.TempDir()
-	AppName = "wick-test-" + filepath.Base(dir)
+	SetAppName("wick-test-" + filepath.Base(dir))
 	t.Cleanup(func() {
-		if d, err := userconfig.Dir(AppName); err == nil {
+		if d, err := userconfig.Dir(AppName()); err == nil {
 			_ = removeAll(d)
 		}
-		AppName = prev
+		SetAppName(prev)
 	})
 }
 
@@ -43,7 +43,7 @@ func TestMergeHookCapabilityRoundtrip(t *testing.T) {
 		Scope:     "bash+edit+mcp",
 	})
 
-	cfg, err := userconfig.Load(AppName)
+	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestMergeHookCapabilityCreatesEntry(t *testing.T) {
 		Scope:     "shell-only",
 	})
 
-	cfg, _ := userconfig.Load(AppName)
+	cfg, _ := userconfig.Load(AppName())
 	ps, ok := cfg.ProviderStatuses["codex/codex"]
 	if !ok {
 		t.Fatal("expected merge to create new entry")
@@ -116,7 +116,7 @@ func TestMergeHookCapabilityPreservesOtherEvents(t *testing.T) {
 		Supported: true, Verified: false, Error: "regression",
 	})
 
-	cfg, _ := userconfig.Load(AppName)
+	cfg, _ := userconfig.Load(AppName())
 	ps := cfg.ProviderStatuses["claude/claude"]
 	if len(ps.Hooks) != 2 {
 		t.Fatalf("expected 2 hook entries preserved, got %d", len(ps.Hooks))
