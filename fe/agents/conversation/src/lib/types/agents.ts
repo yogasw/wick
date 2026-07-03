@@ -139,6 +139,11 @@ export type ProcessInfo = {
   lifecycle: string;
   substate?: string;
   alive: boolean;
+  // "process" = a real running/queued slot (counts, renders a card).
+  // "idle" = no process at all; row carries only the provider/agent name
+  // for the composer toolbar and must NOT be counted or shown as a card.
+  // Optional for backward compat with older payloads (treated as process).
+  kind?: "process" | "idle";
 };
 
 export type FileContent = {

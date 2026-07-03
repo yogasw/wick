@@ -1386,6 +1386,14 @@ func sessionProcesses(c *tool.Ctx) {
 		Lifecycle string `json:"lifecycle"`
 		Substate  string `json:"substate"`
 		Alive     bool   `json:"alive"` // OS-verified: PID exists AND is our process
+		// Kind distinguishes a real running/queued process from the idle
+		// fallback below. "process" = a live slot (active snapshot or FIFO
+		// queue). "idle" = no process at all; the row exists only to carry
+		// the session's provider/agent name (from agents.json) so the
+		// composer toolbar can render it. The UI counts and shows cards for
+		// "process" rows only — an "idle" row must not inflate the process
+		// count nor render a (misleading) "dead" card.
+		Kind string `json:"kind"`
 	}
 	var out []procEntry
 	if globalPool != nil {
@@ -1401,15 +1409,31 @@ func sessionProcesses(c *tool.Ctx) {
 			if e.SessionID != id {
 				continue
 			}
-			// PID alive AND identity matches (recycled PID owned by another
-			// process reads as not-alive). 0 = test fake / pre-PID spawn.
+			// Alive reflects the real OS state: PID exists AND is our process
+			// (a recycled PID owned by someone else reads as not-alive).
+			// 0 = test fake / pre-PID spawn — can't probe, treat as alive.
 			//
-			// Respawn-mode agents (codex) have NO live process between turns
-			// by design — the one-shot turn process exits and the agent idles
-			// until the next message. A dead PID there is healthy, not a
-			// zombie, so don't flag it dead; the lifecycle/substate
-			// (idle/working) already conveys the real status.
-			alive := e.Respawns || e.PID == 0 || processctl.ProcessAlive(e.PID)
+			// We do NOT special-case respawn-mode (codex) here. The old
+			// assumption was that codex has no live process between turns, so a
+			// dead PID was "healthy" and it was blanket-marked alive — but the
+			// codex CLI can stay resident (idle-alive) after a turn's stdout
+			// closes, and blanket alive=true then lied about a process that was
+			// really still running (couldn't be killed, status wrong). Probing
+			// the PID tells the truth: a resident codex reads alive (and is
+			// killable via its tracked PID); one that actually exited reads dead.
+			alive := e.PID == 0 || processctl.ProcessAlive(e.PID)
+			// This endpoint lists ACTIVE processes. An entry whose OS process
+			// has actually exited (alive=false) is not a running process — it's
+			// a slot the pool hasn't reaped yet. Don't surface it: both the
+			// process card and the "Process N" rail badge read this list, so a
+			// dead entry here shows a stale "dead" card and keeps the badge
+			// count too high. Skipping it makes both drop the moment the process
+			// dies (the SSE lifecycle refresh re-fetches this list), without
+			// waiting for the pool's reconcile to release the slot. A working or
+			// still-resident process reads alive=true and is kept.
+			if !alive {
+				continue
+			}
 			prov := e.ProviderType
 			if e.ProviderName != "" && e.ProviderName != e.ProviderType {
 				prov = e.ProviderType + "/" + e.ProviderName
@@ -1423,6 +1447,7 @@ func sessionProcesses(c *tool.Ctx) {
 				Lifecycle: e.Lifecycle,
 				Substate:  e.Substate,
 				Alive:     alive,
+				Kind:      "process",
 			})
 		}
 		// Same session filter, applied to the FIFO queue: a request still
@@ -1442,12 +1467,19 @@ func sessionProcesses(c *tool.Ctx) {
 				// "alive" probe doesn't apply. Mark alive so the UI renders
 				// the "queued" status instead of flipping it to "dead".
 				Alive: true,
+				// A queued request is a real pending process — it counts and
+				// shows a card. Only the idle fallback below is "idle".
+				Kind: "process",
 			})
 		}
 	}
 	// Fallback: when no active/queued process exists (session idle),
 	// surface agents from agents.json so the UI can still show
-	// provider/agent name in the composer toolbar.
+	// provider/agent name in the composer toolbar. Kind "idle" marks
+	// these as NOT processes — the UI reads the provider/name for the
+	// toolbar but must not count them or render a process card, so a
+	// killed/exited session drops its card + "Process N" badge the moment
+	// the pool goes empty instead of lingering as a stale "dead" row.
 	if len(out) == 0 {
 		if sess, ok := globalMgr.Registry().Session(id); ok {
 			for _, a := range sess.Agents {
@@ -1459,6 +1491,7 @@ func sessionProcesses(c *tool.Ctx) {
 					PID:       0,
 					Lifecycle: string(a.Status),
 					Alive:     false,
+					Kind:      "idle",
 				})
 			}
 		}

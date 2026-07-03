@@ -289,16 +289,16 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
-		Workspace:       a.cfg.Workspace,
-		SessionDir:      a.cfg.SessionDir,
-		ResumeID:        a.resumeID,
-		ExtraEnv:        a.cfg.ExtraEnv,
-		ExtraArgs:       a.cfg.ExtraArgs,
-		Instance:        a.cfg.Instance,
-		GateBinary:      a.cfg.GateBinary,
-		Preset:          a.cfg.Preset,
-		MaxTurns:        a.cfg.MaxTurns,
-		ThinkingTokens:  a.cfg.ThinkingTokens,
+		Workspace:      a.cfg.Workspace,
+		SessionDir:     a.cfg.SessionDir,
+		ResumeID:       a.resumeID,
+		ExtraEnv:       a.cfg.ExtraEnv,
+		ExtraArgs:      a.cfg.ExtraArgs,
+		Instance:       a.cfg.Instance,
+		GateBinary:     a.cfg.GateBinary,
+		Preset:         a.cfg.Preset,
+		MaxTurns:       a.cfg.MaxTurns,
+		ThinkingTokens: a.cfg.ThinkingTokens,
 	})
 	if err != nil {
 		cancel()
@@ -442,17 +442,17 @@ func (a *Agent) respawnWithMessage(text string) error {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
-		Workspace:       a.cfg.Workspace,
-		SessionDir:      a.cfg.SessionDir,
-		ResumeID:        resumeID,
-		ExtraEnv:        a.cfg.ExtraEnv,
-		ExtraArgs:       a.cfg.ExtraArgs,
-		Instance:        a.cfg.Instance,
-		GateBinary:      a.cfg.GateBinary,
-		Preset:          a.cfg.Preset,
-		InitialMessage:  text,
-		MaxTurns:        a.cfg.MaxTurns,
-		ThinkingTokens:  a.cfg.ThinkingTokens,
+		Workspace:      a.cfg.Workspace,
+		SessionDir:     a.cfg.SessionDir,
+		ResumeID:       resumeID,
+		ExtraEnv:       a.cfg.ExtraEnv,
+		ExtraArgs:      a.cfg.ExtraArgs,
+		Instance:       a.cfg.Instance,
+		GateBinary:     a.cfg.GateBinary,
+		Preset:         a.cfg.Preset,
+		InitialMessage: text,
+		MaxTurns:       a.cfg.MaxTurns,
+		ThinkingTokens: a.cfg.ThinkingTokens,
 	})
 	if err != nil {
 		// Spawn failed — clear turnActive so a retry isn't parked forever.
@@ -540,7 +540,14 @@ func (a *Agent) Stop() error {
 	}
 	a.mu.Unlock()
 
-	if running {
+	// Terminate the subprocess whenever one is still referenced — not only
+	// when running is true. Respawn-mode (codex) sets running=false once a
+	// turn's stdout closes, but the CLI can stay resident (idle-alive) with
+	// a.proc still pointing at it. Gating on `running` alone left that
+	// process orphaned: Kill was a no-op and codex.exe lingered. Killing an
+	// already-dead proc is harmless (Kill returns nil), so calling
+	// terminateProc for any non-nil proc is safe.
+	if running || proc != nil {
 		if cancel != nil {
 			cancel()
 		}

@@ -246,7 +246,20 @@ type runEntry struct {
 	// is intentionally NOT used to abort post-spawn work — only the
 	// logger value is read.
 	ctx context.Context
+
+	// deadProbes counts consecutive ReconcileDead ticks where the entry
+	// looked dead (idle + PID not alive). A zombie is only reaped after it
+	// stays dead across reconcileDeadThreshold ticks, so a single transient
+	// probe miss (e.g. OpenProcess momentarily failing) can never reap a
+	// process that's actually alive. Reset to 0 the moment it probes alive.
+	deadProbes int
 }
+
+// reconcileDeadThreshold is how many consecutive reconcile ticks an idle
+// entry must probe dead before it's reaped. At the 3s tick cadence this is
+// ~6s of sustained death — long enough to ride out a transient probe miss,
+// short enough that a real zombie clears quickly.
+const reconcileDeadThreshold = 2
 
 // New returns an empty pool.
 //
@@ -676,20 +689,20 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	}
 
 	br, err := p.cfg.Factory.Build(FactoryOptions{
-		SessionID:       sessionID,
-		AgentName:       agentName,
-		ProviderType:    pType,
-		ProviderName:    pName,
-		Workspace:       cwd,
-		ResumeID:        resumeID,
-		IdleTimeout:     p.cfg.IdleTimeout,
-		KillAfterIdle:   p.cfg.KillAfterIdle,
-		PresetName:      sess.Meta.Preset,
-		Origin:          string(sess.Meta.Origin),
-		Title:           sess.Meta.Label,
-		TitleCustom:     sess.Meta.TitleCustom,
-		MaxTurns:        maxTurns,
-		ThinkingTokens:  thinkingTokens,
+		SessionID:      sessionID,
+		AgentName:      agentName,
+		ProviderType:   pType,
+		ProviderName:   pName,
+		Workspace:      cwd,
+		ResumeID:       resumeID,
+		IdleTimeout:    p.cfg.IdleTimeout,
+		KillAfterIdle:  p.cfg.KillAfterIdle,
+		PresetName:     sess.Meta.Preset,
+		Origin:         string(sess.Meta.Origin),
+		Title:          sess.Meta.Label,
+		TitleCustom:    sess.Meta.TitleCustom,
+		MaxTurns:       maxTurns,
+		ThinkingTokens: thinkingTokens,
 	})
 	if err != nil {
 		return err
@@ -1325,19 +1338,15 @@ func (p *Pool) ReconcileDead() {
 		if e.agent == nil {
 			continue
 		}
-		// Respawn-mode agents (codex) intentionally have NO live process
-		// between turns — the one-shot turn process exits and the agent
-		// idles until the next message or its idle TTL. A dead pid here is
-		// normal, not a zombie; reaping it would kill an idle-but-healthy
-		// agent. Their lifecycle is self-managed (idle TTL → ExitIdle).
-		if e.agent.Respawns() {
-			continue
+		lc := state.LifecycleIdle
+		if e.state != nil {
+			lc = e.state.Lifecycle()
 		}
 		pid := e.agent.PID()
-		if pid == 0 {
-			continue // pre-PID spawn or test fake — can't verify, leave it
-		}
-		if !processctl.ProcessAlive(pid) {
+		alive := pid != 0 && processctl.ProcessAlive(pid)
+		reap, next := reapDecision(lc, pid, alive, e.deadProbes)
+		e.deadProbes = next
+		if reap {
 			dead = append(dead, e)
 		}
 	}
@@ -1347,6 +1356,35 @@ func (p *Pool) ReconcileDead() {
 			Int("pid", e.agent.PID()).Msg("pool.reconcile: subprocess dead, releasing slot")
 		_ = e.agent.Stop()
 	}
+}
+
+// reapDecision is the pure core of ReconcileDead: given an entry's
+// lifecycle, its PID, whether that PID is alive, and how many consecutive
+// prior ticks it looked dead, it returns whether to reap now and the
+// updated dead-probe counter. Kept pure (no pool state) so the safety
+// rules can be unit-tested without spawning real processes.
+//
+// Rules, in order:
+//   - working/spawning → NEVER reap (a long turn must not be pulled out
+//     from under a running process); counter resets. This is the sole
+//     protection long-running work needs.
+//   - alive → healthy (resident codex or any live idle process); reset.
+//   - idle + (no live process: pid 0 OR dead pid) → a slot held with
+//     nothing running behind it (the "dead"/"idle · kill in Ns" card that
+//     never clears). Increment; reap only after it stays that way for
+//     reconcileDeadThreshold consecutive ticks, so a single transient probe
+//     miss can't reap a process that is actually alive. A codex that is
+//     merely idle-between-turns and gets reaped here is harmless: the next
+//     Send respawns it and resumes the same conversation.
+func reapDecision(lc state.Lifecycle, pid int, alive bool, deadProbes int) (reap bool, nextProbes int) {
+	if lc == state.LifecycleWorking || lc == state.LifecycleSpawning {
+		return false, 0
+	}
+	if alive {
+		return false, 0
+	}
+	n := deadProbes + 1
+	return n >= reconcileDeadThreshold, n
 }
 
 // Dequeue drops every queued request matching sessionID+agentName.

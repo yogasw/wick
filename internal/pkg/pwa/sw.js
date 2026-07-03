@@ -1,7 +1,7 @@
 // wick service worker — minimal, enables PWA installability and a small
 // static cache. Kept conservative on purpose: navigations always go to the
 // network so we never serve a stale Cloudflare Access login page from cache.
-const CACHE = 'wick-static-v6';
+const CACHE = 'wick-static-v7';
 const ASSETS = [
   '/public/img/icon.svg',
   '/public/img/icon-192.png',
@@ -72,6 +72,13 @@ self.addEventListener('fetch', (event) => {
     url.pathname.startsWith('/9router/') ||
     url.pathname.startsWith('/_next/')
   ) return;
+
+  // The agents Process panel refreshes /sessions/<id>/processes on every SSE
+  // lifecycle transition. Routing those through the SW's network-first path
+  // gives each one a duplicate "(from sw.js)" entry in DevTools and adds a
+  // proxy hop for a request that must always be live (never cached). Let it
+  // go straight to the network — the panel is SSE-driven and short-lived.
+  if (url.pathname.endsWith('/processes')) return;
 
   if (staticAssetRe.test(url.pathname)) {
     // Stale-while-revalidate: return the cached copy immediately (or fall back
