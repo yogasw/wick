@@ -84,9 +84,8 @@ type Pool struct {
 
 // PoolConfig knobs.
 //
-// DefaultProjectID is the project id used when a session has no project
-// bound. Empty = no default; the pool falls back to a per-session temp
-// dir so claude still has a stable cwd. See agents-design.md §0.2 D4.
+// A session with no project bound falls back to a per-session temp dir
+// so claude still has a stable cwd. See agents-design.md §0.2 D4.
 type PoolConfig struct {
 	MaxConcurrent int
 	IdleTimeout   time.Duration
@@ -95,10 +94,15 @@ type PoolConfig struct {
 	// active subprocess (Lifecycle == Idle) so the new session doesn't have
 	// to wait for the idle TTL. The preempted session keeps its CLI session
 	// ID in agents.json and resumes via --resume on its next message.
-	PreemptIdle      bool
-	Layout           config.Layout
-	Factory          AgentFactory
-	DefaultProjectID string
+	PreemptIdle bool
+	Layout      config.Layout
+	Factory     AgentFactory
+	// DefaultProvider is the instance key ("claude", "claude/work", ...)
+	// used when a session's agent entry has no provider bound — the
+	// channel/API/quick-create path where AddAgent is called with an empty
+	// provider. Empty falls back to the per-type claude default (see
+	// factory.go). Sourced from GeneralConfig.DefaultProvider.
+	DefaultProvider string
 	// OnSessionCreated is called after the pool auto-creates a session for a
 	// channel message (e.g. Slack thread_ts). Wire this to
 	// manager.Register so the dashboard sees the session immediately.
@@ -649,7 +653,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		}
 	}
 	if !hasEntry {
-		if err := session.AddAgent(p.cfg.Layout, sessionID, agentName, ""); err != nil {
+		if err := session.AddAgent(p.cfg.Layout, sessionID, agentName, p.cfg.DefaultProvider); err != nil {
 			return err
 		}
 		sess, err = session.Load(p.cfg.Layout, sessionID)
@@ -1097,18 +1101,16 @@ func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID s
 // chain (agents-design.md §0.2 D4):
 //
 //  1. session.Meta.ProjectID — explicit binding
-//  2. PoolConfig.DefaultProjectID — tools-config default
-//  3. <BaseDir>/sessions/<id>/cwd/ — per-session temp dir
+//  2. <BaseDir>/sessions/<id>/cwd/ — per-session temp dir
 //
-// For bound projects (steps 1-2) the returned path is the project's
-// resolved cwd (managed `files/` or custom path). The pool MkdirAll's
-// managed paths so the spawn never fails on a missing directory;
-// custom paths are assumed to exist (validated at project create time).
+// A project is never mandatory at session create; unbound sessions get
+// a stable per-session cwd. For a bound project the returned path is the
+// project's resolved cwd (managed `files/` or custom path). The pool
+// MkdirAll's managed paths so the spawn never fails on a missing
+// directory; custom paths are assumed to exist (validated at project
+// create time).
 func (p *Pool) resolveCwd(sess session.Session) (string, error) {
 	id := sess.Meta.ProjectID
-	if id == "" {
-		id = p.cfg.DefaultProjectID
-	}
 	if id != "" && project.Exists(p.cfg.Layout, id) {
 		path, err := project.ResolvePath(p.cfg.Layout, id)
 		if err != nil {

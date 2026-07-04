@@ -8,7 +8,7 @@ import systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
 // Gate settings live in GateConfig; channel settings in SlackChannelConfig.
 type GeneralConfig struct {
 	Enabled                   bool   `wick:"bool;group=General|Top-level Agents switches and defaults.;desc=Enable the Agents feature."`
-	DefaultProvider           string `wick:"dropdown=claude|codex|gemini;group=General;desc=Default CLI provider."`
+	DefaultProvider           string `wick:"dropdown;key=default_provider;group=General;desc=Default provider instance for new sessions when none is picked (channels, API, quick-create). Options are your configured provider instances (type or type/name); empty falls back to claude."`
 	PublicURL                 string `wick:"url;group=General;desc=Public base URL of this wick instance. Used for the dashboard meta-command."`
 	MaxConcurrent             int    `wick:"number;group=Concurrency & Lifecycle|How many agent subprocesses run at once and when idle ones are reclaimed.;desc=Max concurrent agent subprocesses across all providers. 0 = unlimited. Default: 2."`
 	IdleTimeoutSec            int    `wick:"number;group=Concurrency & Lifecycle;desc=Seconds of inactivity before subprocess is killed. Default: 120."`
@@ -33,10 +33,12 @@ type GeneralConfig struct {
 // table has no row for a given key.
 func DefaultGeneralConfig() GeneralConfig {
 	return GeneralConfig{
-		Enabled:            false,
-		MaxConcurrent:      2,
-		IdleTimeoutSec:     120,
-		DefaultProvider:    "claude",
+		Enabled:        false,
+		MaxConcurrent:  2,
+		IdleTimeoutSec: 120,
+		// DefaultProvider is a picker (JSON [{id,name}]); empty = fall back
+		// to claude at spawn. Not seeded with a value so a fresh install
+		// doesn't pin a provider the operator never chose.
 		AutoRescan:         true,
 		PreemptIdle:        true,
 		SystemPrompt:       systemprompt.DefaultSystemPrompt(),
