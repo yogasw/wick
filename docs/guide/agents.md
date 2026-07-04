@@ -104,7 +104,7 @@ Source: [`config.GeneralConfig`](https://github.com/yogasw/wick/blob/master/inte
 | `MaxConcurrent` | `2` | Subprocess cap across all sessions. |
 | `IdleTimeoutSec` | `120` | Seconds without I/O before subprocess is killed. |
 | `KillAfterIdleSec` | `0` | Extra grace seconds after idle timeout before kill. |
-| `DefaultProvider` | `claude` | Provider type used when a session doesn't specify one. |
+| `DefaultProvider` | _(empty)_ | Provider instance used when a session doesn't specify one (channels, API, quick-create). Dynamic dropdown of your configured provider instances (bare type, or `type/name` when multiple instances share a type). Empty falls back to `claude` at spawn. |
 | `BypassPermissions` | `false` | Pass `--permission-mode bypassPermissions` to Claude. Turn on if Claude is prompting for permission in Slack / HTTP sessions and you don't have a gate. |
 | `PublicURL` | _(empty)_ | Base URL of this wick instance. Used to build `/dashboard` meta-command links. |
 | `AutoRescan` | `true` | Re-probe provider binaries when cached version is older than 24h. Off = manual Rescan only. |

@@ -6,7 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Changed
+*   **`DefaultProvider` is now a dynamic dropdown**: The `agents.default_provider` setting no longer offers a fixed `claude|codex|gemini` choice — its options are your live configured provider instances (bare type, or `type/name` when several instances share a type). It's unset by default and falls back to `claude` at spawn time, so a fresh install doesn't pin a provider the operator never chose.
+*   **Removed the operator-wide `default_project_id` setting**: Session cwd resolution is now just: session's bound project → per-session temp dir. Personal projects (auto-created per user) now cover the old "landing" case. A one-shot boot migration prunes the stale `agents.default_project_id` config row.
+*   **Personal projects are undeletable**: Auto-created per-user personal projects (tagged `personal`) are now protected from deletion, same as the built-in `default` project — the delete button is hidden and the API rejects the request.
 
 ---
 
