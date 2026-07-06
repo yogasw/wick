@@ -653,7 +653,19 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		}
 	}
 	if !hasEntry {
-		if err := session.AddAgent(p.cfg.Layout, sessionID, agentName, p.cfg.DefaultProvider); err != nil {
+		// Provider precedence for a fresh agent entry: the session's project
+		// default → the global default → (empty →) the per-type claude
+		// default in factory.go. Channels create sessions without going
+		// through the UI's AddAgent, so this is the only place a channel
+		// spawn picks up the project's configured provider — without it the
+		// bind always fell through to the global/claude default.
+		prov := p.cfg.DefaultProvider
+		if sess.Meta.ProjectID != "" {
+			if proj, perr := project.Load(p.cfg.Layout, sess.Meta.ProjectID); perr == nil && proj.Meta.Defaults.Provider != "" {
+				prov = proj.Meta.Defaults.Provider
+			}
+		}
+		if err := session.AddAgent(p.cfg.Layout, sessionID, agentName, prov); err != nil {
 			return err
 		}
 		sess, err = session.Load(p.cfg.Layout, sessionID)
