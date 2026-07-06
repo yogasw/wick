@@ -21,7 +21,9 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -216,23 +218,73 @@ func (m *Manager) start() error {
 	// is 0.0.0.0), never open a browser, show logs so we can capture
 	// them, and skip the interactive update check (which would otherwise
 	// make the detached process exit early).
-	cmd := safeexec.Command(bin,
+	args := []string{
 		"--port", fmt.Sprintf("%d", port),
 		"--host", "127.0.0.1",
 		"--no-browser",
 		"--log",
 		"--skip-update",
-	)
+	}
+	// The `9router` bin is a Node script with a `#!/usr/bin/env node`
+	// shebang. On Termux/Android /usr/bin/env does not exist, so exec'ing
+	// the script directly (as Go's exec does — no termux-exec shim in the
+	// child) fails with "bad interpreter" and the process dies before it
+	// can bind the port. Resolve the underlying .js entry and launch it as
+	// `node <entry> ...` to bypass the shebang entirely. This is equally
+	// valid on Linux/macOS/Windows, so we prefer it whenever we can find a
+	// node binary and a JS entrypoint; otherwise fall back to exec'ing the
+	// bin directly (preserves behavior where the bin is a native binary).
+	exe, cmdArgs := bin, args
+	if node, script, ok := resolveNodeLauncher(bin); ok {
+		exe = node
+		cmdArgs = append([]string{script}, args...)
+	}
+	cmd := safeexec.Command(exe, cmdArgs...)
 	cmd.Stdout = m.logs
 	cmd.Stderr = m.logs
 
-	m.log.Info().Str("bin", bin).Int("port", port).Msg("9router: spawning")
+	m.log.Info().Str("exe", exe).Str("bin", bin).Int("port", port).Msg("9router: spawning")
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start 9router: %w", err)
 	}
 	m.cmd = cmd
 	m.log.Info().Int("pid", cmd.Process.Pid).Msg("9router: spawned")
 	return nil
+}
+
+// resolveNodeLauncher inspects the `9router` bin and, when it is a Node
+// script, returns (nodePath, scriptPath, true) so the caller can spawn
+// `node <script>` instead of exec'ing the script directly. This sidesteps
+// the `#!/usr/bin/env node` shebang, which is unresolvable on Termux
+// (no /usr/bin/env). Returns ok=false when node isn't on PATH or the bin
+// isn't a resolvable JS entry, in which case the caller exec's bin as-is.
+func resolveNodeLauncher(bin string) (node, script string, ok bool) {
+	node, err := safeexec.ResolveBin("node")
+	if err != nil {
+		return "", "", false
+	}
+	// npm installs the bin as a symlink to the package's JS entry
+	// (e.g. .../bin/9router -> ../lib/node_modules/9router/cli.js).
+	// Follow it so we hand node the real .js file.
+	script = bin
+	if resolved, err := filepath.EvalSymlinks(bin); err == nil {
+		script = resolved
+	}
+	if !strings.HasSuffix(strings.ToLower(script), ".js") {
+		// Not obviously a JS file. Confirm via shebang before committing
+		// to node — otherwise leave it to a direct exec.
+		f, err := os.Open(script)
+		if err != nil {
+			return "", "", false
+		}
+		defer f.Close()
+		head := make([]byte, 64)
+		n, _ := f.Read(head)
+		if !strings.Contains(string(head[:n]), "node") {
+			return "", "", false
+		}
+	}
+	return node, script, true
 }
 
 func (m *Manager) stop() {

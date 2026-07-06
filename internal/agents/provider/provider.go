@@ -254,6 +254,31 @@ func Load() ([]Instance, error) {
 	return mergeWithDefaults(cfg.Providers), nil
 }
 
+// DropdownOptions returns the configured provider instances formatted as
+// admin-dropdown options ("key::key" pipe-joined), where key is the bare
+// type when name==type, else "type/name". This is the live source for the
+// default_provider config dropdown — instances, not a hardcoded list.
+// Disabled instances are skipped. Returns "" when nothing loads, which a
+// dropdown renders as just the "— select —" placeholder (never "true").
+func DropdownOptions() string {
+	insts, err := Load()
+	if err != nil {
+		return ""
+	}
+	var parts []string
+	for _, ins := range insts {
+		if ins.Disabled {
+			continue
+		}
+		key := string(ins.Type)
+		if ins.Name != "" && ins.Name != string(ins.Type) {
+			key = string(ins.Type) + "/" + ins.Name
+		}
+		parts = append(parts, key+"::"+key)
+	}
+	return strings.Join(parts, "|")
+}
+
 // Find resolves an instance by {type, name}. Empty name resolves to
 // the per-type default whose Name equals the type itself. Uses the
 // in-memory cache so the hot Spawn path doesn't re-read userconfig.

@@ -101,7 +101,7 @@ func apiProjectDetail(c *tool.Ctx) {
 		Description:     p.Meta.Description,
 		CustomPath:      p.Meta.CustomPath,
 		Managed:         p.Meta.CustomPath == "",
-		IsDefault:       p.Meta.Name == project.DefaultName,
+		IsDefault:       project.IsProtected(p.Meta),
 		DefaultPreset:   p.Meta.Defaults.Preset,
 		DefaultProvider: p.Meta.Defaults.Provider,
 		SystemAddon:     p.Meta.Defaults.SystemAddon,
