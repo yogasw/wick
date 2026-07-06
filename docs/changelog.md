@@ -6,17 +6,30 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.28.2](https://github.com/yogasw/wick/compare/v0.28.1...v0.28.2) — Providers & Projects
+
+_Released on 2026-07-06_
+
 ### Changed
 *   **`DefaultProvider` is now a dynamic dropdown**: The `agents.default_provider` setting no longer offers a fixed `claude|codex|gemini` choice — its options are your live configured provider instances (bare type, or `type/name` when several instances share a type). It's unset by default and falls back to `claude` at spawn time, so a fresh install doesn't pin a provider the operator never chose.
 *   **Removed the operator-wide `default_project_id` setting**: Session cwd resolution is now just: session's bound project → per-session temp dir. Personal projects (auto-created per user) now cover the old "landing" case. A one-shot boot migration prunes the stale `agents.default_project_id` config row.
 *   **Personal projects are undeletable**: Auto-created per-user personal projects (tagged `personal`) are now protected from deletion, same as the built-in `default` project — the delete button is hidden and the API rejects the request.
+    *   The project settings API field `is_default` has been renamed to `is_protected` to reflect this change.
+
+### Improved
+*   **Frontend build process optimized**: Replaced the per-workspace `vite build --watch` fan-out with a single recursive `fs.watch`. This reduces idle CPU/RAM usage during development and rebuilds only the changed workspace on demand. An initial pass builds every workspace once with bounded concurrency.
 
 ### Fixed
 *   **Channel spawns now honor the project's default provider**: A session auto-created from Slack, Telegram, or REST previously always fell back to the operator-wide `agents.default_provider` (or `claude`) when spawning its first agent, ignoring the provider configured on the session's bound project. Provider is now resolved as: project default → global default → `claude`.
-*   **9router failed to start on Termux/Android**: `/9router/start` could return a 504 because the process died immediately — `9router`'s `#!/usr/bin/env node` shebang doesn't resolve on Termux (no `/usr/bin/env`). Wick now launches it as `node <entry.js>` directly when a Node binary and JS entrypoint can be resolved, bypassing the shebang; falls back to executing the bin directly otherwise (e.g. native-binary installs).
-*   **Config save race**: Concurrent writes to the same config file (e.g. a foreground save racing a background rescan) could crash with a `rename ... no such file or directory` error. Each save now writes to a uniquely named temp file before renaming it into place. The "cannot be deleted" error for the default/personal project now reads **"this project is protected and cannot be deleted"**.
+*   **9router failed to start on Termux/Android**: `/9router/start` could return a 504 because the process died immediately — `9router`'s `#!/usr/bin/env node` shebang doesn't resolve on Termux (no `/usr/bin/env`). Wick now launches it as `node <entry.js>` directly when a Node binary and JS entrypoint can be resolved, bypassing the shebang; it falls back to executing the binary directly otherwise.
+*   **Config save race**: Concurrent writes to the same config file (e.g. a foreground save racing a background rescan) could crash with a `rename ... no such file or directory` error. Each save now writes to a uniquely named temporary file before renaming it into place. The "cannot be deleted" error for the default/personal project now reads **"this project is protected and cannot be deleted"**.
 
 ---
+
 
 ## [v0.28.1](https://github.com/yogasw/wick/compare/v0.28.0...v0.28.1) — AI Agents & 9router
 
