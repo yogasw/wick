@@ -1878,7 +1878,7 @@ func deleteProject(c *tool.Ctx) {
 		return
 	}
 	if project.IsProtected(p.Meta) {
-		c.JSON(http.StatusForbidden, map[string]string{"error": "the default project cannot be deleted"})
+		c.JSON(http.StatusForbidden, map[string]string{"error": "this project is protected and cannot be deleted"})
 		return
 	}
 	if err := globalMgr.DeleteProject(c.Context(), id); err != nil {

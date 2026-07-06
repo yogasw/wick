@@ -14,6 +14,7 @@ All notable changes to Wick are documented here.
 ### Fixed
 *   **Channel spawns now honor the project's default provider**: A session auto-created from Slack, Telegram, or REST previously always fell back to the operator-wide `agents.default_provider` (or `claude`) when spawning its first agent, ignoring the provider configured on the session's bound project. Provider is now resolved as: project default → global default → `claude`.
 *   **9router failed to start on Termux/Android**: `/9router/start` could return a 504 because the process died immediately — `9router`'s `#!/usr/bin/env node` shebang doesn't resolve on Termux (no `/usr/bin/env`). Wick now launches it as `node <entry.js>` directly when a Node binary and JS entrypoint can be resolved, bypassing the shebang; falls back to executing the bin directly otherwise (e.g. native-binary installs).
+*   **Config save race**: Concurrent writes to the same config file (e.g. a foreground save racing a background rescan) could crash with a `rename ... no such file or directory` error. Each save now writes to a uniquely named temp file before renaming it into place. The "cannot be deleted" error for the default/personal project now reads **"this project is protected and cannot be deleted"**.
 
 ---
 
