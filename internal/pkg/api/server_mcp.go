@@ -109,8 +109,7 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 	// so type:channel + type:agent nodes will fail at run time; everything
 	// else (validate/simulate/test/file ops/canvas mutations) works.
 	stdioAgentsCfg := agentconfig.StorageConfig{
-		BaseDir:          configsSvc.GetOwned("agents", "base_dir"),
-		DefaultProjectID: configsSvc.GetOwned("agents", "default_project_id"),
+		BaseDir: configsSvc.GetOwned("agents", "base_dir"),
 	}
 	stdioWfLayout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(stdioAgentsCfg))
 	stdioWfMgr := wfsetup.New(stdioWfLayout)

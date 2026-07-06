@@ -392,8 +392,7 @@ func NewServer() *Server {
 	// loads the in-memory registry. Pool is wired with the production
 	// ClaudeFactory and the SSE event broadcaster.
 	agentsStorageCfg := agentconfig.StorageConfig{
-		BaseDir:          configsSvc.GetOwned("agents", "base_dir"),
-		DefaultProjectID: configsSvc.GetOwned("agents", "default_project_id"),
+		BaseDir: configsSvc.GetOwned("agents", "base_dir"),
 	}
 	agentsLayout := agentconfig.NewLayout(agentconfig.ResolveBaseDir(agentsStorageCfg))
 	agentsMgr, agentsBootErr := agentregistry.Bootstrap(agentsLayout)
@@ -505,6 +504,15 @@ func NewServer() *Server {
 		if err := configsSvc.DeleteOwnedKey(context.Background(), "agents", "bypass_permissions"); err != nil {
 			log.Warn().Err(err).Msg("agents: drop legacy bypass_permissions row")
 		}
+	}
+
+	// One-shot migration: the operator-wide agents.default_project_id
+	// dropdown was retired — session cwd now resolves from the session's
+	// own project (or a per-session temp dir), and per-user personal
+	// projects cover the "landing" case. Reconcile never prunes, so drop
+	// the stale row explicitly. Idempotent: no-op once gone.
+	if err := configsSvc.DeleteOwnedKey(context.Background(), "agents", "default_project_id"); err != nil {
+		log.Warn().Err(err).Msg("agents: drop retired default_project_id row")
 	}
 
 	// Resolve the gate binary up front: sibling-of-executable first, embedded
@@ -633,13 +641,13 @@ func NewServer() *Server {
 	}
 	preemptIdle := configsSvc.GetOwned("agents", "preempt_idle") != "false"
 	agentsPool = agentpool.New(agentpool.PoolConfig{
-		MaxConcurrent:    maxConc,
-		IdleTimeout:      time.Duration(idleSec) * time.Second,
-		KillAfterIdle:    time.Duration(killAfterIdleSec) * time.Second,
-		PreemptIdle:      preemptIdle,
-		Layout:           agentsLayout,
-		Factory:          agentsFactory,
-		DefaultProjectID: agentsStorageCfg.DefaultProjectID,
+		MaxConcurrent:   maxConc,
+		IdleTimeout:     time.Duration(idleSec) * time.Second,
+		KillAfterIdle:   time.Duration(killAfterIdleSec) * time.Second,
+		PreemptIdle:     preemptIdle,
+		Layout:          agentsLayout,
+		Factory:         agentsFactory,
+		DefaultProvider: configsSvc.GetOwned("agents", "default_provider"),
 		OnSessionCreated: func(s agentsession.Session) {
 			agentsMgr.Register(s)
 		},
@@ -1299,12 +1307,10 @@ func NewServer() *Server {
 	}
 	managerHandler.RegisterConfigDecorator("agents", func(rows []pkgentity.Config) []pkgentity.Config {
 		projectIDs, _ := agentproject.List(agentsLayout)
-		// Build "label::path" options for the allowed_cmds scope column and
-		// "label::id" options for the default_project_id dropdown.
+		// Build "label::path" options for the allowed_cmds scope column.
 		var scopeOpts string
-		var projectOpts string
 		if len(projectIDs) > 0 {
-			var scopeParts, projParts []string
+			var scopeParts []string
 			for _, id := range projectIDs {
 				p, lerr := agentproject.Load(agentsLayout, id)
 				if lerr != nil {
@@ -1314,7 +1320,6 @@ func NewServer() *Server {
 				if label == "" {
 					label = id
 				}
-				projParts = append(projParts, label+"::"+id)
 				if path, err := agentproject.ResolvePath(agentsLayout, id); err == nil && path != "" {
 					scopeParts = append(scopeParts, label+"::"+path)
 				}
@@ -1322,10 +1327,12 @@ func NewServer() *Server {
 			if len(scopeParts) > 0 {
 				scopeOpts = strings.Join(scopeParts, "|")
 			}
-			if len(projParts) > 0 {
-				projectOpts = strings.Join(projParts, "|")
-			}
 		}
+		// default_provider dropdown options = the live provider instances
+		// ("type" or "type/name"), not a hardcoded list. Always overrides the
+		// bare-flag seed options (which would otherwise render the literal
+		// "true"). Empty when no instances load → just "— select —".
+		providerOpts := provider.DropdownOptions()
 		// Return only rows not managed by a dedicated UI page, with ColOptions injected.
 		out := rows[:0]
 		for _, r := range rows {
@@ -1335,8 +1342,10 @@ func NewServer() *Server {
 			if r.Key == "allowed_cmds" && scopeOpts != "" {
 				r.ColOptions = map[string]string{"scope": scopeOpts}
 			}
-			if r.Key == "default_project_id" {
-				r.Options = projectOpts
+			if r.Key == "default_provider" {
+				// Always replace the seed options (bare-flag "true") with the
+				// live instance list, even when empty, so "true" never leaks.
+				r.Options = providerOpts
 			}
 			out = append(out, r)
 		}

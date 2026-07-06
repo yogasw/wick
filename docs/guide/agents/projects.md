@@ -33,9 +33,11 @@ The folder is part of the project's identity: there's no multi-folder project. W
 
 ## Built-in `default` project
 
-Every fresh install has a project named `default`. It's created by `EnsureDefault` at boot, can't be deleted, and is what the pool falls back to when a session doesn't specify a project and no other default is configured.
+Every fresh install has a project named `default`. It's created by `EnsureDefault` at boot, can't be deleted, and is what the pool falls back to when a session doesn't specify a project.
 
 This is what makes "first-message-creates-session" work without any pre-setup: a fresh install + a Slack message in a thread = a session bound to `default`, agent spawned in `~/.<app>/agents/projects/<default-id>/files/`.
+
+Personal projects (auto-created per user, tagged `personal`) are protected from deletion the same way — the delete button is hidden and the API rejects the request for any project where `project.IsProtected` returns true (built-in `default`, or tagged `personal`).
 
 ## Defaults
 
@@ -75,8 +77,6 @@ Each user can **pin one project** as their personal default (stored in their use
 
 Pin/unpin from the 📌 toggle on the sidebar row or the `📌 Pin as default` button on the project landing. One pin per user — pinning another replaces it.
 
-This is distinct from the operator-wide **default project** (`agents.default_project_id` in Settings), which is the fallback for channels / API / quick-create when no project is named.
-
 ## Meta on disk
 
 `projects/<id>/meta.json`:
@@ -109,7 +109,7 @@ The pool calls `project.ResolvePath` when it's about to spawn an agent:
 1. Session has a `project_id` set → load that project's meta.
 2. Custom path? Return it as-is.
 3. Managed? Return `~/.<app>/agents/projects/<id>/files/`.
-4. Session has no project → pool falls back to `cfg.DefaultProjectID` (the operator-wide default) → if still nothing → per-session temp dir at `sessions/<id>/cwd/`.
+4. Session has no project → per-session temp dir at `sessions/<id>/cwd/`.
 
 The pool `MkdirAll`s managed paths before passing them to `exec.Cmd.Dir`. Custom paths are assumed to still exist; if you deleted yours out from under wick, spawn surfaces a clean error.
 
