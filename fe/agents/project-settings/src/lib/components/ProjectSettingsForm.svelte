@@ -193,7 +193,7 @@
             <p class="text-xs text-black-600 dark:text-black-700">{data.chat_count} chats · created {data.created_at}</p>
           {/if}
         </div>
-        {#if !data.is_new && !data.is_default}
+        {#if !data.is_new && !data.is_protected}
           <button
             type="button"
             onclick={() => { showDeleteConfirm = true; }}

@@ -283,23 +283,41 @@ func Load(name string) (Config, error) {
 }
 
 // Save writes the config atomically (write to temp, rename).
+//
+// The temp file gets a unique name per write (via os.CreateTemp) rather
+// than a fixed "config.json.tmp". Concurrent writers to the same config
+// dir — e.g. a foreground Save racing the background rescan goroutine
+// that Save itself spawns — would otherwise clobber each other's shared
+// temp file, and one rename would fail with "no such file or directory"
+// once the other consumed the temp first.
 func Save(name string, cfg Config) error {
 	path, err := Path(name)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, "config-*.json.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmpName := tmp.Name()
+	// Best-effort cleanup: if anything below fails the temp must not linger.
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // ResolveDBPath determines the SQLite DB path and sets DATABASE_URL so

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -274,7 +275,12 @@ func Exists(layout config.Layout, id string) bool {
 // Delete removes the project metadata folder.
 // For managed projects: also removes projects/<id>/ (including files/).
 // For custom projects: the external folder is NOT touched.
-// The "default" project cannot be deleted.
+//
+// Two projects are protected from deletion:
+//   - the built-in "default" project (matched by name)
+//   - any personal project (one carrying the PersonalTag) — the project
+//     auto-created for a user is their permanent default and cannot be
+//     removed. Use IsProtected to check this without attempting a delete.
 func Delete(layout config.Layout, id string) error {
 	if id == "" {
 		return fmt.Errorf("project id is empty")
@@ -283,10 +289,25 @@ func Delete(layout config.Layout, id string) error {
 	if err != nil {
 		return err
 	}
-	if p.Meta.Name == DefaultName {
+	if IsProtected(p.Meta) {
 		return fmt.Errorf("the default project cannot be deleted")
 	}
 	return os.RemoveAll(layout.ProjectDir(id))
+}
+
+// PersonalTag marks the project auto-created for a user as their
+// permanent default. It's the explicit, self-documenting flag used by
+// IsProtected to keep the project undeletable — clearer than inferring
+// "personal" from the owner field or the 👤 icon (which a user could
+// change).
+const PersonalTag = "personal"
+
+// IsProtected reports whether meta names a project that cannot be
+// deleted: the built-in "default" project (matched by name), or a
+// personal project (one carrying PersonalTag — the auto-created per-user
+// default). The UI uses this to hide/disable the delete control.
+func IsProtected(meta Meta) bool {
+	return meta.Name == DefaultName || slices.Contains(meta.Tags, PersonalTag)
 }
 
 // ResolvePath returns the cwd for agent subprocesses bound to this project.
@@ -362,7 +383,7 @@ func PersonalProjectOptions(newID, userID, displayName string) CreateOptions {
 		Name:        name,
 		Icon:        "👤",
 		Description: "Personal project.",
-		Tags:        []string{"personal"},
+		Tags:        []string{PersonalTag},
 		OwnerUserID: userID,
 	}
 }

@@ -411,6 +411,13 @@ func settingsPage(c *tool.Ctx) {
 	// Reset button. The rest fall through to the generic ConfigsTable.
 	// Skip Hidden rows — those belong to dedicated pages (Channels,
 	// Providers, Workspaces) and must not leak onto generic Settings.
+	// default_provider is a dropdown whose options are the live provider
+	// instances (type or type/name), not a hardcoded list. The seed tag is
+	// a bare `dropdown` (options "true"), so inject the real options here —
+	// this page reads configs straight from the DB and does NOT run the
+	// manager's config decorator, so without this the dropdown would show
+	// the literal "true". Empty when no instances load → just "— select —".
+	providerOpts := provider.DropdownOptions()
 	current := ""
 	rest := rows[:0:len(rows)]
 	for _, r := range rows {
@@ -420,6 +427,9 @@ func settingsPage(c *tool.Ctx) {
 		if r.Key == "system_prompt" {
 			current = r.Value
 			continue
+		}
+		if r.Key == "default_provider" {
+			r.Options = providerOpts
 		}
 		rest = append(rest, r)
 	}
@@ -1867,8 +1877,8 @@ func deleteProject(c *tool.Ctx) {
 		c.Error(http.StatusNotFound, "project not found")
 		return
 	}
-	if p.Meta.Name == project.DefaultName {
-		c.JSON(http.StatusForbidden, map[string]string{"error": "the default project cannot be deleted"})
+	if project.IsProtected(p.Meta) {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "this project is protected and cannot be deleted"})
 		return
 	}
 	if err := globalMgr.DeleteProject(c.Context(), id); err != nil {
