@@ -120,6 +120,9 @@ When a message arrives ([pool.go: `Send`](https://github.com/yogasw/wick/blob/ma
 
 5. spawn():
    - load session.Meta → resolve project cwd (project.ResolvePath, fallback chain)
+   - no agents.json entry yet? → pick provider: session's project default →
+     global `agents.default_provider` → (still empty) per-type `claude`
+     default in factory.go, then AddAgent(provider)
    - look up CLISessionID for resume
    - factory.Build(FactoryOptions) → returns Agent + State + Store + OnStarted hook
    - drain Buffer into one combined input
@@ -129,6 +132,8 @@ When a message arrives ([pool.go: `Send`](https://github.com/yogasw/wick/blob/ma
    - if drained text non-empty → a.Send(combined)
      (user turns were already persisted in step 3 — no double-write)
 ```
+
+This is the path a channel (Slack/Telegram/REST) takes for a brand-new session — it never goes through the UI's New Session composer, so this provider precedence is the only place a channel-spawned session picks up its project's configured default provider.
 
 The "spawning" set ([pool.go:35](https://github.com/yogasw/wick/blob/master/internal/agents/pool/pool.go#L35)) is what prevents two concurrent `Send` calls from each seeing "slot free" and both calling `spawn` at once. In-flight spawns count against the cap.
 
