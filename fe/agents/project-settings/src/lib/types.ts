@@ -15,7 +15,7 @@ export interface ProjectSettingsData {
   description: string;
   custom_path: string;
   managed: boolean;
-  is_default: boolean;
+  is_protected: boolean;
   is_new: boolean;
   default_preset: string;
   default_provider: string;

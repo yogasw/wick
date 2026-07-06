@@ -19,7 +19,10 @@ type ProjectSettingsResponse struct {
 	Description     string                 `json:"description"`
 	CustomPath      string                 `json:"custom_path"`
 	Managed         bool                   `json:"managed"`
-	IsDefault       bool                   `json:"is_default"`
+	// IsProtected reports whether the project cannot be deleted — the
+	// built-in "default" project or an auto-created personal project.
+	// The SPA hides the delete control when true.
+	IsProtected     bool                   `json:"is_protected"`
 	IsNew           bool                   `json:"is_new"`
 	DefaultPreset   string                 `json:"default_preset"`
 	DefaultProvider string                 `json:"default_provider"`
@@ -101,7 +104,7 @@ func apiProjectDetail(c *tool.Ctx) {
 		Description:     p.Meta.Description,
 		CustomPath:      p.Meta.CustomPath,
 		Managed:         p.Meta.CustomPath == "",
-		IsDefault:       project.IsProtected(p.Meta),
+		IsProtected:     project.IsProtected(p.Meta),
 		DefaultPreset:   p.Meta.Defaults.Preset,
 		DefaultProvider: p.Meta.Defaults.Provider,
 		SystemAddon:     p.Meta.Defaults.SystemAddon,
