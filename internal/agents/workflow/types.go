@@ -211,6 +211,11 @@ type Node struct {
 	// connector — uses row_id for instance (datatable_* nodes own `row:`)
 	Module string `json:"module,omitempty"`
 	Row    string `json:"row_id,omitempty"`
+	// Account pins the node to a connected SSO account of the instance;
+	// the creds resolver injects that account's token (user_token). Empty
+	// = non-SSO or row-level creds. Access is enforced at the instance
+	// (tag) level; account only selects which token to use.
+	Account string `json:"account_id,omitempty"`
 
 	// shell
 	Command     []string          `json:"command,omitempty"`

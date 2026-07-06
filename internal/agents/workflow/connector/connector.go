@@ -16,7 +16,9 @@ import (
 )
 
 // RowCredsFn returns the credential map for a connector row (instance).
-type RowCredsFn func(module, row string) (map[string]string, error)
+// accountID, when non-empty, selects a connected SSO account whose access
+// token the resolver injects (user_token) over the row's config.
+type RowCredsFn func(module, row, accountID string) (map[string]string, error)
 
 // UserResolverFn resolves a workflow's owner (Workflow.CreatedBy) into the
 // authenticated user + their filter tag IDs, so the connector executor can
@@ -118,13 +120,13 @@ func (r *Registry) Module(key string) (pkgconnector.Module, bool) {
 // HTTPClient exposes the shared http.Client used when building Ctx.
 func (r *Registry) HTTPClient() *http.Client { return r.httpCli }
 
-// RowCreds returns the resolved credentials for (module, row). Empty
-// map when no lookup hook was provided.
-func (r *Registry) RowCreds(module, row string) (map[string]string, error) {
+// RowCreds returns the resolved credentials for (module, row, accountID).
+// Empty map when no lookup hook was provided.
+func (r *Registry) RowCreds(module, row, accountID string) (map[string]string, error) {
 	if r.rowCreds == nil {
 		return map[string]string{}, nil
 	}
-	return r.rowCreds(module, row)
+	return r.rowCreds(module, row, accountID)
 }
 
 // WriteAudit forwards to the configured RunAuditor (no-op if nil).
