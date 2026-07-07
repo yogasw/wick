@@ -44,6 +44,7 @@ func RegisterAll(reg *integration.Registry, ch *slack.Channel) {
 	}
 	// Events — inbound (Slack → workflow trigger).
 	registerEventMessage(reg)
+	registerEventThreadStarted(reg)
 	registerEventAppMention(reg)
 	registerEventAppHomeOpened(reg)
 	registerEventBlockAction(reg)

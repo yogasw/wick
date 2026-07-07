@@ -244,3 +244,57 @@ func (s *Service) ToolTagIDs(ctx context.Context, toolPaths []string) (map[strin
 	}
 	return out, nil
 }
+
+// PrivateResourceIDs reports, for each tool path, whether the resource is
+// "private": it carries an `owner:<...>` marker tag. A private resource is
+// visible only to its owner + admins until an admin adds a real sharing
+// tag. The returned map is keyed by the RESOURCE ID (the last path
+// segment, e.g. "/connectors/<id>" → "<id>"); only private resources are
+// present (value always true). This is the shared primitive behind the
+// manager's connector list "🔒 Private / Everyone" badge and the workflow
+// palette's "Mine / Shared" badge — keep both callers on this so the two
+// surfaces never drift.
+func (s *Service) PrivateResourceIDs(ctx context.Context, toolPaths []string) (map[string]bool, error) {
+	private := map[string]bool{}
+	if len(toolPaths) == 0 {
+		return private, nil
+	}
+	idsByPath, err := s.ToolTagIDs(ctx, toolPaths)
+	if err != nil {
+		return nil, err
+	}
+	uniq := map[string]struct{}{}
+	for _, ids := range idsByPath {
+		for _, id := range ids {
+			uniq[id] = struct{}{}
+		}
+	}
+	if len(uniq) == 0 {
+		return private, nil
+	}
+	all := make([]string, 0, len(uniq))
+	for id := range uniq {
+		all = append(all, id)
+	}
+	tagRows, err := s.TagsByIDs(ctx, all)
+	if err != nil {
+		return nil, err
+	}
+	nameByID := make(map[string]string, len(tagRows))
+	for _, t := range tagRows {
+		nameByID[t.ID] = t.Name
+	}
+	for path, ids := range idsByPath {
+		rid := path
+		if i := strings.LastIndex(path, "/"); i >= 0 {
+			rid = path[i+1:]
+		}
+		for _, id := range ids {
+			if strings.HasPrefix(nameByID[id], "owner:") {
+				private[rid] = true
+				break
+			}
+		}
+	}
+	return private, nil
+}

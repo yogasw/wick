@@ -8,7 +8,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/event"
 	provider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/state"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // TestRealClaudeMultiTurn spawns the real claude CLI, sends two

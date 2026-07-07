@@ -18,13 +18,17 @@ import (
 // swallowed: the returned Cmd keeps the original name, and the error
 // surfaces at cmd.Start / cmd.Run — matching upstream semantics.
 func Command(name string, args ...string) *exec.Cmd {
-	return exec.Command(resolveForExec(name), args...) //nolint:forbidigo // wrapper entrypoint
+	cmd := exec.Command(resolveForExec(name), args...) //nolint:forbidigo // wrapper entrypoint
+	fixBatchQuoting(cmd)
+	return cmd
 }
 
 // CommandContext is the context-aware sibling of Command. Same
 // pre-resolution semantics.
 func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, resolveForExec(name), args...) //nolint:forbidigo // wrapper entrypoint
+	cmd := exec.CommandContext(ctx, resolveForExec(name), args...) //nolint:forbidigo // wrapper entrypoint
+	fixBatchQuoting(cmd)
+	return cmd
 }
 
 // resolveForExec returns the absolute path of name when name is a

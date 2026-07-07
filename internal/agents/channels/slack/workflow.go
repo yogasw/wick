@@ -16,7 +16,7 @@ import (
 func (s *Channel) WorkflowTriggerSpecs() []agentchannels.WorkflowTriggerSpec {
 	return []agentchannels.WorkflowTriggerSpec{{
 		Type:        "channel",
-		Events:      []string{"message", "action", "submission", "reaction", "mention"},
+		Events:      []string{"message", "thread_started", "action", "submission", "reaction", "mention"},
 		Description: "Slack events forwarded by the wick Slack channel adapter.",
 		MatchSchema: map[string]any{
 			"properties": map[string]any{

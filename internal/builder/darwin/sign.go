@@ -6,7 +6,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // ErrSkippedSign is returned when ad-hoc codesign is skipped because

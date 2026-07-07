@@ -26,7 +26,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/capability"
 	provider "github.com/yogasw/wick/internal/agents/provider"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // Spawner spawns the real `gemini` CLI binary in non-interactive mode.

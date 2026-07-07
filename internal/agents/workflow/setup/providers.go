@@ -11,7 +11,7 @@ import (
 	agentprovider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/workflow/provider"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // cliProvider adapts an agentprovider.Instance (claude / codex /

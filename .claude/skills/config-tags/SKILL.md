@@ -58,6 +58,7 @@ type Config struct {
 | `datetime` | Date-time picker | HTML `type="datetime-local"` |
 | `kvlist=col1\|col2` | Editable table | Value stored as JSON array — see below |
 | `picker=<source>` | Searchable typeahead with chips | Value stored as JSON `[{id,name},...]`. Requires the parent module to implement a `LookupProvider`. |
+| `html=<op>` | Server-rendered widget | Fetches markup from connector op `<op>` (`{html:"..."}`), renders it read-only. Buttons in the HTML drive behaviour via a `data-op`/`data-arg` convention: `data-op="__select"` stores `data-arg` as the value; `data-op="<opKey>"` runs that op via the admin `/test` path then re-fetches. Core is domain-agnostic — all layout/logic live in the connector's HTML. Mark the backing op AdminOnly so the LLM can't call it. |
 
 ## Modifiers (any widget)
 
@@ -71,6 +72,7 @@ type Config struct {
 | `key=custom_name` | Override the auto-derived snake_case key (`InitText` → `init_text`) |
 | `visible_when=field:value` | Show this field in the admin UI only while another field equals the named value. Pure presentation hint — value is still seeded / saved normally. |
 | `hidden` | Skip the field in the default admin Settings page. Row is still seeded to DB and readable via `c.Cfg(...)`, so runtime works normally — use for fields managed by a dedicated page (e.g. channel setup composers). |
+| `group=Title` / `group=Title\|Description` / `group=Title\|Description\|collapsed` | Cluster fields into a titled card on the admin Settings page (fields sharing a `Title` render together, first-seen order; no `group` → default "Configuration" card). Optional pipe-separated `Description` is written once at the card top. A 3rd `\|collapsed` segment makes the card **start collapsed** (click header to expand) — use for advanced/rarely-edited groups; `Title\|\|collapsed` collapses with no description. Only the group's first-seen field needs the description / collapsed flag. Not persisted, pure presentation. |
 | `mode=fixed` / `mode=expression` | **Workflow editor only.** Locks the per-field Fixed ⇄ Expression toggle to that mode — the pill renders greyed out and can't be changed. Omit (default) to leave the toggle free (defaults to fixed). Use `mode=fixed` for values that must never be templated (a literal enum, a fixed endpoint path) and `mode=expression` for values that only make sense as a template. Any value other than `fixed`/`expression` is ignored (treated as free). Pure UI hint — the admin Settings page (templ) renders no toggle. |
 
 ## Key derivation

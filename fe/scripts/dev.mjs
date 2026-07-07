@@ -71,7 +71,28 @@ const WATCH_DIRS = [
   ...Object.keys(COMMON_CONSUMERS),
 ].filter((d, i, a) => a.indexOf(d) === i);
 
-const IGNORE = /(^|[\\/])(node_modules|dist|\.svelte-kit|coverage)([\\/]|$)/;
+// Never watched: build output, deps, and test dirs (test files are not
+// bundled, so editing a spec must not rebuild the SPA).
+const IGNORE = /(^|[\\/])(node_modules|dist|\.svelte-kit|coverage|__tests__|__mocks__)([\\/]|$)/;
+
+// Editor atomic-write temp files. VS Code (and others) write
+// `foo.ts.tmp.<pid>.<hash>` then rename to `foo.ts` — a single save
+// fires 2-3 fs.watch events, and the temp path maps to the same
+// workspace, so without this every save rebuilt 2-3× (and the initial
+// scan's temp churn looked like a phantom rebuild storm). Also covers
+// vim `.swp`/`~`, and generic `.tmp`. The real file's own event still
+// triggers exactly one rebuild.
+const TMP_FILE = /(\.tmp\.[^\\/]*|\.tmp|\.swp|\.swx|~)$/;
+
+// Only these extensions are bundled — a build is pointless for anything
+// else. Crucially this also drops fs.watch's DIRECTORY events (a dir's
+// mtime bumps when a child changes, and on Windows the event's `file`
+// is the bare dir path with no extension), which were causing rebuilds
+// with no actual source edit (e.g. `← agents/x/src/lib` and
+// `← .../src/lib/components`). Spec files (*.test.*, *.spec.*) are also
+// excluded — they never reach the bundle.
+const SOURCE_EXT = /\.(svelte|ts|tsx|js|jsx|mjs|cjs|css|json|svg)$/;
+const SPEC_FILE = /\.(test|spec)\.[cm]?[jt]sx?$/;
 
 function log(msg) {
   console.log(`[dev] ${msg}`);
@@ -92,7 +113,10 @@ function banner(msg) {
 // Resolve a changed file (absolute) to the set of workspace dirs to rebuild.
 function dirsForChange(abs) {
   const rel = path.relative(FE_ROOT, abs).split(path.sep).join("/");
-  if (IGNORE.test(rel)) return [];
+  if (IGNORE.test(rel) || TMP_FILE.test(rel)) return [];
+  // Require a real source extension. Rejects directory events (no ext)
+  // and spec files (not bundled) — both trigger phantom rebuilds.
+  if (!SOURCE_EXT.test(rel) || SPEC_FILE.test(rel)) return [];
 
   // Common lib change → fan out to consumers (+ the lib itself if it has
   // its own build entry in WORKSPACES, e.g. common/md).
@@ -114,9 +138,12 @@ function dirsForChange(abs) {
 // pending workspace dirs so a burst of saves produces a single rebuild.
 let building = false;
 const pending = new Set();
+// Files (rel paths) that triggered the current pending batch, for the banner.
+let triggers = new Set();
 
-function enqueue(dirs) {
+function enqueue(dirs, changed) {
   for (const d of dirs) pending.add(d);
+  for (const c of changed) triggers.add(c);
   drain();
 }
 
@@ -127,10 +154,15 @@ function drain() {
   building = true;
   const ws = WORKSPACES[dir];
   const t0 = Date.now();
-  banner(`rebuild ${ws}${pending.size ? ` (+${pending.size} queued)` : ""}`);
+  // Keep the trigger list for the WHOLE queued batch — one save of a
+  // common lib fans out to many consumers, and each should show what
+  // caused it, not just the first. Cleared only once the queue drains.
+  const why = triggers.size ? ` ← ${[...triggers].join(", ")}` : "";
+  banner(`rebuild ${ws}${pending.size ? ` (+${pending.size} queued)` : ""}${why}`);
   buildOnce(ws).then((code) => {
     log(`${ws} ${code === 0 ? "✓ ok" : `✗ exit ${code}`} (${Date.now() - t0}ms)`);
     building = false;
+    if (pending.size === 0) triggers = new Set();
     drain();
   });
 }
@@ -138,14 +170,19 @@ function drain() {
 // Debounce raw fs events (editors fire several per save) into one enqueue.
 let timer = null;
 const dirty = new Set();
-function onChange(abs) {
-  for (const d of dirsForChange(abs)) dirty.add(d);
-  if (dirty.size === 0) return;
+const changedFiles = new Set();
+function onChange(abs, rel) {
+  const dirs = dirsForChange(abs);
+  if (dirs.length === 0) return;
+  for (const d of dirs) dirty.add(d);
+  if (rel) changedFiles.add(rel);
   clearTimeout(timer);
   timer = setTimeout(() => {
     const dirs = [...dirty];
+    const changed = [...changedFiles];
     dirty.clear();
-    enqueue(dirs);
+    changedFiles.clear();
+    enqueue(dirs, changed);
   }, 150);
 }
 
@@ -236,7 +273,7 @@ for (const dir of WATCH_DIRS) {
   const abs = path.join(FE_ROOT, dir, "src");
   try {
     const w = watch(abs, { recursive: true }, (_event, file) => {
-      if (file) onChange(path.join(abs, file));
+      if (file) onChange(path.join(abs, file), `${dir}/src/${file.split(path.sep).join("/")}`);
     });
     watchers.push(w);
   } catch (err) {

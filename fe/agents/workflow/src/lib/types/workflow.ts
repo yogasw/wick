@@ -111,6 +111,7 @@ export type Node = {
   // connector
   module?: string;
   row_id?: string;
+  account_id?: string;
 
   // datatable_*
   table?: string;

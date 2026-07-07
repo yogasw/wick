@@ -100,7 +100,7 @@ func (e *ConnectorExecutor) Execute(ctx context.Context, n workflow.Node, rc *wo
 		return workflow.NodeOutput{}, err
 	}
 
-	creds, cerr := e.Registry.RowCreds(n.Module, n.Row)
+	creds, cerr := e.Registry.RowCreds(n.Module, n.Row, n.Account)
 	if cerr != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("resolve creds: %w", cerr)
 	}

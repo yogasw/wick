@@ -201,6 +201,8 @@
           channel?: string;
           module?: string;
           op?: string;
+          row_id?: string;
+          account_id?: string;
         };
         addNode({
           id: "",
@@ -208,6 +210,8 @@
           ...(prefill.channel ? { channel: prefill.channel } : {}),
           ...(prefill.module ? { module: prefill.module } : {}),
           ...(prefill.op ? { op: prefill.op } : {}),
+          ...(prefill.row_id ? { row_id: prefill.row_id } : {}),
+          ...(prefill.account_id ? { account_id: prefill.account_id } : {}),
           _canvas: { x, y },
         } as any);
       } catch (err) {
@@ -284,6 +288,8 @@
           ...(drag.channel ? { channel: drag.channel } : {}),
           ...(drag.module ? { module: drag.module } : {}),
           ...(drag.op ? { op: drag.op } : {}),
+          ...(drag.row_id ? { row_id: drag.row_id } : {}),
+          ...(drag.account_id ? { account_id: drag.account_id } : {}),
           _canvas: { x, y },
         } as any);
       } else {

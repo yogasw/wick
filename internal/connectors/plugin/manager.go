@@ -13,7 +13,7 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 	"github.com/rs/zerolog/log"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 

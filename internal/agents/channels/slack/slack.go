@@ -815,7 +815,7 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 			// channel type — operators can scope via channel_id /
 			// channel_type match keys. Agent session dispatch below
 			// stays DM-only to preserve existing UX.
-			s.emitWorkflow(ctx, "message", map[string]any{
+			msgPayload := map[string]any{
 				"user":         ev.User,
 				"text":         ev.Text,
 				"channel_id":   ev.Channel,
@@ -823,7 +823,16 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				"thread":       threadKey(ev.ThreadTimeStamp, ev.TimeStamp),
 				"ts":           ev.TimeStamp,
 				"is_dm":        ev.ChannelType == "im" || ev.ChannelType == "mpim",
-			})
+			}
+			s.emitWorkflow(ctx, "message", msgPayload)
+			// A top-level post (no parent thread_ts, or thread_ts == its own
+			// ts) STARTS a thread. Fire the separate thread_started event so
+			// workflows can trigger on new threads only, not replies. Same
+			// payload shape as message; shares this single Slack message
+			// source (Slack has no distinct "thread started" webhook).
+			if ev.ThreadTimeStamp == "" || ev.ThreadTimeStamp == ev.TimeStamp {
+				s.emitWorkflow(ctx, "thread_started", msgPayload)
+			}
 			// Agent session dispatch is DM-only by default. The one
 			// exception is a channel thread whose parent carries the 🤖
 			// auto-reply switch: there, plain replies (no @mention) are

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // maxTurnsArgs builds the --max-turns argv. n <= 0 = no cap (provider

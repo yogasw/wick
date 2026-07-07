@@ -27,7 +27,7 @@ Fields: `channel` (adapter key: `slack`, `telegram`, …), `event` (event id), `
 
 `match` is event-shape-specific:
 
-- **Slack** events: `message`, `app_mention`, `command`, `block_action`, `view_submission`, `shortcut`, `app_home_opened`, `view_closed` — each comes with its own filter schema (channel ID whitelist, action_id, text_contains, callback_id, …).
+- **Slack** events: `message`, `thread_started`, `app_mention`, `command`, `block_action`, `view_submission`, `shortcut`, `app_home_opened`, `view_closed` — each comes with its own filter schema (channel ID whitelist, action_id, text_contains, callback_id, …). `thread_started` ("Slack: New thread") uses the same filter schema as `message` but fires only for a top-level post that starts a new thread, never for replies.
 - **Telegram** events: `message`, `command`.
 
 Discover the exact filter schema per event via the [`workflow_integration` MCP op](/connectors/workflow#tier-1-introspection-read-only) — it returns the full per-channel event + action catalog with `match_schema` and `payload_schema`.

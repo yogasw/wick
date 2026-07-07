@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 func TestSignAdHoc_SkipNonDarwin(t *testing.T) {

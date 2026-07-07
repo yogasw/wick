@@ -30,7 +30,7 @@ import (
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/pkg/pwa"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 	"github.com/yogasw/wick/internal/userconfig"
 
 	"github.com/rs/zerolog/log"

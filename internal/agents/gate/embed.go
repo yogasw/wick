@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/yogasw/wick/internal/appname"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 //go:embed all:assets

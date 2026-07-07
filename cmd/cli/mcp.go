@@ -14,7 +14,7 @@ import (
 
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/mcpconfig"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 func mcpCmd() *cobra.Command {

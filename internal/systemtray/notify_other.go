@@ -5,7 +5,7 @@ package systemtray
 import (
 	"runtime"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // notify shows an OS-level notification.

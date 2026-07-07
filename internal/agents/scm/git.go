@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // ErrRepoNotFound is returned when a client-supplied repo handle does

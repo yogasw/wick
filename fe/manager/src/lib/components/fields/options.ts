@@ -43,20 +43,29 @@ export const DEFAULT_GROUP_TITLE = "Configuration";
 export type FieldGroup = {
   title: string;
   desc: string;
+  collapsed: boolean;
   simple: ConfigField[];
   kvlists: ConfigField[];
   pickers: ConfigField[];
 };
 
-/* parseGroup splits a group= value into a section title and optional
-   description. Grammar: "Title" or "Title|Description". Mirrors the Go
+/* parseGroup splits a group= value into a section title, optional description,
+   and an optional collapsed flag. Grammar: "Title", "Title|Description", or
+   "Title|Description|collapsed" (use "Title||collapsed" for no description).
+   Any 3rd segment other than "collapsed" is ignored. Mirrors the Go
    view.parseGroup helper. */
-export function parseGroup(raw: string | undefined): { title: string; desc: string } {
+export function parseGroup(raw: string | undefined): {
+  title: string;
+  desc: string;
+  collapsed: boolean;
+} {
   const v = (raw ?? "").trim();
-  if (!v) return { title: DEFAULT_GROUP_TITLE, desc: "" };
-  const i = v.indexOf("|");
-  if (i >= 0) return { title: v.slice(0, i).trim(), desc: v.slice(i + 1).trim() };
-  return { title: v, desc: "" };
+  if (!v) return { title: DEFAULT_GROUP_TITLE, desc: "", collapsed: false };
+  const parts = v.split("|");
+  const title = (parts[0] ?? "").trim();
+  const desc = (parts[1] ?? "").trim();
+  const collapsed = (parts[2] ?? "").trim().toLowerCase() === "collapsed";
+  return { title, desc, collapsed };
 }
 
 /* groupFields partitions ALL fields (simple / kvlist / picker) into titled
@@ -69,12 +78,12 @@ export function groupFields(fields: ConfigField[]): FieldGroup[] {
   const idx = new Map<string, number>();
   const out: FieldGroup[] = [];
   for (const f of fields) {
-    const { title, desc } = parseGroup(f.group);
+    const { title, desc, collapsed } = parseGroup(f.group);
     let i = idx.get(title);
     if (i === undefined) {
       i = out.length;
       idx.set(title, i);
-      out.push({ title, desc, simple: [], kvlists: [], pickers: [] });
+      out.push({ title, desc, collapsed, simple: [], kvlists: [], pickers: [] });
     } else if (out[i].desc === "" && desc !== "") {
       out[i].desc = desc;
     }

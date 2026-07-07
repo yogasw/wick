@@ -63,4 +63,13 @@ var (
 		IsGroup:     true,
 		SortOrder:   53,
 	}
+
+	// Browser groups connectors that drive a real browser (Playwright,
+	// headless-Chrome scrapers, screenshot services, …).
+	Browser = entity.DefaultTag{
+		Name:        "Browser",
+		Description: "Browser automation: screenshot, scrape, render, and scripted interaction.",
+		IsGroup:     true,
+		SortOrder:   54,
+	}
 )

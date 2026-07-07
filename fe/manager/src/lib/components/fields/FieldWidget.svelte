@@ -15,14 +15,19 @@
   import DateInput from "./DateInput.svelte";
   import ColorInput from "./ColorInput.svelte";
   import SecretInput from "./SecretInput.svelte";
+  import HtmlField from "./HtmlField.svelte";
 
   type Props = {
     field: ConfigField;
     value: string;
     onChange: (v: string) => void;
     disabled?: boolean;
+    /* Needed only by the server-rendered "html" widget, which calls a
+       connector op via the manager /test path. Empty for other field types. */
+    connectorKey?: string;
+    connectorId?: string;
   };
-  let { field, value, onChange, disabled = false }: Props = $props();
+  let { field, value, onChange, disabled = false, connectorKey = "", connectorId = "" }: Props = $props();
 
   let dropdownOptions = $derived([
     { label: "— select —", value: "" },
@@ -36,6 +41,8 @@
   <TextArea {value} {disabled} onChange={onChange} rows={4} />
 {:else if field.type === "dropdown"}
   <Select {value} {disabled} options={dropdownOptions} onChange={onChange} />
+{:else if field.type === "html"}
+  <HtmlField {connectorKey} {connectorId} op={field.options} {value} {disabled} onChange={onChange} />
 {:else if field.type === "checkbox" || field.type === "bool" || field.type === "boolean"}
   <CheckboxInput {value} {disabled} onChange={onChange} />
 {:else if field.type === "number"}

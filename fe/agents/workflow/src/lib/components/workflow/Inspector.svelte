@@ -123,6 +123,14 @@
           <span>Op</span>
           <input class="rounded border px-2 py-1" value={n.op ?? ""} oninput={(e) => patch("op", (e.target as HTMLInputElement).value)} />
         </label>
+        <label class="flex flex-col gap-1">
+          <span>Instance (row_id)</span>
+          <input class="rounded border px-2 py-1 font-mono" placeholder="first accessible instance" value={n.row_id ?? ""} oninput={(e) => patch("row_id", (e.target as HTMLInputElement).value)} />
+        </label>
+        <label class="flex flex-col gap-1">
+          <span>SSO account (account_id)</span>
+          <input class="rounded border px-2 py-1 font-mono" placeholder="row-level creds (non-SSO)" value={n.account_id ?? ""} oninput={(e) => patch("account_id", (e.target as HTMLInputElement).value)} />
+        </label>
       {/if}
 
       {#if n.type === "channel"}

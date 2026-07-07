@@ -71,19 +71,44 @@ describe("parseRows", () => {
 
 describe("parseGroup", () => {
   it("defaults empty to the default title with no desc", () => {
-    expect(parseGroup("")).toEqual({ title: DEFAULT_GROUP_TITLE, desc: "" });
-    expect(parseGroup(undefined)).toEqual({ title: DEFAULT_GROUP_TITLE, desc: "" });
+    expect(parseGroup("")).toEqual({ title: DEFAULT_GROUP_TITLE, desc: "", collapsed: false });
+    expect(parseGroup(undefined)).toEqual({ title: DEFAULT_GROUP_TITLE, desc: "", collapsed: false });
   });
 
   it("uses the whole value as title when no pipe", () => {
-    expect(parseGroup("Access Control")).toEqual({ title: "Access Control", desc: "" });
+    expect(parseGroup("Access Control")).toEqual({
+      title: "Access Control",
+      desc: "",
+      collapsed: false,
+    });
   });
 
   it("splits title|description and trims both", () => {
     expect(parseGroup("Connection | Transport creds")).toEqual({
       title: "Connection",
       desc: "Transport creds",
+      collapsed: false,
     });
+  });
+
+  it("marks the card collapsed on a 3rd 'collapsed' segment", () => {
+    expect(parseGroup("Advanced|Extra knobs|collapsed")).toEqual({
+      title: "Advanced",
+      desc: "Extra knobs",
+      collapsed: true,
+    });
+  });
+
+  it("supports collapsed with no description (Title||collapsed)", () => {
+    expect(parseGroup("Advanced||collapsed")).toEqual({
+      title: "Advanced",
+      desc: "",
+      collapsed: true,
+    });
+  });
+
+  it("ignores a non-collapsed 3rd segment", () => {
+    expect(parseGroup("A|b|whatever").collapsed).toBe(false);
   });
 });
 

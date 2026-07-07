@@ -163,7 +163,7 @@ export type CatalogResponse = {
 // single source of truth for category + label + badge + drill structure;
 // the FE just iterates and renders.
 export type PaletteDrag =
-  | { type: "node"; node_type: string; channel?: string; module?: string; op?: string }
+  | { type: "node"; node_type: string; channel?: string; module?: string; op?: string; row_id?: string; account_id?: string }
   | { type: "trigger"; trigger_type: string }
   | { type: "channel-trigger"; channel: string; event: string };
 

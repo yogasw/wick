@@ -32,7 +32,7 @@
   }
 
   const DEBOUNCE_MS = 800;
-  const IMMEDIATE = new Set(["dropdown", "checkbox", "bool", "boolean", "color", "date", "datetime"]);
+  const IMMEDIATE = new Set(["dropdown", "checkbox", "bool", "boolean", "color", "date", "datetime", "html"]);
 
   let values = $state<Record<string, string>>(untrack(() => initValues(fields)));
   let savedHasValue = $state<Record<string, boolean>>(untrack(() => initHasValue(fields)));
@@ -136,6 +136,8 @@
       </div>
       <FieldWidget
         {field}
+        {connectorKey}
+        {connectorId}
         value={values[field.key] ?? ""}
         disabled={!canConfigure || field.env_override !== ""}
         onChange={(v) => onFieldChange(field, v)}
@@ -170,13 +172,37 @@
 
   <div class="mt-4 flex flex-col gap-3">
     {#each groups as group (group.title)}
-      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-          <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">{group.title}</h3>
-          {#if group.desc}
-            <p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{group.desc}</p>
-          {/if}
-        </div>
+      <!-- native <details> gives collapse/expand with no JS; group.collapsed
+           (group=Title|Desc|collapsed) starts the card closed. -->
+      <details
+        class="group/card rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm"
+        open={!group.collapsed}
+      >
+        <!-- summary rounds all corners when collapsed and only the top when
+             open; the bottom border shows only when open so a collapsed card
+             has no dangling divider line. -->
+        <summary
+          class="cursor-pointer list-none rounded-xl group-open/card:rounded-b-none group-open/card:border-b border-white-300 dark:border-navy-600 px-5 py-3 bg-white-200 dark:bg-navy-800 flex items-start gap-2 select-none"
+        >
+          <svg
+            class="mt-0.5 h-4 w-4 shrink-0 text-black-700 dark:text-black-600 transition-transform group-open/card:rotate-90"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              fill-rule="evenodd"
+              d="M7.21 14.77a.75.75 0 0 1 .02-1.06L11.168 10 7.23 6.29a.75.75 0 1 1 1.04-1.08l4.5 4.25a.75.75 0 0 1 0 1.08l-4.5 4.25a.75.75 0 0 1-1.06-.02Z"
+              clip-rule="evenodd"
+            />
+          </svg>
+          <div class="min-w-0">
+            <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">{group.title}</h3>
+            {#if group.desc}
+              <p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{group.desc}</p>
+            {/if}
+          </div>
+        </summary>
         <div class="p-5 flex flex-col gap-4">
           {#if group.simple.length > 0}
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
@@ -193,7 +219,7 @@
             {/if}
           {/each}
         </div>
-      </div>
+      </details>
     {/each}
   </div>
 {/if}

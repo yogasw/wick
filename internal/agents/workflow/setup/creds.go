@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/yogasw/wick/internal/agents/workflow/connector"
@@ -36,9 +37,17 @@ func UserResolverAdapter(svc userLookup) connector.UserResolverFn {
 // connector.RowCredsFn for the workflow registry. Lookup is by
 // (module key, row label) — first matching label wins; empty row
 // falls back to the first instance for that Key.
-func ConnectorsCredsAdapter(svc *connectorsvc.Service) func(module, row string) (map[string]string, error) {
-	return func(module, row string) (map[string]string, error) {
-		rows, err := svc.ListByKey(context.Background(), module)
+//
+// When accountID is set, the selected instance's connected SSO account
+// token is injected as `user_token`, overriding the row's config — the
+// same override the MCP tools/call path applies. Access is enforced at
+// the instance (tag) level by the palette; here we only assert the
+// account actually belongs to the resolved row (data integrity), not who
+// may use it.
+func ConnectorsCredsAdapter(svc *connectorsvc.Service) func(module, row, accountID string) (map[string]string, error) {
+	return func(module, row, accountID string) (map[string]string, error) {
+		ctx := context.Background()
+		rows, err := svc.ListByKey(ctx, module)
 		if err != nil {
 			return nil, err
 		}
@@ -46,12 +55,27 @@ func ConnectorsCredsAdapter(svc *connectorsvc.Service) func(module, row string) 
 			return map[string]string{}, nil
 		}
 		want := strings.TrimSpace(row)
+		chosen := rows[0] // fall back to first row so YAML stays usable
 		for _, r := range rows {
 			if want == "" || strings.EqualFold(r.Label, want) || r.ID == want {
-				return svc.LoadConfigs(r), nil
+				chosen = r
+				break
 			}
 		}
-		// No label match — fall back to first row so YAML stays usable.
-		return svc.LoadConfigs(rows[0]), nil
+		creds := svc.LoadConfigs(chosen)
+		if strings.TrimSpace(accountID) != "" {
+			acc, err := svc.GetAccount(ctx, accountID)
+			if err != nil {
+				return nil, err
+			}
+			if acc.ConnectorID != chosen.ID {
+				return nil, fmt.Errorf("account %s does not belong to connector instance %s", accountID, chosen.ID)
+			}
+			if creds == nil {
+				creds = map[string]string{}
+			}
+			creds["user_token"] = acc.AccessToken
+		}
+		return creds, nil
 	}
 }

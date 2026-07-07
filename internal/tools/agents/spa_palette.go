@@ -6,6 +6,9 @@ import (
 	"strings"
 
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
+	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/entity"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -64,22 +67,86 @@ func registerSPAPalette(r tool.Router) {
 }
 
 // spaWorkflowPalette builds the tree on demand from the runtime
-// registries. Pure read-only — no workflow id required because the
-// palette is the same for every workflow on this install.
+// registries. Read-only, but per-user: connector instances are filtered
+// to the caller's accessible rows (owner + shared/mirror tags) exactly
+// like the manager's connector list, so the palette never surfaces
+// instances a user can't reach.
 func spaWorkflowPalette(c *tool.Ctx) {
 	if globalWorkflowMgr == nil {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "workflow manager not ready"})
 		return
 	}
-	resp := buildPalette()
+
+	resp := buildPalette(gatherConnectorData(c))
 	c.JSON(http.StatusOK, resp)
+}
+
+// connectorInstance is one accessible connector row plus its connected SSO
+// accounts and the per-instance operation-enabled map. Precomputed in the
+// handler so buildPalette stays a pure, testable transform.
+type connectorInstance struct {
+	Row      entity.Connector
+	Accounts []entity.ConnectorAccount // SSO accounts (empty for non-SSO or none connected)
+	// OpEnabled[opKey] reports whether the op is enabled on THIS instance
+	// (admin per-row enable/disable + health-check, already resolved).
+	// nil means "all enabled" (states unavailable — fail open).
+	OpEnabled map[string]bool
+}
+
+// gatherConnectorData resolves the caller's accessible connector instances
+// and their SSO accounts. Access = tags, exactly like the manager "wick
+// list" (ListForManager: live filter tags, admins see all). No extra
+// per-account gate — if the instance passes the tag filter, ALL its
+// connected accounts are offered.
+//
+// Unlike the manager list, needs_setup instances are dropped: the palette
+// is a surface for BUILDING runs, and an instance whose creds aren't fully
+// configured can't execute, so dropping its node would only fail at run
+// time. (An SSO instance is "ready" once its row config is complete; a
+// missing connected account is fine — the row's Default credentials still
+// run, and accounts are offered on top.)
+func gatherConnectorData(c *tool.Ctx) map[string][]connectorInstance {
+	out := map[string][]connectorInstance{}
+	if globalConnectors == nil {
+		return out
+	}
+	user := login.GetUser(c.Context())
+	if user == nil {
+		return out
+	}
+	var tagIDs []string
+	if globalAuth != nil {
+		tagIDs = globalAuth.GetUserFilterTagIDs(c.Context(), user.ID)
+	}
+	rows, err := globalConnectors.ListForManager(c.Context(), tagIDs, user.IsAdmin())
+	if err != nil {
+		return out
+	}
+
+	for _, row := range rows {
+		if globalConnectors.Status(row) != "ready" {
+			continue // needs_setup — can't run, so not droppable
+		}
+		inst := connectorInstance{Row: row}
+		inst.OpEnabled, _ = globalConnectors.OperationStates(c.Context(), row.ID, row.Key)
+		if row.EnableSSO {
+			inst.Accounts, _ = globalConnectors.ListAccounts(c.Context(), row.ID)
+		}
+		out[row.Key] = append(out[row.Key], inst)
+	}
+	return out
 }
 
 // buildPalette assembles the palette tree from engine.Triggers,
 // engine.Descriptors (via MCP.NodeTypes), the channel registry, and
 // the connector registry. Separated from the handler so tests can
 // exercise the shape without HTTP plumbing.
-func buildPalette() paletteResponse {
+//
+// instancesByKey maps connector key → the caller's accessible instances
+// (already access-filtered, with readiness + usable SSO accounts resolved
+// by gatherConnectorData). A connector with no accessible instance is
+// omitted from the palette.
+func buildPalette(instancesByKey map[string][]connectorInstance) paletteResponse {
 	resp := paletteResponse{
 		Categories: []paletteCategory{},
 		Drills:     map[string][]paletteItem{},
@@ -128,7 +195,7 @@ func buildPalette() paletteResponse {
 		resp.Drills[key] = events
 		triggers = append(triggers, paletteItem{
 			Kind:     "drill",
-			Label:    ch.Name,
+			Label:    titleizeSlug(ch.Name),
 			Badge:    "trigger",
 			DrillKey: key,
 		})
@@ -207,12 +274,24 @@ func buildPalette() paletteResponse {
 		resp.Drills[key] = ops
 		byCat[string(engine.CategoryAction)] = append(byCat[string(engine.CategoryAction)], paletteItem{
 			Kind:     "drill",
-			Label:    ch.Name,
+			Label:    titleizeSlug(ch.Name),
 			Badge:    "channel",
 			DrillKey: key,
 		})
 	}
-	// Per-connector action drills.
+	// Per-connector drills. Levels: connector → [instance / SSO account] → op.
+	// Access = tags (instancesByKey is already tag-filtered like wick list).
+	// Each connector expands into a flat list of droppable ENTRIES:
+	//   • non-SSO instance        → 1 entry (row_id)
+	//   • SSO instance, N accounts → N entries (row_id + account_id), shown
+	//                                even when N==1 so the user knows which
+	//                                account runs
+	//   • SSO instance, 0 accounts → 1 entry (row_id only; ops drill runs
+	//                                with row-level creds) — mirrors wick
+	//                                list still showing the row
+	// Then: 0 entries → omit; 1 entry → straight to ops (skip picker);
+	// ≥2 → picker drill (connector-instances:<module>), each entry drills
+	// to its own ops (connector-ops:<module>:<entryKey>).
 	for _, info := range globalWorkflowMgr.MCP.ConnectorsList() {
 		mod, ok := globalWorkflowMgr.Connectors.Module(info.Module)
 		if !ok {
@@ -222,27 +301,120 @@ func buildPalette() paletteResponse {
 		if len(modOps) == 0 {
 			continue
 		}
-		key := "connector-ops:" + info.Module
-		ops := make([]paletteItem, 0, len(modOps))
-		for _, op := range modOps {
-			ops = append(ops, paletteItem{
-				Kind:        "drag",
-				Label:       op.Name,
-				Description: op.Description,
-				Drag: map[string]any{
+		insts := instancesByKey[info.Module]
+		if len(insts) == 0 {
+			continue // caller has no accessible instance for this connector
+		}
+
+		// opsFor builds the op drag items for one entry, pinning row_id and
+		// (optionally) account_id. Ops disabled on this instance (enabled,
+		// nil = all enabled) or disabled for this account (accDisabled) are
+		// omitted — a node the user can't run shouldn't be droppable.
+		opsFor := func(rowID, accountID string, enabled, accDisabled map[string]bool) []paletteItem {
+			ops := make([]paletteItem, 0, len(modOps))
+			for _, op := range modOps {
+				if enabled != nil && !enabled[op.Key] {
+					continue // admin-disabled / health-check-disabled on this instance
+				}
+				if accDisabled[op.Key] {
+					continue // disabled for this specific account
+				}
+				drag := map[string]any{
 					"type":      "node",
 					"node_type": "connector",
 					"module":    info.Module,
 					"op":        op.Key,
-				},
+					"row_id":    rowID,
+				}
+				if accountID != "" {
+					drag["account_id"] = accountID
+				}
+				ops = append(ops, paletteItem{
+					Kind:        "drag",
+					Label:       op.Name,
+					Description: op.Description,
+					Drag:        drag,
+				})
+			}
+			return ops
+		}
+
+		type entry struct {
+			label  string
+			opsKey string
+		}
+		var entries []entry
+		for _, inst := range insts {
+			base := inst.Row.Label
+			if strings.TrimSpace(base) == "" {
+				base = info.Name
+			}
+			// Row-level creds ("Default credentials") — ALWAYS available,
+			// even on an SSO instance: connectors like Slack work with a
+			// static token OR an SSO account, so both are offered. Mirrors
+			// the manager test panel's "Run as: [Default credentials, @…]".
+			rowOps := opsFor(inst.Row.ID, "", inst.OpEnabled, nil)
+			if len(rowOps) > 0 {
+				rowOpsKey := "connector-ops:" + info.Module + ":" + inst.Row.ID
+				resp.Drills[rowOpsKey] = rowOps
+				label := base
+				if inst.Row.EnableSSO && len(inst.Accounts) > 0 {
+					// Disambiguate from the account entries below.
+					label = base + " · Default credentials"
+				}
+				entries = append(entries, entry{label: label, opsKey: rowOpsKey})
+			}
+
+			// One entry per connected SSO account (row_id + account_id).
+			// Skip an account with no runnable op left.
+			for _, acc := range inst.Accounts {
+				accCopy := acc
+				accDisabled := connectors.AccountDisabledOps(&accCopy)
+				accOps := opsFor(inst.Row.ID, acc.ID, inst.OpEnabled, accDisabled)
+				if len(accOps) == 0 {
+					continue
+				}
+				opsKey := "connector-ops:" + info.Module + ":" + inst.Row.ID + ":" + acc.ID
+				resp.Drills[opsKey] = accOps
+				entries = append(entries, entry{label: base + " · @" + acc.DisplayName, opsKey: opsKey})
+			}
+		}
+
+		if len(entries) == 0 {
+			continue
+		}
+
+		// One entry → skip the picker, drill straight to its ops.
+		if len(entries) == 1 {
+			key := "connector-ops:" + info.Module
+			resp.Drills[key] = resp.Drills[entries[0].opsKey]
+			delete(resp.Drills, entries[0].opsKey)
+			byCat[string(engine.CategoryAction)] = append(byCat[string(engine.CategoryAction)], paletteItem{
+				Kind:     "drill",
+				Label:    info.Name,
+				Badge:    "connector",
+				DrillKey: key,
+			})
+			continue
+		}
+
+		// ≥2 entries: picker drill, each entry drills to its own ops.
+		instKey := "connector-instances:" + info.Module
+		instItems := make([]paletteItem, 0, len(entries))
+		for _, e := range entries {
+			instItems = append(instItems, paletteItem{
+				Kind:     "drill",
+				Label:    e.label,
+				DrillKey: e.opsKey,
 			})
 		}
-		resp.Drills[key] = ops
+		sortEntryItems(instItems)
+		resp.Drills[instKey] = instItems
 		byCat[string(engine.CategoryAction)] = append(byCat[string(engine.CategoryAction)], paletteItem{
 			Kind:     "drill",
 			Label:    info.Name,
 			Badge:    "connector",
-			DrillKey: key,
+			DrillKey: instKey,
 		})
 	}
 	// Data Tables drill — surfaced under DATA only when we collected
@@ -293,10 +465,29 @@ func buildPalette() paletteResponse {
 	}
 
 	// Sort drill contents so the order is stable across requests.
+	// connector-instances:* lists are already ordered by sortEntryItems
+	// (droppable-first) and must not be re-sorted alpha here.
 	for k := range resp.Drills {
+		if strings.HasPrefix(k, "connector-instances:") {
+			continue
+		}
 		sortPaletteItems(resp.Drills[k])
 	}
 	return resp
+}
+
+// sortEntryItems orders connector instance/account picker rows: droppable
+// entries (kind "drill") first, needs-connect placeholders (kind "drag"
+// with no Drag payload) last, then alphabetically by label. Stable so
+// equal-rank rows keep insertion order.
+func sortEntryItems(items []paletteItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		di, dj := items[i].Kind == "drill", items[j].Kind == "drill"
+		if di != dj {
+			return di // droppable first
+		}
+		return strings.ToLower(items[i].Label) < strings.ToLower(items[j].Label)
+	})
 }
 
 // fallbackLabel returns the descriptor's explicit label, or a

@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // fakeProviderSource is the source of a tiny provider binary built per
