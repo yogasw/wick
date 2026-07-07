@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/playwright-community/playwright-go"
 	"github.com/yogasw/wick/pkg/connector"
+	wickplugin "github.com/yogasw/wick/pkg/plugin"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -61,13 +63,21 @@ func (lc *liveConn) close() {
 	}
 }
 
-// sessionDir is where session metadata files live. Overridable via config
-// (session_dir); defaults to <os-temp>/wick-playwright-sessions, created on demand.
+// sessionDir is where session metadata AND downloaded browser assets live.
+// Resolution order:
+//  1. session_dir config — explicit admin override, always wins.
+//  2. the plugin's persistent data dir (~/.<app>/plugins/playwright_browser),
+//     resolved from the binary's own location by wickplugin.DataDir — no env,
+//     no host cooperation. This is where big downloads (cloakbrowser, ~378MB)
+//     land so they survive OS temp cleanups.
+//
+// wickplugin.DataDir itself falls back to <os-temp>/wick-plugins only for
+// throwaway dev runs where the binary isn't under an installed plugins tree.
 func sessionDir(c *connector.Ctx) string {
 	if d := strings.TrimSpace(c.Cfg("session_dir")); d != "" {
 		return d
 	}
-	return filepath.Join(os.TempDir(), "wick-playwright-sessions")
+	return wickplugin.DataDir(pluginKey)
 }
 
 // maxLiveSessions is the safety cap on concurrently-live browsers.
@@ -350,6 +360,13 @@ func closeSession(c *connector.Ctx, id string) (any, error) {
 
 // ── file + process helpers ───────────────────────────────────────────
 
+// sessionIDRE matches the ids minted by newSessionID (inst-pid-nano). Anything
+// else — path separators, "..", empty — is rejected so a caller-supplied
+// session_id can't traverse out of the session dir into arbitrary files.
+var sessionIDRE = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+func validSessionID(id string) bool { return sessionIDRE.MatchString(id) }
+
 func metaPath(dir, id string) string { return filepath.Join(dir, id+".json") }
 
 func writeMeta(dir string, m sessionMeta) error {
@@ -362,6 +379,9 @@ func writeMeta(dir string, m sessionMeta) error {
 
 func readMeta(dir, id string) (sessionMeta, error) {
 	var m sessionMeta
+	if !validSessionID(id) {
+		return m, fmt.Errorf("invalid session id %q", id)
+	}
 	b, err := os.ReadFile(metaPath(dir, id))
 	if err != nil {
 		if os.IsNotExist(err) {

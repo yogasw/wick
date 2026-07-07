@@ -14,8 +14,17 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/rs/zerolog"
 	"github.com/yogasw/wick/pkg/connector"
 )
+
+// clog is the cloak-install logger. It writes to stderr because that's the
+// stream hashicorp/go-plugin pipes back to the wick host — anything logged here
+// shows up in the server log alongside the request that triggered it. Without
+// this the whole background download was invisible: errors only ever landed in
+// the progress file, and if the goroutine died before writing it, they vanished.
+var clog = zerolog.New(os.Stderr).With().
+	Timestamp().Str("component", "playwright.cloak").Logger()
 
 // CloakBrowser is a patched, stealth Chromium published by CloakHQ. Unlike
 // chromium/firefox/webkit it is NOT a Playwright-managed browser — there is no
@@ -176,11 +185,17 @@ func resolveCloakAsset(c *connector.Ctx) (tag, url, assetName string, err error)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		// The common failure on locked-down hosts: DNS/connectivity to
+		// api.github.com. Log the raw error so it's obvious it's a network
+		// problem, not a bug in the release-scanning logic.
+		clog.Error().Err(err).Str("api", api).Msg("cloak install: GitHub releases API unreachable")
 		return "", "", "", fmt.Errorf("list releases: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		clog.Error().Int("status", resp.StatusCode).Str("body", string(body)).
+			Msg("cloak install: GitHub releases API non-200 (rate limit?)")
 		return "", "", "", fmt.Errorf("GitHub releases API %d: %s", resp.StatusCode, string(body))
 	}
 	var releases []ghRelease
@@ -194,6 +209,8 @@ func resolveCloakAsset(c *connector.Ctx) (tag, url, assetName string, err error)
 			}
 		}
 	}
+	clog.Error().Str("want", want).Int("releases_scanned", len(releases)).
+		Msg("cloak install: no matching asset in any release")
 	return "", "", "", fmt.Errorf("no %s asset in any release of %s", want, cloakRepo(c))
 }
 
@@ -206,9 +223,25 @@ func resolveCloakAsset(c *connector.Ctx) (tag, url, assetName string, err error)
 // is observed through the state file, not the returned error.
 func startCloakInstall(c *connector.Ctx) {
 	cfgs := c.Configs() // snapshot the config map
+	dir := cloakDir(c)
+	clog.Info().Str("dir", dir).Str("os", runtime.GOOS).Str("arch", runtime.GOARCH).
+		Msg("cloak install: launching background goroutine")
 	go func() {
+		// A panic in the goroutine would otherwise kill the whole plugin
+		// subprocess silently and leave no progress file behind — the exact
+		// "nothing happened" symptom. Recover, log it, and record it.
+		defer func() {
+			if r := recover(); r != nil {
+				clog.Error().Interface("panic", r).Msg("cloak install: goroutine panicked")
+				writeCloakProgress(c, cloakProgress{Phase: "error", Done: true, Error: fmt.Sprintf("install panicked: %v", r)})
+			}
+		}()
 		bg := connector.NewPluginCtx(context.Background(), cfgs, map[string]string{})
-		_ = installCloak(bg) // errors are recorded in the progress file
+		if err := installCloak(bg); err != nil {
+			clog.Error().Err(err).Msg("cloak install: failed")
+			return
+		}
+		clog.Info().Msg("cloak install: completed")
 	}()
 }
 
@@ -218,29 +251,37 @@ func startCloakInstall(c *connector.Ctx) {
 // the short manager call context) so a ~200MB download isn't killed when the
 // browser_install RPC returns; see browserInstall's async path.
 func installCloak(c *connector.Ctx) error {
+	dir := cloakDir(c)
 	if cloakInstalled(c) {
+		clog.Info().Str("dir", dir).Msg("cloak install: already installed, nothing to do")
 		return nil
 	}
-	dir := cloakDir(c)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
+		clog.Error().Err(err).Str("dir", dir).Msg("cloak install: cannot create dir")
 		return fmt.Errorf("create cloak dir: %w", err)
 	}
 	fail := func(err error) error {
+		clog.Error().Err(err).Msg("cloak install: aborting")
 		writeCloakProgress(c, cloakProgress{Phase: "error", Done: true, Error: err.Error()})
 		return err
 	}
 
 	writeCloakProgress(c, cloakProgress{Phase: "downloading", Pct: 0})
+	clog.Info().Str("repo", cloakRepo(c)).Str("want", cloakAssetName()).
+		Msg("cloak install: resolving release asset")
 	tag, url, assetName, err := resolveCloakAsset(c)
 	if err != nil {
 		return fail(err)
 	}
+	clog.Info().Str("tag", tag).Str("asset", assetName).Str("url", url).
+		Msg("cloak install: asset resolved, downloading")
 
 	archive := filepath.Join(dir, assetName)
 	if err := downloadFile(c, url, archive); err != nil {
 		return fail(fmt.Errorf("download %s: %w", assetName, err))
 	}
 	defer os.Remove(archive)
+	clog.Info().Str("asset", assetName).Msg("cloak install: download done, extracting")
 
 	writeCloakProgress(c, cloakProgress{Phase: "extracting", Pct: 100})
 	if strings.HasSuffix(assetName, ".zip") {
@@ -256,6 +297,7 @@ func installCloak(c *connector.Ctx) error {
 	}
 	_ = os.WriteFile(filepath.Join(dir, "VERSION"), []byte(tag), 0o644)
 	writeCloakProgress(c, cloakProgress{Phase: "done", Pct: 100, Done: true})
+	clog.Info().Str("tag", tag).Str("dir", dir).Msg("cloak install: done")
 	return nil
 }
 
@@ -269,10 +311,12 @@ func downloadFile(c *connector.Ctx, url, dst string) error {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		clog.Error().Err(err).Str("url", url).Msg("cloak install: download request failed (network?)")
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		clog.Error().Int("status", resp.StatusCode).Str("url", url).Msg("cloak install: download non-200")
 		return fmt.Errorf("status %d", resp.StatusCode)
 	}
 	f, err := os.Create(dst)
@@ -418,7 +462,7 @@ func extractZip(archive, dir string) error {
 // writeFileFrom copies r into path with mode, ensuring the executable bit
 // survives (chrome must stay runnable after extraction).
 func writeFileFrom(r io.Reader, path string, mode os.FileMode) error {
-	out, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode|0o111&mode)
+	out, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode|0o111)
 	if err != nil {
 		// Fall back to a sane mode if the header mode was odd.
 		out, err = os.Create(path)
