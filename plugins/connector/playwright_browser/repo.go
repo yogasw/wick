@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -13,41 +14,72 @@ import (
 // ── Driver install guard ─────────────────────────────────────────────
 //
 // playwright-go ships a Node-based driver and downloads browser binaries on
-// first use. We install lazily and exactly once per plugin process, guarded by
-// installOnce, so:
+// first use. We install lazily, guarded by installMu so:
 //   - a host that has never installed gets a clear error the first time an op
 //     runs, not a crash;
 //   - concurrent calls don't race to install.
 //
 // The install is idempotent — if the driver + browsers are already present it
-// returns fast — so paying it once per process start is cheap.
+// returns fast — so once it succeeds we flip installed and never pay it again.
+// A failure (e.g. no network on first use) is NOT cached: the next call retries,
+// so a transient outage doesn't brick the plugin until the process restarts.
 
 var (
-	installOnce sync.Once
-	installErr  error
+	installMu sync.Mutex
+	installed bool
 )
 
-// ensureDriver runs the one-time driver + browser install and returns a running
+// fallbackDownloadHost is tried when the default CDN (playwright.azureedge.net)
+// fails to resolve/download. playwright-go only hits azureedge unless
+// PLAYWRIGHT_DOWNLOAD_HOST is set, and that CDN is blocked or DNS-broken on some
+// networks — cdn.playwright.dev is the current, reachable mirror.
+const fallbackDownloadHost = "https://cdn.playwright.dev"
+
+// ensureDriver runs the driver + browser install and returns a running
 // Playwright handle. The handle is created per call (cheap) but the heavy
-// download is done once.
+// download is attempted only until it succeeds once.
 func ensureDriver() (*playwright.Playwright, error) {
-	installOnce.Do(func() {
-		if err := playwright.Install(); err != nil {
-			installErr = fmt.Errorf(
+	installMu.Lock()
+	if !installed {
+		if err := installDriver(); err != nil {
+			installMu.Unlock()
+			return nil, fmt.Errorf(
 				"could not install the Playwright driver/browsers: %w\n"+
 					"The host running this plugin needs Node.js and network access on first use. "+
+					"If the default CDN is blocked, set PLAYWRIGHT_DOWNLOAD_HOST to a reachable mirror. "+
 					"You can pre-install manually with: go run github.com/playwright-community/playwright-go/cmd/playwright@latest install --with-deps",
 				err)
 		}
-	})
-	if installErr != nil {
-		return nil, installErr
+		installed = true
 	}
+	installMu.Unlock()
+
 	pw, err := playwright.Run()
 	if err != nil {
 		return nil, fmt.Errorf("could not start Playwright: %w", err)
 	}
 	return pw, nil
+}
+
+// installDriver runs playwright.Install and, if it fails while the user has NOT
+// pinned a download host, retries once against fallbackDownloadHost. A user-set
+// PLAYWRIGHT_DOWNLOAD_HOST is always honored and never overridden.
+func installDriver() error {
+	err := playwright.Install()
+	if err == nil {
+		return nil
+	}
+	if os.Getenv("PLAYWRIGHT_DOWNLOAD_HOST") != "" {
+		return err // user pinned a host; don't second-guess it.
+	}
+	if setErr := os.Setenv("PLAYWRIGHT_DOWNLOAD_HOST", fallbackDownloadHost); setErr != nil {
+		return err
+	}
+	defer os.Unsetenv("PLAYWRIGHT_DOWNLOAD_HOST")
+	if retryErr := playwright.Install(); retryErr != nil {
+		return fmt.Errorf("default CDN failed (%v); fallback %s also failed: %w", err, fallbackDownloadHost, retryErr)
+	}
+	return nil
 }
 
 // ── Session lifecycle ────────────────────────────────────────────────

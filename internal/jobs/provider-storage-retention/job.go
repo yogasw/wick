@@ -23,7 +23,7 @@ func Register(mgr *providersync.Manager) {
 			Icon:        "🧹",
 			DefaultCron: "0 3 * * *",
 			DefaultTags: []tool.DefaultTag{tags.System},
-			AutoEnable:  true,
+			AutoEnable:  false,
 		},
 		Run: func(ctx context.Context) (string, error) {
 			mgr.RunRetention(ctx)

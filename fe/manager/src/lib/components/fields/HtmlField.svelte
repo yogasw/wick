@@ -38,7 +38,11 @@
 
   async function fetchHtml(): Promise<void> {
     if (!op || !connectorId) return;
-    loading = true;
+    // Only show the "Loading…" placeholder on the FIRST fetch (no HTML yet).
+    // A poll-driven refresh (progress bar advancing) already has HTML on screen
+    // — swapping it for "Loading…" every 1.2s makes the whole widget flicker.
+    // Keep the current markup up until the new markup arrives, then swap.
+    if (!html) loading = true;
     errorMsg = "";
     try {
       const res = await runConnectorTest(connectorKey, connectorId, op, { browser: value }, "");
