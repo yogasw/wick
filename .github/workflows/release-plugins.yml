@@ -363,3 +363,39 @@ jobs:
           # Push to master explicitly (we checked it out above). [skip ci] keeps
           # any push-triggered workflow from re-firing on this chore commit.
           git push origin HEAD:master
+
+  # Reclaim the "Latest" badge for the core wick release. Even though plugin
+  # releases set make_latest:false, GitHub can still hand Latest to a plugin
+  # release — it re-derives Latest from tag recency/semver when a release is
+  # published or edited, and the catalog commit above can nudge that. Plugins
+  # tag as "<name>/v<ver>"; core tags as "v<ver>". So: find the newest core
+  # "v*" release and, if it isn't the one flagged Latest, flip it back.
+  # Runs after every plugin release so core stays the default download.
+  ensure-core-latest:
+    name: Ensure core release is Latest
+    needs: [detect, build]
+    if: always() && needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reclaim Latest for core
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Newest core release: tag matches v<semver> and has NO slash (plugin
+          # tags all contain "/"). gh lists newest-first, so head -1 is latest.
+          CORE_TAG=$(gh release list --repo "$REPO" --limit 100 \
+            --json tagName --jq '.[].tagName' \
+            | grep -E '^v[0-9]' | grep -v '/' | head -1 || true)
+          if [ -z "$CORE_TAG" ]; then
+            echo "No core v* release found — nothing to reclaim."
+            exit 0
+          fi
+          CURRENT_LATEST=$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null || echo "")
+          if [ "$CURRENT_LATEST" = "$CORE_TAG" ]; then
+            echo "Core release $CORE_TAG is already Latest — nothing to do."
+          else
+            echo "Latest is '$CURRENT_LATEST', core is '$CORE_TAG' — reclaiming Latest for core."
+            gh release edit "$CORE_TAG" --repo "$REPO" --latest
+          fi

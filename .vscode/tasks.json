@@ -93,6 +93,18 @@
       "problemMatcher": ["$go"]
     },
     {
+      // Build ONE connector plugin (picked from a dropdown) → lab, so iterating
+      // on a single connector doesn't rebuild every plugin. The picker options
+      // live in the "pluginName" input below — add a folder under
+      // plugins/connector/ AND a line there to make it selectable.
+      "label": "plugin: build ONE → lab",
+      "type": "shell",
+      "command": "bash",
+      "args": [".vscode/build-one-plugin-to-lab.sh", "${input:pluginName}"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$go"]
+    },
+    {
       // Standalone task — uninstall every connector plugin from wick-lab. The
       // running lab's poller drops them within ~5s; no server restart needed.
       "label": "plugin: clear lab",
@@ -165,6 +177,22 @@
         "isDefault": true
       },
       "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      // Dropdown for "plugin: build ONE → lab". Keep in sync with the folders
+      // under plugins/connector/ (excluding _template).
+      "id": "pluginName",
+      "type": "pickString",
+      "description": "Which connector plugin to rebuild into wick-lab?",
+      "options": [
+        "bitbucket",
+        "github",
+        "google_workspace",
+        "httpbin",
+        "playwright_browser"
+      ]
     }
   ]
 }
