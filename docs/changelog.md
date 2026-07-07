@@ -6,13 +6,27 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Fixed
-*   **Playwright Browser: `eval` marked destructive**: The `eval` op runs arbitrary JavaScript in the page, so it's now gated behind the same destructive opt-in as `run`.
-*   **Playwright Browser: persistent data dir**: Live-session metadata, browser profiles, and CloakBrowser downloads now default to a persistent dir under the app tree (`~/.<app>/plugins/playwright_browser`) instead of the OS temp dir, so a ~200MB CloakBrowser download survives OS/Storage Sense temp cleanups. Override with the `SessionDir` config as before.
-*   **Playwright Browser: driver install falls back to a mirror CDN**: If the default Playwright download host is unreachable, the connector retries once against `cdn.playwright.dev` before failing; a failed install is no longer cached, so the next call retries instead of requiring a plugin restart.
-*   **Provider Storage Retention job no longer auto-enables**: `provider-storage-retention` now starts disabled on fresh installs, matching `provider-storage-sync`. Enable it from **Tools → Jobs → Provider Storage Retention → Settings → Enabled**.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.28.4](https://github.com/yogasw/wick/compare/v0.28.3...v0.28.4) — Playwright Enhancements
+
+_Released on 2026-07-07_
+
+### Fixed
+*   **Playwright Browser: `eval` marked destructive**: The `eval` operation, which allows running arbitrary JavaScript in the page, is now gated behind the same destructive opt-in as the `run` operation for consistency and enhanced security.
+*   **Playwright Browser: persistent data directory**: Live-session metadata, browser profiles, and CloakBrowser downloads now default to a persistent directory under the application's tree (`~/.<app>/plugins/playwright_browser`) instead of the OS temporary directory. This change ensures that the ~200MB CloakBrowser download, along with other session data, survives OS/Storage Sense temporary file cleanups. This behavior can still be overridden using the `SessionDir` configuration option.
+*   **Playwright Browser: driver install falls back to a mirror CDN**: If the default Playwright download host is unreachable, the connector now retries the download once against `cdn.playwright.dev` before failing. Additionally, failed installations are no longer cached, meaning that the next call will retry the download instead of immediately failing, preventing the plugin from being rendered inoperable by transient network outages.
+*   **Playwright Browser: file write permissions**: Fixed an issue where `writeFileFrom` did not correctly set execute permissions (`+x`) for downloaded files, ensuring executable files are properly runnable.
+*   **Playwright Browser: session ID path traversal guard**: Added validation for session IDs used by `readMeta`, rejecting any IDs that contain characters outside of `[A-Za-z0-9_-]+` to guard against potential path traversal vulnerabilities.
+*   **Playwright Browser: improved CloakBrowser installation logging**: The full CloakBrowser install path is now logged to stderr, and panic recovery is integrated into the progress file, improving visibility and robustness during installation.
+*   **Playwright Browser: faster browser status polling**: Caching `probeVersion` by executable path significantly reduces `browser_status` poll times from approximately 3-4 seconds to about 1 second.
+*   **Provider Storage Retention job no longer auto-enables**: The `provider-storage-retention` job now starts disabled on fresh installs, aligning its behavior with `provider-storage-sync`. It can be manually enabled from **Tools → Jobs → Provider Storage Retention → Settings → Enabled**.
+*   **UI: HtmlField 'Loading…' flash**: The 'Loading…' message no longer flashes on poll refreshes for `HtmlField` components; it now only appears on the initial data fetch.
+
+---
+
 
 ## [v0.28.3](https://github.com/yogasw/wick/compare/v0.28.2...v0.28.3) — Connectors & Workflows
 
