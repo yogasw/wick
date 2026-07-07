@@ -6,13 +6,13 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/playwright-community/playwright-go"
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // Live sessions are the persistent-browser mode. Unlike the ephemeral task ops
@@ -146,7 +146,7 @@ func openSession(c *connector.Ctx) (any, error) {
 		args = append(args, "--proxy-server="+px)
 	}
 
-	cmd := exec.Command(chromeBin, args...)
+	cmd := safeexec.Command(chromeBin, args...)
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("launch detached browser: %w", err)
 	}

@@ -15,7 +15,7 @@ import (
 )
 
 // TestNoDirectOSExec walks the repo and fails if any .go file outside
-// internal/safeexec/ calls os/exec.Command, exec.CommandContext, or
+// pkg/safeexec/ calls os/exec.Command, exec.CommandContext, or
 // exec.LookPath directly. Those callsites trigger Go's internal
 // LookPath which uses faccessat2(2), rejected by Android/Termux seccomp
 // on kernel < 5.8 → SIGSYS crash. Use the safeexec wrappers instead:
@@ -49,7 +49,7 @@ func TestNoDirectOSExec(t *testing.T) {
 			case "safeexec":
 				// Exempt the wrapper package itself — Command/LookPath
 				// implementations have to call the real os/exec internals.
-				if strings.HasSuffix(filepath.ToSlash(path), "internal/safeexec") {
+				if strings.HasSuffix(filepath.ToSlash(path), "pkg/safeexec") {
 					return filepath.SkipDir
 				}
 			}

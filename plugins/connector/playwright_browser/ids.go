@@ -3,12 +3,12 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"time"
 
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // newSessionID mints a short, unique-per-host id for a live session. It combines
@@ -39,7 +39,7 @@ func killPID(pid int) {
 	if runtime.GOOS == "windows" {
 		// Chrome spawns a tree of child processes; /T kills the whole tree, /F
 		// forces it. os.Process.Kill only reaps the parent and orphans children.
-		_ = exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
+		_ = safeexec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
 		return
 	}
 	if p, err := os.FindProcess(pid); err == nil {

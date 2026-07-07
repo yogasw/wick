@@ -31,7 +31,7 @@ import (
 	"github.com/yogasw/wick/internal/builder/darwin"
 	"github.com/yogasw/wick/internal/builder/linux"
 	"github.com/yogasw/wick/internal/builder/windows"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // Build compiles the Go source in CWD per cfg, then wraps the

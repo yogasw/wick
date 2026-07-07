@@ -14,7 +14,7 @@ import (
 
 	agentgate "github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/mcpconfig"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 const (
