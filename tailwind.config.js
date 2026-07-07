@@ -27,6 +27,26 @@ module.exports = {
     './fe/manager/index.html',
   ],
 
+  // Classes emitted at RUNTIME by connector plugins (their `html=` config
+  // widgets return markup as a Go string, which the content scanner can't
+  // see). Safelist the ones those widgets use so they survive purge. Keep
+  // this list tight — it is the styling contract for plugin-authored HTML.
+  safelist: [
+    'ring-1',
+    'ring-green-200',
+    'dark:ring-green-800',
+    'hover:bg-green-500',
+    'hover:border-green-400',
+    'bg-green-50',
+    'dark:bg-green-900',
+    'text-green-700',
+    'dark:text-green-300',
+    // cloak download progress bar
+    'bg-green-500',
+    'animate-pulse',
+    'w-1/3',
+  ],
+
   theme: {
     extend: {},
     // ── Project design system tokens.

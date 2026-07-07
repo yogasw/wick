@@ -40,11 +40,12 @@ const cfgInputClass = "w-full rounded-lg border border-white-400 dark:border-nav
 // Desc is an optional one-time blurb shown under the heading so the shared
 // context lives on the group instead of being repeated on every field.
 type fieldGroup struct {
-	Title   string
-	Desc    string
-	Simple  []entity.Config
-	Pickers []entity.Config
-	KvLists []entity.Config
+	Title     string
+	Desc      string
+	Collapsed bool // card starts collapsed (group=Title|Desc|collapsed)
+	Simple    []entity.Config
+	Pickers   []entity.Config
+	KvLists   []entity.Config
 }
 
 // defaultGroupTitle is the heading used for rows that declare no
@@ -52,20 +53,32 @@ type fieldGroup struct {
 // ungrouped config page looks exactly as it did before grouping.
 const defaultGroupTitle = "Configuration"
 
-// parseGroup splits a `wick:"group=..."` value into a section title and an
-// optional description. Grammar: "Title" or "Title|Description". The
-// description is the place to write the context shared by every field in
-// the group, so individual fields need not repeat it. An empty value maps
-// to the default heading with no description.
-func parseGroup(raw string) (title, desc string) {
+// parseGroup splits a `wick:"group=..."` value into a section title, an
+// optional description, and an optional collapsed flag. Grammar:
+//
+//	"Title"                     — card, always expanded
+//	"Title|Description"         — card with a shared blurb
+//	"Title|Description|collapsed" — card that starts collapsed (click to expand)
+//	"Title||collapsed"          — collapsed, no description
+//
+// The description is the place to write the context shared by every field in
+// the group, so individual fields need not repeat it. Any 3rd segment other
+// than "collapsed" is ignored (treated as expanded). An empty value maps to
+// the default heading, expanded, with no description.
+func parseGroup(raw string) (title, desc string, collapsed bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return defaultGroupTitle, ""
+		return defaultGroupTitle, "", false
 	}
-	if i := strings.IndexByte(raw, '|'); i >= 0 {
-		return strings.TrimSpace(raw[:i]), strings.TrimSpace(raw[i+1:])
+	parts := strings.SplitN(raw, "|", 3)
+	title = strings.TrimSpace(parts[0])
+	if len(parts) > 1 {
+		desc = strings.TrimSpace(parts[1])
 	}
-	return raw, ""
+	if len(parts) > 2 {
+		collapsed = strings.EqualFold(strings.TrimSpace(parts[2]), "collapsed")
+	}
+	return title, desc, collapsed
 }
 
 // groupRows partitions ALL rows (simple, picker, kvlist) into cards by their
@@ -79,12 +92,12 @@ func groupRows(rows []entity.Config) []fieldGroup {
 	idx := map[string]int{}
 	var out []fieldGroup
 	for _, r := range rows {
-		title, desc := parseGroup(r.Group)
+		title, desc, collapsed := parseGroup(r.Group)
 		i, ok := idx[title]
 		if !ok {
 			i = len(out)
 			idx[title] = i
-			out = append(out, fieldGroup{Title: title, Desc: desc})
+			out = append(out, fieldGroup{Title: title, Desc: desc, Collapsed: collapsed})
 		} else if out[i].Desc == "" && desc != "" {
 			out[i].Desc = desc
 		}
