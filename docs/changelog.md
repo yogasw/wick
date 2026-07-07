@@ -6,6 +6,14 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.28.3](https://github.com/yogasw/wick/compare/v0.28.2...v0.28.3) — Connectors & Workflows
+
+_Released on 2026-07-07_
+
 ### Added
 *   **Playwright Browser connector plugin**: A new `playwright_browser` connector drives a real browser (Chromium/Firefox/WebKit, plus a stealth [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) engine) via embedded Playwright. Page-task ops (`screenshot`, `get_content`, `pdf`, `scrape`, `eval`) launch an isolated browser per call; a scripted `run` op executes an ordered list of 32 browser actions (navigation, clicks, form fills, reads, …) in one session; live-session ops (`session_open` / `session_list` / `tab_new` / `tab_close` / `session_close`) keep a persistent browser open across calls — and plugin restarts — reached over CDP. Maintenance ops back an admin-only browser picker on the instance's Settings page. Install with `<app> plugin install playwright_browser`. See [Playwright Browser](connectors/playwright_browser).
 *   **`html=<op>` config widget**: A new server-rendered config widget lets a connector op return markup (`{html:"..."}`) that the admin Settings page renders read-only, wiring click behaviour back to the connector via a `data-op`/`data-arg` convention (select a value, or run another op and re-fetch). The core stays domain-agnostic — all layout and logic live in the connector. See [Config tags reference](reference/config-tags#html-—-server-rendered-widget).
@@ -20,6 +28,7 @@ All notable changes to Wick are documented here.
 *   **Windows: spawning npm-installed CLI shims (e.g. `codex.cmd`) with a space-containing argument failed**: Go's default quoting for `.bat`/`.cmd` launches doesn't match `cmd.exe`'s own re-parsing, so an argument with a space (or a shim path under `C:\Program Files\...`) could fail with `'C:\Program' is not recognized as an internal or external command`. Wick's internal process spawner now builds the `cmd.exe` command line itself for `.bat`/`.cmd` targets.
 
 ---
+
 
 ## [v0.28.2](https://github.com/yogasw/wick/compare/v0.28.1...v0.28.2) — Providers & Projects
 
