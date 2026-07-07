@@ -15,7 +15,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/engine"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 type shellSchema struct {

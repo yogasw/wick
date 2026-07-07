@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // assetName returns the release asset name for this OS/arch:

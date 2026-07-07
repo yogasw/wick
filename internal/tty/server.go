@@ -16,7 +16,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 type Config struct {

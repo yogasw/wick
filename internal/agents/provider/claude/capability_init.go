@@ -9,7 +9,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/capability"
 	"github.com/yogasw/wick/internal/agents/gate"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // init wires this provider into the capability registries. Loaded

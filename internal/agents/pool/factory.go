@@ -20,7 +20,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
 	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // ClaudeFactory is the production AgentFactory: wires a ClaudeParser +

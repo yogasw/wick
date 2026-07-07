@@ -18,7 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )
 

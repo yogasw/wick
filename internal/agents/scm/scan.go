@@ -1,6 +1,6 @@
 // Package scm provides git source-control operations over a session's
 // working directory. It shells out to the real `git` CLI (via
-// internal/safeexec) so existing SSH/PAT auth, branch behavior, and
+// pkg/safeexec) so existing SSH/PAT auth, branch behavior, and
 // push/pull work exactly as on the command line.
 //
 // A session cwd can hold MANY cloned repos; DiscoverRepos walks the tree
