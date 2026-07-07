@@ -241,6 +241,16 @@ the in-flight one.
   the binary basename: a debug build / MCP subprocess named differently would scan a
   different dir than where the DB (and installs) live, and plugins would silently
   vanish from the list.
+- **A plugin that stores state (downloads, caches, sessions) MUST use
+  `wickplugin.DataDir(key)`, never `os.TempDir()`.** `DataDir` returns
+  `~/.<appName>/plugins/<key>/` — a persistent dir ALONGSIDE the `connectors/<key>/`
+  binary dir (so wiping data never touches the installed binary or `plugin.json`). It
+  resolves this plugin-side from the running binary's own path (`.../plugins/connectors/<key>/<bin>`
+  → up two levels → `.../plugins/<key>`), so it needs no env var and no host cooperation.
+  `os.TempDir()` is wiped by the OS / Windows Storage Sense — a plugin that put a
+  ~hundreds-of-MB download there (e.g. playwright's cloakbrowser) finds it silently gone
+  on the next run. `DataDir` falls back to `<temp>/wick-plugins/<key>` ONLY for a bare
+  `go run` / test where the binary isn't under an installed `plugins/connectors/` tree.
 
 ## Verify a plugin end-to-end (local, no CI)
 
@@ -249,6 +259,11 @@ Fastest path in this repo: VSCode. The **"plugin: build all → lab"** task (and
 the unzipped `{binary, plugin.json}` into wick-lab's plugin dir, so a running lab
 hot-reloads them within ~5s — manifests reflect the latest source (e.g. new
 DefaultTags) WITHOUT cutting a release. **"plugin: clear lab"** wipes them.
+
+When iterating on ONE connector, prefer **"plugin: build ONE → lab"** — it pops a
+dropdown (the `pluginName` input in `.vscode/tasks.json`) so only the picked plugin
+rebuilds, not all of them. Adding a new connector folder means adding a line to that
+input's `options` list too (statically maintained — no dynamic listing).
 
 By hand:
 

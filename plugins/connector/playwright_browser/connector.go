@@ -71,7 +71,7 @@ type Config struct {
 	MaxTab              int `wick:"default=5;group=Timeouts & limits;desc=Maximum pages (tabs) a single run may open. Guards against a script fanning out unbounded."`
 
 	// Live-session mode (session_open / session_list / tab_* / session_close).
-	SessionDir      string `wick:"group=Live sessions|Persistent-browser mode: where sessions are stored and how many may run.|collapsed;desc=Directory where live-session metadata + browser profiles are stored. Live browsers survive plugin restarts via these files. Default: OS temp dir /wick-playwright-sessions."`
+	SessionDir      string `wick:"group=Live sessions|Persistent-browser mode: where sessions are stored and how many may run.|collapsed;desc=Directory where live-session metadata, browser profiles, and downloaded engines (e.g. cloakbrowser) are stored. Live browsers survive plugin restarts via these files. Default: the plugin's persistent data dir under the app tree (~/.<app>/plugins/playwright_browser); set this only to override that location."`
 	MaxLiveSessions int    `wick:"default=1;group=Live sessions;desc=Maximum persistent browsers alive at once (session_open cap). Guards RAM. Set 0 for unlimited. Default 1."`
 
 	// Custom binary — rarely touched.
@@ -165,13 +165,16 @@ type browserInstallInput struct {
 }
 
 // Module returns the connector definition served over gRPC by main().
+// pluginKey MUST equal the folder name: connector/playwright_browser/ →
+// "playwright_browser". Underscore, not hyphen — a hyphen would break the
+// <key>-<ver>-<os>-<arch>.zip split. It's also the sub-dir name under the app's
+// plugins dir where this plugin's persistent data lives (see sessionDir).
+const pluginKey = "playwright_browser"
+
 func Module() connector.Module {
 	return connector.Module{
 		Meta: connector.Meta{
-			// Key MUST equal the folder name: connector/playwright_browser/ →
-			// "playwright_browser". Underscore, not hyphen — a hyphen would break
-			// the <key>-<ver>-<os>-<arch>.zip split.
-			Key:         "playwright_browser",
+			Key:         pluginKey,
 			Name:        "Playwright Browser",
 			Description: "Drive a real browser (Chromium/Firefox/WebKit) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process.",
 			Icon:        "🎭",
@@ -210,10 +213,13 @@ func Module() connector.Module {
 					scrapeInput{},
 					scrape, wickdocs.Docs{},
 				),
-				connector.Op(
+				// Destructive: eval runs arbitrary JavaScript in the page, so it can
+				// click, submit forms, and mutate remote state exactly like run.
+				// Kept in the same privilege tier so an admin opts in per row.
+				connector.OpDestructive(
 					"eval",
 					"Evaluate JavaScript",
-					"Open {url}, evaluate the given JavaScript expression in the page, and return its JSON-serialized result. Example script: document.querySelectorAll('a').length",
+					"Open {url}, evaluate the given JavaScript expression in the page, and return its JSON-serialized result. Example script: document.querySelectorAll('a').length. Marked destructive because arbitrary JavaScript can submit forms and change remote state.",
 					evalInput{},
 					evalJS, wickdocs.Docs{},
 				),

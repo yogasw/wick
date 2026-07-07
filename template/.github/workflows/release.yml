@@ -548,6 +548,11 @@ jobs:
           echo "app_name=$NAME" >> "$GITHUB_OUTPUT"
 
       # Same-repo: gh creates the tag at our SHA atomically.
+      # --latest=true is explicit: this repo's Releases are SHARED with plugin
+      # releases (tagged <name>/v<ver>), and a plugin publishing afterwards could
+      # otherwise steal the "Latest" badge from the wick binary people come here
+      # to download. Plugin releases already set make_latest=false; pinning it
+      # here too, plus the verify step below, keeps core reliably Latest.
       - name: Create GitHub release (same repo)
         if: needs.prepare.outputs.is_separate == 'false'
         env:
@@ -557,6 +562,7 @@ jobs:
             --target "${{ needs.prepare.outputs.sha }}" \
             --title "${{ steps.meta.outputs.app_name }} ${{ needs.prepare.outputs.tag }}" \
             --generate-notes \
+            --latest \
             artifacts/*
 
       # Separate releases repo: gh tags releases repo at its default branch
@@ -577,6 +583,27 @@ jobs:
         run: |
           git tag "${{ needs.prepare.outputs.tag }}" "${{ needs.prepare.outputs.sha }}"
           git push origin "${{ needs.prepare.outputs.tag }}"
+
+      # Ensure the wick core release holds the "Latest" badge. Only matters in
+      # same-repo mode, where plugin releases (<name>/v<ver>) share this repo's
+      # Releases. If a plugin release published after this one grabbed Latest
+      # despite make_latest=false — or GitHub re-derived Latest from semver tag
+      # ordering — flip it back to the core tag. Idempotent: a no-op when core is
+      # already Latest.
+      - name: Ensure core release is Latest (same repo)
+        if: needs.prepare.outputs.is_separate == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          LATEST=$(gh release view --repo "${{ github.repository }}" --json tagName --jq .tagName 2>/dev/null || echo "")
+          if [ "$LATEST" = "$TAG" ]; then
+            echo "Core release $TAG is already Latest — nothing to do."
+          else
+            echo "Latest is '$LATEST', expected core '$TAG' — reclaiming Latest for core."
+            gh release edit "$TAG" --repo "${{ github.repository }}" --latest
+          fi
 
       # RELEASE_AUTO_VERSION commit-back: bump wick.yml `version:` to match the
       # tag we just published, then push the diff to the source branch.

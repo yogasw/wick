@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/playwright-community/playwright-go"
 	"github.com/yogasw/wick/pkg/connector"
@@ -86,6 +87,33 @@ func renderProgressRow(name string, p cloakProgress) string {
 		`</div>`
 }
 
+// versionCache memoizes probeVersion by executable path. probeVersion LAUNCHES
+// the browser headless just to read its version — ~1s per engine. The picker
+// polls browser_status every ~1.2s while a download runs, so re-probing 3
+// browsers each tick meant 3-4s per poll and a visibly stuttering UI. A
+// browser's version can't change without its binary changing, so caching by
+// path is safe and makes every poll after the first near-instant.
+var (
+	versionMu    sync.Mutex
+	versionCache = map[string]string{}
+)
+
+func cachedProbeVersion(bt playwright.BrowserType, path string) string {
+	versionMu.Lock()
+	if v, ok := versionCache[path]; ok {
+		versionMu.Unlock()
+		return v
+	}
+	versionMu.Unlock()
+
+	v := probeVersion(bt)
+
+	versionMu.Lock()
+	versionCache[path] = v
+	versionMu.Unlock()
+	return v
+}
+
 // engineState reports whether one engine is installed and, if so, its version.
 // cloakbrowser is resolved via cloak.go (GitHub download); the rest via the
 // Playwright-managed binary path.
@@ -97,10 +125,11 @@ func engineState(c *connector.Ctx, pw *playwright.Playwright, name string) (inst
 	if bt == nil {
 		return false, ""
 	}
-	if path := bt.ExecutablePath(); path == "" || !fileExists(path) {
+	path := bt.ExecutablePath()
+	if path == "" || !fileExists(path) {
 		return false, ""
 	}
-	return true, probeVersion(bt)
+	return true, cachedProbeVersion(bt, path)
 }
 
 // renderEngineRow is one row of the picker: a selectable, highlighted card when

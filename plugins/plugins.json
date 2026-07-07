@@ -92,5 +92,33 @@
       "linux/amd64": "https://github.com/yogasw/wick/releases/download/httpbin/v0.1.0/httpbin-0.1.0-linux-amd64.zip",
       "linux/arm64": "https://github.com/yogasw/wick/releases/download/httpbin/v0.1.0/httpbin-0.1.0-linux-arm64.zip"
     }
+  },
+  {
+    "key": "playwright_browser",
+    "name": "Playwright Browser",
+    "description": "Drive a real browser (Chromium/Firefox/WebKit) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process.",
+    "version": "0.1.0",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "Browser",
+        "Description": "Browser automation: screenshot, scrape, render, and scripted interaction.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 54
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.1.0/playwright_browser-0.1.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.1.0/playwright_browser-0.1.0-linux-arm64.zip"
+    }
   }
 ]

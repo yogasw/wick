@@ -111,9 +111,9 @@ Edit retention on a source via the **Retention** column in Configured Sources (p
 
 ### Default-off on fresh installs
 
-Provider Storage Sync is **disabled by default** on a fresh install. Enable it from **Tools → Jobs → Provider Storage Sync → Settings → Enabled**.
+Both **Provider Storage Sync** and **Provider Storage Retention** are **disabled by default** on a fresh install. Enable each from **Tools → Jobs → \<job name\> → Settings → Enabled**.
 
-Once enabled the job runs every minute and the boot restore + realtime watcher both activate automatically.
+Once Sync is enabled the job runs every minute and the boot restore + realtime watcher both activate automatically. Retention has no side effects until enabled — it just won't purge expired rows.
 
 ### Per-instance kill switch
 

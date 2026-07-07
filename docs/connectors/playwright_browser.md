@@ -23,6 +23,8 @@ outline: deep
 
 ::: warning Runtime dependency
 Playwright ships a Node-based driver and downloads browser binaries on first use. The connector installs these lazily, so the **first** call to a task op (or a `browser_install` from the picker) may take a while and needs outbound network access. Use the [Maintenance](#maintenance) ops to pre-install a browser instead of waiting on the first real call.
+
+If the default download CDN is unreachable, the connector automatically retries once against `cdn.playwright.dev` before failing. A failed install is **not** cached — the next call retries from scratch, so a transient network outage doesn't require a plugin restart. Set `PLAYWRIGHT_DOWNLOAD_HOST` yourself to pin a specific mirror; when set, the automatic fallback is skipped.
 :::
 
 ## Configs
@@ -41,7 +43,7 @@ Config fields are grouped into cards on the instance's Settings page. **Browser*
 | Timeouts & limits *(collapsed)* | `ActionTimeoutMs` | Per-action timeout (click, fill, wait_for). Default `5000`. |
 | Timeouts & limits | `NavigationTimeoutMs` | Page navigation timeout (`goto`). Default `30000`. |
 | Timeouts & limits | `MaxTab` | Max pages (tabs) a single `run` may open. Default `5`. |
-| Live sessions *(collapsed)* | `SessionDir` | Where live-session metadata + browser profiles are stored. Default: OS temp dir. |
+| Live sessions *(collapsed)* | `SessionDir` | Where live-session metadata, browser profiles, and downloaded engines (e.g. CloakBrowser) are stored. Default: the plugin's persistent data dir under the app tree (`~/.<app>/plugins/playwright_browser`) — set this only to override that location. |
 | Live sessions | `MaxLiveSessions` | Max persistent browsers alive at once. Default `1`, `0` = unlimited. |
 | Custom binary *(collapsed)* | `ExecutablePath` | Path to a custom browser binary instead of the bundled one. |
 | Custom binary | `Channel` | Branded channel (`chrome`, `chrome-beta`, `msedge`, …) for the chosen browser. |
@@ -64,7 +66,7 @@ Ephemeral: open a URL, do one thing, close the browser.
 | `get_content` | `url`, `selector`, `as_text` (default true), `wait_for` | Rendered content after JS runs — visible text by default, or HTML when `as_text` is false. |
 | `pdf` | `url`, `wait_for` | Page rendered to PDF as base64. **Chromium only** — errors on firefox/webkit/cloakbrowser instances. |
 | `scrape` | `url`, `fields` (JSON map of key → CSS selector), `wait_for` | Structured extraction — each selector's inner text is returned under its key; a selector matching nothing returns `""`. |
-| `eval` | `url`, `script` | Evaluates a JS expression in the page, returns the JSON-serialized result. |
+| `eval` | `url`, `script` | Evaluates a JS expression in the page, returns the JSON-serialized result. Marked **destructive** — arbitrary JavaScript can submit forms and change remote state. |
 
 ### Scripted flow
 
