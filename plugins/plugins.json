@@ -97,7 +97,7 @@
     "key": "playwright_browser",
     "name": "Playwright Browser",
     "description": "Drive a real browser (Chromium/Firefox/WebKit) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process.",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "default_tags": [
       {
         "Name": "Connector",
@@ -117,8 +117,8 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.1.0/playwright_browser-0.1.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.1.0/playwright_browser-0.1.0-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.2.0/playwright_browser-0.2.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.2.0/playwright_browser-0.2.0-linux-arm64.zip"
     }
   }
 ]
