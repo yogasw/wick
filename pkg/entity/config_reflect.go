@@ -111,10 +111,27 @@ func parseWickTag(raw string) map[string]string {
 // widgetFor picks the admin UI widget from the Go type + tag flags.
 // Explicit widget flags in the tag win over the type-derived default.
 func widgetFor(k reflect.Kind, tag map[string]string) (widget, options string) {
-	for _, flag := range []string{"textarea", "dropdown", "kvlist", "picker", "email", "url", "color", "date", "datetime", "number", "checkbox", "bool", "boolean", "secret"} {
+	for _, flag := range []string{"textarea", "dropdown", "html", "kvlist", "picker", "email", "url", "color", "date", "datetime", "number", "checkbox", "bool", "boolean", "secret"} {
 		if v, ok := tag[flag]; ok {
 			if flag == "dropdown" {
 				return "dropdown", v
+			}
+			if flag == "html" {
+				// Server-rendered widget: the CORE stays fully domain-agnostic —
+				// it never knows what the field is (a browser, a model, a region).
+				// Options carry the connector op key that returns the markup as
+				// {html:"..."}. The widget renders that HTML read-only, then wires
+				// a thin generic convention: any element with
+				//   data-op="<opKey>" data-arg="<value>"
+				// becomes a button that calls that op via the manager /test path
+				// and re-fetches the HTML; the reserved data-op="__select" just
+				// stores data-arg as this field's value. All layout, buttons, and
+				// per-item logic live in the connector's HTML — not here.
+				// A bare `html` flag with no op is invalid — render as text.
+				if v == "true" || v == "" {
+					return "text", ""
+				}
+				return "html", v
 			}
 			if flag == "kvlist" {
 				cols := v

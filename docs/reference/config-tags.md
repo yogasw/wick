@@ -58,6 +58,7 @@ type Config struct {
 | `datetime` | Date-time picker | HTML `type="datetime-local"` |
 | `kvlist=col1\|col2` | Editable table | Value stored as JSON array — see below |
 | `picker=<source>` | Searchable typeahead with chips | Value stored as JSON `[{id,name},...]`. Requires the parent module to implement a `LookupProvider`. See below. |
+| `html=<op>` | Server-rendered widget | The widget fetches markup from connector op `<op>` (`{html:"..."}`) and renders it read-only. Buttons in that HTML drive behaviour via a `data-op` convention — see below. The core stays domain-agnostic. |
 
 ## Modifiers (any widget)
 
@@ -72,7 +73,7 @@ type Config struct {
 | `visible_when=field:value` | Show this field in the admin UI only while another field equals the named value. Use `field:a\|b\|c` (pipe-separated) to allow a set. Pure presentation hint — value is still seeded / saved normally. |
 | `mode=fixed` / `mode=expression` | Lock the workflow editor's Fixed ⇄ Expression toggle for this field. `mode=fixed` forces fixed-literal mode; `mode=expression` forces template mode. Omit the tag (default) to leave the toggle enabled. Pure presentation hint for the workflow canvas inspector — has no effect on the admin Settings page. Not persisted. |
 | `hidden` | Skip the field in the default admin Settings page. Row is still seeded to DB and readable via `c.Cfg(...)`, so runtime works normally — use for fields managed by a dedicated page (e.g. channel setup composers). |
-| `group=Title` / `group=Title\|Description` | Group fields into a titled card on the admin Settings page. All fields sharing the same `Title` are rendered together under one card, in first-seen order. Fields with no `group` fall into the default "Configuration" card. The optional `Description` (pipe-separated) is written once at the top of the card — use it for a one-sentence summary of the group's purpose. Not persisted. Pure presentation. |
+| `group=Title` / `group=Title\|Description` / `group=Title\|Description\|collapsed` | Group fields into a titled card on the admin Settings page. All fields sharing the same `Title` are rendered together under one card, in first-seen order. Fields with no `group` fall into the default "Configuration" card. The optional `Description` (pipe-separated) is written once at the top of the card — use it for a one-sentence summary of the group's purpose. A 3rd `\|collapsed` segment makes the card **start collapsed** (click the header to expand) — use for advanced/rarely-edited groups so the page opens clean; `Title\|\|collapsed` collapses with no description. Only the group's **first-seen** field needs to carry the description / collapsed flag. Not persisted. Pure presentation. |
 
 ## Key derivation
 
@@ -162,6 +163,34 @@ The admin UI debounces 250 ms per keystroke and fires `GET /channels/<slug>/look
 - IDs are arbitrary / freeform / configured locally → `kvlist=id|name`
 :::
 
+## html — server-rendered widget
+
+Use `html=<op>` when a field's UI is **dynamic and owned by the connector**, not a fixed input — a live status list, an install/download picker, anything where the backend should decide the layout and the available actions. The core renders whatever markup the op returns and stays completely domain-agnostic (it never knows the field is a "browser" or a "model").
+
+```go
+type Config struct {
+    // The widget fetches markup from the "browser_status" op and renders it.
+    Browser string `wick:"html=browser_status;default=chromium;desc=Browser engine."`
+}
+```
+
+**The op returns markup** — `{"html": "<div>…</div>"}`. It runs through the manager-only `/test` path (admin/tag-gated), never MCP. Since the op is still LLM-callable by default, mark maintenance-style ops **AdminOnly** in the ops table so the agent can't invoke them.
+
+**`data-op` convention** — the widget wires two behaviours onto any element in the returned HTML:
+
+| Attribute | Effect on click |
+|-----------|-----------------|
+| `data-op="__select" data-arg="<value>"` | Store `<value>` as this field's value (reserved — no op call). |
+| `data-op="<opKey>" data-arg="<value>"` | Run connector op `<opKey>` (with `<value>` passed as its argument) via `/test`, then **re-fetch** the HTML so state updates. |
+
+```go
+// Example browser_status op output — the connector owns all layout + logic:
+// <div data-op="__select" data-arg="chromium">Chromium ✓ v133  [selected]</div>
+// <div>Firefox — <button data-op="browser_install" data-arg="firefox">Download</button></div>
+```
+
+So a Download button installs then refreshes; a row click selects. No SSE — long actions are covered by the re-fetch (poll the status op yourself inside a loop if you want live progress). The markup is admin-only server content rendered in the admin Settings page, so it is `{@html}`-rendered directly; keep it to connector-authored markup, never user input.
+
 ## visible_when — conditional fields
 
 Hide a field from the admin form until another field equals a target value:
@@ -205,6 +234,23 @@ type Config struct {
 **Cascading `visible_when`:** a picker or kvlist field inside a group also respects `visible_when` normally — it only appears when its dependency value matches, even inside the group card.
 
 **Fields without a group** fall into the default "Configuration" card, which is always rendered last.
+
+**Collapsed cards** — append `|collapsed` as the 3rd segment on the group's first field to start that card closed. The admin renders it as an expandable section (a native `<details>` — a click on the header toggles it). Use for advanced or rarely-edited groups so the page opens uncluttered:
+
+```go
+type Config struct {
+    // Essentials — always visible.
+    Browser  string `wick:"dropdown=chromium|firefox|webkit;group=Browser|The knobs most setups need.;desc=Engine."`
+    Headless bool   `wick:"bool;group=Browser;desc=Headless mode."`
+
+    // Advanced — card starts collapsed (Title|Description|collapsed).
+    ProxyServer string `wick:"group=Network|Route traffic through a proxy.|collapsed;desc=Proxy URL."`
+    ProxyBypass string `wick:"group=Network;desc=Domains to bypass."`
+
+    // Collapsed with no description: Title||collapsed
+    Channel string `wick:"group=Custom binary||collapsed;desc=Branded channel."`
+}
+```
 
 ::: tip Grouping vs hidden
 `group` organises visible fields. `hidden` hides a field entirely regardless of groups. A field can be both — it simply won't appear in any group card.
