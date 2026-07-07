@@ -6,7 +6,11 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+*   **Playwright Browser: `eval` marked destructive**: The `eval` op runs arbitrary JavaScript in the page, so it's now gated behind the same destructive opt-in as `run`.
+*   **Playwright Browser: persistent data dir**: Live-session metadata, browser profiles, and CloakBrowser downloads now default to a persistent dir under the app tree (`~/.<app>/plugins/playwright_browser`) instead of the OS temp dir, so a ~200MB CloakBrowser download survives OS/Storage Sense temp cleanups. Override with the `SessionDir` config as before.
+*   **Playwright Browser: driver install falls back to a mirror CDN**: If the default Playwright download host is unreachable, the connector retries once against `cdn.playwright.dev` before failing; a failed install is no longer cached, so the next call retries instead of requiring a plugin restart.
+*   **Provider Storage Retention job no longer auto-enables**: `provider-storage-retention` now starts disabled on fresh installs, matching `provider-storage-sync`. Enable it from **Tools → Jobs → Provider Storage Retention → Settings → Enabled**.
 
 ---
 
