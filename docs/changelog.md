@@ -15,6 +15,8 @@ All notable changes to Wick are documented here.
 
 ### Fixed
 *   **SPA connector detail dropped the `group` config tag**: The connector detail JSON response was missing the `group` field, so fields configured with `group=...` silently lost their card grouping in the Svelte connector detail page (the templ-rendered admin Settings page was unaffected).
+*   **Workflow connector palette drills into instance + SSO account**: Dropping a connector node from the canvas palette now walks **connector → instance → op**, expanding `EnableSSO` connectors (e.g. Slack) into one entry per connected account plus a **Default credentials** entry for the row's own config. Only fully-configured ("ready") instances are shown, ops disabled on an instance or account are hidden, and the list is filtered to instances the current user can access. A workflow connector node can now carry `account_id` alongside `row_id` to pin a run to a specific connected account; the engine injects that account's token at run time. See [`connector` node](workflow/nodes/connector#picking-an-instance-and-account-from-the-palette).
+*   **New Slack trigger `thread_started`** ("Slack: New thread"): fires only when a user starts a brand-new top-level thread, never on replies inside an existing thread. Uses the same channel/user/text filter schema as the existing `message` trigger. See [Triggers ▶ channel](workflow/triggers#channel).
 
 ---
 
