@@ -41,7 +41,14 @@ func isolateConfig(t *testing.T) {
 	prev := AppName()
 	SetAppName("wick-rename-test")
 	invalidateInstanceCache()
+	// Save spawns a fire-and-forget rescan goroutine that persists a
+	// probe into `home`. It outlives the test body, so without draining
+	// it here it races t.TempDir()'s RemoveAll and leaves config.json
+	// behind ("directory not empty"). Cleanups run LIFO and TempDir's
+	// removal is registered first (line above), so this drain runs
+	// before the dir is torn down.
 	t.Cleanup(func() {
+		waitBackgroundRescans()
 		SetAppName(prev)
 		invalidateInstanceCache()
 	})

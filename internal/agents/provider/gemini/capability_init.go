@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/yogasw/wick/internal/agents/capability"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // init registers gemini with the capability registries.

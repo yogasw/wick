@@ -74,6 +74,7 @@ type configFieldJSON struct {
 	HasValue    bool              `json:"has_value"`
 	Description string            `json:"description"`
 	VisibleWhen string            `json:"visible_when"`
+	Group       string            `json:"group,omitempty"`
 	ColOptions  map[string]string `json:"col_options,omitempty"`
 	EnvOverride string            `json:"env_override"`
 }
@@ -258,6 +259,7 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 			HasValue:    cfg.Value != "",
 			Description: descJSON(cfg.Description),
 			VisibleWhen: cfg.VisibleWhen,
+			Group:       cfg.Group,
 			ColOptions:  cfg.ColOptions,
 			EnvOverride: cfg.EnvOverride,
 		}

@@ -5,7 +5,7 @@ package daemon
 import (
 	"strings"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // supervised_linux.go provides the systemd-user delegation the daemon

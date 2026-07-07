@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // Spec is the per-app gate config the binary loads at every

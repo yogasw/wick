@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // gitInit creates a repo at dir with an initial commit so HEAD exists.

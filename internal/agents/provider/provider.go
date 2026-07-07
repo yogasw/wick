@@ -27,7 +27,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 	"github.com/yogasw/wick/internal/userconfig"
 )
 
@@ -218,6 +218,17 @@ var (
 
 var rescanGroup singleflight.Group
 
+// bgRescans tracks Save's fire-and-forget probe goroutines so callers
+// can wait for them to finish. In production nobody waits (the whole
+// point is to persist the fresh probe off the request path); tests use
+// waitBackgroundRescans to drain them before tearing down a temp home,
+// otherwise the goroutine's userconfig.Save races t.TempDir() cleanup.
+var bgRescans sync.WaitGroup
+
+// waitBackgroundRescans blocks until every in-flight Save background
+// rescan has returned. Test-only helper.
+func waitBackgroundRescans() { bgRescans.Wait() }
+
 // reloadInstanceCache pulls a fresh snapshot from userconfig under the
 // caller-supplied lock contract. Called by FindCached on a miss and
 // by mutating ops (Save/Delete/SetHookEnabled) after writing.
@@ -373,7 +384,9 @@ func Save(ins Instance) error {
 	// Persist a fresh probe in the background — user just changed
 	// Binary/ExtraArgs, the previous cached Status is now stale.
 	// singleflight deduplicates concurrent Update calls for the same instance.
+	bgRescans.Add(1)
 	go func() {
+		defer bgRescans.Done()
 		key := string(ins.Type) + "/" + ins.Name
 		rescanGroup.Do(key, func() (any, error) { //nolint:unparam
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

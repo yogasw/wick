@@ -15,7 +15,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/event"
 	provider "github.com/yogasw/wick/internal/agents/provider"
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 func skipIfNoCodex(t *testing.T) string {

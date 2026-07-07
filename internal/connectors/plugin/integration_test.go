@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yogasw/wick/internal/safeexec"
+	"github.com/yogasw/wick/pkg/safeexec"
 	"github.com/yogasw/wick/pkg/connector"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 )

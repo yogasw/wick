@@ -13,10 +13,12 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
 
-  // Current drill view — null = root, otherwise a drill_key into
-  // palette.drills. The label persists across the drill so the back
-  // button can render "← <parent label>".
-  let drill = $state<{ key: string; label: string } | null>(null);
+  // Drill navigation stack — empty = root. Each level is a drill_key
+  // into palette.drills plus its label. A stack (not a single level) so
+  // multi-level drills work: connector → instance → op. The back button
+  // pops one level; the label of the top level renders as "← <label>".
+  let drillStack = $state<{ key: string; label: string }[]>([]);
+  const drill = $derived(drillStack.length ? drillStack[drillStack.length - 1] : null);
 
   onMount(async () => {
     try {
@@ -59,12 +61,13 @@
 
   function enterDrill(item: PaletteItem) {
     if (item.kind !== "drill" || !item.drill_key) return;
-    drill = { key: item.drill_key, label: item.label };
+    drillStack = [...drillStack, { key: item.drill_key, label: item.label }];
     query = "";
   }
 
+  // Back button pops one drill level (root when the stack empties).
   function exitDrill() {
-    drill = null;
+    drillStack = drillStack.slice(0, -1);
     query = "";
   }
 
@@ -97,6 +100,8 @@
             channel: d.channel,
             module: d.module,
             op: d.op,
+            row_id: d.row_id,
+            account_id: d.account_id,
           }),
         );
       } else {
@@ -160,23 +165,37 @@
     {:else if drill}
       <div class="px-2 space-y-1">
         {#each drillItems as item}
-          <button
-            draggable="true"
-            ondragstart={(e) => ondragstart(e, item)}
-            onclick={() => tapAdd(item)}
-            class="w-full flex flex-col items-start gap-0.5 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:bg-navy-600 cursor-grab transition-colors"
-            title={item.description}
-          >
-            <div class="w-full flex items-center justify-between gap-2">
+          {#if item.kind === "drill"}
+            <!-- Nested drill (e.g. connector → instance → ops). -->
+            <button
+              class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
+              onclick={() => enterDrill(item)}
+            >
               <span class="text-sm font-medium truncate">{item.label}</span>
-              {#if item.badge}<span class="text-[10px] text-black-700 dark:text-black-500 shrink-0">{item.badge}</span>{/if}
-            </div>
-            {#if item.description}
-              <span class="text-[10px] text-black-700 dark:text-black-500 line-clamp-2 leading-snug w-full">
-                {item.description}
+              <span class="flex items-center gap-1.5 text-[10px] text-black-700 dark:text-black-500 shrink-0">
+                {#if item.badge}<span>{item.badge}</span>{/if}
+                <span aria-hidden="true">›</span>
               </span>
-            {/if}
-          </button>
+            </button>
+          {:else}
+            <button
+              draggable="true"
+              ondragstart={(e) => ondragstart(e, item)}
+              onclick={() => tapAdd(item)}
+              class="w-full flex flex-col items-start gap-0.5 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 cursor-grab transition-colors"
+              title={item.description}
+            >
+              <div class="w-full flex items-center justify-between gap-2">
+                <span class="text-sm font-medium truncate">{item.label}</span>
+                {#if item.badge}<span class="text-[10px] text-black-700 dark:text-black-500 shrink-0">{item.badge}</span>{/if}
+              </div>
+              {#if item.description}
+                <span class="text-[10px] text-black-700 dark:text-black-500 line-clamp-2 leading-snug w-full">
+                  {item.description}
+                </span>
+              {/if}
+            </button>
+          {/if}
         {/each}
         {#if drillItems.length === 0}
           <p class="px-1 py-4 text-xs text-black-700 dark:text-black-600 italic">
