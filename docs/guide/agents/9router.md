@@ -43,6 +43,8 @@ The **Settings** tab is the management surface for the 9router process itself.
 | **Stop** | Terminates the subprocess gracefully. |
 | **Restart** | Stop + Start in sequence. |
 
+The status badge reflects whether the dashboard port is actually reachable, not just whether wick itself spawned the process — so a 9router started outside wick (or one still running across a wick restart) correctly shows **Running**. The installed version is cached for up to an hour and refreshed in the background; on the very first check after a fresh page load it briefly shows **Checking…** instead of a stale or blank value.
+
 ### Auto-start on boot
 
 Toggle **Auto-start on boot** to have wick launch 9router automatically every time wick starts.
