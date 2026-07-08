@@ -120,6 +120,8 @@ Backs the manager's browser picker. **Not meant for agent use** — seed these o
 
 `cloakbrowser` is a fourth engine option alongside chromium/firefox/webkit — a patched, stealth Chromium published by [CloakHQ](https://github.com/CloakHQ/CloakBrowser). It is **not** a Playwright-managed browser: there's no `playwright.Install` for it, so the connector downloads the right release asset for the host OS/arch straight from GitHub, extracts it, and launches it via `ExecutablePath` with anti-automation flags. Use `CloakRepo` to point at a fork/mirror, or `CloakExecutablePath` to skip the download entirely and use an already-downloaded binary.
 
+Because `cloakbrowser` never launches a Playwright-managed Chromium, opening a session with `Browser=cloakbrowser` skips Playwright's own ~150MB Chromium download — only the (much smaller) Playwright node driver is fetched. Reconnecting to an already-open live session (over CDP) skips it too, for any engine, since reconnecting never launches a new browser.
+
 ## Quirks worth knowing
 
 - `pdf` only works on Chromium instances — set `Browser` to `chromium` (the default) if you need PDF rendering.

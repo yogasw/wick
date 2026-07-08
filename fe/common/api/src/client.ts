@@ -105,3 +105,53 @@ export function apiPost<T>(path: string, body?: unknown, signal?: AbortSignal): 
 export function apiDelete<T>(path: string): Promise<T> {
   return runPromiseUnwrapped(apiDeleteE<T>(path).pipe(Effect.provide(WickClientLayer)));
 }
+
+/**
+ * apiPostSSE POSTs to a Server-Sent Events endpoint and invokes onEvent for
+ * each `data:` frame (parsed as JSON). EventSource can't POST, so this uses
+ * fetch + a stream reader. Resolves when the stream ends; rejects with APIError
+ * on a non-2xx response. Pass a signal to cancel (abort closes the stream).
+ *
+ * The endpoint is expected to also accept a plain POST (no Accept header) and
+ * return JSON — callers can fall back to apiPost for non-streaming use.
+ */
+export async function apiPostSSE<E = unknown>(
+  path: string,
+  onEvent: (data: E) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const resp = await fetch(path, {
+    method: "POST",
+    headers: { Accept: "text/event-stream" },
+    credentials: "same-origin",
+    signal,
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new APIError(resp.status, body);
+  }
+  if (!resp.body) return;
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    // SSE frames are separated by a blank line. Process each complete frame.
+    let sep: number;
+    while ((sep = buf.indexOf("\n\n")) !== -1) {
+      const frame = buf.slice(0, sep);
+      buf = buf.slice(sep + 2);
+      const line = frame.split("\n").find((l) => l.startsWith("data:"));
+      if (!line) continue;
+      const json = line.slice("data:".length).trim();
+      if (!json) continue;
+      try {
+        onEvent(JSON.parse(json) as E);
+      } catch {
+        /* skip malformed frame */
+      }
+    }
+  }
+}

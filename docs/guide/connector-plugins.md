@@ -42,8 +42,10 @@ Every install **verifies** the plugin before it's wired in — the binary's sha2
 
 The connector detail page (Manager → Connectors → {connector}) adds lifecycle actions in its header kebab menu (admin-only):
 
-- **Update to v{X}** — shown when the marketplace catalog carries a newer version than the one on disk. Clicking it downloads and hot-swaps the binary; no restart needed. The connector list shows an **Update** badge on the card when an update is waiting.
+- **Update to v{X}** — shown when the marketplace catalog carries a newer version than the one on disk. Clicking it downloads and hot-swaps the binary; no restart needed. The connector list shows an **Update** badge on the card when an update is waiting. The card shows a live progress bar (downloading %/verifying/replacing/done) for the duration of the update.
 - **Uninstall plugin** — removes the binary from disk. Existing rows and their configuration stay in the database and become inert (they won't execute). Reinstall the plugin to restore them.
+
+Install and update replace the on-disk binary via an atomic rename rather than an in-place overwrite, so updating a plugin while it's actively running a request no longer fails.
 
 The same update operation is also available over the API:
 
