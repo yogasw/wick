@@ -123,7 +123,7 @@ func openSession(c *connector.Ctx) (any, error) {
 	}
 
 	// Resolve the browser binary via playwright (respects executable_path too).
-	pw, err := ensureDriver()
+	pw, err := driverFor(c)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +200,9 @@ func connectSession(c *connector.Ctx, id string) (*liveConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	pw, err := ensureDriver()
+	// Reconnecting to an already-running browser over CDP never launches a new
+	// browser, so it only needs the node driver — never the Chromium download.
+	pw, err := ensureDriverNoInstall()
 	if err != nil {
 		return nil, err
 	}

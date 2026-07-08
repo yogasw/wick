@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -224,41 +225,98 @@ func (h *PluginsHandler) apiInstall(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := connplugin.InstallFromURL(ctx, url, h.dir); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	// Register it into the connectors service now so it appears in the
 	// connector list / manager / admin immediately, not after the poll tick.
-	h.reload(ctx)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "installed": req.Name})
+	h.installOrUpdate(w, r, key(req.Name), url, map[string]any{"ok": true, "installed": req.Name})
 }
 
 // apiUpdate re-downloads the latest catalog version for an already-installed
-// plugin, overwriting its dir in place, then reconciles. Same path as install
-// (InstallFromURL replaces the existing files); keyed by {key} from the URL.
+// plugin, replacing its binary + manifest, then reconciles.
+//
+// Ordering guarantees the "download-succeeds-then-replace" contract: the new
+// archive is fetched and verified into a temp dir first, and only the Replacing
+// phase touches the on-disk plugin (via an atomic rename that survives the old
+// binary still running — see connplugin.InstallFromURLProgress / copyFile). The
+// reconcile after replace kills the stale subprocess so the next call spawns the
+// new binary.
 func (h *PluginsHandler) apiUpdate(w http.ResponseWriter, r *http.Request) {
-	key := r.PathValue("key")
-	if key == "" {
+	k := r.PathValue("key")
+	if k == "" {
 		http.Error(w, "key required", http.StatusBadRequest)
 		return
 	}
 	ctx := r.Context()
-	avail, url, err := h.registry.Resolve(ctx, key, "")
+	avail, url, err := h.registry.Resolve(ctx, k, "")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := connplugin.InstallFromURL(ctx, url, h.dir); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	h.installOrUpdate(w, r, k, url, map[string]any{"ok": true, "updated": k, "version": avail.Version})
+}
+
+// key normalizes a marketplace name to a plugin key for progress labelling.
+// The catalog name is already the key for our plugins; kept as a seam in case
+// they diverge.
+func key(name string) string { return name }
+
+// installOrUpdate runs the download→verify→replace→reconcile pipeline. When the
+// client sent `Accept: text/event-stream` it streams staged progress as SSE
+// (`data: {phase,pct}` frames, then a terminal `data: {ok|error}`); otherwise it
+// blocks and returns the plain JSON `done` payload (backward-compatible with the
+// CLI and any non-SSE caller).
+func (h *PluginsHandler) installOrUpdate(w http.ResponseWriter, r *http.Request, k, url string, done map[string]any) {
+	ctx := r.Context()
+	if !wantsSSE(r) {
+		if err := connplugin.InstallFromURL(ctx, url, h.dir); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		h.reload(ctx)
+		writeJSON(w, http.StatusOK, done)
+		return
+	}
+
+	rc := http.NewResponseController(w)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	_ = rc.Flush()
+
+	send := func(v any) {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return
+		}
+		_, _ = w.Write([]byte("data: "))
+		_, _ = w.Write(b)
+		_, _ = w.Write([]byte("\n\n"))
+		_ = rc.Flush()
+	}
+
+	// The progress callback fires from the download goroutine (io.Copy on this
+	// same goroutine, actually), so writes are serialized — no extra locking.
+	err := connplugin.InstallFromURLProgress(ctx, url, h.dir, func(p connplugin.Progress) {
+		send(p)
+	})
+	if err != nil {
+		send(map[string]any{"phase": "error", "error": err.Error()})
 		return
 	}
 	h.reload(ctx)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "updated": key, "version": avail.Version})
+	send(done)
 }
 
-func (h *PluginsHandler) apiEnable(w http.ResponseWriter, r *http.Request)  { h.setEnabled(w, r, true) }
-func (h *PluginsHandler) apiDisable(w http.ResponseWriter, r *http.Request) { h.setEnabled(w, r, false) }
+// wantsSSE reports whether the caller opted into a Server-Sent Events response.
+func wantsSSE(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+}
+
+func (h *PluginsHandler) apiEnable(w http.ResponseWriter, r *http.Request) { h.setEnabled(w, r, true) }
+func (h *PluginsHandler) apiDisable(w http.ResponseWriter, r *http.Request) {
+	h.setEnabled(w, r, false)
+}
 
 func (h *PluginsHandler) setEnabled(w http.ResponseWriter, r *http.Request, enabled bool) {
 	key := r.PathValue("key")

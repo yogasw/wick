@@ -4,7 +4,10 @@ export type Status = {
   installed: boolean;
   version: string;
   running: boolean;
-  state: "not-installed" | "starting" | "running" | "stopped";
+  state: "not-installed" | "checking" | "starting" | "running" | "stopped";
+  // True while the version is still being resolved for the first time —
+  // render "Checking…" instead of a blank/stale version.
+  checking?: boolean;
 };
 
 // One proxied /9router/v1 request, streamed live over SSE. Carries the FULL

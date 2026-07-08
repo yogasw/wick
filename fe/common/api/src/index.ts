@@ -6,5 +6,6 @@ export {
   apiDeleteE,
   apiGet,
   apiPost,
+  apiPostSSE,
   apiDelete,
 } from "./client.js";

@@ -13,9 +13,10 @@
     disconnectConnectorAccount,
     setConnectorTypeDisabled,
     listPlugins,
-    updatePlugin,
+    updatePluginStream,
     removePlugin as uninstallPlugin,
   } from "$lib/api.js";
+  import type { PluginProgress } from "$lib/api.js";
   import { startConnectorOAuth, type OAuthConnect } from "./connectorOAuth.js";
   import type { ConnectorList, ConnectorRow, ConnectorAccount, PluginEntry } from "$lib/types.js";
   import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
@@ -44,6 +45,9 @@
   let typeBusy = $state(false);
   let pluginBusy = $state(false);
   let confirmUninstall = $state(false);
+  /* Live update progress, non-null only while an update is streaming. Drives
+     the progress bar + phase label. pct is -1 for indeterminate. */
+  let updateProgress = $state<PluginProgress | null>(null);
 
   async function loadPlugin() {
     try {
@@ -234,16 +238,36 @@
   async function doUpdate() {
     if (pluginBusy) return;
     pluginBusy = true;
+    updateProgress = { phase: "downloading", pct: 0 };
     try {
-      const r = await updatePlugin(connectorKey);
-      toastOk(r.version ? `Updated to v${r.version}` : "Plugin updated");
+      await updatePluginStream(connectorKey, (p) => {
+        updateProgress = p;
+      });
+      toastOk("Plugin updated");
       await Promise.all([load(true), loadPlugin()]);
     } catch (e) {
       toastError("Update failed", e instanceof Error ? e.message : String(e));
     } finally {
       pluginBusy = false;
+      updateProgress = null;
     }
   }
+
+  /* Human label for the current update phase, shown next to the bar. */
+  const phaseLabel = $derived.by(() => {
+    switch (updateProgress?.phase) {
+      case "downloading":
+        return updateProgress.pct >= 0 ? `Downloading… ${updateProgress.pct}%` : "Downloading…";
+      case "verifying":
+        return "Verifying…";
+      case "replacing":
+        return "Replacing…";
+      case "done":
+        return "Done";
+      default:
+        return "Updating…";
+    }
+  });
 
   async function confirmDoUninstall() {
     confirmUninstall = false;
@@ -276,7 +300,7 @@
       if (plugin.update_available) {
         items.push({
           label: pluginBusy
-            ? "Updating…"
+            ? phaseLabel
             : `Update to v${plugin.latest_version ?? ""}`.trimEnd(),
           onclick: doUpdate,
           disabled: pluginBusy,
@@ -380,6 +404,22 @@
             <p class="mt-0.5 break-words text-sm text-black-800 dark:text-black-600 line-clamp-3">{data.description}</p>
           {/if}
           <p class="mt-1 text-xs text-black-700 dark:text-black-600">{data.op_count} operation(s) · {rows.length} row(s)</p>
+          {#if updateProgress}
+            {@const indeterminate = updateProgress.phase === "downloading" && updateProgress.pct < 0}
+            {@const pct = updateProgress.phase === "downloading" && updateProgress.pct >= 0 ? updateProgress.pct : updateProgress.phase === "done" ? 100 : updateProgress.phase === "downloading" ? 0 : 100}
+            <div class="mt-2 max-w-xs">
+              <div class="flex items-center justify-between text-[11px] font-medium text-black-800 dark:text-black-600">
+                <span>{phaseLabel}</span>
+              </div>
+              <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-white-300 dark:bg-navy-600">
+                {#if indeterminate}
+                  <div class="h-full w-1/3 animate-pulse rounded-full bg-green-500"></div>
+                {:else}
+                  <div class="h-full rounded-full bg-green-500 transition-all duration-200" style={`width:${pct}%`}></div>
+                {/if}
+              </div>
+            </div>
+          {/if}
         </div>
       </div>
       <div class="flex flex-shrink-0 items-center gap-2 pt-1">

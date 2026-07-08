@@ -213,6 +213,8 @@
     switch (status.state) {
       case "running":
         return { text: "Running", cls: "text-green-600 dark:text-green-300" };
+      case "checking":
+        return { text: "Checking…", cls: "text-amber-600 dark:text-amber-400" };
       case "starting":
         return { text: "Starting…", cls: "text-amber-600 dark:text-amber-400" };
       case "not-installed":
