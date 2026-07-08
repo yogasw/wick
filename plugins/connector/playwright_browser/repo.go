@@ -35,6 +35,20 @@ var (
 // networks — cdn.playwright.dev is the current, reachable mirror.
 const fallbackDownloadHost = "https://cdn.playwright.dev"
 
+// driverFor returns a Playwright handle appropriate for the configured engine.
+// For cloakbrowser the Chromium binary Playwright would fetch is never used —
+// Cloak ships its own patched Chromium downloaded from GitHub (see cloak.go) and
+// is driven purely through the node driver + ExecutablePath. So we only need the
+// driver, NOT the ~150MB Chromium bundle: ensureDriverNoInstall skips the browser
+// download. Every other engine still goes through the full ensureDriver, which
+// downloads that engine's browser on first use.
+func driverFor(c *connector.Ctx) (*playwright.Playwright, error) {
+	if strings.EqualFold(strings.TrimSpace(c.Cfg("browser")), cloakEngine) {
+		return ensureDriverNoInstall()
+	}
+	return ensureDriver()
+}
+
 // ensureDriver runs the driver + browser install and returns a running
 // Playwright handle. The handle is created per call (cheap) but the heavy
 // download is attempted only until it succeeds once.
@@ -103,7 +117,7 @@ type session struct {
 // guarantees teardown. Every task op and `run` goes through here, so lifecycle
 // (and the maxTab / timeout wiring) lives in exactly one place.
 func withSession(c *connector.Ctx, fn func(*session) (any, error)) (any, error) {
-	pw, err := ensureDriver()
+	pw, err := driverFor(c)
 	if err != nil {
 		return nil, err
 	}

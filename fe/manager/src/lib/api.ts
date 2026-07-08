@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from "@wick-fe/common-api";
+import { apiGet, apiPost, apiPostSSE } from "@wick-fe/common-api";
 import type {
   ConnectorDef,
   ConnectorList,
@@ -364,6 +364,13 @@ export async function getConnectorHistory(
 export async function listPlugins(): Promise<import("./types.js").PluginsList> {
   return apiGet<import("./types.js").PluginsList>("/manager/api/plugins");
 }
+/* Install/update progress phases streamed over SSE by plugins_api.go.
+   pct is the download percentage while phase==="downloading" (-1 = unknown
+   size). "error" carries a message; "done" is the terminal success frame. */
+export type PluginProgress =
+  | { phase: "downloading" | "verifying" | "replacing" | "done"; pct: number }
+  | { phase: "error"; error: string };
+
 export async function installPlugin(name: string): Promise<{ ok: boolean }> {
   return apiPost<{ ok: boolean }>("/manager/api/plugins/install", { name });
 }
@@ -371,6 +378,34 @@ export async function updatePlugin(key: string): Promise<{ ok: boolean; version?
   return apiPost<{ ok: boolean; version?: string }>(
     `/manager/api/plugins/${encodeURIComponent(key)}/update`,
   );
+}
+
+/* Streaming variants: same endpoints, but with Accept: text/event-stream so the
+   server streams staged progress. onProgress fires per phase / percent tick.
+   Resolves when the stream ends; rejects (via APIError) on an "error" frame. */
+export async function updatePluginStream(
+  key: string,
+  onProgress: (p: PluginProgress) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamInstall(`/manager/api/plugins/${encodeURIComponent(key)}/update`, onProgress, signal);
+}
+
+async function streamInstall(
+  path: string,
+  onProgress: (p: PluginProgress) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  let failed: string | null = null;
+  await apiPostSSE<PluginProgress & { error?: string }>(
+    path,
+    (p) => {
+      onProgress(p);
+      if (p.phase === "error") failed = p.error ?? "install failed";
+    },
+    signal,
+  );
+  if (failed) throw new Error(failed);
 }
 export async function setPluginEnabled(key: string, enabled: boolean): Promise<{ ok: boolean }> {
   const verb = enabled ? "enable" : "disable";

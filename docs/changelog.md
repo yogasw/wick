@@ -10,6 +10,18 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.28.5](https://github.com/yogasw/wick/compare/v0.28.4...v0.28.5) — Fixes
+
+_Released on 2026-07-08_
+
+### Fixed
+*   **9router status reflects the real process, not just wick-spawned ones**: The Settings tab status badge now probes the dashboard port directly, so a 9router instance started outside wick (or one that survived a wick restart) correctly shows **Running**. The installed version is now cached for up to an hour and refreshed in the background instead of shelling out to `npm` on every status check; the badge briefly shows **Checking…** on the very first load.
+*   **Plugin update no longer fails while the plugin is running**: Installing/updating a connector plugin now replaces the binary via an atomic rename instead of an in-place overwrite, so updating a plugin mid-use no longer fails with a "text file busy" error. The update process now first fetches and verifies the archive to a temporary directory, ensuring that a failed download does not disturb the existing installation. The manager UI's connector card also shows live staged progress (downloading %/verifying/replacing/done) while an update runs.
+*   **Playwright Browser: CloakBrowser and CDP-reconnect skip the Chromium download**: Opening a session with `Browser=cloakbrowser`, or reconnecting to an already-open live session over CDP, no longer triggers Playwright's own ~150MB Chromium download — only the small node driver is fetched.
+
+---
+
+
 ## [v0.28.4](https://github.com/yogasw/wick/compare/v0.28.3...v0.28.4) — Playwright Enhancements
 
 _Released on 2026-07-07_
