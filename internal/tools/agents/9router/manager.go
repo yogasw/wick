@@ -65,7 +65,20 @@ type Manager struct {
 	// Router9ExternalAPI config knob) so this package stays storage-free.
 	// nil until wired → treated as false (local-only, the safe default).
 	externalAllowed func() bool
+
+	// ver caches the installed npm version so /status need not shell out to
+	// `npm ls -g` on every hit (slow, and it holds mu-independent state).
+	// Guarded by verMu.
+	verMu        sync.Mutex
+	verCached    string    // last resolved version ("" = unknown/not-installed)
+	verCheckedAt time.Time // zero until first resolve completes
+	verResolving bool      // an async refresh is in flight
 }
+
+// verTTL is how long a resolved 9router version is trusted before /status
+// triggers a background re-check. Version rarely changes, so a stale-but-fast
+// answer beats blocking every request on `npm ls -g`.
+const verTTL = time.Hour
 
 // forwardClientHeader is an internal, per-request sentinel the API
 // handler stamps with the real client IP when external access is enabled.
@@ -181,6 +194,43 @@ func (m *Manager) installedVersion(ctx context.Context) string {
 
 func (m *Manager) isInstalled(ctx context.Context) bool {
 	return m.installedVersion(ctx) != ""
+}
+
+// cachedVersion returns the installed version without blocking: it serves
+// the last resolved value, and kicks off a background `npm ls -g` refresh
+// when the cache is empty or older than verTTL. The returned `checking` is
+// true only when there is no resolved value yet (first-ever call) and a
+// refresh is running — the UI shows "Checking…" in that window. Once a value
+// has ever been resolved, subsequent stale reads return the old value
+// (checking=false) while refreshing silently in the background.
+func (m *Manager) cachedVersion() (version string, checking bool) {
+	m.verMu.Lock()
+	ver := m.verCached
+	checkedAt := m.verCheckedAt
+	resolving := m.verResolving
+	stale := checkedAt.IsZero() || time.Since(checkedAt) > verTTL
+	neverResolved := checkedAt.IsZero()
+	if stale && !resolving {
+		m.verResolving = true
+		go m.refreshVersion()
+	}
+	m.verMu.Unlock()
+	return ver, neverResolved
+}
+
+// refreshVersion resolves the version off the request path and stores it.
+// Always clears verResolving and stamps verCheckedAt so a failed/empty probe
+// still counts as "resolved" (empty version = not installed) and doesn't spin
+// a refresh on every subsequent hit.
+func (m *Manager) refreshVersion() {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	v := m.installedVersion(ctx)
+	m.verMu.Lock()
+	m.verCached = v
+	m.verCheckedAt = time.Now()
+	m.verResolving = false
+	m.verMu.Unlock()
 }
 
 // install runs `npm install -g 9router@latest` (covers first install
@@ -374,18 +424,28 @@ type statusResp struct {
 	Version   string `json:"version"`
 	Running   bool   `json:"running"`
 	// State is the single source of truth for the UI badge:
-	// "not-installed" | "starting" | "running" | "stopped".
+	// "not-installed" | "checking" | "starting" | "running" | "stopped".
 	State string `json:"state"`
+	// Checking is true while the version is still being resolved for the
+	// first time — the UI shows "Checking…" instead of a stale/blank version.
+	Checking bool `json:"checking"`
 }
 
-// Status reports install + run state as JSON.
+// Status reports install + run state as JSON. Non-blocking: the version comes
+// from a TTL cache (background-refreshed), and "running" is decided by probing
+// the dashboard port — so a 9router started outside wick (or one that outlived
+// a wick restart) reports running=true, not the m.cmd-only view.
 func (m *Manager) Status(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	installed := m.isInstalled(ctx)
-	running := m.isRunning()
+	version, checking := m.cachedVersion()
+	// A reachable port means 9router is up regardless of who spawned it;
+	// having ever resolved a version also implies the package is installed.
+	running := m.backendReachable()
+	installed := version != "" || running
+
 	state := "stopped"
 	switch {
+	case checking && !running:
+		state = "checking"
 	case !installed:
 		state = "not-installed"
 	case m.isStarting():
@@ -395,9 +455,10 @@ func (m *Manager) Status(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, statusResp{
 		Installed: installed,
-		Version:   m.installedVersion(ctx),
+		Version:   version,
 		Running:   running,
 		State:     state,
+		Checking:  checking,
 	})
 }
 
@@ -409,7 +470,14 @@ func (m *Manager) Install(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error()+"\n"+out, http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"version": m.installedVersion(ctx)})
+	// Install just changed the version — resolve fresh and prime the cache so
+	// the next /status reflects it immediately (no stale TTL window).
+	v := m.installedVersion(ctx)
+	m.verMu.Lock()
+	m.verCached = v
+	m.verCheckedAt = time.Now()
+	m.verMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]string{"version": v})
 }
 
 // Start spawns the process and waits for the dashboard to answer.
