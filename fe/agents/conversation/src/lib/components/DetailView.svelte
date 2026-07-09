@@ -28,6 +28,7 @@
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
     duplicateWorkspace, renameWorkspace, removeWorkspace,
   } from "../api/workspace.js";
+  import { listSchedules, createSchedule, cancelSchedule, pauseSchedule, resumeSchedule } from "../api/schedules.js";
 
   import ConversationHeader from "./ConversationHeader.svelte";
   import ConversationThread from "./ConversationThread.svelte";
@@ -38,6 +39,7 @@
   import FileViewerModal from "./FileViewerModal.svelte";
   import ProcessPanel from "./ProcessPanel.svelte";
   import WorkspacePanel from "./WorkspacePanel.svelte";
+  import SchedulePanel from "./SchedulePanel.svelte";
   import AskUserModal from "./AskUserModal.svelte";
   import ApprovalsModal from "./ApprovalsModal.svelte";
   import ApprovedPanel from "./ApprovedPanel.svelte";
@@ -48,7 +50,7 @@
     ContextFileEntry, AskAnswer, ApprovalDecision,
     ApprovedItem,
     WsInstance, WsBase, ProcessInfo, FileContent,
-    ProviderOption, ProjectOption,
+    ProviderOption, ProjectOption, Schedule,
   } from "../types/agents.js";
 
   type Props = {
@@ -133,7 +135,7 @@
   let sseStatus = $state<SSEStatus>("connecting");
 
   /* ── vertical rail tabs ────────────────────────────────────────── */
-  type RailTab = "context" | "process" | "workspace" | "source";
+  type RailTab = "context" | "process" | "workspace" | "scheduled" | "source";
   let railTab = $state<RailTab | null>(null);
 
   /* ── thread scroll ref ─────────────────────────────────────────── */
@@ -164,6 +166,9 @@
   let wsInstances = $state<WsInstance[]>([]);
   let wsBases = $state<WsBase[]>([]);
   let wsOpenCards = $state<Record<string, boolean>>({});
+
+  /* ── scheduled-messages panel state ───────────────────────────── */
+  let schedules = $state<Schedule[]>([]);
 
   /* ── provider / project options ──────────────────────────────── */
   let providerOptions = $state<ProviderOption[]>([]);
@@ -327,6 +332,12 @@
     run(listWorkspace(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { wsInstances = res.instances; wsBases = res.bases; })
       .catch((e: unknown) => toastError(`Workspace: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
+  function loadSchedules() {
+    run(listSchedules(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { schedules = res; })
+      .catch((e: unknown) => toastError(`Schedules: ${e instanceof Error ? e.message : String(e)}`));
   }
 
   /* Rehydrate a question that arrived while the tab was closed; never
@@ -729,6 +740,7 @@
     loadFiles();
     loadProcesses();
     loadWorkspace();
+    loadSchedules();
     loadProviderOptions();
     loadProjectOptions();
     loadPendingAsk();
@@ -765,6 +777,11 @@
       icon: '<circle cx="8" cy="8" r="2"></circle><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" stroke-linecap="round"></path>',
     },
     {
+      id: "scheduled",
+      label: "Scheduled",
+      icon: '<circle cx="8" cy="9" r="5.5"></circle><path d="M8 6v3l2 1.5M8 1.5h0M3 2.5L1.5 4M13 2.5L14.5 4" stroke-linecap="round" stroke-linejoin="round"></path>',
+    },
+    {
       id: "source",
       label: "Source",
       icon: '<circle cx="4" cy="4" r="1.5"></circle><circle cx="4" cy="12" r="1.5"></circle><circle cx="12" cy="5" r="1.5"></circle><path d="M4 5.5v5M5.5 4H9a2 2 0 012 2v0" stroke-linecap="round"></path>',
@@ -782,10 +799,12 @@
   const liveProcesses = $derived(filterLiveProcesses(processes));
   const processCount = $derived(liveProcesses.length);
   const workspaceCount = $derived(wsInstances.length);
+  const scheduledCount = $derived(schedules.filter((s) => s.status === "pending").length);
   function railCount(id: RailTab): number {
     if (id === "context") return contextCount;
     if (id === "process") return processCount;
     if (id === "workspace") return workspaceCount;
+    if (id === "scheduled") return scheduledCount;
     return 0;
   }
 </script>
@@ -1037,6 +1056,30 @@
               .catch((e: unknown) => toastError(`Remove: ${e instanceof Error ? e.message : String(e)}`));
           }}
         />
+      {:else if railTab === "scheduled"}
+        <SchedulePanel
+          {schedules}
+          onCreate={(args) =>
+            run(createSchedule(base, sessionId, args).pipe(Effect.provide(WickClientLayer)))
+              .then(() => { loadSchedules(); return true; })
+              .catch((e: unknown) => { toastError(`Schedule: ${e instanceof Error ? e.message : String(e)}`); return false; })
+          }
+          onCancel={(id) => {
+            run(cancelSchedule(base, sessionId, id).pipe(Effect.provide(WickClientLayer)))
+              .then(loadSchedules)
+              .catch((e: unknown) => toastError(`Cancel: ${e instanceof Error ? e.message : String(e)}`));
+          }}
+          onPause={(id) => {
+            run(pauseSchedule(base, sessionId, id).pipe(Effect.provide(WickClientLayer)))
+              .then(loadSchedules)
+              .catch((e: unknown) => toastError(`Pause: ${e instanceof Error ? e.message : String(e)}`));
+          }}
+          onResume={(id) => {
+            run(resumeSchedule(base, sessionId, id).pipe(Effect.provide(WickClientLayer)))
+              .then(loadSchedules)
+              .catch((e: unknown) => toastError(`Resume: ${e instanceof Error ? e.message : String(e)}`));
+          }}
+        />
       {/if}
     </div>
 
@@ -1133,6 +1176,30 @@
                 run(removeWorkspace(base, sessionId, cid).pipe(Effect.provide(WickClientLayer)))
                   .then(loadWorkspace)
                   .catch((e: unknown) => toastError(`Remove: ${e instanceof Error ? e.message : String(e)}`));
+              }}
+            />
+          {:else if railTab === "scheduled"}
+            <SchedulePanel
+              {schedules}
+              onCreate={(args) =>
+                run(createSchedule(base, sessionId, args).pipe(Effect.provide(WickClientLayer)))
+                  .then(() => { loadSchedules(); return true; })
+                  .catch((e: unknown) => { toastError(`Schedule: ${e instanceof Error ? e.message : String(e)}`); return false; })
+              }
+              onCancel={(id) => {
+                run(cancelSchedule(base, sessionId, id).pipe(Effect.provide(WickClientLayer)))
+                  .then(loadSchedules)
+                  .catch((e: unknown) => toastError(`Cancel: ${e instanceof Error ? e.message : String(e)}`));
+              }}
+              onPause={(id) => {
+                run(pauseSchedule(base, sessionId, id).pipe(Effect.provide(WickClientLayer)))
+                  .then(loadSchedules)
+                  .catch((e: unknown) => toastError(`Pause: ${e instanceof Error ? e.message : String(e)}`));
+              }}
+              onResume={(id) => {
+                run(resumeSchedule(base, sessionId, id).pipe(Effect.provide(WickClientLayer)))
+                  .then(loadSchedules)
+                  .catch((e: unknown) => toastError(`Resume: ${e instanceof Error ? e.message : String(e)}`));
               }}
             />
           {/if}

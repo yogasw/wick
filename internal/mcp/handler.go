@@ -12,6 +12,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
+	"github.com/yogasw/wick/internal/agents/schedule"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/mcp/handlers"
@@ -64,6 +65,10 @@ type Handler struct {
 	// May be nil (tests, smoke mode); handlers.WickInfo reports
 	// "disabled" in that case. DSN is never exposed.
 	db *gorm.DB
+	// schedule backs wick_schedule_message (create/list/cancel future
+	// message injections). nil in stdio mode and tests — the tool then
+	// reports scheduling unavailable.
+	schedule *schedule.Store
 }
 
 func NewHandler(c *connectors.Service) *Handler {
@@ -98,6 +103,13 @@ func (h *Handler) WithPool(p *agentpool.Pool, layout agentconfig.Layout) *Handle
 
 func (h *Handler) WithDB(db *gorm.DB) *Handler {
 	h.db = db
+	return h
+}
+
+// WithSchedule wires the scheduled-message store that backs
+// wick_schedule_message. nil (stdio/tests) disables the tool.
+func (h *Handler) WithSchedule(s *schedule.Store) *Handler {
+	h.schedule = s
 	return h
 }
 
@@ -361,6 +373,8 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 		handlers.WickSessionInfo(w, r, hreq, rsp, h.layout, p.Arguments)
 	case "wick_set_title":
 		handlers.WickSetTitle(w, r, hreq, rsp, h.layout, h.refreshSession, p.Arguments)
+	case "wick_schedule_message":
+		handlers.WickScheduleMessage(w, r, hreq, rsp, h.schedule, h.layout, p.Arguments, user)
 	default:
 		if strings.HasPrefix(p.Name, handlers.WickManagerPrefix) {
 			handlers.WickManagerExecute(w, r, hreq, rsp, h.connectors, p.Name, p.Arguments, user, tagIDs)
