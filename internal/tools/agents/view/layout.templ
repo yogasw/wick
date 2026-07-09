@@ -136,13 +136,19 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 						</svg>
 					</summary>
 					<div class="flex flex-col gap-0.5 pt-0.5">
+						// Ordered by use-frequency: monitoring + everyday tools first,
+						// config/infra last. Scheduled → Channels → Skills → Presets
+						// → Providers → Data Tables → 9router.
+						if user != nil {
+							@agentsNavLink(vm.Base+"/scheduled", "Scheduled", vm.ActivePage == "scheduled")
+						}
+						if user != nil {
+							@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
+						}
+						@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
 						@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
 						if user != nil && user.IsAdmin() {
 							@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
-						}
-						@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
-						if user != nil {
-							@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
 						}
 						@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")
 						if vm.Router9Visible {
@@ -681,7 +687,7 @@ templ agentsNavLink(href, label string, active bool) {
 // (otherwise the active row would be hidden).
 func agentsMoreOpenAttr(activePage string) templ.Attributes {
 	switch activePage {
-	case "presets", "providers", "skills", "channels", "data-tables", "9router":
+	case "presets", "providers", "skills", "channels", "data-tables", "scheduled", "9router":
 		return templ.Attributes{"open": ""}
 	}
 	return templ.Attributes{}
@@ -738,6 +744,11 @@ templ agentsNavIcon(label string) {
 			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
 				<path d="M4 8a4 4 0 014-4 4 4 0 014 4M2 10a6 6 0 016-6 6 6 0 016 6" stroke-linecap="round"></path>
 				<circle cx="8" cy="10" r="1.5" fill="currentColor" stroke="none"></circle>
+			</svg>
+		case "Scheduled":
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<circle cx="8" cy="9" r="5.5"></circle>
+				<path d="M8 6v3l2 1.5M3 2.5L1.5 4M13 2.5 14.5 4" stroke-linecap="round" stroke-linejoin="round"></path>
 			</svg>
 		case "Settings":
 			<svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">

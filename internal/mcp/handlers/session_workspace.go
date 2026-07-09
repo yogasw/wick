@@ -39,9 +39,12 @@ const sessionWorkspaceToolName = "wick_session_workspace"
 //   - add:       create a blank instance from a base connector key
 //                (optionally pop the fill modal for the user right away)
 //   - duplicate: copy an existing session instance (config and all)
-//   - configure: open the fill modal so the user edits an instance's config
-//   - test:      verify setup — base HealthCheck, or run a named operation
-//   - remove:    delete a session instance
+//   - configure:  open the fill modal so the user edits an instance's config
+//   - set_config: write config values directly (no modal) — for transports
+//                 with no UI (e.g. Slack) and automations. Secrets should be
+//                 passed as enc tokens so the plaintext never reaches the agent.
+//   - test:       verify setup — base HealthCheck, or run a named operation
+//   - remove:     delete a session instance
 func WickSessionWorkspace(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -77,12 +80,14 @@ func WickSessionWorkspace(
 		sessionWorkspaceDuplicate(w, req, rsp, svc, layout, sessionID, args)
 	case "configure":
 		sessionWorkspaceConfigure(w, r, req, rsp, svc, layout, asks, askAllowed, sessionID, args)
+	case "set_config":
+		sessionWorkspaceSetConfig(w, req, rsp, svc, layout, sessionID, args)
 	case "test":
 		sessionWorkspaceTest(w, r, req, rsp, svc, layout, sessionID, args, user)
 	case "remove":
 		sessionWorkspaceRemove(w, req, rsp, layout, sessionID, args)
 	default:
-		rsp.ToolError(w, req.ID, "action must be one of: list, add, duplicate, configure, test, remove", sessionWorkspaceToolName)
+		rsp.ToolError(w, req.ID, "action must be one of: list, add, duplicate, configure, set_config, test, remove", sessionWorkspaceToolName)
 	}
 }
 
@@ -304,6 +309,65 @@ func sessionWorkspaceConfigure(w http.ResponseWriter, r *http.Request, req RPCRe
 	})
 }
 
+// sessionWorkspaceSetConfig writes config values onto a session instance
+// without a modal — the path for UI-less transports (Slack) and
+// automations. Values arrive in the `values` arg (a map). Secret fields
+// SHOULD be passed as enc tokens (wick_cenc_ / wick_enc_) so the plaintext
+// never flows through the agent; a plaintext secret is master-encrypted
+// server-side as a fallback. Unknown keys are rejected so a typo can't
+// silently no-op.
+func sessionWorkspaceSetConfig(w http.ResponseWriter, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, sessionID string, args map[string]any) {
+	cid := strings.TrimSpace(argString(args, "connector_id"))
+	if cid == "" {
+		rsp.ToolError(w, req.ID, "connector_id is required (the session instance to configure)", sessionWorkspaceToolName)
+		return
+	}
+	rawValues, ok := args["values"].(map[string]any)
+	if !ok || len(rawValues) == 0 {
+		rsp.ToolError(w, req.ID, "values is required — a map of config key to value (pass secrets as wick_cenc_/wick_enc_ tokens)", sessionWorkspaceToolName)
+		return
+	}
+	inst, ok, err := sessionworkspace.Get(layout, sessionID, cid)
+	if err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
+		return
+	}
+	if !ok {
+		rsp.ToolError(w, req.ID, fmt.Sprintf("session instance %q not found", cid), sessionWorkspaceToolName)
+		return
+	}
+	mod, ok := svc.Module(inst.BaseKey)
+	if !ok {
+		rsp.ToolError(w, req.ID, fmt.Sprintf("base module %q not registered", inst.BaseKey), sessionWorkspaceToolName)
+		return
+	}
+	specByKey := make(map[string]entity.Config, len(mod.Configs))
+	for _, sp := range mod.Configs {
+		specByKey[sp.Key] = sp
+	}
+	// Reject unknown keys up front — a typo shouldn't silently no-op.
+	values := StringifyArgs(rawValues)
+	for k := range values {
+		if _, known := specByKey[k]; !known {
+			rsp.ToolError(w, req.ID, "unknown config key: "+k, sessionWorkspaceToolName)
+			return
+		}
+	}
+
+	applied, err := storeSessionConfig(svc, layout, sessionID, inst.ID, specByKey, values)
+	if err != nil {
+		rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
+		return
+	}
+	reloaded, _, _ := sessionworkspace.Get(layout, sessionID, cid)
+	writeWorkspaceResult(w, req, rsp, map[string]any{
+		"session_id": sessionID,
+		"instance":   sessionWorkspaceVM(svc, reloaded),
+		"applied":    applied,
+		"note":       "Config written. Run action=test to confirm setup before relying on it.",
+	})
+}
+
 func sessionWorkspaceTest(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, sessionID string, args map[string]any, user *entity.User) {
 	cid := strings.TrimSpace(argString(args, "connector_id"))
 	if cid == "" {
@@ -478,14 +542,32 @@ func openConfigModal(r *http.Request, svc *connectors.Service, layout agentconfi
 	if len(ans.Values) == 0 {
 		return []string{}, nil
 	}
+	return storeSessionConfig(svc, layout, sessionID, inst.ID, specByKey, ans.Values)
+}
 
-	toStore := make(map[string]string, len(ans.Values))
-	for k, v := range ans.Values {
+// storeSessionConfig validates the supplied values against the base
+// module's config specs and persists them on the session instance,
+// returning the keys actually written (sorted). Shared by the modal path
+// (openConfigModal) and the modal-less action=set_config path.
+//
+// Value handling per key:
+//   - unknown key (not in the base specs) → skipped.
+//   - empty value → skipped ("leave as-is", same rule as the UI Save).
+//   - secret field, value already an enc token (wick_cenc_ master OR
+//     wick_enc_ per-user) → stored verbatim. This is the automation path:
+//     the caller relays an already-encrypted token, so the plaintext never
+//     passes through the agent.
+//   - secret field, plaintext value → master-encrypted before it touches
+//     disk (errors if encryption is disabled on this server).
+//   - non-secret field → stored verbatim.
+func storeSessionConfig(svc *connectors.Service, layout agentconfig.Layout, sessionID, instID string, specByKey map[string]entity.Config, values map[string]string) ([]string, error) {
+	toStore := make(map[string]string, len(values))
+	for k, v := range values {
 		sp, ok := specByKey[k]
 		if !ok || v == "" {
 			continue
 		}
-		if sp.IsSecret && !enc.IsMasterToken(v) {
+		if sp.IsSecret && !enc.IsMasterToken(v) && !enc.IsToken(v) {
 			e := svc.Enc()
 			if e == nil || e.Disabled() {
 				return nil, fmt.Errorf("config %q is secret but encryption is disabled on this server — cannot store it safely", k)
@@ -501,7 +583,7 @@ func openConfigModal(r *http.Request, svc *connectors.Service, layout agentconfi
 	if len(toStore) == 0 {
 		return []string{}, nil
 	}
-	if err := sessionworkspace.SetConfig(layout, sessionID, inst.ID, toStore); err != nil {
+	if err := sessionworkspace.SetConfig(layout, sessionID, instID, toStore); err != nil {
 		return nil, err
 	}
 	keys := make([]string, 0, len(toStore))

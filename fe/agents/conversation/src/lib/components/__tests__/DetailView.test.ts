@@ -139,6 +139,14 @@ vi.mock("../../api/workspace.js", () => ({
   removeWorkspace: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
 }));
 
+vi.mock("../../api/schedules.js", () => ({
+  listSchedules: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  createSchedule: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  cancelSchedule: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  pauseSchedule: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  resumeSchedule: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+}));
+
 vi.mock("svelte/store", async (importActual) => {
   const actual = await importActual<typeof import("svelte/store")>();
   return { ...actual };
