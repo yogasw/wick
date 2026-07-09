@@ -283,12 +283,14 @@ Pool fires two callbacks the UI subscribes to:
 |---|---|---|
 | `OnSessionCreated(sess)` | Pool auto-creates a session for an inbound channel message | Register session into `manager.Manager` so the dashboard sees it without reload. |
 | `OnLifecycle(LifecycleEvent)` | `spawning` (post-Start) and `killed` transitions | UI badges, spawn-log enrichment. |
+| `OnUserMessage(UserMessageEvent)` | A `role=user` turn is sent from a non-`"ui"` source (channel or [schedule runner](./scheduled-messages)) | Push a `user_message` SSE event so an already-open web session renders the turn live. See [Channels ▶ SSE event vocabulary](./channels#sse-event-vocabulary). |
 
 `Idle` / `Working` transitions are NOT routed via `OnLifecycle` — they're implicit from the event flow. UIs that want every transition subscribe to `AgentEvent` via the factory's `OnEvent`.
 
 ## See also
 
 - [Channels](./channels) — where `SendFunc` is called from.
+- [Scheduled Messages](./scheduled-messages) — another non-web caller of `Send`, via the schedule runner.
 - [Projects](./projects) — `cwd` resolution.
 - [Providers](./providers) — `FactoryOptions.ProviderType` / `ProviderName` forwarding.
 - [Command Gate](../command-gate) — gate's PreToolUse hook fires inside the spawned subprocess; pool doesn't see it.

@@ -7,9 +7,11 @@ All notable changes to Wick are documented here.
 ## [Unreleased]
 
 ### Added
+*   **Scheduled messages**: A new session-scoped primitive to inject a message into an agent session later — one-shot or recurring — without the workflow engine. Agents schedule via the new `wick_schedule_message` MCP tool (`create` / `list` / `cancel` / `pause` / `resume` / `reschedule`; timing via `run_at`, `every`, or `cron`); humans use a per-session **Scheduled** tab or the new global **Scheduled** sidebar page (`/tools/agents/scheduled`) which lists every schedule across sessions, filterable by status and grouped by session. Delivery goes through the normal pool send path, so a fired schedule behaves exactly like any inbound message. See [Scheduled Messages](guide/agents/scheduled-messages).
 *   **Slack: file ops + `get_reactions`**: New **Files** category on the Slack connector — `list_files`, `get_file_info`, and `read_file` (downloads a file's bytes with the bot token and returns them inline: UTF-8 text as a string, binary/images as base64, capped by a `max_bytes` guard). Also added `get_reactions` (read the existing reactions on a message or file). Needs `files:read` and `reactions:read` added to the bot token's scopes. See [Slack connector](connectors/slack#operations-files).
 
 ### Fixed
+*   **Inbound messages from channels/schedules now appear live in an open web session**: A message injected by Slack, Telegram, or a fired schedule while the session's web page was already open used to only show up after a manual refresh. A new `user_message` SSE event pushes it immediately, badged above the bubble (⏰ Scheduled / via Slack) to show where it came from. See [Channels ▶ SSE event vocabulary](guide/agents/channels#sse-event-vocabulary).
 *   **Session connector instances no longer stuck on "needs setup" when a required field has a default**: A required config field now counts as satisfied when the base spec ships a non-empty default value, not only when the instance's own config carries a value — fixes a freshly-added session connector instance reading "needs setup" until a redundant edit-then-save.
 
 ---
