@@ -6,7 +6,11 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **Slack: file ops + `get_reactions`**: New **Files** category on the Slack connector — `list_files`, `get_file_info`, and `read_file` (downloads a file's bytes with the bot token and returns them inline: UTF-8 text as a string, binary/images as base64, capped by a `max_bytes` guard). Also added `get_reactions` (read the existing reactions on a message or file). Needs `files:read` and `reactions:read` added to the bot token's scopes. See [Slack connector](connectors/slack#operations-files).
+
+### Fixed
+*   **Session connector instances no longer stuck on "needs setup" when a required field has a default**: A required config field now counts as satisfied when the base spec ships a non-empty default value, not only when the instance's own config carries a value — fixes a freshly-added session connector instance reading "needs setup" until a redundant edit-then-save.
 
 ---
 
