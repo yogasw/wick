@@ -8,6 +8,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/sessionworkspace"
 	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/pkg/connector"
 )
 
@@ -48,14 +49,25 @@ func SessionInstanceForID(layout agentconfig.Layout, sessionID, connectorID stri
 }
 
 // sessionInstanceStatus mirrors Service.Status for a virtual instance:
-// "ready" when every required (non-hidden) base config field has a value
-// in the instance config, "needs_setup" otherwise.
+// "ready" when every required (non-hidden) base config field is satisfied,
+// "needs_setup" otherwise. A field counts as satisfied when the instance
+// config carries a value OR the base spec ships a non-empty default — the
+// runtime falls back to that default (see entity.MapToStruct), and the
+// Config-tab form already renders it, so a freshly-added instance whose
+// required fields all default must read as ready without a redundant save.
 func sessionInstanceStatus(mod connector.Module, cfg map[string]string) string {
-	for _, sp := range mod.Configs {
+	return sessionConfigStatus(mod.Configs, cfg)
+}
+
+// sessionConfigStatus is the shared required-fields check used by every
+// session-instance surface (MCP list/workspace + the Config-tab UI) so all
+// three agree on when an instance is "ready".
+func sessionConfigStatus(specs []entity.Config, cfg map[string]string) string {
+	for _, sp := range specs {
 		if sp.Hidden || !sp.Required {
 			continue
 		}
-		if strings.TrimSpace(cfg[sp.Key]) == "" {
+		if strings.TrimSpace(cfg[sp.Key]) == "" && strings.TrimSpace(sp.Value) == "" {
 			return "needs_setup"
 		}
 	}

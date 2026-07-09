@@ -143,11 +143,14 @@ func sessionWorkspaceVM(svc *connectors.Service, in sessionworkspace.Instance) i
 	if !ok {
 		return vm
 	}
+	// A required field is "missing" only when the instance config is empty
+	// AND the base spec ships no default — same rule as sessionConfigStatus,
+	// so a defaulted required field never blocks a fresh instance.
 	for _, sp := range mod.Configs {
 		if sp.Hidden || !sp.Required {
 			continue
 		}
-		if strings.TrimSpace(in.Config[sp.Key]) == "" {
+		if strings.TrimSpace(in.Config[sp.Key]) == "" && strings.TrimSpace(sp.Value) == "" {
 			vm.Missing = append(vm.Missing, sp.Key)
 		}
 	}
