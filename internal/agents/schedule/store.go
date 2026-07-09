@@ -22,9 +22,11 @@ import (
 // ErrNotFound is returned when a schedule id does not exist.
 var ErrNotFound = errors.New("scheduled message not found")
 
-// maxAttempts caps delivery retries. After this many failed attempts a row
-// stays "failed" and is never re-fired.
-const maxAttempts = 3
+// Delivery is fail-fast, not retried: a schedule that fails to deliver
+// (send error, or a vanished target session) is marked "failed" and never
+// re-fired. attempts is stamped on each claim for observability only — a
+// nudge that can't be delivered shouldn't spin. (If a retry cap is ever
+// wanted, MarkFailed would compare attempts before terminating.)
 
 // Store is the DB persistence for scheduled messages.
 type Store struct {
