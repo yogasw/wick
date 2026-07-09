@@ -70,4 +70,22 @@ func TestSessionInstanceStatus(t *testing.T) {
 	if got := sessionInstanceStatus(mod, map[string]string{"base_url": "https://x"}); got != "ready" {
 		t.Fatalf("required filled: got %q want ready", got)
 	}
+
+	// A required field that ships a non-empty default is satisfied WITHOUT
+	// anything in the instance config — the runtime falls back to the
+	// default and the form renders it, so a fresh instance must read ready.
+	// This is the regression guard for the "always needs setup until I
+	// re-save" bug.
+	defaulted := connector.Module{
+		Configs: []entity.Config{
+			{Key: "base_url", Required: true, Value: "https://default.example.com"},
+			{Key: "api_key", Required: true, IsSecret: true},
+		},
+	}
+	if got := sessionInstanceStatus(defaulted, map[string]string{"api_key": "wick_cenc_x"}); got != "ready" {
+		t.Fatalf("required-with-default + secret filled: got %q want ready", got)
+	}
+	if got := sessionInstanceStatus(defaulted, map[string]string{}); got != "needs_setup" {
+		t.Fatalf("required-with-default but secret unset: got %q want needs_setup", got)
+	}
 }

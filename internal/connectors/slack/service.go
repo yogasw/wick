@@ -1,9 +1,11 @@
 package slack
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/pkg/connector"
@@ -353,6 +355,128 @@ func shapeUploadResult(raw any) (any, error) {
 	return out, nil
 }
 
+// strAt reads a string field from a decoded JSON map, empty if absent or
+// not a string.
+func strAt(m map[string]any, key string) string {
+	s, _ := m[key].(string)
+	return s
+}
+
+func shapeReactions(raw any) any {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return raw
+	}
+	// reactions.get nests the list under the target type (message/file);
+	// pull whichever carries the reactions array.
+	var reactions []any
+	if msg, ok := m["message"].(map[string]any); ok {
+		reactions, _ = msg["reactions"].([]any)
+	}
+	if reactions == nil {
+		if f, ok := m["file"].(map[string]any); ok {
+			reactions, _ = f["reactions"].([]any)
+		}
+	}
+	if reactions == nil {
+		reactions, _ = m["reactions"].([]any)
+	}
+	out := make([]map[string]any, 0, len(reactions))
+	for _, r := range reactions {
+		if rm, ok := r.(map[string]any); ok {
+			out = append(out, map[string]any{
+				"name":  rm["name"],
+				"count": rm["count"],
+				"users": rm["users"],
+			})
+		}
+	}
+	return map[string]any{"reactions": out}
+}
+
+func shapeFileList(raw any) any {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return raw
+	}
+	files, _ := m["files"].([]any)
+	out := make([]map[string]any, 0, len(files))
+	for _, f := range files {
+		out = append(out, shapeOneFile(f))
+	}
+	resp := map[string]any{"files": out}
+	if paging, ok := m["paging"]; ok {
+		resp["paging"] = paging
+	}
+	return resp
+}
+
+func shapeOneFile(in any) map[string]any {
+	m, ok := in.(map[string]any)
+	if !ok {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"id":                   m["id"],
+		"name":                 m["name"],
+		"title":                m["title"],
+		"mimetype":             m["mimetype"],
+		"filetype":             m["filetype"],
+		"size":                 m["size"],
+		"user":                 m["user"],
+		"created":              m["created"],
+		"channels":             m["channels"],
+		"is_external":          m["is_external"],
+		"url_private_download": m["url_private_download"],
+		"permalink":            m["permalink"],
+	}
+}
+
+// shapeReadFile turns downloaded bytes into an LLM-friendly response:
+// UTF-8 text inline when the mimetype is text-like and the bytes are valid
+// UTF-8, base64 otherwise (images, PDFs, anything binary).
+func shapeReadFile(fileID, name, mimetype string, body []byte) any {
+	out := map[string]any{
+		"file_id":  fileID,
+		"name":     name,
+		"mimetype": mimetype,
+		"size":     len(body),
+	}
+	if isTextMimetype(mimetype) && utf8.Valid(body) {
+		out["is_text"] = true
+		out["content"] = string(body)
+	} else {
+		out["is_text"] = false
+		out["content_base64"] = base64.StdEncoding.EncodeToString(body)
+	}
+	return out
+}
+
+// isTextMimetype reports whether a mimetype's bytes are safe to return as a
+// UTF-8 string. text/* plus a handful of known-text application subtypes.
+func isTextMimetype(mt string) bool {
+	mt = strings.ToLower(strings.TrimSpace(mt))
+	if i := strings.IndexByte(mt, ';'); i >= 0 {
+		mt = strings.TrimSpace(mt[:i])
+	}
+	if strings.HasPrefix(mt, "text/") {
+		return true
+	}
+	switch mt {
+	case "application/json",
+		"application/xml",
+		"application/xhtml+xml",
+		"application/javascript",
+		"application/x-ndjson",
+		"application/x-sh",
+		"application/x-yaml",
+		"application/yaml",
+		"application/csv":
+		return true
+	}
+	return false
+}
+
 // ── Permission check ─────────────────────────────────────────────────
 
 // opScopes lists, for each operation, the set of OAuth scopes that
@@ -380,6 +504,10 @@ var opScopes = map[string][][]string{
 	"delete_message":         {{"chat:write"}},
 	"add_reaction":           {{"reactions:write"}},
 	"remove_reaction":        {{"reactions:write"}},
+	"get_reactions":          {{"reactions:read"}},
+	"list_files":             {{"files:read"}},
+	"get_file_info":          {{"files:read"}},
+	"read_file":              {{"files:read"}},
 	"create_canvas":          {{"canvases:write"}},
 	"create_channel_canvas":  {{"canvases:write"}},
 	"edit_canvas":            {{"canvases:write"}},

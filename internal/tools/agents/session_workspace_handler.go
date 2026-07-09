@@ -91,12 +91,18 @@ func wsValueOr(cfg map[string]string, key, fallback string) string {
 	return fallback
 }
 
+// wsStatus reports "ready" when every required (non-hidden) config field
+// is satisfied. A field counts as satisfied when the instance config
+// carries a value OR the base spec ships a non-empty default — the form
+// already renders that default (see wsBuildFields → wsValueOr) and the
+// runtime falls back to it, so a fresh instance whose required fields all
+// default reads as ready without forcing a redundant edit-then-save.
 func wsStatus(specs []entity.Config, cfg map[string]string) string {
 	for _, sp := range specs {
 		if sp.Hidden || !sp.Required {
 			continue
 		}
-		if strings.TrimSpace(cfg[sp.Key]) == "" {
+		if strings.TrimSpace(cfg[sp.Key]) == "" && strings.TrimSpace(sp.Value) == "" {
 			return "needs_setup"
 		}
 	}
