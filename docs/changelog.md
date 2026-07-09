@@ -6,7 +6,8 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+*   **9router dashboard iframe now agrees with the status badge**: The Dashboard tab's embedded iframe now probes the dashboard port directly (like the status badge and API proxy already did), instead of only checking whether wick itself spawned the process. A 9router started outside wick, or one that survived a wick restart, now serves the iframe instead of showing "not running — start it first" while the badge says **Running**.
 
 ---
 
