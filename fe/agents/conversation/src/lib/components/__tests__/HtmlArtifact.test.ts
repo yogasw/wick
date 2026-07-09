@@ -66,6 +66,38 @@ describe("HtmlArtifact", () => {
     host.remove();
   });
 
+  test("Reload menu item re-fetches a url-backed preview with fresh bytes", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ text: () => Promise.resolve("<p>old</p>") })
+      .mockResolvedValueOnce({ text: () => Promise.resolve("<p>new</p>") });
+    vi.stubGlobal("fetch", fetchMock);
+    const { container } = render(HtmlArtifact, { props: { url: "/raw?path=a.html", name: "a.html" } });
+    await waitFor(() => expect((container.querySelector("iframe") as HTMLIFrameElement).srcdoc).toContain("old"));
+    await fireEvent.click(screen.getByRole("button", { name: "Actions for a.html" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Reload" }));
+    await waitFor(() => expect((container.querySelector("iframe") as HTMLIFrameElement).srcdoc).toContain("new"));
+    // second call bypasses the HTTP cache
+    expect(fetchMock).toHaveBeenLastCalledWith("/raw?path=a.html", { cache: "no-store" });
+  });
+
+  test("Reload remounts the iframe even when refetched bytes are identical", async () => {
+    // Same bytes both times: a plain srcdoc reassign wouldn't re-run the
+    // artifact's scripts, so reload must remount the iframe (fresh element).
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ text: () => Promise.resolve("<p>same</p>") }));
+    const { container } = render(HtmlArtifact, { props: { url: "/raw?path=a.html", name: "a.html" } });
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    const before = container.querySelector("iframe");
+    await fireEvent.click(screen.getByRole("button", { name: "Actions for a.html" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Reload" }));
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBe(before));
+  });
+
+  test("Reload is absent for inline (src) artifacts — nothing to re-fetch", async () => {
+    render(HtmlArtifact, { props: { src: "<p>hi</p>", name: "x.html" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Actions for x.html" }));
+    expect(screen.queryByRole("menuitem", { name: "Reload" })).toBeNull();
+  });
+
   test("Full screen opens an overlay with a larger iframe; Escape closes", async () => {
     render(HtmlArtifact, { props: { src: "<p>hi</p>", name: "x.html" } });
     await fireEvent.click(screen.getByRole("button", { name: "Actions for x.html" }));

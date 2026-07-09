@@ -25,6 +25,7 @@ Most "AI agent" tools either lock you into their own runtime, or expose a chat-o
 | **Skills Manager** — browse, preview, sync, and delete skill `.md` files across all provider skill dirs (`~/.claude/skills`, `~/.codex/skills`, `~/.gemini/skills`) from one UI | [Skills Manager](./agents/skills-manager) |
 | **Command Gate** — `<app>-gate` sidecar binary intercepts every Bash command for whitelist + 4-mode interactive approval | [Command Gate](./command-gate) |
 | **AskUser MCP tool** — agent asks a question mid-turn, web UI renders a card, answer goes back as MCP tool result | (covered in [Channels ▶ Web UI](./agents/channels#web-ui)) |
+| **Composer** — one shared message input across New Session, Project landing, and live sessions, with `@` file mentions and a `/` command palette | _[below](#composer)_ |
 | **Context file panel** — slide-over on session detail to browse / read / edit / download / delete files in the agent's working directory, with markdown + HTML preview and Ace syntax highlighting | _[below](#context-file-panel)_ |
 | **Source Control panel** — docked, pinnable SCM sidebar on the session detail page: multi-repo git status, tree/list view, stage/unstage/discard, commit, branches, push/pull, Monaco diff viewer, commit history, live SSE updates | [Source Control](./agents/source-control) |
 | **Persistent state on disk** — everything under `~/.<app>/agents/`. Backup is `tar`. Restart re-scans, no DB migration. | _below_ |
@@ -145,7 +146,7 @@ Files produced in a single turn are shown as a **grid** (up to 4 items) or a **c
 |---|---|
 | Image — png, jpg, jpeg, svg, webp, gif | Thumbnail in the grid. Click opens a **zoomable / pannable lightbox** (zoom buttons, mouse-wheel, drag to pan, `Esc` / `+` / `−` / `0` keyboard shortcuts). |
 | PDF | Thumbnail chip. Click opens the PDF inline in the lightbox. |
-| HTML | Borderless sandboxed `<iframe>` that grows to its content height (no inner scrollbar). A floating **⋮** menu offers Full screen / Show code / Download. Inline ` ```html ` blocks in the message body use the same renderer. |
+| HTML | Borderless sandboxed `<iframe>` that grows to its content height (no inner scrollbar). A floating **⋮** menu offers Full screen / Show code / Download. Inline ` ```html ` blocks in the message body use the same renderer, as does a ` ```htmlfile ` fence containing just a session-relative path — same preview, but the transcript stores only the path, not the markup. Clicking a `.html` file in the [Context file panel](#context-file-panel) opens the same live preview with an Edit/Preview toggle and Reload. |
 | Markdown (`.md`) | File card with a fullscreen markdown viewer + download. |
 | Text / code | File card with a fullscreen text viewer + download. |
 | Any other type | Downloadable file chip (icon + filename). |
@@ -162,6 +163,10 @@ HTML artifacts (both file artifacts and inline ` ```html ` blocks) receive a **t
 
 The agent system prompt tells the model to use `var(--wick-*)` by default and only hard-code a palette when the design genuinely requires a fixed look (brand mock-up, game canvas, etc.).
 
+### Reading session files from an artifact
+
+A sandboxed artifact can't `fetch()` — the sandbox gives it an opaque origin and the CSP sets `connect-src 'none'`, so any `fetch`/`XHR` (to a file or an API) is refused by design. To feed data into an artifact without loosening the sandbox, the runtime injects `window.wickReadFile(path)` into every artifact: it returns a `Promise` of the file's text contents. The artifact calls it, the *parent* page (which owns the session) reads the file and answers over `postMessage` — no network request ever leaves the sandbox. `path` is session-relative — same rule as the `htmlfile` fence above — and absolute paths / `..` traversal are rejected.
+
 ### Serving artifacts
 
 A new backend endpoint serves cwd files on demand:
@@ -175,6 +180,18 @@ GET /tools/agents/sessions/{id}/files/raw?path=<relative-path>
 - HTML and other types: forced to `attachment` (download) for safety — the lightbox HTML preview uses `srcdoc` not `src` so the raw file is never trusted directly.
 
 The endpoint is gated by the same session-ownership check as the rest of the agents API and respects the `safeJoin` path sandbox (no `..` traversal).
+
+## Composer
+
+The message input — on the New Session page, the Project landing page, and a live session's Conversation tab — is one shared component. Same input, same toolbar (bell, attach, provider/project/preset dropdowns as a single row that scrolls horizontally on narrow screens instead of wrapping), same autocomplete, everywhere.
+
+### `@` file mentions
+
+Typing `@` opens a file-search popup scored against the whole session `cwd` — not just whatever the file tree currently has loaded — backed by `GET /sessions/{id}/files/search?q=<terms>`. Space-separated terms are ANDed; matches are ranked (basename hits first, then earliest match position, then shorter paths), and the underlying file-tree walk is cached for a few seconds so rapid typing doesn't re-walk the disk on every keystroke. Selecting a result inserts `@path`.
+
+### `/` command palette
+
+Typing `/` opens a command menu backed by `GET /api/composer/commands` — built-in actions (switch provider, switch project, open a panel: processes / workspace / source / context, or change the view: commands / approvals / raw) grouped by category, followed by every installed [skill](./agents/skills-manager). Picking a built-in action runs it directly; picking a skill inserts `/<skill-name>`.
 
 ## Context file panel
 
