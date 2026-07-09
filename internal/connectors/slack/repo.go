@@ -128,6 +128,53 @@ func slackPostMultipart(c *connector.Ctx, filename string, content []byte, title
 	return result, nil
 }
 
+// slackDownload fetches raw bytes from a Slack url_private / url_private_download
+// URL using the connector's token as a Bearer header. This is the step
+// files.info cannot do for you: the download URLs are auth-gated, and a
+// tokenless GET silently returns Slack's HTML sign-in page instead of the
+// file. Enforces maxBytes and treats an HTML body on a non-file mimetype as
+// the tell-tale "bot can't see this file" case.
+func slackDownload(c *connector.Ctx, downloadURL string, maxBytes int) ([]byte, error) {
+	token, err := pickToken(c)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(c.Context(), http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build download request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("download file: HTTP %d", resp.StatusCode)
+	}
+
+	// Read one byte past the cap so we can tell "exactly at cap" from "over".
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
+	if err != nil {
+		return nil, fmt.Errorf("read file body: %w", err)
+	}
+	if len(body) > maxBytes {
+		return nil, fmt.Errorf("file exceeds max_bytes (%d) — raise max_bytes or fetch it another way", maxBytes)
+	}
+
+	// Slack answers an unauthorized download with 200 + an HTML login page
+	// rather than an error. Detect that so the caller gets a clear reason
+	// instead of base64'd HTML.
+	ct := resp.Header.Get("Content-Type")
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(ct)), "text/html") &&
+		bytes.Contains(bytes.ToLower(body), []byte("<!doctype html")) {
+		return nil, fmt.Errorf("download returned an HTML page, not the file — the bot is not a member of any channel this file was shared to (needs files:read + channel access)")
+	}
+	return body, nil
+}
+
 // doSlack adds auth, dispatches, and decodes a Slack Web API response.
 // Slack always returns HTTP 200 — success is signalled by `ok: true` in
 // the body. Non-2xx is therefore always a transport/infra failure.

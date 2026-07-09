@@ -10,6 +10,22 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.29.0](https://github.com/yogasw/wick/compare/v0.28.5...v0.29.0) — Scheduled Messages & Slack
+
+_Released on 2026-07-09_
+
+### Added
+*   **Scheduled messages**: A new session-scoped primitive allows agents to inject messages into a session at a later time, either as a one-shot or recurring event, without involving the workflow engine. Agents can schedule via the new `wick_schedule_message` MCP tool (`create` / `list` / `cancel` / `pause` / `resume` / `reschedule`), specifying timing with `run_at`, `every`, or `cron`. Users can manage these messages via a per-session **Scheduled** tab or a new global **Scheduled** sidebar page (`/tools/agents/scheduled`), which lists all schedules across sessions, filterable by status and grouped by session. Messages are delivered through the normal pool send path, behaving exactly like any inbound message. See [Scheduled Messages](guide/agents/scheduled-messages).
+*   **Slack: file ops + `get_reactions`**: The Slack connector now includes a new **Files** category, offering `list_files`, `get_file_info`, and `read_file`. `read_file` downloads file bytes using the bot token, returning UTF-8 text as a string or binary/images as base64, with a `max_bytes` guard. Additionally, `get_reactions` has been added to read existing reactions on messages or files, alongside the existing add/remove operations. These operations require `files:read` and `reactions:read` scopes to be added to the bot token. See [Slack connector](connectors/slack#operations-files).
+
+### Fixed
+*   **Inbound messages from channels/schedules now appear live in an open web session**: Messages injected by sources like Slack, Telegram, or a fired schedule now immediately appear in an open web session, rather than requiring a manual refresh. A new `user_message` SSE event pushes these messages live, displaying a badge (e.g., ⏰ Scheduled / via Slack) above the message bubble to indicate its origin. See [Channels ▶ SSE event vocabulary](guide/agents/channels#sse-event-vocabulary).
+*   **Session connector instances no longer stuck on "needs setup" when a required field has a default**: A required configuration field now correctly registers as satisfied if its base specification includes a non-empty default value, resolving an issue where freshly-added session connector instances would display "needs setup" until a redundant edit-and-save operation.
+*   **Scheduled messages rail badge correctly counts active recurring schedules**: The DetailView rail badge for scheduled messages now accurately counts both "pending" and "active" recurring schedules, ensuring sessions with only active recurring schedules no longer incorrectly show a count of zero.
+
+---
+
+
 ## [v0.28.5](https://github.com/yogasw/wick/compare/v0.28.4...v0.28.5) — Fixes
 
 _Released on 2026-07-08_

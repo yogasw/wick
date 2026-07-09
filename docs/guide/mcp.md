@@ -640,6 +640,10 @@ From the tab a user can:
 
 When `wick_execute` (or `wick_get`) is called with a `session_id` and a `sw_…` connector id, the server resolves the instance from `sessions/<id>/workspace.json`, clones the base module, and runs against the instance's own config — no DB row, no tag visibility (the session itself is the authorization scope). Secret values (master tokens) are decrypted just before the call and re-masked in the response. A `session-config-purge` job sweeps stale workspace files by age as a TTL backstop.
 
+## Scheduling a future message
+
+`wick_schedule_message` lets an agent inject a message into a session later — one-shot or recurring — without the workflow engine. Typical use: an agent schedules itself ("check back at 12:40") by passing its own `session_id`. See [Scheduled Messages](./agents/scheduled-messages) for the full action set (`create` / `list` / `cancel` / `pause` / `resume` / `reschedule`), the timing grammar (`run_at` / `every` / `cron`), and the owner+admin access model.
+
 ## Reference
 
 - MCP spec: <https://modelcontextprotocol.io>
