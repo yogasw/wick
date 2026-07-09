@@ -6,7 +6,13 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **Unified chat composer with `@` file mentions and `/` command palette**: The New Session page, Project landing page, and live session Conversation tab now share a single composer component (previously each had its own). Typing `@` opens a file-search popup scored against the whole session working directory, backed by a new `GET /sessions/{id}/files/search` endpoint. Typing `/` opens a command menu — switch provider/project, open a panel (processes/workspace/source/context), change the view (commands/approvals/raw), or run an installed skill — sourced from a new `GET /api/composer/commands` endpoint. The toolbar (bell, attach, provider/project/preset dropdowns) is now a single row that scrolls horizontally on mobile instead of wrapping. See [Agents — Composer](/guide/agents#composer).
+*   **HTML artifacts by path (` ```htmlfile ` fence)**: A new fence previews a saved `.html` file by its session-relative path instead of pasting the markup into the transcript — same sandboxed preview (Full screen / Show code / Download) as inline ` ```html ` blocks and file artifacts, but the transcript only ever stores the path. Clicking a `.html` file in the Context file panel now opens the same live preview with an Edit/Preview toggle and Reload. See [Agents — Artifacts](/guide/agents#artifacts).
+*   **Artifacts can read session files via `window.wickReadFile`**: Sandboxed HTML artifacts can't `fetch()` (the CSP blocks it by design), so the runtime now injects `window.wickReadFile(path)`, returning a Promise of a session file's text contents fetched by the parent page and handed back over `postMessage`. Lets a generated dashboard load data from a session file without loosening the sandbox. See [Agents — Artifacts](/guide/agents#artifacts).
+
+### Fixed
+*   **Ace code editor caret drift**: Fixed the text caret drifting from its visible position in the Context file panel's Ace editor by re-measuring font metrics after the editor becomes visible and webfonts finish loading.
 
 ---
 
