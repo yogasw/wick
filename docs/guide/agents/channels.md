@@ -303,6 +303,7 @@ The web UI listens to one stream (`GET /tools/agents/stream?session=<id>`) and d
 | `type` | Producer | Payload | FE handler |
 |---|---|---|---|
 | `lifecycle` | State machine via pool `OnLifecycle` | `lifecycle: spawning\|working\|idle\|killed`, `pid`, `at` (LastActive ms) | Update header badge, idle countdown, typing indicator |
+| `user_message` | Pool `OnUserMessage`, fired for a user-role turn injected from a **non-web** source (a channel or the [schedule runner](./scheduled-messages)) | `session_id`, `agent_name`, `source`, `text` | Append the user bubble live, badged by `source` (⏰ "Scheduled" for `source=schedule`, "via Slack" / "via Telegram" for channels) |
 | `session_start` | Parser `SessionStart` event | — | Show typing indicator, append assistant bubble shell |
 | `text_delta` | Parser per chunk | `data: <chunk>` | Append to current assistant bubble |
 | `thinking` | Parser `Thinking` event | `data: <text>` | Append thinking card to turn trace |
@@ -318,6 +319,8 @@ The web UI listens to one stream (`GET /tools/agents/stream?session=<id>`) and d
 | `system_turn` | Provider switcher | `data: JSON {text, steps}` | Render system bubble |
 
 The snapshot endpoint (`GET /stream/snapshot?session=<id>`) replays the **current** in-flight state as the same events so a page refresh mid-turn paints the partial bubble + trace cards without waiting for the next live event. The snapshot reads from pool first (live `entry.PartialText` + `entry.InFlightEvents`), then falls back to `inflight.jsonl` on disk for crashed-but-not-flushed turns.
+
+`user_message` exists to close a gap: a message arriving from Slack, Telegram, or a fired schedule used to only show up in an already-open web session after a manual refresh, because the composer's own optimistic render only covers turns typed in that same tab. The pool skips the event for `source="ui"` — the composer already renders those — so it fires only for turns the viewer couldn't otherwise have seen coming.
 
 ### AskUser MCP tool
 

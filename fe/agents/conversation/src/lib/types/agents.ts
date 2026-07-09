@@ -81,6 +81,11 @@ export type ConversationTurn = {
   agent: string;
   provider: string;
   text: string;
+  // Origin of a user turn: "ui" (web composer), "slack", "telegram",
+  // "schedule", … Absent/"ui" → no source badge. Persisted server-side
+  // (agentstore.ConversationTurn.Source) and carried on live user_message
+  // events. Used to badge messages that didn't come from this web session.
+  source?: string;
   // RFC3339 string from history payload (Go struct `json:"ts"`). Live turns
   // built client-side only set `timestamp` (epoch ms) — read either.
   ts?: string;
@@ -215,6 +220,24 @@ export type WsInstance = {
 export type WsBase = {
   base_key: string;
   label?: string;
+};
+
+export type Schedule = {
+  id: string;
+  session_id: string;
+  created_by: string;
+  kind: string; // once | recurring
+  run_at: string; // RFC3339 — next fire
+  status: string; // pending | active | done | cancelled | failed
+  message: string;
+  run_count: number;
+  paused?: boolean;
+  interval_ms?: number;
+  cron?: string;
+  max_runs?: number;
+  ends_at?: string;
+  last_run_at?: string;
+  last_error?: string;
 };
 
 export type ProviderOption = {

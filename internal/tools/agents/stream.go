@@ -297,6 +297,29 @@ func (b *Broadcaster) PublishRaw(sessionID, agentName, evType, data string) {
 	})
 }
 
+// PublishUserMessage fires a user_message event so connected web viewers
+// render a user turn injected from a NON-web source (a channel or the
+// schedule runner) live, instead of only after a manual refresh. Without
+// this the SSE stream carries only the assistant reply, so the incoming
+// user turn silently goes missing until a refetch. Data is JSON with the
+// text + source so the UI can badge where the message came from.
+func (b *Broadcaster) PublishUserMessage(sessionID, agentName, source, text string) {
+	body, err := json.Marshal(map[string]any{
+		"text":   text,
+		"source": source,
+	})
+	if err != nil {
+		log.Warn().Err(err).Str("session_id", sessionID).Msg("user_message marshal failed")
+		return
+	}
+	b.fanout(sessionID, Event{
+		SessionID: sessionID,
+		AgentName: agentName,
+		Type:      "user_message",
+		Data:      string(body),
+	})
+}
+
 // PublishSystemTurn fires a system_turn event so the UI can append it
 // to the conversation without a page reload. Data is JSON with text +
 // steps so the front-end can render the pill + checklist inline.

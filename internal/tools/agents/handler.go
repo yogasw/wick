@@ -28,6 +28,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/agents/registry"
+	"github.com/yogasw/wick/internal/agents/schedule"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/skills"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
@@ -63,6 +64,7 @@ var (
 	globalSkillStore *skills.Store
 	globalTagsSvc    *tags.Service
 	globalConnectors *connectors.Service
+	globalSchedule   *schedule.Store
 )
 
 // GateStatus is the boot-time snapshot of the command gate. Populated
@@ -138,6 +140,9 @@ func actorID(c *tool.Ctx) string {
 // to recreate them, then remove the old folders.
 func SetDB(db *gorm.DB) {
 	globalDB = db
+	if db != nil {
+		globalSchedule = schedule.NewStore(db)
+	}
 }
 
 // SetChannelRegistry wires the live channel registry so picker fields
@@ -267,6 +272,22 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/workspace/{cid}/rename", sessionWorkspaceRenameUI)
 	r.POST("/sessions/{id}/workspace/{cid}/test", sessionWorkspaceTestUI)
 	r.DELETE("/sessions/{id}/workspace/{cid}", sessionWorkspaceRemoveUI)
+
+	// Scheduled messages (the Scheduled tab) — future message injections
+	// into this session. Owner/admin gated; the runner delivers them.
+	r.GET("/sessions/{id}/schedules", sessionSchedulesListUI)
+	r.POST("/sessions/{id}/schedules", sessionSchedulesCreateUI)
+	r.DELETE("/sessions/{id}/schedules/{sid}", sessionSchedulesCancelUI)
+	r.POST("/sessions/{id}/schedules/{sid}/pause", func(c *tool.Ctx) { sessionSchedulesMutateUI(c, "pause") })
+	r.POST("/sessions/{id}/schedules/{sid}/resume", func(c *tool.Ctx) { sessionSchedulesMutateUI(c, "resume") })
+	r.POST("/sessions/{id}/schedules/{sid}/reschedule", func(c *tool.Ctx) { sessionSchedulesMutateUI(c, "reschedule") })
+
+	// Global cross-session scheduler monitor (the "Scheduled" sidebar page).
+	r.GET("/scheduled", scheduledPage)
+	r.GET("/scheduled/all", schedulesAllUI)
+	r.POST("/scheduled/{sid}/cancel", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "cancel") })
+	r.POST("/scheduled/{sid}/pause", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "pause") })
+	r.POST("/scheduled/{sid}/resume", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "resume") })
 
 	// No standalone /projects list page — the sidebar Projects section is
 	// the canonical project nav. "+ New" → /projects/new (create page),

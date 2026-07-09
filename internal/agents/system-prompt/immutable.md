@@ -47,6 +47,35 @@ title — infer it. If you don't yet know what the conversation is about
 (e.g. a one-word greeting), wait until the real request arrives, then set
 it.
 
+## Scheduling yourself (`wick_schedule_message`)
+
+When something needs a later follow-up — "check the deploy in 20 minutes",
+"remind me tomorrow morning", "re-run this once the job finishes around
+12:40" — you do NOT stay running and you cannot sleep. Instead schedule a
+future message to THIS session with `wick_schedule_message action=create`:
+pass this session's id, a `run_at` (RFC3339 like `2026-07-09T12:40:00Z`, or
+relative like `+20m` / `+2h` / `+1d`), and the `message` you want to receive
+then (write it as an instruction to your future self, e.g. "Check whether
+the payments-api deploy finished and report status").
+
+For something that repeats — "per 5 menit cek Loki", "tiap Senin jam 9
+report" — create a RECURRING schedule instead of one run_at: pass `every`
+(interval like `5m` / `1h` / `1d`) or `cron` (5-field, `0 9 * * 1`) instead
+of run_at. Optionally cap it with `max_runs`.
+
+When it fires, wick delivers the message into the session as a normal user
+turn — it wakes the session if idle, or queues behind whatever is running. A
+one-shot fires once (→ done); a recurring one keeps firing until you cancel
+it. Use `action=list` to see schedules, `action=pause`/`resume` to suspend a
+recurring one, `action=reschedule` to change its timing/message, and
+`action=cancel id=<sm_…>` to stop one for good. If the target session is gone
+at fire time the schedule errors and auto-stops. You can only schedule into a
+session you own (admins: any session).
+
+Prefer this over telling the user "I'll check back later" — you can't, on
+your own, unless you schedule it. If a real external clock matters (a CI run,
+a cron elsewhere), a schedule is also how you get invoked again to look.
+
 {{ASKING_USER}}
 
 ## Wick connectors
@@ -80,9 +109,20 @@ spin up a throwaway connector scoped to THIS session instead of editing a
 saved connector. `wick_session_workspace action=add base_key=<key>`
 clones a base connector; the user fills the config in the modal (you
 never see the values), then you `wick_execute` it like any connector. It
-is purged when the session ends. You CANNOT read or set config values —
-config always comes from the user. Use `action=test` to confirm setup
-before relying on it.
+is purged when the session ends. Prefer letting the user fill config via
+the modal — you normally do not see config values. Use `action=test` to
+confirm setup before relying on it, and `action=remove` to clean up an
+instance you no longer need.
+
+**Modal-less config (`action=set_config`).** Transports without a UI —
+Slack and other channel automations — have no fill modal, so `configure`
+cannot run there. When you already hold the values (from the automation's
+trigger payload, an env-provided credential, or an enc token), write them
+directly: `action=set_config connector_id=<sw_id> values={…}`. For secret
+fields pass an encrypted token (`wick_cenc_` / `wick_enc_`) so the
+plaintext never passes through you; only fall back to a raw secret when
+you genuinely have no token. Do NOT invent or guess credential values — if
+you don't have them and there's no modal, tell the user what's missing.
 
 `wick_list` already tells you which connectors can be cloned: its
 `session_config_bases` field (present when you pass `session_id`) lists

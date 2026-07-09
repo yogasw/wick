@@ -35,6 +35,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
+	"github.com/yogasw/wick/internal/agents/schedule"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
 	agentskills "github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/storage"
@@ -681,6 +682,13 @@ func NewServer() *Server {
 			// transitions are skipped — see dispatchLifecyclePush.
 			dispatchLifecyclePush(ev.Ctx, pushSvc, agentsMgr, agentsLayout, ev)
 		},
+		OnUserMessage: func(ev agentpool.UserMessageEvent) {
+			// Push a user turn injected from a channel or the schedule runner
+			// to connected web viewers, so it shows up live instead of only
+			// after a refresh. Web-sourced turns are already filtered out in
+			// the pool (the composer renders them optimistically).
+			agentsBcast.PublishUserMessage(ev.SessionID, ev.AgentName, ev.Source, ev.Text)
+		},
 	})
 	// Wire the hook writer so Manager injects .claude/settings.local.json
 	// into every workspace on create or switch. The loader re-reads gate config
@@ -1208,6 +1216,7 @@ func NewServer() *Server {
 	// Bearer auth in front, connector dispatch behind. PAT and
 	// OAuth-issued tokens both flow through the same middleware —
 	// dispatch by prefix.
+	scheduleStore := schedule.NewStore(db)
 	mcpHandler := mcp.NewHandler(connectorsSvc).
 		WithBuildInfo(releaseAppVersion, buildCommit, buildTime).
 		WithAppURL(configsSvc.AppURL).
@@ -1220,6 +1229,7 @@ func NewServer() *Server {
 			return askUserPolicy(db, configsSvc, agentsLayout, sessionID)
 		}).
 		WithPool(agentsPool, agentsLayout).
+		WithSchedule(scheduleStore).
 		WithRefreshSession(func(id string) error {
 			syncSessionMeta(id)
 			return nil
@@ -1645,7 +1655,7 @@ func NewServer() *Server {
 	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
 	r.Handle("/mini-tools", http.HandlerFunc(homeHandler.Launcher))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache}
 }
 
 type Server struct {
@@ -1663,7 +1673,11 @@ type Server struct {
 	syncSessionMeta func(sessionID string)
 	channelReg      *agentchannels.Registry
 	db              *gorm.DB
-	gateBin         string // resolved gate binary path; used for hook cleanup on shutdown
+	// scheduleStore backs wick_schedule_message; Run starts the runner that
+	// polls it and delivers due messages through agentsPool. nil-safe: the
+	// runner is only started when both store and pool are present.
+	scheduleStore *schedule.Store
+	gateBin       string // resolved gate binary path; used for hook cleanup on shutdown
 	jobsSvc         *manager.Service
 	wfMgr           *wfsetup.Manager
 	// verCache holds the background-refreshed version + update snapshot the
@@ -1995,6 +2009,14 @@ func (s *Server) Run(ctx context.Context, port int) error {
 
 	// Start channel listeners and watch for config changes.
 	s.startChannels(ctx)
+
+	// Start the scheduled-message runner: polls the store and delivers due
+	// messages through the pool (wick_schedule_message). Boot recovery is
+	// implicit — the first tick picks up anything that came due while wick
+	// was down. Only runs where both the store and the pool exist.
+	if s.scheduleStore != nil && s.agentsPool != nil {
+		go schedule.NewRunner(s.scheduleStore, s.agentsPool, s.agentsLayout).Run(ctx)
+	}
 
 	// Refresh the user-menu version cache: once on boot, then every 6h.
 	// Lives off the request path so opening the dropdown costs no network.

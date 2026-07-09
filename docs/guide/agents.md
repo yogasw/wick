@@ -17,6 +17,7 @@ Most "AI agent" tools either lock you into their own runtime, or expose a chat-o
 | Capability | Where |
 |---|---|
 | **Multi-channel routing** — same agent reachable from Slack, Telegram, and the web UI; each thread / chat / conversation = its own session | [Channels](./agents/channels) |
+| **Scheduled messages** — inject a message into a session later, one-shot or recurring, without the workflow engine; agent-initiated via MCP or human-initiated from the UI | [Scheduled Messages](./agents/scheduled-messages) |
 | **Multi-session concurrency** — pool caps subprocess count, FIFO-queues the rest, idle-kills + resumes via `--resume <cli_session_id>` | [Pool & Sessions](./agents/pool) |
 | **Workflows** — YAML DAG of classify / agent / connector / http / channel / datatable / branch / parallel nodes triggered by cron, channel events, webhooks, or manual runs; replayable per-run state on disk; visual canvas + MCP `workflow_*` ops | [Workflows](/workflow/) |
 | **Projects** — folders on disk (managed or any custom path) used as the agent's `cwd`. Multiple sessions can share one | [Projects](./agents/projects) |
@@ -45,6 +46,7 @@ After boot, head to `/tools/agents`.
 | **Skills** | Browse, preview, sync, and delete skill files across all provider skill dirs. |
 | **Connectors** | Browse and manage LLM-callable connectors from inside the Agents shell. Opens at `/tools/agents/connectors`. Direct links to `/manager/connectors/*` redirect here automatically (deep links preserved). |
 | **Channels** | Slack + Telegram bot config (tokens, access control, default project). Web UI is always-on. |
+| **Scheduled** | Cross-session monitor for every scheduled message you can see — filter by status, grouped by session, inline pause/resume/cancel. See [Scheduled Messages](./agents/scheduled-messages). |
 | **9router** | Install, run, and manage the [9router](https://github.com/decolua/9router) LLM-router/proxy from inside wick. Dashboard embedded via reverse proxy — no extra port needed. Admin-only. |
 
 Sessions auto-create on the first message in a Slack thread, a Telegram chat, or a fresh web conversation. You don't pre-allocate them.
@@ -280,6 +282,7 @@ Each check reports `✓` / `✗` / `!`. Exit `0` when required checks pass, `1` 
 - [**Projects**](./agents/projects) — folders on disk; managed vs custom path; built-in `default`.
 - [**Providers**](./agents/providers) — multi-instance config, binary resolution chain, status cache.
 - [**Channels**](./agents/channels) — Slack, Telegram, web UI; access control; meta-commands.
+- [**Scheduled Messages**](./agents/scheduled-messages) — one-shot / recurring message injection, agent- or human-initiated.
 - [**Pool & Sessions**](./agents/pool) — slot allocation, idle-kill, resume, message buffer.
 - [**Source Control**](./agents/source-control) — git SCM panel on the session detail page.
 - [**9router**](./agents/9router) — embedded LLM router/proxy dashboard; install and manage via Settings tab.

@@ -32,7 +32,7 @@ const defaultBaseURL = "https://slack.com/api"
 // instance; they enable the "Connect Account" button on the detail page.
 type Configs struct {
 	AuthMode     string `wick:"dropdown=bot_token|user_token;default=bot_token;desc=Which Slack OAuth token type to use. Bot tokens (xoxb-) cover the standard surface; user tokens (xoxp-) act as a workspace member and are required for ops that need user identity."`
-	BotToken     string `wick:"secret;desc=Bot User OAuth Token (xoxb-...). Scopes: channels:read, groups:read, im:read, mpim:read, channels:history, groups:history, im:history, mpim:history, users:read, users:read.email, chat:write, chat:write.public, reactions:write, reactions:read, canvases:read, canvases:write."`
+	BotToken     string `wick:"secret;desc=Bot User OAuth Token (xoxb-...). Scopes: channels:read, groups:read, im:read, mpim:read, channels:history, groups:history, im:history, mpim:history, users:read, users:read.email, chat:write, chat:write.public, reactions:write, reactions:read, files:read, files:write, canvases:read, canvases:write."`
 	UserToken    string `wick:"secret;desc=User OAuth Token (xoxp-...). Filled automatically via the Connect Account button when ClientID is configured. Or paste manually."`
 	ClientID     string `wick:"desc=Slack OAuth App Client ID. Required to use the Connect Account button for user-token OAuth flow."`
 	ClientSecret string `wick:"secret;desc=Slack OAuth App Client Secret. Required for the OAuth token exchange when using Connect Account."`
@@ -167,6 +167,32 @@ type SetCanvasAccessInput struct {
 	AccessLevel string `wick:"dropdown=read|write|owner;default=read;desc=Access to grant. owner is valid only for user_ids."`
 	ChannelIDs  string `wick:"desc=Comma-separated channel IDs to grant access. Cannot be combined with user_ids."`
 	UserIDs     string `wick:"desc=Comma-separated user IDs to grant access. Cannot be combined with channel_ids."`
+}
+
+type ListFilesInput struct {
+	Channel   string `wick:"desc=Optional channel ID (C.../G.../D...) to only list files shared in that channel."`
+	User      string `wick:"desc=Optional user ID (U...) to only list files created by that user."`
+	TSFrom    string `wick:"desc=Optional inclusive lower bound on file creation time (Unix seconds, e.g. 1700000000)."`
+	TSTo      string `wick:"desc=Optional inclusive upper bound on file creation time (Unix seconds)."`
+	Types     string `wick:"desc=Comma-separated file type filter: all,spaces,snippets,images,gdocs,zips,pdfs. Default: all."`
+	Limit     int    `wick:"desc=Max files per page (1-200). Default: 100."`
+	Page      int    `wick:"desc=1-based page number (files.list is page-based, not cursor-based). Default: 1."`
+}
+
+type GetFileInfoInput struct {
+	File string `wick:"required;desc=File ID (F...) to inspect. Get it from list_files or a message's files[]."`
+}
+
+type ReadFileInput struct {
+	File      string `wick:"required;desc=File ID (F...) to download and read. The bot must be a member of a channel the file was shared in."`
+	MaxBytes  int    `wick:"desc=Refuse to download files larger than this many bytes (guards context blow-up). Default: 8388608 (8 MiB)."`
+}
+
+type GetReactionsInput struct {
+	Channel string `wick:"desc=Channel ID containing the target message. Required when reading reactions on a message (with ts). Omit when reading a file's reactions (use file)."`
+	TS      string `wick:"desc=Timestamp of the target message. Pair with channel. Omit when reading a file's reactions."`
+	File    string `wick:"desc=File ID (F...) to read reactions on. Use instead of channel+ts."`
+	Full    bool   `wick:"desc=Return the full list of reacting user IDs per emoji (not just the count). Default: false."`
 }
 
 type UploadFileInput struct {
@@ -468,6 +494,25 @@ func Operations() []connector.Category {
 				RemoveReactionInput{},
 				removeReaction, wickdocs.Docs{},
 			),
+			connector.Op(
+				"get_reactions",
+				"Get Reactions",
+				"Read the reactions already on a message (channel+ts) or a file. Returns each emoji name, count, and (with full=true) the reacting user IDs.",
+				GetReactionsInput{},
+				getReactions,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"reactions": "Array of {name, count, users}. name is the emoji shortname without colons; users is populated only when full=true.",
+					},
+					Quirks: []string{
+						"Requires reactions:read scope (distinct from reactions:write used by add/remove).",
+						"Target EITHER a message (channel + ts) OR a file (file) — not both.",
+						"users is capped by Slack; large reaction sets truncate the user list even with full=true.",
+					},
+					PairWith:    []string{"connector:slack.add_reaction", "connector:slack.get_channel_history"},
+					InputSample: `{"channel":"C12345","ts":"1700001234.005600","full":true}`,
+				},
+			),
 			connector.OpDestructive(
 				"upload_file",
 				"Upload File",
@@ -490,6 +535,73 @@ func Operations() []connector.Category {
 						"Requires files:write scope.",
 					},
 					PairWith: []string{"connector:slack.send_message"},
+				},
+			),
+		),
+		connector.Cat("Files", "List, inspect, and read files shared in Slack. Reading downloads the bytes with the bot token.",
+			connector.Op(
+				"list_files",
+				"List Files",
+				"List files visible to the bot, optionally filtered by channel, user, time range, or type. Returns id, name, mimetype, size, and permalinks with page-based pagination.",
+				ListFilesInput{},
+				listFiles,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"files":  "Array of file objects (id, name, title, mimetype, filetype, size, user, created, channels, url_private_download, permalink).",
+						"paging": "Page wrapper: {count, total, page, pages}. page < pages = call again with page+1.",
+					},
+					Quirks: []string{
+						"Requires files:read scope.",
+						"Pagination is PAGE-based (page/pages), not cursor-based like the channel/user ops.",
+						"channel filters to files shared into that channel; user filters by uploader. Combine both to narrow.",
+						"ts_from / ts_to are Unix SECONDS (e.g. 1700000000), not Slack message ts strings.",
+					},
+					PairWith:    []string{"connector:slack.get_file_info", "connector:slack.read_file"},
+					InputSample: `{"channel":"C12345","types":"images","limit":50}`,
+				},
+			),
+			connector.Op(
+				"get_file_info",
+				"Get File Info",
+				"Return metadata for a single file id: name, title, mimetype, filetype, size, user, created, channels shared into, and download/permalink URLs. Does not download the bytes.",
+				GetFileInfoInput{},
+				getFileInfo,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"file": "Single file object (id, name, title, mimetype, filetype, size, user, created, channels, url_private_download, permalink, is_external).",
+					},
+					Quirks: []string{
+						"Requires files:read scope.",
+						"url_private_download is auth-gated — a plain GET returns Slack's login HTML. Use read_file to fetch the bytes with the bot token.",
+					},
+					PairWith:    []string{"connector:slack.read_file", "connector:slack.list_files"},
+					InputSample: `{"file":"F0123ABCD"}`,
+				},
+			),
+			connector.Op(
+				"read_file",
+				"Read File",
+				"Download a file's contents with the bot token and return them inline. Text files come back as a UTF-8 string; binary files (images, PDFs) come back base64-encoded with their mimetype. This is what makes shared screenshots and attachments readable.",
+				ReadFileInput{},
+				readFile,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"file_id":        "File ID that was read.",
+						"name":           "Filename as stored by Slack.",
+						"mimetype":       "Slack-reported mimetype (e.g. image/png, text/plain).",
+						"size":           "Byte length of the downloaded content.",
+						"is_text":        "True when content was returned as a UTF-8 string; false when base64.",
+						"content":        "UTF-8 file text — present only when is_text is true.",
+						"content_base64": "Base64-encoded bytes — present only when is_text is false (binary/image).",
+					},
+					Quirks: []string{
+						"Requires files:read scope AND the bot must be in a channel the file was shared to — otherwise Slack returns HTML login page bytes, not the file.",
+						"Downloads via url_private_download with Authorization: Bearer <bot token>. files.info alone is not enough; the URL is auth-gated.",
+						"Refuses files larger than max_bytes (default 8 MiB) to protect the agent's context window.",
+						"Text detection is by mimetype (text/*, application/json, application/xml, and a few known text subtypes). Everything else returns base64.",
+					},
+					PairWith:    []string{"connector:slack.get_file_info", "connector:slack.list_files"},
+					InputSample: `{"file":"F0123ABCD"}`,
 				},
 			),
 		),
@@ -929,6 +1041,108 @@ func reactionAction(c *connector.Ctx, method string) (any, error) {
 		return nil, err
 	}
 	return map[string]any{"ok": true, "channel": ch, "ts": ts, "name": name}, nil
+}
+
+func getReactions(c *connector.Ctx) (any, error) {
+	ch := strings.TrimSpace(c.Input("channel"))
+	ts := strings.TrimSpace(c.Input("ts"))
+	file := strings.TrimSpace(c.Input("file"))
+	// Target is EITHER a file OR a message (channel+ts), never both — reject
+	// the ambiguous case instead of silently letting file win, so a stray
+	// file value can't quietly shadow an intended message lookup.
+	if file != "" && (ch != "" || ts != "") {
+		return nil, fmt.Errorf("provide either file, or channel and ts — not both")
+	}
+	form := map[string]string{"full": boolForm(c.InputBool("full"), false)}
+	switch {
+	case file != "":
+		form["file"] = file
+	case ch != "" && ts != "":
+		form["channel"] = ch
+		form["timestamp"] = ts
+	default:
+		return nil, fmt.Errorf("provide either file, or both channel and ts")
+	}
+	raw, err := slackGet(c, "reactions.get", form)
+	if err != nil {
+		return nil, err
+	}
+	return shapeReactions(raw), nil
+}
+
+func listFiles(c *connector.Ctx) (any, error) {
+	form := map[string]string{
+		"count": fmt.Sprintf("%d", clampInt(c.InputInt("limit"), 1, 200, 100)),
+		"page":  fmt.Sprintf("%d", clampInt(c.InputInt("page"), 1, 100, 1)),
+	}
+	if v := strings.TrimSpace(c.Input("channel")); v != "" {
+		form["channel"] = v
+	}
+	if v := strings.TrimSpace(c.Input("user")); v != "" {
+		form["user"] = v
+	}
+	if v := strings.TrimSpace(c.Input("ts_from")); v != "" {
+		form["ts_from"] = v
+	}
+	if v := strings.TrimSpace(c.Input("ts_to")); v != "" {
+		form["ts_to"] = v
+	}
+	if v := strings.TrimSpace(c.Input("types")); v != "" {
+		form["types"] = v
+	}
+	raw, err := slackGet(c, "files.list", form)
+	if err != nil {
+		return nil, err
+	}
+	return shapeFileList(raw), nil
+}
+
+func getFileInfo(c *connector.Ctx) (any, error) {
+	file := strings.TrimSpace(c.Input("file"))
+	if file == "" {
+		return nil, fmt.Errorf("file is required")
+	}
+	raw, err := slackGet(c, "files.info", map[string]string{"file": file})
+	if err != nil {
+		return nil, err
+	}
+	if m, ok := raw.(map[string]any); ok {
+		if f, ok := m["file"].(map[string]any); ok {
+			return map[string]any{"file": shapeOneFile(f)}, nil
+		}
+	}
+	return raw, nil
+}
+
+func readFile(c *connector.Ctx) (any, error) {
+	file := strings.TrimSpace(c.Input("file"))
+	if file == "" {
+		return nil, fmt.Errorf("file is required")
+	}
+	maxBytes := clampInt(c.InputInt("max_bytes"), 1, 64<<20, 8<<20)
+
+	// Resolve the auth-gated download URL + mimetype/size from files.info.
+	raw, err := slackGet(c, "files.info", map[string]string{"file": file})
+	if err != nil {
+		return nil, err
+	}
+	m, _ := raw.(map[string]any)
+	fm, _ := m["file"].(map[string]any)
+	if fm == nil {
+		return nil, fmt.Errorf("files.info returned no file object for %q", file)
+	}
+	downloadURL := firstNonEmpty(strAt(fm, "url_private_download"), strAt(fm, "url_private"))
+	if downloadURL == "" {
+		return nil, fmt.Errorf("file %q has no download URL (external or deleted file?)", file)
+	}
+	mimetype := strAt(fm, "mimetype")
+	name := strAt(fm, "name")
+
+	body, err := slackDownload(c, downloadURL, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	return shapeReadFile(file, name, mimetype, body), nil
 }
 
 func createCanvas(c *connector.Ctx) (any, error) {

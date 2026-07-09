@@ -50,6 +50,7 @@ func Migrate(db *gorm.DB) {
 		&entity.Skill{},
 		&entity.PluginState{},
 		&entity.ConnectorState{},
+		&entity.ScheduledMessage{},
 	)
 	if err != nil {
 		log.Fatal().Msgf("failed to run migration: %s", err.Error())

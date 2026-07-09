@@ -16,6 +16,17 @@
   const isUser = $derived(turn.role === "user");
   const isSystem = $derived(turn.role === "system");
 
+  /* Source badge for user turns that did NOT come from this web session —
+     a channel (Slack/Telegram/…) or the schedule runner. "ui"/empty = typed
+     here, no badge. Keeps it clear which messages arrived from elsewhere. */
+  const sourceBadge = $derived.by(() => {
+    if (!isUser) return null;
+    const src = (turn.source ?? "").trim().toLowerCase();
+    if (src === "" || src === "ui" || src === "web" || src === "rest") return null;
+    if (src === "schedule") return { label: "Scheduled", icon: "clock" };
+    return { label: "via " + src.charAt(0).toUpperCase() + src.slice(1), icon: "channel" };
+  });
+
   /* Per-bubble timestamp is just the clock (WhatsApp shows only HH:mm inside
      each bubble; the day/date lives in the centered separator the parent
      renders). Reads `ts` (RFC3339 from history) first, falls back to
@@ -221,12 +232,32 @@
         </div>
       {/if}
       {#if turn.text}
+        <!-- chip + bubble are one tight unit: the source chip sits flush on
+             top of the bubble, tinted to match, so it reads as part of the
+             message rather than a floating label. -->
+        <div class="flex flex-col items-end gap-0.5 min-w-0 max-w-full">
+          {#if sourceBadge}
+            <span class="inline-flex items-center gap-1 rounded-full bg-green-200 dark:bg-green-900 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:text-green-300 mr-0.5">
+              {#if sourceBadge.icon === "clock"}
+                <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <circle cx="8" cy="9" r="5.5"></circle>
+                  <path d="M8 6v3l2 1.5M3 2.5 1.5 4M13 2.5 14.5 4" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+              {:else}
+                <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M3 4a1 1 0 011-1h8a1 1 0 011 1v6a1 1 0 01-1 1H6l-3 2.5V4z" stroke-linejoin="round"></path>
+                </svg>
+              {/if}
+              {sourceBadge.label}
+            </span>
+          {/if}
+          <div class="min-w-0 max-w-full overflow-hidden rounded-2xl rounded-tr-sm bg-green-500 px-4 py-2.5 text-sm text-white-100 whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm">
+            {@html linkifyText(turn.text)}
+          </div>
+        </div>
         {#if stamp}
           <span class="text-[10px] leading-none text-black-500 dark:text-black-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{stamp}</span>
         {/if}
-        <div class="min-w-0 max-w-full overflow-hidden rounded-2xl rounded-tr-sm bg-green-500 px-4 py-2.5 text-sm text-white-100 whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm">
-          {@html linkifyText(turn.text)}
-        </div>
       {/if}
     </div>
   </div>

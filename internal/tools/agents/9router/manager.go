@@ -532,7 +532,12 @@ func (m *Manager) Restart(w http.ResponseWriter, r *http.Request) {
 // 9router process, handling WebSocket upgrades for live updates.
 func (m *Manager) ProxyHandler() http.Handler {
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !m.isRunning() {
+		// Probe the backend port rather than m.cmd so a 9router started
+		// externally (or one that outlived a wick restart) also serves the
+		// dashboard iframe — matching the status badge and API proxy, which
+		// already use backendReachable. Otherwise the badge shows "Running"
+		// while the iframe wrongly says "not running — start it first".
+		if !m.backendReachable() {
 			http.Error(w, "9router not running — start it first", http.StatusServiceUnavailable)
 			return
 		}

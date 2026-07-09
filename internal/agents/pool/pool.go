@@ -124,6 +124,25 @@ type PoolConfig struct {
 	// want every transition should subscribe to AgentEvent via
 	// the factory's OnEvent. Optional; nil = no callback.
 	OnLifecycle func(LifecycleEvent)
+	// OnUserMessage fires when a user-role message is injected into a
+	// session from a NON-web source (a channel or the schedule runner).
+	// It lets the web SSE layer push the incoming turn to connected
+	// viewers, which otherwise only see the assistant reply (the web
+	// composer renders its own sends optimistically, so "ui"-sourced
+	// turns are skipped here to avoid a duplicate). Optional; nil = no
+	// callback.
+	OnUserMessage func(UserMessageEvent)
+}
+
+// UserMessageEvent carries an injected user turn to the SSE layer so
+// already-connected web viewers render it live instead of only after a
+// manual refresh. Source is the origin ("slack", "telegram", "schedule",
+// …) so the UI can badge where the message came from.
+type UserMessageEvent struct {
+	SessionID string
+	AgentName string
+	Source    string
+	Text      string
 }
 
 // LifecycleEvent is emitted for the two transitions the pool drives
@@ -436,6 +455,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	p.mu.Unlock()
 
 	turnPersisted := false
+	userMsgNotified := false
 	if alive {
 		log.Ctx(ctx).Debug().
 			Str("component", "pool").
@@ -453,6 +473,8 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		}
 		if role == "user" {
 			p.setLabelIfEmpty(sessionID, text)
+			p.notifyUserMessage(sessionID, agentName, source, text)
+			userMsgNotified = true
 		}
 		err := entry.agent.Send(augmentWithAttachments(text, atts))
 		// Nudge SSE so the Process panel's queued count updates in
@@ -513,6 +535,9 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// We build a transient Store because no entry.store exists yet.
 	if !turnPersisted {
 		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts)
+	}
+	if role == "user" && !userMsgNotified {
+		p.notifyUserMessage(sessionID, agentName, source, text)
 	}
 
 	// A non-user turn (e.g. the one-time origin-context block channels
@@ -904,6 +929,25 @@ func (p *Pool) notifyLifecycle(ctx context.Context, entry *runEntry, sessionID, 
 		At:           time.Now().UTC(),
 		ProviderType: entry.provType,
 		ProviderName: entry.provName,
+	})
+}
+
+// notifyUserMessage fires the OnUserMessage hook so the SSE layer can push
+// an injected user turn to connected web viewers. Skips web-sourced turns
+// ("ui"): the composer already renders those optimistically, so echoing one
+// back would double it. No-op when no hook or empty text.
+func (p *Pool) notifyUserMessage(sessionID, agentName, source, text string) {
+	if p.cfg.OnUserMessage == nil {
+		return
+	}
+	if source == "ui" || strings.TrimSpace(text) == "" {
+		return
+	}
+	p.cfg.OnUserMessage(UserMessageEvent{
+		SessionID: sessionID,
+		AgentName: agentName,
+		Source:    source,
+		Text:      text,
 	})
 }
 
