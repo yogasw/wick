@@ -45,6 +45,77 @@ func mockSlack(t *testing.T, scopesHeader string) *httptest.Server {
 	return srv
 }
 
+func TestIsTextMimetype(t *testing.T) {
+	textual := []string{"text/plain", "text/csv", "TEXT/HTML; charset=utf-8", "application/json", "application/x-yaml"}
+	for _, mt := range textual {
+		assert.Truef(t, isTextMimetype(mt), "expected %q to be text", mt)
+	}
+	binary := []string{"image/png", "image/jpeg", "application/pdf", "application/octet-stream", ""}
+	for _, mt := range binary {
+		assert.Falsef(t, isTextMimetype(mt), "expected %q to be binary", mt)
+	}
+}
+
+func TestShapeReadFile_TextInline(t *testing.T) {
+	out := shapeReadFile("F1", "notes.txt", "text/plain", []byte("hello world"))
+	m := out.(map[string]any)
+	assert.Equal(t, true, m["is_text"])
+	assert.Equal(t, "hello world", m["content"])
+	assert.NotContains(t, m, "content_base64")
+	assert.Equal(t, 11, m["size"])
+}
+
+func TestShapeReadFile_BinaryBase64(t *testing.T) {
+	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a} // PNG magic
+	out := shapeReadFile("F2", "shot.png", "image/png", png)
+	m := out.(map[string]any)
+	assert.Equal(t, false, m["is_text"])
+	assert.Equal(t, "iVBORw0KGgo=", m["content_base64"])
+	assert.NotContains(t, m, "content")
+}
+
+func TestShapeReadFile_TextMimetypeButInvalidUTF8IsBase64(t *testing.T) {
+	// mimetype claims text but bytes aren't valid UTF-8 → fall back to base64
+	// so we never emit a corrupt string.
+	out := shapeReadFile("F3", "weird.txt", "text/plain", []byte{0xff, 0xfe, 0x00})
+	m := out.(map[string]any)
+	assert.Equal(t, false, m["is_text"])
+	assert.Contains(t, m, "content_base64")
+}
+
+func TestShapeReactions_FromMessage(t *testing.T) {
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"ok":true,
+		"type":"message",
+		"message":{"reactions":[{"name":"thumbsup","count":2,"users":["U1","U2"]}]}
+	}`), &raw))
+	out := shapeReactions(raw).(map[string]any)
+	reacts := out["reactions"].([]map[string]any)
+	require.Len(t, reacts, 1)
+	assert.Equal(t, "thumbsup", reacts[0]["name"])
+	assert.EqualValues(t, 2, reacts[0]["count"])
+}
+
+func TestShapeReactions_FromFile(t *testing.T) {
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"ok":true,"type":"file",
+		"file":{"reactions":[{"name":"eyes","count":1}]}
+	}`), &raw))
+	out := shapeReactions(raw).(map[string]any)
+	reacts := out["reactions"].([]map[string]any)
+	require.Len(t, reacts, 1)
+	assert.Equal(t, "eyes", reacts[0]["name"])
+}
+
+func TestGetReactions_RequiresTarget(t *testing.T) {
+	c := newCtxWithInput(t, map[string]string{}) // no channel/ts/file
+	_, err := getReactions(c)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "either file, or both channel and ts")
+}
+
 func TestEvalScopeRule(t *testing.T) {
 	granted := map[string]struct{}{
 		"chat:write":       {},
@@ -88,7 +159,7 @@ func TestParseScopeHeader(t *testing.T) {
 }
 
 func TestRunHealthCheck_AllOK(t *testing.T) {
-	srv := mockSlack(t, "channels:read,groups:read,im:read,mpim:read,channels:history,groups:history,im:history,mpim:history,users:read,users:read.email,chat:write,reactions:write,canvases:read,canvases:write,files:write")
+	srv := mockSlack(t, "channels:read,groups:read,im:read,mpim:read,channels:history,groups:history,im:history,mpim:history,users:read,users:read.email,chat:write,reactions:write,reactions:read,canvases:read,canvases:write,files:read,files:write")
 	withBaseURL(t, srv.URL)
 	c := newCtx(t, map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-test"})
 

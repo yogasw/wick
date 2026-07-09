@@ -30,6 +30,7 @@ const WORKSPACES = {
   "agents/project-settings": "@wick-fe/agents-project-settings",
   "agents/providers": "@wick-fe/agents-providers",
   "agents/router9": "@wick-fe/agents-router9",
+  "agents/scheduled": "@wick-fe/agents-scheduled",
   "agents/scm": "@wick-fe/agents-scm",
   "agents/shell": "@wick-fe/agents-shell",
   "agents/skills": "@wick-fe/agents-skills",
@@ -46,19 +47,19 @@ const WORKSPACES = {
 const COMMON_CONSUMERS = {
   "common/api": [
     "agents/conversation", "agents/new-session", "agents/presets",
-    "agents/project-settings", "agents/providers", "agents/scm",
+    "agents/project-settings", "agents/providers", "agents/scheduled", "agents/scm",
     "agents/skills", "agents/workflow", "manager",
   ],
   "common/stores": [
     "agents/conversation", "agents/new-session", "agents/overview",
     "agents/presets", "agents/project-settings", "agents/providers",
-    "agents/router9", "agents/scm", "agents/skills", "agents/workflow",
+    "agents/router9", "agents/scheduled", "agents/scm", "agents/skills", "agents/workflow",
     "manager",
   ],
   "common/ui": [
     "agents/conversation", "agents/new-session", "agents/overview",
     "agents/presets", "agents/project-settings", "agents/providers",
-    "agents/router9", "agents/scm", "agents/skills", "agents/workflow",
+    "agents/router9", "agents/scheduled", "agents/scm", "agents/skills", "agents/workflow",
     "manager",
   ],
   "common/sse-worker": ["agents/conversation", "agents/scm"],

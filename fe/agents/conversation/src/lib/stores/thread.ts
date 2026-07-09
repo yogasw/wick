@@ -233,6 +233,37 @@ export function createThreadStore(): ThreadStore {
         break;
       }
 
+      case "user_message": {
+        // A user turn injected from a non-web source (a channel or the
+        // schedule runner). Web-sourced turns never arrive here (the pool
+        // filters "ui" out) — those render optimistically via appendUserTurn.
+        let text = "";
+        let source = "";
+        try {
+          const d = JSON.parse(ev.data ?? "{}") as { text?: string; source?: string };
+          text = d.text ?? "";
+          source = d.source ?? "";
+        } catch (_) {}
+        if (text.trim()) {
+          const userTurn: ConversationTurn = {
+            turn_id: `remote-user-${Date.now()}`,
+            role: "user",
+            agent: "",
+            provider: "",
+            text,
+            source,
+            timestamp: Date.now(),
+            truncated: false,
+            interrupted: false,
+            has_trace: false,
+            events: [],
+            attachments: [],
+          };
+          turns.update((ts) => [...ts, userTurn]);
+        }
+        break;
+      }
+
       case "session_meta": {
         try {
           const d = JSON.parse(ev.data ?? "{}") as { session_id?: string; title?: string };

@@ -24,7 +24,7 @@ The Slack row holds credentials for both the connector ops and the [Slack channe
 | Field | Type | Purpose |
 |---|---|---|
 | `AuthMode` | dropdown | `bot_token` (default) or `user_token` — selects which token the runtime reads when making API calls. |
-| `BotToken` | secret | `xoxb-…` token used by every connector op when `AuthMode=bot_token`. |
+| `BotToken` | secret | `xoxb-…` token used by every connector op when `AuthMode=bot_token`. Needs `files:read` and `reactions:read` (alongside the existing scopes) to use the Files ops and `get_reactions`. |
 | `UserToken` | secret | `xoxp-…` user OAuth token, used when `AuthMode=user_token`. Set after the operator clicks **Connect Account** when `ClientID` is configured, or paste manually. |
 | `ClientID` | string | Slack OAuth App Client ID. Required to activate the **Connect Account** button for the user-token OAuth flow. Lives on this instance row, not in a shared server setting. |
 | `ClientSecret` | secret | Slack OAuth App Client Secret. Required for the token exchange step of the Connect Account flow. Lives on this instance row. |
@@ -46,8 +46,19 @@ The `Test Integration` button at the top of the row runs each API the connector 
 | `get_user_info` | `user` | Profile for one user ID. |
 | `get_user_by_email` | `email` | Resolve a workspace user by email. Pair with `channel:slack.open_dm` to DM them. |
 | `get_permalink` | `channel`, `ts` | Permalink URL for a message ts. |
+| `get_reactions` | `channel`+`ts` or `file`, `full` | Read the reactions already on a message or a file — emoji name, count, and (with `full=true`) reacting user IDs. Requires `reactions:read`. |
 
 All read ops are `connector.Op` (non-destructive).
+
+## Operations (files)
+
+| Op | Input | What it does |
+|---|---|---|
+| `list_files` | `channel`, `user`, `ts_from`, `ts_to`, `types`, `limit`, `page` | List files visible to the bot. Page-based pagination (`page`/`pages`), not cursor-based like the ops above. |
+| `get_file_info` | `file` | Metadata for one file ID — name, mimetype, size, channels, download/permalink URLs. Does not download bytes. |
+| `read_file` | `file`, `max_bytes` | Download a file's bytes with the bot token and return them inline — UTF-8 text as a string, binary (images, PDFs) as base64. Refuses files over `max_bytes` (default 8 MiB). |
+
+All three require the `files:read` scope. `read_file` downloads via `url_private_download` using the bot token as a Bearer header — `files.info` alone can't fetch bytes, the download URL is auth-gated. The bot must also be a member of a channel the file was shared to, otherwise Slack answers with an HTML login page instead of the file (surfaced as a clear error, not base64'd HTML).
 
 ## Operations (write — destructive, opt-in per row)
 
@@ -73,6 +84,8 @@ Every write op is `connector.OpDestructive` — enabled by default on every new 
 - Email lookup requires the `users:read.email` scope; without it the `profile.email` field is empty in `list_users` output.
 - Rate limit: 1 msg/sec per channel for `send_message`. Bursts get queued then 429.
 - `blocks` overrides `text` for rendering, but Slack still wants non-empty `text` for the notification preview — always set both.
+- `list_files` paginates by `page`/`pages`, not `cursor` — different scheme from the channel/user/message read ops above.
+- `ts_from` / `ts_to` on `list_files` are Unix **seconds** (e.g. `1700000000`), not Slack message ts strings.
 
 ## Workflow integration
 

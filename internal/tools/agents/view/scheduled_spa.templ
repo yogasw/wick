@@ -1,0 +1,32 @@
+package view
+
+// ScheduledSPAVM feeds the thin-shell that hosts the scheduled-messages
+// monitor SPA inside the standard agents layout. AssetURL is the hashed Vite
+// bundle path resolved at boot via spaAssetURL("scheduled").
+type ScheduledSPAVM struct {
+	Layout   AgentsLayoutVM
+	Base     string
+	AssetURL string
+}
+
+// ScheduledSPA renders the scheduled-messages monitor SPA shell inside the
+// agents chrome. The SPA reads data-base from the #app div and uses it as the
+// prefix for all API calls (e.g. ${base}/scheduled/all).
+templ ScheduledSPA(vm ScheduledSPAVM) {
+	@AgentsLayout(vm.Layout) {
+		if vm.AssetURL == "" {
+			<div class="p-8 text-sm text-rose-600 dark:text-rose-400">
+				Scheduled bundle not built yet. Run
+				<code class="font-mono">npm --workspace=@wick-fe/agents-scheduled run build</code>
+				in <code class="font-mono">fe/</code> and refresh.
+			</div>
+		} else {
+			<div
+				id="app"
+				data-base={ vm.Base }
+				class="h-full"
+			></div>
+			<script type="module" src={ vm.AssetURL }></script>
+		}
+	}
+}

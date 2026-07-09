@@ -337,22 +337,23 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"(e.g. an httprest pointed at staging, or a second API key) that appears in wick_list/wick_get/wick_execute " +
 				"for THIS session only and is purged when the session ends. The saved connector rows are never touched. " +
 				"Use this when the user wants to hit an endpoint or use credentials that are only relevant right now. " +
-				"You NEVER see config values: you create a blank instance and the USER fills it (secrets are encrypted server-side); " +
+				"Normally you NEVER see config values: you create a blank instance and the USER fills it in a modal (secrets are encrypted server-side); " +
 				"only the key names ever come back to you. Actions: " +
 				"'list' shows this session's instances (id, status, missing keys) and available_bases (connectors you may add). " +
 				"'add' creates a blank instance from a base_key; by default it pops a fill modal for the user right away. " +
 				"'duplicate' copies an existing session instance (config and all) into a new one. " +
-				"'configure' reopens the fill modal so the user edits an instance's config; blocks until submit, like ask_user. " +
+				"'configure' reopens the fill modal so the user edits an instance's config; blocks until submit, like ask_user. Needs a UI transport — not available from Slack/channel automations. " +
+				"'set_config' writes config values directly WITHOUT a modal, for UI-less transports (Slack) and automations. Pass values as a map; for secret fields pass an enc token (wick_cenc_/wick_enc_) so the plaintext never passes through you — only master-encrypt a raw secret if you truly have no token. " +
 				"'test' verifies setup — runs the base connector's health check, or pass operation (+ params) to run a real call. " +
-				"'remove' deletes a session instance. " +
+				"'remove' deletes a session instance (use it to clean up an instance you no longer need). " +
 				"After adding+configuring, the instance's id shows in wick_list (pass the same session_id) and you wick_execute it like any connector.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"action": map[string]any{
 						"type":        "string",
-						"enum":        []string{"list", "add", "duplicate", "configure", "test", "remove"},
-						"description": "list | add | duplicate | configure | test | remove.",
+						"enum":        []string{"list", "add", "duplicate", "configure", "set_config", "test", "remove"},
+						"description": "list | add | duplicate | configure | set_config | test | remove.",
 					},
 					"session_id": map[string]any{
 						"type":        "string",
@@ -364,7 +365,11 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"connector_id": map[string]any{
 						"type":        "string",
-						"description": "The session instance id (sw_…) for duplicate/configure/test/remove.",
+						"description": "The session instance id (sw_…) for duplicate/configure/set_config/test/remove.",
+					},
+					"values": map[string]any{
+						"type":        "object",
+						"description": "action=set_config: map of config key → value to write. Unknown keys are rejected; empty values are skipped (leave as-is). For secret fields pass a wick_cenc_/wick_enc_ token; a raw plaintext secret is master-encrypted server-side.",
 					},
 					"label": map[string]any{
 						"type":        "string",
@@ -532,6 +537,71 @@ func MetaToolDescriptors() []ToolDescriptor {
 				ReadOnlyHint:    PtrBool(false),
 				DestructiveHint: PtrBool(false),
 				IdempotentHint:  PtrBool(true),
+			},
+		},
+		{
+			Name: "wick_schedule_message",
+			Description: "Schedule a message to be delivered into an agent session, once or repeatedly — " +
+				"the way to make yourself 'check back later' or run something on a cadence without staying running. " +
+				"When it fires, the message is injected as a normal user turn: it wakes the session if idle, or " +
+				"queues behind an in-flight turn if busy. " +
+				"Timing (action=create) is ONE of: run_at (one-shot), every (recurring interval), or cron (recurring). " +
+				"Actions: " +
+				"'create' — schedule (session_id + message + one timing field). " +
+				"'list' — list schedules you may see (optional session_id filter). " +
+				"'cancel' — permanently stop a schedule by id. " +
+				"'pause' / 'resume' — temporarily suspend/continue a recurring schedule by id. " +
+				"'reschedule' — change a live schedule's timing/message/max_runs by id. " +
+				"You can only touch schedules for a session you own (or any session if you are an admin). " +
+				"Pass the session_id from the conversation context to schedule yourself.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"action": map[string]any{
+						"type":        "string",
+						"enum":        []string{"create", "list", "cancel", "pause", "resume", "reschedule"},
+						"description": "create | list | cancel | pause | resume | reschedule.",
+					},
+					"session_id": map[string]any{
+						"type":        "string",
+						"description": "action=create: the session to deliver into (usually your own — schedule yourself). action=list: optional filter to one session.",
+					},
+					"run_at": map[string]any{
+						"type":        "string",
+						"description": "One-shot timing. RFC3339 (2026-07-09T12:40:00Z) or relative +<dur> (e.g. +90m, +2h, +1d). Must be in the future. Omit when using every/cron.",
+					},
+					"every": map[string]any{
+						"type":        "string",
+						"description": "Recurring interval, e.g. 5m, 90s, 1h30m, 1d. Fires repeatedly this far apart. Mutually exclusive with run_at/cron.",
+					},
+					"cron": map[string]any{
+						"type":        "string",
+						"description": "Recurring 5-field cron (min hour dom mon dow), e.g. '0 9 * * 1' = every Monday 09:00. Mutually exclusive with run_at/every.",
+					},
+					"max_runs": map[string]any{
+						"type":        "integer",
+						"description": "action=create/reschedule (recurring): stop after this many fires. 0/omitted = no cap.",
+					},
+					"message": map[string]any{
+						"type":        "string",
+						"description": "action=create/reschedule: the message to deliver as a user turn when it fires (max 8000 chars). Write it to your future self.",
+					},
+					"agent_name": map[string]any{
+						"type":        "string",
+						"description": "action=create: optional pool agent to route to. Default 'main'.",
+					},
+					"id": map[string]any{
+						"type":        "string",
+						"description": "action=cancel/pause/resume/reschedule: the schedule id (sm_...).",
+					},
+				},
+				"required": []string{"action"},
+			},
+			Annotations: &ToolAnnotation{
+				Title:           "Schedule message",
+				ReadOnlyHint:    PtrBool(false),
+				DestructiveHint: PtrBool(false),
+				IdempotentHint:  PtrBool(false),
 			},
 		},
 	}
