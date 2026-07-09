@@ -98,6 +98,24 @@ func TestStore_ClaimDue_OnlyPastAndOnce(t *testing.T) {
 	}
 }
 
+func TestStore_NegativeMaxRunsClampedToZero(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	// A negative max_runs must not turn a capped recurring schedule into an
+	// unbounded one (advance treats MaxRuns<=0 as "no cap"). BeforeCreate
+	// clamps it to 0.
+	m, err := s.Create(ctx, &entity.ScheduledMessage{
+		SessionID: "s", Message: "x", Kind: entity.ScheduledKindRecurring,
+		IntervalMs: (time.Hour).Milliseconds(), RunAt: time.Now(), MaxRuns: -5,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if m.MaxRuns != 0 {
+		t.Fatalf("negative max_runs not clamped: got %d, want 0", m.MaxRuns)
+	}
+}
+
 func TestStore_RecurringClaimFinalizeReschedules(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

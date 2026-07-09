@@ -25,7 +25,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5177,
+    port: 5183,
     proxy: {
       "/tools/agents": {
         target: process.env.WICK_PROXY ?? "http://localhost:9425",

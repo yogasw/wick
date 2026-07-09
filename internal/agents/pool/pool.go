@@ -455,6 +455,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	p.mu.Unlock()
 
 	turnPersisted := false
+	userMsgNotified := false
 	if alive {
 		log.Ctx(ctx).Debug().
 			Str("component", "pool").
@@ -473,6 +474,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 		if role == "user" {
 			p.setLabelIfEmpty(sessionID, text)
 			p.notifyUserMessage(sessionID, agentName, source, text)
+			userMsgNotified = true
 		}
 		err := entry.agent.Send(augmentWithAttachments(text, atts))
 		// Nudge SSE so the Process panel's queued count updates in
@@ -534,7 +536,7 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	if !turnPersisted {
 		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts)
 	}
-	if role == "user" {
+	if role == "user" && !userMsgNotified {
 		p.notifyUserMessage(sessionID, agentName, source, text)
 	}
 
