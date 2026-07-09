@@ -211,7 +211,13 @@ func sessionSchedulesMutateUI(c *tool.Ctx, action string) {
 		c.Error(http.StatusBadRequest, action+": "+err.Error())
 		return
 	}
-	fresh, _ := globalSchedule.Get(c.Context(), scheduleID)
+	fresh, err := globalSchedule.Get(c.Context(), scheduleID)
+	if err != nil {
+		// Raced with a concurrent cancel/delete between the mutation and this
+		// re-fetch — the action still landed, so report it gone rather than panic.
+		c.Error(http.StatusNotFound, "schedule not found")
+		return
+	}
 	c.JSON(http.StatusOK, scheduleToVM(*fresh))
 }
 
@@ -389,7 +395,11 @@ func scheduleByIDMutateUI(c *tool.Ctx, action string) {
 		c.Error(http.StatusBadRequest, action+": "+err.Error())
 		return
 	}
-	fresh, _ := globalSchedule.Get(c.Context(), scheduleID)
+	fresh, err := globalSchedule.Get(c.Context(), scheduleID)
+	if err != nil {
+		c.Error(http.StatusNotFound, "schedule not found")
+		return
+	}
 	c.JSON(http.StatusOK, scheduleToVM(*fresh))
 }
 

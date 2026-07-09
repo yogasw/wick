@@ -304,10 +304,14 @@ func (b *Broadcaster) PublishRaw(sessionID, agentName, evType, data string) {
 // user turn silently goes missing until a refetch. Data is JSON with the
 // text + source so the UI can badge where the message came from.
 func (b *Broadcaster) PublishUserMessage(sessionID, agentName, source, text string) {
-	body, _ := json.Marshal(map[string]any{
+	body, err := json.Marshal(map[string]any{
 		"text":   text,
 		"source": source,
 	})
+	if err != nil {
+		log.Warn().Err(err).Str("session_id", sessionID).Msg("user_message marshal failed")
+		return
+	}
 	b.fanout(sessionID, Event{
 		SessionID: sessionID,
 		AgentName: agentName,

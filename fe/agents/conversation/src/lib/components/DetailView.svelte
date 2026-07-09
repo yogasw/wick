@@ -799,7 +799,7 @@
   const liveProcesses = $derived(filterLiveProcesses(processes));
   const processCount = $derived(liveProcesses.length);
   const workspaceCount = $derived(wsInstances.length);
-  const scheduledCount = $derived(schedules.filter((s) => s.status === "pending" || s.status === "active").length);
+  const scheduledCount = $derived(schedules.filter((s) => (s.status === "pending" || s.status === "active") && !s.paused).length);
   function railCount(id: RailTab): number {
     if (id === "context") return contextCount;
     if (id === "process") return processCount;
