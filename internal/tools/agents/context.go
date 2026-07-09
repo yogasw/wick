@@ -5,7 +5,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/project"
@@ -126,18 +129,13 @@ func sessionContextList(c *tool.Ctx) {
 		return
 	}
 	const maxEntries = 5000
-	skip := map[string]struct{}{
-		".git": {}, "node_modules": {}, ".venv": {}, "venv": {},
-		"__pycache__": {}, ".next": {}, "dist": {}, "build": {},
-		"target": {}, ".cache": {},
-	}
 	_ = filepath.Walk(cwd, func(p string, info os.FileInfo, err error) error {
 		if err != nil || p == cwd {
 			return nil
 		}
 		name := info.Name()
 		if info.IsDir() {
-			if _, drop := skip[name]; drop {
+			if _, drop := skipWalkDirs[name]; drop {
 				return filepath.SkipDir
 			}
 		}
@@ -155,6 +153,169 @@ func sessionContextList(c *tool.Ctx) {
 		return nil
 	})
 	c.JSON(http.StatusOK, map[string]any{"cwd": cwd, "files": entries})
+}
+
+// sessionContextSearch walks the session cwd and returns FILE paths matching
+// the space-separated AND terms in ?q= (every term must appear in the path),
+// ranked best-first, capped at ?limit= (default 30, max 100). This backs the
+// composer's @-mention search so it works over the whole tree — fresh on each
+// keystroke and unaffected by the list endpoint's client-side cap. Dirs are
+// excluded; an empty query returns the first files (a browsable default).
+func sessionContextSearch(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	cwd, err := resolveSessionCwd(sess)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	limit := 30
+	if l := c.Query("limit"); l != "" {
+		if n, e := strconv.Atoi(l); e == nil && n > 0 {
+			limit = n
+		}
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	terms := strings.Fields(strings.ToLower(c.Query("q")))
+
+	// Score the CACHED tree in memory rather than walking the disk per keystroke
+	// — the walk is the expensive part, so caching it (short TTL) keeps rapid
+	// @-search typing cheap. The frontend also debounces, so the two together
+	// keep this endpoint from hanging on a large repo.
+	type scored struct {
+		path  string
+		score int
+	}
+	matches := []scored{}
+	for _, rel := range mentionTreeCache.paths(id, cwd) {
+		if s, matched := scoreFilePath(rel, terms); matched {
+			matches = append(matches, scored{rel, s})
+		}
+	}
+
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].score != matches[j].score {
+			return matches[i].score < matches[j].score
+		}
+		return matches[i].path < matches[j].path
+	})
+	if len(matches) > limit {
+		matches = matches[:limit]
+	}
+	paths := make([]string, 0, len(matches))
+	for _, m := range matches {
+		paths = append(paths, m.path)
+	}
+	c.JSON(http.StatusOK, map[string]any{"files": paths})
+}
+
+// scoreFilePath ranks a slash-separated path against AND search terms; lower is
+// better. Returns (score, false) when any term is absent. Earlier hits, a
+// basename match, and shorter paths rank higher — mirrors the composer's
+// client-side fallback so results feel identical either way.
+func scoreFilePath(path string, terms []string) (int, bool) {
+	lp := strings.ToLower(path)
+	score := 0
+	for _, t := range terms {
+		idx := strings.Index(lp, t)
+		if idx == -1 {
+			return 0, false
+		}
+		score += idx
+	}
+	if len(terms) > 0 {
+		base := lp[strings.LastIndex(lp, "/")+1:]
+		if strings.Contains(base, terms[len(terms)-1]) {
+			score -= 1000
+		}
+	}
+	return score + len(lp), true
+}
+
+// skipWalkDirs are noisy directories excluded from both the file list and the
+// @-mention search walk.
+var skipWalkDirs = map[string]struct{}{
+	".git": {}, "node_modules": {}, ".venv": {}, "venv": {},
+	"__pycache__": {}, ".next": {}, "dist": {}, "build": {},
+	"target": {}, ".cache": {},
+}
+
+// walkFilePaths returns slash-separated relative paths of every FILE under cwd
+// (dirs excluded, skipWalkDirs pruned), capped at maxScan.
+func walkFilePaths(cwd string) []string {
+	const maxScan = 20000
+	paths := make([]string, 0, 256)
+	if _, err := os.Stat(cwd); err != nil {
+		return paths
+	}
+	_ = filepath.Walk(cwd, func(p string, info os.FileInfo, err error) error {
+		if err != nil || p == cwd {
+			return nil
+		}
+		if info.IsDir() {
+			if _, drop := skipWalkDirs[info.Name()]; drop {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if len(paths) >= maxScan {
+			return filepath.SkipDir
+		}
+		rel, _ := filepath.Rel(cwd, p)
+		paths = append(paths, filepath.ToSlash(rel))
+		return nil
+	})
+	return paths
+}
+
+// treeCache memoises the (expensive) file walk per session for a short TTL so
+// the @-mention search scores an in-memory list instead of hitting the disk on
+// every keystroke. New files still surface within one TTL.
+type treeCache struct {
+	mu    sync.Mutex
+	items map[string]treeCacheEntry
+}
+type treeCacheEntry struct {
+	paths   []string
+	builtAt time.Time
+}
+
+const treeCacheTTL = 3 * time.Second
+
+var mentionTreeCache = &treeCache{items: map[string]treeCacheEntry{}}
+
+// paths returns the cached file list for a session, rebuilding it (off-lock) when
+// stale. Stale entries for other sessions are evicted opportunistically so the
+// map doesn't grow unbounded over a long-lived server.
+func (c *treeCache) paths(sessionID, cwd string) []string {
+	c.mu.Lock()
+	if e, ok := c.items[sessionID]; ok && time.Since(e.builtAt) < treeCacheTTL {
+		c.mu.Unlock()
+		return e.paths
+	}
+	c.mu.Unlock()
+
+	paths := walkFilePaths(cwd)
+
+	c.mu.Lock()
+	for id, e := range c.items {
+		if id != sessionID && time.Since(e.builtAt) > 10*treeCacheTTL {
+			delete(c.items, id)
+		}
+	}
+	c.items[sessionID] = treeCacheEntry{paths: paths, builtAt: time.Now()}
+	c.mu.Unlock()
+	return paths
 }
 
 const maxReadBytes = 2 * 1024 * 1024 // 2 MiB

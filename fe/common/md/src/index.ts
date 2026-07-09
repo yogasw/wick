@@ -117,6 +117,20 @@ export function renderMarkdown(text: string): string {
       );
       return;
     }
+    /* An htmlfile fence references a saved .html file by session-relative
+       path (one path, the fence body) instead of inlining its markup. The SPA
+       resolves the path to the file-read endpoint and renders the SAME
+       sandboxed preview as an `html` fence — but the chat transcript only ever
+       stores the path, not the (potentially huge) document. The raw path stays
+       as the body so on a non-rich channel it degrades to a readable filename. */
+    if (lang === "htmlfile") {
+      const p = code.trim();
+      out.push(
+        `<div class="wick-html-artifact my-2 rounded-lg overflow-hidden" data-html-artifact data-html-path="${esc(p)}">` +
+        `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 leading-relaxed"><code>${esc(p)}</code></pre></div>`,
+      );
+      return;
+    }
     /* An imagecard fence becomes a thumbnail-gallery placeholder; the SPA
        parses the body (one `url | caption` per line) into hotlinked image
        cards with a favicon + domain chip, and a click opens the lightbox

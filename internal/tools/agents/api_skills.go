@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/pkg/tool"
@@ -85,15 +87,50 @@ func buildSkillListItems(files []skillsync.SkillFile) []SkillListItem {
 
 /* ── handlers ────────────────────────────────────────────────────────────── */
 
+// skillStatusCache memoises skillsync.Status() (a disk scan of the skills dirs)
+// for a short TTL. Both GET /api/skills and the composer command list read it,
+// so caching avoids re-walking on every call. Skills rarely change, so a few
+// seconds of staleness is fine.
+var skillStatusCache struct {
+	mu      sync.Mutex
+	files   []skillsync.SkillFile
+	dirs    []string
+	builtAt time.Time
+	valid   bool
+}
+
+const skillStatusTTL = 5 * time.Second
+
+// cachedSkillStatus returns the (TTL-cached) skills + dirs from disk.
+func cachedSkillStatus() ([]skillsync.SkillFile, []string) {
+	skillStatusCache.mu.Lock()
+	if skillStatusCache.valid && time.Since(skillStatusCache.builtAt) < skillStatusTTL {
+		files, dirs := skillStatusCache.files, skillStatusCache.dirs
+		skillStatusCache.mu.Unlock()
+		return files, dirs
+	}
+	skillStatusCache.mu.Unlock()
+
+	files, dirs, _ := skillsync.Status()
+	if dirs == nil {
+		dirs = []string{}
+	}
+
+	skillStatusCache.mu.Lock()
+	skillStatusCache.files = files
+	skillStatusCache.dirs = dirs
+	skillStatusCache.builtAt = time.Now()
+	skillStatusCache.valid = true
+	skillStatusCache.mu.Unlock()
+	return files, dirs
+}
+
 // apiSkillsList handles GET /api/skills and returns all known skills + dirs.
 func apiSkillsList(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	files, dirs, _ := skillsync.Status()
-	if dirs == nil {
-		dirs = []string{}
-	}
+	files, dirs := cachedSkillStatus()
 	c.JSON(http.StatusOK, SkillListResponse{
 		Dirs:   dirs,
 		Skills: buildSkillListItems(files),

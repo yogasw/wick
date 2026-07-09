@@ -145,6 +145,18 @@ describe("renderMarkdown — rich blocks", () => {
     expect(html).not.toContain("data-code-lang");
   });
 
+  test("htmlfile fence references a file by path, not inlined markup", () => {
+    const html = renderMarkdown("```htmlfile\ndashboards/report.html\n```");
+    expect(html).toContain("data-html-artifact");
+    /* it carries the path, NOT the document source */
+    expect(html).toContain('data-html-path="dashboards/report.html"');
+    expect(html).not.toContain("data-html-src=");
+    /* degrades to the raw path as a readable fallback on non-rich channels */
+    expect(html).toContain("dashboards/report.html");
+    /* not a highlightable code block */
+    expect(html).not.toContain("data-code-lang");
+  });
+
   test("imagecard fence becomes an image-card placeholder with raw source", () => {
     const html = renderMarkdown(
       "```imagecard\nhttps://abc.com/a.jpg | Caption A\nhttps://abc.net/b.png\n```",

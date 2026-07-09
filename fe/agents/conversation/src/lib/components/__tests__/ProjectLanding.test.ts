@@ -181,7 +181,8 @@ describe("ProjectLanding — create-and-navigate on send", () => {
     const fd = init.body as FormData;
     expect(fd.get("message")).toBe("Hello project");
     expect(fd.get("project_id")).toBe("proj-42");
-    expect(fd.get("provider")).toBe("anthropic");
+    // Full "type/name" key now (a named instance no longer collapses to bare type).
+    expect(fd.get("provider")).toBe("anthropic/Claude Sonnet");
   });
 
   test("navigates to the returned URL after successful create", async () => {

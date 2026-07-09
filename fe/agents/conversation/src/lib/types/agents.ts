@@ -130,6 +130,17 @@ export type ContextFileEntry = {
   mtime: number;
 };
 
+/* Mirror of @wick-fe/common-ui's ComposerCommand (kept local to avoid a
+   type-only import through the common-ui barrel). Structurally identical, so a
+   ComposerCommand[] built here is assignable to the shared Composer's prop. */
+export type ComposerCommand = {
+  value: string;
+  label: string;
+  hint?: string;
+  category?: string;
+  run?: () => void;
+};
+
 export type ProcessInfo = {
   session_id: string;
   agent_name: string;

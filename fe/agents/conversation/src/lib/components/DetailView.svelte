@@ -4,7 +4,8 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastError, toastOk } from "@wick-fe/common-stores";
-  import { ConfirmDialog } from "@wick-fe/common-ui";
+  import { ConfirmDialog, Composer } from "@wick-fe/common-ui";
+  import { NOTIFY_KEY } from "../notify-pref.js";
 
   import { createThreadStore } from "../stores/thread.js";
   import type { ThreadMeta, LifecycleState } from "../stores/thread.js";
@@ -22,7 +23,8 @@
   import { getAsks, answerAsk } from "../api/asks.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
   import { sendMessage } from "../api/messages.js";
-  import { listFiles, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
+  import { listFiles, searchFiles, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
+  import { listComposerCommands, type ComposerApiCommand } from "../api/composer.js";
   import { getProcesses, killProcess, dequeueProcess, liveProcesses as filterLiveProcesses } from "../api/processes.js";
   import {
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
@@ -32,10 +34,10 @@
   import ConversationHeader from "./ConversationHeader.svelte";
   import ConversationThread from "./ConversationThread.svelte";
   import JsonTree from "./JsonTree.svelte";
-  import Composer from "./Composer.svelte";
-  import ComposerToolbar from "./ComposerToolbar.svelte";
   import ContextPanel from "./ContextPanel.svelte";
   import FileViewerModal from "./FileViewerModal.svelte";
+  import SwitchModal from "./SwitchModal.svelte";
+  import { setFileContext } from "../richRender.js";
   import ProcessPanel from "./ProcessPanel.svelte";
   import WorkspacePanel from "./WorkspacePanel.svelte";
   import AskUserModal from "./AskUserModal.svelte";
@@ -46,7 +48,7 @@
   import type {
     ConversationTurn, LiveTurn, TypingState,
     ContextFileEntry, AskAnswer, ApprovalDecision,
-    ApprovedItem,
+    ApprovedItem, ComposerCommand,
     WsInstance, WsBase, ProcessInfo, FileContent,
     ProviderOption, ProjectOption,
   } from "../types/agents.js";
@@ -144,6 +146,77 @@
   let filesVal = $state<ContextFileEntry[]>([]);
   let filesLoading = $state(false);
   let filesLoadError = $state("");
+
+  /* Composer autocomplete data. `@` searches the session's files via the
+     backend (whole tree, ranked, fresh per keystroke); `/` lists commands from
+     GET /api/composer/commands (built-in actions + skills). */
+  function searchMentionFiles(query: string): Promise<string[]> {
+    return run(searchFiles(base, sessionId, query).pipe(Effect.provide(WickClientLayer)))
+      .catch(() => [] as string[]);
+  }
+  // The `/` command list comes from the backend (GET /api/composer/commands) so
+  // it's extensible without an FE rebuild. Built-in commands carry an `action`
+  // id that this map resolves to a local handler (UI actions must live in the
+  // FE); skills carry `insert` and drop in `/name` as text. A new backend
+  // command reusing an existing action id needs no FE change.
+  let providerPickerOpen = $state(false);
+  let projectPickerOpen = $state(false);
+  const ACTION_HANDLERS: Record<string, () => void> = {
+    "switch:provider": () => { providerPickerOpen = true; },
+    "switch:project": () => { projectPickerOpen = true; },
+    "panel:process": () => toggleRail("process"),
+    "panel:workspace": () => toggleRail("workspace"),
+    "panel:source": () => toggleRail("source"),
+    "panel:context": () => toggleRail("context"),
+    "view:commands": () => handleTabChange("commands"),
+    "view:approvals": () => handleTabChange("approvals"),
+    "view:raw": () => handleTabChange("raw"),
+  };
+  function toComposerCommand(c: ComposerApiCommand): ComposerCommand {
+    if (c.action) {
+      return { value: c.id, label: c.label, hint: c.hint, category: c.category, run: ACTION_HANDLERS[c.action] };
+    }
+    // insert-type (skills): value is placed after `/`
+    return { value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category };
+  }
+  let composerCommands = $state<ComposerCommand[]>([]);
+
+  // Items for the /provider and /project picker modals. Provider key mirrors
+  // ComposerToolbar: a named instance is "type/name", a default collapses to
+  // the bare type.
+  function provKey(p: ProviderOption): string {
+    return p.name && p.name !== p.type ? `${p.type}/${p.name}` : p.type;
+  }
+  function normKey(k: string): string { return k.includes("/") ? k : `${k}/${k}`; }
+  const providerItems = $derived(
+    providerOptions.map((p) => ({
+      id: provKey(p),
+      label: p.name && p.name !== p.type ? `${p.type} / ${p.name}` : p.type,
+      current: activeProvider != null && normKey(activeProvider) === `${p.type}/${p.name}`,
+    })),
+  );
+  const projectItems = $derived([
+    { id: null as string | null, label: "— no project —", current: activeProjectId == null },
+    ...projectOptions.map((p) => ({ id: p.id as string | null, label: p.name, current: p.id === activeProjectId })),
+  ]);
+
+  // Toolbar dropdowns for the shared Composer (same look as the new-session page).
+  const providerSelect = $derived({
+    options: providerOptions.map((p) => ({
+      label: p.name && p.name !== p.type ? `${p.type} · ${p.name}` : p.type,
+      value: `${p.type}/${p.name}`,
+    })),
+    value: activeProvider ? normKey(activeProvider) : "",
+    onChange: (v: string) => handleProviderChange(v),
+  });
+  const projectSelect = $derived({
+    options: [
+      { label: "— no project —", value: "" },
+      ...projectOptions.map((p) => ({ label: p.name, value: p.id })),
+    ],
+    value: activeProjectId ?? "",
+    onChange: (v: string) => handleProjectChange(v || null),
+  });
   let fileSearch = $state("");
   let openDirs = $state<Record<string, boolean>>({});
   let viewerFile = $state<FileContent | null>(null);
@@ -262,6 +335,14 @@
         filesLoadError = msg;
         toastError(`Files: ${msg}`);
       });
+  }
+
+  // Populate the composer's `/` menu from the backend registry (built-in
+  // actions + skills). Best-effort: on failure the menu is just empty.
+  function loadComposerCommands() {
+    run(listComposerCommands(base).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { composerCommands = (res.commands ?? []).map(toComposerCommand); })
+      .catch(() => { /* commands are optional */ });
   }
 
   /* Workspace files change as the agent works (it writes artifacts into the
@@ -712,8 +793,30 @@
     railTab = railTab === tab ? null : tab;
   }
 
+  // When a panel opens (via a `/` command or a tab click), move focus into it so
+  // it's immediately keyboard-navigable and Esc feels natural.
+  $effect(() => {
+    if (railTab === null) return;
+    queueMicrotask(() => scmSideEl?.focus());
+  });
+
+  // Esc closes the open side panel — "sat set". Guarded on defaultPrevented so
+  // an Esc already consumed by a higher overlay (command menu, picker, file
+  // viewer) doesn't also close the panel.
+  $effect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (railTab !== null) { e.preventDefault(); railTab = null; }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   /* ── mount/unmount ────────────────────────────────────────────── */
   onMount(() => {
+    // htmlfile fences in the transcript resolve their path against this base +
+    // session; set it before the first enrich pass runs (loadConversation).
+    setFileContext(base, sessionId);
     loadConversation(true);
 
     run(getSessionMeta(base, sessionId).pipe(Effect.provide(WickClientLayer)))
@@ -727,6 +830,7 @@
 
     startSSE();
     loadFiles();
+    loadComposerCommands();
     loadProcesses();
     loadWorkspace();
     loadProviderOptions();
@@ -848,22 +952,31 @@
             <kbd class="rounded border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-1 text-[10px] font-mono text-black-600 dark:text-black-700">Ctrl+↓</kbd>
           </button>
         {/if}
-        <div class="max-w-4xl mx-auto pb-6">
-          {#snippet toolbarLeading()}
-            <ComposerToolbar
-              providers={providerOptions}
-              projects={projectOptions}
-              activeProvider={activeProvider}
-              activeProjectId={activeProjectId}
-              onProviderChange={handleProviderChange}
-              onProjectChange={handleProjectChange}
-            />
-          {/snippet}
+        <div class="relative max-w-4xl mx-auto pb-6">
+          <!-- /provider and /project picker popups float above the composer -->
+          <SwitchModal
+            open={providerPickerOpen}
+            title="Switch provider"
+            items={providerItems}
+            onSelect={(id) => { if (id) handleProviderChange(id); }}
+            onClose={() => (providerPickerOpen = false)}
+          />
+          <SwitchModal
+            open={projectPickerOpen}
+            title="Switch project"
+            items={projectItems}
+            onSelect={(id) => handleProjectChange(id)}
+            onClose={() => (projectPickerOpen = false)}
+          />
           <Composer
             onSend={handleSend}
             placeholder="Message the agent…"
             showShiftEnterHint={true}
-            leadingActions={toolbarLeading}
+            notifyKey={NOTIFY_KEY}
+            provider={providerSelect}
+            project={projectSelect}
+            onSearchFiles={searchMentionFiles}
+            commands={composerCommands}
           />
         </div>
       </div>
@@ -958,7 +1071,8 @@
   {#if sideOpen}
     <div
       bind:this={scmSideEl}
-      class={`relative hidden lg:flex flex-col ${railTab === "source" ? "" : "w-80"} shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden`}
+      tabindex="-1"
+      class={`relative hidden lg:flex flex-col outline-none ${railTab === "source" ? "" : "w-80"} shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden`}
       style={railTab === "source" ? `width:${scmWidth}px` : ""}
     >
       {#if railTab === "source"}
