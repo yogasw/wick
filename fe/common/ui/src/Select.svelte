@@ -13,9 +13,8 @@
     class?: string;
     size?: "sm" | "md";
     /** "boxed" (default) is the bordered field; "minimal" is a borderless
-        text+chevron control; "chip" is a filled rounded pill (Claude-style
-        project/context chip). The last two are for toolbars. */
-    variant?: "boxed" | "minimal" | "chip";
+        text+chevron control for toolbars. */
+    variant?: "boxed" | "minimal";
   };
 
   let {
