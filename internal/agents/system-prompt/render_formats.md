@@ -14,6 +14,8 @@ Telegram) the raw source still reads fine.
 | **Code (highlighted)** | fenced block with a language tag: ` ```js `, ` ```python `, ` ```go `, ` ```sql `, … | syntax-highlighted block (highlight.js), light/dark aware |
 | **SVG images** | fence tagged ` ```svg ` **or** a bare `<svg>…</svg>` written inline | rendered inline image, paints progressively while streaming |
 | **Image cards** | fence tagged ` ```imagecard `, one `image-url \| caption` per line | thumbnail grid; click → full-screen carousel (← / →) with the source domain |
+| **HTML preview (inline)** | fence tagged ` ```html ` containing the full document | sandboxed live-preview iframe (see "HTML artifacts" below) |
+| **HTML preview (by file)** | fence tagged ` ```htmlfile ` containing just the **path** to a saved `.html` file | same sandboxed preview, but the transcript stores only the path — not the markup (see below) |
 | **Mermaid diagrams** | fence tagged ` ```mermaid ` containing any Mermaid source | colored diagram, theme-aware light/dark |
 | **Inline math** | `$…$` — e.g. `$E = mc^2$` | KaTeX inline |
 | **Display math** | `$$…$$` on its own line(s) | KaTeX centered block |
@@ -153,3 +155,78 @@ hard-code a specific palette when the design genuinely needs a fixed look
 opaque full-bleed background unless you mean to — leaving the page
 background as `var(--wick-bg)` (or transparent) lets it sit seamlessly in
 the conversation.
+
+#### Previewing an HTML file you already wrote to disk
+
+When the HTML already lives in a file — you generated a dashboard, report, or
+page and saved it with a write/edit tool — **do not paste its contents back
+into the chat as a ` ```html ` block.** For anything sizeable that dumps the
+whole document (often tens of KB) into the transcript: it wastes context, and
+on non-rich channels it degrades to an unreadable wall of markup.
+
+Instead reference it by path with a ` ```htmlfile ` fence — one line, the
+session-relative path:
+
+````
+```htmlfile
+palembang-house-dashboard.html
+```
+````
+
+The chat UI resolves the path, fetches the file, and renders the **same**
+sandboxed preview (with Full screen / Show code / Download). The transcript
+only ever holds the path, so the cost is one line regardless of file size. On
+a non-rich channel it degrades to the readable filename.
+
+Rule of thumb: **generating a small self-contained snippet on the fly →
+` ```html ` inline. Previewing a file that already exists on disk →
+` ```htmlfile ` by path.** The theme bridge above applies to both. (Users can
+also click any `.html` file in the file tree to open the same preview.)
+
+#### Loading session files from inside an artifact
+
+An artifact runs sandboxed and **cannot `fetch()`** — the sandbox gives it an
+opaque origin and the CSP sets `connect-src 'none'`, so any `fetch`/`XHR` to a
+file or API is refused ("Failed to fetch" / "violates Content Security
+Policy"). This is deliberate: it stops the artifact from phoning home. So a
+dashboard that does `fetch("data.json")` will always fail.
+
+To feed data into an artifact, use one of these — both keep the sandbox intact:
+
+- **Embed it inline (simplest).** Put the data in the document itself and read
+  it with plain JS — no network at all:
+  ````
+  ```html
+  <script type="application/json" id="data">{ "users": 42 }</script>
+  <script>
+    const d = JSON.parse(document.getElementById("data").textContent);
+    /* render with d … */
+  </script>
+  ```
+  ````
+  Best when the data is known at authoring time and small-to-medium.
+
+- **Pull a session file over the bridge (`window.wickReadFile`).** The runtime
+  injects `window.wickReadFile(path)` into every artifact; it returns a Promise
+  of the file's **text**. The artifact asks, the *parent* (which has the
+  session) reads the file and hands the bytes back over `postMessage` — no
+  `fetch` from the artifact, so the sandbox is never loosened:
+  ````
+  ```html
+  <div id="out">loading…</div>
+  <script>
+    wickReadFile("artifact.json")
+      .then(txt => { document.getElementById("out").textContent =
+        "users: " + JSON.parse(txt).users; })
+      .catch(e => { document.getElementById("out").textContent = "error: " + e.message; });
+  </script>
+  ```
+  ````
+  The path is **session-relative** (same as `htmlfile` — e.g. `artifact.json`,
+  `data/report.csv`); absolute paths, URLs, and `..` traversal are rejected.
+  Any text file works (JSON, CSV, plain text) — parse it however you like. Use
+  this when the data lives in a file, is large, or you want to load several
+  files (call `wickReadFile` once per file), possibly lazily.
+
+Never tell the artifact to `fetch` a wick endpoint or an external URL — it will
+be blocked. Embed the data, or use `wickReadFile`.

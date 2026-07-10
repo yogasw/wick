@@ -1,9 +1,13 @@
 <script lang="ts">
-  import type { ProjectOption, ProviderOption, SessionListItem } from "../types/agents.js";
+  import type { ProjectOption, ProviderOption, SessionListItem, ComposerCommand } from "../types/agents.js";
   import { toastError } from "@wick-fe/common-stores";
+  import { Effect } from "effect";
+  import { WickClientLayer } from "@wick-fe/common-api";
   import { createSessionInProject } from "../api/options.js";
-  import Composer from "./Composer.svelte";
-  import ComposerToolbar from "./ComposerToolbar.svelte";
+  import { searchProjectFiles } from "../api/files.js";
+  import { listComposerCommands } from "../api/composer.js";
+  import { Composer } from "@wick-fe/common-ui";
+  import { NOTIFY_KEY } from "../notify-pref.js";
   import SessionList from "./SessionList.svelte";
 
   type Props = {
@@ -19,10 +23,40 @@
 
   let search = $state("");
   let selectedProvider = $state<string>("");
-  const activeProjectId = $derived<string | null>(project.id);
+
+  // A named instance is "type/name"; a default collapses to the bare type.
+  function providerKey(p: ProviderOption): string {
+    return p.name && p.name !== p.type ? `${p.type}/${p.name}` : p.type;
+  }
 
   $effect(() => {
-    if (!selectedProvider && providers.length > 0) selectedProvider = providers[0].type;
+    if (!selectedProvider && providers.length > 0) selectedProvider = providerKey(providers[0]);
+  });
+
+  const providerSelect = $derived({
+    options: providers.map((p) => ({
+      label: p.name && p.name !== p.type ? `${p.type} · ${p.name}` : p.type,
+      value: providerKey(p),
+    })),
+    value: selectedProvider,
+    onChange: (v: string) => { selectedProvider = v; },
+  });
+
+  // `@` searches THIS project's folder; `/` shows skills only (pre-session).
+  function searchMentionFiles(query: string): Promise<string[]> {
+    return Effect.runPromise(searchProjectFiles(base, project.id, query).pipe(Effect.provide(WickClientLayer)))
+      .catch(() => [] as string[]);
+  }
+  let composerCommands = $state<ComposerCommand[]>([]);
+  $effect(() => {
+    const providerType = selectedProvider ? selectedProvider.split("/")[0] : "";
+    Effect.runPromise(listComposerCommands(base, "new", providerType).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        composerCommands = (res.commands ?? []).map((c) => ({
+          value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category,
+        }));
+      })
+      .catch(() => { /* commands optional */ });
   });
 
   const chatCount = $derived(sessions.length);
@@ -100,21 +134,14 @@
     </div>
   </div>
 
-  <!-- Compose box: real Composer + ComposerToolbar -->
-  {#snippet toolbarLeading()}
-    <ComposerToolbar
-      {providers}
-      projects={[project]}
-      activeProvider={selectedProvider}
-      activeProjectId={activeProjectId}
-      onProviderChange={(type) => { selectedProvider = type; }}
-      onProjectChange={(_id) => { /* project fixed for landing */ }}
-    />
-  {/snippet}
+  <!-- Compose box: shared Composer (project is fixed here, shown in the header). -->
   <Composer
     onSend={handleSend}
-    placeholder="Ask anything… (Shift+Enter for new line)"
-    leadingActions={toolbarLeading}
+    placeholder="Ask anything…   / commands · @ files"
+    notifyKey={NOTIFY_KEY}
+    provider={providerSelect}
+    onSearchFiles={searchMentionFiles}
+    commands={composerCommands}
   />
 
   <!-- Session list — reuses SessionList for status badge, kebab/delete, pagination, search -->

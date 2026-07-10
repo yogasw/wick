@@ -10,6 +10,37 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.30.0](https://github.com/yogasw/wick/compare/v0.29.0...v0.30.0) — Composer & Agents
+
+_Released on 2026-07-10_
+
+### Added
+*   **Unified chat composer with `@` file mentions and `/` command palette**: The New Session page, Project landing page, and live session Conversation tab share a single composer component. Typing `@` opens a file-search popup — scored against the session's working directory (`GET /sessions/{id}/files/search`) in a live session, or against the selected project's folder (`GET /api/projects/{id}/files/search`) on the New Session / Project landing pages, before any session exists. Typing `/` opens a command menu — switch provider/project, open a panel (processes/workspace/source/context), change the view (commands/approvals/raw), or run an installed skill — sourced from `GET /api/composer/commands`, scoped with `scope=new` (skills only, for pre-session pages) and `provider=<type>` (skills for just that provider); the skill scan behind it is cached server-side for 30s. The toolbar is now a compact `+` hub menu (attach, screenshot, add context, commands, project/provider/preset) plus icon-only project/provider chips, replacing the old dropdown row. See [Agents — Composer](/guide/agents#composer).
+*   **Screenshot capture, inline image editor, and provider brand icons in the composer**: The `+` menu's new **Take screenshot** action (`getDisplayMedia`) and an edit affordance on attached image chips both open a canvas annotator — crop, arrow/rectangle/ellipse/pen, and a blur tool for redacting sensitive detail before sending — with undo and a PNG export at the image's native resolution. The provider chip and its picker now show the Claude / Gemini / Codex brand mark instead of a generic icon (Codex swaps a light/dark SVG pair to follow the app theme). See [Agents — Composer](/guide/agents#composer).
+*   **HTML artifacts by path (` ```htmlfile ` fence)**: A new fence previews a saved `.html` file by its session-relative path instead of pasting the markup into the transcript — same sandboxed preview (Full screen / Show code / Download) as inline ` ```html ` blocks and file artifacts, but the transcript only ever stores the path. Clicking a `.html` file in the Context file panel now opens the same live preview with an Edit/Preview toggle and Reload. See [Agents — Artifacts](/guide/agents#artifacts).
+*   **Artifacts can read session files via `window.wickReadFile`**: Sandboxed HTML artifacts can't `fetch()` (the CSP blocks it by design), so the runtime now injects `window.wickReadFile(path)`, returning a Promise of a session file's text contents fetched by the parent page and handed back over `postMessage`. Lets a generated dashboard load data from a session file without loosening the sandbox. See [Agents — Artifacts](/guide/agents#artifacts).
+
+### Fixed
+*   **Ace code editor caret drift**: Fixed the text caret drifting from its visible position in the Context file panel's Ace editor by re-measuring font metrics after the editor becomes visible and webfonts finish loading.
+*   **9router dashboard iframe now agrees with the status badge**: The Dashboard tab's embedded iframe now probes the dashboard port directly (like the status badge and API proxy already did), instead of only checking whether wick itself spawned the process. A 9router started outside wick, or one that survived a wick restart, now serves the iframe instead of showing "not running — start it first" while the badge says **Running**.
+*   **Schedule and Slack features (review findings from PR #972)**:
+    *   **Correctness**:
+        *   `session_schedule_handler`: Fixed a potential panic on nil dereference if a concurrent cancel occurred between the mutation and a re-fetch, by handling the error and reporting the schedule as gone.
+        *   `pool.send`: Prevented duplicate user message SSE broadcasts by tracking `userMsgNotified` and skipping the second call.
+        *   `entity.ScheduledMessage`: Clamped negative `MaxRuns` values to 0 in `BeforeCreate` to ensure capped recurring schedules do not become unbounded.
+        *   `store.ClaimDue`: Parked claimed rows approximately 100 years in the future instead of now+2h. This prevents re-firing of claimed rows after a crash exceeding 2 hours, ensuring an at-most-once delivery bias.
+        *   `stream.PublishUserMessage`: Added logging and graceful exit on `json.Marshal` errors, consistent with other publishers.
+    *   **Slack**:
+        *   `getReactions`: Now rejects requests if both `file` and `channel+ts` parameters are supplied, enforcing the documented either/or contract.
+        *   `shapeReadFile`: When Slack reports no mimetype, the function now falls back to `utf8.Valid` to return text files inline instead of base64.
+    *   **UI**:
+        *   Scheduled rail badge: Excludes paused recurring schedules from the live count displayed in the badge.
+        *   Scheduled SPA: Updated `data-base` fallback to use `||` instead of `??` to prevent API routing issues in the dev environment; changed the dev port from 5177 to 5183 to resolve a collision.
+    *   **Rejected Findings**: The schedule-id "enumeration" timing concern (ids are random UUIDs, both paths return 404) and the `scheduledPage notReady` guard (page-shell handlers don't call `notReady`; the `schedulesAllUI` data endpoint already guards nil) were reviewed and rejected as not applicable.
+
+---
+
+
 ## [v0.29.0](https://github.com/yogasw/wick/compare/v0.28.5...v0.29.0) — Scheduled Messages & Slack
 
 _Released on 2026-07-09_

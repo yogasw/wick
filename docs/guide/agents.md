@@ -25,6 +25,7 @@ Most "AI agent" tools either lock you into their own runtime, or expose a chat-o
 | **Skills Manager** — browse, preview, sync, and delete skill `.md` files across all provider skill dirs (`~/.claude/skills`, `~/.codex/skills`, `~/.gemini/skills`) from one UI | [Skills Manager](./agents/skills-manager) |
 | **Command Gate** — `<app>-gate` sidecar binary intercepts every Bash command for whitelist + 4-mode interactive approval | [Command Gate](./command-gate) |
 | **AskUser MCP tool** — agent asks a question mid-turn, web UI renders a card, answer goes back as MCP tool result | (covered in [Channels ▶ Web UI](./agents/channels#web-ui)) |
+| **Composer** — one shared message input across New Session, Project landing, and live sessions, with `@` file mentions and a `/` command palette | _[below](#composer)_ |
 | **Context file panel** — slide-over on session detail to browse / read / edit / download / delete files in the agent's working directory, with markdown + HTML preview and Ace syntax highlighting | _[below](#context-file-panel)_ |
 | **Source Control panel** — docked, pinnable SCM sidebar on the session detail page: multi-repo git status, tree/list view, stage/unstage/discard, commit, branches, push/pull, Monaco diff viewer, commit history, live SSE updates | [Source Control](./agents/source-control) |
 | **Persistent state on disk** — everything under `~/.<app>/agents/`. Backup is `tar`. Restart re-scans, no DB migration. | _below_ |
@@ -145,7 +146,7 @@ Files produced in a single turn are shown as a **grid** (up to 4 items) or a **c
 |---|---|
 | Image — png, jpg, jpeg, svg, webp, gif | Thumbnail in the grid. Click opens a **zoomable / pannable lightbox** (zoom buttons, mouse-wheel, drag to pan, `Esc` / `+` / `−` / `0` keyboard shortcuts). |
 | PDF | Thumbnail chip. Click opens the PDF inline in the lightbox. |
-| HTML | Borderless sandboxed `<iframe>` that grows to its content height (no inner scrollbar). A floating **⋮** menu offers Full screen / Show code / Download. Inline ` ```html ` blocks in the message body use the same renderer. |
+| HTML | Borderless sandboxed `<iframe>` that grows to its content height (no inner scrollbar). A floating **⋮** menu offers Full screen / Show code / Download. Inline ` ```html ` blocks in the message body use the same renderer, as does a ` ```htmlfile ` fence containing just a session-relative path — same preview, but the transcript stores only the path, not the markup. Clicking a `.html` file in the [Context file panel](#context-file-panel) opens the same live preview with an Edit/Preview toggle and Reload. |
 | Markdown (`.md`) | File card with a fullscreen markdown viewer + download. |
 | Text / code | File card with a fullscreen text viewer + download. |
 | Any other type | Downloadable file chip (icon + filename). |
@@ -162,6 +163,10 @@ HTML artifacts (both file artifacts and inline ` ```html ` blocks) receive a **t
 
 The agent system prompt tells the model to use `var(--wick-*)` by default and only hard-code a palette when the design genuinely requires a fixed look (brand mock-up, game canvas, etc.).
 
+### Reading session files from an artifact
+
+A sandboxed artifact can't `fetch()` — the sandbox gives it an opaque origin and the CSP sets `connect-src 'none'`, so any `fetch`/`XHR` (to a file or an API) is refused by design. To feed data into an artifact without loosening the sandbox, the runtime injects `window.wickReadFile(path)` into every artifact: it returns a `Promise` of the file's text contents. The artifact calls it, the *parent* page (which owns the session) reads the file and answers over `postMessage` — no network request ever leaves the sandbox. `path` is session-relative — same rule as the `htmlfile` fence above — and absolute paths / `..` traversal are rejected.
+
 ### Serving artifacts
 
 A new backend endpoint serves cwd files on demand:
@@ -175,6 +180,47 @@ GET /tools/agents/sessions/{id}/files/raw?path=<relative-path>
 - HTML and other types: forced to `attachment` (download) for safety — the lightbox HTML preview uses `srcdoc` not `src` so the raw file is never trusted directly.
 
 The endpoint is gated by the same session-ownership check as the rest of the agents API and respects the `safeJoin` path sandbox (no `..` traversal).
+
+## Composer
+
+The message input — on the New Session page, the Project landing page, and a live session's Conversation tab — is one shared component. Same input, same autocomplete, everywhere.
+
+The toolbar is a single `+` button that opens a hub menu: **Attach file or photo**, **Take screenshot** ([below](#screenshot-image-editor)), **Add context (@)**, **Commands** (opens the `/` palette below), then drill-ins for whichever of **Project** / **Provider** / **Preset** the page configures. A standalone bell sits next to it when notifications are available for that page. To the right of the input, an icon-only **project chip** (shown only once a project is set) and **provider chip** — the latter rendering the [provider's brand icon](#provider-icons) — open the same drill-ins directly.
+
+### `@` file mentions
+
+Typing `@` opens a file-search popup. Space-separated terms are ANDed; matches are ranked (basename hits first, then earliest match position, then shorter paths). Which endpoint backs the search depends on the page:
+
+| Page | Endpoint | Scope |
+|---|---|---|
+| Live session (Conversation tab) | `GET /sessions/{id}/files/search?q=<terms>` | The session's resolved `cwd`. |
+| New Session / Project landing | `GET /api/projects/{id}/files/search?q=<terms>` | The selected project's folder — no session exists yet, but its `cwd` will be this same folder once one is created. |
+
+Both endpoints cache the underlying file-tree walk for a few seconds so rapid typing doesn't re-walk the disk on every keystroke. Selecting a result inserts `@path`.
+
+### `/` command palette
+
+Typing `/` (or clicking **Commands** in the `+` menu) opens a command menu backed by `GET /api/composer/commands?scope=<scope>&provider=<type>` — built-in actions (switch provider, switch project, open a panel: processes / workspace / source / context, or change the view: commands / approvals / raw) grouped by category, followed by every installed [skill](./agents/skills-manager). Picking a built-in action runs it directly; picking a skill inserts `/<skill-name>`.
+
+- `scope=new` (New Session / Project landing, before a session exists) drops the built-in actions — they only apply to a live session — and returns skills only.
+- `provider=<type>` (`claude` / `codex` / `gemini`) scopes the skill list to that provider's own skill dir; the composer re-queries this whenever its provider selection changes.
+
+The skill scan behind this is cached server-side for 30s (stale-while-revalidate — the cached list answers instantly, a single background goroutine refreshes it once stale) so the `/` menu stays snappy even with many installed skills.
+
+### Provider icons
+
+The provider chip and its drill-in list show each provider's brand mark — Claude, Gemini, Codex — instead of a generic name, resolved from the leading `type` segment of the `type/name` value. The Codex mark is monochrome, so it ships as a light/dark SVG pair swapped by the app's `.dark` class rather than the OS-level `prefers-color-scheme` a plain `<img>` would otherwise follow. Any other provider type falls back to a generic icon.
+
+### Screenshot + image editor
+
+The `+` menu's **Take screenshot** action captures the screen via the browser's `getDisplayMedia` picker (no server round-trip) and opens the capture straight into an inline editor before it's attached; any already-attached image gets the same edit affordance on its chip. The editor is a canvas annotator with:
+
+- **Crop**, **arrow**, **rectangle**, **ellipse**, and freehand **pen** tools, with color swatches and a stroke-width slider
+- **Blur** — pixelates a dragged region, for redacting secrets or other sensitive detail before sending a screenshot
+- **Undo** (`Ctrl`/`Cmd`+`Z`) across both annotation edits and crops
+- Exports a PNG at the image's natural resolution regardless of on-screen zoom
+
+**Done** replaces (or adds) the file in the composer's attachment list; **Cancel** / `Esc` discards the edit.
 
 ## Context file panel
 
