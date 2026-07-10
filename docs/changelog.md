@@ -10,6 +10,33 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.30.1](https://github.com/yogasw/wick/compare/v0.30.0...v0.30.1) — Data Tables
+
+_Released on 2026-07-10_
+
+### Added
+
+*   **Per-User Data Tables:**
+    *   Introduced data tables as a first-class, per-user resource. HTML artifacts can now perform CRUD operations (Create, Read, Update, Delete) on these tables without compromising the artifact sandbox.
+    *   **Ownership:** Each schema/entity now carries an owner user ID. Tables are taggable resources keyed by slug (e.g., `owner:<slug>`). Access is granted via owner tags, admin-granted users, a direct-owner fallback, and `AdminSeeAll` permissions, applied across the `/data-tables` UI list, detail views, and mutations.
+    *   **Admin Grant Page:** A new `/admin/data-tables` page allows administrators to share data tables by tag, mirroring the existing workflow sharing mechanism.
+    *   **MCP Scoping:** The `connector.Ctx` now includes `CallerUserID`, stamped by `connectors.Service` from the session owner, gating access and attributing create ownership to the specific user.
+
+*   **Widget CRUD Bridge:**
+    *   **JSON Row API:** A new API endpoint `GET/POST/PATCH/DELETE /api/data-tables/{slug}/rows` is introduced for programmatic access, guarded by permissions.
+    *   **Sandboxed Widget Access:** `window.wickDataTable.query`, `insert`, `update`, and `delete` methods are injected into every artifact iframe. Sandboxed widgets can't directly fetch, so the parent proxies each call using the session cookie, maintaining the same trust model as `window.wickReadFile`.
+    *   **Agent Prompt Documentation:** The system prompt has been updated to document this new bridge, enabling agents to build database-backed widgets.
+
+### Fixed
+
+*   **Composer Command Palette Alignment:**
+    *   Resolved an issue in the `/` command menu where the description's width would collapse the command name on narrow or mobile widths. The command name now has priority and is pinned to a fixed-width column, ensuring every hint aligns in a straight second column for improved readability, especially for the skills list. File mentions (`@`) retain the full row for filenames.
+*   **Provider Test Flakiness:**
+    *   Fixed flaky `TestRename` and `TestSwitch` tests within the agent provider package, which were failing under the `-race` CI gate. This was due to a race condition where `Save`'s async probe goroutine for reloading and rewriting `config.json` sometimes conflicted with subsequent synchronous test operations. A `saveSeed` helper now ensures this goroutine is drained after each seed `Save`, serializing config writes and preventing stale reloads or file access denials on Windows. (Internal stability improvement.)
+
+---
+
+
 ## [v0.30.0](https://github.com/yogasw/wick/compare/v0.29.0...v0.30.0) — Composer & Agents
 
 _Released on 2026-07-10_
