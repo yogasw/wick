@@ -129,6 +129,12 @@ func (s *ScheduledMessage) BeforeCreate(tx *gorm.DB) error {
 	if s.Kind == "" {
 		s.Kind = ScheduledKindOnce
 	}
+	// A negative MaxRuns would slip past the advance() stop check
+	// (MaxRuns > 0 && …), turning a "capped" recurring schedule into an
+	// unbounded one. Clamp to 0 = no cap, the intended meaning.
+	if s.MaxRuns < 0 {
+		s.MaxRuns = 0
+	}
 	if s.Status == "" {
 		s.Status = s.LiveStatus()
 	}

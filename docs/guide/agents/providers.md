@@ -34,7 +34,7 @@ The default seed: when the instance list is empty, [`Load`](https://github.com/y
 
 ## Instance names and the type/name key
 
-Every provider instance is identified by a `type/name` key — the type plus a slash plus the instance name. Examples: `claude/claude` (the default), `claude/work`, `codex/fast`. This key is what project defaults, the new-session composer dropdown, and `agents.json` store.
+Every provider instance is identified by a `type/name` key — the type plus a slash plus the instance name. Examples: `claude/claude` (the default), `claude/work`, `codex/fast`. This key is what project defaults, the composer's [provider chip](../agents#composer), and `agents.json` store.
 
 **Name rules:** letters, digits, and `_` only. Spaces in the create/rename form auto-convert to `_`; any other character outside `[A-Za-z0-9_]` is rejected with an inline error. The name must be unique within its type.
 

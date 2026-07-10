@@ -210,6 +210,7 @@ func Register(r tool.Router) {
 	r.GET("/sessions/{id}/turns/{turn_id}/events/{event_id}", sessionTurnEvent)
 
 	r.GET("/sessions/{id}/files", sessionContextList)
+	r.GET("/sessions/{id}/files/search", sessionContextSearch)
 	r.GET("/sessions/{id}/processes", sessionProcesses)
 	r.GET("/sessions/{id}/files/read", sessionContextRead)
 	r.GET("/sessions/{id}/files/download", sessionContextDownload)
@@ -226,6 +227,9 @@ func Register(r tool.Router) {
 	r.GET("/api/sessions/{id}/conversation", apiSessionConversation)
 	r.GET("/api/sessions/{id}/meta", apiSessionMeta)
 
+	// JSON API — composer `/` command menu (built-in actions + skills).
+	r.GET("/api/composer/commands", apiComposerCommands)
+
 	// JSON API — skills SPA endpoints (mirrors templ skills handlers).
 	r.GET("/api/skills", apiSkillsList)
 	r.GET("/api/skills/{name}", apiSkillDetail)
@@ -238,6 +242,7 @@ func Register(r tool.Router) {
 
 	// JSON API — project-settings SPA endpoints.
 	r.GET("/api/projects/{id}", apiProjectDetail)
+	r.GET("/api/projects/{id}/files/search", projectFileSearch)
 	r.POST("/api/projects/{id}", apiProjectUpdate)
 
 	// JSON API — providers SPA endpoints (mirrors templ providers handlers).

@@ -45,6 +45,8 @@ The **Settings** tab is the management surface for the 9router process itself.
 
 The status badge reflects whether the dashboard port is actually reachable, not just whether wick itself spawned the process — so a 9router started outside wick (or one still running across a wick restart) correctly shows **Running**. The installed version is cached for up to an hour and refreshed in the background; on the very first check after a fresh page load it briefly shows **Checking…** instead of a stale or blank value.
 
+The Dashboard tab's iframe uses the same reachability check, so it stays consistent with the badge: an externally-started (or restart-surviving) 9router process serves the embedded dashboard normally instead of showing "not running — start it first" while the badge says Running.
+
 ### Auto-start on boot
 
 Toggle **Auto-start on boot** to have wick launch 9router automatically every time wick starts.

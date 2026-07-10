@@ -128,6 +128,39 @@ describe("FileViewerModal", () => {
     expect(container.querySelector("iframe")).not.toBeNull();
   });
 
+  test("html file opens in the editor by default (context is for editing)", () => {
+    const file = { path: "dash.html", size: 40, binary: false, content: "<h1>Hi</h1>" } as FileContent;
+    const { container } = render(FileViewerModal, {
+      props: { file, dirty: false, onSave: vi.fn(), onClose: vi.fn() },
+    });
+    /* editable → code editor mounted, no preview iframe yet */
+    expect(container.querySelector("[data-testid='code-editor']")).not.toBeNull();
+    expect(container.querySelector("iframe")).toBeNull();
+    /* Save is available because the file is editable */
+    expect(screen.getByText("Save")).toBeDefined();
+  });
+
+  test("html file: Preview toggle swaps the editor for a sandboxed iframe and back", async () => {
+    const file = { path: "dash.html", size: 40, binary: false, content: "<h1>Hi</h1>" } as FileContent;
+    const { container } = render(FileViewerModal, {
+      props: { file, dirty: false, onSave: vi.fn(), onClose: vi.fn() },
+    });
+    await fireEvent.click(screen.getByText("Preview"));
+    expect(container.querySelector("iframe")).not.toBeNull();
+    expect(container.querySelector("[data-testid='code-editor']")).toBeNull();
+    await fireEvent.click(screen.getByText("Edit"));
+    expect(container.querySelector("[data-testid='code-editor']")).not.toBeNull();
+    expect(container.querySelector("iframe")).toBeNull();
+  });
+
+  test("non-html editable file shows no Preview toggle", () => {
+    const file = { path: "notes.txt", size: 5, binary: false, content: "hi" } as FileContent;
+    render(FileViewerModal, {
+      props: { file, dirty: false, onSave: vi.fn(), onClose: vi.fn() },
+    });
+    expect(screen.queryByText("Preview")).toBeNull();
+  });
+
   test("markdown file renders rendered HTML (heading becomes h-tag), not a textarea", () => {
     const file = { path: "readme.md", size: 5, binary: false, content: "# Title" } as FileContent;
     const { container } = render(FileViewerModal, {

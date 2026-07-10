@@ -442,7 +442,11 @@ func shapeReadFile(fileID, name, mimetype string, body []byte) any {
 		"mimetype": mimetype,
 		"size":     len(body),
 	}
-	if isTextMimetype(mimetype) && utf8.Valid(body) {
+	// Text when the mimetype says so, OR when Slack reported no mimetype at
+	// all but the bytes are valid UTF-8 (a .txt Slack didn't type). Binary
+	// (images, PDFs, invalid UTF-8) falls through to base64.
+	textLike := (isTextMimetype(mimetype) || strings.TrimSpace(mimetype) == "") && utf8.Valid(body)
+	if textLike {
 		out["is_text"] = true
 		out["content"] = string(body)
 	} else {

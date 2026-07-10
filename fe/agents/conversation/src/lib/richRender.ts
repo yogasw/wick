@@ -31,6 +31,23 @@ function isDark(): boolean {
   return typeof document !== "undefined" && document.documentElement.classList.contains("dark");
 }
 
+/* File context for `htmlfile` fences: a path-referencing HTML artifact needs
+   the API base + session id to build the file-read URL, but enrich() runs as a
+   plain Svelte action with no props. DetailView sets this once per open
+   conversation; renderHtmlArtifacts reads it to resolve the path. */
+let fileBase = "";
+let fileSessionId = "";
+export function setFileContext(base: string, sessionId: string): void {
+  fileBase = base;
+  fileSessionId = sessionId;
+}
+export function getFileContext(): { base: string; sessionId: string } {
+  return { base: fileBase, sessionId: fileSessionId };
+}
+function fileDownloadURL(path: string): string {
+  return `${fileBase}/sessions/${fileSessionId}/files/download?path=${encodeURIComponent(path)}`;
+}
+
 function loadMermaid(): Promise<MermaidModule> {
   if (!mermaidPromise) {
     mermaidPromise = import("mermaid").then((m) => {
@@ -558,7 +575,10 @@ function artifactThemeStyle(): string {
 
 export function buildArtifactSrcdoc(html: string): string {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`;
-  const head = meta + artifactThemeStyle();
+  // The file bridge MUST go in <head>, before any body script: an artifact's
+  // own <script> runs synchronously top-to-bottom, so if it calls
+  // window.wickReadFile it has to already exist by then.
+  const head = meta + artifactThemeStyle() + artifactFileBridge();
   const htmlClass = isDark() ? ' class="dark"' : "";
   if (/<head[\s>]/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => `${m}${head}`);
   if (/<html[\s>]/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => `${m}<head>${head}</head>`);
@@ -596,8 +616,40 @@ export function artifactHeightReporter(id: string): string {
   })();<\/script>`;
 }
 
-/* buildArtifactSrcdoc + the height reporter injected before </body> (or
-   appended). Used by the inline gallery preview that auto-grows to content. */
+/* File bridge injected into every artifact iframe. The artifact CANNOT fetch
+   (sandbox = opaque origin, CSP connect-src none) — by design, so it can't
+   phone home. This bridge instead lets it ASK the parent for a session file
+   over postMessage (which neither the sandbox nor connect-src restrict): the
+   artifact calls window.wickReadFile(path); the parent validates the path,
+   fetches the file itself (it has the session + cookies), and posts the bytes
+   back. The security boundary is unchanged — the parent is the gatekeeper and
+   only ever serves paths inside this session's dir. Exposes:
+     window.wickReadFile(path): Promise<string>   // resolves to file text
+   correlating each call to its reply by a monotonic request id. */
+export function artifactFileBridge(): string {
+  return `<script>(function(){
+    var seq=0, pending={};
+    window.addEventListener("message",function(e){
+      var d=e.data;
+      if(!d||d.type!=="wick-file-resp")return;
+      var p=pending[d.reqId]; if(!p)return; delete pending[d.reqId];
+      if(d.ok)p.resolve(d.content); else p.reject(new Error(d.error||"read failed"));
+    });
+    window.wickReadFile=function(path){
+      return new Promise(function(resolve,reject){
+        var reqId=++seq; pending[reqId]={resolve:resolve,reject:reject};
+        try{parent.postMessage({type:"wick-file-req",reqId:reqId,path:String(path)},"*");}
+        catch(err){delete pending[reqId];reject(err);}
+      });
+    };
+  })();<\/script>`;
+}
+
+/* buildArtifactSrcdoc (which already injects the file bridge in <head>) plus
+   the height reporter appended before </body>. The reporter goes last because,
+   unlike the bridge, the artifact never calls it — it just needs to run after
+   the body is laid out. Used by the inline gallery preview that auto-grows to
+   content and can pull session files over the postMessage bridge. */
 export function buildAutoHeightSrcdoc(html: string, id: string): string {
   const doc = buildArtifactSrcdoc(html);
   const reporter = artifactHeightReporter(id);
@@ -613,6 +665,22 @@ export function buildAutoHeightSrcdoc(html: string, id: string): string {
 function renderHtmlArtifacts(node: HTMLElement): void {
   const els = node.querySelectorAll<HTMLElement>("[data-html-artifact]:not([data-enriched])");
   for (const el of els) {
+    // A `htmlfile` fence references a saved file by path: fetch its raw bytes
+    // (download endpoint serves HTML, unlike files/read which wraps it in JSON)
+    // and render the same preview — the transcript never held the markup.
+    const path = el.getAttribute("data-html-path");
+    if (path && path.trim()) {
+      if (!fileBase || !fileSessionId) continue; // context not set yet; retry next enrich pass
+      el.setAttribute("data-enriched", "");
+      const name = path.split("/").pop() || "preview.html";
+      el.innerHTML = "";
+      el.className = "w-full";
+      mount(HtmlArtifact, {
+        target: el,
+        props: { url: fileDownloadURL(path), downloadUrl: fileDownloadURL(path), name },
+      });
+      continue;
+    }
     el.setAttribute("data-enriched", "");
     const src = el.getAttribute("data-html-src") ?? "";
     if (!src.trim()) continue;

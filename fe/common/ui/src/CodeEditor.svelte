@@ -121,6 +121,25 @@
         });
         if (autofocus) editor.focus();
         mounted = true;
+
+        // Ace caches the glyph width once, at init. Here init happens while the
+        // host is still `hidden` (display:none, until `mounted` flips) and the
+        // monospace font may not have loaded yet — so the cached width is a hair
+        // off and the caret drifts further from the text the longer the line
+        // (worst at the end). Force a re-measure once the editor is actually
+        // visible, and again when the webfont settles, so the caret lines up.
+        const remeasure = () => {
+          if (!editor) return;
+          try {
+            (editor.renderer as unknown as { $fontMetrics?: { checkForSizeChanges?: () => void } })
+              .$fontMetrics?.checkForSizeChanges?.();
+          } catch { /* private API absent on this Ace build — resize still helps */ }
+          editor.resize(true);
+        };
+        if (typeof requestAnimationFrame !== "undefined") requestAnimationFrame(remeasure);
+        else remeasure();
+        const fonts = (document as unknown as { fonts?: { ready?: Promise<unknown> } }).fonts;
+        if (fonts?.ready) fonts.ready.then(remeasure).catch(() => { /* noop */ });
       } catch (e) {
         console.error("Ace load failed — falling back to textarea:", e);
         mounted = false;

@@ -8,7 +8,10 @@
   import { listAll, cancelById, pauseById, resumeById } from "./lib/api.js";
   import ScheduleRow from "./lib/ScheduleRow.svelte";
 
-  const base = document.getElementById("app")?.dataset.base ?? "/tools/agents";
+  // `|| ` (not `??`): the dev index.html hard-codes data-base="", which is
+  // non-nullish, so `??` would keep the empty string and break API routing
+  // in standalone `npm run dev`. Production injects the real base via templ.
+  const base = document.getElementById("app")?.dataset.base || "/tools/agents";
 
   const run = <A,>(eff: Effect.Effect<A, unknown, never>) => Effect.runPromise(eff);
 

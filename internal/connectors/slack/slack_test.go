@@ -83,6 +83,28 @@ func TestShapeReadFile_TextMimetypeButInvalidUTF8IsBase64(t *testing.T) {
 	assert.Contains(t, m, "content_base64")
 }
 
+func TestShapeReadFile_EmptyMimetypeValidUTF8IsText(t *testing.T) {
+	// Slack reported no mimetype but the bytes are valid UTF-8 → treat as text.
+	out := shapeReadFile("F4", "notes", "", []byte("plain notes"))
+	m := out.(map[string]any)
+	assert.Equal(t, true, m["is_text"])
+	assert.Equal(t, "plain notes", m["content"])
+}
+
+func TestShapeReadFile_EmptyMimetypeInvalidUTF8IsBase64(t *testing.T) {
+	out := shapeReadFile("F5", "blob", "", []byte{0xff, 0xfe})
+	m := out.(map[string]any)
+	assert.Equal(t, false, m["is_text"])
+	assert.Contains(t, m, "content_base64")
+}
+
+func TestGetReactions_RejectsBothTargets(t *testing.T) {
+	c := newCtxWithInput(t, map[string]string{"file": "F1", "channel": "C1", "ts": "1.2"})
+	_, err := getReactions(c)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not both")
+}
+
 func TestShapeReactions_FromMessage(t *testing.T) {
 	var raw map[string]any
 	require.NoError(t, json.Unmarshal([]byte(`{

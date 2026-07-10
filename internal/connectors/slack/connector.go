@@ -1047,6 +1047,12 @@ func getReactions(c *connector.Ctx) (any, error) {
 	ch := strings.TrimSpace(c.Input("channel"))
 	ts := strings.TrimSpace(c.Input("ts"))
 	file := strings.TrimSpace(c.Input("file"))
+	// Target is EITHER a file OR a message (channel+ts), never both — reject
+	// the ambiguous case instead of silently letting file win, so a stray
+	// file value can't quietly shadow an intended message lookup.
+	if file != "" && (ch != "" || ts != "") {
+		return nil, fmt.Errorf("provide either file, or channel and ts — not both")
+	}
 	form := map[string]string{"full": boolForm(c.InputBool("full"), false)}
 	switch {
 	case file != "":

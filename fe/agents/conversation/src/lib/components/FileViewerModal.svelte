@@ -2,6 +2,7 @@
   import type { FileContent } from "../types/agents.js";
   import { renderMarkdown } from "../markdown.js";
   import { CodeEditor, extOf } from "@wick-fe/common-ui";
+  import HtmlArtifact from "./HtmlArtifact.svelte";
 
   const IMAGE_EXTS = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"];
 
@@ -19,9 +20,12 @@
 
   let editContent = $state("");
   let saveStatus = $state<SaveStatus>("");
+  // .html opens in the editor by default (the context panel is where you edit
+  // files); a toggle flips to the live preview. Reset to edit on each new file.
+  let htmlPreview = $state(false);
 
   $effect(() => {
-    if (file) editContent = file.content ?? "";
+    if (file) { editContent = file.content ?? ""; htmlPreview = false; }
   });
 
   $effect(() => {
@@ -52,6 +56,7 @@
   const isImage = $derived(IMAGE_EXTS.includes(ext));
   const isPdf = $derived(ext === "pdf");
   const isMarkdown = $derived(ext === "md" || ext === "markdown");
+  const isHtml = $derived((ext === "html" || ext === "htm") && file !== null && !file.binary && !file.tooBig);
 </script>
 
 {#if file !== null}
@@ -81,6 +86,12 @@
               </svg>
             </a>
           {/if}
+          {#if isHtml}
+            <button type="button" onclick={() => (htmlPreview = !htmlPreview)}
+              class="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
+              {htmlPreview ? "Edit" : "Preview"}
+            </button>
+          {/if}
           {#if editable}
             <button type="button" onclick={handleSave} disabled={saveStatus === "saving"}
               class="inline-flex items-center gap-1 rounded-lg bg-green-500 px-2.5 py-1.5 text-[11px] font-medium text-white-100 hover:bg-green-600 transition-colors disabled:opacity-60">
@@ -107,6 +118,12 @@
           </div>
         {:else if isPdf && downloadHref}
           <iframe src={downloadHref} class="w-full h-full border-0" title="PDF preview"></iframe>
+        {:else if isHtml && htmlPreview}
+          <!-- Preview mode (toggled from the header): same sandboxed iframe as
+               chat HTML artifacts. Edit mode falls through to the code editor. -->
+          <div class="h-full overflow-auto p-4 bg-white-200 dark:bg-navy-800">
+            <HtmlArtifact src={editContent} name={file.path.split("/").pop() || "preview.html"} downloadUrl={downloadHref} />
+          </div>
         {:else if isMarkdown && !file.binary && !file.tooBig}
           <div class="h-full overflow-auto prose prose-sm dark:prose-invert max-w-none p-6 text-sm text-black-900 dark:text-white-100">
             {@html renderMarkdown(file.content ?? "")}

@@ -12,6 +12,9 @@
     disabled?: boolean;
     class?: string;
     size?: "sm" | "md";
+    /** "boxed" (default) is the bordered field; "minimal" is a borderless
+        text+chevron control for toolbars. */
+    variant?: "boxed" | "minimal";
   };
 
   let {
@@ -22,13 +25,18 @@
     disabled = false,
     class: extraClass = "",
     size = "md",
+    variant = "boxed",
   }: Props = $props();
 
   const base =
-    "w-full appearance-none rounded-lg border bg-white-100 dark:bg-navy-800 text-black-900 dark:text-white-100 outline-none transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 pr-7";
+    "w-full appearance-none text-black-900 dark:text-white-100 outline-none transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed pr-7";
   const sizes = {
-    sm: "px-2 py-1 text-xs border-white-400 dark:border-navy-600",
-    md: "px-3 py-2 text-sm border-white-400 dark:border-navy-600",
+    sm: "px-2 py-1 text-xs",
+    md: "px-3 py-2 text-sm",
+  };
+  const variants = {
+    boxed: "rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800",
+    minimal: "rounded-md border-0 bg-transparent font-medium hover:bg-white-200 dark:hover:bg-navy-700 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800",
   };
 
   function label(o: Option): string {
@@ -41,7 +49,7 @@
 
 <div class="relative {extraClass}">
   <select
-    class="{base} {sizes[size]}"
+    class="{base} {sizes[size]} {variants[variant]}"
     {disabled}
     value={value}
     onchange={(e) => onChange((e.target as HTMLSelectElement).value)}

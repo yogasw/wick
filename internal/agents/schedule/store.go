@@ -195,10 +195,15 @@ func (s *Store) ClaimDue(ctx context.Context, now time.Time, limit int) ([]entit
 	if err != nil {
 		return nil, err
 	}
-	// Park claimed rows here until the runner sets the real next state. Chosen
-	// so a crash between claim and finalize just delays the row ~maxCronScan,
-	// not double-fire.
-	parked := now.Add(2 * time.Hour)
+	// Park claimed rows far in the future until the runner sets their real
+	// next state (Finalize for success, MarkFailed on error). The park must
+	// be well beyond any real poll window: if the process crashes AFTER the
+	// claim but BEFORE finalize, the row must NOT re-enter the due set on
+	// restart (run_at <= now) and re-fire. A ~100-year park makes reclaim
+	// impossible in practice; worst case a crash in that narrow window drops
+	// one fire (at-most-once), which is the right bias for a nudge — better a
+	// missed reminder than a duplicate spam.
+	parked := now.AddDate(100, 0, 0)
 	claimed := make([]entity.ScheduledMessage, 0, len(candidates))
 	for _, c := range candidates {
 		res := s.db.WithContext(ctx).Model(&entity.ScheduledMessage{}).

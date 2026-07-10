@@ -7,6 +7,20 @@ export const listFiles = (base: string, id: string) =>
     Effect.map((r) => ({ ...r, files: r.files ?? [] })),
   );
 
+/* Backend @-mention search: ranked file paths matching space-separated AND
+   terms, over the whole tree (not the list endpoint's client cap). */
+export const searchFiles = (base: string, id: string, q: string, limit = 30) =>
+  apiGetE<{ files: string[] }>(
+    `${base}/sessions/${id}/files/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+  ).pipe(Effect.map((r) => r.files ?? []));
+
+/* Project-scoped @-mention search — the session cwd is the project folder, so
+   the project-landing composer can browse it before a session exists. */
+export const searchProjectFiles = (base: string, projectId: string, q: string, limit = 30) =>
+  apiGetE<{ files: string[] }>(
+    `${base}/api/projects/${projectId}/files/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+  ).pipe(Effect.map((r) => r.files ?? []));
+
 export const readFile = (base: string, id: string, path: string) =>
   apiGetE<FileContent>(`${base}/sessions/${id}/files/read?path=${encodeURIComponent(path)}`);
 
