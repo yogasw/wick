@@ -54,12 +54,24 @@ func isolateConfig(t *testing.T) {
 	})
 }
 
+// saveSeed persists an instance and drains Save's fire-and-forget probe
+// goroutine before returning. That goroutine reloads + atomically rewrites
+// config.json; leaving it in flight lets it race the next Save/Rename/Switch
+// (a stale read resurrecting an old name under -race, or a concurrent atomic
+// rename failing with EACCES on Windows). Draining serialises every config
+// write so the ordering-sensitive assertions below are deterministic.
+func saveSeed(t *testing.T, ins Instance) {
+	t.Helper()
+	if err := Save(ins); err != nil {
+		t.Fatalf("seed save %s/%s: %v", ins.Type, ins.Name, err)
+	}
+	waitBackgroundRescans()
+}
+
 func TestRename(t *testing.T) {
 	isolateConfig(t)
 
-	if err := Save(Instance{Type: TypeClaude, Name: "abc"}); err != nil {
-		t.Fatalf("seed save: %v", err)
-	}
+	saveSeed(t, Instance{Type: TypeClaude, Name: "abc"})
 
 	t.Run("rejects invalid new name", func(t *testing.T) {
 		if err := Rename(TypeClaude, "abc", "abc a"); err == nil {
@@ -83,9 +95,7 @@ func TestRename(t *testing.T) {
 	})
 
 	t.Run("rejects collision with existing instance", func(t *testing.T) {
-		if err := Save(Instance{Type: TypeClaude, Name: "other"}); err != nil {
-			t.Fatalf("seed second: %v", err)
-		}
+		saveSeed(t, Instance{Type: TypeClaude, Name: "other"})
 		if err := Rename(TypeClaude, "other", "abc_b"); err == nil {
 			t.Fatal("want collision error renaming onto existing abc_b")
 		}

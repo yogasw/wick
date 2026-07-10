@@ -131,6 +131,15 @@ type Service struct {
 	// so connectors fall back to their own identity. Returns ("", false)
 	// when the session isn't channel-backed or the instance is gone.
 	sessionOwnerBot func(sessionID string) (botUserID string, ok bool)
+
+	// sessionOwnerUser resolves an agent session id to the wick user id that
+	// owns it (session.Meta.UserID). Wired at boot via
+	// SetSessionOwnerUserResolver where the agents registry is in scope; nil
+	// or a miss leaves the caller as p.UserID. Used to attribute per-owner
+	// data (data tables) to the human behind an agent session — agent spawns
+	// authenticate with a shared internal token, so p.UserID alone is not the
+	// real owner.
+	sessionOwnerUser func(sessionID string) (userID string, ok bool)
 }
 
 // tagSeeder is the slice of the tags service Bootstrap needs. Keeping
@@ -154,6 +163,15 @@ func (s *Service) SetTags(t tagSeeder) {
 // always names the session owner's bot rather than the sending connector's.
 func (s *Service) SetSessionOwnerBotResolver(fn func(sessionID string) (string, bool)) {
 	s.sessionOwnerBot = fn
+}
+
+// SetSessionOwnerUserResolver wires the hook that maps an agent session id to
+// the wick user id that owns it. Called once at boot from the API server where
+// the agents registry is available. Lets per-owner connector ops (data tables)
+// attribute create/access to the human behind the session rather than the
+// shared internal agent principal.
+func (s *Service) SetSessionOwnerUserResolver(fn func(sessionID string) (string, bool)) {
+	s.sessionOwnerUser = fn
 }
 
 // SetEnc wires the encrypted-fields cipher in after construction. Call
@@ -1263,21 +1281,32 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	// caller supplied them) so MCP-proxy ops can forward bools/numbers in
 	// their native JSON type rather than the stringified Input form.
 	cctx.SetRawInput(p.RawInput)
-	// Resolve the session-owning bot and stamp it onto the Ctx so the Slack
-	// footer names the owner's bot regardless of which connector sends.
-	// Session id priority: an explicit `session_id` op input (the LLM passes
-	// it when it knows the session) overrides the per-spawn header / top-level
-	// value carried in p.SessionID. All optional — no session, no resolver, or
-	// no match just leaves OwnerBotID empty and the footer uses the app name.
-	if s.sessionOwnerBot != nil {
-		sessionID := p.SessionID
-		if v := strings.TrimSpace(input["session_id"]); v != "" {
-			sessionID = v
+	// Resolve the session id once for the owner-user + owner-bot resolvers.
+	// An explicit `session_id` op input (the LLM passes it when it knows the
+	// session) overrides the per-spawn header / top-level value in p.SessionID.
+	sessionID := p.SessionID
+	if v := strings.TrimSpace(input["session_id"]); v != "" {
+		sessionID = v
+	}
+	// Stamp the effective caller so ops that scope data per owner (data-table
+	// ops) can gate access. Agent spawns authenticate with a shared internal
+	// token (a synthetic admin, NOT the human), so the SESSION's owner — not
+	// p.UserID — is the true principal. Fall back to p.UserID for direct PAT
+	// calls with no session. Empty result → unrestricted (internal/system).
+	callerUID := p.UserID
+	if s.sessionOwnerUser != nil && sessionID != "" {
+		if uid, ok := s.sessionOwnerUser(sessionID); ok && uid != "" {
+			callerUID = uid
 		}
-		if sessionID != "" {
-			if id, ok := s.sessionOwnerBot(sessionID); ok {
-				cctx.SetOwnerBotID(id)
-			}
+	}
+	cctx.SetCallerUserID(callerUID)
+	// Resolve the session-owning bot and stamp it onto the Ctx so the Slack
+	// footer names the owner's bot regardless of which connector sends. All
+	// optional — no session, no resolver, or no match just leaves OwnerBotID
+	// empty and the footer uses the app name.
+	if s.sessionOwnerBot != nil && sessionID != "" {
+		if id, ok := s.sessionOwnerBot(sessionID); ok {
+			cctx.SetOwnerBotID(id)
 		}
 	}
 	value, execErr := op.Execute(cctx)

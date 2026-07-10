@@ -578,7 +578,7 @@ export function buildArtifactSrcdoc(html: string): string {
   // The file bridge MUST go in <head>, before any body script: an artifact's
   // own <script> runs synchronously top-to-bottom, so if it calls
   // window.wickReadFile it has to already exist by then.
-  const head = meta + artifactThemeStyle() + artifactFileBridge();
+  const head = meta + artifactThemeStyle() + artifactFileBridge() + artifactDataTableBridge();
   const htmlClass = isDark() ? ' class="dark"' : "";
   if (/<head[\s>]/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => `${m}${head}`);
   if (/<html[\s>]/i.test(html)) return html.replace(/<html[^>]*>/i, (m) => `${m}<head>${head}</head>`);
@@ -641,6 +641,47 @@ export function artifactFileBridge(): string {
         try{parent.postMessage({type:"wick-file-req",reqId:reqId,path:String(path)},"*");}
         catch(err){delete pending[reqId];reject(err);}
       });
+    };
+  })();<\/script>`;
+}
+
+/* Data-table bridge injected into every artifact iframe, alongside the file
+   bridge and for the same reason: the artifact is sandboxed to an opaque
+   origin with CSP connect-src none, so it CANNOT hit the data-table API
+   itself. It asks the parent over postMessage; the parent (which holds the
+   session cookie) makes the access-checked HTTP call and posts the result
+   back. Ownership is enforced SERVER-side per table — the widget can only
+   read/write tables the signed-in user may access, never another tenant's;
+   the slug is just a hint, the server is the gatekeeper. Exposes:
+     window.wickDataTable.query(slug, opts?)      : Promise<{rows,count}>
+     window.wickDataTable.insert(slug, row)       : Promise<{ok}>
+     window.wickDataTable.update(slug, id, patch) : Promise<{ok}>
+     window.wickDataTable.delete(slug, id)        : Promise<{ok,deleted}>
+   opts = { sort?:"col:asc|desc", limit?, offset?, filters?:{col:{op,v}} }.
+   Correlates each call to its reply by a monotonic request id. */
+export function artifactDataTableBridge(): string {
+  return `<script>(function(){
+    var seq=0, pending={};
+    window.addEventListener("message",function(e){
+      var d=e.data;
+      if(!d||d.type!=="wick-dt-resp")return;
+      var p=pending[d.reqId]; if(!p)return; delete pending[d.reqId];
+      if(d.ok)p.resolve(d.data); else p.reject(new Error(d.error||"data table request failed"));
+    });
+    function call(op,extra){
+      return new Promise(function(resolve,reject){
+        var reqId=++seq; pending[reqId]={resolve:resolve,reject:reject};
+        var msg={type:"wick-dt-req",reqId:reqId,op:op};
+        for(var k in extra){if(Object.prototype.hasOwnProperty.call(extra,k))msg[k]=extra[k];}
+        try{parent.postMessage(msg,"*");}
+        catch(err){delete pending[reqId];reject(err);}
+      });
+    }
+    window.wickDataTable={
+      query:function(slug,opts){return call("query",{slug:String(slug),opts:opts||{}});},
+      insert:function(slug,row){return call("insert",{slug:String(slug),row:row||{}});},
+      update:function(slug,id,patch){return call("update",{slug:String(slug),id:id,row:patch||{}});},
+      "delete":function(slug,id){return call("delete",{slug:String(slug),id:id});}
     };
   })();<\/script>`;
 }

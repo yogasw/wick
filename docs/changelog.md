@@ -10,6 +10,33 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.30.1](https://github.com/yogasw/wick/compare/v0.30.0...v0.30.1) — Data Tables
+
+_Released on 2026-07-10_
+
+### Added
+
+*   **Per-User Data Tables:**
+    *   Introduced data tables as a first-class, per-user resource. HTML artifacts can now perform CRUD operations (Create, Read, Update, Delete) on these tables without compromising the artifact sandbox.
+    *   **Ownership:** Each schema/entity now carries an owner user ID. Tables are taggable resources keyed by slug (e.g., `owner:<slug>`). Access is granted via owner tags, admin-granted users, a direct-owner fallback, and `AdminSeeAll` permissions, applied across the `/data-tables` UI list, detail views, and mutations.
+    *   **Admin Grant Page:** A new `/admin/data-tables` page allows administrators to share data tables by tag, mirroring the existing workflow sharing mechanism.
+    *   **MCP Scoping:** The `connector.Ctx` now includes `CallerUserID`, stamped by `connectors.Service` from the session owner, gating access and attributing create ownership to the specific user.
+
+*   **Widget CRUD Bridge:**
+    *   **JSON Row API:** A new API endpoint `GET/POST/PATCH/DELETE /api/data-tables/{slug}/rows` is introduced for programmatic access, guarded by permissions.
+    *   **Sandboxed Widget Access:** `window.wickDataTable.query`, `insert`, `update`, and `delete` methods are injected into every artifact iframe. Sandboxed widgets can't directly fetch, so the parent proxies each call using the session cookie, maintaining the same trust model as `window.wickReadFile`.
+    *   **Agent Prompt Documentation:** The system prompt has been updated to document this new bridge, enabling agents to build database-backed widgets.
+
+### Fixed
+
+*   **Composer Command Palette Alignment:**
+    *   Resolved an issue in the `/` command menu where the description's width would collapse the command name on narrow or mobile widths. The command name now has priority and is pinned to a fixed-width column, ensuring every hint aligns in a straight second column for improved readability, especially for the skills list. File mentions (`@`) retain the full row for filenames.
+*   **Provider Test Flakiness:**
+    *   Fixed flaky `TestRename` and `TestSwitch` tests within the agent provider package, which were failing under the `-race` CI gate. This was due to a race condition where `Save`'s async probe goroutine for reloading and rewriting `config.json` sometimes conflicted with subsequent synchronous test operations. A `saveSeed` helper now ensures this goroutine is drained after each seed `Save`, serializing config writes and preventing stale reloads or file access denials on Windows. (Internal stability improvement.)
+
+---
+
+
 ## [v0.30.0](https://github.com/yogasw/wick/compare/v0.29.0...v0.30.0) — Composer & Agents
 
 _Released on 2026-07-10_
@@ -19,10 +46,13 @@ _Released on 2026-07-10_
 *   **Screenshot capture, inline image editor, and provider brand icons in the composer**: The `+` menu's new **Take screenshot** action (`getDisplayMedia`) and an edit affordance on attached image chips both open a canvas annotator — crop, arrow/rectangle/ellipse/pen, and a blur tool for redacting sensitive detail before sending — with undo and a PNG export at the image's native resolution. The provider chip and its picker now show the Claude / Gemini / Codex brand mark instead of a generic icon (Codex swaps a light/dark SVG pair to follow the app theme). See [Agents — Composer](/guide/agents#composer).
 *   **HTML artifacts by path (` ```htmlfile ` fence)**: A new fence previews a saved `.html` file by its session-relative path instead of pasting the markup into the transcript — same sandboxed preview (Full screen / Show code / Download) as inline ` ```html ` blocks and file artifacts, but the transcript only ever stores the path. Clicking a `.html` file in the Context file panel now opens the same live preview with an Edit/Preview toggle and Reload. See [Agents — Artifacts](/guide/agents#artifacts).
 *   **Artifacts can read session files via `window.wickReadFile`**: Sandboxed HTML artifacts can't `fetch()` (the CSP blocks it by design), so the runtime now injects `window.wickReadFile(path)`, returning a Promise of a session file's text contents fetched by the parent page and handed back over `postMessage`. Lets a generated dashboard load data from a session file without loosening the sandbox. See [Agents — Artifacts](/guide/agents#artifacts).
+*   **Data Tables are now a per-user owned resource**: `/data-tables` lists only tables the signed-in user owns or was granted via an `owner:<slug>` tag — the same ownership model as Workflows and Skills — with admins seeing every table only when `admin_see_all` is on. A new `/admin/data-tables` grant page lets an admin share a table with other users. The agent's MCP `datatable_*` ops are gated the same way: a session can only reach tables owned by the human behind it, and a table it creates is owned by that user, not the shared internal agent principal. See [Admin Panel — ownership](/guide/admin-panel#projects-workflows-skills-data-tables-ownership).
+*   **HTML artifacts can read/write a Data Table via `window.wickDataTable`**: Alongside `wickReadFile`, the runtime now injects a `wickDataTable.{query,insert,update,delete}` bridge into every artifact, proxied by the parent over the same postMessage channel — no `fetch` ever leaves the sandbox, and access is enforced server-side per table. Backed by a new JSON row API, `GET/POST/PATCH/DELETE /api/data-tables/{slug}/rows`. See [Agents — Reading/writing a Data Table from an artifact](/guide/agents#reading-writing-a-data-table-from-an-artifact).
 
 ### Fixed
 *   **Ace code editor caret drift**: Fixed the text caret drifting from its visible position in the Context file panel's Ace editor by re-measuring font metrics after the editor becomes visible and webfonts finish loading.
 *   **9router dashboard iframe now agrees with the status badge**: The Dashboard tab's embedded iframe now probes the dashboard port directly (like the status badge and API proxy already did), instead of only checking whether wick itself spawned the process. A 9router started outside wick, or one that survived a wick restart, now serves the iframe instead of showing "not running — start it first" while the badge says **Running**.
+*   **`/` command palette names no longer truncate on narrow widths**: Command names in the `/` palette now sit in a fixed-width column so their hints (e.g. skill descriptions) line up instead of the name getting clipped to a few characters. `@` file mentions are unaffected — the filename still uses the full row width.
 *   **Schedule and Slack features (review findings from PR #972)**:
     *   **Correctness**:
         *   `session_schedule_handler`: Fixed a potential panic on nil dereference if a concurrent cancel occurred between the mutation and a re-fetch, by handling the error and reporting the schedule as gone.
