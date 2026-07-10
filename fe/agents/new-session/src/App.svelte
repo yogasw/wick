@@ -3,7 +3,7 @@
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastError } from "@wick-fe/common-stores";
   import { ToastHost, Composer } from "@wick-fe/common-ui";
-  import { getProviderOptions, getPresetOptions, getProjectOptions, createSession } from "$lib/api/options.js";
+  import { getProviderOptions, getPresetOptions, getProjectOptions, createSession, searchProjectFiles, listComposerCommands } from "$lib/api/options.js";
   import type { ProviderOption, PresetOption, ProjectOption } from "$lib/api/options.js";
 
   const appEl = document.getElementById("app");
@@ -22,6 +22,14 @@
   let selectedPreset = $state("");
   let selectedProject = $state("");
   let submitting = $state(false);
+  // `/` menu (skills only pre-session) + `@` search over the selected project.
+  let composerCommands = $state<{ value: string; label: string; hint?: string; category?: string }[]>([]);
+
+  function searchMentionFiles(query: string): Promise<string[]> {
+    if (!selectedProject) return Promise.resolve([]); // no project → no files to browse
+    return Effect.runPromise(searchProjectFiles(base, selectedProject, query).pipe(Effect.provide(WickClientLayer)))
+      .catch(() => [] as string[]);
+  }
 
   const scopedProjectId = new URLSearchParams(window.location.search).get("project") ?? "";
 
@@ -74,6 +82,18 @@
       }
     })();
     return () => { cancelled = true; };
+  });
+
+  // Skills-only `/` menu (BE filters by scope=new — panels/views/switch don't
+  // apply before a session exists), scoped to the selected provider. Re-runs
+  // when the provider changes. Best-effort.
+  $effect(() => {
+    const providerType = selectedProvider ? selectedProvider.split("/")[0] : "";
+    Effect.runPromise(listComposerCommands(base, "new", providerType).pipe(Effect.provide(WickClientLayer)))
+      .then((cmds) => {
+        composerCommands = cmds.map((c) => ({ value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category }));
+      })
+      .catch(() => { /* commands optional */ });
   });
 
   const isScoped = $derived(!!scopedProjectId && projects.some((p) => p.id === scopedProjectId));
@@ -152,14 +172,13 @@
       <Composer
         onSend={handleSend}
         disabled={submitting}
-        minRows={3}
-        requireContent={false}
-        placeholder="Ask anything... (Shift+Enter for new line)"
-        submitLabel={submitting ? "Sending…" : "Send"}
+        placeholder="Ask anything…   / commands · @ files"
         notifyKey="wick.newsession.notify"
         project={projectSelect}
         provider={providerSelect}
         preset={presetSelect}
+        onSearchFiles={searchMentionFiles}
+        commands={composerCommands}
       />
     </div>
 

@@ -183,15 +183,44 @@ The endpoint is gated by the same session-ownership check as the rest of the age
 
 ## Composer
 
-The message input — on the New Session page, the Project landing page, and a live session's Conversation tab — is one shared component. Same input, same toolbar (bell, attach, provider/project/preset dropdowns as a single row that scrolls horizontally on narrow screens instead of wrapping), same autocomplete, everywhere.
+The message input — on the New Session page, the Project landing page, and a live session's Conversation tab — is one shared component. Same input, same autocomplete, everywhere.
+
+The toolbar is a single `+` button that opens a hub menu: **Attach file or photo**, **Take screenshot** ([below](#screenshot-image-editor)), **Add context (@)**, **Commands** (opens the `/` palette below), then drill-ins for whichever of **Project** / **Provider** / **Preset** the page configures. A standalone bell sits next to it when notifications are available for that page. To the right of the input, an icon-only **project chip** (shown only once a project is set) and **provider chip** — the latter rendering the [provider's brand icon](#provider-icons) — open the same drill-ins directly.
 
 ### `@` file mentions
 
-Typing `@` opens a file-search popup scored against the whole session `cwd` — not just whatever the file tree currently has loaded — backed by `GET /sessions/{id}/files/search?q=<terms>`. Space-separated terms are ANDed; matches are ranked (basename hits first, then earliest match position, then shorter paths), and the underlying file-tree walk is cached for a few seconds so rapid typing doesn't re-walk the disk on every keystroke. Selecting a result inserts `@path`.
+Typing `@` opens a file-search popup. Space-separated terms are ANDed; matches are ranked (basename hits first, then earliest match position, then shorter paths). Which endpoint backs the search depends on the page:
+
+| Page | Endpoint | Scope |
+|---|---|---|
+| Live session (Conversation tab) | `GET /sessions/{id}/files/search?q=<terms>` | The session's resolved `cwd`. |
+| New Session / Project landing | `GET /api/projects/{id}/files/search?q=<terms>` | The selected project's folder — no session exists yet, but its `cwd` will be this same folder once one is created. |
+
+Both endpoints cache the underlying file-tree walk for a few seconds so rapid typing doesn't re-walk the disk on every keystroke. Selecting a result inserts `@path`.
 
 ### `/` command palette
 
-Typing `/` opens a command menu backed by `GET /api/composer/commands` — built-in actions (switch provider, switch project, open a panel: processes / workspace / source / context, or change the view: commands / approvals / raw) grouped by category, followed by every installed [skill](./agents/skills-manager). Picking a built-in action runs it directly; picking a skill inserts `/<skill-name>`.
+Typing `/` (or clicking **Commands** in the `+` menu) opens a command menu backed by `GET /api/composer/commands?scope=<scope>&provider=<type>` — built-in actions (switch provider, switch project, open a panel: processes / workspace / source / context, or change the view: commands / approvals / raw) grouped by category, followed by every installed [skill](./agents/skills-manager). Picking a built-in action runs it directly; picking a skill inserts `/<skill-name>`.
+
+- `scope=new` (New Session / Project landing, before a session exists) drops the built-in actions — they only apply to a live session — and returns skills only.
+- `provider=<type>` (`claude` / `codex` / `gemini`) scopes the skill list to that provider's own skill dir; the composer re-queries this whenever its provider selection changes.
+
+The skill scan behind this is cached server-side for 30s (stale-while-revalidate — the cached list answers instantly, a single background goroutine refreshes it once stale) so the `/` menu stays snappy even with many installed skills.
+
+### Provider icons
+
+The provider chip and its drill-in list show each provider's brand mark — Claude, Gemini, Codex — instead of a generic name, resolved from the leading `type` segment of the `type/name` value. The Codex mark is monochrome, so it ships as a light/dark SVG pair swapped by the app's `.dark` class rather than the OS-level `prefers-color-scheme` a plain `<img>` would otherwise follow. Any other provider type falls back to a generic icon.
+
+### Screenshot + image editor
+
+The `+` menu's **Take screenshot** action captures the screen via the browser's `getDisplayMedia` picker (no server round-trip) and opens the capture straight into an inline editor before it's attached; any already-attached image gets the same edit affordance on its chip. The editor is a canvas annotator with:
+
+- **Crop**, **arrow**, **rectangle**, **ellipse**, and freehand **pen** tools, with color swatches and a stroke-width slider
+- **Blur** — pixelates a dragged region, for redacting secrets or other sensitive detail before sending a screenshot
+- **Undo** (`Ctrl`/`Cmd`+`Z`) across both annotation edits and crops
+- Exports a PNG at the image's natural resolution regardless of on-screen zoom
+
+**Done** replaces (or adds) the file in the composer's attachment list; **Cancel** / `Esc` discards the edit.
 
 ## Context file panel
 

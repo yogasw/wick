@@ -2,7 +2,10 @@ package agents
 
 import (
 	"net/http"
+	"sync"
+	"time"
 
+	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -49,25 +52,115 @@ var builtinComposerCommands = []ComposerCommand{
 // built-in actions followed by installed skills (insert-type). This is the
 // single source the composer reads, so new commands/skills appear without an FE
 // rebuild (as long as any new Action id has an FE handler).
+//
+// ?scope=new (the new-session page, before a session exists) drops the built-in
+// actions — open-panel / change-view / switch-provider only make sense against a
+// live session, and provider/project already have toolbar dropdowns there — so
+// only skills (insert-type) are returned. The default scope returns everything.
 func apiComposerCommands(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	out := make([]ComposerCommand, 0, len(builtinComposerCommands)+8)
-	out = append(out, builtinComposerCommands...)
+	if c.Query("scope") != "new" {
+		out = append(out, builtinComposerCommands...)
+	}
 
-	files, _ := cachedSkillStatus()
-	for _, f := range files {
-		if f.IsDir {
+	// ?provider=<type> (claude/codex/gemini) scopes skills to that provider —
+	// each provider has its own skills dir, so their `/` menus differ. Empty
+	// returns every skill.
+	providerType := c.Query("provider")
+
+	// A skill is a FOLDER holding a SKILL.md (loose files like CHANGELOG.md /
+	// install_skills.sh that happen to sit in the skills dir are not skills).
+	// The invokable name + description come from the SKILL.md frontmatter.
+	for _, s := range cachedSkills() {
+		if !s.IsDir {
 			continue
 		}
+		if providerType != "" && !skillInProvider(s, providerType) {
+			continue
+		}
+		name := s.Meta["name"]
+		if name == "" {
+			name = s.Name // fall back to the folder name if no frontmatter name
+		}
+		hint := truncate(s.Meta["description"], 60)
+		if hint == "" {
+			hint = "skill"
+		}
 		out = append(out, ComposerCommand{
-			ID:       "skill:" + f.Name,
-			Label:    "/" + f.Name,
-			Hint:     "skill",
+			ID:       "skill:" + s.Name,
+			Label:    "/" + name,
+			Hint:     hint,
 			Category: "Skills",
-			Insert:   f.Name,
+			Insert:   name,
 		})
 	}
 	c.JSON(http.StatusOK, ComposerCommandsResponse{Commands: out})
+}
+
+// skillInProvider reports whether a skill exists in the given provider's dir
+// (DirLabel yields the provider type, e.g. ".claude/skills" → "claude").
+func skillInProvider(s skillsync.SkillInfo, providerType string) bool {
+	for _, p := range s.InProviders {
+		if p.Label == providerType {
+			return true
+		}
+	}
+	return false
+}
+
+// truncate shortens s to at most n runes, appending "…" when cut.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// skillsCache serves the skill scan stale-while-revalidate. Requests get the
+// cached slice instantly; once it's older than the TTL, a SINGLE background
+// goroutine re-scans (the `refreshing` guard prevents pile-ups that could hang
+// under bursty requests). skillsync.ListSkills() walks every provider dir and
+// reads each SKILL.md frontmatter, so caching keeps the composer `/` menu snappy
+// while staying auto-up-to-date.
+var skillsCache struct {
+	mu         sync.Mutex
+	skills     []skillsync.SkillInfo
+	builtAt    time.Time
+	loaded     bool
+	refreshing bool
+}
+
+const skillsCacheTTL = 30 * time.Second
+
+func cachedSkills() []skillsync.SkillInfo {
+	skillsCache.mu.Lock()
+	if !skillsCache.loaded {
+		// First use: scan synchronously (off-lock) so callers get real data.
+		skillsCache.mu.Unlock()
+		s := skillsync.ListSkills()
+		skillsCache.mu.Lock()
+		skillsCache.skills = s
+		skillsCache.builtAt = time.Now()
+		skillsCache.loaded = true
+		skillsCache.mu.Unlock()
+		return s
+	}
+	s := skillsCache.skills
+	if time.Since(skillsCache.builtAt) >= skillsCacheTTL && !skillsCache.refreshing {
+		skillsCache.refreshing = true
+		go func() {
+			fresh := skillsync.ListSkills()
+			skillsCache.mu.Lock()
+			skillsCache.skills = fresh
+			skillsCache.builtAt = time.Now()
+			skillsCache.refreshing = false
+			skillsCache.mu.Unlock()
+		}()
+	}
+	skillsCache.mu.Unlock()
+	return s
 }

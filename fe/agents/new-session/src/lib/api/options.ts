@@ -42,6 +42,33 @@ export const getProjectOptions = (base: string) =>
     ),
   );
 
+/* Project-scoped @-mention file search — the session cwd IS the project folder,
+   so the new-session composer can browse it before the session exists. */
+export const searchProjectFiles = (base: string, projectId: string, q: string, limit = 30) =>
+  apiGetE<{ files: string[] }>(
+    `${base}/api/projects/${projectId}/files/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+  ).pipe(Effect.map((r) => r.files ?? []));
+
+export type ComposerApiCommand = {
+  id: string;
+  label: string;
+  hint?: string;
+  category?: string;
+  action?: string;
+  insert?: string;
+};
+
+/* scope=new returns only insert-type commands (skills) — panels/views/switch
+   don't apply before a session exists. provider (a type like "claude") scopes
+   skills to that provider. */
+export const listComposerCommands = (base: string, scope = "new", provider = "") => {
+  const p = new URLSearchParams({ scope });
+  if (provider) p.set("provider", provider);
+  return apiGetE<{ commands: ComposerApiCommand[] }>(`${base}/api/composer/commands?${p.toString()}`).pipe(
+    Effect.map((r) => r.commands ?? []),
+  );
+};
+
 export async function createSession(
   base: string,
   message: string,

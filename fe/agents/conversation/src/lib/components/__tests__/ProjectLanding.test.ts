@@ -84,16 +84,9 @@ describe("ProjectLanding — presentational rendering", () => {
     expect(screen.getByPlaceholderText(/ask anything/i)).toBeDefined();
   });
 
-  test("Composer renders an Attach files button (bell + attach via Composer)", () => {
+  test("Composer renders the + menu button (attach + notifications live inside it)", () => {
     render(ProjectLanding, { props: baseProps });
-    const attachBtn = screen.getByRole("button", { name: /attach files/i });
-    expect(attachBtn).toBeDefined();
-  });
-
-  test("Composer renders a Notifications bell button (via ComposerToolbar)", () => {
-    render(ProjectLanding, { props: baseProps });
-    const bellBtn = screen.getByRole("button", { name: /notifications/i });
-    expect(bellBtn).toBeDefined();
+    expect(screen.getByRole("button", { name: /^add$/i })).toBeDefined();
   });
 
   test("renders an 'All chats' back-link pointing to base/sessions", () => {
