@@ -67,6 +67,10 @@ type Ctx struct {
 	// token-derived bot so a send names the session owner's bot, not the
 	// sending connector's. Read via OwnerBotID().
 	ownerBotID string
+	// callerUserID is the wick user id this call runs on behalf of, stamped
+	// from the execute params (empty for internal/system calls). Read via
+	// CallerUserID() by connectors that scope data per owner.
+	callerUserID string
 }
 
 // Masker is the narrow slice of the encrypted-fields service
@@ -310,3 +314,15 @@ func (c *Ctx) SetOwnerBotID(botUserID string) { c.ownerBotID = botUserID }
 // not channel-backed, unknown, or no resolver is wired — callers must fall
 // back to their own identity resolution.
 func (c *Ctx) OwnerBotID() string { return c.ownerBotID }
+
+// SetCallerUserID records the wick user id on whose behalf this call runs,
+// stamped by the framework from the execute params. Unlike the masker (which
+// hides the uuid), this is exposed for connectors that must scope data to the
+// caller — e.g. the data-table ops gate access per owner. Empty for internal
+// callers with no user (the workflow engine, health checks), which such
+// connectors treat as unrestricted.
+func (c *Ctx) SetCallerUserID(userID string) { c.callerUserID = userID }
+
+// CallerUserID returns the user id set by SetCallerUserID, or "" when the call
+// has no associated user (internal/system context).
+func (c *Ctx) CallerUserID() string { return c.callerUserID }

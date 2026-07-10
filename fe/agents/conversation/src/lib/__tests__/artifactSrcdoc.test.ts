@@ -25,4 +25,12 @@ describe("artifact auto-height srcdoc", () => {
     const out = buildAutoHeightSrcdoc("<p>no body tag</p>", "a");
     expect(out).toContain("wick-artifact-height");
   });
+
+  test("injects the data-table bridge (window.wickDataTable) into <head>", () => {
+    const out = buildAutoHeightSrcdoc("<body><p>hi</p></body>", "a");
+    expect(out).toContain("window.wickDataTable");
+    expect(out).toContain("wick-dt-req");
+    // the bridge lives in <head>, before the body content
+    expect(out.indexOf("window.wickDataTable")).toBeLessThan(out.indexOf("<p>hi</p>"));
+  });
 });

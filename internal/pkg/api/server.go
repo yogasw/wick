@@ -1006,6 +1006,20 @@ func NewServer() *Server {
 		return "", false
 	})
 
+	// Map an agent session to the wick user that owns it (session.Meta.UserID),
+	// so per-owner connector ops (data tables) attribute create/access to the
+	// human behind the session — agent spawns authenticate with a shared
+	// internal token, so the token's principal is not the real owner.
+	connectorsSvc.SetSessionOwnerUserResolver(func(sessionID string) (string, bool) {
+		if sessionID == "" {
+			return "", false
+		}
+		if sess, ok := agentsMgr.Registry().Session(sessionID); ok && sess.Meta.UserID != "" {
+			return sess.Meta.UserID, true
+		}
+		return "", false
+	})
+
 	// Hot-reload poller: built here where pluginMgr + connectorsSvc are
 	// both in scope, started in Run with the server lifetime ctx.
 	var pluginReloader *connplugin.Reloader
@@ -1284,6 +1298,13 @@ func NewServer() *Server {
 	agentstool.SetTagsService(tagsSvc)
 	agentstool.SetSkillStore(agentskills.NewStore(db))
 	customConnSvc.EnsureInstanceTags(context.Background())
+
+	// Gate the MCP/agent data-table ops per session owner (owner:<slug> tag),
+	// so the AI reads/writes only tables the human behind the session owns or
+	// was granted — same rule as the /data-tables UI.
+	if wfMgr != nil && wfMgr.DataTables != nil {
+		wfconn.SetDataTableACL(dataTableACL{tags: tagsSvc, login: authSvc, dt: wfMgr.DataTables, cfg: configsSvc})
+	}
 	// Connect MCP custom connectors before the gate lifts: boot
 	// registered them without probing, this pass pulls each server's
 	// live catalog now that configs (incl. oauth instance tokens) are
@@ -1444,6 +1465,9 @@ func NewServer() *Server {
 		wfLister = wfListerAdapter{svc: wfMgr.Service}
 	}
 	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore, sysCfg)
+	if wfMgr != nil && wfMgr.DataTables != nil {
+		adminHandler.SetDataTables(wfMgr.DataTables) // /admin/data-tables grant page
+	}
 
 	// ── Shared services ─────────────────────────────────────────
 	bookmarkSvc := bookmark.NewService(db)
@@ -1678,8 +1702,8 @@ type Server struct {
 	// runner is only started when both store and pool are present.
 	scheduleStore *schedule.Store
 	gateBin       string // resolved gate binary path; used for hook cleanup on shutdown
-	jobsSvc         *manager.Service
-	wfMgr           *wfsetup.Manager
+	jobsSvc       *manager.Service
+	wfMgr         *wfsetup.Manager
 	// verCache holds the background-refreshed version + update snapshot the
 	// user-menu dropdown renders. Run starts its refresh goroutine; the
 	// version middleware injects its snapshot into each request context.

@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -11,13 +12,62 @@ import (
 	"github.com/yogasw/wick/pkg/connector"
 )
 
+// DataTableACL gates the MCP/agent data-table ops (datatable_*) per caller.
+// Wired at boot via SetDataTableACL; nil ⇒ no gating (pre-ownership
+// behaviour). The workflow ENGINE does not reach these ops — it drives
+// datatable.Service directly with its own Access.Workflows enforcement — so
+// this scopes only the agent-facing tool surface. A call with no caller user
+// id (internal/system context) always bypasses the gate.
+type DataTableACL interface {
+	// CanAccess reports whether userID may read/write the given table.
+	CanAccess(ctx context.Context, userID, slug string) bool
+	// RegisterOwner records userID as the owner of a table it just created.
+	RegisterOwner(ctx context.Context, userID, slug string)
+}
+
+var dataTableACL DataTableACL
+
+// SetDataTableACL wires the per-caller data-table gate. Called once at boot.
+func SetDataTableACL(a DataTableACL) { dataTableACL = a }
+
+// guardDataTable denies a caller access to a table they don't own or weren't
+// granted. Returns a not-found error on denial so slugs don't leak. No-op
+// when the ACL is unwired or the caller is an internal context (no user id).
+func guardDataTable(c *connector.Ctx, slug string) error {
+	uid := c.CallerUserID()
+	if uid == "" || dataTableACL == nil {
+		return nil
+	}
+	if !dataTableACL.CanAccess(c.Context(), uid, slug) {
+		return fmt.Errorf("data table %q not found", slug)
+	}
+	return nil
+}
+
 // ── Data Tables MCP handlers ─────────────────────────────────────────
 
 func (h *handlers) datatableList(c *connector.Ctx) (any, error) {
-	return h.ops.DataTableList()
+	out, err := h.ops.DataTableList()
+	if err != nil {
+		return nil, err
+	}
+	uid := c.CallerUserID()
+	if uid == "" || dataTableACL == nil {
+		return out, nil
+	}
+	filtered := out[:0]
+	for _, s := range out {
+		if dataTableACL.CanAccess(c.Context(), uid, s.Slug) {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered, nil
 }
 
 func (h *handlers) datatableGet(c *connector.Ctx) (any, error) {
+	if err := guardDataTable(c, c.Input("slug")); err != nil {
+		return nil, err
+	}
 	return h.ops.DataTableGet(c.Input("slug"))
 }
 
@@ -50,10 +100,18 @@ func (h *handlers) datatableCreate(c *connector.Ctx) (any, error) {
 	if err := h.ops.DataTableCreate(in); err != nil {
 		return nil, err
 	}
+	// Record the caller as owner so the table is scoped to them (parity with
+	// the Data Tables UI). No-op for internal callers / unwired ACL.
+	if uid := c.CallerUserID(); uid != "" && dataTableACL != nil {
+		dataTableACL.RegisterOwner(c.Context(), uid, in.Slug)
+	}
 	return map[string]any{"ok": true, "slug": in.Slug}, nil
 }
 
 func (h *handlers) datatableDrop(c *connector.Ctx) (any, error) {
+	if err := guardDataTable(c, c.Input("slug")); err != nil {
+		return nil, err
+	}
 	if err := h.ops.DataTableDrop(c.Input("slug")); err != nil {
 		return nil, err
 	}
@@ -61,6 +119,9 @@ func (h *handlers) datatableDrop(c *connector.Ctx) (any, error) {
 }
 
 func (h *handlers) datatableQuery(c *connector.Ctx) (any, error) {
+	if err := guardDataTable(c, c.Input("slug")); err != nil {
+		return nil, err
+	}
 	in := wfmcp.DataTableQueryInput{Slug: c.Input("slug")}
 	if raw := strings.TrimSpace(c.Input("where")); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &in.Where); err != nil {
@@ -87,6 +148,9 @@ func (h *handlers) datatableQuery(c *connector.Ctx) (any, error) {
 }
 
 func (h *handlers) datatableInsert(c *connector.Ctx) (any, error) {
+	if err := guardDataTable(c, c.Input("slug")); err != nil {
+		return nil, err
+	}
 	row, err := parseRowJSON(c.Input("row"))
 	if err != nil {
 		return nil, err
@@ -98,6 +162,9 @@ func (h *handlers) datatableInsert(c *connector.Ctx) (any, error) {
 }
 
 func (h *handlers) datatableUpsert(c *connector.Ctx) (any, error) {
+	if err := guardDataTable(c, c.Input("slug")); err != nil {
+		return nil, err
+	}
 	row, err := parseRowJSON(c.Input("row"))
 	if err != nil {
 		return nil, err
@@ -110,6 +177,9 @@ func (h *handlers) datatableUpsert(c *connector.Ctx) (any, error) {
 }
 
 func (h *handlers) datatableDelete(c *connector.Ctx) (any, error) {
+	if err := guardDataTable(c, c.Input("slug")); err != nil {
+		return nil, err
+	}
 	in, err := parseFilterInput(c)
 	if err != nil {
 		return nil, err
@@ -122,6 +192,9 @@ func (h *handlers) datatableDelete(c *connector.Ctx) (any, error) {
 }
 
 func (h *handlers) datatableCount(c *connector.Ctx) (any, error) {
+	if err := guardDataTable(c, c.Input("slug")); err != nil {
+		return nil, err
+	}
 	in, err := parseFilterInput(c)
 	if err != nil {
 		return nil, err

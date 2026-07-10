@@ -34,16 +34,12 @@ func seedSession(t *testing.T, layout config.Layout, id, agentName, prov string)
 
 func TestSwitch(t *testing.T) {
 	isolateConfig(t)
-	// Seed a default codex instance, a named one, and a default claude.
-	if err := Save(Instance{Type: TypeCodex, Name: "codex"}); err != nil {
-		t.Fatalf("seed default: %v", err)
-	}
-	if err := Save(Instance{Type: TypeCodex, Name: "gemini_flash"}); err != nil {
-		t.Fatalf("seed named: %v", err)
-	}
-	if err := Save(Instance{Type: TypeClaude, Name: "claude"}); err != nil {
-		t.Fatalf("seed claude: %v", err)
-	}
+	// Seed a default codex instance, a named one, and a default claude. Each
+	// seed drains Save's async probe write (saveSeed) so the three seeds — and
+	// the switches below — don't race each other's config.json rewrite.
+	saveSeed(t, Instance{Type: TypeCodex, Name: "codex"})
+	saveSeed(t, Instance{Type: TypeCodex, Name: "gemini_flash"})
+	saveSeed(t, Instance{Type: TypeClaude, Name: "claude"})
 	layout := config.NewLayout(t.TempDir())
 
 	t.Run("switches to a named instance and persists type/name", func(t *testing.T) {

@@ -4,7 +4,7 @@
 //
 //   - wick_data_tables       : one row per logical table, schema in JSONB
 //   - wick_data_table_rows   : one row per data row, keyed by table_slug,
-//                              data column is JSONB keyed by column id
+//     data column is JSONB keyed by column id
 //
 // Renames touch only the schema row, never the data; column ids are
 // monotonic per table (Schema.NextColID) so dropped column ids never
@@ -121,6 +121,7 @@ func metaToSchema(m entity.DataTable) (Schema, error) {
 	sc.Slug = m.Slug
 	sc.Name = m.Name
 	sc.Description = m.Description
+	sc.UserID = m.CreatedBy
 	if m.Mode != "" {
 		sc.Mode = m.Mode
 	}
@@ -189,6 +190,7 @@ func (s *PgService) CreateTable(sc Schema) error {
 			SchemaJSON:  schemaJSON,
 			AccessJSON:  accessJSON,
 			NextRowID:   0,
+			CreatedBy:   sc.UserID,
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		}
@@ -354,7 +356,8 @@ func (s *PgService) createInTx(tx *gorm.DB, sc Schema) error {
 	row := entity.DataTable{
 		Slug: sc.Slug, Name: sc.Name, Description: sc.Description,
 		Mode: sc.Mode, SchemaJSON: schemaJSON, AccessJSON: accessJSON,
-		NextRowID: 0, CreatedAt: now, UpdatedAt: now,
+		NextRowID: 0, CreatedBy: sc.UserID,
+		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := tx.Create(&row).Error; err != nil {
 		return err

@@ -403,6 +403,12 @@ func Register(r tool.Router) {
 	r.GET("/data-tables", dataTablesPage)
 	r.GET("/api/data-tables", listDataTablesJSON)
 	r.GET("/api/data-tables/{slug}/columns", listDataTableColumnsJSON)
+	// JSON row CRUD — powers the artifact widget bridge (window.wickDataTable.*)
+	// and programmatic clients. Access-guarded per table, same as the UI.
+	r.GET("/api/data-tables/{slug}/rows", listDataTableRowsJSON)
+	r.POST("/api/data-tables/{slug}/rows", insertDataTableRowJSON)
+	r.PATCH("/api/data-tables/{slug}/rows/{id}", updateDataTableRowJSON)
+	r.DELETE("/api/data-tables/{slug}/rows/{id}", deleteDataTableRowJSON)
 	r.POST("/data-tables", createDataTable)
 	r.POST("/data-tables/import-csv", importDataTableCSV)
 	r.GET("/data-tables/{slug}", dataTableDetail)
@@ -510,6 +516,22 @@ func (a projectAccess) allowSession(projectID, userID string) bool {
 	}
 	_, ok := a.projects[projectID]
 	return ok
+}
+
+// allowDataTable reports whether the caller may see/mutate the data table
+// with the given slug + owner. Access is tag-driven — the "owner:<slug>" tag
+// created for the owner and grantable to others by an admin — mirroring the
+// resource-owner model workflows and skills use (the slug is the resource id,
+// already unioned into `projects` via AccessibleResourceIDs). A direct-owner
+// fallback keeps the creator's access even when the tags service is unwired.
+func (a projectAccess) allowDataTable(slug, ownerUserID string) bool {
+	if a.seeAll {
+		return true
+	}
+	if _, ok := a.projects[slug]; ok {
+		return true
+	}
+	return ownerUserID != "" && ownerUserID == a.userID
 }
 
 // adminSeeAll reports whether the AdminSeeAll knob is on. When true, admins

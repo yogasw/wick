@@ -167,6 +167,28 @@ The agent system prompt tells the model to use `var(--wick-*)` by default and on
 
 A sandboxed artifact can't `fetch()` — the sandbox gives it an opaque origin and the CSP sets `connect-src 'none'`, so any `fetch`/`XHR` (to a file or an API) is refused by design. To feed data into an artifact without loosening the sandbox, the runtime injects `window.wickReadFile(path)` into every artifact: it returns a `Promise` of the file's text contents. The artifact calls it, the *parent* page (which owns the session) reads the file and answers over `postMessage` — no network request ever leaves the sandbox. `path` is session-relative — same rule as the `htmlfile` fence above — and absolute paths / `..` traversal are rejected.
 
+### Reading/writing a Data Table from an artifact
+
+For a live, editable widget (a todo list, a small CRUD dashboard) backed by a real [data table](/workflow/nodes/datatable) instead of a static file, the runtime injects `window.wickDataTable` alongside `wickReadFile`, using the same postMessage bridge — the artifact still never touches the network:
+
+```js
+const { rows } = await wickDataTable.query("tasks", { sort: "id:desc", limit: 50 });
+await wickDataTable.insert("tasks", { title: "new task", done: false });
+await wickDataTable.update("tasks", id, { done: true });
+await wickDataTable.delete("tasks", id);
+```
+
+`query`'s second argument accepts `sort` (`"col:asc"` / `"col:desc"`), `limit`, `offset`, and `filters` (`{col: {op, v}}`, ops `equals` / `not_equals` / `gt` / `gte` / `lt` / `lte` / `contains` / `in` / `is_empty` / `is_not_empty`). The table must already exist — create it in the **Data Tables** tool or via the `datatable_*` MCP ops — and the widget can only reach tables the signed-in user owns or was granted, same [ownership rule](./admin-panel#projects-workflows-skills-data-tables-ownership) as the Data Tables UI.
+
+The parent proxies each call to a JSON row API, gated the same way as the rest of the Data Tables surface:
+
+```
+GET    /api/data-tables/{slug}/rows
+POST   /api/data-tables/{slug}/rows
+PATCH  /api/data-tables/{slug}/rows/{id}
+DELETE /api/data-tables/{slug}/rows/{id}
+```
+
 ### Serving artifacts
 
 A new backend endpoint serves cwd files on demand:

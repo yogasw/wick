@@ -144,7 +144,6 @@ func (h *Handler) skillsAdminPage(w http.ResponseWriter, r *http.Request) {
 	}
 	allTags = filterOwnerTagsForIDs(allTags, skillIDs)
 
-
 	paths := make([]string, len(skills))
 	for i, sk := range skills {
 		paths[i] = "/skills/" + sk.Name
@@ -178,4 +177,59 @@ func (h *Handler) setSkillTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/admin/skills", http.StatusFound)
+}
+
+// ── Data Tables ───────────────────────────────────────────────────────────────
+
+func (h *Handler) dataTablesAdminPage(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	if h.dataTables == nil {
+		http.Error(w, "data tables not available", http.StatusServiceUnavailable)
+		return
+	}
+	slugs := h.dataTables.ListTables()
+	allTags, _ := h.repo.ListTags(ctx)
+	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
+	tableIDs := make(map[string]struct{}, len(slugs))
+	for _, s := range slugs {
+		tableIDs[s] = struct{}{}
+	}
+	allTags = filterOwnerTagsForIDs(allTags, tableIDs)
+
+	paths := make([]string, len(slugs))
+	for i, s := range slugs {
+		paths[i] = "/data-tables/" + s
+	}
+	perms, _ := h.repo.ListToolPerms(ctx, paths)
+
+	rows := make([]adminview.ResourceAdminRow, len(slugs))
+	for i, slug := range slugs {
+		row := adminview.ResourceAdminRow{
+			ID:     slug,
+			Name:   slug,
+			TagIDs: perms[i].TagIDs,
+			Path:   paths[i],
+		}
+		if sc, err := h.dataTables.LoadSchema(slug); err == nil {
+			if sc.Name != "" {
+				row.Name = sc.Name
+			}
+			row.CreatedBy = sc.UserID
+		}
+		rows[i] = row
+	}
+
+	adminview.ResourcesAdminPage("Data Tables", "/admin/data-tables", rows, allTags, user).Render(ctx, w)
+}
+
+func (h *Handler) setDataTableTags(w http.ResponseWriter, r *http.Request) {
+	slug := r.PathValue("slug")
+	r.ParseForm()
+	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	if err := h.repo.SetToolTags(r.Context(), "/data-tables/"+slug, ids); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/admin/data-tables", http.StatusFound)
 }

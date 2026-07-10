@@ -568,9 +568,12 @@
               onmousedown={(e) => { e.preventDefault(); selectItem(item); }}
               onmouseenter={() => (menuIndex = i)}
             >
-              <span class="truncate font-mono">{item.label}</span>
+              <!-- `/` command menu: fixed-width name column so every hint lines
+                   up in a straight second column (esp. skills). `@` file mentions
+                   have no hint — let the filename use the full row instead. -->
+              <span class="truncate font-mono {menuKind === '/' ? 'w-36 sm:w-44 shrink-0' : ''}">{item.label}</span>
               {#if item.hint}
-                <span class="shrink-0 text-[10px] text-black-500 dark:text-black-600">{item.hint}</span>
+                <span class="min-w-0 flex-1 truncate text-[10px] text-black-500 dark:text-black-600">{item.hint}</span>
               {/if}
             </button>
           {/each}

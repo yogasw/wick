@@ -65,13 +65,14 @@ A row whose `Key` no longer has a registered module is tolerated: the row stays,
 
 Operational guide: [Connector Module](./connector-module).
 
-## Projects, Workflows & Skills (ownership)
+## Projects, Workflows, Skills & Data Tables (ownership)
 
-`/admin/projects`, `/admin/workflows`, and `/admin/skills` are cross-user lists of every project, workflow, and skill, each with a tag picker — the admin surface for the **ownership** model that backs per-user isolation.
+`/admin/projects`, `/admin/workflows`, `/admin/skills`, and `/admin/data-tables` are cross-user lists of every project, workflow, skill, and data table, each with a tag picker — the admin surface for the **ownership** model that backs per-user isolation.
 
 - Each of these resources gets an `owner:{resourceID}` filter tag at creation time, and stamps `created_by` as an audit trail. The owner (and any admin) sees it; everyone else is filtered out — same `IsFilter` mechanism as the [Tags](#tags) section, just auto-created per resource instead of hand-assigned.
 - **Share** a resource by assigning a group tag to it here (and the same tag to the users/groups who should see it at `/admin/users`). **Transfer or open up** by editing its tags.
 - Skills now live in their own DB table with `created_by` set on upload; `wick_skill_sync` over MCP is admin-only.
+- **Data Tables**: `/data-tables` in the main UI now lists only tables the signed-in user owns or was granted — same rule as Workflows and Skills. `/admin/data-tables` grants access to other users by tag, exactly like `/admin/workflows`. The agent's MCP `datatable_*` ops are scoped the same way: an agent session can only read/write tables its owner (the human behind the session, not the shared internal agent principal) can reach, and a table an agent creates is owned by that user. Admins only see every table when `admin_see_all` is on.
 
 This is the same tag-filter model used for connectors and tools — the `owner:` tags simply make every user-created resource private-by-default to its creator until explicitly shared.
 

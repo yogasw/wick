@@ -20,8 +20,8 @@ type DataTable struct {
 	Mode        string `gorm:"type:varchar(20);not null;default:'strict'"` // strict | lax
 	SchemaJSON  string `gorm:"type:jsonb;not null;default:'{}'"`
 	AccessJSON  string `gorm:"type:jsonb;default:'{}'"`
-	NextRowID   int64  `gorm:"not null;default:0"` // per-slug monotonic row id allocator
-	CreatedBy   string `gorm:"type:varchar(36)"`
+	NextRowID   int64  `gorm:"not null;default:0"`     // per-slug monotonic row id allocator
+	CreatedBy   string `gorm:"type:varchar(36);index"` // owner user id (Schema.UserID); access via owner:<slug> tag
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

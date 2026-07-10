@@ -228,5 +228,35 @@ To feed data into an artifact, use one of these — both keep the sandbox intact
   this when the data lives in a file, is large, or you want to load several
   files (call `wickReadFile` once per file), possibly lazily.
 
+- **Read/write a Data Table over the bridge (`window.wickDataTable`).** For a
+  live, DB-backed widget with CRUD, the runtime injects `window.wickDataTable`
+  into every artifact. Like `wickReadFile`, the artifact never touches the
+  network — the parent proxies each call with the signed-in user's session, and
+  access is enforced server-side (the widget can only touch tables that user
+  owns or was granted). All methods return Promises:
+  ````
+  ```html
+  <ul id="list"></ul>
+  <script>
+    async function refresh() {
+      const { rows } = await wickDataTable.query("tasks", { sort: "id:desc", limit: 50 });
+      document.getElementById("list").innerHTML =
+        rows.map(r => "<li>" + r.id + ": " + r.title + "</li>").join("");
+    }
+    async function add(title) { await wickDataTable.insert("tasks", { title, done: false }); await refresh(); }
+    async function toggle(id, done) { await wickDataTable.update("tasks", id, { done }); await refresh(); }
+    async function remove(id) { await wickDataTable.delete("tasks", id); await refresh(); }
+    refresh();
+  </script>
+  ```
+  ````
+  Signatures: `query(slug, {sort?, limit?, offset?, filters?}) → {rows,count}`,
+  `insert(slug, row) → {ok}`, `update(slug, id, patch) → {ok}`,
+  `delete(slug, id) → {ok,deleted}`. `filters` is `{col:{op,v}}` with ops
+  equals/contains/gt/gte/lt/lte/in/is_empty/is_not_empty. `id`, `created_at`,
+  `updated_at` are engine-managed. The table must already exist (create it in
+  the Data Tables UI or via the `datatable_*` MCP ops). Use this for editable,
+  persistent widgets; use `wickReadFile` for read-only file-backed data.
+
 Never tell the artifact to `fetch` a wick endpoint or an external URL — it will
-be blocked. Embed the data, or use `wickReadFile`.
+be blocked. Embed the data, or use `wickReadFile` / `wickDataTable`.
