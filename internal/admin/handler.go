@@ -12,6 +12,7 @@ import (
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin/view"
 	agentproject "github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/workflow/datatable"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
@@ -49,6 +50,13 @@ type WorkflowLister interface {
 // SkillLister lists all skills from the DB.
 type SkillLister interface {
 	List(ctx context.Context) ([]entity.Skill, error)
+}
+
+// DataTableLister lists data tables + their schema for the admin grant page.
+// Satisfied directly by datatable.Service (wfMgr.DataTables).
+type DataTableLister interface {
+	ListTables() []string
+	LoadSchema(slug string) (datatable.Schema, error)
 }
 
 func filterOutOwnerTags(tags []*entity.Tag) []*entity.Tag {
@@ -90,6 +98,7 @@ type Handler struct {
 	projects   ProjectLister
 	workflows  WorkflowLister
 	skillsDB   SkillLister
+	dataTables DataTableLister // optional; wired post-construction via SetDataTables
 
 	// sys bundles everything the System config page needs: the update
 	// coordinator (nil-safe — page shows "not configured" when absent),
@@ -166,6 +175,11 @@ func NewHandler(
 	}
 }
 
+// SetDataTables wires the data-tables lister for the /admin/data-tables grant
+// page. Optional — when unset the page returns 503. Kept as a post-construction
+// setter so NewHandler's positional signature doesn't grow another param.
+func (h *Handler) SetDataTables(l DataTableLister) { h.dataTables = l }
+
 func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	admin := func(next http.HandlerFunc) http.Handler {
 		return sessionMidd.RequireAuth(sessionMidd.RequireAdmin(next))
@@ -187,13 +201,13 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 
 	// Tool detail pages now live in Manager — redirect old URLs.
 	mux.Handle("GET /admin/tools/{key}", admin(func(w http.ResponseWriter, r *http.Request) {
-		redirect("/manager/tools/" + r.PathValue("key"))(w, r)
+		redirect("/manager/tools/"+r.PathValue("key"))(w, r)
 	}))
 
 	// Jobs admin page (visibility, tags — schedule/run lives in Manager)
 	mux.Handle("GET /admin/jobs", admin(h.adminJobsPage))
 	mux.Handle("GET /admin/jobs/{key}", admin(func(w http.ResponseWriter, r *http.Request) {
-		redirect("/manager/jobs/" + r.PathValue("key"))(w, r)
+		redirect("/manager/jobs/"+r.PathValue("key"))(w, r)
 	}))
 
 	// Job actions
@@ -250,6 +264,9 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 
 	mux.Handle("GET /admin/skills", admin(h.skillsAdminPage))
 	mux.Handle("POST /admin/skills/{name}/tags", admin(h.setSkillTags))
+
+	mux.Handle("GET /admin/data-tables", admin(h.dataTablesAdminPage))
+	mux.Handle("POST /admin/data-tables/{slug}/tags", admin(h.setDataTableTags))
 
 	// Personal access tokens (admin override view). PATs authenticate
 	// any wick HTTP API — MCP is just one caller — so the surface is

@@ -30,16 +30,23 @@ import (
 // Decode ignores it) instead of accidentally being reinterpreted as a
 // freshly-added column.
 type Schema struct {
-	Slug        string    `json:"-"`
-	Name        string    `json:"name,omitempty"`
-	Description string    `json:"description,omitempty"`
-	Mode        string    `json:"mode,omitempty"` // strict | lax
-	PrimaryKey  []string  `json:"primary_key,omitempty"`
-	Columns     []Column  `json:"columns"`
-	NextColID   int       `json:"next_col_id,omitempty"`
-	Access      Access    `json:"access,omitempty"`
-	CreatedAt   time.Time `json:"created_at,omitempty"`
-	UpdatedAt   time.Time `json:"updated_at,omitempty"`
+	Slug        string   `json:"-"`
+	Name        string   `json:"name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Mode        string   `json:"mode,omitempty"` // strict | lax
+	PrimaryKey  []string `json:"primary_key,omitempty"`
+	Columns     []Column `json:"columns"`
+	NextColID   int      `json:"next_col_id,omitempty"`
+	Access      Access   `json:"access,omitempty"`
+	// UserID is the creator/owner. The table is a self-standing taggable
+	// resource: an "owner:<slug>" tag is created for UserID on creation and an
+	// admin can grant others access by linking them to that tag (same model as
+	// workflows/skills). UserID is column-backed in Postgres (created_by), so
+	// tagged json:"-" to stay out of schema_json — mirrors Slug. Empty UserID =
+	// ownerless (admin-only).
+	UserID    string    `json:"-"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
 // Column is one column declaration.
@@ -124,16 +131,16 @@ type Condition struct {
 
 // Supported condition op constants (n8n parity).
 const (
-	OpEquals      = "equals"
-	OpNotEquals   = "not_equals"
-	OpGT          = "gt"
-	OpGTE         = "gte"
-	OpLT          = "lt"
-	OpLTE         = "lte"
-	OpContains    = "contains"
-	OpIn          = "in"
-	OpIsEmpty     = "is_empty"
-	OpIsNotEmpty  = "is_not_empty"
+	OpEquals     = "equals"
+	OpNotEquals  = "not_equals"
+	OpGT         = "gt"
+	OpGTE        = "gte"
+	OpLT         = "lt"
+	OpLTE        = "lte"
+	OpContains   = "contains"
+	OpIn         = "in"
+	OpIsEmpty    = "is_empty"
+	OpIsNotEmpty = "is_not_empty"
 )
 
 // Service is the workflow-facing data store contract.

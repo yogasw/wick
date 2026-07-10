@@ -2,6 +2,7 @@ package agents
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -9,8 +10,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/datatable"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -33,6 +36,62 @@ func dataTablesNotReady(c *tool.Ctx) bool {
 	return false
 }
 
+// callerUserID returns the authenticated caller's user id, or "" for an
+// internal/unauthenticated caller (matches login.GetUser semantics).
+func callerUserID(c *tool.Ctx) string {
+	if u := login.GetUser(c.Context()); u != nil {
+		return u.ID
+	}
+	return ""
+}
+
+// canAccessDataTable reports whether the caller may see/mutate a table. The
+// table is a self-standing taggable resource keyed by slug: access = the
+// "owner:<slug>" tag (owner + admin-granted users) with a direct-owner
+// fallback, plus the AdminSeeAll knob — same model as workflows/skills.
+func canAccessDataTable(c *tool.Ctx, sc datatable.Schema) bool {
+	return callerProjectAccess(c).allowDataTable(sc.Slug, sc.UserID)
+}
+
+// tagDataTableOwner records userID as owner of a freshly-created table via the
+// "owner:<slug>" tag, so it appears in the owner's list and an admin can grant
+// others. Best-effort: a tag failure must never fail table creation, and it's
+// a no-op when tags aren't wired or the caller is anonymous.
+func tagDataTableOwner(c *tool.Ctx, slug, userID string) {
+	if globalTagsSvc == nil || slug == "" || userID == "" {
+		return
+	}
+	if err := globalTagsSvc.CreateResourceOwnerTag(c.Context(), slug, userID); err != nil {
+		log.Ctx(c.Context()).Warn().Err(err).Str("slug", slug).Msg("create data-table owner tag")
+	}
+}
+
+// untagDataTable removes the owner tag (and its grants) when a table is dropped.
+func untagDataTable(c *tool.Ctx, slug string) {
+	if globalTagsSvc == nil || slug == "" {
+		return
+	}
+	if err := globalTagsSvc.DeleteResourceOwnerTag(c.Context(), slug); err != nil {
+		log.Ctx(c.Context()).Warn().Err(err).Str("slug", slug).Msg("delete data-table owner tag")
+	}
+}
+
+// requireDataTable loads a table and enforces caller access in one step. On
+// miss OR access denial it writes a 404 (denial is indistinguishable from
+// absence so we don't leak which slugs exist) and returns ok=false.
+func requireDataTable(c *tool.Ctx, slug string) (datatable.Schema, bool) {
+	sc, err := globalDataTables.LoadSchema(slug)
+	if err != nil {
+		c.Error(http.StatusNotFound, err.Error())
+		return datatable.Schema{}, false
+	}
+	if !canAccessDataTable(c, sc) {
+		c.Error(http.StatusNotFound, "data table not found")
+		return datatable.Schema{}, false
+	}
+	return sc, true
+}
+
 // dataTablesPage lists every registered table.
 func dataTablesPage(c *tool.Ctx) {
 	if dataTablesNotReady(c) {
@@ -43,10 +102,16 @@ func dataTablesPage(c *tool.Ctx) {
 		Base:   c.Base(),
 		Flash:  c.Query("flash"),
 	}
+	// Resolve the caller's project visibility once (one bulk query) so the
+	// per-table filter below is O(1), not an N+1 tag lookup per table.
+	access := callerProjectAccess(c)
 	for _, slug := range globalDataTables.ListTables() {
 		sc, err := globalDataTables.LoadSchema(slug)
 		if err != nil {
 			continue
+		}
+		if !access.allowDataTable(slug, sc.UserID) {
+			continue // not the caller's table (no owner tag / grant / admin)
 		}
 		count, _ := globalDataTables.Count(slug, nil)
 		vm.Tables = append(vm.Tables, view.DataTableRow{
@@ -72,9 +137,13 @@ func listDataTablesJSON(c *tool.Ctx) {
 		Name string `json:"name"`
 	}
 	var out []item
+	access := callerProjectAccess(c)
 	for _, slug := range globalDataTables.ListTables() {
 		sc, err := globalDataTables.LoadSchema(slug)
 		if err != nil {
+			continue
+		}
+		if !access.allowDataTable(slug, sc.UserID) {
 			continue
 		}
 		out = append(out, item{Slug: slug, Name: sc.Name})
@@ -93,7 +162,7 @@ func listDataTableColumnsJSON(c *tool.Ctx) {
 	}
 	slug := c.PathValue("slug")
 	sc, err := globalDataTables.LoadSchema(slug)
-	if err != nil {
+	if err != nil || !canAccessDataTable(c, sc) {
 		c.JSON(200, []any{})
 		return
 	}
@@ -132,6 +201,8 @@ func createDataTable(c *tool.Ctx) {
 		return
 	}
 
+	owner := callerUserID(c)
+
 	mode := c.Form("create_mode")
 	if mode == "" {
 		mode = "scratch"
@@ -144,10 +215,11 @@ func createDataTable(c *tool.Ctx) {
 			return
 		}
 		defer file.Close()
-		if err := importCSVInto(slug, name, file); err != nil {
+		if err := importCSVInto(slug, name, owner, file); err != nil {
 			c.Error(http.StatusBadRequest, err.Error())
 			return
 		}
+		tagDataTableOwner(c, slug, owner)
 		c.Redirect(c.Base()+"/data-tables/"+slug, http.StatusSeeOther)
 		return
 	}
@@ -172,11 +244,13 @@ func createDataTable(c *tool.Ctx) {
 		Mode:       dtMode,
 		PrimaryKey: []string{pk},
 		Columns:    cols,
+		UserID:     owner, // creator owns it; created outside a project → unscoped
 	}
 	if err := globalDataTables.CreateTable(sc); err != nil {
 		c.Error(http.StatusBadRequest, err.Error())
 		return
 	}
+	tagDataTableOwner(c, slug, owner)
 	c.Redirect(c.Base()+"/data-tables/"+slug, http.StatusSeeOther)
 }
 
@@ -186,6 +260,9 @@ func renameDataTableColumn(c *tool.Ctx) {
 		return
 	}
 	slug := c.PathValue("slug")
+	if _, ok := requireDataTable(c, slug); !ok {
+		return
+	}
 	from := c.PathValue("col")
 	to := strings.TrimSpace(c.Form("name"))
 	if err := globalDataTables.RenameColumn(slug, from, to); err != nil {
@@ -201,6 +278,9 @@ func dropDataTableColumn(c *tool.Ctx) {
 		return
 	}
 	slug := c.PathValue("slug")
+	if _, ok := requireDataTable(c, slug); !ok {
+		return
+	}
 	col := c.PathValue("col")
 	if err := globalDataTables.DropColumn(slug, col); err != nil {
 		c.Error(http.StatusBadRequest, err.Error())
@@ -215,9 +295,8 @@ func addDataTableColumn(c *tool.Ctx) {
 		return
 	}
 	slug := c.PathValue("slug")
-	sc, err := globalDataTables.LoadSchema(slug)
-	if err != nil {
-		c.Error(http.StatusNotFound, err.Error())
+	sc, ok := requireDataTable(c, slug)
+	if !ok {
 		return
 	}
 	name := strings.TrimSpace(c.Form("name"))
@@ -249,10 +328,14 @@ func dropDataTable(c *tool.Ctx) {
 		return
 	}
 	slug := c.PathValue("slug")
+	if _, ok := requireDataTable(c, slug); !ok {
+		return
+	}
 	if err := globalDataTables.DropTable(slug); err != nil {
 		c.Error(http.StatusBadRequest, err.Error())
 		return
 	}
+	untagDataTable(c, slug)
 	c.Redirect(c.Base()+"/data-tables?flash=Dropped+"+slug, http.StatusSeeOther)
 }
 
@@ -270,9 +353,8 @@ func dataTableDetail(c *tool.Ctx) {
 		return
 	}
 	slug := c.PathValue("slug")
-	sc, err := globalDataTables.LoadSchema(slug)
-	if err != nil {
-		c.Error(http.StatusNotFound, err.Error())
+	sc, ok := requireDataTable(c, slug)
+	if !ok {
 		return
 	}
 	sortCol, sortDir := parseSortQuery(c.Query("sort"))
@@ -280,6 +362,7 @@ func dataTableDetail(c *tool.Ctx) {
 	order := orderForSort(sc, sortCol, sortDir)
 	conds := conditionsForFilters(sc, filters)
 	var rows []map[string]any
+	var err error
 	if len(conds) > 0 {
 		rows, err = globalDataTables.QueryConditions(slug, conds, order, 0, 0)
 	} else {
@@ -419,9 +502,8 @@ func insertDataTableRow(c *tool.Ctx) {
 		return
 	}
 	slug := c.PathValue("slug")
-	sc, err := globalDataTables.LoadSchema(slug)
-	if err != nil {
-		c.Error(http.StatusNotFound, err.Error())
+	sc, ok := requireDataTable(c, slug)
+	if !ok {
 		return
 	}
 	row := map[string]any{}
@@ -448,8 +530,7 @@ func bulkDeleteDataTableRows(c *tool.Ctx) {
 		return
 	}
 	slug := c.PathValue("slug")
-	if _, err := globalDataTables.LoadSchema(slug); err != nil {
-		c.Error(http.StatusNotFound, err.Error())
+	if _, ok := requireDataTable(c, slug); !ok {
 		return
 	}
 	ids := c.R.Form["ids"]
@@ -484,9 +565,8 @@ func deleteDataTableRow(c *tool.Ctx) {
 	}
 	slug := c.PathValue("slug")
 	pkParam := c.PathValue("pk")
-	sc, err := globalDataTables.LoadSchema(slug)
-	if err != nil {
-		c.Error(http.StatusNotFound, err.Error())
+	sc, ok := requireDataTable(c, slug)
+	if !ok {
 		return
 	}
 	parts := strings.Split(pkParam, "|")
@@ -521,10 +601,12 @@ func importDataTableCSV(c *tool.Ctx) {
 	if slug == "" {
 		slug = "imported"
 	}
-	if err := importCSVInto(slug, slug, file); err != nil {
+	owner := callerUserID(c)
+	if err := importCSVInto(slug, slug, owner, file); err != nil {
 		c.Error(http.StatusBadRequest, err.Error())
 		return
 	}
+	tagDataTableOwner(c, slug, owner)
 	c.Redirect(c.Base()+"/data-tables/"+slug, http.StatusSeeOther)
 }
 
@@ -532,7 +614,7 @@ func importDataTableCSV(c *tool.Ctx) {
 // headers, primary key inferred as the first column, all columns typed
 // `string`. Used by both the list-page Upload CSV button and the
 // "Import CSV" branch of the create modal.
-func importCSVInto(slug, name string, file io.Reader) error {
+func importCSVInto(slug, name, userID string, file io.Reader) error {
 	reader := csv.NewReader(file)
 	headerRow, err := reader.Read()
 	if err != nil {
@@ -552,6 +634,7 @@ func importCSVInto(slug, name string, file io.Reader) error {
 		Mode:       datatable.ModeLax,
 		PrimaryKey: []string{pk},
 		Columns:    cols,
+		UserID:     userID,
 	}
 	if err := globalDataTables.CreateTable(sc); err != nil {
 		_ = globalDataTables.SaveSchema(sc)
@@ -582,9 +665,8 @@ func exportDataTableCSV(c *tool.Ctx) {
 		return
 	}
 	slug := c.PathValue("slug")
-	sc, err := globalDataTables.LoadSchema(slug)
-	if err != nil {
-		c.Error(http.StatusNotFound, err.Error())
+	sc, ok := requireDataTable(c, slug)
+	if !ok {
 		return
 	}
 	rows, err := globalDataTables.Query(slug, nil, nil, 0, 0)
@@ -613,7 +695,181 @@ func exportDataTableCSV(c *tool.Ctx) {
 	}
 }
 
+// ── JSON row API (widget bridge + programmatic CRUD) ────────────────────
+//
+// These power the artifact widget bridge (window.wickDataTable.*) and any
+// programmatic client. Every handler goes through requireDataTable, so a
+// caller can only read/write tables they own (or that their project grants).
+// The widget itself never reaches these directly — it's sandboxed to an
+// opaque origin — so the parent conversation page proxies each call with the
+// caller's session cookie; the userID is resolved server-side, never trusted
+// from the widget.
+
+// listDataTableRowsJSON: GET /api/data-tables/{slug}/rows
+// Query params (all optional): sort=<col>:asc|desc, per-column filter chips
+// f.<col>.op=<op>&f.<col>.v=<value> (same grammar as the detail page),
+// limit, offset. Returns {rows:[...], count:<total matching>}.
+func listDataTableRowsJSON(c *tool.Ctx) {
+	if dataTablesNotReady(c) {
+		return
+	}
+	slug := c.PathValue("slug")
+	sc, ok := requireDataTable(c, slug)
+	if !ok {
+		return
+	}
+	sortCol, sortDir := parseSortQuery(c.Query("sort"))
+	filters := parseFilterQuery(c.R.URL.Query())
+	order := orderForSort(sc, sortCol, sortDir)
+	conds := conditionsForFilters(sc, filters)
+	limit := atoiDefault(c.Query("limit"), 0)
+	offset := atoiDefault(c.Query("offset"), 0)
+
+	var rows []map[string]any
+	var total int
+	var err error
+	if len(conds) > 0 {
+		rows, err = globalDataTables.QueryConditions(slug, conds, order, limit, offset)
+		if err == nil {
+			total, _ = globalDataTables.CountConditions(slug, conds)
+		}
+	} else {
+		rows, err = globalDataTables.Query(slug, nil, order, limit, offset)
+		if err == nil {
+			total, _ = globalDataTables.Count(slug, nil)
+		}
+	}
+	if err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	if rows == nil {
+		rows = []map[string]any{}
+	}
+	c.JSON(http.StatusOK, map[string]any{"rows": rows, "count": total})
+}
+
+// insertDataTableRowJSON: POST /api/data-tables/{slug}/rows
+// Body: JSON object of column→value. System columns (id/created_at/
+// updated_at) are engine-managed and ignored if supplied. The service
+// assigns the id, so the response is {ok:true} — the widget re-queries to
+// pick up the new row (Insert has no RETURNING).
+func insertDataTableRowJSON(c *tool.Ctx) {
+	if dataTablesNotReady(c) {
+		return
+	}
+	slug := c.PathValue("slug")
+	if _, ok := requireDataTable(c, slug); !ok {
+		return
+	}
+	body, err := decodeJSONObject(c)
+	if err != nil {
+		c.Error(http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := globalDataTables.Insert(slug, body); err != nil {
+		c.Error(http.StatusBadRequest, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true})
+}
+
+// updateDataTableRowJSON: PATCH /api/data-tables/{slug}/rows/{id}
+// Body: partial column→value map. Loads the existing row by id, merges the
+// patch over it (server-side merge — Upsert replaces, so we must supply the
+// full row), and upserts. created_at is preserved; updated_at re-stamped.
+func updateDataTableRowJSON(c *tool.Ctx) {
+	if dataTablesNotReady(c) {
+		return
+	}
+	slug := c.PathValue("slug")
+	if _, ok := requireDataTable(c, slug); !ok {
+		return
+	}
+	id, err := strconv.ParseInt(c.PathValue("id"), 10, 64)
+	if err != nil {
+		c.Error(http.StatusBadRequest, "invalid row id")
+		return
+	}
+	patch, err := decodeJSONObject(c)
+	if err != nil {
+		c.Error(http.StatusBadRequest, err.Error())
+		return
+	}
+	existing, found, err := globalDataTables.Get(slug, map[string]any{datatable.ColID: id})
+	if err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		c.Error(http.StatusNotFound, "row not found")
+		return
+	}
+	// Merge caller fields over the existing row. System columns in the patch
+	// are dropped; Upsert strips them anyway and re-derives id/timestamps.
+	for k, v := range patch {
+		if datatable.IsSystemColumn(k) {
+			continue
+		}
+		existing[k] = v
+	}
+	existing[datatable.ColID] = id // target the update at this row
+	if _, err := globalDataTables.Upsert(slug, existing); err != nil {
+		c.Error(http.StatusBadRequest, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true})
+}
+
+// deleteDataTableRowJSON: DELETE /api/data-tables/{slug}/rows/{id}
+// Removes one row by id. Returns {ok:true, deleted:<n>}.
+func deleteDataTableRowJSON(c *tool.Ctx) {
+	if dataTablesNotReady(c) {
+		return
+	}
+	slug := c.PathValue("slug")
+	if _, ok := requireDataTable(c, slug); !ok {
+		return
+	}
+	id, err := strconv.ParseInt(c.PathValue("id"), 10, 64)
+	if err != nil {
+		c.Error(http.StatusBadRequest, "invalid row id")
+		return
+	}
+	n, err := globalDataTables.Delete(slug, map[string]any{datatable.ColID: id})
+	if err != nil {
+		c.Error(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true, "deleted": n})
+}
+
 // ── helpers ───────────────────────────────────────────────────────────
+
+// decodeJSONObject reads the request body as a single JSON object, capped at
+// 1 MiB. Rejects arrays, nulls, and malformed input.
+func decodeJSONObject(c *tool.Ctx) (map[string]any, error) {
+	if c.R.Body == nil {
+		return nil, fmt.Errorf("empty request body")
+	}
+	defer c.R.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(io.LimitReader(c.R.Body, 1<<20)).Decode(&out); err != nil {
+		return nil, fmt.Errorf("invalid JSON body: %w", err)
+	}
+	if out == nil {
+		return nil, fmt.Errorf("body must be a JSON object")
+	}
+	return out, nil
+}
+
+// atoiDefault parses s as an int, returning def on empty/invalid input.
+func atoiDefault(s string, def int) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+		return n
+	}
+	return def
+}
 
 func parseColumnsText(raw, pk string) ([]datatable.Column, error) {
 	lines := strings.Split(raw, "\n")
