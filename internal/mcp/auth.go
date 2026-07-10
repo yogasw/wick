@@ -40,10 +40,10 @@ type oauthValidator interface {
 // resource-metadata document (RFC 9728), so spec-compliant MCP clients
 // can discover the OAuth server and run the auth dance.
 type AuthMiddleware struct {
-	tokens         *accesstoken.Service
-	users          userResolver
-	oauth          oauthValidator // optional; nil disables OAuth validation
-	resourceMetaURL string        // absolute URL to /.well-known/oauth-protected-resource
+	tokens          *accesstoken.Service
+	users           userResolver
+	oauth           oauthValidator // optional; nil disables OAuth validation
+	resourceMetaURL string         // absolute URL to /.well-known/oauth-protected-resource
 	// internalToken authenticates wick's own agent spawns over loopback;
 	// matching it grants a synthetic admin principal. Empty = off.
 	internalToken string
@@ -56,10 +56,17 @@ func (m *AuthMiddleware) WithInternalToken(token string) *AuthMiddleware {
 	return m
 }
 
+// InternalAgentUserID is the id of the synthetic admin principal the per-boot
+// internal token maps to. Agent spawns authenticate with that token, so this
+// id shows up as the caller's user id for agent MCP calls that don't resolve a
+// session owner — per-owner gates (data tables) treat it as an unrestricted
+// system principal rather than a real user.
+const InternalAgentUserID = "wick-agent-internal"
+
 // internalSystemUser is the synthetic admin principal the internal
 // token maps to (full connector visibility, never persisted).
 func internalSystemUser() *entity.User {
-	return &entity.User{ID: "wick-agent-internal", Name: "wick agent (internal)", Role: entity.RoleAdmin, Approved: true}
+	return &entity.User{ID: InternalAgentUserID, Name: "wick agent (internal)", Role: entity.RoleAdmin, Approved: true}
 }
 
 // NewAuthMiddleware wires the bearer middleware. Pass nil oauth to

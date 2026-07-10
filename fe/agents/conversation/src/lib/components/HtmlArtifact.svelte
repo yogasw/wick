@@ -105,20 +105,107 @@
     }
   }
 
+  type DtQueryOpts = {
+    sort?: string;
+    limit?: number;
+    offset?: number;
+    filters?: Record<string, { op?: string; v?: unknown }>;
+  };
+  type DtReq = { reqId: unknown; op?: string; slug?: unknown; id?: unknown; row?: unknown; opts?: DtQueryOpts };
+
+  // Build the ?sort=…&limit=…&f.<col>.op=…&f.<col>.v=… query string for a
+  // data-table query op from the widget-supplied opts. Mirrors the grammar
+  // the Go handler (parseFilterQuery/parseSortQuery) already understands.
+  function buildDtQuery(opts: DtQueryOpts | undefined): string {
+    if (!opts) return "";
+    const p = new URLSearchParams();
+    if (opts.sort) p.set("sort", String(opts.sort));
+    if (opts.limit != null) p.set("limit", String(opts.limit));
+    if (opts.offset != null) p.set("offset", String(opts.offset));
+    if (opts.filters && typeof opts.filters === "object") {
+      for (const [col, f] of Object.entries(opts.filters)) {
+        if (!f || typeof f !== "object") continue;
+        if (f.op) p.set(`f.${col}.op`, String(f.op));
+        if (f.v != null) p.set(`f.${col}.v`, String(f.v));
+      }
+    }
+    const s = p.toString();
+    return s ? `?${s}` : "";
+  }
+
+  // Serve a data-table request the sandboxed artifact posted over the bridge.
+  // Same trust model as serveFileReq: the artifact can't reach the network
+  // (opaque origin + CSP connect-src none), so the parent — which carries the
+  // session cookie — makes the access-checked call and posts the JSON back.
+  // Ownership is enforced SERVER-side per table; the slug from the widget is
+  // untrusted and re-validated here + in the handler.
+  async function serveDataTableReq(win: Window, msg: DtReq) {
+    const reply = (m: Record<string, unknown>) => {
+      try { win.postMessage({ type: "wick-dt-resp", reqId: msg.reqId, ...m }, "*"); } catch { /* frame gone */ }
+    };
+    const { base } = getFileContext();
+    if (!base) { reply({ ok: false, error: "no session context" }); return; }
+    const slug = typeof msg.slug === "string" ? msg.slug.trim() : "";
+    if (!/^[a-z0-9-]+$/.test(slug)) { reply({ ok: false, error: "invalid table slug" }); return; }
+    const root = `${base}/api/data-tables/${encodeURIComponent(slug)}/rows`;
+    const jsonHeaders = { "content-type": "application/json" };
+    try {
+      let res: Response;
+      switch (msg.op) {
+        case "query":
+          res = await fetch(root + buildDtQuery(msg.opts), { cache: "no-store" });
+          break;
+        case "insert":
+          res = await fetch(root, { method: "POST", headers: jsonHeaders, body: JSON.stringify(msg.row ?? {}) });
+          break;
+        case "update":
+          res = await fetch(`${root}/${encodeURIComponent(String(msg.id))}`,
+            { method: "PATCH", headers: jsonHeaders, body: JSON.stringify(msg.row ?? {}) });
+          break;
+        case "delete":
+          res = await fetch(`${root}/${encodeURIComponent(String(msg.id))}`, { method: "DELETE" });
+          break;
+        default:
+          reply({ ok: false, error: `unknown op: ${String(msg.op)}` });
+          return;
+      }
+      const text = await res.text();
+      let data: unknown = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+      if (!res.ok) {
+        const errMsg = data && typeof data === "object" && "error" in data
+          ? String((data as { error: unknown }).error)
+          : `HTTP ${res.status}`;
+        reply({ ok: false, error: errMsg });
+        return;
+      }
+      reply({ ok: true, data });
+    } catch (e) {
+      reply({ ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
   $effect(() => {
     ensureLoaded();
     function onMsg(e: MessageEvent) {
-      const d = e.data as { type?: string; id?: string; height?: number; reqId?: unknown; path?: unknown } | null;
+      const d = e.data as
+        | { type?: string; id?: string; height?: number; reqId?: unknown; path?: unknown; op?: string; slug?: unknown; row?: unknown; opts?: DtQueryOpts }
+        | null;
       if (!d) return;
       if (d.type === "wick-artifact-height" && d.id === id && d.height) {
         height = Math.min(MAX_HEIGHT, Math.ceil(d.height));
         return;
       }
-      // Only answer file requests coming from THIS component's own iframe(s),
-      // so with several artifacts mounted each request is served exactly once.
-      if (d.type === "wick-file-req" && e.source &&
-          (e.source === frameEl?.contentWindow || e.source === fsFrameEl?.contentWindow)) {
+      // Only answer requests coming from THIS component's own iframe(s), so
+      // with several artifacts mounted each request is served exactly once.
+      const fromOwnFrame = !!e.source &&
+        (e.source === frameEl?.contentWindow || e.source === fsFrameEl?.contentWindow);
+      if (d.type === "wick-file-req" && fromOwnFrame) {
         void serveFileReq(e.source as Window, d.reqId, d.path);
+        return;
+      }
+      if (d.type === "wick-dt-req" && fromOwnFrame) {
+        void serveDataTableReq(e.source as Window, d as DtReq);
       }
     }
     window.addEventListener("message", onMsg);
