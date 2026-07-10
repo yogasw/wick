@@ -242,6 +242,7 @@ func Register(r tool.Router) {
 
 	// JSON API — project-settings SPA endpoints.
 	r.GET("/api/projects/{id}", apiProjectDetail)
+	r.GET("/api/projects/{id}/files/search", projectFileSearch)
 	r.POST("/api/projects/{id}", apiProjectUpdate)
 
 	// JSON API — providers SPA endpoints (mirrors templ providers handlers).

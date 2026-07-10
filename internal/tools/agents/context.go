@@ -177,32 +177,60 @@ func sessionContextSearch(c *tool.Ctx) {
 		return
 	}
 
-	limit := 30
-	if l := c.Query("limit"); l != "" {
-		if n, e := strconv.Atoi(l); e == nil && n > 0 {
-			limit = n
-		}
-	}
-	if limit > 100 {
-		limit = 100
-	}
-	terms := strings.Fields(strings.ToLower(c.Query("q")))
-
 	// Score the CACHED tree in memory rather than walking the disk per keystroke
 	// — the walk is the expensive part, so caching it (short TTL) keeps rapid
 	// @-search typing cheap. The frontend also debounces, so the two together
 	// keep this endpoint from hanging on a large repo.
+	c.JSON(http.StatusOK, map[string]any{
+		"files": rankFilePaths(mentionTreeCache.paths(id, cwd), c.Query("q"), c.Query("limit")),
+	})
+}
+
+// projectFileSearch mirrors sessionContextSearch but scopes the walk to a
+// project's folder — used by the new-session composer's @-mention before any
+// session exists (the session cwd IS the project folder once created).
+// GET /api/projects/{id}/files/search. Access is enforced by projectAccessMW.
+func projectFileSearch(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	if !project.Exists(globalLayout, id) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+		return
+	}
+	cwd, err := project.ResolvePath(globalLayout, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{
+		"files": rankFilePaths(mentionTreeCache.paths("project:"+id, cwd), c.Query("q"), c.Query("limit")),
+	})
+}
+
+// rankFilePaths filters paths to those matching the space-separated AND terms
+// in q, ranks them (see scoreFilePath), and caps to limitStr (default 30, max
+// 100). Shared by the session and project @-mention search endpoints.
+func rankFilePaths(paths []string, q, limitStr string) []string {
+	limit := 30
+	if n, e := strconv.Atoi(limitStr); e == nil && n > 0 {
+		limit = n
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	terms := strings.Fields(strings.ToLower(q))
 	type scored struct {
 		path  string
 		score int
 	}
 	matches := []scored{}
-	for _, rel := range mentionTreeCache.paths(id, cwd) {
+	for _, rel := range paths {
 		if s, matched := scoreFilePath(rel, terms); matched {
 			matches = append(matches, scored{rel, s})
 		}
 	}
-
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].score != matches[j].score {
 			return matches[i].score < matches[j].score
@@ -212,11 +240,11 @@ func sessionContextSearch(c *tool.Ctx) {
 	if len(matches) > limit {
 		matches = matches[:limit]
 	}
-	paths := make([]string, 0, len(matches))
+	out := make([]string, 0, len(matches))
 	for _, m := range matches {
-		paths = append(paths, m.path)
+		out = append(out, m.path)
 	}
-	c.JSON(http.StatusOK, map[string]any{"files": paths})
+	return out
 }
 
 // scoreFilePath ranks a slash-separated path against AND search terms; lower is

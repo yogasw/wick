@@ -50,41 +50,67 @@ describe("Composer — send + attachments", () => {
 });
 
 describe("Composer — toolbar dropdowns + bell", () => {
-  test("provider/project/preset render as dropdowns when configured", () => {
+  test("no native selects; project + provider are toolbar chips; preset lives in the + menu", async () => {
     render(Composer, {
       props: {
         onSend: vi.fn(),
         provider: { options: [{ label: "claude", value: "claude/claude" }], value: "claude/claude", onChange: vi.fn() },
-        project: { options: [{ label: "P", value: "p" }], value: "p", onChange: vi.fn() },
+        project: { options: [{ label: "📁 P", value: "p" }], value: "p", onChange: vi.fn() },
         preset: { options: [{ label: "default", value: "" }], value: "", onChange: vi.fn() },
       },
     });
-    expect(document.querySelectorAll("select").length).toBe(3);
-  });
-
-  test("no dropdowns when none configured", () => {
-    render(Composer, { props: { onSend: vi.fn() } });
     expect(document.querySelectorAll("select").length).toBe(0);
+    // toolbar chips (menu closed → one match each)
+    expect(screen.getByRole("button", { name: /project/i })).toBeDefined();
+    expect(screen.getByRole("button", { name: /provider/i })).toBeDefined();
+    // preset has no chip — only inside the + menu
+    expect(screen.queryByRole("button", { name: /preset/i })).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+    expect(screen.getByRole("button", { name: /preset/i })).toBeDefined();
   });
 
-  test("changing a dropdown fires its onChange", async () => {
+  test("project chip is hidden when no project is selected (empty value)", () => {
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        project: { options: [{ label: "— no project —", value: "" }, { label: "📁 P", value: "p" }], value: "", onChange: vi.fn() },
+      },
+    });
+    // no chip in the toolbar; project is still reachable via the + menu
+    expect(screen.queryByRole("button", { name: /project/i })).toBeNull();
+  });
+
+  test("clicking the project chip opens its drill-in; picking an option fires onChange", async () => {
     const onChange = vi.fn();
     render(Composer, {
       props: {
         onSend: vi.fn(),
-        provider: { options: [{ label: "a", value: "a" }, { label: "b", value: "b" }], value: "a", onChange },
+        project: { options: [{ label: "P one", value: "1" }, { label: "P two", value: "2" }], value: "1", onChange },
       },
     });
-    await fireEvent.change(document.querySelector("select") as HTMLSelectElement, { target: { value: "b" } });
-    expect(onChange).toHaveBeenCalledWith("b");
+    await fireEvent.click(screen.getByRole("button", { name: /project/i })); // the chip
+    await fireEvent.click(screen.getByText("P two"));
+    expect(onChange).toHaveBeenCalledWith("2");
   });
 
-  test("bell shows only when notifyKey is set", () => {
+  test("the + menu holds Attach file; the bell is a standalone icon shown only with notifyKey", async () => {
     const { unmount } = render(Composer, { props: { onSend: vi.fn() } });
-    expect(screen.queryByRole("button", { name: /notifications/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /notifications/i })).toBeNull(); // no bell without key
+    await fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+    expect(screen.getByRole("button", { name: /attach file/i })).toBeDefined();
     unmount();
+
     render(Composer, { props: { onSend: vi.fn(), notifyKey: "k" } });
-    expect(screen.getByRole("button", { name: /notifications/i })).toBeDefined();
+    expect(screen.getByRole("button", { name: /notifications/i })).toBeDefined(); // standalone bell
+  });
+
+  test("+ menu → Attach file opens the file picker", async () => {
+    render(Composer, { props: { onSend: vi.fn() } });
+    const fileInput = document.querySelector("input[type=file]") as HTMLInputElement;
+    const clicked = vi.spyOn(fileInput, "click").mockImplementation(() => {});
+    await fireEvent.click(screen.getByRole("button", { name: /^add$/i }));
+    await fireEvent.click(screen.getByRole("button", { name: /attach file/i }));
+    expect(clicked).toHaveBeenCalledOnce();
   });
 });
 

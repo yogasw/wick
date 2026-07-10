@@ -214,7 +214,7 @@
   const projectSelect = $derived({
     options: [
       { label: "— no project —", value: "" },
-      ...projectOptions.map((p) => ({ label: p.name, value: p.id })),
+      ...projectOptions.map((p) => ({ label: `📁 ${p.name}`, value: p.id })),
     ],
     value: activeProjectId ?? "",
     onChange: (v: string) => handleProjectChange(v || null),
@@ -343,24 +343,31 @@
   }
 
   // Populate the composer's `/` menu from the backend registry (built-in
-  // actions + skills). Best-effort: on failure the menu is just empty.
-  function loadComposerCommands() {
-    run(listComposerCommands(base).pipe(Effect.provide(WickClientLayer)))
+  // actions + skills). Re-runs when the active provider changes so the skill
+  // list matches that provider. Best-effort: on failure the menu is empty.
+  $effect(() => {
+    const providerType = activeProvider ? activeProvider.split("/")[0] : "";
+    run(listComposerCommands(base, undefined, providerType).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { composerCommands = (res.commands ?? []).map(toComposerCommand); })
       .catch(() => { /* commands are optional */ });
-  }
+  });
 
   /* Workspace files change as the agent works (it writes artifacts into the
      session cwd). Reload the tree — silently + debounced — whenever the agent
      reports activity over SSE, so generated files appear without a manual
-     refresh / session reload. */
+     refresh. Only fetch while the file tree is actually visible: `filesVal`
+     feeds the context panel (the `@` mention now uses the backend search), so
+     reloading on every idle SSE heartbeat while the panel is closed just
+     hammered GET /files for nothing. */
   let fileReloadTimer: ReturnType<typeof setTimeout> | null = null;
   function reloadFilesSilently() {
+    if (railTab !== "context") return;
     run(listFiles(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => { cwdVal = res.cwd; filesVal = res.files; })
       .catch(() => { /* keep the current tree on a transient failure */ });
   }
   function scheduleFileReload() {
+    if (railTab !== "context") return; // nothing renders the tree — skip the fetch
     if (fileReloadTimer !== null) clearTimeout(fileReloadTimer);
     fileReloadTimer = setTimeout(reloadFilesSilently, 400);
   }
@@ -811,6 +818,12 @@
     queueMicrotask(() => scmSideEl?.focus());
   });
 
+  // Refresh the file tree when the context panel opens — SSE-driven reloads are
+  // skipped while it's closed, so pick up any files written meanwhile.
+  $effect(() => {
+    if (railTab === "context") reloadFilesSilently();
+  });
+
   // Esc closes the open side panel — "sat set". Guarded on defaultPrevented so
   // an Esc already consumed by a higher overlay (command menu, picker, file
   // viewer) doesn't also close the panel.
@@ -841,7 +854,6 @@
 
     startSSE();
     loadFiles();
-    loadComposerCommands();
     loadProcesses();
     loadWorkspace();
     loadSchedules();
@@ -989,8 +1001,7 @@
           />
           <Composer
             onSend={handleSend}
-            placeholder="Message the agent…"
-            showShiftEnterHint={true}
+            placeholder="Ask anything…   / commands · @ files"
             notifyKey={NOTIFY_KEY}
             provider={providerSelect}
             project={projectSelect}
