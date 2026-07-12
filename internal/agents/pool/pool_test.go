@@ -638,9 +638,10 @@ func TestSpawnFailureSurfacesSystemErrorAndUnsticksLifecycle(t *testing.T) {
 	t.Cleanup(p.Stop)
 	setupSession(t, layout, "S1")
 
-	// The first Send spawns synchronously, so its return carries the error.
-	if err := p.Send(context.Background(), "S1", "default", "ui", "user", "hello"); err == nil {
-		t.Fatal("expected Send to return the spawn error")
+	// A spawn failure is surfaced in-band (system error turn + events), not
+	// bubbled as a Send error — so /send returns 200 instead of a toast.
+	if err := p.Send(context.Background(), "S1", "default", "ui", "user", "hello"); err != nil {
+		t.Fatalf("spawn failure should be surfaced inline, not returned: %v", err)
 	}
 
 	// Slot released → pool idle, not wedged at "spawning".

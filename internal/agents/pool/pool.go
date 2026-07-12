@@ -875,7 +875,13 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 			})
 		}
 		p.tryGrantQueue()
-		return err
+		// Return nil: the failure is now surfaced in-band (persisted system
+		// error turn + broadcast Error/Done, and channels get it via the event
+		// dispatch) exactly like a runtime error. Bubbling it as a Send error
+		// too would make /send return 500 and pop a toast — a double report the
+		// caller should not see. The Send "succeeds"; the session is already
+		// back to idle.
+		return nil
 	}
 	l.Debug().
 		Int("pid", a.PID()).
