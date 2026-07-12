@@ -55,21 +55,21 @@ self.addEventListener('fetch', (event) => {
   catch (_) { return; }
   if (url.origin !== self.location.origin) return;
 
-  // /9router/* is a reverse-proxied third-party app (the embedded 9router
-  // dashboard). Its assets are rewritten on the fly by the wick proxy, so
-  // caching them here would pin a stale, pre-rewrite copy and break the
-  // app. Always go straight to the network — let the proxy be the source
-  // of truth.
+  // /airouter/* is a reverse-proxied third-party app (an embedded AI-router
+  // dashboard — 9router, OmniRoute, …). Its assets are rewritten on the fly
+  // by the wick proxy, so caching them here would pin a stale, pre-rewrite
+  // copy and break the app. Always go straight to the network — let the proxy
+  // be the source of truth.
   //
-  // /_next/* is the SAME app's asset namespace: 9router's Next.js bundle
+  // /_next/* is the SAME app's asset namespace: a router's Next.js bundle
   // emits some root-absolute /_next/ URLs at runtime that land here at the
-  // wick root (the server re-proxies them to the dashboard). They match
+  // wick root (the server re-proxies them to the active dashboard). They match
   // staticAssetRe below, so without this skip the SW would try to cache them
   // and, on a cold miss, serve a stale 404 "from service worker" — exactly
   // the /_next/*.js|css|woff2 404s. Bypass so they reach the server proxy.
   if (
-    url.pathname === '/9router' ||
-    url.pathname.startsWith('/9router/') ||
+    url.pathname === '/airouter' ||
+    url.pathname.startsWith('/airouter/') ||
     url.pathname.startsWith('/_next/')
   ) return;
 

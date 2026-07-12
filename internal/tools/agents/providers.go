@@ -272,7 +272,7 @@ func saveProviderDetail(c *tool.Ctx) {
 		}
 		ins.CodexConfig.SandboxMode = provider.CodexSandboxMode(strings.TrimSpace(c.Form("sandbox_mode")))
 	}
-	applyRouter9Form(&ins, c)
+	applyAIRouterForm(&ins, c)
 	if err := provider.Save(ins); err != nil {
 		c.Redirect(c.Base()+"/providers/detail/"+string(t)+"/"+name+"?error="+err.Error(), http.StatusSeeOther)
 		return
@@ -305,46 +305,55 @@ func saveProviderConfigKey(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// applyRouter9Form reads the 9router fields from a create/detail form and
-// merges them into ins, encrypting the API key. Toggle absent = off.
-// Model slots arrive as router9_model_<slot> fields; which slots exist is
-// defined by provider.Router9Slots(ins.Type).
-func applyRouter9Form(ins *provider.Instance, c *tool.Ctx) {
-	ins.Use9router = c.Form("use_9router") == "on" || c.Form("use_9router") == "true"
+// applyAIRouterForm reads the AI-router fields from a create/detail form and
+// merges them into ins, encrypting the API key. Toggle absent = off. The
+// selected router arrives as airouter_provider; model slots arrive as
+// airouter_model_<slot> fields; which slots exist is defined by the selected
+// router's SpawnHook (provider.RouterSlots).
+func applyAIRouterForm(ins *provider.Instance, c *tool.Ctx) {
+	ins.UseAIRouter = c.Form("use_airouter") == "on" || c.Form("use_airouter") == "true"
+	if p := strings.TrimSpace(c.Form("airouter_provider")); p != "" {
+		ins.AIRouterProvider = p
+	}
 	models := map[string]string{}
-	for _, slot := range provider.Router9Slots(ins.Type) {
-		if v := strings.TrimSpace(c.Form("router9_model_" + slot.Key)); v != "" {
+	for _, slot := range provider.RouterSlots(ins.AIRouterProvider, ins.Type) {
+		if v := strings.TrimSpace(c.Form("airouter_model_" + slot.Key)); v != "" {
 			models[slot.Key] = v
 		}
 	}
 	if len(models) > 0 {
-		ins.Router9Models = models
+		ins.AIRouterModels = models
 	}
 	// Empty or masked placeholder = leave the stored key untouched.
-	if raw := strings.TrimSpace(c.Form("router9_api_key")); raw != "" && !strings.ContainsRune(raw, '•') {
-		ins.Router9APIKey = encryptSecretValue(raw)
+	if raw := strings.TrimSpace(c.Form("airouter_api_key")); raw != "" && !strings.ContainsRune(raw, '•') {
+		ins.AIRouterAPIKey = encryptSecretValue(raw)
 	}
+	// Raw config is free-form (not a secret) — set directly so clearing it
+	// persists. Normalised to \n line endings, outer whitespace trimmed.
+	ins.AIRouterRawConfig = strings.TrimSpace(strings.ReplaceAll(c.Form("airouter_raw_config"), "\r\n", "\n"))
 }
 
-// providerRouter9Slots returns the model slots a provider type exposes
-// under 9router (defined in the BE so counts differ per type). The FE
-// renders one model picker per slot.
-// GET /providers/router9/slots/{type}
-func providerRouter9Slots(c *tool.Ctx) {
+// providerAIRouterSlots returns the model slots a provider type exposes under
+// the given router (?router=<id>, default resolves to 9router in the BE). The
+// FE renders one model picker per slot and re-fetches when the router changes.
+// GET /providers/airouter/slots/{type}
+func providerAIRouterSlots(c *tool.Ctx) {
 	if !requireAdmin(c) {
 		return
 	}
-	slots := provider.Router9Slots(provider.Type(c.PathValue("type")))
+	routerID := strings.TrimSpace(c.Query("router"))
+	slots := provider.RouterSlots(routerID, provider.Type(c.PathValue("type")))
 	if slots == nil {
-		slots = []provider.Router9Slot{}
+		slots = []provider.RouterSlot{}
 	}
 	c.JSON(http.StatusOK, map[string]any{"slots": slots})
 }
 
-// saveProviderRouter9 persists the 9router settings (toggle + per-slot
-// models + optional key) for one instance in a single request.
-// POST /providers/detail/{type}/{name}/router9
-func saveProviderRouter9(c *tool.Ctx) {
+// saveProviderAIRouter persists the AI-router settings (toggle + selected
+// router + per-slot models + optional key) for one instance in a single
+// request.
+// POST /providers/detail/{type}/{name}/airouter
+func saveProviderAIRouter(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
@@ -358,7 +367,7 @@ func saveProviderRouter9(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
 		return
 	}
-	applyRouter9Form(&ins, c)
+	applyAIRouterForm(&ins, c)
 	if err := provider.Save(ins); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -410,7 +419,7 @@ func saveProviderInstance(c *tool.Ctx) {
 			SandboxMode: provider.CodexSandboxMode(strings.TrimSpace(c.Form("sandbox_mode"))),
 		}
 	}
-	applyRouter9Form(&ins, c)
+	applyAIRouterForm(&ins, c)
 	if mode := strings.TrimSpace(c.Form("storage_mode")); mode != "" {
 		ins.Storage = &provider.StorageConfig{
 			Mode:            mode,

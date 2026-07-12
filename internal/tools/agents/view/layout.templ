@@ -151,8 +151,8 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 							@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
 						}
 						@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")
-						if vm.Router9Visible {
-							@agentsNavLink(vm.Base+"/9router", "9router", vm.ActivePage == "9router")
+						if vm.AirouterVisible {
+							@agentsNavLink(vm.Base+"/airouter", "AI Router", vm.ActivePage == "airouter")
 						}
 					</div>
 				</details>
@@ -687,7 +687,7 @@ templ agentsNavLink(href, label string, active bool) {
 // (otherwise the active row would be hidden).
 func agentsMoreOpenAttr(activePage string) templ.Attributes {
 	switch activePage {
-	case "presets", "providers", "skills", "channels", "data-tables", "scheduled", "9router":
+	case "presets", "providers", "skills", "channels", "data-tables", "scheduled", "airouter":
 		return templ.Attributes{"open": ""}
 	}
 	return templ.Attributes{}
@@ -761,7 +761,7 @@ templ agentsNavIcon(label string) {
 				<circle cx="13" cy="11" r="2.25"></circle>
 				<path d="M13 9.5V8" stroke-linecap="round"></path>
 			</svg>
-		case "9router":
+		case "AI Router":
 			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
 				<circle cx="4" cy="4" r="2"></circle>
 				<circle cx="4" cy="12" r="2"></circle>

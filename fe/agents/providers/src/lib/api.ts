@@ -165,11 +165,15 @@ interface WireProviderDetailResponse {
   spawns: WireSpawnLogFile[] | null;
   page: number;
   has_next: boolean;
-  router9?: {
+  airouter?: {
     supported?: boolean;
     enabled?: boolean;
+    provider?: string;
+    routers?: { id: string; name: string }[] | null;
     models?: Record<string, string> | null;
     key_set?: boolean;
+    raw_config?: string;
+    preview?: string;
   } | null;
 }
 
@@ -446,9 +450,11 @@ export async function apiCreateProvider(fields: {
   binary?: string;
   extra_args?: string;
   env?: string;
-  use_9router?: boolean;
-  router9_models?: Record<string, string>;
-  router9_api_key?: string;
+  use_airouter?: boolean;
+  airouter_provider?: string;
+  airouter_models?: Record<string, string>;
+  airouter_api_key?: string;
+  airouter_raw_config?: string;
 }): Promise<void> {
   const form = new URLSearchParams();
   form.set("type", fields.type);
@@ -462,14 +468,20 @@ export async function apiCreateProvider(fields: {
   if (fields.env) {
     form.set("env", fields.env);
   }
-  if (fields.use_9router) {
-    form.set("use_9router", "on");
+  if (fields.use_airouter) {
+    form.set("use_airouter", "on");
   }
-  for (const [slot, model] of Object.entries(fields.router9_models ?? {})) {
-    if (model.trim() !== "") form.set(`router9_model_${slot}`, model.trim());
+  if (fields.airouter_provider) {
+    form.set("airouter_provider", fields.airouter_provider);
   }
-  if (fields.router9_api_key) {
-    form.set("router9_api_key", fields.router9_api_key);
+  for (const [slot, model] of Object.entries(fields.airouter_models ?? {})) {
+    if (model.trim() !== "") form.set(`airouter_model_${slot}`, model.trim());
+  }
+  if (fields.airouter_api_key) {
+    form.set("airouter_api_key", fields.airouter_api_key);
+  }
+  if (fields.airouter_raw_config) {
+    form.set("airouter_raw_config", fields.airouter_raw_config);
   }
   const resp = await fetch(getBase() + "/providers", {
     method: "POST",
@@ -532,11 +544,15 @@ export function normalizeProviderDetail(r: WireProviderDetailResponse): Provider
     Spawns: (r.spawns ?? []).map(mapSpawn),
     Page: r.page ?? 0,
     HasNext: r.has_next ?? false,
-    Router9: {
-      Supported: r.router9?.supported ?? false,
-      Enabled: r.router9?.enabled ?? false,
-      Models: r.router9?.models ?? {},
-      KeySet: r.router9?.key_set ?? false,
+    AIRouter: {
+      Supported: r.airouter?.supported ?? false,
+      Enabled: r.airouter?.enabled ?? false,
+      Provider: r.airouter?.provider ?? "",
+      Routers: (r.airouter?.routers ?? []).map((x) => ({ ID: x.id, Name: x.name })),
+      Models: r.airouter?.models ?? {},
+      KeySet: r.airouter?.key_set ?? false,
+      RawConfig: r.airouter?.raw_config ?? "",
+      Preview: r.airouter?.preview ?? "",
     },
   };
 }
@@ -735,9 +751,9 @@ export async function apiStorageUpload(
   }
 }
 
-// ── 9router ──────────────────────────────────────────────────────────
+// ── AI Router ────────────────────────────────────────────────────────
 
-export type Router9Status = {
+export type AIRouterStatus = {
   installed: boolean;
   running: boolean;
   version: string;
@@ -745,10 +761,11 @@ export type Router9Status = {
   state: string;
 };
 
-// apiRouter9Status reports install + run state so the provider form can
-// gate the "Use 9router" toggle (must be installed + running to enable).
-export async function apiRouter9Status(base: string): Promise<Router9Status> {
-  const r = await get<Partial<Router9Status>>(`${base}/9router/status`);
+// apiAIRouterStatus reports install + run state for the given router so the
+// provider form can gate the "Use AI Router" toggle (must be installed +
+// running to enable).
+export async function apiAIRouterStatus(base: string, id: string): Promise<AIRouterStatus> {
+  const r = await get<Partial<AIRouterStatus>>(`${base}/airouter/${encodeURIComponent(id)}/status`);
   return {
     installed: r.installed ?? false,
     running: r.running ?? false,
@@ -757,25 +774,26 @@ export async function apiRouter9Status(base: string): Promise<Router9Status> {
   };
 }
 
-// apiRouter9Start spawns the 9router process (installed required). Waits
-// for the dashboard to answer before resolving.
-export async function apiRouter9Start(base: string): Promise<void> {
-  return post<void>(`${base}/9router/start`);
+// apiAIRouterStart spawns the given router process (installed required).
+// Waits for the dashboard to answer before resolving.
+export async function apiAIRouterStart(base: string, id: string): Promise<void> {
+  return post<void>(`${base}/airouter/${encodeURIComponent(id)}/start`);
 }
 
-export type Router9Model = {
+export type AIRouterModel = {
   id: string;
   // owned_by groups models in the picker (e.g. "combo", "kc", "gc").
   ownedBy: string;
 };
 
-// apiRouter9Models lists the models 9router serves, via the unauthenticated
-// OpenAI-compatible proxy at the wick root (/9router/v1/models). Returns
-// [] when the endpoint is unreachable (process not running) so the caller
-// can show an empty picker + a hint instead of throwing.
-export async function apiRouter9Models(): Promise<Router9Model[]> {
+// apiAIRouterModels lists the models the given router serves, via the
+// unauthenticated OpenAI-compatible proxy at the wick root
+// (/airouter/<id>/v1/models). Returns [] when the endpoint is unreachable
+// (process not running) so the caller can show an empty picker + a hint
+// instead of throwing.
+export async function apiAIRouterModels(id: string): Promise<AIRouterModel[]> {
   try {
-    const r = await get<{ data?: Array<{ id?: string; owned_by?: string }> }>("/9router/v1/models");
+    const r = await get<{ data?: Array<{ id?: string; owned_by?: string }> }>(`/airouter/${encodeURIComponent(id)}/v1/models`);
     return (r.data ?? [])
       .map((m) => ({ id: m.id ?? "", ownedBy: m.owned_by ?? "" }))
       .filter((m) => m.id !== "");
@@ -784,38 +802,45 @@ export async function apiRouter9Models(): Promise<Router9Model[]> {
   }
 }
 
-export type Router9Slot = {
+export type AIRouterSlot = {
   key: string;
   label: string;
   placeholder: string;
 };
 
-// apiRouter9Slots returns the model slots a provider type exposes under
-// 9router. Defined in the BE so the count/shape differs per provider.
-export async function apiRouter9Slots(base: string, type: string): Promise<Router9Slot[]> {
-  const r = await get<{ slots?: Router9Slot[] }>(`${base}/providers/router9/slots/${encodeURIComponent(type)}`);
+// apiAIRouterSlots returns the model slots a provider type exposes under the
+// given router. Defined in the BE so the count/shape differs per router+type.
+export async function apiAIRouterSlots(base: string, type: string, routerId: string): Promise<AIRouterSlot[]> {
+  const r = await get<{ slots?: AIRouterSlot[] }>(
+    `${base}/providers/airouter/slots/${encodeURIComponent(type)}?router=${encodeURIComponent(routerId)}`,
+  );
   return r.slots ?? [];
 }
 
-// apiSaveRouter9 persists an instance's 9router settings (toggle + per-slot
-// models + optional key) in one request. Slot models are sent as
-// router9_model_<slot>. A blank key keeps the stored one.
-export async function apiSaveRouter9(
+// apiSaveAIRouter persists an instance's AI-router settings (toggle +
+// selected router + per-slot models + optional key) in one request. Slot
+// models are sent as airouter_model_<slot>. A blank key keeps the stored one.
+export async function apiSaveAIRouter(
   base: string,
   type: string,
   name: string,
-  fields: { use_9router: boolean; models: Record<string, string>; api_key?: string },
+  fields: { use_airouter: boolean; provider: string; models: Record<string, string>; api_key?: string; raw_config?: string },
 ): Promise<void> {
   const form = new URLSearchParams();
-  form.set("use_9router", fields.use_9router ? "on" : "false");
+  form.set("use_airouter", fields.use_airouter ? "on" : "false");
+  if (fields.provider) {
+    form.set("airouter_provider", fields.provider);
+  }
   for (const [slot, model] of Object.entries(fields.models)) {
-    if (model.trim() !== "") form.set(`router9_model_${slot}`, model.trim());
+    if (model.trim() !== "") form.set(`airouter_model_${slot}`, model.trim());
   }
   if (fields.api_key && fields.api_key.trim() !== "") {
-    form.set("router9_api_key", fields.api_key);
+    form.set("airouter_api_key", fields.api_key);
   }
+  // Raw config is free-form (not secret); send it always so clearing persists.
+  form.set("airouter_raw_config", fields.raw_config ?? "");
   const resp = await fetch(
-    `${base}/providers/detail/${encodeURIComponent(type)}/${encodeURIComponent(name)}/router9`,
+    `${base}/providers/detail/${encodeURIComponent(type)}/${encodeURIComponent(name)}/airouter`,
     {
       method: "POST",
       credentials: "same-origin",

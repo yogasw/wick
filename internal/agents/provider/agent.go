@@ -950,17 +950,40 @@ drained:
 	}
 	// On abnormal exit, log the exit code + stderr tail so failures are
 	// diagnosable instead of a blank "agent error: ".
+	var stderrTail string
 	if reason == ExitError {
 		if ec, ok := waitErr.(interface{ ExitCode() int }); ok {
 			ev = ev.Int("exit_code", ec.ExitCode())
 		}
 		if st, ok := a.proc.(interface{ StderrTail() string }); ok {
-			if tail := st.StderrTail(); tail != "" {
-				ev = ev.Str("stderr_tail", tail)
+			stderrTail = strings.TrimSpace(st.StderrTail())
+			if stderrTail != "" {
+				ev = ev.Str("stderr_tail", stderrTail)
 			}
 		}
 	}
 	ev.Msg("agent.reader: subprocess exited")
+
+	// Surface an abnormal exit to the UI as a fatal Error event so the user
+	// sees WHY the agent died — e.g. a codex config.toml error (unsupported
+	// wire_api), a bad model id, or a missing binary — instead of a silent
+	// kill. Only on ExitError: clean / idle / stopped exits are normal and
+	// stay quiet. Prefer the captured stderr tail (the real message from the
+	// CLI); fall back to the wait error. Emitted via onEvent so it is both
+	// recorded to history and streamed over SSE, exactly like a parser-level
+	// error. Fired before exitReason so the store/session is still live.
+	if reason == ExitError && a.onEvent != nil {
+		detail := stderrTail
+		if detail == "" && waitErr != nil {
+			detail = waitErr.Error()
+		}
+		if detail != "" {
+			a.onEvent(event.AgentEvent{
+				Type:     event.Error,
+				ErrorMsg: "Agent process exited abnormally:\n" + detail,
+			})
+		}
+	}
 	a.exitReason(reason)
 }
 

@@ -21,9 +21,7 @@ type GeneralConfig struct {
 	WorkflowLokiURL           string `wick:"url;group=Workflow;desc=Loki push endpoint for workflow run events (e.g. http://loki:3100). Empty = disabled."`
 	WorkflowLokiLabels        string `wick:"text;group=Workflow;desc=Extra Loki stream labels as comma-separated key=value pairs (e.g. env=prod,team=eng)."`
 	MCPUninstalledClients     string `wick:"hidden;desc=Comma-separated MCP client IDs the user has manually uninstalled. Managed by the UI — do not edit by hand."`
-	Router9Enabled            bool   `wick:"bool;group=9router|Embedded 9router lifecycle. Access is managed at /admin/tools.;desc=Master switch for the embedded 9router. Off = dashboard, the /9router/v1 API proxy, autostart, and all controls are disabled."`
-	Router9Autostart          bool   `wick:"bool;group=9router;desc=Auto-start the embedded 9router process on boot (only when the master switch is on)."`
-	Router9ExternalAPI        bool   `wick:"bool;group=9router;desc=Allow the /9router/v1 API to be reached from outside this machine (via a tunnel or the public URL). Off (default) = the API answers only local spawns; remote callers get 403. On = remote callers are forwarded to 9router with their real client address, so 9router enforces its own API key for non-local traffic (local spawns still need no key)."`
+	AirouterEnabled           bool   `wick:"bool;group=AI Router|Embedded AI-router lifecycle (9router, OmniRoute, …). Access is managed at /admin/tools; per-router autostart + external-API toggles live on the AI Router page.;desc=Master switch for the embedded AI routers. Off = every dashboard, the /airouter/<id>/v1 API proxies, autostart, and all controls are disabled."`
 	TraceEventInlineKB        int    `wick:"number;group=Tracing|Limits on how trace-event payloads are stored on disk.;desc=Max KB for a trace event payload stored inline in the turn index. Events larger than this are written to a separate file and loaded on demand. Default: 10."`
 	TraceEventMaxKB           int    `wick:"number;group=Tracing;desc=Hard cap in KB for a single trace event payload file. Payloads exceeding this are truncated before write. 0 = no cap. Default: 512."`
 	AdminSeeAll               bool   `wick:"bool;group=Access|Visibility scope for admins.;desc=When on, admins see every project and every session (legacy behaviour). When off (default), admins are scoped like regular users: only projects granted via tags plus their own unscoped sessions. Ownerless sessions (no creator) are hidden from everyone while off."`
@@ -45,6 +43,6 @@ func DefaultGeneralConfig() GeneralConfig {
 		WorkflowGuardMode:  "off",
 		TraceEventInlineKB: 10,
 		TraceEventMaxKB:    512,
-		Router9Enabled:     true,
+		AirouterEnabled:    true,
 	}
 }

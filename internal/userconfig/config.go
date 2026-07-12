@@ -180,21 +180,33 @@ type ProviderInstance struct {
 	// instance. nil = sync disabled.
 	Storage *StorageConfig `json:"storage,omitempty"`
 
-	// Use9router routes this instance's CLI through the embedded 9router
-	// proxy (base URL <wick-origin>/9router/v1) instead of the provider's
-	// own upstream. Only meaningful for claude/codex.
-	Use9router bool `json:"use_9router,omitempty"`
+	// UseAIRouter routes this instance's CLI through an embedded AI router
+	// proxy (base URL <wick-origin>/airouter/<id>/v1) instead of the
+	// provider's own upstream. Only meaningful for claude/codex.
+	//
+	// JSON key kept as "use_9router" for backward compatibility with configs
+	// written before the AI-router generalisation — existing 9router-routed
+	// instances load unchanged and default to the 9router backend.
+	UseAIRouter bool `json:"use_9router,omitempty"`
 
-	// Router9Models maps a per-provider model slot key (e.g. "opus",
+	// AIRouterProvider selects which registered router this instance routes
+	// through ("9router", "omniroute", …). Empty = default (9router).
+	AIRouterProvider string `json:"airouter_provider,omitempty"`
+
+	// AIRouterModels maps a per-provider model slot key (e.g. "opus",
 	// "sonnet", "haiku" for claude; "model", "subagent" for codex) to the
-	// concrete 9router model id chosen for it. Which slots exist is defined
-	// by provider.Router9Slots(type). At least the primary slot is required
-	// when Use9router is true; "auto" is rejected.
-	Router9Models map[string]string `json:"router9_models,omitempty"`
+	// concrete model id chosen for it. Which slots exist is defined by the
+	// selected router's SpawnHook. JSON key kept for back-compat.
+	AIRouterModels map[string]string `json:"router9_models,omitempty"`
 
-	// Router9APIKey is a custom 9router API key (encrypted at rest via the
-	// secret layer). Empty falls back to the default "sk_9router" key.
-	Router9APIKey string `json:"router9_api_key,omitempty"`
+	// AIRouterAPIKey is a custom router API key (encrypted at rest via the
+	// secret layer). Empty falls back to the router's default credential.
+	// JSON key kept for back-compat.
+	AIRouterAPIKey string `json:"router9_api_key,omitempty"`
+
+	// AIRouterRawConfig is free-form extra config appended to the router spawn
+	// (codex `-c` overrides / claude env), one entry per line.
+	AIRouterRawConfig string `json:"airouter_raw_config,omitempty"`
 }
 
 // StorageConfig defines how a provider instance syncs its credential

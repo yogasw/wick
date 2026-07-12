@@ -167,12 +167,16 @@ export interface ProviderDetailResponse {
   Spawns: SpawnLogFileDTO[];
   Page: number;
   HasNext: boolean;
-  Router9: Router9DetailDTO;
+  AIRouter: AIRouterDetailDTO;
 }
 
-export interface Router9DetailDTO {
+export interface AIRouterDetailDTO {
   Supported: boolean;
   Enabled: boolean;
+  Provider: string;
+  Routers: { ID: string; Name: string }[];
   Models: Record<string, string>;
   KeySet: boolean;
+  RawConfig: string;
+  Preview: string;
 }
