@@ -15,6 +15,7 @@ All notable changes to Wick are documented here.
 *   **`/` and `@` work mid-message, not just as a prefix**: The command palette (`/`) and file-mention (`@`) menus now open when the trigger is typed at the start of the line **or** right after a space, so you can drop a command or mention partway through a message; path-like text such as `src/foo` stays inert. See [Agents — Composer](/guide/agents#composer).
 *   **Live session stream self-heals after a drop**: The conversation stream (SharedWorker, with an EventSource fallback) now reconnects when a downed or restarted server closes it and replays the snapshot on reconnect, and resyncs when the tab returns from the background or the network comes back — so a stalled session recovers on its own instead of needing a manual reload.
 *   **Failed agent spawns no longer stick on "spawning"**: When a subprocess fails to launch, the session now tears down to idle and the failure is surfaced as an inline system error turn (persisted, like any runtime error) instead of only a request-level toast; the send itself succeeds.
+*   **AI Router dashboard streams no longer reconnect in a loop**: The Requests and Logs live streams kept dropping every few seconds. The service worker was aborting the page-level `EventSource` on its 8s navigation-timeout and never bypassed the base-prefixed `/tools/agents/airouter/` mount; it now skips any `text/event-stream` request outright. The stream handlers also gained a 15s keepalive (matching the conversation stream) so an idle stream isn't reaped by an upstream proxy.
 
 ---
 
