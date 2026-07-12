@@ -3,7 +3,10 @@ package pool
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -590,5 +593,95 @@ func TestBufferCleanedAfterAgentExit(t *testing.T) {
 	p.mu.Unlock()
 	if bufLen != 0 {
 		t.Fatalf("buffers not cleaned after exit: got %d entries, want 0", bufLen)
+	}
+}
+
+// failingSpawner always fails to launch — exercises the spawn-failure path
+// where the agent subprocess never starts (e.g. the CLI binary can't be
+// exec'd, as with the Windows `.cmd` fork/exec bug).
+type failingSpawner struct{ err error }
+
+func (s *failingSpawner) Spawn(context.Context, provider.SpawnOptions) (provider.Process, error) {
+	return nil, s.err
+}
+
+func TestSpawnFailureSurfacesSystemErrorAndUnsticksLifecycle(t *testing.T) {
+	layout := config.NewLayout(t.TempDir())
+	if err := layout.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	sp := &failingSpawner{err: errors.New("fork/exec cmd.exe: The parameter is incorrect")}
+	factory := &ClaudeFactory{Layout: layout, Spawner: sp}
+
+	var (
+		mu          sync.Mutex
+		spawnErrMsg string
+		lifecycles  []string
+	)
+	p := New(PoolConfig{
+		MaxConcurrent: 2,
+		IdleTimeout:   500 * time.Millisecond,
+		Layout:        layout,
+		Factory:       factory,
+		OnLifecycle: func(ev LifecycleEvent) {
+			mu.Lock()
+			lifecycles = append(lifecycles, ev.Lifecycle)
+			mu.Unlock()
+		},
+		OnSpawnError: func(ev SpawnErrorEvent) {
+			mu.Lock()
+			spawnErrMsg = ev.Message
+			mu.Unlock()
+		},
+	})
+	factory.OnExit = p.HandleExit
+	t.Cleanup(p.Stop)
+	setupSession(t, layout, "S1")
+
+	// The first Send spawns synchronously, so its return carries the error.
+	if err := p.Send(context.Background(), "S1", "default", "ui", "user", "hello"); err == nil {
+		t.Fatal("expected Send to return the spawn error")
+	}
+
+	// Slot released → pool idle, not wedged at "spawning".
+	waitFor(t, func() bool { return p.Active() == 0 }, 2*time.Second)
+
+	mu.Lock()
+	gotMsg := spawnErrMsg
+	gotLifecycles := append([]string(nil), lifecycles...)
+	mu.Unlock()
+
+	// OnSpawnError carried a message with the underlying error detail.
+	if !strings.Contains(gotMsg, "parameter is incorrect") {
+		t.Fatalf("OnSpawnError message missing error detail: %q", gotMsg)
+	}
+	// Lifecycle reached "killed" — the machine did not stay at "spawning".
+	killed := false
+	for _, lc := range gotLifecycles {
+		if lc == "killed" {
+			killed = true
+		}
+	}
+	if !killed {
+		t.Fatalf("expected a 'killed' lifecycle, got %v", gotLifecycles)
+	}
+
+	// Session status reverted to idle.
+	sess, err := session.Load(layout, "S1")
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if sess.Meta.Status != session.StatusIdle {
+		t.Fatalf("status = %q, want idle", sess.Meta.Status)
+	}
+
+	// The failure was persisted as a system error turn in conversation.jsonl.
+	data, rerr := os.ReadFile(layout.SessionConversation("S1"))
+	if rerr != nil {
+		t.Fatalf("read conversation: %v", rerr)
+	}
+	conv := string(data)
+	if !strings.Contains(conv, "parameter is incorrect") || !strings.Contains(conv, `"is_error":true`) {
+		t.Fatalf("conversation missing persisted system error turn:\n%s", conv)
 	}
 }

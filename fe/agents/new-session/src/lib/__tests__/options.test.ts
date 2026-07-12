@@ -47,13 +47,23 @@ beforeEach(() => {
 });
 
 describe("getProviderOptions", () => {
-  it("returns parsed providers", async () => {
+  it("returns parsed providers with a normalized usesAIRouter flag", async () => {
     const data = [{ type: "claude", name: "Claude", version: "3" }];
     mockFetch.mockResolvedValueOnce(makeOkResponse(data));
     const result = await Effect.runPromise(
       getProviderOptions("/tools/agents").pipe(Effect.provide(WickClientLayer)),
     );
-    expect(result).toEqual(data);
+    expect(result).toEqual([{ ...data[0], usesAIRouter: false }]);
+  });
+
+  it("maps the snake_case uses_airouter flag from the backend", async () => {
+    mockFetch.mockResolvedValueOnce(
+      makeOkResponse([{ type: "codex", name: "Codex", version: "1", uses_airouter: true }]),
+    );
+    const result = await Effect.runPromise(
+      getProviderOptions("/tools/agents").pipe(Effect.provide(WickClientLayer)),
+    );
+    expect(result[0].usesAIRouter).toBe(true);
   });
 
   it("normalizes null to empty array", async () => {

@@ -81,6 +81,9 @@ type ProviderChoiceVM struct {
 	Type    string
 	Name    string
 	Version string
+	// UsesAIRouter is true when this instance routes through the embedded
+	// AI Router — the composer marks it with a badge.
+	UsesAIRouter bool
 }
 
 // SessionLifecycleVM is the per-row lifecycle snapshot the sessions

@@ -1239,9 +1239,10 @@ func providerChoicesCached(ctx context.Context) []view.ProviderChoiceVM {
 			continue
 		}
 		out = append(out, view.ProviderChoiceVM{
-			Type:    string(st.Instance.Type),
-			Name:    st.Instance.Name,
-			Version: st.Version,
+			Type:         string(st.Instance.Type),
+			Name:         st.Instance.Name,
+			Version:      st.Version,
+			UsesAIRouter: st.Instance.UseAIRouter,
 		})
 	}
 	return out

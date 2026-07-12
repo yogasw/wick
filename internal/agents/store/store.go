@@ -508,6 +508,11 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 // conversation.jsonl so it renders in history (IsError flags it for the UI
 // to style as a failure). Called from the Error event path after any
 // partial assistant text has been flushed.
+// AppendErrorTurn persists a system error turn to conversation.jsonl. Used by
+// callers outside the normal event flow — e.g. the pool when a spawn fails
+// before the agent starts — to record the failure as inline history.
+func (s *Store) AppendErrorTurn(msg string) error { return s.appendErrorTurn(msg) }
+
 func (s *Store) appendErrorTurn(msg string) error {
 	now := s.now().UTC()
 	turn := ConversationTurn{

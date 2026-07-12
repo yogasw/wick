@@ -1782,14 +1782,15 @@ func providerOptionsJSON(c *tool.Ctx) {
 		return
 	}
 	type option struct {
-		Type    string `json:"type"`
-		Name    string `json:"name"`
-		Version string `json:"version"`
+		Type         string `json:"type"`
+		Name         string `json:"name"`
+		Version      string `json:"version"`
+		UsesAIRouter bool   `json:"uses_airouter"`
 	}
 	ps := providerChoicesCached(c.Context())
 	opts := make([]option, 0, len(ps))
 	for _, p := range ps {
-		opts = append(opts, option{Type: p.Type, Name: p.Name, Version: p.Version})
+		opts = append(opts, option{Type: p.Type, Name: p.Name, Version: p.Version, UsesAIRouter: p.UsesAIRouter})
 	}
 	c.JSON(http.StatusOK, opts)
 }

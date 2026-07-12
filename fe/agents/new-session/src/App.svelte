@@ -107,6 +107,7 @@
     providers.map((p) => ({
       label: p.name === p.type ? p.type : `${p.type} · ${p.name}`,
       value: providerKey(p),
+      badge: p.usesAIRouter ? "AI Router" : undefined,
     })),
   );
   const presetOptions = $derived([
