@@ -477,7 +477,7 @@ export async function apiCreateProvider(fields: {
   for (const [slot, model] of Object.entries(fields.airouter_models ?? {})) {
     if (model.trim() !== "") form.set(`airouter_model_${slot}`, model.trim());
   }
-  if (fields.airouter_api_key) {
+  if (fields.airouter_api_key && fields.airouter_api_key.trim() !== "") {
     form.set("airouter_api_key", fields.airouter_api_key);
   }
   if (fields.airouter_raw_config) {

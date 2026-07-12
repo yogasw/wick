@@ -272,7 +272,11 @@ func saveProviderDetail(c *tool.Ctx) {
 		}
 		ins.CodexConfig.SandboxMode = provider.CodexSandboxMode(strings.TrimSpace(c.Form("sandbox_mode")))
 	}
-	applyAIRouterForm(&ins, c)
+	// NOTE: the general detail save intentionally does NOT touch AI-router
+	// settings — this form (binary/args/env/sandbox) carries no airouter fields,
+	// so running applyAIRouterForm here would reset the toggle/provider/models/
+	// raw-config on every save. AI-router config has its own dedicated save
+	// (saveProviderAIRouter).
 	if err := provider.Save(ins); err != nil {
 		c.Redirect(c.Base()+"/providers/detail/"+string(t)+"/"+name+"?error="+err.Error(), http.StatusSeeOther)
 		return
@@ -321,9 +325,12 @@ func applyAIRouterForm(ins *provider.Instance, c *tool.Ctx) {
 			models[slot.Key] = v
 		}
 	}
-	if len(models) > 0 {
-		ins.AIRouterModels = models
-	}
+	// Assign unconditionally — an empty map is a valid "all slots cleared"
+	// state. Guarding on len>0 would make cleared slots un-removable (the old
+	// stored selections would stick). Safe because applyAIRouterForm only runs
+	// from the dedicated AI-router save + the create form, both of which always
+	// submit the current slot values.
+	ins.AIRouterModels = models
 	// Empty or masked placeholder = leave the stored key untouched.
 	if raw := strings.TrimSpace(c.Form("airouter_api_key")); raw != "" && !strings.ContainsRune(raw, '•') {
 		ins.AIRouterAPIKey = encryptSecretValue(raw)

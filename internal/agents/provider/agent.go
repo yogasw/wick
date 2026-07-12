@@ -967,22 +967,21 @@ drained:
 	// Surface an abnormal exit to the UI as a fatal Error event so the user
 	// sees WHY the agent died — e.g. a codex config.toml error (unsupported
 	// wire_api), a bad model id, or a missing binary — instead of a silent
-	// kill. Only on ExitError: clean / idle / stopped exits are normal and
-	// stay quiet. Prefer the captured stderr tail (the real message from the
-	// CLI); fall back to the wait error. Emitted via onEvent so it is both
-	// recorded to history and streamed over SSE, exactly like a parser-level
-	// error. Fired before exitReason so the store/session is still live.
-	if reason == ExitError && a.onEvent != nil {
-		detail := stderrTail
-		if detail == "" && waitErr != nil {
-			detail = waitErr.Error()
-		}
-		if detail != "" {
-			a.onEvent(event.AgentEvent{
-				Type:     event.Error,
-				ErrorMsg: "Agent process exited abnormally:\n" + detail,
-			})
-		}
+	// kill. Emitted via onEvent so it is recorded to history + streamed over
+	// SSE like a parser-level error, before exitReason (store still live).
+	//
+	// Gate on a NON-EMPTY stderr tail, not on ExitError alone: a bare non-zero
+	// exit with no stderr carries nothing user-actionable, and — critically —
+	// also covers idle-kill races and stdin-driven fake spawners (tests) whose
+	// Wait returns an error but which never wrote stderr. Emitting an Error
+	// event for those would inject a spurious turn signal the pool acts on
+	// (double-draining the queue). Real CLI failures write to stderr, so this
+	// keeps the useful case while staying inert for the noise.
+	if reason == ExitError && stderrTail != "" && a.onEvent != nil {
+		a.onEvent(event.AgentEvent{
+			Type:     event.Error,
+			ErrorMsg: "Agent process exited abnormally:\n" + stderrTail,
+		})
 	}
 	a.exitReason(reason)
 }

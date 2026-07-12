@@ -211,14 +211,27 @@
     }
   });
 
+  // Tracks the last resolved router so we can tell an initial resolve (keep the
+  // saved model selections) from a user switch (drop them). null until the
+  // first non-empty provider is seen.
+  let prevProvider = $state<string | null>(null);
+
   // Load slots + status + models whenever the provider type flips, support
   // resolves, or the selected router changes. Switching router must refetch
-  // everything, so clear the stale status/models first.
+  // everything, so clear the stale status/models first — and reset the
+  // slot→model map, since slot keys aren't comparable across routers (a value
+  // meant for router A's "main" would silently carry into router B, and slots
+  // unique to B would POST empty). Only reset on an actual SWITCH, never on the
+  // initial resolve (which must preserve the instance's saved selections).
   $effect(() => {
     void type; // dependency
     void supported; // dependency
     const rid = provider; // dependency
     if (!supported || rid === "") return;
+    if (prevProvider !== null && prevProvider !== rid) {
+      models = {};
+    }
+    prevProvider = rid;
     status = null;
     modelList = [];
     void loadSlots();
