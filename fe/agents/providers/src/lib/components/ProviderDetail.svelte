@@ -13,11 +13,11 @@
     apiRenameProvider,
     apiProbeGate,
     apiGetProviderCatalog,
-    apiSaveRouter9,
+    apiSaveAIRouter,
   } from "$lib/api.js";
   import type { CatalogEntry, ProviderCatalog } from "$lib/api.js";
   import type { ProviderDetailResponse, ConfigFieldDTO, SpawnLogFileDTO } from "$lib/types.js";
-  import Router9Config from "$lib/components/Router9Config.svelte";
+  import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
 
   type Props = {
     base: string;
@@ -191,13 +191,16 @@
   let valueListFields = $derived(data ? data.ConfigFields.filter(isValueListEditor) : []);
   let keyValueFields = $derived(data ? data.ConfigFields.filter(isKeyValueEditor) : []);
 
-  // 9router local state, seeded from the loaded detail (data.Router9) in load().
-  const router9Supported = $derived(data?.Router9.Supported ?? (type === "claude" || type === "codex"));
-  let r9Use = $state(false);
-  let r9Models = $state<Record<string, string>>({});
-  let r9Key = $state("");
-  let r9KeyMasked = $state(false);
-  let r9Saving = $state(false);
+  // AI Router local state, seeded from the loaded detail (data.AIRouter) in load().
+  const airouterSupported = $derived(data?.AIRouter.Supported ?? (type === "claude" || type === "codex"));
+  let airUse = $state(false);
+  let airProvider = $state("");
+  let airRouters = $state<{ ID: string; Name: string }[]>([]);
+  let airModels = $state<Record<string, string>>({});
+  let airKey = $state("");
+  let airKeyMasked = $state(false);
+  let airRawConfig = $state("");
+  let airSaving = $state(false);
 
   async function load(silent = false) {
     if (!silent) { loading = true; error = null; }
@@ -215,11 +218,14 @@
       fieldValues = vals;
       editorRows = rows;
       secretTouched = {};
-      // Seed 9router widget state from the loaded detail payload.
-      r9Use = data.Router9.Enabled;
-      r9Models = { ...data.Router9.Models };
-      r9KeyMasked = data.Router9.KeySet;
-      r9Key = ""; // never prefill a secret; blank = keep existing
+      // Seed AI Router widget state from the loaded detail payload.
+      airUse = data.AIRouter.Enabled;
+      airProvider = data.AIRouter.Provider;
+      airRouters = data.AIRouter.Routers;
+      airModels = { ...data.AIRouter.Models };
+      airKeyMasked = data.AIRouter.KeySet;
+      airKey = ""; // never prefill a secret; blank = keep existing
+      airRawConfig = data.AIRouter.RawConfig;
     } catch (e) {
       if (!silent) error = e instanceof Error ? e.message : "Failed to load provider detail";
     } finally {
@@ -261,20 +267,22 @@
     }
   }
 
-  async function saveRouter9() {
-    r9Saving = true;
+  async function saveAIRouter() {
+    airSaving = true;
     try {
-      await apiSaveRouter9(base, type, name, {
-        use_9router: r9Use,
-        models: r9Models,
-        api_key: r9Key,
+      await apiSaveAIRouter(base, type, name, {
+        use_airouter: airUse,
+        provider: airProvider,
+        models: airModels,
+        api_key: airKey || undefined,
+        raw_config: airRawConfig,
       });
-      toastOk("9router settings saved");
+      toastOk("AI Router settings saved");
       await load(true);
     } catch (e) {
       toastError(e instanceof Error ? e.message : "Save failed");
     } finally {
-      r9Saving = false;
+      airSaving = false;
     }
   }
 
@@ -747,28 +755,32 @@
       </div>
     {/if}
 
-    {#if router9Supported}
+    {#if airouterSupported}
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
         <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
-          <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">9router</h3>
+          <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">AI Router</h3>
         </div>
         <div class="p-5">
-          <Router9Config
+          <AIRouterConfig
             {base}
             {type}
-            supported={router9Supported}
-            bind:use9router={r9Use}
-            bind:models={r9Models}
-            bind:apiKey={r9Key}
-            apiKeyMasked={r9KeyMasked}
+            supported={airouterSupported}
+            bind:useAirouter={airUse}
+            bind:provider={airProvider}
+            bind:models={airModels}
+            bind:apiKey={airKey}
+            apiKeyMasked={airKeyMasked}
+            bind:rawConfig={airRawConfig}
+            configPreview={data?.AIRouter.Preview ?? ""}
+            routers={airRouters}
           />
         </div>
         <div class="px-5 py-3 border-t border-white-300 dark:border-navy-600 flex justify-end">
           <button
-            onclick={saveRouter9}
-            disabled={r9Saving}
+            onclick={saveAIRouter}
+            disabled={airSaving}
             class="rounded-lg bg-green-600 hover:bg-green-700 px-4 py-1.5 text-xs font-medium text-white-100 disabled:opacity-50"
-          >{r9Saving ? "Saving…" : "Save 9router"}</button>
+          >{airSaving ? "Saving…" : "Save AI Router"}</button>
         </div>
       </div>
     {/if}

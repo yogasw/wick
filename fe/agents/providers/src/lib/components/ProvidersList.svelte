@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ConfirmDialog } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
-  import Router9Config from "$lib/components/Router9Config.svelte";
+  import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
   import {
     apiGetProviders,
     apiRescanAll,
@@ -41,12 +41,22 @@
   let formBinary = $state("");
   let formExtraArgs = $state("");
   let formEnv = $state("");
-  let formUse9router = $state(false);
-  let formRouter9Models = $state<Record<string, string>>({});
-  let formRouter9Key = $state("");
+  let formUseAirouter = $state(false);
+  let formAirouterProvider = $state("");
+  let formAirouterModels = $state<Record<string, string>>({});
+  let formAirouterKey = $state("");
+  let formAirouterRawConfig = $state("");
 
-  // 9router only makes sense for the CLIs wick can rewire (claude/codex).
-  const router9Supported = $derived(formType === "claude" || formType === "codex");
+  // The AI router picker in the create form offers the built-in routers.
+  // A fresh instance has no detail payload to source them from, so list the
+  // registered backends here (mirrors airouter.List() in the BE).
+  const airouterRouters: { ID: string; Name: string }[] = [
+    { ID: "9router", Name: "9router" },
+    { ID: "omniroute", Name: "OmniRoute" },
+  ];
+
+  // An AI router only makes sense for the CLIs wick can rewire (claude/codex).
+  const airouterSupported = $derived(formType === "claude" || formType === "codex");
 
   // The name becomes the second half of the "type/name" provider key,
   // so spaces would break the key downstream. We auto-convert spaces to
@@ -253,9 +263,11 @@
     formBinary = "";
     formExtraArgs = "";
     formEnv = "";
-    formUse9router = false;
-    formRouter9Models = {};
-    formRouter9Key = "";
+    formUseAirouter = false;
+    formAirouterProvider = "";
+    formAirouterModels = {};
+    formAirouterKey = "";
+    formAirouterRawConfig = "";
     addOpen = true;
   }
 
@@ -272,9 +284,11 @@
         binary: formBinary.trim(),
         extra_args: formExtraArgs.trim(),
         env: formEnv,
-        use_9router: formUse9router && router9Supported,
-        router9_models: formRouter9Models,
-        router9_api_key: formRouter9Key,
+        use_airouter: formUseAirouter && airouterSupported,
+        airouter_provider: formAirouterProvider,
+        airouter_models: formAirouterModels,
+        airouter_api_key: formAirouterKey,
+        airouter_raw_config: formAirouterRawConfig,
       });
       toastOk(`Created ${formName.trim()}`);
       addOpen = false;
@@ -745,7 +759,7 @@
       <form onsubmit={doCreate} class="space-y-4">
         <div>
           <label for="add-provider-type" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Type <span class="text-red-500">*</span></label>
-          <select id="add-provider-type" bind:value={formType} onchange={() => { formRouter9Models = {}; }} required class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100">
+          <select id="add-provider-type" bind:value={formType} onchange={() => { formAirouterModels = {}; }} required class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm text-black-900 dark:text-white-100">
             {#each data?.SupportedKeys ?? [] as k (k)}
               <option value={k}>{k}</option>
             {/each}
@@ -780,13 +794,16 @@
           <label for="add-provider-env" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Env (one KEY=VALUE per line)</label>
           <textarea id="add-provider-env" bind:value={formEnv} rows="3" placeholder="ANTHROPIC_API_KEY=sk-..." class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100"></textarea>
         </div>
-        <Router9Config
+        <AIRouterConfig
           {base}
           type={formType}
-          supported={router9Supported}
-          bind:use9router={formUse9router}
-          bind:models={formRouter9Models}
-          bind:apiKey={formRouter9Key}
+          supported={airouterSupported}
+          bind:useAirouter={formUseAirouter}
+          bind:provider={formAirouterProvider}
+          bind:models={formAirouterModels}
+          bind:apiKey={formAirouterKey}
+          bind:rawConfig={formAirouterRawConfig}
+          routers={airouterRouters}
         />
         <div class="flex justify-end gap-3 pt-2">
           <button type="button" onclick={() => { addOpen = false; }} class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800">Cancel</button>
