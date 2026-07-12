@@ -40,7 +40,6 @@ import (
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/tags"
-	router9 "github.com/yogasw/wick/internal/tools/agents/9router"
 	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -313,9 +312,9 @@ func Register(r tool.Router) {
 	r.GET("/providers", providersPage)
 	r.GET("/providers/detail/{type}/{name}", providerDetailPage)
 	r.POST("/providers/detail/{type}/{name}/save", saveProviderDetail)
-	r.POST("/providers/detail/{type}/{name}/router9", saveProviderRouter9)
+	r.POST("/providers/detail/{type}/{name}/airouter", saveProviderAIRouter)
 	r.POST("/providers/detail/{type}/{name}/{key}", saveProviderConfigKey)
-	r.GET("/providers/router9/slots/{type}", providerRouter9Slots)
+	r.GET("/providers/airouter/slots/{type}", providerAIRouterSlots)
 	r.GET("/providers/{type}/{name}", providerDetailPage)
 	r.POST("/providers", saveProviderInstance)
 	r.POST("/providers/rename/{type}/{name}", renameProviderInstance)
@@ -352,13 +351,11 @@ func Register(r tool.Router) {
 	r.POST("/skills-sync/{provider}/{path...}", skillProviderSync)
 	r.POST("/skills/{name}/sync", skillEntrySync)
 
-	// 9router — embedded dashboard managed inside the Agents shell.
-	// Self-contained in the 9router package; we only hand it the sidebar
-	// builder (so its pages render inside our shell with the nav active)
-	// and a config store (so it can persist the auto-start flag).
-	router9.Register(r, func(c *tool.Ctx, activePage string) view.AgentsLayoutVM {
-		return sidebarVM(c, activePage, "")
-	}, router9ConfigStore{}, func() string { return spaAssetURL("router9") })
+	// AI Router — embedded router dashboards (9router, OmniRoute, …) managed
+	// inside the Agents shell. The registry + per-router control endpoints live
+	// in the airouter package; RegisterAirouter wires the control routes + the
+	// SPA page and backs the config store with the app config service.
+	RegisterAirouter(r)
 
 	r.POST("/providers/storage/sync/{type}/{name}", syncProviderStorage)
 	r.GET("/providers/storage", storagePage)
@@ -678,7 +675,7 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		ScopedProjectID:  scopedProjectID,
 		PinnedProjectID:  pinnedProjectID(c),
 		ShellAssetURL:    spaAssetURL("shell"),
-		Router9Visible:   Router9Enabled() && router9AdminOnly(c.Context()),
+		AirouterVisible:  AirouterVisible(c.Context()),
 	}
 }
 
@@ -1785,14 +1782,15 @@ func providerOptionsJSON(c *tool.Ctx) {
 		return
 	}
 	type option struct {
-		Type    string `json:"type"`
-		Name    string `json:"name"`
-		Version string `json:"version"`
+		Type         string `json:"type"`
+		Name         string `json:"name"`
+		Version      string `json:"version"`
+		UsesAIRouter bool   `json:"uses_airouter"`
 	}
 	ps := providerChoicesCached(c.Context())
 	opts := make([]option, 0, len(ps))
 	for _, p := range ps {
-		opts = append(opts, option{Type: p.Type, Name: p.Name, Version: p.Version})
+		opts = append(opts, option{Type: p.Type, Name: p.Name, Version: p.Version, UsesAIRouter: p.UsesAIRouter})
 	}
 	c.JSON(http.StatusOK, opts)
 }

@@ -97,6 +97,40 @@ describe("ProjectLanding — presentational rendering", () => {
   });
 });
 
+describe("ProjectLanding — composer default provider (#983)", () => {
+  const CLAUDE: ProviderOption = { type: "claude", name: "claude", version: "" };
+  const CODEX: ProviderOption = { type: "codex", name: "codex", version: "" };
+
+  function propsWith(defaultProvider: string | undefined) {
+    return {
+      base: "/tools/agents",
+      project: { ...PROJECT, defaultProvider },
+      providers: [CLAUDE, CODEX],
+      sessions: [],
+      onPin: vi.fn(),
+      onSelectSession: vi.fn(),
+    };
+  }
+
+  test("preselects the project's default provider (codex), not the first one", () => {
+    render(ProjectLanding, { props: propsWith("codex") });
+    expect(screen.getByRole("button", { name: "Provider" }).getAttribute("title")).toBe("codex");
+  });
+
+  test("falls back to the first provider when no project default is set", () => {
+    render(ProjectLanding, { props: propsWith(undefined) });
+    expect(screen.getByRole("button", { name: "Provider" }).getAttribute("title")).toBe("claude");
+  });
+
+  test("matches a default given as a bare type against a named instance", () => {
+    const named: ProviderOption = { type: "codex", name: "prod", version: "" };
+    render(ProjectLanding, {
+      props: { ...propsWith("codex"), providers: [CLAUDE, named] },
+    });
+    expect(screen.getByRole("button", { name: "Provider" }).getAttribute("title")).toBe("codex · prod");
+  });
+});
+
 describe("ProjectLanding — folder path in header (#41)", () => {
   test("project header shows the folder path", () => {
     const project = { id: "p1", name: "Proj", path: "/home/work/proj", managed: true };

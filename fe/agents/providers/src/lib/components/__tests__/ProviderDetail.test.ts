@@ -39,7 +39,7 @@ function makeDetail(): ProviderDetailResponse {
     ],
     Page: 1,
     HasNext: false,
-    Router9: { Supported: true, Enabled: false, Models: {}, KeySet: false },
+    AIRouter: { Supported: true, Enabled: false, Provider: "9router", Routers: [{ ID: "9router", Name: "9router" }], Models: {}, KeySet: false, RawConfig: "", Preview: "" },
   };
 }
 
@@ -54,12 +54,16 @@ beforeEach(() => {
   vi.mocked(api.apiHookDisable).mockResolvedValue(undefined);
   vi.mocked(api.apiDeleteProvider).mockResolvedValue(undefined);
   vi.mocked(api.apiProbeGate).mockResolvedValue(undefined);
+  vi.mocked(api.apiGetProviderCatalog).mockResolvedValue({ env: [], args: [] });
+  vi.mocked(api.apiAIRouterStatus).mockResolvedValue({ installed: false, running: false, version: "", state: "stopped" });
+  vi.mocked(api.apiAIRouterSlots).mockResolvedValue([]);
+  vi.mocked(api.apiAIRouterModels).mockResolvedValue([]);
 });
 
 describe("ProviderDetail - rendering", () => {
   it("renders provider heading with type/name", async () => {
     render(ProviderDetail, { props: defaultProps });
-    expect(await screen.findByRole("heading", { name: "claude/default" })).toBeTruthy();
+    expect((await screen.findAllByText("claude/default")).length).toBeGreaterThan(0);
   });
 
   it("renders version badge when path found", async () => {

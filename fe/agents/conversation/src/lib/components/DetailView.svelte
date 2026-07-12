@@ -134,6 +134,7 @@
 
   /* ── SSE ───────────────────────────────────────────────────────── */
   let closeSSE: (() => void) | null = null;
+  let sseStream: ReturnType<typeof connectSession> | null = null;
   let sseStatus = $state<SSEStatus>("connecting");
 
   /* ── vertical rail tabs ────────────────────────────────────────── */
@@ -207,6 +208,7 @@
     options: providerOptions.map((p) => ({
       label: p.name && p.name !== p.type ? `${p.type} · ${p.name}` : p.type,
       value: `${p.type}/${p.name}`,
+      badge: p.usesAIRouter ? "AI Router" : undefined,
     })),
     value: activeProvider ? normKey(activeProvider) : "",
     onChange: (v: string) => handleProviderChange(v),
@@ -693,7 +695,8 @@
   /* ── SSE fan-out ──────────────────────────────────────────────── */
   function startSSE() {
     const stream = connectSession(base, sessionId);
-    closeSSE = () => stream.close();
+    sseStream = stream;
+    closeSSE = () => { sseStream = null; stream.close(); };
 
     stream.status.subscribe((s) => { sseStatus = s; });
 
@@ -863,11 +866,27 @@
     // No interval polling for /processes: the SSE `lifecycle` event already
     // fires whenever a process starts/stops, and triggers a (debounced)
     // loadProcesses(). Polling on top of that just stacked redundant fetches.
+
+    // A backgrounded tab (or a downed/restarted server) can leave the stream
+    // stalled. On return-to-foreground or network-restore, nudge it to
+    // reconnect + replay, and re-pull the authoritative conversation so the
+    // panel un-sticks without a manual reload.
+    document.addEventListener("visibilitychange", handleResync);
+    window.addEventListener("online", handleResync);
   });
+
+  function handleResync() {
+    if (document.visibilityState !== "visible") return;
+    sseStream?.resync();
+    void loadConversation();
+    scheduleProcessReload();
+  }
 
   onDestroy(() => {
     if (fileReloadTimer !== null) clearTimeout(fileReloadTimer);
     if (processReloadTimer !== null) clearTimeout(processReloadTimer);
+    document.removeEventListener("visibilitychange", handleResync);
+    window.removeEventListener("online", handleResync);
     closeSSE?.();
     unsubTurns();
     unsubLive();

@@ -25,9 +25,9 @@ func UnmaskSpawnEnv(t Type, name string, storedEnv []string) []string {
 			live[k] = v
 		}
 	}
-	// The 9router routing keys are what actually reaches the CLI, and they
-	// differ from ins.Env — resolve them from the router9 auth key.
-	if key := Router9AuthKey(ins); key != "" {
+	// The AI-router routing keys are what actually reaches the CLI, and they
+	// differ from ins.Env — resolve them from the router auth key.
+	if key := RouterAuthKey(ins); key != "" {
 		live["ANTHROPIC_AUTH_TOKEN"] = key
 		live["OPENAI_API_KEY"] = key
 	}

@@ -5,6 +5,7 @@ export type ProviderOption = {
   type: string;
   name: string;
   version: string;
+  usesAIRouter?: boolean;
 };
 
 export type PresetOption = {
@@ -21,8 +22,10 @@ export type ProjectOption = {
 };
 
 export const getProviderOptions = (base: string) =>
-  apiGetE<ProviderOption[] | null>(`${base}/providers/options`).pipe(
-    Effect.map((r) => r ?? []),
+  apiGetE<(ProviderOption & { uses_airouter?: boolean })[] | null>(`${base}/providers/options`).pipe(
+    Effect.map((r) =>
+      (r ?? []).map((p) => ({ ...p, usesAIRouter: p.usesAIRouter ?? p.uses_airouter ?? false })),
+    ),
   );
 
 export const getPresetOptions = (base: string) =>

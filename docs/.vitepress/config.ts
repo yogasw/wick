@@ -127,7 +127,7 @@ export default withMermaid(defineConfig({
           { text: 'Scheduled Messages', link: '/guide/agents/scheduled-messages' },
           { text: 'Pool & Sessions', link: '/guide/agents/pool' },
           { text: 'Source Control', link: '/guide/agents/source-control' },
-          { text: '9router', link: '/guide/agents/9router' },
+          { text: 'AI Router', link: '/guide/agents/airouter' },
           { text: 'Command Gate', link: '/guide/command-gate' },
         ],
       },

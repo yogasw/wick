@@ -47,7 +47,7 @@ After boot, head to `/tools/agents`.
 | **Connectors** | Browse and manage LLM-callable connectors from inside the Agents shell. Opens at `/tools/agents/connectors`. Direct links to `/manager/connectors/*` redirect here automatically (deep links preserved). |
 | **Channels** | Slack + Telegram bot config (tokens, access control, default project). Web UI is always-on. |
 | **Scheduled** | Cross-session monitor for every scheduled message you can see — filter by status, grouped by session, inline pause/resume/cancel. See [Scheduled Messages](./agents/scheduled-messages). |
-| **9router** | Install, run, and manage the [9router](https://github.com/decolua/9router) LLM-router/proxy from inside wick. Dashboard embedded via reverse proxy — no extra port needed. Admin-only. |
+| **AI Router** | Install, run, and switch between embedded LLM router/proxy dashboards ([9router](https://github.com/decolua/9router), [OmniRoute](https://github.com/diegosouzapw/OmniRoute)). Each embedded via reverse proxy — no extra port needed. Admin-only. See [AI Router](./agents/airouter). |
 
 Sessions auto-create on the first message in a Slack thread, a Telegram chat, or a fresh web conversation. You don't pre-allocate them.
 
@@ -113,8 +113,7 @@ Source: [`config.GeneralConfig`](https://github.com/yogasw/wick/blob/master/inte
 | `AutoRescan` | `true` | Re-probe provider binaries when cached version is older than 24h. Off = manual Rescan only. |
 | `PreemptIdle` | `true` | When the pool is full and a new session is queued, kill the longest-idle active subprocess to free its slot instead of waiting out the idle TTL. Killed sessions resume via `--resume` on their next message. A 1 s background loop keeps retrying preemption while the queue is non-empty so a session that goes idle after a queued send still releases its slot promptly. |
 | `SystemPrompt` | _(embedded baseline)_ | Global interaction rules appended to every preset's `agent.md` on spawn. Adds to the preset — never replaces it. Edit and reset the default from `/tools/agents/settings`; the shipped baseline is [`internal/agents/system-prompt/default.md`](https://github.com/yogasw/wick/blob/master/internal/agents/system-prompt/default.md). |
-| `Router9Enabled` | `true` | Master switch for the embedded 9router. Off = dashboard, `/9router/v1` proxy, auto-start, and all controls are disabled. Access visibility is managed separately under **Admin → Tools**. |
-| `Router9Autostart` | `false` | Auto-start the embedded 9router process on boot. When on, 9router joins the boot-gate sequence. Only effective when `Router9Enabled` is on. |
+| `AirouterEnabled` | `true` | Master switch for the embedded AI routers. Off = every dashboard, `/airouter/<id>/v1` proxy, auto-start, and all controls are disabled. Per-router auto-start / external-API toggles live on the AI Router page. Access visibility is managed separately under **Admin → Tools**. |
 
 ## Chat rendering
 
@@ -336,7 +335,7 @@ Each check reports `✓` / `✗` / `!`. Exit `0` when required checks pass, `1` 
 - [**Scheduled Messages**](./agents/scheduled-messages) — one-shot / recurring message injection, agent- or human-initiated.
 - [**Pool & Sessions**](./agents/pool) — slot allocation, idle-kill, resume, message buffer.
 - [**Source Control**](./agents/source-control) — git SCM panel on the session detail page.
-- [**9router**](./agents/9router) — embedded LLM router/proxy dashboard; install and manage via Settings tab.
+- [**AI Router**](./agents/airouter) — embedded LLM router/proxy dashboards (9router, OmniRoute); switch between them, install and manage via Settings tab.
 - [**Command Gate**](./command-gate) — shell-command approval system.
 
 ## See also

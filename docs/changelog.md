@@ -10,6 +10,23 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.31.0](https://github.com/yogasw/wick/compare/v0.30.1...v0.31.0) — AI Router
+
+_Released on 2026-07-12_
+
+### Added
+*   **AI Router: multi-router (9router + OmniRoute), switchable, per-provider routing**: The embedded 9router dashboard has been generalized into an **AI Router** page. This page now hosts multiple router backends concurrently, including [9router](https://github.com/decolua/9router) and [OmniRoute](https://github.com/diegosouzapw/OmniRoute). Each router is installed, run, and reverse-proxied on its own loopback port (`/airouter/<id>/`), allowing concurrent operation. A switcher is provided to flip between their Dashboard, Requests, and Settings tabs. Provider instances (e.g., `claude`, `codex`) now feature a **Route through AI Router** toggle, a router picker, per-slot model overrides, a custom API key, and an admin-only **Advanced** section that previews and allows editing of the exact effective spawn configuration (env vars / codex `-c` overrides) as a raw override. A new master switch (`AirouterEnabled`), replacing `Router9Enabled`, gates the entire feature, while per-router auto-start and external-API toggles are available on the AI Router page itself. Existing 9router-routed instances and settings carry over unchanged. See [AI Router](/guide/agents/airouter).
+*   **AI Router badge in the composer provider picker**: Provider instances configured to route through the AI Router now display an **AI Router** badge within the composer's provider menu. This includes a pill next to the option in the list and a corner dot on the selected provider chip, making it clear at a glance which providers are proxied. See [AI Router](/guide/agents/airouter).
+
+### Fixed
+*   **Composer preselects the project's default provider**: On the Project landing page, the composer now correctly seeds its provider from the project's configured default, rather than consistently falling back to the first provider (e.g., claude). This behavior now matches the New Session page.
+*   **`/` and `@` work mid-message, not just as a prefix**: The command palette (`/`) and file-mention (`@`) menus now open when the trigger is typed at the start of a line **or** immediately after a space. This allows commands or mentions to be inserted partway through a message, while path-like text such as `src/foo` remains inert. See [Agents — Composer](/guide/agents#composer).
+*   **Live session stream self-heals after a drop**: The conversation stream (handled by a SharedWorker, with an EventSource fallback) now automatically reconnects if a downed or restarted server closes the connection. Upon reconnect, it replays the session snapshot. Additionally, the stream resyncs when the tab returns from the background or network connectivity is restored, ensuring stalled sessions recover on their own without requiring a manual reload. DetailView also resyncs on `visibilitychange` and network-restore.
+*   **Failed agent spawns no longer stick on "spawning"**: When a subprocess fails to launch, the session now tears down to an idle state, and the failure is surfaced as an inline system error turn (persisted like any runtime error). This is a change from previous behavior, where the session would stick on "spawning" and the failure was only shown as a request-level toast. The send operation itself now succeeds, with the error reported in-band.
+
+---
+
+
 ## [v0.30.1](https://github.com/yogasw/wick/compare/v0.30.0...v0.30.1) — Data Tables
 
 _Released on 2026-07-10_

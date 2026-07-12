@@ -86,4 +86,31 @@ describe("connectSession", () => {
     transport.push({ type: "event", sessionID: "sess-6", event: { type: "text_delta" } });
     expect(received).toHaveLength(0);
   });
+
+  test("resync() re-posts subscribe so the worker refetches/reconnects", () => {
+    const stream = connectSession("http://localhost", "sess-7", { transport });
+    transport.posted.length = 0; // drop the initial subscribe
+    stream.resync();
+    expect(transport.posted).toContainEqual({
+      type: "subscribe",
+      sessionID: "sess-7",
+      base: "http://localhost",
+    });
+  });
+
+  test("resync() invokes transport.resync when the transport provides one", () => {
+    const resync = vi.fn();
+    const t: SSETransport = { ...makeFakeTransport(), resync };
+    const stream = connectSession("http://localhost", "sess-8", { transport: t });
+    stream.resync();
+    expect(resync).toHaveBeenCalledOnce();
+  });
+
+  test("resync() is a no-op after close()", () => {
+    const stream = connectSession("http://localhost", "sess-9", { transport });
+    stream.close();
+    transport.posted.length = 0;
+    stream.resync();
+    expect(transport.posted).toHaveLength(0);
+  });
 });

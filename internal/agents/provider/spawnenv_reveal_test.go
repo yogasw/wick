@@ -7,23 +7,25 @@ import (
 
 func TestUnmaskSpawnEnv(t *testing.T) {
 	isolateConfig(t)
-	SetSecretDecrypter(nil)
-	t.Cleanup(func() { SetSecretDecrypter(nil) })
+	// airouter normally injects the key resolver at boot; the provider package
+	// can't import it (cycle), so a fake stands in here.
+	SetRouterKeyResolver(func(ins *Instance) string { return "sk_9router" })
+	t.Cleanup(func() { SetRouterKeyResolver(nil) })
 
-	// A claude instance with a custom secret env var + a 9router key.
+	// A claude instance with a custom secret env var + AI-router routing.
 	if err := Save(Instance{
-		Type:          TypeClaude,
-		Name:          "work",
-		Env:           []string{"MY_API_KEY=supersecret", "PLAIN_VAR=keep"},
-		Router9APIKey: "", // empty → Router9AuthKey returns the default
+		Type:        TypeClaude,
+		Name:        "work",
+		Env:         []string{"MY_API_KEY=supersecret", "PLAIN_VAR=keep"},
+		UseAIRouter: true,
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
 	stored := []string{
-		"CLAUDE_CONFIG_DIR=C:/x/.claude",             // non-secret, verbatim
+		"CLAUDE_CONFIG_DIR=C:/x/.claude",              // non-secret, verbatim
 		"ANTHROPIC_BASE_URL=http://127.0.0.1:9425/v1", // non-secret, verbatim
-		"ANTHROPIC_AUTH_TOKEN=s********r",             // router9 key → default
+		"ANTHROPIC_AUTH_TOKEN=s********r",             // router key → resolved
 		"MY_API_KEY=s********t",                       // from ins.Env
 		"MAX_THINKING_TOKENS=8000",                    // non-secret, per-spawn, verbatim
 	}
@@ -37,9 +39,9 @@ func TestUnmaskSpawnEnv(t *testing.T) {
 	if got[0] != stored[0] || got[1] != stored[1] || got[4] != stored[4] {
 		t.Fatalf("non-secret entries mutated: %+v", got)
 	}
-	// Router9 auth key resolved to the default.
-	if got[2] != "ANTHROPIC_AUTH_TOKEN="+router9DefaultKey {
-		t.Fatalf("auth token = %q, want default", got[2])
+	// Router auth key resolved via the injected resolver.
+	if got[2] != "ANTHROPIC_AUTH_TOKEN=sk_9router" {
+		t.Fatalf("auth token = %q, want resolved router key", got[2])
 	}
 	// Other secret key resolved from instance env.
 	if got[3] != "MY_API_KEY=supersecret" {
@@ -58,13 +60,12 @@ func TestUnmaskSpawnEnv_UnknownInstance(t *testing.T) {
 
 func TestUnmaskSpawnEnv_SecretAbsentFromConfig(t *testing.T) {
 	isolateConfig(t)
-	SetSecretDecrypter(nil)
-	t.Cleanup(func() { SetSecretDecrypter(nil) })
+	SetRouterKeyResolver(nil)
 	if err := Save(Instance{Type: TypeClaude, Name: "bare"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	// A secret key that the live config has no value for stays masked
-	// (router9 keys always resolve, so use a different key here).
+	// A secret key the live config has no value for — and no AI-router routing —
+	// stays masked.
 	stored := []string{"UNKNOWN_TOKEN=a****z"}
 	got := UnmaskSpawnEnv(TypeClaude, "bare", stored)
 	if got[0] != "UNKNOWN_TOKEN=a****z" {

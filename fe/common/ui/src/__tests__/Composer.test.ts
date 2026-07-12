@@ -168,10 +168,55 @@ describe("Composer — / commands", () => {
     expect(textarea.value).toBe("");
   });
 
-  test("/ only triggers at the start of the message", async () => {
+  test("/ triggers mid-message after whitespace, not just as a prefix", async () => {
     render(Composer, { props: { onSend: vi.fn(), commands: CMDS } });
-    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "hi /provider" } });
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "hi /prov" } });
+    expect(screen.getByText("Switch")).toBeDefined();
+  });
+
+  test("/ does not trigger mid-word (path segment)", async () => {
+    render(Composer, { props: { onSend: vi.fn(), commands: CMDS } });
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "open src/provider" } });
     expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  test("selecting a mid-message command inserts the token after the existing text", async () => {
+    const cmds = [{ value: "model gpt-5", label: "/model", category: "Set" }];
+    render(Composer, { props: { onSend: vi.fn(), commands: cmds } });
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    await fireEvent.input(textarea, { target: { value: "use /mod" } });
+    await fireEvent.mouseDown(screen.getByText("/model"));
+    expect(textarea.value).toBe("use /model gpt-5 ");
+  });
+});
+
+describe("Composer — provider badge", () => {
+  const props = {
+    onSend: vi.fn(),
+    provider: {
+      options: [
+        { label: "claude", value: "claude/claude" },
+        { label: "codex", value: "codex/codex", badge: "AI Router" },
+      ],
+      value: "codex/codex",
+      onChange: vi.fn(),
+    },
+  };
+
+  test("selected badged provider marks the chip title with the badge", async () => {
+    render(Composer, { props });
+    expect(screen.getByRole("button", { name: "Provider" }).getAttribute("title")).toBe("codex · via AI Router");
+  });
+
+  test("a non-badged selection leaves the chip title plain", async () => {
+    render(Composer, { props: { ...props, provider: { ...props.provider, value: "claude/claude" } } });
+    expect(screen.getByRole("button", { name: "Provider" }).getAttribute("title")).toBe("claude");
+  });
+
+  test("the picker list renders the badge pill on badged options", async () => {
+    render(Composer, { props });
+    await fireEvent.click(screen.getByRole("button", { name: "Provider" }));
+    expect(screen.getAllByText("AI Router").length).toBeGreaterThan(0);
   });
 });
 

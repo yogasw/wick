@@ -3,8 +3,10 @@ package agents
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/yogasw/wick/internal/agents/airouter"
 	"github.com/yogasw/wick/internal/agents/capability"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/tools/agents/view"
@@ -203,17 +205,31 @@ type ProviderDetailResponse struct {
 	Spawns       []SpawnLogFileDTO            `json:"spawns"`
 	Page         int                          `json:"page"`
 	HasNext      bool                         `json:"has_next"`
-	Router9      Router9DetailDTO             `json:"router9"`
+	AIRouter     AIRouterDetailDTO            `json:"airouter"`
 }
 
-// Router9DetailDTO carries the instance's current 9router settings so the
-// detail page can seed its widget. The API key is never returned — only a
-// flag indicating one is stored.
-type Router9DetailDTO struct {
-	Supported bool              `json:"supported"`
-	Enabled   bool              `json:"enabled"`
-	Models    map[string]string `json:"models"`
-	KeySet    bool              `json:"key_set"`
+// AIRouterDetailDTO carries the instance's current AI-router settings so the
+// detail page can seed its widget. The API key is never returned — only a flag
+// indicating one is stored. Routers lists the available backends to pick from.
+type AIRouterDetailDTO struct {
+	Supported bool                `json:"supported"`
+	Enabled   bool                `json:"enabled"`
+	Provider  string              `json:"provider"`
+	Routers   []AIRouterChoiceDTO `json:"routers"`
+	Models    map[string]string   `json:"models"`
+	KeySet    bool                `json:"key_set"`
+	RawConfig string              `json:"raw_config"`
+	// Preview is the effective config wick injects at spawn for the current
+	// saved settings — env vars (claude) or -c overrides (codex), one per line,
+	// secret values masked. Shown read-only in the Advanced section so the user
+	// can see exactly what gets set (and which keys to override via RawConfig).
+	Preview string `json:"preview"`
+}
+
+// AIRouterChoiceDTO is one selectable router backend.
+type AIRouterChoiceDTO struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // StorageFileDTO is one storage file row (without the binary content blob).
@@ -553,23 +569,63 @@ func apiProviderDetail(c *tool.Ctx) {
 		Spawns:       spawnDTOs,
 		Page:         page,
 		HasNext:      hasNext,
-		Router9:      router9DetailDTO(st.Instance),
+		AIRouter:     aiRouterDetailDTO(st.Instance),
 	})
 }
 
-// router9DetailDTO projects an instance's 9router settings for the FE.
-// The stored API key is never surfaced — only KeySet.
-func router9DetailDTO(ins provider.Instance) Router9DetailDTO {
+// aiRouterDetailDTO projects an instance's AI-router settings for the FE. The
+// stored API key is never surfaced — only KeySet. Routers enumerates the
+// registered backends so the FE can render the picker.
+func aiRouterDetailDTO(ins provider.Instance) AIRouterDetailDTO {
 	models := map[string]string{}
-	for k, v := range ins.Router9Models {
+	for k, v := range ins.AIRouterModels {
 		models[k] = v
 	}
-	return Router9DetailDTO{
-		Supported: len(provider.Router9Slots(ins.Type)) > 0,
-		Enabled:   ins.Use9router,
-		Models:    models,
-		KeySet:    ins.Router9APIKey != "",
+	routers := make([]AIRouterChoiceDTO, 0)
+	for _, rt := range airouter.List() {
+		routers = append(routers, AIRouterChoiceDTO{ID: rt.Desc.ID, Name: rt.Desc.DisplayName})
 	}
+	return AIRouterDetailDTO{
+		Supported: len(provider.RouterSlots(ins.AIRouterProvider, ins.Type)) > 0,
+		Enabled:   ins.UseAIRouter,
+		Provider:  ins.AIRouterProvider,
+		Routers:   routers,
+		Models:    models,
+		KeySet:    ins.AIRouterAPIKey != "",
+		RawConfig: ins.AIRouterRawConfig,
+		Preview:   aiRouterConfigPreview(ins),
+	}
+}
+
+// aiRouterConfigPreview renders the effective spawn config for an instance's
+// AI-router settings — the env/args the router hook injects (including the
+// user's RawConfig overrides), secret values masked — as newline-separated
+// text for the read-only Advanced preview. Empty when unsupported / unresolved
+// (e.g. WICK_PORT unset). Computed even when the toggle is off so the user can
+// preview before enabling.
+func aiRouterConfigPreview(ins provider.Instance) string {
+	ins.UseAIRouter = true    // force resolution regardless of the saved toggle
+	ins.AIRouterRawConfig = "" // preview the GENERATED config, not an existing override
+	contrib, err := provider.RouterSpawnContribution(&ins, ins.Type)
+	if err != nil {
+		return ""
+	}
+	var b strings.Builder
+	// Admin-only page — show the real resolved values (incl. the auth token)
+	// verbatim so the editable box is the actual effective config.
+	for _, e := range contrib.Env {
+		b.WriteString(e + "\n")
+	}
+	// Render codex -c pairs one per line; leave any other tokens as-is.
+	for i := 0; i < len(contrib.Args); i++ {
+		if contrib.Args[i] == "-c" && i+1 < len(contrib.Args) {
+			b.WriteString("-c " + contrib.Args[i+1] + "\n")
+			i++
+			continue
+		}
+		b.WriteString(contrib.Args[i] + "\n")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // apiProvidersStorage handles GET /api/providers/storage and returns the
