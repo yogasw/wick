@@ -690,6 +690,25 @@ func NewServer() *Server {
 			// the pool (the composer renders them optimistically).
 			agentsBcast.PublishUserMessage(ev.SessionID, ev.AgentName, ev.Source, ev.Text)
 		},
+		OnSpawnError: func(ev agentpool.SpawnErrorEvent) {
+			// The spawn failed before the agent started, so no AgentEvent will
+			// ever flow. Publish a synthetic Error (renders inline as a system
+			// error turn, matching the already-persisted history) plus a Done
+			// so the live turn finalizes. The request-level error still returns
+			// to the caller for logging.
+			log.Ctx(ev.Ctx).Error().
+				Err(ev.Err).
+				Str("component", "lifecycle").
+				Str("session", ev.SessionID).
+				Str("agent", ev.AgentName).
+				Msg("spawn failed: surfacing as system error turn")
+			errEv := agentevent.AgentEvent{Type: agentevent.Error, ErrorMsg: ev.Message}
+			agentsBcast.Publish(ev.SessionID, ev.AgentName, errEv)
+			channelReg.DispatchAgentEvent(ev.SessionID, errEv)
+			doneEv := agentevent.AgentEvent{Type: agentevent.Done}
+			agentsBcast.Publish(ev.SessionID, ev.AgentName, doneEv)
+			channelReg.DispatchAgentEvent(ev.SessionID, doneEv)
+		},
 	})
 	// Wire the hook writer so Manager injects .claude/settings.local.json
 	// into every workspace on create or switch. The loader re-reads gate config

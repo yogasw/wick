@@ -3,13 +3,22 @@ import { apiGetE, apiPostE } from "@wick-fe/common-api";
 import type { ProviderOption, ProjectOption } from "../types/agents.js";
 
 export const getProviderOptions = (base: string) =>
-  apiGetE<ProviderOption[] | null>(`${base}/providers/options`).pipe(
-    Effect.map((r) => r ?? []),
+  apiGetE<(ProviderOption & { uses_airouter?: boolean })[] | null>(`${base}/providers/options`).pipe(
+    Effect.map((r) =>
+      (r ?? []).map((p) => ({ ...p, usesAIRouter: p.usesAIRouter ?? p.uses_airouter ?? false })),
+    ),
   );
 
 export const getProjectOptions = (base: string) =>
-  apiGetE<ProjectOption[] | null>(`${base}/projects/options`).pipe(
-    Effect.map((r) => (r ?? []).map((p) => ({ ...p, managed: p.managed ?? false, pinned: p.pinned ?? false }))),
+  apiGetE<(ProjectOption & { default_provider?: string })[] | null>(`${base}/projects/options`).pipe(
+    Effect.map((r) =>
+      (r ?? []).map((p) => ({
+        ...p,
+        managed: p.managed ?? false,
+        pinned: p.pinned ?? false,
+        defaultProvider: p.defaultProvider ?? p.default_provider ?? "",
+      })),
+    ),
   );
 
 export const switchProvider = (base: string, sessionId: string, provider: string) =>

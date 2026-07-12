@@ -11,9 +11,11 @@ export type ComposerCommand = {
   run?: () => void;
 };
 
-/* A themed dropdown in the Composer toolbar (provider / project / preset). */
+/* A themed dropdown in the Composer toolbar (provider / project / preset).
+   `badge` is an optional short marker shown as a pill next to an option (and as
+   a corner dot on the chip when that option is selected) — e.g. "AI Router". */
 export type ComposerSelect = {
-  options: { label: string; value: string }[];
+  options: { label: string; value: string; badge?: string }[];
   value: string;
   onChange: (v: string) => void;
 };

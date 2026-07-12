@@ -244,6 +244,7 @@ export type ProviderOption = {
   type: string;
   name: string;
   version: string;
+  usesAIRouter?: boolean;
 };
 
 export type ProjectOption = {
@@ -252,4 +253,5 @@ export type ProjectOption = {
   path: string;
   managed: boolean;
   pinned: boolean;
+  defaultProvider?: string;
 };

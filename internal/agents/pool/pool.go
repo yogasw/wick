@@ -132,6 +132,25 @@ type PoolConfig struct {
 	// turns are skipped here to avoid a duplicate). Optional; nil = no
 	// callback.
 	OnUserMessage func(UserMessageEvent)
+	// OnSpawnError fires when a spawn fails before the agent process starts
+	// (e.g. the CLI binary can't be launched). The wiring surfaces Message
+	// as a live error event so it shows inline in the conversation instead of
+	// only as a request-level error/toast; the pool has already persisted the
+	// same text as a system error turn. Optional; nil = no callback.
+	OnSpawnError func(SpawnErrorEvent)
+}
+
+// SpawnErrorEvent carries a failed-spawn notice to the SSE layer. Message is
+// the human-readable text already persisted to conversation.jsonl; the raw
+// fields are there for logging/formatting by the wiring.
+type SpawnErrorEvent struct {
+	SessionID    string
+	AgentName    string
+	Ctx          context.Context
+	Message      string
+	Err          error
+	ProviderType string
+	ProviderName string
 }
 
 // UserMessageEvent carries an injected user turn to the SSE layer so
@@ -818,8 +837,51 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		l.Error().
 			Err(err).
 			Msg("pool.spawn: Start failed")
+		// A failed start leaves the state machine at Spawning and the session
+		// marked Running. Tear down the same way a normal exit does so the UI
+		// doesn't sit stuck on "spawning": flip to Killed (broadcasts the
+		// lifecycle), revert status, release the slot, and let the queue move
+		// on. Surface the failure as a system error turn (persisted + live) so
+		// it reads inline instead of only as a request-level error.
+		label := pType
+		if pName != "" && pName != pType {
+			label = pName + " " + pType
+		}
+		if label == "" {
+			label = agentName
+		}
+		msg := "Failed to start " + label + ": " + err.Error()
+		if sto != nil {
+			if perr := sto.AppendErrorTurn(msg); perr != nil {
+				l.Warn().Err(perr).Msg("pool.spawn: persist spawn-error turn failed")
+			}
+		}
+		p.mu.Lock()
+		if st != nil {
+			st.MarkKilled()
+		}
+		p.mu.Unlock()
+		_ = p.markStatus(sessionID, session.StatusIdle)
 		p.releaseSlot(key)
-		return err
+		if p.cfg.OnSpawnError != nil {
+			p.cfg.OnSpawnError(SpawnErrorEvent{
+				SessionID:    sessionID,
+				AgentName:    agentName,
+				Ctx:          ctx,
+				Message:      msg,
+				Err:          err,
+				ProviderType: pType,
+				ProviderName: pName,
+			})
+		}
+		p.tryGrantQueue()
+		// Return nil: the failure is now surfaced in-band (persisted system
+		// error turn + broadcast Error/Done, and channels get it via the event
+		// dispatch) exactly like a runtime error. Bubbling it as a Send error
+		// too would make /send return 500 and pop a toast — a double report the
+		// caller should not see. The Send "succeeds"; the session is already
+		// back to idle.
+		return nil
 	}
 	l.Debug().
 		Int("pid", a.PID()).
