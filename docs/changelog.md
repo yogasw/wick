@@ -6,9 +6,17 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.31.0](https://github.com/yogasw/wick/compare/v0.30.1...v0.31.0) — AI Router
+
+_Released on 2026-07-12_
+
 ### Added
-*   **AI Router: multi-router (9router + OmniRoute), switchable, per-provider routing**: The embedded 9router dashboard is now a generalized **AI Router** page that hosts multiple router backends side by side — today [9router](https://github.com/decolua/9router) and [OmniRoute](https://github.com/diegosouzapw/OmniRoute) — each installed, run, and reverse-proxied concurrently on its own loopback port (`/airouter/<id>/`), with a switcher to flip between their Dashboard/Requests/Settings tabs. Provider instances (`claude`/`codex`) get a **Route through AI Router** toggle plus a router picker, per-slot model overrides, a custom API key, and an admin-only **Advanced** section that previews and lets you edit the exact effective spawn config (env vars / codex `-c` overrides) as a raw override. A new master switch (`AirouterEnabled`, replacing `Router9Enabled`) gates the whole feature; per-router auto-start and external-API toggles live on the AI Router page itself. Existing 9router-routed instances and settings carry over unchanged. See [AI Router](/guide/agents/airouter).
-*   **AI Router badge in the composer provider picker**: Provider instances that route through the AI Router now carry an **AI Router** badge in the composer's provider menu — a pill next to the option and a corner dot on the provider chip — so it's clear at a glance which providers are proxied. See [AI Router](/guide/agents/airouter).
+*   **AI Router: multi-router (9router + OmniRoute), switchable, per-provider routing**: The embedded 9router dashboard has been generalized into an **AI Router** page. This page now hosts multiple router backends concurrently, including [9router](https://github.com/decolua/9router) and [OmniRoute](https://github.com/diegosouzapw/OmniRoute). Each router is installed, run, and reverse-proxied on its own loopback port (`/airouter/<id>/`), allowing concurrent operation. A switcher is provided to flip between their Dashboard, Requests, and Settings tabs. Provider instances (e.g., `claude`, `codex`) now feature a **Route through AI Router** toggle, a router picker, per-slot model overrides, a custom API key, and an admin-only **Advanced** section that previews and allows editing of the exact effective spawn configuration (env vars / codex `-c` overrides) as a raw override. A new master switch (`AirouterEnabled`), replacing `Router9Enabled`, gates the entire feature, while per-router auto-start and external-API toggles are available on the AI Router page itself. Existing 9router-routed instances and settings carry over unchanged. See [AI Router](/guide/agents/airouter).
+*   **AI Router badge in the composer provider picker**: Provider instances configured to route through the AI Router now display an **AI Router** badge within the composer's provider menu. This includes a pill next to the option in the list and a corner dot on the selected provider chip, making it clear at a glance which providers are proxied. See [AI Router](/guide/agents/airouter).
 
 ### Fixed
 *   **Composer preselects the project's default provider**: On the Project landing page the composer now seeds its provider from the project's configured default instead of always falling back to the first provider (claude) — matching the New Session page.
@@ -18,6 +26,34 @@ All notable changes to Wick are documented here.
 *   **AI Router dashboard streams no longer reconnect in a loop**: The Requests and Logs live streams kept dropping every few seconds. The service worker was aborting the page-level `EventSource` on its 8s navigation-timeout and never bypassed the base-prefixed `/tools/agents/airouter/` mount; it now skips any `text/event-stream` request outright. The stream handlers also gained a 15s keepalive (matching the conversation stream) so an idle stream isn't reaped by an upstream proxy.
 
 ---
+
+
+## [v0.30.1](https://github.com/yogasw/wick/compare/v0.30.0...v0.30.1) — Data Tables
+
+_Released on 2026-07-10_
+
+### Added
+
+*   **Per-User Data Tables:**
+    *   Introduced data tables as a first-class, per-user resource. HTML artifacts can now perform CRUD operations (Create, Read, Update, Delete) on these tables without compromising the artifact sandbox.
+    *   **Ownership:** Each schema/entity now carries an owner user ID. Tables are taggable resources keyed by slug (e.g., `owner:<slug>`). Access is granted via owner tags, admin-granted users, a direct-owner fallback, and `AdminSeeAll` permissions, applied across the `/data-tables` UI list, detail views, and mutations.
+    *   **Admin Grant Page:** A new `/admin/data-tables` page allows administrators to share data tables by tag, mirroring the existing workflow sharing mechanism.
+    *   **MCP Scoping:** The `connector.Ctx` now includes `CallerUserID`, stamped by `connectors.Service` from the session owner, gating access and attributing create ownership to the specific user.
+
+*   **Widget CRUD Bridge:**
+    *   **JSON Row API:** A new API endpoint `GET/POST/PATCH/DELETE /api/data-tables/{slug}/rows` is introduced for programmatic access, guarded by permissions.
+    *   **Sandboxed Widget Access:** `window.wickDataTable.query`, `insert`, `update`, and `delete` methods are injected into every artifact iframe. Sandboxed widgets can't directly fetch, so the parent proxies each call using the session cookie, maintaining the same trust model as `window.wickReadFile`.
+    *   **Agent Prompt Documentation:** The system prompt has been updated to document this new bridge, enabling agents to build database-backed widgets.
+
+### Fixed
+
+*   **Composer Command Palette Alignment:**
+    *   Resolved an issue in the `/` command menu where the description's width would collapse the command name on narrow or mobile widths. The command name now has priority and is pinned to a fixed-width column, ensuring every hint aligns in a straight second column for improved readability, especially for the skills list. File mentions (`@`) retain the full row for filenames.
+*   **Provider Test Flakiness:**
+    *   Fixed flaky `TestRename` and `TestSwitch` tests within the agent provider package, which were failing under the `-race` CI gate. This was due to a race condition where `Save`'s async probe goroutine for reloading and rewriting `config.json` sometimes conflicted with subsequent synchronous test operations. A `saveSeed` helper now ensures this goroutine is drained after each seed `Save`, serializing config writes and preventing stale reloads or file access denials on Windows. (Internal stability improvement.)
+
+---
+
 
 ## [v0.30.0](https://github.com/yogasw/wick/compare/v0.29.0...v0.30.0) — Composer & Agents
 
