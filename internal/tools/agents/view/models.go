@@ -38,11 +38,10 @@ type AgentsLayoutVM struct {
 	// behaviors. Empty when the bundle has not been built yet (dev
 	// machine before npm run build).
 	ShellAssetURL string
-	// Router9Visible controls the "9router" sidebar entry. True when the
-	// master switch is on AND the caller may access it (admin or a granted
-	// access tag) — so non-admins with the tag see the link, and everyone
-	// loses it when 9router is disabled.
-	Router9Visible bool
+	// AirouterVisible controls the "AI Router" sidebar entry. True when the
+	// master switch is on AND the caller may access it (admin) — everyone
+	// loses it when the AI routers are disabled.
+	AirouterVisible bool
 }
 
 // ProjectName returns the display name for a project id, or the id
@@ -82,6 +81,9 @@ type ProviderChoiceVM struct {
 	Type    string
 	Name    string
 	Version string
+	// UsesAIRouter is true when this instance routes through the embedded
+	// AI Router — the composer marks it with a badge.
+	UsesAIRouter bool
 }
 
 // SessionLifecycleVM is the per-row lifecycle snapshot the sessions

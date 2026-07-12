@@ -29,14 +29,29 @@
     return p.name && p.name !== p.type ? `${p.type}/${p.name}` : p.type;
   }
 
+  // Resolve the project's configured default ("codex" or "codex/name") to a
+  // provider actually present in the list: exact key first, then bare type.
+  function defaultProviderKey(): string {
+    if (providers.length === 0) return "";
+    const want = (project.defaultProvider ?? "").trim();
+    if (want) {
+      const exact = providers.find((p) => providerKey(p) === want);
+      if (exact) return providerKey(exact);
+      const byType = providers.find((p) => p.type === want.split("/")[0]);
+      if (byType) return providerKey(byType);
+    }
+    return providerKey(providers[0]);
+  }
+
   $effect(() => {
-    if (!selectedProvider && providers.length > 0) selectedProvider = providerKey(providers[0]);
+    if (!selectedProvider && providers.length > 0) selectedProvider = defaultProviderKey();
   });
 
   const providerSelect = $derived({
     options: providers.map((p) => ({
       label: p.name && p.name !== p.type ? `${p.type} · ${p.name}` : p.type,
       value: providerKey(p),
+      badge: p.usesAIRouter ? "AI Router" : undefined,
     })),
     value: selectedProvider,
     onChange: (v: string) => { selectedProvider = v; },

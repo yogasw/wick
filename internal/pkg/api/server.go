@@ -32,6 +32,7 @@ import (
 	agentgate "github.com/yogasw/wick/internal/agents/gate"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	agentproject "github.com/yogasw/wick/internal/agents/project"
+	"github.com/yogasw/wick/internal/agents/airouter"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
@@ -689,6 +690,25 @@ func NewServer() *Server {
 			// the pool (the composer renders them optimistically).
 			agentsBcast.PublishUserMessage(ev.SessionID, ev.AgentName, ev.Source, ev.Text)
 		},
+		OnSpawnError: func(ev agentpool.SpawnErrorEvent) {
+			// The spawn failed before the agent started, so no AgentEvent will
+			// ever flow. Publish a synthetic Error (renders inline as a system
+			// error turn, matching the already-persisted history) plus a Done
+			// so the live turn finalizes. The request-level error still returns
+			// to the caller for logging.
+			log.Ctx(ev.Ctx).Error().
+				Err(ev.Err).
+				Str("component", "lifecycle").
+				Str("session", ev.SessionID).
+				Str("agent", ev.AgentName).
+				Msg("spawn failed: surfacing as system error turn")
+			errEv := agentevent.AgentEvent{Type: agentevent.Error, ErrorMsg: ev.Message}
+			agentsBcast.Publish(ev.SessionID, ev.AgentName, errEv)
+			channelReg.DispatchAgentEvent(ev.SessionID, errEv)
+			doneEv := agentevent.AgentEvent{Type: agentevent.Done}
+			agentsBcast.Publish(ev.SessionID, ev.AgentName, doneEv)
+			channelReg.DispatchAgentEvent(ev.SessionID, doneEv)
+		},
 	})
 	// Wire the hook writer so Manager injects .claude/settings.local.json
 	// into every workspace on create or switch. The loader re-reads gate config
@@ -838,9 +858,11 @@ func NewServer() *Server {
 		v := configsSvc.GetOwned("agents", "auto_rescan")
 		return v != "false"
 	})
-	// Wire the secret decrypter so spawners can unwrap the stored 9router
-	// API key (wick_cenc_ token) back to plaintext at spawn time.
-	provider.SetSecretDecrypter(configsSvc.DecryptSecret)
+	// Wire the AI-router spawn injection so agent spawners can route through a
+	// registered router (9router / OmniRoute / …), plus the secret decrypter so
+	// they can unwrap the stored router API key (wick_cenc_ token) at spawn.
+	airouter.Init()
+	airouter.SetSecretDecrypter(configsSvc.DecryptSecret)
 	// Prime the persistent status cache once in the background so the
 	// first load of /tools/agents/providers renders from cache instead
 	// of waiting on three cold `--version` spawns. Subsequent boots
@@ -1272,20 +1294,18 @@ func NewServer() *Server {
 	}
 	tr.mount(toolsMux)
 
-	// Auto-start the embedded 9router process at boot when the admin
-	// enabled it. MUST run after tr.mount — that's when each tool's
-	// Register() runs, and 9router's Register wires the config store the
-	// autostart hook reads. (Earlier this ran before mount and always saw
-	// a nil store.) When enabled, it joins the boot gate so the "Booting…"
-	// screen shows "Starting 9router…" and the app waits for it to be
-	// ready instead of opening to a misleading "Stopped" state. Skipped
-	// entirely (no gate step, instant) when auto-start is off.
-	if agentstool.Router9Enabled() && agentstool.Router9AutostartEnabled() {
-		bootGate.Register("9router")
+	// Auto-start each embedded AI router at boot when the admin enabled it for
+	// that router. MUST run after tr.mount — that's when the agents tool's
+	// Register wires the airouter config store the autostart hook reads. When
+	// any router is set to auto-start it joins the boot gate so the "Booting…"
+	// screen waits for the routers to be ready. Skipped entirely (no gate step,
+	// instant) when none auto-start.
+	if agentstool.AirouterEnabled() && agentstool.AnyAirouterAutostart() {
+		bootGate.Register("airouter")
 		go func() {
-			defer bootGate.Done("9router")
-			bootGate.SetPhase("starting-9router")
-			agentstool.Router9Autostart()
+			defer bootGate.Done("airouter")
+			bootGate.SetPhase("starting-airouter")
+			agentstool.AirouterAutostart(func(m string) { log.Warn().Msg(m) })
 		}()
 	}
 
@@ -1637,36 +1657,27 @@ func NewServer() *Server {
 	}
 	r.Handle("/tools/", authMidd.RequireToolAccess(toolMetas)(toolsMux))
 
-	// 9router OpenAI-compatible API proxy, mounted UNAUTHENTICATED at
-	// <root>/9router/v1/. Local AI CLIs (codex/claude) spawned by wick are
-	// pointed at this base URL and must reach 9router without a wick session
-	// cookie — auth is 9router's own API key. The longer route pattern
-	// (/9router/v1/) wins over the admin-gated dashboard mount below in
-	// http.ServeMux's longest-match routing. Registered first for clarity.
-	r.Handle(agentstool.Router9MountPrefix()+"/v1/", agentstool.Router9APIProxy())
+	// AI-router dashboards + OpenAI-compatible API proxies, mounted at the wick
+	// root (not under the tool) so each embedded Next.js app's root-absolute
+	// URLs rewrite to a single per-router prefix. Multiple routers run
+	// concurrently, each at /airouter/<id>/. The /v1 API subtree is
+	// UNAUTHENTICATED (spawned AI CLIs point their base URL here and must reach
+	// the router without a wick session cookie — auth is the router's own API
+	// key); the dashboard is admin-only. Both 404 when the master switch is off.
+	// The longer /v1/ pattern wins over the dashboard mount in http.ServeMux's
+	// longest-match routing.
+	for _, id := range airouter.IDs() {
+		base := "/airouter/" + id
+		r.Handle(base+"/v1/", airouter.APIProxy(id))
+		r.Handle(base+"/", authMidd.RequireAdmin(airouter.RootProxy(id)))
+	}
 
-	// 9router dashboard proxy, mounted at the wick root (not under the
-	// tool) so the embedded Next.js app's root-absolute URLs rewrite to a
-	// single prefix. Admin-only — it fronts a local process that can run
-	// shell-equivalent actions. Router9RootProxy also 404s when the master
-	// switch is off. The page chrome + controls live under
-	// /tools/agents/9router; this serves only the proxied iframe content.
-	r.Handle(agentstool.Router9MountPrefix()+"/", authMidd.RequireAdmin(agentstool.Router9RootProxy()))
-
-	// 9router emits some root-absolute /_next/* asset URLs (fonts/CSS/chunks)
-	// at runtime that the body rewriter can't catch, so they land here at the
-	// wick root instead of under /9router. Serve them from the dashboard proxy.
-	// /_next/ is unique to Next.js, so this can't shadow any wick route.
-	//
-	// Admin-gated like the dashboard it fronts: 9router is an admin-only tool,
-	// so its whole surface — including these assets — must not be reachable by
-	// the public when wick is exposed via a tunnel (the host allowlist lets a
-	// configured public host through, so auth is the real gate here). The
-	// earlier 404s that looked like an auth failure were actually a re-root bug
-	// (RawPath left un-prefixed → StripPrefix missed); with that fixed, the
-	// iframe's same-origin sub-resource requests carry the admin session cookie
-	// and load normally.
-	r.Handle("/_next/", authMidd.RequireAdmin(agentstool.Router9NextAssetProxy()))
+	// Routers emit some root-absolute /_next/* asset URLs (fonts/CSS/chunks)
+	// assembled at runtime that the body rewriter can't catch, so they land at
+	// the wick root. Serve them from the active router's dashboard proxy (the
+	// one whose dashboard HTML was last rendered). /_next/ is unique to Next.js
+	// so this can't shadow a wick route. Admin-gated like the dashboards.
+	r.Handle("/_next/", authMidd.RequireAdmin(airouter.NextAssetProxy()))
 
 	// API — JSON endpoints
 	r.Handle("GET /api/tools", http.HandlerFunc(homeHandler.APITools))
@@ -1820,18 +1831,18 @@ func (s *Server) hostAllowlistHandler(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// The 9router OpenAI-compatible API proxy is reached by AI CLIs
-		// (codex/claude) over loopback (127.0.0.1:<port>/9router/v1/...) —
-		// exempt it from the host allowlist for the same reason as /mcp, so
-		// spawns work even when app_url is a remote/tunnel domain. Scoped to
-		// the /9router/v1 subtree + loopback Host only.
+		// The AI-router OpenAI-compatible API proxies are reached by AI CLIs
+		// (codex/claude) over loopback (127.0.0.1:<port>/airouter/<id>/v1/...) —
+		// exempt them from the host allowlist for the same reason as /mcp, so
+		// spawns work even when app_url is a remote/tunnel domain. Scoped to the
+		// /airouter/<id>/v1 subtree + loopback Host only.
 		//
-		// When the admin has explicitly exposed the API externally, the
+		// When the admin has explicitly exposed a router's API externally, the
 		// exemption widens to any host on that subtree: a tunnel/public host
-		// then reaches the proxy, which forwards the caller as non-local so
-		// 9router enforces its own API key. Off (default) keeps the exemption
+		// then reaches the proxy, which forwards the caller as non-local so the
+		// router enforces its own API key. Off (default) keeps the exemption
 		// loopback-only and the proxy itself rejects off-machine callers.
-		if router9APIExempt(r.URL.Path, r.Host) {
+		if airouterAPIExempt(r.URL.Path, r.Host) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1865,23 +1876,48 @@ func mcpLoopbackExempt(path, host string) bool {
 	return path == "/mcp" && isLoopbackHost(host)
 }
 
-// router9LoopbackExempt reports whether the request targets the 9router
-// API proxy subtree over loopback (127.0.0.1 / ::1 / localhost). Spawned
-// AI CLIs point their base URL at 127.0.0.1:<port>/9router/v1, so — like
-// /mcp — these must bypass the host allowlist to work when app_url is a
-// remote/tunnel domain. Scoped to the /9router/v1 subtree + loopback only.
-func router9APIExempt(path, host string) bool {
-	prefix := agentstool.Router9MountPrefix() + "/v1"
-	if path != prefix && !strings.HasPrefix(path, prefix+"/") {
-		return false
+// withAirouterRedirect 302-redirects a root-absolute request that belongs to an
+// embedded router's SPA (e.g. GET /home) to that router's mount
+// (/airouter/<id>/home). A Next.js dashboard navigates client-side to
+// root-absolute paths that escape the iframe's mount and hit the wick root;
+// wick's service worker then relays them to the network, still at the root, so
+// they 404. Redirecting at the server fixes it regardless of how the request
+// arrives — the SW's fetch() follows the 302 back into the mount. Only fires
+// for a router's declared routes (via Referer or the active dashboard), so
+// normal wick routing is untouched. See airouter.RedirectTargetFor.
+func withAirouterRedirect(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			if target := airouter.RedirectTargetFor(r.URL.Path, r.Referer()); target != "" {
+				if r.URL.RawQuery != "" {
+					target += "?" + r.URL.RawQuery
+				}
+				http.Redirect(w, r, target, http.StatusFound)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// airouterAPIExempt reports whether the request targets an AI-router API proxy
+// subtree (/airouter/<id>/v1) that must bypass the host allowlist. Spawned AI
+// CLIs point their base URL at 127.0.0.1:<port>/airouter/<id>/v1, so — like
+// /mcp — loopback callers are always exempt. Off-machine callers are exempt
+// only when the admin exposed that router's API externally, in which case the
+// proxy forwards them as non-local so the router's own API key gates them.
+func airouterAPIExempt(path, host string) bool {
+	for _, id := range airouter.IDs() {
+		prefix := "/airouter/" + id + "/v1"
+		if path != prefix && !strings.HasPrefix(path, prefix+"/") {
+			continue
+		}
+		if isLoopbackHost(host) {
+			return true
+		}
+		return agentstool.AirouterExternalAllowed(id)
 	}
-	// Loopback callers (local spawns) are always exempt. Off-machine callers
-	// are exempt only when the admin exposed the API externally — the proxy
-	// then forwards them as non-local so 9router's own API key gates them.
-	if isLoopbackHost(host) {
-		return true
-	}
-	return agentstool.Router9ExternalAPIEnabled()
+	return false
 }
 
 // isLoopbackHost reports whether host (a Host header, with or without a
@@ -2063,7 +2099,7 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	}
 
 	h := chainMiddleware(
-		s.authMidd.Session(s.router),
+		s.authMidd.Session(withAirouterRedirect(s.router)),
 		recoverHandler,
 		loggerHandler(func(w http.ResponseWriter, r *http.Request) bool { return false }),
 		s.appNameHandler,

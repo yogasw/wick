@@ -27,8 +27,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/singleflight"
 
-	"github.com/yogasw/wick/pkg/safeexec"
 	"github.com/yogasw/wick/internal/userconfig"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // Type is the AI CLI kind. Adding a new type = add a constant here +
@@ -79,17 +79,32 @@ type Instance struct {
 	// CodexConfig holds codex-specific spawn options. nil for non-codex instances.
 	CodexConfig *CodexConfig
 
-	// Use9router routes this instance's CLI through the embedded 9router
-	// proxy instead of the provider's own upstream. Only claude/codex.
-	Use9router bool
+	// UseAIRouter routes this instance's CLI through an embedded AI router
+	// proxy (9router / OmniRoute / …) instead of the provider's own
+	// upstream. Only claude/codex.
+	UseAIRouter bool
 
-	// Router9Models maps a per-provider model slot (see Router9Slots) to
-	// the concrete 9router model id. Required (primary slot) when
-	// Use9router is true; "auto" is rejected by 9router.
-	Router9Models map[string]string
+	// AIRouterProvider selects which registered router this instance routes
+	// through ("9router", "omniroute", …). Empty falls back to the default
+	// router (9router) so instances configured before this field existed
+	// keep working.
+	AIRouterProvider string
 
-	// Router9APIKey is a custom 9router API key. Empty = default sk_9router.
-	Router9APIKey string
+	// AIRouterModels maps a per-provider model slot (see RouterSlots) to the
+	// concrete model id. Required (primary slot) when UseAIRouter is true.
+	AIRouterModels map[string]string
+
+	// AIRouterAPIKey is a custom router API key (encrypted at rest). Empty =
+	// the router's default credential.
+	AIRouterAPIKey string
+
+	// AIRouterRawConfig is free-form extra config the user can add on top of
+	// what the router hook injects, applied only when UseAIRouter is on. One
+	// entry per line: for codex it's `-c` TOML overrides (e.g.
+	// model_reasoning_effort="high"), for claude/gemini it's env vars
+	// (KEY=VALUE). An escape hatch so the user can tweak router routing without
+	// a code change.
+	AIRouterRawConfig string
 }
 
 // CodexSandboxMode maps to codex's --sandbox flag values.
@@ -715,19 +730,21 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 		}
 		for _, raw := range list {
 			ins := Instance{
-				Type:          t,
-				Name:          raw.Name,
-				Binary:        raw.BinaryPath,
-				ExtraArgs:     raw.ExtraArgs,
-				Env:           raw.Env,
-				Disabled:      raw.Disabled,
-				Hooks:         hooksFromUser(raw.Hooks),
-				Storage:       storageFromUser(raw.Storage),
-				MaxConcurrent: raw.MaxConcurrent,
-				SendMode:      raw.SendMode,
-				Use9router:    raw.Use9router,
-				Router9Models: raw.Router9Models,
-				Router9APIKey: raw.Router9APIKey,
+				Type:             t,
+				Name:             raw.Name,
+				Binary:           raw.BinaryPath,
+				ExtraArgs:        raw.ExtraArgs,
+				Env:              raw.Env,
+				Disabled:         raw.Disabled,
+				Hooks:            hooksFromUser(raw.Hooks),
+				Storage:          storageFromUser(raw.Storage),
+				MaxConcurrent:    raw.MaxConcurrent,
+				SendMode:         raw.SendMode,
+				UseAIRouter:       raw.UseAIRouter,
+				AIRouterProvider:  raw.AIRouterProvider,
+				AIRouterModels:    raw.AIRouterModels,
+				AIRouterAPIKey:    raw.AIRouterAPIKey,
+				AIRouterRawConfig: raw.AIRouterRawConfig,
 			}
 			if t == TypeCodex {
 				ins.CodexConfig = &CodexConfig{
@@ -766,18 +783,20 @@ func pickList(c *userconfig.ProvidersConfig, t Type) *[]userconfig.ProviderInsta
 
 func toUserInstance(ins Instance) userconfig.ProviderInstance {
 	raw := userconfig.ProviderInstance{
-		Name:          ins.Name,
-		BinaryPath:    ins.Binary,
-		Disabled:      ins.Disabled,
-		ExtraArgs:     ins.ExtraArgs,
-		Env:           ins.Env,
-		Hooks:         hooksToUser(ins.Hooks),
-		Storage:       storageToUser(ins.Storage),
-		MaxConcurrent: ins.MaxConcurrent,
-		SendMode:      ins.SendMode,
-		Use9router:    ins.Use9router,
-		Router9Models: ins.Router9Models,
-		Router9APIKey: ins.Router9APIKey,
+		Name:             ins.Name,
+		BinaryPath:       ins.Binary,
+		Disabled:         ins.Disabled,
+		ExtraArgs:        ins.ExtraArgs,
+		Env:              ins.Env,
+		Hooks:            hooksToUser(ins.Hooks),
+		Storage:          storageToUser(ins.Storage),
+		MaxConcurrent:    ins.MaxConcurrent,
+		SendMode:         ins.SendMode,
+		UseAIRouter:       ins.UseAIRouter,
+		AIRouterProvider:  ins.AIRouterProvider,
+		AIRouterModels:    ins.AIRouterModels,
+		AIRouterAPIKey:    ins.AIRouterAPIKey,
+		AIRouterRawConfig: ins.AIRouterRawConfig,
 	}
 	if ins.CodexConfig != nil {
 		raw.SandboxMode = string(ins.CodexConfig.SandboxMode)

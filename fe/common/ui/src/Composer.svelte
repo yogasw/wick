@@ -199,8 +199,10 @@
   });
 
   function detectTrigger(before: string): { kind: "@" | "/"; query: string; pos: number } | null {
-    const slash = /^\/(\S*)$/.exec(before);
-    if (slash) return { kind: "/", query: slash[1], pos: 0 };
+    // `/` and `@` both fire at the start of the line OR right after whitespace,
+    // so a command/mention can be inserted mid-message, not just as a prefix.
+    const slash = /(?:^|\s)\/(\S*)$/.exec(before);
+    if (slash) return { kind: "/", query: slash[1], pos: before.length - slash[1].length - 1 };
     const at = /(?:^|\s)@(\S[^\n]*|)$/.exec(before);
     if (at) return { kind: "@", query: at[1], pos: before.length - at[1].length - 1 };
     return null;
@@ -445,6 +447,11 @@
   function selLabel(s: ComposerSelect | undefined): string {
     if (!s) return "";
     return s.options.find((o) => o.value === s.value)?.label ?? "";
+  }
+  // Badge of the currently-selected option (e.g. "AI Router"), or "".
+  function selBadge(s: ComposerSelect | undefined): string {
+    if (!s) return "";
+    return s.options.find((o) => o.value === s.value)?.badge ?? "";
   }
   // A selector is "active" when it has a real value (not the default/empty one).
   function isActive(s: ComposerSelect | undefined): boolean {
@@ -747,6 +754,7 @@
                 <span class="flex items-center gap-2 min-w-0">
                   {#if plusView === "provider"}{@render provIcon(opt.value, "h-4 w-4 shrink-0")}{/if}
                   <span class="truncate">{opt.label}</span>
+                  {#if opt.badge}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">{opt.badge}</span>{/if}
                 </span>
                 {#if opt.value === sel.value}<span class="shrink-0 text-green-600 dark:text-green-400">✓</span>{/if}
               </button>
@@ -795,11 +803,12 @@
         <button
           type="button"
           aria-label="Provider"
-          title={selLabel(provider) || "Provider"}
+          title={selBadge(provider) ? `${selLabel(provider) || "Provider"} · via ${selBadge(provider)}` : selLabel(provider) || "Provider"}
           onclick={openProviderPicker}
-          class="inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-lg border border-green-500/40 bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-500/20 transition-colors"
+          class="relative inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-lg border border-green-500/40 bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-500/20 transition-colors"
         >
           {@render provIcon(provider.value, "h-5 w-5")}
+          {#if selBadge(provider)}<span class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 ring-2 ring-white-100 dark:ring-navy-700" aria-hidden="true"></span>{/if}
         </button>
       {/if}
       <button
