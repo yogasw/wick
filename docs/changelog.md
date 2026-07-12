@@ -6,7 +6,8 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **AI Router: multi-router (9router + OmniRoute), switchable, per-provider routing**: The embedded 9router dashboard is now a generalized **AI Router** page that hosts multiple router backends side by side — today [9router](https://github.com/decolua/9router) and [OmniRoute](https://github.com/diegosouzapw/OmniRoute) — each installed, run, and reverse-proxied concurrently on its own loopback port (`/airouter/<id>/`), with a switcher to flip between their Dashboard/Requests/Settings tabs. Provider instances (`claude`/`codex`) get a **Route through AI Router** toggle plus a router picker, per-slot model overrides, a custom API key, and an admin-only **Advanced** section that previews and lets you edit the exact effective spawn config (env vars / codex `-c` overrides) as a raw override. A new master switch (`AirouterEnabled`, replacing `Router9Enabled`) gates the whole feature; per-router auto-start and external-API toggles live on the AI Router page itself. Existing 9router-routed instances and settings carry over unchanged. See [AI Router](/guide/agents/airouter).
 
 ---
 
