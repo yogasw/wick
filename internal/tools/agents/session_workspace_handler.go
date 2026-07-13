@@ -45,6 +45,16 @@ type wsInstanceVM struct {
 	Fields  []wsFieldVM `json:"fields"`
 }
 
+// wsTombstoneVM is the trace of a session instance that was auto-deleted for
+// inactivity, shown so the user knows it was here and must be re-created. It
+// carries no config — that is the whole point of the reap.
+type wsTombstoneVM struct {
+	Label     string `json:"label"`
+	BaseKey   string `json:"base_key"`
+	DeletedAt string `json:"deleted_at"`
+	Reason    string `json:"reason,omitempty"`
+}
+
 // wsBaseVM is one base connector the user may add as a session instance.
 type wsBaseVM struct {
 	BaseKey string `json:"base_key"`
@@ -185,7 +195,15 @@ func sessionWorkspaceListUI(c *tool.Ctx) {
 	for _, in := range instances {
 		vms = append(vms, wsInstanceToVM(in))
 	}
-	c.JSON(http.StatusOK, map[string]any{"instances": vms, "bases": wsBases(c)})
+	// Tombstones: connectors auto-deleted when the session went idle. Shown as
+	// greyed "deleted — re-create" cards so the user isn't left wondering where
+	// a connector they set up earlier went (its config is gone with it).
+	tombs, _ := sessionworkspace.Tombstones(globalLayout, sid)
+	tvms := make([]wsTombstoneVM, 0, len(tombs))
+	for _, t := range tombs {
+		tvms = append(tvms, wsTombstoneVM{Label: t.Label, BaseKey: t.BaseKey, DeletedAt: t.DeletedAt, Reason: t.Reason})
+	}
+	c.JSON(http.StatusOK, map[string]any{"instances": vms, "bases": wsBases(c), "deleted": tvms})
 }
 
 // sessionWorkspaceAddUI creates a blank instance from a base connector.

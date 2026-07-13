@@ -638,7 +638,11 @@ From the tab a user can:
 
 ### How instances run at execution time
 
-When `wick_execute` (or `wick_get`) is called with a `session_id` and a `sw_…` connector id, the server resolves the instance from `sessions/<id>/workspace.json`, clones the base module, and runs against the instance's own config — no DB row, no tag visibility (the session itself is the authorization scope). Secret values (master tokens) are decrypted just before the call and re-masked in the response. A `session-config-purge` job sweeps stale workspace files by age as a TTL backstop.
+When `wick_execute` (or `wick_get`) is called with a `session_id` and a `sw_…` connector id, the server resolves the instance from `sessions/<id>/workspace.json`, clones the base module, and runs against the instance's own config — no DB row, no tag visibility (the session itself is the authorization scope). Secret values (master tokens) are decrypted just before the call and re-masked in the response.
+
+Instances live only while the session is active. Once a session sits idle — no running/queued subprocess and no activity for the grace window (default 10 minutes) — its instances are auto-deleted, config (secrets and all) included. While the session is running or was recently active they stay alive on their own, so there is no manual expiry to manage. When an instance is reaped a tombstone is left: `wick_session_workspace` `action=list` returns it under `deleted`, and the session Config tab shows a greyed "deleted — re-create" card, so the agent and user know a connector they set up earlier is gone and must be recreated. A lightweight in-process reaper does the cleanup and stops itself when no instances remain.
+
+The reap also records a `[system]` context turn on the session (naming what was removed, marked "context only — do not reply"). Because the session is idle by definition, this is buffered, not spawned: the agent reads it as leading context the next time the user messages, so it already knows the connector is gone before answering — no extra subprocess, no channel message.
 
 ## Scheduling a future message
 
