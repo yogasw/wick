@@ -1,7 +1,7 @@
 import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import WorkspacePanel from "../WorkspacePanel.svelte";
-import type { WsInstance, WsBase } from "../../types/agents.js";
+import type { WsInstance, WsBase, WsTombstone } from "../../types/agents.js";
 
 const INST_A: WsInstance = {
   id: "cid-a",
@@ -30,6 +30,13 @@ function defaultCallbacks() {
     onDelete: vi.fn(),
   };
 }
+
+const TOMB: WsTombstone = {
+  label: "Old Staging",
+  base_key: "slack",
+  deleted_at: "2026-07-13T12:00:00Z",
+  reason: "session idle",
+};
 
 describe("WorkspacePanel", () => {
   test("shows empty-state message when instances is empty", () => {
@@ -137,5 +144,40 @@ describe("WorkspacePanel", () => {
     });
     expect(screen.getByTestId("base-picker")).toBeDefined();
     expect(screen.getByText("Alpha Connector")).toBeDefined();
+  });
+
+  test("no deleted list when there are no tombstones", () => {
+    render(WorkspacePanel, {
+      props: { instances: [], bases: [], deleted: [], ...defaultCallbacks() },
+    });
+    expect(screen.queryByTestId("deleted-list")).toBeNull();
+  });
+
+  test("renders a tombstone card with its label and reason", () => {
+    render(WorkspacePanel, {
+      props: { instances: [], bases: [BASE_X], deleted: [TOMB], ...defaultCallbacks() },
+    });
+    expect(screen.getByTestId("tombstone")).toBeDefined();
+    expect(screen.getByText("Old Staging")).toBeDefined();
+    expect(screen.getByText(/session idle/i)).toBeDefined();
+    expect(screen.getByText(/config is gone/i)).toBeDefined();
+  });
+
+  test("Re-create button shows when the base is still addable and calls onAdd", async () => {
+    const onAdd = vi.fn();
+    render(WorkspacePanel, {
+      props: { instances: [], bases: [BASE_X], deleted: [TOMB], ...defaultCallbacks(), onAdd },
+    });
+    await fireEvent.click(screen.getByTestId("recreate-btn"));
+    expect(onAdd).toHaveBeenCalledWith("slack");
+  });
+
+  test("Re-create button is hidden when the tombstone's base is no longer addable", () => {
+    render(WorkspacePanel, {
+      // TOMB.base_key is "slack" but only github is addable now
+      props: { instances: [], bases: [BASE_Y], deleted: [TOMB], ...defaultCallbacks() },
+    });
+    expect(screen.getByTestId("tombstone")).toBeDefined();
+    expect(screen.queryByTestId("recreate-btn")).toBeNull();
   });
 });
