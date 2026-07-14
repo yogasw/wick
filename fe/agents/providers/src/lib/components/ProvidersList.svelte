@@ -2,6 +2,7 @@
   import { ConfirmDialog } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
+  import RecentSpawns from "$lib/components/RecentSpawns.svelte";
   import {
     apiGetProviders,
     apiRescanAll,
@@ -17,16 +18,16 @@
     apiHookDisable,
     apiHookCheck,
   } from "$lib/api.js";
-  import type { ProvidersListResponse, ProviderStatusDTO, SpawnLogFileDTO } from "$lib/types.js";
+  import type { ProvidersListResponse, ProviderStatusDTO } from "$lib/types.js";
 
   const HOOK_EVENT = "PreToolUse";
 
   type Props = {
     onNavigate: (type: string, name: string) => void;
-    onOpenSpawn: (file: string) => void;
+    onOpenSession: (sessionID: string) => void;
     base: string;
   };
-  let { onNavigate, onOpenSpawn, base }: Props = $props();
+  let { onNavigate, onOpenSession, base }: Props = $props();
 
   let data = $state<ProvidersListResponse | null>(null);
   let loading = $state(true);
@@ -246,11 +247,6 @@
     } finally {
       setBusy(key, false);
     }
-  }
-
-  function spawnFile(s: SpawnLogFileDTO): string {
-    const idx = Math.max(s.Path.lastIndexOf("/"), s.Path.lastIndexOf("\\"));
-    return idx >= 0 ? s.Path.slice(idx + 1) : s.Path;
   }
 
   function shortID(id: string): string {
@@ -702,53 +698,7 @@
       {/if}
     </div>
 
-    <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-      <div class="px-5 py-3 flex items-center gap-2 border-b border-white-300 dark:border-navy-600">
-        <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Recent Spawns</h2>
-        {#if data.Spawns.length > 0}
-          <span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">{data.Spawns.length}</span>
-        {/if}
-      </div>
-      {#if data.Spawns.length === 0}
-        <div class="px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">No spawns recorded yet.</div>
-      {:else}
-        <table class="w-full text-xs">
-          <thead>
-            <tr class="border-b border-white-300 dark:border-navy-600 text-black-700 dark:text-black-600">
-              <th class="px-5 py-2.5 text-left">Started</th>
-              <th class="px-5 py-2.5 text-left">Provider</th>
-              <th class="px-5 py-2.5 text-left">Session</th>
-              <th class="px-5 py-2.5 text-left">PID</th>
-              <th class="px-5 py-2.5 text-left">Status</th>
-              <th class="px-5 py-2.5 text-left">First Message</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each data.Spawns as s (s.Path)}
-              <tr
-                class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 cursor-pointer"
-                onclick={() => onOpenSpawn(spawnFile(s))}
-              >
-                <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600 whitespace-nowrap">{new Date(s.StartedAt).toLocaleString()}</td>
-                <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">{s.ProviderType}/{s.ProviderName}</td>
-                <td class="px-5 py-2 font-mono text-black-900 dark:text-white-100">{shortID(s.SessionID)}</td>
-                <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">{s.PID > 0 ? s.PID : "—"}</td>
-                <td class="px-5 py-2">
-                  {#if !s.ExitReason}
-                    <span class="rounded bg-green-100 dark:bg-green-900 px-1.5 py-0.5 text-xs text-green-700 dark:text-green-300">running</span>
-                  {:else if s.ExitReason === "unclean"}
-                    <span class="rounded bg-red-100 dark:bg-red-900 px-1.5 py-0.5 text-xs text-red-700 dark:text-red-300">unclean exit</span>
-                  {:else}
-                    <span class="rounded bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-xs text-black-700 dark:text-black-600">{s.ExitReason}</span>
-                  {/if}
-                </td>
-                <td class="px-5 py-2 text-black-700 dark:text-black-600 max-w-xs truncate">{s.FirstUserMessage}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-      {/if}
-    </div>
+    <RecentSpawns {base} {onOpenSession} />
   {/if}
 </div>
 
