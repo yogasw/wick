@@ -6,7 +6,11 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **Recent Spawns grouped per session, with crash detail and a log viewer**: The Providers page's Recent Spawns table now groups spawns by session (one row per session, with a spawn count and latest status) instead of listing every spawn flat; clicking a session opens its spawn history, each expandable inline to the full spawn detail. A crashed spawn now shows its exit code and a stderr tail, and a process that disappeared without recording an exit event is flagged as "died, no exit event" instead of looking like it's still running. Spawn detail also links straight to a new in-app log viewer (`/providers/logs?file=`) for the relevant server/mcp/worker/app/gate/daemon log file, with copy-path, copy-JSON, and download actions. See [Providers — Recent Spawns list](/guide/agents/providers#recent-spawns-list).
+
+### Fixed
+*   **Daemon log is now dated and actually gets pruned**: The daemon's own log (`daemon.log`) is now written per-day (`logs/daemon-YYYY-MM-DD.log`) alongside the other runtime logs, and a bug that let dated log files (including the daemon's) skip retention pruning entirely is fixed — old logs are now deleted on schedule instead of accumulating forever. `<app> status --log` still finds the right file by tailing the newest `daemon-*.log`. See [Daemon (background)](/reference/app-cli#daemon-background).
 
 ---
 
