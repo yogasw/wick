@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { apiGetProviders, normalizeProviders } from "../api.js";
+import { apiGetProviders, apiGetSpawns, normalizeProviders } from "../api.js";
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -21,9 +21,6 @@ function makeWire() {
       },
     ],
     gate: { enabled: true, binary: "/usr/bin/gate", source: "config", reason: "", note: "Gate note", permission_mode: "bypass", bypass_locked: false },
-    spawns: [
-      { path: "/tmp/s.log", provider_type: "claude", provider_name: "claude", session_id: "sess-1", started_at: "2024-01-01T00:00:00Z", pid: 42, origin: "web", first_user_message: "hi", binary: "claude", exit_reason: "done" },
-    ],
     mcp: {
       app_name: "wick-agent",
       clients: [
@@ -80,13 +77,6 @@ describe("normalizeProviders - snake_case wire mapping", () => {
     expect(r.SupportedKeys).toEqual(["claude", "openai"]);
   });
 
-  it("maps spawns snake_case to PascalCase", () => {
-    const r = normalizeProviders(makeWire());
-    expect(r.Spawns[0].SessionID).toBe("sess-1");
-    expect(r.Spawns[0].ProviderType).toBe("claude");
-    expect(r.Spawns[0].PID).toBe(42);
-  });
-
   it("maps pool stats", () => {
     const r = normalizeProviders(makeWire());
     expect(r.PoolMax).toBe(2);
@@ -99,7 +89,6 @@ describe("normalizeProviders - null normalization", () => {
     return {
       providers: null,
       gate: null,
-      spawns: null,
       mcp: null,
       auto_rescan: false,
       pool_active: 0,
@@ -112,10 +101,6 @@ describe("normalizeProviders - null normalization", () => {
 
   it("normalizes null providers to empty array", () => {
     expect(normalizeProviders(makeNullWire()).Providers).toEqual([]);
-  });
-
-  it("normalizes null spawns to empty array", () => {
-    expect(normalizeProviders(makeNullWire()).Spawns).toEqual([]);
   });
 
   it("normalizes null live_processes to empty array", () => {
@@ -180,5 +165,34 @@ describe("apiGetProviders", () => {
       text: async () => "service unavailable",
     }));
     await expect(apiGetProviders()).rejects.toThrow("service unavailable");
+  });
+});
+
+describe("apiGetSpawns", () => {
+  it("maps the paged spawns payload and builds the query string", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        spawns: [
+          { path: "/tmp/s.log", provider_type: "claude", provider_name: "claude", session_id: "sess-1", started_at: "2024-01-01T00:00:00Z", pid: 42, first_user_message: "hi", exit_reason: "error", exit_code: 1 },
+        ],
+        page: 2,
+        has_next: true,
+        total: 15,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const r = await apiGetSpawns("/wick", { type: "claude", name: "claude", q: "hi", page: 2 });
+    expect(r.Spawns[0].SessionID).toBe("sess-1");
+    expect(r.Spawns[0].ExitCode).toBe(1);
+    expect(r.Page).toBe(2);
+    expect(r.HasNext).toBe(true);
+    expect(r.Total).toBe(15);
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain("/api/providers/spawns?");
+    expect(url).toContain("type=claude");
+    expect(url).toContain("q=hi");
+    expect(url).toContain("page=2");
   });
 });

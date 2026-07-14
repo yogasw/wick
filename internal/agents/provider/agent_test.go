@@ -1,7 +1,10 @@
 package provider
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +13,114 @@ import (
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/state"
 )
+
+// crashSpawner produces a process that closes stdout immediately (no
+// output) and whose Wait() returns an error carrying an exit code, plus
+// a StderrTail — simulating a CLI that dies right after spawn (bad model
+// id, config error). Exercises the reader-exit crash path that builds
+// ExitDetail with exit code + stderr tail.
+type crashSpawner struct {
+	exitCode   int
+	stderrTail string
+}
+
+func (s *crashSpawner) Spawn(ctx context.Context, opt SpawnOptions) (Process, error) {
+	pr, pw := io.Pipe()
+	proc := &crashProcess{
+		stdoutR:    pr,
+		stdoutW:    pw,
+		stdinBuf:   &bytes.Buffer{},
+		done:       make(chan struct{}),
+		pid:        93000,
+		exitCode:   s.exitCode,
+		stderrTail: s.stderrTail,
+	}
+	// Close stdout right away so the reader drains to the wait path.
+	go func() { _ = pw.Close() }()
+	return proc, nil
+}
+
+type crashProcess struct {
+	stdoutR    *io.PipeReader
+	stdoutW    *io.PipeWriter
+	stdinMu    sync.Mutex
+	stdinBuf   *bytes.Buffer
+	done       chan struct{}
+	once       sync.Once
+	pid        int
+	exitCode   int
+	stderrTail string
+}
+
+func (p *crashProcess) Stdout() io.Reader     { return p.stdoutR }
+func (p *crashProcess) Stdin() io.WriteCloser { return &crashStdin{p: p} }
+func (p *crashProcess) Pid() int              { return p.pid }
+func (p *crashProcess) Binary() string        { return "" }
+func (p *crashProcess) Argv() []string        { return nil }
+func (p *crashProcess) Env() []string         { return nil }
+func (p *crashProcess) StderrTail() string    { return p.stderrTail }
+
+// Wait returns a non-zero-exit error so the reader classifies the exit
+// as ExitError and reads the exit code off the error.
+func (p *crashProcess) Wait() error { return crashExitErr{code: p.exitCode} }
+
+func (p *crashProcess) Kill() error {
+	p.once.Do(func() {
+		_ = p.stdoutR.Close()
+		_ = p.stdoutW.Close()
+		close(p.done)
+	})
+	return nil
+}
+
+type crashStdin struct{ p *crashProcess }
+
+func (f *crashStdin) Write(b []byte) (int, error) {
+	f.p.stdinMu.Lock()
+	defer f.p.stdinMu.Unlock()
+	return f.p.stdinBuf.Write(b)
+}
+func (f *crashStdin) Close() error { return nil }
+
+// crashExitErr mimics *exec.ExitError: non-nil, non-clean, with an
+// ExitCode() method the reader path type-asserts.
+type crashExitErr struct{ code int }
+
+func (e crashExitErr) Error() string { return "exit status " + strconv.Itoa(e.code) }
+func (e crashExitErr) ExitCode() int { return e.code }
+
+func TestAgentCrashCarriesExitDetail(t *testing.T) {
+	spawner := &crashSpawner{exitCode: 1, stderrTail: "error: unsupported wire_api\nfatal"}
+	details := make(chan ExitDetail, 1)
+	a := New(Options{
+		Workspace:     t.TempDir(),
+		IdleTimeout:   5 * time.Second,
+		ParserFactory: func() event.Parser { return event.NewClaudeParser() },
+		Spawner:       spawner,
+		State:         state.New(nil),
+		OnExitDetail:  func(d ExitDetail) { details <- d },
+	})
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case d := <-details:
+		if d.Reason != ExitError {
+			t.Fatalf("reason = %v, want ExitError", d.Reason)
+		}
+		if d.ExitCode != 1 {
+			t.Errorf("exit code = %d, want 1", d.ExitCode)
+		}
+		if !strings.Contains(d.StderrTail, "unsupported wire_api") {
+			t.Errorf("stderr tail missing crash msg: %q", d.StderrTail)
+		}
+		if !strings.Contains(d.ReasonDetail, "unsupported wire_api") {
+			t.Errorf("reason detail should quote stderr first line: %q", d.ReasonDetail)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnExitDetail did not fire")
+	}
+}
 
 func TestAgentReadsStreamUpdatesState(t *testing.T) {
 	spawner := &fakeSpawner{

@@ -16,6 +16,18 @@
   const isUser = $derived(turn.role === "user");
   const isSystem = $derived(turn.role === "system");
 
+  /* A reply the agent opened with [silent] is kept out of every channel and
+     push alert by the backend, but still shows here so there's a visible
+     record. Flag it (muted bell + dimmed) and strip the marker from display so
+     the reader sees the content, not the plumbing. Case-insensitive, tolerant
+     of leading whitespace — mirrors the server's looksSilent. */
+  const isSilentReply = $derived(
+    !isUser && !isSystem && /^\s*\[silent\]/i.test(turn.text ?? ""),
+  );
+  const displayText = $derived(
+    isSilentReply ? (turn.text ?? "").replace(/^\s*\[silent\]\s*/i, "") : (turn.text ?? ""),
+  );
+
   /* Source badge for user turns that did NOT come from this web session —
      a channel (Slack/Telegram/…) or the schedule runner. "ui"/empty = typed
      here, no badge. Keeps it clear which messages arrived from elsewhere. */
@@ -251,7 +263,7 @@
               {sourceBadge.label}
             </span>
           {/if}
-          <div class="min-w-0 max-w-full overflow-hidden rounded-2xl rounded-tr-sm bg-green-500 px-4 py-2.5 text-sm text-white-100 whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm">
+          <div class="min-w-0 max-w-full overflow-hidden rounded-2xl rounded-tr-sm bg-green-500 px-4 py-2.5 text-base text-white-100 whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm">
             {@html linkifyText(turn.text)}
           </div>
         </div>
@@ -315,11 +327,26 @@
       {/if}
 
       {#if turn.text}
-        {#if stamp}
-          <span class="self-start text-[10px] leading-none text-black-500 dark:text-black-600">{stamp}</span>
+        {#if stamp || isSilentReply}
+          <span class="self-start inline-flex items-center gap-0.5 text-[10px] leading-none text-black-500 dark:text-black-600">
+            {#if isSilentReply}
+              <svg data-testid="silent-flag" viewBox="0 0 24 24" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Silent — kept out of channels & notifications; shown here only">
+                <title>Silent — kept out of channels & notifications; shown here only</title>
+                <path d="M8.7 3.7A6 6 0 0 1 18 8.5c0 3 .5 4.4 1.3 5.6M17 17H4c1.5-1.5 3-3 3-8.5"></path>
+                <path d="M10.3 21a2 2 0 0 0 3.4 0"></path>
+                <line x1="2" y1="2" x2="22" y2="22"></line>
+              </svg>
+            {/if}
+            {#if stamp}<span>{stamp}</span>{/if}
+          </span>
         {/if}
-        <div use:enrich={turn.text} onwick-imagecard-open={onImageCardOpen} class="rounded-2xl rounded-tl-sm bg-white-200 dark:bg-navy-800 px-4 py-3 text-sm text-black-900 dark:text-white-100 break-words leading-relaxed shadow-sm">
-          {@html renderMarkdown(turn.text)}
+        <!-- Assistant replies render as plain serif prose (no bubble
+             bg/padding/shadow), so the conversation reads like a document —
+             only the user's turns wear a bubble. Slightly larger text + roomy
+             line-height for comfortable long-form reading. A [silent] reply is
+             the same plain text, marked by the muted-bell chip above. -->
+        <div use:enrich={displayText} onwick-imagecard-open={onImageCardOpen} class="wick-prose px-0.5 text-black-900 dark:text-white-100 break-words">
+          {@html renderMarkdown(displayText)}
           {#if turn.interrupted}
             <div class="mt-2 flex items-center gap-1.5 border-t border-white-300 dark:border-navy-600 pt-2">
               <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-amber-500" fill="none" stroke="currentColor" stroke-width="1.5">

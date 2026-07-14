@@ -34,19 +34,16 @@ function makeDetail(): ProviderDetailResponse {
       { Key: "extra_args", Value: "[{\"value\":\"--foo\"},{\"value\":\"--bar\"}]", Type: "kvlist", Options: "value", IsSecret: false, Description: "Extra CLI args", Required: false },
       { Key: "env", Value: "[{\"key\":\"FOO\",\"value\":\"1\"}]", Type: "kvlist", Options: "key|value", IsSecret: false, Description: "Environment variables", Required: false },
     ],
-    Spawns: [
-      { Path: "/tmp/s.log", ProviderType: "claude", ProviderName: "default", SessionID: "sess-abc-1234", StartedAt: "2024-01-01T00:00:00Z", PID: 42, Origin: "web", FirstUserMessage: "Hello", Binary: "claude", ExitReason: "done" },
-    ],
-    Page: 1,
-    HasNext: false,
     AIRouter: { Supported: true, Enabled: false, Provider: "9router", Routers: [{ ID: "9router", Name: "9router" }], Models: {}, KeySet: false, RawConfig: "", Preview: "" },
   };
 }
 
-const defaultProps = { base: "", type: "claude", name: "default", onBack: vi.fn(), onOpenSpawn: vi.fn() };
+const defaultProps = { base: "", type: "claude", name: "default", onBack: vi.fn(), onOpenSession: vi.fn() };
 
 beforeEach(() => {
   vi.mocked(api.apiGetProviderDetail).mockResolvedValue(makeDetail());
+  // ProviderDetail embeds <RecentSpawns>, which fetches on mount.
+  vi.mocked(api.apiGetSessions).mockResolvedValue({ Sessions: [], Page: 1, HasNext: false, Total: 0 });
   vi.mocked(api.apiSaveProviderDetail).mockResolvedValue(undefined);
   vi.mocked(api.apiSaveConfigKey).mockResolvedValue(undefined);
   vi.mocked(api.apiHookCheck).mockResolvedValue(undefined);
@@ -124,10 +121,16 @@ describe("ProviderDetail - rendering", () => {
     expect(screen.getByText("Probe Gate")).toBeTruthy();
   });
 
-  it("renders spawn log section", async () => {
+  it("renders recent sessions section (via embedded RecentSpawns)", async () => {
+    vi.mocked(api.apiGetSessions).mockResolvedValue({
+      Sessions: [
+        { SessionID: "sess-abc-1234", ProviderType: "claude", ProviderName: "default", SpawnCount: 2, LastStatus: "stopped", LastStarted: "2024-01-01T00:00:00Z", FirstMessage: "Hello", Origin: "web" },
+      ],
+      Page: 1, HasNext: false, Total: 1,
+    });
     render(ProviderDetail, { props: defaultProps });
-    expect(await screen.findByText("Recent Spawns")).toBeTruthy();
-    expect(screen.getByText("sess-abc")).toBeTruthy();
+    expect(await screen.findByText("Recent Sessions")).toBeTruthy();
+    expect(await screen.findByText("sess-abc")).toBeTruthy();
   });
 
   it("renders Delete button", async () => {
@@ -202,7 +205,10 @@ describe("ProviderDetail - value-list editor (extra_args)", () => {
     await screen.findByText("extra_args");
     const addBtns = screen.getAllByText("+ Add Row");
     fireEvent.click(addBtns[0]);
-    const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
+    // Exclude the Recent Spawns search box (also an <input>) so "the fresh
+    // row" is the last CONFIG input, not the search field.
+    const inputs = (Array.from(document.querySelectorAll("input")) as HTMLInputElement[])
+      .filter((i) => !(i.placeholder ?? "").toLowerCase().includes("search"));
     const fresh = inputs[inputs.length - 1];
     await fireEvent.input(fresh, { target: { value: "--baz" } });
     await fireEvent.blur(fresh);

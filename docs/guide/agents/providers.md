@@ -104,7 +104,15 @@ Each provider card's **Command Gate** row now includes inline **Enable / Disable
 
 ### Recent Spawns list
 
-The page also surfaces a [Gate Status card](../command-gate#diagnostics) and a recent spawns table (filterable by type/name/session). Each row links to the server-rendered spawn detail page.
+The page also surfaces a [Gate Status card](../command-gate#diagnostics) and a **Recent Spawns** table, grouped **per session** — one row per session (provider, spawn count, latest status, last-started time, first message) instead of one row per spawn. Search and pagination (10/page) run server-side.
+
+Clicking a session row opens its **session detail** page: every spawn of that session, newest first, each expandable inline to the full spawn detail (crash cause, injected env, repro command, log links) without leaving the page.
+
+Backing endpoints:
+
+- `GET /api/providers/sessions` — grouped, paginated session summaries (scope with `?type=&name=`, search with `?q=`).
+- `GET /api/providers/sessions/{id}` — every spawn of one session.
+- `GET /api/providers/spawns` — the flat, searchable, paginated spawn list backing both the provider list and provider detail pages.
 
 ## Binary resolution chain
 
@@ -173,9 +181,31 @@ Two events per spawn: `start` (with PID, argv, binary, first user message) and `
 
 Source: [`spawnlog.go`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/spawnlog.go).
 
-The Spawn detail page in the UI (link from the recent-spawns table) renders the start + exit events plus the resolved provider source label. Each row in the Recent Spawns table is now clickable — it opens the corresponding spawn detail page directly.
+The Spawn detail page in the UI (opened from a session's spawn list) renders the start + exit events plus the resolved provider source label.
 
 The detail page also shows an **Injected env** panel when wick added env vars to the spawn (instance env + AI-router routing overrides). Secret values (keys, tokens, passwords) are partially masked — the first and last character are visible, the middle is replaced with `*`. Non-secret routing vars (e.g. `ANTHROPIC_BASE_URL`) pass through unmasked so you can verify the routing destination.
+
+### Crash detail and spawn window
+
+When a spawn's process ends abnormally, the detail page surfaces **why**: the human-readable reason sentence, the OS exit code, and a tail of captured stderr — instead of a bare "error" status. A process that disappears without ever recording an `exit` event (crash, OS-kill, power loss) is called out as **"died, no exit event"** rather than being shown as still running.
+
+Every spawn also shows a **start → end window**:
+
+| State | Meaning |
+|---|---|
+| Running | No exit event yet, and the PID is still alive. |
+| Clean end | An `exit` event was recorded; window ends at that timestamp. |
+| Unclean end | No `exit` event, but the PID is gone — window ends at the last event's timestamp (best-effort), flagged as unclean rather than "running". |
+
+### Log viewer
+
+Each spawn's detail page has a **Logs** block linking to the runtime log file for each component (`server`, `mcp`, `worker`, `app`, `gate`, `daemon`) written on the day(s) the spawn ran. Opening a link goes to `/providers/logs?file=<name>`, a tail viewer for that log file with:
+
+- **Copy path**, **copy as JSON**, and **download** for the visible tail.
+- **Download bundle** to grab the full file.
+- The spawn's start→end window highlighted so you know where to scroll.
+
+Backing endpoints: `GET /api/providers/logs/{file}` (tail, admin-only) and `GET /api/providers/logs/{file}/download` (full file). Both validate the filename against path traversal and resolve strictly inside the app's `logs/` directory.
 
 ## Spawn / probe log keys
 
@@ -287,6 +317,11 @@ Quick cheatsheet for what each provider supports — useful when picking a defau
 | `POST` | `/providers/rename/{type}/{name}` | Renames an instance. Body: `new_name=<name>`. Migrates project defaults; live sessions unaffected. Admin only. |
 | `GET` | `/providers/airouter/slots/{type}?router=<id>` | Returns the model slots the given router exposes for a provider type. Admin only. |
 | `POST` | `/providers/detail/{type}/{name}/airouter` | Saves AI-router settings (toggle + selected router + model slots + API key) for one instance. Admin only. |
+| `GET` | `/api/providers/spawns?type=&name=&q=&page=` | Flat, searchable, paginated (10/page) spawn list backing the Recent Spawns table. Admin only. |
+| `GET` | `/api/providers/sessions?type=&name=&q=&page=` | Per-session spawn summaries (grouped, paginated) for the Recent Spawns list. Admin only. |
+| `GET` | `/api/providers/sessions/{id}` | Every spawn of one session, newest first, for the session detail page. Admin only. |
+| `GET` | `/api/providers/logs/{file}?bytes=` | Tails a runtime log file (server/mcp/worker/app/gate/daemon) for the log viewer. Admin only. |
+| `GET` | `/api/providers/logs/{file}/download` | Downloads the full runtime log file. Admin only. |
 
 ## See also
 

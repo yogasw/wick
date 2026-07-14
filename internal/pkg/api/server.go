@@ -38,10 +38,11 @@ import (
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/schedule"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/sessionworkspace"
 	agentskills "github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
-	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
+	// systemprompt "github.com/yogasw/wick/internal/agents/system-prompt" // disabled: ConnectorCatalog injection (see ConnectorCatalogLoader below)
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
 	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
@@ -69,7 +70,6 @@ import (
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
-	sessionconfigpurge "github.com/yogasw/wick/internal/jobs/session-config-purge"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/mcp"
@@ -191,7 +191,6 @@ func NewServer() *Server {
 	// loops below. Mirrors the call in internal/pkg/worker.NewServer
 	// so both processes share the same registry view.
 	connectorrunspurge.Register(db)
-	sessionconfigpurge.Register()
 	providerstoragesync.Register(syncMgr)
 	providerstorageretention.Register(syncMgr)
 
@@ -680,8 +679,14 @@ func NewServer() *Server {
 			go broadcastPoolStats(agentsBcast, agentsPool)
 			// Fan out a push to opt-in subscribers when the agent
 			// goes idle (the "your turn is back" moment). Other
-			// transitions are skipped — see dispatchLifecyclePush.
-			dispatchLifecyclePush(ev.Ctx, pushSvc, agentsMgr, agentsLayout, ev)
+			// transitions are skipped — see dispatchLifecyclePush. A turn
+			// whose reply was [silent] must not alert either: skip the push
+			// so a quiet reply stays quiet across every outward path.
+			if ev.Lifecycle == "idle" && channelReg.WasLastTurnSilent(ev.SessionID) {
+				log.Debug().Str("session", ev.SessionID).Msg("push: skipped (silent turn)")
+			} else {
+				dispatchLifecyclePush(ev.Ctx, pushSvc, agentsMgr, agentsLayout, ev)
+			}
 		},
 		OnUserMessage: func(ev agentpool.UserMessageEvent) {
 			// Push a user turn injected from a channel or the schedule runner
@@ -710,6 +715,35 @@ func NewServer() *Server {
 			channelReg.DispatchAgentEvent(ev.SessionID, doneEv)
 		},
 	})
+	// When the sweeper reaps an idle session's connectors, record a system
+	// turn on that session so its agent's context reflects the deletion. The
+	// session is idle by definition (that's why it was reaped), so a non-user
+	// turn is BUFFERED, not spawned (see pool.send): it costs nothing now and
+	// the agent reads it as leading context the next time the user messages —
+	// at which point it already knows the connector is gone. No spawn, no
+	// channel bubble.
+	sessionworkspace.SetReapNotify(func(sessionID string, tombs []sessionworkspace.Tombstone) {
+		names := make([]string, 0, len(tombs))
+		for _, t := range tombs {
+			label := t.Label
+			if strings.TrimSpace(label) == "" {
+				label = t.BaseKey
+			}
+			names = append(names, label)
+		}
+		msg := "[system] Your session connector(s) were auto-deleted because this session went idle: " +
+			strings.Join(names, ", ") + ". Their config (including secrets) is gone. " +
+			"This is context only — do not act on it now; if you need them again, re-create them."
+		if err := agentsPool.Send(context.Background(), sessionID, "", "reap", "system", msg); err != nil {
+			log.Warn().Err(err).Str("session", sessionID).Msg("reap-notify: send failed")
+		}
+	})
+	// Reap any session connectors whose sessions went idle while the process
+	// was down, and keep the reaper running if any remain. Wired here (after
+	// the pool + reap-notify) so the boot scan can notify too. The reaper
+	// self-terminates when no instances remain and respawns on the next add.
+	sessionworkspace.StartSweeper(agentsLayout)
+
 	// Wire the hook writer so Manager injects .claude/settings.local.json
 	// into every workspace on create or switch. The loader re-reads gate config
 	// on each call so UI toggles take effect immediately without a restart.
@@ -1058,21 +1092,31 @@ func NewServer() *Server {
 	// one instance with status="ready" — so the model never sees a
 	// connector the operator hasn't finished configuring. A 2s ctx
 	// budget keeps a slow DB from stalling spawn.
-	agentsFactory.ConnectorCatalogLoader = func() string {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		rows, err := connectorsSvc.List(ctx)
-		if err != nil {
-			return ""
-		}
-		ready := make(map[string]bool, len(rows))
-		for _, row := range rows {
-			if connectorsSvc.Status(row) == "ready" {
-				ready[row.Key] = true
-			}
-		}
-		return systemprompt.ConnectorCatalog(ready)
-	}
+	//
+	// DISABLED: the injected catalog lists connector KEYS but not the
+	// per-instance ids, and it renders the global registry rather than the
+	// caller's visible set — so the agent saw connectors it couldn't use and
+	// mis-referenced them (id/uuid not carried, and each user's visible list
+	// differs). Left nil so the factory skips the section entirely; the agent
+	// discovers connectors via wick_list/wick_search/wick_get, which are
+	// already scoped per caller. Re-enable once the catalog is per-user and
+	// carries instance ids.
+	//
+	// agentsFactory.ConnectorCatalogLoader = func() string {
+	// 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// 	defer cancel()
+	// 	rows, err := connectorsSvc.List(ctx)
+	// 	if err != nil {
+	// 		return ""
+	// 	}
+	// 	ready := make(map[string]bool, len(rows))
+	// 	for _, row := range rows {
+	// 		if connectorsSvc.Status(row) == "ready" {
+	// 			ready[row.Key] = true
+	// 		}
+	// 	}
+	// 	return systemprompt.ConnectorCatalog(ready)
+	// }
 
 	// Workflow connector executor needs row credentials resolved
 	// from the connectors service — wire after the service is built.

@@ -18,21 +18,17 @@
   import type { CatalogEntry, ProviderCatalog } from "$lib/api.js";
   import type { ProviderDetailResponse, ConfigFieldDTO, SpawnLogFileDTO } from "$lib/types.js";
   import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
+  import RecentSpawns from "$lib/components/RecentSpawns.svelte";
 
   type Props = {
     base: string;
     type: string;
     name: string;
     onBack: () => void;
-    onOpenSpawn: (file: string) => void;
+    onOpenSession: (sessionID: string) => void;
   };
-  let { base, type, name, onBack, onOpenSpawn }: Props = $props();
+  let { base, type, name, onBack, onOpenSession }: Props = $props();
 
-  // Spawn-log filename (basename of Path) → used to open the spawn detail page.
-  function spawnFile(s: SpawnLogFileDTO): string {
-    const idx = Math.max(s.Path.lastIndexOf("/"), s.Path.lastIndexOf("\\"));
-    return idx >= 0 ? s.Path.slice(idx + 1) : s.Path;
-  }
 
   let crumbs = $derived<BreadcrumbItem[]>([
     { label: "Providers", onClick: onBack },
@@ -1012,67 +1008,7 @@
       </div>
     {/if}
 
-    <!-- Recent spawns -->
-    <details class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden group">
-      <summary class="px-5 py-3 flex items-center gap-2 cursor-pointer list-none select-none hover:bg-white-200 dark:hover:bg-navy-800 transition-colors">
-        <svg class="w-3.5 h-3.5 text-black-700 dark:text-black-600 transition-transform group-open:rotate-90 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
-        <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Recent Spawns</h2>
-        {#if data.Spawns.length > 0}
-          <span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">{data.Spawns.length}</span>
-        {/if}
-      </summary>
-      {#if data.Spawns.length === 0}
-        <div class="px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">No spawns recorded yet.</div>
-      {:else}
-        <table class="w-full text-xs">
-          <thead>
-            <tr class="border-b border-white-300 dark:border-navy-600 text-black-700 dark:text-black-600">
-              <th class="px-5 py-2.5 text-left">Started</th>
-              <th class="px-5 py-2.5 text-left">Session</th>
-              <th class="px-5 py-2.5 text-left">PID</th>
-              <th class="px-5 py-2.5 text-left">Status</th>
-              <th class="px-5 py-2.5 text-left">First Message</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each data.Spawns as s (s.Path)}
-              <tr
-                class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 cursor-pointer"
-                onclick={() => onOpenSpawn(spawnFile(s))}
-              >
-                <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600 whitespace-nowrap">{new Date(s.StartedAt).toLocaleString()}</td>
-                <td class="px-5 py-2 font-mono text-black-900 dark:text-white-100">{s.SessionID.slice(0, 8)}</td>
-                <td class="px-5 py-2 font-mono text-black-700 dark:text-black-600">{s.PID > 0 ? s.PID : "—"}</td>
-                <td class="px-5 py-2">
-                  {#if s.ExitReason === ""}
-                    <span class="rounded bg-green-100 dark:bg-green-900 px-1.5 py-0.5 text-xs text-green-700 dark:text-green-300">running</span>
-                  {:else if s.ExitReason === "unclean"}
-                    <span class="rounded bg-red-100 dark:bg-red-900 px-1.5 py-0.5 text-xs text-red-700 dark:text-red-300">unclean exit</span>
-                  {:else}
-                    <span class="rounded bg-white-300 dark:bg-navy-600 px-1.5 py-0.5 text-xs text-black-700 dark:text-black-600">{s.ExitReason}</span>
-                  {/if}
-                </td>
-                <td class="px-5 py-2 text-black-700 dark:text-black-600 max-w-xs truncate">{s.FirstUserMessage}</td>
-              </tr>
-            {/each}
-          </tbody>
-        </table>
-        {#if data.Page > 1 || data.HasNext}
-          <div class="flex items-center justify-between border-t border-white-300 dark:border-navy-600 px-5 py-3">
-            {#if data.Page > 1}
-              <button onclick={() => load()} class="text-sm text-green-600 dark:text-green-400 hover:underline">← Prev</button>
-            {:else}
-              <span></span>
-            {/if}
-            <span class="text-xs text-black-700 dark:text-black-600">Page {data.Page}</span>
-            {#if data.HasNext}
-              <button onclick={() => load()} class="text-sm text-green-600 dark:text-green-400 hover:underline">Next →</button>
-            {:else}
-              <span></span>
-            {/if}
-          </div>
-        {/if}
-      {/if}
-    </details>
+    <!-- Recent spawns — shared component (search + pagination + inline detail) -->
+    <RecentSpawns {base} {type} {name} {onOpenSession} />
   {/if}
 </div>

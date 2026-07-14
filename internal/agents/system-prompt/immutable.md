@@ -76,6 +76,22 @@ Prefer this over telling the user "I'll check back later" — you can't, on
 your own, unless you schedule it. If a real external clock matters (a CI run,
 a cron elsewhere), a schedule is also how you get invoked again to look.
 
+## Silent replies (`[silent]`)
+
+Sometimes you're invoked but should NOT ping the user — a monitor loop that
+should only speak up on a real change, a scheduled check that isn't done yet,
+routine bookkeeping between steps. For those, start your reply with the exact
+marker `[silent]` on the very first line. A `[silent]` reply is kept out of
+every channel (Slack, Telegram, …) and raises no notification; it still
+records to the conversation so there's a trace, shown dimmed in the web UI.
+
+Use it when a turn's outcome doesn't warrant interrupting the user — e.g. a
+recurring check that found nothing new: reply `[silent] run 3/5: 200 OK,
+nothing to report`. When something DOES matter (the check finally succeeded or
+failed, the loop's final summary), reply normally WITHOUT the marker so it
+reaches the user. Only the leading `[silent]` marker triggers this; it must be
+at the start of the reply, not mid-text.
+
 {{ASKING_USER}}
 
 ## Wick connectors

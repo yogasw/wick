@@ -45,6 +45,43 @@ type Registry struct {
 	channels     []Channel
 	sources      map[string]ConfigSource // by Channel.Name()
 	instanceKeys map[Channel]string
+
+	// turns tracks the per-session in-flight turn so a reply the agent opens
+	// with the [silent] marker is kept out of every channel AND out of the
+	// idle push notification, while still flowing to the web UI. See turnState
+	// + DispatchAgentEvent.
+	turns map[string]*turnState
+
+	// silentLast records, per session, whether the most recently COMPLETED
+	// turn was silent. dispatchLifecyclePush reads it so a silent turn's reply
+	// never becomes a push alert. Set when a turn ends silent; cleared when a
+	// non-silent turn ends.
+	silentLast map[string]bool
+}
+
+// SilentMarker is the case-insensitive prefix an agent puts at the very start
+// of a reply to keep that reply out of every channel and push notification.
+// The message still reaches the web UI (flagged, rendered muted) and the
+// conversation log — it just isn't pushed outward. Used for "work quietly,
+// don't ping the user unless it matters" turns (e.g. a monitor loop).
+const SilentMarker = "[silent]"
+
+// silentDecideMin is how many bytes of the reply we buffer before deciding
+// whether it opens with SilentMarker, so a marker split across stream deltas
+// ("[si" then "lent]") is still detected. Any of: this many bytes, a newline,
+// or the turn ending forces the decision.
+const silentDecideMin = len(SilentMarker)
+
+// turnState buffers a session's streamed reply until we can tell whether it is
+// silent. Once decided, events either flush to channels (normal) or are
+// dropped (silent). Only TextDelta is buffered pre-decision; status-only
+// events (Thinking/ToolUse/ToolResult) are held too so they don't leak a
+// silent turn's activity to channels before the marker is seen.
+type turnState struct {
+	buf      strings.Builder     // accumulated reply text, pre-decision
+	pending  []event.AgentEvent  // events held until the silent decision
+	decided  bool
+	silent   bool
 }
 
 // NewRegistry returns an empty registry. Use the With* methods to attach
@@ -53,7 +90,50 @@ func NewRegistry() *Registry {
 	return &Registry{
 		sources:      map[string]ConfigSource{},
 		instanceKeys: map[Channel]string{},
+		turns:        map[string]*turnState{},
+		silentLast:   map[string]bool{},
 	}
+}
+
+// MarkSilent forces a session's next turn silent regardless of its text — for
+// callers that KNOW a turn should stay off-channel before it starts (a
+// system-initiated turn). Content-based [silent] detection is the usual path;
+// this is the explicit override.
+func (r *Registry) MarkSilent(sessionID string) {
+	r.mu.Lock()
+	ts := r.turns[sessionID]
+	if ts == nil {
+		ts = &turnState{}
+		r.turns[sessionID] = ts
+	}
+	ts.decided = true
+	ts.silent = true
+	r.mu.Unlock()
+}
+
+// ClearSilent drops any in-flight turn state for a session — e.g. a caller
+// that MarkSilent'd a turn that never started, so the next real turn isn't
+// wrongly suppressed.
+func (r *Registry) ClearSilent(sessionID string) {
+	r.mu.Lock()
+	delete(r.turns, sessionID)
+	delete(r.silentLast, sessionID)
+	r.mu.Unlock()
+}
+
+// WasLastTurnSilent reports whether the session's most recently completed turn
+// was silent. dispatchLifecyclePush uses it to skip the "your turn is back"
+// alert for a silent reply.
+func (r *Registry) WasLastTurnSilent(sessionID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.silentLast[sessionID]
+}
+
+// looksSilent reports whether accumulated reply text opens with SilentMarker,
+// ignoring leading whitespace and case.
+func looksSilent(s string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimLeft(s, " \t\r\n")), SilentMarker)
 }
 
 // WithSendFunc attaches the pool dispatch closure. Called once at boot.
@@ -356,12 +436,86 @@ func (r *Registry) StopAll() {
 }
 
 // DispatchAgentEvent fans out one agent event to every channel that
-// implements AgentEventReceiver. Channels filter by sessionID
-// internally (events for sessions they didn't originate are ignored).
+// implements AgentEventReceiver. Channels filter by sessionID internally
+// (events for sessions they didn't originate are ignored).
+//
+// Silent-reply handling: a reply the agent opens with [silent] must not reach
+// any channel. But replies stream in deltas, so we can't know at the first
+// event — instead we buffer the turn's events until we've seen enough text to
+// decide (silentDecideMin bytes, a newline, or the turn ending). Until then no
+// event is forwarded. Once decided:
+//   - not silent → flush every held event to channels, then pass through live.
+//   - silent     → drop everything; nothing reaches any channel this turn.
+// The web-UI/SSE path is separate (the pool's OnEvent → broadcaster) and is
+// never gated here, so the reply still shows in the conversation view. The
+// turn's silent verdict is recorded (silentLast) so the idle push alert can be
+// skipped too. State is per-session and reset on the terminal event.
 func (r *Registry) DispatchAgentEvent(sessionID string, ev event.AgentEvent) {
-	for _, c := range r.Channels() {
-		if x, ok := c.(AgentEventReceiver); ok {
-			x.OnAgentEvent(sessionID, ev)
+	r.mu.Lock()
+	ts := r.turns[sessionID]
+	if ts == nil {
+		ts = &turnState{}
+		r.turns[sessionID] = ts
+	}
+
+	terminal := ev.Type == event.Done || ev.Type == event.Error
+
+	// Pre-decision: accumulate text, hold events, decide when we can.
+	if !ts.decided {
+		if ev.Type == event.TextDelta {
+			ts.buf.WriteString(ev.Text)
+		}
+		ts.pending = append(ts.pending, ev)
+
+		text := ts.buf.String()
+		canDecide := terminal || len(text) >= silentDecideMin || strings.ContainsAny(text, "\n")
+		if !canDecide {
+			r.mu.Unlock()
+			return // keep buffering
+		}
+		ts.decided = true
+		ts.silent = looksSilent(text)
+		held := ts.pending
+		ts.pending = nil
+		silent := ts.silent
+		if terminal {
+			r.finishTurnLocked(sessionID, ts)
+		}
+		r.mu.Unlock()
+		if silent {
+			return // drop the whole held batch — nothing goes to channels
+		}
+		r.forward(sessionID, held) // flush buffered events in order
+		return
+	}
+
+	// Post-decision.
+	silent := ts.silent
+	if terminal {
+		r.finishTurnLocked(sessionID, ts)
+	}
+	r.mu.Unlock()
+	if silent {
+		return
+	}
+	r.forward(sessionID, []event.AgentEvent{ev})
+}
+
+// finishTurnLocked records the turn's silent verdict for the idle-push check
+// and clears the in-flight state. Caller holds r.mu.
+func (r *Registry) finishTurnLocked(sessionID string, ts *turnState) {
+	r.silentLast[sessionID] = ts.silent
+	delete(r.turns, sessionID)
+}
+
+// forward fans a batch of events out to every AgentEventReceiver channel.
+func (r *Registry) forward(sessionID string, evs []event.AgentEvent) {
+	channels := r.Channels()
+	for _, ev := range evs {
+		for _, c := range channels {
+			if x, ok := c.(AgentEventReceiver); ok {
+				x.OnAgentEvent(sessionID, ev)
+			}
 		}
 	}
 }

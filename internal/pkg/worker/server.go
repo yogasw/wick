@@ -13,7 +13,6 @@ import (
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
-	sessionconfigpurge "github.com/yogasw/wick/internal/jobs/session-config-purge"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
@@ -36,7 +35,6 @@ func NewServer() *Server {
 	// runs in internal/pkg/api/server.go so the web process also sees
 	// the row in /admin/jobs.
 	connectorrunspurge.Register(db)
-	sessionconfigpurge.Register()
 	syncMgr := providersync.New(db)
 	providerstoragesync.Register(syncMgr)
 	providerstorageretention.Register(syncMgr)

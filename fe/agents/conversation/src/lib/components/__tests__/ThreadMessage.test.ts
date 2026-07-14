@@ -82,6 +82,46 @@ describe("ThreadMessage - assistant turn", () => {
   });
 });
 
+describe("ThreadMessage - silent assistant reply", () => {
+  test("[silent] reply shows the silent flag icon", () => {
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "assistant", text: "[silent] run 3/5 ok" }) },
+    });
+    expect(screen.getByTestId("silent-flag")).toBeDefined();
+  });
+
+  test("[silent] marker is stripped from the rendered text", () => {
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "assistant", text: "[silent] nothing new" }) },
+    });
+    expect(screen.getByText("nothing new")).toBeDefined();
+    // The raw marker must not be shown to the reader.
+    expect(screen.queryByText(/\[silent\]/i)).toBeNull();
+  });
+
+  test("[silent] detection is case-insensitive and tolerates leading space", () => {
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "assistant", text: "  [SILENT] hushed" }) },
+    });
+    expect(screen.getByTestId("silent-flag")).toBeDefined();
+    expect(screen.getByText("hushed")).toBeDefined();
+  });
+
+  test("a normal assistant reply shows no silent flag", () => {
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "assistant", text: "here is your answer" }) },
+    });
+    expect(screen.queryByTestId("silent-flag")).toBeNull();
+  });
+
+  test("[silent] mid-text (not at start) is NOT treated as silent", () => {
+    render(ThreadMessage, {
+      props: { turn: makeTurn({ role: "assistant", text: "the tag [silent] appears mid sentence" }) },
+    });
+    expect(screen.queryByTestId("silent-flag")).toBeNull();
+  });
+});
+
 describe("ThreadMessage - system turn", () => {
   test("system turn renders centered pill (justify-center), not an assistant bubble", () => {
     const turn = makeTurn({ role: "system", turn_id: "sys-1", text: "Switched provider to claude" });
@@ -422,8 +462,10 @@ describe("ThreadMessage - show trace toggle", () => {
 
     const { container } = render(ThreadMessage, { props: { turn } });
 
-    const bubble = container.querySelector(".rounded-2xl");
-    expect(bubble?.innerHTML).not.toContain("read_file");
+    // The assistant reply renders as plain text (no bubble wrapper). Tool
+    // output must not appear in it — it belongs in the trace section only.
+    expect(screen.getByText("Here is the file")).toBeDefined();
+    expect(container.innerHTML).not.toContain("read_file");
 
     const btn = screen.getByText(/show trace/i).closest("button")!;
     await fireEvent.click(btn);

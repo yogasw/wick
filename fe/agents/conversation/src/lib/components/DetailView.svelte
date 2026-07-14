@@ -51,7 +51,7 @@
     ConversationTurn, LiveTurn, TypingState,
     ContextFileEntry, AskAnswer, ApprovalDecision,
     ApprovedItem, ComposerCommand,
-    WsInstance, WsBase, ProcessInfo, FileContent,
+    WsInstance, WsBase, WsTombstone, ProcessInfo, FileContent,
     ProviderOption, ProjectOption, Schedule,
   } from "../types/agents.js";
 
@@ -240,6 +240,7 @@
   /* ── workspace panel state ────────────────────────────────────── */
   let wsInstances = $state<WsInstance[]>([]);
   let wsBases = $state<WsBase[]>([]);
+  let wsDeleted = $state<WsTombstone[]>([]);
   let wsOpenCards = $state<Record<string, boolean>>({});
 
   /* ── scheduled-messages panel state ───────────────────────────── */
@@ -420,7 +421,7 @@
 
   function loadWorkspace() {
     run(listWorkspace(base, sessionId).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => { wsInstances = res.instances; wsBases = res.bases; })
+      .then((res) => { wsInstances = res.instances; wsBases = res.bases; wsDeleted = res.deleted; })
       .catch((e: unknown) => toastError(`Workspace: ${e instanceof Error ? e.message : String(e)}`));
   }
 
@@ -1166,6 +1167,7 @@
         <WorkspacePanel
           instances={wsInstances}
           bases={wsBases}
+          deleted={wsDeleted}
           openCards={wsOpenCards}
           onAdd={(baseKey) => {
             run(addWorkspace(base, sessionId, baseKey).pipe(Effect.provide(WickClientLayer)))
@@ -1288,6 +1290,7 @@
             <WorkspacePanel
               instances={wsInstances}
               bases={wsBases}
+              deleted={wsDeleted}
               openCards={wsOpenCards}
               onAdd={(baseKey) => {
                 run(addWorkspace(base, sessionId, baseKey).pipe(Effect.provide(WickClientLayer)))

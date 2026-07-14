@@ -55,6 +55,17 @@ self.addEventListener('fetch', (event) => {
   catch (_) { return; }
   if (url.origin !== self.location.origin) return;
 
+  // Server-Sent Events / EventSource streams must NEVER go through the SW. The
+  // network-first path below wraps every fetch in an 8s AbortController (to
+  // rescue navigations stuck on a dead keep-alive socket); on a long-lived
+  // stream that timer fires mid-stream and aborts it every 8s, so the client
+  // sees ERR_FAILED and reconnects in a loop — the "logs keep dying" symptom on
+  // /reqstream, /logstream, and any SSE endpoint reached by a page-level
+  // EventSource (the conversation /stream survives only because it runs in a
+  // SharedWorker the page SW can't intercept). EventSource always sends
+  // `Accept: text/event-stream`; let those go straight to the network.
+  if ((req.headers.get('Accept') || '').includes('text/event-stream')) return;
+
   // /airouter/* is a reverse-proxied third-party app (an embedded AI-router
   // dashboard — 9router, OmniRoute, …). Its assets are rewritten on the fly
   // by the wick proxy, so caching them here would pin a stale, pre-rewrite
@@ -69,7 +80,8 @@ self.addEventListener('fetch', (event) => {
   // the /_next/*.js|css|woff2 404s. Bypass so they reach the server proxy.
   if (
     url.pathname === '/airouter' ||
-    url.pathname.startsWith('/airouter/') ||
+    url.pathname.endsWith('/airouter') ||
+    url.pathname.includes('/airouter/') ||
     url.pathname.startsWith('/_next/')
   ) return;
 

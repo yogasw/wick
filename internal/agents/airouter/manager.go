@@ -691,11 +691,25 @@ func (m *Manager) ReqStream(w http.ResponseWriter, r *http.Request) {
 	ch, unsubscribe := m.bcast.subscribe()
 	defer unsubscribe()
 
+	// The Requests tab can sit idle for minutes between calls. Send a comment
+	// every 15s so an intermediary (Cloudflare, a tunnel, nginx) doesn't reap
+	// the idle stream and force a reconnect loop. Mirrors the conversation
+	// /stream keepalive. The leading ": connected" confirms liveness at once.
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+	fmt.Fprintf(w, ": connected\n\n")
+	_ = rc.Flush()
+
 	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-keepalive.C:
+			if _, err := fmt.Fprintf(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			_ = rc.Flush()
 		case e, ok := <-ch:
 			if !ok {
 				return
@@ -745,11 +759,21 @@ func (m *Manager) LogStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Keepalive comment every 15s so an idle log stream (a stopped or quiet
+	// router) isn't reaped by an intermediary into a reconnect loop.
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+
 	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-keepalive.C:
+			if _, err := fmt.Fprintf(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			_ = rc.Flush()
 		case chunk, ok := <-ch:
 			if !ok {
 				return

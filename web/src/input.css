@@ -2,6 +2,31 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Fonts (self-hosted, served from /public/fonts) ───────────
+ *
+ * Inter (UI) + Source Serif 4 (reading body). Both are variable
+ * woff2 under an open license (OFL), bundled as static assets so
+ * non-npm builds still ship them — no CDN, no hotlink. Inter drives
+ * every control/heading (font-sans); Source Serif 4 gives long-form
+ * reading (agent replies, docs) the calmer, larger feel of a text
+ * page (font-serif). font-family names are referenced by
+ * tailwind.config.js fontFamily.{sans,serif}.
+ * ────────────────────────────────────────────────────────── */
+@font-face {
+  font-family: "InterVariable";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/public/fonts/inter.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+  src: url("/public/fonts/source-serif-4.woff2") format("woff2");
+}
+
 /* ── Theme tokens ────────────────────────────────────────────
  *
  * navy-*, white-*, black-* in tailwind.config.js resolve to the
@@ -171,6 +196,10 @@
     @apply bg-navy-800;
   }
 
+  /* Body stays on the sans UI face — that keeps ALL app chrome (sidebar,
+     menus, session lists, buttons, headings) correct by default. The serif
+     reading face is opt-in, applied ONLY to long-form prose via .wick-prose
+     (agent replies), so UI never accidentally renders serif. */
   body {
     @apply min-h-screen bg-white-200 dark:bg-navy-800 font-sans text-black-800 dark:text-white-100 antialiased;
     line-height: 1.5;

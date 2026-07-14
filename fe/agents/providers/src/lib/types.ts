@@ -52,6 +52,54 @@ export interface SpawnLogFileDTO {
   FirstUserMessage: string;
   Binary: string;
   ExitReason: string;
+  ReasonDetail: string;
+  ExitCode: number;
+  StderrTail: string;
+}
+
+/** Paged Recent Spawns result from GET /api/providers/spawns. */
+export interface SpawnsList {
+  Spawns: SpawnLogFileDTO[];
+  Page: number;
+  HasNext: boolean;
+  Total: number;
+}
+
+/** One session row in the per-session Recent Spawns list. */
+export interface SessionSummary {
+  SessionID: string;
+  ProviderType: string;
+  ProviderName: string;
+  SpawnCount: number;
+  LastStatus: string;
+  LastStarted: string;
+  FirstMessage: string;
+  Origin: string;
+}
+
+export interface SessionsList {
+  Sessions: SessionSummary[];
+  Page: number;
+  HasNext: boolean;
+  Total: number;
+}
+
+/** Every spawn of one session (session detail page). */
+export interface SessionSpawns {
+  SessionID: string;
+  ProviderType: string;
+  ProviderName: string;
+  Spawns: SpawnLogFileDTO[];
+}
+
+/** Tail of one runtime log file (log viewer). */
+export interface LogTail {
+  Name: string;
+  Path: string;
+  Size: number;
+  Content: string;
+  Truncated: boolean;
+  Modified: string;
 }
 
 export interface SpawnEvent {
@@ -69,9 +117,40 @@ export interface SpawnEvent {
   Origin: string;
   FirstUserMessage: string;
   ExitReason: string;
+  ReasonDetail: string;
+  ExitCode: number;
+  StderrTail: string;
   DurationMs: number;
   Error: string;
   Message: string;
+}
+
+export interface LogRef {
+  Prefix: string;
+  Path: string;
+}
+
+export interface SpawnWindow {
+  Start: string;
+  End: string;
+  DurationMs: number;
+  Running: boolean;
+  /** Died without an exit event (crash / OS-kill); End is approximate. */
+  Unclean: boolean;
+}
+
+export interface SpawnLogsDTO {
+  /** Full path to the spawn's own jsonl (event timeline incl. crash stderr). */
+  SpawnPath: string;
+  /** Absolute logs dir, for display. */
+  LogsDir: string;
+  /** Process logs (app/server/worker/mcp/gate/daemon) from the spawn day(s). */
+  Components: LogRef[];
+  /** The spawn's start→end window, to scan the process logs. */
+  Window: SpawnWindow;
+  /** Total .log files in the logs dir (any date); 0 = no process logs
+      written at all (dev/console mode). Lets the UI explain an empty list. */
+  LogsPresent: number;
 }
 
 export interface SpawnDetailResponse {
@@ -82,6 +161,7 @@ export interface SpawnDetailResponse {
   Repro: Record<string, string>;
   /** True when the spawn had a resume id — the Keep/Fresh toggle is meaningful. */
   HasResume: boolean;
+  Logs: SpawnLogsDTO;
 }
 
 export interface MCPClientDTO {
@@ -111,7 +191,6 @@ export interface GateStatusDTO {
 export interface ProvidersListResponse {
   Providers: ProviderStatusDTO[];
   Gate: GateStatusDTO;
-  Spawns: SpawnLogFileDTO[];
   MCPClients: MCPStatusDTO;
   AutoRescan: boolean;
   PoolActive: number;
@@ -164,9 +243,6 @@ export interface ProviderDetailResponse {
   ActiveCount: number;
   ActivePIDs: LiveProcessDTO[];
   ConfigFields: ConfigFieldDTO[];
-  Spawns: SpawnLogFileDTO[];
-  Page: number;
-  HasNext: boolean;
   AIRouter: AIRouterDetailDTO;
 }
 

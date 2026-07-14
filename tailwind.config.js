@@ -207,9 +207,13 @@ module.exports = {
     },
 
     extend: {
-      // Inter — the only typeface
+      // Inter (UI/chrome) + Source Serif 4 (reading body). Self-hosted woff2
+      // under /public/fonts (see web/src/input.css @font-face). font-sans is
+      // the default for controls/headings; font-serif is applied to body so
+      // long-form prose (agent replies, docs) reads like a text page.
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'sans-serif'],
+        sans: ['InterVariable', 'Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'sans-serif'],
+        serif: ['"Source Serif 4"', 'Georgia', 'Cambria', '"Times New Roman"', 'serif'],
         mono: ['Menlo', 'Consolas', 'Monaco', 'monospace'],
       },
 

@@ -1,3 +1,60 @@
+/* ── Reading prose (agent replies) ───────────────────────────
+ *
+ * Long-form reply text, tuned to read like Medium/Claude: a capped
+ * measure so lines don't run the full width, a comfortable line-height
+ * that's tight WITHIN a paragraph, and a clear gap BETWEEN blocks
+ * (paragraphs, lists). The serif face comes from the body default; this
+ * only governs rhythm + measure. Applied via the .wick-prose class on
+ * the reply container in ThreadMessage.
+ * ────────────────────────────────────────────────────────── */
+.wick-prose {
+  font-family: "Source Serif 4", Georgia, Cambria, "Times New Roman", serif;
+  font-size: 16px;         /* match Claude's reading size (was 14px, too small) */
+  line-height: 1.5;        /* 16/24 like Claude — tight within a paragraph */
+  max-width: 68ch;         /* ~65-70 chars/line — the readable measure */
+}
+/* Code stays monospace even inside serif prose — never serif code. */
+.wick-prose code,
+.wick-prose pre,
+.wick-prose kbd,
+.wick-prose samp {
+  font-family: Menlo, Consolas, Monaco, monospace;
+}
+/* Clear separation between blocks; none before the first / after the last
+   so the bubble hugs its content. */
+.wick-prose > * + * {
+  margin-top: 0.9em;
+}
+.wick-prose p {
+  margin: 0;
+}
+.wick-prose ul,
+.wick-prose ol {
+  margin: 0;
+  padding-left: 1.4em;
+}
+.wick-prose li + li {
+  margin-top: 0.3em;       /* list items sit closer than paragraphs */
+}
+.wick-prose li > ul,
+.wick-prose li > ol {
+  margin-top: 0.3em;
+}
+.wick-prose h1,
+.wick-prose h2,
+.wick-prose h3,
+.wick-prose h4 {
+  margin-top: 1.3em;       /* headings get a little extra air above */
+  margin-bottom: 0;
+  line-height: 1.3;
+}
+.wick-prose h1:first-child,
+.wick-prose h2:first-child,
+.wick-prose h3:first-child,
+.wick-prose h4:first-child {
+  margin-top: 0;
+}
+
 /* highlight.js token theme (GitHub-style), scoped to the chat code blocks.
    Light by default; the `.dark` variants follow the app's class-based dark
    mode. The <pre> sets the base text colour + background; these only colour

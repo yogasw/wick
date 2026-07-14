@@ -217,6 +217,15 @@ export type WsInstance = {
   fields?: WsField[];
 };
 
+// WsTombstone is a connector auto-deleted when the session went idle — shown as
+// a "deleted, re-create" notice. Carries no config (that's gone with it).
+export type WsTombstone = {
+  label: string;
+  base_key: string;
+  deleted_at: string;
+  reason?: string;
+};
+
 export type WsBase = {
   base_key: string;
   label?: string;

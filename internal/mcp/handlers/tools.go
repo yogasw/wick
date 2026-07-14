@@ -335,7 +335,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 			Name: "wick_session_workspace",
 			Description: "Spin up throwaway connector instances scoped to the CURRENT SESSION — a private clone of a base connector " +
 				"(e.g. an httprest pointed at staging, or a second API key) that appears in wick_list/wick_get/wick_execute " +
-				"for THIS session only and is purged when the session ends. The saved connector rows are never touched. " +
+				"for THIS session only. Instances live while the session is active and are auto-deleted (config and all) once it sits idle for a while — action=list then reports them under 'deleted' so you know to re-create. The saved connector rows are never touched. " +
 				"Use this when the user wants to hit an endpoint or use credentials that are only relevant right now. " +
 				"Normally you NEVER see config values: you create a blank instance and the USER fills it in a modal (secrets are encrypted server-side); " +
 				"only the key names ever come back to you. Actions: " +

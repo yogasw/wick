@@ -61,6 +61,12 @@ type Agent struct {
 	// idle TTL). Optional.
 	onExit func(reason ExitReason)
 
+	// onExitDetail is fired alongside onExit with the full ExitDetail
+	// (reason detail + exit code + stderr tail on crash). Optional; the
+	// spawn logger uses it to record WHY a process ended, not just that
+	// it did. Fires at most once per spawn, same idempotency as onExit.
+	onExitDetail func(d ExitDetail)
+
 	// exitReasonSet ensures OnExit fires at most once per spawn, even
 	// when both the idle goroutine and the reader-exit path race.
 	exitReasonSet bool
@@ -114,6 +120,32 @@ const (
 	ExitRespawn
 )
 
+// ExitDetail carries the full "why did this process end" context to the
+// OnExitDetail hook — beyond the bare ExitReason enum. The spawn log's
+// exit event records these so an operator reading Recent Spawns can see
+// WHY a process was killed or crashed, not just that it did:
+//
+//   - Reason       the enum (clean/idle/stopped/error/respawn)
+//   - ReasonDetail human sentence naming the trigger, e.g.
+//                  "idle grace period expired", "Stop() called (preempt
+//                  or session change)", "respawn for next turn",
+//                  "subprocess exited non-zero"
+//   - ExitCode     OS exit code on abnormal exit (crash); 0 otherwise
+//   - StderrTail   tail of the subprocess stderr on crash — the actual
+//                  error message (bad model id, config.toml error, …)
+//   - WaitErr      the raw proc.Wait() error string, if any
+//
+// Only the reader-exit path (natural end / crash) can populate ExitCode
+// and StderrTail; the idle/stopped/respawn kill paths set Reason +
+// ReasonDetail only.
+type ExitDetail struct {
+	Reason       ExitReason
+	ReasonDetail string
+	ExitCode     int
+	StderrTail   string
+	WaitErr      string
+}
+
 // Options is the constructor argument. ParserFactory returns a fresh
 // parser per spawn (parsers carry per-stream state — block index map
 // and so on — so we can't reuse one across processes).
@@ -133,6 +165,10 @@ type Options struct {
 
 	OnEvent func(event.AgentEvent)
 	OnExit  func(reason ExitReason)
+	// OnExitDetail fires with the full ExitDetail (reason detail + exit
+	// code + stderr tail on crash) alongside OnExit. Optional — the
+	// factory wires it so the spawn log records the crash/kill reason.
+	OnExitDetail func(d ExitDetail)
 	// OnSpawn fires every time a real subprocess starts, carrying its
 	// binary, argv, pid, and the message that triggered it. Unlike the
 	// pool's one-shot post-Start hook, this also fires for
@@ -245,15 +281,16 @@ func ParseSendMode(s string) (SendMode, bool) {
 // New builds an Agent from Options. Doesn't spawn — call Start.
 func New(opt Options) *Agent {
 	return &Agent{
-		cfg:        opt,
-		state:      opt.State,
-		store:      opt.Store,
-		spawner:    opt.Spawner,
-		onEvent:    opt.OnEvent,
-		onExit:     opt.OnExit,
-		resumeID:   opt.ResumeID,
-		done:       make(chan struct{}),
-		activityCh: make(chan struct{}, 1),
+		cfg:          opt,
+		state:        opt.State,
+		store:        opt.Store,
+		spawner:      opt.Spawner,
+		onEvent:      opt.OnEvent,
+		onExit:       opt.OnExit,
+		onExitDetail: opt.OnExitDetail,
+		resumeID:     opt.ResumeID,
+		done:         make(chan struct{}),
+		activityCh:   make(chan struct{}, 1),
 	}
 }
 
@@ -951,9 +988,11 @@ drained:
 	// On abnormal exit, log the exit code + stderr tail so failures are
 	// diagnosable instead of a blank "agent error: ".
 	var stderrTail string
+	var exitCode int
 	if reason == ExitError {
 		if ec, ok := waitErr.(interface{ ExitCode() int }); ok {
-			ev = ev.Int("exit_code", ec.ExitCode())
+			exitCode = ec.ExitCode()
+			ev = ev.Int("exit_code", exitCode)
 		}
 		if st, ok := a.proc.(interface{ StderrTail() string }); ok {
 			stderrTail = strings.TrimSpace(st.StderrTail())
@@ -963,6 +1002,24 @@ drained:
 		}
 	}
 	ev.Msg("agent.reader: subprocess exited")
+
+	// Build the reason sentence for the spawn log. A crash with stderr
+	// gets the actual error tail; a bare non-zero exit at least gets the
+	// code so the operator isn't staring at an unexplained "error".
+	detail := ExitDetail{Reason: reason, ExitCode: exitCode, StderrTail: stderrTail}
+	if waitErr != nil {
+		detail.WaitErr = waitErr.Error()
+	}
+	switch {
+	case reason != ExitError:
+		detail.ReasonDetail = exitReasonDetail(reason)
+	case stderrTail != "":
+		detail.ReasonDetail = "subprocess crashed: " + firstLine(stderrTail)
+	case exitCode != 0:
+		detail.ReasonDetail = fmt.Sprintf("subprocess exited with code %d (no stderr captured)", exitCode)
+	default:
+		detail.ReasonDetail = "subprocess exited abnormally (no exit code or stderr captured)"
+	}
 
 	// Surface an abnormal exit to the UI as a fatal Error event so the user
 	// sees WHY the agent died — e.g. a codex config.toml error (unsupported
@@ -983,7 +1040,7 @@ drained:
 			ErrorMsg: "Agent process exited abnormally:\n" + stderrTail,
 		})
 	}
-	a.exitReason(reason)
+	a.exitReasonD(detail)
 }
 
 // exitReasonName mirrors the ExitReason iota for log lines. Kept local
@@ -1005,9 +1062,38 @@ func exitReasonName(r ExitReason) string {
 	return "unknown"
 }
 
-// exitReason fires the OnExit hook at most once per spawn. Idempotent
-// because both the idle timer and the reader-exit path call it.
+// exitReasonDetail maps an ExitReason to the default human sentence used
+// by the kill paths (idle / stopped / respawn) that carry no crash
+// detail. The reader-exit path builds a richer detail itself (exit code
+// + stderr) so it does not go through here.
+func exitReasonDetail(r ExitReason) string {
+	switch r {
+	case ExitClean:
+		return "subprocess returned normally"
+	case ExitIdle:
+		return "idle TTL expired (no output within the idle window)"
+	case ExitStopped:
+		return "Stop() called (preempt, session change, or shutdown)"
+	case ExitError:
+		return "subprocess exited abnormally"
+	case ExitRespawn:
+		return "killed to spawn the next turn (respawn provider)"
+	}
+	return "unknown"
+}
+
+// exitReason fires the exit hooks with only the enum + its default
+// reason sentence — used by the kill paths (idle / stopped / respawn)
+// that have no exit-code / stderr detail. See exitReasonD.
 func (a *Agent) exitReason(r ExitReason) {
+	a.exitReasonD(ExitDetail{Reason: r, ReasonDetail: exitReasonDetail(r)})
+}
+
+// exitReasonD fires OnExit + OnExitDetail at most once per spawn.
+// Idempotent because both the idle timer and the reader-exit path call
+// it. OnExit gets the bare enum (unchanged contract); OnExitDetail gets
+// the full detail so the spawn log can record WHY the process ended.
+func (a *Agent) exitReasonD(d ExitDetail) {
 	a.mu.Lock()
 	if a.exitReasonSet {
 		a.mu.Unlock()
@@ -1015,9 +1101,13 @@ func (a *Agent) exitReason(r ExitReason) {
 	}
 	a.exitReasonSet = true
 	hook := a.onExit
+	hookD := a.onExitDetail
 	a.mu.Unlock()
 	if hook != nil {
-		hook(r)
+		hook(d.Reason)
+	}
+	if hookD != nil {
+		hookD(d)
 	}
 }
 

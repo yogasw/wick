@@ -60,11 +60,6 @@ describe("normalizeProviderDetail - snake_case wire mapping", () => {
     expect(r.ConfigFields[1].Value).toBe("claude-3");
   });
 
-  it("maps spawns snake_case to PascalCase", () => {
-    const r = normalizeProviderDetail(makeWireDetail());
-    expect(r.Spawns[0].SessionID).toBe("sess-abc-1234");
-    expect(r.Spawns[0].PID).toBe(42);
-  });
 });
 
 describe("normalizeProviderDetail - null normalization", () => {
@@ -86,11 +81,6 @@ describe("normalizeProviderDetail - null normalization", () => {
   it("normalizes null config_fields to empty array", () => {
     const raw = { ...makeWireDetail(), config_fields: null };
     expect(normalizeProviderDetail(raw).ConfigFields).toEqual([]);
-  });
-
-  it("normalizes null spawns to empty array", () => {
-    const raw = { ...makeWireDetail(), spawns: null };
-    expect(normalizeProviderDetail(raw).Spawns).toEqual([]);
   });
 
   it("normalizes null gate to default structure", () => {
@@ -126,7 +116,6 @@ describe("apiGetProviderDetail", () => {
     }));
     const r = await apiGetProviderDetail("", "claude", "default");
     expect(r.ActivePIDs).toEqual([]);
-    expect(r.Spawns).toEqual([]);
     expect(r.ConfigFields).toEqual([]);
   });
 

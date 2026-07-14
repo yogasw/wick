@@ -81,7 +81,7 @@ The scheduler goroutine auto-respawns with exponential backoff (2s → 30s cap) 
 
 ## Daemon (background)
 
-The daemon commands spawn the binary detached from the calling shell so the parent terminal can exit without killing it. A PID file under `~/.<app>/run.pid` tracks the running instance; output goes to `~/.<app>/daemon.log`.
+The daemon commands spawn the binary detached from the calling shell so the parent terminal can exit without killing it. A PID file under `~/.<app>/run.pid` tracks the running instance; output goes to a dated log under `~/.<app>/logs/daemon-YYYY-MM-DD.log` — a fresh file per day, swept by the same retention as the other runtime logs (see [Logs](../guide/desktop-tray#logs)).
 
 ### `<app> start`
 
@@ -95,7 +95,7 @@ Spawn the binary in the background. Mode is chosen at runtime:
 ./bin/myapp start --host 127.0.0.1   # bind specific interface — child inherits WICK_HOST
 ./bin/myapp start --localhost        # shortcut for --host 127.0.0.1
 # started myapp as `tray` (pid 12345)
-#   log: ~/.myapp/daemon.log
+#   log: ~/.myapp/logs/daemon-2026-07-13.log
 #   pid: ~/.myapp/run.pid
 ```
 
@@ -127,14 +127,14 @@ Stale PID files (process no longer alive) are silently cleaned up so the next `s
 
 ### `<app> status`
 
-Report whether the daemon is alive, its PID, approximate uptime (PID file mtime), and the log / PID file paths. `--log N` tails the last N bytes of the daemon log.
+Report whether the daemon is alive, its PID, approximate uptime (PID file mtime), and the log / PID file paths. `--log N` tails the last N bytes of the daemon log — the **newest** `daemon-YYYY-MM-DD.log` in `logs/`, so a daemon that's been running since a previous day still tails correctly instead of showing an empty today-file.
 
 ```bash
 ./bin/myapp status
 # myapp: running
 #   pid:     12345
 #   started: 2026-05-30T13:02:28+07:00 (37s ago)
-#   log:     ~/.myapp/daemon.log
+#   log:     ~/.myapp/logs/daemon-2026-07-13.log
 #   pidfile: ~/.myapp/run.pid
 
 ./bin/myapp status --log 1000

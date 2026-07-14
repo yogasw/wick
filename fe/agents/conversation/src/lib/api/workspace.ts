@@ -1,16 +1,17 @@
 import { Effect } from "effect";
 import { apiGetE, apiPostE, apiDeleteE } from "@wick-fe/common-api";
-import type { WsInstance, WsBase } from "../types/agents.js";
+import type { WsInstance, WsBase, WsTombstone } from "../types/agents.js";
 
 const normalizeInstance = (i: WsInstance): WsInstance => ({ ...i, fields: i.fields ?? [] });
 
 export const listWorkspace = (base: string, sessionId: string) =>
-  apiGetE<{ instances: WsInstance[]; bases: WsBase[] }>(
+  apiGetE<{ instances: WsInstance[]; bases: WsBase[]; deleted?: WsTombstone[] }>(
     `${base}/sessions/${encodeURIComponent(sessionId)}/workspace`,
   ).pipe(
     Effect.map((r) => ({
       instances: (r.instances ?? []).map(normalizeInstance),
       bases: r.bases ?? [],
+      deleted: r.deleted ?? [],
     })),
   );
 
