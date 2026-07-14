@@ -6,13 +6,29 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.32.0](https://github.com/yogasw/wick/compare/v0.31.0...v0.32.0) — Agents & Providers
+
+_Released on 2026-07-14_
+
 ### Added
 *   **Recent Spawns grouped per session, with crash detail and a log viewer**: The Providers page's Recent Spawns table now groups spawns by session (one row per session, with a spawn count and latest status) instead of listing every spawn flat; clicking a session opens its spawn history, each expandable inline to the full spawn detail. A crashed spawn now shows its exit code and a stderr tail, and a process that disappeared without recording an exit event is flagged as "died, no exit event" instead of looking like it's still running. Spawn detail also links straight to a new in-app log viewer (`/providers/logs?file=`) for the relevant server/mcp/worker/app/gate/daemon log file, with copy-path, copy-JSON, and download actions. See [Providers — Recent Spawns list](/guide/agents/providers#recent-spawns-list).
+*   **Session connector idle TTL**: Session connectors now expire by session inactivity (10 minutes of no running/queued subprocesses) instead of a daily purge job. A self-terminating sweeper reaps idle connector instances, leaves a tombstone notice ("deleted, re-create"), and provides a buffered `[system]` context turn to the agent on the next user message. The old `session-config-purge` job has been removed.
+*   **Silent replies for agents**: An agent reply that begins with the `[silent]` marker is now kept out of every channel (Slack/Telegram/REST) and idle push notifications, but still reaches the web UI (shown with a muted-bell flag, marker stripped) and the conversation log. The registry buffers a turn's events to correctly process the marker even if split across stream deltas.
 
 ### Fixed
 *   **Daemon log is now dated and actually gets pruned**: The daemon's own log (`daemon.log`) is now written per-day (`logs/daemon-YYYY-MM-DD.log`) alongside the other runtime logs, and a bug that let dated log files (including the daemon's) skip retention pruning entirely is fixed — old logs are now deleted on schedule instead of accumulating forever. `<app> status --log` still finds the right file by tailing the newest `daemon-*.log`. See [Daemon (background)](/reference/app-cli#daemon-background).
+*   **AI Router dashboard SSE streams no longer reconnect in a loop**: The AI Router dashboard's Requests/Logs SSE streams no longer experience continuous reconnections. This was resolved by bypassing the service worker's 8-second `AbortController` for `text/event-stream` requests, widening the `/airouter/*` skip to include the base-prefixed mount (`/tools/agents/airouter/`), and adding 15-second keepalive comments and a leading `: connected` message to the stream handlers.
+
+### Changed
+*   **Agent replies UI uses a serif reading font**: Agent replies in the web UI now render as plain serif prose (Source Serif 4, 16px / 1.5 / ~68ch measure) to make the conversation read like a text page. Only user turns retain a bubble. The rest of the app chrome and body text remains in sans-serif (Inter).
+*   **Connector catalog injection removed from system prompt**: The connector catalog injection has been disabled in the system prompt. It previously listed connector keys without per-instance IDs and rendered the global registry rather than the caller's visible set; agents now discover connectors via `wick_list/get/search`.
 
 ---
+
 
 ## [v0.31.0](https://github.com/yogasw/wick/compare/v0.30.1...v0.31.0) — AI Router
 
