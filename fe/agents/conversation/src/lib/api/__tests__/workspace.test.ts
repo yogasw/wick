@@ -78,3 +78,31 @@ describe("addWorkspace", () => {
     expect(result.label).toBe("Test Conn");
   });
 });
+
+describe("listWorkspace tombstones", () => {
+  test("parses deleted tombstones from response", async () => {
+    const result = await Effect.runPromise(
+      listWorkspace("/tools/agents", "sess-1").pipe(
+        Effect.provide(
+          mockLayer(200, {
+            instances: [],
+            bases: [],
+            deleted: [{ label: "Staging", base_key: "httprest", deleted_at: "2026-07-13T12:00:00Z", reason: "session idle" }],
+          }),
+        ),
+      ),
+    );
+    expect(result.deleted).toHaveLength(1);
+    expect(result.deleted[0].label).toBe("Staging");
+    expect(result.deleted[0].reason).toBe("session idle");
+  });
+
+  test("defaults deleted to empty array when absent", async () => {
+    const result = await Effect.runPromise(
+      listWorkspace("/tools/agents", "sess-1").pipe(
+        Effect.provide(mockLayer(200, { instances: [], bases: [] })),
+      ),
+    );
+    expect(result.deleted).toEqual([]);
+  });
+});

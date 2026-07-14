@@ -10,6 +10,26 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.32.0](https://github.com/yogasw/wick/compare/v0.31.0...v0.32.0) — Agents & Providers
+
+_Released on 2026-07-14_
+
+### Added
+*   **Recent Spawns grouped per session, with crash detail and a log viewer**: The Providers page's Recent Spawns table now groups spawns by session (one row per session, with a spawn count and latest status) instead of listing every spawn flat; clicking a session opens its spawn history, each expandable inline to the full spawn detail. A crashed spawn now shows its exit code and a stderr tail, and a process that disappeared without recording an exit event is flagged as "died, no exit event" instead of looking like it's still running. Spawn detail also links straight to a new in-app log viewer (`/providers/logs?file=`) for the relevant server/mcp/worker/app/gate/daemon log file, with copy-path, copy-JSON, and download actions. See [Providers — Recent Spawns list](/guide/agents/providers#recent-spawns-list).
+*   **Session connector idle TTL**: Session connectors now expire by session inactivity (10 minutes of no running/queued subprocesses) instead of a daily purge job. A self-terminating sweeper reaps idle connector instances, leaves a tombstone notice ("deleted, re-create"), and provides a buffered `[system]` context turn to the agent on the next user message. The old `session-config-purge` job has been removed.
+*   **Silent replies for agents**: An agent reply that begins with the `[silent]` marker is now kept out of every channel (Slack/Telegram/REST) and idle push notifications, but still reaches the web UI (shown with a muted-bell flag, marker stripped) and the conversation log. The registry buffers a turn's events to correctly process the marker even if split across stream deltas.
+
+### Fixed
+*   **Daemon log is now dated and actually gets pruned**: The daemon's own log (`daemon.log`) is now written per-day (`logs/daemon-YYYY-MM-DD.log`) alongside the other runtime logs, and a bug that let dated log files (including the daemon's) skip retention pruning entirely is fixed — old logs are now deleted on schedule instead of accumulating forever. `<app> status --log` still finds the right file by tailing the newest `daemon-*.log`. See [Daemon (background)](/reference/app-cli#daemon-background).
+*   **AI Router dashboard SSE streams no longer reconnect in a loop**: The AI Router dashboard's Requests/Logs SSE streams no longer experience continuous reconnections. This was resolved by bypassing the service worker's 8-second `AbortController` for `text/event-stream` requests, widening the `/airouter/*` skip to include the base-prefixed mount (`/tools/agents/airouter/`), and adding 15-second keepalive comments and a leading `: connected` message to the stream handlers.
+
+### Changed
+*   **Agent replies UI uses a serif reading font**: Agent replies in the web UI now render as plain serif prose (Source Serif 4, 16px / 1.5 / ~68ch measure) to make the conversation read like a text page. Only user turns retain a bubble. The rest of the app chrome and body text remains in sans-serif (Inter).
+*   **Connector catalog injection removed from system prompt**: The connector catalog injection has been disabled in the system prompt. It previously listed connector keys without per-instance IDs and rendered the global registry rather than the caller's visible set; agents now discover connectors via `wick_list/get/search`.
+
+---
+
+
 ## [v0.31.0](https://github.com/yogasw/wick/compare/v0.30.1...v0.31.0) — AI Router
 
 _Released on 2026-07-12_
@@ -19,10 +39,11 @@ _Released on 2026-07-12_
 *   **AI Router badge in the composer provider picker**: Provider instances configured to route through the AI Router now display an **AI Router** badge within the composer's provider menu. This includes a pill next to the option in the list and a corner dot on the selected provider chip, making it clear at a glance which providers are proxied. See [AI Router](/guide/agents/airouter).
 
 ### Fixed
-*   **Composer preselects the project's default provider**: On the Project landing page, the composer now correctly seeds its provider from the project's configured default, rather than consistently falling back to the first provider (e.g., claude). This behavior now matches the New Session page.
-*   **`/` and `@` work mid-message, not just as a prefix**: The command palette (`/`) and file-mention (`@`) menus now open when the trigger is typed at the start of a line **or** immediately after a space. This allows commands or mentions to be inserted partway through a message, while path-like text such as `src/foo` remains inert. See [Agents — Composer](/guide/agents#composer).
-*   **Live session stream self-heals after a drop**: The conversation stream (handled by a SharedWorker, with an EventSource fallback) now automatically reconnects if a downed or restarted server closes the connection. Upon reconnect, it replays the session snapshot. Additionally, the stream resyncs when the tab returns from the background or network connectivity is restored, ensuring stalled sessions recover on their own without requiring a manual reload. DetailView also resyncs on `visibilitychange` and network-restore.
-*   **Failed agent spawns no longer stick on "spawning"**: When a subprocess fails to launch, the session now tears down to an idle state, and the failure is surfaced as an inline system error turn (persisted like any runtime error). This is a change from previous behavior, where the session would stick on "spawning" and the failure was only shown as a request-level toast. The send operation itself now succeeds, with the error reported in-band.
+*   **Composer preselects the project's default provider**: On the Project landing page the composer now seeds its provider from the project's configured default instead of always falling back to the first provider (claude) — matching the New Session page.
+*   **`/` and `@` work mid-message, not just as a prefix**: The command palette (`/`) and file-mention (`@`) menus now open when the trigger is typed at the start of the line **or** right after a space, so you can drop a command or mention partway through a message; path-like text such as `src/foo` stays inert. See [Agents — Composer](/guide/agents#composer).
+*   **Live session stream self-heals after a drop**: The conversation stream (SharedWorker, with an EventSource fallback) now reconnects when a downed or restarted server closes it and replays the snapshot on reconnect, and resyncs when the tab returns from the background or the network comes back — so a stalled session recovers on its own instead of needing a manual reload.
+*   **Failed agent spawns no longer stick on "spawning"**: When a subprocess fails to launch, the session now tears down to idle and the failure is surfaced as an inline system error turn (persisted, like any runtime error) instead of only a request-level toast; the send itself succeeds.
+*   **AI Router dashboard streams no longer reconnect in a loop**: The Requests and Logs live streams kept dropping every few seconds. The service worker was aborting the page-level `EventSource` on its 8s navigation-timeout and never bypassed the base-prefixed `/tools/agents/airouter/` mount; it now skips any `text/event-stream` request outright. The stream handlers also gained a 15s keepalive (matching the conversation stream) so an idle stream isn't reaped by an upstream proxy.
 
 ---
 

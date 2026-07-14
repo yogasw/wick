@@ -45,6 +45,11 @@ const sessionWorkspaceToolName = "wick_session_workspace"
 //                 passed as enc tokens so the plaintext never reaches the agent.
 //   - test:       verify setup — base HealthCheck, or run a named operation
 //   - remove:     delete a session instance
+//
+// Instances live only while the session is active: once the session sits idle
+// past the grace window they are auto-deleted (config and all) and a tombstone
+// is left, surfaced in action=list as `deleted`. There is no manual expiry to
+// extend — active work keeps them alive on its own.
 func WickSessionWorkspace(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -135,11 +140,11 @@ func sessionWorkspaceBaseAllowed(r *http.Request, svc *connectors.Service, tagID
 // instanceVM is one session instance in the list/add/configure response.
 // Config values are NEVER included — only which keys are still missing.
 type instanceVM struct {
-	ID       string   `json:"id"`
-	BaseKey  string   `json:"base_key"`
-	Label    string   `json:"label"`
-	Status   string   `json:"status"` // ready | needs_setup
-	Missing  []string `json:"missing_keys,omitempty"`
+	ID      string   `json:"id"`
+	BaseKey string   `json:"base_key"`
+	Label   string   `json:"label"`
+	Status  string   `json:"status"` // ready | needs_setup
+	Missing []string `json:"missing_keys,omitempty"`
 }
 
 func sessionWorkspaceVM(svc *connectors.Service, in sessionworkspace.Instance) instanceVM {
@@ -175,11 +180,18 @@ func sessionWorkspaceList(w http.ResponseWriter, req RPCRequest, rsp Responder, 
 	for _, in := range instances {
 		vms = append(vms, sessionWorkspaceVM(svc, in))
 	}
-	writeWorkspaceResult(w, req, rsp, map[string]any{
+	out := map[string]any{
 		"session_id":      sessionID,
 		"instances":       vms,
 		"available_bases": sessionWorkspaceBases(r, svc, tagIDs, isAdmin),
-	})
+	}
+	// Surface tombstones so the agent knows a connector it set up earlier was
+	// auto-deleted (session went idle) and must be re-created — its config,
+	// secrets and all, is gone.
+	if tombs, _ := sessionworkspace.Tombstones(layout, sessionID); len(tombs) > 0 {
+		out["deleted"] = tombs
+	}
+	writeWorkspaceResult(w, req, rsp, out)
 }
 
 func sessionWorkspaceAdd(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, svc *connectors.Service, layout agentconfig.Layout, asks askuser.Asker, askAllowed func(string) (bool, string), sessionID string, args map[string]any, tagIDs []string, isAdmin bool) {

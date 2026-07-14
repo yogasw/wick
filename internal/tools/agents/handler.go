@@ -320,9 +320,18 @@ func Register(r tool.Router) {
 	r.POST("/providers/rename/{type}/{name}", renameProviderInstance)
 	r.GET("/providers/catalog/{type}", providerCatalogJSON)
 	r.DELETE("/providers/{type}/{name}", deleteProviderInstance)
-	r.GET("/providers/spawns/{file}", providerSpawnDetail)
 	r.GET("/providers/spawns/{file}/reveal", providerSpawnReveal)
+	r.GET("/api/providers/spawns", apiSpawnsList)
 	r.GET("/api/providers/spawns/{file}", apiSpawnDetail)
+	r.GET("/api/providers/sessions", apiSessionsList)
+	r.GET("/api/providers/sessions/{id}", apiSessionSpawns)
+	// Session detail + log viewer are sub-views of the providers SPA; the
+	// shell route boots the SPA on direct load/refresh (client router picks
+	// the view). The /api/providers/logs endpoints back the log viewer.
+	r.GET("/providers/session/{id}", providerDetailPage)
+	r.GET("/providers/logs", providerDetailPage)
+	r.GET("/api/providers/logs/{file}", apiLogTail)
+	r.GET("/api/providers/logs/{file}/download", apiLogDownload)
 	r.POST("/providers/gate/toggle", toggleGate)
 	r.POST("/providers/gate/modes", saveGateModes)
 	r.POST("/providers/rescan", rescanAllProviders)

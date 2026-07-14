@@ -322,7 +322,11 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		writeStartEvent(meta.PID, meta.Binary, meta.Argv, meta.Env, meta.FirstUserMessage)
 	}
 
-	onExit := func(r provider.ExitReason) {
+	// onExitDetail writes the exit event to the spawn log with the full
+	// reason context (why it was killed / crashed, exit code, stderr
+	// tail). It fires alongside OnExit; the pool slot-release still runs
+	// off the enum via f.OnExit below so its contract is unchanged.
+	onExitDetail := func(d provider.ExitDetail) {
 		if f.SpawnLogger != nil && spawnLogPath != "" {
 			_ = f.SpawnLogger.Append(spawnLogPath, provider.SpawnEvent{
 				Type:         "exit",
@@ -331,10 +335,16 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 				ProviderName: pName,
 				SessionID:    opt.SessionID,
 				AgentName:    opt.AgentName,
-				ExitReason:   exitReasonString(r),
+				ExitReason:   exitReasonString(d.Reason),
+				ReasonDetail: d.ReasonDetail,
+				ExitCode:     d.ExitCode,
+				StderrTail:   d.StderrTail,
+				Error:        d.WaitErr,
 				DurationMs:   time.Since(spawnStart).Milliseconds(),
 			})
 		}
+	}
+	onExit := func(r provider.ExitReason) {
 		if f.OnExit != nil {
 			f.OnExit(opt.SessionID, opt.AgentName, r)
 		}
@@ -353,11 +363,12 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			}
 			return event.NewClaudeParser()
 		},
-		Spawner: spawner,
-		Store:   sto,
-		State:   st,
-		OnEvent: onEvent,
-		OnExit:  onExit,
+		Spawner:      spawner,
+		Store:        sto,
+		State:        st,
+		OnEvent:      onEvent,
+		OnExit:       onExit,
+		OnExitDetail: onExitDetail,
 		OnSpawn: func(binary string, argv []string, env []string, pid int, firstMsg string) {
 			writeStartEvent(pid, binary, argv, env, firstMsg)
 		},

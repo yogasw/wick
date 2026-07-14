@@ -76,6 +76,11 @@ type SpawnLogFileDTO struct {
 	FirstUserMessage string `json:"first_user_message,omitempty"`
 	Binary           string `json:"binary,omitempty"`
 	ExitReason       string `json:"exit_reason,omitempty"`
+	// ReasonDetail is the "why it ended" sentence; ExitCode + StderrTail
+	// carry the crash detail. All empty/0 while the spawn is still alive.
+	ReasonDetail string `json:"reason_detail,omitempty"`
+	ExitCode     int    `json:"exit_code,omitempty"`
+	StderrTail   string `json:"stderr_tail,omitempty"`
 }
 
 // SpawnEventDTO is one event line from a spawn log's timeline.
@@ -94,6 +99,9 @@ type SpawnEventDTO struct {
 	Origin           string   `json:"origin,omitempty"`
 	FirstUserMessage string   `json:"first_user_message,omitempty"`
 	ExitReason       string   `json:"exit_reason,omitempty"`
+	ReasonDetail     string   `json:"reason_detail,omitempty"`
+	ExitCode         int      `json:"exit_code,omitempty"`
+	StderrTail       string   `json:"stderr_tail,omitempty"`
 	DurationMs       int64    `json:"duration_ms,omitempty"`
 	Error            string   `json:"error,omitempty"`
 	Message          string   `json:"message,omitempty"`
@@ -111,6 +119,45 @@ type SpawnDetailResponse struct {
 	// HasResume is true when the spawn carried a --resume/resume id, so the
 	// Keep/Fresh toggle is meaningful. False on a session's first spawn.
 	HasResume bool `json:"has_resume"`
+	// Logs points the operator at the on-disk log files relevant to this
+	// spawn so a crash can be copied out for analysis without shelling in.
+	Logs SpawnLogsDTO `json:"logs"`
+}
+
+// SpawnLogsDTO carries the on-disk log paths + the spawn's time window for
+// one spawn's detail page. SpawnPath is the spawn's own jsonl (full event
+// timeline incl. crash stderr). Components lists the process logs
+// (app/server/worker/mcp/gate/daemon) written on the spawn's day(s), so
+// the operator can open the right file and scan the Window range.
+type SpawnLogsDTO struct {
+	SpawnPath  string      `json:"spawn_path"`           // full path to the spawn jsonl
+	LogsDir    string      `json:"logs_dir,omitempty"`   // absolute logs dir for display
+	Components []LogRefDTO `json:"components,omitempty"` // process logs from the spawn day(s)
+	Window     SpawnWindow `json:"window"`               // start→end time range to scan
+	// LogsPresent is the total number of .log files in the logs dir (any
+	// date). 0 = no process logs are being written at all (e.g. dev/console
+	// mode) — lets the UI explain an empty Components list.
+	LogsPresent int `json:"logs_present"`
+}
+
+// LogRefDTO is one process log file relevant to a spawn: its component
+// name (server/daemon/…) and absolute path.
+type LogRefDTO struct {
+	Prefix string `json:"prefix"`
+	Path   string `json:"path"`
+}
+
+// SpawnWindow is the spawn's lifetime — start (spawn) → end. End comes from
+// the exit event when the process shut down cleanly. Running=true only when
+// the process is genuinely still alive. Unclean=true means the process died
+// WITHOUT recording an exit (crash / OS-kill): End is then a best-effort
+// "last sign of life" (the last event's timestamp), not a real exit time.
+type SpawnWindow struct {
+	Start      string `json:"start"`         // RFC3339
+	End        string `json:"end,omitempty"` // RFC3339; "" only while genuinely running
+	DurationMs int64  `json:"duration_ms,omitempty"`
+	Running    bool   `json:"running"`
+	Unclean    bool   `json:"unclean"` // died without an exit event; End is approximate
 }
 
 func spawnEventDTO(e provider.SpawnEvent) SpawnEventDTO {
@@ -129,6 +176,9 @@ func spawnEventDTO(e provider.SpawnEvent) SpawnEventDTO {
 		Origin:           e.Origin,
 		FirstUserMessage: e.FirstUserMessage,
 		ExitReason:       e.ExitReason,
+		ReasonDetail:     e.ReasonDetail,
+		ExitCode:         e.ExitCode,
+		StderrTail:       e.StderrTail,
 		DurationMs:       e.DurationMs,
 		Error:            e.Error,
 		Message:          e.Message,
@@ -162,11 +212,52 @@ type GateStatusDTO struct {
 	BypassLocked   bool   `json:"bypass_locked"`
 }
 
+// SessionSummaryDTO is one row in the per-session Recent Spawns list: a
+// session that spawned one or more processes, collapsed to its latest
+// state. Clicking it opens the session detail (all its spawns).
+type SessionSummaryDTO struct {
+	SessionID    string `json:"session_id"`
+	ProviderType string `json:"provider_type"`
+	ProviderName string `json:"provider_name"`
+	SpawnCount   int    `json:"spawn_count"`
+	LastStatus   string `json:"last_status"`   // exit reason of the newest spawn ("" → running)
+	LastStarted  string `json:"last_started"`  // RFC3339 of the newest spawn
+	FirstMessage string `json:"first_message"` // newest spawn's first user message
+	Origin       string `json:"origin,omitempty"`
+}
+
+// SessionsListResponse is the JSON envelope for GET /api/providers/sessions.
+type SessionsListResponse struct {
+	Sessions []SessionSummaryDTO `json:"sessions"`
+	Page     int                 `json:"page"`
+	HasNext  bool                `json:"has_next"`
+	Total    int                 `json:"total"`
+}
+
+// SessionSpawnsResponse is the JSON envelope for GET
+// /api/providers/sessions/{id} — every spawn of one session, newest first.
+type SessionSpawnsResponse struct {
+	SessionID    string            `json:"session_id"`
+	ProviderType string            `json:"provider_type"`
+	ProviderName string            `json:"provider_name"`
+	Spawns       []SpawnLogFileDTO `json:"spawns"`
+}
+
+// SpawnsListResponse is the JSON envelope for GET /api/providers/spawns —
+// the single source for the Recent Spawns table on both the providers
+// list page (type/name empty = all) and a provider detail page (scoped).
+// Search (q) + pagination happen server-side so one contract serves both.
+type SpawnsListResponse struct {
+	Spawns  []SpawnLogFileDTO `json:"spawns"`
+	Page    int               `json:"page"`
+	HasNext bool              `json:"has_next"`
+	Total   int               `json:"total"` // matches after filter, before paging
+}
+
 // ProvidersListResponse is the JSON envelope for GET /api/providers.
 type ProvidersListResponse struct {
 	Providers     []ProviderStatusDTO `json:"providers"`
 	Gate          GateStatusDTO       `json:"gate"`
-	Spawns        []SpawnLogFileDTO   `json:"spawns"`
 	MCPClients    MCPStatusDTO        `json:"mcp"`
 	AutoRescan    bool                `json:"auto_rescan"`
 	PoolActive    int                 `json:"pool_active"`
@@ -202,9 +293,6 @@ type ProviderDetailResponse struct {
 	ActiveCount  int                          `json:"active_count"`
 	ActivePIDs   []LiveProcessDTO             `json:"active_pids"`
 	ConfigFields []ConfigFieldDTO             `json:"config_fields"`
-	Spawns       []SpawnLogFileDTO            `json:"spawns"`
-	Page         int                          `json:"page"`
-	HasNext      bool                         `json:"has_next"`
 	AIRouter     AIRouterDetailDTO            `json:"airouter"`
 }
 
@@ -333,6 +421,9 @@ func spawnLogFileDTO(f provider.SpawnLogFile) SpawnLogFileDTO {
 		FirstUserMessage: f.FirstUserMessage,
 		Binary:           f.Binary,
 		ExitReason:       f.ExitReason,
+		ReasonDetail:     f.ReasonDetail,
+		ExitCode:         f.ExitCode,
+		StderrTail:       f.StderrTail,
 	}
 }
 
@@ -435,14 +526,9 @@ func apiProvidersList(c *tool.Ctx) {
 		providerDTOs = append(providerDTOs, providerStatusDTO(st, caps))
 	}
 
-	var spawnDTOs []SpawnLogFileDTO
-	if globalSpawnLog != nil {
-		raw, _ := globalSpawnLog.List("", "", "")
-		spawnDTOs = spawnLogFileDTOs(normalizeSpawnStatus(raw))
-	}
-	if spawnDTOs == nil {
-		spawnDTOs = []SpawnLogFileDTO{}
-	}
+	// Recent Spawns now loads from the dedicated /api/providers/spawns
+	// endpoint (search + pagination, shared with provider detail), so the
+	// list payload no longer embeds the spawn list.
 
 	poolActive := 0
 	poolQueueLen := 0
@@ -457,7 +543,6 @@ func apiProvidersList(c *tool.Ctx) {
 	c.JSON(http.StatusOK, ProvidersListResponse{
 		Providers:     providerDTOs,
 		Gate:          gateStatusDTO(gateVM),
-		Spawns:        spawnDTOs,
 		MCPClients:    mcpStatusDTO(mcpVM),
 		AutoRescan:    autoRescanEnabled(),
 		PoolActive:    poolActive,
@@ -507,33 +592,8 @@ func apiProviderDetail(c *tool.Ctx) {
 		activePIDs = []LiveProcessDTO{}
 	}
 
-	const perPage = 20
-	page := 1
-	if v := c.Query("page"); v != "" {
-		if n := parseInt(v); n > 0 {
-			page = n
-		}
-	}
-
-	var spawnDTOs []SpawnLogFileDTO
-	hasNext := false
-	if globalSpawnLog != nil {
-		raw, _ := globalSpawnLog.List(string(t), name, "")
-		all := normalizeSpawnStatus(raw)
-		start := (page - 1) * perPage
-		if start > len(all) {
-			start = len(all)
-		}
-		end := start + perPage
-		if end > len(all) {
-			end = len(all)
-		}
-		spawnDTOs = spawnLogFileDTOs(all[start:end])
-		hasNext = end < len(all)
-	}
-	if spawnDTOs == nil {
-		spawnDTOs = []SpawnLogFileDTO{}
-	}
+	// Recent Spawns loads from the shared /api/providers/spawns endpoint
+	// (scoped by ?type=&name=), so the detail payload no longer embeds it.
 
 	hooksDTO := make(map[string]HookCapabilityDTO, len(st.Hooks))
 	for k, v := range st.Hooks {
@@ -566,9 +626,6 @@ func apiProviderDetail(c *tool.Ctx) {
 		ActiveCount:  len(activePIDs),
 		ActivePIDs:   activePIDs,
 		ConfigFields: configFieldDTOs(provider.SeedInstanceConfig(st.Instance)),
-		Spawns:       spawnDTOs,
-		Page:         page,
-		HasNext:      hasNext,
 		AIRouter:     aiRouterDetailDTO(st.Instance),
 	})
 }
@@ -604,7 +661,7 @@ func aiRouterDetailDTO(ins provider.Instance) AIRouterDetailDTO {
 // (e.g. WICK_PORT unset). Computed even when the toggle is off so the user can
 // preview before enabling.
 func aiRouterConfigPreview(ins provider.Instance) string {
-	ins.UseAIRouter = true    // force resolution regardless of the saved toggle
+	ins.UseAIRouter = true     // force resolution regardless of the saved toggle
 	ins.AIRouterRawConfig = "" // preview the GENERATED config, not an existing override
 	contrib, err := provider.RouterSpawnContribution(&ins, ins.Type)
 	if err != nil {

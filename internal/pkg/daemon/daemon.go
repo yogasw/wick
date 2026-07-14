@@ -21,20 +21,35 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yogasw/wick/pkg/safeexec"
 	"github.com/yogasw/wick/internal/userconfig"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // Paths bundles the per-app filesystem locations used by the daemon.
 type Paths struct {
 	Dir     string // ~/.<appname>/
 	PIDFile string // run.pid
-	LogFile string // daemon.log
+	LogFile string // logs/daemon-YYYY-MM-DD.log (dated; see ResolvePaths)
 	ExePath string // resolved path to the currently running binary
 }
 
+// daemonLogDate is the layout for the dated daemon log filename. Kept in
+// sync with internal/pkg/logfiles so the daemon log sits beside the
+// app/server/worker/mcp dated files under logs/ and is swept by the same
+// retention prune.
+const daemonLogDate = "2006-01-02"
+
 // ResolvePaths returns the canonical daemon paths for an app. The
 // directory is created if missing.
+//
+// The daemon log is dated (logs/daemon-YYYY-MM-DD.log), resolved to the
+// current day at call time. Since ResolvePaths runs on every start /
+// restart / systemd-install, each run lands in that day's file instead
+// of one ever-growing daemon.log — giving the per-day split the operator
+// expects and letting the shared logfiles prune reap old ones. This is a
+// pre-Setup safety net for panics that fire before logfiles.Setup takes
+// over stdout/stderr inside the `all` process; steady-state logs still
+// live in the component-specific dated files.
 func ResolvePaths(appName string) (Paths, error) {
 	dir, err := userconfig.Dir(appName)
 	if err != nil {
@@ -43,6 +58,10 @@ func ResolvePaths(appName string) (Paths, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Paths{}, fmt.Errorf("mkdir %s: %w", dir, err)
 	}
+	logsDir := filepath.Join(dir, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		return Paths{}, fmt.Errorf("mkdir %s: %w", logsDir, err)
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return Paths{}, fmt.Errorf("resolve executable: %w", err)
@@ -50,10 +69,11 @@ func ResolvePaths(appName string) (Paths, error) {
 	if real, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = real
 	}
+	logName := "daemon-" + time.Now().Format(daemonLogDate) + ".log"
 	return Paths{
 		Dir:     dir,
 		PIDFile: filepath.Join(dir, "run.pid"),
-		LogFile: filepath.Join(dir, "daemon.log"),
+		LogFile: filepath.Join(logsDir, logName),
 		ExePath: exe,
 	}, nil
 }
@@ -182,8 +202,18 @@ func Restart(p Paths, timeout time.Duration, args []string) (int, error) {
 
 // TailLog copies the last n bytes of the daemon log to w. Convenience
 // for `status` output. Returns nil if the log doesn't exist yet.
+//
+// The log is dated, so a daemon started on a previous day writes to a
+// file whose name today's ResolvePaths would not reproduce. Tail the
+// NEWEST daemon-*.log in the logs dir (falling back to p.LogFile) so
+// `status` shows the running daemon's actual output, not an empty
+// today-file.
 func TailLog(p Paths, n int64, w io.Writer) error {
-	f, err := os.Open(p.LogFile)
+	path := latestDaemonLog(filepath.Dir(p.LogFile))
+	if path == "" {
+		path = p.LogFile
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -202,6 +232,34 @@ func TailLog(p Paths, n int64, w io.Writer) error {
 	}
 	_, err = io.Copy(w, f)
 	return err
+}
+
+// latestDaemonLog returns the path to the newest daemon-YYYY-MM-DD.log
+// in logsDir (by filename, which sorts chronologically), or "" if none
+// exist. Used by TailLog so `status` finds a daemon started on an
+// earlier day.
+func latestDaemonLog(logsDir string) string {
+	entries, err := os.ReadDir(logsDir)
+	if err != nil {
+		return ""
+	}
+	best := ""
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, "daemon-") || !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		if name > best {
+			best = name
+		}
+	}
+	if best == "" {
+		return ""
+	}
+	return filepath.Join(logsDir, best)
 }
 
 // ErrAlreadyRunning signals Start was called while a live daemon

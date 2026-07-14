@@ -543,8 +543,9 @@ func Run() {
 			}
 			// Split component logs into app/server/worker/mcp dated files
 			// under ~/.<appName>/logs/, matching tray mode. Daemon parent
-			// still redirects child stdout/stderr to daemon.log as a
-			// safety net for panics that fire before this point.
+			// still redirects child stdout/stderr to the dated
+			// logs/daemon-YYYY-MM-DD.log as a safety net for panics that
+			// fire before this point.
 			serverLogger := log.With().Str("component", "server").Logger()
 			workerLogger := log.With().Str("component", "worker").Logger()
 			if ls, cleanup, err := logfiles.Setup(BuildAppName, 0); err == nil {

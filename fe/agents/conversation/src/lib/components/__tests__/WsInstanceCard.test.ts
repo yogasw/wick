@@ -291,4 +291,5 @@ describe("WsInstanceCard", () => {
     expect(saveBtn.disabled).toBe(true);
     expect(screen.queryByText(/no changes/i)).toBeDefined();
   });
+
 });
