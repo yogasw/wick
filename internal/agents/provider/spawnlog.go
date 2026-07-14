@@ -86,6 +86,19 @@ type SpawnEvent struct {
 	DurationMs       int64     `json:"duration_ms,omitempty"`
 	Error            string    `json:"error,omitempty"`
 	Message          string    `json:"message,omitempty"`
+	// ReasonDetail is a human sentence on the exit event explaining WHY
+	// the process ended — e.g. "idle TTL expired", "Stop() called
+	// (preempt or session change)", "subprocess crashed: <stderr line>".
+	// Populated from provider.ExitDetail so Recent Spawns shows a reason,
+	// not just a one-word status.
+	ReasonDetail string `json:"reason_detail,omitempty"`
+	// ExitCode is the OS exit code on an abnormal (crash) exit; 0 for
+	// clean / idle / stopped / respawn exits.
+	ExitCode int `json:"exit_code,omitempty"`
+	// StderrTail is the tail of the subprocess stderr on a crash — the
+	// actual error message (bad model id, config.toml error, missing
+	// binary). Empty when the process exited without writing stderr.
+	StderrTail string `json:"stderr_tail,omitempty"`
 }
 
 // Append writes one event to the spawn log file, creating it on first
@@ -176,6 +189,15 @@ type SpawnLogFile struct {
 	// ExitReason is "" while the spawn is still alive (no exit event
 	// recorded yet), else "clean" / "idle" / "stopped" / "error".
 	ExitReason string
+	// ReasonDetail is the human "why it ended" sentence from the exit
+	// event; "" while alive. Lets the Recent Spawns list show a reason
+	// tooltip without opening the file.
+	ReasonDetail string
+	// ExitCode is the crash exit code from the exit event; 0 otherwise.
+	ExitCode int
+	// StderrTail is the crash stderr tail from the exit event; "" when
+	// the process exited without writing stderr.
+	StderrTail string
 }
 
 // FirstMessageWordLimit caps the spawn log's first_user_message at
@@ -291,6 +313,9 @@ func (s *SpawnLogger) enrichFromEvents(f *SpawnLogFile) {
 			}
 		case "exit":
 			f.ExitReason = ev.ExitReason
+			f.ReasonDetail = ev.ReasonDetail
+			f.ExitCode = ev.ExitCode
+			f.StderrTail = ev.StderrTail
 		}
 	}
 }

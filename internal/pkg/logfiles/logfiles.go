@@ -16,7 +16,7 @@
 //
 // Each file is tee'd to the original stderr so an interactive operator
 // still sees output in the terminal. When the caller has no real
-// stderr (tray detaches the console, daemon redirects to daemon.log),
+// stderr (tray detaches the console, daemon redirects to daemon-DATE.log),
 // the file is the only sink — that's the intent.
 package logfiles
 
@@ -184,12 +184,17 @@ func pruneOldLogs(dir string, retentionDays int) {
 		if !strings.HasSuffix(name, logSuffix) {
 			continue
 		}
+		// Filename is <prefix>-YYYY-MM-DD.log. The date itself contains
+		// dashes, so take the LAST THREE dash-separated segments as the
+		// date — not everything after the last dash (which is just the
+		// day and never parses as a full date).
 		base := strings.TrimSuffix(name, logSuffix)
-		idx := strings.LastIndex(base, "-")
-		if idx < 0 {
+		parts := strings.Split(base, "-")
+		if len(parts) < 3 {
 			continue
 		}
-		t, err := time.Parse(dateLayout, base[idx+1:])
+		datePart := strings.Join(parts[len(parts)-3:], "-")
+		t, err := time.Parse(dateLayout, datePart)
 		if err != nil {
 			continue
 		}

@@ -63,6 +63,9 @@ interface WireSpawnLogFile {
   first_user_message?: string;
   binary?: string;
   exit_reason?: string;
+  reason_detail?: string;
+  exit_code?: number;
+  stderr_tail?: string;
 }
 
 interface WireSpawnEvent {
@@ -80,9 +83,33 @@ interface WireSpawnEvent {
   origin?: string;
   first_user_message?: string;
   exit_reason?: string;
+  reason_detail?: string;
+  exit_code?: number;
+  stderr_tail?: string;
   duration_ms?: number;
   error?: string;
   message?: string;
+}
+
+interface WireLogRef {
+  prefix?: string;
+  path?: string;
+}
+
+interface WireSpawnWindow {
+  start?: string;
+  end?: string;
+  duration_ms?: number;
+  running?: boolean;
+  unclean?: boolean;
+}
+
+interface WireSpawnLogs {
+  spawn_path?: string;
+  logs_dir?: string;
+  components?: WireLogRef[] | null;
+  window?: WireSpawnWindow;
+  logs_present?: number;
 }
 
 interface WireSpawnDetailResponse {
@@ -91,6 +118,7 @@ interface WireSpawnDetailResponse {
   session_deleted: boolean;
   repro: Record<string, string> | null;
   has_resume: boolean;
+  logs?: WireSpawnLogs;
 }
 
 interface WireMCPClient {
@@ -138,7 +166,6 @@ interface WireConfigField {
 interface WireProvidersListResponse {
   providers: WireProviderStatus[] | null;
   gate: WireGateStatus | null;
-  spawns: WireSpawnLogFile[] | null;
   mcp: WireMCPStatus | null;
   auto_rescan: boolean;
   pool_active: number;
@@ -162,9 +189,6 @@ interface WireProviderDetailResponse {
   active_count: number;
   active_pids: WireLiveProcess[] | null;
   config_fields: WireConfigField[] | null;
-  spawns: WireSpawnLogFile[] | null;
-  page: number;
-  has_next: boolean;
   airouter?: {
     supported?: boolean;
     enabled?: boolean;
@@ -290,6 +314,9 @@ function mapSpawn(w: WireSpawnLogFile): SpawnLogFileDTO {
     FirstUserMessage: w.first_user_message ?? "",
     Binary: w.binary ?? "",
     ExitReason: w.exit_reason ?? "",
+    ReasonDetail: w.reason_detail ?? "",
+    ExitCode: w.exit_code ?? 0,
+    StderrTail: w.stderr_tail ?? "",
   };
 }
 
@@ -351,7 +378,6 @@ export function normalizeProviders(r: WireProvidersListResponse): ProvidersListR
   return {
     Providers: (r.providers ?? []).map(mapProviderStatus),
     Gate: mapGate(r.gate),
-    Spawns: (r.spawns ?? []).map(mapSpawn),
     MCPClients: mapMCP(r.mcp),
     AutoRescan: r.auto_rescan ?? false,
     PoolActive: r.pool_active ?? 0,
@@ -541,9 +567,6 @@ export function normalizeProviderDetail(r: WireProviderDetailResponse): Provider
     ActiveCount: r.active_count ?? 0,
     ActivePIDs: (r.active_pids ?? []).map(mapLiveProcess),
     ConfigFields: (r.config_fields ?? []).map(mapConfigField),
-    Spawns: (r.spawns ?? []).map(mapSpawn),
-    Page: r.page ?? 0,
-    HasNext: r.has_next ?? false,
     AIRouter: {
       Supported: r.airouter?.supported ?? false,
       Enabled: r.airouter?.enabled ?? false,
@@ -557,8 +580,9 @@ export function normalizeProviderDetail(r: WireProviderDetailResponse): Provider
   };
 }
 
-export async function apiGetProviderDetail(base: string, type: string, name: string): Promise<ProviderDetailResponse> {
-  const r = await get<WireProviderDetailResponse>(`${base}/api/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}`);
+export async function apiGetProviderDetail(base: string, type: string, name: string, page?: number): Promise<ProviderDetailResponse> {
+  const q = page && page > 1 ? `?page=${page}` : "";
+  const r = await get<WireProviderDetailResponse>(`${base}/api/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}${q}`);
   return normalizeProviderDetail(r);
 }
 
@@ -578,10 +602,106 @@ function mapSpawnEvent(w: WireSpawnEvent): SpawnEvent {
     Origin: w.origin ?? "",
     FirstUserMessage: w.first_user_message ?? "",
     ExitReason: w.exit_reason ?? "",
+    ReasonDetail: w.reason_detail ?? "",
+    ExitCode: w.exit_code ?? 0,
+    StderrTail: w.stderr_tail ?? "",
     DurationMs: w.duration_ms ?? 0,
     Error: w.error ?? "",
     Message: w.message ?? "",
   };
+}
+
+// apiGetSpawns is the single source for the Recent Spawns table on both the
+// list page (type/name omitted = all) and a provider detail page (scoped).
+// Search (q) + pagination happen server-side.
+export async function apiGetSpawns(
+  base: string,
+  opts: { type?: string; name?: string; q?: string; page?: number } = {},
+): Promise<import("./types.js").SpawnsList> {
+  const p = new URLSearchParams();
+  if (opts.type) p.set("type", opts.type);
+  if (opts.name) p.set("name", opts.name);
+  if (opts.q) p.set("q", opts.q);
+  if (opts.page && opts.page > 1) p.set("page", String(opts.page));
+  const qs = p.toString();
+  const r = await get<{ spawns?: WireSpawnLogFile[] | null; page?: number; has_next?: boolean; total?: number }>(
+    `${base}/api/providers/spawns${qs ? `?${qs}` : ""}`,
+  );
+  return {
+    Spawns: (r.spawns ?? []).map(mapSpawn),
+    Page: r.page ?? 1,
+    HasNext: r.has_next ?? false,
+    Total: r.total ?? 0,
+  };
+}
+
+// apiGetSessions lists Recent Spawns grouped by session (row = session).
+// type/name scope to a provider; q searches; page paginates.
+export async function apiGetSessions(
+  base: string,
+  opts: { type?: string; name?: string; q?: string; page?: number } = {},
+): Promise<import("./types.js").SessionsList> {
+  const p = new URLSearchParams();
+  if (opts.type) p.set("type", opts.type);
+  if (opts.name) p.set("name", opts.name);
+  if (opts.q) p.set("q", opts.q);
+  if (opts.page && opts.page > 1) p.set("page", String(opts.page));
+  const qs = p.toString();
+  const r = await get<{
+    sessions?: Array<Record<string, unknown>> | null;
+    page?: number;
+    has_next?: boolean;
+    total?: number;
+  }>(`${base}/api/providers/sessions${qs ? `?${qs}` : ""}`);
+  return {
+    Sessions: (r.sessions ?? []).map((s) => ({
+      SessionID: String(s.session_id ?? ""),
+      ProviderType: String(s.provider_type ?? ""),
+      ProviderName: String(s.provider_name ?? ""),
+      SpawnCount: Number(s.spawn_count ?? 0),
+      LastStatus: String(s.last_status ?? ""),
+      LastStarted: String(s.last_started ?? ""),
+      FirstMessage: String(s.first_message ?? ""),
+      Origin: String(s.origin ?? ""),
+    })),
+    Page: r.page ?? 1,
+    HasNext: r.has_next ?? false,
+    Total: r.total ?? 0,
+  };
+}
+
+// apiGetSessionSpawns returns every spawn of one session, newest first.
+export async function apiGetSessionSpawns(base: string, id: string): Promise<import("./types.js").SessionSpawns> {
+  const r = await get<{ session_id?: string; provider_type?: string; provider_name?: string; spawns?: WireSpawnLogFile[] | null }>(
+    `${base}/api/providers/sessions/${encodeURIComponent(id)}`,
+  );
+  return {
+    SessionID: r.session_id ?? id,
+    ProviderType: r.provider_type ?? "",
+    ProviderName: r.provider_name ?? "",
+    Spawns: (r.spawns ?? []).map(mapSpawn),
+  };
+}
+
+// apiTailLog fetches the tail of one runtime log file for the log viewer.
+export async function apiTailLog(base: string, file: string, bytes?: number): Promise<import("./types.js").LogTail> {
+  const q = bytes ? `?bytes=${bytes}` : "";
+  const r = await get<{ name?: string; path?: string; size?: number; content?: string; truncated?: boolean; modified?: string }>(
+    `${base}/api/providers/logs/${encodeURIComponent(file)}${q}`,
+  );
+  return {
+    Name: r.name ?? "",
+    Path: r.path ?? "",
+    Size: r.size ?? 0,
+    Content: r.content ?? "",
+    Truncated: r.truncated ?? false,
+    Modified: r.modified ?? "",
+  };
+}
+
+// logDownloadURL builds the attachment download href for a log file.
+export function logDownloadURL(base: string, file: string): string {
+  return `${base}/api/providers/logs/${encodeURIComponent(file)}/download`;
 }
 
 // apiGetSpawnDetail fetches one spawn log's metadata, event timeline, and the
@@ -595,6 +715,19 @@ export async function apiGetSpawnDetail(base: string, file: string): Promise<Spa
     SessionDeleted: r.session_deleted ?? false,
     Repro: r.repro ?? {},
     HasResume: r.has_resume ?? false,
+    Logs: {
+      SpawnPath: r.logs?.spawn_path ?? "",
+      LogsDir: r.logs?.logs_dir ?? "",
+      Components: (r.logs?.components ?? []).map((c) => ({ Prefix: c.prefix ?? "", Path: c.path ?? "" })),
+      Window: {
+        Start: r.logs?.window?.start ?? "",
+        End: r.logs?.window?.end ?? "",
+        DurationMs: r.logs?.window?.duration_ms ?? 0,
+        Running: r.logs?.window?.running ?? false,
+        Unclean: r.logs?.window?.unclean ?? false,
+      },
+      LogsPresent: r.logs?.logs_present ?? 0,
+    },
   };
 }
 

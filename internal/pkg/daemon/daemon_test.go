@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,8 +29,16 @@ func TestResolvePaths_CreatesDir(t *testing.T) {
 	if filepath.Base(p.PIDFile) != "run.pid" {
 		t.Errorf("unexpected pidfile name: %s", p.PIDFile)
 	}
-	if filepath.Base(p.LogFile) != "daemon.log" {
+	// Log is dated and lives under logs/: daemon-YYYY-MM-DD.log.
+	base := filepath.Base(p.LogFile)
+	if !strings.HasPrefix(base, "daemon-") || !strings.HasSuffix(base, ".log") {
 		t.Errorf("unexpected logfile name: %s", p.LogFile)
+	}
+	if filepath.Base(filepath.Dir(p.LogFile)) != "logs" {
+		t.Errorf("log should live under logs/: %s", p.LogFile)
+	}
+	if _, err := time.Parse("2006-01-02", strings.TrimSuffix(strings.TrimPrefix(base, "daemon-"), ".log")); err != nil {
+		t.Errorf("logfile name not dated: %s (%v)", base, err)
 	}
 }
 

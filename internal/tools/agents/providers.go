@@ -1067,13 +1067,198 @@ func toggleAutoRescan(c *tool.Ctx) {
 	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
 }
 
-// providerSpawnDetail serves the Providers SPA shell for the
-// /providers/spawns/{file} route. The SPA router (prefix /providers) picks up
-// /spawns/<file> and renders SpawnDetail, which fetches apiSpawnDetail. Serving
-// the shell here means a direct load / refresh of the URL boots straight into
-// the detail view.
-func providerSpawnDetail(c *tool.Ctx) {
-	providerDetailPage(c)
+// spawnsPerPage is the page size for the Recent Spawns table, shared by
+// the list page and provider detail so both paginate identically.
+const spawnsPerPage = 10
+
+// matchesSpawnQuery reports whether a spawn matches a lowercased search
+// query over its first message / session / pid / status.
+func matchesSpawnQuery(s provider.SpawnLogFile, q string) bool {
+	if q == "" {
+		return true
+	}
+	status := s.ExitReason
+	if status == "" {
+		status = "running"
+	}
+	return strings.Contains(strings.ToLower(s.FirstUserMessage), q) ||
+		strings.Contains(strings.ToLower(s.SessionID), q) ||
+		strings.Contains(strconv.Itoa(s.PID), q) ||
+		strings.Contains(strings.ToLower(status), q)
+}
+
+// apiSessionsList is the source for the per-session Recent Spawns list.
+// Spawns are grouped by session id; each session collapses to its latest
+// spawn's state (status, time, first message) plus a spawn count. Query:
+// type/name scope to a provider, q searches, page paginates (spawnsPerPage).
+func apiSessionsList(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	if globalSpawnLog == nil {
+		c.JSON(http.StatusOK, SessionsListResponse{Sessions: []SessionSummaryDTO{}, Page: 1})
+		return
+	}
+	pType := c.Query("type")
+	pName := c.Query("name")
+	q := strings.ToLower(strings.TrimSpace(c.Query("q")))
+	page := 1
+	if v := c.Query("page"); v != "" {
+		if n := parseInt(v); n > 0 {
+			page = n
+		}
+	}
+
+	raw, _ := globalSpawnLog.List(pType, pName, "")
+	all := normalizeSpawnStatus(raw)
+
+	// Group by session, preserving newest-first order (List already sorts
+	// desc by StartedAt). The first spawn seen per session is its newest,
+	// so it defines the collapsed row; later ones just bump the count.
+	order := make([]string, 0)
+	byID := make(map[string]*SessionSummaryDTO)
+	for i := range all {
+		s := all[i]
+		// A session matches the search if ANY of its spawns match, so the
+		// group isn't hidden just because the newest spawn's message differs.
+		sum, ok := byID[s.SessionID]
+		if !ok {
+			sum = &SessionSummaryDTO{
+				SessionID:    s.SessionID,
+				ProviderType: s.ProviderType,
+				ProviderName: s.ProviderName,
+				LastStatus:   s.ExitReason,
+				LastStarted:  s.StartedAt.UTC().Format(time.RFC3339),
+				FirstMessage: s.FirstUserMessage,
+				Origin:       s.Origin,
+			}
+			byID[s.SessionID] = sum
+			order = append(order, s.SessionID)
+		}
+		sum.SpawnCount++
+	}
+
+	// Filter groups by query (match if the session id / newest message /
+	// status matches, or any spawn matched — checked via the group fields
+	// plus a per-spawn scan for message/pid).
+	sessions := make([]SessionSummaryDTO, 0, len(order))
+	for _, id := range order {
+		sum := byID[id]
+		if q != "" && !sessionMatchesQuery(all, id, q) {
+			continue
+		}
+		sessions = append(sessions, *sum)
+	}
+
+	total := len(sessions)
+	start := (page - 1) * spawnsPerPage
+	if start > total {
+		start = total
+	}
+	end := start + spawnsPerPage
+	if end > total {
+		end = total
+	}
+	c.JSON(http.StatusOK, SessionsListResponse{
+		Sessions: sessions[start:end],
+		Page:     page,
+		HasNext:  end < total,
+		Total:    total,
+	})
+}
+
+// sessionMatchesQuery reports whether any spawn of session id matches q.
+func sessionMatchesQuery(all []provider.SpawnLogFile, id, q string) bool {
+	if strings.Contains(strings.ToLower(id), q) {
+		return true
+	}
+	for i := range all {
+		if all[i].SessionID == id && matchesSpawnQuery(all[i], q) {
+			return true
+		}
+	}
+	return false
+}
+
+// apiSessionSpawns returns every spawn of one session, newest first — the
+// session detail page. SpawnLogger.List's third arg filters by session id.
+func apiSessionSpawns(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	id := c.PathValue("id")
+	if id == "" {
+		c.Error(http.StatusBadRequest, "session id required")
+		return
+	}
+	resp := SessionSpawnsResponse{SessionID: id, Spawns: []SpawnLogFileDTO{}}
+	if globalSpawnLog != nil {
+		raw, _ := globalSpawnLog.List("", "", id)
+		all := normalizeSpawnStatus(raw)
+		resp.Spawns = spawnLogFileDTOs(all)
+		if len(all) > 0 {
+			resp.ProviderType = all[0].ProviderType
+			resp.ProviderName = all[0].ProviderName
+		}
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// apiSpawnsList is the single source for the Recent Spawns table. Query:
+//
+//	type, name  scope to one provider instance (both empty = all providers)
+//	q           case-insensitive search over first message / session / pid / status
+//	page        1-based; page size is spawnsPerPage
+//
+// Search + pagination are server-side so the list page and a provider
+// detail page share one contract and one FE component.
+func apiSpawnsList(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	if globalSpawnLog == nil {
+		c.JSON(http.StatusOK, SpawnsListResponse{Spawns: []SpawnLogFileDTO{}, Page: 1})
+		return
+	}
+	pType := c.Query("type")
+	pName := c.Query("name")
+	q := strings.ToLower(strings.TrimSpace(c.Query("q")))
+	page := 1
+	if v := c.Query("page"); v != "" {
+		if n := parseInt(v); n > 0 {
+			page = n
+		}
+	}
+
+	raw, _ := globalSpawnLog.List(pType, pName, "")
+	all := normalizeSpawnStatus(raw)
+
+	// Text filter (server-side) — same fields the FE used to match on.
+	if q != "" {
+		filtered := all[:0]
+		for _, s := range all {
+			if matchesSpawnQuery(s, q) {
+				filtered = append(filtered, s)
+			}
+		}
+		all = filtered
+	}
+
+	total := len(all)
+	start := (page - 1) * spawnsPerPage
+	if start > total {
+		start = total
+	}
+	end := start + spawnsPerPage
+	if end > total {
+		end = total
+	}
+	c.JSON(http.StatusOK, SpawnsListResponse{
+		Spawns:  spawnLogFileDTOs(all[start:end]),
+		Page:    page,
+		HasNext: end < total,
+		Total:   total,
+	})
 }
 
 // apiSpawnDetail returns the JSON detail for one spawn log: metadata, the full
@@ -1099,8 +1284,27 @@ func apiSpawnDetail(c *tool.Ctx) {
 		}
 	}
 	eventDTOs := make([]SpawnEventDTO, 0, len(events))
+	// endedAt is the exit-event time (clean end); zero when none recorded.
+	// lastAt tracks the newest event so we can date an unclean death.
+	var endedAt, lastAt time.Time
+	haveExit := false
 	for _, ev := range events {
+		if ev.Type == "exit" {
+			endedAt = ev.At
+			haveExit = true
+		}
+		if ev.At.After(lastAt) {
+			lastAt = ev.At
+		}
 		eventDTOs = append(eventDTOs, spawnEventDTO(ev))
+	}
+	// Unclean = no exit event but the process is gone (crash / OS-kill). Use
+	// the last event's time as a best-effort end so the window isn't a
+	// misleading "running". A running PID with no exit is genuinely running.
+	unclean := false
+	if !haveExit && meta.PID > 0 && !processctl.ProcessAlive(meta.PID) {
+		unclean = true
+		endedAt = lastAt // best-effort; may be zero if the file had no events
 	}
 	c.JSON(http.StatusOK, SpawnDetailResponse{
 		File:           spawnLogFileDTO(meta),
@@ -1108,6 +1312,7 @@ func apiSpawnDetail(c *tool.Ctx) {
 		SessionDeleted: sessionDeleted,
 		Repro:          view.BuildReproVariants(meta.ProviderType, meta.Binary, meta.Argv, meta.Env),
 		HasResume:      view.HasResumeArgv(meta.ProviderType, meta.Argv),
+		Logs:           spawnLogsDTO(meta.Path, meta.StartedAt, endedAt, unclean),
 	})
 }
 
