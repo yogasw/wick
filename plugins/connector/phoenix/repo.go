@@ -1,4 +1,4 @@
-package phoenix
+package main
 
 import (
 	"bytes"
@@ -97,8 +97,8 @@ type wireSession struct {
 }
 
 type wireTrace struct {
-	ID      string `json:"id"`
-	TraceID string `json:"traceId"`
+	ID       string `json:"id"`
+	TraceID  string `json:"traceId"`
 	RootSpan struct {
 		ID     string `json:"id"`
 		SpanID string `json:"spanId"`

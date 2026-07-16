@@ -1,15 +1,17 @@
-package loki
+package main
 
 import (
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/wickdocs"
+	"github.com/yogasw/wick/plugins/tags"
 )
 
 const Key = "loki"
 
 type Configs struct {
 	BaseURL       string `wick:"url;required;desc=Grafana base URL. Example: https://loki.domain.com"`
-	DatasourceUID string `wick:"required;default=43cBBeg4k;desc=Loki datasource UID in Grafana. Found in the datasource proxy URL segment after /uid/."`
+	DatasourceUID string `wick:"required;desc=Loki datasource UID in Grafana. Found in the datasource proxy URL segment after /uid/."`
 	AuthMode      string `wick:"dropdown=basic|token;required;default=basic;desc=basic = Grafana username + password, token = Bearer API key (Service Account)."`
 	Token         string `wick:"secret;desc=Grafana Service Account token. Used when auth_mode = token."`
 	Username      string `wick:"required;desc=Grafana username. Used when auth_mode = basic."`
@@ -29,12 +31,21 @@ type LabelValuesInput struct {
 	Label string `wick:"required;desc=Label name to look up. Example: app"`
 }
 
-func Meta() connector.Meta {
-	return connector.Meta{
-		Key:         Key,
-		Name:        "Loki",
-		Description: "Query logs and discover labels in a Grafana Loki instance via LogQL.",
-		Icon:        "🪵",
+// Module is the connector definition. DefaultTags match the built-in it
+// replaced (Connector + Observability) so it lands in the same connector-list
+// section; the app reads these from the manifest and categorizes the plugin
+// identically to a built-in.
+func Module() connector.Module {
+	return connector.Module{
+		Meta: connector.Meta{
+			Key:         Key,
+			Name:        "Loki",
+			Description: "Query logs and discover labels in a Grafana Loki instance via LogQL.",
+			Icon:        "🪵",
+			DefaultTags: []entity.DefaultTag{tags.Connector, tags.Observability},
+		},
+		Configs:    entity.StructToConfigs(Configs{}),
+		Operations: Operations(),
 	}
 }
 

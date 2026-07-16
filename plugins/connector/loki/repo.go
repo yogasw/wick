@@ -1,4 +1,4 @@
-package loki
+package main
 
 import (
 	"encoding/base64"
