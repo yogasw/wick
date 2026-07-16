@@ -185,14 +185,28 @@ func Operations() []connector.Category {
 }
 ```
 
-Signatures: `Op(key, name, description string, input I, exec ExecuteFunc, docs wickdocs.Docs)` and `OpDestructive(...)` — same args. The trailing `docs wickdocs.Docs` carries optional self-documentation (examples, quirks, output shape) surfaced by the workflow `workflow_node_detail` MCP op; pass `wickdocs.Docs{}` when there is nothing extra. The flat helper `Module.AllOps()` concatenates every section's ops in order for callers that don't care about grouping.
+Signatures: `Op(key, name, description string, input I, exec ExecuteFunc, docs wickdocs.Docs)`, `OpDestructive(...)`, and `OpConfigOnly(...)` — same args. The trailing `docs wickdocs.Docs` carries optional self-documentation (examples, quirks, output shape) surfaced by the workflow `workflow_node_detail` MCP op; pass `wickdocs.Docs{}` when there is nothing extra. The flat helper `Module.AllOps()` concatenates every section's ops in order for callers that don't care about grouping.
 
-**`Op` vs `OpDestructive`:**
+**`Op` vs `OpDestructive` vs `OpConfigOnly`:**
 
 - `Op(...)` for read-only or idempotent writes that can be safely retried.
 - `OpDestructive(...)` for actions the user does not want the LLM to fire by mistake — DELETE, send-message, post-comment, force-push, anything that touches money or user-visible state.
+- `OpConfigOnly(...)` for an op that exists **only to back a config-form widget** (an `html=<op>` picker or status card), NOT as an agent tool. It is hidden from the entire MCP surface (wick_list counts, wick_search, wick_get) and blocked if called via `wick_execute` (`Source != test`), yet still runs from the manager config UI's `/test` path for any user who can configure the instance. Use it for read-only "list options for a picker" / "show connection status" helpers. In the admin op table it renders with a "config only" badge and no enable toggle (a "UI only" chip instead), and it's excluded from the "Operations N" tool count.
 
 A destructive op is **disabled by default** on every new row. Admins opt in per (row, operation).
+
+`OpConfigOnly` is the correct way to hide a picker/status helper op from the LLM — **not** `AdminOnly`, which does not hide the op from the catalog and additionally blocks non-admin config users from the widget. See the `config-tags` skill's `html=<op>` row.
+
+```go
+// Backs an html=<op> datasource picker; never an agent tool.
+connector.OpConfigOnly(
+    "list_datasources", "List Datasources",
+    "List Loki datasources. Read-only; used by the manager UI's datasource picker.",
+    pickerInput{}, listDatasources, wickdocs.Docs{},
+)
+```
+
+The `html=<op>` widget always calls the backing op with the currently-selected value in an arg named `browser` (a fixed convention) and auto-selects when the op returns exactly one `data-op="__select"` option. Return `map[string]any{"html": "<markup>"}`; put clickable rows as `<... data-op="__select" data-arg="<value>">`.
 
 ### Description discipline
 
@@ -217,7 +231,7 @@ See [`internal/connectors/crudcrud/`](../../../internal/connectors/crudcrud/) fo
 4. **MUST** use `c.HTTP` as the starting client (carries a 30s default timeout from `pkg/connector.DefaultHTTPTimeout`). Replace it locally if you need a different transport, but document why.
 5. **SHOULD** wrap upstream errors with `fmt.Errorf("...: %w", err)` so the chain reads cleanly in the history detail panel.
 6. **SHOULD** transform the upstream response into a typed struct or map shape that's stable across upstream changes. Returning the raw upstream body works but means LLMs see noise (envelopes, pagination cursors, debug fields) and break when upstream tweaks the shape. See [`connectors-design.md` § 10.1](../../../internal/planning/archive/connectors-design.md).
-7. **SHOULD** mark destructive operations with `OpDestructive(...)` — the framework defaults the toggle off so it's an explicit admin opt-in.
+7. **SHOULD** mark destructive operations with `OpDestructive(...)` — the framework defaults the toggle off so it's an explicit admin opt-in. Mark config-form-helper ops (backing an `html=<op>` picker/status widget) with `OpConfigOnly(...)` so they never reach the LLM.
 8. **MAY** emit progress with `c.ReportProgress(progress, total, message)` for long-running calls. Safe to call from any goroutine; no-op on the JSON transport.
 
 ### Anti-patterns
@@ -511,6 +525,6 @@ The retention job [`internal/jobs/connector-runs-purge`](../../../internal/jobs/
 
 - Canonical example: [`internal/connectors/crudcrud/connector.go`](../../../internal/connectors/crudcrud/connector.go)
 - Design source of truth: [`internal/planning/archive/connectors-design.md`](../../../internal/planning/archive/connectors-design.md)
-- Public API: [`pkg/connector/`](../../../pkg/connector/) — `Meta`, `Module`, `Operation`, `Op`, `OpDestructive`, `ExecuteFunc`, `Ctx`
+- Public API: [`pkg/connector/`](../../../pkg/connector/) — `Meta`, `Module`, `Operation`, `Op`, `OpDestructive`, `OpConfigOnly`, `ExecuteFunc`, `Ctx`
 - MCP server: [`internal/mcp/`](../../../internal/mcp/)
 - Retention job: [`internal/jobs/connector-runs-purge/`](../../../internal/jobs/connector-runs-purge/)

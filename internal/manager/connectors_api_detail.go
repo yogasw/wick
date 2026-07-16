@@ -86,6 +86,7 @@ type connectorOpJSON struct {
 	Name                 string `json:"name"`
 	Description          string `json:"description"`
 	Destructive          bool   `json:"destructive"`
+	ConfigOnly           bool   `json:"config_only"`
 	Enabled              bool   `json:"enabled"`
 	SystemDisabled       bool   `json:"system_disabled"`
 	SystemDisabledReason string `json:"system_disabled_reason"`
@@ -187,7 +188,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		Description: mod.Meta.Description,
 		Icon:        mod.Meta.Icon,
 		Fixed:       mod.Meta.Fixed,
-		OpCount:     len(mod.AllOps()),
+		OpCount:     visibleOpCount(mod),
 		Custom:      customInfo != nil,
 		DefID:       defID,
 		MCP:          mcp,
@@ -274,11 +275,16 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 	for _, cat := range mod.Operations {
 		for _, op := range cat.Ops {
 			st := states[op.Key]
+			// ConfigOnly ops back a config-form widget (e.g. the datasource
+			// picker). They stay visible in the admin table (admins can still
+			// Test them) but the UI flags them "Config only" and hides the
+			// enable toggle — they're not agent tools and never reach wick_get.
 			ops = append(ops, connectorOpJSON{
 				Key:                  op.Key,
 				Name:                 op.Name,
 				Description:          op.Description,
 				Destructive:          op.Destructive,
+				ConfigOnly:           op.ConfigOnly,
 				Enabled:              st.Enabled,
 				SystemDisabled:       st.SystemDisabled,
 				SystemDisabledReason: st.SystemDisabledReason,
@@ -341,6 +347,22 @@ func buildCategoryJSON(mod connector.Module) []connectorCategoryJSON {
 		out = append(out, connectorCategoryJSON{Key: c.Title, Title: c.Title, Description: c.Description})
 	}
 	return out
+}
+
+// visibleOpCount counts a module's operations that are real agent tools —
+// ConfigOnly helpers (config-form pickers) are excluded, so the top-level
+// "Operations N" badge reflects the tool count, not the config plumbing. The
+// ops themselves still render in the table (flagged "Config only").
+func visibleOpCount(mod connector.Module) int {
+	n := 0
+	for _, c := range mod.Operations {
+		for _, op := range c.Ops {
+			if !op.ConfigOnly {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // rowAccountsJSON projects a row's connected OAuth accounts into the read

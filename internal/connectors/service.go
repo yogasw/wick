@@ -812,7 +812,11 @@ func (s *Service) OperationStates(ctx context.Context, connectorID, key string) 
 	out := make(map[string]bool, len(full))
 	for k, st := range full {
 		// SystemDisabled is advisory — admin override via Enabled takes precedence.
-		out[k] = st.Enabled
+		// ConfigOnly ops are collapsed to false here so every MCP catalog builder
+		// (which reads this bool map) hides them from the LLM — they remain
+		// runnable from the config UI because Execute reads OperationStatesFull,
+		// where Enabled is untouched.
+		out[k] = st.Enabled && !st.ConfigOnly
 	}
 	return out, nil
 }
@@ -828,6 +832,12 @@ type OpState struct {
 	SystemDisabled       bool
 	SystemDisabledReason string
 	AdminOnly            bool
+	// ConfigOnly mirrors connector.Operation.ConfigOnly (a module-level flag,
+	// not a per-row DB toggle): the op backs a config-form widget and must be
+	// hidden from the MCP catalog. OperationStates collapses it into false;
+	// Execute (which reads this full state) leaves Enabled intact so /test can
+	// still run it.
+	ConfigOnly bool
 }
 
 // OperationStatesFull returns the full per-operation state map for a
@@ -850,7 +860,7 @@ func (s *Service) OperationStatesFull(ctx context.Context, connectorID, key stri
 	modOps := mod.AllOps()
 	out := make(map[string]OpState, len(modOps))
 	for _, op := range modOps {
-		st := OpState{Enabled: true} // destructive ops now default ON; LLM confirms before executing
+		st := OpState{Enabled: true, ConfigOnly: op.ConfigOnly} // destructive ops now default ON; LLM confirms before executing
 		if row, ok := stored[op.Key]; ok {
 			st.Enabled = row.Enabled
 			st.SystemDisabled = row.SystemDisabled
@@ -1137,6 +1147,15 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 	}
 	if op == nil {
 		return nil, fmt.Errorf("unknown operation %q on connector %q", p.OperationKey, c.Key)
+	}
+
+	// ConfigOnly ops back a config-form widget (e.g. an html= picker) and must
+	// never run as an agent tool. They are hidden from the MCP catalog, but a
+	// caller that already knows the tool_id could still reach here — so block
+	// every non-config source. The manager config UI drives them via the test
+	// path, which is the only source allowed through.
+	if op.ConfigOnly && p.Source != entity.ConnectorRunSourceTest {
+		return nil, fmt.Errorf("operation %q is a config-only helper and cannot be called as a tool", p.OperationKey)
 	}
 
 	// Per-row state checks (op enable/disable, admin-only) only apply to

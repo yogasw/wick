@@ -112,6 +112,22 @@
     void value; // track
     fetchHtml();
   });
+
+  // Auto-select when the fetched markup offers exactly ONE selectable option and
+  // nothing is chosen yet — so a single-choice picker (e.g. one Grafana org)
+  // fills itself instead of forcing a pointless click. Guarded to the empty
+  // state so it never overrides an operator's existing pick, and it only ever
+  // stores a value the connector's own HTML advertised via data-op="__select".
+  $effect(() => {
+    if (disabled || value || !html) return;
+    const opts = Array.from(
+      document.createRange().createContextualFragment(html).querySelectorAll<HTMLElement>('[data-op="__select"]'),
+    );
+    if (opts.length === 1) {
+      const only = opts[0].dataset.arg ?? "";
+      if (only) onChange(only);
+    }
+  });
 </script>
 
 <div class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3">
