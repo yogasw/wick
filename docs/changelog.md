@@ -6,7 +6,12 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **Notion connectors**: Two new plugin connectors for Notion. [`notion`](/connectors/notion) wraps the official REST API with an Internal Integration bot token — search, fetch (properties + markdown body via the block tree, MCP-style), query databases, comments, users, and create/update pages and databases. [`notion_unofficial`](/connectors/notion_unofficial) reads and writes through Notion's private web API using a `token_v2` session cookie (with a paste-a-cURL setup widget) — sees everything the logged-in user can see, including embedded/filtered database views, at the cost of being an undocumented, best-effort API. Both install via `<app> plugin install notion` / `notion_unofficial`. A new `Productivity` connector tag groups docs/knowledge-base connectors.
+*   **Per-instance AI description for connectors**: A connector row's detail page now has an **AI description** field — free text an admin can attach to that specific instance (when to use it, team notes, account constraints), separate from the connector type's own built-in description. It auto-saves and is appended to the base description wherever the `wickmanager` connector surfaces it to an LLM (`connector_list`, `connector_get`). See [Connector Module ▶ AI description](/guide/connector-module#ai-description).
+
+### Fixed
+*   **Phoenix connector docs**: Fixed a stale source path and tier label left over from the Phoenix connector's earlier move to a downloadable plugin (`plugins/connector/phoenix/`) — the connector reference page and index now correctly point at the plugin location and installation flow.
 
 ---
 

@@ -60,6 +60,11 @@
 
   const selectedKeys = $derived(ops.filter((o) => selected[o.key]).map((o) => o.key));
 
+  /* Agent-tool count for the header badge: ConfigOnly ops back a config-form
+     picker and aren't tools, so they don't count toward "Operations N" (they
+     still render below, flagged "Config only"). */
+  const toolCount = $derived(ops.filter((o) => !o.config_only).length);
+
   /* One card per category title, in declaration order, then a trailing
      untitled group for ops whose category is empty. Built from the visible
      (filtered) ops so search hides empty cards automatically. The category
@@ -214,7 +219,7 @@
     <!-- Global header: title, total count, search, bulk -->
     <div class="flex flex-wrap items-center gap-2">
       <h2 class="text-base font-semibold text-black-900 dark:text-white-100 mr-1">Operations</h2>
-      <span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600">{ops.length}</span>
+      <span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600">{toolCount}</span>
       <input
         type="search"
         aria-label="Search operations"
@@ -338,6 +343,12 @@
                         </td>
                         <td class="px-4 py-3 text-right">
                           <div class="inline-flex flex-col items-end gap-1.5">
+                            {#if op.config_only}
+                              <!-- ConfigOnly ops aren't agent tools, so the enable
+                                   toggle is meaningless — they're always available to
+                                   the config form and never to the LLM. -->
+                              <span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600" title="Runs from this config form only; never exposed to the LLM.">UI only</span>
+                            {:else}
                             {#if op.system_disabled}
                               <span class="inline-flex items-center gap-1 rounded-md border border-prog-300 bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400" title={`Health check warning: ${op.system_disabled_reason}. Toggle on to override.`}>⚠ {op.system_disabled_reason}</span>
                             {/if}
@@ -359,6 +370,7 @@
                               <span class="rounded-full bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400">enabled (warning)</span>
                             {:else}
                               <span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600">disabled</span>
+                            {/if}
                             {/if}
                           </div>
                         </td>

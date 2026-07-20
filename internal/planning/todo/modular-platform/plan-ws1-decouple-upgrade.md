@@ -52,7 +52,7 @@ In the findings doc, record: does `wick init` / any re-scaffold path overwrite a
 ```bash
 cd /tmp && rm -rf wick-upgrade-probe
 # Use the locally built wick CLI:
-( cd /home/agung/qiscus/tools/wick && go build -o /tmp/wick . )
+( cd /home/agung/xxx/tools/wick && go build -o /tmp/wick . )
 /tmp/wick init wick-upgrade-probe --skip-setup
 ```
 
@@ -66,8 +66,8 @@ cd /tmp/wick-upgrade-probe
 cp main.go /tmp/main.before && cp go.mod /tmp/gomod.before
 /tmp/wick upgrade   # answer prompts; capture full stdout to findings doc
 # record AFTER and diff
-diff /tmp/main.before main.go    | tee -a /home/agung/qiscus/tools/wick/internal/planning/todo/modular-platform/findings-upgrade.md
-diff /tmp/gomod.before go.mod    | tee -a /home/agung/qiscus/tools/wick/internal/planning/todo/modular-platform/findings-upgrade.md
+diff /tmp/main.before main.go    | tee -a /home/agung/xxx/tools/wick/internal/planning/todo/modular-platform/findings-upgrade.md
+diff /tmp/gomod.before go.mod    | tee -a /home/agung/xxx/tools/wick/internal/planning/todo/modular-platform/findings-upgrade.md
 ```
 
 - [ ] **Step 2 (verify):** Confirm in the findings doc whether the user's `main.go` customisation survived, whether `go mod tidy` succeeded, and whether the CLI/dep versions ended aligned. This is the empirical answer to "what does terkendala mean".

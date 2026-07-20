@@ -356,9 +356,24 @@ func (s *Service) List() []entity.Config {
 func (s *Service) Missing(owner string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	// Snapshot this owner's current values so a visible_when predicate can
+	// be evaluated against sibling fields. A field required only under a
+	// condition (e.g. token when auth_mode=token) must not count as missing
+	// while that condition is false, or the instance is stuck needs_setup.
+	values := make(map[string]string)
+	for k, c := range s.cache {
+		if k.Owner == owner {
+			values[k.Key] = c.Value
+		}
+	}
+
 	var out []string
 	for k, m := range s.meta {
 		if k.Owner != owner || !m.Required {
+			continue
+		}
+		if !entity.VisibleWhenMatches(m.VisibleWhen, values) {
 			continue
 		}
 		if s.cache[k].Value == "" {

@@ -9,3 +9,7 @@ type Config = pkgentity.Config
 // StructToConfigs is re-exported from pkg/entity — see that package
 // for the tag grammar and reflection rules.
 var StructToConfigs = pkgentity.StructToConfigs
+
+// VisibleWhenMatches is re-exported from pkg/entity — evaluates a
+// visible_when predicate against a values map.
+var VisibleWhenMatches = pkgentity.VisibleWhenMatches

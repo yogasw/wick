@@ -55,11 +55,20 @@ func Serve(mod connector.Module) {
 		return
 	}
 	applyRlimits()
-	goplugin.Serve(&goplugin.ServeConfig{
+	cfg := &goplugin.ServeConfig{
 		HandshakeConfig: Handshake,
 		VersionedPlugins: map[int]goplugin.PluginSet{
 			ProtoVersion: {PluginName: &ConnectorGRPCPlugin{Impl: NewServer(mod)}},
 		},
 		GRPCServer: goplugin.DefaultGRPCServer,
-	})
+	}
+	// Debug: when WICK_PLUGIN_REATTACH_OUT is set the binary runs standalone
+	// (typically under dlv) so a developer can breakpoint it — serve in test
+	// mode and publish a reattach file instead of the parent-only stdout
+	// handshake. See debug.go.
+	if out := strings.TrimSpace(os.Getenv(EnvReattachOut)); out != "" {
+		serveReattach(cfg, out)
+		return
+	}
+	goplugin.Serve(cfg)
 }

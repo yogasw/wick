@@ -49,6 +49,52 @@ describe("createThreadStore", () => {
     expect(turns[0].turn_id).toBe("new1");
   });
 
+  test("setHistory grafts a dropped local turn's trace onto a trace-less persisted twin", () => {
+    // Stream a turn with a tool call + result, then `done` finalizes it into a
+    // local (live-*) turn carrying the inline trace.
+    store.handleEvent(ev("text_delta", { data: "done" }));
+    store.handleEvent(
+      ev("tool_use", { tool_use_id: "t1", tool_name: "fetch", tool_input: "{}" }),
+    );
+    store.handleEvent(ev("tool_result", { tool_use_id: "t1", data: "RESULT-BODY" }));
+    store.handleEvent(ev("done"));
+
+    // The authoritative reload lands trace-less (has_trace but events not yet
+    // flushed) — same (role, text) as the finalized local turn.
+    store.setHistory([
+      makeTurn({
+        turn_id: "persist-1",
+        role: "assistant",
+        text: "done",
+        has_trace: true,
+        events: [],
+      }),
+    ]);
+
+    const turns = get(store.turns);
+    const twin = turns.find((t) => t.turn_id === "persist-1")!;
+    expect(twin).toBeDefined();
+    // The persisted twin reclaimed the streamed trace instead of showing empty.
+    expect(twin.events.length).toBeGreaterThan(0);
+    expect(twin.events.some((e) => e.text === "RESULT-BODY")).toBe(true);
+    // No duplicate: the local twin was dropped, only the persisted one remains.
+    expect(turns.filter((t) => t.role === "assistant" && t.text === "done")).toHaveLength(1);
+  });
+
+  test("setHistory keeps a persisted turn's own events when it already has a trace", () => {
+    store.setHistory([
+      makeTurn({
+        turn_id: "p1",
+        role: "assistant",
+        text: "hi",
+        has_trace: true,
+        events: [{ type: "tool_use", tool_name: "x", text: "keep-me" }],
+      }),
+    ]);
+    const twin = get(store.turns).find((t) => t.turn_id === "p1")!;
+    expect(twin.events[0].text).toBe("keep-me");
+  });
+
   /* ── initial state ──────────────────────────────────────────────── */
 
   test("turns starts empty", () => {

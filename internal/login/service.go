@@ -256,7 +256,35 @@ func (s *Service) CanAccessTool(ctx context.Context, user *entity.User, toolPath
 	if len(filterTagIDs) == 0 {
 		return true
 	}
-	for _, uid := range GetUserTagIDs(ctx) {
+	return anyTagMatch(GetUserTagIDs(ctx), filterTagIDs)
+}
+
+// CanAccessSharedResource reports whether a non-owner may reach a resource that
+// an admin shares purely by filter tag — a project or data table, keyed by a
+// tool_tags path like "/projects/<id>" or "/data-tables/<slug>".
+//
+// It differs from CanAccessTool on the untagged case, and that difference is
+// the whole point. A tool with no filter tags is open to everyone ("untagged =
+// public"); a project/data table with no filter tags is NOT — it stays private
+// to its owner (+ admins), reachable by others ONLY through an explicit tag
+// grant. Callers pass owner/admin access separately; this answers just the
+// tag-share question, so an untagged resource returns false here instead of
+// leaking to every authenticated user.
+func (s *Service) CanAccessSharedResource(ctx context.Context, user *entity.User, resourcePath string) bool {
+	if user == nil || !user.Approved {
+		return false
+	}
+	filterTagIDs := s.repo.GetToolFilterTagIDs(ctx, resourcePath)
+	if len(filterTagIDs) == 0 {
+		return false // no tag share — owner/admin handled by the caller
+	}
+	return anyTagMatch(GetUserTagIDs(ctx), filterTagIDs)
+}
+
+// anyTagMatch reports whether the two tag-id sets intersect. Pure helper so the
+// tag-share rule is unit-testable without a DB.
+func anyTagMatch(userTagIDs, filterTagIDs []string) bool {
+	for _, uid := range userTagIDs {
 		for _, fid := range filterTagIDs {
 			if uid == fid {
 				return true

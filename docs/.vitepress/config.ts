@@ -100,6 +100,8 @@ export default withMermaid(defineConfig({
           { text: 'Slack', link: '/connectors/slack' },
           { text: 'Google Workspace', link: '/connectors/googleworkspace' },
           { text: 'Phoenix', link: '/connectors/phoenix' },
+          { text: 'Notion', link: '/connectors/notion' },
+          { text: 'Notion (Unofficial)', link: '/connectors/notion_unofficial' },
           { text: 'Wick Manager', link: '/connectors/wickmanager' },
           { text: 'Workflow', link: '/connectors/workflow' },
           { text: 'Notifications', link: '/connectors/notifications' },

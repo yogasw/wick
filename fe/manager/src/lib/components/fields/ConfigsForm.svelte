@@ -91,6 +91,26 @@
     }
   }
 
+  /* Set MANY fields at once — used by an html widget whose op returns
+     { fields: { key: value } } (e.g. "paste a cURL → fill token_v2 + headers").
+     Each key is written into local state and persisted. Unknown keys (not part
+     of this connector's schema) are ignored so a connector can't write arbitrary
+     config.
+
+     Persists run SEQUENTIALLY (await each), not in parallel. The per-key config
+     endpoint is read-modify-write on the whole config map (LoadConfigs → set one
+     → Update all), so N concurrent POSTs read the same stale snapshot and the
+     last writer clobbers the rest — only one key would survive a refresh. Awaiting
+     each write means the next read sees the previous commit. */
+  async function setFields(map: Record<string, string>) {
+    for (const [key, value] of Object.entries(map)) {
+      if (!fieldsByKey.has(key)) continue;
+      values = { ...values, [key]: value };
+      if (timers[key]) clearTimeout(timers[key]);
+      await persist(key, value);
+    }
+  }
+
   function onKvChange(field: ConfigField, json: string) {
     values = { ...values, [field.key]: json };
     if (timers[field.key]) clearTimeout(timers[field.key]);
@@ -141,6 +161,7 @@
         value={values[field.key] ?? ""}
         disabled={!canConfigure || field.env_override !== ""}
         onChange={(v) => onFieldChange(field, v)}
+        onSetFields={setFields}
       />
       {#if field.env_override}
         <p class="mt-1.5 text-[11px] text-prog-400 leading-relaxed">Overridden by <span class="font-mono">{field.env_override}</span> environment variable. Unset it and restart to edit from here.</p>

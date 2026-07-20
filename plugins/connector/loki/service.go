@@ -1,4 +1,4 @@
-package loki
+package main
 
 import (
 	"errors"
@@ -59,7 +59,32 @@ func validateLabelValues(c *connector.Ctx) (string, error) {
 	if label == "" {
 		return "", errors.New("label is required")
 	}
-	return resourceURL(c, "label/"+url.PathEscape(label)+"/values")
+	u, err := resourceURL(c, "label/"+url.PathEscape(label)+"/values")
+	if err != nil {
+		return "", err
+	}
+	return withLabelWindow(c, u), nil
+}
+
+// withLabelWindow appends a start/end time range to a label-discovery URL,
+// read from the op's optional start/end inputs (default: last 6h → now).
+// Grafana proxies /labels and /label/<x>/values to Loki, and some Loki
+// versions/configs reject a range-less label query with a 500
+// (plugin.downstreamError) — newer ones default to a window, older ones don't.
+// Always sending a window makes label discovery work the same across versions;
+// the inputs let the operator widen it or inspect a past period. 6h default
+// (wider than query's 1h) so labels that only appear intermittently still
+// surface without any input.
+func withLabelWindow(c *connector.Ctx, rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+	q := u.Query()
+	q.Set("start", resolveTime(c.Input("start"), -6*time.Hour))
+	q.Set("end", resolveTime(c.Input("end"), 0))
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func resourceURL(c *connector.Ctx, path string) (string, error) {
