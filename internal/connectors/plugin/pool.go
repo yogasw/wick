@@ -3,6 +3,7 @@ package plugin
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -56,6 +57,39 @@ func envWarmSet() map[string]bool {
 		}
 	}
 	return out
+}
+
+// reattachPathFor returns the debug reattach-file path configured for a plugin
+// key, or "" when none is set. Honoured, most-specific first:
+//
+//	WICK_PLUGIN_REATTACH=<key>=<path>[,<key>=<path>...]  — explicit map
+//	WICK_DEBUG_PLUGIN=<key>                              — conventional path
+//	                    bin/plugin-<key>.reattach.json under the repo root
+//
+// Only the PATH is resolved here; liveness (is the debugger actually running?)
+// is verified by wickplugin.ReadReattachConfig via a socket dial, so a stale
+// file for a stopped/relaunched debugger cleanly falls back to a normal spawn.
+func reattachPathFor(key string) string {
+	for _, pair := range strings.Split(os.Getenv("WICK_PLUGIN_REATTACH"), ",") {
+		k, v, ok := strings.Cut(pair, "=")
+		if ok && strings.TrimSpace(k) == key {
+			return strings.TrimSpace(v)
+		}
+	}
+	if strings.TrimSpace(os.Getenv("WICK_DEBUG_PLUGIN")) == key {
+		return filepath.Join(devRepoRoot(), "bin", "plugin-"+key+".reattach.json")
+	}
+	return ""
+}
+
+// devRepoRoot is the workspace root in a dev/lab run. WICK_DEV_REPO_ROOT is set
+// by the wicklab launch config; falls back to the process cwd.
+func devRepoRoot() string {
+	if r := strings.TrimSpace(os.Getenv("WICK_DEV_REPO_ROOT")); r != "" {
+		return r
+	}
+	wd, _ := os.Getwd()
+	return wd
 }
 
 // ensureSlotLocked makes room for one new subprocess when at capacity. It

@@ -34,7 +34,6 @@ import (
 	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
 	agenttelegram "github.com/yogasw/wick/internal/agents/channels/telegram"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
-	agentproject "github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
@@ -49,19 +48,6 @@ func currentUserIDForChannel(c *tool.Ctx) string {
 		return ""
 	}
 	return u.ID
-}
-
-// channelProjectAccess builds the project visibility filter for the logged-in
-// user, mirroring the app-wide access rule (admin/owner sees all, otherwise
-// own + shared + tag-shared).
-func channelProjectAccess(c *tool.Ctx) agentproject.Access {
-	u := login.GetUser(c.Context())
-	acc := agentproject.Access{TagIDs: login.GetUserTagIDs(c.Context())}
-	if u != nil {
-		acc.UserID = u.ID
-		acc.IsAdmin = u.IsAdmin()
-	}
-	return acc
 }
 
 // channelsPage renders the list of available channels (Slack, Telegram).
@@ -113,7 +99,7 @@ func slackChannelPage(c *tool.Ctx) {
 		return
 	}
 	userID := currentUserIDForChannel(c)
-	rows := loadChannelRowsForUser("slack", userID, agentconfig.SeedSlackChannelConfig(), "project_id", channelProjectAccess(c))
+	rows := loadChannelRowsForUser("slack", userID, agentconfig.SeedSlackChannelConfig(), "project_id", callerProjectAccess(c))
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
 		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
@@ -131,7 +117,7 @@ func restChannelPage(c *tool.Ctx) {
 		return
 	}
 	userID := currentUserIDForChannel(c)
-	rows := loadChannelRowsForUser("rest", userID, agentconfig.SeedRestChannelConfig(), "project_id", channelProjectAccess(c))
+	rows := loadChannelRowsForUser("rest", userID, agentconfig.SeedRestChannelConfig(), "project_id", callerProjectAccess(c))
 
 	appURL := ""
 	if globalConfigs != nil {
@@ -162,7 +148,7 @@ func telegramChannelPage(c *tool.Ctx) {
 		return
 	}
 	userID := currentUserIDForChannel(c)
-	rows := loadChannelRowsForUser("telegram", userID, agentconfig.SeedTelegramChannelConfig(), "project_id", channelProjectAccess(c))
+	rows := loadChannelRowsForUser("telegram", userID, agentconfig.SeedTelegramChannelConfig(), "project_id", callerProjectAccess(c))
 	c.HTML(view.ChannelConfigPage(view.ChannelConfigVM{
 		Layout:      sidebarVM(c, "channels", ""),
 		Base:        c.Base(),
@@ -351,7 +337,7 @@ func makeChannelSaveHandler(channelType string) func(*tool.Ctx) {
 // loadChannelRowsForUser returns entity.Config rows with values populated from
 // a specific user's agent_channels JSON config. App Owner users pass userID=""
 // which falls back to the owner row. Secret tokens are decrypted before render.
-func loadChannelRowsForUser(channelType, userID string, seed []entity.Config, projectKey string, acc agentproject.Access) []entity.Config {
+func loadChannelRowsForUser(channelType, userID string, seed []entity.Config, projectKey string, acc projectAccess) []entity.Config {
 	rows := make([]entity.Config, len(seed))
 	copy(rows, seed)
 	if globalDB != nil {
@@ -370,28 +356,28 @@ func loadChannelRowsForUser(channelType, userID string, seed []entity.Config, pr
 			rows[i].Value = v
 		}
 	}
-	if globalLayout.BaseDir != "" && projectKey != "" {
+	if projectKey != "" && globalMgr != nil {
 		// Only projects this user may access populate the default-project
-		// dropdown — own + shared + tag-shared (admins see all).
-		ids, err := agentproject.ListVisibleTo(globalLayout, acc)
-		if err == nil && len(ids) > 0 {
-			var opts []string
-			for _, id := range ids {
-				p, lerr := agentproject.Load(globalLayout, id)
-				if lerr != nil {
-					continue
-				}
-				label := p.Meta.Name
-				if label == "" {
-					label = id
-				}
-				opts = append(opts, label+"::"+id)
+		// dropdown — own + ownerless-if-admin + tag-filter grant (admins see
+		// all). Uses the same projectAccess gate as the sidebar and
+		// projectAccessMW so a tag-shared project appears everywhere at once,
+		// instead of project.ListVisibleTo (which reads Meta.Tags, a field no
+		// UI populates).
+		var opts []string
+		for id, p := range globalMgr.Registry().Projects() {
+			if !acc.allowProject(id) {
+				continue
 			}
-			if len(opts) > 0 {
-				for i := range rows {
-					if rows[i].Key == projectKey {
-						rows[i].Options = strings.Join(opts, "|")
-					}
+			label := p.Meta.Name
+			if label == "" {
+				label = id
+			}
+			opts = append(opts, label+"::"+id)
+		}
+		if len(opts) > 0 {
+			for i := range rows {
+				if rows[i].Key == projectKey {
+					rows[i].Options = strings.Join(opts, "|")
 				}
 			}
 		}

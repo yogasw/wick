@@ -389,11 +389,22 @@ func (h *Handler) gatherMissing(ctx context.Context, jobs []entity.Job) (total i
 }
 
 func requiredMissingKeys(rows []entity.Config) []string {
+	values := make(map[string]string, len(rows))
+	for _, v := range rows {
+		values[v.Key] = v.Value
+	}
 	var out []string
 	for _, v := range rows {
-		if v.Required && v.Value == "" {
-			out = append(out, v.Key)
+		if !v.Required || v.Value != "" {
+			continue
 		}
+		// A field required only under a visible_when condition (e.g. token
+		// when auth_mode=token) is not "missing" while that condition is
+		// false — it is hidden and irrelevant to the current mode.
+		if !entity.VisibleWhenMatches(v.VisibleWhen, values) {
+			continue
+		}
+		out = append(out, v.Key)
 	}
 	return out
 }

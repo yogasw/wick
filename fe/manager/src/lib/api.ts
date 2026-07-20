@@ -104,6 +104,12 @@ export async function setConnectorLabel(key: string, id: string, label: string):
   await apiPost(`${rowBase(key, id)}/label`, { label });
 }
 
+/* Per-instance AI-facing description (appended to the module description in
+   wick_list/wick_get). Empty string clears it. */
+export async function setConnectorDescription(key: string, id: string, description: string): Promise<void> {
+  await apiPost(`${rowBase(key, id)}/description`, { description });
+}
+
 export async function toggleConnectorDisabled(key: string, id: string): Promise<boolean> {
   const r = await apiPost<{ disabled: boolean }>(`${rowBase(key, id)}/disable`);
   return r.disabled;

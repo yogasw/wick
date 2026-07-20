@@ -131,3 +131,66 @@ func TestDeleteOwnedNoopWhenEmpty(t *testing.T) {
 		t.Fatalf("delete empty: %v", err)
 	}
 }
+
+// A field marked required only under a visible_when condition must not count
+// as missing while that condition is false — otherwise a connector with a
+// mode switch (auth_mode = basic|token) is permanently stuck needs_setup no
+// matter which mode the operator picks.
+func TestMissingHonorsVisibleWhen(t *testing.T) {
+	svc := newTestSvc(t)
+	ctx := context.Background()
+
+	rows := []entity.Config{
+		{Key: "base_url", Value: "http://abc.com", Required: true},
+		{Key: "auth_mode", Value: "basic", Required: true},
+		{Key: "username", Required: true, VisibleWhen: "auth_mode:basic"},
+		{Key: "password", Required: true, VisibleWhen: "auth_mode:basic"},
+		{Key: "token", Required: true, VisibleWhen: "auth_mode:token"},
+	}
+	if err := svc.EnsureOwned(ctx, "connector:loki", rows...); err != nil {
+		t.Fatalf("ensure: %v", err)
+	}
+
+	// auth_mode = basic: token is hidden, so only the basic creds count.
+	missing := svc.Missing("connector:loki")
+	if !equalSet(missing, []string{"username", "password"}) {
+		t.Fatalf("basic mode: want [username password], got %v", missing)
+	}
+
+	// Fill the basic creds → ready, and the hidden token must not resurface.
+	mustSet(t, svc, "connector:loki", "username", "admin")
+	mustSet(t, svc, "connector:loki", "password", "secret")
+	if missing := svc.Missing("connector:loki"); len(missing) != 0 {
+		t.Fatalf("basic mode filled: want ready, got missing %v", missing)
+	}
+
+	// Switch to token: now token is required, and the (still-filled but hidden)
+	// basic creds drop out of the missing set regardless.
+	mustSet(t, svc, "connector:loki", "auth_mode", "token")
+	if missing := svc.Missing("connector:loki"); !equalSet(missing, []string{"token"}) {
+		t.Fatalf("token mode: want [token], got %v", missing)
+	}
+}
+
+func mustSet(t *testing.T, svc *Service, owner, key, val string) {
+	t.Helper()
+	if err := svc.SetOwned(context.Background(), owner, key, val); err != nil {
+		t.Fatalf("set %s/%s: %v", owner, key, err)
+	}
+}
+
+func equalSet(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, g := range got {
+		seen[g] = true
+	}
+	for _, w := range want {
+		if !seen[w] {
+			return false
+		}
+	}
+	return true
+}

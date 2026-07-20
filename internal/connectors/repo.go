@@ -236,6 +236,17 @@ func (r *Repo) SetDisabled(ctx context.Context, id string, disabled bool) error 
 		}).Error
 }
 
+// SetDescription updates the per-instance AI-facing description. Empty string
+// clears it. Uses a column map (not a struct) so "" actually writes through
+// (a struct Update would skip the zero value and never clear it).
+func (r *Repo) SetDescription(ctx context.Context, id, description string) error {
+	return r.db.WithContext(ctx).Model(&entity.Connector{}).Where("id = ?", id).
+		Updates(map[string]any{
+			"description": description,
+			"updated_at":  time.Now(),
+		}).Error
+}
+
 // SetRateLimit updates the per-minute call cap for a connector instance.
 // Pass 0 to remove the limit.
 func (r *Repo) SetRateLimit(ctx context.Context, id string, rpm int) error {

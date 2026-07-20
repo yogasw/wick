@@ -57,8 +57,8 @@ type Config struct {
 | `date` | Date picker | HTML `type="date"` |
 | `datetime` | Date-time picker | HTML `type="datetime-local"` |
 | `kvlist=col1\|col2` | Editable table | Value stored as JSON array — see below |
-| `picker=<source>` | Searchable typeahead with chips | Value stored as JSON `[{id,name},...]`. Requires the parent module to implement a `LookupProvider`. |
-| `html=<op>` | Server-rendered widget | Fetches markup from connector op `<op>` (`{html:"..."}`), renders it read-only. Buttons in the HTML drive behaviour via a `data-op`/`data-arg` convention: `data-op="__select"` stores `data-arg` as the value; `data-op="<opKey>"` runs that op via the admin `/test` path then re-fetches. Core is domain-agnostic — all layout/logic live in the connector's HTML. Mark the backing op AdminOnly so the LLM can't call it. |
+| `picker=<source>` | Searchable typeahead with chips | Value stored as JSON `[{id,name},...]`. Backed by a `LookupProvider`. **Channels only** — there is no `LookupProvider` path for connectors (they run out-of-process over gRPC, and only channels wire the `/lookup` endpoint). On a **connector**, use `html=<op>` for a picker instead (see next row). A bare `picker` with no source degrades to plain text. |
+| `html=<op>` | Server-rendered widget | Fetches markup from connector op `<op>` (`{html:"..."}`), renders it read-only. Buttons in the HTML drive behaviour via a `data-op`/`data-arg` convention: `data-op="__select"` stores `data-arg` as the value; `data-op="<opKey>"` runs that op via the admin `/test` path then re-fetches. The widget always calls the op with the current field value in an arg named `browser`, and auto-selects when the markup offers exactly one `__select` option. Beyond `__select`, an op can return **`{fields:{k:v}}`** to fill *other* config fields and **`{html}`** to render its own feedback, and the connector's own `<input>`/`<textarea>` values are sent to the op — see [**§ `html=<op>` widget contract**](#html-op-widget-contract) below. Core is domain-agnostic — all layout/logic live in the connector's HTML. **Declare the backing op with `connector.OpConfigOnly(...)`** (NOT `AdminOnly`) so it's hidden from the whole MCP surface (wick_list / wick_get / wick_search) yet still runnable from the config UI via `/test` by any user who can configure the instance — see the connector-module skill. AdminOnly is wrong here: it does NOT hide the op from the catalog and it blocks non-admin config users. |
 
 ## Modifiers (any widget)
 
@@ -125,3 +125,45 @@ if err := json.Unmarshal([]byte(c.Cfg("groups")), &rows); err == nil {
 - One column only → bare `kvlist` (defaults to a `value` column)
 - Free-form multi-line text → use `textarea` instead
 :::
+
+## `html=<op>` widget contract
+
+The `html=<op>` widget is a generic "connector renders its own UI, core stays
+domain-agnostic" bridge. The op returns a JSON object; the widget reacts to the
+keys it recognises. An op can return any combination of these:
+
+| Return key | Effect in the widget |
+|---|---|
+| `{"html": "<markup>"}` | Replace the widget body with this markup (read-only render). A **button op** returning `html` shows it in place — use for feedback/validation ("✓ extracted 3 fields", "❌ token invalid"). The connector decides the message; core just renders it. |
+| `{"fields": {"k":"v", …}}` | Write these values into **sibling config fields** (by key). Only keys that exist in this connector's schema are applied — a connector can't write arbitrary config. This is how "paste a cURL → fill token_v2 + user_agent + …" works from one button. |
+
+Both may appear together (`{fields, html}`): fill the fields **and** show feedback.
+
+**Sending user input to the op.** Any `<input>` / `<textarea>` / `<select>` with
+a `name` inside the connector's HTML has its value sent to the op as
+`input.<name>` when a `data-op` button is clicked (the static `data-arg` is still
+sent as `browser` for the picker convention). So a connector can render its own
+form — a textarea to paste into, a dropdown to pick from — and read what the user
+typed. Example flow: `import_form` op renders `<textarea name="raw">` + a
+`data-op="import_extract"` button → click sends `{browser, raw}` → the
+`import_extract` op parses `raw`, returns `{fields:{…}, html:"✓ done"}`.
+
+**Multi-field writes persist SEQUENTIALLY, not in parallel.** The per-key config
+endpoint is read-modify-write over the whole config map (LoadConfigs → set one →
+Update all), so if the widget fired N config POSTs concurrently they'd read the
+same stale snapshot and the last writer would clobber the rest — only one key
+would survive a page refresh. The core (`ConfigsForm.setFields`) awaits each
+write so the next read sees the previous commit. Connectors get this for free;
+just return `{fields}`.
+
+**Styling plugin/connector-returned HTML: use inline `style` with CSS variables,
+NOT Tailwind utility classes.** The manager's Tailwind build only compiles
+classes it finds in scanned `.templ`/source files — it does **not** scan HTML a
+connector returns at runtime. Utility classes that aren't already used elsewhere
+(`translate-x-5`, `focus:ring-green-200`, `dark:bg-navy-900`, `disabled:*`, …)
+get purged and your markup renders unstyled or theme-broken. Instead style with
+`style="background:var(--color-white-100);color:var(--color-black-900);…"` — the
+theme CSS variables (`--color-navy-*`, `--color-white-*`, `--color-black-*`)
+resolve at runtime and swap with the active theme, so it's both theme-aware and
+purge-proof. Green is fixed across themes, so `#27B199` (green-500) inline is
+fine. (Learned building the Notion connectors' import-cURL widget.)

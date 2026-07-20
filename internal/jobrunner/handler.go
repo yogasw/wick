@@ -102,11 +102,19 @@ func (h *Handler) renderWithError(w http.ResponseWriter, r *http.Request, key st
 // banner is rendered below the navbar; admins get a Configure → link
 // to /manager/jobs/{key}, non-admins just see the nudge.
 func jobBanner(j *entity.Job, rows []entity.Config) *ui.MissingEntry {
+	values := make(map[string]string, len(rows))
+	for _, row := range rows {
+		values[row.Key] = row.Value
+	}
 	var missing []string
 	for _, row := range rows {
-		if row.Required && row.Value == "" {
-			missing = append(missing, row.Key)
+		if !row.Required || row.Value != "" {
+			continue
 		}
+		if !entity.VisibleWhenMatches(row.VisibleWhen, values) {
+			continue
+		}
+		missing = append(missing, row.Key)
 	}
 	if len(missing) == 0 {
 		return nil

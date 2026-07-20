@@ -125,6 +125,13 @@ type Operation struct {
 	Input       []entity.Config
 	Execute     ExecuteFunc `json:"-"`
 	Destructive bool
+	// ConfigOnly marks an operation that exists only to back a config-form
+	// widget (e.g. an `html=<op>` datasource/browser picker) — NOT a tool the
+	// LLM should ever call. Such an op is hidden from the entire MCP surface
+	// (wick_list counts, wick_search, wick_get) yet stays runnable from the
+	// manager's config UI via the /test path, so the widget can still fetch
+	// its data. Use it for read-only "list options for a picker" helpers.
+	ConfigOnly bool
 	// Docs carries the opt-in self-documentation fields the workflow
 	// MCP `workflow_node_detail` op surfaces to AI clients (examples,
 	// quirks, templateable fields, pair-with, common pitfalls).
@@ -166,6 +173,18 @@ func Op[I any](key, name, description string, input I, exec ExecuteFunc, docs wi
 func OpDestructive[I any](key, name, description string, input I, exec ExecuteFunc, docs wickdocs.Docs) Operation {
 	op := Op(key, name, description, input, exec, docs)
 	op.Destructive = true
+	return op
+}
+
+// OpConfigOnly is the config-form-helper variant of Op. The resulting
+// Operation is hidden from the whole MCP surface (wick_list / wick_search /
+// wick_get) so the LLM never sees it, but stays runnable from the manager's
+// config UI via /test — so an `html=<op>` picker widget can still call it to
+// fetch its options. Use it for read-only "list options" helpers that exist
+// only to populate a config field, never as an agent tool.
+func OpConfigOnly[I any](key, name, description string, input I, exec ExecuteFunc, docs wickdocs.Docs) Operation {
+	op := Op(key, name, description, input, exec, docs)
+	op.ConfigOnly = true
 	return op
 }
 

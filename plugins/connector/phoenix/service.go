@@ -1,4 +1,4 @@
-package phoenix
+package main
 
 import (
 	"encoding/json"

@@ -29,6 +29,60 @@
       "preLaunchTask": "debug: prep"
     },
     {
+      // Debug ONE connector plugin with breakpoints. dlv compiles + runs the
+      // plugin standalone; WICK_PLUGIN_REATTACH_OUT makes it publish a reattach
+      // file under bin/. wick-lab (launched together via the "lab + plugin
+      // debug" compound) dials that file and attaches to THIS process instead
+      // of spawning its own child, so breakpoints in the plugin bind.
+      //
+      // The plugin folder is hardcoded (VS Code resolves `program` before
+      // envFile, so ${env:} can't select it). Change loki → <other> here AND in
+      // .env (WICK_DEBUG_PLUGIN) to debug a different plugin. Stop ALL debug
+      // sessions before relaunching — don't stack.
+      "name": "plugin debug (loki)",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/plugins/connector/loki",
+      "cwd": "${workspaceFolder}/plugins",
+      "env": {
+        "WICK_PLUGIN_REATTACH_OUT": "${workspaceFolder}/bin/plugin-loki.reattach.json"
+      },
+      "preLaunchTask": "plugin: install debug target → lab"
+    },
+    {
+      // Same reattach setup as "plugin debug (loki)" for the official Notion
+      // connector. Set WICK_DEBUG_PLUGIN=notion in .env, breakpoint in
+      // plugins/connector/notion/{service,repo}.go op handlers, then run the
+      // "lab + plugin debug (notion)" compound. Stop all sessions before relaunch.
+      "name": "plugin debug (notion)",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/plugins/connector/notion",
+      "cwd": "${workspaceFolder}/plugins",
+      "env": {
+        "WICK_PLUGIN_REATTACH_OUT": "${workspaceFolder}/bin/plugin-notion.reattach.json"
+      },
+      "preLaunchTask": "plugin: install debug target → lab"
+    },
+    {
+      // Same reattach setup for the UNOFFICIAL Notion connector (kjk/notionapi).
+      // Set WICK_DEBUG_PLUGIN=notion_unofficial in .env, breakpoint in
+      // plugins/connector/notion_unofficial/service.go, then run the
+      // "lab + plugin debug (notion_unofficial)" compound.
+      "name": "plugin debug (notion_unofficial)",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/plugins/connector/notion_unofficial",
+      "cwd": "${workspaceFolder}/plugins",
+      "env": {
+        "WICK_PLUGIN_REATTACH_OUT": "${workspaceFolder}/bin/plugin-notion_unofficial.reattach.json"
+      },
+      "preLaunchTask": "plugin: install debug target → lab"
+    },
+    {
       "name": "Run CLI (init)",
       "type": "go",
       "request": "launch",
@@ -45,6 +99,29 @@
       "program": "${workspaceFolder}/main.go",
       "args": "${input:cliArgs}",
       "cwd": "${workspaceFolder}"
+    }
+  ],
+  "compounds": [
+    {
+      // One click: run the plugin under dlv AND boot wick-lab wired to reattach.
+      // wick-lab reads WICK_DEBUG_PLUGIN=<key> from .env and attaches to the
+      // dlv-run plugin on the first connector call (the manager takes over even
+      // if it spawned a child first). Set WICK_DEBUG_PLUGIN=loki in .env.
+      "name": "lab + plugin debug",
+      "configurations": ["plugin debug (loki)", "wicklab"],
+      "stopAll": true
+    },
+    {
+      // Notion (official). Set WICK_DEBUG_PLUGIN=notion in .env first.
+      "name": "lab + plugin debug (notion)",
+      "configurations": ["plugin debug (notion)", "wicklab"],
+      "stopAll": true
+    },
+    {
+      // Notion (unofficial). Set WICK_DEBUG_PLUGIN=notion_unofficial in .env first.
+      "name": "lab + plugin debug (notion_unofficial)",
+      "configurations": ["plugin debug (notion_unofficial)", "wicklab"],
+      "stopAll": true
     }
   ],
   "inputs": [

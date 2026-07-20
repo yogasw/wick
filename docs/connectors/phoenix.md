@@ -10,10 +10,18 @@ Operations are **read-only**: they list LLM spans for a room or an app and drill
 
 | | |
 |---|---|
-| **Source** | [`internal/connectors/phoenix/`](https://github.com/yogasw/wick/tree/master/internal/connectors/phoenix) |
+| **Source** | [`plugins/connector/phoenix/`](https://github.com/yogasw/wick/tree/master/plugins/connector/phoenix) |
 | **Key** | `phoenix` |
 | **Icon** | 🔥 |
-| **Tier** | builtin (every wick app) |
+| **Tier** | plugin — install with `<app> plugin install phoenix` |
+
+> This connector is no longer compiled into the wick binary. Install it as a plugin:
+>
+> ```bash
+> <app> plugin install phoenix
+> ```
+>
+> Existing credential rows are preserved on upgrade — the connector reappears automatically once the plugin is installed and enabled. See [Connector Plugins](/guide/connector-plugins) for the full install flow.
 
 ## Configs
 

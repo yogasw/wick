@@ -18,10 +18,11 @@ import (
 )
 
 type entry struct {
-	client   *goplugin.Client
-	conn     wickplugin.GRPCConn
-	lastUsed time.Time
-	inflight int
+	client     *goplugin.Client
+	conn       wickplugin.GRPCConn
+	lastUsed   time.Time
+	inflight   int
+	reattached bool // attached to a debugger-run plugin, not a spawned child
 }
 
 // Manager owns connector plugin subprocesses keyed by connector Meta.Key.
@@ -145,18 +146,44 @@ func (m *Manager) WarmUp() {
 
 func (m *Manager) spawn(key string) (*entry, error) {
 	// caller (Client) holds m.mu.
-	bin, ok := m.binaries[key]
-	if !ok {
-		return nil, fmt.Errorf("no plugin binary registered for %q", key)
-	}
-	client := goplugin.NewClient(&goplugin.ClientConfig{
+	clientCfg := &goplugin.ClientConfig{
 		HandshakeConfig:  wickplugin.Handshake,
 		VersionedPlugins: wickplugin.VersionedPlugins,
-		Cmd:              safeexec.Command(bin),
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		AutoMTLS:         true,
 		UnixSocketConfig: &goplugin.UnixSocketConfig{TempDir: m.socketDir},
-	})
+	}
+	// Debug: attach to a debugger-run plugin instead of spawning our own child,
+	// but ONLY when ReadReattachConfig confirms it's reachable (it dials the
+	// addr). A stale file from a stopped/relaunched dlv fails the dial and we
+	// fall through to a normal spawn — this is what stops attach-to-zombie,
+	// dispense mismatches, and circuit trips from desynced reattach files.
+	// AutoMTLS off: the running plugin never got our client cert.
+	reattached := false
+	if rp := reattachPathFor(key); rp != "" {
+		if rc, err := wickplugin.ReadReattachConfig(rp); err == nil {
+			clientCfg.Reattach = rc
+			clientCfg.AutoMTLS = false
+			// Reattach skips version negotiation, so go-plugin never copies the
+			// matching VersionedPlugins set into config.Plugins — the dispense
+			// would then fail with "unknown plugin type". Set Plugins directly.
+			clientCfg.Plugins = wickplugin.ReattachPluginSet()
+			reattached = true
+			log.Info().Str("connector", key).Str("reattach", rp).
+				Int("pid", rc.Pid).Msg("attaching to debug plugin instead of spawning")
+		} else {
+			log.Debug().Str("connector", key).Str("reattach", rp).Err(err).
+				Msg("no live debug plugin; spawning normally")
+		}
+	}
+	if clientCfg.Reattach == nil {
+		bin, ok := m.binaries[key]
+		if !ok {
+			return nil, fmt.Errorf("no plugin binary registered for %q", key)
+		}
+		clientCfg.Cmd = safeexec.Command(bin)
+	}
+	client := goplugin.NewClient(clientCfg)
 	rpc, err := client.Client()
 	if err != nil {
 		client.Kill()
@@ -172,7 +199,7 @@ func (m *Manager) spawn(key string) (*entry, error) {
 		client.Kill()
 		return nil, fmt.Errorf("plugin %q returned unexpected client type", key)
 	}
-	return &entry{client: client, conn: conn, lastUsed: m.now()}, nil
+	return &entry{client: client, conn: conn, lastUsed: m.now(), reattached: reattached}, nil
 }
 
 // IsPlugin reports whether key is served by a plugin subprocess.
@@ -241,6 +268,24 @@ func (m *Manager) Client(key string) (*Lease, error) {
 		m.kill(key)
 		delete(m.entries, key)
 		e = nil
+	}
+	// Debug takeover / release: keep the cached entry consistent with whether a
+	// LIVE debugger currently owns this key. reattachPathFor + the dial in
+	// ReadReattachConfig make "live" precise, so this flips cleanly both ways:
+	//   spawned child + debugger now live      → drop child, re-spawn (attach)
+	//   reattached + debugger gone/unreachable  → drop attach, re-spawn (child)
+	// Without this, whichever entry got cached first serves forever — the exact
+	// reason breakpoints never bound when the lab spawned before dlv started.
+	if e != nil {
+		live := reattachPathFor(key) != "" && func() bool {
+			_, err := wickplugin.ReadReattachConfig(reattachPathFor(key))
+			return err == nil
+		}()
+		if live != e.reattached {
+			m.kill(key)
+			delete(m.entries, key)
+			e = nil
+		}
 	}
 	if e == nil {
 		if err := m.ensureSlotLocked(); err != nil {

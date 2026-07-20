@@ -1,6 +1,9 @@
 package entity
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Config is one row in the runtime-editable KV config table (legacy
 // name: `app_variables`). Wick reconciles two sources into this table
@@ -78,3 +81,30 @@ type Config struct {
 }
 
 func (Config) TableName() string { return "configs" }
+
+// VisibleWhenMatches evaluates a "<field>:<a|b|c>" visible_when predicate
+// against the current values map (keyed by config Key). An empty predicate
+// (no visible_when tag) is always visible. The value half is pipe-separated
+// and matched as an OR. Mirrors the manager templ applyVisibility and the
+// FE isVisible helper so a required-but-hidden field is not counted missing.
+//
+// Single level only — it does not walk a dependency chain. That is enough
+// for the required-completeness check: a field required under condition X is
+// only enforced while X holds; the UI handles the cascading hide.
+func VisibleWhenMatches(predicate string, values map[string]string) bool {
+	if predicate == "" {
+		return true
+	}
+	i := strings.IndexByte(predicate, ':')
+	if i < 0 {
+		return true
+	}
+	key := strings.TrimSpace(predicate[:i])
+	current := values[key]
+	for _, allowed := range strings.Split(predicate[i+1:], "|") {
+		if strings.TrimSpace(allowed) == current {
+			return true
+		}
+	}
+	return false
+}

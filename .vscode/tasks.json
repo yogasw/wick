@@ -105,6 +105,18 @@
       "problemMatcher": ["$go"]
     },
     {
+      // preLaunchTask for the "plugin debug (loki)" launch config. Installs the
+      // debugged plugin (from WICK_DEBUG_PLUGIN in .env) into wick-lab so it
+      // registers + shows in the connector list before dlv runs it. See
+      // install-debug-target-to-lab.sh.
+      "label": "plugin: install debug target → lab",
+      "type": "shell",
+      "command": "bash",
+      "args": [".vscode/install-debug-target-to-lab.sh"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$go"]
+    },
+    {
       // Standalone task — uninstall every connector plugin from wick-lab. The
       // running lab's poller drops them within ~5s; no server restart needed.
       "label": "plugin: clear lab",
@@ -191,6 +203,10 @@
         "github",
         "google_workspace",
         "httpbin",
+        "loki",
+        "notion",
+        "notion_unofficial",
+        "phoenix",
         "playwright_browser"
       ]
     }

@@ -5,8 +5,6 @@ import (
 	"testing"
 
 	"github.com/yogasw/wick/internal/connectors/httprest"
-	"github.com/yogasw/wick/internal/connectors/loki"
-	"github.com/yogasw/wick/internal/connectors/phoenix"
 	"github.com/yogasw/wick/internal/connectors/slack"
 	"github.com/yogasw/wick/pkg/connector"
 )
@@ -18,13 +16,11 @@ func TestBuiltinModules_RegistersThePublicConnectors(t *testing.T) {
 	}
 	sort.Strings(got)
 
-	// github, bitbucket, and google_workspace were moved out-of-tree to
-	// downloadable plugins (plugins/connector/*), so they are no longer
-	// builtins. Install them via `<app> plugin install <key>`.
+	// github, bitbucket, google_workspace, loki, and phoenix were moved
+	// out-of-tree to downloadable plugins (plugins/connector/*), so they are no
+	// longer builtins. Install them via `<app> plugin install <key>`.
 	want := []string{
 		httprest.Meta().Key,
-		loki.Meta().Key,
-		phoenix.Meta().Key,
 		slack.Meta().Key,
 	}
 	sort.Strings(want)
@@ -55,7 +51,6 @@ func TestProfileModules(t *testing.T) {
 	}{
 		{profile: ProfileFull, wantKeys: []string{
 			httprest.Meta().Key, slack.Meta().Key,
-			loki.Meta().Key, phoenix.Meta().Key,
 		}},
 		{profile: ProfileAgent, wantKeys: []string{
 			httprest.Meta().Key, slack.Meta().Key,
@@ -63,7 +58,6 @@ func TestProfileModules(t *testing.T) {
 		{profile: ProfileLite, wantNone: true},
 		{profile: "totally-unknown", wantKeys: []string{
 			httprest.Meta().Key, slack.Meta().Key,
-			loki.Meta().Key, phoenix.Meta().Key,
 		}},
 	}
 

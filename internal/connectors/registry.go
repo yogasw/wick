@@ -24,8 +24,6 @@ package connectors
 import (
 	"github.com/yogasw/wick/internal/connectors/crudcrud"
 	"github.com/yogasw/wick/internal/connectors/httprest"
-	"github.com/yogasw/wick/internal/connectors/loki"
-	"github.com/yogasw/wick/internal/connectors/phoenix"
 	"github.com/yogasw/wick/internal/connectors/slack"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/connector"
@@ -123,16 +121,11 @@ func builtinModules() []connector.Module {
 			HealthCheck: slack.HealthCheck,
 			OAuth:       slack.SlackOAuthMeta(),
 		},
-		{
-			Meta:       withConnectorTag(loki.Meta(), tags.Observability),
-			Configs:    entity.StructToConfigs(loki.Configs{}),
-			Operations: loki.Operations(),
-		},
-		{
-			Meta:       withConnectorTag(phoenix.Meta(), tags.Observability),
-			Configs:    entity.StructToConfigs(phoenix.Configs{}),
-			Operations: phoenix.Operations(),
-		},
+		// loki and phoenix moved out-of-tree to downloadable plugins
+		// (plugins/connector/loki, plugins/connector/phoenix). They are no
+		// longer compiled into the binary; install via
+		// `<app> plugin install loki` / `<app> plugin install phoenix`.
+		//
 		// google_workspace moved out-of-tree to a downloadable plugin
 		// (plugins/connector/google_workspace). It is no longer compiled
 		// into the binary; install it via `<app> plugin install google_workspace`.

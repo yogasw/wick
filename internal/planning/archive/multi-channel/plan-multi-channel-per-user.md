@@ -99,7 +99,7 @@ Artinya: kerjaan inti = **angkat Telegram & REST ke pola Slack**, + **pindahin U
 ## Task 6: UI ke Profile
 - [ ] `ProfileTabChannels` di `profile_layout.templ` + tab link "Channels".
 - [ ] render Slack/Telegram/REST form di dalam `ProfileLayout`, scope `currentUserIDForChannel`.
-- [ ] UI copy English (label/placeholder/helper), sample pakai nama generik (abc.com), bukan "qiscus".
+- [ ] UI copy English (label/placeholder/helper), sample pakai nama generik (abc.com)
 - [ ] design system: Inter, 8px grid, green/navy token, dark/light.
 
 ## Task 7-8: buang jalur global + migrasi

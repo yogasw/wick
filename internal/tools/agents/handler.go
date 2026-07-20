@@ -589,6 +589,35 @@ func callerProjectAccess(c *tool.Ctx) projectAccess {
 	for pid, p := range globalMgr.Registry().Projects() {
 		if p.Meta.OwnerUserID == u.ID || (p.Meta.OwnerUserID == "" && isAdmin) {
 			set[pid] = struct{}{}
+			continue
+		}
+		// Tag-filter grant: an admin shares a project on /admin/projects, which
+		// writes tool_tags on path "/projects/<id>". A user who carries any of
+		// the project's filter tags is admitted — the same tag-share mechanism
+		// tools use, but via CanAccessSharedResource, NOT CanAccessTool: an
+		// untagged project stays private to its owner instead of leaking to
+		// every authenticated user (owner/admin are handled just above).
+		// Without this a tag-shared project never entered `set`, so the sidebar,
+		// projectAccessMW, and ownsSession all denied it even when the tag matched.
+		if globalAuth != nil &&
+			globalAuth.CanAccessSharedResource(c.Context(), u, "/projects/"+pid) {
+			set[pid] = struct{}{}
+		}
+	}
+	// Data tables are taggable the same way: /admin/data-tables writes tool_tags
+	// on path "/data-tables/<slug>". Union any slug the caller may reach by
+	// filter tag into the same set — allowDataTable reads `set[slug]`, so a
+	// tag-shared table becomes visible in the list and mutable via the widget,
+	// not just tables owned outright or granted an owner:<slug> tag. Same
+	// untagged-stays-private rule as projects (CanAccessSharedResource).
+	if globalAuth != nil && globalDataTables != nil {
+		for _, slug := range globalDataTables.ListTables() {
+			if _, ok := set[slug]; ok {
+				continue
+			}
+			if globalAuth.CanAccessSharedResource(c.Context(), u, "/data-tables/"+slug) {
+				set[slug] = struct{}{}
+			}
 		}
 	}
 	return projectAccess{userID: u.ID, projects: set}

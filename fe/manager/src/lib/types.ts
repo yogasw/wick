@@ -79,6 +79,7 @@ export interface ConnectorOp {
   name: string;
   description: string;
   destructive: boolean;
+  config_only?: boolean;
   enabled: boolean;
   system_disabled: boolean;
   system_disabled_reason: string;

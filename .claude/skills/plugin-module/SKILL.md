@@ -254,16 +254,19 @@ the in-flight one.
 
 ## Verify a plugin end-to-end (local, no CI)
 
-Fastest path in this repo: VSCode. The **"plugin: build all → lab"** task (and the
-**"wicklab + plugins"** launch config) build every plugin from current source and drop
-the unzipped `{binary, plugin.json}` into wick-lab's plugin dir, so a running lab
-hot-reloads them within ~5s — manifests reflect the latest source (e.g. new
-DefaultTags) WITHOUT cutting a release. **"plugin: clear lab"** wipes them.
+Fastest path in this repo: VSCode. The **"plugin: build all → lab"** task builds every
+plugin from current source and drops the unzipped `{binary, plugin.json}` into
+wick-lab's plugin dir, so a running lab (launch config **"wicklab"**) hot-reloads them
+within ~5s — manifests reflect the latest source (e.g. new DefaultTags) WITHOUT cutting
+a release. **"plugin: clear lab"** wipes them.
 
 When iterating on ONE connector, prefer **"plugin: build ONE → lab"** — it pops a
 dropdown (the `pluginName` input in `.vscode/tasks.json`) so only the picked plugin
 rebuilds, not all of them. Adding a new connector folder means adding a line to that
 input's `options` list too (statically maintained — no dynamic listing).
+
+To breakpoint a plugin's code (not just run it), see **Debug a plugin with
+breakpoints** below — a plain build-to-lab run isn't debuggable.
 
 By hand:
 
@@ -275,3 +278,52 @@ cd plugins && /tmp/wick plugin build <key> --target $(go env GOOS)/$(go env GOAR
 #   unzip bin/<key>-*.zip -d /tmp/x  &&  the binary's plugin.json must pass VerifyManifest
 go test ./pkg/plugin/... ./internal/connectors/plugin/... ./cmd/cli/...
 ```
+
+## Debug a plugin with breakpoints (reattach)
+
+A plugin runs as a separate gRPC subprocess wick-lab spawns, so a plain `wicklab`
+F5 can't breakpoint its code. Debug via **reattach**: dlv runs the plugin
+standalone and wick-lab attaches to it instead of spawning its own child.
+
+1. `.env`: `WICK_DEBUG_PLUGIN=<key>` (blank = normal spawn, no reattach).
+2. Breakpoint in the plugin's `service.go` / `repo.go` **op handler** — NOT in
+   `Module()` / `Operations()` / init (those run once at startup, before the
+   host ever dispenses, and just freeze the serve goroutine).
+3. Launch the **`lab + plugin debug`** compound (VSCode). It runs
+   `plugin debug (<key>)` (dlv on `plugins/connector/<key>`, env
+   `WICK_PLUGIN_REATTACH_OUT=bin/plugin-<key>.reattach.json`) + `wicklab`, and a
+   preLaunchTask installs the plugin's `{binary, plugin.json}` to the lab dir so
+   it registers and shows in the list.
+4. Trigger the op from the UI → breakpoint binds.
+
+The launch config's `program` hardcodes the plugin folder (vscode-go resolves
+`program` before `envFile`, so `${env:}` can't select it). To debug a different
+plugin, change BOTH the launch `program` and `.env` `WICK_DEBUG_PLUGIN`.
+
+**Mechanism** (`pkg/plugin/debug.go`, `internal/connectors/plugin/{manager,pool}.go`):
+`WICK_PLUGIN_REATTACH_OUT` makes `Serve` run in go-plugin test mode + write the
+reattach file. Host `reattachPathFor` resolves the path; `ReadReattachConfig`
+**dials the addr** for liveness so a stopped/relaunched debugger cleanly falls
+back to a normal spawn; `Manager.Client` takes over a spawned child when a live
+debugger appears (and reverts when it dies).
+
+**THE gotcha (cost ~1.5h once):** go-plugin SKIPS version negotiation on
+reattach, so it never copies the matching `VersionedPlugins` entry into
+`config.Plugins`. The dispense then fails with `unknown plugin type: connector`
+— which looks like a proto / build / dlv-pause problem but is none of those. FIX
+(already in tree): set `ClientConfig.Plugins = wickplugin.ReattachPluginSet()` on
+the reattach path. Regression test: `pkg/plugin/debug_reattach_test.go`
+reproduces the failure WITHOUT dlv — **when reattach misbehaves, write/run a
+no-dlv round-trip test first**, don't debug through the UI.
+
+**Operational rules that bite:**
+- Never stack processes. Before relaunch, kill ALL `wick-lab.exe`,
+  `__debug_bin.exe`, and `<key>.exe`. A stale wick-lab (locked binary) silently
+  runs OLD code — a rebuild that "can't overwrite bin/wick-lab.exe" means it's
+  still running.
+- `dlv debug` alone writes NO `plugin.json`, so the connector vanishes from the
+  list — always install to lab (the preLaunchTask / `plugin: build ONE → lab`)
+  so the manifest is present.
+- Build-to-lab scripts must resolve the lab home from `USERPROFILE`, not `$HOME`:
+  the VSCode task shell is msys2/zsh whose `$HOME` (`/home/<user>`) is a
+  DIFFERENT folder than `C:\Users\<user>` the Windows binary scans.

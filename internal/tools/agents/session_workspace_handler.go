@@ -108,11 +108,26 @@ func wsValueOr(cfg map[string]string, key, fallback string) string {
 // runtime falls back to it, so a fresh instance whose required fields all
 // default reads as ready without forcing a redundant edit-then-save.
 func wsStatus(specs []entity.Config, cfg map[string]string) string {
+	// Effective values: instance value, else the base spec default. Used
+	// both to test satisfaction and to evaluate visible_when predicates.
+	values := make(map[string]string, len(specs))
+	for _, sp := range specs {
+		if v := strings.TrimSpace(cfg[sp.Key]); v != "" {
+			values[sp.Key] = v
+		} else {
+			values[sp.Key] = strings.TrimSpace(sp.Value)
+		}
+	}
 	for _, sp := range specs {
 		if sp.Hidden || !sp.Required {
 			continue
 		}
-		if strings.TrimSpace(cfg[sp.Key]) == "" && strings.TrimSpace(sp.Value) == "" {
+		// A field required only under a visible_when condition (e.g. token
+		// when auth_mode=token) is irrelevant while that condition is false.
+		if !entity.VisibleWhenMatches(sp.VisibleWhen, values) {
+			continue
+		}
+		if values[sp.Key] == "" {
 			return "needs_setup"
 		}
 	}

@@ -72,4 +72,13 @@ var (
 		IsGroup:     true,
 		SortOrder:   54,
 	}
+
+	// Productivity groups docs / knowledge-base / note connectors (Notion,
+	// Confluence, Google Docs, …).
+	Productivity = entity.DefaultTag{
+		Name:        "Productivity",
+		Description: "Docs, wikis, and knowledge-base connectors.",
+		IsGroup:     true,
+		SortOrder:   55,
+	}
 )
