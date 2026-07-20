@@ -10,6 +10,12 @@
        data-op="__select" data-arg="<value>"
          → store <value> as this field's value (reserved, no op call)
 
+     An op may ALSO return { fields: { key: value } } alongside (or instead of)
+     { html }. When present, those key/value pairs are written to sibling config
+     fields via onSetFields — e.g. a "paste a cURL → Extract" button that fills
+     token_v2 + user-agent + version in one click. The connector decides which
+     keys; the core only applies known ones. 
+
      All layout, buttons, badges, and per-item logic live in the connector's
      HTML — never here. So the same widget serves a browser picker, a model
      list, a region chooser, etc., with zero widget changes. */
@@ -27,8 +33,24 @@
     disabled?: boolean;
     /** persist a new value when the HTML selects one */
     onChange: (v: string) => void;
+    /** apply many sibling fields when an op returns { fields: {...} } */
+    onSetFields?: (map: Record<string, string>) => void;
   };
-  let { connectorKey, connectorId, op, value, disabled = false, onChange }: Props = $props();
+  let { connectorKey, connectorId, op, value, disabled = false, onChange, onSetFields }: Props = $props();
+
+  /** Pull a { fields: {k:v} } map off an op response and apply it (known keys
+      only — enforced upstream in ConfigsForm.setFields). Ignores anything that
+      isn't a flat string map. */
+  function applyFields(resp: unknown): void {
+    if (!onSetFields || !resp || typeof resp !== "object") return;
+    const f = (resp as { fields?: unknown }).fields;
+    if (!f || typeof f !== "object") return;
+    const map: Record<string, string> = {};
+    for (const [k, v] of Object.entries(f as Record<string, unknown>)) {
+      if (typeof v === "string") map[k] = v;
+    }
+    if (Object.keys(map).length > 0) onSetFields(map);
+  }
 
   let html = $state("");
   let loading = $state(true);
@@ -47,7 +69,8 @@
     try {
       const res = await runConnectorTest(connectorKey, connectorId, op, { browser: value }, "");
       if (res.error) throw new Error(res.error);
-      const r = res.response as { html?: string } | undefined;
+      const r = res.response as { html?: string; fields?: unknown } | undefined;
+      applyFields(r);
       html = r?.html ?? "";
     } catch (e) {
       errorMsg = e instanceof Error ? e.message : String(e);
@@ -70,10 +93,34 @@
     }
   }
 
-  /* Delegated click handler: find the nearest element carrying data-op and act
-     on its data-arg. __select just stores the value; any other op is run via
-     /test (with the arg passed as `browser`, matching the plugin's input), then
-     the HTML is re-fetched so freshly-installed items flip state. */
+  // rootEl wraps the connector HTML; used to read the values of any <input>/
+  // <textarea> the connector rendered inside its own form.
+  let rootEl: HTMLDivElement | undefined = $state();
+
+  /* Collect the connector form's named field values. Any <input>/<textarea>/
+     <select> with a `name` inside the widget becomes input.<name> sent to the op,
+     so a connector can render its own form (e.g. a textarea to paste a cURL) and
+     read what the user typed. data-arg (static) is still passed as `browser` for
+     back-compat with the picker convention. */
+  function collectInputs(): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (!rootEl) return out;
+    rootEl
+      .querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("[name]")
+      .forEach((f) => {
+        const n = f.getAttribute("name");
+        if (n) out[n] = f.value;
+      });
+    return out;
+  }
+
+  /* Delegated click handler: find the nearest element carrying data-op and act.
+     __select just stores the value (single-field picker convention). Any other
+     op runs via /test with { browser: data-arg, ...named form inputs }. The op's
+     response drives the widget: { fields } writes sibling config fields, { html }
+     replaces the markup (so the connector renders its own feedback — a validation
+     error, a success note, whatever). If it returns neither html nor fields we
+     re-fetch, preserving the old picker/progress behaviour. */
   async function onClick(ev: MouseEvent): Promise<void> {
     if (disabled) return;
     const el = (ev.target as HTMLElement | null)?.closest<HTMLElement>("[data-op]");
@@ -90,12 +137,20 @@
     if (busyOp) return; // one action at a time
     busyOp = opName;
     try {
-      const res = await runConnectorTest(connectorKey, connectorId, opName, { browser: arg }, "");
+      const input = { browser: arg, ...collectInputs() };
+      const res = await runConnectorTest(connectorKey, connectorId, opName, input, "");
       if (res.error) throw new Error(res.error);
-      // The op may run async (e.g. a long download that returns {started:true}).
-      // Re-fetch immediately; schedulePoll then keeps polling while the status
-      // HTML shows a data-installing progress row.
-      await fetchHtml();
+      const r = res.response as { html?: string; fields?: unknown } | undefined;
+      // Apply any config fields the op asked us to set.
+      applyFields(r);
+      // If the op returned its own HTML (feedback/validation), show it as-is;
+      // otherwise re-fetch (picker/progress flows return neither).
+      if (r?.html !== undefined) {
+        html = r.html;
+        schedulePoll();
+      } else {
+        await fetchHtml();
+      }
     } catch (e) {
       toastError("Action failed", e instanceof Error ? e.message : String(e));
     } finally {
@@ -140,7 +195,7 @@
     <!-- Markup comes from the connector op. It is admin-only server content
          (not user input), and rendered inside the admin Settings page. -->
     <!-- eslint-disable-next-line svelte/no-at-html-tags -->
-    <div class="contents" onclick={onClick} role="presentation">{@html html}</div>
+    <div bind:this={rootEl} class="contents" onclick={onClick} role="presentation">{@html html}</div>
     {#if busyOp}
       <p class="mt-2 text-xs text-black-700 dark:text-black-600">Working… ({busyOp})</p>
     {/if}

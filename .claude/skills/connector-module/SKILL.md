@@ -208,6 +208,8 @@ connector.OpConfigOnly(
 
 The `html=<op>` widget always calls the backing op with the currently-selected value in an arg named `browser` (a fixed convention) and auto-selects when the op returns exactly one `data-op="__select"` option. Return `map[string]any{"html": "<markup>"}`; put clickable rows as `<... data-op="__select" data-arg="<value>">`.
 
+Beyond the picker convention, an `html=<op>` op can drive a richer config UI: return **`{"fields": {k:v}}`** to fill *other* config fields (e.g. a "paste a cURL → fill token_v2 + headers" button), and the connector's own named `<input>`/`<textarea>` values are sent to the op so it can render an input form + parse what the user typed. Style returned markup with **inline `style` using CSS variables** (`var(--color-navy-800)`, …), NOT Tailwind classes — runtime-returned HTML isn't scanned by the Tailwind build, so utility classes get purged and render unstyled. Full contract in the **`config-tags` skill's `§ html=<op> widget contract`**.
+
 ### Description discipline
 
 `Operation.Description` is the **load-bearing** signal the LLM uses to decide whether to call this op. It shows up verbatim in `wick_list` / `wick_search` payloads.
