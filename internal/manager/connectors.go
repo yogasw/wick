@@ -44,6 +44,7 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("GET /manager/api/connectors/{key}/{id}", auth(h.apiConnectorDetail))
 	mux.Handle("POST /manager/api/connectors/{key}/new", auth(h.apiCreateConnectorRow))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/label", auth(h.apiSetConnectorLabel))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/description", auth(h.apiSetConnectorDescription))
 	mux.Handle("POST /manager/api/connectors/{key}/reload", auth(h.apiConnectorReload))
 	// Connector-TYPE off-switch (admin-only): hide/show the whole connector
 	// type from the LLM. Distinct from the per-row {id}/disable below.
@@ -298,6 +299,7 @@ func (h *Handler) setConnectorLabel(w http.ResponseWriter, r *http.Request) {
 	}
 	http.Redirect(w, r, "/manager/connectors/"+key+"/"+row.ID, http.StatusFound)
 }
+
 
 func (h *Handler) setConnectorConfig(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

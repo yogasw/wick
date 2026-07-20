@@ -4,8 +4,9 @@ go 1.25.0
 
 require (
 	github.com/playwright-community/playwright-go v0.5001.0
+	github.com/rs/zerolog v1.31.0
 	github.com/stretchr/testify v1.11.1
-	github.com/yogasw/wick v0.26.2
+	github.com/yogasw/wick v0.32.0
 )
 
 require (

@@ -352,17 +352,42 @@ export function createThreadStore(): ThreadStore {
       // persisted set, and drop the ones that ARE (their persisted twin
       // replaces them). This kills the intermittent double without losing a
       // reply when the reload lands early.
+      // Trace carry-over: the same reload-vs-flush race also hits the TRACE.
+      // A persisted twin loads its trace lazily (has_trace=true, events=[] until
+      // loadTrace), and right after `done` the turn's thinking/<id>.json may not
+      // be flushed yet, so the twin arrives trace-less and the trace shown
+      // mid-stream vanishes until a manual refresh. Meanwhile the local turn we
+      // are about to drop still holds the full inline trace we streamed. So when
+      // a persisted twin has no inline events but its local twin does, graft the
+      // local events onto it.
       turns.update((cur) => {
-        const persistedKeys = new Set(newTurns.map((t) => `${t.role} ${t.text}`));
         const isLocal = (t: ConversationTurn) =>
           t.turn_id.startsWith("live-") ||
           t.turn_id.startsWith("error-") ||
           t.turn_id.startsWith("warning-") ||
           t.turn_id.startsWith("local-user-");
+
+        const localByKey = new Map<string, ConversationTurn>();
+        for (const t of cur) {
+          if (!isLocal(t)) continue;
+          const key = `${t.role} ${t.text}`;
+          if (!localByKey.has(key)) localByKey.set(key, t);
+        }
+
+        const merged = newTurns.map((t) => {
+          if (t.events && t.events.length > 0) return t;
+          const twin = localByKey.get(`${t.role} ${t.text}`);
+          if (twin && twin.events && twin.events.length > 0) {
+            return { ...t, events: twin.events, has_trace: true };
+          }
+          return t;
+        });
+
+        const persistedKeys = new Set(newTurns.map((t) => `${t.role} ${t.text}`));
         const pendingLocal = cur.filter(
           (t) => isLocal(t) && !persistedKeys.has(`${t.role} ${t.text}`),
         );
-        return [...newTurns, ...pendingLocal];
+        return [...merged, ...pendingLocal];
       });
     },
     appendUserTurn,

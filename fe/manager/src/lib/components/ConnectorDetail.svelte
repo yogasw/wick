@@ -5,11 +5,12 @@
      duplicate/delete live on the connector list's per-row menu, not here).
      Config auto-save is owned by ConfigsForm; the rest POSTs through the
      JSON api client. */
-  import { Button, TextInput, NumberInput } from "@wick-fe/common-ui";
+  import { Button, TextInput, TextArea, NumberInput } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     getConnectorRow,
     setConnectorLabel,
+    setConnectorDescription,
     runHealthCheck,
     setConnectorRateLimit,
   } from "$lib/api.js";
@@ -27,6 +28,8 @@
   let loading = $state(true);
   let error = $state("");
   let labelDraft = $state("");
+  let descDraft = $state("");
+  let descEnabled = $state(false);
   let rateDraft = $state(0);
   let rateBusy = $state(false);
   let healthBusy = $state(false);
@@ -37,6 +40,8 @@
     try {
       data = await getConnectorRow(connectorKey, connectorId);
       labelDraft = data.label;
+      descDraft = data.description ?? "";
+      descEnabled = descDraft.trim() !== "";
       rateDraft = data.rate_limit_rpm;
       error = "";
     } catch (e) {
@@ -64,6 +69,33 @@
     } catch (e) {
       toastError("Save failed", e instanceof Error ? e.message : String(e));
     }
+  }
+
+  // AI description auto-saves (debounced), matching the config fields — no Save
+  // button. Persists descDraft as-is; empty clears it server-side.
+  let descStatus = $state<"" | "saving" | "saved" | "error">("");
+  let descTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function persistDescription() {
+    if (!data) return;
+    descStatus = "saving";
+    try {
+      await setConnectorDescription(connectorKey, connectorId, descDraft.trim());
+      data = { ...data, description: descDraft.trim() };
+      descStatus = "saved";
+      setTimeout(() => {
+        if (descStatus === "saved") descStatus = "";
+      }, 2000);
+    } catch (e) {
+      descStatus = "error";
+      toastError("Save failed", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  function onDescInput(v: string) {
+    descDraft = v;
+    if (descTimer) clearTimeout(descTimer);
+    descTimer = setTimeout(persistDescription, 800);
   }
 
   async function checkHealth() {
@@ -150,6 +182,58 @@
         </div>
         <Button size="lg" disabled={!data.can_configure} onclick={saveLabel}>Save</Button>
       </div>
+    </section>
+
+    <section class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm">
+      <div class="flex items-start justify-between gap-4 px-5 py-4">
+        <div class="min-w-0">
+          <div class="flex items-center gap-2">
+            <h2 class="text-base font-semibold text-black-900 dark:text-white-100">AI description</h2>
+            {#if descEnabled && descStatus}
+              <span
+                class="text-[11px] {descStatus === 'error' ? 'text-neg-400' : descStatus === 'saved' ? 'text-pos-400' : 'text-black-700 dark:text-black-600'}"
+              >
+                {descStatus === "saving" ? "saving…" : descStatus === "saved" ? "✓ saved" : descStatus === "error" ? "✗ failed" : ""}
+              </span>
+            {/if}
+          </div>
+          <p class="mt-1 text-sm text-black-800 dark:text-black-600">
+            Extra guidance the AI sees for this connector — when to use it, team notes, constraints. Appended to the built-in description.
+          </p>
+        </div>
+        <!-- Pill switch: shows/hides the field to keep the page tidy. -->
+        <!-- Knob offset uses inline style, not translate-x utilities: those
+             (translate-x-5 / -0.5) get purged from the manager CSS and the knob
+             would never move. Inline transform is purge-proof. -->
+        <button
+          type="button"
+          role="switch"
+          aria-checked={descEnabled}
+          aria-label="Toggle AI description"
+          disabled={!data.can_configure}
+          onclick={() => (descEnabled = !descEnabled)}
+          class="relative mt-1 inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors {data.can_configure
+            ? 'cursor-pointer'
+            : 'opacity-50'} {descEnabled ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
+        >
+          <span
+            class="inline-block h-5 w-5 rounded-full bg-white-100 shadow transition-transform"
+            style="transform: translateX({descEnabled ? '22px' : '2px'});"
+          ></span>
+        </button>
+      </div>
+      {#if descEnabled}
+        <div class="border-t border-white-300 dark:border-navy-600 px-5 py-4">
+          <TextArea
+            value={descDraft}
+            disabled={!data.can_configure}
+            rows={4}
+            onChange={onDescInput}
+            ariaLabel="Connector AI description"
+          />
+          <p class="mt-2 text-[11px] text-black-700 dark:text-black-600">Saves automatically as you type.</p>
+        </div>
+      {/if}
     </section>
 
     {#if healthBanner}

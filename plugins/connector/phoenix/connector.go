@@ -1,23 +1,25 @@
-// Package phoenix wraps the Arize Phoenix observability API as a wick
-// connector for debugging LLM behaviour. One instance = one Phoenix project
-// (base URL + API token + project id). Operations are read-only: they list
-// LLM spans for a conversation room or an app_id and drill into a single span's
-// full message/tool-call detail — the signals needed to answer "why did the
-// agent answer X" without touching or mutating any Phoenix data.
+// Command phoenix wraps the Arize Phoenix observability API as a wick
+// connector plugin for debugging LLM behaviour. One instance = one Phoenix
+// project (base URL + API token + project id). Operations are read-only: they
+// list LLM spans for a conversation room or an app_id and drill into a single
+// span's full message/tool-call detail — the signals needed to answer "why did
+// the agent answer X" without touching or mutating any Phoenix data.
 //
-// File layout:
+// File layout (plugin form):
 //
-//   - connector.go — Meta, Configs, Input structs, Operations, thin handlers
+//   - connector.go — Module, Configs, Input structs, Operations, thin handlers
 //   - service.go   — input validation, attribute parsing, response shaping
 //   - repo.go      — outbound GraphQL via http.NewRequestWithContext
-package phoenix
+package main
 
 import (
 	"fmt"
 	"strings"
 
 	"github.com/yogasw/wick/pkg/connector"
+	"github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/wickdocs"
+	"github.com/yogasw/wick/plugins/tags"
 )
 
 const Key = "phoenix"
@@ -51,13 +53,21 @@ type GetSpanInput struct {
 	SpanNodeID string `wick:"required;desc=Phoenix span global id (the span_node_id from a list result). Base64 form, e.g. U3BhbjozODk2MjI0MQ=="`
 }
 
-// Meta returns the static metadata block for this connector.
-func Meta() connector.Meta {
-	return connector.Meta{
-		Key:         Key,
-		Name:        "Phoenix",
-		Description: "Debug LLM behaviour in Arize Phoenix: list LLM spans by room or app_id and inspect a single span's prompt, messages, tool calls, and token usage. Read-only.",
-		Icon:        "🔥",
+// Module is the connector definition. DefaultTags match the built-in it
+// replaced (Connector + Observability) so it lands in the same connector-list
+// section; the app reads these from the manifest and categorizes the plugin
+// identically to a built-in.
+func Module() connector.Module {
+	return connector.Module{
+		Meta: connector.Meta{
+			Key:         Key,
+			Name:        "Phoenix",
+			Description: "Debug LLM behaviour in Arize Phoenix: list LLM spans by room or app_id and inspect a single span's prompt, messages, tool calls, and token usage. Read-only.",
+			Icon:        "🔥",
+			DefaultTags: []entity.DefaultTag{tags.Connector, tags.Observability},
+		},
+		Configs:    entity.StructToConfigs(Configs{}),
+		Operations: Operations(),
 	}
 }
 

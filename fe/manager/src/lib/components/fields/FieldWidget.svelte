@@ -26,8 +26,19 @@
        connector op via the manager /test path. Empty for other field types. */
     connectorKey?: string;
     connectorId?: string;
+    /* Optional: lets an html widget write MANY fields at once (op returns
+       { fields: {...} }). Only the html widget uses it. */
+    onSetFields?: (map: Record<string, string>) => void;
   };
-  let { field, value, onChange, disabled = false, connectorKey = "", connectorId = "" }: Props = $props();
+  let {
+    field,
+    value,
+    onChange,
+    disabled = false,
+    connectorKey = "",
+    connectorId = "",
+    onSetFields,
+  }: Props = $props();
 
   let dropdownOptions = $derived([
     { label: "— select —", value: "" },
@@ -42,7 +53,7 @@
 {:else if field.type === "dropdown"}
   <Select {value} {disabled} options={dropdownOptions} onChange={onChange} />
 {:else if field.type === "html"}
-  <HtmlField {connectorKey} {connectorId} op={field.options} {value} {disabled} onChange={onChange} />
+  <HtmlField {connectorKey} {connectorId} op={field.options} {value} {disabled} onChange={onChange} {onSetFields} />
 {:else if field.type === "checkbox" || field.type === "bool" || field.type === "boolean"}
   <CheckboxInput {value} {disabled} onChange={onChange} />
 {:else if field.type === "number"}

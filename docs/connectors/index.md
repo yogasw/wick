@@ -18,11 +18,13 @@ A built-in is just a regular connector that calls `connectors.Register(...)` (or
 |---|---|---|---|
 | [HTTP / REST](./httprest) | `httprest` | Generic JSON REST client — GET / POST / PUT / PATCH / DELETE any path. Useful when you want an LLM to call an API you haven't wrapped in a typed connector yet. | builtin |
 | [Slack](./slack) | `slack` | Read channels, threads, users; send / edit / delete messages; manage reactions. OAuth credentials supported on the row. | builtin |
-| [Phoenix](./phoenix) | `phoenix` | Debug LLM behaviour in Arize Phoenix — list spans by room or app_id and inspect a single span's prompt, messages, tool calls, and token usage. Read-only. | builtin |
 | [GitHub](./github) | `github` | Comprehensive REST coverage: repos, issues, PRs (diff/merge/create + reviews), branches, labels, files, releases, tags, search, collaborators, Actions, webhooks + health check. | plugin |
 | [Bitbucket](./bitbucket) | `bitbucket` | Search repos, read commits / diffs, list and create pull requests, post PR comments (top-level or inline). | plugin |
 | [Google Workspace](./googleworkspace) | `google_workspace` | Manage Drive files, read/write Sheets, edit Docs and Slides, send and label Gmail, manage Calendar events (with Meet links), create Meet links, and read Meet recordings and transcripts — all under one Google OAuth account. 38 ops across seven Google APIs. | plugin |
 | [Playwright Browser](./playwright_browser) | `playwright_browser` | Drive a real browser (Chromium/Firefox/WebKit/CloakBrowser) to screenshot, scrape, render PDF, evaluate JS, and run scripted multi-step flows. Supports persistent live sessions across calls. | plugin |
+| [Phoenix](./phoenix) | `phoenix` | Debug LLM behaviour in Arize Phoenix — list spans by room or app_id and inspect a single span's prompt, messages, tool calls, and token usage. Read-only. | plugin |
+| [Notion](./notion) | `notion` | Official Notion REST API via an Internal Integration bot token — search, fetch (properties + markdown body), query databases, comments, users, create/update pages and databases. | plugin |
+| [Notion (Unofficial)](./notion_unofficial) | `notion_unofficial` | Notion's private web API via a `token_v2` session cookie — sees everything the logged-in user can see, including embedded/filtered database views. Mostly read, with limited write. | plugin |
 | [Wick Manager](./wickmanager) | `wickmanager` | Read and edit wick's own apps / jobs / tools / connectors / tray lifecycle. For asking the LLM to inspect or tweak wick itself, not third-party APIs. | runtime |
 | [Workflow](./workflow) | `workflow` | Create, edit, test, simulate, and run workflows over MCP — the LLM-facing surface for the [Workflows](/workflow/) feature. | runtime |
 | [Notifications](./notifications) | `notifications` | Send a browser push notification to a subscribed user by opaque PN ID. Pairs with the per-session subscribe bell on the agents UI. | runtime |
@@ -35,7 +37,7 @@ A built-in is just a regular connector that calls `connectors.Register(...)` (or
 - **runtime** — registered inline at boot in [`internal/pkg/api/server.go`](https://github.com/yogasw/wick/blob/master/internal/pkg/api/server.go) because the operations need runtime services (configsSvc, jobsSvc, workflow engine, …) that only exist mid-boot.
 - **lab sample** — `connectors.RegisterLabSamples()` in `cmd/lab` only. Not present in production binaries.
 
-> **Migrating from an older release?** If you relied on `github`, `bitbucket`, or `google_workspace` as built-in connectors (before they were moved to plugins), your existing credential rows and configurations are preserved — they are keyed by `Meta.Key` which is unchanged. The connector will not appear in the connector list until the plugin is installed and enabled. Run `<app> plugin install github` (and/or `bitbucket`, `google_workspace`) after upgrading, then enable each from the manager UI.
+> **Migrating from an older release?** If you relied on `github`, `bitbucket`, `google_workspace`, or `phoenix` as built-in connectors (before they were moved to plugins), your existing credential rows and configurations are preserved — they are keyed by `Meta.Key` which is unchanged. The connector will not appear in the connector list until the plugin is installed and enabled. Run `<app> plugin install github` (and/or `bitbucket`, `google_workspace`, `phoenix`) after upgrading, then enable each from the manager UI.
 
 ## Tag visibility
 
