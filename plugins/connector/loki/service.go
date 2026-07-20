@@ -12,10 +12,11 @@ import (
 )
 
 type queryParams struct {
-	URL       string
+	Base      string // Grafana base URL
+	UID       string // Loki datasource UID
 	Query     string
-	Start     string
-	End       string
+	StartMs   int64 // range start, Unix ms
+	EndMs     int64 // range end, Unix ms
 	Limit     int
 	Direction string
 }
@@ -39,19 +40,43 @@ func validateQuery(c *connector.Ctx) (queryParams, error) {
 		direction = "backward"
 	}
 
-	u, err := resourceURL(c, "query_range")
-	if err != nil {
-		return queryParams{}, err
+	base := strings.TrimRight(strings.TrimSpace(c.Cfg("base_url")), "/")
+	if base == "" {
+		return queryParams{}, errors.New("base_url is not configured")
+	}
+	uid := strings.TrimSpace(c.Cfg("datasource_uid"))
+	if uid == "" {
+		return queryParams{}, errors.New("datasource_uid is not configured")
 	}
 
 	return queryParams{
-		URL:       u,
+		Base:      base,
+		UID:       uid,
 		Query:     q,
-		Start:     resolveTime(c.Input("start"), -time.Hour),
-		End:       resolveTime(c.Input("end"), 0),
+		StartMs:   resolveTimeMs(c.Input("start"), -time.Hour),
+		EndMs:     resolveTimeMs(c.Input("end"), 0),
 		Limit:     limit,
 		Direction: direction,
 	}, nil
+}
+
+// resolveTimeMs is resolveTime's Unix-millisecond sibling for the /api/ds/query
+// from/to fields (Grafana expects epoch ms). Accepts RFC3339, a Unix ns string,
+// or empty (now + offset).
+func resolveTimeMs(input string, offsetFromNow time.Duration) int64 {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return time.Now().Add(offsetFromNow).UnixMilli()
+	}
+	if looksLikeUnixNano(input) {
+		if ns, err := strconv.ParseInt(input, 10, 64); err == nil {
+			return ns / 1_000_000
+		}
+	}
+	if t, err := time.Parse(time.RFC3339, input); err == nil {
+		return t.UnixMilli()
+	}
+	return time.Now().Add(offsetFromNow).UnixMilli()
 }
 
 func validateLabelValues(c *connector.Ctx) (string, error) {
