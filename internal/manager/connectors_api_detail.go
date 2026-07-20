@@ -130,6 +130,7 @@ type connectorDetailJSON struct {
 	Icon           string                  `json:"icon"`
 	ID             string                  `json:"id"`
 	Label          string                  `json:"label"`
+	Description    string                  `json:"description"`
 	Disabled       bool                    `json:"disabled"`
 	RateLimitRPM   int                     `json:"rate_limit_rpm"`
 	HasHealthCheck bool                    `json:"has_health_check"`
@@ -312,6 +313,7 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 		Icon:                  mod.Meta.Icon,
 		ID:                    row.ID,
 		Label:                 row.Label,
+		Description:           row.Description,
 		Disabled:              row.Disabled,
 		RateLimitRPM:          row.RateLimitRPM,
 		HasHealthCheck:        mod.HealthCheck != nil,
@@ -480,6 +482,33 @@ func (h *Handler) apiSetConnectorLabel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"label": label})
+}
+
+// apiSetConnectorDescription serves
+// POST /manager/api/connectors/{key}/{id}/description. Body:
+// {"description":"..."}. Saves the per-instance AI-facing description (appended
+// to the module description in wick_list/wick_get). Empty clears it.
+func (h *Handler) apiSetConnectorDescription(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+	row, errResp, ok := h.loadConfigurableRow(r, user)
+	if !ok {
+		writeJSON(w, errResp.status, map[string]string{"error": errResp.msg})
+		return
+	}
+	var body struct {
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	desc := strings.TrimSpace(body.Description)
+	if err := h.connectors.SetDescription(ctx, row.ID, desc); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"description": desc})
 }
 
 // apiSetConnectorConfig serves

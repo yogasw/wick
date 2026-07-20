@@ -48,10 +48,16 @@ import (
 // same with "/jobs/{path}". A future rename of ToolTag/SetToolTags into
 // a generic entity-tag API is tracked separately.
 type Connector struct {
-	ID        string `gorm:"type:varchar(36);primaryKey"`
-	Key       string `gorm:"type:varchar(100);index;not null"`
-	Label     string `gorm:"type:varchar(255);not null"`
-	Disabled  bool   `gorm:"default:false"`
+	ID    string `gorm:"type:varchar(36);primaryKey"`
+	Key   string `gorm:"type:varchar(100);index;not null"`
+	Label string `gorm:"type:varchar(255);not null"`
+	// Description is per-instance free text an admin writes to guide the AI:
+	// when to use this specific instance, team notes, constraints. It is
+	// appended to the module's built-in Meta.Description in the MCP surface
+	// (connector_list / connector_get) so the agent reads both. Empty by
+	// default; purely additive.
+	Description string `gorm:"type:text"`
+	Disabled    bool   `gorm:"default:false"`
 	// RateLimitRPM caps how many times this connector instance may be
 	// called per minute across all users. 0 means unlimited. Enforced
 	// in-process via a sliding-window counter — not distributed.

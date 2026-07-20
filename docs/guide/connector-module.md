@@ -90,7 +90,7 @@ func Meta() connector.Meta {
 |-------|-------------|
 | `Key` | Unique slug across all connectors. Drives the admin URL `/manager/connectors/{Key}` |
 | `Name` | Display name on the admin card and detail page |
-| `Description` | Shown to admins. The LLM never reads this — see per-`Operation` Description below |
+| `Description` | Shown to admins on the connector card. Also read by the LLM when a caller uses the `wickmanager` connector's `connector_list`/`connector_get` ops — see [Per-row management UI ▶ AI description](#ai-description) for the per-instance text appended to it there. For every other MCP surface (`wick_list`/`wick_search`/`wick_get`), the LLM sees per-`Operation` Description instead — see below. |
 | `Icon` | Emoji or short string |
 | `DefaultTags` | Tags attached to every freshly seeded row. **Every connector should include `tags.Connector`** so the home page groups it under "Connector". Add module-specific tags on top of that (e.g. `tags.System` for built-in maintenance connectors). Admin unlinks survive restarts — boot only seeds when a row has zero tag links yet. |
 | `Fixed` | When `true`, only one row may exist for this Key. Useful for connectors backed by a single in-process resource. |
@@ -353,22 +353,32 @@ Implementation: `Service.SetDisabled` (`internal/connectors/service.go`) writes 
 
 *`/manager/connectors/{key}/{id}` detail page — identity, action bar, label form, credentials, operations table.*
 
-`/manager/connectors/{key}/{id}` is the per-row settings page. Six sections:
+`/manager/connectors/{key}/{id}` is the per-row settings page. Seven sections:
 
 1. **Identity** — label, status badge, opaque row ID.
 2. **Top actions** — History, Duplicate, Disable/Enable, Delete.
 3. **Label form** — rename without redeploying.
-4. **Credentials** — auto-rendered from your `Configs` struct via `entity.StructToConfigs`. For OAuth connectors, also shows the Connect Account button and any connected accounts.
-5. **Access Policy** — four flags controlling who can configure or connect OAuth accounts. Editable by admins or the instance owner (creator); `AllowOthersConfigure` users are intentionally excluded here because the policy controls who gets that grant:
+4. **AI description** — a free-text field, off by default (toggle to show it), that an admin can fill with extra guidance for *this instance*: when to use it, team notes, account-specific constraints. It auto-saves as you type (debounced, no Save button) and is stored on `entity.Connector.Description`, separate from the module's own `Meta.Description`. See below.
+5. **Credentials** — auto-rendered from your `Configs` struct via `entity.StructToConfigs`. For OAuth connectors, also shows the Connect Account button and any connected accounts.
+6. **Access Policy** — four flags controlling who can configure or connect OAuth accounts. Editable by admins or the instance owner (creator); `AllowOthersConfigure` users are intentionally excluded here because the policy controls who gets that grant:
    - `Enable SSO` — turns on the OAuth Connect Account flow for this instance.
    - `Multi-account` — each user connect creates a new account entry (vs replacing the single token).
    - `Allow others to configure` — non-admin users with tag access may edit credentials.
    - `Allow others to connect SSO` — non-admin users with tag access may initiate the OAuth flow.
-6. **Operations** — operations grouped into named category cards (one card per `connector.Cat` section: title, description, op count, per-card Enable/Disable all). A sticky "Sections" sidebar on the right lists every category; clicking a row jumps to that card. A global search box filters across all categories (cards with no match hide). Each op row carries:
+7. **Operations** — operations grouped into named category cards (one card per `connector.Cat` section: title, description, op count, per-card Enable/Disable all). A sticky "Sections" sidebar on the right lists every category; clicking a row jumps to that card. A global search box filters across all categories (cards with no match hide). Each op row carries:
    - `[Test]` link → opens the test panel (`/test?op=<key>`)
    - `[History]` link → opens the audit log filtered to that op
-   - `Enable / Disable` toggle — toggle individual ops. Destructive ops ship enabled; disable here if you want to restrict them.
+   - `Enable / Disable` toggle — toggle individual ops. Destructive ops ship enabled; disable here if you want to restrict them. An op declared with `OpConfigOnly(...)` (backs a config-form widget, e.g. an `html=<op>` picker or status card) shows a **"Config only"** badge instead of the toggle — it's not an agent tool and is excluded from the "Operations N" count, but admins can still run it from `[Test]`.
    - `SystemDisabled` badge (advisory) — shown when the health check flagged a missing permission, but the op can still be called if `Enabled=true`.
+
+### AI description
+
+Beyond the module's own `Meta.Description` (written once, in code, shared by every row), an admin can attach a **per-instance** description to a specific connector row — useful when the same connector type is spawned multiple times for different accounts/teams and each needs its own "when to use this one" guidance.
+
+- Edited on the detail page's **AI description** section (see above); saves automatically.
+- Stored on `entity.Connector.Description` — `Service.SetDescription` / `Repo.SetDescription`, `POST /manager/api/connectors/{key}/{id}/description` (`{"description":"..."}`, empty clears it).
+- Surfaced to the LLM through the `wickmanager` connector's `connector_list` and `connector_get` ops: the instance text is appended to the module's `Meta.Description` (base description, blank line, then the instance note). Empty instance text falls back to just the base description. See [Wick Manager](/connectors/wickmanager).
+- Purely additive — it does not change what any *operation* does, only what an LLM (or admin) reads about the instance as a whole.
 
 ### Test panel (Postman-style)
 

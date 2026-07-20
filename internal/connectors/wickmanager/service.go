@@ -41,6 +41,22 @@ type handlers struct {
 
 func newHandlers(deps Deps) *handlers { return &handlers{deps: deps} }
 
+// describeConnector combines the module's built-in description with the
+// admin-written per-instance description (entity.Connector.Description). The
+// instance text is appended so the agent reads both the generic "what it does"
+// and the local "when to use this one / team notes". Empty instance text →
+// just the base description.
+func describeConnector(base, instance string) string {
+	instance = strings.TrimSpace(instance)
+	if instance == "" {
+		return base
+	}
+	if strings.TrimSpace(base) == "" {
+		return instance
+	}
+	return base + "\n\n" + instance
+}
+
 // ── masking helpers ──────────────────────────────────────────────────
 
 // maskedConfigValue returns the value to surface to the LLM. Secret
@@ -608,7 +624,7 @@ func (h *handlers) connectorList(c *connector.Ctx) (any, error) {
 			"id":          row.ID,
 			"key":         row.Key,
 			"label":       row.Label,
-			"description": mod.Meta.Description,
+			"description": describeConnector(mod.Meta.Description, row.Description),
 			"icon":        mod.Meta.Icon,
 			"status":      h.deps.Connectors.Status(row),
 			"total_tools": count,
@@ -666,7 +682,7 @@ func (h *handlers) connectorGet(c *connector.Ctx) (any, error) {
 			"id":          row.ID,
 			"key":         row.Key,
 			"label":       row.Label,
-			"description": mod.Meta.Description,
+			"description": describeConnector(mod.Meta.Description, row.Description),
 			"icon":        mod.Meta.Icon,
 			"disabled":    row.Disabled,
 			"status":      h.deps.Connectors.Status(*row),

@@ -642,6 +642,11 @@ func (s *Service) SetDisabled(ctx context.Context, id string, disabled bool) err
 	return s.repo.SetDisabled(ctx, id, disabled)
 }
 
+// SetDescription updates the per-instance AI-facing description (empty clears).
+func (s *Service) SetDescription(ctx context.Context, id, description string) error {
+	return s.repo.SetDescription(ctx, id, description)
+}
+
 // SetRateLimit updates the calls-per-minute cap for a connector instance.
 // Pass 0 to remove the limit.
 func (s *Service) SetRateLimit(ctx context.Context, id string, rpm int) error {
