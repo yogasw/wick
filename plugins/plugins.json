@@ -94,6 +94,118 @@
     }
   },
   {
+    "key": "loki",
+    "name": "Loki",
+    "description": "Query logs and discover labels in a Grafana Loki instance via LogQL.",
+    "version": "0.3.0",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "Observability",
+        "Description": "Logging, metrics, and tracing connectors.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 53
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/loki/v0.3.0/loki-0.3.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/loki/v0.3.0/loki-0.3.0-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "notion",
+    "name": "Notion",
+    "description": "Read and write Notion pages, databases, and comments via the official REST API with a bot token. Fetch returns MCP-style markdown.",
+    "version": "0.1.0",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "Productivity",
+        "Description": "Docs, wikis, and knowledge-base connectors.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 55
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/notion/v0.1.0/notion-0.1.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/notion/v0.1.0/notion-0.1.0-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "notion_unofficial",
+    "name": "Notion (Unofficial)",
+    "description": "Read Notion pages and databases via the private web API using a token_v2 cookie. Fetch returns rich markdown; mostly read with limited write (set title).",
+    "version": "0.1.0",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "Productivity",
+        "Description": "Docs, wikis, and knowledge-base connectors.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 55
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.1.0/notion_unofficial-0.1.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.1.0/notion_unofficial-0.1.0-linux-arm64.zip"
+    }
+  },
+  {
+    "key": "phoenix",
+    "name": "Phoenix",
+    "description": "Debug LLM behaviour in Arize Phoenix: list LLM spans by room or app_id and inspect a single span's prompt, messages, tool calls, and token usage. Read-only.",
+    "version": "0.1.0",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "Observability",
+        "Description": "Logging, metrics, and tracing connectors.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 53
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/phoenix/v0.1.0/phoenix-0.1.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/phoenix/v0.1.0/phoenix-0.1.0-linux-arm64.zip"
+    }
+  },
+  {
     "key": "playwright_browser",
     "name": "Playwright Browser",
     "description": "Drive a real browser (Chromium/Firefox/WebKit) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process.",

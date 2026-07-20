@@ -1,13 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -28,60 +28,141 @@ type QueryResult struct {
 	Entries []LogEntry `json:"entries"`
 }
 
+// fetchQueryRange runs a Loki log query through Grafana's DATASOURCE QUERY API
+// (POST /api/ds/query), NOT the resource proxy — a range query isn't a resource
+// endpoint on Grafana's Loki datasource (that path 500s with
+// plugin.downstreamError), so we use the same call the Grafana UI makes. The
+// response is Grafana's DataFrame format, not Loki's native envelope, so it's
+// parsed differently (see parseLogFrames).
 func fetchQueryRange(c *connector.Ctx, p queryParams) (*QueryResult, error) {
-	u, err := url.Parse(p.URL)
-	if err != nil {
-		return nil, fmt.Errorf("build url: %w", err)
+	body := map[string]any{
+		"from": strconv.FormatInt(p.StartMs, 10),
+		"to":   strconv.FormatInt(p.EndMs, 10),
+		"queries": []any{
+			map[string]any{
+				"refId":         "A",
+				"datasource":    map[string]any{"type": "loki", "uid": p.UID},
+				"expr":          p.Query,
+				"queryType":     "range",
+				"maxLines":      p.Limit,
+				"direction":     p.Direction,
+				"intervalMs":    1000,
+				"maxDataPoints": 1000,
+			},
+		},
 	}
-	q := u.Query()
-	q.Set("query", p.Query)
-	q.Set("start", p.Start)
-	q.Set("end", p.End)
-	q.Set("limit", strconv.Itoa(p.Limit))
-	q.Set("direction", p.Direction)
-	u.RawQuery = q.Encode()
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal query: %w", err)
+	}
 
-	req, err := http.NewRequestWithContext(c.Context(), http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(c.Context(), http.MethodPost, p.Base+"/api/ds/query?ds_type=loki", bytes.NewReader(b))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
+	req.Header.Set("Content-Type", "application/json")
 	applyAuth(c, req)
 	applyOrgID(c, req)
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("call loki: %w", err)
+		return nil, fmt.Errorf("call grafana: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, lokiError(resp.StatusCode, raw)
 	}
+	return parseLogFrames(raw)
+}
 
-	var envelope struct {
-		Data struct {
-			Result []struct {
-				Stream map[string]string `json:"stream"`
-				Values [][2]string       `json:"values"`
-			} `json:"result"`
-		} `json:"data"`
+// parseLogFrames turns Grafana's /api/ds/query DataFrame response into flat log
+// entries. Each result carries frames; a log frame has columns (data.values)
+// described by schema.fields — a labels column (object), a Line column (string),
+// and a time column (tsNs string ns, or Time ms). Per-query errors on a 200 are
+// surfaced too.
+func parseLogFrames(raw []byte) (*QueryResult, error) {
+	var env struct {
+		Results map[string]struct {
+			Error  string `json:"error"`
+			Status int    `json:"status"`
+			Frames []struct {
+				Schema struct {
+					Fields []struct {
+						Name string `json:"name"`
+					} `json:"fields"`
+				} `json:"schema"`
+				Data struct {
+					Values [][]json.RawMessage `json:"values"`
+				} `json:"data"`
+			} `json:"frames"`
+		} `json:"results"`
 	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
+	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
 	entries := make([]LogEntry, 0)
-	for _, stream := range envelope.Data.Result {
-		for _, v := range stream.Values {
-			entries = append(entries, LogEntry{
-				Timestamp: nanoToRFC3339(v[0]),
-				Labels:    stream.Stream,
-				Line:      v[1],
-			})
+	for _, res := range env.Results {
+		if res.Error != "" {
+			return nil, fmt.Errorf("loki query error: %s", res.Error)
+		}
+		for _, fr := range res.Frames {
+			// Map field name → column index (case-insensitive).
+			idx := map[string]int{}
+			for i, f := range fr.Schema.Fields {
+				idx[strings.ToLower(f.Name)] = i
+			}
+			lineCol, ok := firstCol(idx, "line", "body")
+			if !ok {
+				continue // not a log frame (e.g. a metric frame)
+			}
+			labelCol, hasLabels := firstCol(idx, "labels", "__labels")
+			tsNsCol, hasTsNs := idx["tsns"]
+			timeCol, hasTime := firstCol(idx, "time", "timestamp")
+
+			vals := fr.Data.Values
+			if lineCol >= len(vals) {
+				continue
+			}
+			rows := len(vals[lineCol])
+			for i := 0; i < rows; i++ {
+				var line string
+				_ = json.Unmarshal(vals[lineCol][i], &line)
+
+				labels := map[string]string{}
+				if hasLabels && labelCol < len(vals) && i < len(vals[labelCol]) {
+					_ = json.Unmarshal(vals[labelCol][i], &labels)
+				}
+
+				ts := ""
+				switch {
+				case hasTsNs && tsNsCol < len(vals) && i < len(vals[tsNsCol]):
+					var ns string
+					_ = json.Unmarshal(vals[tsNsCol][i], &ns)
+					ts = nanoToRFC3339(ns)
+				case hasTime && timeCol < len(vals) && i < len(vals[timeCol]):
+					var ms int64
+					if json.Unmarshal(vals[timeCol][i], &ms) == nil {
+						ts = time.Unix(0, ms*int64(time.Millisecond)).UTC().Format(time.RFC3339Nano)
+					}
+				}
+
+				entries = append(entries, LogEntry{Timestamp: ts, Labels: labels, Line: line})
+			}
 		}
 	}
 	return &QueryResult{Count: len(entries), Entries: entries}, nil
+}
+
+// firstCol returns the column index for the first matching field name.
+func firstCol(idx map[string]int, names ...string) (int, bool) {
+	for _, n := range names {
+		if i, ok := idx[n]; ok {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 func fetchStringList(c *connector.Ctx, rawURL string) ([]string, error) {
