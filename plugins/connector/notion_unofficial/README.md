@@ -11,6 +11,12 @@ MCP-style markdown.
 > ends, and it is a ToS grey area. Treat this connector as a convenience, not a
 > guarantee. For anything durable, prefer the official `notion` connector.
 
+**Token expiry & rate limits.** `token_v2` is a session cookie with no refresh —
+when it expires (logout / password change / rotation), every op fails with a
+clear `notion 401: not authenticated — token_v2 expired…` and the connection
+card turns red; re-import a fresh Copy-as-cURL to fix. HTTP 429 (the private API
+rate-limits at ~3 req/s) is retried automatically with backoff.
+
 ## Known limitations / not yet handled
 
 - **Formula & rollup columns are blank.** Notion computes them server-side and

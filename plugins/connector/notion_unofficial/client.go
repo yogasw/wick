@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -115,39 +116,68 @@ func (cl *v3Client) identity() (spaceID, userID string, err error) {
 	return cl.spaceID, cl.resolvedU, nil
 }
 
+// maxRetries429 bounds the rate-limit retry loop.
+const maxRetries429 = 3
+
 // post sends a JSON body to an api/v3 endpoint and returns the raw response.
+// On HTTP 429 it retries with backoff (honoring Retry-After and the request
+// context), up to maxRetries429 — the private API rate-limits at ~3 req/s.
 func (cl *v3Client) post(path string, body any) ([]byte, error) {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal body: %w", err)
 	}
-	req, err := http.NewRequestWithContext(cl.c.Context(), http.MethodPost, privateBase+path, bytes.NewReader(b))
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("cookie", "token_v2="+cl.token)
-	// The api/v3 endpoints are the browser's private API, not a public API. A
-	// default "Go-http-client" User-Agent stands out and risks being flagged or
-	// blocked, so we present as a normal browser (and send the client-version
-	// header the web app sends). These are cosmetic to the payload but keep the
-	// request looking like the session it borrows the cookie from.
-	req.Header.Set("User-Agent", cl.userAgent)
-	req.Header.Set("Notion-Client-Version", cl.clientVer)
-	if cl.user != "" {
-		req.Header.Set("x-notion-active-user-header", cl.user)
-	}
 
-	resp, err := cl.c.HTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("call notion: %w", err)
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(cl.c.Context(), http.MethodPost, privateBase+path, bytes.NewReader(b))
+		if err != nil {
+			return nil, fmt.Errorf("build request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("cookie", "token_v2="+cl.token)
+		// The api/v3 endpoints are the browser's private API, not a public API. A
+		// default "Go-http-client" User-Agent stands out and risks being flagged
+		// or blocked, so we present as a normal browser (and send the
+		// client-version header the web app sends). Cosmetic to the payload but
+		// keep the request looking like the session it borrows the cookie from.
+		req.Header.Set("User-Agent", cl.userAgent)
+		req.Header.Set("Notion-Client-Version", cl.clientVer)
+		if cl.user != "" {
+			req.Header.Set("x-notion-active-user-header", cl.user)
+		}
+
+		resp, err := cl.c.HTTP.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("call notion: %w", err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxRetries429 {
+			wait := retryAfter(resp.Header.Get("Retry-After"), attempt)
+			select {
+			case <-cl.c.Context().Done():
+				return nil, cl.c.Context().Err()
+			case <-time.After(wait):
+				continue
+			}
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, privateError(resp.StatusCode, raw)
+		}
+		return raw, nil
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, privateError(resp.StatusCode, raw)
+}
+
+// retryAfter returns how long to wait before a 429 retry: the server's
+// Retry-After (seconds) when present, else exponential backoff (1s, 2s, 4s).
+func retryAfter(header string, attempt int) time.Duration {
+	if header != "" {
+		if secs, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
 	}
-	return raw, nil
+	return time.Duration(1<<attempt) * time.Second
 }
 
 // saveTransactions is the write endpoint (replaces the old, now-404
@@ -192,6 +222,12 @@ func newUUID() string {
 func nowMillis() int64 { return time.Now().UnixMilli() }
 
 func privateError(status int, body []byte) error {
+	// 401 almost always means the token_v2 cookie expired or was invalidated
+	// (logout / password change / rotation). The private API has no refresh, so
+	// point the operator at the fix instead of a bare "401".
+	if status == http.StatusUnauthorized {
+		return errors.New("notion 401: not authenticated — token_v2 expired or invalid. Re-import a fresh Copy-as-cURL (or paste a new token_v2) from a logged-in notion.so session")
+	}
 	var env struct {
 		Name    string `json:"name"`
 		Message string `json:"message"`
