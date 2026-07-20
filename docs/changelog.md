@@ -6,14 +6,43 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Added
-*   **Notion connectors**: Two new plugin connectors for Notion. [`notion`](/connectors/notion) wraps the official REST API with an Internal Integration bot token — search, fetch (properties + markdown body via the block tree, MCP-style), query databases, comments, users, and create/update pages and databases. [`notion_unofficial`](/connectors/notion_unofficial) reads and writes through Notion's private web API using a `token_v2` session cookie (with a paste-a-cURL setup widget) — sees everything the logged-in user can see, including embedded/filtered database views, at the cost of being an undocumented, best-effort API. Both install via `<app> plugin install notion` / `notion_unofficial`. A new `Productivity` connector tag groups docs/knowledge-base connectors.
-*   **Per-instance AI description for connectors**: A connector row's detail page now has an **AI description** field — free text an admin can attach to that specific instance (when to use it, team notes, account constraints), separate from the connector type's own built-in description. It auto-saves and is appended to the base description wherever the `wickmanager` connector surfaces it to an LLM (`connector_list`, `connector_get`). See [Connector Module ▶ AI description](/guide/connector-module#ai-description).
-
-### Fixed
-*   **Phoenix connector docs**: Fixed a stale source path and tier label left over from the Phoenix connector's earlier move to a downloadable plugin (`plugins/connector/phoenix/`) — the connector reference page and index now correctly point at the plugin location and installation flow.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.33.0](https://github.com/yogasw/wick/compare/v0.32.0...v0.33.0) — Connectors & Plugins
+
+_Released on 2026-07-20_
+
+### Added
+*   **Notion Connectors**: Two new plugin connectors for Notion:
+    *   [`notion`](/connectors/notion): Wraps the official REST API (Notion-Version 2022-06-28). Supports search, fetch (properties + markdown body via the block tree), query databases, comments, users, and create/update pages/databases.
+    *   [`notion_unofficial`](/connectors/notion_unofficial): Reads and writes through Notion's private web API using a `token_v2` session cookie (with a paste-a-cURL setup widget). Sees everything the logged-in user can see, including embedded/filtered database views. Provides `describe_database` (schema + options + view filter) and `create_page` with typed properties (date/select/relation), plus `query_database`, `get_records`, `create_comment`, `set_title`. Handles token expiry with actionable errors and retries HTTP 429 with backoff.
+    *   Both install via `<app> plugin install notion` / `notion_unofficial`.
+    *   A new `Productivity` connector tag groups docs/knowledge-base connectors.
+*   **Per-instance AI Description for Connectors**: A connector row's detail page now has an **AI description** field. This free text can be attached by an admin to a specific connector instance (e.g., when to use it, team notes, account constraints). It auto-saves and is appended to the connector type's built-in description wherever the `wickmanager` connector surfaces it to an LLM (`connector_list`, `connector_get`). See [Connector Module ▶ AI description](/guide/connector-module#ai-description).
+*   **Enhanced Connector Configuration UX**:
+    *   **`ConfigOnly` Operations**: Introduced `connector.OpConfigOnly` for operations that back a config-form widget (e.g., pickers, status) but are not agent tools. These are hidden from the MCP surface, blocked via `wick_execute` for non-test sources, and labeled "config only" in the admin UI.
+    *   **Extended HTML Config Widget**: The `html=<op>` config widget can now return `{fields:{k:v}}` to fill sibling config fields and `{html}` for its own feedback. The connector's named `<input>`/`<textarea>` values are sent to the operation, enabling custom config form building (e.g., paste-a-cURL import).
+    *   **Loki Connector Improvements**:
+        *   `org_id` and `datasource_uid` are now HTML pickers, utilizing `ConfigOnly` operations (`list_orgs`, `list_datasources`).
+        *   A `connection_status` widget shows Grafana version and reachability.
+        *   `auth_mode` (basic|token) provides conditional visibility for username/password vs. token fields.
+        *   Configs are regrouped into `Connection`, `Authentication`, and `Datasource` sections.
+        *   `labels` and `label_values` operations now accept optional `start/end` parameters.
+        *   Loki connector version bumped to 0.2.0.
+*   **Plugin Debugging with Reattach**: Added support for breakpoint debugging connector plugins via `go-plugin reattach`. This allows attaching a debugger (like `dlv`) to a running plugin instance. A key fix ensures `ClientConfig.Plugins` is explicitly set during reattach to avoid "unknown plugin type" errors. VSCode launch configurations are provided for an integrated debugging experience.
+*   **Loki and Phoenix Connectors Moved to Plugins**: The Loki and Phoenix connectors are now downloadable plugins (same as GitHub/Bitbucket/Google Workspace) rather than in-tree builtins. They are no longer compiled into Wick and must be installed via `<app> plugin install loki|phoenix`. Loki's `datasource_uid` is now a required field.
+
+### Fixed
+*   **Agent Visibility Gate for Shared Resources**: Corrected an issue where `callerProjectAccess` for agents only unioned owner grants. Projects and data tables shared via filter tags (`tool_tags`) are now correctly visible and accessible to users carrying the matching tags, resolving 404 errors and visibility issues in the sidebar and default-project dropdown. Untagged projects/data tables remain owner-private.
+*   **Phoenix Connector Documentation**: Fixed stale source paths and tier labels in the connector reference page and index, ensuring they correctly point to the plugin location and installation flow.
+*   **Tool-Call Trace Preservation**: Resolved an issue where the optimistic live turn's streamed trace vanished after a turn finalized, requiring a manual refresh. The `setHistory` function now grafts the local turn's inline events onto its persisted twin, ensuring traces are continuously visible.
+*   **Required Field Visibility Logic**: `Missing()` and required-completeness checks now correctly honor `visible_when` conditions, preventing fields that are only required under specific circumstances from being flagged as missing when hidden.
+*   **Dead Changelog Links**: Fixed two dead links in the v0.28.1 changelog that incorrectly pointed to `guide/agents/9router` instead of the updated `guide/agents/airouter`.
+
+---
+
 
 ## [v0.32.0](https://github.com/yogasw/wick/compare/v0.31.0...v0.32.0) — Agents & Providers
 
