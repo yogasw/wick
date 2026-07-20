@@ -97,6 +97,8 @@ Ephemeral: open a URL, do one thing, close the browser.
 
 Persistent browsers that survive across calls — and plugin restarts — until closed. The browser runs as a **detached OS process** reached over CDP, so it outlives the idle-swept plugin subprocess; only `session_close` ends it.
 
+> **Chromium-based engines only.** Live sessions require the Chromium DevTools protocol, which only `chromium` and `cloakbrowser` (patched Chromium) expose. `session_open` errors on a `firefox` / `webkit` instance — use the ephemeral ops (`run`, `screenshot`, …) for those, or set `Browser=chromium`.
+
 | Op | Destructive | Input | What it does |
 |---|---|---|---|
 | `session_open` | yes | — | Launches a persistent browser, returns its `session_id`. Respects `MaxLiveSessions`. |

@@ -116,10 +116,12 @@ func openSession(c *connector.Ctx) (any, error) {
 	}
 
 	// Live sessions rely on the Chromium DevTools protocol (--remote-debugging-port
-	// + the DevToolsActivePort file). Firefox/WebKit don't expose that, so guard
+	// + the DevToolsActivePort file). Only Chromium engines expose that: the stock
+	// chromium and cloakbrowser (patched Chromium). Firefox/WebKit don't, so guard
 	// early with a clear message instead of hanging until the 20s port timeout.
-	if b := strings.ToLower(strings.TrimSpace(c.Cfg("browser"))); b != "" && b != defBrowser {
-		return nil, fmt.Errorf("live sessions require a chromium instance; this instance uses %q. Use the ephemeral ops (run/screenshot/...) for firefox/webkit, or set browser=chromium", c.Cfg("browser"))
+	b := strings.ToLower(strings.TrimSpace(c.Cfg("browser")))
+	if b != "" && b != defBrowser && b != cloakEngine {
+		return nil, fmt.Errorf("live sessions require a chromium-based engine (chromium or cloakbrowser); this instance uses %q. Use the ephemeral ops (run/screenshot/...) for firefox/webkit, or set browser=chromium", c.Cfg("browser"))
 	}
 
 	// Resolve the browser binary via playwright (respects executable_path too).
@@ -132,7 +134,15 @@ func openSession(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Binary precedence mirrors launchOptions(): explicit executable_path wins;
+	// otherwise cloakbrowser uses its downloaded stealth binary, and stock
+	// chromium falls back to the Playwright-managed binary. browserType maps
+	// cloakbrowser onto pw.Chromium, so bt.ExecutablePath() would point at the
+	// wrong (stock chromium) binary for cloak — resolve cloak explicitly.
 	chromeBin := strings.TrimSpace(c.Cfg("executable_path"))
+	if chromeBin == "" && b == cloakEngine {
+		chromeBin = cloakBinaryPath(c)
+	}
 	if chromeBin == "" {
 		chromeBin = bt.ExecutablePath()
 	}
