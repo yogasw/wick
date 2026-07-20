@@ -51,6 +51,38 @@
       "preLaunchTask": "plugin: install debug target → lab"
     },
     {
+      // Same reattach setup as "plugin debug (loki)" for the official Notion
+      // connector. Set WICK_DEBUG_PLUGIN=notion in .env, breakpoint in
+      // plugins/connector/notion/{service,repo}.go op handlers, then run the
+      // "lab + plugin debug (notion)" compound. Stop all sessions before relaunch.
+      "name": "plugin debug (notion)",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/plugins/connector/notion",
+      "cwd": "${workspaceFolder}/plugins",
+      "env": {
+        "WICK_PLUGIN_REATTACH_OUT": "${workspaceFolder}/bin/plugin-notion.reattach.json"
+      },
+      "preLaunchTask": "plugin: install debug target → lab"
+    },
+    {
+      // Same reattach setup for the UNOFFICIAL Notion connector (kjk/notionapi).
+      // Set WICK_DEBUG_PLUGIN=notion_unofficial in .env, breakpoint in
+      // plugins/connector/notion_unofficial/service.go, then run the
+      // "lab + plugin debug (notion_unofficial)" compound.
+      "name": "plugin debug (notion_unofficial)",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/plugins/connector/notion_unofficial",
+      "cwd": "${workspaceFolder}/plugins",
+      "env": {
+        "WICK_PLUGIN_REATTACH_OUT": "${workspaceFolder}/bin/plugin-notion_unofficial.reattach.json"
+      },
+      "preLaunchTask": "plugin: install debug target → lab"
+    },
+    {
       "name": "Run CLI (init)",
       "type": "go",
       "request": "launch",
@@ -77,6 +109,18 @@
       // if it spawned a child first). Set WICK_DEBUG_PLUGIN=loki in .env.
       "name": "lab + plugin debug",
       "configurations": ["plugin debug (loki)", "wicklab"],
+      "stopAll": true
+    },
+    {
+      // Notion (official). Set WICK_DEBUG_PLUGIN=notion in .env first.
+      "name": "lab + plugin debug (notion)",
+      "configurations": ["plugin debug (notion)", "wicklab"],
+      "stopAll": true
+    },
+    {
+      // Notion (unofficial). Set WICK_DEBUG_PLUGIN=notion_unofficial in .env first.
+      "name": "lab + plugin debug (notion_unofficial)",
+      "configurations": ["plugin debug (notion_unofficial)", "wicklab"],
       "stopAll": true
     }
   ],

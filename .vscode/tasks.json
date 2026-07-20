@@ -204,6 +204,8 @@
         "google_workspace",
         "httpbin",
         "loki",
+        "notion",
+        "notion_unofficial",
         "phoenix",
         "playwright_browser"
       ]
