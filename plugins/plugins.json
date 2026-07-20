@@ -97,7 +97,7 @@
     "key": "loki",
     "name": "Loki",
     "description": "Query logs and discover labels in a Grafana Loki instance via LogQL.",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "default_tags": [
       {
         "Name": "Connector",
@@ -117,8 +117,8 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/loki/v0.2.0/loki-0.2.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/loki/v0.2.0/loki-0.2.0-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/loki/v0.3.0/loki-0.3.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/loki/v0.3.0/loki-0.3.0-linux-arm64.zip"
     }
   },
   {
