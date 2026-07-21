@@ -106,8 +106,33 @@ Persistent browsers that survive across calls — and plugin restarts — until 
 | `tab_new` | no | `session_id`, `url` | Opens a new tab in a live session, optionally navigating it. |
 | `tab_close` | yes | `session_id`, `index` | Closes the tab at `index` (from `session_list`). |
 | `session_close` | yes | `session_id` | Kills the session's browser and frees its resources. **Always close sessions you opened** — an abandoned one holds a browser process open until closed or reboot. |
+| `session_endpoints` | no | `session_id` | Returns the session's raw CDP details: `cdp_url` plus one entry per tab with `target_id` + `ws_debugger_url`. Read-only; backs the live-browser panel (below). Not meant for agent use. |
 
 Pass a live session's `session_id` to `run` (or any task op) to reuse the same open browser instead of launching a throwaway one.
+
+### Live browser panel
+
+The agents conversation UI has a right-side **Browser** panel (the globe icon on the rail) that shows a live view of a `playwright_browser` live session — watch the page, and in **Full** mode click / type / log in manually.
+
+- **Pick an instance.** The panel lists your active `playwright_browser` connector instances in a dropdown (a single usable instance is auto-selected). Nothing runs until you open the panel and pick one.
+- **Open or reuse a session.** "New session" spawns a live browser (`session_open`); existing ones appear in the session dropdown. Multi-tab sessions get a tab switcher.
+- **Two modes.** *View only* streams the screen (CDP `Page.startScreencast`) with no input. *Full* additionally forwards your mouse and keyboard to the browser (CDP `Input.dispatch*`) — this is what lets you log in by hand or drive a page the agent can't. Click the view first to capture keyboard.
+- **Resize / pop out.** The rail panel is narrow, so the view has expand controls: **Pop out to window** floats it as a draggable, resizable mini-screen (drag the header to move, the corner to resize), and **Fullscreen** fills the viewport. **Dock** returns it inline. The stream and input keep working across all three.
+
+**How it works:** a live session is a detached Chromium with an unauthenticated CDP port on `127.0.0.1`. Wick core (not the browser) dials that loopback port and proxies a same-origin WebSocket to the panel — the raw CDP port is never exposed to your browser. Access is gated per-instance by the same rule as editing the connector's credentials (admin, owner tag, or "allow others to configure"). Chromium-based engines only, like all live sessions.
+
+### Extensions
+
+The connector detail page (manager UI) has an **Extensions** section to load Chrome extensions into this connector's live sessions:
+
+- **Upload** — drag-drop or pick a `.zip` or `.crx`. It's unpacked and stored under the connector's session dir.
+- **From the Web Store** — paste an extension's 32-character Web Store id; wick downloads its `.crx` and installs it.
+- **Remove** — deletes an installed extension.
+
+Two things to know:
+
+- **Applies to new sessions.** Chrome loads extensions only at launch, so installing/removing affects the *next* `session_open`, not sessions already running.
+- **Forces headed.** `--load-extension` only works in a headed browser, so any installed extension makes new sessions run headed regardless of the Headless config.
 
 ### Maintenance
 
