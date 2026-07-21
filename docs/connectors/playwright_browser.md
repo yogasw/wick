@@ -45,6 +45,7 @@ Config fields are grouped into cards on the instance's Settings page. **Browser*
 | Timeouts & limits | `MaxTab` | Max pages (tabs) a single `run` may open. Default `5`. |
 | Live sessions *(collapsed)* | `SessionDir` | Where live-session metadata, browser profiles, and downloaded engines (e.g. CloakBrowser) are stored. Default: the plugin's persistent data dir under the app tree (`~/.<app>/plugins/playwright_browser`) — set this only to override that location. |
 | Live sessions | `MaxLiveSessions` | Max persistent browsers alive at once. Default `1`, `0` = unlimited. |
+| Live sessions | `MaxTabsPerSession` | Max tabs within one live session (`tab_new` cap). Each open tab keeps a live page in RAM, so multi-tab is opt-in — default `1`, `0` = unlimited. |
 | Custom binary *(collapsed)* | `ExecutablePath` | Path to a custom browser binary instead of the bundled one. |
 | Custom binary | `Channel` | Branded channel (`chrome`, `chrome-beta`, `msedge`, …) for the chosen browser. |
 | CloakBrowser *(collapsed)* | `CloakRepo` | GitHub `owner/repo` hosting CloakBrowser release assets. Default `CloakHQ/CloakBrowser`. |
@@ -72,7 +73,7 @@ Ephemeral: open a URL, do one thing, close the browser.
 
 | Op | Destructive | Input | What it does |
 |---|---|---|---|
-| `run` | yes | `actions` (JSON array), `session_id` (optional) | Runs an ordered list of browser actions in one session and returns a result per step; stops at the first failure. Pass `session_id` to run against a persistent [live session](#live-session) instead of a throwaway browser. |
+| `run` | yes | `actions` (JSON array), `session_id` (optional), `tab` (optional) | Runs an ordered list of browser actions in one session and returns a result per step; stops at the first failure. Pass `session_id` to run against a persistent [live session](#live-session) instead of a throwaway browser, and `tab` (0-based, from `session_list`) to target a specific tab in a multi-tab session — ignored without `session_id`, defaults to the first tab. |
 
 `run` supports 32 actions in one script:
 
@@ -102,8 +103,8 @@ Persistent browsers that survive across calls — and plugin restarts — until 
 | Op | Destructive | Input | What it does |
 |---|---|---|---|
 | `session_open` | yes | — | Launches a persistent browser, returns its `session_id`. Respects `MaxLiveSessions`. |
-| `session_list` | no | — | Lists every live session and its open tabs (index, url, title). Dead sessions are swept automatically. |
-| `tab_new` | no | `session_id`, `url` | Opens a new tab in a live session, optionally navigating it. |
+| `session_list` | no | — | Lists every live session and its open tabs (index, url, title), plus `max_tabs` (the effective `MaxTabsPerSession` cap, `0` = unlimited) so callers can tell when a session is full. Dead sessions are swept automatically. |
+| `tab_new` | no | `session_id`, `url` | Opens a new tab in a live session, optionally navigating it. Rejected once the session hits `MaxTabsPerSession` — close a tab or raise the cap first. |
 | `tab_close` | yes | `session_id`, `index` | Closes the tab at `index` (from `session_list`). |
 | `session_close` | yes | `session_id` | Kills the session's browser and frees its resources. **Always close sessions you opened** — an abandoned one holds a browser process open until closed or reboot. |
 | `session_endpoints` | no | `session_id` | Returns the session's raw CDP details: `cdp_url` plus one entry per tab with `target_id` + `ws_debugger_url`. Read-only; backs the live-browser panel (below). Not meant for agent use. |
@@ -120,6 +121,8 @@ The agents conversation UI has a right-side **Browser** panel (the globe icon on
 - **Resize / pop out.** The rail panel is narrow, so the view has expand controls: **Pop out to window** floats it as a draggable, resizable mini-screen (drag the header to move, the corner to resize), and **Fullscreen** fills the viewport. **Dock** returns it inline. The stream and input keep working across all three.
 
 **How it works:** a live session is a detached Chromium with an unauthenticated CDP port on `127.0.0.1`. Wick core (not the browser) dials that loopback port and proxies a same-origin WebSocket to the panel — the raw CDP port is never exposed to your browser. Access is gated per-instance by the same rule as editing the connector's credentials (admin, owner tag, or "allow others to configure"). Chromium-based engines only, like all live sessions.
+
+The connector's detail page in the manager UI has a matching **Active sessions** section: it lists every live session on that instance, lets you inspect a session's open tabs, jump straight to its live view (opens the conversation panel above, pre-pointed at that session), or kill it to free the browser process.
 
 ### Extensions
 

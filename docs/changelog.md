@@ -6,7 +6,11 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **Live browser panel for `playwright_browser`**: The agents conversation UI has a new right-rail **Browser** tab (shown once an enabled `playwright_browser` instance exists) that shows a live view of a session — watch the screen, or switch to **Full** mode to click/type/log in by hand. Supports pop-out/floating and fullscreen views, zoom, an address bar with `chrome://` shortcuts, and a tab switcher for multi-tab sessions. The connector's manager detail page gained a matching **Active sessions** section (inspect/goto/kill) and an **Extensions** section to install Chrome extensions (`.zip`/`.crx` upload or Chrome Web Store id) into its live sessions. New `MaxTabsPerSession` config caps tabs per session (default 1, opt-in multi-tab) and `run`/`session_list` gained a `tab` input / `max_tabs` field to target and report on specific tabs. See [Playwright Browser](/connectors/playwright_browser#live-browser-panel).
+
+### Fixed
+*   **Connector list visibility for non-admins**: A connector now stays listed for non-admin users once its type has *any* instance, even if every existing instance is tag-restricted from them — so they can add their own account instead of the connector disappearing entirely.
 
 ---
 
