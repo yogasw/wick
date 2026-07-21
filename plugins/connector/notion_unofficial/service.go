@@ -293,6 +293,77 @@ func setTitle(c *connector.Ctx) (any, error) {
 	return map[string]any{"id": id, "title": title}, nil
 }
 
+func appendContent(c *connector.Ctx) (any, error) {
+	id := normalizeID(c.Input("page_id"))
+	md := c.Input("markdown")
+	if id == "" || strings.TrimSpace(md) == "" {
+		return nil, errors.New("page_id and markdown are required")
+	}
+	blocks := markdownToBlocks(md)
+	if len(blocks) == 0 {
+		return nil, errors.New("markdown produced no blocks")
+	}
+	cl, err := newClient(c)
+	if err != nil {
+		return nil, err
+	}
+	// Optional anchor: insert right AFTER this block instead of at the page end.
+	afterID := normalizeID(c.Input("after_block_id"))
+	ids, err := cl.appendContent(id, blocks, afterID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"page_id": id, "added": len(ids), "block_ids": ids}, nil
+}
+
+func listBlocks(c *connector.Ctx) (any, error) {
+	id := normalizeID(c.Input("page_id"))
+	if id == "" {
+		return nil, errors.New("page_id is required")
+	}
+	cl, err := newClient(c)
+	if err != nil {
+		return nil, err
+	}
+	blocks, err := cl.listBlocks(id)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"page_id": id, "count": len(blocks), "blocks": blocks}, nil
+}
+
+func updateBlock(c *connector.Ctx) (any, error) {
+	blockID := normalizeID(c.Input("block_id"))
+	text := c.Input("text")
+	if blockID == "" || strings.TrimSpace(text) == "" {
+		return nil, errors.New("block_id and text are required")
+	}
+	cl, err := newClient(c)
+	if err != nil {
+		return nil, err
+	}
+	if err := cl.updateBlock(blockID, text, strings.TrimSpace(c.Input("type"))); err != nil {
+		return nil, err
+	}
+	return map[string]any{"id": blockID}, nil
+}
+
+func deleteBlock(c *connector.Ctx) (any, error) {
+	blockID := normalizeID(c.Input("block_id"))
+	pageID := normalizeID(c.Input("page_id"))
+	if blockID == "" || pageID == "" {
+		return nil, errors.New("page_id and block_id are required")
+	}
+	cl, err := newClient(c)
+	if err != nil {
+		return nil, err
+	}
+	if err := cl.deleteBlock(pageID, blockID); err != nil {
+		return nil, err
+	}
+	return map[string]any{"id": blockID, "deleted": true}, nil
+}
+
 // --- config-only widget ---
 
 func connectionStatus(c *connector.Ctx) (any, error) {

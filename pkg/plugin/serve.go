@@ -7,9 +7,28 @@ import (
 	"strings"
 
 	goplugin "github.com/hashicorp/go-plugin"
+	"google.golang.org/grpc"
 
 	"github.com/yogasw/wick/pkg/connector"
 )
+
+// MaxGRPCMessageBytes is the plugin transport's max gRPC message size (both
+// directions, both ends). gRPC defaults to 4 MiB recv, which is too small for
+// ops that carry file payloads — e.g. extension_install sends a browser
+// extension as base64 (a 4 MB .crx becomes ~6 MB on the wire). 64 MiB matches
+// the connector-side upload cap. Server + client must agree, so both read this.
+const MaxGRPCMessageBytes = 64 << 20
+
+// grpcServerWithLimits mirrors goplugin.DefaultGRPCServer but raises the message
+// size limits so large op payloads (file uploads) aren't rejected with
+// ResourceExhausted.
+func grpcServerWithLimits(opts []grpc.ServerOption) *grpc.Server {
+	opts = append(opts,
+		grpc.MaxRecvMsgSize(MaxGRPCMessageBytes),
+		grpc.MaxSendMsgSize(MaxGRPCMessageBytes),
+	)
+	return grpc.NewServer(opts...)
+}
 
 // DumpManifest returns json.Marshal(mod) — the manifest is the module
 // itself, so the plugin.json on disk can never drift from the binary.
@@ -60,7 +79,7 @@ func Serve(mod connector.Module) {
 		VersionedPlugins: map[int]goplugin.PluginSet{
 			ProtoVersion: {PluginName: &ConnectorGRPCPlugin{Impl: NewServer(mod)}},
 		},
-		GRPCServer: goplugin.DefaultGRPCServer,
+		GRPCServer: grpcServerWithLimits,
 	}
 	// Debug: when WICK_PLUGIN_REATTACH_OUT is set the binary runs standalone
 	// (typically under dlv) so a developer can breakpoint it — serve in test

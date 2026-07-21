@@ -73,6 +73,10 @@ type Config struct {
 	// Live-session mode (session_open / session_list / tab_* / session_close).
 	SessionDir      string `wick:"group=Live sessions|Persistent-browser mode: where sessions are stored and how many may run.|collapsed;desc=Directory where live-session metadata, browser profiles, and downloaded engines (e.g. cloakbrowser) are stored. Live browsers survive plugin restarts via these files. Default: the plugin's persistent data dir under the app tree (~/.<app>/plugins/playwright_browser); set this only to override that location."`
 	MaxLiveSessions int    `wick:"default=1;group=Live sessions;desc=Maximum persistent browsers alive at once (session_open cap). Guards RAM. Set 0 for unlimited. Default 1."`
+	// MaxTabsPerSession caps tabs within one session. Default 1 (single-tab):
+	// extra tabs each hold a live page in RAM, so multi-tab is opt-in. Raise it
+	// to allow parallel tabs; 0 = unlimited. tab_new is rejected past the cap.
+	MaxTabsPerSession int `wick:"default=1;group=Live sessions;desc=Maximum tabs per live session (tab_new cap). Each open tab costs RAM, so multi-tab is opt-in — default 1. Raise to allow parallel tabs; set 0 for unlimited."`
 
 	// Custom binary — rarely touched.
 	ExecutablePath string `wick:"group=Custom binary|Point at a non-bundled browser build. Most setups leave these empty.|collapsed;desc=Path to a custom browser binary to launch instead of the bundled one. Example: /usr/bin/google-chrome"`
@@ -125,6 +129,7 @@ type evalInput struct {
 type runInput struct {
 	Actions   string `wick:"textarea;required;desc=JSON array of action objects run in order in one browser session. Each has an \"action\" key. NAVIGATION: goto{url}, go_back, go_forward, reload, wait_for_load_state{state?}, wait_for_url{url}. INTERACTION: click{selector}, dblclick{selector}, hover{selector}, tap{selector}, focus{selector}, fill{selector,value}, type{selector,value}, press{key,selector?}, check{selector}, uncheck{selector}, select_option{selector,value|values}, set_input_files{selector,files}, drag_and_drop{selector,target}, scroll{delta_x?,delta_y?}. WAIT: wait_for{selector}, wait{ms}. READ: screenshot{full_page?,selector?}, content{selector?}, eval{script}, get_attribute{selector,attr}, text_content{selector}, inner_html{selector}, is_visible{selector}, is_checked{selector}, count{selector}, title, url. Returns one result per step; stops at the first failure. Example: [{\"action\":\"goto\",\"url\":\"https://abc.com\"},{\"action\":\"fill\",\"selector\":\"#q\",\"value\":\"hi\"},{\"action\":\"click\",\"selector\":\"button[type=submit]\"},{\"action\":\"wait_for\",\"selector\":\".result\"},{\"action\":\"screenshot\",\"full_page\":true}]"`
 	SessionID string `wick:"desc=Optional live session id (from session_open). When set, actions run in that persistent browser and the browser is NOT closed afterwards. Leave empty for a throwaway browser launched and closed for this call."`
+	Tab       int    `wick:"desc=Which tab to act on when session_id is set (0-based, from session_list). Default 0 (first tab). Ignored without session_id."`
 }
 
 // ── Live session inputs ──────────────────────────────────────────────
@@ -136,6 +141,26 @@ type sessionOpenInput struct{}
 
 // sessionListInput lists live sessions and their tabs. No arguments.
 type sessionListInput struct{}
+
+// sessionEndpointsInput returns a live session's raw CDP connection details
+// (cdp_url + per-tab WebSocket debugger URLs) so the manager's live-browser
+// panel can proxy a DevTools stream to it. Not for agent use.
+type sessionEndpointsInput struct {
+	SessionID string `wick:"required;desc=Live session id from session_open."`
+}
+
+// ── Extension inputs (manager UI, not for agent use) ─────────────────
+
+type extensionListInput struct{}
+
+type extensionInstallInput struct {
+	ID   string `wick:"required;desc=Extension slug (folder name). Derived from the upload filename or the Web Store id."`
+	Data string `wick:"required;desc=Base64 of the extension archive (.zip or .crx)."`
+}
+
+type extensionRemoveInput struct {
+	ID string `wick:"required;desc=Extension slug to remove."`
+}
 
 // tabNewInput opens a new tab in a live session.
 type tabNewInput struct {
@@ -256,6 +281,13 @@ func Module() connector.Module {
 					sessionListOp, wickdocs.Docs{},
 				),
 				connector.Op(
+					"session_endpoints",
+					"Live Session Endpoints",
+					"Return a live session's raw CDP connection details: cdp_url plus one entry per open tab with its target_id and ws_debugger_url. Read-only; backs the manager's live-browser panel, which proxies a DevTools screencast/input stream to these endpoints. Not meant for agent use.",
+					sessionEndpointsInput{},
+					sessionEndpointsOp, wickdocs.Docs{},
+				),
+				connector.Op(
 					"tab_new",
 					"Open Tab",
 					"Open a new tab in a live session, optionally navigating it to {url}. Returns the new tab index.",
@@ -275,6 +307,31 @@ func Module() connector.Module {
 					"Kill a live session's browser and free its resources. Always close sessions you opened — an abandoned session holds a browser process open until closed or host reboot.",
 					sessionCloseInput{},
 					sessionCloseOp, wickdocs.Docs{},
+				),
+			),
+			connector.Cat(
+				"Extensions",
+				"Chrome extensions loaded into live sessions. Backs the manager's Extensions section; not meant for agent use. Any installed extension forces new sessions headed (--load-extension needs a headed browser).",
+				connector.Op(
+					"extension_list",
+					"List Extensions",
+					"List installed extensions (id, name, version, size). Read-only; backs the manager Extensions section.",
+					extensionListInput{},
+					extensionListOp, wickdocs.Docs{},
+				),
+				connector.OpDestructive(
+					"extension_install",
+					"Install Extension",
+					"Unpack a base64 .zip/.crx into the connector's extensions dir. Applies to new sessions. Used by the manager upload / Web Store add.",
+					extensionInstallInput{},
+					extensionInstallOp, wickdocs.Docs{},
+				),
+				connector.OpDestructive(
+					"extension_remove",
+					"Remove Extension",
+					"Delete an installed extension by id. Applies to new sessions.",
+					extensionRemoveInput{},
+					extensionRemoveOp, wickdocs.Docs{},
 				),
 			),
 			connector.Cat(
@@ -363,7 +420,7 @@ func run(c *connector.Ctx) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return runActionsInContext(c, ctx, actions)
+		return runActionsInContext(c, ctx, actions, c.InputInt("tab"))
 	}
 	return withSession(c, func(s *session) (any, error) { return s.runActions(actions) })
 }
@@ -373,6 +430,32 @@ func run(c *connector.Ctx) (any, error) {
 func sessionOpen(c *connector.Ctx) (any, error) { return openSession(c) }
 
 func sessionListOp(c *connector.Ctx) (any, error) { return sessionList(c) }
+
+func sessionEndpointsOp(c *connector.Ctx) (any, error) {
+	sid := strings.TrimSpace(c.Input("session_id"))
+	if sid == "" {
+		return nil, fmt.Errorf("session_id is required")
+	}
+	return sessionEndpoints(c, sid)
+}
+
+func extensionListOp(c *connector.Ctx) (any, error) { return extensionList(c) }
+
+func extensionInstallOp(c *connector.Ctx) (any, error) {
+	id := strings.TrimSpace(c.Input("id"))
+	if id == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+	return extensionInstall(c, id, c.Input("data"))
+}
+
+func extensionRemoveOp(c *connector.Ctx) (any, error) {
+	id := strings.TrimSpace(c.Input("id"))
+	if id == "" {
+		return nil, fmt.Errorf("id is required")
+	}
+	return extensionRemove(c, id)
+}
 
 func tabNewOp(c *connector.Ctx) (any, error) {
 	sid := strings.TrimSpace(c.Input("session_id"))

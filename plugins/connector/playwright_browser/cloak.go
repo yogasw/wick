@@ -340,11 +340,11 @@ func downloadFile(c *connector.Ctx, url, dst string) error {
 // total is unknown (<=0) it leaves pct at 0 (the bar shows an indeterminate
 // "downloading" state instead).
 type progressReader struct {
-	r        io.Reader
-	total    int64
-	read     int64
-	lastPct  int
-	onPct    func(pct int)
+	r       io.Reader
+	total   int64
+	read    int64
+	lastPct int
+	onPct   func(pct int)
 }
 
 func (p *progressReader) Read(b []byte) (int, error) {

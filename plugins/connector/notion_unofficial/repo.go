@@ -2,6 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -958,6 +961,334 @@ func (cl *v3Client) setTitle(pageID, title string) error {
 	}
 	ops := []map[string]any{
 		op("block", pageID, spaceID, []any{"properties", "title"}, "set", [][]any{{title}}),
+	}
+	return cl.saveTransactions(spaceID, ops)
+}
+
+// newBlock is a parsed markdown line ready to become one api/v3 block: its notion
+// block type + the plain title text. checked is only used by to_do; lang only by
+// code. The types mirror exactly what blockToMarkdown reads back, so appended
+// content round-trips through fetch.
+type newBlock struct {
+	typ     string
+	title   string
+	checked bool
+	lang    string
+}
+
+// markdownToBlocks turns a markdown body into ordered newBlocks. It's the inverse
+// of blockToMarkdown and deliberately covers the same block types: headings,
+// bulleted/numbered/to-do lists, quotes, fenced code, dividers, and paragraphs.
+// Inline formatting (**bold**, `code`, links) is NOT parsed — text is stored as a
+// single plain run, which is enough for the "paste a cleaned-up body" use case and
+// keeps the writer deterministic. Blank lines separate paragraphs; a run of
+// non-blank prose lines is joined into one paragraph.
+func markdownToBlocks(md string) []newBlock {
+	lines := strings.Split(strings.ReplaceAll(md, "\r\n", "\n"), "\n")
+	var blocks []newBlock
+	var para []string
+
+	flushPara := func() {
+		if len(para) == 0 {
+			return
+		}
+		blocks = append(blocks, newBlock{typ: "text", title: strings.Join(para, " ")})
+		para = nil
+	}
+
+	for i := 0; i < len(lines); i++ {
+		raw := lines[i]
+		line := strings.TrimSpace(raw)
+
+		// Fenced code block: ```lang … ```
+		if strings.HasPrefix(line, "```") {
+			flushPara()
+			lang := strings.TrimSpace(strings.TrimPrefix(line, "```"))
+			var body []string
+			i++
+			for i < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[i]), "```") {
+				body = append(body, lines[i])
+				i++
+			}
+			blocks = append(blocks, newBlock{typ: "code", title: strings.Join(body, "\n"), lang: lang})
+			continue
+		}
+
+		if line == "" {
+			flushPara()
+			continue
+		}
+
+		switch {
+		case strings.HasPrefix(line, "### "):
+			flushPara()
+			blocks = append(blocks, newBlock{typ: "sub_sub_header", title: strings.TrimPrefix(line, "### ")})
+		case strings.HasPrefix(line, "## "):
+			flushPara()
+			blocks = append(blocks, newBlock{typ: "sub_header", title: strings.TrimPrefix(line, "## ")})
+		case strings.HasPrefix(line, "# "):
+			flushPara()
+			blocks = append(blocks, newBlock{typ: "header", title: strings.TrimPrefix(line, "# ")})
+		case line == "---" || line == "***" || line == "___":
+			flushPara()
+			blocks = append(blocks, newBlock{typ: "divider"})
+		case strings.HasPrefix(line, "> "):
+			flushPara()
+			blocks = append(blocks, newBlock{typ: "quote", title: strings.TrimPrefix(line, "> ")})
+		case isTodoItem(line):
+			flushPara()
+			checked := strings.HasPrefix(line, "- [x]") || strings.HasPrefix(line, "- [X]")
+			blocks = append(blocks, newBlock{typ: "to_do", title: strings.TrimSpace(line[5:]), checked: checked})
+		case strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* "):
+			flushPara()
+			blocks = append(blocks, newBlock{typ: "bulleted_list", title: strings.TrimSpace(line[2:])})
+		case isOrderedItem(line):
+			flushPara()
+			blocks = append(blocks, newBlock{typ: "numbered_list", title: orderedItemText(line)})
+		default:
+			para = append(para, line)
+		}
+	}
+	flushPara()
+	return blocks
+}
+
+// isTodoItem reports whether a line is a "- [ ] " / "- [x] " task item.
+func isTodoItem(line string) bool {
+	return strings.HasPrefix(line, "- [ ] ") || strings.HasPrefix(line, "- [x] ") || strings.HasPrefix(line, "- [X] ")
+}
+
+// isOrderedItem reports whether a line is an "N. " ordered-list item.
+func isOrderedItem(line string) bool {
+	dot := strings.IndexByte(line, '.')
+	if dot <= 0 || dot+1 >= len(line) || line[dot+1] != ' ' {
+		return false
+	}
+	for _, r := range line[:dot] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// orderedItemText strips the "N. " prefix from an ordered-list line.
+func orderedItemText(line string) string {
+	dot := strings.IndexByte(line, '.')
+	return strings.TrimSpace(line[dot+1:])
+}
+
+// appendContent creates a block per markdown line and lists them, in order,
+// after the page's existing content — so the page body grows without touching
+// what's already there. Returns the ids of the created blocks. Sequence mirrors
+// createPage: each block is `set` with type + parent/audit fields, its title (and
+// to_do "checked" / code "language" property) is set, then it's `listAfter`-ed
+// onto the parent's content.
+func (cl *v3Client) appendContent(pageID string, blocks []newBlock, afterID string) ([]string, error) {
+	spaceID, userID, err := cl.identity()
+	if err != nil {
+		return nil, err
+	}
+	now := nowMillis()
+	ids := make([]string, 0, len(blocks))
+	ops := make([]map[string]any, 0, len(blocks)*3)
+
+	// anchor threads the position: the first block lands after afterID (or at the
+	// end when afterID is empty), and each subsequent block lands after the one
+	// before it — so a multi-block insert keeps its markdown order in place.
+	anchor := strings.TrimSpace(afterID)
+
+	// Guard: if an anchor is given, it MUST be a top-level block of this page.
+	// listAfter with an `after` id that isn't in the parent's content silently
+	// mis-places the new block (it can land at the top or float loose), which
+	// visibly breaks the page. Verify up front and fail with a clear message
+	// instead — the caller should pass an id from list_blocks on this page.
+	if anchor != "" {
+		rm, err := cl.loadPageChunk(pageID)
+		if err != nil {
+			return nil, err
+		}
+		root := recordValue(rm.Block[pageID])
+		if root == nil {
+			return nil, errors.New("page not found or not accessible with this token")
+		}
+		found := false
+		for _, cid := range contentIDs(root) {
+			if cid == anchor {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("after_block_id %s is not a top-level block of this page — call list_blocks and use an id it returns", anchor)
+		}
+	}
+
+	for _, blk := range blocks {
+		newID := newUUID()
+		ids = append(ids, newID)
+
+		ops = append(ops, op("block", newID, spaceID, []any{}, "set", map[string]any{
+			"type":             blk.typ,
+			"id":               newID,
+			"version":          1,
+			"parent_id":        pageID,
+			"parent_table":     "block",
+			"alive":            true,
+			"space_id":         spaceID,
+			"created_by_id":    userID,
+			"created_by_table": "notion_user",
+			"created_time":     now,
+		}))
+		if blk.typ != "divider" {
+			ops = append(ops, op("block", newID, spaceID, []any{"properties", "title"}, "set", [][]any{{blk.title}}))
+		}
+		if blk.typ == "to_do" {
+			checked := "no"
+			if blk.checked {
+				checked = "yes"
+			}
+			ops = append(ops, op("block", newID, spaceID, []any{"properties", "checked"}, "set", [][]any{{checked}}))
+		}
+		if blk.typ == "code" && blk.lang != "" {
+			ops = append(ops, op("block", newID, spaceID, []any{"properties", "language"}, "set", [][]any{{blk.lang}}))
+		}
+		listArgs := map[string]any{"id": newID}
+		if anchor != "" {
+			listArgs["after"] = anchor // place right after the anchor block
+		}
+		ops = append(ops, op("block", pageID, spaceID, []any{"content"}, "listAfter", listArgs))
+		anchor = newID // next block chains after this one
+	}
+
+	if err := cl.saveTransactions(spaceID, ops); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// blockInfo is one top-level block of a page, flattened for targeting: the id to
+// pass to update_block/delete_block, its notion type, its text, and whether its
+// text can be rewritten with update_block.
+type blockInfo struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	Editable bool   `json:"editable"`
+}
+
+// editableBlockTypes are the block types whose text lives in properties.title and
+// can therefore be safely rewritten by update_block. It's exactly the set of
+// text-bearing types markdownToBlocks produces / blockToMarkdown renders as text.
+// Anything else (image, embed, collection_view, column, divider, page, …) either
+// has no title or would be corrupted by a title write, so update_block refuses
+// it — that's the guard against editing a block that shouldn't be touched.
+var editableBlockTypes = map[string]bool{
+	"text":           true,
+	"header":         true,
+	"sub_header":     true,
+	"sub_sub_header": true,
+	"bulleted_list":  true,
+	"numbered_list":  true,
+	"to_do":          true,
+	"quote":          true,
+	"callout":        true,
+	"code":           true,
+	"toggle":         true,
+}
+
+// listBlocks returns the page's top-level content blocks in order, each with its
+// id + type + text. This is the "see the block ids" step: an agent (or Yoga)
+// calls it, picks the block to change, then calls update_block / delete_block
+// with that id — so a single block is edited or removed without touching the
+// rest of the page.
+func (cl *v3Client) listBlocks(pageID string) ([]blockInfo, error) {
+	rm, err := cl.loadPageChunk(pageID)
+	if err != nil {
+		return nil, err
+	}
+	root := recordValue(rm.Block[pageID])
+	if root == nil {
+		return nil, errors.New("page not found or not accessible with this token")
+	}
+	ids := contentIDs(root)
+	out := make([]blockInfo, 0, len(ids))
+	for _, id := range ids {
+		rec := recordValue(rm.Block[id])
+		if rec == nil {
+			continue
+		}
+		typ := strField(rec, "type")
+		out = append(out, blockInfo{
+			ID:       id,
+			Type:     typ,
+			Text:     strings.TrimSpace(inlineToPlain(recordProps(rec)["title"])),
+			Editable: editableBlockTypes[typ],
+		})
+	}
+	return out, nil
+}
+
+// updateBlock replaces one block's text in place, addressed by its own id — the
+// rest of the page is untouched. If newType is non-empty the block's type is
+// switched too (e.g. text → sub_header); pass "" to keep the current type.
+func (cl *v3Client) updateBlock(blockID, text, newType string) error {
+	spaceID, _, err := cl.identity()
+	if err != nil {
+		return err
+	}
+
+	// Guard: only rewrite text-bearing blocks. Fetch the block's current type and
+	// refuse anything whose title-write would be meaningless or corrupting (image,
+	// embed, table, divider, …) — so update_block can't silently damage a block it
+	// shouldn't touch. A type switch must also land on an editable type.
+	rm, err := cl.syncRecordValues([]string{blockID})
+	if err != nil {
+		return err
+	}
+	rec := recordValue(rm.Block[blockID])
+	if rec == nil {
+		return errors.New("block not found or not accessible with this token")
+	}
+	curType := strField(rec, "type")
+	if !editableBlockTypes[curType] {
+		return fmt.Errorf("block %s is a %q — its text can't be edited in place (only %s). Use list_blocks to pick a text block", blockID, curType, editableTypesList())
+	}
+	if newType != "" && !editableBlockTypes[newType] {
+		return fmt.Errorf("cannot switch block to type %q — pick one of %s", newType, editableTypesList())
+	}
+
+	ops := []map[string]any{
+		op("block", blockID, spaceID, []any{"properties", "title"}, "set", [][]any{{text}}),
+	}
+	if newType != "" {
+		ops = append(ops, op("block", blockID, spaceID, []any{"type"}, "set", newType))
+	}
+	return cl.saveTransactions(spaceID, ops)
+}
+
+// editableTypesList renders the editable block types as a stable, sorted,
+// comma-separated string for error messages.
+func editableTypesList() string {
+	ts := make([]string, 0, len(editableBlockTypes))
+	for t := range editableBlockTypes {
+		ts = append(ts, t)
+	}
+	sort.Strings(ts)
+	return strings.Join(ts, ", ")
+}
+
+// deleteBlock removes one block from a page: it marks the block dead (alive=false)
+// and unlinks it from the parent page's content order. Only that block goes —
+// everything else on the page stays. parentID is the page the block sits on.
+func (cl *v3Client) deleteBlock(parentID, blockID string) error {
+	spaceID, _, err := cl.identity()
+	if err != nil {
+		return err
+	}
+	ops := []map[string]any{
+		op("block", blockID, spaceID, []any{"alive"}, "set", false),
+		op("block", parentID, spaceID, []any{"content"}, "listRemove", map[string]any{"id": blockID}),
 	}
 	return cl.saveTransactions(spaceID, ops)
 }

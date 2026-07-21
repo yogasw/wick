@@ -45,6 +45,7 @@ Config fields are grouped into cards on the instance's Settings page. **Browser*
 | Timeouts & limits | `MaxTab` | Max pages (tabs) a single `run` may open. Default `5`. |
 | Live sessions *(collapsed)* | `SessionDir` | Where live-session metadata, browser profiles, and downloaded engines (e.g. CloakBrowser) are stored. Default: the plugin's persistent data dir under the app tree (`~/.<app>/plugins/playwright_browser`) — set this only to override that location. |
 | Live sessions | `MaxLiveSessions` | Max persistent browsers alive at once. Default `1`, `0` = unlimited. |
+| Live sessions | `MaxTabsPerSession` | Max tabs within one live session (`tab_new` cap). Each open tab keeps a live page in RAM, so multi-tab is opt-in — default `1`, `0` = unlimited. |
 | Custom binary *(collapsed)* | `ExecutablePath` | Path to a custom browser binary instead of the bundled one. |
 | Custom binary | `Channel` | Branded channel (`chrome`, `chrome-beta`, `msedge`, …) for the chosen browser. |
 | CloakBrowser *(collapsed)* | `CloakRepo` | GitHub `owner/repo` hosting CloakBrowser release assets. Default `CloakHQ/CloakBrowser`. |
@@ -72,7 +73,7 @@ Ephemeral: open a URL, do one thing, close the browser.
 
 | Op | Destructive | Input | What it does |
 |---|---|---|---|
-| `run` | yes | `actions` (JSON array), `session_id` (optional) | Runs an ordered list of browser actions in one session and returns a result per step; stops at the first failure. Pass `session_id` to run against a persistent [live session](#live-session) instead of a throwaway browser. |
+| `run` | yes | `actions` (JSON array), `session_id` (optional), `tab` (optional) | Runs an ordered list of browser actions in one session and returns a result per step; stops at the first failure. Pass `session_id` to run against a persistent [live session](#live-session) instead of a throwaway browser, and `tab` (0-based, from `session_list`) to target a specific tab in a multi-tab session — ignored without `session_id`, defaults to the first tab. |
 
 `run` supports 32 actions in one script:
 
@@ -97,15 +98,44 @@ Ephemeral: open a URL, do one thing, close the browser.
 
 Persistent browsers that survive across calls — and plugin restarts — until closed. The browser runs as a **detached OS process** reached over CDP, so it outlives the idle-swept plugin subprocess; only `session_close` ends it.
 
+> **Chromium-based engines only.** Live sessions require the Chromium DevTools protocol, which only `chromium` and `cloakbrowser` (patched Chromium) expose. `session_open` errors on a `firefox` / `webkit` instance — use the ephemeral ops (`run`, `screenshot`, …) for those, or set `Browser=chromium`.
+
 | Op | Destructive | Input | What it does |
 |---|---|---|---|
 | `session_open` | yes | — | Launches a persistent browser, returns its `session_id`. Respects `MaxLiveSessions`. |
-| `session_list` | no | — | Lists every live session and its open tabs (index, url, title). Dead sessions are swept automatically. |
-| `tab_new` | no | `session_id`, `url` | Opens a new tab in a live session, optionally navigating it. |
+| `session_list` | no | — | Lists every live session and its open tabs (index, url, title), plus `max_tabs` (the effective `MaxTabsPerSession` cap, `0` = unlimited) so callers can tell when a session is full. Dead sessions are swept automatically. |
+| `tab_new` | no | `session_id`, `url` | Opens a new tab in a live session, optionally navigating it. Rejected once the session hits `MaxTabsPerSession` — close a tab or raise the cap first. |
 | `tab_close` | yes | `session_id`, `index` | Closes the tab at `index` (from `session_list`). |
 | `session_close` | yes | `session_id` | Kills the session's browser and frees its resources. **Always close sessions you opened** — an abandoned one holds a browser process open until closed or reboot. |
+| `session_endpoints` | no | `session_id` | Returns the session's raw CDP details: `cdp_url` plus one entry per tab with `target_id` + `ws_debugger_url`. Read-only; backs the live-browser panel (below). Not meant for agent use. |
 
 Pass a live session's `session_id` to `run` (or any task op) to reuse the same open browser instead of launching a throwaway one.
+
+### Live browser panel
+
+The agents conversation UI has a right-side **Browser** panel (the globe icon on the rail) that shows a live view of a `playwright_browser` live session — watch the page, and in **Full** mode click / type / log in manually.
+
+- **Pick an instance.** The panel lists your active `playwright_browser` connector instances in a dropdown (a single usable instance is auto-selected). Nothing runs until you open the panel and pick one.
+- **Open or reuse a session.** "New session" spawns a live browser (`session_open`); existing ones appear in the session dropdown. Multi-tab sessions get a tab switcher.
+- **Two modes.** *View only* streams the screen (CDP `Page.startScreencast`) with no input. *Full* additionally forwards your mouse and keyboard to the browser (CDP `Input.dispatch*`) — this is what lets you log in by hand or drive a page the agent can't. Click the view first to capture keyboard.
+- **Resize / pop out.** The rail panel is narrow, so the view has expand controls: **Pop out to window** floats it as a draggable, resizable mini-screen (drag the header to move, the corner to resize), and **Fullscreen** fills the viewport. **Dock** returns it inline. The stream and input keep working across all three.
+
+**How it works:** a live session is a detached Chromium with an unauthenticated CDP port on `127.0.0.1`. Wick core (not the browser) dials that loopback port and proxies a same-origin WebSocket to the panel — the raw CDP port is never exposed to your browser. Access is gated per-instance by the same rule as editing the connector's credentials (admin, owner tag, or "allow others to configure"). Chromium-based engines only, like all live sessions.
+
+The connector's detail page in the manager UI has a matching **Active sessions** section: it lists every live session on that instance, lets you inspect a session's open tabs, jump straight to its live view (opens the conversation panel above, pre-pointed at that session), or kill it to free the browser process.
+
+### Extensions
+
+The connector detail page (manager UI) has an **Extensions** section to load Chrome extensions into this connector's live sessions:
+
+- **Upload** — drag-drop or pick a `.zip` or `.crx`. It's unpacked and stored under the connector's session dir.
+- **From the Web Store** — paste an extension's 32-character Web Store id; wick downloads its `.crx` and installs it.
+- **Remove** — deletes an installed extension.
+
+Two things to know:
+
+- **Applies to new sessions.** Chrome loads extensions only at launch, so installing/removing affects the *next* `session_open`, not sessions already running.
+- **Forces headed.** `--load-extension` only works in a headed browser, so any installed extension makes new sessions run headed regardless of the Headless config.
 
 ### Maintenance
 
