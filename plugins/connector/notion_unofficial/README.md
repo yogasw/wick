@@ -59,12 +59,26 @@ rate-limits at ~3 req/s) is retried automatically with backoff.
   view.
 - **`get_records`** — raw block records by id (escape hatch).
 
+- **`list_blocks`** — list a page's top-level content blocks in order, each as
+  `{id, type, text, editable}`. Call it before `update_block`/`delete_block` to
+  get the id of the exact block to change; `editable:false` marks blocks whose
+  text can't be rewritten in place (images, embeds, tables, dividers, …).
+
 ### Write (`saveTransactions`)
 - **`create_page`** — a subpage under a page, or a **row in a database**
   (`parent_type=database`). For a row, pass `properties` (JSON `name → value`) to
   fill columns.
 - **`create_comment`** — page-level comment on a page or a database row.
-- **`set_title`** — rename a page.
+  Append-only (no edit/delete-comment op).
+- **`set_title`** — rename a page (H1 / row Name). Doesn't touch the body.
+- **`append_content`** — add blocks from markdown. Default = end of page; set
+  `after_block_id` (from `list_blocks`) to insert right **after** that block, i.e.
+  in the **middle** of the page. Existing content untouched. Validates the anchor
+  belongs to the page and rejects a bad one instead of mis-placing the blocks.
+- **`update_block`** — rewrite **one** block's text in place by its id (from
+  `list_blocks`); other blocks are untouched. Optional `type` converts the block.
+  Refuses non-text blocks (image/embed/table/divider/…).
+- **`delete_block`** — remove **one** block by id; the rest of the page stays.
 
 ### Maintenance (UI only, hidden from the agent)
 - `import_form`, `import_curl_extract` — back the paste-a-cURL widget.
