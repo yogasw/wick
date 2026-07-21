@@ -102,14 +102,14 @@ func installDriver() error {
 // operation. It is created by withSession, used by exactly one goroutine, and
 // torn down when withSession returns — no sharing across calls.
 type session struct {
-	c       *connector.Ctx
-	pw      *playwright.Playwright
-	browser playwright.Browser
-	bctx    playwright.BrowserContext
-	pages   int // pages opened so far, checked against maxTab
-	maxTab  int
-	actMS   float64
-	navMS   float64
+	c        *connector.Ctx
+	pw       *playwright.Playwright
+	browser  playwright.Browser
+	bctx     playwright.BrowserContext
+	pages    int // pages opened so far, checked against maxTab
+	maxTab   int
+	actMS    float64
+	navMS    float64
 	chromium bool
 }
 
@@ -365,10 +365,25 @@ func (s *session) runActions(actions []action) (any, error) {
 // runActionsInContext runs the action list on a NEW tab inside an existing live
 // browser context (the session_id path). The tab is left open — it belongs to
 // the persistent session and shows up in session_list.
-func runActionsInContext(_ *connector.Ctx, ctx playwright.BrowserContext, actions []action) (any, error) {
-	page, err := ctx.NewPage()
-	if err != nil {
-		return nil, fmt.Errorf("open tab in live session: %w", err)
+// runActionsInContext runs the actions against the tab at tabIndex in an
+// existing live session. It reuses the EXISTING page (not a fresh NewPage) so
+// repeated run calls act on the same tab instead of spawning a new one each time
+// (which used to leak tabs and made the agent unable to target a tab). A
+// negative tabIndex, or an index past the last page, falls back to a new tab
+// (subject to the caller's tab cap, which it should have already checked).
+func runActionsInContext(_ *connector.Ctx, ctx playwright.BrowserContext, actions []action, tabIndex int) (any, error) {
+	pages := ctx.Pages()
+	var page playwright.Page
+	if tabIndex >= 0 && tabIndex < len(pages) {
+		page = pages[tabIndex]
+	} else if len(pages) > 0 {
+		page = pages[len(pages)-1] // default: last/active tab
+	} else {
+		p, err := ctx.NewPage()
+		if err != nil {
+			return nil, fmt.Errorf("open tab in live session: %w", err)
+		}
+		page = p
 	}
 	return runActionLoop(page, actions), nil
 }

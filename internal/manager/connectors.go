@@ -63,6 +63,26 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/test", auth(h.apiTestConnectorOperation))
 	mux.Handle("GET /manager/api/connectors/{key}/{id}/history", auth(h.apiConnectorHistory))
 
+	// Live-browser panel (playwright_browser only). Sessions list/open/close are
+	// unary JSON; ws proxies a DevTools screencast/input stream to the session's
+	// loopback CDP endpoint. Gated per-row by canConfigureRow (admin → owner tag →
+	// AllowOthersConfigure) inside the handlers — same gate as editing the
+	// connector's credentials, since driving its browser is at least that
+	// privileged. See connectors_browser_proxy.go.
+	mux.Handle("GET /manager/api/connectors/{key}/{id}/browser/sessions", auth(h.apiBrowserSessions))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/browser/open", auth(h.apiBrowserOpen))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/browser/sessions/{session}/close", auth(h.apiBrowserClose))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/browser/sessions/{session}/tabs/new", auth(h.apiBrowserTabNew))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/browser/sessions/{session}/tabs/{index}/close", auth(h.apiBrowserTabClose))
+	mux.Handle("GET /manager/api/connectors/{key}/{id}/browser/ws", auth(h.apiBrowserWS))
+
+	// Extension management for playwright_browser live sessions (same per-row
+	// gate). Upload a .zip/.crx or add by Web Store id; applies to new sessions.
+	mux.Handle("GET /manager/api/connectors/{key}/{id}/browser/extensions", auth(h.apiBrowserExtensions))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/browser/extensions/upload", auth(h.apiBrowserExtensionUpload))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/browser/extensions/from-store", auth(h.apiBrowserExtensionFromStore))
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/browser/extensions/{extID}/remove", auth(h.apiBrowserExtensionRemove))
+
 	// Phase 7a — JSON twins of the per-row admin controls (rate limit,
 	// duplicate, access policy, session config, operation toggles, and
 	// account management). Same services + permission gates as the templ

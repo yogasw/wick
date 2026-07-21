@@ -55,6 +55,27 @@ type setTitleInput struct {
 	Title  string `wick:"required;desc=New page title (plain text)."`
 }
 
+type appendContentInput struct {
+	PageID       string `wick:"required;desc=ID of the page to add blocks to (dashed UUID or 32-char id from a Notion URL)."`
+	Markdown     string `wick:"required;desc=Markdown turned into new blocks. Supports headings (#/##/###), bullet/numbered/to-do lists, quotes, fenced code, and dividers. Inline bold/code/links are stored as plain text."`
+	AfterBlockID string `wick:"desc=Optional. Insert the new blocks right AFTER this block id (get it from list_blocks) — use this to add in the MIDDLE of a page. Leave blank to append at the end. Existing content is never touched either way."`
+}
+
+type listBlocksInput struct {
+	PageID string `wick:"required;desc=ID of the page whose top-level blocks to list. Returns each block's {id, type, text} — use a returned id with update_block or delete_block to edit ONE block without touching the rest of the page."`
+}
+
+type updateBlockInput struct {
+	BlockID string `wick:"required;desc=ID of the block to rewrite (get it from list_blocks). Only this block changes."`
+	Text    string `wick:"required;desc=New plain-text content for the block. Replaces the block's current text; the block type is kept unless 'type' is set."`
+	Type    string `wick:"desc=Optional new block type to switch to, e.g. text, header, sub_header, sub_sub_header, bulleted_list, numbered_list, to_do, quote, code. Leave blank to keep the current type."`
+}
+
+type deleteBlockInput struct {
+	PageID  string `wick:"required;desc=ID of the page the block sits on."`
+	BlockID string `wick:"required;desc=ID of the block to delete (get it from list_blocks). Only this block is removed; the rest of the page stays."`
+}
+
 type describeDatabaseInput struct {
 	PageID string `wick:"required;desc=ID of a database page OR a page that embeds a database. Returns the schema so you know what to set on a new row."`
 }
@@ -95,7 +116,7 @@ func Module() connector.Module {
 		Meta: connector.Meta{
 			Key:         Key,
 			Name:        "Notion (Unofficial)",
-			Description: "Read Notion pages and databases via the private web API using a token_v2 cookie. Fetch returns rich markdown; mostly read with limited write (set title).",
+			Description: "Read and edit Notion pages and databases via the private web API using a token_v2 cookie. Fetch returns rich markdown; write ops append content and edit or delete individual blocks in place (list_blocks → update_block/delete_block) without rewriting the whole page.",
 			Icon:        "📓",
 			DefaultTags: []entity.DefaultTag{tags.Connector, tags.Productivity},
 		},
@@ -141,10 +162,18 @@ func Operations() []connector.Category {
 				getRecords,
 				wickdocs.Docs{},
 			),
+			connector.Op(
+				"list_blocks",
+				"List Page Blocks",
+				"List a page's top-level content blocks in order, each as {id, type, text, editable}. Call this BEFORE update_block/delete_block to get the id of the exact block to change — so you edit one block in place instead of rewriting the whole page. editable=false marks blocks whose text can't be set this way (images, embeds, tables, etc.).",
+				listBlocksInput{},
+				listBlocks,
+				wickdocs.Docs{},
+			),
 		),
 		connector.Cat(
 			"Write",
-			"Write via the private API's saveTransactions endpoint.",
+			"Write via the private API's saveTransactions endpoint. To EDIT existing page content precisely, never rewrite the whole page: call list_blocks to get each block's id + type, then update_block (change one block's text/type) or delete_block (drop one block) on the id you want — everything else is left untouched. append_content adds new blocks at the end. To edit a database row's PROPERTIES (status, date, select, relation, …) treat the row as a page and use create_page's properties format as a reference for value shapes (describe_database lists the exact names/types/options). Comments are append-only: create_comment adds one; there is no edit/delete-comment op.",
 			connector.Op(
 				"create_page",
 				"Create Page / Add Row",
@@ -156,7 +185,7 @@ func Operations() []connector.Category {
 			connector.Op(
 				"create_comment",
 				"Create Comment",
-				"Add a page-level comment to a page or a database row (a row is a page). Returns {id, discussion_id}.",
+				"Add a page-level comment to a page or a database row (a row is a page). Comments are append-only — there is no way to edit or delete a comment through this connector, so post a correcting comment instead. Returns {id, discussion_id}.",
 				createCommentInput{},
 				createComment,
 				wickdocs.Docs{},
@@ -164,9 +193,33 @@ func Operations() []connector.Category {
 			connector.Op(
 				"set_title",
 				"Set Page Title",
-				"Change a page's title. Returns {id, title}.",
+				"Change a page's title (the H1/name at the top). For a database row this sets the row's Name/title cell. Does not touch the body — to edit body text use update_block. Returns {id, title}.",
 				setTitleInput{},
 				setTitle,
+				wickdocs.Docs{},
+			),
+			connector.Op(
+				"append_content",
+				"Append / Insert Content",
+				"ADD new blocks to a page's body from markdown. By default they go at the END; set after_block_id (from list_blocks) to insert right AFTER that block instead — that's how you add content in the MIDDLE of a page. Existing content is never touched — use this to add, not to rewrite; to change something already there use update_block/delete_block. Supports #/##/### headings, - / 1. / - [ ] lists, > quotes, fenced code, and --- dividers. Returns {page_id, added, block_ids} — the block_ids let you immediately edit or delete what you just added.",
+				appendContentInput{},
+				appendContent,
+				wickdocs.Docs{},
+			),
+			connector.Op(
+				"update_block",
+				"Update Block",
+				"EDIT one block in place, addressed by its own id from list_blocks — only that block changes, every other block on the page is left exactly as-is (this is how you fix a typo or rewrite a paragraph without replacing the whole page). Set text to the block's new content; optionally set type to convert it (e.g. text→sub_header). Refuses non-text blocks (image, embed, table, divider, …): run list_blocks first and target an editable=true block. Returns {id}.",
+				updateBlockInput{},
+				updateBlock,
+				wickdocs.Docs{},
+			),
+			connector.Op(
+				"delete_block",
+				"Delete Block",
+				"REMOVE one block from a page by its id (from list_blocks). Only that block is removed; the rest of the page stays. Combine with append_content to insert a corrected version, or with update_block to fix in place. Returns {id, deleted}.",
+				deleteBlockInput{},
+				deleteBlock,
 				wickdocs.Docs{},
 			),
 		),
