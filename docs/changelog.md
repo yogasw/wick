@@ -6,14 +6,25 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.33.1](https://github.com/yogasw/wick/compare/v0.33.0...v0.33.1) — Live Browser & Connectors
+
+_Released on 2026-07-21_
+
 ### Added
 *   **In-place block editing for `notion_unofficial`**: The unofficial Notion connector can now edit a page's body precisely instead of only setting its title. `list_blocks` returns each top-level block as `{id, type, text, editable}`; `update_block` rewrites one block's text (and optionally its type) in place; `delete_block` removes one block — all addressed by block id, so neighbouring blocks are never touched. `append_content` adds new blocks from markdown at the end, or mid-page via `after_block_id`. Two guards keep an edit from breaking the page: `update_block` refuses non-text blocks (images, embeds, tables, dividers — marked `editable:false`), and `append_content` rejects an `after_block_id` that isn't a top-level block of the target page. Connector bumped to 0.2.0. See [Notion (Unofficial) ▶ Editing page content in place](/connectors/notion_unofficial#editing-page-content-in-place).
-*   **Live browser panel for `playwright_browser`**: The agents conversation UI has a new right-rail **Browser** tab (shown once an enabled `playwright_browser` instance exists) that shows a live view of a session — watch the screen, or switch to **Full** mode to click/type/log in by hand. Supports pop-out/floating and fullscreen views, zoom, an address bar with `chrome://` shortcuts, and a tab switcher for multi-tab sessions. The connector's manager detail page gained a matching **Active sessions** section (inspect/goto/kill) and an **Extensions** section to install Chrome extensions (`.zip`/`.crx` upload or Chrome Web Store id) into its live sessions. New `MaxTabsPerSession` config caps tabs per session (default 1, opt-in multi-tab) and `run`/`session_list` gained a `tab` input / `max_tabs` field to target and report on specific tabs. See [Playwright Browser](/connectors/playwright_browser#live-browser-panel).
+*   **Live browser panel for `playwright_browser`**: The agents conversation UI has a new right-rail **Browser** tab (shown once an enabled `playwright_browser` instance exists) that shows a live view of a session — watch the screen, or switch to **Full** mode to click/type/log in by hand. This includes support for `cloakbrowser` (patched Chromium) instances. It supports pop-out/floating and fullscreen views, zoom, an address bar with `chrome://` shortcuts, and a tab switcher for multi-tab sessions. The connector's manager detail page gained a matching **Active sessions** section (inspect/goto/kill) and an **Extensions** section to install Chrome extensions (`.zip`/`.crx` upload or Chrome Web Store id) into its live sessions. New `MaxTabsPerSession` config caps tabs per session (default 1, opt-in multi-tab) and `run`/`session_list` gained a `tab` input / `max_tabs` field to target and report on specific tabs. Connector bumped to 0.7.0. See [Playwright Browser](/connectors/playwright_browser#live-browser-panel).
+*   **Increased gRPC message limit**: The plugin transport's gRPC message receive cap was raised from 4 MiB to 64 MiB to accommodate larger payloads, such as base64-encoded browser extensions for `playwright_browser` installation.
+*   **Updated connector documentation**: New documentation pages were added for `loki` and `httpbin` connectors, and these, along with `playwright_browser`, were registered in the sidebar and connector index.
 
 ### Fixed
 *   **Connector list visibility for non-admins**: A connector now stays listed for non-admin users once its type has *any* instance, even if every existing instance is tag-restricted from them — so they can add their own account instead of the connector disappearing entirely.
 
 ---
+
 
 ## [v0.33.0](https://github.com/yogasw/wick/compare/v0.32.0...v0.33.0) — Connectors & Plugins
 
