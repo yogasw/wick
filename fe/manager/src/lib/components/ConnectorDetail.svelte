@@ -19,6 +19,8 @@
   import OperationsTable from "./OperationsTable.svelte";
   import AccountsSection from "./AccountsSection.svelte";
   import AccessPolicySection from "./AccessPolicySection.svelte";
+  import ActiveSessionsSection from "./ActiveSessionsSection.svelte";
+  import ExtensionsSection from "./ExtensionsSection.svelte";
   import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
   type Props = { connectorKey: string; connectorId: string };
@@ -238,6 +240,11 @@
 
     {#if healthBanner}
       <div class="rounded-xl border px-4 py-3 text-sm {healthBanner.ok ? 'border-pos-300 bg-pos-100 text-pos-400' : 'border-neg-300 bg-neg-100 text-neg-400'}">{healthBanner.msg}</div>
+    {/if}
+
+    {#if connectorKey === "playwright_browser"}
+      <ActiveSessionsSection connectorId={connectorId} />
+      <ExtensionsSection connectorId={connectorId} />
     {/if}
 
     <section>

@@ -31,6 +31,8 @@
     duplicateWorkspace, renameWorkspace, removeWorkspace,
   } from "../api/workspace.js";
   import { listSchedules, createSchedule, cancelSchedule, pauseSchedule, resumeSchedule } from "../api/schedules.js";
+  import BrowserPanel from "./BrowserPanel.svelte";
+  import { listInstances as listBrowserInstances } from "../api/browser.js";
 
   import ConversationHeader from "./ConversationHeader.svelte";
   import ConversationThread from "./ConversationThread.svelte";
@@ -138,7 +140,7 @@
   let sseStatus = $state<SSEStatus>("connecting");
 
   /* ── vertical rail tabs ────────────────────────────────────────── */
-  type RailTab = "context" | "process" | "workspace" | "scheduled" | "source";
+  type RailTab = "context" | "process" | "workspace" | "scheduled" | "browser" | "source";
   let railTab = $state<RailTab | null>(null);
 
   /* ── thread scroll ref ─────────────────────────────────────────── */
@@ -864,6 +866,11 @@
     loadProviderOptions();
     loadProjectOptions();
     loadPendingAsk();
+    // The Browser rail tab only appears if there's an enabled playwright_browser
+    // instance to drive. Best-effort: on any error, leave it hidden.
+    run(listBrowserInstances().pipe(Effect.provide(WickClientLayer)))
+      .then((rows) => { hasBrowserInstance = rows.some((r) => !r.disabled); })
+      .catch(() => { hasBrowserInstance = false; });
     // No interval polling for /processes: the SSE `lifecycle` event already
     // fires whenever a process starts/stops, and triggers a (debounced)
     // loadProcesses(). Polling on top of that just stacked redundant fetches.
@@ -896,7 +903,11 @@
     unsubMeta();
   });
 
-  const railTabs: { id: RailTab; label: string; icon: string }[] = [
+  // True once we confirm an enabled playwright_browser instance exists; gates
+  // the Browser rail tab (hidden when there's nothing to drive).
+  let hasBrowserInstance = $state(false);
+
+  const railTabsAll: { id: RailTab; label: string; icon: string }[] = [
     {
       id: "context",
       label: "Context",
@@ -918,11 +929,25 @@
       icon: '<circle cx="8" cy="9" r="5.5"></circle><path d="M8 6v3l2 1.5M8 1.5h0M3 2.5L1.5 4M13 2.5L14.5 4" stroke-linecap="round" stroke-linejoin="round"></path>',
     },
     {
+      id: "browser",
+      label: "Browser",
+      icon: '<circle cx="8" cy="8" r="6.5"></circle><path d="M1.5 8h13M8 1.5c1.8 1.7 2.8 4 2.8 6.5S9.8 12.8 8 14.5C6.2 12.8 5.2 10.5 5.2 8S6.2 3.2 8 1.5z" stroke-linecap="round" stroke-linejoin="round"></path>',
+    },
+    {
       id: "source",
       label: "Source",
       icon: '<circle cx="4" cy="4" r="1.5"></circle><circle cx="4" cy="12" r="1.5"></circle><circle cx="12" cy="5" r="1.5"></circle><path d="M4 5.5v5M5.5 4H9a2 2 0 012 2v0" stroke-linecap="round"></path>',
     },
   ];
+
+  // Drop the Browser tab until an enabled playwright_browser instance is known.
+  const railTabs = $derived(
+    hasBrowserInstance ? railTabsAll : railTabsAll.filter((t) => t.id !== "browser"),
+  );
+  // If the Browser panel is open but its tab just disappeared, close the panel.
+  $effect(() => {
+    if (railTab === "browser" && !hasBrowserInstance) railTab = null;
+  });
 
   const sideOpen = $derived(railTab !== null);
 
@@ -1226,6 +1251,8 @@
               .catch((e: unknown) => toastError(`Resume: ${e instanceof Error ? e.message : String(e)}`));
           }}
         />
+      {:else if railTab === "browser"}
+        <BrowserPanel onError={(m) => toastError(m)} />
       {/if}
     </div>
 
@@ -1349,6 +1376,8 @@
                   .catch((e: unknown) => toastError(`Resume: ${e instanceof Error ? e.message : String(e)}`));
               }}
             />
+          {:else if railTab === "browser"}
+            <BrowserPanel onError={(m) => toastError(m)} />
           {/if}
         </div>
       </div>

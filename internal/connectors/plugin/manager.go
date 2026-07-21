@@ -12,9 +12,10 @@ import (
 
 	goplugin "github.com/hashicorp/go-plugin"
 	"github.com/rs/zerolog/log"
+	"google.golang.org/grpc"
 
-	"github.com/yogasw/wick/pkg/safeexec"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 type entry struct {
@@ -152,6 +153,15 @@ func (m *Manager) spawn(key string) (*entry, error) {
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		AutoMTLS:         true,
 		UnixSocketConfig: &goplugin.UnixSocketConfig{TempDir: m.socketDir},
+		// Raise gRPC message limits to match the server (wickplugin) so ops that
+		// carry file payloads (e.g. extension_install, base64 of a browser
+		// extension) aren't rejected with ResourceExhausted at 4 MiB default.
+		GRPCDialOptions: []grpc.DialOption{
+			grpc.WithDefaultCallOptions(
+				grpc.MaxCallRecvMsgSize(wickplugin.MaxGRPCMessageBytes),
+				grpc.MaxCallSendMsgSize(wickplugin.MaxGRPCMessageBytes),
+			),
+		},
 	}
 	// Debug: attach to a debugger-run plugin instead of spawning our own child,
 	// but ONLY when ReadReattachConfig confirms it's reachable (it dials the

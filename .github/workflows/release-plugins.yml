@@ -16,7 +16,9 @@ name: Release plugins
 #   - Each built plugin is cross-built for every target; zips attach to a GitHub
 #     Release tagged <name>/v<version>. Those tags start with the plugin name so
 #     they never match the core 'v*' tag triggers.
-#   - A plugin whose <name>/v<version> tag already exists is skipped (idempotent).
+#   - A plugin whose <name>/v<version> tag already exists never enters the build
+#     matrix (filtered in detect); the build job re-checks the tag as a second
+#     idempotency guard (covers workflow_dispatch and detect/build races).
 #   - update-catalog then regenerates plugins/plugins.json from the live releases
 #     and commits it, so the in-app marketplace updates automatically.
 #
@@ -87,14 +89,24 @@ jobs:
           ev="${{ github.event_name }}"
 
           # Helper: append every buildable plugin (has main.go, not a _ scaffold)
-          # of every kind to $entries. Used when we rebuild ALL (core-released).
-          add_all() {
+          # whose <name>/v<VERSION> tag does NOT exist yet. Doing the tag check
+          # here (not just in the build job) keeps the matrix to only the plugins
+          # that will actually cut a release — bump one plugin, get one build leg,
+          # not a leg per plugin that immediately skips itself.
+          add_unreleased() {
+            tags=$(git ls-remote --tags origin)
             for kind in connector tool job; do
               [ -d "$kind" ] || continue
               for d in "$kind"/*/; do
                 n=$(basename "$d")
                 case "$n" in _*) continue ;; esac
                 [ -f "$kind/$n/main.go" ] || continue
+                [ -f "$kind/$n/VERSION" ] || continue
+                v=$(cat "$kind/$n/VERSION")
+                if echo "$tags" | grep -q "refs/tags/$n/v$v\$"; then
+                  echo "skip $kind/$n v$v — tag already released"
+                  continue
+                fi
                 entries=$(echo "$entries" | jq -c --arg k "$kind" --arg n "$n" '. + [{kind:$k,name:$n}]')
               done
             done
@@ -105,10 +117,11 @@ jobs:
             entries='[{"kind":"${{ github.event.inputs.kind }}","name":"${{ github.event.inputs.name }}"}]'
           else
             # repository_dispatch (core-released) — the only automatic trigger.
-            # Rebuild EVERY plugin; the build job's tag-exists check is idempotent,
-            # so only plugins whose VERSION actually changed cut a new release.
-            echo "core-released (v${{ github.event.client_payload.version }}) → consider all plugins"
-            add_all
+            # Only plugins whose VERSION has no matching release tag enter the
+            # matrix. A core release with no plugin bumps yields an empty matrix,
+            # which also skips the test job (any=false).
+            echo "core-released (v${{ github.event.client_payload.version }}) → detect unreleased plugins"
+            add_unreleased
           fi
           echo "matrix={\"include\":$entries}" >> "$GITHUB_OUTPUT"
           if [ "$(echo "$entries" | jq 'length')" -gt 0 ]; then

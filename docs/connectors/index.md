@@ -23,11 +23,13 @@ A built-in is just a regular connector that calls `connectors.Register(...)` (or
 | [Google Workspace](./googleworkspace) | `google_workspace` | Manage Drive files, read/write Sheets, edit Docs and Slides, send and label Gmail, manage Calendar events (with Meet links), create Meet links, and read Meet recordings and transcripts — all under one Google OAuth account. 38 ops across seven Google APIs. | plugin |
 | [Playwright Browser](./playwright_browser) | `playwright_browser` | Drive a real browser (Chromium/Firefox/WebKit/CloakBrowser) to screenshot, scrape, render PDF, evaluate JS, and run scripted multi-step flows. Supports persistent live sessions across calls. | plugin |
 | [Phoenix](./phoenix) | `phoenix` | Debug LLM behaviour in Arize Phoenix — list spans by room or app_id and inspect a single span's prompt, messages, tool calls, and token usage. Read-only. | plugin |
+| [Loki](./loki) | `loki` | Query logs and discover labels in a Grafana Loki instance via LogQL. Runs through Grafana with org + datasource pickers; pairs with Phoenix for full-stack debugging. Read-only. | plugin |
 | [Notion](./notion) | `notion` | Official Notion REST API via an Internal Integration bot token — search, fetch (properties + markdown body), query databases, comments, users, create/update pages and databases. | plugin |
 | [Notion (Unofficial)](./notion_unofficial) | `notion_unofficial` | Notion's private web API via a `token_v2` session cookie — sees everything the logged-in user can see, including embedded/filtered database views. Mostly read, with limited write. | plugin |
 | [Wick Manager](./wickmanager) | `wickmanager` | Read and edit wick's own apps / jobs / tools / connectors / tray lifecycle. For asking the LLM to inspect or tweak wick itself, not third-party APIs. | runtime |
 | [Workflow](./workflow) | `workflow` | Create, edit, test, simulate, and run workflows over MCP — the LLM-facing surface for the [Workflows](/workflow/) feature. | runtime |
 | [Notifications](./notifications) | `notifications` | Send a browser push notification to a subscribed user by opaque PN ID. Pairs with the per-session subscribe bell on the agents UI. | runtime |
+| [HTTPBin](./httpbin) | `httpbin` | Sample plugin connector hitting httpbin.org — GET, POST, and status-code echo. No credentials; the smallest complete connector, useful as a plugin template. | plugin (sample) |
 | [CRUD CRUD](./crudcrud) | `crudcrud` | Demo connector wrapping the public crudcrud.com sandbox. Ships with [`cmd/lab`](https://github.com/yogasw/wick/tree/master/cmd/lab) only — useful as a copy-paste starting point. | lab sample |
 
 **Tiers:**

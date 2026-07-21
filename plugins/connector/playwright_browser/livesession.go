@@ -94,6 +94,17 @@ func maxLiveSessions(c *connector.Ctx) int {
 	return v
 }
 
+// maxTabsPerSession is the per-session tab cap (config max_tabs_per_session).
+// Seeds as 1 (default=1) so sessions are single-tab unless explicitly opened up.
+// An explicit 0 (or negative) means UNLIMITED. Returns 0 to signal "no limit".
+func maxTabsPerSession(c *connector.Ctx) int {
+	v := c.CfgInt("max_tabs_per_session")
+	if v <= 0 {
+		return 0 // unlimited
+	}
+	return v
+}
+
 // ── open ─────────────────────────────────────────────────────────────
 
 // openSession launches a detached Chromium on a dynamic CDP port and persists
@@ -116,10 +127,12 @@ func openSession(c *connector.Ctx) (any, error) {
 	}
 
 	// Live sessions rely on the Chromium DevTools protocol (--remote-debugging-port
-	// + the DevToolsActivePort file). Firefox/WebKit don't expose that, so guard
+	// + the DevToolsActivePort file). Only Chromium engines expose that: the stock
+	// chromium and cloakbrowser (patched Chromium). Firefox/WebKit don't, so guard
 	// early with a clear message instead of hanging until the 20s port timeout.
-	if b := strings.ToLower(strings.TrimSpace(c.Cfg("browser"))); b != "" && b != defBrowser {
-		return nil, fmt.Errorf("live sessions require a chromium instance; this instance uses %q. Use the ephemeral ops (run/screenshot/...) for firefox/webkit, or set browser=chromium", c.Cfg("browser"))
+	b := strings.ToLower(strings.TrimSpace(c.Cfg("browser")))
+	if b != "" && b != defBrowser && b != cloakEngine {
+		return nil, fmt.Errorf("live sessions require a chromium-based engine (chromium or cloakbrowser); this instance uses %q. Use the ephemeral ops (run/screenshot/...) for firefox/webkit, or set browser=chromium", c.Cfg("browser"))
 	}
 
 	// Resolve the browser binary via playwright (respects executable_path too).
@@ -132,7 +145,15 @@ func openSession(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Binary precedence mirrors launchOptions(): explicit executable_path wins;
+	// otherwise cloakbrowser uses its downloaded stealth binary, and stock
+	// chromium falls back to the Playwright-managed binary. browserType maps
+	// cloakbrowser onto pw.Chromium, so bt.ExecutablePath() would point at the
+	// wrong (stock chromium) binary for cloak — resolve cloak explicitly.
 	chromeBin := strings.TrimSpace(c.Cfg("executable_path"))
+	if chromeBin == "" && b == cloakEngine {
+		chromeBin = cloakBinaryPath(c)
+	}
 	if chromeBin == "" {
 		chromeBin = bt.ExecutablePath()
 	}
@@ -149,8 +170,17 @@ func openSession(c *connector.Ctx) (any, error) {
 		"--no-first-run", "--no-default-browser-check",
 		"--no-sandbox", // required where the sandbox helper is blocked
 	}
+	// Honor the Headless config. Use --headless=new (not classic headless) so
+	// that --load-extension still works when extensions are installed — classic
+	// headless ignores extensions entirely; the "new" mode loads them (some
+	// extensions are still finicky under headless, but this keeps the session
+	// invisible as configured instead of forcing a visible window).
 	if headless(c) {
 		args = append(args, "--headless=new")
+	}
+	if exts := installedExtensions(c); len(exts) > 0 {
+		joined := strings.Join(exts, ",")
+		args = append(args, "--load-extension="+joined, "--disable-extensions-except="+joined)
 	}
 	if px := strings.TrimSpace(c.Cfg("proxy_server")); px != "" {
 		args = append(args, "--proxy-server="+px)
@@ -280,7 +310,8 @@ func sessionList(c *connector.Ctx) (any, error) {
 			"tabs":       tabs,
 		})
 	}
-	return map[string]any{"sessions": sessions, "count": len(sessions)}, nil
+	// max_tabs lets the UI disable "new tab" at the cap (0 = unlimited).
+	return map[string]any{"sessions": sessions, "count": len(sessions), "max_tabs": maxTabsPerSession(c)}, nil
 }
 
 // describeTabs lists a session's open pages (index, url, title). Best-effort:
@@ -304,6 +335,70 @@ func describeTabs(c *connector.Ctx, id string) []map[string]any {
 	return tabs
 }
 
+// cdpTarget is one row of Chrome's GET <cdp>/json — a debuggable target (a tab,
+// worker, etc). We keep only page targets and expose the WebSocket debugger URL
+// the live-browser panel's core-side proxy dials for screencast + input.
+type cdpTarget struct {
+	ID                   string `json:"id"`
+	Type                 string `json:"type"`
+	Title                string `json:"title"`
+	URL                  string `json:"url"`
+	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+}
+
+// sessionEndpoints returns the raw CDP connection details for a live session so
+// the CORE process can proxy a DevTools WebSocket to it (screencast + input) —
+// core reaches the loopback CDP port directly; the plugin only discovers it.
+//
+// Output: the session's cdp_url plus one entry per page target with its
+// ws_debugger_url. Read straight from Chrome's GET <cdp>/json (not playwright),
+// because that endpoint is the source of the per-target debugger WebSocket URLs.
+// This is a maintenance/UI read — not meant for agent use — hence seeded
+// AdminOnly like the other manager-backing ops.
+func sessionEndpoints(c *connector.Ctx, id string) (any, error) {
+	meta, err := readMeta(sessionDir(c), id)
+	if err != nil {
+		return nil, err
+	}
+	client := http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(meta.CDPURL + "/json")
+	if err != nil {
+		return nil, fmt.Errorf("reach CDP endpoint for session %s: %w (the browser may have been closed; run session_close to clean up)", id, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("CDP /json returned %d for session %s", resp.StatusCode, id)
+	}
+
+	var targets []cdpTarget
+	if err := json.Unmarshal(raw, &targets); err != nil {
+		return nil, fmt.Errorf("decode CDP targets: %w", err)
+	}
+
+	tabs := make([]map[string]any, 0, len(targets))
+	index := 0
+	for _, t := range targets {
+		if t.Type != "page" {
+			continue // skip workers, service workers, iframes, etc.
+		}
+		tabs = append(tabs, map[string]any{
+			"index":           index,
+			"target_id":       t.ID,
+			"ws_debugger_url": t.WebSocketDebuggerURL,
+			"url":             t.URL,
+			"title":           t.Title,
+		})
+		index++
+	}
+	return map[string]any{
+		"session_id": id,
+		"cdp_url":    meta.CDPURL,
+		"tabs":       tabs,
+		"count":      len(tabs),
+	}, nil
+}
+
 // tabNew opens a new tab (optionally navigating to url) in a live session.
 func tabNew(c *connector.Ctx, id, url string) (any, error) {
 	lc, err := connectSession(c, id)
@@ -314,6 +409,16 @@ func tabNew(c *connector.Ctx, id, url string) (any, error) {
 	ctx, err := lc.firstContext()
 	if err != nil {
 		return nil, err
+	}
+	// Enforce the per-session tab cap. Default 1 (single-tab) — multi-tab is
+	// opt-in via MaxTabsPerSession because each tab holds a page in RAM. 0 =
+	// unlimited. Applies to both the manager UI "+" and agent (MCP) calls.
+	if cap := maxTabsPerSession(c); cap > 0 && len(ctx.Pages()) >= cap {
+		return nil, fmt.Errorf(
+			"tab limit reached: this session already has %d/%d tab(s). Multi-tab is disabled by default to save memory (each tab keeps a live page in RAM). "+
+				"To open more tabs, an operator must raise \"Max tabs per session\" on this connector's settings (config max_tabs_per_session; 0 = unlimited). "+
+				"Alternatively, reuse the current tab (run with the existing tab index) or close a tab (tab_close) before opening a new one",
+			len(ctx.Pages()), cap)
 	}
 	page, err := ctx.NewPage()
 	if err != nil {

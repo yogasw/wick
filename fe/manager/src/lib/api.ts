@@ -227,6 +227,64 @@ export async function runConnectorTest(
   });
 }
 
+/* Live-browser sessions (playwright_browser only). The row detail page shows an
+ * Active sessions section — list + kill. Same endpoints the conversation
+ * BrowserPanel uses; key is fixed to playwright_browser. */
+export type BrowserTab = { index: number; url: string; title: string };
+export type BrowserSession = {
+  session_id: string;
+  pid: number;
+  browser: string;
+  created: string;
+  tabs: BrowserTab[] | null;
+};
+
+export async function listBrowserSessions(id: string): Promise<BrowserSession[]> {
+  const r = await apiGet<{ sessions?: BrowserSession[] }>(
+    `${rowBase("playwright_browser", id)}/browser/sessions`,
+  );
+  return r.sessions ?? [];
+}
+
+export async function closeBrowserSession(id: string, session: string): Promise<void> {
+  await apiPost(
+    `${rowBase("playwright_browser", id)}/browser/sessions/${encodeURIComponent(session)}/close`,
+  );
+}
+
+export type BrowserExtension = {
+  id: string;
+  name: string;
+  version: string;
+  size: number;
+};
+
+const extBase = (id: string) => `${rowBase("playwright_browser", id)}/browser/extensions`;
+
+export async function listBrowserExtensions(id: string): Promise<BrowserExtension[]> {
+  const r = await apiGet<{ extensions?: BrowserExtension[] }>(extBase(id));
+  return r.extensions ?? [];
+}
+
+// Upload is multipart (a .zip/.crx file), so it bypasses the JSON apiPost helper
+// and posts a FormData body directly. Returns the installed extension summary.
+export async function uploadBrowserExtension(id: string, file: File): Promise<BrowserExtension> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch(`${extBase(id)}/upload`, { method: "POST", body: fd, credentials: "same-origin" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Upload failed (${res.status})`);
+  return data as BrowserExtension;
+}
+
+export async function addBrowserExtensionFromStore(id: string, storeId: string): Promise<BrowserExtension> {
+  return apiPost<BrowserExtension>(`${extBase(id)}/from-store`, { id: storeId });
+}
+
+export async function removeBrowserExtension(id: string, extId: string): Promise<void> {
+  await apiPost(`${extBase(id)}/${encodeURIComponent(extId)}/remove`);
+}
+
 const customBase = "/manager/api/connectors/custom";
 
 export async function getCustomMeta(): Promise<CustomMeta> {

@@ -70,6 +70,26 @@ func (h *Handler) apiConnectors(w http.ResponseWriter, r *http.Request) {
 		countByKey[row.Key] = c
 	}
 
+	// Whether a connector TYPE has ANY instance at all, ignoring per-instance tag
+	// filtering. Tags scope *instances*, not the connector type — so a non-admin
+	// should still SEE a connector in the list once it has instances (they can
+	// then create/use their own account), even if every existing instance is
+	// tag-restricted from them. Only the instances themselves stay hidden (in the
+	// per-key rows endpoint), not the connector card. Best-effort: on error we
+	// fall back to the managed count, preserving the old behavior.
+	hasAnyInstance := map[string]bool{}
+	if !isAdmin {
+		if all, err := h.connectors.List(ctx); err == nil {
+			for _, row := range all {
+				hasAnyInstance[row.Key] = true
+			}
+		} else {
+			for k := range countByKey {
+				hasAnyInstance[k] = true
+			}
+		}
+	}
+
 	disabledTypes := h.connectors.DisabledTypeKeys()
 
 	type defWithSort struct {
@@ -83,7 +103,10 @@ func (h *Handler) apiConnectors(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		cnt := countByKey[m.Meta.Key]
-		if !isAdmin && cnt.active+cnt.needsSetup+cnt.disabled == 0 {
+		// Hide from non-admins only when the connector TYPE has no instance at
+		// all. If instances exist (even ones tag-restricted from this user), the
+		// connector stays listed so they can add/use their own account.
+		if !isAdmin && !hasAnyInstance[m.Meta.Key] {
 			continue
 		}
 		cat, catSort, catDesc := connectorCategory(m.Meta.DefaultTags, system)
