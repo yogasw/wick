@@ -49,10 +49,12 @@ You can also fill `TokenV2` by hand: **DevTools → Application → Cookies → 
 |---|---|---|
 | `Import` (widget) | | Paste a **Copy-as-cURL** of any `notion.so/api/v3` request from browser DevTools, click **Extract** — it parses the curl and fills the fields below automatically. See [Importing credentials from a cURL](#importing-credentials-from-a-curl). The easiest way to set this connector up. |
 | `TokenV2` | ✅ (secret) | The `token_v2` cookie from a logged-in `notion.so` session (DevTools → Application → Cookies → `token_v2`). Filled by Extract, or paste manually. Expires when the browser session ends. |
-| `ActiveUserID` | | Sent as `x-notion-active-user-header`; only needed on sessions with multiple Notion accounts. |
-| `UserAgent` | | Advanced. Browser User-Agent sent with every request — leave blank for a modern-Chrome default. |
-| `NotionClientVersion` | | Advanced. `Notion-Client-Version` header; a sensible default is baked in. |
+| `ActiveUserID` | ✅ | Sent as `x-notion-active-user-header`. Filled by Extract; needed on sessions with multiple Notion accounts. |
+| `UserAgent` | ✅ | Advanced. Browser User-Agent sent with every request. Filled by Extract from a Copy-as-cURL — matches your real session so requests blend in. |
+| `NotionClientVersion` | ✅ | Advanced. `Notion-Client-Version` header the web app sends. Filled by Extract; defaults to a sensible value. |
 | `Status` (widget) | | Live connection status card — probes the cookie and shows the logged-in user + workspace. |
+
+All four auth/advanced fields are required — but the **Import** widget fills them all in one paste, so setup is still a single click, not extra manual typing.
 
 Beyond these config fields, this connector also requires the per-instance **AI description** to be filled before it counts as set up — see [AI description required](#ai-description-required).
 
