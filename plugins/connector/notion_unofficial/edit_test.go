@@ -241,3 +241,77 @@ func TestIntegration_EditBlocks(t *testing.T) {
 		t.Error("deleted block still present")
 	}
 }
+
+// TestIntegration_UpdatePageProperties exercises update_page_properties against
+// the LIVE private API: it creates a throwaway row in a database, changes ONE
+// property, and confirms the call reports it as updated. It also checks the
+// guards: an unknown property name lands in skipped_properties instead of
+// erroring the whole call, and a plain page is refused (no properties).
+//
+// Gated on NOTION_TEST_DB_ID (a database/collection page to add the row under)
+// plus NOTION_TEST_PROP / NOTION_TEST_PROP_VALUE naming a writable property and
+// a valid value for it. Skips if unset. Logs the throwaway row for manual
+// deletion (row archive isn't exposed).
+func TestIntegration_UpdatePageProperties(t *testing.T) {
+	dbID := os.Getenv("NOTION_TEST_DB_ID")
+	prop := os.Getenv("NOTION_TEST_PROP")
+	val := os.Getenv("NOTION_TEST_PROP_VALUE")
+	if dbID == "" || prop == "" || val == "" {
+		t.Skip("NOTION_TEST_DB_ID / NOTION_TEST_PROP / NOTION_TEST_PROP_VALUE not set — skipping live property test")
+	}
+
+	// Create a throwaway row.
+	cp := testCtx(t, map[string]string{
+		"parent_type": "database",
+		"parent_id":   dbID,
+		"title":       "wick update_props test (hapus)",
+	})
+	rowOut, err := createPage(cp)
+	if err != nil {
+		t.Fatalf("createPage (row): %v", err)
+	}
+	rowID := rowOut.(map[string]any)["id"].(string)
+	t.Logf("throwaway row: %s (delete manually after)", rowID)
+
+	// Update ONE property.
+	up := testCtx(t, map[string]string{
+		"page_id":    rowID,
+		"properties": `{"` + prop + `":"` + val + `"}`,
+	})
+	uout, err := updatePageProperties(up)
+	if err != nil {
+		t.Fatalf("updatePageProperties: %v", err)
+	}
+	updated, _ := uout.(map[string]any)["updated"].([]string)
+	if len(updated) != 1 || updated[0] != prop {
+		t.Errorf("expected updated=[%q], got %+v (skipped=%v)", prop, updated, uout.(map[string]any)["skipped_properties"])
+	}
+
+	// An unknown property is skipped, not fatal.
+	uc := testCtx(t, map[string]string{
+		"page_id":    rowID,
+		"properties": `{"` + prop + `":"` + val + `","__no_such_prop__":"x"}`,
+	})
+	sout, err := updatePageProperties(uc)
+	if err != nil {
+		t.Fatalf("updatePageProperties (with unknown prop): %v", err)
+	}
+	if skipped, _ := sout.(map[string]any)["skipped_properties"].([]string); len(skipped) == 0 {
+		t.Error("unknown property should have been reported in skipped_properties")
+	}
+
+	// Guard: a plain page (subpage under a normal page, not a row) must be refused.
+	parent := os.Getenv("NOTION_TEST_WRITE_PAGE_ID")
+	if parent != "" {
+		pp := testCtx(t, map[string]string{"parent_type": "page", "parent_id": parent, "title": "wick not-a-row (hapus)"})
+		if pageOut, e := createPage(pp); e == nil {
+			plainID := pageOut.(map[string]any)["id"].(string)
+			gc := testCtx(t, map[string]string{"page_id": plainID, "properties": `{"` + prop + `":"` + val + `"}`})
+			if _, e := updatePageProperties(gc); e == nil {
+				t.Error("update_page_properties on a plain page should have been refused")
+			} else {
+				t.Logf("plain-page correctly refused: %v", e)
+			}
+		}
+	}
+}

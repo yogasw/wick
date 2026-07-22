@@ -90,10 +90,11 @@ func Meta() connector.Meta {
 |-------|-------------|
 | `Key` | Unique slug across all connectors. Drives the admin URL `/manager/connectors/{Key}` |
 | `Name` | Display name on the admin card and detail page |
-| `Description` | Shown to admins on the connector card. Also read by the LLM when a caller uses the `wickmanager` connector's `connector_list`/`connector_get` ops — see [Per-row management UI ▶ AI description](#ai-description) for the per-instance text appended to it there. For every other MCP surface (`wick_list`/`wick_search`/`wick_get`), the LLM sees per-`Operation` Description instead — see below. |
+| `Description` | Shown to admins on the connector card, and to the LLM as the connector's `description` in `wick_list`/`wick_search`/`wick_get`. The per-instance admin note (see [Per-row management UI ▶ AI description](#ai-description)) rides alongside as a separate `operator_note` field there, and is appended to this text in the `wickmanager` `connector_list`/`connector_get` ops. Per-operation detail comes from each `Operation` Description — see below. |
 | `Icon` | Emoji or short string |
 | `DefaultTags` | Tags attached to every freshly seeded row. **Every connector should include `tags.Connector`** so the home page groups it under "Connector". Add module-specific tags on top of that (e.g. `tags.System` for built-in maintenance connectors). Admin unlinks survive restarts — boot only seeds when a row has zero tag links yet. |
 | `Fixed` | When `true`, only one row may exist for this Key. Useful for connectors backed by a single in-process resource. |
+| `RequireAIDescription` | When `true`, an instance with a blank [AI description](#ai-description) reports as `needs_setup` — the description becomes mandatory, like a missing required config field, and the instance shows as unfinished until it's filled. Use it where an undocumented instance is a liability (e.g. a connector on a personal token that should always record who may use it). Default `false` = description stays optional. |
 
 ### `Configs` struct
 
@@ -377,7 +378,7 @@ Beyond the module's own `Meta.Description` (written once, in code, shared by eve
 
 - Edited on the detail page's **AI description** section (see above); saves automatically.
 - Stored on `entity.Connector.Description` — `Service.SetDescription` / `Repo.SetDescription`, `POST /manager/api/connectors/{key}/{id}/description` (`{"description":"..."}`, empty clears it).
-- Surfaced to the LLM through the `wickmanager` connector's `connector_list` and `connector_get` ops: the instance text is appended to the module's `Meta.Description` (base description, blank line, then the instance note). Empty instance text falls back to just the base description. See [Wick Manager](/connectors/wickmanager).
+- Surfaced to the LLM two ways: (1) as a distinct `operator_note` field in the `wick_list` / `wick_search` / `wick_get` meta-tools — separate from the connector's built-in `description`, so the agent can tell an operator instruction from product copy (omitted when blank); (2) through the `wickmanager` connector's `connector_list` / `connector_get` ops, where the instance text is appended to the module's `Meta.Description` (base description, blank line, then the instance note). See [Wick Manager](/connectors/wickmanager).
 - Purely additive — it does not change what any *operation* does, only what an LLM (or admin) reads about the instance as a whole.
 
 ### Test panel (Postman-style)

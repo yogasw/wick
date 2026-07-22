@@ -49,10 +49,34 @@ You can also fill `TokenV2` by hand: **DevTools → Application → Cookies → 
 |---|---|---|
 | `Import` (widget) | | Paste a **Copy-as-cURL** of any `notion.so/api/v3` request from browser DevTools, click **Extract** — it parses the curl and fills the fields below automatically. See [Importing credentials from a cURL](#importing-credentials-from-a-curl). The easiest way to set this connector up. |
 | `TokenV2` | ✅ (secret) | The `token_v2` cookie from a logged-in `notion.so` session (DevTools → Application → Cookies → `token_v2`). Filled by Extract, or paste manually. Expires when the browser session ends. |
-| `ActiveUserID` | | Sent as `x-notion-active-user-header`; only needed on sessions with multiple Notion accounts. |
-| `UserAgent` | | Advanced. Browser User-Agent sent with every request — leave blank for a modern-Chrome default. |
-| `NotionClientVersion` | | Advanced. `Notion-Client-Version` header; a sensible default is baked in. |
+| `ActiveUserID` | ✅ | Sent as `x-notion-active-user-header`. Filled by Extract; needed on sessions with multiple Notion accounts. |
+| `UserAgent` | ✅ | Advanced. Browser User-Agent sent with every request. Filled by Extract from a Copy-as-cURL — matches your real session so requests blend in. |
+| `NotionClientVersion` | ✅ | Advanced. `Notion-Client-Version` header the web app sends. Filled by Extract; defaults to a sensible value. |
 | `Status` (widget) | | Live connection status card — probes the cookie and shows the logged-in user + workspace. |
+
+All four auth/advanced fields are required — but the **Import** widget fills them all in one paste, so setup is still a single click, not extra manual typing.
+
+Beyond these config fields, this connector also requires the per-instance **AI description** to be filled before it counts as set up — see [AI description required](#ai-description-required).
+
+### AI description required
+
+`TokenV2` is a **personal** Notion session cookie — every call through this connector acts as that one human and can see/modify everything their account can, across their whole workspace. An instance with no record of who's allowed to use it is a liability, so this connector makes the per-instance **AI description** mandatory.
+
+The AI description is the free-text guidance an admin writes for the LLM (shown in the connector's detail page). For `notion_unofficial` it doubles as the record of **who may use this instance and what for**. The agent sees it as a distinct `operator_note` field in `wick_list` / `wick_search` / `wick_get` — separate from the connector's built-in `description` — so it can tell an operator instruction from product copy and weight it accordingly.
+
+- While the AI description is **blank**, the instance reports as **`needs_setup`** — exactly like a missing required config field. It shows as unfinished in the manager UI and is treated as not-ready everywhere its status is consulted.
+- Fill the AI description (state who's allowed to use it, and optionally what for) and the instance flips to **`ready`**.
+- The **Import** and **Status** widgets work regardless, so an operator can paste the token and confirm the connection first, then write the AI description to finish setup.
+
+## Setup — how to use it
+
+End-to-end, from a fresh install to an agent making calls:
+
+1. **Install & enable** the plugin: `<app> plugin install notion_unofficial`, then enable it (see [Connector Plugins](/guide/connector-plugins)).
+2. **Hand over credentials.** In the connector's config, paste a **Copy-as-cURL** into the **Import** widget and click **Extract** — see [Importing credentials from a cURL](#importing-credentials-from-a-curl). This fills `TokenV2` and friends.
+3. **Confirm the connection.** Check the **Status** widget reads **Connected** as your user + workspace. (Both widgets work before the instance is enabled.)
+4. **Fill the AI description.** On the connector's detail page, write who's allowed to use this instance (and optionally what for). This is required — **until it's filled, the instance stays `needs_setup`**; once filled, it's `ready`. See [AI description required](#ai-description-required).
+5. **Use it from an agent.** The ops are now callable. A typical flow: `describe_database` (get property names/types/options) → `create_page` to add a row, or `update_page_properties` to change an existing row's cells; `list_blocks` → `update_block`/`delete_block`/`append_content` to edit page body.
 
 ## Operations
 
@@ -76,6 +100,7 @@ You can also fill `TokenV2` by hand: **DevTools → Application → Cookies → 
 | `append_content` | `page_id`, `markdown`, `after_block_id` | Add new blocks from markdown. By default they go at the **end**; set `after_block_id` (from `list_blocks`) to insert right **after** that block — i.e. in the **middle** of the page. Existing content is never touched. Returns `{page_id, added, block_ids}`. |
 | `update_block` | `block_id`, `text`, `type` | Rewrite **one** block's text in place, addressed by its ID from `list_blocks` — every other block stays exactly as-is. Optionally set `type` to convert the block (e.g. `text → sub_header`). Refuses non-text blocks. Returns `{id}`. |
 | `delete_block` | `page_id`, `block_id` | Remove **one** block by its ID (from `list_blocks`). Only that block goes; the rest of the page stays. Returns `{id, deleted}`. |
+| `update_page_properties` | `page_id`, `properties` | Edit the **property cells** of an existing database row in place (status, date, select, relation, checkbox, …) — only the listed properties change, every other cell and the row's body content is left exactly as-is. `properties` is JSON `name → value`, same shapes as `create_page`; call `describe_database` first for the exact names/types/options. Refuses a plain page (no property schema — use `set_title`/`update_block` there). Returns `{id, updated, skipped_properties}`. |
 
 Read ops never mutate; only the write ops above call the private API's `saveTransactions` endpoint.
 
@@ -97,6 +122,11 @@ Two guards keep an edit from breaking the page:
 - **`append_content` validates `after_block_id`.** An anchor that isn't a top-level block of the target page is rejected (instead of silently mis-placing the new blocks). Always pass an ID that `list_blocks` returned for that page.
 
 ### Writing database row properties
+
+Use `create_page` to set properties on a **new** row, or `update_page_properties`
+to change property cells on an **existing** row (only the listed cells change;
+the rest of the row and its body are untouched). Both take the same
+`properties` shape.
 
 `properties` values are plain strings in a format-per-type convention:
 

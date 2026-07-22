@@ -43,7 +43,9 @@
       data = await getConnectorRow(connectorKey, connectorId);
       labelDraft = data.label;
       descDraft = data.description ?? "";
-      descEnabled = descDraft.trim() !== "";
+      // When the connector requires the AI description, the section is always
+      // shown (it can't be toggled off) so the operator can't miss it.
+      descEnabled = data.require_ai_description === true || descDraft.trim() !== "";
       rateDraft = data.rate_limit_rpm;
       error = "";
     } catch (e) {
@@ -191,6 +193,9 @@
         <div class="min-w-0">
           <div class="flex items-center gap-2">
             <h2 class="text-base font-semibold text-black-900 dark:text-white-100">AI description</h2>
+            {#if data.require_ai_description}
+              <span class="rounded-full bg-neg-400/15 px-2 py-0.5 text-[11px] font-medium text-neg-400">Required</span>
+            {/if}
             {#if descEnabled && descStatus}
               <span
                 class="text-[11px] {descStatus === 'error' ? 'text-neg-400' : descStatus === 'saved' ? 'text-pos-400' : 'text-black-700 dark:text-black-600'}"
@@ -201,9 +206,13 @@
           </div>
           <p class="mt-1 text-sm text-black-800 dark:text-black-600">
             Extra guidance the AI sees for this connector — when to use it, team notes, constraints. Appended to the built-in description.
+            {#if data.require_ai_description}
+              <span class="text-black-900 dark:text-white-200">This connector requires it — it stays “needs setup” until you fill it in (e.g. state who may use this instance).</span>
+            {/if}
           </p>
         </div>
-        <!-- Pill switch: shows/hides the field to keep the page tidy. -->
+        <!-- Pill switch: shows/hides the field to keep the page tidy. When the
+             connector requires the AI description it's forced on (can't hide). -->
         <!-- Knob offset uses inline style, not translate-x utilities: those
              (translate-x-5 / -0.5) get purged from the manager CSS and the knob
              would never move. Inline transform is purge-proof. -->
@@ -212,9 +221,12 @@
           role="switch"
           aria-checked={descEnabled}
           aria-label="Toggle AI description"
-          disabled={!data.can_configure}
-          onclick={() => (descEnabled = !descEnabled)}
-          class="relative mt-1 inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors {data.can_configure
+          disabled={!data.can_configure || data.require_ai_description}
+          onclick={() => {
+            if (data?.require_ai_description) return;
+            descEnabled = !descEnabled;
+          }}
+          class="relative mt-1 inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors {data.can_configure && !data.require_ai_description
             ? 'cursor-pointer'
             : 'opacity-50'} {descEnabled ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
         >
@@ -233,7 +245,11 @@
             onChange={onDescInput}
             ariaLabel="Connector AI description"
           />
-          <p class="mt-2 text-[11px] text-black-700 dark:text-black-600">Saves automatically as you type.</p>
+          {#if data.require_ai_description && descDraft.trim() === ""}
+            <p class="mt-2 text-[11px] text-neg-400">Required — this instance stays “needs setup” until you fill this in.</p>
+          {:else}
+            <p class="mt-2 text-[11px] text-black-700 dark:text-black-600">Saves automatically as you type.</p>
+          {/if}
         </div>
       {/if}
     </section>

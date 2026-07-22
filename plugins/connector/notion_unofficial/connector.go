@@ -22,21 +22,21 @@ type Config struct {
 	// nothing — it's just the widget mount point.
 	Import string `wick:"html=import_form;group=Authentication;desc=Paste a Copy-as-cURL of any notion.so/api/v3 request from DevTools, then Extract — it fills the fields below."`
 
-	TokenV2      string `wick:"secret;group=Authentication;desc=Value of the token_v2 cookie from a logged-in notion.so browser session (DevTools → Application → Cookies → token_v2). Filled by Extract, or paste manually. Expires when the session ends."`
-	ActiveUserID string `wick:"group=Authentication;desc=Optional. Notion user ID for the x-notion-active-user-header, needed only on sessions with multiple accounts."`
+	TokenV2      string `wick:"required;secret;group=Authentication;desc=Value of the token_v2 cookie from a logged-in notion.so browser session (DevTools → Application → Cookies → token_v2). Filled by Extract, or paste manually. Expires when the session ends."`
+	ActiveUserID string `wick:"required;group=Authentication;desc=Notion user ID for the x-notion-active-user-header. Filled by Extract from a Copy-as-cURL; needed on sessions with multiple accounts."`
 	// Status is a read-only widget: it calls LoadUserContent live and shows the
 	// logged-in user + workspace so the operator can confirm the cookie works.
 	Status string `wick:"html=connection_status;group=Authentication;desc=Live connection status: probes the cookie and shows the logged-in user + workspace. Paste a cURL or fill token_v2 first."`
 
 	// The private API is the browser's API — requests present as a browser to
-	// avoid being flagged. Sensible defaults are baked in; override only if a
-	// request gets blocked or you want to match a specific browser/app version.
+	// avoid being flagged. Both are filled by Extract from a Copy-as-cURL, which
+	// is the intended setup path; newClient still falls back to sane defaults in
+	// code if a value is somehow absent.
 	// NOTE: no default= in the User-Agent tag — the value contains ';' which is
-	// the wick tag delimiter and would corrupt parsing. The default is applied
-	// in code (newClient falls back to defaultUserAgent when the config is
-	// empty), so a blank field still sends a modern-Chrome UA.
-	UserAgent           string `wick:"group=Advanced;desc=Browser User-Agent sent with every request. Leave blank for a modern Chrome default; change only if requests get blocked."`
-	NotionClientVersion string `wick:"group=Advanced;default=23.13.0.0;desc=Notion-Client-Version header the web app sends. Leave blank for a sensible default."`
+	// the wick tag delimiter and would corrupt parsing. The in-code fallback
+	// (newClient → defaultUserAgent) covers a missing value.
+	UserAgent           string `wick:"required;group=Advanced;desc=Browser User-Agent sent with every request. Filled by Extract from a Copy-as-cURL; matches your real session so requests blend in."`
+	NotionClientVersion string `wick:"required;group=Advanced;default=23.13.0.0;desc=Notion-Client-Version header the web app sends. Filled by Extract from a Copy-as-cURL; defaults to a sensible value."`
 }
 
 // --- per-operation input structs ---
@@ -87,6 +87,11 @@ type createPageInput struct {
 	Properties string `wick:"desc=Database rows only. JSON object keyed by property NAME → string value. Call describe_database first for names/types/options. Formats: select=exact option; multi_select=comma-separated; checkbox=true/false; date=\"YYYY-MM-DD\" or \"YYYY-MM-DD HH:MM\" (range with \" → \"); relation/person=comma-separated ids. Example: {\"Activity\":\"Debug\",\"Start time\":\"2026-07-17 06:00\",\"End time\":\"2026-07-17 07:00\",\"Ticket\":\"<page-id>\"}"`
 }
 
+type updatePagePropertiesInput struct {
+	PageID     string `wick:"required;desc=ID of the database ROW (a row is a page) whose properties to update. Must be a row inside a database — a plain page has no properties. For its title use set_title; for body content use update_block."`
+	Properties string `wick:"required;desc=JSON object keyed by property NAME → string value; only the listed properties change, the rest of the row is untouched. Call describe_database first for names/types/options. Formats: select=exact option; multi_select=comma-separated; checkbox=true/false; date=\"YYYY-MM-DD\" or \"YYYY-MM-DD HH:MM\" (range with \" → \"); relation/person=comma-separated ids. To clear a cell pass an empty string. Example: {\"Status\":\"Done\",\"End time\":\"2026-07-21 07:00\"}"`
+}
+
 type createCommentInput struct {
 	PageID string `wick:"required;desc=ID of the page (or database row — a row is a page) to comment on."`
 	Text   string `wick:"required;desc=Comment text (plain text)."`
@@ -119,6 +124,12 @@ func Module() connector.Module {
 			Description: "Read and edit Notion pages and databases via the private web API using a token_v2 cookie. Fetch returns rich markdown; write ops append content and edit or delete individual blocks in place (list_blocks → update_block/delete_block) without rewriting the whole page.",
 			Icon:        "📓",
 			DefaultTags: []entity.DefaultTag{tags.Connector, tags.Productivity},
+			// This connector authenticates with a PERSONAL Notion session token
+			// (token_v2) — every call acts as that one human across their whole
+			// workspace. Require the admin to fill the AI description before the
+			// instance counts as set up, so there is always a record of who may
+			// use it and what for; a blank one reports "needs_setup".
+			RequireAIDescription: true,
 		},
 		Configs:    entity.StructToConfigs(Config{}),
 		Operations: Operations(),
@@ -173,7 +184,7 @@ func Operations() []connector.Category {
 		),
 		connector.Cat(
 			"Write",
-			"Write via the private API's saveTransactions endpoint. To EDIT existing page content precisely, never rewrite the whole page: call list_blocks to get each block's id + type, then update_block (change one block's text/type) or delete_block (drop one block) on the id you want — everything else is left untouched. append_content adds new blocks at the end. To edit a database row's PROPERTIES (status, date, select, relation, …) treat the row as a page and use create_page's properties format as a reference for value shapes (describe_database lists the exact names/types/options). Comments are append-only: create_comment adds one; there is no edit/delete-comment op.",
+			"Write via the private API's saveTransactions endpoint. To EDIT existing page content precisely, never rewrite the whole page: call list_blocks to get each block's id + type, then update_block (change one block's text/type) or delete_block (drop one block) on the id you want — everything else is left untouched. append_content adds new blocks at the end. To edit a database row's PROPERTIES (status, date, select, relation, …) use update_page_properties on the row id with a name→value JSON object (describe_database lists the exact names/types/options); only the cells you pass change. Comments are append-only: create_comment adds one; there is no edit/delete-comment op.",
 			connector.Op(
 				"create_page",
 				"Create Page / Add Row",
@@ -220,6 +231,14 @@ func Operations() []connector.Category {
 				"REMOVE one block from a page by its id (from list_blocks). Only that block is removed; the rest of the page stays. Combine with append_content to insert a corrected version, or with update_block to fix in place. Returns {id, deleted}.",
 				deleteBlockInput{},
 				deleteBlock,
+				wickdocs.Docs{},
+			),
+			connector.Op(
+				"update_page_properties",
+				"Update Page Properties",
+				"EDIT the PROPERTY cells of an existing database row in place (status, date, select, relation, checkbox, …) — only the properties you list change, every other cell and the row's body content is left exactly as-is. Pass properties as a JSON object of name→value (same shapes as create_page); call describe_database first for the exact names/types/options. Refuses a plain page (no property schema) — for a page title use set_title, for body content use update_block. Returns {id, updated, skipped_properties}.",
+				updatePagePropertiesInput{},
+				updatePageProperties,
 				wickdocs.Docs{},
 			),
 		),

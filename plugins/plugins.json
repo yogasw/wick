@@ -152,8 +152,8 @@
   {
     "key": "notion_unofficial",
     "name": "Notion (Unofficial)",
-    "description": "Read Notion pages and databases via the private web API using a token_v2 cookie. Fetch returns rich markdown; mostly read with limited write (set title).",
-    "version": "0.1.0",
+    "description": "Read and edit Notion pages and databases via the private web API using a token_v2 cookie. Fetch returns rich markdown; write ops append content and edit or delete individual blocks in place (list_blocks → update_block/delete_block) without rewriting the whole page.",
+    "version": "0.2.0",
     "default_tags": [
       {
         "Name": "Connector",
@@ -173,8 +173,8 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.1.0/notion_unofficial-0.1.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.1.0/notion_unofficial-0.1.0-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.2.0/notion_unofficial-0.2.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.2.0/notion_unofficial-0.2.0-linux-arm64.zip"
     }
   },
   {
@@ -209,7 +209,7 @@
     "key": "playwright_browser",
     "name": "Playwright Browser",
     "description": "Drive a real browser (Chromium/Firefox/WebKit) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process.",
-    "version": "0.3.0",
+    "version": "0.7.0",
     "default_tags": [
       {
         "Name": "Connector",
@@ -229,8 +229,8 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.3.0/playwright_browser-0.3.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.3.0/playwright_browser-0.3.0-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.7.0/playwright_browser-0.7.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.7.0/playwright_browser-0.7.0-linux-arm64.zip"
     }
   }
 ]
