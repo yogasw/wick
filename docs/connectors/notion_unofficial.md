@@ -54,6 +54,28 @@ You can also fill `TokenV2` by hand: **DevTools → Application → Cookies → 
 | `NotionClientVersion` | | Advanced. `Notion-Client-Version` header; a sensible default is baked in. |
 | `Status` (widget) | | Live connection status card — probes the cookie and shows the logged-in user + workspace. |
 
+Beyond these config fields, this connector also requires the per-instance **AI description** to be filled before it counts as set up — see [AI description required](#ai-description-required).
+
+### AI description required
+
+`TokenV2` is a **personal** Notion session cookie — every call through this connector acts as that one human and can see/modify everything their account can, across their whole workspace. An instance with no record of who's allowed to use it is a liability, so this connector makes the per-instance **AI description** mandatory.
+
+The AI description is the free-text guidance an admin writes for the LLM (shown in the connector's detail page). For `notion_unofficial` it doubles as the record of **who may use this instance and what for**. The agent sees it as a distinct `operator_note` field in `wick_list` / `wick_search` / `wick_get` — separate from the connector's built-in `description` — so it can tell an operator instruction from product copy and weight it accordingly.
+
+- While the AI description is **blank**, the instance reports as **`needs_setup`** — exactly like a missing required config field. It shows as unfinished in the manager UI and is treated as not-ready everywhere its status is consulted.
+- Fill the AI description (state who's allowed to use it, and optionally what for) and the instance flips to **`ready`**.
+- The **Import** and **Status** widgets work regardless, so an operator can paste the token and confirm the connection first, then write the AI description to finish setup.
+
+## Setup — how to use it
+
+End-to-end, from a fresh install to an agent making calls:
+
+1. **Install & enable** the plugin: `<app> plugin install notion_unofficial`, then enable it (see [Connector Plugins](/guide/connector-plugins)).
+2. **Hand over credentials.** In the connector's config, paste a **Copy-as-cURL** into the **Import** widget and click **Extract** — see [Importing credentials from a cURL](#importing-credentials-from-a-curl). This fills `TokenV2` and friends.
+3. **Confirm the connection.** Check the **Status** widget reads **Connected** as your user + workspace. (Both widgets work before the instance is enabled.)
+4. **Fill the AI description.** On the connector's detail page, write who's allowed to use this instance (and optionally what for). This is required — **until it's filled, the instance stays `needs_setup`**; once filled, it's `ready`. See [AI description required](#ai-description-required).
+5. **Use it from an agent.** The ops are now callable. A typical flow: `describe_database` (get property names/types/options) → `create_page` to add a row, or `update_page_properties` to change an existing row's cells; `list_blocks` → `update_block`/`delete_block`/`append_content` to edit page body.
+
 ## Operations
 
 ### Read

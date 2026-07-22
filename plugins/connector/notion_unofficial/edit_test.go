@@ -1,35 +1,10 @@
 package main
 
 import (
-	"context"
 	"os"
 	"strings"
 	"testing"
-
-	"github.com/yogasw/wick/pkg/connector"
 )
-
-// TestUsageNoteGate proves the personal-token safety gate: with usage_note
-// blank an agent-facing op refuses even when the token is present, and once the
-// note is filled the gate lets the call through (it then fails later, on the
-// network — which is fine; we only assert the gate is not the blocker). No live
-// API needed for the blocked case.
-func TestUsageNoteGate(t *testing.T) {
-	// Blank usage_note → blocked, regardless of token.
-	blocked := connector.NewPluginCtx(context.Background(),
-		map[string]string{"token_v2": "tok"}, map[string]string{"page_id": "x"})
-	if _, err := fetch(blocked); err == nil {
-		t.Fatal("fetch should be blocked while usage_note is blank")
-	} else if !strings.Contains(err.Error(), "DISABLED") {
-		t.Errorf("expected the usage-note refusal, got: %v", err)
-	}
-
-	// Filled usage_note → gate passes (requireUsageNote returns nil).
-	if err := requireUsageNote(connector.NewPluginCtx(context.Background(),
-		map[string]string{"usage_note": "Ops team only"}, nil)); err != nil {
-		t.Errorf("gate should pass once usage_note is filled, got: %v", err)
-	}
-}
 
 // --- unit tests: markdown → blocks (deterministic, no network) ---
 

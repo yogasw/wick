@@ -21,8 +21,14 @@ type connectorSummary struct {
 	ID          string `json:"id"`
 	Connector   string `json:"connector"`
 	Description string `json:"description"`
-	TotalTools  int    `json:"total_tools"`
-	Status      string `json:"status"`
+	// OperatorNote is the per-instance AI description an admin typed by hand
+	// (entity.Connector.Description) — separate from the built-in Description so
+	// the LLM can tell it's an operator-authored instruction (access rules, team
+	// notes, constraints) deserving extra attention, not product copy. Omitted
+	// when blank.
+	OperatorNote string `json:"operator_note,omitempty"`
+	TotalTools   int    `json:"total_tools"`
+	Status       string `json:"status"`
 	// Kind is "connector" for a standard instance or "account" for a
 	// connected OAuth account entry. Use kind to distinguish bot vs personal.
 	Kind     string `json:"kind"`
@@ -57,11 +63,12 @@ type searchTool struct {
 }
 
 type searchGroup struct {
-	ID          string       `json:"id"`
-	Connector   string       `json:"connector"`
-	Description string       `json:"description"`
-	Status      string       `json:"status"`
-	Tools       []searchTool `json:"tools"`
+	ID           string       `json:"id"`
+	Connector    string       `json:"connector"`
+	Description  string       `json:"description"`
+	OperatorNote string       `json:"operator_note,omitempty"`
+	Status       string       `json:"status"`
+	Tools        []searchTool `json:"tools"`
 }
 
 type searchResult struct {
@@ -90,9 +97,10 @@ type categoryDetail struct {
 }
 
 type connectorDetail struct {
-	ID          string       `json:"id"`
-	Connector   string       `json:"connector"`
-	Description string       `json:"description"`
+	ID           string `json:"id"`
+	Connector    string `json:"connector"`
+	Description  string `json:"description"`
+	OperatorNote string `json:"operator_note,omitempty"`
 	// Categories lists the op groups when wick_get is called without a
 	// category argument (list mode). The caller picks one and re-calls
 	// wick_get with category=<title> to get the op schemas.
@@ -163,12 +171,13 @@ func WickList(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 		totalTools += count
 		// Always add the connector entry itself.
 		summaries = append(summaries, connectorSummary{
-			ID:          row.ID,
-			Connector:   row.Label,
-			Description: mod.Meta.Description,
-			TotalTools:  count,
-			Status:      status,
-			Kind:        "connector",
+			ID:           row.ID,
+			Connector:    row.Label,
+			Description:  mod.Meta.Description,
+			OperatorNote: strings.TrimSpace(row.Description),
+			TotalTools:   count,
+			Status:       status,
+			Kind:         "connector",
 		})
 		// For OAuth connectors, also add one entry per connected account.
 		if mod.OAuth != nil {
@@ -270,11 +279,12 @@ func WickSearch(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Resp
 		}
 		total += len(matched)
 		groups = append(groups, searchGroup{
-			ID:          row.ID,
-			Connector:   row.Label,
-			Description: mod.Meta.Description,
-			Status:      status,
-			Tools:       matched,
+			ID:           row.ID,
+			Connector:    row.Label,
+			Description:  mod.Meta.Description,
+			OperatorNote: strings.TrimSpace(row.Description),
+			Status:       status,
+			Tools:        matched,
 		})
 	}
 	// Session-workspace instances: matched only when a session_id is
@@ -355,7 +365,7 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 		}
 		return FormatToolID(row.ID, opKey)
 	}
-	detail, err := buildConnectorDetail(mod, row.ID, row.Label, selector, toolIDFor, func(opKey string) bool { return states[opKey] })
+	detail, err := buildConnectorDetail(mod, row.ID, row.Label, row.Description, selector, toolIDFor, func(opKey string) bool { return states[opKey] })
 	if err != nil {
 		rsp.ToolError(w, req.ID, err.Error(), connectorID)
 		return
@@ -385,8 +395,8 @@ func WickGet(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respond
 // toolIDFor builds the tool_id for an op key (account suffix handled by the
 // caller). Sharing this between the DB-row and session-instance paths keeps
 // the two from drifting.
-func buildConnectorDetail(mod connector.Module, id, label, selector string, toolIDFor func(opKey string) string, enabled func(opKey string) bool) (connectorDetail, error) {
-	detail := connectorDetail{ID: id, Connector: label, Description: mod.Meta.Description}
+func buildConnectorDetail(mod connector.Module, id, label, operatorNote, selector string, toolIDFor func(opKey string) string, enabled func(opKey string) bool) (connectorDetail, error) {
+	detail := connectorDetail{ID: id, Connector: label, Description: mod.Meta.Description, OperatorNote: strings.TrimSpace(operatorNote)}
 	selector = strings.TrimSpace(selector)
 
 	// OP SCHEMA: selector names an enabled op key → return just that op + schema.

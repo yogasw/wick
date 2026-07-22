@@ -224,7 +224,7 @@ func sessionInstanceDetail(svc *connectors.Service, target *connectors.SessionIn
 		label = mod.Meta.Name + " (session)"
 	}
 	// Session instances have no per-op disable state — every op is enabled.
-	detail, err := buildConnectorDetail(mod, instanceID, label, selector,
+	detail, err := buildConnectorDetail(mod, instanceID, label, "", selector,
 		func(opKey string) string { return FormatToolID(instanceID, opKey) },
 		func(string) bool { return true })
 	if err != nil {

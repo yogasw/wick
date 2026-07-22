@@ -39,9 +39,6 @@ func testCtx(t *testing.T, inputs map[string]string) *connector.Ctx {
 	configs := map[string]string{
 		"token_v2":       token,
 		"active_user_id": os.Getenv("NOTION_UNOFFICIAL_ACTIVE_USER_ID"),
-		// The usage-note gate blocks every agent-facing op while blank; fill it so
-		// the live tests exercise the real ops rather than the refusal.
-		"usage_note": "integration test",
 	}
 	return connector.NewPluginCtx(ctx, configs, inputs)
 }

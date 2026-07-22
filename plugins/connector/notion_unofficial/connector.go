@@ -14,17 +14,6 @@ const Key = "notion_unofficial"
 // Cookies). ActiveUserID fills the x-notion-active-user-header some endpoints
 // require on multi-account sessions; leave blank for a single-account login.
 type Config struct {
-	// UsageNote is a mandatory human statement of WHO is allowed to use this
-	// instance (and optionally what for). It gates every agent-facing op: while
-	// blank, all operations refuse (see requireUsageNote). The point is safety —
-	// this connector runs on a PERSONAL Notion session token, so an undocumented
-	// instance is a loaded gun; the operator must record who may use it before an
-	// agent is allowed to act as that human. The value is shown to the LLM (it's
-	// an op input on nothing, but the refusal message references it), so write it
-	// for the agent, e.g. "Only the Ops team's Notion automation may use this
-	// (Yoga's personal login). Do not use for anything outside Ops runbooks."
-	UsageNote string `wick:"required;group=Authentication;desc=REQUIRED. Who is allowed to use this connector instance (this token is a PERSONAL Notion login — every call acts as that human). State at minimum WHO may use it; optionally what for. All operations are blocked until this is filled."`
-
 	// Import is the easy path: an html widget (import_form op) renders a textarea
 	// where the operator pastes a "Copy as cURL" of any api/v3 request from
 	// DevTools, plus an Extract button. Extract parses the curl and writes the
@@ -33,21 +22,21 @@ type Config struct {
 	// nothing — it's just the widget mount point.
 	Import string `wick:"html=import_form;group=Authentication;desc=Paste a Copy-as-cURL of any notion.so/api/v3 request from DevTools, then Extract — it fills the fields below."`
 
-	TokenV2      string `wick:"secret;group=Authentication;desc=Value of the token_v2 cookie from a logged-in notion.so browser session (DevTools → Application → Cookies → token_v2). Filled by Extract, or paste manually. Expires when the session ends."`
-	ActiveUserID string `wick:"group=Authentication;desc=Optional. Notion user ID for the x-notion-active-user-header, needed only on sessions with multiple accounts."`
+	TokenV2      string `wick:"required;secret;group=Authentication;desc=Value of the token_v2 cookie from a logged-in notion.so browser session (DevTools → Application → Cookies → token_v2). Filled by Extract, or paste manually. Expires when the session ends."`
+	ActiveUserID string `wick:"required;group=Authentication;desc=Notion user ID for the x-notion-active-user-header. Filled by Extract from a Copy-as-cURL; needed on sessions with multiple accounts."`
 	// Status is a read-only widget: it calls LoadUserContent live and shows the
 	// logged-in user + workspace so the operator can confirm the cookie works.
 	Status string `wick:"html=connection_status;group=Authentication;desc=Live connection status: probes the cookie and shows the logged-in user + workspace. Paste a cURL or fill token_v2 first."`
 
 	// The private API is the browser's API — requests present as a browser to
-	// avoid being flagged. Sensible defaults are baked in; override only if a
-	// request gets blocked or you want to match a specific browser/app version.
+	// avoid being flagged. Both are filled by Extract from a Copy-as-cURL, which
+	// is the intended setup path; newClient still falls back to sane defaults in
+	// code if a value is somehow absent.
 	// NOTE: no default= in the User-Agent tag — the value contains ';' which is
-	// the wick tag delimiter and would corrupt parsing. The default is applied
-	// in code (newClient falls back to defaultUserAgent when the config is
-	// empty), so a blank field still sends a modern-Chrome UA.
-	UserAgent           string `wick:"group=Advanced;desc=Browser User-Agent sent with every request. Leave blank for a modern Chrome default; change only if requests get blocked."`
-	NotionClientVersion string `wick:"group=Advanced;default=23.13.0.0;desc=Notion-Client-Version header the web app sends. Leave blank for a sensible default."`
+	// the wick tag delimiter and would corrupt parsing. The in-code fallback
+	// (newClient → defaultUserAgent) covers a missing value.
+	UserAgent           string `wick:"required;group=Advanced;desc=Browser User-Agent sent with every request. Filled by Extract from a Copy-as-cURL; matches your real session so requests blend in."`
+	NotionClientVersion string `wick:"required;group=Advanced;default=23.13.0.0;desc=Notion-Client-Version header the web app sends. Filled by Extract from a Copy-as-cURL; defaults to a sensible value."`
 }
 
 // --- per-operation input structs ---
@@ -135,6 +124,12 @@ func Module() connector.Module {
 			Description: "Read and edit Notion pages and databases via the private web API using a token_v2 cookie. Fetch returns rich markdown; write ops append content and edit or delete individual blocks in place (list_blocks → update_block/delete_block) without rewriting the whole page.",
 			Icon:        "📓",
 			DefaultTags: []entity.DefaultTag{tags.Connector, tags.Productivity},
+			// This connector authenticates with a PERSONAL Notion session token
+			// (token_v2) — every call acts as that one human across their whole
+			// workspace. Require the admin to fill the AI description before the
+			// instance counts as set up, so there is always a record of who may
+			// use it and what for; a blank one reports "needs_setup".
+			RequireAIDescription: true,
 		},
 		Configs:    entity.StructToConfigs(Config{}),
 		Operations: Operations(),

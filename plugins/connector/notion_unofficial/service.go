@@ -399,9 +399,7 @@ func deleteBlock(c *connector.Ctx) (any, error) {
 // --- config-only widget ---
 
 func connectionStatus(c *connector.Ctx) (any, error) {
-	// Ungated: the status card must work during setup, before the usage_note is
-	// filled — that's how the operator confirms the token before enabling ops.
-	cl, err := newClientUngated(c)
+	cl, err := newClient(c)
 	if err != nil {
 		return map[string]any{"html": statusCard(false, "Fill token_v2 first.")}, nil
 	}

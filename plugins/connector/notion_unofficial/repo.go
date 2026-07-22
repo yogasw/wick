@@ -1198,8 +1198,8 @@ var editableBlockTypes = map[string]bool{
 }
 
 // listBlocks returns the page's top-level content blocks in order, each with its
-// id + type + text. This is the "see the block ids" step: an agent (or Yoga)
-// calls it, picks the block to change, then calls update_block / delete_block
+// id + type + text. This is the "see the block ids" step: an agent (or the
+// operator) calls it, picks the block to change, then calls update_block / delete_block
 // with that id — so a single block is edited or removed without touching the
 // rest of the page.
 func (cl *v3Client) listBlocks(pageID string) ([]blockInfo, error) {

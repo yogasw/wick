@@ -50,24 +50,7 @@ type v3Client struct {
 	identityOK bool
 }
 
-// newClient builds a client for an AGENT-FACING op. On top of the credential
-// check it enforces the usage-note gate (requireUsageNote): this connector runs
-// on a PERSONAL Notion login (token_v2 = one human's session, seeing everything
-// that account can), so it must not be usable until an operator has written who
-// is allowed to use it. Setup/UI ops (connection_status, import) skip the gate
-// via newClientUngated so an operator can still fill in the token first.
 func newClient(c *connector.Ctx) (*v3Client, error) {
-	if err := requireUsageNote(c); err != nil {
-		return nil, err
-	}
-	return newClientUngated(c)
-}
-
-// newClientUngated builds a client WITHOUT the usage-note gate. Only the setup
-// ops (connection_status, import_curl_extract) should use it — they must run
-// before the connector is fully configured. Every agent-facing op goes through
-// newClient instead.
-func newClientUngated(c *connector.Ctx) (*v3Client, error) {
 	// Credentials live in individual config fields. The easy way to fill them is
 	// the import widget (import_form / import_curl_extract), which parses a pasted
 	// Copy-as-cURL and writes token_v2 + user_agent + notion_client_version +
@@ -86,21 +69,6 @@ func newClientUngated(c *connector.Ctx) (*v3Client, error) {
 		userAgent: ua,
 		clientVer: ver,
 	}, nil
-}
-
-// requireUsageNote refuses an agent-facing op unless the operator has filled the
-// usage_note config — the free-text statement of WHO is allowed to use this
-// instance (and/or what for). Because the token is one person's personal Notion
-// session, an undocumented instance is a liability: any agent that reaches it
-// acts as that human across their whole workspace. The error is written for the
-// LLM: it explains the risk and that the connector is intentionally disabled
-// until a human documents its intended user/scope — so the agent stops instead
-// of guessing.
-func requireUsageNote(c *connector.Ctx) error {
-	if strings.TrimSpace(c.Cfg("usage_note")) == "" {
-		return errors.New("this notion_unofficial connector is DISABLED until an operator fills its \"Usage / who may use this\" note. It authenticates with a PERSONAL Notion session token (token_v2) — every call acts as that human and can see/modify everything their account can, across their whole workspace. Do NOT use it: there is no record of who is allowed to, or what for. Ask a human to open the connector's config and document its intended user/scope (at minimum, WHO may use it) before any operation is permitted.")
-	}
-	return nil
 }
 
 // firstNonEmpty returns the first trimmed-non-empty argument, or "".
