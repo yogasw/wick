@@ -82,6 +82,20 @@ type Meta struct {
 	// mean "not synced yet", not "nothing to offer". wick_list runs the
 	// lazy catalog refresh before deciding to hide such a connector.
 	LiveCatalog bool
+	// RequireAIDescription makes the per-instance AI description
+	// (entity.Connector.Description — the free-text guidance an admin
+	// writes for the LLM) mandatory: an instance whose description is
+	// blank reports as "needs_setup" exactly like a missing required
+	// config field, so it shows as unfinished in the admin UI and is
+	// treated as not-ready everywhere Status is consulted.
+	//
+	// Use it for connectors where an undocumented instance is a
+	// liability — e.g. notion_unofficial authenticates with a personal
+	// session token, so every instance must record who may use it and
+	// what for before it is considered set up.
+	//
+	// Default false = description stays optional (existing behaviour).
+	RequireAIDescription bool
 	// DefaultTags is the list of tags wick auto-attaches to each newly
 	// seeded row for this connector at boot. Tags are reused across
 	// connectors via the central tags package; admins can add or remove

@@ -118,6 +118,10 @@ export interface ConnectorDetail {
   has_health_check: boolean;
   can_configure: boolean;
   is_admin: boolean;
+  /* When true the per-instance AI description is mandatory: the section is
+     forced on and marked required, and a blank one keeps the instance
+     needs_setup (mirrors Meta.RequireAIDescription). */
+  require_ai_description?: boolean;
   /* True for an admin OR the instance owner — gates the Access policy +
      per-session config sections. Broader than is_admin (owner included),
      narrower than can_configure (excludes AllowOthersConfigure users). */

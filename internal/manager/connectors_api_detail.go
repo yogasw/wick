@@ -136,6 +136,11 @@ type connectorDetailJSON struct {
 	HasHealthCheck bool                    `json:"has_health_check"`
 	CanConfigure   bool                    `json:"can_configure"`
 	IsAdmin        bool                    `json:"is_admin"`
+	// RequireAIDescription mirrors Meta.RequireAIDescription: when true the
+	// per-instance AI description is mandatory (a blank one keeps the instance
+	// needs_setup). The SPA uses it to force the AI description section on and
+	// mark it required.
+	RequireAIDescription bool `json:"require_ai_description"`
 	// CanManagePolicy is true for an admin OR the instance owner — gates the
 	// Access policy + session-config sections (more than can_configure, which
 	// also covers AllowOthersConfigure users who must NOT edit the policy).
@@ -319,6 +324,7 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 		HasHealthCheck:        mod.HealthCheck != nil,
 		CanConfigure:          canConfigure,
 		IsAdmin:               isAdmin,
+		RequireAIDescription:  mod.Meta.RequireAIDescription,
 		CanManagePolicy:       canManagePolicy,
 		Fields:                fields,
 		Operations:            ops,
