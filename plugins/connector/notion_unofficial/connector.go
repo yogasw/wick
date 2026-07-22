@@ -87,6 +87,11 @@ type createPageInput struct {
 	Properties string `wick:"desc=Database rows only. JSON object keyed by property NAME → string value. Call describe_database first for names/types/options. Formats: select=exact option; multi_select=comma-separated; checkbox=true/false; date=\"YYYY-MM-DD\" or \"YYYY-MM-DD HH:MM\" (range with \" → \"); relation/person=comma-separated ids. Example: {\"Activity\":\"Debug\",\"Start time\":\"2026-07-17 06:00\",\"End time\":\"2026-07-17 07:00\",\"Ticket\":\"<page-id>\"}"`
 }
 
+type updatePagePropertiesInput struct {
+	PageID     string `wick:"required;desc=ID of the database ROW (a row is a page) whose properties to update. Must be a row inside a database — a plain page has no properties. For its title use set_title; for body content use update_block."`
+	Properties string `wick:"required;desc=JSON object keyed by property NAME → string value; only the listed properties change, the rest of the row is untouched. Call describe_database first for names/types/options. Formats: select=exact option; multi_select=comma-separated; checkbox=true/false; date=\"YYYY-MM-DD\" or \"YYYY-MM-DD HH:MM\" (range with \" → \"); relation/person=comma-separated ids. To clear a cell pass an empty string. Example: {\"Status\":\"Done\",\"End time\":\"2026-07-21 07:00\"}"`
+}
+
 type createCommentInput struct {
 	PageID string `wick:"required;desc=ID of the page (or database row — a row is a page) to comment on."`
 	Text   string `wick:"required;desc=Comment text (plain text)."`
@@ -173,7 +178,7 @@ func Operations() []connector.Category {
 		),
 		connector.Cat(
 			"Write",
-			"Write via the private API's saveTransactions endpoint. To EDIT existing page content precisely, never rewrite the whole page: call list_blocks to get each block's id + type, then update_block (change one block's text/type) or delete_block (drop one block) on the id you want — everything else is left untouched. append_content adds new blocks at the end. To edit a database row's PROPERTIES (status, date, select, relation, …) treat the row as a page and use create_page's properties format as a reference for value shapes (describe_database lists the exact names/types/options). Comments are append-only: create_comment adds one; there is no edit/delete-comment op.",
+			"Write via the private API's saveTransactions endpoint. To EDIT existing page content precisely, never rewrite the whole page: call list_blocks to get each block's id + type, then update_block (change one block's text/type) or delete_block (drop one block) on the id you want — everything else is left untouched. append_content adds new blocks at the end. To edit a database row's PROPERTIES (status, date, select, relation, …) use update_page_properties on the row id with a name→value JSON object (describe_database lists the exact names/types/options); only the cells you pass change. Comments are append-only: create_comment adds one; there is no edit/delete-comment op.",
 			connector.Op(
 				"create_page",
 				"Create Page / Add Row",
@@ -220,6 +225,14 @@ func Operations() []connector.Category {
 				"REMOVE one block from a page by its id (from list_blocks). Only that block is removed; the rest of the page stays. Combine with append_content to insert a corrected version, or with update_block to fix in place. Returns {id, deleted}.",
 				deleteBlockInput{},
 				deleteBlock,
+				wickdocs.Docs{},
+			),
+			connector.Op(
+				"update_page_properties",
+				"Update Page Properties",
+				"EDIT the PROPERTY cells of an existing database row in place (status, date, select, relation, checkbox, …) — only the properties you list change, every other cell and the row's body content is left exactly as-is. Pass properties as a JSON object of name→value (same shapes as create_page); call describe_database first for the exact names/types/options. Refuses a plain page (no property schema) — for a page title use set_title, for body content use update_block. Returns {id, updated, skipped_properties}.",
+				updatePagePropertiesInput{},
+				updatePageProperties,
 				wickdocs.Docs{},
 			),
 		),

@@ -1385,6 +1385,61 @@ func resolveProps(props map[string]string, nameToID, idToType map[string]string)
 	return sets, skipped
 }
 
+// updatePageProps sets one or more property cells on an EXISTING database row
+// (a row is a page). It resolves the row's parent collection to translate the
+// agent-supplied {property NAME → string value} into the schema ids + formatted
+// api/v3 values, then writes each cell in place — every other property and the
+// row's body content is left untouched. Returns the property names actually set
+// and any that were skipped (unknown / read-only). Only works on a row whose
+// parent is a collection; a plain page has no property schema to write against.
+func (cl *v3Client) updatePageProps(pageID string, props map[string]string) (set, skipped []string, err error) {
+	spaceID, _, err := cl.identity()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// The row must live in a collection — that's where the property schema is.
+	rm, err := cl.syncRecordValues([]string{pageID})
+	if err != nil {
+		return nil, nil, err
+	}
+	rec := recordValue(rm.Block[pageID])
+	if rec == nil {
+		return nil, nil, errors.New("page not found or not accessible with this token")
+	}
+	if strField(rec, "parent_table") != "collection" {
+		return nil, nil, errors.New("this page is not a database row — it has no properties to update (only rows in a database have property columns; use set_title / update_block for a normal page)")
+	}
+	collID := strField(rec, "parent_id")
+	if collID == "" {
+		return nil, nil, errors.New("could not resolve the row's parent database")
+	}
+
+	nameToID, idToType, err := cl.fetchCollectionSchema(collID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load database schema: %w", err)
+	}
+	sets, skipped := resolveProps(props, nameToID, idToType)
+	if len(sets) == 0 {
+		return nil, skipped, errors.New("no writable properties to update (all names were unknown, read-only, or the title — use set_title to change the title)")
+	}
+
+	// Resolve id→name once for the feedback list (report by the name the caller used).
+	idToName := make(map[string]string, len(nameToID))
+	for name, id := range nameToID {
+		idToName[id] = name
+	}
+	ops := make([]map[string]any, 0, len(sets))
+	for _, p := range sets {
+		ops = append(ops, op("block", pageID, spaceID, []any{"properties", p.ID}, "set", p.Value))
+		set = append(set, idToName[p.ID])
+	}
+	if err := cl.saveTransactions(spaceID, ops); err != nil {
+		return nil, nil, err
+	}
+	return set, skipped, nil
+}
+
 // createComment adds a page-level comment: it creates a discussion + a comment
 // and lists the discussion on the target block (a page or a row-page).
 // Returns {commentID, discussionID}. Sequence verified live (comment needs the

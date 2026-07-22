@@ -177,6 +177,38 @@ func createPage(c *connector.Ctx) (any, error) {
 	return out, nil
 }
 
+// updatePageProperties edits the property cells of an existing database row in
+// place. The row is addressed by its page id; properties is a JSON object of
+// name→value (same shapes create_page accepts). Only the listed properties
+// change — the rest of the row and its body content are untouched.
+func updatePageProperties(c *connector.Ctx) (any, error) {
+	id := normalizeID(c.Input("page_id"))
+	raw := strings.TrimSpace(c.Input("properties"))
+	if id == "" || raw == "" {
+		return nil, errors.New("page_id and properties are required")
+	}
+	var props map[string]string
+	if err := json.Unmarshal([]byte(raw), &props); err != nil {
+		return nil, fmt.Errorf("properties is not valid JSON object of name→value: %w", err)
+	}
+	if len(props) == 0 {
+		return nil, errors.New("properties is empty — nothing to update")
+	}
+	cl, err := newClient(c)
+	if err != nil {
+		return nil, err
+	}
+	updated, skipped, err := cl.updatePageProps(id, props)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]any{"id": id, "updated": updated}
+	if len(skipped) > 0 {
+		out["skipped_properties"] = skipped
+	}
+	return out, nil
+}
+
 // describeDatabase returns a database's schema so the agent knows exactly what
 // it can set on a new row: each property's name, type, whether it's writable,
 // and select options. For an embedded/linked view it also reports the active
