@@ -79,6 +79,12 @@ rate-limits at ~3 req/s) is retried automatically with backoff.
   `list_blocks`); other blocks are untouched. Optional `type` converts the block.
   Refuses non-text blocks (image/embed/table/divider/…).
 - **`delete_block`** — remove **one** block by id; the rest of the page stays.
+- **`update_page_properties`** — edit the **property cells** of an existing
+  database row in place (status, date, select, relation, checkbox, …). Pass
+  `properties` (JSON `name → value`, same shapes as `create_page`); only the
+  listed cells change, the rest of the row and its body are untouched. Refuses a
+  plain page (no property schema — use `set_title`/`update_block` there).
+  Returns `{id, updated, skipped_properties}`.
 
 ### Maintenance (UI only, hidden from the agent)
 - `import_form`, `import_curl_extract` — back the paste-a-cURL widget.

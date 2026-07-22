@@ -10,6 +10,18 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.33.2](https://github.com/yogasw/wick/compare/v0.33.1...v0.33.2) — Notion Connector
+
+_Released on 2026-07-22_
+
+### Added
+*   **`update_page_properties` for `notion_unofficial`**: Edits the property cells of an existing database row in place (status, date, select, multi_select, checkbox, relation, person, number, and more). Only the properties passed are written, leaving the rest of the row and its body content untouched. Takes `page_id` (the row) and `properties` (JSON `name → value`, using the same shapes as `create_page`). The operation refuses a plain page (one without a property schema, directing users to `set_title` or `update_block` instead) and returns unknown or read-only property names in `skipped_properties` rather than failing the call. Returns `{id, updated, skipped_properties}`. Call `describe_database` first to retrieve exact property names, types, and options. See [Notion (Unofficial) ▶ Writing database row properties](/connectors/notion_unofficial#writing-database-row-properties).
+*   **`notion_unofficial` requires an AI description to be set up**: As this connector authenticates with a personal Notion session token (`token_v2`)—meaning every call acts as one human across their entire workspace—an instance is now considered `needs_setup` until its per-instance **AI description** is filled. This ensures there's always a record of who may use it and for what purpose. This feature reuses the existing per-instance description field (which guides the LLM) and standard readiness status: a blank description reports as unfinished in the Manager UI, just like a missing required config field, and flips to `ready` once completed. Setup widgets (`Import`, `Status`) bypass this gate, allowing operators to confirm the connection before enabling the instance. This is backed by a new opt-in `Meta.RequireAIDescription` connector flag. All authentication and advanced configuration fields (`token_v2`, `active_user_id`, `user_agent`, `notion_client_version`) are now also required; these are conveniently filled in one click by the Extract widget. In the Manager UI, when a connector requires an AI description, the section is now forced on, marked 'Required', and displays a warning when blank. The connector version has been bumped to 0.4.0. See [Notion (Unofficial) ▶ AI description required](/connectors/notion_unofficial#ai-description-required).
+*   **`operator_note` in the connector meta-tools**: `wick_list`, `wick_search`, and `wick_get` now include a separate `operator_note` field. This field carries the admin-written per-instance AI description, distinguishing it from the connector's built-in `description`. This allows the agent to recognize and prioritize operator-authored instructions (such as access rules, team notes, or constraints) over product descriptions. For example, a personal-token connector's note might specify who is authorized to use it. This field is omitted when blank.
+
+---
+
+
 ## [v0.33.1](https://github.com/yogasw/wick/compare/v0.33.0...v0.33.1) — Live Browser & Connectors
 
 _Released on 2026-07-21_

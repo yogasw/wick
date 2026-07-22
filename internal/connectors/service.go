@@ -37,10 +37,19 @@ func ownerForConnector(connectorID string) string {
 // has a non-empty value, "needs_setup" otherwise. Reads from the
 // configs.Service cache (RWMutex, no DB hit per call).
 func (s *Service) Status(c entity.Connector) string {
-	if len(s.cfgs.Missing(ownerForConnector(c.ID))) == 0 {
-		return "ready"
+	if len(s.cfgs.Missing(ownerForConnector(c.ID))) != 0 {
+		return "needs_setup"
 	}
-	return "needs_setup"
+	// A connector may also require the per-instance AI description (the
+	// admin's free-text guidance for the LLM). When the module opts in
+	// via Meta.RequireAIDescription, a blank description is treated the
+	// same as a missing required config field — the instance is not
+	// finished being set up. Used by e.g. notion_unofficial, where an
+	// undocumented instance running on a personal token is a liability.
+	if mod, ok := s.Module(c.Key); ok && mod.Meta.RequireAIDescription && strings.TrimSpace(c.Description) == "" {
+		return "needs_setup"
+	}
+	return "ready"
 }
 
 // LoadConfigs returns the credential map for a connector row, keyed
