@@ -14,6 +14,17 @@ const Key = "notion_unofficial"
 // Cookies). ActiveUserID fills the x-notion-active-user-header some endpoints
 // require on multi-account sessions; leave blank for a single-account login.
 type Config struct {
+	// UsageNote is a mandatory human statement of WHO is allowed to use this
+	// instance (and optionally what for). It gates every agent-facing op: while
+	// blank, all operations refuse (see requireUsageNote). The point is safety —
+	// this connector runs on a PERSONAL Notion session token, so an undocumented
+	// instance is a loaded gun; the operator must record who may use it before an
+	// agent is allowed to act as that human. The value is shown to the LLM (it's
+	// an op input on nothing, but the refusal message references it), so write it
+	// for the agent, e.g. "Only the Ops team's Notion automation may use this
+	// (Yoga's personal login). Do not use for anything outside Ops runbooks."
+	UsageNote string `wick:"required;group=Authentication;desc=REQUIRED. Who is allowed to use this connector instance (this token is a PERSONAL Notion login — every call acts as that human). State at minimum WHO may use it; optionally what for. All operations are blocked until this is filled."`
+
 	// Import is the easy path: an html widget (import_form op) renders a textarea
 	// where the operator pastes a "Copy as cURL" of any api/v3 request from
 	// DevTools, plus an Extract button. Extract parses the curl and writes the
