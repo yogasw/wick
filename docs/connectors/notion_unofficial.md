@@ -76,6 +76,7 @@ You can also fill `TokenV2` by hand: **DevTools → Application → Cookies → 
 | `append_content` | `page_id`, `markdown`, `after_block_id` | Add new blocks from markdown. By default they go at the **end**; set `after_block_id` (from `list_blocks`) to insert right **after** that block — i.e. in the **middle** of the page. Existing content is never touched. Returns `{page_id, added, block_ids}`. |
 | `update_block` | `block_id`, `text`, `type` | Rewrite **one** block's text in place, addressed by its ID from `list_blocks` — every other block stays exactly as-is. Optionally set `type` to convert the block (e.g. `text → sub_header`). Refuses non-text blocks. Returns `{id}`. |
 | `delete_block` | `page_id`, `block_id` | Remove **one** block by its ID (from `list_blocks`). Only that block goes; the rest of the page stays. Returns `{id, deleted}`. |
+| `update_page_properties` | `page_id`, `properties` | Edit the **property cells** of an existing database row in place (status, date, select, relation, checkbox, …) — only the listed properties change, every other cell and the row's body content is left exactly as-is. `properties` is JSON `name → value`, same shapes as `create_page`; call `describe_database` first for the exact names/types/options. Refuses a plain page (no property schema — use `set_title`/`update_block` there). Returns `{id, updated, skipped_properties}`. |
 
 Read ops never mutate; only the write ops above call the private API's `saveTransactions` endpoint.
 
@@ -97,6 +98,11 @@ Two guards keep an edit from breaking the page:
 - **`append_content` validates `after_block_id`.** An anchor that isn't a top-level block of the target page is rejected (instead of silently mis-placing the new blocks). Always pass an ID that `list_blocks` returned for that page.
 
 ### Writing database row properties
+
+Use `create_page` to set properties on a **new** row, or `update_page_properties`
+to change property cells on an **existing** row (only the listed cells change;
+the rest of the row and its body are untouched). Both take the same
+`properties` shape.
 
 `properties` values are plain strings in a format-per-type convention:
 

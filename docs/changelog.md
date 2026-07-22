@@ -6,7 +6,8 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **`update_page_properties` for `notion_unofficial`**: Edits the property cells of an existing database row in place (status, date, select, multi_select, checkbox, relation, person, …) — only the properties passed are written, the rest of the row and its body content are untouched. Takes `page_id` (the row) and `properties` (JSON `name → value`, same shapes as `create_page`); refuses a plain page (no property schema — use `set_title`/`update_block` there), and unknown/read-only names come back in `skipped_properties` instead of failing. Returns `{id, updated, skipped_properties}`. Call `describe_database` first for exact property names/types/options. Connector bumped to 0.3.0. See [Notion (Unofficial) ▶ Writing database row properties](/connectors/notion_unofficial#writing-database-row-properties).
 
 ---
 
