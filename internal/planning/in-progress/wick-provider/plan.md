@@ -1,5 +1,104 @@
 # Wick Provider (built-in) — Design
 
+## TODO — captured 2026-07-24, not yet started
+
+Captured so nothing from the last live-testing round gets lost. None of these are
+implemented yet — planning/discussion only so far. Roughly ordered by dependency.
+
+1. **Provider picker: 3-level nav (Type → Name → Model).** Composer's "Provider"
+   panel is currently a flat list (`claude · claude_default`, `claude · new [AI
+   Router]`, `codex`, `codex · gemini_fl… [AI Router]`, `gemini`, `wick`). Restructure
+   to: pick **Type** first (claude/codex/gemini/wick, one row each) → submenu of that
+   type's **instance Name**s → for `wick` specifically, if that wick instance has
+   more than one registered **Model**, a 3rd-level submenu to pick the model (skip
+   this level entirely if there's only one model — never force an extra nav step).
+   Wick instances themselves can already be duplicated like any other provider type
+   (the old "single instance" rule from this doc is superseded — see note below), so
+   a user can have `wick · default`, `wick · custom_a`, etc., each with its own model
+   list. FE: composer provider-picker component (`fe/agents/conversation` — find via
+   the "< Provider" panel header). BE: no new endpoint expected, just FE grouping
+   over the existing provider-list response.
+2. **Fix the wick icon in the picker.** Screenshot shows a generic person/user icon
+   for `wick` next to sparkle/atom-style icons for claude/gemini — looks out of
+   place. Find the icon map (keyed by provider type) and swap in something befitting
+   "wick" (brand icon already exists per git log `feat(fe): give the wick provider
+   its own brand icon` — confirm the picker actually uses it; if the picker has its
+   own separate icon map from the one that commit touched, that's the bug).
+3. **WickDetail model row: consolidate actions into a kebab (⋯) menu.** Today each
+   model row has separate buttons: Test / Edit / Delete (+ implicit "set default" via
+   radio). Replace with a single "⋯" dropdown containing: **Edit, Set default, Test,
+   Duplicate, Disable/Enable, Delete** (mockup.html View 2 now shows this exact
+   layout, including a disabled-row example) — room to grow without the row getting
+   wider every time a new action lands. Disabled rows show a muted "Disabled" chip
+   and grey out the row; Set default/Test are disabled until re-enabled.
+4. **Add per-model Disable/Enable.** New bool field on `WickModel` (BE:
+   `internal/agents/provider/wick` model struct + wherever it's persisted/read for
+   the composer's model list) — a disabled model is hidden from the composer's
+   Model submenu (item 1) and from being auto-picked as default, but stays visible
+   (greyed) in the Models table so it's not lost, just parked. FE: toggle in the
+   kebab menu + a visual "Disabled" chip on the row.
+5. **Real per-model Test button (1-token ping).** Currently
+   `WickDetail.svelte`'s `testModel()` is a placeholder toastOk stub ("Test for X is
+   not wired yet") — no backend endpoint exists. Build: `POST
+   /providers/wick/models/{id}/test` → BE resolves the model's adapter (same
+   Kind/APIFormat → adapter mapping `spawn.go` already uses for real spawns),
+   decrypts the stored key, sends a minimal 1-token generate call, returns
+   `{ok, latency_ms, error?}`. Reuses the adapter code path, not a new HTTP client.
+   Wire the FE Test button (now inside the kebab menu, item 3) to call it and toast
+   the result (latency on success, vendor error message on failure).
+6. **Long-running tool calls (>~2min) go to a background goroutine.** Today every
+   tool call blocks the turn synchronously (`engine.dispatch` →
+   `handler(ctx, args)`, see `internal/agents/provider/wick/engine.go`). For calls
+   that legitimately run long (mainly `shell`, currently capped at a hard 120s
+   timeout in `tool_shell.go`), instead of just timing out: at ~90s–2min without
+   completion, detach the still-running process into a goroutine that streams
+   output to a per-session job file (mirror the workflow engine's `Store` pattern —
+   `state.json` + append-only `events.jsonl`/`output.log`, see
+   `internal/agents/workflow/engine/engine.go`'s `Save`/`AppendEvent`/`ListEventsTail`
+   — new sibling layout helper `SessionJobsDir(id)`/`SessionJob(id, jobID)` next to
+   the existing `Session*` methods in `internal/agents/config/layout.go`), and
+   return a tool result immediately: "still running in background, job id X — check
+   with `job_status`/`job_result` later." Add a small poll tool (`job_status` /
+   `job_result`) to `buildTools` so the model can check back in a later turn instead
+   of the turn hanging. Chosen approach (decided in this session): tool returns a
+   placeholder immediately + the model polls next turn — NOT interrupting the live
+   generation to inject the result mid-stream (that would need surgery on the
+   engine's streaming/dispatch loop for little benefit).
+7. **Oversized tool results get redirected to a file.** Tool call results (shell
+   output, connector responses, etc.) above ~50KB should be written to a file
+   (session workspace, path surfaced in the tool result) instead of inlined —
+   returned tool_result text becomes something like "response too large (212KB),
+   saved to `output/shell_1234.txt` — use read_file to inspect it." Applies to tool
+   results only, not final assistant text. Natural pairing with item 6 (background
+   job output is already file-based) — likely the same size-check helper backs both.
+8. **Per-model generation config, trim redundant Global fields.** Advanced-options
+   fields already exist per-model in the Add/Edit modal (max output tokens, temp,
+   top-p, thinking budget, raw config — see `WickGenConfig` in the Data model
+   section below) — confirm the backend actually persists/uses all of them (some
+   may be UI-only stubs). Decision (this session): keep these model-specific knobs
+   **per-model only**; do NOT also expose them as instance-level Global defaults —
+   drop any duplicate Global field for something that's genuinely per-model (a
+   model-specific temperature has no sane "global default" — every model's sane
+   default differs). Global should keep only genuinely instance-level settings:
+   shell tool on/off, connectors, max context tokens (history budget), max turns,
+   and gate-adjacent settings — **gate config explicitly stays global**, never
+   per-model.
+9. **Duplicate model.** The "Duplicate" entry in the kebab menu (item 3) clones a
+   `WickModel` row (new id, same config incl. decrypted-then-re-encrypted API key,
+   label suffixed "(copy)") so setting up a variant (e.g. same model, different
+   temperature) doesn't mean re-entering the API key/model id from scratch. Check
+   for an existing clone/duplicate pattern elsewhere in the codebase (connector
+   duplication, workflow duplication) to mirror before inventing a new one.
+
+**Superseded note:** the "Naming (decided)" section below says wick is a **single
+instance** with no duplicate/rename — that was the 2026-07-23 decision. As of this
+session's discussion, that's being revisited: wick instances CAN be duplicated like
+any other provider type, which is what makes the 3-level picker (item 1) meaningful
+(otherwise "Name" would always have exactly one option). Treat the "single instance"
+language below as historical until the picker/duplication work above actually lands
+— don't remove the old section, just don't trust it as current truth.
+
+
 `wick` becomes the 4th provider type alongside `claude` / `codex` / `gemini` — a
 **built-in agent runtime that runs inside the wick process**, no external CLI to
 install. Operators register custom models (Google Gemini, OpenAI, Anthropic,
@@ -39,6 +138,38 @@ approval, prompt caching, auto-compaction, composer nested model picker, context
 ## Build status (2026-07-23 overnight build)
 
 Legend: [x] done + tested · [~] partial · [ ] not started
+
+### Live-testing round, 2026-07-24 — ✅ DONE (not yet reflected further down this doc)
+
+- [x] **Command gate: full tool coverage, not just shell.** Every wick tool now goes
+  through the same approve_once/session/always/block modal CLI providers get, unless
+  `permission_mode=bypass` (full access, no gate at all). Read-only tools + fs tools
+  always-allow; `shell` checks the whitelist then falls through to approval;
+  everything else (`wick_execute`, connector calls, unknown MCP tools) always
+  requires approval. New in-process synchronous approval path
+  (`ApprovalManager.RequestApproval`) reuses the same daemon state (session-approved
+  cache, SSE broadcast, `/approve` HTTP endpoint) as the CLI socket-based gate.
+- [x] **Fixed: wrong session id reaching the gate checker**, root cause of "gate
+  says bypass but shell still hangs 25s with no modal" — `dispatch()` was passing
+  the stream-json protocol's own engine-local id instead of the real wick HTTP
+  session id, so approval SSE events fanned out to nobody. New `wickSessionID` field
+  distinct from `sessionID`.
+- [x] **`AllowShellMetachars` toggle** — lets a whitelisted command carry chain
+  operators (`;`, `|`, `&`/`&&`) safely by re-validating each chained sub-command
+  independently; redirect/substitution chars (`>`, `<`, backtick, `$(...)`) stay
+  hard-blocked regardless (they inject into one command rather than adding a
+  genuinely separate one).
+- [x] **System prompt split: global vs per-provider.** Wick was silently inheriting
+  claude's overlay (missing switch branch in `pool/factory.go`) — now has its own
+  `immutable_wick.md` overlay; the persistent-memory (`memory.md`) instructions
+  live there, not in the shared immutable base.
+- [x] **`todo` tool: merged UI + moved to shared MCP surface.** Was wick-only
+  native tool; now defined once in `internal/mcp/handlers/todo.go` /
+  `tools.go`/`handler.go`'s `dispatchTool`, reachable by claude/codex/gemini too
+  (mirrors `ask_user`'s pattern — reuses `dispatchTool` in-process, no new auth
+  surface). FE renders every `todo` call in a turn as ONE merged checklist widget
+  (not one card per call), matched by optional `id` (falls back to step-text), with
+  per-item click-to-expand showing the tool calls that happened during that step.
 
 ## NEXT TARGETS (Yoga feedback while testing, 2026-07-24)
 

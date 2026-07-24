@@ -99,6 +99,23 @@
   .iconbtn{background:none;border:none;cursor:pointer;color:var(--text-faint);padding:4px;border-radius:4px}
   .iconbtn:hover{color:var(--text);background:var(--row-hover)}
   .iconbtn.danger:hover{color:var(--neg-400)}
+  .chip-disabled{background:var(--cau-100);color:var(--cau-400);border-color:transparent}
+  html[data-theme="dark"] .chip-disabled{background:rgba(215,142,8,.16)}
+  tr.row-disabled td{opacity:.55}
+
+  /* ── kebab (⋯) row menu ──────────────────────────────────────────── */
+  .kebab-wrap{position:relative;display:inline-block}
+  .kebab-menu{display:none;position:absolute;right:0;top:calc(100% + 4px);z-index:10;
+    min-width:172px;background:var(--surface);border:1px solid var(--border-strong);
+    border-radius:8px;box-shadow:var(--shadow-lg);padding:4px;flex-direction:column}
+  .kebab-wrap.open .kebab-menu{display:flex}
+  .kebab-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;
+    background:none;border:none;cursor:pointer;font:inherit;font-size:13px;color:var(--text);
+    text-align:left;width:100%}
+  .kebab-item:hover{background:var(--row-hover)}
+  .kebab-item.danger{color:var(--neg-400)}
+  .kebab-item svg{flex-shrink:0}
+  .kebab-sep{height:1px;background:var(--border);margin:4px 2px}
 
   /* ── View 3: modal ──────────────────────────────────────────────── */
   .modal-frame{max-width:640px;margin:0 auto;box-shadow:var(--shadow-lg)}
@@ -260,7 +277,7 @@
     <div class="tablewrap">
       <table>
         <thead>
-          <tr><th style="width:64px">Default</th><th>Model</th><th>Provider</th><th>API key</th><th style="width:96px"></th></tr>
+          <tr><th style="width:64px">Default</th><th>Model</th><th>Provider</th><th>API key</th><th style="width:56px"></th></tr>
         </thead>
         <tbody>
           <tr>
@@ -269,9 +286,18 @@
             <td><span class="chip">Google</span></td>
             <td class="mono faint">••••••••3kQ</td>
             <td>
-              <button class="btn btn-ghost btn-sm" title="1-token ping: validates key + model id">Test</button>
-              <button class="iconbtn" title="Edit"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
-              <button class="iconbtn danger" title="Delete"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+              <div class="kebab-wrap" onclick="event.stopPropagation();this.classList.toggle('open')">
+                <button class="iconbtn" title="More actions"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg></button>
+                <div class="kebab-menu">
+                  <button class="kebab-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>Edit</button>
+                  <button class="kebab-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Set default</button>
+                  <button class="kebab-item" title="1-token ping: validates key + model id"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>Test</button>
+                  <button class="kebab-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Duplicate</button>
+                  <div class="kebab-sep"></div>
+                  <button class="kebab-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>Disable</button>
+                  <button class="kebab-item danger"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>Delete</button>
+                </div>
+              </div>
             </td>
           </tr>
           <tr>
@@ -280,20 +306,38 @@
             <td><span class="chip">OpenAI</span></td>
             <td class="mono faint">••••••••9xF</td>
             <td>
-              <button class="btn btn-ghost btn-sm" title="1-token ping: validates key + model id">Test</button>
-              <button class="iconbtn" title="Edit"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
-              <button class="iconbtn danger" title="Delete"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+              <div class="kebab-wrap" onclick="event.stopPropagation();this.classList.toggle('open')">
+                <button class="iconbtn" title="More actions"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg></button>
+                <div class="kebab-menu">
+                  <button class="kebab-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>Edit</button>
+                  <button class="kebab-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Set default</button>
+                  <button class="kebab-item" title="1-token ping: validates key + model id"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>Test</button>
+                  <button class="kebab-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Duplicate</button>
+                  <div class="kebab-sep"></div>
+                  <button class="kebab-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>Disable</button>
+                  <button class="kebab-item danger"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>Delete</button>
+                </div>
+              </div>
             </td>
           </tr>
-          <tr>
+          <tr class="row-disabled">
             <td><span class="radio"></span></td>
-            <td>Grok 4.5 via OpenRouter<div class="mono faint">x-ai/grok-4.5</div></td>
+            <td>Grok 4.5 via OpenRouter <span class="chip chip-disabled" style="margin-left:6px">Disabled</span><div class="mono faint">x-ai/grok-4.5</div></td>
             <td><span class="chip">OpenRouter</span></td>
             <td class="mono faint">••••••••aB2</td>
             <td>
-              <button class="btn btn-ghost btn-sm" title="1-token ping: validates key + model id">Test</button>
-              <button class="iconbtn" title="Edit"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
-              <button class="iconbtn danger" title="Delete"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+              <div class="kebab-wrap" onclick="event.stopPropagation();this.classList.toggle('open')">
+                <button class="iconbtn" title="More actions"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></svg></button>
+                <div class="kebab-menu">
+                  <button class="kebab-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>Edit</button>
+                  <button class="kebab-item" disabled style="opacity:.4;cursor:default" title="Enable it first"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Set default</button>
+                  <button class="kebab-item" disabled style="opacity:.4;cursor:default" title="Enable it first"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>Test</button>
+                  <button class="kebab-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Duplicate</button>
+                  <div class="kebab-sep"></div>
+                  <button class="kebab-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>Enable</button>
+                  <button class="kebab-item danger"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>Delete</button>
+                </div>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -304,6 +348,7 @@
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--cau-400)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:2px"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
     <span>Wick runs in-process with native tools: <b>shell</b> (bash/cmd — gate rules enforced inside the tool itself, no hook probe needed) and <b>wick connectors</b> (direct service call, no MCP round-trip).</span>
   </div>
+  <p class="faint" style="font-size:12px;margin-top:8px">Row actions are a single <b>⋯</b> menu (click to preview above) — Edit / Set default / Test / Duplicate / Disable-Enable / Delete — instead of separate buttons, so the row stays a fixed width as more actions land later. A <b>Disabled</b> model (bottom row) is greyed out, drops out of the composer's model submenu (View 4) and can't be set default or tested until re-enabled, but stays in the table so its config isn't lost.</p>
 
   <!-- ════════ VIEW 3 — Add/Edit Custom Model modal ════════ -->
   <span class="viewtag">View 3 — Add / Edit Custom Model modal (Factory-style + live model search)</span>
@@ -398,6 +443,7 @@
 
   <!-- ════════ VIEW 4 — composer picker: nested model submenu ════════ -->
   <span class="viewtag">View 4 — Session composer · provider picker with nested wick model list (core)</span>
+  <p class="faint" style="font-size:12px;margin-bottom:8px">Superseded by the 3-level TODO (top of plan.md, 2026-07-24): wick instances can now be duplicated like any other provider type, so the flat "claude / codex / gemini / wick" list below becomes Type → Name → (Model, only if that instance has &gt;1). This mockup still shows the older flat/single-instance shape — kept as-is until the new nav is actually implemented.</p>
   <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
     <div class="card" style="width:280px;padding:8px 0">
       <div style="padding:8px 16px;font-size:12px;font-weight:500;color:var(--text-faint)">Provider</div>
@@ -427,6 +473,7 @@
       <p class="help" style="margin-top:8px"><b>wick appears once</b> in the picker (single instance — no <span class="mono">wick · foo</span> duplicates like codex instances today). Clicking it expands its registered models; the session stores the chosen model id. History follows the session, not the provider — switching claude → wick keeps the conversation (rebuilt from <span class="mono">conversation.jsonl</span>).</p>
     </div>
   </div>
+
 </main>
 
 <script>
@@ -449,6 +496,11 @@
       el.style.display = el.dataset.id.toLowerCase().includes(q) ? '' : 'none';
     });
   }
+
+  // close any open kebab menu when clicking elsewhere
+  document.addEventListener('click', () => {
+    document.querySelectorAll('.kebab-wrap.open').forEach(el => el.classList.remove('open'));
+  });
 </script>
 </body>
 </html>
