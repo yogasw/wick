@@ -458,11 +458,12 @@
     return !!s && !!s.value;
   }
   // Provider brand from the "type/name" value: claude / codex / gemini / other.
-  function provType(value: string): "claude" | "codex" | "gemini" | "other" {
+  function provType(value: string): "claude" | "codex" | "gemini" | "wick" | "other" {
     const t = (value.split("/")[0] || "").toLowerCase();
     if (t.includes("claude")) return "claude";
     if (t.includes("codex") || t.includes("openai")) return "codex";
     if (t.includes("gemini")) return "gemini";
+    if (t.includes("wick")) return "wick";
     return "other";
   }
 
@@ -507,7 +508,7 @@
 
 {#snippet provIcon(value: string, cls: string)}
   {@const t = provType(value)}
-  {#if t === "claude" || t === "gemini"}
+  {#if t === "claude" || t === "gemini" || t === "wick"}
     <!-- Multicolor brand marks served statically from /public/img/providers (embedded). -->
     <img
       src={`/public/img/providers/${t}.svg`}
