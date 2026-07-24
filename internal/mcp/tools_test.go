@@ -481,7 +481,7 @@ func TestToolsListContainsAllExpectedTools(t *testing.T) {
 	want := []string{
 		"wick_list", "wick_search", "wick_get", "wick_execute",
 		"wick_info", "wick_encrypt", "wick_decrypt",
-		"ask_user", "wick_list_providers",
+		"todo", "ask_user", "wick_list_providers",
 		"wick_skill_list", "wick_skill_sync",
 		"wick_session_info", "wick_set_title",
 		"wick_session_workspace",

@@ -12,10 +12,30 @@
 //
 // Result: idle cost is one Node process; a build only spins up while a
 // file is actually changing.
-import { spawn } from "node:child_process";
+import { spawn, exec } from "node:child_process";
 import { watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+const IS_WINDOWS = process.platform === "win32";
+
+// Kill an entire process tree. shell:true spawns npm/bun as a wrapper around
+// vite — plain p.kill() only signals that wrapper; on Windows especially,
+// the actual vite/node build process is a grandchild that survives and
+// keeps writing to dist/ after we thought the build was stopped. taskkill
+// /T walks the tree; on POSIX, killing the negated pgid (spawned in its own
+// process group below) covers the same case.
+function killTree(p) {
+  if (IS_WINDOWS) {
+    exec(`taskkill /pid ${p.pid} /T /F`, () => {});
+  } else {
+    try {
+      process.kill(-p.pid, "SIGTERM");
+    } catch {
+      p.kill();
+    }
+  }
+}
 
 const FE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const runner = process.versions.bun ? "bun" : "npm";
@@ -137,7 +157,11 @@ function dirsForChange(abs) {
 
 // Serialize builds: one vite process at a time, coalescing a queue of
 // pending workspace dirs so a burst of saves produces a single rebuild.
+// A build in flight is killed and restarted (not just queued behind) the
+// moment a NEW change arrives — see onChange below — so rapid-fire edits
+// never pile up a backlog of stale builds that finish one after another.
 let building = false;
+let currentProc = null;
 const pending = new Set();
 // Files (rel paths) that triggered the current pending batch, for the banner.
 let triggers = new Set();
@@ -160,15 +184,37 @@ function drain() {
   // caused it, not just the first. Cleared only once the queue drains.
   const why = triggers.size ? ` ← ${[...triggers].join(", ")}` : "";
   banner(`rebuild ${ws}${pending.size ? ` (+${pending.size} queued)` : ""}${why}`);
-  buildOnce(ws).then((code) => {
-    log(`${ws} ${code === 0 ? "✓ ok" : `✗ exit ${code}`} (${Date.now() - t0}ms)`);
+  buildOnce(ws, false, true).then(({ code, killed }) => {
     building = false;
+    currentProc = null;
+    if (killed) {
+      // A newer change interrupted this build. onChange() already killed
+      // the process and reset the debounce timer; that timer's eventual
+      // enqueue() call drain()s too, but it fires 5s from now — meanwhile
+      // `building` was true (this exit event hadn't landed yet) so ANY
+      // enqueue() that happened in between returned immediately without
+      // draining. Call drain() now so a dir queued while we were still
+      // exiting doesn't sit stuck until the next unrelated change.
+      drain();
+      return;
+    }
+    log(`${ws} ${code === 0 ? "✓ ok" : `✗ exit ${code}`} (${Date.now() - t0}ms)`);
     if (pending.size === 0) triggers = new Set();
     drain();
   });
 }
 
+// Quiet period: a change must go this long with NO further changes before
+// a build starts. Generous on purpose — editors/saves/formatters fire in
+// bursts, and restarting an in-flight build (below) means a short debounce
+// just thrashes. 5s idle, no new edits → build. Any edit during that wait
+// (or during a running build) pushes it out another 5s.
+const DEBOUNCE_MS = 5000;
+
 // Debounce raw fs events (editors fire several per save) into one enqueue.
+// If a build is already running when a new change lands, kill it — its
+// output is stale before it even finishes — and let the fresh debounce
+// window start the rebuild once things go quiet again.
 let timer = null;
 const dirty = new Set();
 const changedFiles = new Set();
@@ -177,6 +223,12 @@ function onChange(abs, rel) {
   if (dirs.length === 0) return;
   for (const d of dirs) dirty.add(d);
   if (rel) changedFiles.add(rel);
+  if (currentProc) {
+    log(`change detected mid-build — stopping current build, waiting ${DEBOUNCE_MS / 1000}s quiet before restart`);
+    currentProc.markKilled();
+    killTree(currentProc);
+    currentProc = null;
+  }
   clearTimeout(timer);
   timer = setTimeout(() => {
     const dirs = [...dirty];
@@ -184,28 +236,41 @@ function onChange(abs, rel) {
     dirty.clear();
     changedFiles.clear();
     enqueue(dirs, changed);
-  }, 150);
+  }, DEBOUNCE_MS);
 }
 
-// Run one build attempt. Buffers output when quiet; resolves {code, out}.
+// Run one build attempt. Buffers output when quiet; resolves {code, out, killed}.
+// track=true registers the spawned process on currentProc (so onChange can
+// kill it) — only the interactive watch-mode build (drain()) does this; the
+// initial parallel builds don't need kill-on-change since nothing is
+// watching for changes yet.
 //
 // shell:true is REQUIRED on Windows — npm/bun are .cmd shims that Node 24
 // refuses to spawn directly (EINVAL) without a shell. The DEP0190 warning
 // this prints is harmless here: our args are a fixed, literal list (no
 // user input to escape), so the "unescaped args" caveat doesn't apply.
-function runBuild(ws, quiet) {
+function runBuild(ws, quiet, track) {
   return new Promise((resolve) => {
     const p = spawn(runner, ["--workspace", ws, "run", "build"], {
       cwd: FE_ROOT,
       stdio: quiet ? ["ignore", "pipe", "pipe"] : "inherit",
       shell: true,
+      // detached (POSIX only — harmless flag on Windows) puts the shell in
+      // its own process group so killTree's -pid signal reaches the whole
+      // tree, not just the shell wrapper.
+      detached: !IS_WINDOWS,
     });
+    if (track) currentProc = p;
     let buf = "";
+    let killedByUs = false;
+    // Marked BEFORE killTree() so onChange's own log + the exit handler
+    // agree this was an intentional stop, not a build failure.
+    p.markKilled = () => { killedByUs = true; };
     if (quiet) {
       p.stdout.on("data", (d) => (buf += d));
       p.stderr.on("data", (d) => (buf += d));
     }
-    p.on("exit", (code) => resolve({ code: code ?? 1, out: buf }));
+    p.on("exit", (code) => resolve({ code: code ?? 1, out: buf, killed: killedByUs }));
   });
 }
 
@@ -214,14 +279,15 @@ function runBuild(ws, quiet) {
 // failure. Retries once on a transient EPERM/EBUSY — vite's emptyOutDir
 // rmSync races a Windows file lock (the running Go server embeds/serves
 // the same dist tree, or an AV/indexer holds the handle briefly).
-async function buildOnce(ws, quiet = false) {
-  let r = await runBuild(ws, quiet);
+async function buildOnce(ws, quiet = false, track = false) {
+  let r = await runBuild(ws, quiet, track);
+  if (r.killed) return r;
   if (r.code !== 0 && /EPERM|EBUSY|Permission denied/i.test(r.out)) {
     await new Promise((res) => setTimeout(res, 400));
-    r = await runBuild(ws, quiet);
+    r = await runBuild(ws, quiet, track);
   }
   if (quiet && r.code !== 0 && r.out) process.stderr.write(r.out);
-  return r.code;
+  return r;
 }
 
 // Concurrency for the INITIAL build only. A bounded pool so the first
@@ -247,7 +313,7 @@ async function initialBuild() {
       const i = next++;
       const ws = targets[i];
       const t0 = Date.now();
-      const code = await buildOnce(ws, true); // quiet: parallel logs would interleave
+      const { code } = await buildOnce(ws, true); // quiet: parallel logs would interleave
       done++;
       const pct = Math.round((done / total) * 100);
       if (code !== 0) {

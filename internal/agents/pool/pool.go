@@ -258,6 +258,10 @@ type FactoryOptions struct {
 	// spawn (claude). Pulled from the agent entry by the pool; empty = unset
 	// (provider default, thinking on); "0" = disabled; "<n>" = budget.
 	ThinkingTokens string
+	// ModelID pins a model id on the spawn, scoped to the active provider
+	// instance. Pulled from the agent entry by the pool; empty = that
+	// provider's own default.
+	ModelID string
 }
 
 // queueEntry is one request waiting for a slot.
@@ -723,6 +727,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	resumeID := ""
 	maxTurns := 0
 	thinkingTokens := ""
+	modelID := ""
 	pType := ""
 	pName := ""
 	for _, a := range sess.Agents {
@@ -730,6 +735,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 			resumeID = a.CLISessionID
 			maxTurns = a.MaxTurns
 			thinkingTokens = a.ThinkingTokens
+			modelID = a.ModelID
 			// Provider field is stored as "type/name" (e.g. "claude/work").
 			// Fall back to bare type when no slash present.
 			if idx := strings.Index(a.Provider, "/"); idx >= 0 {
@@ -763,6 +769,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		TitleCustom:    sess.Meta.TitleCustom,
 		MaxTurns:       maxTurns,
 		ThinkingTokens: thinkingTokens,
+		ModelID:        modelID,
 	})
 	if err != nil {
 		return err

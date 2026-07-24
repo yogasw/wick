@@ -46,6 +46,14 @@ type App struct {
 	// startup on this instance, overriding the job-enabled flag in DB.
 	// Useful when multiple servers share one DB but only one should sync.
 	ProviderSyncDisable bool `env:"WICK_PROVIDERSYNC_DISABLE" envDefault:"false"`
+	// Service worker registration. Default true (on) so the PWA install
+	// prompt + offline caching work in production. Set WICK_SW_ENABLED=false
+	// during dev — the SW's stale-while-revalidate caching on static assets
+	// can pin an old build after a rebuild, forcing a hard-refresh /
+	// unregister dance every time the FE changes. Off means /sw.js 404s,
+	// which makes the browser drop any previously-registered worker for
+	// this origin on the next load.
+	SWEnabled bool `env:"WICK_SW_ENABLED" envDefault:"true"`
 }
 
 type Database struct {

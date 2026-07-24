@@ -39,13 +39,25 @@ const (
 	TypeClaude Type = "claude"
 	TypeCodex  Type = "codex"
 	TypeGemini Type = "gemini"
+	// TypeWick is the built-in in-process provider (adk-go engine, no
+	// external CLI). Single-instance: exactly one "wick/wick" — model
+	// multiplicity lives in Instance.WickModels. See
+	// internal/planning/in-progress/wick-provider/plan.md.
+	TypeWick Type = "wick"
 )
 
 // SupportedTypes returns all CLI types the agents module knows how to
 // spawn. Order is the UI display order.
 func SupportedTypes() []Type {
-	return []Type{TypeClaude, TypeCodex, TypeGemini}
+	return []Type{TypeClaude, TypeCodex, TypeGemini, TypeWick}
 }
+
+// InProcess reports whether this provider type runs inside the wick
+// process (no subprocess, no binary probe, no PID). Branch points that
+// assume an external CLI (path scan, repro specs, gate hooks) use this
+// instead of hardcoding TypeWick so future in-process types inherit
+// the behavior.
+func (t Type) InProcess() bool { return t == TypeWick }
 
 // Instance is the in-memory view of one configured runtime instance —
 // merged from userconfig + supported-type defaults. The Backends UI
@@ -105,6 +117,49 @@ type Instance struct {
 	// (KEY=VALUE). An escape hatch so the user can tweak router routing without
 	// a code change.
 	AIRouterRawConfig string
+
+	// WickModels is the custom-model registry for the built-in wick
+	// provider. nil for other types.
+	WickModels []WickModel
+
+	// WickConfig holds wick's instance-level settings (tools, context
+	// budget, generation defaults). nil = defaults / other types.
+	WickConfig *WickConfig
+}
+
+// WickModel mirrors userconfig.WickModel in-memory — one registered
+// custom model on the wick provider.
+type WickModel struct {
+	ID              string
+	Kind            string // google | openai | anthropic | openrouter | other
+	Label           string
+	Model           string
+	APIKey          string // encrypted (wick_cenc_)
+	BaseURL         string
+	APIFormat       string // gemini | openai_chat | openai_responses | anthropic_messages
+	MaxOutputTokens int
+	Default         bool
+	Disabled        bool
+	GenConfig       *WickGenConfig
+	RawConfig       string
+}
+
+// WickConfig mirrors userconfig.WickConfig in-memory.
+type WickConfig struct {
+	ShellToolDisabled bool
+	Connectors        []string
+	MaxContextTokens  int
+	MaxTurns          int
+	GenConfig         *WickGenConfig
+	RawConfig         string
+}
+
+// WickGenConfig mirrors userconfig.WickGenConfig in-memory.
+type WickGenConfig struct {
+	Temperature     *float64
+	TopP            *float64
+	ThinkingBudget  *int
+	MaxOutputTokens int
 }
 
 // CodexSandboxMode maps to codex's --sandbox flag values.
@@ -375,6 +430,13 @@ func Save(ins Instance) error {
 	if !isSupported(ins.Type) {
 		return fmt.Errorf("unsupported runtime type %q", ins.Type)
 	}
+	// Single-instance rule: wick cannot be duplicated — exactly one
+	// "wick/wick". Model multiplicity lives in WickModels, not in
+	// extra instances. Enforced at the data layer so a direct API call
+	// can't bypass the (Phase 1) UI guards.
+	if ins.Type == TypeWick && ins.Name != string(TypeWick) {
+		return fmt.Errorf("wick is single-instance: instance name must be %q (models are added on the instance, not as new instances)", TypeWick)
+	}
 	cfg, err := userconfig.Load(AppName())
 	if err != nil {
 		return err
@@ -437,6 +499,11 @@ func Rename(t Type, oldName, newName string) error {
 	}
 	if !isSupported(t) {
 		return fmt.Errorf("unsupported runtime type %q", t)
+	}
+	// Single-instance rule: the wick instance is not renamable — its
+	// key is always "wick/wick" (see Save).
+	if t == TypeWick {
+		return fmt.Errorf("wick is single-instance and cannot be renamed")
 	}
 	cfg, err := userconfig.Load(AppName())
 	if err != nil {
@@ -563,6 +630,15 @@ func Delete(t Type, name string) error {
 // ctx bounds the version probe; HTTP handlers should pass a 3s timeout.
 func Probe(ctx context.Context, ins Instance) Status {
 	st := Status{Instance: ins, ResolvedAt: time.Now()}
+	// In-process providers have no binary: no PATH lookup, no --version
+	// subprocess. Report a synthetic "found" so the UI never shows a
+	// bogus "binary not found" for something that cannot have one.
+	if ins.Type.InProcess() {
+		st.Path = "(built-in)"
+		st.PathFound = true
+		st.Version = "built-in"
+		return st
+	}
 	source := ""
 	if ins.Binary != "" {
 		st.Path = ins.Binary
@@ -730,16 +806,16 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 		}
 		for _, raw := range list {
 			ins := Instance{
-				Type:             t,
-				Name:             raw.Name,
-				Binary:           raw.BinaryPath,
-				ExtraArgs:        raw.ExtraArgs,
-				Env:              raw.Env,
-				Disabled:         raw.Disabled,
-				Hooks:            hooksFromUser(raw.Hooks),
-				Storage:          storageFromUser(raw.Storage),
-				MaxConcurrent:    raw.MaxConcurrent,
-				SendMode:         raw.SendMode,
+				Type:              t,
+				Name:              raw.Name,
+				Binary:            raw.BinaryPath,
+				ExtraArgs:         raw.ExtraArgs,
+				Env:               raw.Env,
+				Disabled:          raw.Disabled,
+				Hooks:             hooksFromUser(raw.Hooks),
+				Storage:           storageFromUser(raw.Storage),
+				MaxConcurrent:     raw.MaxConcurrent,
+				SendMode:          raw.SendMode,
 				UseAIRouter:       raw.UseAIRouter,
 				AIRouterProvider:  raw.AIRouterProvider,
 				AIRouterModels:    raw.AIRouterModels,
@@ -750,6 +826,10 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 				ins.CodexConfig = &CodexConfig{
 					SandboxMode: CodexSandboxMode(raw.SandboxMode),
 				}
+			}
+			if t == TypeWick {
+				ins.WickModels = wickModelsFromUser(raw.WickModels)
+				ins.WickConfig = wickConfigFromUser(raw.WickConfig)
 			}
 			out = append(out, ins)
 		}
@@ -765,6 +845,8 @@ func readList(c userconfig.ProvidersConfig, t Type) []userconfig.ProviderInstanc
 		return c.Codex
 	case TypeGemini:
 		return c.Gemini
+	case TypeWick:
+		return c.Wick
 	}
 	return nil
 }
@@ -777,21 +859,23 @@ func pickList(c *userconfig.ProvidersConfig, t Type) *[]userconfig.ProviderInsta
 		return &c.Codex
 	case TypeGemini:
 		return &c.Gemini
+	case TypeWick:
+		return &c.Wick
 	}
 	return nil
 }
 
 func toUserInstance(ins Instance) userconfig.ProviderInstance {
 	raw := userconfig.ProviderInstance{
-		Name:             ins.Name,
-		BinaryPath:       ins.Binary,
-		Disabled:         ins.Disabled,
-		ExtraArgs:        ins.ExtraArgs,
-		Env:              ins.Env,
-		Hooks:            hooksToUser(ins.Hooks),
-		Storage:          storageToUser(ins.Storage),
-		MaxConcurrent:    ins.MaxConcurrent,
-		SendMode:         ins.SendMode,
+		Name:              ins.Name,
+		BinaryPath:        ins.Binary,
+		Disabled:          ins.Disabled,
+		ExtraArgs:         ins.ExtraArgs,
+		Env:               ins.Env,
+		Hooks:             hooksToUser(ins.Hooks),
+		Storage:           storageToUser(ins.Storage),
+		MaxConcurrent:     ins.MaxConcurrent,
+		SendMode:          ins.SendMode,
 		UseAIRouter:       ins.UseAIRouter,
 		AIRouterProvider:  ins.AIRouterProvider,
 		AIRouterModels:    ins.AIRouterModels,
@@ -801,7 +885,117 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 	if ins.CodexConfig != nil {
 		raw.SandboxMode = string(ins.CodexConfig.SandboxMode)
 	}
+	if ins.Type == TypeWick {
+		raw.WickModels = wickModelsToUser(ins.WickModels)
+		raw.WickConfig = wickConfigToUser(ins.WickConfig)
+	}
 	return raw
+}
+
+// ── Wick converters ───────────────────────────────────────────────────
+//
+// Same persisted↔in-memory mirroring pattern as hooksFromUser /
+// storageFromUser: nil-in → nil-out so a fresh instance and an
+// unconfigured one share the zero value.
+
+func wickModelsFromUser(in []userconfig.WickModel) []WickModel {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]WickModel, len(in))
+	for i, m := range in {
+		out[i] = WickModel{
+			ID:              m.ID,
+			Kind:            m.Kind,
+			Label:           m.Label,
+			Model:           m.Model,
+			APIKey:          m.APIKey,
+			BaseURL:         m.BaseURL,
+			APIFormat:       m.APIFormat,
+			MaxOutputTokens: m.MaxOutputTokens,
+			Default:         m.Default,
+			Disabled:        m.Disabled,
+			GenConfig:       wickGenFromUser(m.GenConfig),
+			RawConfig:       m.RawConfig,
+		}
+	}
+	return out
+}
+
+func wickModelsToUser(in []WickModel) []userconfig.WickModel {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]userconfig.WickModel, len(in))
+	for i, m := range in {
+		out[i] = userconfig.WickModel{
+			ID:              m.ID,
+			Kind:            m.Kind,
+			Label:           m.Label,
+			Model:           m.Model,
+			APIKey:          m.APIKey,
+			BaseURL:         m.BaseURL,
+			APIFormat:       m.APIFormat,
+			MaxOutputTokens: m.MaxOutputTokens,
+			Default:         m.Default,
+			Disabled:        m.Disabled,
+			GenConfig:       wickGenToUser(m.GenConfig),
+			RawConfig:       m.RawConfig,
+		}
+	}
+	return out
+}
+
+func wickConfigFromUser(in *userconfig.WickConfig) *WickConfig {
+	if in == nil {
+		return nil
+	}
+	return &WickConfig{
+		ShellToolDisabled: in.ShellToolDisabled,
+		Connectors:        in.Connectors,
+		MaxContextTokens:  in.MaxContextTokens,
+		MaxTurns:          in.MaxTurns,
+		GenConfig:         wickGenFromUser(in.GenConfig),
+		RawConfig:         in.RawConfig,
+	}
+}
+
+func wickConfigToUser(in *WickConfig) *userconfig.WickConfig {
+	if in == nil {
+		return nil
+	}
+	return &userconfig.WickConfig{
+		ShellToolDisabled: in.ShellToolDisabled,
+		Connectors:        in.Connectors,
+		MaxContextTokens:  in.MaxContextTokens,
+		MaxTurns:          in.MaxTurns,
+		GenConfig:         wickGenToUser(in.GenConfig),
+		RawConfig:         in.RawConfig,
+	}
+}
+
+func wickGenFromUser(in *userconfig.WickGenConfig) *WickGenConfig {
+	if in == nil {
+		return nil
+	}
+	return &WickGenConfig{
+		Temperature:     in.Temperature,
+		TopP:            in.TopP,
+		ThinkingBudget:  in.ThinkingBudget,
+		MaxOutputTokens: in.MaxOutputTokens,
+	}
+}
+
+func wickGenToUser(in *WickGenConfig) *userconfig.WickGenConfig {
+	if in == nil {
+		return nil
+	}
+	return &userconfig.WickGenConfig{
+		Temperature:     in.Temperature,
+		TopP:            in.TopP,
+		ThinkingBudget:  in.ThinkingBudget,
+		MaxOutputTokens: in.MaxOutputTokens,
+	}
 }
 
 // hooksFromUser converts the persisted shape into the in-memory map.

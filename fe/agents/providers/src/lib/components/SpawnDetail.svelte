@@ -16,8 +16,12 @@
     /** Open the log viewer for a runtime log file, optionally scoped to the
         spawn window. Omitted → the process-log rows are copy-only. */
     onOpenLog?: (logFile: string, from?: string, to?: string) => void;
+    /** Hide the Reproduce card. Set for the in-process wick provider,
+        which has no CLI argv to reproduce (the session's model-interaction
+        log is shown separately instead). */
+    hideReproduce?: boolean;
   };
-  let { base, file, onBack, embedded = false, onOpenLog }: Props = $props();
+  let { base, file, onBack, embedded = false, onOpenLog, hideReproduce = false }: Props = $props();
 
   // Copy-to-clipboard for the log-link buttons; shows a transient "Copied!".
   let copiedKey = $state("");
@@ -239,7 +243,8 @@
       </div>
     {/if}
 
-    <!-- Reproduce -->
+    <!-- Reproduce (hidden for in-process providers with no CLI argv) -->
+    {#if !hideReproduce}
     <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm p-4 space-y-4">
       <div class="flex items-start justify-between gap-4">
         <div>
@@ -301,6 +306,7 @@
         <p class="text-xs text-cau-400">cmd.exe: the <code class="font-mono">--mcp-config</code> JSON arg has doubled quotes (<code class="font-mono">""</code>) — PowerShell or bash reproduce more reliably.</p>
       {/if}
     </div>
+    {/if}
 
     <!-- Event timeline -->
     <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">

@@ -22,6 +22,7 @@ import (
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin"
 	"github.com/yogasw/wick/internal/agents/agentctl"
+	"github.com/yogasw/wick/internal/agents/airouter"
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
@@ -32,8 +33,8 @@ import (
 	agentgate "github.com/yogasw/wick/internal/agents/gate"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	agentproject "github.com/yogasw/wick/internal/agents/project"
-	"github.com/yogasw/wick/internal/agents/airouter"
 	"github.com/yogasw/wick/internal/agents/provider"
+	wickprovider "github.com/yogasw/wick/internal/agents/provider/wick"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/schedule"
@@ -95,6 +96,7 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 	"github.com/yogasw/wick/web"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -1314,6 +1316,108 @@ func NewServer() *Server {
 			syncSessionMeta(id)
 			return nil
 		})
+
+	// Expose the full MCP tool surface (ask_user, wick_set_title,
+	// wick_session_info, connectors, providers, skills, wickmanager, …) to
+	// the built-in in-process wick provider agent. It reuses the same MCP
+	// dispatch + the same synthetic-admin identity the CLI providers use
+	// over loopback — no new auth surface. nil provider = only shell/todo.
+	wickprovider.SetToolProvider(func(scope wickprovider.ToolScope) []wickprovider.ExternalTool {
+		ctx := context.Background()
+		descs := mcpHandler.AgentToolDescriptors(ctx)
+		out := make([]wickprovider.ExternalTool, 0, len(descs))
+		for _, d := range descs {
+			name := d.Name
+			out = append(out, wickprovider.ExternalTool{
+				Name:        name,
+				Description: d.Description,
+				Params:      toSchemaMap(d.InputSchema),
+				Handler: func(hctx context.Context, args map[string]any) (string, bool) {
+					text, isErr := mcpHandler.CallAgentTool(hctx, name, args, scope.SessionID)
+					return text, isErr
+				},
+			})
+		}
+		return out
+	})
+
+	// wickGateExemptTools mirrors the CLI gate's built-in always-allow
+	// list (docs/guide/command-gate.md "wick's own read-only MCP tools
+	// are gate-exempt") — read-only discovery / session-housekeeping
+	// calls never warrant an approval popup regardless of whitelist
+	// state. wick_execute and wick_skill_sync are deliberately NOT here:
+	// they run real connector ops / write files and stay gated.
+	wickGateExemptTools := map[string]bool{
+		"wick_list": true, "wick_search": true, "wick_get": true, "wick_info": true,
+		"wick_list_providers": true, "wick_skill_list": true, "wick_session_info": true,
+		"wick_set_title": true, "wick_session_workspace": true, "ask_user": true,
+		"todo": true, // wick's own task-list tool — no side effects outside the session
+	}
+	// Command gate for the wick provider's in-process tool dispatch.
+	// Enforced natively (no subprocess PreToolUse hook), covering every
+	// tool call — not just "shell" — the same catch-all scope
+	// docs/guide/command-gate.md describes for the CLI providers:
+	//   - exempt tools (read-only/no side effects): always allow
+	//   - native fs tools (read_file/write_file/edit_file): always
+	//     allow — fsResolvePath already confines them to the session
+	//     workspace, equivalent to the CLI gate's in-scope auto-allow
+	//     for Read/Write/Edit
+	//   - shell: whitelist check (allowed_cmds), same as before
+	//   - everything else (wick_execute, connector calls, unknown/future
+	//     MCP tools): no whitelist concept applies, so ask — same as the
+	//     CLI gate's "no scope to check → ask user" rule
+	// "Ask" blocks synchronously on the SAME ApprovalManager the CLI
+	// gate binary drives, so a wick tool call shows the identical modal
+	// (with the identical approve_once/session/always/block choices) in
+	// the same web UI.
+	wickprovider.SetGateChecker(func(ctx context.Context, sessionID, toolName string, args map[string]any) (bool, string) {
+		if configsSvc.GetOwned("agents", "gate_enabled") != "true" {
+			return false, "" // gate off → allow
+		}
+		// PermissionMode mirrors the CLI providers' PermissionModeLoader
+		// (server.go ~line 589): "bypass" means spawns run unguarded — no
+		// hook installed for claude/codex, no approval prompt at all. wick
+		// must honor the same policy: a card showing "locked (bypass)"
+		// promised unguarded execution, so falling through to the approval
+		// modal here (as it did before this check existed) broke that
+		// promise — every non-whitelisted command sat waiting on a prompt
+		// the operator was told wouldn't happen. gate_enabled=true +
+		// permission_mode=bypass is exactly the config Slack/HTTP channels
+		// use (no human available to answer a modal), so this combination
+		// is expected, not a misconfiguration.
+		permissionMode := configsSvc.GetOwned("agents", "permission_mode")
+		if permissionMode == "" {
+			permissionMode = "on"
+		}
+		if permissionMode == "bypass" {
+			return false, ""
+		}
+		if wickGateExemptTools[toolName] {
+			return false, ""
+		}
+		switch toolName {
+		case "read_file", "write_file", "edit_file":
+			return false, "" // scoped to the session workspace by fsResolvePath
+		case "shell":
+			cmd, _ := args["command"].(string)
+			matcher := gate.NewMatcher(
+				parseGateRules(configsSvc.GetOwned("agents", "allowed_cmds")),
+				agentsLayout.ProjectsDir(),
+			).WithAllowShellMetachars(configsSvc.GetOwned("agents", "allow_shell_metachars") == "true")
+			if allow, _ := matcher.Decide(cmd); allow {
+				return false, ""
+			}
+			// Not on the whitelist — fall through to the same ask-user
+			// path as any other non-exempt tool, rather than a bare deny,
+			// so the operator can approve a one-off command exactly like
+			// the CLI providers' modal already allows.
+			return wickRequestApproval(ctx, approvalMgr, agentsPool, sessionID, toolName, cmd)
+		default:
+			cmd := summarizeToolArgs(args)
+			return wickRequestApproval(ctx, approvalMgr, agentsPool, sessionID, toolName, cmd)
+		}
+	})
+
 	mcpAuth := mcp.NewAuthMiddleware(
 		tokensSvc,
 		authSvc,
@@ -1609,8 +1713,15 @@ func NewServer() *Server {
 	r.Handle("GET /public/manifest.json", http.HandlerFunc(pwa.ManifestHandler))
 
 	// Service worker served from the root so its scope covers the whole
-	// app — required for the PWA install prompt to appear.
-	r.Handle("GET /sw.js", http.HandlerFunc(pwa.ServiceWorkerHandler))
+	// app — required for the PWA install prompt to appear. Default on;
+	// WICK_SW_ENABLED=false (set in dev launch configs) 404s /sw.js
+	// instead so the browser drops any previously-registered worker —
+	// the SW's own caching otherwise pins a stale build across rebuilds.
+	if cfg.App.SWEnabled {
+		r.Handle("GET /sw.js", http.HandlerFunc(pwa.ServiceWorkerHandler))
+	} else {
+		r.Handle("GET /sw.js", http.HandlerFunc(pwa.DisabledServiceWorkerHandler))
+	}
 
 	// Static files (embedded in binary). Directory listings are blocked.
 	r.Handle("GET /public/", ui.StaticHandler("", web.PublicFiles))
@@ -2361,6 +2472,57 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+// summarizeToolArgs renders a tool call's args as a single-line string
+// for display in the approval modal and for gate.MatchKey hashing, when
+// the tool has no single obvious "command" field (unlike shell). Falls
+// back to a raw JSON dump; errors render as "(unrenderable args)" rather
+// than failing the gate check.
+func summarizeToolArgs(args map[string]any) string {
+	b, err := json.Marshal(args)
+	if err != nil {
+		return "(unrenderable args)"
+	}
+	return string(b)
+}
+
+// wickRequestApproval blocks the calling tool dispatch on the same
+// ApprovalManager the CLI providers' gate binary drives — an
+// in-process call (gate.ApprovalManager.RequestApproval) rather than a
+// socket round-trip, since wick's engine already runs inside this
+// process. Returns deny=true with a reason built from the manager's
+// decision; approve_* decisions return deny=false.
+func wickRequestApproval(ctx context.Context, mgr *gate.ApprovalManager, pool *agentpool.Pool, sessionID, toolName, cmd string) (bool, string) {
+	if mgr == nil {
+		// Gate socket failed to bind at boot — fail open rather than
+		// wedging every wick tool call on a manager that can't resolve.
+		return false, ""
+	}
+	var cwd string
+	for _, e := range pool.ActiveSnapshot() {
+		if e.SessionID == sessionID {
+			cwd = e.CWD
+			break
+		}
+	}
+	matchKey := gate.MatchKey(toolName, cmd)
+	resp := mgr.RequestApproval(ctx, gate.ApprovalRequest{
+		ID:        uuid.NewString(),
+		SessionID: sessionID,
+		Tool:      toolName,
+		Cmd:       cmd,
+		WorkDir:   cwd,
+		MatchKey:  matchKey,
+	})
+	if gate.IsApprove(resp.Decision) {
+		return false, ""
+	}
+	reason := resp.Reason
+	if reason == "" {
+		reason = "blocked by command gate"
+	}
+	return true, "command gate: " + reason
+}
+
 // parseGateRules decodes the kvlist JSON (pattern|scope columns) stored in
 // AllowedCmds into a slice of gate.CommandRule.
 func parseGateRules(raw string) []gate.CommandRule {
@@ -2391,3 +2553,25 @@ func parseGateRules(raw string) []gate.CommandRule {
 type encDecryptorFunc func(string) (string, error)
 
 func (f encDecryptorFunc) Decrypt(token string) (string, error) { return f(token) }
+
+// toSchemaMap normalizes an MCP tool descriptor's InputSchema (typed as
+// any) into the map[string]any JSON-Schema shape the wick provider's
+// tool seam expects. Direct assert first; otherwise a JSON round-trip
+// (handles typed structs). nil / unconvertible → an empty object schema.
+func toSchemaMap(v any) map[string]any {
+	if v == nil {
+		return map[string]any{"type": "object"}
+	}
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return map[string]any{"type": "object"}
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil || m == nil {
+		return map[string]any{"type": "object"}
+	}
+	return m
+}

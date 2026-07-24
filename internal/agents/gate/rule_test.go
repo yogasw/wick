@@ -60,6 +60,93 @@ func TestMatcherShellMetacharBlocked(t *testing.T) {
 	}
 }
 
+// TestMatcherAllowShellMetachars proves the opt-in toggle
+// (config.GateConfig.AllowShellMetachars) lets an otherwise-whitelisted
+// command carry chaining/redirect metacharacters — e.g. an operator
+// who wants "sleep 60 && echo done" to work — while a command that
+// still fails the whitelist itself (no matching pattern) stays
+// blocked regardless of the toggle.
+func TestMatcherAllowShellMetachars(t *testing.T) {
+	rules := []CommandRule{{Pattern: "sleep *"}, {Pattern: "echo *"}}
+
+	blocked := NewMatcher(rules, "")
+	if allow, reason := blocked.Decide("sleep 60 && echo done"); allow {
+		t.Errorf("default matcher should still block metachars, got allow (reason %q)", reason)
+	}
+
+	allowed := NewMatcher(rules, "").WithAllowShellMetachars(true)
+	if allow, reason := allowed.Decide("sleep 60 && echo done"); !allow {
+		t.Errorf("WithAllowShellMetachars(true) should allow chaining, got block: %q", reason)
+	}
+
+	// The whitelist itself is still enforced — metachars alone don't
+	// grant a free pass to an unlisted command.
+	if allow, reason := allowed.Decide("sleep 60 && rm -rf /"); allow {
+		t.Errorf("WithAllowShellMetachars(true) must not bypass the whitelist, got allow (reason %q)", reason)
+	}
+}
+
+// TestMatcherAllowShellMetachars_RedirectsStillBlocked proves redirects
+// and substitution stay blocked even with AllowShellMetachars on — they
+// inject into a single command's argv rather than adding a separate,
+// independently-checked command, so splitting on chain operators can't
+// make them safe (e.g. "cat * > /etc/passwd" would otherwise sail
+// through a "cat *" rule with no second command to catch).
+func TestMatcherAllowShellMetachars_RedirectsStillBlocked(t *testing.T) {
+	m := NewMatcher([]CommandRule{{Pattern: "sleep *"}, {Pattern: "cat *"}}, "").
+		WithAllowShellMetachars(true)
+	dangerous := []string{
+		"cat foo > /etc/passwd",
+		"cat foo < /etc/shadow",
+		"sleep 1 `rm foo`",
+		"sleep 1 $(rm foo)",
+	}
+	for _, cmd := range dangerous {
+		if allow, reason := m.Decide(cmd); allow {
+			t.Errorf("Decide(%q): redirect/substitution should still block even with AllowShellMetachars, got allow (reason %q)", cmd, reason)
+		}
+	}
+}
+
+// TestMatcherAllowShellMetachars_RealDelayUseCase is the exact pattern
+// that motivated the toggle: waiting, then reporting completion.
+func TestMatcherAllowShellMetachars_RealDelayUseCase(t *testing.T) {
+	m := NewMatcher([]CommandRule{{Pattern: "sleep *"}, {Pattern: "echo *"}}, "").
+		WithAllowShellMetachars(true)
+	if allow, reason := m.Decide(`sleep 60 && echo "1min-delay-ok"`); !allow {
+		t.Errorf("expected the delay-then-echo pattern to be allowed, got block: %q", reason)
+	}
+}
+
+// TestMatcherShellMetacharReasonIsActionable proves the block reason
+// names the exact offending character and suggests what to do instead
+// (split into separate calls, or use the native fs tools), rather than
+// a bare "shell metacharacter blocked" that gives the model nothing to
+// act on.
+func TestMatcherShellMetacharReasonIsActionable(t *testing.T) {
+	m := NewMatcher([]CommandRule{{Pattern: "git *"}}, "")
+	cases := []struct {
+		cmd      string
+		wantChar string
+	}{
+		{"git status; rm foo", ";"},
+		{"git status | sh", "|"},
+		{"git status && rm foo", "&"},
+		{"git status `rm foo`", "`"},
+		{"git status $(rm foo)", "$"},
+		{"git status > out.txt", ">"},
+	}
+	for _, tc := range cases {
+		_, reason := m.Decide(tc.cmd)
+		if !contains(reason, tc.wantChar) {
+			t.Errorf("Decide(%q): reason %q should name the character %q", tc.cmd, reason, tc.wantChar)
+		}
+		if !contains(reason, "write_file") && !contains(reason, "separate shell call") {
+			t.Errorf("Decide(%q): reason %q should suggest an alternative", tc.cmd, reason)
+		}
+	}
+}
+
 func TestMatcherScopePrefix(t *testing.T) {
 	m := NewMatcher([]CommandRule{{Pattern: "cat *", Scope: "/workspace"}}, "")
 	cases := []struct {

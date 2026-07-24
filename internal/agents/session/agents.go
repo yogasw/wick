@@ -32,6 +32,13 @@ type AgentEntry struct {
 	// "0" = disabled; "<n>" = budget. Set per workflow agent node from its
 	// thinking + max_thinking_tokens inputs.
 	ThinkingTokens string `json:"thinking_tokens,omitempty"`
+	// ModelID pins a specific model id this agent uses on its next spawn,
+	// scoped to whichever provider Provider currently points at. Empty =
+	// use that provider instance's own default-model resolution. Currently
+	// only meaningful for wick (WickModel.ID); other provider types ignore
+	// it. Cleared on switching to a provider type that doesn't recognize
+	// it, so a later switch back doesn't resurrect a stale/foreign pin.
+	ModelID string `json:"model_id,omitempty"`
 }
 
 // SaveAgents atomically rewrites sessions/<id>/agents.json. nil
@@ -129,6 +136,28 @@ func SetThinkingTokens(layout config.Layout, id, name, v string) error {
 		Status:         "idle",
 		CreatedAt:      time.Now().UTC(),
 		ThinkingTokens: v,
+	})
+	return SaveAgents(layout, id, sess.Agents)
+}
+
+// SetModelID persists the pinned model id on the agent entry, creating it
+// if missing. Empty = unset (the active provider's own default applies).
+func SetModelID(layout config.Layout, id, name, modelID string) error {
+	sess, err := Load(layout, id)
+	if err != nil {
+		return err
+	}
+	for i := range sess.Agents {
+		if sess.Agents[i].Name == name {
+			sess.Agents[i].ModelID = modelID
+			return SaveAgents(layout, id, sess.Agents)
+		}
+	}
+	sess.Agents = append(sess.Agents, AgentEntry{
+		Name:      name,
+		Status:    "idle",
+		CreatedAt: time.Now().UTC(),
+		ModelID:   modelID,
 	})
 	return SaveAgents(layout, id, sess.Agents)
 }

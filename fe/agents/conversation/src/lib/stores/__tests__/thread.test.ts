@@ -138,6 +138,58 @@ describe("createThreadStore", () => {
     expect(get(store.live)!.blocks).toHaveLength(1);
   });
 
+  /* ── text_snapshot ──────────────────────────────────────────────── */
+
+  test("text_snapshot replaces live.text instead of appending", () => {
+    store.handleEvent(ev("text_delta", { data: "partial so far" }));
+    store.handleEvent(ev("text_snapshot", { data: "partial so far" }));
+    expect(get(store.live)!.text).toBe("partial so far");
+  });
+
+  test("repeated text_snapshot replays (e.g. one per SharedWorker resubscribe) never duplicate the text", () => {
+    store.handleEvent(ev("text_delta", { data: "Retest menyeluruh + notes lebih detail." }));
+    store.handleEvent(ev("text_snapshot", { data: "Retest menyeluruh + notes lebih detail." }));
+    store.handleEvent(ev("text_snapshot", { data: "Retest menyeluruh + notes lebih detail." }));
+    store.handleEvent(ev("text_snapshot", { data: "Retest menyeluruh + notes lebih detail." }));
+    expect(get(store.live)!.text).toBe("Retest menyeluruh + notes lebih detail.");
+  });
+
+  test("text_snapshot starts live if not yet open", () => {
+    store.handleEvent(ev("text_snapshot", { data: "resumed text" }));
+    const live = get(store.live);
+    expect(live).not.toBeNull();
+    expect(live!.text).toBe("resumed text");
+  });
+
+  /* ── handleKilledLocally ────────────────────────────────────────── */
+
+  test("handleKilledLocally clears typing.active even with no lifecycle event", () => {
+    store.handleEvent(ev("text_delta", { data: "partial" }));
+    store.handleKilledLocally();
+    expect(get(store.typing).active).toBe(false);
+  });
+
+  test("handleKilledLocally finalizes the live turn into turns", () => {
+    store.handleEvent(ev("text_delta", { data: "partial reply" }));
+    store.handleKilledLocally();
+    expect(get(store.live)).toBeNull();
+    const turns = get(store.turns);
+    expect(turns).toHaveLength(1);
+    expect(turns[0].text).toBe("partial reply");
+  });
+
+  test("handleKilledLocally sets lifecycle state to killed", () => {
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", pid: 5, data: "bash" }));
+    store.handleKilledLocally();
+    expect(get(store.lifecycle).state).toBe("killed");
+  });
+
+  test("handleKilledLocally with no live content does not push an empty turn", () => {
+    store.handleKilledLocally();
+    expect(get(store.turns)).toHaveLength(0);
+    expect(get(store.typing).active).toBe(false);
+  });
+
   /* ── thinking ───────────────────────────────────────────────────── */
 
   test("thinking event pushes a thinking block to live", () => {
@@ -173,6 +225,29 @@ describe("createThreadStore", () => {
       expect(block.startedAt).toBe(100);
       expect(block.result).toBeUndefined();
     }
+  });
+
+  test("repeated tool_use with the same tool_use_id (snapshot replay) does not duplicate the block", () => {
+    store.handleEvent(ev("tool_use", {
+      tool_use_id: "u1", tool_name: "shell", tool_input: '{"command":"sleep 60"}', at: 100,
+    }));
+    // Same event replayed — e.g. every SharedWorker resubscribe while
+    // the tool is still running sends the current InFlightEvents again.
+    store.handleEvent(ev("tool_use", {
+      tool_use_id: "u1", tool_name: "shell", tool_input: '{"command":"sleep 60"}', at: 100,
+    }));
+    store.handleEvent(ev("tool_use", {
+      tool_use_id: "u1", tool_name: "shell", tool_input: '{"command":"sleep 60"}', at: 100,
+    }));
+    const live = get(store.live);
+    expect(live!.blocks).toHaveLength(1);
+  });
+
+  test("tool_use with a different tool_use_id still appends a new block", () => {
+    store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "shell", tool_input: "{}", at: 1 }));
+    store.handleEvent(ev("tool_use", { tool_use_id: "u2", tool_name: "read_file", tool_input: "{}", at: 2 }));
+    const live = get(store.live);
+    expect(live!.blocks).toHaveLength(2);
   });
 
   /* ── tool_result ────────────────────────────────────────────────── */
@@ -309,6 +384,33 @@ describe("createThreadStore", () => {
   test("lifecycle working with empty data sets substate to empty string", () => {
     store.handleEvent(ev("lifecycle", { lifecycle: "working", data: "" }));
     expect(get(store.typing).substate).toBe("");
+  });
+
+  /* ── typing.toolName ────────────────────────────────────────────── */
+
+  test("tool_use sets typing.toolName to the running tool", () => {
+    store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "write_file", tool_input: "{}", at: 1 }));
+    const typing = get(store.typing);
+    expect(typing.active).toBe(true);
+    expect(typing.toolName).toBe("write_file");
+  });
+
+  test("tool_result clears typing.toolName", () => {
+    store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "write_file", tool_input: "{}", at: 1 }));
+    store.handleEvent(ev("tool_result", { tool_use_id: "u1", data: "ok", is_error: false, at: 2 }));
+    expect(get(store.typing).toolName).toBeUndefined();
+  });
+
+  test("lifecycle idle clears typing.toolName", () => {
+    store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "shell", tool_input: "{}", at: 1 }));
+    store.handleEvent(ev("lifecycle", { lifecycle: "idle" }));
+    expect(get(store.typing).toolName).toBeUndefined();
+  });
+
+  test("lifecycle working preserves an in-flight typing.toolName", () => {
+    store.handleEvent(ev("tool_use", { tool_use_id: "u1", tool_name: "shell", tool_input: "{}", at: 1 }));
+    store.handleEvent(ev("lifecycle", { lifecycle: "working", data: "shell" }));
+    expect(get(store.typing).toolName).toBe("shell");
   });
 
   /* ── system_turn ────────────────────────────────────────────────── */

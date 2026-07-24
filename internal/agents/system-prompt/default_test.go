@@ -125,6 +125,34 @@ func providerVariants() []struct {
 	}{
 		{"claude", ImmutableSystemPrompt},
 		{"codex", ImmutableSystemPromptCodex},
+		{"wick", ImmutableSystemPromptWick},
+	}
+}
+
+// TestImmutableWickHasOwnMemorySection is a regression guard: wick used
+// to have no dedicated immutable_wick.md at all — pool/factory.go's
+// provider-type switch had only a codex branch, so every non-codex
+// provider (including wick) fell into the claude branch and got
+// ImmutableSystemPrompt() (claude's overlay). The "Persistent memory"
+// section names wick's own write_file/edit_file tools specifically, so
+// it must land only in wick's prompt, not claude's or codex's (they use
+// their own harness file tools, not these).
+func TestImmutableWickHasOwnMemorySection(t *testing.T) {
+	wick := ImmutableSystemPromptWick()
+	if !strings.Contains(wick, "## Persistent memory") {
+		t.Error("wick's immutable prompt is missing the Persistent memory section")
+	}
+	if !strings.Contains(wick, "write_file") {
+		t.Error("wick's memory section should reference its own write_file tool")
+	}
+
+	claude := ImmutableSystemPrompt()
+	if strings.Contains(claude, "## Persistent memory") {
+		t.Error("claude's immutable prompt should NOT carry wick's memory section")
+	}
+	codex := ImmutableSystemPromptCodex()
+	if strings.Contains(codex, "## Persistent memory") {
+		t.Error("codex's immutable prompt should NOT carry wick's memory section")
 	}
 }
 

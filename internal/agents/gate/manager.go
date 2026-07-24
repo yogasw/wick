@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -30,10 +31,19 @@ type ApprovalManager struct {
 	onRequest  func(sessionID string, r ApprovalRequest)
 	onResolved func(sessionID, requestID, decision string)
 
-	mu                  sync.Mutex
-	listener            *Listener
-	sessionApproved     map[string]map[string]bool // sessionID → matchKey → true
-	sessionAllApproved  map[string]bool            // sessionID → approve every command
+	mu                 sync.Mutex
+	listener           *Listener
+	sessionApproved    map[string]map[string]bool // sessionID → matchKey → true
+	sessionAllApproved map[string]bool            // sessionID → approve every command
+
+	// inProcPending holds requests submitted via RequestApproval — an
+	// in-process caller (wick's own tool dispatch) rather than the gate
+	// binary dialing the shared socket. Separate from Listener.pending:
+	// an in-process caller has no socket connection for Resolve to write
+	// a JSON reply to, and must keep working even when the socket failed
+	// to bind (Listener == nil) since there's no cross-process boundary
+	// to cross in the first place.
+	inProcPending map[string]chan ApprovalResponse
 }
 
 // ApprovalManagerOptions wires the manager to its environment.
@@ -75,6 +85,7 @@ func NewApprovalManager(opt ApprovalManagerOptions) (*ApprovalManager, error) {
 		onResolved:         opt.OnResolved,
 		sessionApproved:    make(map[string]map[string]bool),
 		sessionAllApproved: make(map[string]bool),
+		inProcPending:      make(map[string]chan ApprovalResponse),
 	}, nil
 }
 
@@ -106,9 +117,81 @@ func (m *ApprovalManager) Stop() {
 	m.listener = nil
 	m.sessionApproved = nil
 	m.sessionAllApproved = nil
+	pending := m.inProcPending
+	m.inProcPending = nil
 	m.mu.Unlock()
 	if l != nil {
 		_ = l.Close()
+	}
+	// Unblock any in-process RequestApproval callers still waiting —
+	// mirrors Listener.Close's "listener closed" reply to its own
+	// pending set.
+	for id, ch := range pending {
+		select {
+		case ch <- ApprovalResponse{ID: id, Decision: DecisionBlock, Reason: "manager stopped"}:
+		default:
+		}
+	}
+}
+
+// RequestApproval is the in-process counterpart to a gate binary
+// dialing the shared socket — for a caller that already runs inside
+// this same process (wick's own tool dispatch) and already knows its
+// sessionID, so there's no cwd to route and no socket to cross. It
+// mirrors Listener.handleConn's request/wait/timeout shape but skips
+// JSON encode/decode and the unix socket entirely; the "always
+// allow"/"allow this session" caches and the OnRequest/OnResolved SSE
+// broadcast are shared with the socket path via the same manager, so a
+// wick tool call and a CLI provider's Bash call show up in the same
+// approval modal and the same Approved-commands list.
+//
+// r.ID must be a fresh, caller-generated unique ID (the socket path's
+// equivalent is minted by the gate binary). ctx cancellation (session
+// killed mid-approval) resolves as a block, same as a timeout.
+func (m *ApprovalManager) RequestApproval(ctx context.Context, r ApprovalRequest) ApprovalResponse {
+	sessionID := r.SessionID
+
+	if sessionID != "" && m.IsSessionAllApproved(sessionID) {
+		return ApprovalResponse{ID: r.ID, Decision: DecisionApproveAll, Reason: "session all-approved"}
+	}
+	if sessionID != "" && m.IsSessionApproved(sessionID, r.MatchKey) {
+		return ApprovalResponse{ID: r.ID, Decision: DecisionApproveSession, Reason: "session auto-approved"}
+	}
+
+	ch := make(chan ApprovalResponse, 1)
+	m.mu.Lock()
+	if m.inProcPending == nil {
+		// Stop() already ran — nothing left to wait for.
+		m.mu.Unlock()
+		return ApprovalResponse{ID: r.ID, Decision: DecisionBlock, Reason: "manager stopped"}
+	}
+	m.inProcPending[r.ID] = ch
+	m.mu.Unlock()
+
+	if m.onRequest != nil {
+		m.onRequest(sessionID, r)
+	}
+
+	timeout := m.timeout()
+	if timeout <= 0 {
+		timeout = DefaultApprovalTimeout
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case resp := <-ch:
+		return resp
+	case <-timer.C:
+		m.mu.Lock()
+		delete(m.inProcPending, r.ID)
+		m.mu.Unlock()
+		return ApprovalResponse{ID: r.ID, Decision: DecisionBlock, Reason: "timeout"}
+	case <-ctx.Done():
+		m.mu.Lock()
+		delete(m.inProcPending, r.ID)
+		m.mu.Unlock()
+		return ApprovalResponse{ID: r.ID, Decision: DecisionBlock, Reason: "cancelled"}
 	}
 }
 
@@ -162,16 +245,32 @@ func (m *ApprovalManager) Resolve(sessionID, requestID, decision, reason, matchK
 	return ok, nil
 }
 
-// resolve is the unsafe inner: deliver to the listener channel +
-// fire OnResolved.
+// resolve is the unsafe inner: deliver to whichever pending set holds
+// requestID — the socket Listener (a gate binary dialed in) or
+// inProcPending (an in-process RequestApproval caller) — then fire
+// OnResolved. The two pending sets share the requestID namespace but
+// are otherwise independent, so this just tries both.
 func (m *ApprovalManager) resolve(sessionID, requestID, decision, reason string) bool {
 	m.mu.Lock()
 	l := m.listener
-	m.mu.Unlock()
-	if l == nil {
-		return false
+	ch, inProc := m.inProcPending[requestID]
+	if inProc {
+		delete(m.inProcPending, requestID)
 	}
-	ok := l.Resolve(requestID, decision, reason)
+	m.mu.Unlock()
+
+	ok := false
+	if inProc {
+		select {
+		case ch <- ApprovalResponse{ID: requestID, Decision: decision, Reason: reason}:
+			ok = true
+		default:
+			// RequestApproval's own timer already fired and gave up.
+		}
+	}
+	if !ok && l != nil {
+		ok = l.Resolve(requestID, decision, reason)
+	}
 	if ok && m.onResolved != nil {
 		m.onResolved(sessionID, requestID, decision)
 	}

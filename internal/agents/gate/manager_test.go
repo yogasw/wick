@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"context"
 	"net"
 	"os"
 	"sync"
@@ -244,5 +245,130 @@ func TestManager_RouteByCWD_NoMatch(t *testing.T) {
 	case <-requested:
 		t.Error("onRequest fired for unrouted cwd; should be auto-approved")
 	default:
+	}
+}
+
+// ── RequestApproval (in-process, no socket) ─────────────────────────
+
+func TestManager_RequestApproval_ResolvedByHTTPHandlerEquivalent(t *testing.T) {
+	setupSharedHome(t)
+	mgr := newTestManager(t, "appG", func(string) (string, bool) { return "S1", true })
+	defer mgr.Stop()
+
+	requested := make(chan ApprovalRequest, 1)
+	mgr.onRequest = func(_ string, r ApprovalRequest) { requested <- r }
+
+	respCh := make(chan ApprovalResponse, 1)
+	go func() {
+		respCh <- mgr.RequestApproval(context.Background(), ApprovalRequest{
+			ID: "wick-req-1", SessionID: "S1", Tool: "write_file", Cmd: "notes.txt", MatchKey: "wick-key-1",
+		})
+	}()
+
+	select {
+	case r := <-requested:
+		if r.Tool != "write_file" {
+			t.Errorf("onRequest tool: got %q", r.Tool)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RequestApproval never reached onRequest")
+	}
+
+	// Resolve exactly as the HTTP handler (approveCommand) would.
+	if ok, err := mgr.Resolve("S1", "wick-req-1", DecisionApproveOnce, "user clicked", "wick-key-1"); err != nil || !ok {
+		t.Fatalf("Resolve: ok=%v err=%v", ok, err)
+	}
+
+	select {
+	case resp := <-respCh:
+		if resp.Decision != DecisionApproveOnce {
+			t.Errorf("decision: got %q, want %q", resp.Decision, DecisionApproveOnce)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RequestApproval never returned after Resolve")
+	}
+}
+
+func TestManager_RequestApproval_SessionApprovedFastPath(t *testing.T) {
+	setupSharedHome(t)
+	mgr := newTestManager(t, "appH", func(string) (string, bool) { return "S1", true })
+	defer mgr.Stop()
+
+	requested := make(chan struct{}, 1)
+	mgr.onRequest = func(string, ApprovalRequest) { requested <- struct{}{} }
+
+	mgr.markSessionApproved("S1", "wick-key-2")
+
+	resp := mgr.RequestApproval(context.Background(), ApprovalRequest{
+		ID: "wick-req-2", SessionID: "S1", Tool: "shell", Cmd: "sleep 1", MatchKey: "wick-key-2",
+	})
+	if resp.Decision != DecisionApproveSession {
+		t.Errorf("decision: got %q, want %q", resp.Decision, DecisionApproveSession)
+	}
+	select {
+	case <-requested:
+		t.Error("onRequest fired for an already session-approved matchKey")
+	default:
+	}
+}
+
+func TestManager_RequestApproval_TimeoutBlocks(t *testing.T) {
+	setupSharedHome(t)
+	mgr, err := NewApprovalManager(ApprovalManagerOptions{
+		AppName:    "appI",
+		Timeout:    50 * time.Millisecond,
+		RouteByCWD: func(string) (string, bool) { return "S1", true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	resp := mgr.RequestApproval(context.Background(), ApprovalRequest{
+		ID: "wick-req-3", SessionID: "S1", Tool: "shell", Cmd: "rm -rf /", MatchKey: "wick-key-3",
+	})
+	if resp.Decision != DecisionBlock {
+		t.Errorf("decision: got %q, want %q (timeout)", resp.Decision, DecisionBlock)
+	}
+	if resp.Reason != "timeout" {
+		t.Errorf("reason: got %q, want %q", resp.Reason, "timeout")
+	}
+}
+
+func TestManager_RequestApproval_ContextCancelBlocks(t *testing.T) {
+	setupSharedHome(t)
+	mgr := newTestManager(t, "appJ", func(string) (string, bool) { return "S1", true })
+	defer mgr.Stop()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	respCh := make(chan ApprovalResponse, 1)
+	go func() {
+		respCh <- mgr.RequestApproval(ctx, ApprovalRequest{
+			ID: "wick-req-4", SessionID: "S1", Tool: "shell", Cmd: "sleep 999", MatchKey: "wick-key-4",
+		})
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case resp := <-respCh:
+		if resp.Decision != DecisionBlock || resp.Reason != "cancelled" {
+			t.Errorf("got decision=%q reason=%q, want block/cancelled", resp.Decision, resp.Reason)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RequestApproval did not return after ctx cancel")
+	}
+}
+
+func TestManager_RequestApproval_AfterStopReturnsBlock(t *testing.T) {
+	setupSharedHome(t)
+	mgr := newTestManager(t, "appK", func(string) (string, bool) { return "S1", true })
+	mgr.Stop()
+
+	resp := mgr.RequestApproval(context.Background(), ApprovalRequest{
+		ID: "wick-req-5", SessionID: "S1", Tool: "shell", Cmd: "ls", MatchKey: "wick-key-5",
+	})
+	if resp.Decision != DecisionBlock {
+		t.Errorf("decision after Stop: got %q, want %q", resp.Decision, DecisionBlock)
 	}
 }

@@ -211,8 +211,11 @@
       label: p.name && p.name !== p.type ? `${p.type} · ${p.name}` : p.type,
       value: `${p.type}/${p.name}`,
       badge: p.usesAIRouter ? "AI Router" : undefined,
+      models: p.models,
     })),
-    value: activeProvider ? normKey(activeProvider) : "",
+    value: activeProvider
+      ? normKey(activeProvider) + (activeModelID ? `::${activeModelID}` : "")
+      : "",
     onChange: (v: string) => handleProviderChange(v),
   });
   const projectSelect = $derived({
@@ -252,6 +255,9 @@
   let providerOptions = $state<ProviderOption[]>([]);
   let projectOptions = $state<ProjectOption[]>([]);
   let activeProvider = $state<string | null>(null);
+  // Pinned wick model id on the active agent, if any — "" = that
+  // provider instance's own default model applies.
+  let activeModelID = $state("");
   let activeProjectId = $state<string | null>(null);
 
   /* ── approval error state ─────────────────────────────────────── */
@@ -456,17 +462,23 @@
       .catch(() => { projectOptions = []; });
   }
 
-  async function handleProviderChange(provider: string) {
+  async function handleProviderChange(providerValue: string) {
+    // Composer encodes a 3rd-level model pick as "type/name::modelID" (see
+    // Composer.svelte's splitModelPin) — split it back out before sending.
+    const sepIdx = providerValue.indexOf("::");
+    const provider = sepIdx < 0 ? providerValue : providerValue.slice(0, sepIdx);
+    const modelId = sepIdx < 0 ? undefined : providerValue.slice(sepIdx + 2);
     try {
       // In-place switch (same path as a "#codex" chat message): persists to
       // agents.json + kills the subprocess so the next message respawns with
       // the new provider. Session id is unchanged — no navigation. A single
       // system turn arrives over SSE (no assistant bubble).
       await run(
-        switchProvider(base, sessionId, provider).pipe(Effect.provide(WickClientLayer)),
+        switchProvider(base, sessionId, provider, modelId).pipe(Effect.provide(WickClientLayer)),
       );
       // Reflect the switch in both the composer selector and the header pill.
       activeProvider = provider;
+      activeModelID = modelId ?? "";
       agentLabel = provider;
       // Refetch the authoritative history: the backend collapses back-to-back
       // switches on disk, so this replaces any stale switch bubbles still shown
@@ -751,7 +763,18 @@
       ? dequeueProcess(base, target.sid)
       : killProcess(base, target.sid);
     run(action.pipe(Effect.provide(WickClientLayer)))
-      .then(loadProcesses)
+      .then(() => {
+        // Kill succeeded server-side, but the lifecycle:idle/killed SSE
+        // event that would normally clear "thinking…" can be lost — the
+        // process may have already died silently before this click (an
+        // idle-timeout race), or the SSE stream itself can drop the
+        // message. Clear the panel's live/typing state directly so Kill
+        // always has a visible effect instead of looking like a no-op.
+        if (target.sid === sessionId && !target.queued) {
+          thread.handleKilledLocally();
+        }
+        return loadProcesses();
+      })
       .catch((e: unknown) => toastError(`Kill: ${e instanceof Error ? e.message : String(e)}`));
   }
 
@@ -853,7 +876,8 @@
       .then((res) => {
         title = res.label || res.id;
         agentLabel = res.active_agent || "";
-        activeProvider = res.active_agent || null;
+        activeProvider = res.provider || res.active_agent || null;
+        activeModelID = res.model_id || "";
         activeProjectId = res.project_id || null;
       })
       .catch(() => { title = sessionId; });

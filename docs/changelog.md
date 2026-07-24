@@ -10,6 +10,64 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.34.0](https://github.com/yogasw/wick/compare/v0.33.2...v0.34.0) — Wick & Tools
+
+_Released on 2026-07-24_
+
+### Wick Provider
+#### Added
+*   3-level provider picker (Type -> Name -> Model) for Wick instances with multiple enabled models.
+*   Session-level model pinning: switching models on the same Wick instance is no longer treated as a no-op.
+*   End-to-end `WickModel.Disabled` support; disabled models are hidden from the composer and not auto-picked.
+*   New endpoints for disabling, enabling, duplicating, and a 1-token Test ping for Wick models.
+*   Dedicated brand icon for the Wick provider in the composer's provider picker.
+#### Fixed
+*   Idle-timeout race that could kill Wick sessions during a model call.
+*   Wick gate using an incorrect session ID for approval routing.
+*   Wick incorrectly inheriting Claude's system prompt overlay.
+#### Changed
+*   Model rows in WickDetail.svelte are now consolidated into the shared KebabMenu component (Edit/Set default/Test/Duplicate/Disable/Delete).
+*   System prompt split into a shared base and per-provider overlays (`immutable_wick.md`).
+*   Persistent `memory.md` guidance added to Wick's system prompt.
+
+### Command Gate & Security
+#### Added
+*   Extension of the command gate to cover every Wick tool (not just shell), with in-process synchronous approval.
+*   `AllowShellMetachars` configuration toggle to permit shell chaining (e.g., `&&`, `;`, `|`) per-whitelist while continuing to block redirects/substitution.
+#### Fixed
+*   Command gate now correctly honors `permission_mode=bypass`.
+#### Improved
+*   More actionable shell metacharacter block reasons, specifying the character and suggesting alternatives.
+
+### Todo Tool (Shared MCP)
+#### Added
+*   Schema gains `title` and `description` fields, and optional nested `substeps`.
+*   New UI: all todo calls are merged into a single checklist widget, with each item expandable to show associated tool calls that occurred while it was in progress.
+*   Tool call duration: `at`/`end_at` timestamps from trace events are parsed and displayed in `ToolCard`s.
+*   `TodoCard` sums each item's related tool-call durations into a total.
+#### Changed
+*   Moved from a Wick-only native tool to the shared MCP tool surface (now available to Claude, Codex, and Gemini).
+*   The old single overloaded `step` field is kept as a deprecated fallback for older traces.
+*   The in-progress item's current activity is now shown inline in the card instead of a separate floating indicator.
+
+### New Native Tools
+#### Added
+*   Native `read_file`, `write_file`, and `edit_file` tools with line-range support.
+
+### Frontend & UX
+#### Fixed
+*   Duplicated text/tool_use rendering from SSE snapshot replay.
+*   HTML file artifact retry capped to prevent infinite busy-loops, displaying a static fallback after ~2s.
+
+### Developer Experience
+#### Added
+*   `WICK_SW_ENABLED` environment toggle for disabling the service worker in development.
+#### Improved
+*   `fe/scripts/dev.mjs` debounce extended to 5s, and in-flight builds are now killed and restarted when new changes land mid-build.
+
+---
+
+
 ## [v0.33.2](https://github.com/yogasw/wick/compare/v0.33.1...v0.33.2) — Notion Connector
 
 _Released on 2026-07-22_

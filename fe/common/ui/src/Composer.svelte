@@ -11,7 +11,7 @@
        - submitLabel: text beside the send arrow (omit → icon only) */
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import ImageEditor from "./ImageEditor.svelte";
-  import type { ComposerCommand, ComposerSelect } from "./composer-types.js";
+  import type { ComposerCommand, ComposerSelect, ComposerSelectOption } from "./composer-types.js";
 
   type Props = {
     onSend: (msg: { text: string; files: File[] }) => void;
@@ -372,6 +372,7 @@
   function togglePlus() {
     if (plusOpen) { plusOpen = false; return; }
     plusView = "root";
+    modelDrillOpt = null;
     computePlacement();
     plusOpen = true;
   }
@@ -444,25 +445,46 @@
   const plusSelect = $derived(
     plusView === "provider" ? provider : plusView === "project" ? project : plusView === "preset" ? preset : undefined,
   );
+  // 3rd picker level: which provider option (a "type/name" instance with
+  // >1 model) is currently drilled into for its model list. Non-null only
+  // while plusView === "provider" and the user clicked such an option.
+  let modelDrillOpt = $state<ComposerSelectOption | null>(null);
+  function closeModelDrill() {
+    modelDrillOpt = null;
+  }
+  // Splits a selector value into its option key and an optional pinned
+  // model id — "wick/wick::m_abc123" (3rd-level model pick) vs a plain
+  // "type/name" (no model pin, or a provider without a models list).
+  function splitModelPin(value: string): { key: string; modelID: string } {
+    const i = value.indexOf("::");
+    return i < 0 ? { key: value, modelID: "" } : { key: value.slice(0, i), modelID: value.slice(i + 2) };
+  }
   function selLabel(s: ComposerSelect | undefined): string {
     if (!s) return "";
-    return s.options.find((o) => o.value === s.value)?.label ?? "";
+    const { key, modelID } = splitModelPin(s.value);
+    const opt = s.options.find((o) => o.value === key);
+    if (!opt) return "";
+    if (!modelID) return opt.label;
+    const model = opt.models?.find((m) => m.id === modelID);
+    return model ? `${opt.label} · ${model.label}` : opt.label;
   }
   // Badge of the currently-selected option (e.g. "AI Router"), or "".
   function selBadge(s: ComposerSelect | undefined): string {
     if (!s) return "";
-    return s.options.find((o) => o.value === s.value)?.badge ?? "";
+    const { key } = splitModelPin(s.value);
+    return s.options.find((o) => o.value === key)?.badge ?? "";
   }
   // A selector is "active" when it has a real value (not the default/empty one).
   function isActive(s: ComposerSelect | undefined): boolean {
     return !!s && !!s.value;
   }
   // Provider brand from the "type/name" value: claude / codex / gemini / other.
-  function provType(value: string): "claude" | "codex" | "gemini" | "other" {
+  function provType(value: string): "claude" | "codex" | "gemini" | "wick" | "other" {
     const t = (value.split("/")[0] || "").toLowerCase();
     if (t.includes("claude")) return "claude";
     if (t.includes("codex") || t.includes("openai")) return "codex";
     if (t.includes("gemini")) return "gemini";
+    if (t.includes("wick")) return "wick";
     return "other";
   }
 
@@ -507,7 +529,7 @@
 
 {#snippet provIcon(value: string, cls: string)}
   {@const t = provType(value)}
-  {#if t === "claude" || t === "gemini"}
+  {#if t === "claude" || t === "gemini" || t === "wick"}
     <!-- Multicolor brand marks served statically from /public/img/providers (embedded). -->
     <img
       src={`/public/img/providers/${t}.svg`}
@@ -727,6 +749,34 @@
                 </button>
               {/if}
             {/each}
+          {:else if modelDrillOpt}
+            {@const drill = modelDrillOpt}
+            {@const models = drill.models ?? []}
+            <button
+              type="button"
+              onclick={closeModelDrill}
+              class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors"
+            >
+              <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              {@render provIcon(drill.value, "h-4 w-4")}
+              {drill.label}
+            </button>
+            <div class="border-t border-white-300 dark:border-navy-600"></div>
+            {#each models as m (m.id)}
+              {@const pinnedValue = `${drill.value}::${m.id}`}
+              {@const isSel = provider?.value === pinnedValue || (provider?.value === drill.value && m.default)}
+              <button
+                type="button"
+                onclick={() => { provider?.onChange(pinnedValue); modelDrillOpt = null; plusView = "root"; plusOpen = false; }}
+                class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {isSel ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
+              >
+                <span class="flex items-center gap-2 min-w-0">
+                  <span class="truncate">{m.label}</span>
+                  {#if m.default}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>{/if}
+                </span>
+                {#if isSel}<span class="shrink-0 text-green-600 dark:text-green-400">✓</span>{/if}
+              </button>
+            {/each}
           {:else if plusSelect}
             {@const sel = plusSelect}
             <button
@@ -748,7 +798,15 @@
             {#each sel.options as opt (opt.value)}
               <button
                 type="button"
-                onclick={() => { sel.onChange(opt.value); plusView = "root"; plusOpen = false; }}
+                onclick={() => {
+                  if (plusView === "provider" && opt.models && opt.models.length > 1) {
+                    modelDrillOpt = opt;
+                    return;
+                  }
+                  sel.onChange(opt.value);
+                  plusView = "root";
+                  plusOpen = false;
+                }}
                 class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {opt.value === sel.value ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
               >
                 <span class="flex items-center gap-2 min-w-0">
@@ -756,7 +814,11 @@
                   <span class="truncate">{opt.label}</span>
                   {#if opt.badge}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">{opt.badge}</span>{/if}
                 </span>
-                {#if opt.value === sel.value}<span class="shrink-0 text-green-600 dark:text-green-400">✓</span>{/if}
+                {#if plusView === "provider" && opt.models && opt.models.length > 1}
+                  <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                {:else if opt.value === sel.value}
+                  <span class="shrink-0 text-green-600 dark:text-green-400">✓</span>
+                {/if}
               </button>
             {/each}
           {/if}

@@ -123,6 +123,13 @@ type ProvidersConfig struct {
 	Claude []ProviderInstance `json:"claude,omitempty"`
 	Codex  []ProviderInstance `json:"codex,omitempty"`
 	Gemini []ProviderInstance `json:"gemini,omitempty"`
+
+	// Wick is the built-in in-process provider. Single-instance by
+	// design: the list never holds more than the one "wick" entry —
+	// multiplicity lives in that instance's WickModels, not in extra
+	// instances. Enforced by provider.Save/Rename, kept as a slice so
+	// the ProvidersConfig shape stays uniform across types.
+	Wick []ProviderInstance `json:"wick,omitempty"`
 }
 
 // ProviderInstance is one named configuration of a provider type.
@@ -207,6 +214,84 @@ type ProviderInstance struct {
 	// AIRouterRawConfig is free-form extra config appended to the router spawn
 	// (codex `-c` overrides / claude env), one entry per line.
 	AIRouterRawConfig string `json:"airouter_raw_config,omitempty"`
+
+	// WickModels is the custom-model registry for the built-in wick
+	// provider — one entry per registered model (Gemini / OpenAI /
+	// Anthropic / OpenRouter / other). Only meaningful for the wick
+	// instance; ignored by claude/codex/gemini.
+	WickModels []WickModel `json:"wick_models,omitempty"`
+
+	// WickConfig holds the wick provider's instance-level settings
+	// (tools, context budget, generation defaults). nil = defaults.
+	WickConfig *WickConfig `json:"wick_config,omitempty"`
+}
+
+// WickModel is one registered custom model on the wick provider.
+// See internal/planning/in-progress/wick-provider/plan.md.
+type WickModel struct {
+	// ID is the stable identifier ("m_" + random) referenced by the
+	// Default flag and by sessions that pinned a specific model.
+	ID string `json:"id"`
+	// Kind is the vendor family: google | openai | anthropic |
+	// openrouter | other.
+	Kind string `json:"kind"`
+	// Label is the display name; empty = show Model.
+	Label string `json:"label,omitempty"`
+	// Model is the vendor model id (gemini-flash-latest, gpt-5.2, …).
+	Model string `json:"model"`
+	// APIKey is encrypted at rest (wick_cenc_ token).
+	APIKey string `json:"api_key,omitempty"`
+	// BaseURL overrides the vendor endpoint; required for kind=other.
+	BaseURL string `json:"base_url,omitempty"`
+	// APIFormat picks the wire protocol: gemini | openai_chat |
+	// openai_responses | anthropic_messages. Empty = derived from Kind.
+	APIFormat string `json:"api_format,omitempty"`
+	// MaxOutputTokens caps the response size. 0 = vendor default.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+	// Default marks the model sessions use unless they pin another.
+	// Exactly one entry per instance holds true (enforced on save).
+	Default bool `json:"default,omitempty"`
+	// Disabled hides the model from the composer's model picker and
+	// from default-selection, without deleting its (possibly hard-won)
+	// config. Stays visible, greyed out, in the Models table.
+	Disabled bool `json:"disabled,omitempty"`
+	// GenConfig holds per-model generation overrides; nil = the
+	// instance-level WickConfig.GenConfig applies.
+	GenConfig *WickGenConfig `json:"gen_config,omitempty"`
+	// RawConfig is per-model raw ADK config (JSON), merged last.
+	RawConfig string `json:"raw_config,omitempty"`
+}
+
+// WickConfig is the instance-level settings block for the wick
+// provider ("Provider settings" card in the UI).
+type WickConfig struct {
+	// ShellToolDisabled turns the bash/cmd tool off. Stored inverted
+	// so the zero value keeps the shell tool enabled (default on).
+	ShellToolDisabled bool `json:"shell_tool_disabled,omitempty"`
+	// Connectors limits which connector instances become tools.
+	// Empty = all ready connectors.
+	Connectors []string `json:"connectors,omitempty"`
+	// MaxContextTokens is the history-replay budget. 0 = model default.
+	MaxContextTokens int `json:"max_context_tokens,omitempty"`
+	// MaxTurns caps the agentic loop per user turn. 0 = unlimited.
+	MaxTurns int `json:"max_turns,omitempty"`
+	// GenConfig is the default generation config for models without
+	// their own override.
+	GenConfig *WickGenConfig `json:"gen_config,omitempty"`
+	// RawConfig is raw ADK config (JSON) merged into the runner config
+	// — the escape hatch that keeps every adk-go knob reachable before
+	// a structured field exists for it.
+	RawConfig string `json:"raw_config,omitempty"`
+}
+
+// WickGenConfig mirrors the common genai.GenerateContentConfig knobs.
+// Pointer fields distinguish "not set" from zero. The long tail of
+// options rides WickConfig.RawConfig / WickModel.RawConfig.
+type WickGenConfig struct {
+	Temperature     *float64 `json:"temperature,omitempty"`
+	TopP            *float64 `json:"top_p,omitempty"`
+	ThinkingBudget  *int     `json:"thinking_budget,omitempty"` // tokens; 0 = off, nil = model default
+	MaxOutputTokens int      `json:"max_output_tokens,omitempty"`
 }
 
 // StorageConfig defines how a provider instance syncs its credential

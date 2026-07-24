@@ -46,6 +46,11 @@ export type SessionMeta = {
   title_custom: boolean;
   created_at: string;
   last_active: string;
+  /** "type/name" provider key of the active agent — distinct from
+      active_agent (the agent's own name, e.g. "main"). */
+  provider?: string;
+  /** Pinned model id on the active agent (wick only, currently). */
+  model_id?: string;
 };
 
 export type TurnEvent = {
@@ -55,6 +60,10 @@ export type TurnEvent = {
   tool_use_id?: string;
   is_error?: boolean;
   text?: string;
+  /** RFC3339 — when this event arrived (tool_use) / when the tool
+      finished (tool_result's end_at). Absent on older recorded traces. */
+  at?: string;
+  end_at?: string;
 };
 
 export type Attachment = {
@@ -195,7 +204,7 @@ export type ThreadBlock =
 
 export type LiveTurn = { text: string; blocks: ThreadBlock[] };
 
-export type TypingState = { active: boolean; substate?: string };
+export type TypingState = { active: boolean; substate?: string; toolName?: string };
 
 export type WsField = {
   key: string;
@@ -249,11 +258,20 @@ export type Schedule = {
   last_error?: string;
 };
 
+export type ProviderModelOption = {
+  id: string;
+  label: string;
+  default: boolean;
+};
+
 export type ProviderOption = {
   type: string;
   name: string;
   version: string;
   usesAIRouter?: boolean;
+  /** Only populated for wick instances with >1 enabled model — the composer
+      picker adds a 3rd "model" level only when there's a real choice. */
+  models?: ProviderModelOption[];
 };
 
 export type ProjectOption = {

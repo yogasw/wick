@@ -40,6 +40,13 @@ export interface ThreadStore {
   setHistory(turns: ConversationTurn[]): void;
   appendUserTurn(text: string, attachments?: Attachment[]): void;
   handleEvent(ev: AgentEvent): void;
+  /* Force the UI out of "thinking…"/live-turn state after a user-initiated
+     kill, without waiting for a lifecycle:idle/killed SSE event. Needed
+     because that event can be lost — the process may have already died
+     silently (e.g. an idle-timeout race) before Kill was even clicked, or
+     the SSE stream itself can drop the message — leaving the panel stuck
+     showing "thinking…" with no visible effect from the Kill button. */
+  handleKilledLocally(): void;
 }
 
 let _userTurnCounter = 0;
@@ -110,11 +117,11 @@ export function createThreadStore(): ThreadStore {
       case "lifecycle": {
         const lc = ev.lifecycle ?? "";
         if (lc === "idle" || lc === "killed") {
-          typing.update((t) => ({ ...t, active: false }));
+          typing.update((t) => ({ ...t, active: false, toolName: undefined }));
         } else if (lc === "spawning") {
           typing.set({ active: true, substate: "spawning" });
         } else if (lc === "working") {
-          typing.set({ active: true, substate: ev.data ?? "" });
+          typing.update((t) => ({ active: true, substate: ev.data ?? "", toolName: t.toolName }));
         }
         const lcState = (lc === "spawning" || lc === "working" || lc === "idle" || lc === "killed")
           ? lc as LifecycleState["state"]
@@ -137,6 +144,20 @@ export function createThreadStore(): ThreadStore {
         break;
       }
 
+      // A full cumulative replay of the in-flight turn's text (sent by the
+      // stream snapshot on every resubscribe — e.g. every page load while
+      // the SharedWorker's stream is still open, not just after a real
+      // gap). Replaces live.text instead of appending — treating it as a
+      // delta would re-glue the same paragraph onto itself each reload.
+      case "text_snapshot": {
+        const lt = ensureLive();
+        lt.text = ev.data ?? "";
+        live.set(lt);
+        typing.update((t) => ({ ...t, active: true }));
+        markWorking();
+        break;
+      }
+
       case "thinking": {
         const lt = ensureLive();
         lt.blocks = [...lt.blocks, { kind: "thinking", text: ev.data ?? "" }];
@@ -147,15 +168,28 @@ export function createThreadStore(): ThreadStore {
 
       case "tool_use": {
         const lt = ensureLive();
+        const id = ev.tool_use_id ?? "";
         const block: ThreadBlock = {
           kind: "tool",
-          toolUseId: ev.tool_use_id ?? "",
+          toolUseId: id,
           toolName: ev.tool_name ?? "",
           toolInput: ev.tool_input ?? "",
           startedAt: ev.at,
         };
-        lt.blocks = [...lt.blocks, block];
+        // The stream snapshot (SharedWorker resubscribe on every page
+        // load while a turn is in flight, not just after a real gap —
+        // same cause as the text_snapshot duplication) replays every
+        // InFlightEvents entry it has, including tool_use, each time.
+        // Without a toolUseId dedup this appended a second identical
+        // card for the same still-running tool call on every reload.
+        const idx = id ? lt.blocks.findIndex((b) => b.kind === "tool" && b.toolUseId === id) : -1;
+        if (idx >= 0) {
+          lt.blocks = lt.blocks.map((b, i) => (i === idx ? block : b));
+        } else {
+          lt.blocks = [...lt.blocks, block];
+        }
         live.set(lt);
+        typing.update((t) => ({ ...t, active: true, toolName: ev.tool_name ?? "" }));
         markWorking();
         break;
       }
@@ -190,6 +224,7 @@ export function createThreadStore(): ThreadStore {
           lt.blocks = [...lt.blocks, standalone];
         }
         live.set(lt);
+        typing.update((t) => ({ ...t, toolName: undefined }));
         markWorking();
         break;
       }
@@ -392,5 +427,10 @@ export function createThreadStore(): ThreadStore {
     },
     appendUserTurn,
     handleEvent,
+    handleKilledLocally() {
+      finalize();
+      typing.set({ active: false });
+      lifecycle.update((l) => (l.state === "killed" ? l : { ...l, state: "killed" }));
+    },
   };
 }

@@ -127,4 +127,11 @@ type SpawnOptions struct {
 	// regular agent chat flow is byte-identical — only the workflow agent
 	// node sets it (from its thinking + max_thinking_tokens inputs).
 	ThinkingTokens string
+
+	// ModelID pins which model this spawn should run, scoped to whichever
+	// provider Instance is. Empty = that provider's own default-model
+	// resolution (e.g. wick's pickModel Default/first-enabled behaviour).
+	// Threaded from the session's AgentEntry.ModelID; providers that don't
+	// support multiple models per instance ignore it.
+	ModelID string
 }

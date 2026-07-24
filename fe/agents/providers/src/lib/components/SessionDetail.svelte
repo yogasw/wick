@@ -4,6 +4,7 @@
   import { apiGetSessionSpawns } from "$lib/api.js";
   import type { SessionSpawns, SpawnLogFileDTO } from "$lib/types.js";
   import SpawnDetail from "$lib/components/SpawnDetail.svelte";
+  import WickInteractions from "$lib/components/WickInteractions.svelte";
 
   type Props = {
     base: string;
@@ -62,6 +63,13 @@
       </p>
     </div>
 
+    {#if data.ProviderType === "wick"}
+      <!-- The built-in wick provider runs in-process: there's no CLI argv
+           to "reproduce". Show the model-interaction log instead — the
+           actual request/response per call, for debugging the answers. -->
+      <WickInteractions {base} session={id} />
+    {/if}
+
     {#if data.Spawns.length === 0}
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">
         No spawns for this session.
@@ -105,7 +113,7 @@
               {#if isOpen}
                 <tr class="border-b border-white-300 dark:border-navy-600 bg-white-50 dark:bg-navy-900">
                   <td colspan="4" class="px-5 py-4">
-                    <SpawnDetail {base} file={spawnFile(s)} {onOpenLog} embedded />
+                    <SpawnDetail {base} file={spawnFile(s)} {onOpenLog} embedded hideReproduce={data.ProviderType === "wick"} />
                   </td>
                 </tr>
               {/if}

@@ -37,6 +37,13 @@ type SwitchOptions struct {
 	// (UI SSE, Slack postReply, REST response, etc.) can deliver it back to
 	// the user without forwarding to the provider.
 	Reply func(text string)
+	// ModelID pins a wick instance's WickModel.ID for the next spawn. Only
+	// meaningful when tag resolves to a wick instance; ignored otherwise.
+	// Empty = use the instance's Default model. Picking a different model
+	// on the SAME already-active wick instance is not a no-op switch (it
+	// still needs to persist + kill so the next spawn picks it up) even
+	// though the provider tag itself is unchanged.
+	ModelID string
 }
 
 // normalizeProviderKey returns "type/name" form. Bare "type" becomes "type/type".
@@ -99,8 +106,11 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 	for i, a := range loaded.Agents {
 		if a.Name == agentName {
 			fromKey = normalizeProviderKey(a.Provider)
-			// Reject a no-op switch to the provider already active.
-			if normalizeProviderKey(a.Provider) == newKey {
+			sameInstance := normalizeProviderKey(a.Provider) == newKey
+			// Reject a no-op switch: same instance AND same (or no) model pin
+			// requested. Picking a different model on the same wick instance
+			// still needs to persist + kill, so it is NOT treated as a no-op.
+			if sameInstance && opts.ModelID == a.ModelID {
 				short := wantType
 				if wantName != wantType {
 					short = newKey
@@ -123,6 +133,15 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 			}
 			targetHasHistory = resumeID != ""
 			loaded.Agents[i].CLISessionID = resumeID
+			// Pin the requested model when switching to a provider type that
+			// recognizes one (currently only wick); clear any stale pin
+			// otherwise, so a later switch back doesn't resurrect a foreign
+			// instance's model choice.
+			if wantType == string(TypeWick) {
+				loaded.Agents[i].ModelID = opts.ModelID
+			} else {
+				loaded.Agents[i].ModelID = ""
+			}
 			break
 		}
 	}

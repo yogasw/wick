@@ -72,9 +72,12 @@ internal/**/dist/*/assets/
 # root package.json, this lock is always orphaned.
 /package-lock.json
 
-# Build output binaries
-lab-server
-wick
+# Build output binaries — anchored to root so source dirs named the
+# same (e.g. internal/agents/provider/wick/) are not swallowed.
+/lab-server
+/lab-server.exe
+/wick
+/wick.exe
 ci-timing.txt
 node_modules/
 index-*
