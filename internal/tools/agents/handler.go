@@ -26,6 +26,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/preset"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
+	wick "github.com/yogasw/wick/internal/agents/provider/wick"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/schedule"
@@ -116,7 +117,22 @@ func SetGateStatus(s GateStatus) { globalGateStatus = s }
 // SetConfigs wires the shared configs service so the Providers page
 // can toggle agents.gate_enabled inline. Without this, the toggle
 // endpoint 503s.
-func SetConfigs(c *configs.Service) { globalConfigs = c }
+//
+// It also hands the wick provider a secret decryptor so its in-process
+// engine can decrypt per-model API keys (wick_cenc_ tokens) at spawn
+// time without the wick package importing configs (avoids a cycle).
+func SetConfigs(c *configs.Service) {
+	globalConfigs = c
+	if c != nil {
+		wick.SetSecretDecryptor(func(token string) string {
+			plain, err := c.DecryptSecret(token)
+			if err != nil {
+				return token
+			}
+			return plain
+		})
+	}
+}
 
 // SetAuth wires the login service so per-user preferences (pinned
 // project) can be read/written from the agents tool.
@@ -319,6 +335,18 @@ func Register(r tool.Router) {
 	r.POST("/providers", saveProviderInstance)
 	r.POST("/providers/rename/{type}/{name}", renameProviderInstance)
 	r.GET("/providers/catalog/{type}", providerCatalogJSON)
+
+	// Built-in wick provider: model CRUD, instance settings, live model
+	// discovery. The wick instance is single (wick/wick).
+	r.GET("/providers/wick/config", getWickConfig)
+	r.GET("/providers/wick/interactions/{session}", getWickInteractions)
+	r.GET("/providers/wick/interactions/{session}/{seq}/curl", getWickInteractionCurl)
+	r.POST("/providers/wick/models", saveWickModel)
+	r.DELETE("/providers/wick/models/{id}", deleteWickModel)
+	r.POST("/providers/wick/models/{id}/default", setWickDefaultModel)
+	r.POST("/providers/wick/settings", saveWickSettings)
+	r.POST("/providers/wick/models/discover", discoverWickModels)
+
 	r.DELETE("/providers/{type}/{name}", deleteProviderInstance)
 	r.GET("/providers/spawns/{file}/reveal", providerSpawnReveal)
 	r.GET("/api/providers/spawns", apiSpawnsList)
@@ -2213,14 +2241,19 @@ func snapshotEvents(sessionID string) []Event {
 		})
 		// Replay the partial assistant text accumulated since the last
 		// flushed turn — needed for mid-stream refresh so the bubble
-		// repaints instead of going blank until Done arrives. The FE
-		// treats text_delta as append; sending the full partial here
-		// works because the FE clears any pending turn before replay.
+		// repaints instead of going blank until Done arrives. This is a
+		// full cumulative snapshot, not an increment, so it uses its own
+		// event type: text_delta means "append", and every SharedWorker
+		// resubscribe (every page load while the stream is alive, not
+		// just after a real gap) calls this same snapshot path, so
+		// sending it as text_delta double(or more)-appended the same
+		// text on each resubscribe. The FE replaces live.text for
+		// text_snapshot instead of appending.
 		if e.PartialText != "" {
 			out = append(out, Event{
 				SessionID: e.SessionID,
 				AgentName: e.AgentName,
-				Type:      "text_delta",
+				Type:      "text_snapshot",
 				Data:      e.PartialText,
 			})
 		}

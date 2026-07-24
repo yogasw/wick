@@ -204,5 +204,53 @@ describe("ProvidersList - active processes panel", () => {
   });
 });
 
+describe("ProvidersList - wick built-in card", () => {
+  function withWick(): ProvidersListResponse {
+    const d = makeData();
+    d.Providers.push({
+      Instance: { Type: "wick", Name: "wick", Binary: "", Disabled: false, MaxConcurrent: 0, SendMode: "" },
+      Path: "(built-in)",
+      PathFound: true,
+      Version: "built-in",
+      VersionErr: "",
+      Probing: false,
+      Hooks: {},
+      HookEnabled: {},
+      Cap: { Used: 0, Max: 0, Unlimited: true },
+    });
+    return d;
+  }
+
+  it("renders the Built-in badge + model count and calls onNavigate", async () => {
+    vi.mocked(api.apiGetProviders).mockResolvedValue(withWick());
+    vi.mocked(api.apiGetWickConfig).mockResolvedValue({
+      models: [
+        { ID: "m_1", Kind: "google", Label: "Gemini Flash", Model: "gemini-flash-latest", KeyMasked: "••", HasKey: true, BaseURL: "", APIFormat: "gemini", MaxOutputTokens: 0, Default: true, Temperature: null, TopP: null, ThinkingBudget: null, RawConfig: "" },
+      ],
+      settings: { ShellToolDisabled: false, Connectors: [], MaxContextTokens: 0, MaxTurns: 0, Temperature: null, TopP: null, ThinkingBudget: null, RawConfig: "" },
+    });
+    const onNavigate = vi.fn();
+    render(ProvidersList, { props: { onNavigate, onOpenSession: vi.fn(), base: "/wick" } });
+    expect(await screen.findByText("Built-in")).toBeTruthy();
+    expect(await screen.findByText("1 registered")).toBeTruthy();
+    // The card surfaces the default model's display label.
+    expect(screen.getByText("Gemini Flash")).toBeTruthy();
+    // The wick card exposes a Detail button routing to wick/wick.
+    const detailBtns = screen.getAllByText("Detail");
+    fireEvent.click(detailBtns[detailBtns.length - 1]);
+    expect(onNavigate).toHaveBeenCalledWith("wick", "wick");
+  });
+
+  it("shows Needs setup when wick has zero models", async () => {
+    vi.mocked(api.apiGetProviders).mockResolvedValue(withWick());
+    vi.mocked(api.apiGetWickConfig).mockResolvedValue({
+      models: [],
+      settings: { ShellToolDisabled: false, Connectors: [], MaxContextTokens: 0, MaxTurns: 0, Temperature: null, TopP: null, ThinkingBudget: null, RawConfig: "" },
+    });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "/wick" } });
+    expect(await screen.findByText("Needs setup")).toBeTruthy();
+  });
+});
+
 // Recent Spawns is now its own component (RecentSpawns.svelte) with its own
 // test file — ProvidersList just embeds it.

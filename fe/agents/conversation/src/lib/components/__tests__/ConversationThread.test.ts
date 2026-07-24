@@ -86,6 +86,41 @@ describe("ConversationThread", () => {
     expect(container.innerHTML).toContain("running bash…");
   });
 
+  test("typing indicator prefers a known tool name over substate", () => {
+    const typing: TypingState = { active: true, substate: "working", toolName: "write_file" };
+    const { container } = render(ConversationThread, {
+      props: { turns: [], live: null, typing },
+    });
+    expect(container.innerHTML).toContain("writing file…");
+    expect(container.innerHTML).not.toContain("running working…");
+  });
+
+  test("typing indicator falls back to a generic label for an unknown tool name", () => {
+    const typing: TypingState = { active: true, toolName: "wick_search" };
+    const { container } = render(ConversationThread, {
+      props: { turns: [], live: null, typing },
+    });
+    expect(container.innerHTML).toContain("searching…");
+  });
+
+  test("typing indicator never renders the contradictory 'running idle…' text", () => {
+    const typing: TypingState = { active: true, substate: "idle" };
+    const { container } = render(ConversationThread, {
+      props: { turns: [], live: null, typing },
+    });
+    expect(container.innerHTML).not.toContain("running idle…");
+    expect(container.innerHTML).toContain("thinking…");
+  });
+
+  test("typing indicator never renders the raw backend substate 'running_tool'", () => {
+    const typing: TypingState = { active: true, substate: "running_tool" };
+    const { container } = render(ConversationThread, {
+      props: { turns: [], live: null, typing },
+    });
+    expect(container.innerHTML).not.toContain("running running_tool…");
+    expect(container.innerHTML).toContain("running a tool…");
+  });
+
   test("renders empty state when no turns and not live/typing", () => {
     render(ConversationThread, { props: { turns: [], live: null, typing: { active: false } } });
     expect(screen.getByText(/no messages yet/i)).toBeDefined();

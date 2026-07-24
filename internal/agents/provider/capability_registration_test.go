@@ -10,6 +10,7 @@ import (
 	_ "github.com/yogasw/wick/internal/agents/provider/claude"
 	_ "github.com/yogasw/wick/internal/agents/provider/codex"
 	_ "github.com/yogasw/wick/internal/agents/provider/gemini"
+	_ "github.com/yogasw/wick/internal/agents/provider/wick"
 )
 
 // TestProviderRegistrationsLoadAll asserts that importing each
@@ -45,4 +46,26 @@ func TestProviderRegistrationsLoadAll(t *testing.T) {
 			}
 		})
 	}
+
+	// wick is the in-process provider: registered so the UI can render
+	// its badge, but with the inverse contract — no subprocess hook, no
+	// writer, no prober. The gate is enforced natively in the runner.
+	t.Run("wick", func(t *testing.T) {
+		cap, ok := capability.Lookup("wick")
+		if !ok {
+			t.Fatal("capability.Lookup(wick) not registered")
+		}
+		if cap.HookSupported {
+			t.Error("wick: HookSupported should be false (in-process, no subprocess hook)")
+		}
+		if cap.InterceptScope != "in-process" {
+			t.Errorf("wick: InterceptScope = %q, want %q", cap.InterceptScope, "in-process")
+		}
+		if _, ok := capability.LookupHookConfigWriter("wick"); ok {
+			t.Error("wick: HookConfigWriter should NOT be registered")
+		}
+		if _, ok := capability.LookupProber("wick"); ok {
+			t.Error("wick: Prober should NOT be registered")
+		}
+	})
 }

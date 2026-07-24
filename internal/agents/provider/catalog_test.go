@@ -10,11 +10,17 @@ import (
 	_ "github.com/yogasw/wick/internal/agents/provider/claude"
 	_ "github.com/yogasw/wick/internal/agents/provider/codex"
 	_ "github.com/yogasw/wick/internal/agents/provider/gemini"
+	_ "github.com/yogasw/wick/internal/agents/provider/wick"
 )
 
 func TestCatalogFor(t *testing.T) {
 	for _, ty := range provider.SupportedTypes() {
 		cat := provider.CatalogFor(ty)
+		if ty.InProcess() {
+			// In-process types configure via the Models UI, not env/args
+			// pickers — the registered catalog is intentionally empty.
+			continue
+		}
 		if len(cat.Env) == 0 {
 			t.Errorf("%s: expected at least one env entry (subpackage init not registered?)", ty)
 		}

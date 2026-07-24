@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wick Provider — UI Mockup</title>
+<style>
+  /* ── Design tokens (from tailwind.config.js / tokens.md) ─────────── */
+  :root{
+    --green-200:#D1ECE5; --green-300:#A1D9CB; --green-500:#27B199; --green-600:#288372; --green-700:#24584E; --green-800:#1B312C;
+    --navy-500:#01416C; --navy-600:#103352; --navy-700:#14263A; --navy-800:#121923;
+    --black-600:#BFBFBF; --black-700:#A0A0A0; --black-800:#565656; --black-900:#0A0A0A;
+    --white-100:#FFFFFF; --white-200:#FAFAFA; --white-300:#ECECEC; --white-400:#DFDFDF;
+    --pos-100:#F1F9EF; --pos-400:#288C7A;
+    --cau-100:#FFF2D1; --cau-400:#D78E08;
+    --neg-400:#EB5757; --link-400:#007BFF;
+    /* semantic (light) */
+    --bg:var(--white-200); --surface:var(--white-100);
+    --border:var(--white-300); --border-strong:var(--white-400);
+    --text:var(--black-900); --text-muted:var(--black-800); --text-faint:var(--black-700);
+    --badge-builtin-bg:var(--green-200); --badge-builtin-fg:var(--green-700);
+    --row-hover:var(--white-200);
+    --shadow-md:0 4px 12px -2px rgba(0,0,0,.08),0 2px 4px -1px rgba(0,0,0,.05);
+    --shadow-lg:0 10px 24px -4px rgba(0,0,0,.10),0 4px 8px -2px rgba(0,0,0,.06);
+  }
+  html[data-theme="dark"]{
+    --bg:var(--navy-800); --surface:var(--navy-700);
+    --border:var(--navy-600); --border-strong:var(--navy-500);
+    --text:var(--white-100); --text-muted:var(--black-600); --text-faint:var(--black-700);
+    --badge-builtin-bg:var(--green-800); --badge-builtin-fg:var(--green-300);
+    --row-hover:var(--navy-600);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    background:var(--bg); color:var(--text);
+    font-size:14px; line-height:1.5;
+  }
+  main{max-width:1120px;margin:0 auto;padding:32px 24px 80px}
+  h1{font-size:1.75rem;font-weight:600;letter-spacing:-.01em;line-height:1.2}
+  h2{font-size:1.125rem;font-weight:600}
+  .muted{color:var(--text-muted)}
+  .faint{color:var(--text-faint)}
+  .mono{font-family:Menlo,Consolas,Monaco,monospace;font-size:12px}
+
+  /* view labels — mockup scaffolding, not product UI */
+  .viewtag{display:inline-block;margin:48px 0 16px;padding:4px 12px;border-radius:9999px;
+    background:var(--surface);border:1px dashed var(--border-strong);
+    font-size:12px;font-weight:500;color:var(--text-muted)}
+  .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+
+  .btn{display:inline-flex;align-items:center;gap:8px;border-radius:8px;cursor:pointer;
+    font:inherit;font-size:14px;font-weight:500;padding:8px 16px;border:1px solid transparent}
+  .btn-primary{background:var(--green-500);color:#fff}
+  .btn-primary:hover{background:var(--green-600)}
+  .btn-ghost{background:transparent;color:var(--text-muted);border-color:var(--border-strong)}
+  .btn-ghost:hover{background:var(--row-hover)}
+  .btn-sm{padding:4px 12px;font-size:12px;border-radius:8px}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+    box-shadow:var(--shadow-md)}
+
+  /* ── View 1: providers grid ─────────────────────────────────────── */
+  .grid{display:grid;gap:16px;grid-template-columns:1fr}
+  @media(min-width:640px){.grid{grid-template-columns:1fr 1fr}}
+  @media(min-width:1024px){.grid{grid-template-columns:repeat(4,1fr)}}
+  .pcard{padding:24px;display:flex;flex-direction:column;gap:8px}
+  .pcard .head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .pname{font-weight:600;font-size:16px}
+  .badge{display:inline-flex;align-items:center;gap:4px;border-radius:9999px;
+    padding:2px 8px;font-size:11px;font-weight:500}
+  .badge-builtin{background:var(--badge-builtin-bg);color:var(--badge-builtin-fg)}
+  .badge-ready{background:var(--pos-100);color:var(--pos-400)}
+  .badge-setup{background:var(--cau-100);color:var(--cau-400)}
+  html[data-theme="dark"] .badge-ready{background:rgba(40,140,122,.16)}
+  html[data-theme="dark"] .badge-setup{background:rgba(215,142,8,.16)}
+  .kv{display:flex;justify-content:space-between;font-size:12px}
+  .kv .k{color:var(--text-faint)}
+  .pcard .foot{margin-top:8px;padding-top:12px;border-top:1px solid var(--border);
+    display:flex;justify-content:space-between;align-items:center}
+
+  /* ── View 2: detail / models table ──────────────────────────────── */
+  .crumb{font-size:12px;color:var(--text-faint);margin-bottom:8px}
+  .crumb a{color:var(--link-400);text-decoration:none}
+  .notice{display:flex;gap:12px;align-items:flex-start;padding:12px 16px;border-radius:8px;
+    background:var(--surface);border:1px solid var(--border);font-size:12px;color:var(--text-muted)}
+  .tablewrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:14px;min-width:640px}
+  th{font-size:12px;font-weight:500;color:var(--text-faint);text-align:left;
+    padding:12px 16px;border-bottom:1px solid var(--border)}
+  td{padding:12px 16px;border-bottom:1px solid var(--border);vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:var(--row-hover)}
+  .chip{display:inline-flex;align-items:center;border-radius:9999px;padding:2px 10px;
+    font-size:11px;font-weight:500;border:1px solid var(--border-strong);color:var(--text-muted)}
+  .radio{width:16px;height:16px;border-radius:9999px;border:2px solid var(--border-strong);
+    display:inline-block;vertical-align:middle}
+  .radio.on{border-color:var(--green-500);box-shadow:inset 0 0 0 3px var(--surface);background:var(--green-500)}
+  .iconbtn{background:none;border:none;cursor:pointer;color:var(--text-faint);padding:4px;border-radius:4px}
+  .iconbtn:hover{color:var(--text);background:var(--row-hover)}
+  .iconbtn.danger:hover{color:var(--neg-400)}
+
+  /* ── View 3: modal ──────────────────────────────────────────────── */
+  .modal-frame{max-width:640px;margin:0 auto;box-shadow:var(--shadow-lg)}
+  .modal-head{display:flex;align-items:center;justify-content:space-between;
+    padding:16px 24px;border-bottom:1px solid var(--border)}
+  .modal-body{padding:24px;display:flex;flex-direction:column;gap:16px}
+  .modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:16px 24px;
+    border-top:1px solid var(--border)}
+  label{display:block;font-size:14px;font-weight:500;margin-bottom:4px}
+  .help{font-size:12px;color:var(--text-faint);margin-top:4px}
+  .input,select.input{width:100%;font:inherit;font-size:14px;color:var(--text);
+    background:var(--surface);border:1px solid var(--border-strong);border-radius:8px;
+    padding:8px 12px;outline:none}
+  .input::placeholder{color:var(--text-faint)}
+  .input:focus{border-color:var(--green-500)}
+  .searchbox{position:relative}
+  .searchbox svg{position:absolute;left:12px;top:50%;transform:translateY(-50%)}
+  .searchbox .input{padding-left:40px}
+  .modellist{border:1px solid var(--border-strong);border-radius:8px;margin-top:8px;
+    max-height:192px;overflow-y:auto}
+  .modellist .item{display:flex;align-items:center;justify-content:space-between;
+    padding:8px 16px;cursor:pointer;font-size:14px}
+  .modellist .item:hover{background:var(--row-hover)}
+  .modellist .item.sel{color:var(--green-500);font-weight:500}
+  .modellist .item .sub{font-size:11px;color:var(--text-faint);font-weight:400}
+  .adv-toggle{display:flex;align-items:center;gap:8px;background:none;border:none;
+    cursor:pointer;font:inherit;font-size:14px;font-weight:500;color:var(--text-muted);padding:0}
+  .adv-toggle svg{transition:transform .15s}
+  .adv-toggle.open svg{transform:rotate(90deg)}
+  .adv{display:none;flex-direction:column;gap:16px;padding-left:24px;
+    border-left:2px solid var(--border)}
+  .adv.open{display:flex}
+  .row2{display:grid;gap:16px;grid-template-columns:1fr}
+  @media(min-width:640px){.row2{grid-template-columns:1fr 1fr}}
+
+  /* ── View 4: composer strip ─────────────────────────────────────── */
+  .composer{display:flex;gap:8px;align-items:center;padding:12px 16px;flex-wrap:wrap}
+  .composer .fake-input{flex:1;min-width:200px;color:var(--text-faint);font-size:14px}
+  .selchip{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border-strong);
+    border-radius:8px;padding:4px 12px;font-size:12px;font-weight:500;color:var(--text-muted);cursor:pointer}
+  .selchip:hover{background:var(--row-hover)}
+  .dot{width:8px;height:8px;border-radius:9999px;background:var(--green-500);display:inline-block}
+  .pick{padding:8px 16px;font-size:14px;cursor:pointer}
+  .pick:hover{background:var(--row-hover)}
+  .pick.sel{color:var(--green-500);font-weight:500}
+  .pick.sub{padding-left:32px}
+  textarea.input{resize:vertical}
+</style>
+</head>
+<body>
+<main>
+  <div class="topbar">
+    <div>
+      <h1>Wick Provider — UI Mockup</h1>
+      <p class="muted" style="margin-top:4px">Built-in provider type <span class="mono">wick</span> · custom models with live discovery · pair of <span class="mono">plan.md</span></p>
+    </div>
+    <button class="btn btn-ghost" onclick="toggleTheme()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+      Theme
+    </button>
+  </div>
+
+  <!-- ════════ VIEW 1 — Providers page ════════ -->
+  <span class="viewtag">View 1 — Providers page (list)</span>
+  <div class="grid">
+    <div class="card pcard">
+      <div class="head"><span class="pname">Claude</span><span class="badge badge-ready">Ready</span></div>
+      <div class="kv"><span class="k">Binary</span><span class="mono">claude 2.1.9</span></div>
+      <div class="kv"><span class="k">Instances</span><span>1</span></div>
+      <div class="foot"><span class="faint" style="font-size:12px">0 / 2 running</span><button class="btn btn-ghost btn-sm">Detail</button></div>
+    </div>
+    <div class="card pcard">
+      <div class="head"><span class="pname">Codex</span><span class="badge badge-ready">Ready</span></div>
+      <div class="kv"><span class="k">Binary</span><span class="mono">codex 0.48.0</span></div>
+      <div class="kv"><span class="k">Instances</span><span>1</span></div>
+      <div class="foot"><span class="faint" style="font-size:12px">0 / 2 running</span><button class="btn btn-ghost btn-sm">Detail</button></div>
+    </div>
+    <div class="card pcard">
+      <div class="head"><span class="pname">Gemini</span><span class="badge badge-setup">Needs setup</span></div>
+      <div class="kv"><span class="k">Binary</span><span class="mono">not found</span></div>
+      <div class="kv"><span class="k">Instances</span><span>1</span></div>
+      <div class="foot"><span class="faint" style="font-size:12px">—</span><button class="btn btn-ghost btn-sm">Detail</button></div>
+    </div>
+    <!-- the new card -->
+    <div class="card pcard" style="border-color:var(--green-500)">
+      <div class="head">
+        <span class="pname">Wick</span>
+        <span class="badge badge-builtin">Built-in</span>
+      </div>
+      <p class="faint" style="font-size:12px">Runs inside wick — no CLI, no PATH setup.</p>
+      <div class="kv"><span class="k">Models</span><span>3 registered</span></div>
+      <div class="kv"><span class="k">Default</span><span class="mono">gemini-flash-latest</span></div>
+      <div class="foot"><span class="badge badge-ready">Ready</span><button class="btn btn-ghost btn-sm">Detail</button></div>
+    </div>
+  </div>
+
+  <!-- ════════ VIEW 2 — Wick detail: Provider settings + Models ════════ -->
+  <span class="viewtag">View 2 — Wick detail page · Provider settings + Models (replaces Binary/Args/Env)</span>
+  <div class="crumb"><a href="#">Providers</a> / wick <span class="chip" style="margin-left:8px">Single instance — no duplicate/rename</span></div>
+
+  <div class="card" style="margin-bottom:16px">
+    <div style="padding:16px 24px;border-bottom:1px solid var(--border)">
+      <h2>Provider settings</h2>
+      <p class="faint" style="font-size:12px">Instance-level config. Every knob adk-go supports is reachable: common fields below, the rest via raw config.</p>
+    </div>
+    <div class="modal-body" style="gap:16px">
+      <div class="row2">
+        <div>
+          <label>Shell tool (bash / cmd)</label>
+          <select class="input"><option selected>Enabled — gate enforced natively</option><option>Disabled</option></select>
+          <p class="help">Gate rules run inside the tool callback before exec.</p>
+        </div>
+        <div>
+          <label>Connectors</label>
+          <select class="input"><option selected>All ready connectors</option><option>Selected only…</option><option>None</option></select>
+          <p class="help">Wired directly as function tools — no MCP.</p>
+        </div>
+      </div>
+      <div class="row2">
+        <div>
+          <label>Max context tokens</label>
+          <input class="input" type="text" placeholder="model default">
+          <p class="help">History-replay budget; trimmed newest-first.</p>
+        </div>
+        <div>
+          <label>Max turns per message</label>
+          <input class="input" type="text" placeholder="unlimited">
+        </div>
+      </div>
+      <div class="row2">
+        <div>
+          <label>Default temperature</label>
+          <input class="input" type="text" placeholder="model default">
+        </div>
+        <div>
+          <label>Default thinking budget</label>
+          <input class="input" type="text" placeholder="model default · 0 = off">
+        </div>
+      </div>
+      <div>
+        <label>Raw ADK config <span class="faint" style="font-weight:400">(JSON, merged last)</span></label>
+        <textarea class="input mono" rows="3" placeholder='{"generateContentConfig": {"safetySettings": [...]}}'></textarea>
+        <p class="help">Escape hatch — any adk-go option without a field above goes here (same pattern as AI-router raw config).</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 24px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+      <div>
+        <h2>Models</h2>
+        <p class="faint" style="font-size:12px">Custom models this instance can run. One is the default; sessions use it unless overridden.</p>
+      </div>
+      <button class="btn btn-primary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        Add model
+      </button>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th style="width:64px">Default</th><th>Model</th><th>Provider</th><th>API key</th><th style="width:96px"></th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="radio on"></span></td>
+            <td>Gemini Flash (latest)<div class="mono faint">gemini-flash-latest</div></td>
+            <td><span class="chip">Google</span></td>
+            <td class="mono faint">••••••••3kQ</td>
+            <td>
+              <button class="btn btn-ghost btn-sm" title="1-token ping: validates key + model id">Test</button>
+              <button class="iconbtn" title="Edit"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+              <button class="iconbtn danger" title="Delete"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="radio"></span></td>
+            <td>GPT 5.2<div class="mono faint">gpt-5.2</div></td>
+            <td><span class="chip">OpenAI</span></td>
+            <td class="mono faint">••••••••9xF</td>
+            <td>
+              <button class="btn btn-ghost btn-sm" title="1-token ping: validates key + model id">Test</button>
+              <button class="iconbtn" title="Edit"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+              <button class="iconbtn danger" title="Delete"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+            </td>
+          </tr>
+          <tr>
+            <td><span class="radio"></span></td>
+            <td>Grok 4.5 via OpenRouter<div class="mono faint">x-ai/grok-4.5</div></td>
+            <td><span class="chip">OpenRouter</span></td>
+            <td class="mono faint">••••••••aB2</td>
+            <td>
+              <button class="btn btn-ghost btn-sm" title="1-token ping: validates key + model id">Test</button>
+              <button class="iconbtn" title="Edit"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+              <button class="iconbtn danger" title="Delete"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="notice" style="margin-top:16px">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--cau-400)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:2px"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+    <span>Wick runs in-process with native tools: <b>shell</b> (bash/cmd — gate rules enforced inside the tool itself, no hook probe needed) and <b>wick connectors</b> (direct service call, no MCP round-trip).</span>
+  </div>
+
+  <!-- ════════ VIEW 3 — Add/Edit Custom Model modal ════════ -->
+  <span class="viewtag">View 3 — Add / Edit Custom Model modal (Factory-style + live model search)</span>
+  <div class="card modal-frame">
+    <div class="modal-head">
+      <h2 style="font-size:14px;letter-spacing:.02em">Add custom model</h2>
+      <button class="iconbtn" title="Close"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="modal-body">
+      <div>
+        <label for="kind">Provider</label>
+        <select id="kind" class="input">
+          <option>Google Gemini</option>
+          <option selected>OpenAI</option>
+          <option>Anthropic</option>
+          <option>OpenRouter</option>
+          <option>Other provider</option>
+        </select>
+      </div>
+      <div>
+        <label for="key">API key</label>
+        <input id="key" class="input" type="password" value="sk-................................">
+        <p class="help">Encrypted at rest (<span class="mono">wick_cenc_…</span>), used server-side only — never sent back to the browser.</p>
+      </div>
+      <div>
+        <label for="modelsearch">Model</label>
+        <div class="searchbox">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text-faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <input id="modelsearch" class="input" type="text" placeholder="Search available models…" oninput="filterModels(this.value)">
+        </div>
+        <div class="modellist" id="modellist">
+          <div class="item sel" data-id="gpt-5.2"><span>gpt-5.2 <span class="sub">· 400k ctx</span></span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div>
+          <div class="item" data-id="gpt-5.2-mini"><span>gpt-5.2-mini <span class="sub">· 400k ctx</span></span></div>
+          <div class="item" data-id="gpt-5.2-codex"><span>gpt-5.2-codex <span class="sub">· 400k ctx</span></span></div>
+          <div class="item" data-id="o4-mini"><span>o4-mini <span class="sub">· 200k ctx</span></span></div>
+          <div class="item" data-id="gpt-4.1"><span>gpt-4.1 <span class="sub">· 1M ctx</span></span></div>
+        </div>
+        <p class="help">Fetched live from <span class="mono">api.openai.com/v1/models</span> after the key is entered — type to filter. “Other provider” switches to a manual model id field.</p>
+      </div>
+      <div>
+        <label for="label">Display name <span class="faint" style="font-weight:400">(optional)</span></label>
+        <input id="label" class="input" type="text" placeholder="GPT 5.2" value="GPT 5.2">
+      </div>
+      <button class="adv-toggle" id="advtoggle" onclick="toggleAdv()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+        Advanced options
+      </button>
+      <div class="adv" id="adv">
+        <div class="row2">
+          <div>
+            <label for="fmt">API format</label>
+            <select id="fmt" class="input">
+              <option selected>OpenAI Chat Completions</option>
+              <option>OpenAI Responses</option>
+              <option>Anthropic Messages</option>
+              <option>Gemini generateContent</option>
+            </select>
+            <p class="help">Defaults from the provider — set only for “Other”.</p>
+          </div>
+          <div>
+            <label for="maxtok">Max output tokens <span class="faint" style="font-weight:400">(optional)</span></label>
+            <input id="maxtok" class="input" type="text" placeholder="16384">
+          </div>
+        </div>
+        <div>
+          <label for="baseurl">Base URL</label>
+          <input id="baseurl" class="input" type="text" value="https://api.openai.com/v1">
+          <p class="help">Required for “Other provider” (self-hosted / OpenAI-compatible endpoints).</p>
+        </div>
+        <div class="row2">
+          <div>
+            <label for="temp">Temperature <span class="faint" style="font-weight:400">(optional)</span></label>
+            <input id="temp" class="input" type="text" placeholder="instance default">
+          </div>
+          <div>
+            <label for="think">Thinking budget <span class="faint" style="font-weight:400">(optional)</span></label>
+            <input id="think" class="input" type="text" placeholder="instance default · 0 = off">
+          </div>
+        </div>
+        <div>
+          <label for="rawmodel">Raw ADK config <span class="faint" style="font-weight:400">(JSON, per-model, merged last)</span></label>
+          <textarea id="rawmodel" class="input mono" rows="2" placeholder='{"generateContentConfig": {...}}'></textarea>
+        </div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost">Cancel</button>
+      <button class="btn btn-primary">Save model</button>
+    </div>
+  </div>
+
+  <!-- ════════ VIEW 4 — composer picker: nested model submenu ════════ -->
+  <span class="viewtag">View 4 — Session composer · provider picker with nested wick model list (core)</span>
+  <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
+    <div class="card" style="width:280px;padding:8px 0">
+      <div style="padding:8px 16px;font-size:12px;font-weight:500;color:var(--text-faint)">Provider</div>
+      <div class="pick"><span>claude</span></div>
+      <div class="pick"><span>codex</span></div>
+      <div class="pick"><span>gemini</span></div>
+      <div class="pick sel" style="display:flex;justify-content:space-between;align-items:center">
+        <span><span class="dot" style="margin-right:8px"></span>wick</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+      </div>
+      <div style="border-top:1px solid var(--border);margin-top:4px;padding:8px 16px 4px;font-size:12px;font-weight:500;color:var(--text-faint)">wick · model</div>
+      <div class="pick sub sel" style="display:flex;justify-content:space-between;align-items:center">
+        <span>Gemini Flash (latest) <span class="chip" style="margin-left:4px">default</span></span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--green-500)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+      </div>
+      <div class="pick sub"><span>GPT 5.2</span></div>
+      <div class="pick sub"><span>Grok 4.5 via OpenRouter</span></div>
+    </div>
+    <div style="flex:1;min-width:240px">
+      <div class="card composer">
+        <span class="selchip"><span class="dot"></span> wick · Gemini Flash (latest)
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </span>
+        <span class="fake-input">Message the agent…</span>
+        <button class="btn btn-primary btn-sm">Send</button>
+      </div>
+      <p class="help" style="margin-top:8px"><b>wick appears once</b> in the picker (single instance — no <span class="mono">wick · foo</span> duplicates like codex instances today). Clicking it expands its registered models; the session stores the chosen model id. History follows the session, not the provider — switching claude → wick keeps the conversation (rebuilt from <span class="mono">conversation.jsonl</span>).</p>
+    </div>
+  </div>
+</main>
+
+<script>
+  function toggleTheme(){
+    const r=document.documentElement;
+    r.dataset.theme = r.dataset.theme==='dark' ? 'light' : 'dark';
+  }
+  // default to OS preference
+  if(matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme='dark';
+
+  function toggleAdv(){
+    document.getElementById('adv').classList.toggle('open');
+    document.getElementById('advtoggle').classList.toggle('open');
+  }
+  toggleAdv(); // mockup ships with advanced open so reviewers see the fields
+
+  function filterModels(q){
+    q=q.toLowerCase();
+    document.querySelectorAll('#modellist .item').forEach(el=>{
+      el.style.display = el.dataset.id.toLowerCase().includes(q) ? '' : 'none';
+    });
+  }
+</script>
+</body>
+</html>

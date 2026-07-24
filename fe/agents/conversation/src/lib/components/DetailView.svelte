@@ -751,7 +751,18 @@
       ? dequeueProcess(base, target.sid)
       : killProcess(base, target.sid);
     run(action.pipe(Effect.provide(WickClientLayer)))
-      .then(loadProcesses)
+      .then(() => {
+        // Kill succeeded server-side, but the lifecycle:idle/killed SSE
+        // event that would normally clear "thinking…" can be lost — the
+        // process may have already died silently before this click (an
+        // idle-timeout race), or the SSE stream itself can drop the
+        // message. Clear the panel's live/typing state directly so Kill
+        // always has a visible effect instead of looking like a no-op.
+        if (target.sid === sessionId && !target.queued) {
+          thread.handleKilledLocally();
+        }
+        return loadProcesses();
+      })
       .catch((e: unknown) => toastError(`Kill: ${e instanceof Error ? e.message : String(e)}`));
   }
 

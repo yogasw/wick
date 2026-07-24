@@ -993,6 +993,227 @@ export async function apiSaveAIRouter(
   }
 }
 
+// ── Wick provider (built-in) ─────────────────────────────────────────
+//
+// The `wick` provider type is the in-process runtime. Unlike the CLI
+// providers it has no binary / args / env — instead it owns a Models
+// list + instance-level Provider settings, read from a dedicated config
+// endpoint (the generic /api/providers detail payload does NOT carry them).
+
+export interface WickModelDTO {
+  ID: string;
+  /** google | openai | anthropic | openrouter | other */
+  Kind: string;
+  Label: string;
+  Model: string;
+  /** Masked stored key ("••••••••…"); never the real value. */
+  KeyMasked: string;
+  /** Whether a key is stored server-side for this model. */
+  HasKey: boolean;
+  BaseURL: string;
+  APIFormat: string;
+  MaxOutputTokens: number;
+  Default: boolean;
+  Temperature: number | null;
+  TopP: number | null;
+  ThinkingBudget: number | null;
+  RawConfig: string;
+}
+
+export interface WickSettingsDTO {
+  ShellToolDisabled: boolean;
+  Connectors: string[];
+  MaxContextTokens: number;
+  MaxTurns: number;
+  Temperature: number | null;
+  TopP: number | null;
+  ThinkingBudget: number | null;
+  RawConfig: string;
+}
+
+export type WickConfig = { models: WickModelDTO[]; settings: WickSettingsDTO };
+
+interface WireWickModel {
+  id?: string;
+  kind?: string;
+  label?: string;
+  model?: string;
+  key_masked?: string;
+  has_key?: boolean;
+  base_url?: string;
+  api_format?: string;
+  max_output_tokens?: number;
+  default?: boolean;
+  temperature?: number | null;
+  top_p?: number | null;
+  thinking_budget?: number | null;
+  raw_config?: string;
+}
+
+interface WireWickSettings {
+  shell_tool_disabled?: boolean;
+  connectors?: string[] | null;
+  max_context_tokens?: number;
+  max_turns?: number;
+  temperature?: number | null;
+  top_p?: number | null;
+  thinking_budget?: number | null;
+  raw_config?: string;
+}
+
+function mapWickModel(w: WireWickModel): WickModelDTO {
+  return {
+    ID: w.id ?? "",
+    Kind: w.kind ?? "",
+    Label: w.label ?? "",
+    Model: w.model ?? "",
+    KeyMasked: w.key_masked ?? "",
+    HasKey: w.has_key ?? false,
+    BaseURL: w.base_url ?? "",
+    APIFormat: w.api_format ?? "",
+    MaxOutputTokens: w.max_output_tokens ?? 0,
+    Default: w.default ?? false,
+    Temperature: w.temperature ?? null,
+    TopP: w.top_p ?? null,
+    ThinkingBudget: w.thinking_budget ?? null,
+    RawConfig: w.raw_config ?? "",
+  };
+}
+
+function mapWickSettings(w: WireWickSettings | null | undefined): WickSettingsDTO {
+  return {
+    ShellToolDisabled: w?.shell_tool_disabled ?? false,
+    Connectors: w?.connectors ?? [],
+    MaxContextTokens: w?.max_context_tokens ?? 0,
+    MaxTurns: w?.max_turns ?? 0,
+    Temperature: w?.temperature ?? null,
+    TopP: w?.top_p ?? null,
+    ThinkingBudget: w?.thinking_budget ?? null,
+    RawConfig: w?.raw_config ?? "",
+  };
+}
+
+// apiGetWickConfig loads the wick instance's registered models + provider
+// settings. This is the read side the generic detail endpoint lacks —
+// call it on WickDetail mount and after every save/delete/default change.
+export async function apiGetWickConfig(base: string): Promise<WickConfig> {
+  const r = await get<{ models?: WireWickModel[] | null; settings?: WireWickSettings | null }>(
+    `${base}/providers/wick/config`,
+  );
+  return {
+    models: (r.models ?? []).map(mapWickModel),
+    settings: mapWickSettings(r.settings),
+  };
+}
+
+// Body for creating/updating a wick model. Snake_case matches the BE
+// contract. Omit `api_key` (or leave it undefined) to keep the stored key
+// on edit; `id` present = update, absent = create. Undefined keys are
+// dropped by JSON.stringify so optional fields fall back to BE defaults.
+export type WickModelInput = {
+  id?: string;
+  kind: string;
+  label?: string;
+  model: string;
+  api_key?: string;
+  base_url?: string;
+  api_format?: string;
+  max_output_tokens?: number;
+  default?: boolean;
+  temperature?: number;
+  top_p?: number;
+  thinking_budget?: number;
+  raw_config?: string;
+};
+
+export async function apiSaveWickModel(base: string, input: WickModelInput): Promise<{ status: string; id: string }> {
+  const r = await post<{ status?: string; id?: string }>(`${base}/providers/wick/models`, input);
+  return { status: r?.status ?? "", id: r?.id ?? "" };
+}
+
+export async function apiDeleteWickModel(base: string, id: string): Promise<void> {
+  return del<void>(`${base}/providers/wick/models/${encodeURIComponent(id)}`);
+}
+
+export async function apiSetWickModelDefault(base: string, id: string): Promise<void> {
+  return post<void>(`${base}/providers/wick/models/${encodeURIComponent(id)}/default`);
+}
+
+export type WickSettingsInput = {
+  shell_tool_disabled: boolean;
+  connectors?: string[];
+  max_context_tokens?: number;
+  max_turns?: number;
+  temperature?: number;
+  top_p?: number;
+  thinking_budget?: number;
+  raw_config?: string;
+};
+
+export async function apiSaveWickSettings(base: string, input: WickSettingsInput): Promise<void> {
+  return post<void>(`${base}/providers/wick/settings`, input);
+}
+
+export type WickDiscoverInput = { kind: string; api_key?: string; base_url?: string; model_ref?: string };
+export type WickDiscoverModel = { id: string; label: string };
+export type WickDiscoverResult = { models: WickDiscoverModel[]; error: string };
+
+// apiDiscoverWickModels proxies the vendor model-list API server-side so
+// the key never touches the browser. Pass `api_key` when the user typed a
+// fresh key, or `model_ref` (an existing model id) to reuse the stored
+// key on edit. A non-empty `error` means discovery failed — the caller
+// should fall back to a free-text model id input (non-fatal).
+export async function apiDiscoverWickModels(base: string, input: WickDiscoverInput): Promise<WickDiscoverResult> {
+  const r = await post<{ models?: { id?: string; label?: string }[] | null; error?: string }>(
+    `${base}/providers/wick/models/discover`,
+    input,
+  );
+  return {
+    models: (r?.models ?? [])
+      .map((m) => ({ id: m.id ?? "", label: m.label ?? m.id ?? "" }))
+      .filter((m) => m.id !== ""),
+    error: r?.error ?? "",
+  };
+}
+
+// ── Wick interactions (session log) ────────────────────────────────────
+
+// WickInteraction is one model call the in-process wick engine made —
+// the request it sent (system + messages + tools) and the response
+// (text + tool calls + tokens + latency + error). This is the wick
+// provider's session log: "why did the model answer this".
+export interface WickInteractionMsg {
+  role: string;
+  text?: string;
+  tool_call?: string;
+  tool_resp?: string;
+}
+
+export interface WickInteraction {
+  seq: number;
+  kind: string; // "generate" | "compaction"
+  model: string;
+  latency_ms: number;
+  system?: string;
+  tools?: string[];
+  request: WickInteractionMsg[];
+  response?: string;
+  tool_calls?: string[];
+  prompt_tokens?: number;
+  output_tokens?: number;
+  cached_tokens?: number;
+  error?: string;
+}
+
+// apiGetWickInteractions loads the per-call interaction log for a session
+// (empty array when the session made no wick model calls / file absent).
+export async function apiGetWickInteractions(base: string, session: string): Promise<WickInteraction[]> {
+  const r = await get<{ interactions?: WickInteraction[] | null }>(
+    `${base}/providers/wick/interactions/${encodeURIComponent(session)}`,
+  );
+  return r?.interactions ?? [];
+}
+
 export type { StorageFileDTO };
 
 export { ApiError };

@@ -1,9 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { ConversationTurn, LiveTurn, TypingState, ThreadBlock, TurnEvent } from "../types/agents.js";
+  import type { ConversationTurn, LiveTurn, TypingState, TurnEvent } from "../types/agents.js";
   import { renderLive } from "../richRender.js";
+  import { mergeTodoItemsWithSteps, stripTodoBlocks } from "../todoGroups.js";
+  import type { ThreadBlock } from "../types/agents.js";
   import ThreadMessage from "./ThreadMessage.svelte";
   import ToolCard from "./ToolCard.svelte";
+  import TodoCard from "./TodoCard.svelte";
   import { turnDay, turnDayKey, activeDayLabel } from "../timeFormat.js";
 
   type Props = {
@@ -18,9 +21,29 @@
 
   let containerEl: HTMLElement | undefined = $state();
 
-  function typingLabel(substate?: string): string {
-    if (!substate || substate === "thinking") return "thinking…";
+  const TOOL_LABELS: Record<string, string> = {
+    write_file: "writing file…",
+    read_file: "reading file…",
+    edit_file: "editing file…",
+    shell: "running command…",
+    todo: "updating task list…",
+    ask_user: "waiting for your input…",
+    wick_list: "listing…",
+    wick_search: "searching…",
+    wick_schedule_message: "scheduling message…",
+  };
+
+  function typingLabel(substate?: string, toolName?: string): string {
+    if (toolName) return TOOL_LABELS[toolName] ?? `running ${toolName}…`;
+    if (!substate || substate === "thinking" || substate === "idle") return "thinking…";
     if (substate === "spawning") return "spawning…";
+    // "running_tool" is the backend's generic lifecycle substate for "a tool
+    // is executing" (agents/state.State.String()) — it's not a tool name.
+    // It normally arrives together with a tool_use event that fills in
+    // toolName above; this is only the fallback for a race where the
+    // lifecycle ping lands before that event, so it must not render as
+    // "running running_tool…".
+    if (substate === "running_tool") return "running a tool…";
     return `running ${substate}…`;
   }
 
@@ -31,6 +54,12 @@
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
   const isEmpty = $derived(turns.length === 0 && !live && !typing.active);
+
+  // Same merge as ThreadMessage's persisted-turn trace: a long-running
+  // live turn calling todo repeatedly shows one checklist with current
+  // progress instead of a stacked card per call.
+  const liveMergedTodoItems = $derived(mergeTodoItemsWithSteps(live?.blocks ?? []));
+  const liveNonTodoBlocks = $derived(stripTodoBlocks(live?.blocks ?? []));
 
   function findScrollParent(el: HTMLElement | null): HTMLElement | null {
     let node = el?.parentElement ?? null;
@@ -145,7 +174,10 @@
           </button>
           {#if liveTraceOpen}
             <div class="flex flex-col gap-1">
-              {#each live.blocks as block, bi (bi)}
+              {#if liveMergedTodoItems.length > 0}
+                <TodoCard items={liveMergedTodoItems} />
+              {/if}
+              {#each liveNonTodoBlocks as block, bi (bi)}
                 {#if block.kind === "tool"}
                   <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} />
                 {:else if block.kind === "thinking"}
@@ -173,7 +205,7 @@
           <svg class="h-3 w-3 shrink-0 animate-spin text-green-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
           </svg>
-          <span class="italic">{typingLabel(typing.substate)}</span>
+          <span class="italic">{typingLabel(typing.substate, typing.toolName)}</span>
         </div>
       </div>
     </div>

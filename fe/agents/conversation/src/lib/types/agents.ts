@@ -195,7 +195,7 @@ export type ThreadBlock =
 
 export type LiveTurn = { text: string; blocks: ThreadBlock[] };
 
-export type TypingState = { active: boolean; substate?: string };
+export type TypingState = { active: boolean; substate?: string; toolName?: string };
 
 export type WsField = {
   key: string;

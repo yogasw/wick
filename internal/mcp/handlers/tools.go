@@ -232,6 +232,43 @@ func MetaToolDescriptors() []ToolDescriptor {
 			},
 		},
 		{
+			Name: "todo",
+			Description: "Record or update your task plan and progress. Call at the start of a multi-step task and " +
+				"after finishing each step — pass the FULL list every time (not just the changed item). Reuse the same " +
+				"'id' for a step across calls when updating its status so the UI can track it as one item rather than " +
+				"a new one each time; if you don't set an id, the step's text is used to match it instead, so keep the " +
+				"wording exactly the same across calls to update the same step's status. The UI renders this as a " +
+				"single collapsible checklist that always reflects your latest reported status, not a card per call.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"items": map[string]any{
+						"type":        "array",
+						"description": "The full task list, in order.",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"id": map[string]any{
+									"type": "string",
+									"description": "Stable identifier for this step (e.g. \"1\", \"setup-db\"). Reuse " +
+										"the SAME id across calls when updating this step's status later. Optional " +
+										"but strongly recommended whenever you re-send the list with changed statuses.",
+								},
+								"step":   map[string]any{"type": "string", "description": "What this step does."},
+								"status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed"}, "description": "Current status of the step."},
+							},
+							"required": []string{"step", "status"},
+						},
+					},
+				},
+				"required": []string{"items"},
+			},
+			Annotations: &ToolAnnotation{
+				Title:        "Update task list",
+				ReadOnlyHint: PtrBool(false),
+			},
+		},
+		{
 			Name: "ask_user",
 			Description: "Ask the human operator a question and block until they answer in the Wick web UI. " +
 				"Use sparingly — only when you genuinely need a decision the user must make (e.g. picking between " +

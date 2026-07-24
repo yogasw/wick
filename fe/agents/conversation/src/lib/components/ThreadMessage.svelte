@@ -3,7 +3,9 @@
   import { renderMarkdown, linkifyText } from "../markdown.js";
   import { turnTime } from "../timeFormat.js";
   import { enrich } from "../richRender.js";
+  import { mergeTodoItemsWithSteps, stripTodoBlocks } from "../todoGroups.js";
   import ToolCard from "./ToolCard.svelte";
+  import TodoCard from "./TodoCard.svelte";
   import ArtifactGallery from "./ArtifactGallery.svelte";
   import MediaLightbox from "./MediaLightbox.svelte";
 
@@ -146,6 +148,15 @@
     flush();
     return blocks;
   });
+
+  // A long turn can call todo many times (checkpoint after checkpoint).
+  // Merging every call into one checklist — instead of rendering a
+  // separate card per call — means the widget always shows current
+  // progress (% done) rather than stacking N nearly-identical cards.
+  // The individual todo tool_use blocks are stripped from the flat
+  // trace below since this merged widget replaces them.
+  const mergedTodoItems = $derived(mergeTodoItemsWithSteps(traceBlocks));
+  const nonTodoBlocks = $derived(stripTodoBlocks(traceBlocks));
 
   async function toggleTrace() {
     if (traceOpen) {
@@ -307,7 +318,10 @@
 
           {#if traceOpen}
             <div class="flex flex-col gap-1 mt-0.5" data-trace-blocks>
-              {#each traceBlocks as block}
+              {#if mergedTodoItems.length > 0}
+                <TodoCard items={mergedTodoItems} />
+              {/if}
+              {#each nonTodoBlocks as block}
                 {#if block.kind === "thinking"}
                   <div data-thinking-block class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700 whitespace-pre-wrap break-words">
                     {block.text}
