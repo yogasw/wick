@@ -1,0 +1,573 @@
+<title>Browser Network Capture → Replay</title>
+<style>
+:root{
+  --bg:#faf9f6;
+  --surface:#ffffff;
+  --surface-2:#f2f0ea;
+  --ink:#1c2321;
+  --muted:#5f6b68;
+  --line:#e2ded4;
+  --accent:#0f7d6b;
+  --accent-ink:#0a5a4d;
+  --accent-soft:#e2f2ee;
+  --warn:#a3690f;
+  --warn-soft:#faf0dd;
+  --code-bg:#f4f2ec;
+  --shadow: 0 1px 2px rgba(28,35,33,.06), 0 8px 24px -12px rgba(28,35,33,.12);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#121614;
+    --surface:#181e1b;
+    --surface-2:#1f2622;
+    --ink:#e8ece9;
+    --muted:#8b9895;
+    --line:#2a332e;
+    --accent:#4fd6b9;
+    --accent-ink:#7ee8cf;
+    --accent-soft:#173029;
+    --warn:#e0ab5c;
+    --warn-soft:#2c2417;
+    --code-bg:#0f1512;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 32px -16px rgba(0,0,0,.5);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#121614; --surface:#181e1b; --surface-2:#1f2622; --ink:#e8ece9; --muted:#8b9895;
+  --line:#2a332e; --accent:#4fd6b9; --accent-ink:#7ee8cf; --accent-soft:#173029;
+  --warn:#e0ab5c; --warn-soft:#2c2417; --code-bg:#0f1512;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 32px -16px rgba(0,0,0,.5);
+}
+:root[data-theme="light"]{
+  --bg:#faf9f6; --surface:#ffffff; --surface-2:#f2f0ea; --ink:#1c2321; --muted:#5f6b68;
+  --line:#e2ded4; --accent:#0f7d6b; --accent-ink:#0a5a4d; --accent-soft:#e2f2ee;
+  --warn:#a3690f; --warn-soft:#faf0dd; --code-bg:#f4f2ec;
+  --shadow: 0 1px 2px rgba(28,35,33,.06), 0 8px 24px -12px rgba(28,35,33,.12);
+}
+
+@font-face{
+  font-family:'DispMono';
+  src:local('SFMono-Regular'),local('Menlo'),local('Consolas');
+}
+
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:var(--bg);
+  color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  font-size:16px;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+
+.wrap{
+  max-width:1180px;
+  margin:0 auto;
+  padding:0 24px 96px;
+}
+
+/* ---------- Header ---------- */
+header.hero{
+  padding:56px 0 36px;
+  border-bottom:1px solid var(--line);
+  margin-bottom:36px;
+}
+.eyebrow{
+  font-family:ui-monospace,'DispMono',SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:12.5px;
+  letter-spacing:.09em;
+  text-transform:uppercase;
+  color:var(--accent-ink);
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom:14px;
+}
+.eyebrow::before{
+  content:"";
+  width:7px;height:7px;
+  border-radius:50%;
+  background:var(--accent);
+  box-shadow:0 0 0 3px var(--accent-soft);
+}
+h1{
+  font-family:ui-monospace,'DispMono',SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:clamp(28px,4vw,42px);
+  font-weight:600;
+  letter-spacing:-.01em;
+  margin:0 0 14px;
+  text-wrap:balance;
+  color:var(--ink);
+}
+h1 .arrow{color:var(--muted);font-weight:400;padding:0 6px;}
+.dek{
+  max-width:62ch;
+  color:var(--muted);
+  font-size:16.5px;
+  margin:0;
+}
+.meta-row{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-top:20px;
+}
+.tag{
+  font-family:ui-monospace,'DispMono',SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:12px;
+  padding:4px 10px;
+  border-radius:5px;
+  background:var(--surface-2);
+  border:1px solid var(--line);
+  color:var(--muted);
+}
+
+/* ---------- Layout: rail + content ---------- */
+.layout{
+  display:grid;
+  grid-template-columns:220px minmax(0,1fr);
+  gap:48px;
+  align-items:start;
+}
+@media (max-width:860px){
+  .layout{grid-template-columns:1fr;}
+}
+
+.rail{
+  position:sticky;
+  top:24px;
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+@media (max-width:860px){
+  .rail{position:static;flex-direction:row;flex-wrap:wrap;gap:8px;margin-bottom:8px;}
+}
+.rail a{
+  font-size:13.5px;
+  color:var(--muted);
+  text-decoration:none;
+  padding:7px 10px;
+  border-radius:6px;
+  border-left:2px solid transparent;
+}
+.rail a:hover, .rail a:focus-visible{
+  color:var(--ink);
+  background:var(--surface-2);
+  border-left-color:var(--accent);
+  outline:none;
+}
+.rail-label{
+  font-family:ui-monospace,'DispMono',SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:11px;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:var(--muted);
+  padding:0 10px 6px;
+}
+
+main{min-width:0;}
+
+section{
+  margin-bottom:44px;
+  scroll-margin-top:20px;
+}
+h2{
+  font-family:ui-monospace,'DispMono',SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:13px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  color:var(--accent-ink);
+  margin:0 0 16px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+h2::after{
+  content:"";
+  flex:1;
+  height:1px;
+  background:var(--line);
+}
+h3{
+  font-size:17px;
+  font-weight:650;
+  margin:22px 0 8px;
+  color:var(--ink);
+}
+p{margin:0 0 12px;max-width:70ch;}
+.card{
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:22px 24px;
+  box-shadow:var(--shadow);
+}
+
+/* ---------- TODO checklist ---------- */
+.todo-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:9px;}
+.todo-list li{
+  display:flex;
+  gap:11px;
+  align-items:flex-start;
+  font-size:14.5px;
+}
+.todo-list input[type=checkbox]{
+  margin-top:3px;
+  width:15px;height:15px;
+  accent-color:var(--accent);
+  flex-shrink:0;
+}
+.todo-list label{cursor:pointer;}
+.todo-list li.done label{color:var(--muted);text-decoration:line-through;}
+
+/* ---------- Flow diagram ---------- */
+.flow{
+  display:flex;
+  flex-direction:column;
+  gap:0;
+}
+.flow-step{
+  display:grid;
+  grid-template-columns:34px minmax(0,1fr);
+  gap:16px;
+  padding:14px 0;
+}
+.flow-step .num{
+  font-family:ui-monospace,'DispMono',SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:13px;
+  color:var(--accent-ink);
+  background:var(--accent-soft);
+  border-radius:50%;
+  width:30px;height:30px;
+  display:flex;align-items:center;justify-content:center;
+  font-weight:600;
+}
+.flow-line{
+  position:relative;
+}
+.flow-step:not(:last-child) .num::after{
+  content:"";
+  position:absolute;
+  left:14px;
+  top:44px;
+  width:1.5px;
+  height:calc(100% - 14px);
+  background:var(--line);
+}
+.flow-step h4{margin:0 0 4px;font-size:15px;font-weight:650;}
+.flow-step p{margin:0;font-size:14px;color:var(--muted);max-width:60ch;}
+.flow-step code{font-size:13px;}
+
+/* ---------- code / schema ---------- */
+code, pre{
+  font-family:ui-monospace,'DispMono',SFMono-Regular,Menlo,Consolas,monospace;
+}
+code{
+  background:var(--code-bg);
+  padding:1px 6px;
+  border-radius:4px;
+  font-size:.9em;
+  color:var(--accent-ink);
+  border:1px solid var(--line);
+}
+pre{
+  background:var(--code-bg);
+  border:1px solid var(--line);
+  border-radius:8px;
+  padding:16px 18px;
+  overflow-x:auto;
+  font-size:13.5px;
+  line-height:1.55;
+  color:var(--ink);
+  margin:0 0 12px;
+}
+pre code{background:none;border:none;padding:0;color:inherit;}
+
+/* ---------- pill / status ---------- */
+.pill{
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  font-family:ui-monospace,'DispMono',SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:11.5px;
+  padding:3px 9px;
+  border-radius:20px;
+  font-weight:600;
+  letter-spacing:.02em;
+}
+.pill.reco{background:var(--accent-soft);color:var(--accent-ink);}
+.pill.open{background:var(--warn-soft);color:var(--warn);}
+.pill.method{background:var(--surface-2);color:var(--muted);border:1px solid var(--line);}
+
+/* ---------- Options / questions ---------- */
+.option-grid{display:grid;gap:14px;grid-template-columns:1fr;}
+.qcard{
+  border:1px solid var(--line);
+  border-radius:9px;
+  padding:16px 18px;
+  background:var(--surface);
+  border-left:3px solid var(--warn);
+}
+.qcard h4{margin:0 0 6px;font-size:15px;font-weight:650;display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap;}
+.qcard .qtitle{display:flex;align-items:center;gap:8px;}
+.qcard .qnum{color:var(--muted);font-family:ui-monospace,'DispMono',SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;}
+.qcard p{margin:0;color:var(--muted);font-size:14px;}
+.qcard .lean{
+  margin-top:8px;
+  font-size:13px;
+  color:var(--accent-ink);
+  background:var(--accent-soft);
+  display:inline-block;
+  padding:3px 9px;
+  border-radius:5px;
+}
+
+/* ---------- schema table ---------- */
+.schema-table{
+  width:100%;
+  border-collapse:collapse;
+  font-size:14px;
+}
+.schema-table th,.schema-table td{
+  text-align:left;
+  padding:9px 12px;
+  border-bottom:1px solid var(--line);
+}
+.schema-table th{
+  font-family:ui-monospace,'DispMono',SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:11.5px;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  color:var(--muted);
+  font-weight:600;
+}
+.schema-table td:first-child{font-family:ui-monospace,'DispMono',SFMono-Regular,Menlo,Consolas,monospace;color:var(--accent-ink);white-space:nowrap;}
+.schema-table td:nth-child(2){color:var(--muted);white-space:nowrap;}
+
+/* ---------- compare row ---------- */
+.compare{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:14px;
+}
+@media (max-width:640px){.compare{grid-template-columns:1fr;}}
+.compare .opt{
+  border:1px solid var(--line);
+  border-radius:9px;
+  padding:16px 18px;
+  background:var(--surface);
+}
+.compare .opt.win{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;}
+.compare .opt h4{margin:0 0 8px;font-size:14.5px;display:flex;align-items:center;gap:8px;}
+.compare .opt ul{margin:0;padding-left:18px;font-size:13.5px;color:var(--muted);}
+.compare .opt li{margin-bottom:4px;}
+
+/* ---------- non-goals ---------- */
+.nongoal-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;}
+.nongoal-list li{
+  display:flex;gap:10px;font-size:14.5px;color:var(--muted);
+}
+.nongoal-list li::before{content:"—";color:var(--line);flex-shrink:0;}
+
+footer{
+  margin-top:60px;
+  padding-top:20px;
+  border-top:1px solid var(--line);
+  color:var(--muted);
+  font-size:12.5px;
+  font-family:ui-monospace,'DispMono',SFMono-Regular,Menlo,Consolas,monospace;
+}
+
+@media (prefers-reduced-motion:no-preference){
+  .qcard, .flow-step, .compare .opt { transition: transform .15s ease; }
+}
+</style>
+
+<div class="wrap">
+  <header class="hero">
+    <div class="eyebrow">internal/planning/todo · playwright_browser connector</div>
+    <h1>Browser Network Capture <span class="arrow">→</span> Replay</h1>
+    <p class="dek">Log in once by hand, capture the raw HTTP the browser actually sent, and replay it directly — no cookie-jar bookkeeping, no refresh-token logic. When replay fails, fall back to re-opening the browser.</p>
+    <div class="meta-row">
+      <span class="tag">status: planning</span>
+      <span class="tag">connector: playwright_browser</span>
+      <span class="tag">new op: network_capture</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Section navigation">
+      <div class="rail-label">Contents</div>
+      <a href="#todo">TODO</a>
+      <a href="#problem">Problem</a>
+      <a href="#why">Why this approach</a>
+      <a href="#design">Design</a>
+      <a href="#flow">Flow</a>
+      <a href="#schema">Request shape</a>
+      <a href="#config">Op inputs</a>
+      <a href="#questions">Open questions</a>
+      <a href="#nongoals">Non-goals</a>
+    </nav>
+
+    <main>
+      <section id="todo">
+        <h2>TODO</h2>
+        <div class="card">
+          <ul class="todo-list">
+            <li><input type="checkbox" id="t1"><label for="t1">Decide capture trigger UX (manual "done" signal vs URL-pattern match vs timeout)</label></li>
+            <li><input type="checkbox" id="t2"><label for="t2">Decide scope/filter defaults (domain allowlist vs capture-all + client-side filter)</label></li>
+            <li><input type="checkbox" id="t3"><label for="t3">Add <code>network_capture</code> op to <code>playwright_browser</code> connector (reuse live-session infra)</label></li>
+            <li><input type="checkbox" id="t4"><label for="t4">Add <code>CapturedRequest</code> struct + HAR parsing in repo.go</label></li>
+            <li><input type="checkbox" id="t5"><label for="t5">Replay path: fire a <code>CapturedRequest</code> via the existing HTTP connector</label></li>
+            <li><input type="checkbox" id="t6"><label for="t6">Retry/fallback wiring: replay fails → re-invoke <code>network_capture</code> → update stored request</label></li>
+            <li><input type="checkbox" id="t7"><label for="t7">Docs: new op section in <code>docs/connectors/playwright_browser.md</code></label></li>
+            <li><input type="checkbox" id="t8"><label for="t8">Decide storage: session-scoped file vs return-to-caller-only, no persistence</label></li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="problem">
+        <h2>Problem</h2>
+        <p>Yoga wants to open a browser once — e.g. log in to Facebook manually — capture the <strong>full outgoing request(s)</strong> the browser made (method, URL, headers, cookies, body) as a list, then replay those directly over plain HTTP going forward. On failure (expired session, 403, redirect-to-login), fall back to opening the browser again to re-capture — the caller never has to reason about cookie rotation or refresh-token mechanics.</p>
+        <p>This is DevTools' "Copy as cURL" / "Save as HAR" workflow, done programmatically and wired into a connector.</p>
+      </section>
+
+      <section id="why">
+        <h2>Why this approach</h2>
+        <p><code>BrowserContext.storageState()</code> only dumps cookies + localStorage — useful for re-authenticating a <em>browser</em>, but the ask is for the raw <strong>request</strong>, so nothing about which fields matter needs to be understood upfront. Full request capture is ground truth: whatever the browser sent is exactly what gets replayed.</p>
+      </section>
+
+      <section id="design">
+        <h2>Design</h2>
+        <h3>Capture method</h3>
+        <div class="compare">
+          <div class="opt">
+            <h4><span class="pill method">Listener</span> page.on("request")</h4>
+            <ul>
+              <li>Simple, already-vendored playwright-go bindings</li>
+              <li>Gives method / url / headers / postData directly</li>
+              <li>Misses wire-level detail — redirects collapse, some headers are browser-computed</li>
+            </ul>
+          </div>
+          <div class="opt win">
+            <h4><span class="pill reco">Recommended</span> HAR recording</h4>
+            <ul>
+              <li><code>BrowserNewContextOptions.RecordHar</code> — native to Playwright</li>
+              <li>Full fidelity: headers, cookies, timing, redirect chain</li>
+              <li>Industry-standard format — external HAR viewers / curl converters already exist</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="flow">
+        <h2>End-to-end flow</h2>
+        <div class="card">
+          <div class="flow">
+            <div class="flow-step">
+              <div class="num">1</div>
+              <div>
+                <h4><code>session_open</code> <span style="font-weight:400;color:var(--muted);">(existing op)</span></h4>
+                <p>Headed live session, HAR recording enabled on the context.</p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">2</div>
+              <div>
+                <h4>Manual interaction</h4>
+                <p>User logs in / clicks through the flow inside the visible browser window.</p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">3</div>
+              <div>
+                <h4><code>network_capture(session_id, url_filter?)</code> <span style="font-weight:400;color:var(--muted);">— new op</span></h4>
+                <p>Stops/flushes HAR recording, parses entries, filters by <code>url_filter</code> if given (else returns XHR/fetch entries, skips static assets). Returns a list of <code>CapturedRequest</code>.</p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">4</div>
+              <div>
+                <h4>Replay</h4>
+                <p>Caller picks the relevant <code>CapturedRequest</code> and fires it via the existing <code>http</code> connector — no browser needed.</p>
+              </div>
+            </div>
+            <div class="flow-step">
+              <div class="num">5</div>
+              <div>
+                <h4>Retry-fallback on failure</h4>
+                <p>403 / redirect-to-login → caller re-runs <code>session_open</code> + manual login + <code>network_capture</code>, gets a fresh request, retries.</p>
+              </div>
+            </div>
+          </div>
+          <p style="margin-top:6px;font-size:13.5px;">Steps 4–5 are the <strong>consumer's</strong> responsibility — this connector's job stops at "give me the captured requests." Any workflow/agent wires its own retry policy on top, rather than baking one site's auth logic into the connector.</p>
+        </div>
+      </section>
+
+      <section id="schema">
+        <h2>CapturedRequest shape</h2>
+        <pre><code>type CapturedRequest struct {
+    Method  string            `json:"method"`
+    URL     string            `json:"url"`
+    Headers map[string]string `json:"headers"`
+    Cookies string            `json:"cookies"`  // Cookie header, already flattened
+    Body    string            `json:"body,omitempty"`
+    Status  int               `json:"status"`   // response status, for filtering successful calls
+}</code></pre>
+      </section>
+
+      <section id="config">
+        <h2>Op inputs — <code>network_capture</code></h2>
+        <div class="card">
+          <table class="schema-table">
+            <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td>session_id</td><td>string</td><td>Required. From <code>session_open</code>.</td></tr>
+              <tr><td>url_filter</td><td>string</td><td>Optional substring/regex to narrow returned entries.</td></tr>
+              <tr><td>include_assets</td><td>bool</td><td>Default <code>false</code> — skips images/css/font/js.</td></tr>
+            </tbody>
+          </table>
+          <p style="margin-top:12px;font-size:13.5px;">No new instance-level <code>Config</code> needed — HAR recording toggles per <code>session_open</code> call, not persistent config.</p>
+        </div>
+      </section>
+
+      <section id="questions">
+        <h2>Open questions <span class="pill open" style="margin-left:8px;">needs a decision</span></h2>
+        <div class="option-grid">
+          <div class="qcard">
+            <h4><span class="qtitle"><span class="qnum">01</span> Capture trigger</span></h4>
+            <p>Does <code>network_capture</code> snapshot "everything since <code>session_open</code>," or do we need a start/stop pair (<code>network_capture_start</code> / <code>network_capture_stop</code>) so the user can bound exactly which interactions get captured?</p>
+            <span class="lean">Leaning: start/stop pair, for precision — costs one extra op</span>
+          </div>
+          <div class="qcard">
+            <h4><span class="qtitle"><span class="qnum">02</span> Filter defaults</span></h4>
+            <p>Capture-all-then-filter (simple, but noisy — trackers/analytics pollute the result) vs. require an explicit domain allowlist upfront (cleaner, more setup).</p>
+          </div>
+          <div class="qcard">
+            <h4><span class="qtitle"><span class="qnum">03</span> Persistence</span></h4>
+            <p>Requests returned in the tool response only (ephemeral — caller must save them itself), or does the connector also persist to a file under the session dir for later retrieval without re-opening the browser?</p>
+          </div>
+          <div class="qcard">
+            <h4><span class="qtitle"><span class="qnum">04</span> Replay helper</span></h4>
+            <p>Build a matching <code>network_replay</code> op in this same connector (fires the <code>CapturedRequest</code> via plain HTTP, still inside this plugin), or leave replay entirely to the generic <code>http</code> connector / caller's own code?</p>
+            <span class="lean">Leaning: leave external — avoids duplicating an HTTP client connector that already exists</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="nongoals">
+        <h2>Non-goals</h2>
+        <div class="card">
+          <ul class="nongoal-list">
+            <li>Solving CSRF / dynamic-token endpoints that can't be statically replayed — caller's job to detect (e.g. a re-auth redirect in the response) and re-capture.</li>
+            <li>TLS/JA3 fingerprint-matching between the captured browser session and the replay client — a real risk raised in discussion, but out of scope here; replay goes over a plain Go <code>http.Client</code>, which won't match Chromium's TLS fingerprint exactly.</li>
+          </ul>
+        </div>
+      </section>
+
+      <footer>plan.md · internal/planning/todo/browser-network-capture/</footer>
+    </main>
+  </div>
+</div>

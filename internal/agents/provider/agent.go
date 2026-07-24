@@ -213,6 +213,10 @@ type Options struct {
 	// each spawn (claude). Empty = unset (provider default). Forwarded
 	// verbatim into SpawnOptions.
 	ThinkingTokens string
+	// ModelID pins a model id on each spawn, scoped to the active provider
+	// instance. Empty = that provider's own default. Forwarded verbatim
+	// into SpawnOptions.
+	ModelID string
 }
 
 // SendMode controls how an Agent delivers a user message to its CLI.
@@ -336,6 +340,7 @@ func (a *Agent) Start(ctx context.Context) error {
 		Preset:         a.cfg.Preset,
 		MaxTurns:       a.cfg.MaxTurns,
 		ThinkingTokens: a.cfg.ThinkingTokens,
+		ModelID:        a.cfg.ModelID,
 	})
 	if err != nil {
 		cancel()
@@ -490,6 +495,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 		InitialMessage: text,
 		MaxTurns:       a.cfg.MaxTurns,
 		ThinkingTokens: a.cfg.ThinkingTokens,
+		ModelID:        a.cfg.ModelID,
 	})
 	if err != nil {
 		// Spawn failed — clear turnActive so a retry isn't parked forever.

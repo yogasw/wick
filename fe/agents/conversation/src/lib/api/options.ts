@@ -5,7 +5,11 @@ import type { ProviderOption, ProjectOption } from "../types/agents.js";
 export const getProviderOptions = (base: string) =>
   apiGetE<(ProviderOption & { uses_airouter?: boolean })[] | null>(`${base}/providers/options`).pipe(
     Effect.map((r) =>
-      (r ?? []).map((p) => ({ ...p, usesAIRouter: p.usesAIRouter ?? p.uses_airouter ?? false })),
+      (r ?? []).map((p) => ({
+        ...p,
+        usesAIRouter: p.usesAIRouter ?? p.uses_airouter ?? false,
+        models: p.models ?? undefined,
+      })),
     ),
   );
 
@@ -21,10 +25,10 @@ export const getProjectOptions = (base: string) =>
     ),
   );
 
-export const switchProvider = (base: string, sessionId: string, provider: string) =>
+export const switchProvider = (base: string, sessionId: string, provider: string, modelId?: string) =>
   apiPostE<{ status: string; provider?: string }>(
     `${base}/sessions/${encodeURIComponent(sessionId)}/provider`,
-    { provider },
+    modelId ? { provider, model_id: modelId } : { provider },
   );
 
 export const moveProject = (base: string, sessionId: string, projectId: string | null) =>

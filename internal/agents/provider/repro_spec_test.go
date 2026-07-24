@@ -4,7 +4,11 @@ import "testing"
 
 func TestReproSpecFor(t *testing.T) {
 	// Every supported type must declare a spec (the reproduce UI relies on it).
+	// In-process types have no argv at all — reproduce is n/a, zero spec is correct.
 	for _, ty := range SupportedTypes() {
+		if ty.InProcess() {
+			continue
+		}
 		s := ReproSpecFor(ty)
 		if len(s.HeadlessFlags) == 0 && len(s.HeadlessValueFlags) == 0 && len(s.HeadlessSubcmds) == 0 {
 			t.Errorf("%s: no headless tokens declared", ty)

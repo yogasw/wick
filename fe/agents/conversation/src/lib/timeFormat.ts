@@ -14,6 +14,19 @@ function turnDate(turn: ConversationTurn): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
+/** Parses an RFC3339 timestamp (a trace event's `at`/`end_at`) into epoch
+    ms, or undefined for an absent/malformed/zero value. Go's zero
+    time.Time marshals as "0001-01-01T00:00:00Z" (an omitted `end_at` on
+    a still-running tool call, or a trace recorded before these fields
+    existed) — Date parses that fine but it must not render as a real
+    timestamp, so reject anything before 2000. */
+export function parseEventTime(raw?: string): number | undefined {
+  if (!raw) return undefined;
+  const ms = Date.parse(raw);
+  if (isNaN(ms) || ms < 946684800000) return undefined; // 946684800000 = 2000-01-01 UTC
+  return ms;
+}
+
 const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
 
 export function turnTime(turn: ConversationTurn): string {

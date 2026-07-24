@@ -84,6 +84,18 @@ type ProviderChoiceVM struct {
 	// UsesAIRouter is true when this instance routes through the embedded
 	// AI Router — the composer marks it with a badge.
 	UsesAIRouter bool
+	// Models lists this instance's selectable models — currently only
+	// populated for wick (its custom-model registry). Empty for every
+	// other provider type: the composer picker only descends to a 3rd
+	// "model" level when there's more than one enabled entry here.
+	Models []ModelChoiceVM
+}
+
+// ModelChoiceVM is one selectable model under a wick provider instance.
+type ModelChoiceVM struct {
+	ID      string
+	Label   string
+	Default bool
 }
 
 // SessionLifecycleVM is the per-row lifecycle snapshot the sessions

