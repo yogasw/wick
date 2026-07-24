@@ -38,6 +38,9 @@ var immutableSystemPromptClaudeTemplate string
 //go:embed immutable_codex.md
 var immutableSystemPromptCodexTemplate string
 
+//go:embed immutable_wick.md
+var immutableSystemPromptWickTemplate string
+
 // DefaultSystemPrompt is the baseline interaction policy embedded at
 // build time. Seeded into the `system_prompt` config row on fresh
 // installs and surfaced as the target of the Reset button on the
@@ -85,6 +88,20 @@ func baseImmutable() string {
 // codex picks it up automatically on every spawn.
 func ImmutableSystemPromptCodex() string {
 	return resolve(joinImmutable(baseImmutable(), immutableSystemPromptCodexTemplate))
+}
+
+// ImmutableSystemPromptWick returns the global rules combined with
+// wick-specific rules. Passed as the engine's sysPrompt on every wick
+// spawn (see internal/agents/provider/wick/spawn.go). Previously wick
+// fell through pool/factory.go's provider-type switch into the claude
+// branch and got ImmutableSystemPrompt() (claude's overlay) instead of
+// its own — harmless while immutable_claude.md was empty, but wrong
+// the moment claude-specific guidance is added there, and there was no
+// dedicated file for wick-only rules (e.g. anything that assumes the
+// native read_file/write_file/edit_file tools rather than a harness's
+// own file tools) to land in.
+func ImmutableSystemPromptWick() string {
+	return resolve(joinImmutable(baseImmutable(), immutableSystemPromptWickTemplate))
 }
 
 // joinImmutable appends the per-provider override only when it has

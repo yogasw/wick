@@ -36,6 +36,13 @@ type SessionMetaDTO struct {
 	TitleCustom bool   `json:"title_custom"`
 	CreatedAt   string `json:"created_at"`
 	LastActive  string `json:"last_active"`
+	// Provider is the active agent's "type/name" provider key — distinct
+	// from ActiveAgent (the agent's own name, e.g. "main"). Empty if no
+	// agent entry exists yet.
+	Provider string `json:"provider,omitempty"`
+	// ModelID is the active agent's pinned model id (currently meaningful
+	// for wick only). Empty = that provider's own default model.
+	ModelID string `json:"model_id,omitempty"`
 }
 
 // accessibleSessionIDs returns the subset of ids whose sessions pass the
@@ -171,6 +178,20 @@ func apiSessionMeta(c *tool.Ctx) {
 		TitleCustom: sess.Meta.TitleCustom,
 		CreatedAt:   sess.Meta.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		LastActive:  sess.Meta.LastActive.Format("2006-01-02T15:04:05Z07:00"),
+	}
+	// Resolve provider + pinned model from the active (or first) agent
+	// entry — ActiveAgent above is the agent's own NAME ("main"), not its
+	// provider key, so the composer needs this separately.
+	agentName := sess.Meta.ActiveAgent
+	if agentName == "" && len(sess.Agents) > 0 {
+		agentName = sess.Agents[0].Name
+	}
+	for _, a := range sess.Agents {
+		if a.Name == agentName {
+			dto.Provider = a.Provider
+			dto.ModelID = a.ModelID
+			break
+		}
 	}
 	c.JSON(http.StatusOK, dto)
 }

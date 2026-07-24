@@ -703,6 +703,14 @@ export function buildAutoHeightSrcdoc(html: string, id: string): string {
    (HtmlArtifact.svelte): a borderless auto-height preview with a floating ⋮
    menu (Full screen / Show code / Download). The placeholder div is enriched
    in place by mounting the component into it with the inline source. */
+// enrich() re-invokes renderHtmlArtifacts on every DOM mutation (~every 50ms).
+// If setFileContext never receives a usable base/sessionId (e.g. a route param
+// race), the "context not set yet" branch below would retry forever — a
+// silent busy-loop that reads as a hung page. Cap retries per element so a
+// stuck context degrades to a visible fallback instead of spinning forever.
+const HTML_ARTIFACT_MAX_WAIT_RETRIES = 40; // ~2s at the 50ms debounce
+const htmlArtifactWaitCounts = new WeakMap<HTMLElement, number>();
+
 function renderHtmlArtifacts(node: HTMLElement): void {
   const els = node.querySelectorAll<HTMLElement>("[data-html-artifact]:not([data-enriched])");
   for (const el of els) {
@@ -711,7 +719,19 @@ function renderHtmlArtifacts(node: HTMLElement): void {
     // and render the same preview — the transcript never held the markup.
     const path = el.getAttribute("data-html-path");
     if (path && path.trim()) {
-      if (!fileBase || !fileSessionId) continue; // context not set yet; retry next enrich pass
+      if (!fileBase || !fileSessionId) {
+        const waited = (htmlArtifactWaitCounts.get(el) ?? 0) + 1;
+        htmlArtifactWaitCounts.set(el, waited);
+        if (waited < HTML_ARTIFACT_MAX_WAIT_RETRIES) continue; // retry next enrich pass
+        // Gave up waiting for context — render a static fallback so the
+        // element stops being re-queried on every mutation.
+        el.setAttribute("data-enriched", "");
+        const name = path.split("/").pop() || "preview.html";
+        el.textContent = `${name} (preview unavailable — reload the page)`;
+        el.className = "text-sm text-black-700 dark:text-white-400 italic";
+        continue;
+      }
+      htmlArtifactWaitCounts.delete(el);
       el.setAttribute("data-enriched", "");
       const name = path.split("/").pop() || "preview.html";
       el.innerHTML = "";

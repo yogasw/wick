@@ -22,3 +22,15 @@ func ServiceWorkerHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Service-Worker-Allowed", "/")
 	_, _ = w.Write(serviceWorkerJS)
 }
+
+// DisabledServiceWorkerHandler serves /sw.js as a 404 (WICK_SW_ENABLED=false).
+// The service worker's own caching (stale-while-revalidate on static
+// assets, cache-fallback on navigations) can pin a stale build across a
+// dev rebuild, so this lets a dev server run with no SW at all. A 404
+// here — rather than just not registering — makes the browser drop any
+// worker it already registered for this origin on the next page load,
+// so switching the flag off actually clears prior state instead of
+// leaving an old worker running alongside the new "disabled" server.
+func DisabledServiceWorkerHandler(w http.ResponseWriter, r *http.Request) {
+	http.NotFound(w, r)
+}

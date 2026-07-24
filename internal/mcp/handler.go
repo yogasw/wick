@@ -14,6 +14,7 @@ import (
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/schedule"
 	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/mcp/handlers"
 	"gorm.io/gorm"
@@ -343,43 +344,52 @@ func (h *Handler) handleToolsCall(w http.ResponseWriter, r *http.Request, req rp
 
 	rsp := h.responder()
 	hreq := handlers.RPCRequest{ID: req.ID, Params: req.Params}
+	h.dispatchTool(w, r, hreq, rsp, p.Name, p.Arguments, user, tagIDs)
+}
 
-	switch p.Name {
+// dispatchTool routes one tool call to its handler. Extracted from
+// handleToolsCall so the in-process agent path (CallAgentTool, used by
+// the built-in wick provider) shares the exact same routing + handlers
+// as the HTTP MCP transport — one dispatch, no drift.
+func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq handlers.RPCRequest, rsp handlers.Responder, name string, args map[string]any, user *entity.User, tagIDs []string) {
+	switch name {
 	case "wick_list":
-		handlers.WickList(w, r, hreq, rsp, h.connectors, h.layout, p.Arguments, tagIDs, user.IsAdmin())
+		handlers.WickList(w, r, hreq, rsp, h.connectors, h.layout, args, tagIDs, user.IsAdmin())
 	case "wick_search":
-		handlers.WickSearch(w, r, hreq, rsp, h.connectors, h.layout, p.Arguments, tagIDs, user.IsAdmin())
+		handlers.WickSearch(w, r, hreq, rsp, h.connectors, h.layout, args, tagIDs, user.IsAdmin())
 	case "wick_get":
-		handlers.WickGet(w, r, hreq, rsp, h.connectors, h.layout, p.Arguments, tagIDs, user.IsAdmin())
+		handlers.WickGet(w, r, hreq, rsp, h.connectors, h.layout, args, tagIDs, user.IsAdmin())
 	case "wick_execute":
-		handlers.WickExecute(w, r, hreq, rsp, h.connectors, h.layout, p.Arguments, user, tagIDs)
+		handlers.WickExecute(w, r, hreq, rsp, h.connectors, h.layout, args, user, tagIDs)
 	case "wick_info":
 		handlers.WickInfo(w, hreq, rsp, h.version, h.commit, h.buildTime, h.wickRoot, h.db)
 	case "wick_encrypt":
 		handlers.WickEncrypt(w, hreq, rsp, func(s string) string { return handlers.EncfieldsURL(h.appURL, s) })
 	case "wick_decrypt":
 		handlers.WickDecrypt(w, hreq, rsp, func(s string) string { return handlers.EncfieldsURL(h.appURL, s) })
+	case "todo":
+		handlers.WickTodo(w, hreq, rsp, args)
 	case "ask_user":
-		handlers.AskUser(w, r, hreq, rsp, h.askUsers, h.askUserAllowed, p.Arguments)
+		handlers.AskUser(w, r, hreq, rsp, h.askUsers, h.askUserAllowed, args)
 	case "wick_session_workspace":
-		handlers.WickSessionWorkspace(w, r, hreq, rsp, h.connectors, h.layout, h.askUsers, h.askUserAllowed, p.Arguments, user, tagIDs)
+		handlers.WickSessionWorkspace(w, r, hreq, rsp, h.connectors, h.layout, h.askUsers, h.askUserAllowed, args, user, tagIDs)
 	case "wick_list_providers":
-		handlers.WickListProviders(w, hreq, rsp, h.layout, p.Arguments)
+		handlers.WickListProviders(w, hreq, rsp, h.layout, args)
 	case "wick_skill_list":
 		handlers.WickSkillList(w, hreq, rsp)
 	case "wick_skill_sync":
 		handlers.WickSkillSync(w, r, hreq, rsp)
 	case "wick_session_info":
-		handlers.WickSessionInfo(w, r, hreq, rsp, h.layout, p.Arguments)
+		handlers.WickSessionInfo(w, r, hreq, rsp, h.layout, args)
 	case "wick_set_title":
-		handlers.WickSetTitle(w, r, hreq, rsp, h.layout, h.refreshSession, p.Arguments)
+		handlers.WickSetTitle(w, r, hreq, rsp, h.layout, h.refreshSession, args)
 	case "wick_schedule_message":
-		handlers.WickScheduleMessage(w, r, hreq, rsp, h.schedule, h.layout, p.Arguments, user)
+		handlers.WickScheduleMessage(w, r, hreq, rsp, h.schedule, h.layout, args, user)
 	default:
-		if strings.HasPrefix(p.Name, handlers.WickManagerPrefix) {
-			handlers.WickManagerExecute(w, r, hreq, rsp, h.connectors, p.Name, p.Arguments, user, tagIDs)
+		if strings.HasPrefix(name, handlers.WickManagerPrefix) {
+			handlers.WickManagerExecute(w, r, hreq, rsp, h.connectors, name, args, user, tagIDs)
 		} else {
-			writeRPCError(w, req.ID, errInvalidParams, "unknown tool: "+p.Name, nil)
+			rsp.WriteError(w, hreq.ID, errInvalidParams, "unknown tool: "+name, nil)
 		}
 	}
 }

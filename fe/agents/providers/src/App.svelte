@@ -4,6 +4,7 @@
   import { ToastHost } from "@wick-fe/common-ui";
   import ProvidersList from "$lib/components/ProvidersList.svelte";
   import ProviderDetail from "$lib/components/ProviderDetail.svelte";
+  import WickDetail from "$lib/components/WickDetail.svelte";
   import StorageView from "$lib/components/StorageView.svelte";
   import SessionDetail from "$lib/components/SessionDetail.svelte";
   import LogViewer from "$lib/components/LogViewer.svelte";
@@ -47,6 +48,12 @@
     <LogViewer {base} file={logParams.file} from={logParams.from} to={logParams.to} onBack={() => history.back()} />
   {:else if sessionParams}
     <SessionDetail {base} id={sessionParams.id} onBack={() => push("/")} onOpenLog={openLog} />
+  {:else if detailParams && detailParams.type === "wick"}
+    <WickDetail
+      {base}
+      onBack={() => push("/")}
+      onOpenSession={(id) => push(`/session/${encodeURIComponent(id)}`)}
+    />
   {:else if detailParams}
     <ProviderDetail
       {base}

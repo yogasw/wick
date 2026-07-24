@@ -17,6 +17,7 @@
     apiHookEnable,
     apiHookDisable,
     apiHookCheck,
+    apiGetWickConfig,
   } from "$lib/api.js";
   import type { ProvidersListResponse, ProviderStatusDTO } from "$lib/types.js";
 
@@ -32,6 +33,10 @@
   let data = $state<ProvidersListResponse | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
+  // Wick's model count + default label live behind its own config endpoint
+  // (the /api/providers list doesn't carry them), so fetch it alongside the
+  // list to fill the built-in card. Null until first fetch resolves.
+  let wickInfo = $state<{ count: number; defaultLabel: string } | null>(null);
   let confirmDelete = $state<ProviderStatusDTO | null>(null);
   let busy = $state<Record<string, boolean>>({});
   let mcpOpen = $state(false);
@@ -84,6 +89,7 @@
     }
     try {
       data = await apiGetProviders();
+      void loadWick();
     } catch (e) {
       if (!silent) {
         error = e instanceof Error ? e.message : "Failed to load providers";
@@ -93,6 +99,29 @@
         loading = false;
       }
     }
+  }
+
+  // Fetch the wick model count + default label for its card. Only runs when
+  // the list actually contains a wick instance; failures are non-fatal (the
+  // card just shows "Needs setup").
+  async function loadWick(): Promise<void> {
+    if (!data?.Providers.some((p) => p.Instance.Type === "wick")) {
+      return;
+    }
+    try {
+      const cfg = await apiGetWickConfig(base);
+      const def = cfg.models.find((m) => m.Default) ?? cfg.models[0];
+      wickInfo = {
+        count: cfg.models.length,
+        defaultLabel: def ? (def.Label || def.Model) : "",
+      };
+    } catch {
+      wickInfo = { count: 0, defaultLabel: "" };
+    }
+  }
+
+  function isWick(p: ProviderStatusDTO): boolean {
+    return p.Instance.Type === "wick";
   }
 
   function setBusy(key: string, val: boolean): void {
@@ -430,6 +459,55 @@
     {:else}
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-2 overflow-x-clip">
         {#each data.Providers as p (`${p.Instance.Type}/${p.Instance.Name}`)}
+          {#if isWick(p)}
+            {@const ready = (wickInfo?.count ?? 0) > 0}
+            <div class="rounded-xl border border-green-500 bg-white-100 dark:bg-navy-700 p-5 shadow-sm space-y-2 flex flex-col">
+              <div class="flex items-center justify-between gap-2">
+                <p class="text-base font-semibold text-black-900 dark:text-white-100">Wick</p>
+                <span class="rounded-full bg-green-100 dark:bg-green-900 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-300">Built-in</span>
+              </div>
+              <p class="text-xs text-black-700 dark:text-black-600">Runs inside wick — no CLI, no PATH setup.</p>
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-black-700 dark:text-black-600">Models</span>
+                <span class="text-black-900 dark:text-white-100">{wickInfo === null ? "…" : `${wickInfo.count} registered`}</span>
+              </div>
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-black-700 dark:text-black-600">Default</span>
+                <span class="font-mono text-black-900 dark:text-white-100 truncate max-w-[60%]">{wickInfo?.defaultLabel || "—"}</span>
+              </div>
+              <div class="pt-3 border-t border-white-300 dark:border-navy-600 flex items-center justify-between gap-2">
+                <span class="text-xs font-semibold text-black-900 dark:text-white-100">Command Gate</span>
+                {#if data.Gate.BypassLocked}
+                  <span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">locked (bypass)</span>
+                {:else if data.Gate.Enabled}
+                  <span class="rounded bg-green-500 px-2 py-0.5 text-xs font-medium text-white-100">enforced ✓</span>
+                {:else}
+                  <span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-800 dark:text-black-600">off</span>
+                {/if}
+              </div>
+              <p class="text-xs text-black-700 dark:text-black-600 leading-relaxed">
+                {#if data.Gate.BypassLocked}
+                  Permission policy is set to bypass — the shell tool runs unguarded.
+                {:else if data.Gate.Enabled}
+                  Enforced in-process on every shell call — no separate Enable/Test needed here.
+                {:else}
+                  Off — turn on the master Command Gate below to whitelist shell commands.
+                {/if}
+              </p>
+              <div class="mt-2 pt-3 border-t border-white-300 dark:border-navy-600 flex items-center justify-between">
+                {#if ready}
+                  <span class="rounded bg-green-50 dark:bg-green-900 px-2 py-0.5 text-xs font-medium text-green-700 dark:text-green-300">Ready</span>
+                {:else}
+                  <span class="rounded bg-amber-50 dark:bg-amber-900 px-2 py-0.5 text-xs font-medium text-amber-700 dark:text-amber-300">Needs setup</span>
+                {/if}
+                <button
+                  type="button"
+                  onclick={() => onNavigate(p.Instance.Type, p.Instance.Name)}
+                  class="text-xs rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800"
+                >Detail</button>
+              </div>
+            </div>
+          {:else}
           {@const rescanKey = `rescan-${p.Instance.Type}-${p.Instance.Name}`}
           {@const delKey = `del-${p.Instance.Type}-${p.Instance.Name}`}
           {@const hookKey = `hook-${p.Instance.Type}-${p.Instance.Name}`}
@@ -551,6 +629,7 @@
               </div>
             {/if}
           </div>
+          {/if}
         {/each}
       </div>
     {/if}

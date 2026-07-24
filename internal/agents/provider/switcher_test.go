@@ -40,6 +40,7 @@ func TestSwitch(t *testing.T) {
 	saveSeed(t, Instance{Type: TypeCodex, Name: "codex"})
 	saveSeed(t, Instance{Type: TypeCodex, Name: "gemini_flash"})
 	saveSeed(t, Instance{Type: TypeClaude, Name: "claude"})
+	saveSeed(t, Instance{Type: TypeWick, Name: "wick"})
 	layout := config.NewLayout(t.TempDir())
 
 	t.Run("switches to a named instance and persists type/name", func(t *testing.T) {
@@ -115,6 +116,66 @@ func TestSwitch(t *testing.T) {
 		// switch1 (1) + chat (2) + switch2 (1) — nothing pruned, the chat broke the run.
 		if len(turns) != 4 {
 			t.Fatalf("turns = %d, want 4; got %+v", len(turns), turns)
+		}
+	})
+
+	t.Run("pins a model id when switching to wick", func(t *testing.T) {
+		seedSession(t, layout, "sess-wick-pin", "main", "codex/codex")
+		if err := Switch(layout, nopPool{}, "sess-wick-pin", "main", "wick/wick", SwitchOptions{ModelID: "m_abc"}); err != nil {
+			t.Fatalf("switch: %v", err)
+		}
+		loaded, err := session.Load(layout, "sess-wick-pin")
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		if got := loaded.Agents[0].ModelID; got != "m_abc" {
+			t.Fatalf("ModelID = %q, want m_abc", got)
+		}
+	})
+
+	t.Run("clears the model pin when switching away from wick", func(t *testing.T) {
+		seedSession(t, layout, "sess-wick-clear", "main", "wick/wick")
+		if err := session.SetModelID(layout, "sess-wick-clear", "main", "m_old"); err != nil {
+			t.Fatalf("seed pin: %v", err)
+		}
+		if err := Switch(layout, nopPool{}, "sess-wick-clear", "main", "claude", SwitchOptions{}); err != nil {
+			t.Fatalf("switch: %v", err)
+		}
+		loaded, err := session.Load(layout, "sess-wick-clear")
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		if got := loaded.Agents[0].ModelID; got != "" {
+			t.Fatalf("ModelID = %q, want cleared", got)
+		}
+	})
+
+	t.Run("picking a different model on the same wick instance is not a no-op", func(t *testing.T) {
+		seedSession(t, layout, "sess-wick-remodel", "main", "wick/wick")
+		if err := session.SetModelID(layout, "sess-wick-remodel", "main", "m_1"); err != nil {
+			t.Fatalf("seed pin: %v", err)
+		}
+		// Same provider tag, different model — must succeed, not "already using".
+		if err := Switch(layout, nopPool{}, "sess-wick-remodel", "main", "wick/wick", SwitchOptions{ModelID: "m_2"}); err != nil {
+			t.Fatalf("switch to different model on same instance: %v", err)
+		}
+		loaded, err := session.Load(layout, "sess-wick-remodel")
+		if err != nil {
+			t.Fatalf("reload: %v", err)
+		}
+		if got := loaded.Agents[0].ModelID; got != "m_2" {
+			t.Fatalf("ModelID = %q, want m_2", got)
+		}
+	})
+
+	t.Run("same instance and same model pin is rejected as a no-op", func(t *testing.T) {
+		seedSession(t, layout, "sess-wick-noop", "main", "wick/wick")
+		if err := session.SetModelID(layout, "sess-wick-noop", "main", "m_1"); err != nil {
+			t.Fatalf("seed pin: %v", err)
+		}
+		err := Switch(layout, nopPool{}, "sess-wick-noop", "main", "wick/wick", SwitchOptions{ModelID: "m_1"})
+		if err == nil || !strings.Contains(err.Error(), "already using") {
+			t.Fatalf("error = %v, want 'already using'", err)
 		}
 	})
 }

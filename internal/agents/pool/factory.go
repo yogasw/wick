@@ -17,6 +17,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/provider/claude"
 	codexpkg "github.com/yogasw/wick/internal/agents/provider/codex"
 	geminipkg "github.com/yogasw/wick/internal/agents/provider/gemini"
+	wickpkg "github.com/yogasw/wick/internal/agents/provider/wick"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
 	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
@@ -167,9 +168,12 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		pTypeStrEarly = string(provider.TypeClaude)
 	}
 	var immutable string
-	if provider.Type(pTypeStrEarly) == provider.TypeCodex {
+	switch provider.Type(pTypeStrEarly) {
+	case provider.TypeCodex:
 		immutable = systemprompt.ImmutableSystemPromptCodex()
-	} else {
+	case provider.TypeWick:
+		immutable = systemprompt.ImmutableSystemPromptWick()
+	default:
 		immutable = systemprompt.ImmutableSystemPrompt()
 	}
 	presetContent := immutable
@@ -246,6 +250,11 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			spawner = codexpkg.Spawner{Binary: bin}
 		case provider.TypeGemini:
 			spawner = geminipkg.Spawner{Binary: bin, YoloMode: bypassPerms}
+		case provider.TypeWick:
+			// In-process runtime — no binary. Must NOT fall through to
+			// the claude default: that would spawn a real claude CLI
+			// under the wick label.
+			spawner = wickpkg.Spawner{}
 		default:
 			spawner = claude.Spawner{Binary: bin, BypassPermissions: bypassPerms, MCPToken: f.MCPToken}
 		}
@@ -377,6 +386,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		Preset:         presetContent,
 		MaxTurns:       opt.MaxTurns,
 		ThinkingTokens: opt.ThinkingTokens,
+		ModelID:        opt.ModelID,
 		ExtraArgs:      resolvedIns.ExtraArgs,
 		ExtraEnv:       resolvedIns.Env,
 		// claude = persistent stdin (append); codex = one-shot per turn,
