@@ -1014,6 +1014,7 @@ export interface WickModelDTO {
   APIFormat: string;
   MaxOutputTokens: number;
   Default: boolean;
+  Disabled: boolean;
   Temperature: number | null;
   TopP: number | null;
   ThinkingBudget: number | null;
@@ -1044,6 +1045,7 @@ interface WireWickModel {
   api_format?: string;
   max_output_tokens?: number;
   default?: boolean;
+  disabled?: boolean;
   temperature?: number | null;
   top_p?: number | null;
   thinking_budget?: number | null;
@@ -1073,6 +1075,7 @@ function mapWickModel(w: WireWickModel): WickModelDTO {
     APIFormat: w.api_format ?? "",
     MaxOutputTokens: w.max_output_tokens ?? 0,
     Default: w.default ?? false,
+    Disabled: w.disabled ?? false,
     Temperature: w.temperature ?? null,
     TopP: w.top_p ?? null,
     ThinkingBudget: w.thinking_budget ?? null,
@@ -1120,6 +1123,7 @@ export type WickModelInput = {
   api_format?: string;
   max_output_tokens?: number;
   default?: boolean;
+  disabled?: boolean;
   temperature?: number;
   top_p?: number;
   thinking_budget?: number;
@@ -1137,6 +1141,24 @@ export async function apiDeleteWickModel(base: string, id: string): Promise<void
 
 export async function apiSetWickModelDefault(base: string, id: string): Promise<void> {
   return post<void>(`${base}/providers/wick/models/${encodeURIComponent(id)}/default`);
+}
+
+export async function apiSetWickModelDisabled(base: string, id: string, disabled: boolean): Promise<void> {
+  return post<void>(`${base}/providers/wick/models/${encodeURIComponent(id)}/disabled`, { disabled });
+}
+
+export async function apiDuplicateWickModel(base: string, id: string): Promise<{ status: string; id: string }> {
+  const r = await post<{ status?: string; id?: string }>(`${base}/providers/wick/models/${encodeURIComponent(id)}/duplicate`);
+  return { status: r?.status ?? "", id: r?.id ?? "" };
+}
+
+export type WickTestResult = { ok: boolean; latencyMs: number; error: string };
+
+export async function apiTestWickModel(base: string, id: string): Promise<WickTestResult> {
+  const r = await post<{ ok?: boolean; latency_ms?: number; error?: string }>(
+    `${base}/providers/wick/models/${encodeURIComponent(id)}/test`,
+  );
+  return { ok: r?.ok ?? false, latencyMs: r?.latency_ms ?? 0, error: r?.error ?? "" };
 }
 
 export type WickSettingsInput = {

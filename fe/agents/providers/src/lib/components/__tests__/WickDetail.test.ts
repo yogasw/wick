@@ -25,6 +25,7 @@ function makeConfig(): WickConfig {
         APIFormat: "gemini",
         MaxOutputTokens: 0,
         Default: true,
+        Disabled: false,
         Temperature: null,
         TopP: null,
         ThinkingBudget: null,
@@ -41,6 +42,7 @@ function makeConfig(): WickConfig {
         APIFormat: "openai_chat",
         MaxOutputTokens: 0,
         Default: false,
+        Disabled: false,
         Temperature: null,
         TopP: null,
         ThinkingBudget: null,
@@ -113,9 +115,13 @@ describe("WickDetail", () => {
   it("deletes a model through the confirm dialog", async () => {
     render(WickDetail, { props: props() });
     await screen.findByText("gemini-flash-latest");
-    const delBtns = screen.getAllByLabelText("Delete model");
-    await fireEvent.click(delBtns[0]);
-    // Confirm dialog opens; click its destructive button.
+    const kebabBtns = screen.getAllByLabelText(/Actions for/);
+    await fireEvent.click(kebabBtns[0]);
+    // The kebab popup's "Delete" row opens the confirm dialog; its own
+    // destructive button shares the same visible text, so scope to the
+    // dialog via role — the LAST "Delete" match once the popup is open.
+    const deleteRow = (await screen.findAllByText("Delete")).at(-1)!;
+    await fireEvent.click(deleteRow);
     await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(api.apiDeleteWickModel).toHaveBeenCalledWith("/wick", "m_1");
   });
@@ -132,8 +138,9 @@ describe("WickDetail", () => {
   it("editing an existing model prefills the display name", async () => {
     render(WickDetail, { props: props() });
     await screen.findByText("gemini-flash-latest");
-    const editBtns = screen.getAllByLabelText("Edit model");
-    await fireEvent.click(editBtns[0]);
+    const kebabBtns = screen.getAllByLabelText(/Actions for/);
+    await fireEvent.click(kebabBtns[0]);
+    await fireEvent.click(await screen.findByText("Edit"));
     expect(await screen.findByText("Edit custom model")).toBeTruthy();
     const nameInput = screen.getByLabelText("Display name (optional)") as HTMLInputElement;
     expect(nameInput.value).toBe("Gemini Flash");

@@ -49,7 +49,7 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 		}
 	}
 
-	m, ok := pickModel(opt.Instance)
+	m, ok := pickModel(opt.Instance, opt.ModelID)
 	if !ok {
 		emit(initLine(newSessionID()))
 		emit(errorLine("No model configured for the wick provider. Open Providers → Wick and add a model."))
@@ -121,18 +121,40 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 	}
 }
 
-// pickModel selects the model to run: the Default model, else the first
-// registered. Returns false when none are configured.
-func pickModel(inst *provider.Instance) (provider.WickModel, bool) {
+// pickModel selects the model to run: the pinned modelID if it exists and
+// is enabled, else the Default model, else the first enabled one. Disabled
+// models are never auto-picked — parked, not gone. A pin that no longer
+// resolves (model deleted/disabled since the pin was set) silently falls
+// back rather than erroring, since the session otherwise still works fine
+// on the instance's own default. Returns false when none are configured or
+// every one is disabled.
+func pickModel(inst *provider.Instance, modelID string) (provider.WickModel, bool) {
 	if inst == nil || len(inst.WickModels) == 0 {
 		return provider.WickModel{}, false
 	}
-	for _, m := range inst.WickModels {
+	if modelID != "" {
+		for _, m := range inst.WickModels {
+			if m.ID == modelID && !m.Disabled {
+				return m, true
+			}
+		}
+	}
+	var firstEnabled *provider.WickModel
+	for i, m := range inst.WickModels {
+		if m.Disabled {
+			continue
+		}
 		if m.Default {
 			return m, true
 		}
+		if firstEnabled == nil {
+			firstEnabled = &inst.WickModels[i]
+		}
 	}
-	return inst.WickModels[0], true
+	if firstEnabled != nil {
+		return *firstEnabled, true
+	}
+	return provider.WickModel{}, false
 }
 
 // resolveWickConfig applies defaults to the instance config so the

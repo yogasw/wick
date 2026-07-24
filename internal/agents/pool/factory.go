@@ -386,6 +386,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		Preset:         presetContent,
 		MaxTurns:       opt.MaxTurns,
 		ThinkingTokens: opt.ThinkingTokens,
+		ModelID:        opt.ModelID,
 		ExtraArgs:      resolvedIns.ExtraArgs,
 		ExtraEnv:       resolvedIns.Env,
 		// claude = persistent stdin (append); codex = one-shot per turn,

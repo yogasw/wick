@@ -344,6 +344,9 @@ func Register(r tool.Router) {
 	r.POST("/providers/wick/models", saveWickModel)
 	r.DELETE("/providers/wick/models/{id}", deleteWickModel)
 	r.POST("/providers/wick/models/{id}/default", setWickDefaultModel)
+	r.POST("/providers/wick/models/{id}/disabled", setWickModelDisabled)
+	r.POST("/providers/wick/models/{id}/duplicate", duplicateWickModel)
+	r.POST("/providers/wick/models/{id}/test", testWickModel)
 	r.POST("/providers/wick/settings", saveWickSettings)
 	r.POST("/providers/wick/models/discover", discoverWickModels)
 
@@ -1193,6 +1196,10 @@ func sessionDetail(c *tool.Ctx) {
 
 type switchProviderReq struct {
 	Provider string `json:"provider"`
+	// ModelID optionally pins a model id on the target provider instance
+	// (currently meaningful for wick only). Empty = that provider's own
+	// default-model resolution.
+	ModelID string `json:"model_id,omitempty"`
 }
 
 // switchProvider changes the active provider on the current session
@@ -1227,7 +1234,8 @@ func switchProvider(c *tool.Ctx) {
 	// UI passes no Reply: the single system turn (published via Notify) carries
 	// the switch pill + note, so we don't want a duplicate assistant bubble.
 	if err := provider.Switch(globalLayout, globalPool, id, agentName, req.Provider, provider.SwitchOptions{
-		Source: "ui",
+		Source:  "ui",
+		ModelID: req.ModelID,
 		Notify: func(tag string, steps []string) {
 			if bcast != nil {
 				bcast.PublishSystemTurn(id, agentName, "Provider switched → "+tag, steps)
@@ -1847,16 +1855,26 @@ func providerOptionsJSON(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
+	type model struct {
+		ID      string `json:"id"`
+		Label   string `json:"label"`
+		Default bool   `json:"default"`
+	}
 	type option struct {
-		Type         string `json:"type"`
-		Name         string `json:"name"`
-		Version      string `json:"version"`
-		UsesAIRouter bool   `json:"uses_airouter"`
+		Type         string  `json:"type"`
+		Name         string  `json:"name"`
+		Version      string  `json:"version"`
+		UsesAIRouter bool    `json:"uses_airouter"`
+		Models       []model `json:"models,omitempty"`
 	}
 	ps := providerChoicesCached(c.Context())
 	opts := make([]option, 0, len(ps))
 	for _, p := range ps {
-		opts = append(opts, option{Type: p.Type, Name: p.Name, Version: p.Version, UsesAIRouter: p.UsesAIRouter})
+		var models []model
+		for _, m := range p.Models {
+			models = append(models, model{ID: m.ID, Label: m.Label, Default: m.Default})
+		}
+		opts = append(opts, option{Type: p.Type, Name: p.Name, Version: p.Version, UsesAIRouter: p.UsesAIRouter, Models: models})
 	}
 	c.JSON(http.StatusOK, opts)
 }

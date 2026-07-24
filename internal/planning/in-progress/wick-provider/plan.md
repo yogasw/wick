@@ -1,51 +1,103 @@
 # Wick Provider (built-in) — Design
 
+## DONE — 2026-07-24, picker + kebab menu + model lifecycle
+
+Picker/model-management round from the 2026-07-24 TODO — all landed. Wick stays
+**single-instance** (the multi-instance idea floated mid-session was explicitly
+dropped — see "Not done" below); item numbers below match the original TODO.
+
+1. **Provider picker: 3-level nav (Type → Name → Model) — ✅ DONE.** Composer's
+   picker (`fe/common/ui/src/Composer.svelte`, shared by all SPAs, not
+   `fe/agents/conversation`-local as first assumed) now supports a 3rd level:
+   picking a "type/name" option whose `models` array has >1 entry drills into a
+   model submenu instead of committing immediately (`modelDrillOpt` state);
+   picking a model encodes the pin as `"type/name::modelID"` (`composer-types.ts`'s
+   `ComposerSelectOption.models` + `ComposerModelOption`). `DetailView.svelte`
+   splits that encoding back out in `handleProviderChange` before calling
+   `switchProvider(base, sessionId, provider, modelId)`.
+   - **BE session-level model pinning (new, not in the original TODO scope but
+     required to make level 3 do anything real):** `AgentEntry.ModelID`
+     (`internal/agents/session/agents.go`, `SetModelID`) + `SwitchOptions.ModelID`
+     (`internal/agents/provider/switcher.go` — a same-instance, different-model
+     switch is explicitly NOT a no-op) threaded through `SpawnOptions.ModelID` →
+     `provider.Options.ModelID` → `pool.FactoryOptions.ModelID` (pool.go reads it
+     off the agent entry alongside `MaxTurns`/`ThinkingTokens`) → `wick.pickModel`
+     (now `pickModel(inst, modelID string)`: pinned model wins if enabled, else
+     Default, else first enabled; a stale/disabled/unknown pin silently falls
+     back rather than erroring). `switchProvider` HTTP handler
+     (`internal/tools/agents/handler.go`) + `SessionMetaDTO` (new `Provider`/
+     `ModelID` fields — `ActiveAgent` is the agent's own NAME, not its provider
+     key, which the FE was conflating before this) carry it end to end. Tests:
+     `spawn_test.go` (`TestPickModel_*`, 8 cases incl. disabled/unknown pin
+     fallback), `switcher_test.go` (4 new subtests: pin on switch-to-wick, clear
+     on switch-away, same-instance-different-model is not a no-op, same pin IS a
+     no-op).
+   - Provider-level grouping into Type→Name (vs. Name showing every instance
+     flat) was NOT built — see "Not done" below; only the Name→Model level landed.
+2. **Wick icon in the picker — ✅ already done before this round.** Turned out
+   already fixed by an earlier commit (`feat(fe): give the wick provider its own
+   brand icon`) — `Composer.svelte`'s `provIcon` snippet already renders
+   `/public/img/providers/wick.svg` for `provType() === "wick"`. No work needed.
+3. **WickDetail model row → kebab (⋯) menu — ✅ DONE.** Discovered
+   `@wick-fe/common-ui` already ships a reusable `KebabMenu.svelte` (portal-based,
+   module-scoped single-open-at-a-time, used elsewhere in the app) — reused it
+   as-is rather than building a new menu. `WickDetail.svelte`'s model row now
+   renders one `KebabMenu` with items `Edit / Set default / Test / Duplicate /
+   Disable|Enable / Delete` (danger styling on Delete); disabled rows dim
+   (`opacity-55`) and grey a "Disabled" chip next to the label; Set
+   default/Test are `disabled` in the menu while the row is disabled.
+4. **Per-model Disable/Enable — ✅ DONE.** `Disabled bool` added to
+   `userconfig.WickModel`, `provider.WickModel`, the wire DTOs
+   (`wickModelDTO`/`wickModelView` in `providers_wick.go`, `WireWickModel`/
+   `WickModelDTO` in the FE `api.ts`) and the provider-converter functions
+   (`wickModelsFromUser`/`wickModelsToUser`). New endpoint `POST
+   /providers/wick/models/{id}/disabled` (`setWickModelDisabled`) — disabling the
+   current default re-elects the first other enabled model (mirrors
+   `deleteWickModel`'s existing fallback); `setWickDefaultModel` now rejects
+   setting a disabled model as default (400); `normalizeDefault` (save path)
+   never lands a disabled model as default either (falls back to first enabled).
+   Composer's model submenu only ever sees enabled models — `wickModelChoices`
+   (`internal/tools/agents/providers.go`) filters `Disabled` models out AND
+   returns nil entirely when ≤1 enabled model remains (so the 3rd picker level
+   simply doesn't appear rather than showing a single, pointless option). Tests:
+   `providers_wick_test.go`'s `TestNormalizeDefault` (6 cases covering the
+   disabled-model edge cases specifically).
+5. **Real per-model Test button (1-token ping) — ✅ DONE.** New `wick.TestModel`
+   (`internal/agents/provider/wick/test_ping.go`) resolves the model via the SAME
+   `resolveModel` adapter path a real spawn uses, sends a `MaxOutputTokens: 1`
+   generate call with a 20s timeout, returns `(latency, error)`; errors render
+   through the existing `vendorErrorMessage` (exported as `TestModelErrorMessage`)
+   so Test-button failures read the same friendly way as a spawn failure ("Model
+   rejected the API key (401)…"). New endpoint `POST
+   /providers/wick/models/{id}/test` (`testWickModel`, decrypts the stored key
+   server-side, never touches the browser) → `{ok, latency_ms, error?}`. FE
+   `apiTestWickModel` + `WickDetail.svelte`'s `testModel()` now really call it and
+   toast latency or the vendor error, replacing the old "not wired yet" stub.
+9. **Duplicate model — ✅ DONE.** New endpoint `POST
+   /providers/wick/models/{id}/duplicate` (`duplicateWickModel`) clones the
+   `WickModel` row verbatim (including the encrypted key ciphertext — no
+   decrypt/re-encrypt needed, it's valid under a new id too) under a fresh
+   `"m_" + uuid`, label suffixed " (copy)", and forces the clone to
+   `Default: false, Disabled: false` regardless of the source row, so
+   duplicating for experimentation never silently takes over as the active
+   model. Wired into the kebab menu (item 3) + `apiDuplicateWickModel`.
+
+**Not done (explicitly out of scope this round):**
+- **Wick multi-instance** — the idea that wick instances could be duplicated
+  like claude/codex ones (making a real Type→Name level meaningful) was raised
+  mid-session and explicitly DECLINED as too large to bundle here. The
+  single-instance guard in `provider.go` (`Save`: `ins.Type == TypeWick &&
+  ins.Name != string(TypeWick)` → error) is UNTOUCHED. The "Superseded note"
+  further down this doc, which floated dropping that guard, does NOT reflect
+  what actually shipped — treat this DONE section as authoritative over it.
+- Items 6, 7, 8 below (background tool calls, oversized-result-to-file,
+  global/per-model config cleanup) — not started, see TODO section.
+
 ## TODO — captured 2026-07-24, not yet started
 
-Captured so nothing from the last live-testing round gets lost. None of these are
-implemented yet — planning/discussion only so far. Roughly ordered by dependency.
+Captured so nothing from the last live-testing round gets lost. Items 1–5 and 9
+above are done; these three remain.
 
-1. **Provider picker: 3-level nav (Type → Name → Model).** Composer's "Provider"
-   panel is currently a flat list (`claude · claude_default`, `claude · new [AI
-   Router]`, `codex`, `codex · gemini_fl… [AI Router]`, `gemini`, `wick`). Restructure
-   to: pick **Type** first (claude/codex/gemini/wick, one row each) → submenu of that
-   type's **instance Name**s → for `wick` specifically, if that wick instance has
-   more than one registered **Model**, a 3rd-level submenu to pick the model (skip
-   this level entirely if there's only one model — never force an extra nav step).
-   Wick instances themselves can already be duplicated like any other provider type
-   (the old "single instance" rule from this doc is superseded — see note below), so
-   a user can have `wick · default`, `wick · custom_a`, etc., each with its own model
-   list. FE: composer provider-picker component (`fe/agents/conversation` — find via
-   the "< Provider" panel header). BE: no new endpoint expected, just FE grouping
-   over the existing provider-list response.
-2. **Fix the wick icon in the picker.** Screenshot shows a generic person/user icon
-   for `wick` next to sparkle/atom-style icons for claude/gemini — looks out of
-   place. Find the icon map (keyed by provider type) and swap in something befitting
-   "wick" (brand icon already exists per git log `feat(fe): give the wick provider
-   its own brand icon` — confirm the picker actually uses it; if the picker has its
-   own separate icon map from the one that commit touched, that's the bug).
-3. **WickDetail model row: consolidate actions into a kebab (⋯) menu.** Today each
-   model row has separate buttons: Test / Edit / Delete (+ implicit "set default" via
-   radio). Replace with a single "⋯" dropdown containing: **Edit, Set default, Test,
-   Duplicate, Disable/Enable, Delete** (mockup.html View 2 now shows this exact
-   layout, including a disabled-row example) — room to grow without the row getting
-   wider every time a new action lands. Disabled rows show a muted "Disabled" chip
-   and grey out the row; Set default/Test are disabled until re-enabled.
-4. **Add per-model Disable/Enable.** New bool field on `WickModel` (BE:
-   `internal/agents/provider/wick` model struct + wherever it's persisted/read for
-   the composer's model list) — a disabled model is hidden from the composer's
-   Model submenu (item 1) and from being auto-picked as default, but stays visible
-   (greyed) in the Models table so it's not lost, just parked. FE: toggle in the
-   kebab menu + a visual "Disabled" chip on the row.
-5. **Real per-model Test button (1-token ping).** Currently
-   `WickDetail.svelte`'s `testModel()` is a placeholder toastOk stub ("Test for X is
-   not wired yet") — no backend endpoint exists. Build: `POST
-   /providers/wick/models/{id}/test` → BE resolves the model's adapter (same
-   Kind/APIFormat → adapter mapping `spawn.go` already uses for real spawns),
-   decrypts the stored key, sends a minimal 1-token generate call, returns
-   `{ok, latency_ms, error?}`. Reuses the adapter code path, not a new HTTP client.
-   Wire the FE Test button (now inside the kebab menu, item 3) to call it and toast
-   the result (latency on success, vendor error message on failure).
 6. **Long-running tool calls (>~2min) go to a background goroutine.** Today every
    tool call blocks the turn synchronously (`engine.dispatch` →
    `handler(ctx, args)`, see `internal/agents/provider/wick/engine.go`). For calls
@@ -90,13 +142,14 @@ implemented yet — planning/discussion only so far. Roughly ordered by dependen
    for an existing clone/duplicate pattern elsewhere in the codebase (connector
    duplication, workflow duplication) to mirror before inventing a new one.
 
-**Superseded note:** the "Naming (decided)" section below says wick is a **single
-instance** with no duplicate/rename — that was the 2026-07-23 decision. As of this
-session's discussion, that's being revisited: wick instances CAN be duplicated like
-any other provider type, which is what makes the 3-level picker (item 1) meaningful
-(otherwise "Name" would always have exactly one option). Treat the "single instance"
-language below as historical until the picker/duplication work above actually lands
-— don't remove the old section, just don't trust it as current truth.
+**Correction (2026-07-24, later same session):** the note that used to sit here
+floated dropping the single-instance rule so "Type → Name → Model" would have a
+real Name level. That was explicitly declined when it came time to implement —
+see the "DONE" section above ("Not done"). The "Naming (decided)" section below
+(**wick is single-instance**, no duplicate/rename) is CURRENT truth, not
+historical. What shipped instead: a Name→Model level only (multiplicity lives
+in Models, exactly as originally designed) — the picker still only shows one
+`wick` row; drilling into it goes straight to its model list when it has >1.
 
 
 `wick` becomes the 4th provider type alongside `claude` / `codex` / `gemini` — a

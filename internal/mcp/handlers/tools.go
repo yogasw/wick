@@ -235,10 +235,15 @@ func MetaToolDescriptors() []ToolDescriptor {
 			Name: "todo",
 			Description: "Record or update your task plan and progress. Call at the start of a multi-step task and " +
 				"after finishing each step — pass the FULL list every time (not just the changed item). Reuse the same " +
-				"'id' for a step across calls when updating its status so the UI can track it as one item rather than " +
-				"a new one each time; if you don't set an id, the step's text is used to match it instead, so keep the " +
-				"wording exactly the same across calls to update the same step's status. The UI renders this as a " +
-				"single collapsible checklist that always reflects your latest reported status, not a card per call.",
+				"'id' for a task across calls when updating its status so the UI can track it as one item rather than " +
+				"a new one each time; if you don't set an id, the title is used to match it instead, so keep the " +
+				"wording exactly the same across calls. Give each top-level task a short 'title' (a few words — what " +
+				"you're working on) and a 'description' (1-2 plain sentences explaining what it covers and why — NOT " +
+				"a comma/bullet list). If a task breaks down into concrete actions, list them under 'substeps' (each " +
+				"just a short 'step' label + its own status) — e.g. task 'Build login form' with substeps 'Install " +
+				"deps', 'Wire validation', 'Style form'. Substeps are optional; a simple task can omit them. The UI " +
+				"renders this as a single collapsible checklist that always reflects your latest reported status, " +
+				"not a card per call.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -250,14 +255,40 @@ func MetaToolDescriptors() []ToolDescriptor {
 							"properties": map[string]any{
 								"id": map[string]any{
 									"type": "string",
-									"description": "Stable identifier for this step (e.g. \"1\", \"setup-db\"). Reuse " +
-										"the SAME id across calls when updating this step's status later. Optional " +
+									"description": "Stable identifier for this task (e.g. \"1\", \"setup-db\"). Reuse " +
+										"the SAME id across calls when updating this task's status later. Optional " +
 										"but strongly recommended whenever you re-send the list with changed statuses.",
 								},
-								"step":   map[string]any{"type": "string", "description": "What this step does."},
-								"status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed"}, "description": "Current status of the step."},
+								"title": map[string]any{
+									"type": "string",
+									"description": "Short label for this task (a few words), e.g. \"Build login form\". " +
+										"Shown as the checklist item text.",
+								},
+								"description": map[string]any{
+									"type": "string",
+									"description": "1-2 plain sentences explaining what this task covers and why — " +
+										"not a comma/bullet list. Shown when the item is expanded.",
+								},
+								"step": map[string]any{
+									"type": "string",
+									"description": "Deprecated — use 'title' + 'description' instead. Kept for older " +
+										"callers; if 'title' is absent this text is used as the checklist label.",
+								},
+								"status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed"}, "description": "Current status of the task."},
+								"substeps": map[string]any{
+									"type":        "array",
+									"description": "Optional concrete actions under this task, in order. Omit for a simple task with no breakdown.",
+									"items": map[string]any{
+										"type": "object",
+										"properties": map[string]any{
+											"step":   map[string]any{"type": "string", "description": "Short label for this action, e.g. \"Install deps\"."},
+											"status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed"}, "description": "Current status of this action."},
+										},
+										"required": []string{"step", "status"},
+									},
+								},
 							},
-							"required": []string{"step", "status"},
+							"required": []string{"title", "status"},
 						},
 					},
 				},

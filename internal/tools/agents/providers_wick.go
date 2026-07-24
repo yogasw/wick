@@ -137,6 +137,7 @@ type wickModelDTO struct {
 	APIFormat       string   `json:"api_format,omitempty"`
 	MaxOutputTokens int      `json:"max_output_tokens,omitempty"`
 	Default         bool     `json:"default,omitempty"`
+	Disabled        bool     `json:"disabled,omitempty"`
 	Temperature     *float64 `json:"temperature,omitempty"`
 	TopP            *float64 `json:"top_p,omitempty"`
 	ThinkingBudget  *int     `json:"thinking_budget,omitempty"`
@@ -162,6 +163,7 @@ type wickModelView struct {
 	APIFormat       string   `json:"api_format"`
 	MaxOutputTokens int      `json:"max_output_tokens"`
 	Default         bool     `json:"default"`
+	Disabled        bool     `json:"disabled,omitempty"`
 	Temperature     *float64 `json:"temperature,omitempty"`
 	TopP            *float64 `json:"top_p,omitempty"`
 	ThinkingBudget  *int     `json:"thinking_budget,omitempty"`
@@ -193,6 +195,7 @@ func getWickConfig(c *tool.Ctx) {
 			APIFormat:       m.APIFormat,
 			MaxOutputTokens: m.MaxOutputTokens,
 			Default:         m.Default,
+			Disabled:        m.Disabled,
 			RawConfig:       m.RawConfig,
 		}
 		if m.GenConfig != nil {
@@ -271,7 +274,8 @@ func saveWickModel(c *tool.Ctx) {
 		BaseURL:         strings.TrimSpace(dto.BaseURL),
 		APIFormat:       strings.TrimSpace(dto.APIFormat),
 		MaxOutputTokens: dto.MaxOutputTokens,
-		Default:         dto.Default,
+		Default:         dto.Default && !dto.Disabled,
+		Disabled:        dto.Disabled,
 		RawConfig:       strings.TrimSpace(dto.RawConfig),
 	}
 	if g := genConfigFromDTO(dto); g != nil {
@@ -339,8 +343,13 @@ func deleteWickModel(c *tool.Ctx) {
 		out = append(out, m)
 	}
 	ins.WickModels = out
-	if removedDefault && len(ins.WickModels) > 0 {
-		ins.WickModels[0].Default = true
+	if removedDefault {
+		for i := range ins.WickModels {
+			if !ins.WickModels[i].Disabled {
+				ins.WickModels[i].Default = true
+				break
+			}
+		}
 	}
 	if err := provider.Save(ins); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -363,22 +372,181 @@ func setWickDefaultModel(c *tool.Ctx) {
 	}
 	ins.Type = provider.TypeWick
 	ins.Name = wickInstanceName
-	found := false
+	target := -1
 	for i := range ins.WickModels {
-		ins.WickModels[i].Default = ins.WickModels[i].ID == id
 		if ins.WickModels[i].ID == id {
-			found = true
+			target = i
+			break
 		}
 	}
-	if !found {
+	if target == -1 {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "model not found"})
 		return
+	}
+	if ins.WickModels[target].Disabled {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "model is disabled — enable it first"})
+		return
+	}
+	for i := range ins.WickModels {
+		ins.WickModels[i].Default = i == target
 	}
 	if err := provider.Save(ins); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+type setDisabledReq struct {
+	Disabled bool `json:"disabled"`
+}
+
+// setWickModelDisabled toggles a model's Disabled flag. Disabling the
+// current default model promotes the first other enabled model to
+// default (mirrors deleteWickModel's fallback); disabling the only
+// enabled model leaves no default — the composer/spawn path already
+// treats "no enabled default" as "no model available".
+// POST /providers/wick/models/{id}/disabled
+func setWickModelDisabled(c *tool.Ctx) {
+	if notReady(c) || !requireAdmin(c) {
+		return
+	}
+	id := c.PathValue("id")
+	var req setDisabledReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	ins, err := wickInstance()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	ins.Type = provider.TypeWick
+	ins.Name = wickInstanceName
+	target := -1
+	for i := range ins.WickModels {
+		if ins.WickModels[i].ID == id {
+			target = i
+			break
+		}
+	}
+	if target == -1 {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "model not found"})
+		return
+	}
+	ins.WickModels[target].Disabled = req.Disabled
+	if req.Disabled && ins.WickModels[target].Default {
+		ins.WickModels[target].Default = false
+		for i := range ins.WickModels {
+			if i != target && !ins.WickModels[i].Disabled {
+				ins.WickModels[i].Default = true
+				break
+			}
+		}
+	}
+	if err := provider.Save(ins); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// duplicateWickModel clones a model's full config (including its
+// encrypted key, copied verbatim — no decrypt/re-encrypt needed since the
+// ciphertext is valid for any row) under a new id, labeled "(copy)". The
+// clone is never Default or Disabled regardless of the source, so a
+// duplicate for experimentation doesn't silently take over as the
+// instance's active model.
+// POST /providers/wick/models/{id}/duplicate
+func duplicateWickModel(c *tool.Ctx) {
+	if notReady(c) || !requireAdmin(c) {
+		return
+	}
+	id := c.PathValue("id")
+	ins, err := wickInstance()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	ins.Type = provider.TypeWick
+	ins.Name = wickInstanceName
+	var src *provider.WickModel
+	for i := range ins.WickModels {
+		if ins.WickModels[i].ID == id {
+			src = &ins.WickModels[i]
+			break
+		}
+	}
+	if src == nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "model not found"})
+		return
+	}
+	clone := *src
+	clone.ID = "m_" + uuid.NewString()[:12]
+	clone.Label = strings.TrimSpace(src.Label)
+	if clone.Label == "" {
+		clone.Label = src.Model
+	}
+	clone.Label += " (copy)"
+	clone.Default = false
+	clone.Disabled = false
+	if src.GenConfig != nil {
+		g := *src.GenConfig
+		clone.GenConfig = &g
+	}
+	ins.WickModels = append(ins.WickModels, clone)
+	if err := provider.Save(ins); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "ok", "id": clone.ID})
+}
+
+// testWickModel sends a real 1-token ping through the model's own adapter
+// (same resolveModel path a spawn uses) to validate the key + model id +
+// base URL in one round-trip.
+// POST /providers/wick/models/{id}/test
+func testWickModel(c *tool.Ctx) {
+	if notReady(c) || !requireAdmin(c) {
+		return
+	}
+	id := c.PathValue("id")
+	ins, err := wickInstance()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var m *provider.WickModel
+	for i := range ins.WickModels {
+		if ins.WickModels[i].ID == id {
+			m = &ins.WickModels[i]
+			break
+		}
+	}
+	if m == nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "model not found"})
+		return
+	}
+	testM := *m
+	if globalConfigs != nil {
+		plain, derr := globalConfigs.DecryptSecret(testM.APIKey)
+		if derr != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": "stored key could not be decrypted"})
+			return
+		}
+		testM.APIKey = plain
+	}
+	if testM.APIKey == "" && strings.ToLower(testM.Kind) != "other" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "no API key stored for this model"})
+		return
+	}
+	latency, err := wick.TestModel(c.Context(), testM)
+	if err != nil {
+		c.JSON(http.StatusOK, map[string]any{"ok": false, "error": wick.TestModelErrorMessage(err)})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true, "latency_ms": latency.Milliseconds()})
 }
 
 // wickSettingsDTO is the Provider-settings card payload.
@@ -493,7 +661,8 @@ func storedWickKey(modelID string) string {
 
 // normalizeDefault enforces the single-default invariant. When the just-
 // saved model is default, clear the others; if nothing is default, make
-// the saved one (or the first) default.
+// the saved one default (unless it's disabled, in which case fall back to
+// the first enabled model — a disabled model is never auto-picked).
 func normalizeDefault(ins *provider.Instance, savedID string, savedDefault bool) {
 	if savedDefault {
 		for i := range ins.WickModels {
@@ -502,19 +671,23 @@ func normalizeDefault(ins *provider.Instance, savedID string, savedDefault bool)
 		return
 	}
 	for _, m := range ins.WickModels {
-		if m.Default {
-			return // some other model is default — fine
+		if m.Default && !m.Disabled {
+			return // some other enabled model is already default — fine
 		}
 	}
-	// Nothing is default → make the saved one default.
+	// Nothing (enabled) is default → make the saved one default, unless
+	// it's disabled itself, then fall back to the first enabled model.
 	for i := range ins.WickModels {
-		if ins.WickModels[i].ID == savedID {
+		if ins.WickModels[i].ID == savedID && !ins.WickModels[i].Disabled {
 			ins.WickModels[i].Default = true
 			return
 		}
 	}
-	if len(ins.WickModels) > 0 {
-		ins.WickModels[0].Default = true
+	for i := range ins.WickModels {
+		if !ins.WickModels[i].Disabled {
+			ins.WickModels[i].Default = true
+			return
+		}
 	}
 }
 

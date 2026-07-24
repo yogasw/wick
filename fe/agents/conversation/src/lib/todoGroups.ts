@@ -14,7 +14,26 @@
 
 import type { ThreadBlock } from "./types/agents.js";
 
-export type TodoItem = { id?: string; step: string; status: "pending" | "in_progress" | "completed" | string };
+export type TodoSubstep = { step: string; status: "pending" | "in_progress" | "completed" | string };
+
+export type TodoItem = {
+  id?: string;
+  /** Short checklist label. `step` is the deprecated pre-nested-todo field
+      name — kept as a fallback so older recorded traces still render. */
+  title?: string;
+  step?: string;
+  /** 1-2 sentence explanation shown when the item is expanded. */
+  description?: string;
+  status: "pending" | "in_progress" | "completed" | string;
+  /** Optional concrete actions under this task — its own nested checklist. */
+  substeps?: TodoSubstep[];
+};
+
+/** The label to render for an item — title if the model set one, else the
+    deprecated step text. */
+export function itemLabel(it: TodoItem): string {
+  return it.title?.trim() || it.step?.trim() || "";
+}
 
 /** Parses a todo tool_use block's toolInput into its item list. Returns
     [] if toolInput is missing or malformed — never throws. */
@@ -35,7 +54,7 @@ export function parseTodoItems(block: Extract<ThreadBlock, { kind: "tool" }>): T
     but two calls that both reword the same step will be treated as
     different items — an accepted tradeoff without a real id). */
 function itemKey(it: TodoItem): string {
-  return it.id?.trim() || it.step;
+  return it.id?.trim() || itemLabel(it);
 }
 
 /** Merges every todo call's items into one ordered list — the latest
@@ -101,5 +120,5 @@ export function todoProgress(items: TodoItem[]): { done: number; total: number; 
   const total = items.length;
   const done = items.filter((it) => it.status === "completed").length;
   const inProgress = items.find((it) => it.status === "in_progress");
-  return { done, total, current: inProgress?.step ?? null };
+  return { done, total, current: inProgress ? itemLabel(inProgress) : null };
 }

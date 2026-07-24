@@ -1,12 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { ConfirmDialog, Breadcrumb, Modal, Select, Button, type BreadcrumbItem } from "@wick-fe/common-ui";
+  import { ConfirmDialog, Breadcrumb, Modal, Select, Button, KebabMenu, type BreadcrumbItem } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     apiGetWickConfig,
     apiSaveWickModel,
     apiDeleteWickModel,
     apiSetWickModelDefault,
+    apiSetWickModelDisabled,
+    apiDuplicateWickModel,
+    apiTestWickModel,
     apiSaveWickSettings,
     apiDiscoverWickModels,
   } from "$lib/api.js";
@@ -342,10 +345,43 @@
     }
   }
 
-  function testModel(m: WickModelDTO) {
-    // Per-model 1-token ping is a later phase (needs a BE test endpoint).
-    // Placeholder keeps the row layout stable and signals intent.
-    toastOk(`Test for ${m.Label || m.Model} is not wired yet`);
+  async function testModel(m: WickModelDTO) {
+    setBusy(`test-${m.ID}`, true);
+    try {
+      const r = await apiTestWickModel(base, m.ID);
+      if (r.ok) toastOk(`${m.Label || m.Model}: OK (${r.latencyMs}ms)`);
+      else toastError(r.error || "Test failed");
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Test failed");
+    } finally {
+      setBusy(`test-${m.ID}`, false);
+    }
+  }
+
+  async function duplicateModel(m: WickModelDTO) {
+    setBusy(`dup-${m.ID}`, true);
+    try {
+      await apiDuplicateWickModel(base, m.ID);
+      toastOk(`Duplicated ${m.Label || m.Model}`);
+      await loadConfig(true);
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Duplicate failed");
+    } finally {
+      setBusy(`dup-${m.ID}`, false);
+    }
+  }
+
+  async function toggleDisabled(m: WickModelDTO) {
+    setBusy(`disable-${m.ID}`, true);
+    try {
+      await apiSetWickModelDisabled(base, m.ID, !m.Disabled);
+      toastOk(m.Disabled ? `Enabled ${m.Label || m.Model}` : `Disabled ${m.Label || m.Model}`);
+      await loadConfig(true);
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Failed to update model");
+    } finally {
+      setBusy(`disable-${m.ID}`, false);
+    }
   }
 
   onMount(() => { void loadConfig(); });
@@ -489,15 +525,15 @@
             </thead>
             <tbody>
               {#each models as m (m.ID)}
-                <tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800">
+                <tr class="border-b border-white-300 dark:border-navy-600 last:border-0 hover:bg-white-200 dark:hover:bg-navy-800 {m.Disabled ? 'opacity-55' : ''}">
                   <td class="px-4 py-3">
                     <button
                       type="button"
                       role="radio"
                       aria-checked={m.Default}
                       aria-label={m.Default ? "Default model" : "Set as default"}
-                      title={m.Default ? "Default model" : "Set as default"}
-                      disabled={busy[`default-${m.ID}`]}
+                      title={m.Disabled ? "Enable it first" : m.Default ? "Default model" : "Set as default"}
+                      disabled={busy[`default-${m.ID}`] || m.Disabled}
                       onclick={() => setDefault(m)}
                       class="flex h-4 w-4 items-center justify-center rounded-full border-2 transition-colors disabled:opacity-50 {m.Default ? 'border-green-500 bg-green-500' : 'border-white-400 dark:border-navy-500 hover:border-green-500'}"
                     >
@@ -507,7 +543,12 @@
                     </button>
                   </td>
                   <td class="px-4 py-3">
-                    <div class="text-black-900 dark:text-white-100">{m.Label || m.Model}</div>
+                    <div class="flex items-center gap-2">
+                      <span class="text-black-900 dark:text-white-100">{m.Label || m.Model}</span>
+                      {#if m.Disabled}
+                        <span class="inline-flex items-center rounded-full bg-cau-100 px-2 py-0.5 text-[11px] font-medium text-cau-400 dark:bg-cau-400/15">Disabled</span>
+                      {/if}
+                    </div>
                     <div class="font-mono text-xs text-black-700 dark:text-black-600">{m.Model}</div>
                   </td>
                   <td class="px-4 py-3">
@@ -521,32 +562,18 @@
                     {/if}
                   </td>
                   <td class="px-4 py-3">
-                    <div class="flex items-center justify-end gap-1">
-                      <button
-                        type="button"
-                        onclick={() => testModel(m)}
-                        title="1-token ping: validates key + model id"
-                        class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800"
-                      >Test</button>
-                      <button
-                        type="button"
-                        onclick={() => openEdit(m)}
-                        title="Edit"
-                        aria-label="Edit model"
-                        class="rounded p-1.5 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 hover:text-black-900 dark:hover:text-white-100"
-                      >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy[`del-${m.ID}`]}
-                        onclick={() => { confirmDelete = m; }}
-                        title="Delete"
-                        aria-label="Delete model"
-                        class="rounded p-1.5 text-black-700 dark:text-black-600 hover:bg-red-50 dark:hover:bg-red-900/20 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50"
-                      >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
-                      </button>
+                    <div class="flex justify-end">
+                      <KebabMenu
+                        ariaLabel={`Actions for ${m.Label || m.Model}`}
+                        items={[
+                          { label: "Edit", onclick: () => openEdit(m) },
+                          { label: "Set default", onclick: () => setDefault(m), disabled: m.Disabled || m.Default },
+                          { label: "Test", onclick: () => testModel(m), disabled: m.Disabled },
+                          { label: "Duplicate", onclick: () => duplicateModel(m) },
+                          { label: m.Disabled ? "Enable" : "Disable", onclick: () => toggleDisabled(m) },
+                          { label: "Delete", onclick: () => { confirmDelete = m; }, danger: true },
+                        ]}
+                      />
                     </div>
                   </td>
                 </tr>

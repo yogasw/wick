@@ -139,6 +139,7 @@ type WickModel struct {
 	APIFormat       string // gemini | openai_chat | openai_responses | anthropic_messages
 	MaxOutputTokens int
 	Default         bool
+	Disabled        bool
 	GenConfig       *WickGenConfig
 	RawConfig       string
 }
@@ -913,6 +914,7 @@ func wickModelsFromUser(in []userconfig.WickModel) []WickModel {
 			APIFormat:       m.APIFormat,
 			MaxOutputTokens: m.MaxOutputTokens,
 			Default:         m.Default,
+			Disabled:        m.Disabled,
 			GenConfig:       wickGenFromUser(m.GenConfig),
 			RawConfig:       m.RawConfig,
 		}
@@ -936,6 +938,7 @@ func wickModelsToUser(in []WickModel) []userconfig.WickModel {
 			APIFormat:       m.APIFormat,
 			MaxOutputTokens: m.MaxOutputTokens,
 			Default:         m.Default,
+			Disabled:        m.Disabled,
 			GenConfig:       wickGenToUser(m.GenConfig),
 			RawConfig:       m.RawConfig,
 		}

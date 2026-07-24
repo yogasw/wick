@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1450,8 +1451,35 @@ func providerChoicesCached(ctx context.Context) []view.ProviderChoiceVM {
 			Name:         st.Instance.Name,
 			Version:      st.Version,
 			UsesAIRouter: st.Instance.UseAIRouter,
+			Models:       wickModelChoices(st.Instance),
 		})
 	}
+	return out
+}
+
+// wickModelChoices lists the enabled models on a wick instance, default
+// first. nil for every other provider type or when a wick instance has
+// 0-1 enabled models — the composer only needs a 3rd "model" picker level
+// when there's a real choice to make.
+func wickModelChoices(ins provider.Instance) []view.ModelChoiceVM {
+	if ins.Type != provider.TypeWick || len(ins.WickModels) == 0 {
+		return nil
+	}
+	out := make([]view.ModelChoiceVM, 0, len(ins.WickModels))
+	for _, m := range ins.WickModels {
+		if m.Disabled {
+			continue
+		}
+		label := m.Label
+		if label == "" {
+			label = m.Model
+		}
+		out = append(out, view.ModelChoiceVM{ID: m.ID, Label: label, Default: m.Default})
+	}
+	if len(out) <= 1 {
+		return nil
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Default && !out[j].Default })
 	return out
 }
 

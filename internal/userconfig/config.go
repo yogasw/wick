@@ -251,6 +251,10 @@ type WickModel struct {
 	// Default marks the model sessions use unless they pin another.
 	// Exactly one entry per instance holds true (enforced on save).
 	Default bool `json:"default,omitempty"`
+	// Disabled hides the model from the composer's model picker and
+	// from default-selection, without deleting its (possibly hard-won)
+	// config. Stays visible, greyed out, in the Models table.
+	Disabled bool `json:"disabled,omitempty"`
 	// GenConfig holds per-model generation overrides; nil = the
 	// instance-level WickConfig.GenConfig applies.
 	GenConfig *WickGenConfig `json:"gen_config,omitempty"`

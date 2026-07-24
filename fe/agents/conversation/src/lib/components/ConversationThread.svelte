@@ -154,6 +154,18 @@
   {#if live}
     <div class="flex justify-start">
       <div class="flex flex-col gap-1.5 max-w-[92%] min-w-0">
+        {#if liveMergedTodoItems.length > 0}
+          <!-- Always shown regardless of liveTraceOpen — the todo card is
+               task PROGRESS, not raw trace detail, so collapsing the trace
+               must not hide it. currentActivity (what's running right now)
+               renders INSIDE the card next to the active item instead of as
+               the separate floating "typing" bubble below, so hiding the
+               trace never loses "what's happening" — see typing.active. -->
+          <TodoCard
+            items={liveMergedTodoItems}
+            currentActivity={typing.active ? typingLabel(typing.substate, typing.toolName) : undefined}
+          />
+        {/if}
         {#if live.blocks.length > 0}
           <button
             type="button"
@@ -174,9 +186,6 @@
           </button>
           {#if liveTraceOpen}
             <div class="flex flex-col gap-1">
-              {#if liveMergedTodoItems.length > 0}
-                <TodoCard items={liveMergedTodoItems} />
-              {/if}
               {#each liveNonTodoBlocks as block, bi (bi)}
                 {#if block.kind === "tool"}
                   <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} />
@@ -198,7 +207,10 @@
     </div>
   {/if}
 
-  {#if typing.active}
+  {#if typing.active && liveMergedTodoItems.length === 0}
+    <!-- Floating "what's running" bubble is now redundant WHEN a todo card
+         exists (its activity shows inline instead) — only render this
+         fallback when there's no todo card to attach it to. -->
     <div class="flex justify-start items-end">
       <div class="rounded-2xl rounded-tl-sm border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-4 py-2.5">
         <div class="flex items-center gap-2 text-xs text-black-600 dark:text-black-700">
