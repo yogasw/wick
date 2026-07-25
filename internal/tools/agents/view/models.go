@@ -96,6 +96,9 @@ type ModelChoiceVM struct {
 	ID      string
 	Label   string
 	Default bool
+	// Desc is a short human description shown under the model name in the
+	// picker (like the CLIs' own /model menu). Empty when unknown.
+	Desc string
 }
 
 // SessionLifecycleVM is the per-row lifecycle snapshot the sessions

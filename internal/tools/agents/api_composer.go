@@ -46,6 +46,11 @@ var builtinComposerCommands = []ComposerCommand{
 	{ID: "commands", Label: "/commands", Hint: "gate log", Category: "Views", Action: "view:commands"},
 	{ID: "approvals", Label: "/approvals", Hint: "pending", Category: "Views", Action: "view:approvals"},
 	{ID: "raw", Label: "/raw", Hint: "transcript", Category: "Views", Action: "view:raw"},
+	// /compact summarizes the older conversation to reclaim context, like
+	// Claude Code's /compact. It's a "send" action: the FE sends "/compact"
+	// as the message. The wick engine intercepts it and runs compaction
+	// in-process; the CLI providers pass it through to their own /compact.
+	{ID: "compact", Label: "/compact", Hint: "summarize history to free context", Category: "Session", Action: "send:/compact"},
 }
 
 // apiComposerCommands handles GET /api/composer/commands — the `/` command menu:

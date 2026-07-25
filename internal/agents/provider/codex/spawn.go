@@ -125,6 +125,13 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		sandboxMode = opt.Instance.CodexConfig.SandboxMode
 	}
 	args = append(args, "--sandbox", string(sandboxMode))
+	// Trust ~/.codex/skills so the agent can read a skill's bundled
+	// resource files (they live outside the workspace, and the sandbox
+	// otherwise blocks them). Mirrors claude/spawn.go's --add-dir wiring;
+	// skillsync copies skills here but the sandbox hides them without this.
+	if home, err := homeDir(); err == nil {
+		args = append(args, skillAddDirArgs(home, dirExists)...)
+	}
 	// When gate is active for this instance, do NOT set
 	// --ask-for-approval to a bypass value — codex's approval flag
 	// generally skips PreToolUse under bypass modes, which would
@@ -134,6 +141,9 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	}
 	args = append(args, s.ExtraArgs...)
 	args = append(args, opt.ExtraArgs...)
+	// Pinned model (per-instance model picker) → --model. No-op when
+	// unpinned, AI-router, or --model already given.
+	args = append(args, provider.ModelArgs(opt, args)...)
 
 	// AI router: when the instance routes through an embedded proxy, the
 	// selected router contributes the codex model_provider wiring + env here

@@ -189,6 +189,7 @@ interface WireProviderDetailResponse {
   active_count: number;
   active_pids: WireLiveProcess[] | null;
   config_fields: WireConfigField[] | null;
+  default_models?: { id: string; desc?: string }[] | null;
   airouter?: {
     supported?: boolean;
     enabled?: boolean;
@@ -567,6 +568,7 @@ export function normalizeProviderDetail(r: WireProviderDetailResponse): Provider
     ActiveCount: r.active_count ?? 0,
     ActivePIDs: (r.active_pids ?? []).map(mapLiveProcess),
     ConfigFields: (r.config_fields ?? []).map(mapConfigField),
+    DefaultModels: (r.default_models ?? []).map((m) => ({ id: m.id, desc: m.desc ?? "" })),
     AIRouter: {
       Supported: r.airouter?.supported ?? false,
       Enabled: r.airouter?.enabled ?? false,
@@ -1227,13 +1229,77 @@ export interface WickInteraction {
   error?: string;
 }
 
-// apiGetWickInteractions loads the per-call interaction log for a session
-// (empty array when the session made no wick model calls / file absent).
-export async function apiGetWickInteractions(base: string, session: string): Promise<WickInteraction[]> {
-  const r = await get<{ interactions?: WickInteraction[] | null }>(
-    `${base}/providers/wick/interactions/${encodeURIComponent(session)}`,
+// WickInteractionsPage is one page of the interaction log — the server
+// does the search / sort / pagination so a big session doesn't ship its
+// whole log to the browser.
+export interface WickInteractionsPage {
+  interactions: WickInteraction[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface WickInteractionsQuery {
+  q?: string;
+  sort?: "newest" | "oldest";
+  page?: number;
+  pageSize?: number;
+}
+
+// apiGetWickInteractions loads one page of the interaction log for a
+// session (server-side search/sort/pagination).
+export async function apiGetWickInteractions(
+  base: string,
+  session: string,
+  opts: WickInteractionsQuery = {},
+): Promise<WickInteractionsPage> {
+  const p = new URLSearchParams();
+  if (opts.q) p.set("q", opts.q);
+  if (opts.sort) p.set("sort", opts.sort);
+  if (opts.page) p.set("page", String(opts.page));
+  if (opts.pageSize) p.set("page_size", String(opts.pageSize));
+  const qs = p.toString();
+  const url = `${base}/providers/wick/interactions/${encodeURIComponent(session)}${qs ? "?" + qs : ""}`;
+  const r = await get<WickInteractionsPage>(url);
+  return {
+    interactions: r?.interactions ?? [],
+    total: r?.total ?? 0,
+    page: r?.page ?? 1,
+    page_size: r?.page_size ?? (opts.pageSize ?? 10),
+  };
+}
+
+// WickCurlForms is every render of one reconstructed request, so the curl
+// builder can switch format without a refetch. The key is a placeholder
+// ($WICK_MODEL_API_KEY) in all of them; the real key is fetched separately
+// via apiGetWickModelKey only when the operator asks.
+export interface WickCurlForms {
+  single_line: string;
+  multiline: string;
+  raw_http: string;
+  json_body: string;
+  model_id: string;
+  env: Record<string, string>;
+}
+
+// apiGetWickInteractionCurl reconstructs the request for one interaction (by
+// seq) in every format, for the curl builder. Throws ApiError on 422
+// (interaction predates model-id tracking, or the model was deleted).
+export async function apiGetWickInteractionCurl(base: string, session: string, seq: number): Promise<WickCurlForms> {
+  const r = await get<WickCurlForms>(
+    `${base}/providers/wick/interactions/${encodeURIComponent(session)}/${seq}/curl`,
   );
-  return r?.interactions ?? [];
+  return r;
+}
+
+// apiGetWickModelKey reveals a model's real API key (admin-only) for the
+// "use real token" option in the curl builder. The admin entered this key,
+// so returning it to them is not a new exposure.
+export async function apiGetWickModelKey(base: string, modelId: string): Promise<string> {
+  const r = await get<{ key?: string }>(
+    `${base}/providers/wick/models/${encodeURIComponent(modelId)}/key`,
+  );
+  return r?.key ?? "";
 }
 
 export type { StorageFileDTO };

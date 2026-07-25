@@ -19,11 +19,15 @@ func TestScheduleScope(t *testing.T) {
 	if _, all := scheduleScope(owner); !all {
 		t.Fatalf("app owner should see all owners")
 	}
-	// Plain admin (no admin_see_all on this transport) → own scope only,
-	// matching the UI monitor's default.
+	// Admin (RoleAdmin, not IsOwner) → all owners. This matches the
+	// create/cancel gate (canManageSession = CanSeeAllSessions || IsAdmin):
+	// previously admins were scoped to their own id here, which made list
+	// return [] for the in-process wick provider's synthetic RoleAdmin
+	// principal (it can create/cancel but its id never matches the row's
+	// owner_user_id = the real session owner). See scheduleScope doc.
 	admin := &entity.User{ID: "a", Role: entity.RoleAdmin}
-	if id, all := scheduleScope(admin); id != "a" || all {
-		t.Fatalf("plain admin: got (%q,%v) want (a,false)", id, all)
+	if _, all := scheduleScope(admin); !all {
+		t.Fatalf("admin should see all owners (match create/cancel gate)")
 	}
 	// regular user → own scope only.
 	u := &entity.User{ID: "u1", Role: entity.RoleUser}

@@ -323,6 +323,52 @@ Quick cheatsheet for what each provider supports — useful when picking a defau
 | `GET` | `/api/providers/logs/{file}?bytes=` | Tails a runtime log file (server/mcp/worker/app/gate/daemon) for the log viewer. Admin only. |
 | `GET` | `/api/providers/logs/{file}/download` | Downloads the full runtime log file. Admin only. |
 
+## CLI model picker
+
+`claude`, `codex`, and `gemini` instances have an optional **Model selection** card on the provider detail page — off by default, since each CLI already has its own default model.
+
+- **Allow model selection** toggle turns it on. When on, the composer shows a model level under this instance in its provider picker, and the chosen id is passed to the CLI via `--model` on spawn.
+- Below the toggle, an editable id + description table (a `models` kvlist) lists the models to offer — e.g. `opus` / "Opus 4.8 with 1M context · best for everyday, complex tasks". Each model's description renders under its name in the picker.
+- **Load defaults** replaces the table with the built-in catalog seed for that provider type (see below) — a quick way to start editing instead of typing ids from scratch.
+- Leaving the table empty falls back to the catalog seed automatically; you only need to fill it in to trim the list or add a model the catalog doesn't know about.
+
+`--model` is skipped when no model is pinned, when the instance routes through an [AI Router](./airouter) (the router sets the model itself), or when `ExtraArgs` already has a manual `--model` — an explicit operator choice is never overridden.
+
+### Model catalog
+
+The default models offered per type (`claude` / `codex` / `gemini`) come from a small catalog, since none of these CLIs can list their own models:
+
+1. **Embedded baseline** — a `models.json` compiled into the binary, always present.
+2. **Remote overlay** — the same file fetched from `raw.githubusercontent.com/yogasw/wick/master/internal/agents/provider/models.json`, refreshed lazily (every 6h, or immediately on **Rescan**). This lets the maintained list of ids/descriptions grow after a release without an upgrade.
+3. **Disk cache** — the last successful remote fetch, persisted under `~/.<app>/`. An operator can hand-edit this file to change the offered defaults without redeploying — it's treated exactly like a remote fetch result.
+
+The three layers merge per model id: whichever copy (embedded, remote, or disk cache) has the newest `updated_at` wins; a model marked disabled in any copy is hidden from the picker entirely.
+
+## Built-in wick provider
+
+`wick` is a fourth provider type alongside `claude` / `codex` / `gemini` — but instead of spawning a CLI subprocess, it runs the agent loop **in-process** and talks straight to a vendor's chat API: **OpenAI**, **OpenRouter**, **Anthropic**, **Gemini**, or any OpenAI-compatible endpoint (local llama.cpp, vLLM, LiteLLM, Together, Groq, …). Use it when no CLI is installed, or you want a model none of the three CLIs ship.
+
+Unlike `claude`/`codex`/`gemini` (which allow multiple named instances), there is a single `wick` instance. Its models are managed directly on the provider detail page:
+
+- **Add a model**: pick a kind (auto-fills the base URL for known vendors), paste the API key, save. Each model gets its own row with edit / set-default / test / duplicate / disable / delete actions.
+- **Test** sends a minimal 1-token ping to confirm the key + base URL work before relying on it in a session.
+- **Disable** hides a model from the composer without deleting its config.
+- Registering more than one enabled model surfaces the same nested provider picker (type ▸ instance ▸ model) in the composer described above.
+
+### Session interactions log
+
+Every model call a wick session makes is logged to `<session>/wick-interactions.jsonl` — request (system prompt, messages, tools) and response (text, tool calls, tokens, latency, error). The session's detail page shows this in place of the CLI providers' spawn/reproduce view, with server-side search and pagination.
+
+Each logged interaction has a **copy as curl** action that reconstructs the exact HTTP request wick sent, in four formats (single-line, Bash, raw HTTP, JSON body), with an editable body preview and per-part copy. The bearer token defaults to a `$WICK_MODEL_API_KEY` placeholder; an admin can reveal the real key inline instead of hunting for it in the provider settings.
+
+### Context compaction
+
+A wick session's history is bounded by a context budget. When it nears the limit, wick asks the model to summarize the oldest turns (decisions, facts, file paths, done vs. pending) and continues with the summary in place of the raw turns — so long tasks don't hit a hard context-window error. This also runs a heavier pass automatically if a request still overflows the vendor's window. Type `/compact` in a session to trigger it manually.
+
+### Long-running tool calls
+
+Shell commands the wick agent runs don't block on a fixed wall-clock deadline — a long command (installs, builds, crawls) can run as a background job that the agent polls for status/log instead of stalling the turn. This mirrors the same command-gate and approval flow as any other Wick tool call.
+
 ## See also
 
 - [Projects](./projects) — `default_provider` field per project; how project defaults auto-migrate on rename.

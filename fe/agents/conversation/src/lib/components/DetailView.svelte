@@ -12,6 +12,8 @@
   import { connectSession } from "../stores/sse.js";
   import type { SSEStatus } from "../types/agents.js";
   import { currentAsk, showAsk, hideAsk } from "../stores/asks.js";
+  import { currentDetail, showDetail, hideDetail } from "../stores/detail.js";
+  import DetailModal from "./DetailModal.svelte";
   import { currentApproval, showApproval, hideApproval } from "../stores/approvals.js";
   import { notify } from "../notify.js";
   import { push } from "../router.js";
@@ -179,7 +181,16 @@
   };
   function toComposerCommand(c: ComposerApiCommand): ComposerCommand {
     if (c.action) {
-      return { value: c.id, label: c.label, hint: c.hint, category: c.category, run: ACTION_HANDLERS[c.action] };
+      // "send:<text>" actions (e.g. /compact) submit <text> as a message —
+      // the provider engine interprets it (wick runs compaction in-process;
+      // CLI providers pass their own /compact through). Generic so new
+      // send-commands need no per-command FE handler.
+      let run = ACTION_HANDLERS[c.action];
+      if (!run && c.action.startsWith("send:")) {
+        const text = c.action.slice("send:".length);
+        run = () => void handleSend({ text, files: [] });
+      }
+      return { value: c.id, label: c.label, hint: c.hint, category: c.category, run };
     }
     // insert-type (skills): value is placed after `/`
     return { value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category };
@@ -534,6 +545,19 @@
     }
     window.addEventListener("keydown", onKeydown);
     return () => window.removeEventListener("keydown", onKeydown);
+  });
+
+  // Generic detail chips (rendered by richRender) bubble a `wick-detail-open`
+  // event to the window; open the shared modal with its title + body. One
+  // listener serves every chip in the thread — reusable by any feature that
+  // emits a `detail` fence, not just compaction.
+  $effect(() => {
+    function onDetailOpen(e: Event) {
+      const d = (e as CustomEvent).detail as { title?: string; body?: string } | undefined;
+      if (d) showDetail({ title: d.title ?? "Details", body: d.body ?? "" });
+    }
+    window.addEventListener("wick-detail-open", onDetailOpen);
+    return () => window.removeEventListener("wick-detail-open", onDetailOpen);
   });
 
   $effect(() => {
@@ -1487,6 +1511,8 @@
   onClose={() => { approvalError = ""; hideApproval(); }}
   error={approvalError}
 />
+
+<DetailModal content={$currentDetail} onClose={hideDetail} />
 
 <ConfirmDialog
   open={confirmKill !== null}

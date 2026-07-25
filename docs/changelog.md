@@ -6,7 +6,21 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Wick Provider
+#### Added
+*   Context compaction: when a session's history nears the context budget, wick asks the model to summarize the oldest turns (decisions, facts, file paths, done vs. pending) and continues with the summary in place — plus a manual `/compact` command and a heavier automatic pass on request overflow.
+*   Long-running tool calls: shell commands no longer run under a fixed wall-clock deadline — a long command can run as a background job the agent polls for status/log instead of stalling the turn.
+*   **Curl builder** for the session's Wick Interactions log: reconstructs any logged model call as a copyable request in 4 formats (single-line, Bash, raw HTTP, JSON body), with an editable body preview, env-var display, per-part copy, and an admin-only "reveal real key" option (defaults to a `$WICK_MODEL_API_KEY` placeholder).
+*   Session detail page: server-side search + pagination over the Wick Interactions log, upload progress + compaction indicators, and a detail modal for viewing a chip's full content without cluttering the transcript.
+
+### CLI Model Picker
+#### Added
+*   Per-instance **model selection** for `claude` / `codex` / `gemini` instances: an "Allow model selection" toggle plus an editable id + description table (`models`), with a "Load defaults" button that fills it from the catalog. When on, the picked model is passed to the CLI via `--model`.
+*   **Model catalog**: an embedded `models.json` baseline, overlaid by a GitHub-raw copy (refreshed lazily or on Rescan) and a hand-editable disk cache under `~/.<app>/` — merged per-model by `updated_at` (newest wins); disabled models are hidden.
+*   The composer's provider picker gained a full **type ▸ instance ▸ model** drill-down (a new reusable `ProviderPicker` component), collapsing any level with only one choice; each model shows its description under its name.
+
+### Docs
+*   Documented the built-in wick provider (`claude` / `codex` / `gemini` alternative talking straight to a vendor API), the CLI model picker + model catalog, and the `Allow shell metacharacters` command-gate config — all of which had shipped without guide coverage.
 
 ---
 

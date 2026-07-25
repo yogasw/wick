@@ -337,7 +337,13 @@ func Module() connector.Module {
 			connector.Cat(
 				"Maintenance",
 				"Inspect and download the browser engines. Backs the manager's browser picker; not meant for agent use — seed these AdminOnly.",
-				connector.Op(
+				// ConfigOnly: this op renders the manager's browser-picker
+				// widget (html=browser_status) and returns HTML, not JSON.
+				// Registering it as a normal Op leaked it onto the MCP tool
+				// surface, where an agent calling it got an HTML document back.
+				// OpConfigOnly hides it from wick_list/search/get while the
+				// manager widget still runs it via the /test path.
+				connector.OpConfigOnly(
 					"browser_status",
 					"Browser Status",
 					"Report which browser engines (chromium/firefox/webkit) are installed and their versions. Read-only; used by the manager UI's browser picker.",

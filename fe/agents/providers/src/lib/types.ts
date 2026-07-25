@@ -243,6 +243,7 @@ export interface ProviderDetailResponse {
   ActiveCount: number;
   ActivePIDs: LiveProcessDTO[];
   ConfigFields: ConfigFieldDTO[];
+  DefaultModels: { id: string; desc: string }[];
   AIRouter: AIRouterDetailDTO;
 }
 

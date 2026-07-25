@@ -154,6 +154,19 @@ func TestImmutableWickHasOwnMemorySection(t *testing.T) {
 	if strings.Contains(codex, "## Persistent memory") {
 		t.Error("codex's immutable prompt should NOT carry wick's memory section")
 	}
+
+	// The context-window / auto-compaction guidance is likewise wick-only:
+	// it describes wick's in-process compaction + its shell/job tools, which
+	// the CLI providers don't have.
+	if !strings.Contains(wick, "## Context window and long tool output") {
+		t.Error("wick's immutable prompt is missing the context-window section")
+	}
+	if strings.Contains(claude, "## Context window and long tool output") {
+		t.Error("claude's immutable prompt should NOT carry wick's context-window section")
+	}
+	if strings.Contains(codex, "## Context window and long tool output") {
+		t.Error("codex's immutable prompt should NOT carry wick's context-window section")
+	}
 }
 
 func nonBlankLines(s string) []string {

@@ -160,6 +160,9 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	}
 	args = append(args, s.ExtraArgs...)
 	args = append(args, opt.ExtraArgs...)
+	// Pinned model (per-instance model picker) → --model. No-op when
+	// unpinned, AI-router (sets model via env), or --model already given.
+	args = append(args, provider.ModelArgs(opt, args)...)
 	// AI router: when enabled, front the Anthropic API with wick's
 	// /airouter/<id>/v1 proxy. The selected router contributes base URL, auth
 	// token, and per-tier models via env (Claude Code's own gateway vars) — no

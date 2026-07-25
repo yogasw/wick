@@ -262,6 +262,7 @@ export type ProviderModelOption = {
   id: string;
   label: string;
   default: boolean;
+  desc?: string;
 };
 
 export type ProviderOption = {
