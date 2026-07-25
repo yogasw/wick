@@ -93,54 +93,52 @@ dropped — see "Not done" below); item numbers below match the original TODO.
 - Items 6, 7, 8 below (background tool calls, oversized-result-to-file,
   global/per-model config cleanup) — not started, see TODO section.
 
-## TODO — captured 2026-07-24, not yet started
+## DONE — 2026-07-24 later round: background jobs, oversized-result-to-file, per-model genconfig
+
+Items 6/7/8 from the "captured 2026-07-24" list below all landed (commit
+`65067121 feat: wick long-tool-call jobs, context compaction, model picker +
+catalog, curl builder`). Verified against code, not just claimed:
+
+6. **Long-running tool calls → background goroutine — ✅ DONE.** `job.go` +
+   `job_tools.go` (`job_status`/`job_result` poll tools wired into `buildTools`) +
+   `tool_shell_bg.go` (detach path). A shell call that runs long returns a
+   placeholder + job id immediately; the model polls next turn. Tests: `job_test.go`,
+   `tool_shell_bg_test.go`.
+7. **Oversized tool results → file — ✅ DONE.** `toolresult.go` (+ `overflow_test.go`,
+   `toolresult_test.go`): results over the size cap get written to a session-workspace
+   file and the tool_result becomes a "saved to …, use read_file" pointer.
+8. **Per-model generation config — ✅ DONE.** `genconfig.go` (+ `genconfig_test.go`):
+   per-model temp/top-p/thinking-budget/max-output persist and apply at spawn; the
+   redundant global duplicates were dropped. Gate config stays global.
+
+## TODO — captured 2026-07-24 (items 6–8 above now DONE; item 9 was already done)
 
 Captured so nothing from the last live-testing round gets lost. Items 1–5 and 9
-above are done; these three remain.
+were already done; items 6–8 are now done too (see the DONE block just above).
+What genuinely remains is Phase 9 + skill-invocation — see "STILL OPEN" below.
 
-6. **Long-running tool calls (>~2min) go to a background goroutine.** Today every
-   tool call blocks the turn synchronously (`engine.dispatch` →
-   `handler(ctx, args)`, see `internal/agents/provider/wick/engine.go`). For calls
-   that legitimately run long (mainly `shell`, currently capped at a hard 120s
-   timeout in `tool_shell.go`), instead of just timing out: at ~90s–2min without
-   completion, detach the still-running process into a goroutine that streams
-   output to a per-session job file (mirror the workflow engine's `Store` pattern —
-   `state.json` + append-only `events.jsonl`/`output.log`, see
-   `internal/agents/workflow/engine/engine.go`'s `Save`/`AppendEvent`/`ListEventsTail`
-   — new sibling layout helper `SessionJobsDir(id)`/`SessionJob(id, jobID)` next to
-   the existing `Session*` methods in `internal/agents/config/layout.go`), and
-   return a tool result immediately: "still running in background, job id X — check
-   with `job_status`/`job_result` later." Add a small poll tool (`job_status` /
-   `job_result`) to `buildTools` so the model can check back in a later turn instead
-   of the turn hanging. Chosen approach (decided in this session): tool returns a
-   placeholder immediately + the model polls next turn — NOT interrupting the live
-   generation to inject the result mid-stream (that would need surgery on the
-   engine's streaming/dispatch loop for little benefit).
-7. **Oversized tool results get redirected to a file.** Tool call results (shell
-   output, connector responses, etc.) above ~50KB should be written to a file
-   (session workspace, path surfaced in the tool result) instead of inlined —
-   returned tool_result text becomes something like "response too large (212KB),
-   saved to `output/shell_1234.txt` — use read_file to inspect it." Applies to tool
-   results only, not final assistant text. Natural pairing with item 6 (background
-   job output is already file-based) — likely the same size-check helper backs both.
-8. **Per-model generation config, trim redundant Global fields.** Advanced-options
-   fields already exist per-model in the Add/Edit modal (max output tokens, temp,
-   top-p, thinking budget, raw config — see `WickGenConfig` in the Data model
-   section below) — confirm the backend actually persists/uses all of them (some
-   may be UI-only stubs). Decision (this session): keep these model-specific knobs
-   **per-model only**; do NOT also expose them as instance-level Global defaults —
-   drop any duplicate Global field for something that's genuinely per-model (a
-   model-specific temperature has no sane "global default" — every model's sane
-   default differs). Global should keep only genuinely instance-level settings:
-   shell tool on/off, connectors, max context tokens (history budget), max turns,
-   and gate-adjacent settings — **gate config explicitly stays global**, never
-   per-model.
-9. **Duplicate model.** The "Duplicate" entry in the kebab menu (item 3) clones a
-   `WickModel` row (new id, same config incl. decrypted-then-re-encrypted API key,
-   label suffixed "(copy)") so setting up a variant (e.g. same model, different
-   temperature) doesn't mean re-entering the API key/model id from scratch. Check
-   for an existing clone/duplicate pattern elsewhere in the codebase (connector
-   duplication, workflow duplication) to mirror before inventing a new one.
+9. **Duplicate model — ✅ DONE** (see the top "DONE — 2026-07-24 picker" section,
+   item 9): `POST /providers/wick/models/{id}/duplicate` clones the row under a fresh
+   id, label "(copy)", forced `Default:false, Disabled:false`.
+
+## STILL OPEN — verified against code 2026-07-25 (the real remaining work)
+
+These three are the ONLY wick-provider gaps left after verifying the tree at
+`internal/agents/provider/wick/`. Everything else in this doc has shipped.
+
+A. **Skill tool + slash command — NOT built.** `contextfiles.go` only *lists*
+   `skills.md` into the system prompt; there is no `tool_skill.go`, so the model
+   cannot `skill(name)` to load a SKILL.md body, and a user `/​<skill-name>` message
+   is not pre-processed. Wick knows what skills exist but cannot invoke or run them.
+   (This is the highest-impact gap — the skill set is large and wick can't use it.)
+B. **Input steering / message queue (Phase 9) — NOT built.** `engine.runTurn(ctx,
+   userText string)` processes exactly one message at a time off the `msgs` channel.
+   No visible backlog / `QueuedCount`, and a mid-turn user message is not injected
+   into the running turn — it just waits for the turn to finish (no steering).
+C. **Multimodal input (Phase 9) — NOT built.** `runTurn` takes `userText string`
+   only. Image/file attachments are not sent as inline `genai.Part`s; v1 only passes
+   a path in text (agent reads via shell). Media-out artifact derivation for wick
+   turns is also unverified.
 
 **Correction (2026-07-24, later same session):** the note that used to sit here
 floated dropping the single-instance rule so "Type → Name → Model" would have a
