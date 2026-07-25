@@ -537,10 +537,27 @@ func execAction(page playwright.Page, a action) (any, error) {
 		_, err := page.Reload()
 		return nil, err
 	case "wait_for_load_state":
-		if st := loadState(a.State); st != nil {
-			return nil, page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: st})
+		st := loadState(a.State)
+		if st == nil {
+			return nil, page.WaitForLoadState()
 		}
-		return nil, page.WaitForLoadState()
+		// `networkidle` waits for 0 in-flight requests for 500ms — which never
+		// happens on sites that poll in the background (Google, Facebook, most
+		// SPAs), so it would hang until the navigation timeout (deprecated by
+		// Playwright for exactly this reason). Cap it at a short timeout and treat
+		// a timeout as "good enough" (don't fail the step) so a chatty page can't
+		// stall the whole run for minutes.
+		if *st == *playwright.LoadStateNetworkidle {
+			err := page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+				State:   st,
+				Timeout: playwright.Float(10000),
+			})
+			if err != nil && strings.Contains(strings.ToLower(err.Error()), "timeout") {
+				return map[string]any{"note": "networkidle not reached within 10s (page keeps polling); continued anyway"}, nil
+			}
+			return nil, err
+		}
+		return nil, page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: st})
 	case "wait_for_url":
 		return nil, page.WaitForURL(a.URL)
 
