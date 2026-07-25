@@ -32,6 +32,10 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		cancel:     cancel,
 		engineDone: make(chan struct{}),
 		label:      "wick (built-in)",
+		// Created here (not in the engine goroutine) so Kill can read p.bg /
+		// p.jobs without racing the goroutine that would otherwise set them.
+		bg:   newBgRegistry(opt.Workspace),
+		jobs: newJobManager(),
 	}
 	go p.runEngine(opt)
 	return p, nil
@@ -48,6 +52,12 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 			log.Debug().Err(err).Msg("wick.engine: pipe write failed (reader gone)")
 		}
 	}
+
+	// Wire the job manager's engine seams: on completion a job injects a
+	// [job-done] turn (injectTurn), and while any job runs off-turn the
+	// keepAlive heartbeat stops the pool idle-kill from reaping the session
+	// before the job can wake it.
+	p.jobs.setSeams(p.injectTurn, func() { emit(heartbeatLine()) })
 
 	m, ok := pickModel(opt.Instance, opt.ModelID)
 	if !ok {
@@ -78,6 +88,12 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 		SessionDir: opt.SessionDir,
 		SessionID:  sessionIDFromDir(opt.SessionDir),
 		Config:     resolved,
+		// Per-spawn background-shell registry (created in Spawn). Shared by
+		// shell(run_in_background)/shell_output/shell_kill; reaped on Kill.
+		Bg: p.bg,
+		// Per-spawn async-job manager (created in Spawn). Shared by
+		// job_start/status/log/cancel; cancelled on Kill.
+		Jobs: p.jobs,
 	}
 	tools := buildTools(tc)
 	history := loadHistory(opt.SessionDir, maxContextTokens(wc))
@@ -94,6 +110,7 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 	eng := newEngine(llm, m.Model, sysPrompt, genCfg, tools, history, resolved.MaxTurns, emit)
 	eng.setModelID(m.ID)
 	eng.setWickSessionID(tc.SessionID)
+	eng.setToolSpillDir(opt.SessionDir)
 	eng.gate = gateCheckerFn
 	eng.setContextBudget(maxContextTokens(wc))
 	// Record every model call to the wick session log (why the model

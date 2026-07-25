@@ -173,3 +173,95 @@ func TestBuildCurl_MalformedRecord(t *testing.T) {
 		t.Fatal("expected a parse error for malformed record JSON")
 	}
 }
+
+// ── curl builder renderers (single-line / raw HTTP / json / bearer) ──
+
+func TestRenderSingleLine_NoContinuation(t *testing.T) {
+	m := provider.WickModel{ID: "m1", Kind: "openai", Model: "gpt-4o"}
+	req, err := BuildRequest(mustRecordJSON(t, sampleRecord()), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := RenderSingleLine(req, "$WICK_MODEL_API_KEY")
+	if strings.Contains(out, "\n") {
+		t.Errorf("single-line must be one line (no newline / continuation):\n%s", out)
+	}
+	if !strings.Contains(out, "chat/completions") || !strings.Contains(out, "hello there") {
+		t.Errorf("single-line missing endpoint/body: %s", out)
+	}
+}
+
+func TestRenderRawHTTP_Shape(t *testing.T) {
+	m := provider.WickModel{ID: "m1", Kind: "anthropic", Model: "claude-3"}
+	req, err := BuildRequest(mustRecordJSON(t, sampleRecord()), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := RenderRawHTTP(req, "$WICK_MODEL_API_KEY")
+	if !strings.HasPrefix(out, "POST ") {
+		t.Errorf("raw HTTP must start with the request line: %s", out)
+	}
+	if !strings.Contains(out, "Host: ") || !strings.Contains(out, "\n\n") {
+		t.Errorf("raw HTTP missing Host or body separator: %s", out)
+	}
+}
+
+func TestRenderJSONBody(t *testing.T) {
+	m := provider.WickModel{ID: "m1", Kind: "openai", Model: "gpt-4o"}
+	req, _ := BuildRequest(mustRecordJSON(t, sampleRecord()), m)
+	out := RenderJSONBody(req)
+	if strings.Contains(out, "curl") || strings.Contains(out, "-H ") {
+		t.Errorf("json body must not contain curl/headers: %s", out)
+	}
+	if !strings.Contains(out, "hello there") {
+		t.Errorf("json body missing content: %s", out)
+	}
+}
+
+func TestBearerInjection(t *testing.T) {
+	m := provider.WickModel{ID: "m1", Kind: "openai", Model: "gpt-4o"}
+	req, _ := BuildRequest(mustRecordJSON(t, sampleRecord()), m)
+	out := RenderSingleLine(req, "sk-my-real-token")
+	if !strings.Contains(out, "Bearer sk-my-real-token") {
+		t.Errorf("custom bearer not injected: %s", out)
+	}
+	if strings.Contains(out, "$WICK_MODEL_API_KEY") {
+		t.Errorf("placeholder should be gone with a real token: %s", out)
+	}
+}
+
+func TestGeminiQueryParamAuth(t *testing.T) {
+	m := provider.WickModel{ID: "m1", Kind: "gemini", Model: "gemini-1.5-pro"}
+	req, err := BuildRequest(mustRecordJSON(t, sampleRecord()), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := RenderSingleLine(req, "$WICK_MODEL_API_KEY")
+	if !strings.Contains(out, "key=$WICK_MODEL_API_KEY") {
+		t.Errorf("gemini key should be a query param: %s", out)
+	}
+}
+
+// TestSingleQuoteEscaping is the Postman-truncation regression guard: a
+// body containing an apostrophe must NOT terminate the -d '...' string
+// early. The '\'' idiom keeps the whole body inside one shell-quoted arg.
+func TestSingleQuoteEscaping(t *testing.T) {
+	rec := interactionRecord{
+		ModelID: "m1",
+		Request: []interactionMsg{{Role: "user", Text: "don't stop, it's fine"}},
+	}
+	m := provider.WickModel{ID: "m1", Kind: "openai", Model: "gpt-4o"}
+	req, err := BuildRequest(mustRecordJSON(t, rec), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := RenderSingleLine(req, "$WICK_MODEL_API_KEY")
+	// The apostrophes must be escaped as '\'' — a bare ' would close -d.
+	if !strings.Contains(out, `'\''`) {
+		t.Errorf("apostrophe in body not shell-escaped (would truncate in Postman):\n%s", out)
+	}
+	// The command must still end with a closing quote (body fully enclosed).
+	if !strings.HasSuffix(out, "'") {
+		t.Errorf("rendered curl does not end cleanly with a closing quote:\n%s", out)
+	}
+}

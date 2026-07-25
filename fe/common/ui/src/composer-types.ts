@@ -16,6 +16,8 @@ export type ComposerModelOption = {
   id: string;
   label: string;
   default: boolean;
+  /** Short human description shown under the model name in the picker. */
+  desc?: string;
 };
 
 /* A themed dropdown in the Composer toolbar (provider / project / preset).

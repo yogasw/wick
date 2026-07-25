@@ -67,7 +67,7 @@ func collectParsed(t *testing.T, lines []string) []event.AgentEvent {
 	return evs
 }
 
-func newTestEngine(f *fakeModel, tools []toolDef) (*engine, *[]string) {
+func newTestEngine(f LLM, tools []toolDef) (*engine, *[]string) {
 	var lines []string
 	emit := func(b []byte) { lines = append(lines, string(b)) }
 	eng := newEngine(f, "fake", "you are a test agent", &genai.GenerateContentConfig{}, tools, nil, 0, emit)
@@ -103,6 +103,60 @@ func TestEngineTextTurn(t *testing.T) {
 	}
 	if !gotDone {
 		t.Errorf("missing Done; events=%+v", evs)
+	}
+}
+
+// TestEngineToolUseEmittedBeforeDispatch is the P0b guard: the engine
+// MUST emit the tool_use line before invoking the (potentially long-
+// running) tool handler. That ordering is what keeps a long foreground
+// tool alive: the reader (agent.go) sees the ToolUse event and pauses the
+// idle-kill timer (toolInFlight=true) for the whole time the tool blocks;
+// only when the ToolResult arrives does the timer restart. If the engine
+// ever dispatched first and emitted tool_use after, a `sleep 300` would
+// look like 300s of silent stdout and the pool would idle-kill the
+// session mid-tool. This test locks that ordering in.
+func TestEngineToolUseEmittedBeforeDispatch(t *testing.T) {
+	var linesAtDispatch int
+	var linesRef *[]string
+
+	slow := toolDef{
+		decl: &genai.FunctionDeclaration{Name: "slow"},
+		handler: func(ctx context.Context, args map[string]any) (string, bool) {
+			// Snapshot how many lines were emitted by the time the handler
+			// runs. The tool_use line must already be among them.
+			linesAtDispatch = len(*linesRef)
+			return "ok", false
+		},
+	}
+	f := &fakeModel{responses: []*LLMResponse{
+		toolCallResp("slow", map[string]any{}),
+		textResp("finished"),
+	}}
+	eng, lines := newTestEngine(f, []toolDef{slow})
+	linesRef = lines
+	eng.start()
+	eng.runTurn(context.Background(), "run slow")
+
+	if linesAtDispatch == 0 {
+		t.Fatal("handler ran before any line was emitted — tool_use not sent first")
+	}
+	// The last line emitted before dispatch must be the tool_use frame.
+	pre := (*lines)[:linesAtDispatch]
+	last := pre[len(pre)-1]
+	if !strings.Contains(last, `"type":"tool_use"`) || !strings.Contains(last, `"name":"slow"`) {
+		t.Errorf("line before dispatch is not the tool_use frame:\n%s", last)
+	}
+	// And the real parser must classify it as a ToolUse (what the reader
+	// keys the idle-pause off of).
+	evs := collectParsed(t, pre)
+	var sawToolUse bool
+	for _, e := range evs {
+		if e.Type == event.ToolUse && e.ToolName == "slow" {
+			sawToolUse = true
+		}
+	}
+	if !sawToolUse {
+		t.Errorf("parser did not see ToolUse before dispatch; events=%+v", evs)
 	}
 }
 

@@ -70,6 +70,13 @@ type Instance struct {
 	Env       []string
 	Disabled  bool
 
+	// ModelSelect + Models: the CLI model picker for claude/codex/gemini.
+	// ModelSelect on exposes a model picker (Models, or the per-type seed
+	// when empty) and passes the pick to the CLI via --model on spawn. See
+	// modelseed.go + the cli-provider-model-picker plan. Ignored by wick.
+	ModelSelect bool
+	Models      []ModelEntry
+
 	// Hooks holds the user's enable/disable intent per hook event
 	// (PreToolUse, SessionStart, …). Spawners read this on every
 	// Spawn to decide whether to install / remove the per-workspace
@@ -812,6 +819,8 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 				ExtraArgs:         raw.ExtraArgs,
 				Env:               raw.Env,
 				Disabled:          raw.Disabled,
+				ModelSelect:       raw.ModelSelect,
+				Models:            modelsFromUser(raw.Models),
 				Hooks:             hooksFromUser(raw.Hooks),
 				Storage:           storageFromUser(raw.Storage),
 				MaxConcurrent:     raw.MaxConcurrent,
@@ -872,6 +881,8 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 		Disabled:          ins.Disabled,
 		ExtraArgs:         ins.ExtraArgs,
 		Env:               ins.Env,
+		ModelSelect:       ins.ModelSelect,
+		Models:            modelsToUser(ins.Models),
 		Hooks:             hooksToUser(ins.Hooks),
 		Storage:           storageToUser(ins.Storage),
 		MaxConcurrent:     ins.MaxConcurrent,
@@ -890,6 +901,34 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 		raw.WickConfig = wickConfigToUser(ins.WickConfig)
 	}
 	return raw
+}
+
+// ── CLI model-picker converters ───────────────────────────────────────
+//
+// Mirror the persisted []userconfig.UserModelEntry to the in-memory
+// []ModelEntry. nil-in → nil-out so an unconfigured instance keeps the zero
+// value (empty Models → per-type catalog seed).
+
+func modelsFromUser(in []userconfig.UserModelEntry) []ModelEntry {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ModelEntry, len(in))
+	for i, m := range in {
+		out[i] = ModelEntry{ID: m.ID, Desc: m.Desc}
+	}
+	return out
+}
+
+func modelsToUser(in []ModelEntry) []userconfig.UserModelEntry {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]userconfig.UserModelEntry, len(in))
+	for i, m := range in {
+		out[i] = userconfig.UserModelEntry{ID: m.ID, Desc: m.Desc}
+	}
+	return out
 }
 
 // ── Wick converters ───────────────────────────────────────────────────

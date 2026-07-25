@@ -341,6 +341,7 @@ func Register(r tool.Router) {
 	r.GET("/providers/wick/config", getWickConfig)
 	r.GET("/providers/wick/interactions/{session}", getWickInteractions)
 	r.GET("/providers/wick/interactions/{session}/{seq}/curl", getWickInteractionCurl)
+	r.GET("/providers/wick/models/{id}/key", getWickModelKey)
 	r.POST("/providers/wick/models", saveWickModel)
 	r.DELETE("/providers/wick/models/{id}", deleteWickModel)
 	r.POST("/providers/wick/models/{id}/default", setWickDefaultModel)
@@ -954,6 +955,16 @@ func newSessionCompose(c *tool.Ctx) {
 // instance set as a project default never reached agents.json — the
 // session always span with the base provider. See the provider switch
 // path in pool.go which splits "type/name" back apart on spawn.
+// splitProviderModel separates a compose provider value that may encode a
+// pinned model as "type/name::modelID" (multi-model providers like wick)
+// into (providerValue, modelID). No "::" → modelID is "".
+func splitProviderModel(v string) (provider, modelID string) {
+	if i := strings.Index(v, "::"); i >= 0 {
+		return v[:i], v[i+2:]
+	}
+	return v, ""
+}
+
 func resolveSessionProvider(c *tool.Ctx, formValue, projectID string) string {
 	prov := strings.TrimSpace(formValue)
 	if prov == "" && projectID != "" {
@@ -1007,7 +1018,8 @@ func startNewSession(c *tool.Ctx) {
 		return
 	}
 	projectID := c.Form("project_id")
-	prov := resolveSessionProvider(c, c.Form("provider"), projectID)
+	provForm, modelID := splitProviderModel(c.Form("provider"))
+	prov := resolveSessionProvider(c, provForm, projectID)
 	presetName := c.Form("preset")
 	if presetName == "" {
 		presetName = "default"
@@ -1033,6 +1045,13 @@ func startNewSession(c *tool.Ctx) {
 		log.Ctx(c.Context()).Error().Msgf("compose add agent: %s", err.Error())
 		renderCompose(c, text, err.Error())
 		return
+	}
+	// Pin the chosen model (multi-model providers like wick) so the first
+	// spawn uses it — same effect as an in-session /provider model pick.
+	if modelID != "" {
+		if err := session.SetModelID(globalLayout, id, "main", modelID); err != nil {
+			log.Ctx(c.Context()).Warn().Msgf("compose set model id: %s", err.Error())
+		}
 	}
 	// Pre-subscribe: the new-session composer carries a bell with a
 	// hidden "subscribe" input that flips to "1" when toggled on. If
@@ -1146,7 +1165,8 @@ func createSession(c *tool.Ctx) {
 		return
 	}
 	projectID := c.Form("project_id")
-	prov := resolveSessionProvider(c, c.Form("provider"), projectID)
+	provForm, modelID := splitProviderModel(c.Form("provider"))
+	prov := resolveSessionProvider(c, provForm, projectID)
 	id := uuid.New().String()
 	presetName := "default"
 	if projectID != "" {
@@ -1170,6 +1190,11 @@ func createSession(c *tool.Ctx) {
 		log.Ctx(c.Context()).Error().Msgf("add agent: %s", err.Error())
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
+	}
+	if modelID != "" {
+		if err := session.SetModelID(globalLayout, id, "main", modelID); err != nil {
+			log.Ctx(c.Context()).Warn().Msgf("create session set model id: %s", err.Error())
+		}
 	}
 	c.Redirect(c.Base()+"/sessions/"+id, http.StatusSeeOther)
 }
@@ -1238,7 +1263,7 @@ func switchProvider(c *tool.Ctx) {
 		ModelID: req.ModelID,
 		Notify: func(tag string, steps []string) {
 			if bcast != nil {
-				bcast.PublishSystemTurn(id, agentName, "Provider switched → "+tag, steps)
+				bcast.PublishSystemTurn(id, agentName, provider.SwitchChipText(tag, req.ModelID), steps)
 			}
 		},
 	}); err != nil {
@@ -1351,7 +1376,7 @@ func sendMessage(c *tool.Ctx) {
 			Notify: func(tag string, steps []string) {
 				if bcast != nil {
 					bcast.PublishRaw(id, agentName, "user_message", req.Text)
-					bcast.PublishSystemTurn(id, agentName, "Provider switched → "+tag, steps)
+					bcast.PublishSystemTurn(id, agentName, provider.SwitchChipText(tag, ""), steps)
 				}
 			},
 		}); err != nil {
@@ -1859,6 +1884,7 @@ func providerOptionsJSON(c *tool.Ctx) {
 		ID      string `json:"id"`
 		Label   string `json:"label"`
 		Default bool   `json:"default"`
+		Desc    string `json:"desc,omitempty"`
 	}
 	type option struct {
 		Type         string  `json:"type"`
@@ -1872,7 +1898,7 @@ func providerOptionsJSON(c *tool.Ctx) {
 	for _, p := range ps {
 		var models []model
 		for _, m := range p.Models {
-			models = append(models, model{ID: m.ID, Label: m.Label, Default: m.Default})
+			models = append(models, model{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc})
 		}
 		opts = append(opts, option{Type: p.Type, Name: p.Name, Version: p.Version, UsesAIRouter: p.UsesAIRouter, Models: models})
 	}

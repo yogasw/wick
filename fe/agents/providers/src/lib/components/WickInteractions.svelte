@@ -1,22 +1,49 @@
 <script lang="ts">
-  import { apiGetWickInteractions, type WickInteraction } from "$lib/api";
+  import { apiGetWickInteractions, apiGetWickInteractionCurl, type WickInteraction, type WickCurlForms } from "$lib/api";
+  import { toastError } from "@wick-fe/common-stores";
+  import CurlBuilderModal from "./CurlBuilderModal.svelte";
 
   // Session log for the built-in wick provider: every model call's
   // request → response, so an operator can see WHY the model answered a
   // given way (replaces the CLI Reproduce/argv box, which is meaningless
   // for the in-process provider).
-  let { base, session }: { base: string; session: string } = $props();
+  // live = a spawn for this session is still running, so a model call may be
+  // in flight right now. When live we auto-refresh and show an in-progress
+  // row, so a long call (e.g. the 10m shell window) reads as "working" here
+  // instead of the list looking frozen with only finished calls.
+  let { base, session, live = false }: { base: string; session: string; live?: boolean } = $props();
 
   let interactions = $state<WickInteraction[]>([]);
+  let total = $state(0);
   let loading = $state(true);
   let err = $state("");
   let expanded = $state<Set<number>>(new Set());
+  let curlBusy = $state<number | null>(null);
 
-  async function load() {
-    loading = true;
+  // ── search / sort / pagination — all server-side so a big session's log
+  // isn't shipped whole to the browser. Changing any of these reloads. ──
+  let query = $state("");
+  let sortDir = $state<"newest" | "oldest">("newest");
+  let pageSize = $state(10);
+  let page = $state(1);
+
+  const totalPages = $derived(Math.max(1, Math.ceil(total / pageSize)));
+  const pageRows = $derived(interactions); // server already sliced this page
+
+  async function load(showSpinner = true) {
+    if (showSpinner) loading = true;
     err = "";
     try {
-      interactions = await apiGetWickInteractions(base, session);
+      const res = await apiGetWickInteractions(base, session, {
+        q: query.trim() || undefined,
+        sort: sortDir,
+        page,
+        pageSize,
+      });
+      interactions = res.interactions;
+      total = res.total;
+      // Server clamps page to range; mirror it so the footer stays honest.
+      if (res.page) page = res.page;
     } catch (e) {
       err = e instanceof Error ? e.message : "Failed to load interactions";
     } finally {
@@ -24,15 +51,76 @@
     }
   }
 
-  function toggle(index: number) {
+  // Search runs on submit (Enter or the Search button), NOT per keystroke —
+  // typing shouldn't fire a request for every character. `applied` tracks
+  // the query the current results reflect, so the Search button can show
+  // whether there's an unapplied change.
+  let applied = $state("");
+  function runSearch() {
+    if (query.trim() === applied) return;
+    applied = query.trim();
+    page = 1;
+    void load();
+  }
+  function onSearchKey(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      runSearch();
+    }
+  }
+  function setSort(dir: "newest" | "oldest") {
+    if (sortDir === dir) return;
+    sortDir = dir;
+    page = 1;
+    void load();
+  }
+  function setPageSize(n: number) {
+    if (pageSize === n) return;
+    pageSize = n;
+    page = 1;
+    void load();
+  }
+  function goPage(p: number) {
+    if (p < 1 || p > totalPages || p === page) return;
+    page = p;
+    void load();
+  }
+
+  // Open the curl builder for one call: fetch every render form, then let
+  // the modal pick format / token / edits before copying. Replaces the old
+  // one-shot copy that produced a multi-line command Postman truncated.
+  let curlForms = $state<WickCurlForms | null>(null);
+  async function openCurl(seq: number) {
+    curlBusy = seq;
+    try {
+      curlForms = await apiGetWickInteractionCurl(base, session, seq);
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Could not build the request for this call");
+    } finally {
+      curlBusy = null;
+    }
+  }
+
+  // Keyed by seq (stable across filter/sort/page) so an expanded row stays
+  // expanded when the list reorders — an index key would jump.
+  function toggle(seq: number) {
     const next = new Set(expanded);
-    if (next.has(index)) next.delete(index);
-    else next.add(index);
+    if (next.has(seq)) next.delete(seq);
+    else next.add(seq);
     expanded = next;
   }
 
   $effect(() => {
     if (session) void load();
+  });
+
+  // While a spawn is live, poll for new interactions (background refresh, no
+  // spinner) so a call that finishes mid-view appears without a manual
+  // Refresh. Stops as soon as the session is no longer live.
+  $effect(() => {
+    if (!session || !live) return;
+    const t = setInterval(() => void load(false), 3000);
+    return () => clearInterval(t);
   });
 
   function roleLabel(r: string): string {
@@ -50,23 +138,104 @@
       </p>
     </div>
     <button
-      onclick={load}
-      class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800"
-    >Refresh</button>
+      onclick={() => load()}
+      disabled={loading}
+      class="inline-flex items-center gap-1.5 rounded-lg border border-white-400 dark:border-navy-600 px-3 py-1 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-60"
+    >
+      {#if loading}
+        <svg viewBox="0 0 16 16" class="h-3 w-3 animate-spin" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 2a6 6 0 1 1-6 6" stroke-linecap="round"></path></svg>
+        Loading
+      {:else}
+        Refresh
+      {/if}
+    </button>
   </div>
 
-  {#if loading}
-    <div class="px-5 py-4 text-xs text-black-700 dark:text-black-600">Loading…</div>
+  <!-- Toolbar: search + sort + page size. Stays visible during search
+       reloads (a loading spinner shows in the search field instead). -->
+  {#if total > 0 || query || err}
+    <div class="flex flex-wrap items-center gap-2 border-b border-white-300 dark:border-navy-600 px-5 py-2">
+      <div class="relative min-w-0 flex-1">
+        {#if loading}
+          <svg viewBox="0 0 16 16" class="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin text-green-500" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 2a6 6 0 1 1-6 6" stroke-linecap="round"></path></svg>
+        {:else}
+          <svg viewBox="0 0 16 16" class="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-black-600 dark:text-black-700" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <circle cx="7" cy="7" r="4.5"></circle><path d="M11 11l3 3" stroke-linecap="round"></path>
+          </svg>
+        {/if}
+        <input
+          bind:value={query}
+          onkeydown={onSearchKey}
+          placeholder="Search tool calls, response, model… (Enter)"
+          class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 py-1 pl-7 pr-7 text-xs text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:outline-none"
+        />
+        {#if query}
+          <button
+            onclick={() => { query = ""; runSearch(); }}
+            aria-label="Clear search"
+            class="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-black-600 hover:text-black-800 dark:hover:text-black-400"
+          >
+            <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"></path></svg>
+          </button>
+        {/if}
+      </div>
+      <button
+        onclick={runSearch}
+        disabled={loading || query.trim() === applied}
+        class="rounded-lg bg-green-500 px-3 py-1 text-xs font-medium text-white-100 hover:bg-green-600 disabled:opacity-40"
+      >Search</button>
+      <div class="inline-flex overflow-hidden rounded-lg border border-white-400 dark:border-navy-600">
+        <button onclick={() => setSort("newest")} class={`px-2.5 py-1 text-xs font-medium ${sortDir === "newest" ? "bg-green-500 text-white-100" : "text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800"}`}>Newest</button>
+        <button onclick={() => setSort("oldest")} class={`px-2.5 py-1 text-xs font-medium ${sortDir === "oldest" ? "bg-green-500 text-white-100" : "text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800"}`}>Oldest</button>
+      </div>
+      <div class="inline-flex items-center gap-1">
+        <span class="text-[11px] text-black-700 dark:text-black-600">Per page</span>
+        <div class="inline-flex overflow-hidden rounded-lg border border-white-400 dark:border-navy-600">
+          {#each [5, 10] as n (n)}
+            <button onclick={() => setPageSize(n)} class={`px-2.5 py-1 text-xs font-medium ${pageSize === n ? "bg-green-500 text-white-100" : "text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800"}`}>{n}</button>
+          {/each}
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if loading && interactions.length === 0}
+    <!-- First load only — a search/page reload keeps the list visible with
+         the small spinner in the search field. -->
+    <div class="flex items-center gap-2 px-5 py-4 text-xs text-black-700 dark:text-black-600">
+      <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 2a6 6 0 1 1-6 6" stroke-linecap="round"></path></svg>
+      Loading…
+    </div>
   {:else if err}
     <div class="px-5 py-4 text-xs text-error-400">{err}</div>
-  {:else if interactions.length === 0}
+  {:else if total === 0 && !applied && !live}
     <div class="px-5 py-4 text-xs text-black-700 dark:text-black-600">No model interactions recorded for this session yet.</div>
   {:else}
     <ul class="divide-y divide-white-300 dark:divide-navy-600">
-      {#each interactions as it, i (i)}
+      {#if live}
+        <!-- A spawn is running: a model call may be in flight now. Records
+             land only when a call FINISHES, so show a synthetic in-progress
+             row at the top so the list doesn't look frozen mid-call. -->
+        <li class="flex items-center gap-3 px-5 py-2.5 bg-white-200/50 dark:bg-navy-800/50">
+          <span class="w-8 shrink-0"></span>
+          <span class="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[10px] font-medium bg-pos-100 text-pos-400">
+            <svg viewBox="0 0 16 16" class="h-3 w-3 animate-spin" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+              <path d="M8 2a6 6 0 1 1-6 6" stroke-linecap="round"></path>
+            </svg>
+            running
+          </span>
+          <span class="min-w-0 flex-1 truncate text-xs text-black-700 dark:text-black-600 italic">
+            model call in progress…
+          </span>
+        </li>
+      {/if}
+      {#if total === 0 && applied}
+        <li class="px-5 py-4 text-xs text-black-700 dark:text-black-600">No interactions match “{applied}”.</li>
+      {/if}
+      {#each pageRows as it (it.seq)}
         <li>
           <button
-            onclick={() => toggle(i)}
+            onclick={() => toggle(it.seq)}
             class="flex w-full items-center gap-3 px-5 py-2.5 text-left hover:bg-white-200 dark:hover:bg-navy-800"
           >
             <span class="font-mono text-[11px] text-black-700 dark:text-black-600 w-8 shrink-0">#{it.seq}</span>
@@ -83,13 +252,18 @@
             </span>
           </button>
 
-          {#if expanded.has(i)}
+          {#if expanded.has(it.seq)}
             <div class="border-t border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-5 py-3 space-y-3 text-xs">
-              <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-black-800 dark:text-black-600">
+              <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-black-800 dark:text-black-600">
                 <span>model: <span class="font-mono text-black-900 dark:text-white-100">{it.model}</span></span>
                 {#if it.tools && it.tools.length}
                   <span>tools: <span class="font-mono">{it.tools.join(", ")}</span></span>
                 {/if}
+                <button
+                  onclick={() => openCurl(it.seq)}
+                  disabled={curlBusy === it.seq}
+                  class="ml-auto rounded-lg border border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] font-medium text-black-800 dark:text-black-600 hover:bg-white-100 dark:hover:bg-navy-700 disabled:opacity-50"
+                >{curlBusy === it.seq ? "Building…" : "Copy request"}</button>
               </div>
 
               {#if it.system}
@@ -134,5 +308,27 @@
         </li>
       {/each}
     </ul>
+
+    {#if totalPages > 1}
+      <div class="flex items-center justify-between gap-3 border-t border-white-300 dark:border-navy-600 px-5 py-2">
+        <span class="text-[11px] text-black-700 dark:text-black-600">
+          {total} call{total === 1 ? "" : "s"} · page {page} of {totalPages}
+        </span>
+        <div class="inline-flex items-center gap-1">
+          <button
+            onclick={() => goPage(page - 1)}
+            disabled={page <= 1 || loading}
+            class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-40"
+          >Prev</button>
+          <button
+            onclick={() => goPage(page + 1)}
+            disabled={page >= totalPages || loading}
+            class="rounded-lg border border-white-400 dark:border-navy-600 px-2 py-1 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-40"
+          >Next</button>
+        </div>
+      </div>
+    {/if}
   {/if}
 </div>
+
+<CurlBuilderModal {base} forms={curlForms} onClose={() => (curlForms = null)} />
