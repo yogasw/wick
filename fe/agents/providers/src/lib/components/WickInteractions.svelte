@@ -17,6 +17,10 @@
   let total = $state(0);
   let loading = $state(true);
   let err = $state("");
+  // Live phase, straight from the server: is a model call in flight right now,
+  // and for how long. Authoritative — no guessing from the log.
+  let modelInFlight = $state(false);
+  let modelElapsedMs = $state(0);
   let expanded = $state<Set<number>>(new Set());
   let curlBusy = $state<number | null>(null);
 
@@ -30,6 +34,46 @@
   const totalPages = $derived(Math.max(1, Math.ceil(total / pageSize)));
   const pageRows = $derived(interactions); // server already sliced this page
 
+  // The newest record on page 1 (respecting sort), used to name the tool that's
+  // running when the server says NO model call is in flight.
+  const newestInteraction = $derived(
+    page !== 1 || interactions.length === 0
+      ? null
+      : sortDir === "newest"
+        ? interactions[0]
+        : interactions[interactions.length - 1],
+  );
+
+  // Human "0m 12s" from ms.
+  function fmtDur(ms: number): string {
+    const s = Math.floor(ms / 1000);
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+  }
+
+  // Live label — accurate now, not guessed. The server tells us whether a model
+  // call is in flight (HTTP out, no record yet); if so it's a MODEL call, with a
+  // running timer so a stuck call (elapsed keeps climbing) is obvious. Otherwise
+  // a turn is in progress but no model call is out → a TOOL is running (the
+  // newest record's tool_calls name it). The timer is what surfaces "stuck".
+  const liveLabel = $derived.by(() => {
+    if (modelInFlight) {
+      return `model call in progress… (${fmtDur(liveElapsedMs)})`;
+    }
+    const tc = newestInteraction?.tool_calls;
+    if (tc && tc.length) return `running tool: ${tc.join(", ")}…`;
+    return "working…";
+  });
+
+  // Local clock so the timer advances smoothly between 3s polls: seed from the
+  // server's elapsed on each load, then tick locally.
+  let liveElapsedMs = $state(0);
+  $effect(() => {
+    if (!live || !modelInFlight) return;
+    liveElapsedMs = modelElapsedMs;
+    const t = setInterval(() => (liveElapsedMs += 1000), 1000);
+    return () => clearInterval(t);
+  });
+
   async function load(showSpinner = true) {
     if (showSpinner) loading = true;
     err = "";
@@ -42,6 +86,8 @@
       });
       interactions = res.interactions;
       total = res.total;
+      modelInFlight = res.model_call_in_flight ?? false;
+      modelElapsedMs = res.model_call_elapsed_ms ?? 0;
       // Server clamps page to range; mirror it so the footer stays honest.
       if (res.page) page = res.page;
     } catch (e) {
@@ -225,7 +271,7 @@
             running
           </span>
           <span class="min-w-0 flex-1 truncate text-xs text-black-700 dark:text-black-600 italic">
-            model call in progress…
+            {liveLabel}
           </span>
         </li>
       {/if}

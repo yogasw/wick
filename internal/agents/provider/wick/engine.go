@@ -301,6 +301,11 @@ func (e *engine) generate(ctx context.Context) (*LLMResponse, error) {
 		}
 	}()
 
+	// Mark the model-call phase so the interactions UI can tell "waiting on the
+	// model" from "running a tool" — the log alone can't, since a record only
+	// lands when the call finishes. Cleared as soon as the call returns.
+	markModelCallStart(e.wickSessionID)
+
 	var out *LLMResponse
 	var gotErr error
 	for resp, err := range e.llm.GenerateContent(ctx, req, false) {
@@ -310,6 +315,7 @@ func (e *engine) generate(ctx context.Context) (*LLMResponse, error) {
 		}
 		out = resp
 	}
+	markModelCallDone(e.wickSessionID)
 	close(heartbeatDone)
 	e.recordInteraction("generate", cfg, req.Contents, out, time.Since(start).Milliseconds(), gotErr)
 	if gotErr != nil {

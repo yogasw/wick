@@ -1237,6 +1237,11 @@ export interface WickInteractionsPage {
   total: number;
   page: number;
   page_size: number;
+  // True while an outbound model call is in flight right now (HTTP out to the
+  // vendor, no record landed yet). Lets the UI label the live row as a model
+  // call vs a running tool, with how long it's been waiting.
+  model_call_in_flight?: boolean;
+  model_call_elapsed_ms?: number;
 }
 
 export interface WickInteractionsQuery {
@@ -1266,6 +1271,8 @@ export async function apiGetWickInteractions(
     total: r?.total ?? 0,
     page: r?.page ?? 1,
     page_size: r?.page_size ?? (opts.pageSize ?? 10),
+    model_call_in_flight: r?.model_call_in_flight ?? false,
+    model_call_elapsed_ms: r?.model_call_elapsed_ms ?? 0,
   };
 }
 

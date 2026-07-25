@@ -89,12 +89,21 @@ func getWickInteractions(c *tool.Ctx) {
 	for _, r := range rows[start:end] {
 		out = append(out, r.raw)
 	}
-	c.JSON(http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"interactions": out,
 		"total":        total,
 		"page":         page,
 		"page_size":    pageSize,
-	})
+	}
+	// Live phase: is an outbound model call in flight right now? The log can't
+	// show this (records land only when a call finishes), so the FE uses it to
+	// label the live row as "model call" vs "running tool" accurately, plus how
+	// long it's been waiting (to spot a stuck call).
+	if inFlight, dur := wick.ModelCallInFlight(session); inFlight {
+		resp["model_call_in_flight"] = true
+		resp["model_call_elapsed_ms"] = dur.Milliseconds()
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // bytesContainsFold reports whether the lowercased line contains needle
