@@ -134,13 +134,24 @@ type runInput struct {
 
 // ── Live session inputs ──────────────────────────────────────────────
 
-// sessionOpenInput opens a persistent browser. It takes no per-call args today
-// (browser/headless/proxy come from Config); the empty struct keeps the schema
-// explicit and lets fields be added later without a signature change.
-type sessionOpenInput struct{}
+// sessionOpenInput opens a persistent browser. Browser/headless/proxy come from
+// Config; the one optional arg is a named profile to reuse (login/cookies
+// persist across sessions under that name) — empty means an anonymous,
+// swept-on-close session, the original behavior.
+type sessionOpenInput struct {
+	Profile string `wick:"desc=Optional named profile to run this session against. A named profile's login/cookies persist across sessions and plugin restarts, so reopening the same name reuses the login without re-auth. Letters, digits, dash, underscore only. Leave empty for a throwaway anonymous session."`
+}
 
 // sessionListInput lists live sessions and their tabs. No arguments.
 type sessionListInput struct{}
+
+// profileListInput lists named persistent profiles. No arguments.
+type profileListInput struct{}
+
+// profileDeleteInput removes a named profile and its stored login/cookies.
+type profileDeleteInput struct {
+	Name string `wick:"required;desc=Named profile to delete (from profile_list). Refused while a live session is using it — close that session first."`
+}
 
 // sessionEndpointsInput returns a live session's raw CDP connection details
 // (cdp_url + per-tab WebSocket debugger URLs) so the manager's live-browser
@@ -308,6 +319,20 @@ func Module() connector.Module {
 					sessionCloseInput{},
 					sessionCloseOp, wickdocs.Docs{},
 				),
+				connector.Op(
+					"profile_list",
+					"List Profiles",
+					"List named persistent profiles (login/cookies that survive across sessions). Each entry has its name, created/last-used time, whether a live session is currently using it (live), and that session_id if so. Persistent — profiles with no running browser still appear. Open one with session_open(profile=<name>).",
+					profileListInput{},
+					profileListOp, wickdocs.Docs{},
+				),
+				connector.OpDestructive(
+					"profile_delete",
+					"Delete Profile",
+					"Delete a named profile and its stored login/cookies for good. Refused while a live session is using the profile — close that session first. The only way a named profile is removed.",
+					profileDeleteInput{},
+					profileDeleteOp, wickdocs.Docs{},
+				),
 			),
 			connector.Cat(
 				"Extensions",
@@ -436,6 +461,10 @@ func run(c *connector.Ctx) (any, error) {
 func sessionOpen(c *connector.Ctx) (any, error) { return openSession(c) }
 
 func sessionListOp(c *connector.Ctx) (any, error) { return sessionList(c) }
+
+func profileListOp(c *connector.Ctx) (any, error) { return profileList(c) }
+
+func profileDeleteOp(c *connector.Ctx) (any, error) { return profileDelete(c) }
 
 func sessionEndpointsOp(c *connector.Ctx) (any, error) {
 	sid := strings.TrimSpace(c.Input("session_id"))

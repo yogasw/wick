@@ -43,6 +43,12 @@ type sessionMeta struct {
 	Browser  string    `json:"browser"`
 	Created  time.Time `json:"created"`
 	UserData string    `json:"user_data_dir"`
+	// Profile is the caller-supplied named profile this session runs against,
+	// empty for an anonymous session. A named profile's UserData dir is
+	// profile-<name> and is NOT swept on close — its login/cookies persist so a
+	// later session_open(profile=<name>) reuses it. Anonymous sessions use
+	// profile-<session-id> and are cleaned up as before.
+	Profile string `json:"profile,omitempty"`
 }
 
 // liveConn is a per-call reconnection to a live session: a fresh playwright Run
@@ -162,7 +168,23 @@ func openSession(c *connector.Ctx) (any, error) {
 	}
 
 	id := newSessionID(c)
-	udd := filepath.Join(dir, "profile-"+id)
+
+	// Resolve the profile dir. A named profile (validated) gives a stable
+	// profile-<name> dir that persists across sessions so login carries over; an
+	// empty profile falls back to the per-session profile-<id> dir (anonymous,
+	// swept on close — the original behavior). A named profile already driven by
+	// a live session is rejected: a Chromium --user-data-dir is single-owner, so
+	// two live browsers on the same dir corrupt it.
+	profile := strings.TrimSpace(c.Input("profile"))
+	if profile != "" {
+		if !validProfileName(profile) {
+			return nil, fmt.Errorf("invalid profile name %q: use letters, digits, dash, underscore (no path separators)", profile)
+		}
+		if owner, ok := profileInUse(c, profile); ok {
+			return nil, fmt.Errorf("profile %q is already in use by live session %s: close it first (session_close) before reopening the profile", profile, owner)
+		}
+	}
+	udd := profileDir(dir, profile, id)
 
 	args := []string{
 		"--remote-debugging-port=0", // dynamic port — dodges Windows port-exclusion ranges
@@ -206,6 +228,7 @@ func openSession(c *connector.Ctx) (any, error) {
 		Browser:  c.Cfg("browser"),
 		Created:  sessionNow(c),
 		UserData: udd,
+		Profile:  profile,
 	}
 	if err := writeMeta(dir, meta); err != nil {
 		_ = cmd.Process.Kill()
@@ -217,6 +240,7 @@ func openSession(c *connector.Ctx) (any, error) {
 		"session_id": id,
 		"pid":        meta.PID,
 		"cdp_url":    cdpURL,
+		"profile":    profile,
 		"note":       "Live browser started. Pass this session_id to run/screenshot/etc to reuse it. Close it with session_close when done.",
 	}, nil
 }
@@ -307,6 +331,7 @@ func sessionList(c *connector.Ctx) (any, error) {
 			"pid":        m.PID,
 			"browser":    m.Browser,
 			"created":    m.Created,
+			"profile":    m.Profile,
 			"tabs":       tabs,
 		})
 	}
@@ -502,9 +527,15 @@ func readMeta(dir, id string) (sessionMeta, error) {
 	return m, nil
 }
 
-// removeSession deletes the metadata file and the browser's profile dir.
+// removeSession deletes the metadata file and, for anonymous sessions, the
+// browser's profile dir. A NAMED profile's dir is preserved so its login/cookies
+// survive to the next session_open(profile=<name>) — only profile_delete removes
+// it. Anonymous sessions (empty Profile) keep the original sweep behavior.
 func removeSession(dir string, m sessionMeta) {
 	_ = os.Remove(metaPath(dir, m.ID))
+	if m.Profile != "" {
+		return // named profile: keep the user-data dir so login persists
+	}
 	if m.UserData != "" {
 		_ = os.RemoveAll(m.UserData)
 	}
