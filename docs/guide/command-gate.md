@@ -290,6 +290,12 @@ The shared `spec.json` carries two things:
 - `rules` — glob patterns evaluated by the gate without a socket round-trip. Edit from `/admin/advanced` under the `agents` group; the daemon rewrites `spec.json` on save and on every Build invocation.
 - `auto_approved` — exact matches added by **Always allow** in the modal. Same hot-path: gate reads, matches, emits allow — no daemon round-trip.
 
+### Allowing shell metacharacters
+
+By default the gate blocks shell metacharacters (`;`, `|`, `&`, `` ` ``, `<`, `>`, `$`, newline) inside an otherwise-whitelisted command — a pattern like `git *` could otherwise smuggle in a second, unreviewed command via `git status && rm -rf /`.
+
+The **`Allow shell metacharacters`** toggle (`/admin/advanced`, `agents` group) turns this off: chaining and redirects are permitted as long as the base command still matches a whitelist pattern. It does not touch the whitelist itself — only whether metacharacters are allowed inside an already-matched command. Leave it off unless you trust every whitelist pattern to be safe under chaining.
+
 ## Diagnostics
 
 ```bash
