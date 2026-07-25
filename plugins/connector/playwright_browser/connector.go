@@ -130,6 +130,13 @@ type runInput struct {
 	Actions   string `wick:"textarea;required;desc=JSON array of action objects run in order in one browser session. Each has an \"action\" key. NAVIGATION: goto{url}, go_back, go_forward, reload, wait_for_load_state{state?}, wait_for_url{url}. INTERACTION: click{selector}, dblclick{selector}, hover{selector}, tap{selector}, focus{selector}, fill{selector,value}, type{selector,value}, press{key,selector?}, check{selector}, uncheck{selector}, select_option{selector,value|values}, set_input_files{selector,files}, drag_and_drop{selector,target}, scroll{delta_x?,delta_y?}. WAIT: wait_for{selector}, wait{ms}. READ: screenshot{full_page?,selector?}, content{selector?}, eval{script}, get_attribute{selector,attr}, text_content{selector}, inner_html{selector}, is_visible{selector}, is_checked{selector}, count{selector}, title, url. Returns one result per step; stops at the first failure. Example: [{\"action\":\"goto\",\"url\":\"https://abc.com\"},{\"action\":\"fill\",\"selector\":\"#q\",\"value\":\"hi\"},{\"action\":\"click\",\"selector\":\"button[type=submit]\"},{\"action\":\"wait_for\",\"selector\":\".result\"},{\"action\":\"screenshot\",\"full_page\":true}]"`
 	SessionID string `wick:"desc=Optional live session id (from session_open). When set, actions run in that persistent browser and the browser is NOT closed afterwards. Leave empty for a throwaway browser launched and closed for this call."`
 	Tab       int    `wick:"desc=Which tab to act on when session_id is set (0-based, from session_list). Default 0 (first tab). Ignored without session_id."`
+	// Network-capture opt-in. Decided up front (before the actions run) so the
+	// recorder is attached before any navigation and misses nothing.
+	RecordRequest       bool   `wick:"bool;desc=Record every HTTP request the browser makes while this script runs, so they can be inspected or replayed over plain HTTP later. Saved to disk; read back with get_request."`
+	RecordName          string `wick:"desc=Name for the saved capture file (letters/digits/dash/underscore). Default 'captured'. When a profile is set, the capture is stored under that profile instead."`
+	RecordURLPattern    string `wick:"desc=Optional substring or regex the request URL must match to be recorded. Leave empty to record all XHR/fetch calls (static assets are skipped)."`
+	RecordIncludeAssets bool   `wick:"bool;desc=Also record static assets (images, CSS, fonts, JS). Off by default — those are usually noise for replay."`
+	Profile             string `wick:"desc=Optional named profile to store the capture under (profiles/<name>/captured.json). Only used with record_request."`
 }
 
 // ── Live session inputs ──────────────────────────────────────────────
@@ -151,6 +158,13 @@ type profileListInput struct{}
 // profileDeleteInput removes a named profile and its stored login/cookies.
 type profileDeleteInput struct {
 	Name string `wick:"required;desc=Named profile to delete (from profile_list). Refused while a live session is using it — close that session first."`
+}
+
+// getRequestInput reads back a previously recorded capture (from a run with
+// record_request=true). Give the profile OR the capture name it was saved under.
+type getRequestInput struct {
+	Profile string `wick:"desc=Named profile the capture was stored under (profiles/<name>/captured.json). Leave empty to read a non-profile capture by name."`
+	Name    string `wick:"desc=Capture name (default 'captured'). Used when no profile is set: reads captures/<name>.json."`
 }
 
 // sessionEndpointsInput returns a live session's raw CDP connection details
@@ -333,6 +347,13 @@ func Module() connector.Module {
 					profileDeleteInput{},
 					profileDeleteOp, wickdocs.Docs{},
 				),
+				connector.Op(
+					"get_request",
+					"Get Recorded Requests",
+					"Read back the HTTP requests recorded by an earlier run with record_request=true. Returns each request's method, url, headers, cookies, body, and response status — ready to replay over plain HTTP. Give the profile it was stored under, or the capture name.",
+					getRequestInput{},
+					getRequestOp, wickdocs.Docs{},
+				),
 			),
 			connector.Cat(
 				"Extensions",
@@ -465,6 +486,18 @@ func sessionListOp(c *connector.Ctx) (any, error) { return sessionList(c) }
 func profileListOp(c *connector.Ctx) (any, error) { return profileList(c) }
 
 func profileDeleteOp(c *connector.Ctx) (any, error) { return profileDelete(c) }
+
+func getRequestOp(c *connector.Ctx) (any, error) {
+	path, err := captureSavePath(c, c.Input("profile"), c.Input("name"))
+	if err != nil {
+		return nil, err
+	}
+	reqs, err := loadCapture(path)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"requests": reqs, "count": len(reqs)}, nil
+}
 
 func sessionEndpointsOp(c *connector.Ctx) (any, error) {
 	sid := strings.TrimSpace(c.Input("session_id"))

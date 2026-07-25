@@ -111,6 +111,7 @@ type session struct {
 	actMS    float64
 	navMS    float64
 	chromium bool
+	cap      *capture // non-nil when record_request is on; collects requests
 }
 
 // withSession launches an isolated browser per Config, runs fn against it, and
@@ -153,7 +154,51 @@ func withSession(c *connector.Ctx, fn func(*session) (any, error)) (any, error) 
 		navMS:    navTimeout(c),
 		chromium: strings.EqualFold(strings.TrimSpace(c.Cfg("browser")), "") || strings.EqualFold(c.Cfg("browser"), defBrowser),
 	}
-	return fn(s)
+
+	// record_request opt-in: attach a context-level request recorder BEFORE any
+	// navigation so nothing is missed. Covers every tab in this context.
+	if boolInput(c, "record_request") {
+		s.cap = newCapture(c.Input("record_url_pattern"), boolInput(c, "record_include_assets"))
+		s.cap.attach(bctx)
+	}
+
+	res, err := fn(s)
+
+	// If we recorded, persist the requests before the context is torn down. Save
+	// errors are surfaced as a note, not a hard failure — the op's own result
+	// (screenshot, etc.) still stands.
+	if s.cap != nil {
+		if saveErr := s.persistCapture(); saveErr != nil {
+			// Attach to a map result when possible; otherwise ignore silently.
+			if m, ok := res.(map[string]any); ok {
+				m["capture_error"] = saveErr.Error()
+			}
+		}
+	}
+	return res, err
+}
+
+// persistCapture writes the recorded requests to the resolved save path and, on
+// success, annotates nothing (callers read them back via get_request). The path
+// is profiles/<name>/captured.json when a profile is set, else captures/<name>.json.
+func (s *session) persistCapture() error {
+	if s.cap == nil {
+		return nil
+	}
+	path, err := captureSavePath(s.c, s.c.Input("profile"), s.c.Input("record_name"))
+	if err != nil {
+		return err
+	}
+	return saveCapture(path, s.cap.snapshot())
+}
+
+// boolInput parses a connector input as a boolean ("true"/"1"/"yes" → true).
+func boolInput(c *connector.Ctx, key string) bool {
+	switch strings.ToLower(strings.TrimSpace(c.Input(key))) {
+	case "true", "1", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // newPage opens a page in the session context, enforcing the tab cap and
