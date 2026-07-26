@@ -183,9 +183,41 @@
     return JSON.stringify(out);
   }
 
-  let simpleFields = $derived(data ? data.ConfigFields.filter(isSimpleField) : []);
-  let valueListFields = $derived(data ? data.ConfigFields.filter(isValueListEditor) : []);
+  // fieldVisible honors the `models` ⇄ `model_select` dependency: the model
+  // list only shows when model selection is enabled (mirrors the backend
+  // config-tag `visible_when=model_select:true`). The toggle's live value
+  // comes from fieldValues so it reacts without a reload.
+  function fieldVisible(f: ConfigFieldDTO): boolean {
+    if (f.Key === "models") return fieldValues["model_select"] === "true";
+    return true;
+  }
+
+  // model_select + models render together in their own "Model selection"
+  // card, so exclude them from the generic Configuration / value-list
+  // sections (else they'd appear twice).
+  const MODEL_KEYS = new Set(["model_select", "models"]);
+  const isModelField = (f: ConfigFieldDTO) => MODEL_KEYS.has(f.Key);
+
+  let simpleFields = $derived(data ? data.ConfigFields.filter((f) => isSimpleField(f) && !isModelField(f)) : []);
+  let valueListFields = $derived(data ? data.ConfigFields.filter((f) => isValueListEditor(f) && !isModelField(f) && fieldVisible(f)) : []);
   let keyValueFields = $derived(data ? data.ConfigFields.filter(isKeyValueEditor) : []);
+
+  // The two model-picker fields, for the dedicated card.
+  const modelSelectField = $derived(data?.ConfigFields.find((f) => f.Key === "model_select"));
+  const modelsField = $derived(data?.ConfigFields.find((f) => f.Key === "models"));
+  // Per-type seed models (from the backend), shown as the effective default
+  // and offered as a one-click starting point when the list is empty.
+  const defaultModels = $derived(data?.DefaultModels ?? []);
+
+  // Load the catalog defaults into the editable models list so the operator
+  // can tweak from a real starting point instead of typing every name. This
+  // REPLACES the current rows (not append) with the id + desc columns.
+  function loadDefaultModels() {
+    if (!modelsField || defaultModels.length === 0) return;
+    const rows = defaultModels.map((m) => ({ id: m.id, desc: m.desc }));
+    setRows(modelsField, rows);
+    saveEditor(modelsField);
+  }
 
   // AI Router local state, seeded from the loaded detail (data.AIRouter) in load().
   const airouterSupported = $derived(data?.AIRouter.Supported ?? (type === "claude" || type === "codex"));
@@ -304,10 +336,17 @@
     }
   }
 
-  // catalogFor maps an editor field to its picker entries: the `env`
-  // field uses the env catalog, anything else (extra_args) uses args.
+  // catalogFor maps an editor field to its picker entries. Only the two
+  // catalog-backed fields get a picker: `env` (env-var catalog) and
+  // `extra_args` (CLI-flag catalog). Every other kvlist field (e.g.
+  // `models`, which is a free list of model names, NOT CLI flags) gets no
+  // catalog — the "+ Add from catalog" button is hidden and the user adds
+  // rows manually. Without this guard, `models` wrongly showed the CLI-flag
+  // catalog (--model, --sandbox, …).
   function catalogFor(f: ConfigFieldDTO): CatalogEntry[] {
-    return f.Key === "env" ? catalog.env : catalog.args;
+    if (f.Key === "env") return catalog.env;
+    if (f.Key === "extra_args") return catalog.args;
+    return [];
   }
 
   // envEntryByKey maps an env var name to its catalog entry, so the
@@ -727,6 +766,19 @@
                     bind:value={fieldValues[f.Key]}
                     class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2.5 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
                   />
+                {:else if f.Type === "bool" || f.Type === "checkbox"}
+                  <!-- Toggle switch for boolean config (e.g. model_select).
+                       Value is stored as the string "true"/"false". -->
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label={f.Key}
+                    aria-checked={fieldValues[f.Key] === "true"}
+                    onclick={() => (fieldValues[f.Key] = fieldValues[f.Key] === "true" ? "false" : "true")}
+                    class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors {fieldValues[f.Key] === 'true' ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
+                  >
+                    <span class="inline-block h-5 w-5 transform rounded-full bg-white-100 shadow transition-transform {fieldValues[f.Key] === 'true' ? 'translate-x-5' : 'translate-x-0.5'}"></span>
+                  </button>
                 {:else}
                   <input
                     type="text"
@@ -747,6 +799,70 @@
             disabled={saving}
             class="rounded-lg bg-green-600 hover:bg-green-700 px-4 py-1.5 text-xs font-medium text-white-100 disabled:opacity-50"
           >{saving ? "Saving…" : "Save All"}</button>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Model selection — toggle + curated model list in one card. Only for
+         CLI providers (the fields are absent for wick). -->
+    {#if modelSelectField}
+      <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
+        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+          <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Model selection</h3>
+          <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+            Let sessions pick a model for this instance. When on, the composer shows a model picker and passes the choice to the CLI via <code class="font-mono">--model</code>.
+          </p>
+        </div>
+        <div class="p-5 space-y-4">
+          <label class="flex items-center gap-3">
+            <button
+              type="button"
+              role="switch"
+              aria-label="Allow model selection"
+              aria-checked={fieldValues["model_select"] === "true"}
+              onclick={() => { fieldValues["model_select"] = fieldValues["model_select"] === "true" ? "false" : "true"; void apiSaveConfigKey(base, type, name, "model_select", fieldValues["model_select"]).then(() => load(true)).catch(() => {}); }}
+              class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors {fieldValues['model_select'] === 'true' ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
+            >
+              <span class="inline-block h-5 w-5 transform rounded-full bg-white-100 shadow transition-transform {fieldValues['model_select'] === 'true' ? 'translate-x-5' : 'translate-x-0.5'}"></span>
+            </button>
+            <span class="text-sm text-black-900 dark:text-white-100">Allow model selection</span>
+          </label>
+
+          {#if fieldValues["model_select"] === "true" && modelsField}
+            {@const f = modelsField}
+            {@const empty = (editorRows[f.Key] ?? []).length === 0}
+            <div>
+              <div class="mb-1.5 flex items-start justify-between gap-2 flex-wrap">
+                <div class="min-w-0">
+                  <span class="font-mono text-xs font-semibold text-black-900 dark:text-white-100">models</span>
+                  {#if f.Description}
+                    <p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600 leading-relaxed whitespace-pre-line">{f.Description}</p>
+                  {/if}
+                </div>
+                {#if defaultModels.length > 0}
+                  <button
+                    type="button"
+                    onclick={loadDefaultModels}
+                    class="shrink-0 rounded-lg border border-white-400 dark:border-navy-600 px-2.5 py-1 text-[11px] font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800"
+                  >Load defaults</button>
+                {/if}
+              </div>
+              {#if empty && defaultModels.length > 0}
+                <p class="mb-2 text-[11px] text-black-700 dark:text-black-600">
+                  Currently using built-in defaults: <span class="font-mono text-black-900 dark:text-white-100">{defaultModels.map((m) => m.id).join(", ")}</span>. Add your own below (or Load defaults to edit them).
+                </p>
+              {/if}
+              <KvList
+                columns={kvCols(f)}
+                rows={editorRows[f.Key] ?? []}
+                onChange={(rows: Record<string, string>[]) => setRows(f, rows)}
+                onCommit={() => saveEditor(f)}
+                placeholders={{ id: "model id (e.g. opus)", desc: "short description" }}
+                addLabel="+ Add model"
+                emptyText="No models added — using the built-in defaults above."
+              />
+            </div>
+          {/if}
         </div>
       </div>
     {/if}

@@ -105,3 +105,33 @@ func TestMaybeCompact_CutAlignsToUserBoundary(t *testing.T) {
 		t.Errorf("kept tail should start on a user turn, got role %q", eng.history[1].Role)
 	}
 }
+
+// TestIsCompactCommand covers the /compact detection, including the pool's
+// buffered "[system] …" prepend that caused /compact to be sent to the
+// model as a prompt instead of running compaction.
+func TestIsCompactCommand(t *testing.T) {
+	yes := []string{
+		"/compact",
+		"  /compact  ",
+		"[system] Your session connector(s) were auto-deleted … re-create them.\n/compact",
+		"[system] a notice\n\n/compact",
+	}
+	for _, s := range yes {
+		if !isCompactCommand(s) {
+			t.Errorf("should be /compact command: %q", s)
+		}
+	}
+	no := []string{
+		"",
+		"compact the logs please",
+		"run /compact later",                      // /compact not on its own last line
+		"please explain what /compact does",       // ends elsewhere
+		"here is my note\n/compact",               // non-[system] prefix → real user msg, don't hijack
+		"/compact now do the thing",               // trailing text
+	}
+	for _, s := range no {
+		if isCompactCommand(s) {
+			t.Errorf("should NOT be /compact command: %q", s)
+		}
+	}
+}

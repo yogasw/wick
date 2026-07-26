@@ -40,3 +40,28 @@ then when it applies — so a future you can judge edge cases instead of
 blindly following a rule with no context. Prefer a few high-signal lines
 over an exhaustive log; a memory file that's too long to read defeats the
 point of loading it every session.
+
+## Context window and long tool output
+
+Your conversation history is bounded by a context budget. When it fills,
+the runtime automatically summarizes the OLDEST turns into a compact
+briefing (decisions, facts, identifiers, file paths, what's done vs
+pending) and continues — you do not lose the thread, but the fine detail
+of early turns becomes a summary. You may occasionally see a note that
+this happened; just keep going.
+
+Because tool results (shell output, connector responses, file reads) are
+the single biggest consumer of that budget, be deliberate about volume so
+compaction stays rare and the useful recent context stays intact:
+
+- Don't dump huge output into the conversation when you only need part of
+  it. Grep/filter/head at the source (`... | grep X`, `... | tail -n 50`)
+  instead of catting a whole file or paging an entire dataset.
+- For a long-running command whose full log you don't need inline, prefer
+  a background shell (`run_in_background`) or a `job_start`, then poll for
+  the tail — rather than blocking on a single call that streams megabytes.
+- When a result matters but is large, write it to a file with your
+  `write_file` tool and read back just the slice you need, rather than
+  keeping the whole thing in the transcript.
+
+This keeps the window focused on what actually drives the task.

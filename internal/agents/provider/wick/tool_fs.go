@@ -30,30 +30,71 @@ import (
 const fsMaxReadBytes = 200_000
 
 // fsResolvePath resolves a (possibly relative) path against the session
-// workspace and rejects anything that would escape it — the equivalent
-// of the shell tool's scope restriction, applied natively instead of via
-// gate.CommandRule.Scope.
+// workspace and rejects anything that would escape it. Write path — the
+// workspace is the only allowed root.
 func fsResolvePath(workspace, path string) (string, error) {
+	return fsResolvePathIn(path, workspace, workspace)
+}
+
+// fsResolvePathReadable resolves a path allowed to live in the workspace
+// OR the session's uploads dir. Files the user attaches land in
+// <SessionDir>/uploads (outside the workspace), and the pool tells the
+// agent to read them by absolute path via the "[Attached files]" block —
+// so read_file MUST accept that root, or the agent is told to read a path
+// its own tool rejects ("escapes the session workspace"). Read-only: the
+// uploads dir is never a write target (see fsResolvePath).
+func fsResolvePathReadable(workspace, uploadsDir, path string) (string, error) {
+	return fsResolvePathIn(path, workspace, workspace, uploadsDir)
+}
+
+// fsResolvePathIn resolves path (relative → against relBase) and confirms
+// the cleaned result stays within at least one of the allowed roots. Empty
+// roots are skipped; when no non-empty root is configured (tests /
+// headless) the path is returned as-is. A relative path resolves against
+// relBase (the workspace).
+func fsResolvePathIn(path, relBase string, roots ...string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	if workspace == "" {
-		// No workspace configured (tests / headless) — allow the path
-		// as-is; callers that care about scoping set Workspace.
+	// Collect the non-empty roots we'll check against.
+	var clean []string
+	for _, r := range roots {
+		if strings.TrimSpace(r) != "" {
+			clean = append(clean, filepath.Clean(r))
+		}
+	}
+	if len(clean) == 0 {
+		// No scoping configured — allow as-is (callers that care set roots).
 		return path, nil
 	}
+
 	var full string
 	if filepath.IsAbs(path) {
 		full = filepath.Clean(path)
 	} else {
-		full = filepath.Clean(filepath.Join(workspace, path))
+		base := relBase
+		if strings.TrimSpace(base) == "" {
+			base = clean[0]
+		}
+		full = filepath.Clean(filepath.Join(base, path))
 	}
-	ws := filepath.Clean(workspace)
-	if full != ws && !strings.HasPrefix(full, ws+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q escapes the session workspace", path)
+	for _, root := range clean {
+		if full == root || strings.HasPrefix(full, root+string(filepath.Separator)) {
+			return full, nil
+		}
 	}
-	return full, nil
+	return "", fmt.Errorf("path %q escapes the session workspace", path)
+}
+
+// sessionUploadsDir is where user-attached files live for this spawn:
+// <SessionDir>/uploads. Empty when SessionDir isn't wired (tests). Must
+// match uploadsDirName in internal/tools/agents/uploads.go.
+func sessionUploadsDir(tc toolContext) string {
+	if tc.SessionDir == "" {
+		return ""
+	}
+	return filepath.Join(tc.SessionDir, "uploads")
 }
 
 func readFileTool(tc toolContext) toolDef {
@@ -78,7 +119,7 @@ func readFileTool(tc toolContext) toolDef {
 		},
 		handler: func(ctx context.Context, args map[string]any) (string, bool) {
 			p, _ := args["path"].(string)
-			full, err := fsResolvePath(tc.Workspace, p)
+			full, err := fsResolvePathReadable(tc.Workspace, sessionUploadsDir(tc), p)
 			if err != nil {
 				return "error: " + err.Error(), true
 			}

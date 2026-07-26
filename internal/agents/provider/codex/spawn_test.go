@@ -1,6 +1,8 @@
 package codex
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -168,6 +170,14 @@ func TestSpawnerArgv(t *testing.T) {
 		},
 	}
 
+	// Pin home to an empty temp dir so ~/.codex/skills doesn't exist and
+	// the skill --add-dir stays out of these exact-argv assertions
+	// regardless of the dev/CI machine's real home. The --add-dir path is
+	// covered separately by TestSpawnerArgv_SkillsDir.
+	restore := homeDir
+	homeDir = func() (string, error) { return t.TempDir(), nil }
+	t.Cleanup(func() { homeDir = restore })
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.spawner.Binary = "codex-nonexistent-for-test"
@@ -194,5 +204,41 @@ func TestSpawnerArgv(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSpawnerArgv_SkillsDir verifies codex is granted --add-dir
+// ~/.codex/skills when that dir exists, so a sandboxed agent can read
+// skill bundle files (the claude-vs-codex gap the retest surfaced).
+func TestSpawnerArgv_SkillsDir(t *testing.T) {
+	home := t.TempDir()
+	skills := filepath.Join(home, ".codex", "skills")
+	if err := os.MkdirAll(skills, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	restore := homeDir
+	homeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { homeDir = restore })
+
+	sp := Spawner{Binary: "codex-nonexistent-for-test"}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p, err := sp.Spawn(ctx, provider.SpawnOptions{Workspace: t.TempDir()})
+	if err == nil {
+		_ = p.Kill()
+	}
+	if p == nil {
+		t.Skip("could not inspect argv — Spawn failed before exec.Cmd was wired")
+	}
+
+	got := p.Argv()
+	var sawAddDir bool
+	for i, a := range got {
+		if a == "--add-dir" && i+1 < len(got) && got[i+1] == skills {
+			sawAddDir = true
+		}
+	}
+	if !sawAddDir {
+		t.Errorf("argv missing --add-dir %s\n  got: %v", skills, got)
 	}
 }

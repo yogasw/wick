@@ -3,9 +3,17 @@ export interface PinnedSession {
   label: string;
 }
 
+export interface ProviderModelItem {
+  id: string;
+  label: string;
+  default: boolean;
+  desc?: string;
+}
+
 export interface ProviderListItem {
   type: string;
   name: string;
+  models?: ProviderModelItem[];
 }
 
 export interface ProjectSettingsData {

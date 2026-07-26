@@ -4,9 +4,9 @@ outline: deep
 
 # AI Agents
 
-Wick **Agents** spawn AI CLIs (Claude, Codex, Gemini) as long-lived subprocesses, route messages from **Slack threads, Telegram chats, or the web UI** into them, and stream every event back into the dashboard.
+Wick **Agents** spawn AI CLIs (Claude, Codex, Gemini) as long-lived subprocesses — or, when no CLI is installed, run the built-in **wick** provider in-process against OpenAI, OpenRouter, Anthropic, Gemini, or any OpenAI-compatible endpoint. Either way, wick routes messages from **Slack threads, Telegram chats, or the web UI** into them and streams every event back into the dashboard.
 
-The point isn't to wrap a model — it's to let the AI keep its native CLI runtime (its MCP servers, skills, memory, settings) while wick handles session storage, command approval, multi-instance config, and concurrency.
+The point isn't to wrap a model — it's to let the AI keep its native CLI runtime (its MCP servers, skills, memory, settings) while wick handles session storage, command approval, multi-instance config, and concurrency. See [Providers ▶ Built-in wick provider](./agents/providers#built-in-wick-provider) for the CLI-free path.
 
 ::: tip Why this is interesting
 Most "AI agent" tools either lock you into their own runtime, or expose a chat-only UI. Wick goes the other way: bring your own Claude / Codex / Gemini install, and wick gives it a place to run safely with **multi-channel routing (Slack + Telegram + UI)**, multi-session concurrency, real projects on disk, and a per-command [approval gate](./command-gate). One agent — many ways to talk to it.
@@ -230,7 +230,11 @@ The skill scan behind this is cached server-side for 30s (stale-while-revalidate
 
 ### Provider icons
 
-The provider chip and its drill-in list show each provider's brand mark — Claude, Gemini, Codex — instead of a generic name, resolved from the leading `type` segment of the `type/name` value. The Codex mark is monochrome, so it ships as a light/dark SVG pair swapped by the app's `.dark` class rather than the OS-level `prefers-color-scheme` a plain `<img>` would otherwise follow. Any other provider type falls back to a generic icon.
+The provider chip and its drill-in list show each provider's brand mark — Claude, Gemini, Codex, and wick's own icon — instead of a generic name, resolved from the leading `type` segment of the `type/name` value. The Codex mark is monochrome, so it ships as a light/dark SVG pair swapped by the app's `.dark` class rather than the OS-level `prefers-color-scheme` a plain `<img>` would otherwise follow. Any other provider type falls back to a generic icon.
+
+### Provider picker levels
+
+The provider drill-in nests up to three levels — **type ▸ instance ▸ model** — collapsing any level that has only one choice. A single-instance, single-model setup (the common case) picks a provider in one tap; multiple instances of a type (e.g. two `claude` PATs) add an instance level; an instance with more than one enabled model (a `claude`/`codex`/`gemini` instance with [model selection](./agents/providers#cli-model-picker) on, or a `wick` instance with several models) adds a model level, with each model's description shown under its name. Picking a model pins it for that session; the chip reflects the pinned model until changed.
 
 ### Screenshot + image editor
 

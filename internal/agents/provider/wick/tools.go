@@ -28,6 +28,14 @@ type toolContext struct {
 	SessionDir string
 	SessionID  string
 	Config     *WickConfigResolved
+	// Bg holds this spawn's background shells (run_in_background). One
+	// registry per spawn, reaped on teardown. nil when shell is disabled
+	// or the tool set is built without background support (tests).
+	Bg *bgRegistry
+	// Jobs holds this spawn's async jobs (job_start + completion inject).
+	// One manager per spawn, cancelled on teardown. nil = job tools report
+	// "not available" (tests / unwired).
+	Jobs *jobManager
 }
 
 // WickConfigResolved is the effective instance config after defaults,
@@ -56,7 +64,15 @@ type WickConfigResolved struct {
 func buildTools(tc toolContext) []toolDef {
 	var tools []toolDef
 	if tc.Config == nil || tc.Config.ShellTool {
-		tools = append(tools, shellTool(tc))
+		// shell_output / shell_kill share tc.Bg (the per-spawn background
+		// registry, set by the spawner). When Bg is nil (tests / disabled)
+		// the bg handlers report "not available" rather than panic, so it's
+		// safe to register them unconditionally alongside shell.
+		tools = append(tools, shellTool(tc), shellOutputTool(tc), shellKillTool(tc))
+		// Async jobs run off-turn and inject a completion turn. The only
+		// runner today is shell, so gate the job tools on shell too. tc.Jobs
+		// nil (tests / unwired) → handlers report "not available".
+		tools = append(tools, jobStartTool(tc), jobStatusTool(tc), jobLogTool(tc), jobCancelTool(tc))
 	}
 	if tc.Config == nil || tc.Config.FsTools {
 		tools = append(tools, readFileTool(tc), writeFileTool(tc), editFileTool(tc))

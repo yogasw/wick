@@ -83,6 +83,9 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	}
 	args = append(args, s.ExtraArgs...)
 	args = append(args, opt.ExtraArgs...)
+	// Pinned model (per-instance model picker) → --model. No-op when
+	// unpinned, AI-router, or --model already given.
+	args = append(args, provider.ModelArgs(opt, args)...)
 	if opt.ResumeID != "" {
 		args = append(args, "--resume", opt.ResumeID)
 	}

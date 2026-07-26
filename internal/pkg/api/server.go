@@ -69,6 +69,7 @@ import (
 	"github.com/yogasw/wick/internal/jobrunner"
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
+	connectorrunsreaper "github.com/yogasw/wick/internal/jobs/connector-runs-reaper"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
 	"github.com/yogasw/wick/internal/login"
@@ -193,6 +194,7 @@ func NewServer() *Server {
 	// loops below. Mirrors the call in internal/pkg/worker.NewServer
 	// so both processes share the same registry view.
 	connectorrunspurge.Register(db)
+	connectorrunsreaper.Register(db)
 	providerstoragesync.Register(syncMgr)
 	providerstorageretention.Register(syncMgr)
 
@@ -1076,6 +1078,13 @@ func NewServer() *Server {
 			return sess.Meta.UserID, true
 		}
 		return "", false
+	})
+
+	// Surface connector run start/finish to the conversation SSE stream so a
+	// running tool call can show a per-run Cancel button (the FE needs the run
+	// id, which only exists inside connectors.Service).
+	connectorsSvc.SetRunObserver(func(ev connectors.RunEvent) {
+		agentsBcast.PublishConnectorRun(ev.SessionID, ev.RunID, ev.ConnectorID, ev.OperationKey, string(ev.Status), ev.Running)
 	})
 
 	// Hot-reload poller: built here where pluginMgr + connectorsSvc are

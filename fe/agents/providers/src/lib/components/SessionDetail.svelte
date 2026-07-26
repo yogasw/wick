@@ -67,7 +67,7 @@
       <!-- The built-in wick provider runs in-process: there's no CLI argv
            to "reproduce". Show the model-interaction log instead — the
            actual request/response per call, for debugging the answers. -->
-      <WickInteractions {base} session={id} />
+      <WickInteractions {base} session={id} live={data.Spawns.some((s) => !s.ExitReason)} />
     {/if}
 
     {#if data.Spawns.length === 0}

@@ -259,12 +259,12 @@ func browserType(pw *playwright.Playwright, cfg string) (playwright.BrowserType,
 		return pw.Firefox, nil
 	case "webkit":
 		return pw.WebKit, nil
-	case cloakEngine:
-		// CloakBrowser is patched Chromium — drive it via the Chromium
-		// BrowserType with a custom ExecutablePath (set in launchOptions).
+	case cloakEngine, cloakProEngine:
+		// CloakBrowser (free or pro) is patched Chromium — drive it via the
+		// Chromium BrowserType with a custom ExecutablePath (set in launchOptions).
 		return pw.Chromium, nil
 	default:
-		return nil, fmt.Errorf("unknown browser %q: use chromium, firefox, webkit, or cloakbrowser", cfg)
+		return nil, fmt.Errorf("unknown browser %q: use chromium, firefox, webkit, cloakbrowser, or cloakbrowser-pro", cfg)
 	}
 }
 
@@ -276,11 +276,28 @@ func launchOptions(c *connector.Ctx) playwright.BrowserTypeLaunchOptions {
 	opts := playwright.BrowserTypeLaunchOptions{
 		Headless: playwright.Bool(headless(c)),
 	}
-	isCloak := strings.EqualFold(strings.TrimSpace(c.Cfg("browser")), cloakEngine)
+	engine := strings.TrimSpace(c.Cfg("browser"))
+	isCloak := isCloakEngine(engine)
 	if isCloak {
-		opts.ExecutablePath = playwright.String(cloakBinaryPath(c))
+		// Free variant → the binary wick downloaded; Pro variant → the CLI-managed
+		// (~/.cloakbrowser) binary resolved from `cloakbrowser info`.
+		opts.ExecutablePath = playwright.String(resolveCloakBinary(c, engine))
 		opts.IgnoreDefaultArgs = cloakLaunchArgs.IgnoreDefaultArgs
-		opts.Args = append([]string{}, cloakLaunchArgs.Args...)
+		opts.Args = cloakArgs(c)
+		// Headless is left ENTIRELY to Playwright's own Headless flag (set above),
+		// exactly like the cloakbrowser wrapper — it never adds a --headless flag
+		// itself. Playwright's new-headless launch is what avoids the Windows
+		// window flash, and a launch matrix confirmed plain Headless:true + the
+		// stealth args navigates cleanly (adding --headless=old OR
+		// --ignore-gpu-blocklist is what caused "target closed").
+		// Pass the license key into the launched browser's env so a Pro binary
+		// activates its licensed tier. Without it a Pro binary fails its license
+		// check and exits immediately — Playwright then reports "target closed"
+		// and the window flashes open-then-shut. Playwright's Env REPLACES the
+		// process env, so cloakLaunchEnv merges the current env in.
+		if env := cloakLaunchEnv(c); env != nil {
+			opts.Env = env
+		}
 	}
 	if p := strings.TrimSpace(c.Cfg("executable_path")); p != "" {
 		opts.ExecutablePath = playwright.String(p)
@@ -294,6 +311,21 @@ func launchOptions(c *connector.Ctx) playwright.BrowserTypeLaunchOptions {
 			proxy.Bypass = playwright.String(bp)
 		}
 		opts.Proxy = proxy
+	}
+	// Log the resolved launch shape so a "blink" / flash is diagnosable: which
+	// binary, headless flag, and args actually reach Chrome.
+	if isCloak {
+		exe := ""
+		if opts.ExecutablePath != nil {
+			exe = *opts.ExecutablePath
+		}
+		hl := false
+		if opts.Headless != nil {
+			hl = *opts.Headless
+		}
+		clog.Info().Str("engine", engine).Str("binary", exe).
+			Bool("pw_headless", hl).Strs("args", opts.Args).
+			Bool("has_license", cloakLaunchEnv(c) != nil).Msg("cloak: launch options resolved")
 	}
 	return opts
 }
@@ -314,6 +346,26 @@ func contextOptions(pw *playwright.Playwright, c *connector.Ctx) (playwright.Bro
 		opts.DeviceScaleFactor = playwright.Float(desc.DeviceScaleFactor)
 		opts.IsMobile = playwright.Bool(desc.IsMobile)
 		opts.HasTouch = playwright.Bool(desc.HasTouch)
+	} else if isCloakEngine(c.Cfg("browser")) {
+		// CloakBrowser viewport handling mirrors the wrapper's
+		// _resolve_context_viewport (browser.py):
+		//   - headed → no_viewport (the page tracks the real window).
+		//   - headless on a newer binary (>=148, e.g. Pro v150) → no_viewport too:
+		//     it reports coherent screen dimensions natively, so an emulated
+		//     viewport would make outerWidth < innerWidth (an impossible-window
+		//     bot tell that makes the binary drop the page — "target closed").
+		//   - headless on an OLDER binary (free v146, <148) → a fixed 1920x947
+		//     viewport (DEFAULT_VIEWPORT) keeps dimensions coherent + deterministic;
+		//     that binary does NOT report coherent headless dimensions on its own.
+		// A user UA override is honored in all cases.
+		if !headless(c) || cloakSupportsNoViewport(c) {
+			opts.NoViewport = playwright.Bool(true)
+		} else {
+			opts.Viewport = &playwright.Size{Width: 1920, Height: 947}
+		}
+		if ua := strings.TrimSpace(c.Cfg("user_agent")); ua != "" {
+			opts.UserAgent = playwright.String(ua)
+		}
 	} else {
 		w := c.CfgInt("viewport_width")
 		if w <= 0 {

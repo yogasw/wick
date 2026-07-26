@@ -445,12 +445,71 @@
   const plusSelect = $derived(
     plusView === "provider" ? provider : plusView === "project" ? project : plusView === "preset" ? preset : undefined,
   );
-  // 3rd picker level: which provider option (a "type/name" instance with
-  // >1 model) is currently drilled into for its model list. Non-null only
-  // while plusView === "provider" and the user clicked such an option.
+  // Provider picker is up to 3 levels: TYPE ▸ INSTANCE ▸ MODEL, each
+  // collapsing when it has only one choice.
+  //   typeDrillKey  — which provider TYPE is drilled into (level 2), or "".
+  //   modelDrillOpt — which INSTANCE option is drilled into for models (lvl 3).
+  let typeDrillKey = $state<string>("");
   let modelDrillOpt = $state<ComposerSelectOption | null>(null);
   function closeModelDrill() {
     modelDrillOpt = null;
+  }
+  function closeTypeDrill() {
+    typeDrillKey = "";
+  }
+
+  // rawType extracts the raw provider TYPE segment from an option value
+  // ("claude/timA" → "claude"; a bare "wick" → "wick"). Distinct from
+  // provType (which normalizes to a fixed brand set for the icon).
+  function rawType(value: string): string {
+    const key = splitModelPin(value).key;
+    const slash = key.indexOf("/");
+    return slash < 0 ? key : key.slice(0, slash);
+  }
+
+  // Provider options grouped by type, preserving order. Used to render the
+  // level-1 (type) list and level-2 (instances of a type) list.
+  const providerGroups = $derived.by(() => {
+    const groups: { type: string; opts: ComposerSelectOption[] }[] = [];
+    const idx = new Map<string, number>();
+    for (const o of provider?.options ?? []) {
+      const t = rawType(o.value);
+      let i = idx.get(t);
+      if (i === undefined) {
+        i = groups.length;
+        idx.set(t, i);
+        groups.push({ type: t, opts: [] });
+      }
+      groups[i].opts.push(o);
+    }
+    return groups;
+  });
+
+  // hasModelDrill: an option worth a 3rd (model) level.
+  function hasModelDrill(o: ComposerSelectOption): boolean {
+    return !!o.models && o.models.length > 1;
+  }
+
+  // Selecting a provider TYPE at level 1: if it collapses to a single flat
+  // choice, apply it directly; otherwise drill into level 2 (instances) or
+  // level 3 (models). Keeps every level that has only one option invisible.
+  function pickType(g: { type: string; opts: ComposerSelectOption[] }) {
+    if (g.opts.length === 1) {
+      const only = g.opts[0];
+      if (hasModelDrill(only)) { modelDrillOpt = only; return; }
+      provider?.onChange(only.value);
+      plusView = "root"; plusOpen = false;
+      return;
+    }
+    typeDrillKey = g.type;
+  }
+
+  // Selecting an INSTANCE at level 2: drill to models if it has them, else
+  // apply directly.
+  function pickInstance(o: ComposerSelectOption) {
+    if (hasModelDrill(o)) { modelDrillOpt = o; return; }
+    provider?.onChange(o.value);
+    typeDrillKey = ""; plusView = "root"; plusOpen = false;
   }
   // Splits a selector value into its option key and an optional pinned
   // model id — "wick/wick::m_abc123" (3rd-level model pick) vs a plain
@@ -768,13 +827,79 @@
               <button
                 type="button"
                 onclick={() => { provider?.onChange(pinnedValue); modelDrillOpt = null; plusView = "root"; plusOpen = false; }}
+                class="flex w-full items-start justify-between gap-3 px-3 py-1.5 text-left transition-colors {isSel ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
+              >
+                <span class="flex flex-col min-w-0">
+                  <span class="flex items-center gap-2 text-sm">
+                    <span class="truncate">{m.label}</span>
+                    {#if m.default}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>{/if}
+                  </span>
+                  {#if m.desc}<span class="text-[11px] text-black-700 dark:text-black-600 leading-snug">{m.desc}</span>{/if}
+                </span>
+                {#if isSel}<span class="shrink-0 mt-0.5 text-green-600 dark:text-green-400">✓</span>{/if}
+              </button>
+            {/each}
+          {:else if typeDrillKey && provider}
+            {@const group = providerGroups.find((g) => g.type === typeDrillKey)}
+            <button
+              type="button"
+              onclick={closeTypeDrill}
+              class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors"
+            >
+              <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              {@render provIcon(typeDrillKey, "h-4 w-4")}
+              {typeDrillKey}
+            </button>
+            <div class="border-t border-white-300 dark:border-navy-600"></div>
+            {#each group?.opts ?? [] as opt (opt.value)}
+              {@const isSel = splitModelPin(provider.value).key === opt.value}
+              <button
+                type="button"
+                onclick={() => pickInstance(opt)}
                 class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {isSel ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
               >
                 <span class="flex items-center gap-2 min-w-0">
-                  <span class="truncate">{m.label}</span>
-                  {#if m.default}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>{/if}
+                  <span class="truncate">{opt.label}</span>
+                  {#if opt.badge}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">{opt.badge}</span>{/if}
                 </span>
-                {#if isSel}<span class="shrink-0 text-green-600 dark:text-green-400">✓</span>{/if}
+                {#if hasModelDrill(opt)}
+                  <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                {:else if isSel}
+                  <span class="shrink-0 text-green-600 dark:text-green-400">✓</span>
+                {/if}
+              </button>
+            {/each}
+          {:else if plusView === "provider" && provider}
+            {@const selKey = splitModelPin(provider.value).key}
+            <button
+              type="button"
+              onclick={() => (plusView = "root")}
+              class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors"
+            >
+              <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              {@render provIcon(provider.value, "h-4 w-4")}
+              Provider
+            </button>
+            <div class="border-t border-white-300 dark:border-navy-600"></div>
+            {#each providerGroups as g (g.type)}
+              {@const single = g.opts.length === 1 ? g.opts[0] : null}
+              {@const nested = g.opts.length > 1 || (single ? hasModelDrill(single) : false)}
+              {@const isSel = rawType(provider.value) === g.type}
+              <button
+                type="button"
+                onclick={() => pickType(g)}
+                class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {isSel ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
+              >
+                <span class="flex items-center gap-2 min-w-0">
+                  {@render provIcon(g.type, "h-4 w-4 shrink-0")}
+                  <span class="truncate">{single ? single.label : g.type}</span>
+                  {#if single?.badge}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">{single.badge}</span>{/if}
+                </span>
+                {#if nested}
+                  <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                {:else if single && single.value === selKey}
+                  <span class="shrink-0 text-green-600 dark:text-green-400">✓</span>
+                {/if}
               </button>
             {/each}
           {:else if plusSelect}
@@ -787,36 +912,23 @@
               <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
               {#if plusView === "project"}
                 <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4a1 1 0 011-1h3l1.5 1.5H13a1 1 0 011 1V12a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke-linejoin="round"/></svg>
-              {:else if plusView === "provider"}
-                {@render provIcon(sel.value, "h-4 w-4")}
               {:else}
                 <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 5h6M11 5h3M2 11h3M8 11h6" stroke-linecap="round"/><circle cx="9.5" cy="5" r="1.5"/><circle cx="6.5" cy="11" r="1.5"/></svg>
               {/if}
-              {plusView === "provider" ? "Provider" : plusView === "project" ? "Project" : "Preset"}
+              {plusView === "project" ? "Project" : "Preset"}
             </button>
             <div class="border-t border-white-300 dark:border-navy-600"></div>
             {#each sel.options as opt (opt.value)}
               <button
                 type="button"
-                onclick={() => {
-                  if (plusView === "provider" && opt.models && opt.models.length > 1) {
-                    modelDrillOpt = opt;
-                    return;
-                  }
-                  sel.onChange(opt.value);
-                  plusView = "root";
-                  plusOpen = false;
-                }}
+                onclick={() => { sel.onChange(opt.value); plusView = "root"; plusOpen = false; }}
                 class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {opt.value === sel.value ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
               >
                 <span class="flex items-center gap-2 min-w-0">
-                  {#if plusView === "provider"}{@render provIcon(opt.value, "h-4 w-4 shrink-0")}{/if}
                   <span class="truncate">{opt.label}</span>
                   {#if opt.badge}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">{opt.badge}</span>{/if}
                 </span>
-                {#if plusView === "provider" && opt.models && opt.models.length > 1}
-                  <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                {:else if opt.value === sel.value}
+                {#if opt.value === sel.value}
                   <span class="shrink-0 text-green-600 dark:text-green-400">✓</span>
                 {/if}
               </button>

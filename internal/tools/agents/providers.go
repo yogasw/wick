@@ -275,6 +275,16 @@ func saveProviderDetail(c *tool.Ctx) {
 		}
 		ins.CodexConfig.SandboxMode = provider.CodexSandboxMode(strings.TrimSpace(c.Form("sandbox_mode")))
 	}
+	// CLI model picker (claude/codex/gemini): toggle + curated model list.
+	// Empty models → the per-type seed defaults are offered. Not applicable
+	// to wick (uses WickModels). The FE toggle sends "true"/"false"; models
+	// is a kvlist (JSON [{id,desc}]) so it's decoded via ApplyInstanceConfigKey
+	// rather than splitLines.
+	if t != provider.TypeWick {
+		ms := strings.TrimSpace(c.Form("model_select"))
+		ins.ModelSelect = ms == "true" || ms == "on"
+		provider.ApplyInstanceConfigKey(&ins, "models", c.Form("models"))
+	}
 	// NOTE: the general detail save intentionally does NOT touch AI-router
 	// settings — this form (binary/args/env/sandbox) carries no airouter fields,
 	// so running applyAIRouterForm here would reset the toggle/provider/models/
@@ -803,6 +813,12 @@ func rescanAllProviders(c *tool.Ctx) {
 	ctx, cancel := context.WithTimeout(c.Context(), 30*time.Second)
 	defer cancel()
 	provider.RescanAll(ctx)
+	// A rescan is the natural moment to also pull the latest model catalog
+	// from GitHub — the operator explicitly asked for fresh data. Best
+	// effort: a rate-limited/offline remote keeps the embedded + cached list.
+	if err := provider.RefreshRemoteModels(ctx); err != nil {
+		log.Ctx(ctx).Debug().Msgf("rescan: model catalog refresh skipped: %s", err.Error())
+	}
 	c.Redirect(c.Base()+"/providers", http.StatusSeeOther)
 }
 
@@ -1451,35 +1467,42 @@ func providerChoicesCached(ctx context.Context) []view.ProviderChoiceVM {
 			Name:         st.Instance.Name,
 			Version:      st.Version,
 			UsesAIRouter: st.Instance.UseAIRouter,
-			Models:       wickModelChoices(st.Instance),
+			Models:       modelChoicesFor(st.Instance),
 		})
 	}
 	return out
 }
 
-// wickModelChoices lists the enabled models on a wick instance, default
-// first. nil for every other provider type or when a wick instance has
-// 0-1 enabled models — the composer only needs a 3rd "model" picker level
-// when there's a real choice to make.
-func wickModelChoices(ins provider.Instance) []view.ModelChoiceVM {
-	if ins.Type != provider.TypeWick || len(ins.WickModels) == 0 {
-		return nil
-	}
-	out := make([]view.ModelChoiceVM, 0, len(ins.WickModels))
-	for _, m := range ins.WickModels {
-		if m.Disabled {
-			continue
+// modelChoicesFor lists an instance's selectable models for the composer's
+// 3rd picker level. wick uses its custom-model registry; CLI providers
+// (claude/codex/gemini) use the per-instance model picker (EffectiveModels:
+// curated Models, else the per-type seed) when ModelSelect is on. Returns
+// nil when there's nothing worth a picker (0-1 entries) so the composer
+// stays flat — the level only appears when there's a real choice.
+func modelChoicesFor(ins provider.Instance) []view.ModelChoiceVM {
+	var out []view.ModelChoiceVM
+	if ins.Type == provider.TypeWick {
+		for _, m := range ins.WickModels {
+			if m.Disabled {
+				continue
+			}
+			label := m.Label
+			if label == "" {
+				label = m.Model
+			}
+			out = append(out, view.ModelChoiceVM{ID: m.ID, Label: label, Default: m.Default})
 		}
-		label := m.Label
-		if label == "" {
-			label = m.Model
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Default && !out[j].Default })
+	} else {
+		// CLI provider: the alias is both the id (passed to --model) and the
+		// label; Desc comes from the seed. First entry is the default.
+		for i, m := range ins.EffectiveModels() {
+			out = append(out, view.ModelChoiceVM{ID: m.ID, Label: m.ID, Default: i == 0, Desc: m.Desc})
 		}
-		out = append(out, view.ModelChoiceVM{ID: m.ID, Label: label, Default: m.Default})
 	}
 	if len(out) <= 1 {
 		return nil
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Default && !out[j].Default })
 	return out
 }
 

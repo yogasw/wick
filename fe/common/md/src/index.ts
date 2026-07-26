@@ -131,6 +131,23 @@ export function renderMarkdown(text: string): string {
       );
       return;
     }
+    /* A `detail` fence becomes a small clickable chip that opens the full
+       body in a modal — for content worth keeping accessible but not worth
+       filling the transcript with (a compaction summary, a long tool
+       explanation, …). Body line 1 is the chip title; the rest is the modal
+       body. On a non-rich channel it degrades to the raw text (title + body),
+       so nothing is lost. Reusable: any feature can emit this fence. */
+    if (lang === "detail") {
+      const body = code.replace(/\r\n/g, "\n");
+      const nl = body.indexOf("\n");
+      const title = (nl === -1 ? body : body.slice(0, nl)).trim() || "Details";
+      const rest = nl === -1 ? "" : body.slice(nl + 1).trim();
+      out.push(
+        `<div class="wick-detail my-2" data-detail data-detail-title="${esc(title)}" data-detail-body="${esc(rest)}">` +
+        `<pre class="overflow-x-auto px-4 py-3 text-xs font-mono text-black-900 dark:text-white-100 bg-white-200 dark:bg-navy-800 rounded-lg leading-relaxed"><code>${esc(body)}</code></pre></div>`,
+      );
+      return;
+    }
     /* An imagecard fence becomes a thumbnail-gallery placeholder; the SPA
        parses the body (one `url | caption` per line) into hotlinked image
        cards with a favicon + domain chip, and a click opens the lightbox

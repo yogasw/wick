@@ -14,5 +14,7 @@ export { default as KebabMenu } from "./KebabMenu.svelte";
 export { default as CodeEditor } from "./CodeEditor.svelte";
 export { aceModeFor, aceModeForLanguage, extOf } from "./aceMode.js";
 export { default as Composer } from "./Composer.svelte";
+export { default as ProviderPicker } from "./ProviderPicker.svelte";
+export type { ComposerSelectOption, ComposerModelOption } from "./composer-types.js";
 export { default as ImageEditor } from "./ImageEditor.svelte";
 export type { ComposerCommand, ComposerSelect } from "./composer-types.js";

@@ -96,3 +96,5 @@ vite.config.ts.timestamp-*
 
 # stray plugin/keygen binaries if built at repo root
 /plugin-keygen
+
+/test.py

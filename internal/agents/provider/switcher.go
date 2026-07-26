@@ -133,15 +133,11 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 			}
 			targetHasHistory = resumeID != ""
 			loaded.Agents[i].CLISessionID = resumeID
-			// Pin the requested model when switching to a provider type that
-			// recognizes one (currently only wick); clear any stale pin
-			// otherwise, so a later switch back doesn't resurrect a foreign
-			// instance's model choice.
-			if wantType == string(TypeWick) {
-				loaded.Agents[i].ModelID = opts.ModelID
-			} else {
-				loaded.Agents[i].ModelID = ""
-			}
+			// Pin the requested model. All provider types now honor a model
+			// pin: wick maps it to a WickModel.ID, the CLI providers pass it
+			// to their binary via --model. Empty clears any stale pin (so a
+			// switch back doesn't resurrect a foreign instance's choice).
+			loaded.Agents[i].ModelID = opts.ModelID
 			break
 		}
 	}
@@ -208,7 +204,7 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 			Role:      "system",
 			Source:    source,
 			Kind:      store.KindProviderSwitch,
-			Text:      "Provider switched → " + tag,
+			Text:      SwitchChipText(tag, opts.ModelID),
 			Extras: map[string]string{
 				"from": fromKey,
 				"to":   newKey,
@@ -242,6 +238,18 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 	}
 
 	return nil
+}
+
+// SwitchChipText builds the "Provider switched → <tag>" label, appending
+// "· <model>" when a model was pinned so the user sees exactly which model
+// the session now uses (not just the provider). One helper so every
+// call-site (switcher + the HTTP handlers) renders the chip identically.
+func SwitchChipText(tag, modelID string) string {
+	s := "Provider switched → " + tag
+	if modelID != "" {
+		s += " · " + modelID
+	}
+	return s
 }
 
 // isSwitchArtifact reports whether a turn was written by a previous Switch

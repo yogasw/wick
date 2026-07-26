@@ -41,7 +41,8 @@ errors and auto-cancels.
 - [x] Align MCP scheduleScope with the UI rule: only the app owner
       (CanSeeAllSessions) enumerates all owners; a plain admin is scoped to
       their own (cross-user view = UI monitor, which reads admin_see_all).
-- [ ] Docs page + changelog — NEXT
+- [x] Docs page + changelog — shipped: `docs/guide/agents/scheduled-messages.md`
+      + changelog v0.29.0 "Scheduled Messages & Slack".
 
 ## Done (v1 — one-shot, shipped)
 

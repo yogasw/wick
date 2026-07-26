@@ -40,6 +40,10 @@ export interface ThreadStore {
   setHistory(turns: ConversationTurn[]): void;
   appendUserTurn(text: string, attachments?: Attachment[]): void;
   handleEvent(ev: AgentEvent): void;
+  /* Remove a stuck tool card from the live turn (a run with no runId to
+     cancel — an orphan from before per-run cancel, or one whose finish event
+     was lost). View cleanup only; the backend is not touched. */
+  dismissToolBlock(toolUseId: string): void;
   /* Force the UI out of "thinking…"/live-turn state after a user-initiated
      kill, without waiting for a lifecycle:idle/killed SSE event. Needed
      because that event can be lost — the process may have already died
@@ -299,6 +303,41 @@ export function createThreadStore(): ThreadStore {
         break;
       }
 
+      case "connector_run": {
+        // A connector run started/finished under this session. Attach its run_id
+        // + connector_id to the matching in-flight tool call so the card can show
+        // a Cancel button; clear it when the run finishes. wick_execute is
+        // synchronous and the event carries no tool_use_id, so we bind to the
+        // most recent still-running tool block without a run id yet (start) or the
+        // block already carrying this run id (finish).
+        let d: { run_id?: string; connector_id?: string; running?: boolean };
+        try {
+          d = JSON.parse(ev.data ?? "{}");
+        } catch (_) {
+          break;
+        }
+        const runId = d.run_id ?? "";
+        if (!runId) break;
+        const lt = ensureLive();
+        if (d.running) {
+          // Bind to the last running tool block that doesn't have a run id yet.
+          for (let i = lt.blocks.length - 1; i >= 0; i--) {
+            const b = lt.blocks[i];
+            if (b.kind === "tool" && b.result === undefined && !b.runId) {
+              lt.blocks[i] = { ...b, runId, connectorId: d.connector_id ?? "" };
+              break;
+            }
+          }
+        } else {
+          // Finished — drop the run id so the Cancel button disappears.
+          lt.blocks = lt.blocks.map((b) =>
+            b.kind === "tool" && b.runId === runId ? { ...b, runId: undefined, connectorId: undefined } : b,
+          );
+        }
+        live.set(lt);
+        break;
+      }
+
       case "session_meta": {
         try {
           const d = JSON.parse(ev.data ?? "{}") as { session_id?: string; title?: string };
@@ -379,6 +418,17 @@ export function createThreadStore(): ThreadStore {
     typing,
     lifecycle,
     meta,
+    // dismissToolBlock removes a stuck tool card from the live turn (a run with
+    // no runId to cancel — an orphan from before per-run cancel, or one whose
+    // finish event was lost). Purely a view cleanup; the backend is untouched.
+    dismissToolBlock(toolUseId: string) {
+      const lt = get(live);
+      if (!lt) return;
+      const blocks = lt.blocks.filter(
+        (b) => !(b.kind === "tool" && b.toolUseId === toolUseId),
+      );
+      live.set({ ...lt, blocks });
+    },
     setHistory(newTurns) {
       // The persisted history is authoritative. But a locally-committed
       // turn (live-*/error-*/warning-*) may not be in `newTurns` yet if the

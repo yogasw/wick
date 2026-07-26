@@ -757,11 +757,47 @@ function renderHtmlArtifacts(node: HTMLElement): void {
   }
 }
 
+/* Turns each [data-detail] placeholder into a compact clickable chip. The
+   full body lives in data-detail-body; clicking dispatches
+   `wick-detail-open` with {title, body}, which ThreadMessage catches to
+   open a modal. Keeps long-but-occasionally-needed content (a compaction
+   summary, a verbose explanation) out of the transcript flow while staying
+   one click away. Reusable by any feature that emits a `detail` fence. */
+function renderDetail(node: HTMLElement): void {
+  const els = node.querySelectorAll<HTMLElement>("[data-detail]:not([data-enriched])");
+  for (const el of els) {
+    el.setAttribute("data-enriched", "");
+    const title = el.getAttribute("data-detail-title") || "Details";
+    const body = el.getAttribute("data-detail-body") || "";
+    el.innerHTML = "";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.setAttribute("data-detail-chip", "");
+    btn.className =
+      "inline-flex items-center gap-1.5 rounded-full border border-white-300 dark:border-navy-600 " +
+      "bg-white-200 dark:bg-navy-800 px-2.5 py-1 text-xs text-black-700 dark:text-black-600 " +
+      "hover:bg-white-300 dark:hover:bg-navy-700 transition-colors cursor-pointer";
+    btn.innerHTML =
+      `<svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">` +
+      `<path d="M3 4h10M3 8h10M3 12h6" stroke-linecap="round"></path></svg>` +
+      `<span class="truncate max-w-[22rem]">${esc(title)}</span>` +
+      `<span class="text-[10px] opacity-60">details</span>`;
+    btn.addEventListener("click", () => {
+      el.dispatchEvent(
+        new CustomEvent("wick-detail-open", { bubbles: true, detail: { title, body } }),
+      );
+    });
+    el.appendChild(btn);
+  }
+}
+
 function enrichAll(node: HTMLElement): void {
   renderHtmlArtifacts(node);
   void renderMermaid(node);
   renderSvg(node);
   renderImageCards(node);
+  renderDetail(node);
   void highlightCode(node);
   void renderMath(node);
 }

@@ -4,7 +4,7 @@ outline: deep
 
 # Playwright Browser
 
-`playwright_browser` drives a real browser (Chromium / Firefox / WebKit, plus [CloakBrowser](#cloakbrowser)) to screenshot, scrape, render PDF, evaluate JS, and run scripted interaction flows. Each op launches an isolated browser inside the plugin's own process — no shared state, safe to run concurrently — except in [live-session mode](#live-session), where a browser is kept open across calls.
+`playwright_browser` drives a real browser (Chromium / Firefox / WebKit, plus [CloakBrowser free and Pro](#cloakbrowser)) to screenshot, scrape, render PDF, evaluate JS, and run scripted interaction flows. Each op launches an isolated browser inside the plugin's own process — no shared state, safe to run concurrently — except in [live-session mode](#live-session), where a browser is kept open across calls.
 
 | | |
 |---|---|
@@ -48,8 +48,10 @@ Config fields are grouped into cards on the instance's Settings page. **Browser*
 | Live sessions | `MaxTabsPerSession` | Max tabs within one live session (`tab_new` cap). Each open tab keeps a live page in RAM, so multi-tab is opt-in — default `1`, `0` = unlimited. |
 | Custom binary *(collapsed)* | `ExecutablePath` | Path to a custom browser binary instead of the bundled one. |
 | Custom binary | `Channel` | Branded channel (`chrome`, `chrome-beta`, `msedge`, …) for the chosen browser. |
-| CloakBrowser *(collapsed)* | `CloakRepo` | GitHub `owner/repo` hosting CloakBrowser release assets. Default `CloakHQ/CloakBrowser`. |
-| CloakBrowser | `CloakExecutablePath` | Path to an already-downloaded CloakBrowser binary — set to skip the GitHub download. |
+| CloakBrowser *(collapsed)* | `CloakRepo` | GitHub `owner/repo` hosting CloakBrowser release assets (free tier). Default `CloakHQ/CloakBrowser`. |
+| CloakBrowser | `CloakExecutablePath` | Path to an already-downloaded CloakBrowser binary. Set this to skip the GitHub download (free tier) or the CLI resolution (pro tier). Applies to both cloak engines. |
+| CloakBrowser | `CloakLicenseKey` | CloakBrowser Pro license key (`cb_...`). Required by the `cloakbrowser-pro` engine; leave empty for the free `cloakbrowser` engine. Passed to the browser at launch so it runs at its licensed tier. |
+| CloakBrowser | `CloakCLIPath` | Path to the `cloakbrowser` CLI used by the `cloakbrowser-pro` engine. Default: resolved on `PATH`. Only needed for a non-`PATH` install. |
 
 **The browser picker** is a [`html=` widget](/reference/config-tags#html-—-server-rendered-widget) — the connector renders its own status card per engine (installed / not installed, version, a Download button) and the widget wires clicks back to `browser_status` / `browser_install`. This is the reference implementation for `html=` in the docs.
 
@@ -65,7 +67,7 @@ Ephemeral: open a URL, do one thing, close the browser.
 |---|---|---|
 | `screenshot` | `url`, `full_page`, `selector`, `wait_for` | PNG screenshot as base64. `full_page` captures the whole scrollable page; `selector` scopes to one element. |
 | `get_content` | `url`, `selector`, `as_text` (default true), `wait_for` | Rendered content after JS runs — visible text by default, or HTML when `as_text` is false. |
-| `pdf` | `url`, `wait_for` | Page rendered to PDF as base64. **Chromium only** — errors on firefox/webkit/cloakbrowser instances. |
+| `pdf` | `url`, `wait_for` | Page rendered to PDF as base64. **Chromium only** — errors on firefox/webkit/cloakbrowser/cloakbrowser-pro instances. |
 | `scrape` | `url`, `fields` (JSON map of key → CSS selector), `wait_for` | Structured extraction — each selector's inner text is returned under its key; a selector matching nothing returns `""`. |
 | `eval` | `url`, `script` | Evaluates a JS expression in the page, returns the JSON-serialized result. Marked **destructive** — arbitrary JavaScript can submit forms and change remote state. |
 
@@ -73,7 +75,7 @@ Ephemeral: open a URL, do one thing, close the browser.
 
 | Op | Destructive | Input | What it does |
 |---|---|---|---|
-| `run` | yes | `actions` (JSON array), `session_id` (optional), `tab` (optional) | Runs an ordered list of browser actions in one session and returns a result per step; stops at the first failure. Pass `session_id` to run against a persistent [live session](#live-session) instead of a throwaway browser, and `tab` (0-based, from `session_list`) to target a specific tab in a multi-tab session — ignored without `session_id`, defaults to the first tab. |
+| `run` | yes | `actions` (JSON array), `session_id` (optional), `tab` (optional), `record_request` (optional) | Runs an ordered list of browser actions in one session and returns a result per step; stops at the first failure. Pass `session_id` to run against a persistent [live session](#live-session) instead of a throwaway browser, and `tab` (0-based, from `session_list`) to target a specific tab in a multi-tab session — ignored without `session_id`, defaults to the first tab. Set `record_request` to capture the HTTP calls the script triggers — see [Recording network requests](#recording-network-requests). |
 
 `run` supports 32 actions in one script:
 
@@ -98,18 +100,60 @@ Ephemeral: open a URL, do one thing, close the browser.
 
 Persistent browsers that survive across calls — and plugin restarts — until closed. The browser runs as a **detached OS process** reached over CDP, so it outlives the idle-swept plugin subprocess; only `session_close` ends it.
 
-> **Chromium-based engines only.** Live sessions require the Chromium DevTools protocol, which only `chromium` and `cloakbrowser` (patched Chromium) expose. `session_open` errors on a `firefox` / `webkit` instance — use the ephemeral ops (`run`, `screenshot`, …) for those, or set `Browser=chromium`.
+> **Chromium-based engines only.** Live sessions require the Chromium DevTools protocol, which only `chromium` and the two cloak engines (`cloakbrowser` / `cloakbrowser-pro`, patched Chromium) expose. `session_open` errors on a `firefox` / `webkit` instance — use the ephemeral ops (`run`, `screenshot`, …) for those, or set `Browser=chromium`.
 
 | Op | Destructive | Input | What it does |
 |---|---|---|---|
-| `session_open` | yes | — | Launches a persistent browser, returns its `session_id`. Respects `MaxLiveSessions`. |
+| `session_open` | yes | `profile` (optional) | Launches a persistent browser, returns its `session_id`. Respects `MaxLiveSessions` (and the CloakBrowser free-tier 1-session lock — see [CloakBrowser](#cloakbrowser)). Pass `profile` to run against a [named profile](#named-profiles) instead of a throwaway anonymous session. |
 | `session_list` | no | — | Lists every live session and its open tabs (index, url, title), plus `max_tabs` (the effective `MaxTabsPerSession` cap, `0` = unlimited) so callers can tell when a session is full. Dead sessions are swept automatically. |
 | `tab_new` | no | `session_id`, `url` | Opens a new tab in a live session, optionally navigating it. Rejected once the session hits `MaxTabsPerSession` — close a tab or raise the cap first. |
 | `tab_close` | yes | `session_id`, `index` | Closes the tab at `index` (from `session_list`). |
 | `session_close` | yes | `session_id` | Kills the session's browser and frees its resources. **Always close sessions you opened** — an abandoned one holds a browser process open until closed or reboot. |
 | `session_endpoints` | no | `session_id` | Returns the session's raw CDP details: `cdp_url` plus one entry per tab with `target_id` + `ws_debugger_url`. Read-only; backs the live-browser panel (below). Not meant for agent use. |
+| `profile_list` | no | — | Lists named persistent profiles: name, created/last-used time, and whether a live session is currently using it. See [Named profiles](#named-profiles). |
+| `profile_delete` | yes | `name` | Deletes a named profile and its stored login/cookies for good. Refused while a live session is using it — close that session first. |
+| `get_request` | no | `profile` or `name` | Reads back HTTP requests recorded by an earlier `run` with `record_request=true`. See [Recording network requests](#recording-network-requests). |
 
 Pass a live session's `session_id` to `run` (or any task op) to reuse the same open browser instead of launching a throwaway one.
+
+### Named profiles
+
+A live session already launches Chromium with its own `--user-data-dir`, but by default that dir is named after the random session id and removed once the session closes — so a login never survives past `session_close`.
+
+Passing `profile` to `session_open` gives the session a **stable, named** profile dir instead:
+
+```json
+{"action": "session_open", "profile": "acme-account-a"}
+```
+
+- Login, cookies, and localStorage under that profile persist across sessions **and plugin restarts** — closing the session and reopening it with the same `profile` reuses the same login, no re-auth.
+- A profile name is letters/digits/dash/underscore only (no path separators).
+- A named profile is single-owner: opening it while another live session already holds it is rejected — close that session first.
+- `profile_list` shows every named profile on disk (even with no browser currently running against it) and which session, if any, currently owns it.
+- `profile_delete` is the only way to remove a named profile; it refuses while a session is using it.
+
+Anonymous sessions (no `profile` passed) keep the original behavior: a per-session dir swept on `session_close`.
+
+### Recording network requests
+
+Pass `record_request: true` to a `run` script to capture every HTTP request the browser makes while the script runs (XHR/fetch calls, by default — static assets are skipped as noise):
+
+```json
+{
+  "actions": [{"action": "goto", "url": "https://abc.com/dashboard"}],
+  "record_request": true,
+  "record_name": "dashboard-load",
+  "record_url_pattern": "/api/",
+  "record_include_assets": false
+}
+```
+
+- `record_url_pattern` (optional) — a substring or regex the request URL must match to be recorded; leave empty to record everything (minus assets).
+- `record_include_assets` — set true to also capture images/CSS/fonts/JS.
+- `record_name` — name for the saved capture (default `captured`); when a `profile` is also set on the run, the capture is stored under that profile instead of by name.
+- Duplicate requests (same method + URL + body — typical of SPA polling) are collapsed to one entry.
+
+Each recorded request carries method, URL, headers, cookies, body, and the response status + headers — read it back afterwards with `get_request` (give the same `profile` or `name` the run used). This is meant for inspecting or replaying calls over plain HTTP later, not for driving the browser itself.
 
 ### Live browser panel
 
@@ -118,6 +162,7 @@ The agents conversation UI has a right-side **Browser** panel (the globe icon on
 - **Pick an instance.** The panel lists your active `playwright_browser` connector instances in a dropdown (a single usable instance is auto-selected). Nothing runs until you open the panel and pick one.
 - **Open or reuse a session.** "New session" spawns a live browser (`session_open`); existing ones appear in the session dropdown. Multi-tab sessions get a tab switcher.
 - **Two modes.** *View only* streams the screen (CDP `Page.startScreencast`) with no input. *Full* additionally forwards your mouse and keyboard to the browser (CDP `Input.dispatch*`) — this is what lets you log in by hand or drive a page the agent can't. Click the view first to capture keyboard.
+- **Clipboard.** In Full mode, Ctrl/Cmd+C and +V flow straight to the remote browser, so in-page copy/paste works natively. Wick also bridges your local clipboard across the boundary: focusing the view pushes your PC clipboard into the remote (so a paste inside gets what you copied outside), and leaving the view pulls the remote's copied text/selection back to your PC clipboard. Right-click opens a small Copy/Paste menu on the live view itself, since the remote's native context menu can't be streamed.
 - **Resize / pop out.** The rail panel is narrow, so the view has expand controls: **Pop out to window** floats it as a draggable, resizable mini-screen (drag the header to move, the corner to resize), and **Fullscreen** fills the viewport. **Dock** returns it inline. The stream and input keep working across all three.
 
 **How it works:** a live session is a detached Chromium with an unauthenticated CDP port on `127.0.0.1`. Wick core (not the browser) dials that loopback port and proxies a same-origin WebSocket to the panel — the raw CDP port is never exposed to your browser. Access is gated per-instance by the same rule as editing the connector's credentials (admin, owner tag, or "allow others to configure"). Chromium-based engines only, like all live sessions.
@@ -143,21 +188,42 @@ Backs the manager's browser picker. **Not meant for agent use** — seed these o
 
 | Op | Destructive | Input | What it does |
 |---|---|---|---|
-| `browser_status` | no | — | Reports which engines (`chromium`, `firefox`, `webkit`, `cloakbrowser`) are installed and their versions. Returns HTML for the `html=` widget. |
-| `browser_install` | yes | `browser` | Downloads one engine's binary. Idempotent — installing an already-present engine returns fast. Chromium/Firefox/WebKit install synchronously; CloakBrowser downloads in the background and reports progress back through `browser_status` (polled by the widget). |
+| `browser_status` | no | — | Reports which engines (`chromium`, `firefox`, `webkit`, `cloakbrowser`, `cloakbrowser-pro`) are installed and their versions. Returns HTML for the `html=` widget. |
+| `browser_install` | yes | `browser` | Downloads one engine's binary. Idempotent — installing an already-present engine returns fast. Chromium/Firefox/WebKit install synchronously; free CloakBrowser downloads in the background and reports progress back through `browser_status` (polled by the widget); CloakBrowser Pro installs synchronously via the `cloakbrowser` CLI (requires `CloakLicenseKey`). |
+| `browser_update` | — | `browser` | Re-fetches an engine's binary to the newest available build. Backs the picker's ⋮ **Update** menu item — see [Installing, updating, uninstalling](#installing-updating-uninstalling). |
+| `browser_uninstall` | — | `browser` | Removes an engine's downloaded binary. Backs the picker's ⋮ **Uninstall** menu item. |
 
 ## CloakBrowser
 
-`cloakbrowser` is a fourth engine option alongside chromium/firefox/webkit — a patched, stealth Chromium published by [CloakHQ](https://github.com/CloakHQ/CloakBrowser). It is **not** a Playwright-managed browser: there's no `playwright.Install` for it, so the connector downloads the right release asset for the host OS/arch straight from GitHub, extracts it, and launches it via `ExecutablePath` with anti-automation flags. Use `CloakRepo` to point at a fork/mirror, or `CloakExecutablePath` to skip the download entirely and use an already-downloaded binary.
+`cloakbrowser` and `cloakbrowser-pro` are two engine options alongside chromium/firefox/webkit — a patched, stealth Chromium published by [CloakHQ](https://github.com/CloakHQ/CloakBrowser). Neither is a Playwright-managed browser (no `playwright.Install`); they differ in how the binary is obtained and what limits apply:
 
-Because `cloakbrowser` never launches a Playwright-managed Chromium, opening a session with `Browser=cloakbrowser` skips Playwright's own ~150MB Chromium download — only the (much smaller) Playwright node driver is fetched. Reconnecting to an already-open live session (over CDP) skips it too, for any engine, since reconnecting never launches a new browser.
+| | `cloakbrowser` (free) | `cloakbrowser-pro` |
+|---|---|---|
+| Binary source | Downloaded straight from a GitHub release for the host OS/arch (`CloakRepo`, default `CloakHQ/CloakBrowser`) | Managed by the official `cloakbrowser` CLI (`cloakbrowser install` / `update`), which resolves the binary for your license's tier |
+| License key | Not required | Required — set `CloakLicenseKey` (`cb_...`); passed to the browser at launch as `CLOAKBROWSER_LICENSE_KEY` |
+| Concurrent live sessions | **Locked to 1**, regardless of `MaxLiveSessions` — this is CloakBrowser's free-plan limit. A second `session_open` fails to get a slot rather than silently queuing. | Follows `MaxLiveSessions` once the license key resolves to a paid tier (checked via the CLI's `info` output); falls back to the same 1-session lock if the tier can't be confirmed (e.g. CLI unreachable) |
+| Requires | Nothing extra — wick manages the download | The `cloakbrowser` CLI installed and reachable on `PATH` (or point `CloakCLIPath` at it) |
+
+`CloakExecutablePath` overrides binary resolution for **either** engine — set it to skip the GitHub download or the CLI lookup entirely and launch an already-downloaded binary directly.
+
+Because a cloak engine never launches a Playwright-managed Chromium, opening a session with `Browser=cloakbrowser` or `cloakbrowser-pro` skips Playwright's own ~150MB Chromium download — only the (much smaller) Playwright node driver is fetched. Reconnecting to an already-open live session (over CDP) skips it too, for any engine, since reconnecting never launches a new browser.
+
+### Installing, updating, uninstalling
+
+The browser picker (the `html=` widget described above) lists both cloak engines alongside chromium/firefox/webkit. An installed row carries a **⋮ menu** with:
+
+- **Update** — re-fetches the binary. For the free engine this pulls the latest GitHub release (shown as an amber "update" pill on the row when a newer tag is available); for the pro engine it runs `cloakbrowser update` to refresh to the licensed tier's newest build.
+- **Uninstall** — removes the downloaded binary so the row flips back to "not installed". For the free engine this deletes wick's own download cache; for the pro engine it clears the CLI's cache. A binary reached via an explicit `CloakExecutablePath` override is never deleted — wick only removes what it downloaded.
+
+Clicking a not-yet-installed row's **Download** button installs it: the free engine downloads in the background with a progress bar (poll `browser_status`, or just watch the picker); the pro engine requires `CloakLicenseKey` to be set first and installs synchronously via the CLI.
 
 ## Quirks worth knowing
 
 - `pdf` only works on Chromium instances — set `Browser` to `chromium` (the default) if you need PDF rendering.
 - Live-session browsers are detached OS processes (not tied to the plugin subprocess), reconnected over CDP on each call — verified to work around Windows' fixed-debug-port restrictions via a dynamic `--remote-debugging-port=0`.
-- CloakBrowser installs run in the background and can take a while (~200MB download); poll `browser_status` (or watch the picker) for progress rather than expecting `browser_install` to block until done.
+- CloakBrowser (free) installs run in the background and can take a while (~200MB download); poll `browser_status` (or watch the picker) for progress rather than expecting `browser_install` to block until done.
 - `Device` overrides `ViewportWidth` / `ViewportHeight` when set.
+- `wait_for_load_state` with `state=networkidle` is capped at 10s — sites that poll in the background never reach "0 in-flight requests", so a timeout there is treated as good enough (the step continues with a note) instead of stalling the run for minutes.
 
 ## See also
 

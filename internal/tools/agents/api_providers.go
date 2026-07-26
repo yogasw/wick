@@ -294,6 +294,19 @@ type ProviderDetailResponse struct {
 	ActivePIDs   []LiveProcessDTO             `json:"active_pids"`
 	ConfigFields []ConfigFieldDTO             `json:"config_fields"`
 	AIRouter     AIRouterDetailDTO            `json:"airouter"`
+	// DefaultModels are the per-type catalog seed models (id + description),
+	// shown in the model-selection card so the operator sees what's used when
+	// the curated list is empty, and can Load them as an editable starting
+	// point (id + desc columns). Sourced from the merged catalog
+	// (embedded + GitHub + disk cache). Empty for wick (uses WickModels).
+	DefaultModels []DefaultModelDTO `json:"default_models,omitempty"`
+}
+
+// DefaultModelDTO is one catalog seed model surfaced to the detail page's
+// "Load defaults" button — id plus its description.
+type DefaultModelDTO struct {
+	ID   string `json:"id"`
+	Desc string `json:"desc,omitempty"`
 }
 
 // AIRouterDetailDTO carries the instance's current AI-router settings so the
@@ -468,6 +481,18 @@ func spawnLogFileDTOs(files []provider.SpawnLogFile) []SpawnLogFileDTO {
 	return out
 }
 
+// seedModelDTOs returns the catalog seed models (id + description) for a
+// provider type — the "Load defaults" starting list on the detail page. Both
+// columns are loaded into the id|desc kvlist when the operator clicks Load.
+func seedModelDTOs(t provider.Type) []DefaultModelDTO {
+	seeds := provider.SeedModels(t)
+	out := make([]DefaultModelDTO, 0, len(seeds))
+	for _, s := range seeds {
+		out = append(out, DefaultModelDTO{ID: s.ID, Desc: s.Desc})
+	}
+	return out
+}
+
 // configFieldDTOs converts entity.Config rows to DTOs, masking secret values.
 // Secret fields have their Value replaced with "••••••••" when non-empty,
 // following the same discipline applied across API endpoints that return
@@ -625,8 +650,9 @@ func apiProviderDetail(c *tool.Ctx) {
 		GlobalMax:    poolMaxConcurrent(),
 		ActiveCount:  len(activePIDs),
 		ActivePIDs:   activePIDs,
-		ConfigFields: configFieldDTOs(provider.SeedInstanceConfig(st.Instance)),
-		AIRouter:     aiRouterDetailDTO(st.Instance),
+		ConfigFields:  configFieldDTOs(provider.SeedInstanceConfig(st.Instance)),
+		AIRouter:      aiRouterDetailDTO(st.Instance),
+		DefaultModels: seedModelDTOs(st.Instance.Type),
 	})
 }
 

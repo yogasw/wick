@@ -1,11 +1,22 @@
 import { Effect } from "effect";
 import { apiGetE } from "@wick-fe/common-api";
 
+export type ProviderModelOption = {
+  id: string;
+  label: string;
+  default: boolean;
+  desc?: string;
+};
+
 export type ProviderOption = {
   type: string;
   name: string;
   version: string;
   usesAIRouter?: boolean;
+  // Selectable models for a multi-model provider (wick). >1 entry makes the
+  // composer show a nested model picker (the "›" arrow). Absent for
+  // single-model / CLI providers.
+  models?: ProviderModelOption[];
 };
 
 export type PresetOption = {

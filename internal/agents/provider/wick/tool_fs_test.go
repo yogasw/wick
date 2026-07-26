@@ -314,3 +314,70 @@ func TestFsTools_RoundTrip(t *testing.T) {
 		t.Fatalf("read after edit mismatch: %q isErr=%v", out, isErr)
 	}
 }
+
+// ── M1: read from the session uploads dir (attached files) ───────────
+
+// TestReadFile_UploadsDirAllowed proves read_file can read a user-attached
+// file, which lives in <SessionDir>/uploads — OUTSIDE the workspace. The
+// pool tells the agent to read these by absolute path via the "[Attached
+// files]" block, so rejecting them (the old bug) left the agent unable to
+// read files the user attached.
+func TestReadFile_UploadsDirAllowed(t *testing.T) {
+	sessionDir := t.TempDir()
+	ws := filepath.Join(sessionDir, "projects", "p1", "files")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	uploads := filepath.Join(sessionDir, "uploads")
+	if err := os.MkdirAll(uploads, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	upFile := filepath.Join(uploads, "attached.md")
+	if err := os.WriteFile(upFile, []byte("uploaded content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tc := toolContext{Workspace: ws, SessionDir: sessionDir}
+	out, isErr := callFsTool(t, ws, readFileTool(tc), map[string]any{"path": upFile})
+	if isErr {
+		t.Fatalf("read of uploaded file should succeed, got: %q", out)
+	}
+	if out != "uploaded content" {
+		t.Errorf("unexpected content: %q", out)
+	}
+}
+
+// TestReadFile_StillRejectsOutsideBothRoots: a path that's neither in the
+// workspace nor the uploads dir stays rejected.
+func TestReadFile_StillRejectsOutsideBothRoots(t *testing.T) {
+	sessionDir := t.TempDir()
+	ws := filepath.Join(sessionDir, "projects", "p1", "files")
+	_ = os.MkdirAll(ws, 0o755)
+	tc := toolContext{Workspace: ws, SessionDir: sessionDir}
+
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	_ = os.WriteFile(outside, []byte("nope"), 0o644)
+
+	out, isErr := callFsTool(t, ws, readFileTool(tc), map[string]any{"path": outside})
+	if !isErr || !strings.Contains(out, "escapes the session workspace") {
+		t.Errorf("path outside workspace+uploads must be rejected, got isErr=%v %q", isErr, out)
+	}
+}
+
+// TestWriteFile_UploadsStaysWorkspaceOnly: write_file must NOT be able to
+// write into the uploads dir (read-only for uploads — don't let the agent
+// overwrite the user's attached blobs).
+func TestWriteFile_UploadsStaysWorkspaceOnly(t *testing.T) {
+	sessionDir := t.TempDir()
+	ws := filepath.Join(sessionDir, "projects", "p1", "files")
+	_ = os.MkdirAll(ws, 0o755)
+	uploads := filepath.Join(sessionDir, "uploads")
+	_ = os.MkdirAll(uploads, 0o755)
+	tc := toolContext{Workspace: ws, SessionDir: sessionDir}
+
+	target := filepath.Join(uploads, "evil.txt")
+	out, isErr := callFsTool(t, ws, writeFileTool(tc), map[string]any{"path": target, "content": "x"})
+	if !isErr || !strings.Contains(out, "escapes the session workspace") {
+		t.Errorf("write into uploads must be rejected, got isErr=%v %q", isErr, out)
+	}
+}

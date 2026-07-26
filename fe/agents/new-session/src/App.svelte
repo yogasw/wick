@@ -108,6 +108,9 @@
       label: p.name === p.type ? p.type : `${p.type} · ${p.name}`,
       value: providerKey(p),
       badge: p.usesAIRouter ? "AI Router" : undefined,
+      // Carry models so a multi-model provider (wick) drills into a model
+      // picker here too, consistent with the conversation composer.
+      models: p.models,
     })),
   );
   const presetOptions = $derived([

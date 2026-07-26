@@ -24,6 +24,14 @@ type InstanceConfig struct {
 	SendMode string `wick:"key=send_mode;dropdown=default|append|queue|spawn;desc=How a message reaches the CLI.\ndefault — follow the provider type (claude=append, codex=queue).\nappend — one persistent process; the CLI queues input itself (claude).\nqueue — one process per turn; messages sent while busy wait, then run in order. Context continues (resume). Nothing is dropped.\nspawn — one process per message, all in parallel. No queue; each runs in its own session, so contexts do NOT share history."`
 }
 
+// CLIModelConfig is the model-picker section for CLI providers
+// (claude/codex/gemini). Kept separate from InstanceConfig so it's only
+// appended for those types — wick has its own WickModels UI.
+type CLIModelConfig struct {
+	ModelSelect bool   `wick:"bool;key=model_select;group=Model selection|Let sessions pick a model for this instance. When on, the composer shows a model picker and passes the choice to the CLI via --model.;desc=Show a model picker for this instance. Off = the CLI's own default model."`
+	Models      string `wick:"key=models;kvlist=id|desc;group=Model selection;visible_when=model_select:true;desc=Models to offer: an id/alias (e.g. opus) and a short description. Leave empty to use the built-in defaults for this provider. The CLI can't list its own models, so this is edited by hand (or Load defaults)."`
+}
+
 // SeedInstanceConfig returns populated entity.Config rows for an Instance.
 func SeedInstanceConfig(ins Instance) []pkgentity.Config {
 	sendMode := ins.SendMode
@@ -37,6 +45,13 @@ func SeedInstanceConfig(ins Instance) []pkgentity.Config {
 		MaxConcurrent: ins.MaxConcurrent,
 		SendMode:      sendMode,
 	})
+	// CLI model picker — claude/codex/gemini only (wick uses WickModels).
+	if ins.Type != TypeWick {
+		rows = append(rows, pkgentity.StructToConfigs(CLIModelConfig{
+			ModelSelect: ins.ModelSelect,
+			Models:      modelsToKVList(ins.Models),
+		})...)
+	}
 	return rows
 }
 
@@ -62,7 +77,47 @@ func ApplyInstanceConfigKey(ins *Instance, key, value string) {
 		ins.SendMode = v
 	case "disabled":
 		ins.Disabled = value == "true" || value == "on"
+	case "model_select":
+		ins.ModelSelect = value == "true" || value == "on"
+	case "models":
+		ins.Models = kvListToModels(value)
 	}
+}
+
+// modelsToKVList encodes []ModelEntry → JSON [{"id":"opus","desc":"…"}, ...]
+// for the id|desc kvlist widget. Empty → "" so the widget renders no rows.
+func modelsToKVList(models []ModelEntry) string {
+	if len(models) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(models)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// kvListToModels decodes the id|desc kvlist JSON [{"id":..,"desc":..}, ...]
+// back to []ModelEntry, dropping rows with a blank id. Tolerant of the legacy
+// single-column {"value":..} shape so a config saved before the desc column
+// still loads (value → id).
+func kvListToModels(s string) []ModelEntry {
+	var rows []map[string]string
+	if err := json.Unmarshal([]byte(s), &rows); err != nil || len(rows) == 0 {
+		return nil
+	}
+	out := make([]ModelEntry, 0, len(rows))
+	for _, r := range rows {
+		id := strings.TrimSpace(r["id"])
+		if id == "" {
+			id = strings.TrimSpace(r["value"]) // legacy single-column shape
+		}
+		if id == "" {
+			continue
+		}
+		out = append(out, ModelEntry{ID: id, Desc: strings.TrimSpace(r["desc"])})
+	}
+	return out
 }
 
 // argsToKVList encodes []string → JSON [{"value":"arg"}, ...]

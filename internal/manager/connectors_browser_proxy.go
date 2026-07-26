@@ -152,6 +152,13 @@ func (h *Handler) apiBrowserClose(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session id required"})
 		return
 	}
+	// Abort every in-flight op bound to this session BEFORE killing the browser,
+	// so no run keeps executing against a browser that's about to be gone (which
+	// left runs hung in "running" and could crash the driver with EPIPE). The
+	// aborted ops' contexts unblock their plugin calls and finalize as
+	// "cancelled". Done first so the session_close op below (which registers
+	// under the same session id) isn't itself swept by this cancel.
+	h.connectors.CancelSession(sid)
 	var out map[string]any
 	if errMsg := h.execBrowserOp(r.Context(), login.GetUser(r.Context()), r, row.ID, "session_close", map[string]string{"session_id": sid}, &out); errMsg != "" {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": errMsg})

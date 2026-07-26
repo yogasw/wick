@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 
 	"github.com/yogasw/wick/internal/configs"
@@ -25,6 +26,16 @@ import (
 // is true. Wick auto-seeds exactly one row for a Fixed connector at
 // Bootstrap; admins cannot add or duplicate beyond that.
 var ErrFixedInstanceViolation = errors.New("connector is fixed: only one instance allowed")
+
+// opTimeout is the server-side hard ceiling on a single connector op, applied to
+// EVERY execution path (MCP, panel test, browser widget) in Service.Execute — so
+// a run can never wedge "running" even on a caller path that passes a
+// deadline-less context. Deliberately generous: above the plugin's own 45s op
+// deadline and any realistic op, so only a genuine hang trips it. A shorter
+// inbound deadline (e.g. the MCP SSE path's 5m) still wins — context takes the
+// earliest. When it fires the op is recorded "cancelled" (reason: timeout), not
+// "error", since the op didn't fail on its own.
+const opTimeout = 3 * time.Minute
 
 // ownerForConnector returns the configs.Service owner string used to
 // scope a connector instance's per-field config rows. Each instance
@@ -149,6 +160,24 @@ type Service struct {
 	// authenticate with a shared internal token, so p.UserID alone is not the
 	// real owner.
 	sessionOwnerUser func(sessionID string) (userID string, ok bool)
+
+	// runObserver, when set, is notified as a run enters "running" and again when
+	// it reaches a terminal status, so the agent conversation UI can surface a
+	// per-tool-call Cancel button (it needs the connector run id, which is created
+	// here and otherwise never leaves this package). Wired at boot via
+	// SetRunObserver where the agents SSE broadcaster is in scope; nil = no-op.
+	// Fired only for runs that have a sessionID (an agent turn) — a PAT call has
+	// no conversation to surface a button in.
+	runObserver func(ev RunEvent)
+
+	// inflight tracks the cancel func of EVERY op currently executing, keyed by
+	// run id, so CancelRun can abort one run (the per-run Kill button) regardless
+	// of whether it has a session. bySession is a secondary index (sessionID ->
+	// set of runIDs) so CancelSession can abort every op bound to a live session
+	// at once. Both guarded by inflightMu.
+	inflightMu sync.Mutex
+	inflight   map[string]context.CancelFunc // runID -> cancel
+	bySession  map[string]map[string]struct{} // sessionID -> set of runIDs
 }
 
 // tagSeeder is the slice of the tags service Bootstrap needs. Keeping
@@ -181,6 +210,43 @@ func (s *Service) SetSessionOwnerBotResolver(fn func(sessionID string) (string, 
 // shared internal agent principal.
 func (s *Service) SetSessionOwnerUserResolver(fn func(sessionID string) (string, bool)) {
 	s.sessionOwnerUser = fn
+}
+
+// RunEvent is emitted to the runObserver as a run starts and finishes, so the
+// conversation UI can show/hide a per-tool-call Cancel button. Running=true is
+// the start (Status "running"); Running=false is the terminal update carrying
+// the final Status. RunID is what the FE passes to the cancel route.
+type RunEvent struct {
+	SessionID    string
+	RunID        string
+	ConnectorID  string
+	OperationKey string
+	Status       entity.ConnectorRunStatus
+	Running      bool
+}
+
+// SetRunObserver wires the hook notified as connector runs start/finish. Called
+// once at boot where the agents SSE broadcaster is in scope, so a running
+// connector run (and its run id) can be surfaced to the conversation UI for a
+// per-run Cancel button. nil disables it.
+func (s *Service) SetRunObserver(fn func(RunEvent)) {
+	s.runObserver = fn
+}
+
+// emitRun notifies the observer (if set) for a session-scoped run. No-op for
+// runs with no session — there's no conversation to surface a button in.
+func (s *Service) emitRun(sessionID, runID, connectorID, opKey string, status entity.ConnectorRunStatus, running bool) {
+	if s.runObserver == nil || sessionID == "" {
+		return
+	}
+	s.runObserver(RunEvent{
+		SessionID:    sessionID,
+		RunID:        runID,
+		ConnectorID:  connectorID,
+		OperationKey: opKey,
+		Status:       status,
+		Running:      running,
+	})
 }
 
 // SetEnc wires the encrypted-fields cipher in after construction. Call
@@ -218,6 +284,8 @@ func NewService(r *Repo) *Service {
 		modules:    make(map[string]connector.Module),
 		rl:         newRateLimiter(),
 		metrics:    metrics.Noop{},
+		inflight:   make(map[string]context.CancelFunc),
+		bySession:  make(map[string]map[string]struct{}),
 	}
 }
 
@@ -245,6 +313,89 @@ func NewServiceFromDB(db *gorm.DB) *Service {
 // leaves every type enabled.
 func (s *Service) SetTypeStateDB(db *gorm.DB) {
 	s.typeState = newTypeStateStore(db)
+}
+
+// registerInflight records an in-flight op's cancel func by run id (so CancelRun
+// can abort exactly this run) and, when it has a session, indexes it under that
+// session (so CancelSession can abort the whole group).
+func (s *Service) registerInflight(sessionID, runID string, cancel context.CancelFunc) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	s.inflight[runID] = cancel
+	if sessionID != "" {
+		set := s.bySession[sessionID]
+		if set == nil {
+			set = make(map[string]struct{})
+			s.bySession[sessionID] = set
+		}
+		set[runID] = struct{}{}
+	}
+}
+
+// deregisterInflight drops a finished op's entry from both indexes, pruning the
+// session bucket once empty so the maps don't grow unbounded.
+func (s *Service) deregisterInflight(sessionID, runID string) {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	delete(s.inflight, runID)
+	if sessionID != "" {
+		if set := s.bySession[sessionID]; set != nil {
+			delete(set, runID)
+			if len(set) == 0 {
+				delete(s.bySession, sessionID)
+			}
+		}
+	}
+}
+
+// CancelRun aborts one in-flight op by run id (the per-run Kill button). Returns
+// true if a running op was found and cancelled. Cancelling its context unblocks
+// the plugin gRPC stream so op.Execute returns and its deferred finalizer flips
+// the row to "cancelled". Unknown / already-finished run → false.
+func (s *Service) CancelRun(runID string) bool {
+	if strings.TrimSpace(runID) == "" {
+		return false
+	}
+	s.inflightMu.Lock()
+	cancel := s.inflight[runID]
+	s.inflightMu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	log.Info().Str("run_id", runID).Msg("connectors: cancelled run on request")
+	return true
+}
+
+// CancelSession aborts every op currently executing under sessionID and returns
+// how many it cancelled. Cancelling each op's context unblocks its plugin gRPC
+// stream, so op.Execute returns and its deferred finalizer flips the run row to
+// "cancelled" — no op is left running in the background against a session that's
+// gone. Called when a live browser session is closed (session_close). Safe to
+// call for an unknown session (returns 0). Entries are removed by the ops' own
+// deferred deregister, so a cancelled op won't be cancelled twice.
+func (s *Service) CancelSession(sessionID string) int {
+	if strings.TrimSpace(sessionID) == "" {
+		return 0
+	}
+	s.inflightMu.Lock()
+	set := s.bySession[sessionID]
+	cancels := make([]context.CancelFunc, 0, len(set))
+	for runID := range set {
+		if c := s.inflight[runID]; c != nil {
+			cancels = append(cancels, c)
+		}
+	}
+	s.inflightMu.Unlock()
+	// Cancel outside the lock: cancel() is fast but a deferred deregister on the
+	// aborting goroutine also takes inflightMu, so holding it here could contend.
+	for _, c := range cancels {
+		c()
+	}
+	if len(cancels) > 0 {
+		log.Info().Str("session_id", sessionID).Int("cancelled", len(cancels)).Msg("connectors: aborted in-flight ops for closed session")
+	}
+	return len(cancels)
 }
 
 // TypeEnabled reports whether the connector type key is enabled. Default-on:
@@ -298,6 +449,16 @@ func (s *Service) Bootstrap(ctx context.Context, mods []connector.Module) error 
 		}
 	}
 	s.backfillSessionConfigDefault(ctx, mods)
+
+	// Reclaim runs left in "running" by a crash/restart or the pre-fix era when a
+	// hung op never finalized its row. Anything still "running" and older than a
+	// couple of minutes at boot can't be a live op of THIS process, so flip it to
+	// "cancelled" — the history UI never wedges on a stale "running". Best-effort.
+	if n, err := s.repo.ResetStuckRuns(ctx, time.Now().Add(-2*time.Minute)); err != nil {
+		log.Ctx(ctx).Warn().Err(err).Msg("connectors bootstrap: reset stuck runs failed")
+	} else if n > 0 {
+		log.Ctx(ctx).Info().Int64("count", n).Msg("connectors bootstrap: reclaimed stale running runs")
+	}
 	return nil
 }
 
@@ -1285,12 +1446,21 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		masker.add(collectSensitiveValues(mod, op, configs, input))
 	}
 
+	// Resolve the session id up front (an explicit `session_id` op input wins
+	// over the per-spawn p.SessionID) so it can be stamped on the run record and
+	// used to register this op for session-scoped cancellation below.
+	sessionID := p.SessionID
+	if v := strings.TrimSpace(input["session_id"]); v != "" {
+		sessionID = v
+	}
+
 	s.metrics.IncActive()
 	startedAt := time.Now()
 	run := &entity.ConnectorRun{
 		ConnectorID:  c.ID,
 		OperationKey: op.Key,
 		UserID:       p.UserID,
+		SessionID:    sessionID,
 		Source:       p.Source,
 		RequestJSON:  string(reqBytes),
 		Status:       entity.ConnectorRunStatusRunning,
@@ -1303,24 +1473,71 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("create run: %w", err)
 	}
 
+	// Make the op's context cancelable AND time-bounded, then register it under
+	// its session. Two guarantees flow from this:
+	//   - CancelSession (session_close) / CancelRun (per-run Kill) cancel opCtx →
+	//     the plugin gRPC stream's Recv() unblocks with context.Canceled → the op
+	//     returns instead of hanging.
+	//   - the WithTimeout is the server-side backstop: even if nothing cancels it
+	//     and the plugin never times out itself, the op can't run past opTimeout —
+	//     opCtx fires, the op unwinds, and the deferred finalizer records it. This
+	//     is what stops a run from wedging "running" on the timeout-less manager
+	//     path. It's deliberately generous (well above any real op) so only a
+	//     genuine hang trips it; a shorter inbound deadline (e.g. the MCP path's)
+	//     still wins because context takes the earliest.
+	opCtx, cancel := context.WithTimeout(ctx, opTimeout)
+	s.registerInflight(sessionID, run.ID, cancel)
+	// Tell the conversation UI a run just went in-flight (carries the run id it
+	// needs for a per-run Cancel button). The terminal counterpart fires in
+	// finalize below.
+	s.emitRun(sessionID, run.ID, c.ID, op.Key, entity.ConnectorRunStatusRunning, true)
+
+	// finalize is the SINGLE terminal-status writer for this run. It runs from a
+	// defer so the row is never left "running": whether op.Execute returns
+	// normally, its context is cancelled by a session_close, or it panics, the
+	// row lands on success/error/cancelled exactly once (guarded by `done`).
+	// Without this a hung/panicking op left the row "running" forever, and there
+	// was no reaper to reclaim it. FinishRun uses the parent ctx (not opCtx) on
+	// purpose — opCtx may be the very context that was just cancelled, and we
+	// still need to persist the terminal state.
+	done := false
+	var res *ExecuteResult
+	var execErr error
+	finalize := func() {
+		cancel()
+		s.deregisterInflight(sessionID, run.ID)
+		if done {
+			return
+		}
+		done = true
+		if res == nil {
+			// op.Execute panicked before res was assigned — record it as an error
+			// so the row is finalized rather than stuck.
+			res = &ExecuteResult{RunID: run.ID, Status: entity.ConnectorRunStatusError, ErrorMessage: "operation panicked"}
+		}
+		latencyMs := int(time.Since(startedAt).Milliseconds())
+		if ferr := s.repo.FinishRun(ctx, run.ID, res.Status, res.ResponseJSON, res.ErrorMessage, latencyMs, 0); ferr != nil {
+			log.Warn().Err(ferr).Str("run_id", run.ID).Msg("connectors: finish run failed")
+		}
+		s.metrics.DecActive()
+		s.metrics.RecordRun(c.Key, op.Key, string(res.Status), latencyMs)
+		// Terminal counterpart of the running notice — tells the UI to drop the
+		// per-run Cancel button and reflect the final status.
+		s.emitRun(sessionID, run.ID, c.ID, op.Key, res.Status, false)
+	}
+	defer finalize()
+
 	// Pass a nil interface (not a typed-nil *maskerAdapter) when enc is
 	// disabled so connector.Ctx's nil-check on c.Mask short-circuits.
 	var ctxMasker connector.Masker
 	if masker != nil {
 		ctxMasker = masker
 	}
-	cctx := connector.NewCtx(ctx, c.ID, configs, input, s.httpClient, p.Progress, ctxMasker)
+	cctx := connector.NewCtx(opCtx, c.ID, configs, input, s.httpClient, p.Progress, ctxMasker)
 	// Hand the connector the caller's original argument types (when the
 	// caller supplied them) so MCP-proxy ops can forward bools/numbers in
 	// their native JSON type rather than the stringified Input form.
 	cctx.SetRawInput(p.RawInput)
-	// Resolve the session id once for the owner-user + owner-bot resolvers.
-	// An explicit `session_id` op input (the LLM passes it when it knows the
-	// session) overrides the per-spawn header / top-level value in p.SessionID.
-	sessionID := p.SessionID
-	if v := strings.TrimSpace(input["session_id"]); v != "" {
-		sessionID = v
-	}
 	// Stamp the effective caller so ops that scope data per owner (data-table
 	// ops) can gate access. Agent spawns authenticate with a shared internal
 	// token (a synthetic admin, NOT the human), so the SESSION's owner — not
@@ -1342,7 +1559,18 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			cctx.SetOwnerBotID(id)
 		}
 	}
-	value, execErr := op.Execute(cctx)
+	// Recover a panicking op so finalize (deferred above) still writes a terminal
+	// status instead of the row hanging in "running". Re-raise nothing — the run
+	// is recorded as an error and the caller gets the error result.
+	var value any
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				execErr = fmt.Errorf("connector op panicked: %v", r)
+			}
+		}()
+		value, execErr = op.Execute(cctx)
+	}()
 	latencyMs := int(time.Since(startedAt).Milliseconds())
 
 	// maskOut replays every sensitive plaintext seen during this call
@@ -1367,29 +1595,52 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return masker.svc.Mask(s, masker.snapshot(), p.UserID)
 	}
 
-	res := &ExecuteResult{
+	res = &ExecuteResult{
 		RunID:     run.ID,
 		LatencyMs: latencyMs,
 	}
-	if execErr != nil {
+	switch {
+	case errors.Is(opCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
+		// The server-side op timeout fired: the op ran past opTimeout without
+		// anyone cancelling it (a genuine hang). Record it as "cancelled" (aborted,
+		// not a failure the op hit) and tell the agent it timed out so it doesn't
+		// assume a result.
+		res.Status = entity.ConnectorRunStatusCancelled
+		res.ErrorMessage = maskOut(fmt.Sprintf("This operation timed out after %s and was aborted. It did not complete — do not assume any result.", opTimeout))
+		if execErr == nil {
+			execErr = errors.New("operation timed out")
+		}
+	case opCtx.Err() != nil && ctx.Err() == nil:
+		// opCtx was cancelled (not timed out) while the parent ctx is still alive —
+		// this op was aborted on purpose (a per-run Kill or a session_close via
+		// CancelSession), NOT a genuine failure. Mark it "cancelled" so the UI shows
+		// "aborted", and give the AGENT an explicit, self-explanatory tool result:
+		// the message is what the model sees, so it must make clear the user stopped
+		// this call and the agent should not silently retry it. Set regardless of
+		// whether op.Execute already returned an error — cancellation wins the label.
+		res.Status = entity.ConnectorRunStatusCancelled
+		res.ErrorMessage = maskOut("This operation was cancelled by the user before it finished. It was not completed — do not assume any result. Ask the user how to proceed rather than automatically retrying.")
+		if execErr == nil {
+			// The op happened to return just as it was cancelled; surface the cancel
+			// as the error so the caller's result is unambiguously "cancelled".
+			execErr = errors.New("operation cancelled by user")
+		}
+	case execErr != nil:
 		res.Status = entity.ConnectorRunStatusError
 		res.ErrorMessage = maskOut(execErr.Error())
-	} else {
+	default:
 		bytes, mErr := json.Marshal(value)
 		if mErr != nil {
 			res.Status = entity.ConnectorRunStatusError
 			res.ErrorMessage = maskOut("marshal response: " + mErr.Error())
+			execErr = mErr
 		} else {
 			res.Status = entity.ConnectorRunStatusSuccess
 			res.ResponseJSON = maskOut(string(bytes))
 		}
 	}
 
-	if err := s.repo.FinishRun(ctx, run.ID, res.Status, res.ResponseJSON, res.ErrorMessage, latencyMs, 0); err != nil {
-		return res, fmt.Errorf("finish run: %w", err)
-	}
-	s.metrics.DecActive()
-	s.metrics.RecordRun(c.Key, op.Key, string(res.Status), latencyMs)
+	// finalize (deferred) writes the terminal status + metrics exactly once.
 	return res, execErr
 }
 
@@ -1426,6 +1677,15 @@ func (s *Service) Retry(ctx context.Context, originalRunID, userID, ipAddr, user
 // prefill flow when a Retry link is followed from the history view.
 func (s *Service) GetRun(ctx context.Context, runID string) (*entity.ConnectorRun, error) {
 	return s.repo.GetRun(ctx, runID)
+}
+
+// FinalizeStaleRun flips one still-"running" row to "cancelled". Used when a
+// per-run cancel is requested but no live cancel func is registered — the op
+// already returned or the row is a crash leftover, yet the DB still shows
+// "running". Reclaims exactly that row so the UI doesn't wedge. No-op-safe: if
+// the row isn't "running" the update matches nothing.
+func (s *Service) FinalizeStaleRun(ctx context.Context, runID string) error {
+	return s.repo.FinishRun(ctx, runID, entity.ConnectorRunStatusCancelled, "", "run reclaimed (no longer active)", 0, 0)
 }
 
 // ListRuns returns the most recent ConnectorRun rows for a connector,

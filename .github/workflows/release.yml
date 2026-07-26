@@ -63,6 +63,50 @@ jobs:
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
 
+      # Guard: plugin source changed but VERSION not bumped.
+      #
+      # The release pipeline treats an existing <name>/v<VERSION> tag as "already
+      # released" and SILENTLY SKIPS the plugin (detect/add_unreleased in
+      # release-plugins.yml). So editing a plugin's files without bumping its
+      # VERSION means the change never ships — no error anywhere. Catch it HERE,
+      # at PR time, where we can still diff each plugin folder against its own
+      # released tag (release-plugins.yml runs via repository_dispatch and has no
+      # PR/diff context, so it can't do this check).
+      #
+      # For every buildable plugin (main.go + VERSION, skip _ scaffolds): if its
+      # <name>/v<VERSION> tag exists AND the folder differs from that tag, the
+      # VERSION is stale — fail and tell the author to bump it.
+      - name: Verify changed plugins bumped their VERSION
+        run: |
+          set -euo pipefail
+          # Local refs for the plugin tags so `git diff <tag>` resolves offline.
+          git fetch --quiet origin 'refs/tags/*:refs/tags/*'
+          stale=""
+          for kind in connector tool job; do
+            [ -d "plugins/$kind" ] || continue
+            for d in plugins/"$kind"/*/; do
+              n=$(basename "$d")
+              case "$n" in _*) continue ;; esac
+              [ -f "$d/main.go" ]  || continue
+              [ -f "$d/VERSION" ] || continue
+              v=$(cat "$d/VERSION")
+              tag="$n/v$v"
+              # Tag missing → this VERSION is unreleased → nothing to enforce.
+              git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1 || continue
+              # Tag exists → the folder must be byte-identical to what was released.
+              if ! git diff --quiet "refs/tags/$tag" -- "$d"; then
+                echo "::error file=$d/VERSION::$kind/$n changed since $tag but VERSION is still $v — bump plugins/$kind/$n/VERSION"
+                stale="$stale $kind/$n"
+              fi
+            done
+          done
+          if [ -n "$stale" ]; then
+            echo "Plugins changed without a VERSION bump:$stale"
+            echo "Each already-released plugin above differs from its tag. Bump its VERSION so the release pipeline builds and ships the change instead of silently skipping it."
+            exit 1
+          fi
+          echo "All changed plugins have a bumped (unreleased) VERSION."
+
       - name: Verify PR is from master branch
         if: steps.check_tag.outputs.skip == 'false'
         uses: actions/github-script@v6

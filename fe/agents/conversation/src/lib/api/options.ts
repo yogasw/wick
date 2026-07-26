@@ -13,6 +13,14 @@ export const getProviderOptions = (base: string) =>
     ),
   );
 
+// getPresetOptions lists the configured presets ([{name}]) so the project
+// landing / init composer can offer a preset selector (same source the
+// new-session page uses).
+export const getPresetOptions = (base: string) =>
+  apiGetE<{ name: string }[] | null>(`${base}/presets/options`).pipe(
+    Effect.map((r) => (r ?? []).map((p) => p.name)),
+  );
+
 export const getProjectOptions = (base: string) =>
   apiGetE<(ProjectOption & { default_provider?: string })[] | null>(`${base}/projects/options`).pipe(
     Effect.map((r) =>
@@ -49,12 +57,14 @@ export async function createSessionInProject(
   files: File[],
   provider: string,
   projectId: string,
+  preset = "",
 ): Promise<string> {
   const fd = new FormData();
   fd.append("message", message);
   for (const f of files) fd.append("files", f);
   fd.append("provider", provider);
   fd.append("project_id", projectId);
+  if (preset) fd.append("preset", preset);
   const res = await fetch(`${base}/`, { method: "POST", body: fd, credentials: "same-origin" });
   if (res.ok || res.redirected) return res.url;
   throw new Error(`create session failed: ${res.status}`);

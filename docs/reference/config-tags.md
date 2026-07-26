@@ -26,10 +26,10 @@ type Config struct {
     // secret/password field
     APIKey string `wick:"desc=External API key.;secret;required"`
 
-    // native checkbox (auto-applied for bool fields)
+    // toggle switch (auto-applied for bool fields)
     EnableCache bool `wick:"desc=Cache results across requests."`
 
-    // toggle switch — clearer on/off visual; opt-in via `bool` flag
+    // toggle switch (bool/boolean are aliases of the same control)
     DebugMode bool `wick:"bool;desc=Verbose logging."`
 
     // editable table — see kvlist section below
@@ -47,8 +47,7 @@ type Config struct {
 | _(none / default string)_ | Text input | |
 | `textarea` | Textarea | Multi-line |
 | `dropdown=a\|b\|c` | Select | Pipe-separated options |
-| `checkbox` | Native checkbox | Auto-applied for Go `bool` fields. Compact, classic style. |
-| `bool` / `boolean` | Toggle switch | Boolean with clear on/off track + knob. Use when state should read at a glance. |
+| `checkbox` / `bool` / `boolean` | Toggle switch | All three render the same on/off toggle (track + knob). Auto-applied for Go `bool` fields; the tags are aliases. |
 | `number` | Number input | Auto-applied for `int` / `float` fields |
 | `secret` | Password input | Masked; value never sent to browser. Shows `••••••••` when set |
 | `email` | Email input | HTML `type="email"` |

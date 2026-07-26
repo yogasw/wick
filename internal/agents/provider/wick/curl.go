@@ -1,32 +1,57 @@
 package wick
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	provider "github.com/yogasw/wick/internal/agents/provider"
 )
 
-// curl.go reconstructs a "copy as curl" command for one interaction
-// record, so an operator debugging "did the vendor API actually respond"
-// can paste-and-run the exact request shape wick sent. Nothing about the
-// vendor config (base_url, kind, api_format, key) is stored in the
-// interaction log itself — it's looked up on demand from the model's
-// current config here, keyed by WickModel.ID. The API key is NEVER
-// resolved to plaintext for this purpose; it's always a placeholder the
-// operator fills in.
+// curl.go reconstructs the request one logged interaction sent, so an
+// operator debugging "did the vendor API actually respond" can replay the
+// exact shape. Nothing about the vendor config (base_url, kind, api_format,
+// key) is stored in the interaction log — it's looked up on demand from the
+// model's current config, keyed by WickModel.ID.
+//
+// BuildRequest produces a structured CurlRequest (method/url/headers/body);
+// the renderers turn it into whatever the caller needs: a Postman-safe
+// single line, a readable multi-line bash command, a raw HTTP request
+// (Postman/Insomnia "import raw"), or just the JSON body. The API key is
+// injected at render time as a bearerValue — the struct never carries a
+// secret, so the same request can be rendered with a placeholder OR (admin,
+// on request) the real key without re-deriving anything.
 
-// BuildCurl reconstructs a curl command for one logged interaction,
-// given the model config it ran under (looked up by the caller via
-// WickModel.ID = record's ModelID). recordJSON is one raw line from
-// wick-interactions.jsonl. Returns an error string (not a Go error) when
-// the record can't be parsed or the model config is missing/unsupported,
-// so the caller can render it directly.
-func BuildCurl(recordJSON []byte, m provider.WickModel) (string, error) {
+// CurlRequest is the structured, render-agnostic form of a reconstructed
+// request. AuthHeader names the header the bearer/token goes in (differs by
+// vendor: Authorization vs x-api-key vs a query param for Gemini).
+type CurlRequest struct {
+	Method string
+	URL    string // may contain a {{KEY}} marker for Gemini's query-param auth
+	// Headers excludes the auth header; that's applied at render with the
+	// caller's chosen bearer value (placeholder / custom / real).
+	Headers    map[string]string
+	AuthHeader string // "" when auth is a URL query param (Gemini)
+	AuthScheme string // "Bearer " for OpenAI; "" for x-api-key / query param
+	Body       json.RawMessage
+	// EnvHint lists the env vars a caller may want to export before running
+	// (shown in the UI's env block). Values are placeholders, never secrets.
+	EnvHint map[string]string
+}
+
+// bearerPlaceholder is the shell var the key defaults to, so a copied curl
+// never contains a real secret unless the operator explicitly reveals it.
+const bearerPlaceholder = "$WICK_MODEL_API_KEY"
+
+// BuildRequest reconstructs the structured request for one logged
+// interaction under the given model config. Returns an error string (not a
+// Go error) so the caller can render it directly.
+func BuildRequest(recordJSON []byte, m provider.WickModel) (CurlRequest, error) {
 	var rec interactionRecord
 	if err := json.Unmarshal(recordJSON, &rec); err != nil {
-		return "", fmt.Errorf("parse interaction record: %w", err)
+		return CurlRequest{}, fmt.Errorf("parse interaction record: %w", err)
 	}
 
 	kind := strings.ToLower(strings.TrimSpace(m.Kind))
@@ -41,19 +66,50 @@ func BuildCurl(recordJSON []byte, m provider.WickModel) (string, error) {
 
 	switch format {
 	case "openai_chat", "openai_responses":
-		return curlOpenAI(rec, m, baseURL), nil
+		return reqOpenAI(rec, m, baseURL), nil
 	case "anthropic_messages":
-		return curlAnthropic(rec, m, baseURL), nil
+		return reqAnthropic(rec, m, baseURL), nil
 	case "gemini":
-		return curlGemini(rec, m, baseURL), nil
+		return reqGemini(rec, m, baseURL), nil
 	default:
-		return "", fmt.Errorf("unsupported api format %q for curl reconstruction", format)
+		return CurlRequest{}, fmt.Errorf("unsupported api format %q for curl reconstruction", format)
 	}
 }
 
-// curlOpenAI reconstructs an OpenAI Chat Completions style curl (also
-// used by OpenRouter and "other" openai-compatible endpoints).
-func curlOpenAI(rec interactionRecord, m provider.WickModel, baseURL string) string {
+// BuildRequestFromLive reconstructs the structured request for the CURRENTLY
+// in-flight model call (from the live-phase snapshot) rather than a finished log
+// record — so the FE can view/copy-as-curl the request that's being sent right
+// now, before any record lands. It maps the live snapshot onto the same
+// interactionRecord shape BuildRequest consumes, so the exact same vendor-format
+// reconstruction + renderers apply.
+func BuildRequestFromLive(st ModelCallState, m provider.WickModel) (CurlRequest, error) {
+	rec := interactionRecord{
+		Kind:    st.Kind,
+		Model:   st.Model,
+		ModelID: st.ModelID,
+		System:  st.System,
+		Tools:   st.Tools,
+		Request: st.Messages,
+	}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return CurlRequest{}, err
+	}
+	return BuildRequest(b, m)
+}
+
+// BuildCurl keeps the original single-shot API: a ready single-line curl
+// with the key as a placeholder. Kept for existing callers/tests; new UI
+// uses BuildRequest + a renderer.
+func BuildCurl(recordJSON []byte, m provider.WickModel) (string, error) {
+	req, err := BuildRequest(recordJSON, m)
+	if err != nil {
+		return "", err
+	}
+	return RenderMultiline(req, bearerPlaceholder), nil
+}
+
+func reqOpenAI(rec interactionRecord, m provider.WickModel, baseURL string) CurlRequest {
 	messages := make([]map[string]string, 0, len(rec.Request)+1)
 	if rec.System != "" {
 		messages = append(messages, map[string]string{"role": "system", "content": rec.System})
@@ -61,15 +117,19 @@ func curlOpenAI(rec interactionRecord, m provider.WickModel, baseURL string) str
 	for _, msg := range rec.Request {
 		messages = append(messages, map[string]string{"role": oaiRole(msg.Role), "content": msgText(msg)})
 	}
-	body := map[string]any{"model": m.Model, "messages": messages}
-	return renderCurl(baseURL+"/chat/completions", map[string]string{
-		"Authorization": "Bearer $WICK_MODEL_API_KEY",
-		"Content-Type":  "application/json",
-	}, body)
+	body, _ := json.MarshalIndent(map[string]any{"model": m.Model, "messages": messages}, "", "  ")
+	return CurlRequest{
+		Method:     "POST",
+		URL:        baseURL + "/chat/completions",
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		AuthHeader: "Authorization",
+		AuthScheme: "Bearer ",
+		Body:       body,
+		EnvHint:    map[string]string{"WICK_MODEL_API_KEY": "your OpenAI-compatible API key", "BASE_URL": baseURL},
+	}
 }
 
-// curlAnthropic reconstructs an Anthropic Messages API style curl.
-func curlAnthropic(rec interactionRecord, m provider.WickModel, baseURL string) string {
+func reqAnthropic(rec interactionRecord, m provider.WickModel, baseURL string) CurlRequest {
 	messages := make([]map[string]string, 0, len(rec.Request))
 	for _, msg := range rec.Request {
 		role := "user"
@@ -78,21 +138,23 @@ func curlAnthropic(rec interactionRecord, m provider.WickModel, baseURL string) 
 		}
 		messages = append(messages, map[string]string{"role": role, "content": msgText(msg)})
 	}
-	body := map[string]any{"model": m.Model, "max_tokens": 4096, "messages": messages}
+	payload := map[string]any{"model": m.Model, "max_tokens": 4096, "messages": messages}
 	if rec.System != "" {
-		body["system"] = rec.System
+		payload["system"] = rec.System
 	}
-	return renderCurl(baseURL+"/messages", map[string]string{
-		"x-api-key":         "$WICK_MODEL_API_KEY",
-		"anthropic-version": anthropicVersion,
-		"Content-Type":      "application/json",
-	}, body)
+	body, _ := json.MarshalIndent(payload, "", "  ")
+	return CurlRequest{
+		Method:     "POST",
+		URL:        baseURL + "/messages",
+		Headers:    map[string]string{"anthropic-version": anthropicVersion, "Content-Type": "application/json"},
+		AuthHeader: "x-api-key",
+		AuthScheme: "",
+		Body:       body,
+		EnvHint:    map[string]string{"WICK_MODEL_API_KEY": "your Anthropic API key", "BASE_URL": baseURL},
+	}
 }
 
-// curlGemini reconstructs a Gemini generateContent style curl. The key
-// is normally a query param for Gemini; kept as a placeholder the same
-// way so it's never a real secret in the copyable output.
-func curlGemini(rec interactionRecord, m provider.WickModel, baseURL string) string {
+func reqGemini(rec interactionRecord, m provider.WickModel, baseURL string) CurlRequest {
 	contents := make([]map[string]any, 0, len(rec.Request))
 	for _, msg := range rec.Request {
 		role := "user"
@@ -104,17 +166,161 @@ func curlGemini(rec interactionRecord, m provider.WickModel, baseURL string) str
 			"parts": []map[string]string{{"text": msgText(msg)}},
 		})
 	}
-	body := map[string]any{"contents": contents}
+	payload := map[string]any{"contents": contents}
 	if rec.System != "" {
-		body["systemInstruction"] = map[string]any{"parts": []map[string]string{{"text": rec.System}}}
+		payload["systemInstruction"] = map[string]any{"parts": []map[string]string{{"text": rec.System}}}
 	}
-	url := fmt.Sprintf("%s/v1beta/models/%s:generateContent?key=$WICK_MODEL_API_KEY", baseURL, m.Model)
-	return renderCurl(url, map[string]string{"Content-Type": "application/json"}, body)
+	body, _ := json.MarshalIndent(payload, "", "  ")
+	// Gemini takes the key as a ?key= query param, not a header. The URL
+	// carries a {{KEY}} marker the renderer substitutes with the bearer.
+	return CurlRequest{
+		Method:     "POST",
+		URL:        fmt.Sprintf("%s/v1beta/models/%s:generateContent?key={{KEY}}", baseURL, m.Model),
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		AuthHeader: "", // query-param auth
+		AuthScheme: "",
+		Body:       body,
+		EnvHint:    map[string]string{"WICK_MODEL_API_KEY": "your Gemini API key", "BASE_URL": baseURL},
+	}
 }
 
-// msgText renders one interactionMsg back into plain text for the curl
-// body — tool_call/tool_result markers become a readable inline note
-// since the exact vendor tool-result wire shape isn't preserved in the log.
+// ── renderers ────────────────────────────────────────────────────────
+
+// applyAuth returns the URL and the auth header (name,value) for a bearer.
+// For Gemini (query-param auth) the bearer is spliced into the URL's {{KEY}}
+// marker and no header is returned.
+func applyAuth(r CurlRequest, bearer string) (url string, authName, authValue string) {
+	url = r.URL
+	if strings.Contains(url, "{{KEY}}") {
+		url = strings.ReplaceAll(url, "{{KEY}}", bearer)
+		return url, "", ""
+	}
+	if r.AuthHeader != "" {
+		return url, r.AuthHeader, r.AuthScheme + bearer
+	}
+	return url, "", ""
+}
+
+// sortedHeaderKeys gives headers a stable render order (auth first, then
+// alphabetical) so the output is deterministic across calls/tests.
+func sortedHeaderKeys(h map[string]string) []string {
+	keys := make([]string, 0, len(h))
+	for k := range h {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// RenderSingleLine renders a one-line curl (no `\` continuation), which
+// pastes into Postman "Import → Raw text" without the truncation the
+// multi-line form suffers.
+func RenderSingleLine(r CurlRequest, bearer string) string {
+	url, authName, authValue := applyAuth(r, bearer)
+	var b strings.Builder
+	fmt.Fprintf(&b, "curl -sS -X %s %s", r.Method, sq(url))
+	if authName != "" {
+		fmt.Fprintf(&b, " -H %s", sq(authName+": "+authValue))
+	}
+	for _, k := range sortedHeaderKeys(r.Headers) {
+		fmt.Fprintf(&b, " -H %s", sq(k+": "+r.Headers[k]))
+	}
+	if len(r.Body) > 0 {
+		fmt.Fprintf(&b, " -d %s", sq(compactJSON(r.Body)))
+	}
+	return b.String()
+}
+
+// RenderMultiline renders the readable bash form with `\` continuation.
+func RenderMultiline(r CurlRequest, bearer string) string {
+	url, authName, authValue := applyAuth(r, bearer)
+	var b strings.Builder
+	fmt.Fprintf(&b, "curl -sS -X %s %s", r.Method, sq(url))
+	if authName != "" {
+		fmt.Fprintf(&b, " \\\n  -H %s", sq(authName+": "+authValue))
+	}
+	for _, k := range sortedHeaderKeys(r.Headers) {
+		fmt.Fprintf(&b, " \\\n  -H %s", sq(k+": "+r.Headers[k]))
+	}
+	if len(r.Body) > 0 {
+		fmt.Fprintf(&b, " \\\n  -d %s", sq(string(prettyJSON(r.Body))))
+	}
+	return b.String()
+}
+
+// sq wraps s in single quotes for a POSIX shell, escaping any embedded
+// single quote via the '\'' idiom (close quote, escaped quote, reopen).
+// Without this a body containing an apostrophe (e.g. "don't" in a system
+// prompt) terminated the -d '...' string early — which is exactly what
+// truncated the request when pasted into Postman's curl importer.
+func sq(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// RenderRawHTTP renders a raw HTTP/1.1 request — the format Postman /
+// Insomnia "import raw" parse most reliably.
+func RenderRawHTTP(r CurlRequest, bearer string) string {
+	url, authName, authValue := applyAuth(r, bearer)
+	host, path := splitHostPath(url)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s %s HTTP/1.1\n", r.Method, path)
+	fmt.Fprintf(&b, "Host: %s\n", host)
+	if authName != "" {
+		fmt.Fprintf(&b, "%s: %s\n", authName, authValue)
+	}
+	for _, k := range sortedHeaderKeys(r.Headers) {
+		fmt.Fprintf(&b, "%s: %s\n", k, r.Headers[k])
+	}
+	if len(r.Body) > 0 {
+		b.WriteString("\n")
+		b.Write(prettyJSON(r.Body))
+	}
+	return b.String()
+}
+
+// RenderJSONBody returns just the pretty-printed request body.
+func RenderJSONBody(r CurlRequest) string {
+	if len(r.Body) == 0 {
+		return "{}"
+	}
+	return string(prettyJSON(r.Body))
+}
+
+// splitHostPath breaks a URL into host and path+query for the raw-HTTP
+// request line. Best-effort: an unparsable URL degrades to ("", url).
+func splitHostPath(url string) (host, path string) {
+	s := url
+	for _, pre := range []string{"https://", "http://"} {
+		if strings.HasPrefix(s, pre) {
+			s = s[len(pre):]
+			break
+		}
+	}
+	if i := strings.IndexByte(s, '/'); i >= 0 {
+		return s[:i], s[i:]
+	}
+	return s, "/"
+}
+
+func compactJSON(b json.RawMessage) string {
+	var out bytes.Buffer
+	if err := json.Compact(&out, b); err != nil {
+		return string(b)
+	}
+	return out.String()
+}
+
+func prettyJSON(b json.RawMessage) []byte {
+	var out bytes.Buffer
+	if err := json.Indent(&out, b, "", "  "); err != nil {
+		return b
+	}
+	return out.Bytes()
+}
+
+// msgText renders one interactionMsg back into plain text for the request
+// body — tool_call/tool_result markers become a readable inline note since
+// the exact vendor tool-result wire shape isn't preserved in the log.
 func msgText(msg interactionMsg) string {
 	switch {
 	case msg.ToolCall != "":
@@ -134,28 +340,4 @@ func oaiRole(role string) string {
 		return "user"
 	}
 	return role
-}
-
-// renderCurl formats a POST curl command with headers + a pretty-printed
-// JSON body, single-quoted for shell-safety.
-func renderCurl(url string, headers map[string]string, body any) string {
-	var b strings.Builder
-	b.WriteString("curl -sS -X POST '")
-	b.WriteString(url)
-	b.WriteString("'")
-	for k, v := range headers {
-		b.WriteString(" \\\n  -H '")
-		b.WriteString(k)
-		b.WriteString(": ")
-		b.WriteString(v)
-		b.WriteString("'")
-	}
-	payload, err := json.MarshalIndent(body, "", "  ")
-	if err != nil {
-		payload = []byte("{}")
-	}
-	b.WriteString(" \\\n  -d '")
-	b.Write(payload)
-	b.WriteString("'")
-	return b.String()
 }

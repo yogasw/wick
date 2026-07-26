@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ConfirmDialog } from "@wick-fe/common-ui";
+  import { ConfirmDialog, ProviderPicker } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     getProjectSettings,
@@ -51,10 +51,14 @@
       const label = p.name === p.type
         ? p.type.charAt(0).toUpperCase() + p.type.slice(1)
         : value;
-      return { value, label };
+      return {
+        value,
+        label,
+        models: (p.models ?? []).map((m) => ({ id: m.id, label: m.label, default: m.default, desc: m.desc })),
+      };
     });
-    if (provider && !opts.some((o) => o.value === provider)) {
-      opts.push({ value: provider, label: `${provider} (unavailable)` });
+    if (provider && !opts.some((o) => o.value === provider.split("::")[0])) {
+      opts.push({ value: provider.split("::")[0], label: `${provider.split("::")[0]} (unavailable)`, models: [] });
     }
     return opts;
   });
@@ -265,15 +269,13 @@
             <div class="space-y-3">
               <div>
                 <label for="ps-provider" class="block text-black-600 dark:text-black-700 text-xs mb-0.5">Provider</label>
-                <select
+                <ProviderPicker
                   id="ps-provider"
-                  bind:value={provider}
-                  class="w-full rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1.5 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"
-                >
-                  {#each providerOptions as opt (opt.value)}
-                    <option value={opt.value}>{opt.label}</option>
-                  {/each}
-                </select>
+                  options={providerOptions}
+                  value={provider}
+                  onChange={(v) => (provider = v)}
+                  placeholder="Select provider"
+                />
               </div>
               <div>
                 <label for="ps-preset" class="block text-black-600 dark:text-black-700 text-xs mb-0.5">Preset</label>

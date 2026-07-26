@@ -276,15 +276,27 @@ func argInt(args map[string]any, key string) int {
 	return 0
 }
 
-// scheduleScope returns (ownerID, allOwners) for a list query. Only the app
-// super-user (CanSeeAllSessions / IsOwner) enumerates every owner's
-// schedules; a plain admin is scoped to their own, matching the "admins
-// don't see everything by default" rule the UI monitor enforces via
-// admin_see_all. A cross-user view for admins is the UI monitor's job (it
-// reads the admin_see_all config, which this transport does not carry).
-// nil user (stdio / tests) is unscoped so local tooling sees everything.
+// scheduleScope returns (ownerID, allOwners) for a list query. It mirrors
+// the create/cancel gate (canManageSession = CanSeeAllSessions || IsAdmin):
+// the app super-user AND any admin — including the in-process wick
+// provider's synthetic RoleAdmin principal — enumerate every owner's
+// schedules; a regular user is scoped to their own. nil user (stdio /
+// tests) is unscoped so local tooling sees everything.
+//
+// This deliberately lets admins list across owners on THIS transport.
+// Earlier it scoped plain admins to their own id, which broke the
+// create→list symmetry for the internal principal (it stamps each row's
+// owner_user_id with the real session owner, so a self-scoped list never
+// matched and returned []). The UI monitor still applies its own
+// admin_see_all filtering separately.
 func scheduleScope(user *entity.User) (string, bool) {
-	if user == nil || user.CanSeeAllSessions() {
+	// Admins (incl. the in-process wick provider's synthetic RoleAdmin
+	// principal) see all owners here, matching the create/cancel gate
+	// (canManageSession = CanSeeAllSessions || IsAdmin). Without IsAdmin
+	// the internal user — RoleAdmin but not IsOwner — could create/cancel
+	// but list returned [] because the query scoped to its own id, which
+	// never matches a row stamped with the real session owner's id.
+	if user == nil || user.CanSeeAllSessions() || user.IsAdmin() {
 		return "", true
 	}
 	return user.ID, false
