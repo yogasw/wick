@@ -608,14 +608,114 @@ var cloakLaunchArgs = struct {
 	IgnoreDefaultArgs: []string{"--enable-automation", "--enable-unsafe-swiftshader"},
 }
 
-// cloakArgs builds the per-launch stealth args with a fresh fingerprint seed,
-// matching cloakbrowser's get_default_stealth_args (Windows profile). A new seed
-// per launch = a new coherent device identity, which is what the wrapper does.
-func cloakArgs() []string {
-	seed := 10000 + rand.Intn(90000) // 10000..99999, same range as the wrapper
-	return []string{
+// headlessNoViewportMinVersion is the first Chromium build that reports coherent
+// headless dimensions without an emulated viewport (and on which --start-maximized
+// stays coherent). Mirrors the Python wrapper's HEADLESS_NO_VIEWPORT_MIN_VERSION.
+// Binaries at/above this run headless with no_viewport + may start maximized;
+// older ones need a fixed viewport and must NOT maximize (would give an
+// impossible outerWidth < innerWidth window — a bot tell).
+const headlessNoViewportMinVersion = "148.0.7778.215.4"
+
+// cloakBinaryVersion returns the resolved CloakBrowser binary version, best-effort:
+//   - pro engine: from `cloakbrowser info` (the CLI-managed binary).
+//   - free engine: from the VERSION tag recorded at install (leading "v" stripped).
+// "" when unknown — callers then take the conservative (older-binary) path.
+func cloakBinaryVersion(c *connector.Ctx) string {
+	engine := strings.TrimSpace(c.Cfg("browser"))
+	if isCloakPro(engine) {
+		if info, err := cloakGetInfoCached(c); err == nil {
+			return strings.TrimSpace(info.Version)
+		}
+		return ""
+	}
+	return strings.TrimPrefix(strings.TrimSpace(cloakVersion(c)), "v")
+}
+
+// cloakSupportsNoViewport reports whether the resolved binary reports coherent
+// dimensions natively — i.e. is at/above headlessNoViewportMinVersion. Mirrors
+// the wrapper's binary_supports_headless_no_viewport / binary_supports_maximized_window
+// (they share the same threshold). Unknown version → false (safe, older path).
+func cloakSupportsNoViewport(c *connector.Ctx) bool {
+	v := cloakBinaryVersion(c)
+	if v == "" {
+		return false
+	}
+	return cmpDottedVersion(v, headlessNoViewportMinVersion) >= 0
+}
+
+// cmpDottedVersion compares two dotted numeric version strings (e.g.
+// "150.0.7871.114" vs "148.0.7778.215.4") segment by segment. Returns -1, 0, or
+// +1. Non-numeric or missing segments compare as 0, so a shorter prefix that
+// matches is treated as equal up to its length. Mirrors the wrapper's
+// _version_newer semantics closely enough for the >=148 gate.
+func cmpDottedVersion(a, b string) int {
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	n := len(as)
+	if len(bs) > n {
+		n = len(bs)
+	}
+	for i := 0; i < n; i++ {
+		ai, bi := 0, 0
+		if i < len(as) {
+			ai = atoiSafe(as[i])
+		}
+		if i < len(bs) {
+			bi = atoiSafe(bs[i])
+		}
+		if ai != bi {
+			if ai < bi {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+// atoiSafe parses a leading integer from s, returning 0 on any non-numeric input.
+func atoiSafe(s string) int {
+	n := 0
+	for _, r := range strings.TrimSpace(s) {
+		if r < '0' || r > '9' {
+			break
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
+}
+
+// cloakArgs builds the per-launch stealth args, mirroring cloakbrowser's
+// build_args(): get_default_stealth_args() (--no-sandbox, a fresh per-launch
+// --fingerprint seed 10000..99999 for a new coherent device identity, and the
+// Windows fingerprint profile) plus the two version/OS-gated flags the wrapper
+// adds:
+//
+//   - --ignore-gpu-blocklist: the wrapper adds this on Windows in ALL modes
+//     (headed + headless) so Chromium's GPU blocklist doesn't block WebGPU for
+//     the Microsoft Basic Render Driver. It is NOT a bot tell — real Windows
+//     Chrome behind the basic driver needs it too. (An earlier launch matrix
+//     mis-attributed a "target closed" to this flag; the real cause was an
+//     exhausted free-tier license session slot, not the flag.)
+//   - --start-maximized: only on binaries at/above headlessNoViewportMinVersion
+//     (Pro v148+), where a maximized window stays coherent (outer == screen).
+//     Below the gate it would create outerWidth < innerWidth — an impossible
+//     window — so it must be omitted, exactly like the wrapper's
+//     binary_supports_maximized_window gate.
+func cloakArgs(c *connector.Ctx) []string {
+	seed := 10000 + rand.Intn(90000)
+	args := []string{
 		"--no-sandbox",
 		fmt.Sprintf("--fingerprint=%d", seed),
 		"--fingerprint-platform=windows",
 	}
+	// Windows GPU blocklist bypass — the wrapper adds this on Windows regardless
+	// of headless; keep the OS gate so non-Windows hosts match the wrapper too.
+	if runtime.GOOS == "windows" {
+		args = append(args, "--ignore-gpu-blocklist")
+	}
+	// Maximized window, gated to binaries where it stays coherent.
+	if cloakSupportsNoViewport(c) {
+		args = append(args, "--start-maximized")
+	}
+	return args
 }

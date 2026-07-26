@@ -283,17 +283,13 @@ func launchOptions(c *connector.Ctx) playwright.BrowserTypeLaunchOptions {
 		// (~/.cloakbrowser) binary resolved from `cloakbrowser info`.
 		opts.ExecutablePath = playwright.String(resolveCloakBinary(c, engine))
 		opts.IgnoreDefaultArgs = cloakLaunchArgs.IgnoreDefaultArgs
-		opts.Args = cloakArgs()
-		// Headless mode: Playwright's Headless:true injects --headless=new, which
-		// on Windows briefly creates then hides a real window (the visible "blink"
-		// / open-then-close). Take control ourselves: turn Playwright's flag OFF
-		// and add classic --headless=old, which never creates a window → no flash.
-		// (Ephemeral ops don't load extensions, so classic headless is fine — the
-		// live-session path handles the extension case separately.)
-		if headless(c) {
-			opts.Headless = playwright.Bool(false)
-			opts.Args = append(opts.Args, "--headless=old")
-		}
+		opts.Args = cloakArgs(c)
+		// Headless is left ENTIRELY to Playwright's own Headless flag (set above),
+		// exactly like the cloakbrowser wrapper — it never adds a --headless flag
+		// itself. Playwright's new-headless launch is what avoids the Windows
+		// window flash, and a launch matrix confirmed plain Headless:true + the
+		// stealth args navigates cleanly (adding --headless=old OR
+		// --ignore-gpu-blocklist is what caused "target closed").
 		// Pass the license key into the launched browser's env so a Pro binary
 		// activates its licensed tier. Without it a Pro binary fails its license
 		// check and exits immediately — Playwright then reports "target closed"
@@ -350,6 +346,26 @@ func contextOptions(pw *playwright.Playwright, c *connector.Ctx) (playwright.Bro
 		opts.DeviceScaleFactor = playwright.Float(desc.DeviceScaleFactor)
 		opts.IsMobile = playwright.Bool(desc.IsMobile)
 		opts.HasTouch = playwright.Bool(desc.HasTouch)
+	} else if isCloakEngine(c.Cfg("browser")) {
+		// CloakBrowser viewport handling mirrors the wrapper's
+		// _resolve_context_viewport (browser.py):
+		//   - headed → no_viewport (the page tracks the real window).
+		//   - headless on a newer binary (>=148, e.g. Pro v150) → no_viewport too:
+		//     it reports coherent screen dimensions natively, so an emulated
+		//     viewport would make outerWidth < innerWidth (an impossible-window
+		//     bot tell that makes the binary drop the page — "target closed").
+		//   - headless on an OLDER binary (free v146, <148) → a fixed 1920x947
+		//     viewport (DEFAULT_VIEWPORT) keeps dimensions coherent + deterministic;
+		//     that binary does NOT report coherent headless dimensions on its own.
+		// A user UA override is honored in all cases.
+		if !headless(c) || cloakSupportsNoViewport(c) {
+			opts.NoViewport = playwright.Bool(true)
+		} else {
+			opts.Viewport = &playwright.Size{Width: 1920, Height: 947}
+		}
+		if ua := strings.TrimSpace(c.Cfg("user_agent")); ua != "" {
+			opts.UserAgent = playwright.String(ua)
+		}
 	} else {
 		w := c.CfgInt("viewport_width")
 		if w <= 0 {

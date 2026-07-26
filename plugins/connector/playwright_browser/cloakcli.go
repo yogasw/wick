@@ -186,11 +186,20 @@ func cloakGetInfoCached(c *connector.Ctx) (cloakInfo, error) {
 	return info, nil
 }
 
-// cloakGetInfo runs `cloakbrowser info` and parses it. Best-effort: a parse miss
-// leaves the field empty rather than erroring, so a slightly different CLI
-// version doesn't break the widget.
+// cloakGetInfo runs `cloakbrowser info --no-launch` and parses it. Best-effort: a
+// parse miss leaves the field empty rather than erroring, so a slightly different
+// CLI version doesn't break the widget.
+//
+// --no-launch is critical: a plain `cloakbrowser info` runs a LAUNCH TEST — it
+// actually spawns the stealth Chromium to prove it executes — which flashed a
+// browser window (and could leave a process running) every time the manager
+// rendered the pro engine's status row. --no-launch skips that test but still
+// reports Version + Installed + tier + Binary (read from the cache/manifest, no
+// download, no launch), so the widget gets everything it needs with zero flicker.
+// It also drops the info call from ~12s to ~0.4s. Mirrors what the widget needs
+// from the wrapper's cmd_info(quick=True) path.
 func cloakGetInfo(c *connector.Ctx) (cloakInfo, error) {
-	out, err := runCloakCLI(c, 30*time.Second, "info")
+	out, err := runCloakCLI(c, 30*time.Second, "info", "--no-launch")
 	// Parse the output even on a non-zero exit: `cloakbrowser info` can print a
 	// benign warning (e.g. a Windows console encoding error for a ✗ glyph) and
 	// still emit the full diagnostics, or exit non-zero while the diagnostics are

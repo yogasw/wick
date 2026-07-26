@@ -234,22 +234,22 @@ func openSession(c *connector.Ctx) (any, error) {
 		"--no-first-run", "--no-default-browser-check",
 		"--no-sandbox", // required where the sandbox helper is blocked
 	}
-	// Honor the Headless config. Mode matters on Windows:
-	//   - --headless=new spins up a REAL browser window and then hides it, which
-	//     flashes visibly for a moment (the "blink" — open-then-close). It's only
-	//     needed when extensions are loaded, because classic headless ignores
-	//     --load-extension entirely.
-	//   - --headless=old (classic) never creates a window → zero flash, but no
-	//     extensions.
-	// So: use classic headless by default (no blink) and only upgrade to
-	// --headless=new when extensions are actually installed.
+	// Honor the Headless config. This path launches Chrome DETACHED (not via
+	// Playwright), so it must stay alive on its own waiting for a CDP client.
+	// Newer Chromium (the pro v150 binary) EXITS immediately under classic
+	// --headless=old when detached, so use --headless=new here (it keeps serving
+	// CDP). It briefly shows a window on Windows, but we do NOT force a tiny
+	// off-screen window to hide it — a 1×1 off-screen window gives CloakBrowser an
+	// incoherent screen size (an "impossible window" bot tell) that makes the
+	// stealth binary drop the page. A momentary flash is the lesser evil vs. a
+	// broken stealth session. For cloak also add the stealth fingerprint args so
+	// the detached browser matches the Playwright-launched one.
 	exts := installedExtensions(c)
 	if headless(c) {
-		if len(exts) > 0 {
-			args = append(args, "--headless=new")
-		} else {
-			args = append(args, "--headless=old")
-		}
+		args = append(args, "--headless=new")
+	}
+	if isCloakEngine(b) {
+		args = append(args, cloakArgs(c)...)
 	}
 	if len(exts) > 0 {
 		joined := strings.Join(exts, ",")

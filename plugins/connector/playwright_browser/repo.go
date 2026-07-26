@@ -125,14 +125,63 @@ type session struct {
 // On timeout we force pw.Stop in the background so the pending call errors out
 // and the worker goroutine is freed instead of leaking as a zombie.
 func withSession(c *connector.Ctx, fn func(*session) (any, error)) (any, error) {
-	pw, err := driverFor(c)
-	if err != nil {
-		return nil, err
-	}
-	teardown := func() { _ = pw.Stop() }
-	return withDeadline("browser op", teardown, func() (any, error) {
-		return withSessionRun(c, pw, fn)
+	// teardown is set to the CURRENT attempt's pw.Stop so a deadline abort tears
+	// down whichever driver is live. It's replaced each retry (see below).
+	var teardownMu sync.Mutex
+	teardown := func() {}
+	return withDeadline("browser op", func() {
+		teardownMu.Lock()
+		t := teardown
+		teardownMu.Unlock()
+		t()
+	}, func() (any, error) {
+		// CloakBrowser (esp. the pro v150 binary) non-deterministically drops its
+		// page right after launch — its license/stealth init can close the target
+		// before the first navigation lands, surfacing as "target closed". A fresh
+		// browser almost always succeeds, so retry the whole run a few times for
+		// cloak. Non-cloak engines don't have this and run once.
+		//
+		// CRITICAL: each attempt gets its OWN Playwright driver. A retried attempt
+		// that reused a driver already Stopped by the previous attempt's teardown
+		// would fail instantly ("target closed" again) — making the retry loop a
+		// no-op. Python's cloakbrowser succeeds because every launch() starts a
+		// fresh sync_playwright(); we mirror that by resolving driverFor per attempt.
+		attempts := 1
+		if isCloakEngine(c.Cfg("browser")) {
+			attempts = cloakLaunchRetries
+		}
+		var res any
+		var err error
+		for i := 0; i < attempts; i++ {
+			pw, derr := driverFor(c)
+			if derr != nil {
+				return nil, derr
+			}
+			teardownMu.Lock()
+			teardown = func() { _ = pw.Stop() }
+			teardownMu.Unlock()
+
+			res, err = withSessionRun(c, pw, fn)
+			if err == nil || !isTargetClosed(err) {
+				return res, err
+			}
+			// This attempt dropped its target. withSessionRun already Stopped its pw
+			// on return, so the next iteration resolves a brand-new driver.
+		}
+		return res, err
 	})
+}
+
+// cloakLaunchRetries bounds how many times a cloak op is retried when the binary
+// drops its target on launch. A handful is plenty — success rate per attempt is
+// high; this just smooths the occasional early-close.
+const cloakLaunchRetries = 4
+
+// isTargetClosed reports whether err is Playwright's "target closed" — the
+// browser/page/context went away mid-call. For cloak this is the early-drop we
+// retry; for others it's a genuine teardown and not retried.
+func isTargetClosed(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "target closed")
 }
 
 // withSessionRun is withSession's body, split out so withSession can wrap it in

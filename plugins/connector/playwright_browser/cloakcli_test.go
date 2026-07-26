@@ -44,6 +44,33 @@ Installed: True`
 	}
 }
 
+// TestParseCloakInfoNoLaunch covers the exact `cloakbrowser info --no-launch`
+// output the widget now runs: it carries a leading Windows charmap warning and a
+// trailing "Launch: skipped (--quick)" line the parser must ignore, while still
+// reading Version/Tier/Binary/Installed. The --no-launch flag is what stops the
+// info call from flashing a browser window on every status render.
+func TestParseCloakInfoNoLaunch(t *testing.T) {
+	out := "Error: 'charmap' codec can't encode character '\\u2713' in position 11: character maps to <undefined>\r\n" +
+		"CloakBrowser diagnostics\r\n" +
+		"Python:    3.14.3\r\n" +
+		"OS:        Windows AMD64\r\n" +
+		"Platform:  windows-x64\r\n" +
+		"Version:   150.0.7871.114.3 (pro)\r\n" +
+		"Binary:    C:\\Users\\me\\.cloakbrowser\\chromium-150.0.7871.114.3-pro\\chrome.exe\r\n" +
+		"Installed: True\r\n" +
+		"Launch:    skipped (--quick)\r\n"
+	info := parseCloakInfo(out)
+	if info.Version != "150.0.7871.114.3" || info.Tier != "pro" {
+		t.Fatalf("--no-launch parse wrong: version=%q tier=%q", info.Version, info.Tier)
+	}
+	if !info.Installed {
+		t.Error("expected Installed=true from --no-launch output")
+	}
+	if info.Binary != `C:\Users\me\.cloakbrowser\chromium-150.0.7871.114.3-pro\chrome.exe` {
+		t.Errorf("binary path wrong: %q", info.Binary)
+	}
+}
+
 func TestParseCloakInfoNotInstalled(t *testing.T) {
 	out := `Version:   (unknown)
 Installed: False`
