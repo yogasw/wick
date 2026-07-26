@@ -182,11 +182,73 @@
   let discovering = $state(false);
   let discoverErr = $state("");
   let discoverTimer: ReturnType<typeof setTimeout> | null = null;
+  let searchEl = $state<HTMLInputElement | undefined>();
+
+  // Multi-select has two selection modes:
+  //   "live"   — selection tracks the filter: every model matching the search
+  //              is auto-selected and re-tracks as you type. Row clicks add a
+  //              per-id override (drop a matched one / force-add an unmatched).
+  //   "manual" — you tick models yourself (+ a "Select all matching" snapshot);
+  //              the filter only narrows the list, it doesn't select.
+  // Single mode keeps the "click fills Model ID" behaviour.
+  let multiSelect = $state(false);
+  let selectMode = $state<"live" | "manual">("live");
+  // live-mode overrides on top of the filter match:
+  let excludedIDs = $state<Set<string>>(new Set()); // matched but dropped
+  let forcedIDs = $state<Set<string>>(new Set());    // unmatched but added
+  // manual-mode explicit picks:
+  let selectedIDs = $state<Set<string>>(new Set());
+
+  function modelById(id: string): WickDiscoverModel {
+    return discovered.find((m) => m.id === id) ?? { id, label: "" };
+  }
+  // isSelected: in live mode, filter-match ± overrides; in manual, the tick set.
+  function isSelected(id: string): boolean {
+    if (selectMode === "manual") return selectedIDs.has(id);
+    if (forcedIDs.has(id)) return true;
+    if (excludedIDs.has(id)) return false;
+    return matchesTerms(modelById(id));
+  }
+  // The effective set of models to add: everything currently selected.
+  let selectedModels = $derived.by(() => discovered.filter((m) => isSelected(m.id)));
+
+  // Search grammar (intentionally tiny): space-separated terms; a term is
+  // "include" by default, or "exclude" when prefixed with `-` or `!`. A model
+  // matches when it contains every include term AND no exclude term. Matching
+  // is over both the id and the human label.
+  type Term = { text: string; exclude: boolean };
+  let searchTerms = $derived.by<Term[]>(() =>
+    modelSearch
+      .toLowerCase()
+      .split(/\s+/)
+      .map((t) => t.trim())
+      .filter((t) => t !== "" && t !== "-" && t !== "!")
+      .map((t) =>
+        t.startsWith("-") || t.startsWith("!")
+          ? { text: t.slice(1), exclude: true }
+          : { text: t, exclude: false },
+      ),
+  );
+
+  function matchesTerms(m: WickDiscoverModel): boolean {
+    const hay = `${m.id} ${m.label}`.toLowerCase();
+    for (const t of searchTerms) {
+      const hit = hay.includes(t.text);
+      if (t.exclude ? hit : !hit) return false;
+    }
+    return true;
+  }
 
   let filteredModels = $derived.by(() => {
-    const q = modelSearch.trim().toLowerCase();
-    if (!q) return discovered;
-    return discovered.filter((m) => m.id.toLowerCase().includes(q) || m.label.toLowerCase().includes(q));
+    if (searchTerms.length === 0) return discovered;
+    return discovered.filter(matchesTerms);
+  });
+
+  // Auto-focus the model filter the moment the modal opens for a known
+  // provider, so you can start typing straight away without a click. Guarded
+  // on modalOpen + a visible search box; the input only renders for non-other.
+  $effect(() => {
+    if (modalOpen && mKind !== "other" && searchEl) searchEl.focus();
   });
 
   function scheduleDiscover() {
@@ -250,8 +312,45 @@
     scheduleDiscover();
   }
   function pickModel(m: WickDiscoverModel) {
+    if (multiSelect) { toggleSelected(m.id); return; }
     mModel = m.id;
     if (mLabel.trim() === "") mLabel = m.label;
+  }
+
+  // Toggle a single row. Manual mode: flip membership in the tick set. Live
+  // mode: layer an override on the filter match (drop a matched one / force an
+  // unmatched one), keeping the two override sets mutually exclusive.
+  function toggleSelected(id: string) {
+    if (selectMode === "manual") {
+      const next = new Set(selectedIDs);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      selectedIDs = next;
+      return;
+    }
+    const nextEx = new Set(excludedIDs);
+    const nextFor = new Set(forcedIDs);
+    const matched = matchesTerms(modelById(id));
+    if (isSelected(id)) { nextFor.delete(id); if (matched) nextEx.add(id); }
+    else { nextEx.delete(id); if (!matched) nextFor.add(id); }
+    excludedIDs = nextEx;
+    forcedIDs = nextFor;
+  }
+  // Manual mode: snapshot the currently-filtered rows into the tick set.
+  function selectAllFiltered() {
+    const next = new Set(selectedIDs);
+    for (const m of filteredModels) next.add(m.id);
+    selectedIDs = next;
+  }
+  function clearOverrides() { excludedIDs = new Set(); forcedIDs = new Set(); selectedIDs = new Set(); }
+  // Leaving multi mode drops all selection so nothing silently applies later.
+  function setMulti(on: boolean) {
+    multiSelect = on;
+    if (!on) clearOverrides();
+  }
+  // Switching sub-mode: clear the other mode's state so the count is honest.
+  function setSelectMode(m: "live" | "manual") {
+    selectMode = m;
+    clearOverrides();
   }
 
   function openAdd() {
@@ -263,6 +362,7 @@
     mMaxOut = ""; mTemp = ""; mThinking = ""; mRaw = "";
     advOpen = false;
     modelSearch = "";
+    multiSelect = false; clearOverrides();
     discovered = []; discoverErr = ""; discovering = false;
     modalOpen = true;
   }
@@ -280,31 +380,104 @@
     mThinking = m.ThinkingBudget != null ? String(m.ThinkingBudget) : "";
     mRaw = m.RawConfig;
     advOpen = !!(m.BaseURL || m.APIFormat || m.MaxOutputTokens || m.Temperature != null || m.ThinkingBudget != null || m.RawConfig);
-    modelSearch = "";
+    clearOverrides();
+    // A live set opens in Multiple + Live with its filter prefilled so editing
+    // tweaks the query; a plain model opens in Single.
+    if (m.DiscoveryFilter) {
+      multiSelect = true; selectMode = "live"; modelSearch = m.DiscoveryFilter;
+    } else {
+      multiSelect = false; selectMode = "live"; modelSearch = "";
+    }
     discovered = []; discoverErr = ""; discovering = false;
     modalOpen = true;
     // Reuse the stored key to repopulate the picker without re-entry.
     scheduleDiscover();
   }
 
+  // Shared payload for a single model id — everything except the id/label,
+  // which differ between the single form and each batch entry.
+  function baseModelInput() {
+    return {
+      kind: mKind,
+      api_key: (mKeyTouched && mKey.trim() !== "") ? mKey.trim() : undefined,
+      base_url: mBaseURL.trim() || undefined,
+      api_format: mFormat || undefined,
+      max_output_tokens: intOrUndef(mMaxOut),
+      temperature: floatOrUndef(mTemp),
+      thinking_budget: intOrUndef(mThinking),
+      raw_config: mRaw.trim() || undefined,
+    };
+  }
+
   async function saveModel() {
-    if (mModel.trim() === "") { toastError("Pick or enter a model id"); return; }
     if (mKind === "other" && mBaseURL.trim() === "") { toastError("Base URL is required for Other provider"); return; }
+
+    // Multiple + LIVE: save ONE entry that stores the filter query. At
+    // picker time it expands to the vendor's models matching the filter, so a
+    // single entry stands in for many models (no per-model registration).
+    if (multiSelect && selectMode === "live") {
+      if (searchTerms.length === 0) { toastError("Type a filter to define the live set"); return; }
+      savingModel = true;
+      try {
+        // Editing a live set updates in place (carry its id); a live set
+        // switched-on from a plain model edit is a NEW entry (drop the id).
+        const liveID = editing?.DiscoveryFilter ? editing.ID : undefined;
+        await apiSaveWickModel(base, {
+          ...baseModelInput(),
+          id: liveID,
+          model: "", // live set — no single pinned model
+          label: mLabel.trim() || `Live: ${modelSearch.trim()}`,
+          discovery_filter: modelSearch.trim(),
+        });
+        toastOk(liveID ? "Live model set updated" : "Live model set added");
+        modalOpen = false;
+        await loadConfig(true);
+      } catch (e) {
+        toastError(e instanceof Error ? e.message : "Save failed");
+      } finally {
+        savingModel = false;
+      }
+      return;
+    }
+
+    // Multiple + MANUAL: one new provider entry per ticked model, label
+    // defaults to the discovered label, sharing the key + advanced settings.
+    if (multiSelect) {
+      const chosen = selectedModels;
+      if (chosen.length === 0) { toastError("Select at least one model"); return; }
+      savingModel = true;
+      let ok = 0;
+      try {
+        for (const m of chosen) {
+          await apiSaveWickModel(base, {
+            ...baseModelInput(),
+            model: m.id,
+            label: m.label && m.label !== m.id ? m.label : undefined,
+          });
+          ok++;
+        }
+        toastOk(`${ok} model${ok === 1 ? "" : "s"} added`);
+        modalOpen = false;
+        await loadConfig(true);
+      } catch (e) {
+        // Partial success is possible; report what landed then reload.
+        toastError(`${e instanceof Error ? e.message : "Save failed"}${ok > 0 ? ` (${ok} saved before the error)` : ""}`);
+        if (ok > 0) { modalOpen = false; await loadConfig(true); }
+      } finally {
+        savingModel = false;
+      }
+      return;
+    }
+
+    if (mModel.trim() === "") { toastError("Pick or enter a model id"); return; }
     savingModel = true;
     try {
       await apiSaveWickModel(base, {
+        ...baseModelInput(),
         id: editing?.ID,
-        kind: mKind,
         label: mLabel.trim() || undefined,
         model: mModel.trim(),
-        api_key: (mKeyTouched && mKey.trim() !== "") ? mKey.trim() : undefined,
-        base_url: mBaseURL.trim() || undefined,
-        api_format: mFormat || undefined,
-        max_output_tokens: intOrUndef(mMaxOut),
         default: editing?.Default ? true : undefined,
-        temperature: floatOrUndef(mTemp),
-        thinking_budget: intOrUndef(mThinking),
-        raw_config: mRaw.trim() || undefined,
       });
       toastOk(editing ? "Model updated" : "Model added");
       modalOpen = false;
@@ -544,12 +717,15 @@
                   </td>
                   <td class="px-4 py-3">
                     <div class="flex items-center gap-2">
-                      <span class="text-black-900 dark:text-white-100">{m.Label || m.Model}</span>
+                      <span class="text-black-900 dark:text-white-100">{m.Label || m.Model || m.DiscoveryFilter}</span>
+                      {#if m.DiscoveryFilter}
+                        <span class="inline-flex items-center rounded-full bg-green-500/10 px-2 py-0.5 text-[11px] font-medium text-green-600 dark:text-green-400">Live set</span>
+                      {/if}
                       {#if m.Disabled}
                         <span class="inline-flex items-center rounded-full bg-cau-100 px-2 py-0.5 text-[11px] font-medium text-cau-400 dark:bg-cau-400/15">Disabled</span>
                       {/if}
                     </div>
-                    <div class="font-mono text-xs text-black-700 dark:text-black-600">{m.Model}</div>
+                    <div class="font-mono text-xs text-black-700 dark:text-black-600">{m.DiscoveryFilter ? `filter: ${m.DiscoveryFilter}` : m.Model}</div>
                   </td>
                   <td class="px-4 py-3">
                     <span class="inline-flex items-center rounded-full border border-white-400 dark:border-navy-500 px-2.5 py-0.5 text-xs font-medium text-black-800 dark:text-black-600">{kindChip(m.Kind)}</span>
@@ -640,21 +816,88 @@
         id="m-model"
         type="text"
         bind:value={mModel}
-        placeholder={modelPlaceholder}
-        class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+        disabled={multiSelect}
+        placeholder={multiSelect ? "Using checked models below" : modelPlaceholder}
+        class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       />
-      <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">The model identifier sent to the provider's API. Type it directly, or pick from the list below.</p>
+      <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">{multiSelect ? "This field is ignored in Multiple mode — the models come from the list / filter below." : "The model identifier sent to the provider's API. Type it directly, or pick from the list below."}</p>
 
       {#if mKind !== "other"}
         <!-- Optional discovery helper: search the vendor's model list and
-             click to fill the Model ID above. Never required. -->
-        <div class="relative mt-3">
+             click to fill the Model ID above (single) or check several to add
+             at once (multiple). Never required. -->
+
+        <!-- Single vs multiple: single fills the Model ID above; multiple lets
+             you tick several models and batch-ADD one provider entry per model,
+             sharing the key + advanced settings. Available while editing too —
+             switching an edit to Multiple just adds new entries (the model
+             being edited is left untouched). -->
+        <div class="mt-3 flex items-center justify-between gap-3">
+          <div class="inline-flex rounded-lg border border-white-400 dark:border-navy-600 p-0.5 text-xs">
+            <button
+              type="button"
+              onclick={() => setMulti(false)}
+              class="rounded-md px-2.5 py-1 font-medium transition-colors {!multiSelect ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100'}"
+            >Single</button>
+            <button
+              type="button"
+              onclick={() => setMulti(true)}
+              class="rounded-md px-2.5 py-1 font-medium transition-colors {multiSelect ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100'}"
+            >Multiple</button>
+          </div>
+          {#if multiSelect}
+            <span class="text-[11px] font-medium {selectedModels.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-black-700 dark:text-black-600'}">{selectedModels.length} {selectMode === "live" ? "match now" : "selected"}</span>
+          {/if}
+        </div>
+
+        {#if multiSelect}
+          <!-- Sub-mode: Live (selection follows the filter) vs Manual (tick +
+               Select all snapshot). -->
+          <div class="mt-2 flex items-center justify-between gap-3">
+            <div class="inline-flex rounded-lg border border-white-400 dark:border-navy-600 p-0.5 text-[11px]">
+              <button
+                type="button"
+                onclick={() => setSelectMode("live")}
+                class="rounded-md px-2 py-0.5 font-medium transition-colors {selectMode === 'live' ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100'}"
+              >Live (follows filter)</button>
+              <button
+                type="button"
+                onclick={() => setSelectMode("manual")}
+                class="rounded-md px-2 py-0.5 font-medium transition-colors {selectMode === 'manual' ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100'}"
+              >Manual</button>
+            </div>
+            <div class="flex items-center gap-3 text-[11px]">
+              {#if selectMode === "manual"}
+                {#if selectedIDs.size > 0}
+                  <button type="button" onclick={clearOverrides} class="text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">Clear</button>
+                {/if}
+                <button type="button" onclick={selectAllFiltered} disabled={filteredModels.length === 0} class="font-medium text-green-600 dark:text-green-400 hover:underline disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed">Select all{searchTerms.length > 0 ? " matching" : ""}</button>
+              {:else if excludedIDs.size > 0 || forcedIDs.size > 0}
+                <button type="button" onclick={clearOverrides} class="text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100">Reset overrides</button>
+              {/if}
+            </div>
+          </div>
+        {/if}
+
+        <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">
+          {#if multiSelect && selectMode === "live"}
+            Saves <span class="font-medium">one live entry</span> that stores this filter. In the model picker it re-fetches the vendor list and shows everything matching — no per-model registration. The list below is a preview of what matches now.
+          {:else if multiSelect}
+            Tick models to add each as its own entry{editing ? " — the model you're editing stays as is" : ""}.
+          {:else}
+            Pick one model to fill the Model ID above, or switch to Multiple to add several at once.
+          {/if}
+          Filter grammar: <code class="rounded bg-white-200 dark:bg-navy-700 px-1">term</code> contains, <code class="rounded bg-white-200 dark:bg-navy-700 px-1">-term</code> / <code class="rounded bg-white-200 dark:bg-navy-700 px-1">!term</code> excludes.
+        </p>
+
+        <div class="relative mt-2">
           <svg class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-black-700 dark:text-black-600" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
           <input
             id="m-model-search"
             type="text"
+            bind:this={searchEl}
             bind:value={modelSearch}
-            placeholder="Search available models…"
+            placeholder="Filter models — space-separated, prefix -term or !term to exclude…"
             class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 pl-10 pr-3 py-2 text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
           />
         </div>
@@ -670,19 +913,26 @@
               <div class="px-4 py-3 text-xs text-black-700 dark:text-black-600">No models found — type the id above manually.</div>
             {:else}
               {#each filteredModels as m (m.id)}
-                {@const selected = mModel === m.id}
+                {@const selected = multiSelect ? isSelected(m.id) : mModel === m.id}
                 <button
                   type="button"
                   onclick={() => pickModel(m)}
-                  class="flex w-full items-center justify-between px-4 py-2 text-left text-sm hover:bg-white-200 dark:hover:bg-navy-800 {selected ? 'text-green-600 dark:text-green-400 font-medium' : 'text-black-900 dark:text-white-100'}"
+                  class="flex w-full items-center justify-between gap-2 px-4 py-2 text-left text-sm hover:bg-white-200 dark:hover:bg-navy-800 {selected ? 'text-green-600 dark:text-green-400 font-medium' : 'text-black-900 dark:text-white-100'}"
                 >
-                  <span class="min-w-0 truncate">
-                    {m.id}
-                    {#if m.label && m.label !== m.id}
-                      <span class="ml-1 text-[11px] font-normal text-black-700 dark:text-black-600">· {m.label}</span>
+                  <span class="flex min-w-0 items-center gap-2">
+                    {#if multiSelect}
+                      <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded border {selected ? 'border-green-500 bg-green-500 text-white-100' : 'border-white-400 dark:border-navy-600'}">
+                        {#if selected}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>{/if}
+                      </span>
                     {/if}
+                    <span class="min-w-0 truncate">
+                      {m.id}
+                      {#if m.label && m.label !== m.id}
+                        <span class="ml-1 text-[11px] font-normal text-black-700 dark:text-black-600">· {m.label}</span>
+                      {/if}
+                    </span>
                   </span>
-                  {#if selected}
+                  {#if selected && !multiSelect}
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M20 6 9 17l-5-5"/></svg>
                   {/if}
                 </button>
@@ -770,6 +1020,8 @@
   </div>
   {#snippet footer()}
     <Button variant="secondary" disabled={savingModel} onclick={() => { modalOpen = false; }}>Cancel</Button>
-    <Button variant="primary" disabled={savingModel} onclick={saveModel}>{savingModel ? "Saving…" : "Save model"}</Button>
+    <Button variant="primary" disabled={savingModel} onclick={saveModel}>
+      {#if savingModel}Saving…{:else if multiSelect && selectMode === "live"}Add live set{:else if multiSelect}Add {selectedModels.length || ""} model{selectedModels.length === 1 ? "" : "s"}{:else}Save model{/if}
+    </Button>
   {/snippet}
 </Modal>

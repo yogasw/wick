@@ -315,6 +315,7 @@ Quick cheatsheet for what each provider supports — useful when picking a defau
 |---|---|---|
 | `GET` | `/providers/catalog/{type}` | Returns the curated env + args picker entries for `claude`, `codex`, or `gemini`. Admin only. |
 | `POST` | `/providers/rename/{type}/{name}` | Renames an instance. Body: `new_name=<name>`. Migrates project defaults; live sessions unaffected. Admin only. |
+| `GET` | `/providers/options/{type}/{name}/models` | Live model list for one configured instance, used by the composer's model drill-in. `?entry=<id>` expands one `wick` live model set (see [Built-in wick provider](#built-in-wick-provider)) by resolving the vendor's current models against its stored filter. |
 | `GET` | `/providers/airouter/slots/{type}?router=<id>` | Returns the model slots the given router exposes for a provider type. Admin only. |
 | `POST` | `/providers/detail/{type}/{name}/airouter` | Saves AI-router settings (toggle + selected router + model slots + API key) for one instance. Admin only. |
 | `GET` | `/api/providers/spawns?type=&name=&q=&page=` | Flat, searchable, paginated (10/page) spawn list backing the Recent Spawns table. Admin only. |
@@ -351,9 +352,13 @@ The three layers merge per model id: whichever copy (embedded, remote, or disk c
 Unlike `claude`/`codex`/`gemini` (which allow multiple named instances), there is a single `wick` instance. Its models are managed directly on the provider detail page:
 
 - **Add a model**: pick a kind (auto-fills the base URL for known vendors), paste the API key, save. Each model gets its own row with edit / set-default / test / duplicate / disable / delete actions.
+- **Single vs Multiple**: the Add/Edit form has a **Single** / **Multiple** toggle above the model search box. Single is the classic flow — pick or type one model id. Multiple lets you register several at once from the discovered vendor list, in one of two sub-modes:
+  - **Manual** — tick individual models (or **Select all matching**) and save; each ticked model becomes its own regular entry.
+  - **Live** — type a filter instead of ticking anything, and save **one** entry that stores the filter. This is a **live model set**: no single model id is pinned. At picker time wick re-fetches the vendor's model list and narrows it by the filter live, so the set always reflects whatever the vendor currently offers instead of a fixed snapshot.
+- Filter grammar (used by the Live mode box, and shared by the picker's own filter): space-separated terms; a bare `term` must be contained in the model id or label, a `-term` / `!term` prefix excludes it. Case-insensitive.
 - **Test** sends a minimal 1-token ping to confirm the key + base URL work before relying on it in a session.
 - **Disable** hides a model from the composer without deleting its config.
-- Registering more than one enabled model surfaces the same nested provider picker (type ▸ instance ▸ model) in the composer described above.
+- Registering more than one enabled model (or a live set, even alongside a single model) surfaces the same nested provider picker (type ▸ instance ▸ model) in the composer described above — a live model set renders as one expandable row that drills into a 4th level of matching vendor models.
 
 ### Session interactions log
 
