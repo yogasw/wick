@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -74,7 +73,7 @@ func cloakCLIAvailable(c *connector.Ctx) bool {
 	if strings.ContainsAny(p, `/\`) {
 		return fileExists(p)
 	}
-	_, err := exec.LookPath(p)
+	_, err := safeexec.LookPath(p)
 	return err == nil
 }
 
