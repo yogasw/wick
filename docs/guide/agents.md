@@ -223,6 +223,8 @@ Both endpoints cache the underlying file-tree walk for a few seconds so rapid ty
 
 Typing `/` (or clicking **Commands** in the `+` menu) opens a command menu backed by `GET /api/composer/commands?scope=<scope>&provider=<type>` — built-in actions (switch provider, switch project, open a panel: processes / workspace / source / context, or change the view: commands / approvals / raw) grouped by category, followed by every installed [skill](./agents/skills-manager). Picking a built-in action runs it directly; picking a skill inserts `/<skill-name>`.
 
+`/provider` opens the composer's own provider drill-in (the same one below the provider chip) rather than a separate modal — one picker, one code path, regardless of how it was opened.
+
 - `scope=new` (New Session / Project landing, before a session exists) drops the built-in actions — they only apply to a live session — and returns skills only.
 - `provider=<type>` (`claude` / `codex` / `gemini`) scopes the skill list to that provider's own skill dir; the composer re-queries this whenever its provider selection changes.
 
@@ -235,6 +237,8 @@ The provider chip and its drill-in list show each provider's brand mark — Clau
 ### Provider picker levels
 
 The provider drill-in nests up to three levels — **type ▸ instance ▸ model** — collapsing any level that has only one choice. A single-instance, single-model setup (the common case) picks a provider in one tap; multiple instances of a type (e.g. two `claude` PATs) add an instance level; an instance with more than one enabled model (a `claude`/`codex`/`gemini` instance with [model selection](./agents/providers#cli-model-picker) on, or a `wick` instance with several models) adds a model level, with each model's description shown under its name. Picking a model pins it for that session; the chip reflects the pinned model until changed.
+
+For a `wick` instance, the model level's list is fetched live from `GET /providers/options/{type}/{name}/models` instead of a static snapshot, and a registered **live model set** ([Providers ▶ Built-in wick provider](./agents/providers#built-in-wick-provider)) renders as one expandable row rather than a flat entry. Opening that row adds a **4th level**: wick fetches the vendor's current model list and narrows it by the set's stored filter server-side (the filter query itself is never sent to the browser). Picking one of those expanded models pins that exact vendor model id for the session, same as any other model pick.
 
 ### Screenshot + image editor
 

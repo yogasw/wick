@@ -6,7 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Wick Provider
+#### Added
+*   **Live model sets**: a registered `wick` model can store a discovery filter (`term` contains, `-term`/`!term` excludes) instead of a fixed model id. In the composer's provider picker it shows as an expandable row that fetches the vendor's model list live and narrows it by the filter — a 4th picker level (provider ▸ models ▸ live set ▸ expanded models). The Add-Model form on the Wick provider page gains a **Single** / **Multiple** toggle, with Multiple offering **Live** (follows the filter) or **Manual** (tick to select) sub-modes.
+*   The `/provider` command now opens the same in-composer provider picker used by the toolbar chip, instead of a separate flat modal.
 
 ---
 
