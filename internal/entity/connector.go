@@ -126,6 +126,12 @@ const (
 	ConnectorRunStatusRunning ConnectorRunStatus = "running"
 	ConnectorRunStatusSuccess ConnectorRunStatus = "success"
 	ConnectorRunStatusError   ConnectorRunStatus = "error"
+	// ConnectorRunStatusCancelled is a run aborted before it finished — either
+	// its session was closed (session_close cancels every in-flight op bound to
+	// that session) or a stale-run reaper reclaimed a row whose op never
+	// returned. Distinct from "error" so the UI can show "aborted" rather than
+	// implying the operation itself failed.
+	ConnectorRunStatusCancelled ConnectorRunStatus = "cancelled"
 )
 
 // ConnectorRun records one execution of one operation on one connector
@@ -174,6 +180,11 @@ type ConnectorRun struct {
 	ConnectorID  string             `gorm:"type:text;not null;index:idx_run_connector_started,priority:1"`
 	OperationKey string             `gorm:"type:text;not null"`
 	UserID       string             `gorm:"type:text;index:idx_run_user_started,priority:1"`
+	// SessionID is the agent/live-session this op ran under (empty for direct
+	// PAT calls with no session). Persisted so a session_close can find and abort
+	// every in-flight run bound to the session, and so a stale-run reaper /
+	// audit can attribute a run to its session. Indexed for the by-session lookup.
+	SessionID string `gorm:"type:text;index:idx_run_session"`
 	Source       ConnectorRunSource `gorm:"type:text;not null"`
 	RequestJSON  string             `gorm:"type:text"`
 	ResponseJSON string             `gorm:"type:text"`

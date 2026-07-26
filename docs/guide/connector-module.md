@@ -406,6 +406,8 @@ Beyond the module's own `Meta.Description` (written once, in code, shared by eve
 - The User column resolves IDs to display names in batch (no N+1 queries).
 - Click a row to expand inline — full Request JSON, Response JSON, run ID, IP, user agent, and HTTP status, no extra round trip.
 - The expanded panel includes a "Retry in test panel" link that navigates to the test page with the prior input prefilled. Manual replay only — wick deliberately does not offer a one-click POST replay so you can review and adjust before re-running.
+- A row still `running` shows a **✕ Cancel** button. Cancelling aborts the op in place (its context is cancelled, so the underlying connector call unwinds) and the row settles to a **Cancelled** status — a distinct, neutral state from `Error`, since the op didn't fail on its own. A run can also be cancelled from the agent conversation UI, where a running tool call shows the same cancel control on its card (the agent turn keeps going; only that one op is aborted).
+- A run can no longer stay stuck `running` forever: besides the boot-time reset and the per-op server timeout, a background job periodically reclaims any row still `running` well past every legitimate op's ceiling, flipping it to `Cancelled` so the history/tracer UI never shows a permanently-running row.
 
 ## Sharing connectors with tags
 

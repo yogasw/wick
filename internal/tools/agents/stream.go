@@ -173,6 +173,28 @@ func (b *Broadcaster) PublishSessionMeta(sessionID, title string, titleCustom bo
 	})
 }
 
+// PublishConnectorRun broadcasts the start/finish of a connector run to a
+// session's subscribers so the conversation UI can show a per-run Cancel button
+// on an in-flight tool call. running=true is the start (status "running"),
+// carrying the run_id + connector_id the FE needs to hit the cancel route;
+// running=false is the terminal update carrying the final status so the FE drops
+// the button. Wired from connectors.Service via SetRunObserver.
+func (b *Broadcaster) PublishConnectorRun(sessionID, runID, connectorID, opKey, status string, running bool) {
+	body, _ := json.Marshal(map[string]any{
+		"session_id":   sessionID,
+		"run_id":       runID,
+		"connector_id": connectorID,
+		"op":           opKey,
+		"status":       status,
+		"running":      running,
+	})
+	b.fanout(sessionID, Event{
+		SessionID: sessionID,
+		Type:      "connector_run",
+		Data:      string(body),
+	})
+}
+
 // PublishGitStatusJSON broadcasts a pre-marshalled git_status payload to
 // a session's subscribers. The payload is the full repo+status snapshot
 // (built by the fs watcher) so the FE updates entirely from the event —

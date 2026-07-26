@@ -36,14 +36,15 @@ var (
 const fallbackDownloadHost = "https://cdn.playwright.dev"
 
 // driverFor returns a Playwright handle appropriate for the configured engine.
-// For cloakbrowser the Chromium binary Playwright would fetch is never used —
-// Cloak ships its own patched Chromium downloaded from GitHub (see cloak.go) and
-// is driven purely through the node driver + ExecutablePath. So we only need the
-// driver, NOT the ~150MB Chromium bundle: ensureDriverNoInstall skips the browser
+// For either cloakbrowser variant the Chromium binary Playwright would fetch is
+// never used — Cloak ships its own patched Chromium (free: downloaded from
+// GitHub; pro: managed by the cloakbrowser CLI, see cloak.go) and is driven
+// purely through the node driver + ExecutablePath. So we only need the driver,
+// NOT the ~150MB Chromium bundle: ensureDriverNoInstall skips the browser
 // download. Every other engine still goes through the full ensureDriver, which
 // downloads that engine's browser on first use.
 func driverFor(c *connector.Ctx) (*playwright.Playwright, error) {
-	if strings.EqualFold(strings.TrimSpace(c.Cfg("browser")), cloakEngine) {
+	if isCloakEngine(c.Cfg("browser")) {
 		return ensureDriverNoInstall()
 	}
 	return ensureDriver()
@@ -111,16 +112,82 @@ type session struct {
 	actMS    float64
 	navMS    float64
 	chromium bool
+	cap      *capture // non-nil when record_request is on; collects requests
 }
 
 // withSession launches an isolated browser per Config, runs fn against it, and
 // guarantees teardown. Every task op and `run` goes through here, so lifecycle
 // (and the maxTab / timeout wiring) lives in exactly one place.
+//
+// The whole thing runs under the op deadline (withDeadline): a Playwright call
+// that wedges because the Node driver died (EPIPE) would otherwise block
+// forever — Playwright's own per-action timeout can't fire from a dead driver.
+// On timeout we force pw.Stop in the background so the pending call errors out
+// and the worker goroutine is freed instead of leaking as a zombie.
 func withSession(c *connector.Ctx, fn func(*session) (any, error)) (any, error) {
-	pw, err := driverFor(c)
-	if err != nil {
-		return nil, err
-	}
+	// teardown is set to the CURRENT attempt's pw.Stop so a deadline abort tears
+	// down whichever driver is live. It's replaced each retry (see below).
+	var teardownMu sync.Mutex
+	teardown := func() {}
+	return withDeadline("browser op", func() {
+		teardownMu.Lock()
+		t := teardown
+		teardownMu.Unlock()
+		t()
+	}, func() (any, error) {
+		// CloakBrowser (esp. the pro v150 binary) non-deterministically drops its
+		// page right after launch — its license/stealth init can close the target
+		// before the first navigation lands, surfacing as "target closed". A fresh
+		// browser almost always succeeds, so retry the whole run a few times for
+		// cloak. Non-cloak engines don't have this and run once.
+		//
+		// CRITICAL: each attempt gets its OWN Playwright driver. A retried attempt
+		// that reused a driver already Stopped by the previous attempt's teardown
+		// would fail instantly ("target closed" again) — making the retry loop a
+		// no-op. Python's cloakbrowser succeeds because every launch() starts a
+		// fresh sync_playwright(); we mirror that by resolving driverFor per attempt.
+		attempts := 1
+		if isCloakEngine(c.Cfg("browser")) {
+			attempts = cloakLaunchRetries
+		}
+		var res any
+		var err error
+		for i := 0; i < attempts; i++ {
+			pw, derr := driverFor(c)
+			if derr != nil {
+				return nil, derr
+			}
+			teardownMu.Lock()
+			teardown = func() { _ = pw.Stop() }
+			teardownMu.Unlock()
+
+			res, err = withSessionRun(c, pw, fn)
+			if err == nil || !isTargetClosed(err) {
+				return res, err
+			}
+			// This attempt dropped its target. withSessionRun already Stopped its pw
+			// on return, so the next iteration resolves a brand-new driver.
+		}
+		return res, err
+	})
+}
+
+// cloakLaunchRetries bounds how many times a cloak op is retried when the binary
+// drops its target on launch. A handful is plenty — success rate per attempt is
+// high; this just smooths the occasional early-close.
+const cloakLaunchRetries = 4
+
+// isTargetClosed reports whether err is Playwright's "target closed" — the
+// browser/page/context went away mid-call. For cloak this is the early-drop we
+// retry; for others it's a genuine teardown and not retried.
+func isTargetClosed(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "target closed")
+}
+
+// withSessionRun is withSession's body, split out so withSession can wrap it in
+// the op deadline. pw is owned by the caller for the teardown path but stopped
+// here on the normal return.
+func withSessionRun(c *connector.Ctx, pw *playwright.Playwright, fn func(*session) (any, error)) (any, error) {
 	defer pw.Stop()
 
 	bt, err := browserType(pw, c.Cfg("browser"))
@@ -153,8 +220,53 @@ func withSession(c *connector.Ctx, fn func(*session) (any, error)) (any, error) 
 		navMS:    navTimeout(c),
 		chromium: strings.EqualFold(strings.TrimSpace(c.Cfg("browser")), "") || strings.EqualFold(c.Cfg("browser"), defBrowser),
 	}
-	return fn(s)
+
+	// record_request opt-in: attach a context-level request recorder BEFORE any
+	// navigation so nothing is missed. Covers every tab in this context.
+	if boolInput(c, "record_request") {
+		s.cap = newCapture(c.Input("record_url_pattern"), boolInput(c, "record_include_assets"))
+		s.cap.attach(bctx)
+	}
+
+	res, err := fn(s)
+
+	// If we recorded, persist the requests before the context is torn down. Save
+	// errors are surfaced as a note, not a hard failure — the op's own result
+	// (screenshot, etc.) still stands.
+	if s.cap != nil {
+		if saveErr := s.persistCapture(); saveErr != nil {
+			// Attach to a map result when possible; otherwise ignore silently.
+			if m, ok := res.(map[string]any); ok {
+				m["capture_error"] = saveErr.Error()
+			}
+		}
+	}
+	return res, err
 }
+
+// persistCapture writes the recorded requests to the resolved save path and, on
+// success, annotates nothing (callers read them back via get_request). The path
+// is profiles/<name>/captured.json when a profile is set, else captures/<name>.json.
+func (s *session) persistCapture() error {
+	if s.cap == nil {
+		return nil
+	}
+	path, err := captureSavePath(s.c, s.c.Input("profile"), s.c.Input("record_name"))
+	if err != nil {
+		return err
+	}
+	return saveCapture(path, s.cap.snapshot())
+}
+
+// boolInput parses a connector input as a boolean ("true"/"1"/"yes" → true).
+func boolInput(c *connector.Ctx, key string) bool {
+	switch strings.ToLower(strings.TrimSpace(c.Input(key))) {
+	case "true", "1", "yes", "on":
+		return true
+	}
+	return false
+}
+
 
 // newPage opens a page in the session context, enforcing the tab cap and
 // wiring the configured action + navigation timeouts.
@@ -362,16 +474,18 @@ func (s *session) runActions(actions []action) (any, error) {
 	return runActionLoop(page, actions), nil
 }
 
-// runActionsInContext runs the action list on a NEW tab inside an existing live
-// browser context (the session_id path). The tab is left open — it belongs to
-// the persistent session and shows up in session_list.
 // runActionsInContext runs the actions against the tab at tabIndex in an
 // existing live session. It reuses the EXISTING page (not a fresh NewPage) so
 // repeated run calls act on the same tab instead of spawning a new one each time
 // (which used to leak tabs and made the agent unable to target a tab). A
 // negative tabIndex, or an index past the last page, falls back to a new tab
 // (subject to the caller's tab cap, which it should have already checked).
-func runActionsInContext(_ *connector.Ctx, ctx playwright.BrowserContext, actions []action, tabIndex int) (any, error) {
+//
+// record_request works here too, not just on the ephemeral path: the capture is
+// attached to the live context BEFORE the actions run and detached + persisted
+// after. Detaching before the caller disconnects the CDP link is what keeps a
+// late requestfinished event from firing at a closing pipe (the EPIPE crash).
+func runActionsInContext(c *connector.Ctx, ctx playwright.BrowserContext, actions []action, tabIndex int) (any, error) {
 	pages := ctx.Pages()
 	var page playwright.Page
 	if tabIndex >= 0 && tabIndex < len(pages) {
@@ -385,7 +499,36 @@ func runActionsInContext(_ *connector.Ctx, ctx playwright.BrowserContext, action
 		}
 		page = p
 	}
-	return runActionLoop(page, actions), nil
+
+	// A live-session page comes from ctx.Pages() (or a fresh tab here), so unlike
+	// the ephemeral path it never went through newPage() and carries Playwright's
+	// DEFAULT timeout — which is 0 = infinite. A goto to a page that keeps a
+	// background connection open (Google, most SPAs) then never resolves its
+	// WaitUntilStateLoad and the whole run hangs forever ("stuck running"). Apply
+	// the connector's configured nav/action timeouts here so the run is bounded.
+	page.SetDefaultTimeout(actionTimeout(c))
+	page.SetDefaultNavigationTimeout(navTimeout(c))
+
+	var cap *capture
+	if boolInput(c, "record_request") {
+		cap = newCapture(c.Input("record_url_pattern"), boolInput(c, "record_include_assets"))
+		cap.attach(ctx)
+	}
+
+	res := runActionLoop(page, actions)
+
+	if cap != nil {
+		// Detach BEFORE returning (the caller disconnects the CDP link on
+		// return) so the driver can't fire a queued event at a closing pipe.
+		cap.detach(ctx)
+		path, err := captureSavePath(c, c.Input("profile"), c.Input("record_name"))
+		if err != nil {
+			res["capture_error"] = err.Error()
+		} else if err := saveCapture(path, cap.snapshot()); err != nil {
+			res["capture_error"] = err.Error()
+		}
+	}
+	return res, nil
 }
 
 // runActionLoop drives the validated action list in order on one page, stopping
@@ -492,10 +635,27 @@ func execAction(page playwright.Page, a action) (any, error) {
 		_, err := page.Reload()
 		return nil, err
 	case "wait_for_load_state":
-		if st := loadState(a.State); st != nil {
-			return nil, page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: st})
+		st := loadState(a.State)
+		if st == nil {
+			return nil, page.WaitForLoadState()
 		}
-		return nil, page.WaitForLoadState()
+		// `networkidle` waits for 0 in-flight requests for 500ms — which never
+		// happens on sites that poll in the background (Google, Facebook, most
+		// SPAs), so it would hang until the navigation timeout (deprecated by
+		// Playwright for exactly this reason). Cap it at a short timeout and treat
+		// a timeout as "good enough" (don't fail the step) so a chatty page can't
+		// stall the whole run for minutes.
+		if *st == *playwright.LoadStateNetworkidle {
+			err := page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+				State:   st,
+				Timeout: playwright.Float(10000),
+			})
+			if err != nil && strings.Contains(strings.ToLower(err.Error()), "timeout") {
+				return map[string]any{"note": "networkidle not reached within 10s (page keeps polling); continued anyway"}, nil
+			}
+			return nil, err
+		}
+		return nil, page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{State: st})
 	case "wait_for_url":
 		return nil, page.WaitForURL(a.URL)
 

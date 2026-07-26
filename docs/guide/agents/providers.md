@@ -361,6 +361,15 @@ Every model call a wick session makes is logged to `<session>/wick-interactions.
 
 Each logged interaction has a **copy as curl** action that reconstructs the exact HTTP request wick sent, in four formats (single-line, Bash, raw HTTP, JSON body), with an editable body preview and per-part copy. The bearer token defaults to a `$WICK_MODEL_API_KEY` placeholder; an admin can reveal the real key inline instead of hunting for it in the provider settings.
 
+**Live model-call observability.** While a call is in flight, the "running" row at the top of the log is no longer a static "model call in progress…" label:
+
+- It shows whether the model is actually mid-call or a **tool is running instead** (named from the newest logged interaction's tool calls), with a live elapsed timer either way.
+- A retried call shows the attempt number and a short reason (rate limited, server error, context full, …).
+- **View request** reconstructs the curl for the request being sent *right now*, before it finishes and a log record exists — useful for debugging a call that looks stuck.
+- **Cancel call** aborts just the in-flight model call; the turn itself keeps going (the agent sees the call as failed/cancelled and can retry or continue), rather than killing the whole session.
+
+This is backed by every wick model adapter (OpenAI/Anthropic/OpenAI-compatible and Gemini alike) now sharing one retry policy: transient failures (timeout, connection reset, `429`, `5xx`) retry with backoff under a bounded per-attempt timeout, while fatal errors (bad key/model, other `4xx`) fail fast without retrying.
+
 ### Context compaction
 
 A wick session's history is bounded by a context budget. When it nears the limit, wick asks the model to summarize the oldest turns (decisions, facts, file paths, done vs. pending) and continues with the summary in place of the raw turns — so long tasks don't hit a hard context-window error. This also runs a heavier pass automatically if a request still overflows the vendor's window. Type `/compact` in a session to trigger it manually.

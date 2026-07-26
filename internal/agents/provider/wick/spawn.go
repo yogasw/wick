@@ -116,6 +116,15 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 	// Record every model call to the wick session log (why the model
 	// answered as it did) at <SessionDir>/wick-interactions.jsonl.
 	eng.setInteractionSink(newInteractionSink(opt.SessionDir))
+	// Let the engine drain mid-turn messages from the same channel the loop below
+	// reads. Safe: while runTurn is executing, the loop is parked in its receive
+	// (it only reads msgs to START a turn), so during a turn the engine is the
+	// sole reader — no double-consume. Messages that arrive between turns are
+	// still picked up by the loop as the next turn.
+	eng.setSteer(p.msgs)
+	if wc != nil {
+		eng.setRetryPolicy(retryPolicyFromConfig(wc.MaxModelRetries, wc.ModelCallTimeoutSec))
+	}
 	eng.start()
 
 	// If the agent supplied an initial message positionally (respawn

@@ -39,6 +39,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/entity"
@@ -82,10 +83,16 @@ type Config struct {
 	ExecutablePath string `wick:"group=Custom binary|Point at a non-bundled browser build. Most setups leave these empty.|collapsed;desc=Path to a custom browser binary to launch instead of the bundled one. Example: /usr/bin/google-chrome"`
 	Channel        string `wick:"group=Custom binary;desc=Branded channel for the chosen browser (chrome, chrome-beta, msedge, ...). Leave empty for the bundled build."`
 
-	// CloakBrowser — stealth Chromium downloaded from GitHub (not a Playwright
-	// engine). Only relevant when the cloakbrowser engine is selected.
-	CloakRepo           string `wick:"group=CloakBrowser|Stealth Chromium engine. Downloaded from a GitHub release; override the source or point at a local binary.|collapsed;desc=GitHub owner/repo hosting CloakBrowser release assets. Default: CloakHQ/CloakBrowser."`
-	CloakExecutablePath string `wick:"group=CloakBrowser;desc=Path to an already-downloaded CloakBrowser binary. Set this to skip the GitHub download (e.g. on a platform with no published build)."`
+	// CloakBrowser — stealth Chromium. Two engines share these configs: the free
+	// "cloakbrowser" (wick downloads the binary from GitHub) and the pro
+	// "cloakbrowser-pro" (binary managed by the official `cloakbrowser` CLI + a
+	// license key). Only relevant when one of those engines is selected.
+	CloakRepo           string `wick:"group=CloakBrowser|Stealth Chromium engine. The free tier downloads from a GitHub release; the pro tier is managed by the cloakbrowser CLI + a license key.|collapsed;desc=GitHub owner/repo hosting CloakBrowser release assets (free tier). Default: CloakHQ/CloakBrowser."`
+	CloakExecutablePath string `wick:"group=CloakBrowser;desc=Path to an already-downloaded CloakBrowser binary. Set this to skip the GitHub download / CLI resolution (e.g. on a platform with no published build). Applies to both cloak engines."`
+	// Pro-tier license: passed to the browser at launch, and used by the
+	// cloakbrowser-pro engine to install/update the licensed binary via the CLI.
+	CloakLicenseKey string `wick:"secret;group=CloakBrowser;desc=CloakBrowser Pro license key (cb_...). Passed as CLOAKBROWSER_LICENSE_KEY at launch so a paid binary runs at its licensed tier. Required by the cloakbrowser-pro engine; leave empty for the free cloakbrowser engine."`
+	CloakCLIPath    string `wick:"group=CloakBrowser;desc=Path to the 'cloakbrowser' CLI used by the cloakbrowser-pro engine. Default: resolved on PATH. Only needed for a non-PATH install."`
 }
 
 // ── Per-operation input structs ──────────────────────────────────────
@@ -130,17 +137,42 @@ type runInput struct {
 	Actions   string `wick:"textarea;required;desc=JSON array of action objects run in order in one browser session. Each has an \"action\" key. NAVIGATION: goto{url}, go_back, go_forward, reload, wait_for_load_state{state?}, wait_for_url{url}. INTERACTION: click{selector}, dblclick{selector}, hover{selector}, tap{selector}, focus{selector}, fill{selector,value}, type{selector,value}, press{key,selector?}, check{selector}, uncheck{selector}, select_option{selector,value|values}, set_input_files{selector,files}, drag_and_drop{selector,target}, scroll{delta_x?,delta_y?}. WAIT: wait_for{selector}, wait{ms}. READ: screenshot{full_page?,selector?}, content{selector?}, eval{script}, get_attribute{selector,attr}, text_content{selector}, inner_html{selector}, is_visible{selector}, is_checked{selector}, count{selector}, title, url. Returns one result per step; stops at the first failure. Example: [{\"action\":\"goto\",\"url\":\"https://abc.com\"},{\"action\":\"fill\",\"selector\":\"#q\",\"value\":\"hi\"},{\"action\":\"click\",\"selector\":\"button[type=submit]\"},{\"action\":\"wait_for\",\"selector\":\".result\"},{\"action\":\"screenshot\",\"full_page\":true}]"`
 	SessionID string `wick:"desc=Optional live session id (from session_open). When set, actions run in that persistent browser and the browser is NOT closed afterwards. Leave empty for a throwaway browser launched and closed for this call."`
 	Tab       int    `wick:"desc=Which tab to act on when session_id is set (0-based, from session_list). Default 0 (first tab). Ignored without session_id."`
+	// Network-capture opt-in. Decided up front (before the actions run) so the
+	// recorder is attached before any navigation and misses nothing.
+	RecordRequest       bool   `wick:"bool;desc=Record every HTTP request the browser makes while this script runs, so they can be inspected or replayed over plain HTTP later. Saved to disk; read back with get_request."`
+	RecordName          string `wick:"desc=Name for the saved capture file (letters/digits/dash/underscore). Default 'captured'. When a profile is set, the capture is stored under that profile instead."`
+	RecordURLPattern    string `wick:"desc=Optional substring or regex the request URL must match to be recorded. Leave empty to record all XHR/fetch calls (static assets are skipped)."`
+	RecordIncludeAssets bool   `wick:"bool;desc=Also record static assets (images, CSS, fonts, JS). Off by default — those are usually noise for replay."`
+	Profile             string `wick:"desc=Optional named profile to store the capture under (profiles/<name>/captured.json). Only used with record_request."`
 }
 
 // ── Live session inputs ──────────────────────────────────────────────
 
-// sessionOpenInput opens a persistent browser. It takes no per-call args today
-// (browser/headless/proxy come from Config); the empty struct keeps the schema
-// explicit and lets fields be added later without a signature change.
-type sessionOpenInput struct{}
+// sessionOpenInput opens a persistent browser. Browser/headless/proxy come from
+// Config; the one optional arg is a named profile to reuse (login/cookies
+// persist across sessions under that name) — empty means an anonymous,
+// swept-on-close session, the original behavior.
+type sessionOpenInput struct {
+	Profile string `wick:"desc=Optional named profile to run this session against. A named profile's login/cookies persist across sessions and plugin restarts, so reopening the same name reuses the login without re-auth. Letters, digits, dash, underscore only. Leave empty for a throwaway anonymous session."`
+}
 
 // sessionListInput lists live sessions and their tabs. No arguments.
 type sessionListInput struct{}
+
+// profileListInput lists named persistent profiles. No arguments.
+type profileListInput struct{}
+
+// profileDeleteInput removes a named profile and its stored login/cookies.
+type profileDeleteInput struct {
+	Name string `wick:"required;desc=Named profile to delete (from profile_list). Refused while a live session is using it — close that session first."`
+}
+
+// getRequestInput reads back a previously recorded capture (from a run with
+// record_request=true). Give the profile OR the capture name it was saved under.
+type getRequestInput struct {
+	Profile string `wick:"desc=Named profile the capture was stored under (profiles/<name>/captured.json). Leave empty to read a non-profile capture by name."`
+	Name    string `wick:"desc=Capture name (default 'captured'). Used when no profile is set: reads captures/<name>.json."`
+}
 
 // sessionEndpointsInput returns a live session's raw CDP connection details
 // (cdp_url + per-tab WebSocket debugger URLs) so the manager's live-browser
@@ -186,7 +218,7 @@ type browserStatusInput struct{}
 
 // browserInstallInput downloads one engine's browser binary.
 type browserInstallInput struct {
-	Browser string `wick:"dropdown=chromium|firefox|webkit|cloakbrowser;required;desc=Engine to download."`
+	Browser string `wick:"dropdown=chromium|firefox|webkit|cloakbrowser|cloakbrowser-pro;required;desc=Engine to download."`
 }
 
 // Module returns the connector definition served over gRPC by main().
@@ -308,6 +340,27 @@ func Module() connector.Module {
 					sessionCloseInput{},
 					sessionCloseOp, wickdocs.Docs{},
 				),
+				connector.Op(
+					"profile_list",
+					"List Profiles",
+					"List named persistent profiles (login/cookies that survive across sessions). Each entry has its name, created/last-used time, whether a live session is currently using it (live), and that session_id if so. Persistent — profiles with no running browser still appear. Open one with session_open(profile=<name>).",
+					profileListInput{},
+					profileListOp, wickdocs.Docs{},
+				),
+				connector.OpDestructive(
+					"profile_delete",
+					"Delete Profile",
+					"Delete a named profile and its stored login/cookies for good. Refused while a live session is using the profile — close that session first. The only way a named profile is removed.",
+					profileDeleteInput{},
+					profileDeleteOp, wickdocs.Docs{},
+				),
+				connector.Op(
+					"get_request",
+					"Get Recorded Requests",
+					"Read back the HTTP requests recorded by an earlier run with record_request=true. Returns each request's method, url, headers, cookies, body, and response status — ready to replay over plain HTTP. Give the profile it was stored under, or the capture name.",
+					getRequestInput{},
+					getRequestOp, wickdocs.Docs{},
+				),
 			),
 			connector.Cat(
 				"Extensions",
@@ -356,6 +409,20 @@ func Module() connector.Module {
 					"Download one browser engine's binary (chromium/firefox/webkit). Blocks until the download completes. Idempotent. Used by the manager UI's Download button.",
 					browserInstallInput{},
 					browserInstallOp, wickdocs.Docs{},
+				),
+				connector.OpConfigOnly(
+					"browser_update",
+					"Update Browser",
+					"Re-fetch a browser engine's binary to the newest available build (cloakbrowser pulls the latest GitHub release). Used by the manager UI's ⋮ menu.",
+					browserInstallInput{},
+					browserUpdateOp, wickdocs.Docs{},
+				),
+				connector.OpConfigOnly(
+					"browser_uninstall",
+					"Uninstall Browser",
+					"Remove a browser engine's downloaded binary so it shows as not installed. Used by the manager UI's ⋮ menu.",
+					browserInstallInput{},
+					browserUninstallOp, wickdocs.Docs{},
 				),
 			),
 		},
@@ -417,18 +484,86 @@ func run(c *connector.Ctx) (any, error) {
 	// browser (reconnect over CDP, don't close). Otherwise launch a throwaway
 	// browser for this call only.
 	if sid := strings.TrimSpace(c.Input("session_id")); sid != "" {
+		return runLive(c, sid, actions)
+	}
+	return withSession(c, func(s *session) (any, error) { return s.runActions(actions) })
+}
+
+// opDeadline is the hard ceiling on ONE browser op (ephemeral run/screenshot/…
+// OR a live-session run). Playwright-go's operations (Launch, Goto,
+// WaitForLoadState, ConnectOverCDP, pw.Stop) are blocking pipe calls into the
+// Node driver and are NOT bound to any Go context. When the driver dies mid-call
+// — e.g. it crashes with EPIPE writing a response — the pending call's result
+// never arrives and the goroutine blocks in waitResult FOREVER. Playwright's own
+// per-action timeout can't save it: that timer lives in the (now-dead) driver.
+// This Go-level deadline is the only thing that guarantees the op returns, so the
+// run finalizes (status leaves "running") instead of wedging as a zombie.
+//
+// Set above the per-action nav timeout (default 30s) plus margin so a legitimate
+// slow navigation completes normally; only a truly wedged call trips it.
+const opDeadline = 45 * time.Second
+
+// withDeadline runs work on a worker goroutine and returns its result, or a
+// timeout error if it doesn't finish within opDeadline. On timeout the worker is
+// abandoned (a wedged driver call can't be force-killed from Go); it unblocks and
+// exits when the driver process finally dies and its pipe closes. teardown, if
+// set, is fired in the background on timeout to hasten that (e.g. force-close the
+// connection so the pending call errors out). label names the op in the error.
+func withDeadline(label string, teardown func(), work func() (any, error)) (any, error) {
+	type outcome struct {
+		res any
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := work()
+		done <- outcome{res, err}
+	}()
+	select {
+	case o := <-done:
+		return o.res, o.err
+	case <-time.After(opDeadline):
+		if teardown != nil {
+			go teardown()
+		}
+		return nil, fmt.Errorf("%s exceeded %s (browser unresponsive; the driver may have crashed — close and reopen the session)", label, opDeadline)
+	}
+}
+
+// runLive executes actions against a live session under the op deadline. The
+// connect+run happens on a worker goroutine; if it doesn't finish in time,
+// runLive returns a timeout error and force-disconnects in the background (a
+// wedged pw.Stop must not block the return).
+func runLive(c *connector.Ctx, sid string, actions []action) (any, error) {
+	// lcCh hands the live connection to the timeout path so it can force a
+	// teardown even while the worker is still blocked mid-run.
+	lcCh := make(chan *liveConn, 1)
+	teardown := func() {
+		select {
+		case lc := <-lcCh:
+			lc.close()
+		default:
+		}
+	}
+	return withDeadline("live run", teardown, func() (any, error) {
 		lc, err := connectSession(c, sid)
 		if err != nil {
 			return nil, err
 		}
-		defer lc.close() // disconnect only — browser stays alive
-		ctx, err := lc.firstContext()
+		lcCh <- lc
+		bctx, err := lc.firstContext()
 		if err != nil {
+			lc.close()
 			return nil, err
 		}
-		return runActionsInContext(c, ctx, actions, c.InputInt("tab"))
-	}
-	return withSession(c, func(s *session) (any, error) { return s.runActions(actions) })
+		res, err := runActionsInContext(c, bctx, actions, c.InputInt("tab"))
+		// Quiesce before disconnecting so the live-view screencast / in-flight CDP
+		// events drain — disconnecting with a frame still queued is what crashed
+		// the Node driver with EPIPE.
+		lc.quiesce()
+		lc.close() // disconnect only — the detached browser stays alive
+		return res, err
+	})
 }
 
 // ── Live session handlers ────────────────────────────────────────────
@@ -436,6 +571,22 @@ func run(c *connector.Ctx) (any, error) {
 func sessionOpen(c *connector.Ctx) (any, error) { return openSession(c) }
 
 func sessionListOp(c *connector.Ctx) (any, error) { return sessionList(c) }
+
+func profileListOp(c *connector.Ctx) (any, error) { return profileList(c) }
+
+func profileDeleteOp(c *connector.Ctx) (any, error) { return profileDelete(c) }
+
+func getRequestOp(c *connector.Ctx) (any, error) {
+	path, err := captureSavePath(c, c.Input("profile"), c.Input("name"))
+	if err != nil {
+		return nil, err
+	}
+	reqs, err := loadCapture(path)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"requests": reqs, "count": len(reqs)}, nil
+}
 
 func sessionEndpointsOp(c *connector.Ctx) (any, error) {
 	sid := strings.TrimSpace(c.Input("session_id"))
@@ -489,5 +640,7 @@ func sessionCloseOp(c *connector.Ctx) (any, error) {
 
 // ── Maintenance handlers ─────────────────────────────────────────────
 
-func browserStatusOp(c *connector.Ctx) (any, error)  { return browserStatus(c) }
-func browserInstallOp(c *connector.Ctx) (any, error) { return browserInstall(c) }
+func browserStatusOp(c *connector.Ctx) (any, error)    { return browserStatus(c) }
+func browserInstallOp(c *connector.Ctx) (any, error)   { return browserInstall(c) }
+func browserUpdateOp(c *connector.Ctx) (any, error)    { return browserUpdate(c) }
+func browserUninstallOp(c *connector.Ctx) (any, error) { return browserUninstall(c) }

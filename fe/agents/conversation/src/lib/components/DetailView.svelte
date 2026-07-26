@@ -20,7 +20,7 @@
   import { readScmWidth, writeScmWidth, clampScmWidth } from "../scmWidth.js";
   import { isValidFileName } from "../fileName.js";
 
-  import { getConversation, getSessionMeta, deleteSession, getTurnTrace } from "../api/sessions.js";
+  import { getConversation, getSessionMeta, deleteSession, getTurnTrace, cancelRun } from "../api/sessions.js";
   import { getProviderOptions, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
   import { getAsks, answerAsk } from "../api/asks.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
@@ -779,6 +779,16 @@
     confirmKill = { sid: sessionId, queued: false };
   }
 
+  // Cancel one in-flight connector run behind a running tool call (the ✕ on a
+  // wick_execute card). The run finalizes "cancelled" server-side and the agent
+  // gets an explicit cancelled tool result; the connector_run(finished) SSE
+  // event clears the button.
+  function handleCancelRun(runId: string) {
+    run(cancelRun(base, sessionId, runId).pipe(Effect.provide(WickClientLayer)))
+      .then(() => toastOk("Operation cancelled"))
+      .catch((e: unknown) => toastError("Cancel failed", e instanceof Error ? e.message : String(e)));
+  }
+
   function doKill() {
     const target = confirmKill;
     confirmKill = null;
@@ -1045,7 +1055,7 @@
         data-chat-panel
       >
         <div class="max-w-4xl mx-auto w-full px-6 pt-14 pb-6 md:pt-6">
-          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} />
+          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} />
         </div>
       </div>
 

@@ -128,8 +128,14 @@
     const opName = el.dataset.op ?? "";
     const arg = el.dataset.arg ?? "";
     if (!opName) return;
-    ev.preventDefault();
 
+    // UI-only markers (e.g. a kebab menu's <summary data-op="__menu">) must NOT
+    // preventDefault — that would block the native <details> toggle — and must
+    // not select the row. Return BEFORE preventDefault so the browser opens the
+    // menu normally.
+    if (opName.startsWith("__") && opName !== "__select") return;
+
+    ev.preventDefault();
     if (opName === "__select") {
       if (arg && arg !== value) onChange(arg);
       return;

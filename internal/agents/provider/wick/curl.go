@@ -76,6 +76,28 @@ func BuildRequest(recordJSON []byte, m provider.WickModel) (CurlRequest, error) 
 	}
 }
 
+// BuildRequestFromLive reconstructs the structured request for the CURRENTLY
+// in-flight model call (from the live-phase snapshot) rather than a finished log
+// record — so the FE can view/copy-as-curl the request that's being sent right
+// now, before any record lands. It maps the live snapshot onto the same
+// interactionRecord shape BuildRequest consumes, so the exact same vendor-format
+// reconstruction + renderers apply.
+func BuildRequestFromLive(st ModelCallState, m provider.WickModel) (CurlRequest, error) {
+	rec := interactionRecord{
+		Kind:    st.Kind,
+		Model:   st.Model,
+		ModelID: st.ModelID,
+		System:  st.System,
+		Tools:   st.Tools,
+		Request: st.Messages,
+	}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return CurlRequest{}, err
+	}
+	return BuildRequest(b, m)
+}
+
 // BuildCurl keeps the original single-shot API: a ready single-line curl
 // with the key as a placeholder. Kept for existing callers/tests; new UI
 // uses BuildRequest + a renderer.

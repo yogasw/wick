@@ -637,6 +637,12 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 	})
 	if execErr != nil {
 		body := execErr.Error()
+		// Prefer the masked, agent-readable ErrorMessage (e.g. the explicit
+		// "cancelled by the user — don't retry" text) over the raw error, and the
+		// response body over both when present.
+		if res != nil && res.ErrorMessage != "" {
+			body = res.ErrorMessage
+		}
 		if res != nil && res.ResponseJSON != "" {
 			body = res.ResponseJSON
 		}

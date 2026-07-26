@@ -95,7 +95,25 @@ type engine struct {
 	// truncated inline, just without a file to recover the rest). Set from
 	// the spawn's SessionDir.
 	toolSpillDir string
+
+	// steer, when set, is drained (non-blocking) between tool-call rounds within
+	// a turn: any user messages that arrived MID-TURN are injected into the
+	// history before the next model call, so the user can steer/correct the agent
+	// while it's still working instead of waiting for the whole turn to finish.
+	// Same channel the spawn loop reads for next-turn messages; the engine peeks
+	// it opportunistically. nil disables mid-turn steering.
+	steer <-chan string
+
+	// retryPolicy tunes per-call timeout + retry attempts, applied to every model
+	// call. Zero value → sane defaults (3 attempts, 120s). Set from wick config.
+	retryPolicy retryPolicy
 }
+
+// setSteer wires the mid-turn steering channel (the spawn's msgs channel).
+func (e *engine) setSteer(ch <-chan string) { e.steer = ch }
+
+// setRetryPolicy wires the operator-configured retry+timeout policy.
+func (e *engine) setRetryPolicy(p retryPolicy) { e.retryPolicy = p }
 
 // setWickSessionID wires the wick HTTP session id (distinct from the
 // stream-json protocol's own sessionID) so gate checks route approval
@@ -188,6 +206,11 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 			return
 		}
 
+		// Drain any messages that arrived MID-TURN and inject them so the next
+		// model call sees the user's steer/correction without waiting for the
+		// whole turn to end. Non-blocking: only messages already queued are taken.
+		e.drainSteer()
+
 		// Re-check the budget every round, not just at turn start: history
 		// balloons INSIDE this loop as each tool result is appended (a shell
 		// or connector result can be tens of KB), so a turn with many tool
@@ -268,11 +291,68 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 	e.emit(doneLine(strings.TrimSpace(finalText.String())))
 }
 
+// drainSteer pulls any messages already queued on the steer channel (arrived
+// mid-turn) and appends them to the history as user turns, so the next model
+// call in this turn sees the user's steer. Non-blocking — it never waits for a
+// message. The message is already persisted to the store by pool.send when it
+// arrived, so the transcript shows it; here we only feed it into the live model
+// context. isCompactCommand messages are skipped (a mid-turn /compact would
+// fight the in-progress turn; it's honored as its own next turn instead).
+func (e *engine) drainSteer() {
+	if e.steer == nil {
+		return
+	}
+	for {
+		select {
+		case msg, ok := <-e.steer:
+			if !ok {
+				e.steer = nil
+				return
+			}
+			if strings.TrimSpace(msg) == "" || isCompactCommand(msg) {
+				continue
+			}
+			e.emit(thinkingLine("↪ user added mid-turn: " + msg))
+			e.history = append(e.history, genai.NewContentFromText(msg, genai.RoleUser))
+		default:
+			return
+		}
+	}
+}
+
 // generate calls the model once (non-streaming v1) and returns the
 // aggregated response. Streaming token-by-token output is a documented
 // follow-up (the aggregator double-emit hazard makes non-streaming the
 // correct first cut).
 func (e *engine) generate(ctx context.Context) (*LLMResponse, error) {
+	return e.generateAttempt(ctx, "generate", 1, "")
+}
+
+// snapshotRequest builds the in-flight request snapshot the live-phase registry
+// exposes to the FE (curl + viewer) BEFORE the record lands. Reuses the same
+// truncating summarizers the finished record uses, so both render identically.
+func (e *engine) snapshotRequest(kind string, cfg *genai.GenerateContentConfig, contents []*genai.Content) *modelCallRequest {
+	r := &modelCallRequest{
+		Kind:    kind,
+		Model:   e.modelName,
+		ModelID: e.modelID,
+		System:  capText(systemText(cfg)),
+		Request: summarizeRequest(contents),
+	}
+	for _, fd := range toolsFromConfig(cfg) {
+		r.Tools = append(r.Tools, fd.Name)
+	}
+	return r
+}
+
+// generateAttempt calls the model once and returns the aggregated response. kind
+// is "generate" or "compaction"; attempt is the 1-based retry number and reason
+// a short label (both surfaced live so the FE can show "retrying (attempt 2 —
+// rate limited)"). The vendor call runs under a child context whose cancel is
+// published to the live-phase registry, so CancelModelCall can abort THIS call
+// without killing the turn — generate returns an error the caller handles like
+// any other, and the turn ends gracefully.
+func (e *engine) generateAttempt(ctx context.Context, kind string, attempt int, reason string) (*LLMResponse, error) {
 	cfg := e.effectiveConfig()
 	req := &LLMRequest{
 		Model:    e.modelName,
@@ -301,17 +381,55 @@ func (e *engine) generate(ctx context.Context) (*LLMResponse, error) {
 		}
 	}()
 
+	// Child context so just this model call can be cancelled (CancelModelCall)
+	// without tearing down the turn/session.
+	callCtx, cancelCall := context.WithCancel(ctx)
+	defer cancelCall()
+
+	snap := e.snapshotRequest(kind, cfg, req.Contents)
+	sid := e.wickSessionID
+
+	// Apply the operator's configured retry+timeout policy to this call (the
+	// adapters read it from the context); nil config → sane defaults.
+	callCtx = withRetryPolicy(callCtx, e.retryPolicy)
+
+	// Surface adapter-level retries (429/5xx/transport, done inside the adapters
+	// below the engine) live AND in the conversation: the interactions panel gets
+	// a "retrying (attempt N)" badge, and the chat gets a system line so the user
+	// sees "the model errored and is being retried" without opening the panel.
+	// The snapshot is unchanged across a retry (same request), so we reuse snap.
+	callCtx = withRetryNotify(callCtx, func(httpAttempt int, reason string) {
+		a := attempt
+		if httpAttempt > 1 {
+			a = attempt + httpAttempt - 1
+		}
+		markModelCallRetry(sid, a, reason, snap, cancelCall)
+		max := e.retryPolicy.attempts()
+		e.emit(thinkingLine(fmt.Sprintf("⚠ Model call failed (%s) — retrying (attempt %d/%d)…", reason, a, max)))
+	})
+
+	// Mark the model-call phase with the request snapshot + attempt + cancel so
+	// the interactions UI can label "waiting on the model", render/copy the
+	// in-flight request, show a retry badge, and drive a per-call cancel. Cleared
+	// as soon as the call returns.
+	if attempt > 1 {
+		markModelCallRetry(sid, attempt, reason, snap, cancelCall)
+	} else {
+		markModelCallStart(sid, attempt, snap, cancelCall)
+	}
+
 	var out *LLMResponse
 	var gotErr error
-	for resp, err := range e.llm.GenerateContent(ctx, req, false) {
+	for resp, err := range e.llm.GenerateContent(callCtx, req, false) {
 		if err != nil {
 			gotErr = err
 			break
 		}
 		out = resp
 	}
+	markModelCallDone(e.wickSessionID)
 	close(heartbeatDone)
-	e.recordInteraction("generate", cfg, req.Contents, out, time.Since(start).Milliseconds(), gotErr)
+	e.recordInteraction(kind, cfg, req.Contents, out, time.Since(start).Milliseconds(), gotErr)
 	if gotErr != nil {
 		return nil, gotErr
 	}
@@ -405,7 +523,9 @@ func (e *engine) generateWithOverflowRecovery(ctx context.Context) (*LLMResponse
 		// happening without polluting the final answer text.
 		e.emit(thinkingLine("Context was full — auto-summarized earlier conversation to keep going."))
 
-		out, err = e.generate(ctx)
+		// attempt+1 because this generate is the (attempt+1)-th try of the same
+		// logical call; the live phase shows "retrying (attempt N — context full)".
+		out, err = e.generateAttempt(ctx, "generate", attempt+1, "context full")
 		if err == nil {
 			return out, nil
 		}
