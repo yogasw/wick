@@ -3,8 +3,36 @@
 
   type ToolBlock = Extract<ThreadBlock, { kind: "tool" }>;
 
-  type Props = { block: ToolBlock };
-  let { block }: Props = $props();
+  // onCancel aborts the underlying connector run (per-operation — the agent turn
+  // keeps going and receives a "cancelled" result). onDismiss just removes a
+  // stuck card from the view without touching the backend (used for orphan runs
+  // from before this feature, which carry no runId to cancel).
+  type Props = {
+    block: ToolBlock;
+    onCancel?: (runId: string) => void;
+    onDismiss?: (toolUseId: string) => void;
+    // Set when this card belongs to an interrupted/cut-off turn (history path).
+    // Such a tool call has no result but is NOT live — show "interrupted", not a
+    // running spinner that never resolves.
+    interrupted?: boolean;
+  };
+  let { block, onCancel, onDismiss, interrupted = false }: Props = $props();
+
+  let cancelling = $state(false);
+
+  function cancel(e: Event): void {
+    e.stopPropagation();
+    if (cancelling) return;
+    if (block.runId && onCancel) {
+      cancelling = true;
+      onCancel(block.runId);
+    } else if (onDismiss) {
+      // No runId — an orphan/stale card (e.g. from before per-run cancel existed,
+      // or a run whose finish event was lost). Nothing to abort server-side; just
+      // clear it from the view.
+      onDismiss(block.toolUseId);
+    }
+  }
 
   let inputCollapsed = $state(true);
   let resultCollapsed = $state(true);
@@ -12,8 +40,15 @@
   // A tool is still running until its result arrives. While running we show
   // a live elapsed timer so a long call (e.g. a shell command that takes
   // minutes) reads as "working", not stuck — the whole point of this card
-  // during the 10m shell window the user hit.
-  const running = $derived(block.result === undefined && !!block.startedAt);
+  // during the 10m shell window the user hit. A tool call on an interrupted
+  // turn is NOT running — its result never came because the turn was cut off,
+  // so it must read "interrupted", never an eternal spinner.
+  const running = $derived(block.result === undefined && !!block.startedAt && !interrupted);
+  const wasInterrupted = $derived(block.result === undefined && interrupted);
+
+  // The ✕ is shown on any running tool. It cancels the op when a runId is known
+  // (a live run), otherwise it just dismisses the stuck card from the UI.
+  const canCancel = $derived(running && (!!onCancel || !!onDismiss));
 
   // now ticks once a second ONLY while something on the page is running, so
   // the running timer updates without a permanent interval.
@@ -77,6 +112,20 @@
         </svg>
         running{#if runningElapsed} {runningElapsed}{/if}…
       </span>
+      {#if canCancel}
+        <span
+          role="button"
+          tabindex="0"
+          title={block.runId ? "Cancel this operation (the agent keeps going)" : "Dismiss this stuck card"}
+          aria-label={block.runId ? "Cancel this operation" : "Dismiss this stuck card"}
+          aria-disabled={cancelling}
+          onclick={cancel}
+          onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") cancel(e); }}
+          class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30 {cancelling ? 'opacity-40' : ''}"
+        >✕</span>
+      {/if}
+    {:else if wasInterrupted}
+      <span class="ml-auto text-[10px] font-medium text-amber-700 dark:text-amber-300 uppercase tracking-wide shrink-0">interrupted</span>
     {:else}
       <span class="ml-auto text-[10px] text-black-500 dark:text-black-600 uppercase tracking-wide shrink-0">tool call</span>
     {/if}

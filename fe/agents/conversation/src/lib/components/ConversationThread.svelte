@@ -15,9 +15,13 @@
     typing: TypingState;
     loadTrace?: (turnId: string) => Promise<TurnEvent[]>;
     onOpenPath?: (path: string) => void;
+    // Cancel an in-flight connector run behind a running tool call.
+    onCancelRun?: (runId: string) => void;
+    // Dismiss a stuck tool card (no runId to cancel) from the view.
+    onDismissTool?: (toolUseId: string) => void;
   };
 
-  let { turns, live, typing, loadTrace, onOpenPath }: Props = $props();
+  let { turns, live, typing, loadTrace, onOpenPath, onCancelRun, onDismissTool }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -188,7 +192,7 @@
             <div class="flex flex-col gap-1">
               {#each liveNonTodoBlocks as block, bi (bi)}
                 {#if block.kind === "tool"}
-                  <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} />
+                  <ToolCard block={block as Extract<ThreadBlock, { kind: "tool" }>} onCancel={onCancelRun} onDismiss={onDismissTool} />
                 {:else if block.kind === "thinking"}
                   <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700">
                     {(block as Extract<ThreadBlock, { kind: "thinking" }>).text}

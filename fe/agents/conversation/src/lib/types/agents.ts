@@ -200,7 +200,22 @@ export type SSEStatus = "connecting" | "connected" | "error";
 export type ThreadBlock =
   | { kind: "thinking"; text: string }
   | { kind: "raw"; text: string }
-  | { kind: "tool"; toolUseId: string; toolName: string; toolInput: string; result?: string; isError?: boolean; startedAt?: number; endedAt?: number };
+  | {
+      kind: "tool";
+      toolUseId: string;
+      toolName: string;
+      toolInput: string;
+      result?: string;
+      isError?: boolean;
+      startedAt?: number;
+      endedAt?: number;
+      // Set from a `connector_run` SSE event while the underlying connector run
+      // is in flight, so a running wick_execute tool call can show a Cancel
+      // button (needs connectorId + runId for the cancel route). Cleared when the
+      // run finishes.
+      runId?: string;
+      connectorId?: string;
+    };
 
 export type LiveTurn = { text: string; blocks: ThreadBlock[] };
 

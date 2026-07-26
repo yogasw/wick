@@ -6,9 +6,9 @@
      (replaceState, no SPA navigation) so links stay shareable, then trigger
      a re-fetch. Reuses common-ui Select/Button + the JSON history endpoint. */
   import { Button, Select } from "@wick-fe/common-ui";
-  import { toastError } from "@wick-fe/common-stores";
+  import { toastError, toastOk } from "@wick-fe/common-stores";
   import { push } from "$lib/router.js";
-  import { getConnectorHistory } from "$lib/api.js";
+  import { getConnectorHistory, cancelConnectorRun } from "$lib/api.js";
   import type { HistoryResult, HistoryFilter, HistoryRun } from "$lib/types.js";
   import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
@@ -26,6 +26,7 @@
     { label: "Success", value: "success" },
     { label: "Error", value: "error" },
     { label: "Running", value: "running" },
+    { label: "Cancelled", value: "cancelled" },
   ];
 
   let data = $state<HistoryResult | null>(null);
@@ -109,6 +110,24 @@
     push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(connectorId)}/test?op=${encodeURIComponent(run.operation_key)}&prefill=${encodeURIComponent(run.id)}`);
   }
 
+  // runs currently being cancelled — disables the button + shows intent.
+  let cancelling = $state<Record<string, boolean>>({});
+
+  async function cancelRun(run: HistoryRun): Promise<void> {
+    if (cancelling[run.id]) return;
+    cancelling = { ...cancelling, [run.id]: true };
+    try {
+      const r = await cancelConnectorRun(connectorKey, connectorId, run.id);
+      toastOk(r.reclaimed ? "Run reclaimed" : "Run cancelled");
+      await load(true);
+    } catch (e) {
+      toastError("Cancel failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      const { [run.id]: _, ...rest } = cancelling;
+      cancelling = rest;
+    }
+  }
+
   async function load(silent = false): Promise<void> {
     if (!silent) loading = true;
     try {
@@ -154,6 +173,9 @@
     success: "bg-pos-100 text-pos-400",
     error: "bg-neg-100 text-neg-400",
     running: "bg-prog-100 text-prog-400",
+    // Cancelled is neutral, not an error: the op was aborted (session closed or
+    // reclaimed as stale), it didn't fail on its own.
+    cancelled: "bg-black-700 text-black-500",
   };
 
   $effect(() => {
@@ -235,9 +257,21 @@
                 <td class="px-4 py-3 text-xs"><span class="inline-flex items-center rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 font-medium text-black-700 dark:text-black-600">{run.source}</span></td>
                 <td class="px-4 py-3 text-xs text-black-800 dark:text-black-600">{userLabel(run)}</td>
                 <td class="px-4 py-3 text-xs">
-                  <span class="rounded-full px-2 py-0.5 font-medium {statusBadge[run.status] ?? statusBadge.running}">{run.status}</span>
-                  {#if run.status === "error" && run.error_msg}
-                    <p class="mt-1 max-w-md truncate font-mono text-[10px] text-neg-400" title={run.error_msg}>{run.error_msg}</p>
+                  <span class="inline-flex items-center gap-1">
+                    <span class="rounded-full px-2 py-0.5 font-medium {statusBadge[run.status] ?? statusBadge.running}">{run.status}</span>
+                    {#if run.status === "running"}
+                      <button
+                        type="button"
+                        title="Cancel this run"
+                        aria-label="Cancel this run"
+                        disabled={cancelling[run.id]}
+                        onclick={() => cancelRun(run)}
+                        class="inline-flex h-5 w-5 items-center justify-center rounded-full text-neg-400 hover:bg-neg-100 disabled:opacity-40"
+                      >✕</button>
+                    {/if}
+                  </span>
+                  {#if run.error_msg && (run.status === "error" || run.status === "cancelled")}
+                    <p class="mt-1 max-w-md truncate font-mono text-[10px] {run.status === 'cancelled' ? 'text-black-500' : 'text-neg-400'}" title={run.error_msg}>{run.error_msg}</p>
                   {/if}
                 </td>
                 <td class="px-4 py-3 text-right font-mono text-xs text-black-800 dark:text-black-600">{run.latency_ms > 0 ? `${run.latency_ms} ms` : "—"}</td>
@@ -252,7 +286,7 @@
                       </div>
                       <div>
                         <p class="text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">Response</p>
-                        {#if run.status === "error" && run.error_msg}
+                        {#if run.error_msg && (run.status === "error" || run.status === "cancelled")}
                           <pre class="mt-1 max-h-80 overflow-auto rounded-lg border border-neg-300 bg-neg-100 p-3 font-mono text-[11px] text-neg-400">{run.error_msg}</pre>
                         {:else}
                           <pre class="mt-1 max-h-80 overflow-auto rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-3 font-mono text-[11px] text-black-900 dark:text-white-100">{prettyJSON(run.response_json)}</pre>

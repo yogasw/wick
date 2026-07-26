@@ -423,6 +423,20 @@ export async function getConnectorHistory(
   return { ...r, runs: r.runs ?? [], ops: r.ops ?? [], users: r.users ?? [] };
 }
 
+/* Kill one in-flight run (the per-run Cancel button on a "running" history row).
+   Cancels the op's context server-side so it unwinds and finalizes as
+   "cancelled". reclaimed=true means the row was a stale leftover reclaimed
+   rather than an active op that was cancelled. */
+export async function cancelConnectorRun(
+  key: string,
+  id: string,
+  runID: string,
+): Promise<{ cancelled: boolean; reclaimed?: boolean }> {
+  return apiPost<{ cancelled: boolean; reclaimed?: boolean }>(
+    `${rowBase(key, id)}/runs/${encodeURIComponent(runID)}/cancel`,
+  );
+}
+
 /* Plugin marketplace. Listing is readable by any logged-in user; the
    actions below are admin-only server-side. Backed by internal/manager/plugins_api.go. */
 export async function listPlugins(): Promise<import("./types.js").PluginsList> {
