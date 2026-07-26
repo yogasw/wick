@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { apiGetWickInteractions, apiGetWickInteractionCurl, type WickInteraction, type WickCurlForms } from "$lib/api";
-  import { toastError } from "@wick-fe/common-stores";
+  import { apiGetWickInteractions, apiGetWickInteractionCurl, apiGetWickLiveCurl, apiCancelWickModelCall, type WickInteraction, type WickCurlForms } from "$lib/api";
+  import { toastError, toastOk } from "@wick-fe/common-stores";
   import CurlBuilderModal from "./CurlBuilderModal.svelte";
 
   // Session log for the built-in wick provider: every model call's
@@ -21,6 +21,8 @@
   // and for how long. Authoritative — no guessing from the log.
   let modelInFlight = $state(false);
   let modelElapsedMs = $state(0);
+  let modelAttempt = $state(1);
+  let modelRetryReason = $state("");
   let expanded = $state<Set<number>>(new Set());
   let curlBusy = $state<number | null>(null);
 
@@ -57,6 +59,10 @@
   // newest record's tool_calls name it). The timer is what surfaces "stuck".
   const liveLabel = $derived.by(() => {
     if (modelInFlight) {
+      if (modelAttempt > 1) {
+        const why = modelRetryReason ? ` — ${modelRetryReason}` : "";
+        return `retrying model call (attempt ${modelAttempt}${why})… (${fmtDur(liveElapsedMs)})`;
+      }
       return `model call in progress… (${fmtDur(liveElapsedMs)})`;
     }
     const tc = newestInteraction?.tool_calls;
@@ -88,6 +94,8 @@
       total = res.total;
       modelInFlight = res.model_call_in_flight ?? false;
       modelElapsedMs = res.model_call_elapsed_ms ?? 0;
+      modelAttempt = res.model_call?.attempt ?? 1;
+      modelRetryReason = res.model_call?.retry_reason ?? "";
       // Server clamps page to range; mirror it so the footer stays honest.
       if (res.page) page = res.page;
     } catch (e) {
@@ -144,6 +152,35 @@
       toastError(e instanceof Error ? e.message : "Could not build the request for this call");
     } finally {
       curlBusy = null;
+    }
+  }
+
+  // View/copy the request being sent RIGHT NOW (the in-flight call), before any
+  // record lands — for debugging a stuck "model call in progress".
+  let liveCurlBusy = $state(false);
+  async function openLiveCurl() {
+    liveCurlBusy = true;
+    try {
+      curlForms = await apiGetWickLiveCurl(base, session);
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "No in-flight request to show");
+    } finally {
+      liveCurlBusy = false;
+    }
+  }
+
+  // Cancel just the in-flight model call (the turn keeps going).
+  let cancelBusy = $state(false);
+  async function cancelModelCall() {
+    cancelBusy = true;
+    try {
+      await apiCancelWickModelCall(base, session);
+      toastOk("Model call cancelled");
+      await load(false);
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Could not cancel the model call");
+    } finally {
+      cancelBusy = false;
     }
   }
 
@@ -273,6 +310,22 @@
           <span class="min-w-0 flex-1 truncate text-xs text-black-700 dark:text-black-600 italic">
             {liveLabel}
           </span>
+          {#if modelInFlight}
+            <button
+              type="button"
+              onclick={openLiveCurl}
+              disabled={liveCurlBusy}
+              class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 disabled:opacity-40"
+              title="View / copy the request being sent right now"
+            >View request</button>
+            <button
+              type="button"
+              onclick={cancelModelCall}
+              disabled={cancelBusy}
+              class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium text-error-400 hover:bg-error-100 disabled:opacity-40"
+              title="Cancel just this model call (the turn keeps going)"
+            >Cancel call</button>
+          {/if}
         </li>
       {/if}
       {#if total === 0 && applied}

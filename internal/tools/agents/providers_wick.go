@@ -97,11 +97,29 @@ func getWickInteractions(c *tool.Ctx) {
 	}
 	// Live phase: is an outbound model call in flight right now? The log can't
 	// show this (records land only when a call finishes), so the FE uses it to
-	// label the live row as "model call" vs "running tool" accurately, plus how
-	// long it's been waiting (to spot a stuck call).
-	if inFlight, dur := wick.ModelCallInFlight(session); inFlight {
+	// label the live row as "model call" vs "running tool" accurately, how long
+	// it's been waiting (to spot a stuck call), the retry attempt/reason, and the
+	// in-flight request itself (so it can be viewed/copied-as-curl BEFORE the
+	// record lands).
+	if st := wick.ModelCallSnapshot(session); st.InFlight {
+		live := map[string]any{
+			"in_flight":  true,
+			"elapsed_ms": st.Elapsed.Milliseconds(),
+			"attempt":    st.Attempt,
+			"kind":       st.Kind,
+			"model":      st.Model,
+			"model_id":   st.ModelID,
+			"system":     st.System,
+			"tools":      st.Tools,
+			"messages":   st.Messages,
+		}
+		if st.RetryReason != "" {
+			live["retry_reason"] = st.RetryReason
+		}
+		resp["model_call"] = live
+		// Back-compat with the existing FE fields.
 		resp["model_call_in_flight"] = true
-		resp["model_call_elapsed_ms"] = dur.Milliseconds()
+		resp["model_call_elapsed_ms"] = st.Elapsed.Milliseconds()
 	}
 	c.JSON(http.StatusOK, resp)
 }
@@ -225,6 +243,85 @@ func getWickInteractionCurl(c *tool.Ctx) {
 		"model_id":    model.ID,
 		"env":         req.EnvHint,
 	})
+}
+
+// findWickModel resolves a WickModel by id from the current instance. Returns
+// (nil, false) when the instance can't load or the id is unknown.
+func findWickModel(id string) (*provider.WickModel, bool) {
+	ins, err := wickInstance()
+	if err != nil {
+		return nil, false
+	}
+	for i := range ins.WickModels {
+		if ins.WickModels[i].ID == id {
+			return &ins.WickModels[i], true
+		}
+	}
+	return nil, false
+}
+
+// getWickLiveCurl reconstructs the curl/request for the CURRENTLY in-flight
+// model call (no seq — reads the live-phase snapshot). Lets an operator inspect
+// or replay the request that's being sent right now, e.g. while a call is stuck
+// at "model call in progress (1m 17s)". Admin-only; key is a placeholder.
+// GET /providers/wick/interactions/{session}/live/curl
+func getWickLiveCurl(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	session := strings.TrimSpace(c.PathValue("session"))
+	if session == "" || strings.ContainsAny(session, `/\`) || strings.Contains(session, "..") {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid session id"})
+		return
+	}
+	st := wick.ModelCallSnapshot(session)
+	if !st.InFlight {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no model call in flight"})
+		return
+	}
+	if st.ModelID == "" {
+		c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": "in-flight call has no model id — cannot reconstruct a curl"})
+		return
+	}
+	model, ok := findWickModel(st.ModelID)
+	if !ok {
+		c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": "the in-flight model is not resolvable"})
+		return
+	}
+	req, err := wick.BuildRequestFromLive(st, *model)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	const ph = "$WICK_MODEL_API_KEY"
+	c.JSON(http.StatusOK, map[string]any{
+		"single_line": wick.RenderSingleLine(req, ph),
+		"multiline":   wick.RenderMultiline(req, ph),
+		"raw_http":    wick.RenderRawHTTP(req, ph),
+		"json_body":   wick.RenderJSONBody(req),
+		"model_id":    model.ID,
+		"env":         req.EnvHint,
+	})
+}
+
+// cancelWickModelCall aborts just the in-flight model call for a session (not
+// the turn/session). The engine sees the cancellation as a call error and ends
+// the turn gracefully; the process stays alive. Admin-only.
+// POST /providers/wick/interactions/{session}/cancel-call
+func cancelWickModelCall(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	session := strings.TrimSpace(c.PathValue("session"))
+	if session == "" || strings.ContainsAny(session, `/\`) || strings.Contains(session, "..") {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid session id"})
+		return
+	}
+	if wick.CancelModelCall(session) {
+		c.JSON(http.StatusOK, map[string]any{"cancelled": true})
+		return
+	}
+	c.JSON(http.StatusConflict, map[string]any{"cancelled": false, "error": "no model call in flight"})
 }
 
 // getWickModelKey reveals a model's API key in plaintext for the curl

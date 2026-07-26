@@ -1242,6 +1242,26 @@ export interface WickInteractionsPage {
   // call vs a running tool, with how long it's been waiting.
   model_call_in_flight?: boolean;
   model_call_elapsed_ms?: number;
+  // Full live snapshot of the in-flight call: retry attempt/reason (for a
+  // "retrying (attempt N)" badge) and the request being sent (for live view/curl
+  // before any record lands).
+  model_call?: WickLiveModelCall;
+}
+
+// WickLiveModelCall is the in-flight call snapshot. attempt>1 means a retry is
+// underway (retry_reason says why). The request fields mirror a finished record
+// so the same viewer/curl render them.
+export interface WickLiveModelCall {
+  in_flight: boolean;
+  elapsed_ms: number;
+  attempt: number;
+  retry_reason?: string;
+  kind: string;
+  model: string;
+  model_id: string;
+  system?: string;
+  tools?: string[];
+  messages?: { role: string; text?: string; tool_call?: string; tool_resp?: string }[];
 }
 
 export interface WickInteractionsQuery {
@@ -1273,7 +1293,24 @@ export async function apiGetWickInteractions(
     page_size: r?.page_size ?? (opts.pageSize ?? 10),
     model_call_in_flight: r?.model_call_in_flight ?? false,
     model_call_elapsed_ms: r?.model_call_elapsed_ms ?? 0,
+    model_call: r?.model_call,
   };
+}
+
+// apiGetWickLiveCurl reconstructs the request for the CURRENTLY in-flight model
+// call (no seq — reads the live snapshot). Throws on 404 (nothing in flight) or
+// 422 (no model id / model gone).
+export async function apiGetWickLiveCurl(base: string, session: string): Promise<WickCurlForms> {
+  return get<WickCurlForms>(
+    `${base}/providers/wick/interactions/${encodeURIComponent(session)}/live/curl`,
+  );
+}
+
+// apiCancelWickModelCall aborts just the in-flight model call (not the turn).
+export async function apiCancelWickModelCall(base: string, session: string): Promise<{ cancelled: boolean }> {
+  return post<{ cancelled: boolean }>(
+    `${base}/providers/wick/interactions/${encodeURIComponent(session)}/cancel-call`,
+  );
 }
 
 // WickCurlForms is every render of one reconstructed request, so the curl
