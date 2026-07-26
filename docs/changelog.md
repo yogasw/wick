@@ -6,44 +6,61 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.35.0](https://github.com/yogasw/wick/compare/v0.34.0...v0.35.0) — Features & Improvements
+
+_Released on 2026-07-26_
+
 ### Wick Provider
 #### Added
-*   Context compaction: when a session's history nears the context budget, wick asks the model to summarize the oldest turns (decisions, facts, file paths, done vs. pending) and continues with the summary in place — plus a manual `/compact` command and a heavier automatic pass on request overflow.
-*   Long-running tool calls: shell commands no longer run under a fixed wall-clock deadline — a long command can run as a background job the agent polls for status/log instead of stalling the turn.
-*   **Curl builder** for the session's Wick Interactions log: reconstructs any logged model call as a copyable request in 4 formats (single-line, Bash, raw HTTP, JSON body), with an editable body preview, env-var display, per-part copy, and an admin-only "reveal real key" option (defaults to a `$WICK_MODEL_API_KEY` placeholder).
-*   Session detail page: server-side search + pagination over the Wick Interactions log, upload progress + compaction indicators, and a detail modal for viewing a chip's full content without cluttering the transcript.
-*   Live model-call observability in the interactions log: the "running" row now distinguishes an in-flight model call from a running tool call, shows a live elapsed timer and retry attempt/reason, and gains **View request** (curl for the call in flight, before it's logged) and **Cancel call** (aborts just that model call; the turn keeps going).
-*   Uniform retry + per-attempt timeout across every model adapter, including Gemini: transient failures (timeout, connection reset, `429`, `5xx`) retry with backoff; fatal errors (bad key/model, other `4xx`) fail fast.
+*   Context compaction: When a session's history nears the context budget, wick asks the model to summarize the oldest turns (decisions, facts, file paths, done vs. pending) and continues with the summary in place. Includes a manual `/compact` command and a heavier automatic pass on request overflow.
+*   Long-running tool calls: Shell commands no longer run under a fixed wall-clock deadline. A long command can run as a background job the agent polls for status/log instead of stalling the turn.
+*   **Curl builder** for the session's Wick Interactions log: Reconstructs any logged model call as a copyable request in 4 formats (single-line, Bash, raw HTTP, JSON body), with an editable body preview, env-var display, per-part copy, and an admin-only "reveal real key" option (defaults to a `$WICK_MODEL_API_KEY` placeholder).
+*   Session detail page: Features server-side search + pagination over the Wick Interactions log, upload progress + compaction indicators, and a detail modal for viewing a chip's full content without cluttering the transcript.
+*   Live model-call observability in the interactions log: The "running" row now distinguishes an in-flight model call from a running tool call, shows a live elapsed timer and retry attempt/reason, and gains **View request** (curl for the call in flight, before it's logged) and **Cancel call** (aborts just that model call; the turn keeps going). Messages that arrive mid-turn are injected into the next model call of the same turn.
+*   Uniform retry + per-attempt timeout across every model adapter, including Gemini: Transient failures (timeout, connection reset, `429`, `5xx`, unavailable) retry with backoff; fatal errors (bad key/model, other `4xx`) fail fast. Configurable via `max_model_retries` and `model_call_timeout_sec`.
 
 ### Connectors
 #### Added
-*   Connector runs are cancellable — a **✕ Cancel** button on a `running` row in the connector History page, and on a running tool call in the agent conversation UI, aborts just that op (the run settles to a new **Cancelled** status, distinct from Error).
-*   A run can no longer stay stuck `running` forever: a background reaper job periodically reclaims any row still `running` well past every legitimate op's ceiling.
+*   Connector runs are cancellable: A **✕ Cancel** button on a `running` row in the connector History page and on a running tool call in the agent conversation UI aborts just that operation. The run settles to a new **Cancelled** status, distinct from Error. A cancelled/timed-out op returns an explicit, agent-readable result.
+*   A run can no longer stay stuck `running` forever: A background reaper job periodically reclaims any row still `running` well past every legitimate op's ceiling. `CancelSession` aborts all in-flight operations of a live session.
+*   Interrupted tool state: A tool call on an interrupted/cut-off turn now reads "interrupted" instead of an eternal running spinner.
 
 ### Playwright Browser
 #### Added
-*   **CloakBrowser Pro** (`cloakbrowser-pro`): a second stealth-Chromium engine alongside the existing free `cloakbrowser`, managed by the official `cloakbrowser` CLI + a license key (`CloakLicenseKey`). The free engine is hard-capped to 1 concurrent live session (CloakBrowser's free-plan limit); the pro engine follows the configured `MaxLiveSessions` once its license resolves to a paid tier.
-*   Browser picker gains a **⋮ menu** on installed engines for **Update** (re-fetch the latest build) and **Uninstall** (remove the downloaded binary), instead of only install.
-*   **Named browser profiles**: `session_open(profile=<name>)` persists login/cookies under a stable profile dir across sessions and plugin restarts (`profile_list`, `profile_delete`), instead of every session starting from a fresh, swept-on-close profile.
-*   **Record network requests**: `run(record_request=true)` captures the HTTP requests a script triggers (method, URL, headers, cookies, body, response status/headers), filterable by URL pattern, readable back with `get_request`.
-*   Live-browser panel: native clipboard bridging between your machine and the remote browser in Full mode (focus pushes your clipboard in, leaving pulls the remote's copied text back out), plus a right-click Copy/Paste menu on the live view.
+*   **CloakBrowser Pro** (`cloakbrowser-pro`): A second stealth-Chromium engine alongside the existing free `cloakbrowser`. It is managed by the official `cloakbrowser` CLI + a license key (`CloakLicenseKey`). The free engine is hard-capped to 1 concurrent live session (CloakBrowser's free-plan limit); the pro engine follows the configured `MaxLiveSessions` once its license resolves to a paid tier. The `cloak_use_cli` toggle has been removed.
+*   Browser picker gains a **⋮ menu** on installed engines for **Update** (re-fetch the latest build) and **Uninstall** (remove the downloaded binary). An "update available" badge is shown for the free cloak. Version probing reads the revision from the install path to avoid launching the engine. Graceful shutdown is attempted before force-killing a process.
+*   **Named browser profiles**: `session_open(profile=<name>)` persists login/cookies under a stable profile directory across sessions and plugin restarts. New `profile_list` and `profile_delete` operations are available, and `session_list` gains a profile field. Opening a profile already driven by a live session is rejected.
+*   **Record network requests**: `run(record_request=true)` captures the HTTP requests a script triggers (method, URL, headers, cookies, body, response status/headers), filterable by URL pattern, readable back with `get_request`. Requests are deduped. This now works for live sessions too.
+*   Live-browser panel: Native clipboard bridging between your machine and the remote browser in Full mode (focus pushes your clipboard in, leaving pulls the remote's copied text back out), plus a right-click Copy/Paste menu on the live view. `MouseEvent.detail` is forwarded as `clickCount` for double/triple-click selections.
 #### Fixed
 *   `wait_for_load_state(state=networkidle)` no longer stalls a run for minutes on pages that poll in the background — capped at 10s, then continues.
+*   `record_request` no longer crashes the Node driver or hangs the run by reading only initializer-cached fields in the `OnRequestFinished` callback.
+*   Hard Go-level deadline applied to every browser operation (ephemeral + live) plus a bounded connection close to prevent goroutines from blocking indefinitely.
+*   `browser_status` flicker on the Pro engine's status row when running `cloakbrowser info` is resolved by passing `--no-launch`.
+*   "Target closed" errors on cloak operations are fixed by resolving a fresh Playwright driver per retry attempt.
+*   Cloakbrowser launch arguments are aligned with the official Python wrapper, restoring `--ignore-gpu-blocklist` on Windows and adding `--start-maximized` for binaries version 148 and above.
 
 ### Admin UI
 #### Changed
-*   Boolean config fields (`bool`/`boolean`/`checkbox`) now render as an interactive toggle switch everywhere, not just for the `bool`/`boolean` tags — clicking the label also toggles it.
+*   Boolean config fields (`bool`/`boolean`/`checkbox`) now render as an interactive toggle switch everywhere — clicking the label also toggles it.
+#### Fixed
+*   HTML widget UI-only marker `data-op="__menu"` no longer prevents default, allowing a native `<details>` kebab menu to open without selecting the row.
 
 ### CLI Model Picker
 #### Added
-*   Per-instance **model selection** for `claude` / `codex` / `gemini` instances: an "Allow model selection" toggle plus an editable id + description table (`models`), with a "Load defaults" button that fills it from the catalog. When on, the picked model is passed to the CLI via `--model`.
-*   **Model catalog**: an embedded `models.json` baseline, overlaid by a GitHub-raw copy (refreshed lazily or on Rescan) and a hand-editable disk cache under `~/.<app>/` — merged per-model by `updated_at` (newest wins); disabled models are hidden.
-*   The composer's provider picker gained a full **type ▸ instance ▸ model** drill-down (a new reusable `ProviderPicker` component), collapsing any level with only one choice; each model shows its description under its name.
+*   Per-instance **model selection** for `claude` / `codex` / `gemini` instances: An "Allow model selection" toggle plus an editable ID + description table (`models`), with a "Load defaults" button that fills it from the catalog. When on, the picked model is passed to the CLI via `--model`.
+*   **Model catalog**: An embedded `models.json` baseline, overlaid by a GitHub-raw copy (refreshed lazily or on Rescan) and a hand-editable disk cache under `~/.<app>/` — merged per-model by `updated_at` (newest wins); disabled models are hidden.
+*   The composer's provider picker gained a full **type ▸ instance ▸ model** drill-down (a new reusable `ProviderPicker` component), collapsing any level with only one choice; each model shows its description under its name. The chip also shows the selected model on switch.
 
 ### Docs
-*   Documented the built-in wick provider (`claude` / `codex` / `gemini` alternative talking straight to a vendor API), the CLI model picker + model catalog, and the `Allow shell metacharacters` command-gate config — all of which had shipped without guide coverage.
+*   Documented the built-in wick provider (`claude` / `codex` / `gemini` alternative talking straight to a vendor API), the CLI model picker + model catalog, the `Allow shell metacharacters` command-gate config, CloakBrowser Pro, named browser profiles, network capture, model-call observability, and connector cancellation.
 
 ---
+
 
 ## [v0.34.0](https://github.com/yogasw/wick/compare/v0.33.2...v0.34.0) — Wick & Tools
 
