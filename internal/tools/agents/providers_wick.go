@@ -1,7 +1,9 @@
 package agents
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/provider"
 	wick "github.com/yogasw/wick/internal/agents/provider/wick"
 	"github.com/yogasw/wick/internal/agents/storage"
+	"github.com/yogasw/wick/internal/tools/agents/view"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -381,6 +384,9 @@ type wickModelDTO struct {
 	TopP            *float64 `json:"top_p,omitempty"`
 	ThinkingBudget  *int     `json:"thinking_budget,omitempty"`
 	RawConfig       string   `json:"raw_config,omitempty"`
+	// DiscoveryFilter, when set, makes this a live model set (Model may be
+	// empty). See userconfig.WickModel.DiscoveryFilter.
+	DiscoveryFilter string `json:"discovery_filter,omitempty"`
 }
 
 // wickInstance loads the single wick instance, materialising the
@@ -407,6 +413,7 @@ type wickModelView struct {
 	TopP            *float64 `json:"top_p,omitempty"`
 	ThinkingBudget  *int     `json:"thinking_budget,omitempty"`
 	RawConfig       string   `json:"raw_config"`
+	DiscoveryFilter string   `json:"discovery_filter,omitempty"`
 }
 
 // getWickConfig returns the wick instance's models (masked keys) +
@@ -436,6 +443,7 @@ func getWickConfig(c *tool.Ctx) {
 			Default:         m.Default,
 			Disabled:        m.Disabled,
 			RawConfig:       m.RawConfig,
+			DiscoveryFilter: m.DiscoveryFilter,
 		}
 		if m.GenConfig != nil {
 			v.Temperature = m.GenConfig.Temperature
@@ -488,8 +496,15 @@ func saveWickModel(c *tool.Ctx) {
 	}
 	dto.Model = strings.TrimSpace(dto.Model)
 	dto.Kind = strings.ToLower(strings.TrimSpace(dto.Kind))
-	if dto.Model == "" || dto.Kind == "" {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "kind and model are required"})
+	dto.DiscoveryFilter = strings.TrimSpace(dto.DiscoveryFilter)
+	// A live model set is identified by a discovery filter and needs no single
+	// model id; a plain entry still requires one.
+	if dto.Kind == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "kind is required"})
+		return
+	}
+	if dto.Model == "" && dto.DiscoveryFilter == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "model is required (or set a discovery filter for a live set)"})
 		return
 	}
 	if dto.Kind == "other" && strings.TrimSpace(dto.BaseURL) == "" {
@@ -516,6 +531,7 @@ func saveWickModel(c *tool.Ctx) {
 		Default:         dto.Default && !dto.Disabled,
 		Disabled:        dto.Disabled,
 		RawConfig:       strings.TrimSpace(dto.RawConfig),
+		DiscoveryFilter: dto.DiscoveryFilter,
 	}
 	if g := genConfigFromDTO(dto); g != nil {
 		m.GenConfig = g
@@ -875,6 +891,59 @@ func discoverWickModels(c *tool.Ctx) {
 	}
 	c.JSON(http.StatusOK, map[string]any{"models": models})
 }
+
+// expandLiveWickSet fetches the vendor model list for ONE registered wick
+// model that carries a discovery filter, and returns the matching models. Used
+// by the picker's 4th level: the user opened a "live set" row, so we resolve
+// it to real vendor models now. Empty result / error → nil (caller shows an
+// empty state); never aborts. Matching an entry by id, else by filter string.
+func expandLiveWickSet(ctx context.Context, ins provider.Instance, entryID, filter string) []view.ModelChoiceVM {
+	var target *provider.WickModel
+	for i := range ins.WickModels {
+		m := &ins.WickModels[i]
+		if m.Disabled || strings.TrimSpace(m.DiscoveryFilter) == "" {
+			continue
+		}
+		if (entryID != "" && m.ID == entryID) || (entryID == "" && m.DiscoveryFilter == filter) {
+			target = m
+			break
+		}
+	}
+	if target == nil {
+		return nil
+	}
+	live, err := discoverWickModel(ctx, target)
+	if err != nil {
+		log.Ctx(ctx).Warn().Err(err).Str("filter", target.DiscoveryFilter).Msg("live wick model set fetch failed")
+		return nil
+	}
+	var out []view.ModelChoiceVM
+	for _, d := range wick.FilterModels(live, target.DiscoveryFilter) {
+		label := d.Label
+		if label == "" {
+			label = d.ID
+		}
+		out = append(out, view.ModelChoiceVM{ID: d.ID, Label: label})
+	}
+	return out
+}
+
+// discoverWickModel lists the vendor's models for one registered wick model,
+// decrypting its stored key. DiscoverModels caches per key/kind/base with a
+// TTL, so repeated drills are cheap.
+func discoverWickModel(ctx context.Context, m *provider.WickModel) ([]wick.DiscoveredModel, error) {
+	key := m.APIKey
+	if globalConfigs != nil && key != "" {
+		if plain, derr := globalConfigs.DecryptSecret(key); derr == nil {
+			key = plain
+		}
+	}
+	if key == "" && strings.ToLower(m.Kind) != "other" {
+		return nil, fmt.Errorf("no stored key to list models")
+	}
+	return wick.DiscoverModels(ctx, m.Kind, key, strings.TrimSpace(m.BaseURL))
+}
+
 
 // storedWickKey returns the decrypted API key for a stored model id, or
 // "" if not found / unavailable.

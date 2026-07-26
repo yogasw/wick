@@ -20,6 +20,34 @@
   let typeDrill = $state<string>(""); // level 2: instances of this type
   let modelDrill = $state<ComposerSelectOption | null>(null); // level 3
   let rootEl = $state<HTMLDivElement | undefined>();
+  let modelSearch = $state("");
+  let modelSearchEl = $state<HTMLInputElement | undefined>();
+
+  // Filter the drilled instance's models by the search box. Same tiny grammar
+  // as elsewhere: contains by default, `-`/`!` prefix excludes.
+  function modelMatches(m: { id: string; label: string }, q: string): boolean {
+    const hay = `${m.id} ${m.label}`.toLowerCase();
+    for (const raw of q.toLowerCase().split(/\s+/)) {
+      const t = raw.trim();
+      if (t === "" || t === "-" || t === "!") continue;
+      const exclude = t.startsWith("-") || t.startsWith("!");
+      const needle = exclude ? t.slice(1) : t;
+      const hit = hay.includes(needle);
+      if (exclude ? hit : !hit) return false;
+    }
+    return true;
+  }
+  const drillModels = $derived.by(() => {
+    const all = modelDrill?.models ?? [];
+    const q = modelSearch.trim();
+    return q ? all.filter((m) => modelMatches(m, q)) : all;
+  });
+
+  // Focus the search box the moment we drill into a model list (only shown
+  // when the list is long enough to be worth filtering).
+  $effect(() => {
+    if (modelDrill && modelSearchEl) modelSearchEl.focus();
+  });
 
   function splitPin(v: string): { key: string; modelID: string } {
     const i = v.indexOf("::");
@@ -56,20 +84,24 @@
     return m ? `${opt.label} · ${m.label}` : opt.label;
   });
 
-  function reset() { typeDrill = ""; modelDrill = null; }
+  function reset() { typeDrill = ""; modelDrill = null; modelSearch = ""; }
   function close() { open = false; reset(); }
+  // Back out of the model list to the previous level, clearing the filter.
+  function backFromModels() { modelDrill = null; modelSearch = ""; }
+
+  function drillModel(o: ComposerSelectOption) { modelSearch = ""; modelDrill = o; }
 
   function pickType(g: { type: string; opts: ComposerSelectOption[] }) {
     if (g.opts.length === 1) {
       const only = g.opts[0];
-      if (hasModels(only)) { modelDrill = only; return; }
+      if (hasModels(only)) { drillModel(only); return; }
       onChange(only.value); close();
       return;
     }
     typeDrill = g.type;
   }
   function pickInstance(o: ComposerSelectOption) {
-    if (hasModels(o)) { modelDrill = o; return; }
+    if (hasModels(o)) { drillModel(o); return; }
     onChange(o.value); close();
   }
   function pickModel(o: ComposerSelectOption, modelID: string) {
@@ -106,22 +138,38 @@
     <div class="absolute z-30 mt-1 w-full min-w-[16rem] overflow-hidden rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-xl">
       {#if modelDrill}
         {@const d = modelDrill}
-        <button type="button" onclick={() => (modelDrill = null)} class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700">
+        <button type="button" onclick={backFromModels} class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700">
           <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
           {d.label}
         </button>
         <div class="border-t border-white-300 dark:border-navy-600"></div>
-        {#each d.models ?? [] as m (m.id)}
-          {@const pinned = `${d.value}::${m.id}`}
-          {@const isSel = value === pinned || (value === d.value && m.default)}
-          <button type="button" onclick={() => pickModel(d, m.id)} class="flex w-full items-start justify-between gap-3 px-3 py-1.5 text-left {isSel ? 'bg-green-500/10' : 'hover:bg-white-200 dark:hover:bg-navy-700'} text-black-900 dark:text-white-100">
-            <span class="flex flex-col min-w-0">
-              <span class="flex items-center gap-2 text-sm"><span class="truncate">{m.label}</span>{#if m.default}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>{/if}</span>
-              {#if m.desc}<span class="text-[11px] text-black-700 dark:text-black-600 leading-snug">{m.desc}</span>{/if}
-            </span>
-            {#if isSel}<span class="shrink-0 mt-0.5 text-green-600 dark:text-green-400">✓</span>{/if}
-          </button>
-        {/each}
+        <!-- Filter box: worth showing once the list is long enough to scan. -->
+        {#if (d.models?.length ?? 0) > 6}
+          <div class="px-2 pt-2">
+            <input
+              type="text"
+              bind:this={modelSearchEl}
+              bind:value={modelSearch}
+              placeholder="Filter models…"
+              class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2.5 py-1.5 text-xs text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500"
+            />
+          </div>
+        {/if}
+        <div class="max-h-72 overflow-y-auto py-1">
+          {#each drillModels as m (m.id)}
+            {@const pinned = `${d.value}::${m.id}`}
+            {@const isSel = value === pinned || (value === d.value && m.default)}
+            <button type="button" onclick={() => pickModel(d, m.id)} class="flex w-full items-start justify-between gap-3 px-3 py-1.5 text-left {isSel ? 'bg-green-500/10' : 'hover:bg-white-200 dark:hover:bg-navy-700'} text-black-900 dark:text-white-100">
+              <span class="flex flex-col min-w-0">
+                <span class="flex items-center gap-2 text-sm"><span class="truncate">{m.label}</span>{#if m.default}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>{/if}</span>
+                {#if m.desc}<span class="text-[11px] text-black-700 dark:text-black-600 leading-snug">{m.desc}</span>{/if}
+              </span>
+              {#if isSel}<span class="shrink-0 mt-0.5 text-green-600 dark:text-green-400">✓</span>{/if}
+            </button>
+          {:else}
+            <div class="px-3 py-3 text-xs text-black-700 dark:text-black-600">No models match “{modelSearch}”.</div>
+          {/each}
+        </div>
       {:else if typeDrill}
         {@const group = groups.find((g) => g.type === typeDrill)}
         <button type="button" onclick={() => (typeDrill = "")} class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700">

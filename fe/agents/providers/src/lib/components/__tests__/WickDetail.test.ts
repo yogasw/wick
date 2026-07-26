@@ -101,7 +101,88 @@ describe("WickDetail", () => {
     await screen.findByText("gemini-flash-latest");
     await fireEvent.click(screen.getByText("Add model"));
     expect(await screen.findByText("Add custom model")).toBeTruthy();
-    expect(screen.getByPlaceholderText("Search available models…")).toBeTruthy();
+    expect(screen.getByPlaceholderText(/Filter models/)).toBeTruthy();
+  });
+
+  it("batch-adds several models in Multiple mode", async () => {
+    vi.mocked(api.apiDiscoverWickModels).mockResolvedValue({
+      models: [
+        { id: "gpt-5.2", label: "GPT 5.2" },
+        { id: "o4-mini", label: "o4 mini" },
+      ],
+      error: "",
+    });
+    render(WickDetail, { props: props() });
+    await screen.findByText("gemini-flash-latest");
+    await fireEvent.click(screen.getByText("Add model"));
+    await screen.findByText("Add custom model");
+
+    // Typing a key triggers discovery; wait for the two mocked models.
+    await fireEvent.input(screen.getByLabelText("API key"), { target: { value: "sk-test" } });
+    await screen.findByText("gpt-5.2");
+
+    // Multiple + Manual mode, then tick both rows explicitly.
+    await fireEvent.click(screen.getByText("Multiple"));
+    await fireEvent.click(screen.getByText("Manual"));
+    await fireEvent.click(screen.getByText("gpt-5.2"));
+    await fireEvent.click(screen.getByText("o4-mini"));
+
+    // Footer button reflects the count and saves one entry per model.
+    vi.mocked(api.apiSaveWickModel).mockClear();
+    await fireEvent.click(screen.getByText(/Add 2 models/));
+    expect(api.apiSaveWickModel).toHaveBeenCalledTimes(2);
+    expect(api.apiSaveWickModel).toHaveBeenCalledWith("/wick", expect.objectContaining({ model: "gpt-5.2" }));
+    expect(api.apiSaveWickModel).toHaveBeenCalledWith("/wick", expect.objectContaining({ model: "o4-mini" }));
+  });
+
+  it("live mode saves ONE entry storing the filter (not per-model)", async () => {
+    vi.mocked(api.apiDiscoverWickModels).mockResolvedValue({
+      models: [
+        { id: "gpt-5.2", label: "GPT 5.2" },
+        { id: "gpt-5.2-mini", label: "GPT 5.2 mini" },
+        { id: "claude-x", label: "Claude X" },
+      ],
+      error: "",
+    });
+    render(WickDetail, { props: props() });
+    await screen.findByText("gemini-flash-latest");
+    await fireEvent.click(screen.getByText("Add model"));
+    await screen.findByText("Add custom model");
+    await fireEvent.input(screen.getByLabelText("API key"), { target: { value: "sk-test" } });
+    await screen.findByText("gpt-5.2");
+
+    // Multiple defaults to Live. Filter "gpt -mini" — the preview shows 1 match
+    // (gpt-5.2), but saving stores ONE live entry carrying the filter.
+    await fireEvent.click(screen.getByText("Multiple"));
+    await fireEvent.input(screen.getByPlaceholderText(/Filter models/), { target: { value: "gpt -mini" } });
+    vi.mocked(api.apiSaveWickModel).mockClear();
+    await fireEvent.click(screen.getByText("Add live set"));
+    expect(api.apiSaveWickModel).toHaveBeenCalledTimes(1);
+    expect(api.apiSaveWickModel).toHaveBeenCalledWith(
+      "/wick",
+      expect.objectContaining({ discovery_filter: "gpt -mini", model: "" }),
+    );
+  });
+
+  it("filters discovered models with an exclude term", async () => {
+    vi.mocked(api.apiDiscoverWickModels).mockResolvedValue({
+      models: [
+        { id: "gpt-5.2", label: "GPT 5.2" },
+        { id: "gpt-5.2-mini", label: "GPT 5.2 mini" },
+      ],
+      error: "",
+    });
+    render(WickDetail, { props: props() });
+    await screen.findByText("gemini-flash-latest");
+    await fireEvent.click(screen.getByText("Add model"));
+    await screen.findByText("Add custom model");
+    await fireEvent.input(screen.getByLabelText("API key"), { target: { value: "sk-test" } });
+    await screen.findByText("gpt-5.2");
+
+    // "gpt -mini" keeps the base id, excludes the mini variant.
+    await fireEvent.input(screen.getByPlaceholderText(/Filter models/), { target: { value: "gpt -mini" } });
+    expect(screen.getByText("gpt-5.2")).toBeTruthy();
+    expect(screen.queryByText("gpt-5.2-mini")).toBeNull();
   });
 
   it("sets a non-default model as default", async () => {

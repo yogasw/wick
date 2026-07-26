@@ -21,7 +21,7 @@
   import { isValidFileName } from "../fileName.js";
 
   import { getConversation, getSessionMeta, deleteSession, getTurnTrace, cancelRun } from "../api/sessions.js";
-  import { getProviderOptions, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
+  import { getProviderOptions, getProviderOptionModels, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
   import { getAsks, answerAsk } from "../api/asks.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
   import { sendMessage } from "../api/messages.js";
@@ -166,10 +166,13 @@
   // id that this map resolves to a local handler (UI actions must live in the
   // FE); skills carry `insert` and drop in `/name` as text. A new backend
   // command reusing an existing action id needs no FE change.
-  let providerPickerOpen = $state(false);
   let projectPickerOpen = $state(false);
+  // Imperative handle to the composer so `/provider` opens ITS provider drill
+  // (4-level, live-set aware) — the same picker as the toolbar chip, not a
+  // separate flat modal.
+  let composerRef = $state<{ openProvider: () => void } | undefined>();
   const ACTION_HANDLERS: Record<string, () => void> = {
-    "switch:provider": () => { providerPickerOpen = true; },
+    "switch:provider": () => { composerRef?.openProvider(); },
     "switch:project": () => { projectPickerOpen = true; },
     "panel:process": () => toggleRail("process"),
     "panel:workspace": () => toggleRail("workspace"),
@@ -200,21 +203,22 @@
   // Items for the /provider and /project picker modals. Provider key mirrors
   // ComposerToolbar: a named instance is "type/name", a default collapses to
   // the bare type.
-  function provKey(p: ProviderOption): string {
-    return p.name && p.name !== p.type ? `${p.type}/${p.name}` : p.type;
-  }
   function normKey(k: string): string { return k.includes("/") ? k : `${k}/${k}`; }
-  const providerItems = $derived(
-    providerOptions.map((p) => ({
-      id: provKey(p),
-      label: p.name && p.name !== p.type ? `${p.type} / ${p.name}` : p.type,
-      current: activeProvider != null && normKey(activeProvider) === `${p.type}/${p.name}`,
-    })),
-  );
   const projectItems = $derived([
     { id: null as string | null, label: "— no project —", current: activeProjectId == null },
     ...projectOptions.map((p) => ({ id: p.id as string | null, label: p.name, current: p.id === activeProjectId })),
   ]);
+
+  // Live model loader for the composer's model drill-in. `optionValue` is a
+  // "type/name" key; split it and ask the server for that instance's current
+  // vendor models. Errors bubble up to the composer, which keeps the static
+  // list — so this never blocks selection.
+  function loadProviderModels(optionValue: string, opts?: { entry?: string }) {
+    const slash = optionValue.indexOf("/");
+    const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
+    const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
+    return Effect.runPromise(getProviderOptionModels(base, type, name, opts).pipe(Effect.provide(WickClientLayer)));
+  }
 
   // Toolbar dropdowns for the shared Composer (same look as the new-session page).
   const providerSelect = $derived({
@@ -228,6 +232,7 @@
       ? normKey(activeProvider) + (activeModelID ? `::${activeModelID}` : "")
       : "",
     onChange: (v: string) => handleProviderChange(v),
+    loadModels: loadProviderModels,
   });
   const projectSelect = $derived({
     options: [
@@ -1087,14 +1092,9 @@
           </button>
         {/if}
         <div class="relative max-w-4xl mx-auto pb-6">
-          <!-- /provider and /project picker popups float above the composer -->
-          <SwitchModal
-            open={providerPickerOpen}
-            title="Switch provider"
-            items={providerItems}
-            onSelect={(id) => { if (id) handleProviderChange(id); }}
-            onClose={() => (providerPickerOpen = false)}
-          />
+          <!-- /project picker floats above the composer. /provider now opens
+               the composer's own provider drill (see composerRef), so no
+               separate provider modal. -->
           <SwitchModal
             open={projectPickerOpen}
             title="Switch project"
@@ -1103,6 +1103,7 @@
             onClose={() => (projectPickerOpen = false)}
           />
           <Composer
+            bind:this={composerRef}
             onSend={handleSend}
             placeholder="Ask anything…   / commands · @ files"
             notifyKey={NOTIFY_KEY}

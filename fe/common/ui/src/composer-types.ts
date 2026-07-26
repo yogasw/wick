@@ -18,6 +18,10 @@ export type ComposerModelOption = {
   default: boolean;
   /** Short human description shown under the model name in the picker. */
   desc?: string;
+  /** True when this row is a LIVE MODEL SET, not a single model: the picker
+      shows it as an expandable row (a 4th level) resolved by this row's `id`
+      via loadModels({entry: id}). The vendor filter stays server-side. */
+  live?: boolean;
 };
 
 /* A themed dropdown in the Composer toolbar (provider / project / preset).
@@ -36,4 +40,18 @@ export type ComposerSelect = {
   options: ComposerSelectOption[];
   value: string;
   onChange: (v: string) => void;
+  /* Optional lazy loader for a provider's model list. When present, drilling
+     into an option calls this with the option's value; the returned models
+     replace that option's static `models` for the drill (cached per value).
+     On error or empty result the picker keeps the static list. Lets the
+     composer show the vendor's live models without prefetching every
+     provider up front.
+
+     For a 4th level (opening a LIVE SET row), it's called again with `opts`
+     identifying the set — `entry` (the set's model id) — and returns that
+     set's expanded models. */
+  loadModels?: (
+    optionValue: string,
+    opts?: { entry?: string },
+  ) => Promise<ComposerModelOption[]>;
 };
