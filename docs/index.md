@@ -116,7 +116,7 @@ Add a model on the **Providers** page: pick a kind, paste the API key (base URL 
 Need humans-facing tool pages, scheduled jobs, or LLM-facing connectors that live in your codebase? The framework lets Claude scaffold them as real Go files.
 
 ```bash
-go install github.com/yogasw/wick@v0.35.0
+go install github.com/yogasw/wick@v0.35.1
 wick init my-app
 cd my-app && wick dev
 ```
