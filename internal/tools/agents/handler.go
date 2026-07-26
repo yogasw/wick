@@ -214,6 +214,7 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/provider", switchProvider)
 	r.POST("/sessions/{id}/project", moveSessionToProject)
 	r.POST("/sessions/{id}/kill", killAgent)
+	r.POST("/sessions/{id}/runs/{runID}/cancel", cancelSessionRun)
 	r.POST("/sessions/{id}/dequeue", dequeueAgent)
 	r.GET("/sessions/{id}/subscription", sessionSubscriptionStatus)
 	r.POST("/sessions/{id}/subscribe", sessionSubscribe)
@@ -1676,6 +1677,43 @@ func killAgent(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]string{"status": "killed"})
+}
+
+// cancelSessionRun aborts one in-flight connector run belonging to this session
+// — the per-tool-call Cancel button in the conversation trace. Gated to the
+// session's owner, and the run is verified to belong to THIS session so a caller
+// can't cancel another session's runs. Cancelling unblocks the op so it
+// finalizes as "cancelled"; the agent then sees an explicit cancelled result.
+func cancelSessionRun(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	if globalConnectors == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "connectors unavailable"})
+		return
+	}
+	runID := c.PathValue("runID")
+	run, err := globalConnectors.GetRun(c.Context(), runID)
+	if err != nil || run == nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "run not found"})
+		return
+	}
+	if run.SessionID != id {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "run does not belong to this session"})
+		return
+	}
+	if !globalConnectors.CancelRun(runID) {
+		// Not registered as live though the row may still say "running" — reclaim it
+		// so the UI doesn't wedge.
+		_ = globalConnectors.FinalizeStaleRun(c.Context(), runID)
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
 func deleteSession(c *tool.Ctx) {

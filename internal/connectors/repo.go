@@ -665,3 +665,21 @@ func (r *Repo) PurgeRunsOlderThan(ctx context.Context, cutoff time.Time) (int64,
 	res := r.db.WithContext(ctx).Where("started_at < ?", cutoff).Delete(&entity.ConnectorRun{})
 	return res.RowsAffected, res.Error
 }
+
+// ResetStuckRuns finalizes ConnectorRun rows left in "running" whose StartedAt
+// is before cutoff, flipping them to "cancelled" with an explanatory error.
+// These are runs whose op never returned (a crash/restart before the deferred
+// finalizer could write, or the pre-fix era when a hung op left the row running
+// forever). Called at boot and (optionally) on a periodic sweep so the history
+// UI never shows a run wedged in "running" indefinitely. Returns the row count.
+func (r *Repo) ResetStuckRuns(ctx context.Context, cutoff time.Time) (int64, error) {
+	now := time.Now()
+	res := r.db.WithContext(ctx).Model(&entity.ConnectorRun{}).
+		Where("status = ? AND started_at < ?", entity.ConnectorRunStatusRunning, cutoff).
+		Updates(map[string]any{
+			"status":    entity.ConnectorRunStatusCancelled,
+			"error_msg": "run did not finish (reclaimed as stale)",
+			"ended_at":  &now,
+		})
+	return res.RowsAffected, res.Error
+}

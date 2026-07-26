@@ -70,6 +70,57 @@ const historyPageSize = 10
 // params, mirroring connectorHistoryPage exactly: same RunFilter, same
 // pageSize, same Count/List service calls + user resolution. No
 // business-logic duplication — it reuses ListRunsFiltered/CountRunsFiltered.
+// apiCancelConnectorRun kills one in-flight run (the per-run Cancel button in
+// the history UI). Gated like editing the row (canConfigureRow): aborting an op
+// is at least as privileged as configuring it. Verifies the run belongs to this
+// row before cancelling so a caller can't kill another connector's runs.
+func (h *Handler) apiCancelConnectorRun(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := login.GetUser(ctx)
+
+	row, errResp, ok := h.loadVisibleRow(r, user)
+	if !ok {
+		writeJSON(w, errResp.status, map[string]string{"error": errResp.msg})
+		return
+	}
+	if !h.canConfigureRow(user, row) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "you don't have access to cancel this connector's runs"})
+		return
+	}
+
+	runID := r.PathValue("runID")
+	if runID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "run id required"})
+		return
+	}
+	run, err := h.connectors.GetRun(ctx, runID)
+	if err != nil || run == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "run not found"})
+		return
+	}
+	if run.ConnectorID != row.ID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "run does not belong to this connector"})
+		return
+	}
+	if run.Status != entity.ConnectorRunStatusRunning {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "run is not running (already " + string(run.Status) + ")"})
+		return
+	}
+
+	if !h.connectors.CancelRun(runID) {
+		// Registered cancel not found even though the row says "running" — the op
+		// likely just finished, or it's a stale row from a crash. Reclaim it so
+		// the UI doesn't wedge on a run nothing can cancel.
+		if ferr := h.connectors.FinalizeStaleRun(ctx, runID); ferr != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "run is no longer active and could not be reclaimed"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"cancelled": true, "reclaimed": true})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"cancelled": true})
+}
+
 func (h *Handler) apiConnectorHistory(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := login.GetUser(ctx)
