@@ -6,12 +6,24 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Wick Provider
-#### Added
-*   **Live model sets**: a registered `wick` model can store a discovery filter (`term` contains, `-term`/`!term` excludes) instead of a fixed model id. In the composer's provider picker it shows as an expandable row that fetches the vendor's model list live and narrows it by the filter — a 4th picker level (provider ▸ models ▸ live set ▸ expanded models). The Add-Model form on the Wick provider page gains a **Single** / **Multiple** toggle, with Multiple offering **Live** (follows the filter) or **Manual** (tick to select) sub-modes.
-*   The `/provider` command now opens the same in-composer provider picker used by the toolbar chip, instead of a separate flat modal.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.35.1](https://github.com/yogasw/wick/compare/v0.35.0...v0.35.1) — Wick Models
+
+_Released on 2026-07-26_
+
+### Wick Provider
+#### Added
+*   **Live model sets**: A registered `wick` model can now store a discovery filter (e.g., `term` for includes, `-term`/`!term` for excludes) instead of a fixed model ID.
+    *   In the composer's provider picker, live model sets appear as expandable rows that fetch the vendor's model list dynamically, narrowed by the stored filter. This introduces a 4th picker level: `provider ▸ models ▸ live set ▸ expanded models`.
+    *   The composer's model picker for live sets features lazy-loading of models on drill (with caching and fallback to static models), an auto-focused filter box, arrow-key navigation, a refresh button, right-anchored popups, and second-click collapse.
+    *   The Add-Model form on the Wick provider page now includes a **Single** / **Multiple** toggle. The **Multiple** option offers **Live** mode (which follows the discovery filter) or **Manual** mode (for selecting models by ticking).
+*   The `/provider` command now opens the same in-composer provider picker used by the toolbar chip, unifying the experience and replacing the separate flat modal.
+
+---
+
 
 ## [v0.35.0](https://github.com/yogasw/wick/compare/v0.34.0...v0.35.0) — Features & Improvements
 
