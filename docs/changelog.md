@@ -12,6 +12,27 @@ All notable changes to Wick are documented here.
 *   Long-running tool calls: shell commands no longer run under a fixed wall-clock deadline — a long command can run as a background job the agent polls for status/log instead of stalling the turn.
 *   **Curl builder** for the session's Wick Interactions log: reconstructs any logged model call as a copyable request in 4 formats (single-line, Bash, raw HTTP, JSON body), with an editable body preview, env-var display, per-part copy, and an admin-only "reveal real key" option (defaults to a `$WICK_MODEL_API_KEY` placeholder).
 *   Session detail page: server-side search + pagination over the Wick Interactions log, upload progress + compaction indicators, and a detail modal for viewing a chip's full content without cluttering the transcript.
+*   Live model-call observability in the interactions log: the "running" row now distinguishes an in-flight model call from a running tool call, shows a live elapsed timer and retry attempt/reason, and gains **View request** (curl for the call in flight, before it's logged) and **Cancel call** (aborts just that model call; the turn keeps going).
+*   Uniform retry + per-attempt timeout across every model adapter, including Gemini: transient failures (timeout, connection reset, `429`, `5xx`) retry with backoff; fatal errors (bad key/model, other `4xx`) fail fast.
+
+### Connectors
+#### Added
+*   Connector runs are cancellable — a **✕ Cancel** button on a `running` row in the connector History page, and on a running tool call in the agent conversation UI, aborts just that op (the run settles to a new **Cancelled** status, distinct from Error).
+*   A run can no longer stay stuck `running` forever: a background reaper job periodically reclaims any row still `running` well past every legitimate op's ceiling.
+
+### Playwright Browser
+#### Added
+*   **CloakBrowser Pro** (`cloakbrowser-pro`): a second stealth-Chromium engine alongside the existing free `cloakbrowser`, managed by the official `cloakbrowser` CLI + a license key (`CloakLicenseKey`). The free engine is hard-capped to 1 concurrent live session (CloakBrowser's free-plan limit); the pro engine follows the configured `MaxLiveSessions` once its license resolves to a paid tier.
+*   Browser picker gains a **⋮ menu** on installed engines for **Update** (re-fetch the latest build) and **Uninstall** (remove the downloaded binary), instead of only install.
+*   **Named browser profiles**: `session_open(profile=<name>)` persists login/cookies under a stable profile dir across sessions and plugin restarts (`profile_list`, `profile_delete`), instead of every session starting from a fresh, swept-on-close profile.
+*   **Record network requests**: `run(record_request=true)` captures the HTTP requests a script triggers (method, URL, headers, cookies, body, response status/headers), filterable by URL pattern, readable back with `get_request`.
+*   Live-browser panel: native clipboard bridging between your machine and the remote browser in Full mode (focus pushes your clipboard in, leaving pulls the remote's copied text back out), plus a right-click Copy/Paste menu on the live view.
+#### Fixed
+*   `wait_for_load_state(state=networkidle)` no longer stalls a run for minutes on pages that poll in the background — capped at 10s, then continues.
+
+### Admin UI
+#### Changed
+*   Boolean config fields (`bool`/`boolean`/`checkbox`) now render as an interactive toggle switch everywhere, not just for the `bool`/`boolean` tags — clicking the label also toggles it.
 
 ### CLI Model Picker
 #### Added
