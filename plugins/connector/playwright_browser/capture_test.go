@@ -85,6 +85,103 @@ func TestCaptureSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+// req is a tiny helper to build a CapturedRequest for addRecord tests.
+func req(method, url, body string) CapturedRequest {
+	return CapturedRequest{Method: method, URL: url, Body: body, Status: 200}
+}
+
+// TestCaptureDedup: identical (method+URL+body) requests collapse to one; a
+// different body OR method OR url is a distinct entry.
+func TestCaptureDedup(t *testing.T) {
+	cp := newCapture("", true) // include assets so the filter never interferes
+	cp.addRecord(req("GET", "https://a.com/api/poll", ""))
+	cp.addRecord(req("GET", "https://a.com/api/poll", "")) // exact dup → dropped
+	cp.addRecord(req("GET", "https://a.com/api/poll", "")) // dup again → dropped
+	if got := cp.snapshot(); len(got) != 1 {
+		t.Fatalf("exact duplicates should collapse to 1, got %d", len(got))
+	}
+
+	// Same URL+method, different body → kept (paginated POSTs).
+	cp.addRecord(req("POST", "https://a.com/api/list", `{"page":1}`))
+	cp.addRecord(req("POST", "https://a.com/api/list", `{"page":2}`))
+	cp.addRecord(req("POST", "https://a.com/api/list", `{"page":1}`)) // dup of first
+	list := 0
+	for _, r := range cp.snapshot() {
+		if r.URL == "https://a.com/api/list" {
+			list++
+		}
+	}
+	if list != 2 {
+		t.Fatalf("different-body POSTs should be kept separately (want 2), got %d", list)
+	}
+}
+
+// TestCaptureCrossDomain: with no url pattern, requests to DIFFERENT domains are
+// all recorded (cross-domain is kept by design). Re-hitting the same domain
+// endpoint dedups, but distinct domains never collide even for the same path.
+func TestCaptureCrossDomain(t *testing.T) {
+	cp := newCapture("", true)
+	cp.addRecord(req("GET", "https://a.com/api/x", ""))
+	cp.addRecord(req("GET", "https://b.com/api/x", "")) // same path, other domain
+	cp.addRecord(req("GET", "https://c.com/api/x", ""))
+	cp.addRecord(req("GET", "https://a.com/api/x", "")) // dup of #1 → dropped
+	got := cp.snapshot()
+	if len(got) != 3 {
+		t.Fatalf("three distinct domains should record 3 (dup dropped), got %d", len(got))
+	}
+	seenDomain := map[string]bool{}
+	for _, r := range got {
+		seenDomain[r.URL] = true
+	}
+	for _, want := range []string{"https://a.com/api/x", "https://b.com/api/x", "https://c.com/api/x"} {
+		if !seenDomain[want] {
+			t.Errorf("missing cross-domain request %q", want)
+		}
+	}
+}
+
+// TestCaptureURLPatternFilter: with a pattern set, only matching URLs are kept —
+// regardless of domain.
+func TestCaptureURLPatternFilter(t *testing.T) {
+	cp := newCapture("/api/", true)
+	cp.addRecord(req("GET", "https://a.com/api/users", ""))  // matches
+	cp.addRecord(req("GET", "https://b.com/api/orders", "")) // matches (other domain)
+	cp.addRecord(req("GET", "https://a.com/static/logo", "")) // no match → dropped
+	if got := cp.snapshot(); len(got) != 2 {
+		t.Fatalf("pattern should keep 2 (both /api/, any domain), got %d", len(got))
+	}
+}
+
+// TestCaptureAssetFilter: static assets are dropped unless includeAssets is set.
+func TestCaptureAssetFilter(t *testing.T) {
+	skip := newCapture("", false)
+	skip.addRecord(req("GET", "https://a.com/app.js", ""))
+	skip.addRecord(req("GET", "https://a.com/api/data", ""))
+	if got := skip.snapshot(); len(got) != 1 || got[0].URL != "https://a.com/api/data" {
+		t.Fatalf("assets should be skipped by default, got %+v", got)
+	}
+
+	keep := newCapture("", true)
+	keep.addRecord(req("GET", "https://a.com/app.js", ""))
+	keep.addRecord(req("GET", "https://a.com/api/data", ""))
+	if got := keep.snapshot(); len(got) != 2 {
+		t.Fatalf("includeAssets=true should keep the asset too, got %d", len(got))
+	}
+}
+
+// TestCaptureMaxItems: recording stops at maxItems; the cap doesn't corrupt the
+// dedup set or panic.
+func TestCaptureMaxItems(t *testing.T) {
+	cp := newCapture("", true)
+	cp.maxItems = 3
+	for i := 0; i < 10; i++ {
+		cp.addRecord(req("GET", "https://a.com/api/"+string(rune('a'+i)), ""))
+	}
+	if got := cp.snapshot(); len(got) != 3 {
+		t.Fatalf("maxItems=3 should cap at 3, got %d", len(got))
+	}
+}
+
 // TestGetRequestOpRegistered guards the read-only op is on the module.
 func TestGetRequestOpRegistered(t *testing.T) {
 	var found bool

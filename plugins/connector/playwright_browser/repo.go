@@ -117,11 +117,27 @@ type session struct {
 // withSession launches an isolated browser per Config, runs fn against it, and
 // guarantees teardown. Every task op and `run` goes through here, so lifecycle
 // (and the maxTab / timeout wiring) lives in exactly one place.
+//
+// The whole thing runs under the op deadline (withDeadline): a Playwright call
+// that wedges because the Node driver died (EPIPE) would otherwise block
+// forever — Playwright's own per-action timeout can't fire from a dead driver.
+// On timeout we force pw.Stop in the background so the pending call errors out
+// and the worker goroutine is freed instead of leaking as a zombie.
 func withSession(c *connector.Ctx, fn func(*session) (any, error)) (any, error) {
 	pw, err := driverFor(c)
 	if err != nil {
 		return nil, err
 	}
+	teardown := func() { _ = pw.Stop() }
+	return withDeadline("browser op", teardown, func() (any, error) {
+		return withSessionRun(c, pw, fn)
+	})
+}
+
+// withSessionRun is withSession's body, split out so withSession can wrap it in
+// the op deadline. pw is owned by the caller for the teardown path but stopped
+// here on the normal return.
+func withSessionRun(c *connector.Ctx, pw *playwright.Playwright, fn func(*session) (any, error)) (any, error) {
 	defer pw.Stop()
 
 	bt, err := browserType(pw, c.Cfg("browser"))
@@ -407,16 +423,18 @@ func (s *session) runActions(actions []action) (any, error) {
 	return runActionLoop(page, actions), nil
 }
 
-// runActionsInContext runs the action list on a NEW tab inside an existing live
-// browser context (the session_id path). The tab is left open — it belongs to
-// the persistent session and shows up in session_list.
 // runActionsInContext runs the actions against the tab at tabIndex in an
 // existing live session. It reuses the EXISTING page (not a fresh NewPage) so
 // repeated run calls act on the same tab instead of spawning a new one each time
 // (which used to leak tabs and made the agent unable to target a tab). A
 // negative tabIndex, or an index past the last page, falls back to a new tab
 // (subject to the caller's tab cap, which it should have already checked).
-func runActionsInContext(_ *connector.Ctx, ctx playwright.BrowserContext, actions []action, tabIndex int) (any, error) {
+//
+// record_request works here too, not just on the ephemeral path: the capture is
+// attached to the live context BEFORE the actions run and detached + persisted
+// after. Detaching before the caller disconnects the CDP link is what keeps a
+// late requestfinished event from firing at a closing pipe (the EPIPE crash).
+func runActionsInContext(c *connector.Ctx, ctx playwright.BrowserContext, actions []action, tabIndex int) (any, error) {
 	pages := ctx.Pages()
 	var page playwright.Page
 	if tabIndex >= 0 && tabIndex < len(pages) {
@@ -430,7 +448,36 @@ func runActionsInContext(_ *connector.Ctx, ctx playwright.BrowserContext, action
 		}
 		page = p
 	}
-	return runActionLoop(page, actions), nil
+
+	// A live-session page comes from ctx.Pages() (or a fresh tab here), so unlike
+	// the ephemeral path it never went through newPage() and carries Playwright's
+	// DEFAULT timeout — which is 0 = infinite. A goto to a page that keeps a
+	// background connection open (Google, most SPAs) then never resolves its
+	// WaitUntilStateLoad and the whole run hangs forever ("stuck running"). Apply
+	// the connector's configured nav/action timeouts here so the run is bounded.
+	page.SetDefaultTimeout(actionTimeout(c))
+	page.SetDefaultNavigationTimeout(navTimeout(c))
+
+	var cap *capture
+	if boolInput(c, "record_request") {
+		cap = newCapture(c.Input("record_url_pattern"), boolInput(c, "record_include_assets"))
+		cap.attach(ctx)
+	}
+
+	res := runActionLoop(page, actions)
+
+	if cap != nil {
+		// Detach BEFORE returning (the caller disconnects the CDP link on
+		// return) so the driver can't fire a queued event at a closing pipe.
+		cap.detach(ctx)
+		path, err := captureSavePath(c, c.Input("profile"), c.Input("record_name"))
+		if err != nil {
+			res["capture_error"] = err.Error()
+		} else if err := saveCapture(path, cap.snapshot()); err != nil {
+			res["capture_error"] = err.Error()
+		}
+	}
+	return res, nil
 }
 
 // runActionLoop drives the validated action list in order on one page, stopping

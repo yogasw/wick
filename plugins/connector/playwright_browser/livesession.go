@@ -60,14 +60,43 @@ type liveConn struct {
 	meta    sessionMeta
 }
 
+// closeGrace bounds how long close() waits for the driver disconnect. Both
+// browser.Close (CDP disconnect) and pw.Stop (stop the Node driver) are blocking
+// pipe calls; if the driver is wedged they can hang forever. We wait this long,
+// then abandon the wait so the caller returns — the OS reaps the orphaned driver
+// process rather than a Go goroutine blocking on it indefinitely (a zombie).
+const closeGrace = 5 * time.Second
+
 func (lc *liveConn) close() {
-	if lc.browser != nil {
-		_ = lc.browser.Close() // CDP: disconnect only, chrome process stays
-	}
-	if lc.pw != nil {
-		_ = lc.pw.Stop()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if lc.browser != nil {
+			_ = lc.browser.Close() // CDP: disconnect only, chrome process stays
+		}
+		if lc.pw != nil {
+			_ = lc.pw.Stop()
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(closeGrace):
+		// Driver disconnect wedged. Return anyway; the abandoned goroutine ends
+		// when the driver process finally dies / its pipe closes, and pw.Stop's
+		// child process is reaped by the OS.
 	}
 }
+
+// quiesce gives the driver a brief moment to drain in-flight CDP events before
+// the deferred close() tears the connection down. On a LIVE session the same
+// browser is also feeding the live-view panel's screencast, so CDP events keep
+// arriving asynchronously; disconnecting (pw.Stop) while the Node driver still
+// has a frame or requestfinished queued makes it write to a closing pipe and
+// crash with EPIPE — which left the run "stuck" and killed the driver. Detaching
+// our own capture listener removes the one source we own; this settle covers the
+// events we don't (screencast), letting the queue drain first. Cheap and
+// bounded — it's a teardown-only pause, not on the hot path.
+func (lc *liveConn) quiesce() { time.Sleep(150 * time.Millisecond) }
 
 // sessionDir is where session metadata AND downloaded browser assets live.
 // Resolution order:

@@ -38,11 +38,18 @@ type CapturedRequest struct {
 
 // capture accumulates requests seen during one recording. Playwright fires
 // request events from an internal goroutine, so appends are mutex-guarded.
+//
+// Duplicates are collapsed by (method + URL + body): a page that re-fires the
+// exact same request (SPA polling, a retried fetch) records it once, so the
+// saved capture is a clean set of distinct calls to replay rather than N copies
+// of the same poll. Two calls to the same endpoint with DIFFERENT bodies (e.g.
+// paginated POSTs) are kept separately — the body is part of the identity.
 type capture struct {
 	mu       sync.Mutex
 	reqs     []CapturedRequest
-	urlRE    *regexp.Regexp // optional filter; nil = keep all XHR/fetch-ish
-	assets   bool           // include static assets (img/css/font/js) when true
+	seen     map[string]struct{} // dedup keys (method\x00url\x00body)
+	urlRE    *regexp.Regexp      // optional filter; nil = keep all XHR/fetch-ish
+	assets   bool                // include static assets (img/css/font/js) when true
 	maxItems int
 }
 
@@ -50,7 +57,7 @@ type capture struct {
 // request URL must match to be kept; includeAssets keeps static assets that are
 // otherwise skipped as noise.
 func newCapture(urlPattern string, includeAssets bool) *capture {
-	cp := &capture{assets: includeAssets, maxItems: 500}
+	cp := &capture{assets: includeAssets, maxItems: 500, seen: make(map[string]struct{})}
 	if p := strings.TrimSpace(urlPattern); p != "" {
 		// Substring or regex — compile as regex, falling back to a literal match
 		// via QuoteMeta if it isn't valid regex, so a plain "/api/x" always works.
@@ -63,45 +70,65 @@ func newCapture(urlPattern string, includeAssets bool) *capture {
 	return cp
 }
 
+// dedupKey identifies a request for duplicate collapsing: same method, URL, and
+// body → same key. NUL-joined so no field's content can forge a boundary.
+func dedupKey(method, url, body string) string {
+	return method + "\x00" + url + "\x00" + body
+}
+
 // assetExtRE matches URLs that are almost certainly static assets, skipped by
 // default because they're noise for replay (you want the XHR/fetch API calls).
 var assetExtRE = regexp.MustCompile(`(?i)\.(png|jpe?g|gif|webp|svg|ico|css|woff2?|ttf|otf|eot|mp4|webm|mp3|wav|js|map)(\?|$)`)
 
-// add records one finished request if it passes the filters. Best-effort: any
-// per-field error (e.g. PostData on a GET) is ignored so one odd request never
-// breaks the whole capture.
+// add records one finished request if it passes the filters. It extracts the
+// fields from the live Playwright Request, then hands off to addRecord for the
+// (browser-free, unit-tested) filter/dedup/store decision.
+//
+// CRITICAL: this runs inside the driver's OnRequestFinished callback goroutine.
+// It may ONLY touch data cached on the request initializer — URL, Method,
+// Headers, PostData all read locally with no driver round-trip. It must NOT call
+// Request.Response() or Request.AllHeaders(): those do a channel.Send back INTO
+// the driver, and sending from within a driver-dispatched callback re-enters the
+// pipe transport and crashes the Node driver with EPIPE (which wedged the whole
+// run). Response status is therefore not captured here — method+url+headers+body
+// is what a replay needs anyway; the status was never load-bearing.
 func (cp *capture) add(req playwright.Request) {
-	url := req.URL()
-	if cp.urlRE != nil && !cp.urlRE.MatchString(url) {
-		return
-	}
-	if !cp.assets && assetExtRE.MatchString(url) {
-		return
-	}
-
-	headers, _ := req.AllHeaders()
+	headers := req.Headers() // cached (provisional headers) — no driver round-trip
 	cookies := headers["cookie"]
 	// The Cookie header is surfaced separately; drop it from Headers so callers
-	// don't double-send it, and normalize away hop-by-hop noise we don't replay.
+	// don't double-send it.
 	delete(headers, "cookie")
 
 	body := ""
-	if pd, err := req.PostData(); err == nil {
+	if pd, err := req.PostData(); err == nil { // cached on initializer
 		body = pd
 	}
 
-	status := 0
-	if resp, err := req.Response(); err == nil && resp != nil {
-		status = resp.Status()
-	}
-
-	cr := CapturedRequest{
+	cp.addRecord(CapturedRequest{
 		Method:  req.Method(),
-		URL:     url,
+		URL:     req.URL(),
 		Headers: headers,
 		Cookies: cookies,
 		Body:    body,
-		Status:  status,
+	})
+}
+
+// addRecord applies the keep/dedup/cap rules to one already-extracted request.
+// Split from add so the recording logic is testable without a live browser:
+//   - URL filter (record_url_pattern) — drop non-matching URLs.
+//   - asset filter — drop static assets unless includeAssets.
+//   - dedup — collapse identical (method+URL+body) requests to one.
+//   - cap — stop at maxItems so a chatty page can't grow memory unbounded.
+//
+// Cross-domain requests are kept by design: the only URL gate is the caller's
+// optional record_url_pattern, so a page that calls its own API plus a third
+// party records both unless the caller narrowed the pattern.
+func (cp *capture) addRecord(cr CapturedRequest) {
+	if cp.urlRE != nil && !cp.urlRE.MatchString(cr.URL) {
+		return
+	}
+	if !cp.assets && assetExtRE.MatchString(cr.URL) {
+		return
 	}
 
 	cp.mu.Lock()
@@ -109,6 +136,11 @@ func (cp *capture) add(req playwright.Request) {
 	if len(cp.reqs) >= cp.maxItems {
 		return // cap to avoid unbounded memory on a chatty page
 	}
+	key := dedupKey(cr.Method, cr.URL, cr.Body)
+	if _, dup := cp.seen[key]; dup {
+		return // identical request already recorded
+	}
+	cp.seen[key] = struct{}{}
 	cp.reqs = append(cp.reqs, cr)
 }
 
@@ -125,6 +157,16 @@ func (cp *capture) snapshot() []CapturedRequest {
 // covers every page/tab in that context, so multi-tab flows are captured too.
 func (cp *capture) attach(bctx playwright.BrowserContext) {
 	bctx.OnRequestFinished(cp.add)
+}
+
+// detach removes the request listener from a browser context. This matters on
+// the LIVE-session path (a CDP-attached, persistent context): the listener must
+// be gone before the per-call connection is torn down, otherwise the driver can
+// still fire a queued requestfinished event at a pipe that's closing and crash
+// with EPIPE. On the ephemeral path the whole context dies with the call so a
+// detach is harmless there too.
+func (cp *capture) detach(bctx playwright.BrowserContext) {
+	bctx.RemoveListener("requestfinished", cp.add)
 }
 
 // ── persistence ──────────────────────────────────────────────────────

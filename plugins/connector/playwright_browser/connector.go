@@ -39,6 +39,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/entity"
@@ -463,18 +464,86 @@ func run(c *connector.Ctx) (any, error) {
 	// browser (reconnect over CDP, don't close). Otherwise launch a throwaway
 	// browser for this call only.
 	if sid := strings.TrimSpace(c.Input("session_id")); sid != "" {
+		return runLive(c, sid, actions)
+	}
+	return withSession(c, func(s *session) (any, error) { return s.runActions(actions) })
+}
+
+// opDeadline is the hard ceiling on ONE browser op (ephemeral run/screenshot/…
+// OR a live-session run). Playwright-go's operations (Launch, Goto,
+// WaitForLoadState, ConnectOverCDP, pw.Stop) are blocking pipe calls into the
+// Node driver and are NOT bound to any Go context. When the driver dies mid-call
+// — e.g. it crashes with EPIPE writing a response — the pending call's result
+// never arrives and the goroutine blocks in waitResult FOREVER. Playwright's own
+// per-action timeout can't save it: that timer lives in the (now-dead) driver.
+// This Go-level deadline is the only thing that guarantees the op returns, so the
+// run finalizes (status leaves "running") instead of wedging as a zombie.
+//
+// Set above the per-action nav timeout (default 30s) plus margin so a legitimate
+// slow navigation completes normally; only a truly wedged call trips it.
+const opDeadline = 45 * time.Second
+
+// withDeadline runs work on a worker goroutine and returns its result, or a
+// timeout error if it doesn't finish within opDeadline. On timeout the worker is
+// abandoned (a wedged driver call can't be force-killed from Go); it unblocks and
+// exits when the driver process finally dies and its pipe closes. teardown, if
+// set, is fired in the background on timeout to hasten that (e.g. force-close the
+// connection so the pending call errors out). label names the op in the error.
+func withDeadline(label string, teardown func(), work func() (any, error)) (any, error) {
+	type outcome struct {
+		res any
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := work()
+		done <- outcome{res, err}
+	}()
+	select {
+	case o := <-done:
+		return o.res, o.err
+	case <-time.After(opDeadline):
+		if teardown != nil {
+			go teardown()
+		}
+		return nil, fmt.Errorf("%s exceeded %s (browser unresponsive; the driver may have crashed — close and reopen the session)", label, opDeadline)
+	}
+}
+
+// runLive executes actions against a live session under the op deadline. The
+// connect+run happens on a worker goroutine; if it doesn't finish in time,
+// runLive returns a timeout error and force-disconnects in the background (a
+// wedged pw.Stop must not block the return).
+func runLive(c *connector.Ctx, sid string, actions []action) (any, error) {
+	// lcCh hands the live connection to the timeout path so it can force a
+	// teardown even while the worker is still blocked mid-run.
+	lcCh := make(chan *liveConn, 1)
+	teardown := func() {
+		select {
+		case lc := <-lcCh:
+			lc.close()
+		default:
+		}
+	}
+	return withDeadline("live run", teardown, func() (any, error) {
 		lc, err := connectSession(c, sid)
 		if err != nil {
 			return nil, err
 		}
-		defer lc.close() // disconnect only — browser stays alive
-		ctx, err := lc.firstContext()
+		lcCh <- lc
+		bctx, err := lc.firstContext()
 		if err != nil {
+			lc.close()
 			return nil, err
 		}
-		return runActionsInContext(c, ctx, actions, c.InputInt("tab"))
-	}
-	return withSession(c, func(s *session) (any, error) { return s.runActions(actions) })
+		res, err := runActionsInContext(c, bctx, actions, c.InputInt("tab"))
+		// Quiesce before disconnecting so the live-view screencast / in-flight CDP
+		// events drain — disconnecting with a frame still queued is what crashed
+		// the Node driver with EPIPE.
+		lc.quiesce()
+		lc.close() // disconnect only — the detached browser stays alive
+		return res, err
+	})
 }
 
 // ── Live session handlers ────────────────────────────────────────────
