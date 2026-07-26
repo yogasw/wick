@@ -26,38 +26,59 @@ import (
 
 // CapturedRequest is one recorded HTTP request/response, flattened to exactly
 // what a replay needs: method, url, headers, cookies, body, and the response
-// status (to filter successful calls). This is the DevTools "Copy as cURL" data.
+// side (status + response headers, filled from the response event). This is the
+// DevTools "Copy as cURL" data.
 type CapturedRequest struct {
 	Method  string            `json:"method"`
 	URL     string            `json:"url"`
 	Headers map[string]string `json:"headers"`
 	Cookies string            `json:"cookies"` // flattened Cookie header value
 	Body    string            `json:"body,omitempty"`
-	Status  int               `json:"status"` // response status; 0 if none
+	Status  int               `json:"status"` // response status; 0 until the response event lands
+	// RespHeaders is the response's headers, filled from the OnResponse event.
+	// Nil when no response was seen (e.g. a request that never completed).
+	RespHeaders map[string]string `json:"response_headers,omitempty"`
 }
 
 // capture accumulates requests seen during one recording. Playwright fires
-// request events from an internal goroutine, so appends are mutex-guarded.
+// request/response events from an internal goroutine, so mutations are
+// mutex-guarded.
 //
 // Duplicates are collapsed by (method + URL + body): a page that re-fires the
 // exact same request (SPA polling, a retried fetch) records it once, so the
 // saved capture is a clean set of distinct calls to replay rather than N copies
 // of the same poll. Two calls to the same endpoint with DIFFERENT bodies (e.g.
 // paginated POSTs) are kept separately — the body is part of the identity.
+//
+// The response side (status + response headers) is filled by a SEPARATE
+// OnResponse listener that correlates back to the recorded request by
+// method+URL. This is why status was 0 for a while: the request event can't read
+// the response without a re-entrant driver call (EPIPE), so we instead take it
+// from the response event, whose Status()/Headers() are cached and safe.
 type capture struct {
 	mu       sync.Mutex
 	reqs     []CapturedRequest
-	seen     map[string]struct{} // dedup keys (method\x00url\x00body)
-	urlRE    *regexp.Regexp      // optional filter; nil = keep all XHR/fetch-ish
-	assets   bool                // include static assets (img/css/font/js) when true
+	resps    map[string]capturedResp // method\x00url → response (status+headers)
+	seen     map[string]struct{}     // dedup keys (method\x00url\x00body)
+	urlRE    *regexp.Regexp          // optional filter; nil = keep all XHR/fetch-ish
+	assets   bool                    // include static assets (img/css/font/js) when true
 	maxItems int
+}
+
+// capturedResp is the response side kept keyed by method+URL, merged onto the
+// matching request in snapshot(). Held separately (not written straight onto the
+// request entry) because the OnResponse event can fire BEFORE the request's
+// OnRequestFinished — recording it independently makes ordering irrelevant.
+type capturedResp struct {
+	status  int
+	headers map[string]string
 }
 
 // newCapture builds a collector. urlPattern (optional) is a regex/substring the
 // request URL must match to be kept; includeAssets keeps static assets that are
 // otherwise skipped as noise.
 func newCapture(urlPattern string, includeAssets bool) *capture {
-	cp := &capture{assets: includeAssets, maxItems: 500, seen: make(map[string]struct{})}
+	cp := &capture{assets: includeAssets, maxItems: 500, seen: make(map[string]struct{}), resps: make(map[string]capturedResp)}
 	if p := strings.TrimSpace(urlPattern); p != "" {
 		// Substring or regex — compile as regex, falling back to a literal match
 		// via QuoteMeta if it isn't valid regex, so a plain "/api/x" always works.
@@ -144,29 +165,75 @@ func (cp *capture) addRecord(cr CapturedRequest) {
 	cp.reqs = append(cp.reqs, cr)
 }
 
-// snapshot returns a copy of the captured requests so far.
+// respKey correlates a response back to a recorded request by method+URL.
+func respKey(method, url string) string { return method + "\x00" + url }
+
+// addResponse records the response side (status + headers) keyed by method+URL,
+// to be merged onto the matching request in snapshot(). Called from the
+// OnResponse listener. Only touches cached response fields (Status/Headers) —
+// never Body(), which would re-enter the driver (EPIPE). Recorded independently
+// of the request so it doesn't matter whether the response or request event
+// fires first. Bounded by maxItems like reqs so a chatty page can't grow it
+// unbounded.
+func (cp *capture) addResponse(status int, method, url string, respHeaders map[string]string) {
+	cp.mu.Lock()
+	defer cp.mu.Unlock()
+	if len(cp.resps) >= cp.maxItems {
+		return
+	}
+	cp.resps[respKey(method, url)] = capturedResp{status: status, headers: respHeaders}
+}
+
+// snapshot returns a copy of the captured requests, each merged with its
+// response (status + response headers) matched by method+URL.
 func (cp *capture) snapshot() []CapturedRequest {
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
 	out := make([]CapturedRequest, len(cp.reqs))
 	copy(out, cp.reqs)
+	for i := range out {
+		if r, ok := cp.resps[respKey(out[i].Method, out[i].URL)]; ok {
+			out[i].Status = r.status
+			if len(r.headers) > 0 {
+				out[i].RespHeaders = r.headers
+			}
+		}
+	}
 	return out
 }
 
-// attach wires the collector to a browser context — a context-level listener
-// covers every page/tab in that context, so multi-tab flows are captured too.
-func (cp *capture) attach(bctx playwright.BrowserContext) {
-	bctx.OnRequestFinished(cp.add)
+// onResponse is the OnResponse handler: it reads the CACHED response fields
+// (Status, Headers — no driver round-trip, unlike Body()) and correlates them
+// back to the recorded request by method+URL. Kept as a method value (stable
+// identity) so it can be removed in detach.
+func (cp *capture) onResponse(resp playwright.Response) {
+	req := resp.Request()
+	if req == nil {
+		return
+	}
+	// Headers() is the cached provisional set — safe here. AllHeaders() would
+	// Send back into the driver, so we avoid it (same rule as the request side).
+	cp.addResponse(resp.Status(), req.Method(), resp.URL(), resp.Headers())
 }
 
-// detach removes the request listener from a browser context. This matters on
-// the LIVE-session path (a CDP-attached, persistent context): the listener must
-// be gone before the per-call connection is torn down, otherwise the driver can
-// still fire a queued requestfinished event at a pipe that's closing and crash
-// with EPIPE. On the ephemeral path the whole context dies with the call so a
-// detach is harmless there too.
+// attach wires the collector to a browser context — context-level listeners
+// cover every page/tab in that context, so multi-tab flows are captured too.
+// Both the request (for the call) and response (for status/headers) events are
+// wired.
+func (cp *capture) attach(bctx playwright.BrowserContext) {
+	bctx.OnRequestFinished(cp.add)
+	bctx.OnResponse(cp.onResponse)
+}
+
+// detach removes both listeners from a browser context. This matters on the
+// LIVE-session path (a CDP-attached, persistent context): the listeners must be
+// gone before the per-call connection is torn down, otherwise the driver can
+// still fire a queued event at a pipe that's closing and crash with EPIPE. On
+// the ephemeral path the whole context dies with the call so a detach is
+// harmless there too.
 func (cp *capture) detach(bctx playwright.BrowserContext) {
 	bctx.RemoveListener("requestfinished", cp.add)
+	bctx.RemoveListener("response", cp.onResponse)
 }
 
 // ── persistence ──────────────────────────────────────────────────────

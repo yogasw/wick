@@ -31,18 +31,30 @@ func newSessionID(c *connector.Ctx) string {
 func sessionNow(_ *connector.Ctx) time.Time { return time.Now() }
 
 // killPID terminates the detached browser process (and, on Windows, its child
-// tree). Best-effort: a already-dead PID is not an error.
+// tree). Best-effort: an already-dead PID is not an error.
+//
+// It tries a GRACEFUL shutdown first, then force-kills only if that doesn't take.
+// This matters for CloakBrowser: a force-kill (taskkill /F, kill -9) leaves the
+// licensed session slot occupied until it times out (~15 min), so hard-killing
+// every close would exhaust a small plan's seats. A graceful signal lets Chrome
+// release the slot immediately; /F is the fallback for a hung process.
 func killPID(pid int) {
 	if pid <= 0 {
 		return
 	}
 	if runtime.GOOS == "windows" {
-		// Chrome spawns a tree of child processes; /T kills the whole tree, /F
-		// forces it. os.Process.Kill only reaps the parent and orphans children.
+		// Graceful first: taskkill WITHOUT /F asks the process to close (WM_CLOSE
+		// to the window / console), which lets Chrome exit cleanly and free the
+		// session slot. Then /F /T reaps anything left of the tree.
+		_ = safeexec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T").Run()
+		time.Sleep(1500 * time.Millisecond)
 		_ = safeexec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
 		return
 	}
 	if p, err := os.FindProcess(pid); err == nil {
+		// Interrupt first (clean exit → slot released), then hard Kill as fallback.
+		_ = p.Signal(os.Interrupt)
+		time.Sleep(1500 * time.Millisecond)
 		_ = p.Kill()
 	}
 }

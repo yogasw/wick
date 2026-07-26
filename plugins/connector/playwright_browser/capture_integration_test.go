@@ -123,6 +123,11 @@ func TestIntegrationRecordDedupSameDomain(t *testing.T) {
 		switch r.URL {
 		case srv.URL + "/api/poll":
 			poll++
+			// The response side must now be filled (status 200), not left 0 —
+			// this is the regression the OnResponse listener fixes.
+			if r.Status != 200 {
+				t.Errorf("expected response status 200 for /api/poll, got %d", r.Status)
+			}
 		case srv.URL + "/api/once":
 			once++
 		}

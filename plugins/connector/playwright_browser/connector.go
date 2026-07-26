@@ -83,10 +83,16 @@ type Config struct {
 	ExecutablePath string `wick:"group=Custom binary|Point at a non-bundled browser build. Most setups leave these empty.|collapsed;desc=Path to a custom browser binary to launch instead of the bundled one. Example: /usr/bin/google-chrome"`
 	Channel        string `wick:"group=Custom binary;desc=Branded channel for the chosen browser (chrome, chrome-beta, msedge, ...). Leave empty for the bundled build."`
 
-	// CloakBrowser — stealth Chromium downloaded from GitHub (not a Playwright
-	// engine). Only relevant when the cloakbrowser engine is selected.
-	CloakRepo           string `wick:"group=CloakBrowser|Stealth Chromium engine. Downloaded from a GitHub release; override the source or point at a local binary.|collapsed;desc=GitHub owner/repo hosting CloakBrowser release assets. Default: CloakHQ/CloakBrowser."`
-	CloakExecutablePath string `wick:"group=CloakBrowser;desc=Path to an already-downloaded CloakBrowser binary. Set this to skip the GitHub download (e.g. on a platform with no published build)."`
+	// CloakBrowser — stealth Chromium. Two engines share these configs: the free
+	// "cloakbrowser" (wick downloads the binary from GitHub) and the pro
+	// "cloakbrowser-pro" (binary managed by the official `cloakbrowser` CLI + a
+	// license key). Only relevant when one of those engines is selected.
+	CloakRepo           string `wick:"group=CloakBrowser|Stealth Chromium engine. The free tier downloads from a GitHub release; the pro tier is managed by the cloakbrowser CLI + a license key.|collapsed;desc=GitHub owner/repo hosting CloakBrowser release assets (free tier). Default: CloakHQ/CloakBrowser."`
+	CloakExecutablePath string `wick:"group=CloakBrowser;desc=Path to an already-downloaded CloakBrowser binary. Set this to skip the GitHub download / CLI resolution (e.g. on a platform with no published build). Applies to both cloak engines."`
+	// Pro-tier license: passed to the browser at launch, and used by the
+	// cloakbrowser-pro engine to install/update the licensed binary via the CLI.
+	CloakLicenseKey string `wick:"secret;group=CloakBrowser;desc=CloakBrowser Pro license key (cb_...). Passed as CLOAKBROWSER_LICENSE_KEY at launch so a paid binary runs at its licensed tier. Required by the cloakbrowser-pro engine; leave empty for the free cloakbrowser engine."`
+	CloakCLIPath    string `wick:"group=CloakBrowser;desc=Path to the 'cloakbrowser' CLI used by the cloakbrowser-pro engine. Default: resolved on PATH. Only needed for a non-PATH install."`
 }
 
 // ── Per-operation input structs ──────────────────────────────────────
@@ -212,7 +218,7 @@ type browserStatusInput struct{}
 
 // browserInstallInput downloads one engine's browser binary.
 type browserInstallInput struct {
-	Browser string `wick:"dropdown=chromium|firefox|webkit|cloakbrowser;required;desc=Engine to download."`
+	Browser string `wick:"dropdown=chromium|firefox|webkit|cloakbrowser|cloakbrowser-pro;required;desc=Engine to download."`
 }
 
 // Module returns the connector definition served over gRPC by main().
@@ -403,6 +409,20 @@ func Module() connector.Module {
 					"Download one browser engine's binary (chromium/firefox/webkit). Blocks until the download completes. Idempotent. Used by the manager UI's Download button.",
 					browserInstallInput{},
 					browserInstallOp, wickdocs.Docs{},
+				),
+				connector.OpConfigOnly(
+					"browser_update",
+					"Update Browser",
+					"Re-fetch a browser engine's binary to the newest available build (cloakbrowser pulls the latest GitHub release). Used by the manager UI's ⋮ menu.",
+					browserInstallInput{},
+					browserUpdateOp, wickdocs.Docs{},
+				),
+				connector.OpConfigOnly(
+					"browser_uninstall",
+					"Uninstall Browser",
+					"Remove a browser engine's downloaded binary so it shows as not installed. Used by the manager UI's ⋮ menu.",
+					browserInstallInput{},
+					browserUninstallOp, wickdocs.Docs{},
 				),
 			),
 		},
@@ -620,5 +640,7 @@ func sessionCloseOp(c *connector.Ctx) (any, error) {
 
 // ── Maintenance handlers ─────────────────────────────────────────────
 
-func browserStatusOp(c *connector.Ctx) (any, error)  { return browserStatus(c) }
-func browserInstallOp(c *connector.Ctx) (any, error) { return browserInstall(c) }
+func browserStatusOp(c *connector.Ctx) (any, error)    { return browserStatus(c) }
+func browserInstallOp(c *connector.Ctx) (any, error)   { return browserInstall(c) }
+func browserUpdateOp(c *connector.Ctx) (any, error)    { return browserUpdate(c) }
+func browserUninstallOp(c *connector.Ctx) (any, error) { return browserUninstall(c) }

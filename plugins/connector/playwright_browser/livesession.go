@@ -121,7 +121,18 @@ func sessionDir(c *connector.Ctx) string {
 // instance shows "1" not a confusing "0". An explicit 0 (or negative) means
 // UNLIMITED — the admin opted out of the cap. Returns 0 to signal "no limit";
 // openSession special-cases it rather than comparing len >= 0.
+//
+// CloakBrowser license lock: the free tier is ONE concurrent session (per
+// CloakBrowser's plan). So when the selected engine is the free "cloakbrowser"
+// (or "cloakbrowser-pro" whose CLI reports a non-pro tier), the cap is
+// hard-pinned to 1 regardless of the admin's max_live_sessions — running a
+// second free session would just fail to get a slot and hold the seat until it
+// times out (~15 min). The pro engine at its licensed "pro" tier allows more, so
+// the admin's configured cap applies (see isCloakFree).
 func maxLiveSessions(c *connector.Ctx) int {
+	if isCloakFree(c) {
+		return 1
+	}
 	v := c.CfgInt("max_live_sessions")
 	if v <= 0 {
 		return 0 // unlimited
@@ -163,11 +174,12 @@ func openSession(c *connector.Ctx) (any, error) {
 
 	// Live sessions rely on the Chromium DevTools protocol (--remote-debugging-port
 	// + the DevToolsActivePort file). Only Chromium engines expose that: the stock
-	// chromium and cloakbrowser (patched Chromium). Firefox/WebKit don't, so guard
-	// early with a clear message instead of hanging until the 20s port timeout.
+	// chromium and both cloakbrowser variants (patched Chromium). Firefox/WebKit
+	// don't, so guard early with a clear message instead of hanging until the 20s
+	// port timeout.
 	b := strings.ToLower(strings.TrimSpace(c.Cfg("browser")))
-	if b != "" && b != defBrowser && b != cloakEngine {
-		return nil, fmt.Errorf("live sessions require a chromium-based engine (chromium or cloakbrowser); this instance uses %q. Use the ephemeral ops (run/screenshot/...) for firefox/webkit, or set browser=chromium", c.Cfg("browser"))
+	if b != "" && b != defBrowser && !isCloakEngine(b) {
+		return nil, fmt.Errorf("live sessions require a chromium-based engine (chromium, cloakbrowser, or cloakbrowser-pro); this instance uses %q. Use the ephemeral ops (run/screenshot/...) for firefox/webkit, or set browser=chromium", c.Cfg("browser"))
 	}
 
 	// Resolve the browser binary via playwright (respects executable_path too).
@@ -181,13 +193,14 @@ func openSession(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	// Binary precedence mirrors launchOptions(): explicit executable_path wins;
-	// otherwise cloakbrowser uses its downloaded stealth binary, and stock
-	// chromium falls back to the Playwright-managed binary. browserType maps
-	// cloakbrowser onto pw.Chromium, so bt.ExecutablePath() would point at the
-	// wrong (stock chromium) binary for cloak — resolve cloak explicitly.
+	// otherwise a cloak engine uses its resolved stealth binary (free → wick's
+	// GitHub download, pro → the CLI-managed one), and stock chromium falls back to
+	// the Playwright-managed binary. browserType maps both cloak variants onto
+	// pw.Chromium, so bt.ExecutablePath() would point at the wrong (stock chromium)
+	// binary for cloak — resolve cloak explicitly.
 	chromeBin := strings.TrimSpace(c.Cfg("executable_path"))
-	if chromeBin == "" && b == cloakEngine {
-		chromeBin = cloakBinaryPath(c)
+	if chromeBin == "" && isCloakEngine(b) {
+		chromeBin = resolveCloakBinary(c, b)
 	}
 	if chromeBin == "" {
 		chromeBin = bt.ExecutablePath()
@@ -221,15 +234,24 @@ func openSession(c *connector.Ctx) (any, error) {
 		"--no-first-run", "--no-default-browser-check",
 		"--no-sandbox", // required where the sandbox helper is blocked
 	}
-	// Honor the Headless config. Use --headless=new (not classic headless) so
-	// that --load-extension still works when extensions are installed — classic
-	// headless ignores extensions entirely; the "new" mode loads them (some
-	// extensions are still finicky under headless, but this keeps the session
-	// invisible as configured instead of forcing a visible window).
+	// Honor the Headless config. Mode matters on Windows:
+	//   - --headless=new spins up a REAL browser window and then hides it, which
+	//     flashes visibly for a moment (the "blink" — open-then-close). It's only
+	//     needed when extensions are loaded, because classic headless ignores
+	//     --load-extension entirely.
+	//   - --headless=old (classic) never creates a window → zero flash, but no
+	//     extensions.
+	// So: use classic headless by default (no blink) and only upgrade to
+	// --headless=new when extensions are actually installed.
+	exts := installedExtensions(c)
 	if headless(c) {
-		args = append(args, "--headless=new")
+		if len(exts) > 0 {
+			args = append(args, "--headless=new")
+		} else {
+			args = append(args, "--headless=old")
+		}
 	}
-	if exts := installedExtensions(c); len(exts) > 0 {
+	if len(exts) > 0 {
 		joined := strings.Join(exts, ",")
 		args = append(args, "--load-extension="+joined, "--disable-extensions-except="+joined)
 	}
@@ -238,6 +260,14 @@ func openSession(c *connector.Ctx) (any, error) {
 	}
 
 	cmd := safeexec.Command(chromeBin, args...)
+	// Carry the CloakBrowser license key into the browser's environment so a Pro
+	// key runs the licensed tier (more concurrent sessions). Applies to both cloak
+	// variants; no-op for other engines / when no key is set.
+	if isCloakEngine(b) {
+		if env := cloakCLIEnv(c); len(env) > 0 {
+			cmd.Env = append(cmd.Environ(), env...)
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("launch detached browser: %w", err)
 	}

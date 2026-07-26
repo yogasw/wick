@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/yogasw/wick/pkg/connector"
@@ -37,9 +40,23 @@ var clog = zerolog.New(os.Stderr).With().
 // as just another engine name.
 
 const (
-	cloakEngine      = "cloakbrowser"
+	cloakEngine      = "cloakbrowser"     // free tier: wick downloads the binary from GitHub
+	cloakProEngine   = "cloakbrowser-pro" // pro tier: binary managed by the cloakbrowser CLI + a license key
 	cloakDefaultRepo = "CloakHQ/CloakBrowser"
 )
+
+// isCloakEngine reports whether name is either CloakBrowser variant (free or
+// pro). Both are patched Chromium driven through pw.Chromium, so most engine
+// logic treats them identically — only binary resolution + licensing differ.
+func isCloakEngine(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	return n == cloakEngine || n == cloakProEngine
+}
+
+// isCloakPro reports whether name is specifically the pro variant.
+func isCloakPro(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), cloakProEngine)
+}
 
 // cloakRepo is the owner/repo hosting the release assets. Overridable via the
 // cloak_repo config so a fork / mirror can be pointed at without a rebuild.
@@ -103,6 +120,25 @@ func cloakInstalling(c *connector.Ctx) bool {
 // cloakBinaryPath returns the resolved Cloak executable: the admin's explicit
 // cloak_executable_path override if set, else the cached download location.
 // Existence is the caller's concern (fileExists).
+// resolveCloakBinary returns the executable path for the given cloak engine:
+//   - cloakbrowser (free): wick's own downloaded binary (or cloak_executable_path
+//     override).
+//   - cloakbrowser-pro: the CLI-managed binary from `cloakbrowser info`
+//     (~/.cloakbrowser/…-pro). An explicit cloak_executable_path still wins for
+//     both, so an operator can always point at a hand-placed binary.
+func resolveCloakBinary(c *connector.Ctx, engine string) string {
+	if p := strings.TrimSpace(c.Cfg("cloak_executable_path")); p != "" {
+		return p
+	}
+	if isCloakPro(engine) {
+		if bin := cloakCLIBinary(c); bin != "" {
+			return bin
+		}
+		return "" // pro not resolvable → launch will error clearly
+	}
+	return cloakBinaryPath(c)
+}
+
 func cloakBinaryPath(c *connector.Ctx) string {
 	if p := strings.TrimSpace(c.Cfg("cloak_executable_path")); p != "" {
 		return p
@@ -212,6 +248,75 @@ func resolveCloakAsset(c *connector.Ctx) (tag, url, assetName string, err error)
 	clog.Error().Str("want", want).Int("releases_scanned", len(releases)).
 		Msg("cloak install: no matching asset in any release")
 	return "", "", "", fmt.Errorf("no %s asset in any release of %s", want, cloakRepo(c))
+}
+
+// ── version / update / uninstall ─────────────────────────────────────
+
+// latestCloak caches the newest release tag so the status widget (which polls
+// often) doesn't hit the GitHub API every render. GitHub rate-limits unauthed
+// calls to 60/hr; a 1h TTL keeps well under it while surfacing updates promptly.
+var (
+	latestCloakMu   sync.Mutex
+	latestCloakTag  string
+	latestCloakWhen time.Time
+)
+
+// cloakLatestVersion returns the newest available CloakBrowser tag for this host
+// (best-effort, cached 1h). "" on any error — an update check must never break
+// the status view or block on a slow/unreachable GitHub.
+func cloakLatestVersion(c *connector.Ctx) string {
+	latestCloakMu.Lock()
+	if latestCloakTag != "" && time.Since(latestCloakWhen) < time.Hour {
+		tag := latestCloakTag
+		latestCloakMu.Unlock()
+		return tag
+	}
+	latestCloakMu.Unlock()
+
+	tag, _, _, err := resolveCloakAsset(c)
+	if err != nil {
+		clog.Warn().Err(err).Msg("cloak: latest-version check failed")
+		return ""
+	}
+	latestCloakMu.Lock()
+	latestCloakTag = tag
+	latestCloakWhen = time.Now()
+	latestCloakMu.Unlock()
+	return tag
+}
+
+// cloakUpdateAvailable reports whether a newer CloakBrowser release exists than
+// the installed one. False when not installed, offline, or already current.
+func cloakUpdateAvailable(c *connector.Ctx) (bool, string) {
+	if !cloakInstalled(c) {
+		return false, ""
+	}
+	latest := cloakLatestVersion(c)
+	if latest == "" {
+		return false, ""
+	}
+	cur := cloakVersion(c)
+	// Tags may carry a leading "v"; normalize before comparing.
+	if strings.TrimPrefix(cur, "v") == strings.TrimPrefix(latest, "v") {
+		return false, latest
+	}
+	return true, latest
+}
+
+// cloakUninstall removes the downloaded CloakBrowser (binary + VERSION +
+// progress state) so the row flips back to "not installed". A caller-supplied
+// cloak_executable_path override is NOT deleted — we didn't download it, so we
+// don't own it; only the managed cache dir is removed.
+func cloakUninstall(c *connector.Ctx) error {
+	if p := strings.TrimSpace(c.Cfg("cloak_executable_path")); p != "" {
+		return fmt.Errorf("cloakbrowser uses a custom cloak_executable_path — remove it manually; wick won't delete a path it didn't download")
+	}
+	dir := cloakDir(c)
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("remove cloak dir: %w", err)
+	}
+	clog.Info().Str("dir", dir).Msg("cloak: uninstalled")
+	return nil
 }
 
 // ── download + extract ───────────────────────────────────────────────
@@ -487,12 +592,30 @@ func safeJoin(base, name string) (string, error) {
 
 // ── launch flags ─────────────────────────────────────────────────────
 
-// cloakLaunchArgs are the anti-automation launch tweaks CloakBrowser needs. The
-// stealth is compiled into the binary; these just avoid re-flagging automation.
+// cloakLaunchArgs are the anti-automation launch tweaks CloakBrowser needs,
+// mirroring the official cloakbrowser Python wrapper's config:
+//   - IgnoreDefaultArgs drops Playwright's tells: --enable-automation (sets
+//     navigator.webdriver=true) and --enable-unsafe-swiftshader (software WebGL,
+//     a headless giveaway).
+//   - Args carries --no-sandbox plus the stealth fingerprint flags; the seed is
+//     randomized PER LAUNCH (see cloakArgs) so each session is a distinct, real-
+//     world device identity. --fingerprint-platform pins a Windows profile.
+// The heavy fingerprint spoofing is compiled into the binary; these flags just
+// turn it on + avoid re-flagging automation.
 var cloakLaunchArgs = struct {
 	IgnoreDefaultArgs []string
-	Args              []string
 }{
-	IgnoreDefaultArgs: []string{"--enable-automation"},
-	Args:              []string{"--no-sandbox"},
+	IgnoreDefaultArgs: []string{"--enable-automation", "--enable-unsafe-swiftshader"},
+}
+
+// cloakArgs builds the per-launch stealth args with a fresh fingerprint seed,
+// matching cloakbrowser's get_default_stealth_args (Windows profile). A new seed
+// per launch = a new coherent device identity, which is what the wrapper does.
+func cloakArgs() []string {
+	seed := 10000 + rand.Intn(90000) // 10000..99999, same range as the wrapper
+	return []string{
+		"--no-sandbox",
+		fmt.Sprintf("--fingerprint=%d", seed),
+		"--fingerprint-platform=windows",
+	}
 }

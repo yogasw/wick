@@ -259,12 +259,12 @@ func browserType(pw *playwright.Playwright, cfg string) (playwright.BrowserType,
 		return pw.Firefox, nil
 	case "webkit":
 		return pw.WebKit, nil
-	case cloakEngine:
-		// CloakBrowser is patched Chromium — drive it via the Chromium
-		// BrowserType with a custom ExecutablePath (set in launchOptions).
+	case cloakEngine, cloakProEngine:
+		// CloakBrowser (free or pro) is patched Chromium — drive it via the
+		// Chromium BrowserType with a custom ExecutablePath (set in launchOptions).
 		return pw.Chromium, nil
 	default:
-		return nil, fmt.Errorf("unknown browser %q: use chromium, firefox, webkit, or cloakbrowser", cfg)
+		return nil, fmt.Errorf("unknown browser %q: use chromium, firefox, webkit, cloakbrowser, or cloakbrowser-pro", cfg)
 	}
 }
 
@@ -276,11 +276,32 @@ func launchOptions(c *connector.Ctx) playwright.BrowserTypeLaunchOptions {
 	opts := playwright.BrowserTypeLaunchOptions{
 		Headless: playwright.Bool(headless(c)),
 	}
-	isCloak := strings.EqualFold(strings.TrimSpace(c.Cfg("browser")), cloakEngine)
+	engine := strings.TrimSpace(c.Cfg("browser"))
+	isCloak := isCloakEngine(engine)
 	if isCloak {
-		opts.ExecutablePath = playwright.String(cloakBinaryPath(c))
+		// Free variant → the binary wick downloaded; Pro variant → the CLI-managed
+		// (~/.cloakbrowser) binary resolved from `cloakbrowser info`.
+		opts.ExecutablePath = playwright.String(resolveCloakBinary(c, engine))
 		opts.IgnoreDefaultArgs = cloakLaunchArgs.IgnoreDefaultArgs
-		opts.Args = append([]string{}, cloakLaunchArgs.Args...)
+		opts.Args = cloakArgs()
+		// Headless mode: Playwright's Headless:true injects --headless=new, which
+		// on Windows briefly creates then hides a real window (the visible "blink"
+		// / open-then-close). Take control ourselves: turn Playwright's flag OFF
+		// and add classic --headless=old, which never creates a window → no flash.
+		// (Ephemeral ops don't load extensions, so classic headless is fine — the
+		// live-session path handles the extension case separately.)
+		if headless(c) {
+			opts.Headless = playwright.Bool(false)
+			opts.Args = append(opts.Args, "--headless=old")
+		}
+		// Pass the license key into the launched browser's env so a Pro binary
+		// activates its licensed tier. Without it a Pro binary fails its license
+		// check and exits immediately — Playwright then reports "target closed"
+		// and the window flashes open-then-shut. Playwright's Env REPLACES the
+		// process env, so cloakLaunchEnv merges the current env in.
+		if env := cloakLaunchEnv(c); env != nil {
+			opts.Env = env
+		}
 	}
 	if p := strings.TrimSpace(c.Cfg("executable_path")); p != "" {
 		opts.ExecutablePath = playwright.String(p)
@@ -294,6 +315,21 @@ func launchOptions(c *connector.Ctx) playwright.BrowserTypeLaunchOptions {
 			proxy.Bypass = playwright.String(bp)
 		}
 		opts.Proxy = proxy
+	}
+	// Log the resolved launch shape so a "blink" / flash is diagnosable: which
+	// binary, headless flag, and args actually reach Chrome.
+	if isCloak {
+		exe := ""
+		if opts.ExecutablePath != nil {
+			exe = *opts.ExecutablePath
+		}
+		hl := false
+		if opts.Headless != nil {
+			hl = *opts.Headless
+		}
+		clog.Info().Str("engine", engine).Str("binary", exe).
+			Bool("pw_headless", hl).Strs("args", opts.Args).
+			Bool("has_license", cloakLaunchEnv(c) != nil).Msg("cloak: launch options resolved")
 	}
 	return opts
 }
