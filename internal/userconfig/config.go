@@ -323,6 +323,11 @@ type WickConfig struct {
 	MaxContextTokens int `json:"max_context_tokens,omitempty"`
 	// MaxTurns caps the agentic loop per user turn. 0 = unlimited.
 	MaxTurns int `json:"max_turns,omitempty"`
+	// MaxModelRetries is the total attempts for a failing model call (incl. the
+	// first). 0 = default (3). 1 disables retries.
+	MaxModelRetries int `json:"max_model_retries,omitempty"`
+	// ModelCallTimeoutSec bounds one model-call attempt. 0 = default (120s).
+	ModelCallTimeoutSec int `json:"model_call_timeout_sec,omitempty"`
 	// GenConfig is the default generation config for models without
 	// their own override.
 	GenConfig *WickGenConfig `json:"gen_config,omitempty"`

@@ -153,12 +153,14 @@ type WickModel struct {
 
 // WickConfig mirrors userconfig.WickConfig in-memory.
 type WickConfig struct {
-	ShellToolDisabled bool
-	Connectors        []string
-	MaxContextTokens  int
-	MaxTurns          int
-	GenConfig         *WickGenConfig
-	RawConfig         string
+	ShellToolDisabled   bool
+	Connectors          []string
+	MaxContextTokens    int
+	MaxTurns            int
+	MaxModelRetries     int
+	ModelCallTimeoutSec int
+	GenConfig           *WickGenConfig
+	RawConfig           string
 }
 
 // WickGenConfig mirrors userconfig.WickGenConfig in-memory.
@@ -990,12 +992,14 @@ func wickConfigFromUser(in *userconfig.WickConfig) *WickConfig {
 		return nil
 	}
 	return &WickConfig{
-		ShellToolDisabled: in.ShellToolDisabled,
-		Connectors:        in.Connectors,
-		MaxContextTokens:  in.MaxContextTokens,
-		MaxTurns:          in.MaxTurns,
-		GenConfig:         wickGenFromUser(in.GenConfig),
-		RawConfig:         in.RawConfig,
+		ShellToolDisabled:   in.ShellToolDisabled,
+		Connectors:          in.Connectors,
+		MaxContextTokens:    in.MaxContextTokens,
+		MaxTurns:            in.MaxTurns,
+		MaxModelRetries:     in.MaxModelRetries,
+		ModelCallTimeoutSec: in.ModelCallTimeoutSec,
+		GenConfig:           wickGenFromUser(in.GenConfig),
+		RawConfig:           in.RawConfig,
 	}
 }
 
@@ -1004,12 +1008,14 @@ func wickConfigToUser(in *WickConfig) *userconfig.WickConfig {
 		return nil
 	}
 	return &userconfig.WickConfig{
-		ShellToolDisabled: in.ShellToolDisabled,
-		Connectors:        in.Connectors,
-		MaxContextTokens:  in.MaxContextTokens,
-		MaxTurns:          in.MaxTurns,
-		GenConfig:         wickGenToUser(in.GenConfig),
-		RawConfig:         in.RawConfig,
+		ShellToolDisabled:   in.ShellToolDisabled,
+		Connectors:          in.Connectors,
+		MaxContextTokens:    in.MaxContextTokens,
+		MaxTurns:            in.MaxTurns,
+		MaxModelRetries:     in.MaxModelRetries,
+		ModelCallTimeoutSec: in.ModelCallTimeoutSec,
+		GenConfig:           wickGenToUser(in.GenConfig),
+		RawConfig:           in.RawConfig,
 	}
 }
 
