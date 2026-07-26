@@ -159,8 +159,18 @@ func pickModel(inst *provider.Instance, modelID string) (provider.WickModel, boo
 		return provider.WickModel{}, false
 	}
 	if modelID != "" {
+		// A live-set pick is "<entryID>@<vendorModelID>": resolve the entry for
+		// its key/kind/base, then override the concrete model id with the
+		// vendor model the user chose from the expanded list.
+		entryID, vendorID := modelID, ""
+		if at := strings.IndexByte(modelID, '@'); at >= 0 {
+			entryID, vendorID = modelID[:at], modelID[at+1:]
+		}
 		for _, m := range inst.WickModels {
-			if m.ID == modelID && !m.Disabled {
+			if m.ID == entryID && !m.Disabled {
+				if vendorID != "" {
+					m.Model = vendorID // live-set override
+				}
 				return m, true
 			}
 		}
