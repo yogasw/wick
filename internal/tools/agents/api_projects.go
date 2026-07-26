@@ -43,6 +43,18 @@ type ProjectSettingsResponse struct {
 type ProviderListItem struct {
 	Type string `json:"type"`
 	Name string `json:"name"`
+	// Models are this instance's selectable models (id+label), so the
+	// project default picker can descend to a model level — same data the
+	// composer's provider picker uses. Empty for single-model instances.
+	Models []ProviderModelItem `json:"models,omitempty"`
+}
+
+// ProviderModelItem is one model choice under a provider instance.
+type ProviderModelItem struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Default bool   `json:"default"`
+	Desc    string `json:"desc,omitempty"`
 }
 
 // ProjectPinnedSession is one pinned session row in the API response.
@@ -58,7 +70,11 @@ func projectProviderList(c *tool.Ctx) []ProviderListItem {
 	ps := providerChoicesCached(c.Context())
 	out := make([]ProviderListItem, 0, len(ps))
 	for _, p := range ps {
-		out = append(out, ProviderListItem{Type: p.Type, Name: p.Name})
+		var models []ProviderModelItem
+		for _, m := range p.Models {
+			models = append(models, ProviderModelItem{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc})
+		}
+		out = append(out, ProviderListItem{Type: p.Type, Name: p.Name, Models: models})
 	}
 	return out
 }

@@ -62,6 +62,9 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("GET /manager/api/connectors/{key}/{id}/test-meta", auth(h.apiConnectorTestMeta))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/test", auth(h.apiTestConnectorOperation))
 	mux.Handle("GET /manager/api/connectors/{key}/{id}/history", auth(h.apiConnectorHistory))
+	// Kill a single in-flight run (the per-run Cancel button in history). Cancels
+	// the op's context so it unwinds and finalizes as "cancelled".
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/runs/{runID}/cancel", auth(h.apiCancelConnectorRun))
 
 	// Live-browser panel (playwright_browser only). Sessions list/open/close are
 	// unary JSON; ws proxies a DevTools screencast/input stream to the session's

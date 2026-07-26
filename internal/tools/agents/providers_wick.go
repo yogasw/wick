@@ -40,15 +40,120 @@ func getWickInteractions(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid session id"})
 		return
 	}
+	// Server-side search + sort + pagination so a session with hundreds of
+	// calls doesn't ship the whole log to the browser. q filters on the
+	// text fields; sort=oldest|newest (default newest); page (1-based) +
+	// page_size bound the slice.
+	q := strings.ToLower(strings.TrimSpace(c.Query("q")))
+	sortOldest := c.Query("sort") == "oldest"
+	pageSize := clampInt(atoiOr(c.Query("page_size"), 10), 1, 100)
+	page := maxInt(atoiOr(c.Query("page"), 1), 1)
+
 	path := filepath.Join(globalLayout.SessionDir(session), "wick-interactions.jsonl")
-	records := make([]json.RawMessage, 0)
+	type row struct {
+		raw json.RawMessage
+		seq int
+	}
+	var rows []row
 	_ = storage.ReadJSONL(path, func(line []byte) bool {
+		if q != "" && !bytesContainsFold(line, q) {
+			return true // filter before keeping — cheap substring on the raw line
+		}
+		var probe struct {
+			Seq int `json:"seq"`
+		}
+		_ = json.Unmarshal(line, &probe)
 		cp := make([]byte, len(line))
 		copy(cp, line)
-		records = append(records, json.RawMessage(cp))
+		rows = append(rows, row{raw: json.RawMessage(cp), seq: probe.Seq})
 		return true
 	})
-	c.JSON(http.StatusOK, map[string]any{"interactions": records})
+
+	// File is append-order (oldest→newest). Reverse for the default newest-first.
+	if !sortOldest {
+		for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+			rows[i], rows[j] = rows[j], rows[i]
+		}
+	}
+
+	total := len(rows)
+	start := (page - 1) * pageSize
+	if start > total {
+		start = total
+	}
+	end := start + pageSize
+	if end > total {
+		end = total
+	}
+	out := make([]json.RawMessage, 0, end-start)
+	for _, r := range rows[start:end] {
+		out = append(out, r.raw)
+	}
+	resp := map[string]any{
+		"interactions": out,
+		"total":        total,
+		"page":         page,
+		"page_size":    pageSize,
+	}
+	// Live phase: is an outbound model call in flight right now? The log can't
+	// show this (records land only when a call finishes), so the FE uses it to
+	// label the live row as "model call" vs "running tool" accurately, how long
+	// it's been waiting (to spot a stuck call), the retry attempt/reason, and the
+	// in-flight request itself (so it can be viewed/copied-as-curl BEFORE the
+	// record lands).
+	if st := wick.ModelCallSnapshot(session); st.InFlight {
+		live := map[string]any{
+			"in_flight":  true,
+			"elapsed_ms": st.Elapsed.Milliseconds(),
+			"attempt":    st.Attempt,
+			"kind":       st.Kind,
+			"model":      st.Model,
+			"model_id":   st.ModelID,
+			"system":     st.System,
+			"tools":      st.Tools,
+			"messages":   st.Messages,
+		}
+		if st.RetryReason != "" {
+			live["retry_reason"] = st.RetryReason
+		}
+		resp["model_call"] = live
+		// Back-compat with the existing FE fields.
+		resp["model_call_in_flight"] = true
+		resp["model_call_elapsed_ms"] = st.Elapsed.Milliseconds()
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// bytesContainsFold reports whether the lowercased line contains needle
+// (needle is already lowercase). Cheap raw-line substring match — good
+// enough for the interaction search; the JSONL line already holds every
+// searchable field (model, response, tool_calls, request text).
+func bytesContainsFold(line []byte, needle string) bool {
+	return strings.Contains(strings.ToLower(string(line)), needle)
+}
+
+func atoiOr(s string, def int) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil {
+		return n
+	}
+	return def
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // getWickInteractionCurl reconstructs a "copy as curl" command for one
@@ -118,12 +223,146 @@ func getWickInteractionCurl(c *tool.Ctx) {
 		return
 	}
 
-	curlCmd, err := wick.BuildCurl(target, *model)
+	req, err := wick.BuildRequest(target, *model)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, map[string]string{"curl": curlCmd})
+	// Return every render up-front (key as a placeholder) so the FE builder
+	// can switch format without a refetch. The real key is fetched only on
+	// explicit reveal via the separate models/{id}/key endpoint — it never
+	// rides in this payload.
+	const ph = "$WICK_MODEL_API_KEY"
+	c.JSON(http.StatusOK, map[string]any{
+		// "curl" kept for backward-compat with the old single-command client.
+		"curl":        wick.RenderSingleLine(req, ph),
+		"single_line": wick.RenderSingleLine(req, ph),
+		"multiline":   wick.RenderMultiline(req, ph),
+		"raw_http":    wick.RenderRawHTTP(req, ph),
+		"json_body":   wick.RenderJSONBody(req),
+		"model_id":    model.ID,
+		"env":         req.EnvHint,
+	})
+}
+
+// findWickModel resolves a WickModel by id from the current instance. Returns
+// (nil, false) when the instance can't load or the id is unknown.
+func findWickModel(id string) (*provider.WickModel, bool) {
+	ins, err := wickInstance()
+	if err != nil {
+		return nil, false
+	}
+	for i := range ins.WickModels {
+		if ins.WickModels[i].ID == id {
+			return &ins.WickModels[i], true
+		}
+	}
+	return nil, false
+}
+
+// getWickLiveCurl reconstructs the curl/request for the CURRENTLY in-flight
+// model call (no seq — reads the live-phase snapshot). Lets an operator inspect
+// or replay the request that's being sent right now, e.g. while a call is stuck
+// at "model call in progress (1m 17s)". Admin-only; key is a placeholder.
+// GET /providers/wick/interactions/{session}/live/curl
+func getWickLiveCurl(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	session := strings.TrimSpace(c.PathValue("session"))
+	if session == "" || strings.ContainsAny(session, `/\`) || strings.Contains(session, "..") {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid session id"})
+		return
+	}
+	st := wick.ModelCallSnapshot(session)
+	if !st.InFlight {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no model call in flight"})
+		return
+	}
+	if st.ModelID == "" {
+		c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": "in-flight call has no model id — cannot reconstruct a curl"})
+		return
+	}
+	model, ok := findWickModel(st.ModelID)
+	if !ok {
+		c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": "the in-flight model is not resolvable"})
+		return
+	}
+	req, err := wick.BuildRequestFromLive(st, *model)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	const ph = "$WICK_MODEL_API_KEY"
+	c.JSON(http.StatusOK, map[string]any{
+		"single_line": wick.RenderSingleLine(req, ph),
+		"multiline":   wick.RenderMultiline(req, ph),
+		"raw_http":    wick.RenderRawHTTP(req, ph),
+		"json_body":   wick.RenderJSONBody(req),
+		"model_id":    model.ID,
+		"env":         req.EnvHint,
+	})
+}
+
+// cancelWickModelCall aborts just the in-flight model call for a session (not
+// the turn/session). The engine sees the cancellation as a call error and ends
+// the turn gracefully; the process stays alive. Admin-only.
+// POST /providers/wick/interactions/{session}/cancel-call
+func cancelWickModelCall(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	session := strings.TrimSpace(c.PathValue("session"))
+	if session == "" || strings.ContainsAny(session, `/\`) || strings.Contains(session, "..") {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid session id"})
+		return
+	}
+	if wick.CancelModelCall(session) {
+		c.JSON(http.StatusOK, map[string]any{"cancelled": true})
+		return
+	}
+	c.JSON(http.StatusConflict, map[string]any{"cancelled": false, "error": "no model call in flight"})
+}
+
+// getWickModelKey reveals a model's API key in plaintext for the curl
+// builder's "use real token" option. Admin-only, and deliberately scoped:
+// the admin is the one who entered this key, so returning it to them (never
+// to the model, never to the log) is not a new exposure — it just saves a
+// round-trip to the provider settings. Decrypts on demand via the configs
+// service; a plaintext-stored key passes through unchanged.
+// GET /providers/wick/models/{id}/key
+func getWickModelKey(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	id := strings.TrimSpace(c.PathValue("id"))
+	if id == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid model id"})
+		return
+	}
+	ins, err := wickInstance()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	var model *provider.WickModel
+	for i := range ins.WickModels {
+		if ins.WickModels[i].ID == id {
+			model = &ins.WickModels[i]
+			break
+		}
+	}
+	if model == nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "model not found"})
+		return
+	}
+	key := model.APIKey
+	if globalConfigs != nil && key != "" {
+		if plain, derr := globalConfigs.DecryptSecret(key); derr == nil {
+			key = plain
+		}
+	}
+	c.JSON(http.StatusOK, map[string]string{"key": key})
 }
 
 // wickModelDTO is the create/edit payload from the Add-Model modal.

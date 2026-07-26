@@ -214,6 +214,7 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/provider", switchProvider)
 	r.POST("/sessions/{id}/project", moveSessionToProject)
 	r.POST("/sessions/{id}/kill", killAgent)
+	r.POST("/sessions/{id}/runs/{runID}/cancel", cancelSessionRun)
 	r.POST("/sessions/{id}/dequeue", dequeueAgent)
 	r.GET("/sessions/{id}/subscription", sessionSubscriptionStatus)
 	r.POST("/sessions/{id}/subscribe", sessionSubscribe)
@@ -341,6 +342,9 @@ func Register(r tool.Router) {
 	r.GET("/providers/wick/config", getWickConfig)
 	r.GET("/providers/wick/interactions/{session}", getWickInteractions)
 	r.GET("/providers/wick/interactions/{session}/{seq}/curl", getWickInteractionCurl)
+	r.GET("/providers/wick/interactions/{session}/live/curl", getWickLiveCurl)
+	r.POST("/providers/wick/interactions/{session}/cancel-call", cancelWickModelCall)
+	r.GET("/providers/wick/models/{id}/key", getWickModelKey)
 	r.POST("/providers/wick/models", saveWickModel)
 	r.DELETE("/providers/wick/models/{id}", deleteWickModel)
 	r.POST("/providers/wick/models/{id}/default", setWickDefaultModel)
@@ -954,6 +958,16 @@ func newSessionCompose(c *tool.Ctx) {
 // instance set as a project default never reached agents.json — the
 // session always span with the base provider. See the provider switch
 // path in pool.go which splits "type/name" back apart on spawn.
+// splitProviderModel separates a compose provider value that may encode a
+// pinned model as "type/name::modelID" (multi-model providers like wick)
+// into (providerValue, modelID). No "::" → modelID is "".
+func splitProviderModel(v string) (provider, modelID string) {
+	if i := strings.Index(v, "::"); i >= 0 {
+		return v[:i], v[i+2:]
+	}
+	return v, ""
+}
+
 func resolveSessionProvider(c *tool.Ctx, formValue, projectID string) string {
 	prov := strings.TrimSpace(formValue)
 	if prov == "" && projectID != "" {
@@ -1007,7 +1021,8 @@ func startNewSession(c *tool.Ctx) {
 		return
 	}
 	projectID := c.Form("project_id")
-	prov := resolveSessionProvider(c, c.Form("provider"), projectID)
+	provForm, modelID := splitProviderModel(c.Form("provider"))
+	prov := resolveSessionProvider(c, provForm, projectID)
 	presetName := c.Form("preset")
 	if presetName == "" {
 		presetName = "default"
@@ -1033,6 +1048,13 @@ func startNewSession(c *tool.Ctx) {
 		log.Ctx(c.Context()).Error().Msgf("compose add agent: %s", err.Error())
 		renderCompose(c, text, err.Error())
 		return
+	}
+	// Pin the chosen model (multi-model providers like wick) so the first
+	// spawn uses it — same effect as an in-session /provider model pick.
+	if modelID != "" {
+		if err := session.SetModelID(globalLayout, id, "main", modelID); err != nil {
+			log.Ctx(c.Context()).Warn().Msgf("compose set model id: %s", err.Error())
+		}
 	}
 	// Pre-subscribe: the new-session composer carries a bell with a
 	// hidden "subscribe" input that flips to "1" when toggled on. If
@@ -1146,7 +1168,8 @@ func createSession(c *tool.Ctx) {
 		return
 	}
 	projectID := c.Form("project_id")
-	prov := resolveSessionProvider(c, c.Form("provider"), projectID)
+	provForm, modelID := splitProviderModel(c.Form("provider"))
+	prov := resolveSessionProvider(c, provForm, projectID)
 	id := uuid.New().String()
 	presetName := "default"
 	if projectID != "" {
@@ -1170,6 +1193,11 @@ func createSession(c *tool.Ctx) {
 		log.Ctx(c.Context()).Error().Msgf("add agent: %s", err.Error())
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
+	}
+	if modelID != "" {
+		if err := session.SetModelID(globalLayout, id, "main", modelID); err != nil {
+			log.Ctx(c.Context()).Warn().Msgf("create session set model id: %s", err.Error())
+		}
 	}
 	c.Redirect(c.Base()+"/sessions/"+id, http.StatusSeeOther)
 }
@@ -1238,7 +1266,7 @@ func switchProvider(c *tool.Ctx) {
 		ModelID: req.ModelID,
 		Notify: func(tag string, steps []string) {
 			if bcast != nil {
-				bcast.PublishSystemTurn(id, agentName, "Provider switched → "+tag, steps)
+				bcast.PublishSystemTurn(id, agentName, provider.SwitchChipText(tag, req.ModelID), steps)
 			}
 		},
 	}); err != nil {
@@ -1351,7 +1379,7 @@ func sendMessage(c *tool.Ctx) {
 			Notify: func(tag string, steps []string) {
 				if bcast != nil {
 					bcast.PublishRaw(id, agentName, "user_message", req.Text)
-					bcast.PublishSystemTurn(id, agentName, "Provider switched → "+tag, steps)
+					bcast.PublishSystemTurn(id, agentName, provider.SwitchChipText(tag, ""), steps)
 				}
 			},
 		}); err != nil {
@@ -1653,6 +1681,43 @@ func killAgent(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]string{"status": "killed"})
 }
 
+// cancelSessionRun aborts one in-flight connector run belonging to this session
+// — the per-tool-call Cancel button in the conversation trace. Gated to the
+// session's owner, and the run is verified to belong to THIS session so a caller
+// can't cancel another session's runs. Cancelling unblocks the op so it
+// finalizes as "cancelled"; the agent then sees an explicit cancelled result.
+func cancelSessionRun(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	if globalConnectors == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "connectors unavailable"})
+		return
+	}
+	runID := c.PathValue("runID")
+	run, err := globalConnectors.GetRun(c.Context(), runID)
+	if err != nil || run == nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "run not found"})
+		return
+	}
+	if run.SessionID != id {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "run does not belong to this session"})
+		return
+	}
+	if !globalConnectors.CancelRun(runID) {
+		// Not registered as live though the row may still say "running" — reclaim it
+		// so the UI doesn't wedge.
+		_ = globalConnectors.FinalizeStaleRun(c.Context(), runID)
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
 func deleteSession(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -1859,6 +1924,7 @@ func providerOptionsJSON(c *tool.Ctx) {
 		ID      string `json:"id"`
 		Label   string `json:"label"`
 		Default bool   `json:"default"`
+		Desc    string `json:"desc,omitempty"`
 	}
 	type option struct {
 		Type         string  `json:"type"`
@@ -1872,7 +1938,7 @@ func providerOptionsJSON(c *tool.Ctx) {
 	for _, p := range ps {
 		var models []model
 		for _, m := range p.Models {
-			models = append(models, model{ID: m.ID, Label: m.Label, Default: m.Default})
+			models = append(models, model{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc})
 		}
 		opts = append(opts, option{Type: p.Type, Name: p.Name, Version: p.Version, UsesAIRouter: p.UsesAIRouter, Models: models})
 	}

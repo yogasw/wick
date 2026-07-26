@@ -1,0 +1,20 @@
+{
+  "updated_at": "2026-07-25T00:00:00Z",
+  "providers": {
+    "claude": [
+      { "id": "opus", "desc": "Opus 4.8 with 1M context · best for everyday, complex tasks", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" },
+      { "id": "sonnet", "desc": "Sonnet 5 · efficient for routine tasks", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" },
+      { "id": "haiku", "desc": "Haiku 4.5 · fastest for quick answers", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" },
+      { "id": "fable", "desc": "Fable 5 · most capable for your hardest, longest-running tasks", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" }
+    ],
+    "codex": [
+      { "id": "gpt-5.5", "desc": "Frontier model for complex coding, research, and real-world work", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" },
+      { "id": "gpt-5.4", "desc": "Strong model for everyday coding", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" },
+      { "id": "gpt-5.4-mini", "desc": "Small, fast, and cost-efficient model for simpler coding tasks", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" }
+    ],
+    "gemini": [
+      { "id": "gemini-2.5-pro", "desc": "Most capable Gemini for complex, multi-step work", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" },
+      { "id": "gemini-2.5-flash", "desc": "Fast and cost-efficient for everyday tasks", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" }
+    ]
+  }
+}

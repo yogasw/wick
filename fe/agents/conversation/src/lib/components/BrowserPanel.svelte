@@ -39,6 +39,12 @@
   let connected = $state(false);
   let statusText = $state("");
 
+  /* Right-click context menu on the live view — a small HTML menu we render
+   * ourselves (the remote's native menu can't be streamed), giving discoverable
+   * Copy/Paste plus the cross-machine PC clipboard actions. Positioned at the
+   * click in client coords; open=false hides it. */
+  let ctxMenu = $state<{ open: boolean; x: number; y: number }>({ open: false, x: 0, y: 0 });
+
   /* Zoom = CSS→device scale for the emulated viewport. Lower = more page fits
    * (zoomed out); higher = larger content. The browser viewport is sized to the
    * canvas box / zoom, so there's no letterbox and content is real size. */
@@ -104,6 +110,13 @@
   let ws: WebSocket | null = null;
   let cdpId = 1; // monotonic CDP command id
   let ackTimer: number | null = null;
+
+  // CDP commands awaiting a result (only sendCmd registers here), keyed by id.
+  // Used to read the remote page's selection back for the copy→PC clipboard step.
+  const pendingCmds = new Map<
+    number,
+    { resolve: (v: any) => void; reject: (e: any) => void; timer: number }
+  >();
 
   const selectedSession = $derived(sessions.find((s) => s.session_id === sessionId));
   const tabs = $derived(selectedSession?.tabs ?? []);
@@ -219,6 +232,21 @@
     }
   }
 
+  // send() + a Promise resolving with the command's CDP result — for the one
+  // place we need a return value: reading the remote selection for copy→PC.
+  function sendCmd(method: string, params: Record<string, unknown> = {}): Promise<any> {
+    if (ws?.readyState !== WebSocket.OPEN) return Promise.reject(new Error("not connected"));
+    const id = cdpId++;
+    return new Promise((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        pendingCmds.delete(id);
+        reject(new Error(`CDP ${method} timed out`));
+      }, 3000);
+      pendingCmds.set(id, { resolve, reject, timer });
+      ws!.send(JSON.stringify({ id, method, params }));
+    });
+  }
+
   function connect() {
     disconnect();
     if (!instanceId || !sessionId) return;
@@ -273,6 +301,11 @@
       clearTimeout(ackTimer);
       ackTimer = null;
     }
+    for (const [, p] of pendingCmds) {
+      clearTimeout(p.timer);
+      p.reject(new Error("disconnected"));
+    }
+    pendingCmds.clear();
   }
 
   const startScreencast = () =>
@@ -346,10 +379,19 @@
   }
 
   function onCdpMessage(raw: string) {
-    let msg: { method?: string; params?: any };
+    let msg: { id?: number; result?: any; error?: any; method?: string; params?: any };
     try {
       msg = JSON.parse(raw);
     } catch {
+      return;
+    }
+    // Reply to a sendCmd() we're awaiting.
+    if (typeof msg.id === "number" && pendingCmds.has(msg.id)) {
+      const p = pendingCmds.get(msg.id)!;
+      pendingCmds.delete(msg.id);
+      clearTimeout(p.timer);
+      if (msg.error) p.reject(msg.error);
+      else p.resolve(msg.result);
       return;
     }
     if (msg.method === "Page.screencastFrame" && msg.params) {
@@ -457,6 +499,8 @@
   let heldName = "";
   let heldMask = 0;
 
+
+  
   // Map DOM MouseEvent.button (0=left,1=middle,2=right) to CDP name + bitmask.
   function domButton(b: number): { name: string; mask: number } {
     if (b === 2) return { name: "right", mask: 2 };
@@ -489,13 +533,19 @@
       mask = type === "mousePressed" ? b.mask : 0; // release clears the bitmask
     }
 
+    // clickCount drives Chrome's double/triple-click (select word / line). The
+    // browser already counts consecutive clicks in MouseEvent.detail (1=single,
+    // 2=double, 3=triple), so forward that — hardcoding 1 meant the remote never
+    // saw a double-click. A move isn't a click → 0; press/release clamp to ≥1.
+    const clickCount = type === "mouseMoved" ? 0 : Math.max(1, ev.detail || 1);
+
     send("Input.dispatchMouseEvent", {
       type,
       x: p.x,
       y: p.y,
       button: name,
       buttons: mask,
-      clickCount: type === "mouseMoved" ? 0 : 1,
+      clickCount,
     });
 
     if (type === "mouseReleased") {
@@ -519,6 +569,11 @@
     // through because it's not length-1). stopPropagation keeps the key from
     // ever reaching that window listener, so focus stays on the canvas.
     ev.stopPropagation();
+
+    // Clipboard keys are NOT intercepted — Ctrl/Cmd+C/V flow straight to the
+    // remote so its clipboard works natively. The PC↔remote bridge instead syncs
+    // the two clipboards when focus crosses the canvas boundary (see the focus/
+    // blur handlers), so plain copy/paste "just works" across machines.
     const base = {
       key: ev.key,
       code: ev.code,
@@ -538,6 +593,89 @@
     send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
     if (printable) {
       send("Input.dispatchKeyEvent", { type: "char", text: ev.key, ...base });
+    }
+  }
+
+  /* ── right-click context menu ─────────────────────────────────── */
+
+  // Open our own menu at the click position (the remote's native context menu
+  // can't be captured by the screencast). Full mode + connected only.
+  function onCanvasContextMenu(ev: MouseEvent) {
+    ev.preventDefault();
+    if (mode !== "full" || !connected) return;
+    ctxMenu = { open: true, x: ev.clientX, y: ev.clientY };
+  }
+
+  function closeCtxMenu() {
+    if (ctxMenu.open) ctxMenu = { ...ctxMenu, open: false };
+  }
+
+  // Dispatch a plain Ctrl/Cmd+<key> into the remote (used for the menu's native
+  // Copy/Paste, which act on the REMOTE clipboard just like a keyboard shortcut).
+  function sendRemoteCombo(key: string, code: string, keyCode: number) {
+    canvasEl?.focus();
+    // metaKey on mac (modifier 4), ctrlKey elsewhere (modifier 2). Send both bits
+    // set is fine — Chrome uses whichever the platform expects.
+    const base = { key, code, windowsVirtualKeyCode: keyCode, modifiers: 2 };
+    send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+    send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+  }
+  const remoteCopy = () => sendRemoteCombo("c", "KeyC", 67);
+  const remotePaste = () => sendRemoteCombo("v", "KeyV", 86);
+
+  /* ── PC↔remote clipboard auto-sync ────────────────────────────────
+   * Plain Ctrl+C/V are never touched — copy/paste stay native to the remote. To
+   * make the PC clipboard "just work" across the boundary, we sync the two
+   * clipboards when focus crosses the canvas:
+   *   focus  (entering the view) → push the PC clipboard INTO the remote, so a
+   *           Ctrl+V inside pastes what you copied on your PC.
+   *   blur   (leaving the view)  → pull the remote clipboard/selection OUT to the
+   *           PC, so a paste in a PC app gets what you copied in-page.
+   * Best-effort: the async Clipboard API needs a secure context + permission, and
+   * the remote read falls back to the current selection when its clipboard read
+   * is blocked (common right as the page loses focus). */
+
+  // focus: PC clipboard → remote clipboard.
+  async function pushClipboardToRemote() {
+    if (mode !== "full" || !connected) return;
+    let text = "";
+    try {
+      text = await navigator.clipboard.readText();
+    } catch {
+      return;
+    }
+    if (!text) return;
+    // Write into the remote clipboard (userGesture so Chromium allows it). Best-
+    // effort — if it's rejected, an in-page paste just uses the remote's prior clip.
+    void sendCmd("Runtime.evaluate", {
+      expression: `navigator.clipboard.writeText(${JSON.stringify(text)}).catch(()=>{})`,
+      awaitPromise: true,
+      userGesture: true,
+    }).catch(() => {});
+  }
+
+  // blur: remote clipboard (fallback selection) → PC clipboard.
+  async function pullClipboardFromRemote() {
+    if (!connected) return;
+    let text = "";
+    try {
+      const res = await sendCmd("Runtime.evaluate", {
+        expression:
+          "(async()=>{const s=String(window.getSelection?window.getSelection().toString():'');" +
+          "if(s)return s;try{return await navigator.clipboard.readText();}catch(e){return '';}})()",
+        awaitPromise: true,
+        returnByValue: true,
+        userGesture: true,
+      });
+      text = res?.result?.value ?? "";
+    } catch {
+      return;
+    }
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      /* local clipboard write blocked */
     }
   }
 
@@ -577,8 +715,12 @@
     // Pause the stream when the tab/window is hidden so a background video
     // doesn't keep streaming (and playing audio) while you're on another page.
     document.addEventListener("visibilitychange", onVisibility);
+    // Esc closes the right-click menu.
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeCtxMenu(); };
+    document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
+      document.removeEventListener("keydown", onKey);
       disconnect();
       resizeObs?.disconnect();
     };
@@ -733,6 +875,31 @@
         <svg viewBox="0 0 16 16" class="h-4 w-4 text-black-600"><path d="M11 15L15 11M6 15L15 6" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
       </div>
     {/if}
+  </div>
+{/if}
+
+<!-- Right-click menu on the live view. Rendered at the top level so its fixed
+     position isn't clipped by the panel. A full-screen invisible backdrop closes
+     it on any outside click / right-click. -->
+{#if ctxMenu.open}
+  <div
+    class="fixed inset-0 z-[60]"
+    onclick={closeCtxMenu}
+    oncontextmenu={(e) => { e.preventDefault(); closeCtxMenu(); }}
+    role="presentation"
+  >
+    <div
+      class="ctx-menu absolute min-w-[184px] overflow-hidden rounded-lg border py-1 text-[13px] shadow-2xl"
+      style={`left:${ctxMenu.x}px; top:${ctxMenu.y}px; --ctx-bg:${ovBg}; --ctx-hover:${ovBar}; --ctx-border:${ovBorder}; --ctx-text:${ovText}; --ctx-sub:${ovSub}; background:var(--ctx-bg); border-color:var(--ctx-border); color:var(--ctx-text);`}
+      role="menu"
+    >
+      <button type="button" role="menuitem" class="ctx-item" onclick={() => { remoteCopy(); closeCtxMenu(); }}>
+        <span>Copy</span><span class="ctx-key">Ctrl+C</span>
+      </button>
+      <button type="button" role="menuitem" class="ctx-item" onclick={() => { remotePaste(); closeCtxMenu(); }}>
+        <span>Paste</span><span class="ctx-key">Ctrl+V</span>
+      </button>
+    </div>
   </div>
 {/if}
 
@@ -919,7 +1086,9 @@
       onwheel={onWheel}
       onkeydown={(e) => onCanvasKey(e, "keyDown")}
       onkeyup={(e) => onCanvasKey(e, "keyUp")}
-      oncontextmenu={(e) => e.preventDefault()}
+      onfocus={() => void pushClipboardToRemote()}
+      onblur={() => void pullClipboardFromRemote()}
+      oncontextmenu={onCanvasContextMenu}
       data-testid="browser-canvas"
     ></canvas>
     {#if !connected}
@@ -934,6 +1103,31 @@
   {#if mode === "full"}
     <p class="text-[11px] text-black-700 dark:text-black-600">
       Full mode: click and type directly on the view. Click the view first to capture keyboard.
+      Copy/paste works normally — your PC clipboard syncs with the browser as you click in and out.
     </p>
   {/if}
 {/snippet}
+
+<style>
+  /* Right-click menu — themed via CSS vars set inline from the live theme, so it
+     reads as one surface in both light and dark (like the overlay chrome). */
+  .ctx-item {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem;
+    padding: 0.375rem 0.75rem;
+    text-align: left;
+    color: var(--ctx-text);
+    background: transparent;
+    cursor: pointer;
+  }
+  .ctx-item:hover {
+    background: var(--ctx-hover);
+  }
+  .ctx-key {
+    font-size: 11px;
+    color: var(--ctx-sub);
+  }
+</style>

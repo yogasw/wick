@@ -12,13 +12,15 @@
   import { connectSession } from "../stores/sse.js";
   import type { SSEStatus } from "../types/agents.js";
   import { currentAsk, showAsk, hideAsk } from "../stores/asks.js";
+  import { currentDetail, showDetail, hideDetail } from "../stores/detail.js";
+  import DetailModal from "./DetailModal.svelte";
   import { currentApproval, showApproval, hideApproval } from "../stores/approvals.js";
   import { notify } from "../notify.js";
   import { push } from "../router.js";
   import { readScmWidth, writeScmWidth, clampScmWidth } from "../scmWidth.js";
   import { isValidFileName } from "../fileName.js";
 
-  import { getConversation, getSessionMeta, deleteSession, getTurnTrace } from "../api/sessions.js";
+  import { getConversation, getSessionMeta, deleteSession, getTurnTrace, cancelRun } from "../api/sessions.js";
   import { getProviderOptions, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
   import { getAsks, answerAsk } from "../api/asks.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
@@ -179,7 +181,16 @@
   };
   function toComposerCommand(c: ComposerApiCommand): ComposerCommand {
     if (c.action) {
-      return { value: c.id, label: c.label, hint: c.hint, category: c.category, run: ACTION_HANDLERS[c.action] };
+      // "send:<text>" actions (e.g. /compact) submit <text> as a message —
+      // the provider engine interprets it (wick runs compaction in-process;
+      // CLI providers pass their own /compact through). Generic so new
+      // send-commands need no per-command FE handler.
+      let run = ACTION_HANDLERS[c.action];
+      if (!run && c.action.startsWith("send:")) {
+        const text = c.action.slice("send:".length);
+        run = () => void handleSend({ text, files: [] });
+      }
+      return { value: c.id, label: c.label, hint: c.hint, category: c.category, run };
     }
     // insert-type (skills): value is placed after `/`
     return { value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category };
@@ -536,6 +547,19 @@
     return () => window.removeEventListener("keydown", onKeydown);
   });
 
+  // Generic detail chips (rendered by richRender) bubble a `wick-detail-open`
+  // event to the window; open the shared modal with its title + body. One
+  // listener serves every chip in the thread — reusable by any feature that
+  // emits a `detail` fence, not just compaction.
+  $effect(() => {
+    function onDetailOpen(e: Event) {
+      const d = (e as CustomEvent).detail as { title?: string; body?: string } | undefined;
+      if (d) showDetail({ title: d.title ?? "Details", body: d.body ?? "" });
+    }
+    window.addEventListener("wick-detail-open", onDetailOpen);
+    return () => window.removeEventListener("wick-detail-open", onDetailOpen);
+  });
+
   $effect(() => {
     if (!threadEl) return;
     const el = threadEl;
@@ -753,6 +777,16 @@
   /* ── header actions ───────────────────────────────────────────── */
   function handleKill() {
     confirmKill = { sid: sessionId, queued: false };
+  }
+
+  // Cancel one in-flight connector run behind a running tool call (the ✕ on a
+  // wick_execute card). The run finalizes "cancelled" server-side and the agent
+  // gets an explicit cancelled tool result; the connector_run(finished) SSE
+  // event clears the button.
+  function handleCancelRun(runId: string) {
+    run(cancelRun(base, sessionId, runId).pipe(Effect.provide(WickClientLayer)))
+      .then(() => toastOk("Operation cancelled"))
+      .catch((e: unknown) => toastError("Cancel failed", e instanceof Error ? e.message : String(e)));
   }
 
   function doKill() {
@@ -1021,7 +1055,7 @@
         data-chat-panel
       >
         <div class="max-w-4xl mx-auto w-full px-6 pt-14 pb-6 md:pt-6">
-          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} />
+          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} />
         </div>
       </div>
 
@@ -1487,6 +1521,8 @@
   onClose={() => { approvalError = ""; hideApproval(); }}
   error={approvalError}
 />
+
+<DetailModal content={$currentDetail} onClose={hideDetail} />
 
 <ConfirmDialog
   open={confirmKill !== null}

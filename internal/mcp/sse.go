@@ -438,6 +438,12 @@ func (h *Handler) sseWickExecute(sess *sseSession, r *http.Request, req rpcReque
 			}
 			if out.err != nil {
 				body := out.err.Error()
+				// Prefer the masked, human/agent-readable ErrorMessage (e.g. the
+				// explicit "cancelled by the user — don't retry" text) over the raw
+				// error string, and the response body over both when present.
+				if out.res != nil && out.res.ErrorMessage != "" {
+					body = out.res.ErrorMessage
+				}
 				if out.res != nil && out.res.ResponseJSON != "" {
 					body = out.res.ResponseJSON
 				}

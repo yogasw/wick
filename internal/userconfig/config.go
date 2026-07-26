@@ -149,12 +149,60 @@ type ProvidersConfig struct {
 // every spawn. The primary use case is per-instance credentials
 // (different ANTHROPIC_API_KEY between work and personal claude)
 // without leaking those into the user's global shell env.
+// UserModelEntry is one curated model on a provider instance: an alias plus
+// an optional description, both hand-editable. UnmarshalJSON accepts either
+// the current object form ({"id":"opus","desc":"…"}) or the legacy plain
+// string form ("opus") so configs written before the description column
+// migrate transparently on first load.
+type UserModelEntry struct {
+	ID   string `json:"id"`
+	Desc string `json:"desc,omitempty"`
+}
+
+func (m *UserModelEntry) UnmarshalJSON(b []byte) error {
+	b = []byte(strings.TrimSpace(string(b)))
+	if len(b) > 0 && b[0] == '"' {
+		// Legacy form: a bare string alias.
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		m.ID = s
+		m.Desc = ""
+		return nil
+	}
+	// Current form: an object. Use an alias type to avoid recursing into
+	// this UnmarshalJSON.
+	type raw UserModelEntry
+	var r raw
+	if err := json.Unmarshal(b, &r); err != nil {
+		return err
+	}
+	*m = UserModelEntry(r)
+	return nil
+}
+
 type ProviderInstance struct {
 	Name       string   `json:"name"`
 	BinaryPath string   `json:"binary_path,omitempty"`
 	Disabled   bool     `json:"disabled,omitempty"`
 	ExtraArgs  []string `json:"extra_args,omitempty"`
 	Env        []string `json:"env,omitempty"`
+
+	// ModelSelect turns on the model picker for this CLI instance
+	// (claude/codex/gemini). When on, the composer offers Models (or the
+	// per-type seed defaults when Models is empty) and the chosen model is
+	// passed to the CLI via --model on spawn. Off = the CLI's own default
+	// model, no picker (unchanged behaviour). Ignored by wick (which has
+	// its own WickModels).
+	ModelSelect bool `json:"model_select,omitempty"`
+	// Models is the user-curated list of models offered when ModelSelect is
+	// on: each an alias plus an optional description. Empty → the per-type
+	// seed defaults are used. CLIs can't enumerate their own models, so this
+	// is seeded + user-editable rather than discovered. UserModelEntry
+	// unmarshals both the current object form and the legacy plain-string
+	// form so existing configs migrate transparently.
+	Models []UserModelEntry `json:"models,omitempty"`
 
 	// Hooks captures the user's intent per hook event: "do you want
 	// wick to route this hook through the gate?". Keys are event
@@ -275,6 +323,11 @@ type WickConfig struct {
 	MaxContextTokens int `json:"max_context_tokens,omitempty"`
 	// MaxTurns caps the agentic loop per user turn. 0 = unlimited.
 	MaxTurns int `json:"max_turns,omitempty"`
+	// MaxModelRetries is the total attempts for a failing model call (incl. the
+	// first). 0 = default (3). 1 disables retries.
+	MaxModelRetries int `json:"max_model_retries,omitempty"`
+	// ModelCallTimeoutSec bounds one model-call attempt. 0 = default (120s).
+	ModelCallTimeoutSec int `json:"model_call_timeout_sec,omitempty"`
 	// GenConfig is the default generation config for models without
 	// their own override.
 	GenConfig *WickGenConfig `json:"gen_config,omitempty"`

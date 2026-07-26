@@ -339,7 +339,7 @@
                     <pre class="px-3 pb-2 overflow-x-auto text-[11px] text-black-700 dark:text-black-600 whitespace-pre-wrap break-words">{block.text}</pre>
                   </details>
                 {:else}
-                  <ToolCard {block} />
+                  <ToolCard {block} interrupted={turn.interrupted} />
                 {/if}
               {/each}
             </div>

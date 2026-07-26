@@ -45,13 +45,26 @@ func (m *geminiModel) Name() string { return m.modelID }
 // the stream arg is accepted for interface parity and ignored.
 func (m *geminiModel) GenerateContent(ctx context.Context, req *LLMRequest, stream bool) iter.Seq2[*LLMResponse, error] {
 	return func(yield func(*LLMResponse, error) bool) {
-		// Log every outbound model call (masked) so failures are
-		// diagnosable, matching the HTTP adapters' logging.
+		// Apply the SAME retry+timeout policy the HTTP adapters use — previously
+		// Gemini had neither, so a timeout/429/5xx failed immediately (and a hung
+		// call had no per-attempt ceiling). doWithRetry bounds each attempt and
+		// retries transient failures with backoff; notify surfaces "retrying
+		// (attempt N)" live.
+		policy := retryPolicyFromContext(ctx)
+		notify := retryNotifyFromContext(ctx)
+		var resp *genai.GenerateContentResponse
 		start := time.Now()
-		resp, err := m.generate(ctx, m.modelID, req.Contents, req.Config)
+		err := doWithRetry(ctx, policy, notify, func(callCtx context.Context) error {
+			r, e := m.generate(callCtx, m.modelID, req.Contents, req.Config)
+			if e != nil {
+				return e
+			}
+			resp = r
+			return nil
+		})
 		if err != nil {
 			log.Warn().Str("component", "wick.gemini").Str("model", m.modelID).
-				Dur("latency", time.Since(start)).Err(err).Msg("outbound call: error")
+				Dur("latency", time.Since(start)).Err(err).Msg("outbound call: error (after retries)")
 			yield(nil, err)
 			return
 		}

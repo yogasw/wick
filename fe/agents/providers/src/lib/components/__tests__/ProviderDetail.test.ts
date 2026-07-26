@@ -34,6 +34,7 @@ function makeDetail(): ProviderDetailResponse {
       { Key: "extra_args", Value: "[{\"value\":\"--foo\"},{\"value\":\"--bar\"}]", Type: "kvlist", Options: "value", IsSecret: false, Description: "Extra CLI args", Required: false },
       { Key: "env", Value: "[{\"key\":\"FOO\",\"value\":\"1\"}]", Type: "kvlist", Options: "key|value", IsSecret: false, Description: "Environment variables", Required: false },
     ],
+    DefaultModels: [],
     AIRouter: { Supported: true, Enabled: false, Provider: "9router", Routers: [{ ID: "9router", Name: "9router" }], Models: {}, KeySet: false, RawConfig: "", Preview: "" },
   };
 }

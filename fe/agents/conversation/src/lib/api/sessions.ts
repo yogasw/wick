@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { apiGetE, apiDeleteE } from "@wick-fe/common-api";
+import { apiGetE, apiDeleteE, apiPostE } from "@wick-fe/common-api";
 import type { SessionListItem, SessionMeta, ConversationTurn, TurnEvent } from "../types/agents.js";
 
 export const listSessions = (base: string, projectId?: string) => {
@@ -27,6 +27,14 @@ export const getSessionMeta = (base: string, id: string) =>
 
 export const deleteSession = (base: string, id: string) =>
   apiDeleteE<unknown>(`${base}/sessions/${encodeURIComponent(id)}`);
+
+// cancelRun aborts one in-flight connector run (the per-tool-call Cancel button
+// on a running wick_execute card). The run must belong to this session.
+export const cancelRun = (base: string, sessionId: string, runId: string) =>
+  apiPostE<{ status: string }>(
+    `${base}/sessions/${encodeURIComponent(sessionId)}/runs/${encodeURIComponent(runId)}/cancel`,
+    {},
+  );
 
 function normalizeTurnEvents(raw: unknown): TurnEvent[] {
   if (Array.isArray(raw)) return raw as TurnEvent[];

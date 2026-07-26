@@ -219,17 +219,28 @@ describe("apiGetWickInteractions", () => {
       { seq: 1, kind: "generate", model: "gpt-5.2", latency_ms: 320, request: [{ role: "user", text: "hi" }], response: "hello", prompt_tokens: 10, output_tokens: 3 },
       { seq: 2, kind: "generate", model: "gpt-5.2", latency_ms: 90, request: [], error: "429 rate limited" },
     ];
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okJson({ interactions: recs })));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okJson({ interactions: recs, total: 2, page: 1, page_size: 10 })));
     const out = await apiGetWickInteractions("/wick", "sess-123");
-    expect(out).toHaveLength(2);
-    expect(out[0].response).toBe("hello");
-    expect(out[1].error).toBe("429 rate limited");
+    expect(out.interactions).toHaveLength(2);
+    expect(out.total).toBe(2);
+    expect(out.interactions[0].response).toBe("hello");
+    expect(out.interactions[1].error).toBe("429 rate limited");
     const url = (vi.mocked(fetch) as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(url).toBe("/wick/providers/wick/interactions/sess-123");
   });
 
+  it("passes search / sort / pagination as query params", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okJson({ interactions: [], total: 0, page: 2, page_size: 5 })));
+    await apiGetWickInteractions("/wick", "s", { q: "shell", sort: "oldest", page: 2, pageSize: 5 });
+    const url = (vi.mocked(fetch) as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(url).toContain("q=shell");
+    expect(url).toContain("sort=oldest");
+    expect(url).toContain("page=2");
+    expect(url).toContain("page_size=5");
+  });
+
   it("normalizes a null/absent list to an empty array", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okJson({ interactions: null })));
-    expect(await apiGetWickInteractions("", "s")).toEqual([]);
+    expect((await apiGetWickInteractions("", "s")).interactions).toEqual([]);
   });
 });

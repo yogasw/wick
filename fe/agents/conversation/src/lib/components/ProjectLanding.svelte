@@ -3,7 +3,7 @@
   import { toastError } from "@wick-fe/common-stores";
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
-  import { createSessionInProject } from "../api/options.js";
+  import { createSessionInProject, getPresetOptions } from "../api/options.js";
   import { searchProjectFiles } from "../api/files.js";
   import { listComposerCommands } from "../api/composer.js";
   import { Composer } from "@wick-fe/common-ui";
@@ -52,10 +52,36 @@
       label: p.name && p.name !== p.type ? `${p.type} · ${p.name}` : p.type,
       value: providerKey(p),
       badge: p.usesAIRouter ? "AI Router" : undefined,
+      // Carry the model list so a multi-model provider (wick) shows the
+      // nested model picker here too — matching the conversation composer.
+      models: p.models,
     })),
     value: selectedProvider,
     onChange: (v: string) => { selectedProvider = v; },
   });
+
+  // Preset selector — same affordance as the new-session page, so an init
+  // from a project landing can override the preset before the session
+  // starts. "" = the default preset (or the project's configured default).
+  let presets = $state<string[]>([]);
+  let selectedPreset = $state<string>("");
+  $effect(() => {
+    Effect.runPromise(getPresetOptions(base).pipe(Effect.provide(WickClientLayer)))
+      .then((names) => { presets = names; })
+      .catch(() => { /* presets optional */ });
+  });
+  const presetSelect = $derived(
+    presets.length > 0
+      ? {
+          options: [
+            { label: "— preset (default) —", value: "" },
+            ...presets.map((n) => ({ label: n, value: n })),
+          ],
+          value: selectedPreset,
+          onChange: (v: string) => { selectedPreset = v; },
+        }
+      : undefined,
+  );
 
   // `@` searches THIS project's folder; `/` shows skills only (pre-session).
   function searchMentionFiles(query: string): Promise<string[]> {
@@ -84,6 +110,7 @@
         files,
         selectedProvider,
         project.id,
+        selectedPreset,
       );
       window.location.href = url;
     } catch (err) {
@@ -155,9 +182,13 @@
     placeholder="Ask anything…   / commands · @ files"
     notifyKey={NOTIFY_KEY}
     provider={providerSelect}
+    preset={presetSelect}
     onSearchFiles={searchMentionFiles}
     commands={composerCommands}
   />
+  <p class="text-center text-xs text-black-600 dark:text-black-700">
+    New session in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span>{#if project.defaultProvider} · defaults to <span class="font-mono">{project.defaultProvider}</span>{/if}. Pick provider / model / preset above to override for this session.
+  </p>
 
   <!-- Session list — reuses SessionList for status badge, kebab/delete, pagination, search -->
   <div class="flex flex-col gap-3 flex-1 min-h-0">

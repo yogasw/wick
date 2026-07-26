@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: "Wick"
-  text: "Run Claude / Codex / Gemini as a Slack + Telegram + Web agent host. One binary."
-  tagline: Download <strong>Wick Agent</strong>, point it at your AI CLI of choice, and your team gets a multi-channel agent in minutes — no Go, no scaffolding, no copy-pasting. Or build internal tools in Go with the <strong>Wick Framework</strong>, where Claude scaffolds tools, jobs, and connectors as real files in your repo.
+  text: "Run Claude / Codex / Gemini — or any model via OpenRouter — as a Slack + Telegram + Web agent host. One binary."
+  tagline: Download <strong>Wick Agent</strong>, point it at your AI CLI of choice — or the built-in <strong>wick</strong> provider talking to OpenAI, OpenRouter, Anthropic, Gemini, or any OpenAI-compatible endpoint — and your team gets a multi-channel agent in minutes. No Go, no scaffolding, no copy-pasting. Or build internal tools in Go with the <strong>Wick Framework</strong>, where Claude scaffolds tools, jobs, and connectors as real files in your repo.
   image:
     src: /logo.svg
     alt: Wick
@@ -29,6 +29,12 @@ features:
       Spawn Claude / Codex / Gemini as long-lived subprocesses — same agent reachable from Slack threads, Telegram chats, and the web UI at the same time.
       <br><br>
       Multi-session pool with idle-kill + <code>--resume</code> revive · multi-instance providers (two PATs, side-by-side) · projects on disk · <a href="/wick/guide/command-gate">command gate</a> with 4-mode interactive approval · AskUser MCP tool · everything persisted under <code>~/.<app>/agents/</code>.
+  - icon: 🧠
+    title: Bring Any Model
+    details: |
+      No CLI installed? The built-in <strong>wick</strong> provider runs an agent in-process against <strong>OpenAI</strong>, <strong>OpenRouter</strong>, <strong>Anthropic</strong>, <strong>Gemini</strong>, or <strong>any OpenAI-compatible endpoint</strong> — just a base URL + key.
+      <br><br>
+      Register multiple models, pick per-session from the composer, set a default. One OpenRouter key unlocks hundreds of models behind a single provider.
   - icon: 🤖
     title: AI Is the Primary User
     details: Wick is designed for AI agents, not humans. Every convention, file name, and pattern is optimized so Claude knows exactly what to create — no exploration, no guessing.
@@ -87,12 +93,30 @@ Web UI at `http://localhost:9425`. Initial credentials in the daemon log / conta
 
 ---
 
+## No CLI? Bring any model
+
+Don't have a Claude / Codex / Gemini CLI installed — or want a model none of them ship? The built-in **wick** provider runs the agent loop in-process and talks straight to a vendor API:
+
+| Provider | Endpoint | Notes |
+|---|---|---|
+| **OpenAI** | `https://api.openai.com/v1` | Chat + Responses formats |
+| **OpenRouter** | `https://openrouter.ai/api/v1` | One key → hundreds of models |
+| **Anthropic** | `https://api.anthropic.com/v1` | Native Messages format |
+| **Gemini** | Google endpoint | Native Gemini format |
+| **Any OpenAI-compatible** | your `base_url` | Local llama.cpp, vLLM, LiteLLM, Together, Groq, … |
+
+Add a model on the **Providers** page: pick a kind, paste the API key (base URL auto-fills for known vendors), and it shows up in the composer's model picker. Register several, set a default, switch per session. Same channels, same command gate, same pool — just a different brain.
+
+→ [Providers](/guide/agents/providers)
+
+---
+
 ## Wick Framework — build internal tools in Go
 
 Need humans-facing tool pages, scheduled jobs, or LLM-facing connectors that live in your codebase? The framework lets Claude scaffold them as real Go files.
 
 ```bash
-go install github.com/yogasw/wick@v0.34.0
+go install github.com/yogasw/wick@v0.35.0
 wick init my-app
 cd my-app && wick dev
 ```

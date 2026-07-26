@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // tool_shell_test.go covers the shell provider spec: the shell tool must
@@ -292,19 +293,77 @@ func TestShell_MultiplicationTable(t *testing.T) {
 
 // ── G. Safety / timeout ─────────────────────────────────────────────
 
-func TestShell_Timeout(t *testing.T) {
+// runShellArgs is runShell with extra handler args (e.g. timeout_ms).
+func runShellArgs(t *testing.T, args map[string]any) (string, bool) {
+	t.Helper()
 	if _, err := resolveBash(); err != nil {
 		t.Skipf("bash not available on this host: %v", err)
 	}
-	// Use a short timeout so the test doesn't wait the full default.
 	td := shellTool(toolContext{Workspace: t.TempDir()})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	// shellDefaultTimeout is 120s; we can't shrink it per-call without a
-	// config knob, so this test just documents the contract: a deadline
-	// error message is present. Full end-to-end timeout is exercised
-	// implicitly by the shellDefaultTimeout constant in production.
-	_ = td
-	_ = ctx
-	t.Skip("shellDefaultTimeout is a package constant (120s); no per-call override to test cheaply — behavior verified via code review of the DeadlineExceeded branch")
+	return td.handler(context.Background(), args)
+}
+
+// TestShell_TimeoutMsHonored proves a caller-supplied timeout_ms actually
+// shifts the deadline: a 300ms cap on `sleep 5` must fail near-instantly
+// with a deadline message, NOT run for the 10m default.
+func TestShell_TimeoutMsHonored(t *testing.T) {
+	start := time.Now()
+	out, isErr := runShellArgs(t, map[string]any{
+		"command":    "sleep 5",
+		"timeout_ms": 300,
+	})
+	elapsed := time.Since(start)
+	if !isErr {
+		t.Fatalf("sleep 5 with timeout_ms=300 should time out, got ok: %q", out)
+	}
+	if !strings.Contains(out, "timed out") {
+		t.Errorf("want a timeout message, got %q", out)
+	}
+	// Generous upper bound: the floor is 1s, so this fires ~1s, well under
+	// the 5s sleep and the 10m default. Anything past a few seconds means
+	// the deadline was ignored.
+	if elapsed > 4*time.Second {
+		t.Errorf("timeout_ms did not shift the deadline: took %v", elapsed)
+	}
+}
+
+// TestShell_TimeoutMsSuccessWindow proves a command that finishes inside a
+// generous timeout_ms still succeeds (the deadline isn't over-eager).
+func TestShell_TimeoutMsSuccessWindow(t *testing.T) {
+	out, isErr := runShellArgs(t, map[string]any{
+		"command":    "echo done",
+		"timeout_ms": 10000,
+	})
+	if isErr {
+		t.Fatalf("fast command under a 10s timeout should succeed, got: %q", out)
+	}
+	if !strings.Contains(out, "done") {
+		t.Errorf("want done, got %q", out)
+	}
+}
+
+func TestResolveShellTimeout(t *testing.T) {
+	cases := []struct {
+		name string
+		arg  any
+		want time.Duration
+	}{
+		{"absent", nil, shellDefaultTimeout},
+		{"zero", float64(0), shellDefaultTimeout},
+		{"negative", float64(-100), shellDefaultTimeout},
+		{"float64", float64(5000), 5 * time.Second},
+		{"int", 5000, 5 * time.Second},
+		{"numeric string", "5000", 5 * time.Second},
+		{"garbage string", "soon", shellDefaultTimeout},
+		{"below floor clamps up", float64(10), shellMinTimeout},
+		{"above ceiling clamps down", float64(99 * 60 * 1000), shellMaxTimeout},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveShellTimeout(map[string]any{"timeout_ms": tc.arg})
+			if got != tc.want {
+				t.Errorf("resolveShellTimeout(%v) = %v, want %v", tc.arg, got, tc.want)
+			}
+		})
+	}
 }
