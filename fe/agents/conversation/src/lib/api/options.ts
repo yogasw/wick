@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiPostE } from "@wick-fe/common-api";
-import type { ProviderOption, ProjectOption } from "../types/agents.js";
+import type { ProviderOption, ProviderModelOption, ProjectOption } from "../types/agents.js";
 
 export const getProviderOptions = (base: string) =>
   apiGetE<(ProviderOption & { uses_airouter?: boolean })[] | null>(`${base}/providers/options`).pipe(
@@ -12,6 +12,27 @@ export const getProviderOptions = (base: string) =>
       })),
     ),
   );
+
+// getProviderOptionModels asks the server for one configured provider's LIVE
+// model list (wick → vendor API with the stored key; CLI → effective seed).
+// The composer calls this lazily when the user drills into a provider so the
+// list reflects what the vendor actually serves now, not a build-time seed.
+// The server falls back to the curated list on any discovery error, so this
+// always resolves to something usable.
+export const getProviderOptionModels = (
+  base: string,
+  type: string,
+  name: string,
+  opts?: { entry?: string },
+) => {
+  // `entry` expands ONE live model set by its id (the 4th picker level); the
+  // vendor filter stays server-side. Without it the endpoint returns the
+  // instance's top-level model choices.
+  const q = opts?.entry ? `?entry=${encodeURIComponent(opts.entry)}` : "";
+  return apiGetE<{ models?: ProviderModelOption[] | null }>(
+    `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${q}`,
+  ).pipe(Effect.map((r) => r.models ?? []));
+};
 
 // getPresetOptions lists the configured presets ([{name}]) so the project
 // landing / init composer can offer a preset selector (same source the

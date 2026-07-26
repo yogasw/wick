@@ -15,6 +15,45 @@ type DiscoveredModel struct {
 	Label string `json:"label,omitempty"`
 }
 
+// MatchFilter reports whether a model matches a discovery-filter query. The
+// grammar mirrors the UI's: space-separated terms; a bare term must be
+// contained (case-insensitive) in the id or label, a `-`/`!` prefix excludes.
+// An empty/blank query matches everything. Shared by the FE filter box and the
+// server-side expansion of a live model set, so both agree.
+func MatchFilter(m DiscoveredModel, query string) bool {
+	hay := strings.ToLower(m.ID + " " + m.Label)
+	for _, raw := range strings.Fields(query) {
+		t := strings.ToLower(raw)
+		if t == "-" || t == "!" {
+			continue
+		}
+		exclude := strings.HasPrefix(t, "-") || strings.HasPrefix(t, "!")
+		needle := t
+		if exclude {
+			needle = t[1:]
+		}
+		hit := strings.Contains(hay, needle)
+		if exclude == hit {
+			return false
+		}
+	}
+	return true
+}
+
+// FilterModels returns the subset of models matching query (see MatchFilter).
+func FilterModels(models []DiscoveredModel, query string) []DiscoveredModel {
+	if strings.TrimSpace(query) == "" {
+		return models
+	}
+	out := make([]DiscoveredModel, 0, len(models))
+	for _, m := range models {
+		if MatchFilter(m, query) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // discoverCacheEntry memoises a vendor list result so typing in the
 // search box doesn't re-hit the vendor on every keystroke.
 type discoverCacheEntry struct {

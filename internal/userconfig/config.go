@@ -308,6 +308,13 @@ type WickModel struct {
 	GenConfig *WickGenConfig `json:"gen_config,omitempty"`
 	// RawConfig is per-model raw ADK config (JSON), merged last.
 	RawConfig string `json:"raw_config,omitempty"`
+	// DiscoveryFilter, when set, makes this a LIVE model set rather than a
+	// single pinned model: at picker time the vendor's model list is fetched
+	// and filtered by this query (tiny grammar: space-separated terms;
+	// `term` = contains, `-term`/`!term` = exclude — matched over id+label).
+	// Model may be empty for a live set. Lets one entry stand in for many
+	// models without registering each by hand.
+	DiscoveryFilter string `json:"discovery_filter,omitempty"`
 }
 
 // WickConfig is the instance-level settings block for the wick

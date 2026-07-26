@@ -1,8 +1,16 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 
+// A stand-in Effect: `.pipe(...)` returns itself so options.ts's builders
+// (apiGetE(...).pipe(Effect.map(...))) don't throw at module load. Nothing
+// runs it — Effect.runPromise is stubbed to a never-resolving promise below.
+const inertEffect: { pipe: (...a: unknown[]) => unknown } = { pipe: () => inertEffect };
+
 vi.mock("@wick-fe/common-api", () => ({
   WickClientLayer: {},
+  apiGetE: vi.fn(() => inertEffect),
+  apiPostE: vi.fn(() => inertEffect),
+  apiDeleteE: vi.fn(() => inertEffect),
 }));
 
 vi.mock("@wick-fe/common-stores", () => ({
@@ -15,6 +23,7 @@ vi.mock("effect", () => ({
   Effect: {
     runPromise: vi.fn().mockReturnValue(new Promise(() => {})),
     provide: vi.fn((eff: unknown) => eff),
+    map: vi.fn(() => (eff: unknown) => eff),
   },
 }));
 

@@ -11,7 +11,7 @@
        - submitLabel: text beside the send arrow (omit → icon only) */
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import ImageEditor from "./ImageEditor.svelte";
-  import type { ComposerCommand, ComposerSelect, ComposerSelectOption } from "./composer-types.js";
+  import type { ComposerCommand, ComposerSelect, ComposerSelectOption, ComposerModelOption } from "./composer-types.js";
 
   type Props = {
     onSend: (msg: { text: string; files: File[] }) => void;
@@ -118,11 +118,20 @@
 
   // The `+` toolbar menu (attach file, notifications) — Claude-style.
   let plusOpen = $state(false);
+  // Which side the popup aligns to: "left" (opened from the + button) or
+  // "right" (opened from the project/provider chip on the right).
+  let plusAnchor = $state<"left" | "right">("left");
   let plusEl: HTMLDivElement | undefined = $state();
+  let plusMenuEl: HTMLDivElement | undefined = $state();
   $effect(() => {
     if (!plusOpen) return;
     function onDown(e: MouseEvent) {
-      if (plusEl && !plusEl.contains(e.target as Node)) plusOpen = false;
+      // Close on any click outside the popup itself — but ignore clicks on the
+      // toolbar triggers (+ / chips), which own their open/close.
+      const t = e.target as HTMLElement;
+      if (plusMenuEl?.contains(t)) return;
+      if (t.closest?.('[data-plus-trigger]')) return;
+      plusOpen = false;
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") plusOpen = false;
@@ -373,20 +382,30 @@
     if (plusOpen) { plusOpen = false; return; }
     plusView = "root";
     modelDrillOpt = null;
+    plusAnchor = "left"; // the + button lives at the far left
     computePlacement();
     plusOpen = true;
   }
 
-  // Toolbar chips open the + menu straight at the matching drill-in.
+  // Toolbar chips open the + menu straight at the matching drill-in. The
+  // project + provider chips sit on the RIGHT of the toolbar, so their popup
+  // right-aligns to them instead of flying out from the far-left + button.
   function openProjectPicker() {
     plusView = "project";
+    plusAnchor = "right";
     computePlacement();
     plusOpen = true;
   }
   function openProviderPicker() {
-    plusView = "provider";
+    plusAnchor = "right";
     computePlacement();
     plusOpen = true;
+    enterProviderView(); // jump straight to the current provider's models if it has any
+  }
+  // Imperative open for the parent (e.g. a `/provider` command routes here so
+  // the slash menu and the toolbar chip share ONE picker — no separate modal).
+  export function openProvider() {
+    openProviderPicker();
   }
 
   /* ── screenshot + image editor ──────────────────────────────────────── */
@@ -453,10 +472,190 @@
   let modelDrillOpt = $state<ComposerSelectOption | null>(null);
   function closeModelDrill() {
     modelDrillOpt = null;
+    modelDrillSearch = "";
+    setDrill = null;
   }
   function closeTypeDrill() {
     typeDrillKey = "";
   }
+
+  // Lazy live-model loading for the drilled provider. `modelCache` holds the
+  // list keyed by option value once fetched; `modelLoading` is the set of
+  // values currently in flight. Cache persists across open/close so a second
+  // drill is instant. On error we simply keep the static list (no cache
+  // entry), so the picker never blocks on discovery.
+  let modelCache = $state<Record<string, ComposerModelOption[]>>({});
+  let modelLoading = $state<Set<string>>(new Set());
+  let modelDrillSearch = $state("");
+  let modelDrillSearchEl = $state<HTMLInputElement | undefined>();
+
+  // Level 4: a LIVE SET row inside the model drill was opened. setDrill holds
+  // the set's model row; its expansion is cached under a per-set key so
+  // reopening is instant. Back from a set returns to the provider model list.
+  let setDrill = $state<ComposerModelOption | null>(null);
+  function setCacheKey(optValue: string, m: ComposerModelOption): string {
+    return `${optValue}::set::${m.id}`;
+  }
+  function isLiveSet(m: ComposerModelOption): boolean {
+    return !!m.live;
+  }
+
+  // The list to render: for a live-set drill (level 4), the set's expansion;
+  // otherwise the drilled provider's models (fetched or static).
+  const drillBaseModels = $derived.by<ComposerModelOption[]>(() => {
+    if (!modelDrillOpt) return [];
+    if (setDrill) return modelCache[setCacheKey(modelDrillOpt.value, setDrill)] ?? [];
+    return modelCache[modelDrillOpt.value] ?? modelDrillOpt.models ?? [];
+  });
+  function modelRowMatches(m: ComposerModelOption, q: string): boolean {
+    const hay = `${m.id} ${m.label}`.toLowerCase();
+    for (const raw of q.toLowerCase().split(/\s+/)) {
+      const t = raw.trim();
+      if (t === "" || t === "-" || t === "!") continue;
+      const exclude = t.startsWith("-") || t.startsWith("!");
+      const needle = exclude ? t.slice(1) : t;
+      const hit = hay.includes(needle);
+      if (exclude ? hit : !hit) return false;
+    }
+    return true;
+  }
+  const drillModels = $derived.by(() => {
+    const q = modelDrillSearch.trim();
+    return q ? drillBaseModels.filter((m) => modelRowMatches(m, q)) : drillBaseModels;
+  });
+
+  // ── keyboard nav for the + menu (arrow up/down + Enter) ────────────────
+  // A flat list of the CURRENT view's selectable rows, each with an action to
+  // fire on Enter/click. Rebuilds per view so ↑/↓ always walks what's shown.
+  let plusIndex = $state(0);
+  type PlusRow = { run: () => void };
+  const plusRows = $derived.by<PlusRow[]>(() => {
+    if (!plusOpen) return [];
+    if (modelDrillOpt) {
+      const drill = modelDrillOpt;
+      const rows: PlusRow[] = [];
+      // "Use default" row only shows at the provider level, not filtering.
+      if (!setDrill && !modelDrillSearch.trim()) {
+        rows.push({ run: () => { provider?.onChange(drill.value); closeModelDrill(); plusView = "root"; plusOpen = false; } });
+      }
+      for (const m of drillModels) {
+        // A live-set row opens its expansion (level 4); a plain model selects.
+        if (!setDrill && isLiveSet(m)) rows.push({ run: () => openSetDrill(m) });
+        else rows.push({ run: () => selectModel(drill, m.id) });
+      }
+      return rows;
+    }
+    if (plusView === "provider" && provider) {
+      if (typeDrillKey) {
+        const group = providerGroups.find((g) => g.type === typeDrillKey);
+        return (group?.opts ?? []).map((o) => ({ run: () => pickInstance(o) }));
+      }
+      return providerGroups.map((g) => ({ run: () => pickType(g) }));
+    }
+    if ((plusView === "project" || plusView === "preset") && plusSelect) {
+      return plusSelect.options.map((o) => ({ run: () => { plusSelect.onChange(o.value); plusView = "root"; plusOpen = false; } }));
+    }
+    return [];
+  });
+  // Reset the highlight whenever the view/list changes.
+  $effect(() => { void plusRows.length; void plusView; void modelDrillOpt; void setDrill; plusIndex = 0; });
+
+  function handlePlusKeys(e: KeyboardEvent) {
+    if (e.key === "Escape") { e.preventDefault(); plusOpen = false; return; }
+    const n = plusRows.length;
+    if (n === 0) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); plusIndex = (plusIndex + 1) % n; }
+    else if (e.key === "ArrowUp") { e.preventDefault(); plusIndex = (plusIndex - 1 + n) % n; }
+    else if (e.key === "Enter") { e.preventDefault(); plusRows[plusIndex]?.run(); }
+  }
+
+  // Kick off (or reuse) a live-model load and focus the filter box whenever we
+  // drill into a provider's model list.
+  function openModelDrill(o: ComposerSelectOption) {
+    modelDrillSearch = "";
+    setDrill = null;
+    modelDrillOpt = o;
+    void loadModelsFor(o);
+  }
+  async function loadModelsFor(o: ComposerSelectOption) {
+    if (!provider?.loadModels) return; // no loader wired → static list only
+    if (modelCache[o.value] || modelLoading.has(o.value)) return; // cached / in flight
+    const next = new Set(modelLoading);
+    next.add(o.value);
+    modelLoading = next;
+    try {
+      const live = await provider.loadModels(o.value);
+      if (live && live.length > 0) modelCache = { ...modelCache, [o.value]: live };
+    } catch {
+      // Non-fatal — keep the static list.
+    } finally {
+      const done = new Set(modelLoading);
+      done.delete(o.value);
+      modelLoading = done;
+    }
+  }
+
+  // Level 4: open a live-set row and load its expansion (vendor list narrowed
+  // by the set's filter), cached under a per-set key.
+  function openSetDrill(m: ComposerModelOption) {
+    // Second click on the same live set collapses it back to the model list.
+    if (setDrill && setDrill.id === m.id) { closeSetDrill(); return; }
+    modelDrillSearch = "";
+    setDrill = m;
+    void loadSetModels(m);
+  }
+  function closeSetDrill() { setDrill = null; modelDrillSearch = ""; }
+  async function loadSetModels(m: ComposerModelOption) {
+    const o = modelDrillOpt;
+    if (!o || !provider?.loadModels) return;
+    const key = setCacheKey(o.value, m);
+    if (modelCache[key] || modelLoading.has(key)) return;
+    const next = new Set(modelLoading);
+    next.add(key);
+    modelLoading = next;
+    try {
+      const live = await provider.loadModels(o.value, { entry: m.id });
+      modelCache = { ...modelCache, [key]: live ?? [] };
+    } catch {
+      modelCache = { ...modelCache, [key]: [] };
+    } finally {
+      const done = new Set(modelLoading);
+      done.delete(key);
+      modelLoading = done;
+    }
+  }
+
+  // Reload button: drop the current view's cached list and re-fetch, so a
+  // stale vendor list (models added/removed since first drill) can be
+  // refreshed without reopening the whole picker.
+  function reloadDrill() {
+    const o = modelDrillOpt;
+    if (!o) return;
+    const key = setDrill ? setCacheKey(o.value, setDrill) : o.value;
+    const next = { ...modelCache };
+    delete next[key];
+    modelCache = next;
+    if (setDrill) void loadSetModels(setDrill);
+    else void loadModelsFor(o);
+  }
+
+  // Commit a model selection and close the whole menu. Inside a live-set
+  // (setDrill), the picked vendor model is encoded as "<entryID>@<vendorID>"
+  // so the backend resolves the set entry (key/kind/base) then overrides the
+  // concrete model — a raw vendor id alone isn't a registered model.
+  function selectModel(o: ComposerSelectOption, modelID: string) {
+    const pin = setDrill ? `${setDrill.id}@${modelID}` : modelID;
+    provider?.onChange(`${o.value}::${pin}`);
+    closeModelDrill();
+    plusView = "root";
+    plusOpen = false;
+  }
+
+  $effect(() => {
+    if (modelDrillOpt && modelDrillSearchEl) { modelDrillSearchEl.focus(); return; }
+    // No search input in this view → focus the popup so ↑/↓/Enter land on it.
+    if (plusOpen && !modelDrillOpt && plusMenuEl) plusMenuEl.focus();
+  });
 
   // rawType extracts the raw provider TYPE segment from an option value
   // ("claude/timA" → "claude"; a bare "wick" → "wick"). Distinct from
@@ -485,9 +684,31 @@
     return groups;
   });
 
-  // hasModelDrill: an option worth a 3rd (model) level.
+  // hasModelDrill: an option worth a 3rd (model) level. True when it already
+  // ships >1 static model, OR a live loader is wired — in that case we drill
+  // in and fetch the vendor list on demand, even if the option shipped with no
+  // (or one) static model. Lets a provider expose its full live model list
+  // from the picker without prefetching every provider up front.
   function hasModelDrill(o: ComposerSelectOption): boolean {
-    return !!o.models && o.models.length > 1;
+    if (o.models && o.models.length > 1) return true;
+    return !!provider?.loadModels;
+  }
+
+  // Entering the provider view from the root menu / chip. If a provider is
+  // already selected and can drill into models, jump straight to its model
+  // list (fetching live models on the way) — no bouncing back through the
+  // whole type list. Otherwise show the type list to choose one.
+  function enterProviderView() {
+    typeDrillKey = "";
+    modelDrillOpt = null;
+    const key = splitModelPin(provider?.value ?? "").key;
+    const cur = provider?.options.find((o) => o.value === key);
+    if (cur && hasModelDrill(cur)) {
+      plusView = "provider";
+      openModelDrill(cur);
+      return;
+    }
+    plusView = "provider";
   }
 
   // Selecting a provider TYPE at level 1: if it collapses to a single flat
@@ -496,7 +717,7 @@
   function pickType(g: { type: string; opts: ComposerSelectOption[] }) {
     if (g.opts.length === 1) {
       const only = g.opts[0];
-      if (hasModelDrill(only)) { modelDrillOpt = only; return; }
+      if (hasModelDrill(only)) { openModelDrill(only); return; }
       provider?.onChange(only.value);
       plusView = "root"; plusOpen = false;
       return;
@@ -507,7 +728,7 @@
   // Selecting an INSTANCE at level 2: drill to models if it has them, else
   // apply directly.
   function pickInstance(o: ComposerSelectOption) {
-    if (hasModelDrill(o)) { modelDrillOpt = o; return; }
+    if (hasModelDrill(o)) { openModelDrill(o); return; }
     provider?.onChange(o.value);
     typeDrillKey = ""; plusView = "root"; plusOpen = false;
   }
@@ -608,6 +829,11 @@
   {/if}
 {/snippet}
 
+<!-- The click handler is a mouse-only convenience (click empty space →
+     focus the textarea); keyboard users tab straight into the textarea, so
+     no keyboard equivalent is needed. Drag handlers power file drops. -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
   bind:this={rootEl}
   role="region"
@@ -728,20 +954,28 @@
   <!-- Toolbar: everything lives in the + menu (attach, context, commands,
        provider/project/preset) except the + button and the notification bell.
        Right side is just the send button. -->
-  <div class="flex items-center gap-2 rounded-b-2xl border-t border-white-300 dark:border-navy-600 bg-white-200/60 dark:bg-navy-800/40 px-3 py-2">
+  <div bind:this={plusEl} class="relative flex items-center gap-2 rounded-b-2xl border-t border-white-300 dark:border-navy-600 bg-white-200/60 dark:bg-navy-800/40 px-3 py-2">
     <!-- + hub menu -->
-    <div bind:this={plusEl} class="relative shrink-0">
+    <div class="shrink-0">
       <button
         type="button"
         aria-label="Add"
         title="Attach, context, commands, provider/project/preset"
+        data-plus-trigger
         onclick={togglePlus}
         class="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600 transition-colors"
       >
         <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 3v10M3 8h10" stroke-linecap="round"/></svg>
       </button>
       {#if plusOpen}
-        <div class="absolute left-0 z-30 min-w-[240px] max-h-80 overflow-y-auto rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1 {menuPlacement === 'top' ? 'bottom-full mb-2' : 'top-full mt-2'}">
+        <!-- Anchored to whichever control opened it: left for the + button,
+             right for the provider/project chips (they sit on the right).
+             onkeydown drives ↑/↓/Enter row navigation for every view. -->
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <!-- In the model drill the inner list owns the scroll (fixed header +
+             scrolling rows), so the outer must NOT also scroll — otherwise you
+             get two nested scrollbars. Other views scroll on the outer box. -->
+        <div bind:this={plusMenuEl} role="menu" tabindex="-1" onkeydown={handlePlusKeys} class="absolute {plusAnchor === 'right' ? 'right-2' : 'left-2'} z-30 w-[min(20rem,calc(100%-1rem))] max-h-80 {modelDrillOpt ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'} rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-lg py-1 {menuPlacement === 'top' ? 'bottom-full mb-2' : 'top-full mt-2'}">
           {#if plusView === "root"}
             <button
               type="button"
@@ -790,7 +1024,7 @@
                 {@const iconCls = `h-4 w-4 shrink-0 ${isActive(row.sel) ? "text-green-600 dark:text-green-400" : "text-black-800 dark:text-black-600"}`}
                 <button
                   type="button"
-                  onclick={() => (plusView = row.key as PlusView)}
+                  onclick={() => { if (row.key === "provider") enterProviderView(); else plusView = row.key as PlusView; }}
                   class="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-slate-800 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors"
                 >
                   <span class="flex items-center gap-2 min-w-0">
@@ -810,35 +1044,88 @@
             {/each}
           {:else if modelDrillOpt}
             {@const drill = modelDrillOpt}
-            {@const models = drill.models ?? []}
-            <button
-              type="button"
-              onclick={closeModelDrill}
-              class="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors"
-            >
-              <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              {@render provIcon(drill.value, "h-4 w-4")}
-              {drill.label}
-            </button>
-            <div class="border-t border-white-300 dark:border-navy-600"></div>
-            {#each models as m (m.id)}
-              {@const pinnedValue = `${drill.value}::${m.id}`}
-              {@const isSel = provider?.value === pinnedValue || (provider?.value === drill.value && m.default)}
+            {@const inSet = setDrill}
+            {@const loading = inSet ? modelLoading.has(setCacheKey(drill.value, inSet)) : modelLoading.has(drill.value)}
+            {@const showDefaultRow = !inSet && !modelDrillSearch.trim()}
+            <!-- Header row: back + provider name + inline search. The search
+                 lives here (always visible, auto-focused) so drilling in lands
+                 straight on a typeable field. In a live-set (level 4) the back
+                 button returns to the provider's model list. -->
+            <div class="shrink-0 flex items-center gap-2 px-2 py-2 border-b border-white-300 dark:border-navy-600">
               <button
                 type="button"
-                onclick={() => { provider?.onChange(pinnedValue); modelDrillOpt = null; plusView = "root"; plusOpen = false; }}
-                class="flex w-full items-start justify-between gap-3 px-3 py-1.5 text-left transition-colors {isSel ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
+                onclick={inSet ? closeSetDrill : closeModelDrill}
+                aria-label={inSet ? "Back to models" : "Back to providers"}
+                class="shrink-0 rounded-md p-1 text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors"
               >
-                <span class="flex flex-col min-w-0">
-                  <span class="flex items-center gap-2 text-sm">
-                    <span class="truncate">{m.label}</span>
-                    {#if m.default}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>{/if}
-                  </span>
-                  {#if m.desc}<span class="text-[11px] text-black-700 dark:text-black-600 leading-snug">{m.desc}</span>{/if}
-                </span>
-                {#if isSel}<span class="shrink-0 mt-0.5 text-green-600 dark:text-green-400">✓</span>{/if}
+                <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
-            {/each}
+              {@render provIcon(drill.value, "h-4 w-4 shrink-0")}
+              <input
+                type="text"
+                bind:this={modelDrillSearchEl}
+                bind:value={modelDrillSearch}
+                placeholder={inSet ? `Search ${inSet.label}…` : `Search ${drill.label} models…`}
+                class="min-w-0 flex-1 bg-transparent text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none"
+              />
+              {#if loading}
+                <svg class="shrink-0 h-3.5 w-3.5 animate-spin text-black-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 9 9" stroke-linecap="round"/></svg>
+              {:else if provider?.loadModels}
+                <!-- Reload: drop this list's cache and re-fetch (vendor list may
+                     have changed since it was first loaded). -->
+                <button type="button" onclick={reloadDrill} aria-label="Refresh models" title="Refresh models" class="shrink-0 rounded-md p-1 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors">
+                  <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+                </button>
+              {/if}
+            </div>
+            <div class="flex-1 min-h-0 overflow-y-auto py-1">
+              <!-- "Use default" pins the provider without a specific model, so
+                   a drilled-in provider is still selectable on its own. Hidden
+                   inside a live-set (level 4). -->
+              {#if showDefaultRow}
+                {@const isDefaultSel = provider?.value === drill.value}
+                {@const hi = plusIndex === 0}
+                <button
+                  type="button"
+                  onmouseenter={() => (plusIndex = 0)}
+                  onclick={() => { provider?.onChange(drill.value); closeModelDrill(); plusView = "root"; plusOpen = false; }}
+                  class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {hi ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : isDefaultSel ? 'bg-green-500/5 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
+                >
+                  <span class="truncate">Use {drill.label} <span class="text-black-700 dark:text-black-600">(default model)</span></span>
+                  {#if isDefaultSel}<span class="shrink-0 text-green-600 dark:text-green-400">✓</span>{/if}
+                </button>
+                <div class="mx-3 my-1 border-t border-white-300 dark:border-navy-600"></div>
+              {/if}
+              {#each drillModels as m, mi (m.id)}
+                {@const live = !inSet && isLiveSet(m)}
+                {@const pinnedValue = `${drill.value}::${m.id}`}
+                {@const isSel = !live && (provider?.value === pinnedValue || (provider?.value === drill.value && m.default))}
+                {@const rowIdx = (showDefaultRow ? 1 : 0) + mi}
+                {@const hi = plusIndex === rowIdx}
+                <button
+                  type="button"
+                  onmouseenter={() => (plusIndex = rowIdx)}
+                  onclick={() => { if (live) openSetDrill(m); else selectModel(drill, m.id); }}
+                  class="flex w-full items-start justify-between gap-3 px-3 py-1.5 text-left transition-colors {hi ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : isSel ? 'bg-green-500/5 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
+                >
+                  <span class="flex flex-col min-w-0">
+                    <span class="flex items-center gap-2 text-sm">
+                      <span class="truncate">{m.label}</span>
+                      {#if m.default}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>{/if}
+                      {#if live}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">live set</span>{/if}
+                    </span>
+                    {#if m.desc}<span class="text-[11px] text-black-700 dark:text-black-600 leading-snug">{m.desc}</span>{/if}
+                  </span>
+                  {#if live}
+                    <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 mt-0.5 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  {:else if isSel}<span class="shrink-0 mt-0.5 text-green-600 dark:text-green-400">✓</span>{/if}
+                </button>
+              {:else}
+                <div class="px-3 py-3 text-xs text-black-700 dark:text-black-600">
+                  {#if loading}Loading models…{:else if modelDrillSearch.trim()}No models match “{modelDrillSearch}”.{:else}No extra models — use the default above.{/if}
+                </div>
+              {/each}
+            </div>
           {:else if typeDrillKey && provider}
             {@const group = providerGroups.find((g) => g.type === typeDrillKey)}
             <button
@@ -851,12 +1138,14 @@
               {typeDrillKey}
             </button>
             <div class="border-t border-white-300 dark:border-navy-600"></div>
-            {#each group?.opts ?? [] as opt (opt.value)}
+            {#each group?.opts ?? [] as opt, oi (opt.value)}
               {@const isSel = splitModelPin(provider.value).key === opt.value}
+              {@const hi = plusIndex === oi}
               <button
                 type="button"
+                onmouseenter={() => (plusIndex = oi)}
                 onclick={() => pickInstance(opt)}
-                class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {isSel ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
+                class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {hi ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : isSel ? 'bg-green-500/5 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
               >
                 <span class="flex items-center gap-2 min-w-0">
                   <span class="truncate">{opt.label}</span>
@@ -881,14 +1170,16 @@
               Provider
             </button>
             <div class="border-t border-white-300 dark:border-navy-600"></div>
-            {#each providerGroups as g (g.type)}
+            {#each providerGroups as g, gi (g.type)}
               {@const single = g.opts.length === 1 ? g.opts[0] : null}
               {@const nested = g.opts.length > 1 || (single ? hasModelDrill(single) : false)}
               {@const isSel = rawType(provider.value) === g.type}
+              {@const hi = plusIndex === gi}
               <button
                 type="button"
+                onmouseenter={() => (plusIndex = gi)}
                 onclick={() => pickType(g)}
-                class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {isSel ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
+                class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {hi ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : isSel ? 'bg-green-500/5 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
               >
                 <span class="flex items-center gap-2 min-w-0">
                   {@render provIcon(g.type, "h-4 w-4 shrink-0")}
@@ -918,11 +1209,13 @@
               {plusView === "project" ? "Project" : "Preset"}
             </button>
             <div class="border-t border-white-300 dark:border-navy-600"></div>
-            {#each sel.options as opt (opt.value)}
+            {#each sel.options as opt, si (opt.value)}
+              {@const hi = plusIndex === si}
               <button
                 type="button"
+                onmouseenter={() => (plusIndex = si)}
                 onclick={() => { sel.onChange(opt.value); plusView = "root"; plusOpen = false; }}
-                class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {opt.value === sel.value ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
+                class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {hi ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : opt.value === sel.value ? 'bg-green-500/5 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
               >
                 <span class="flex items-center gap-2 min-w-0">
                   <span class="truncate">{opt.label}</span>
@@ -964,6 +1257,7 @@
         type="button"
         aria-label="Project"
         title={(selLabel(project) || "Project").replace(/^📁\s*/, "")}
+        data-plus-trigger
         onclick={openProjectPicker}
         class="inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-lg border border-green-500/40 bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-500/20 transition-colors"
       >
@@ -978,6 +1272,7 @@
           type="button"
           aria-label="Provider"
           title={selBadge(provider) ? `${selLabel(provider) || "Provider"} · via ${selBadge(provider)}` : selLabel(provider) || "Provider"}
+          data-plus-trigger
           onclick={openProviderPicker}
           class="relative inline-flex items-center justify-center h-8 w-8 shrink-0 rounded-lg border border-green-500/40 bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-500/20 transition-colors"
         >

@@ -99,6 +99,10 @@ type ModelChoiceVM struct {
 	// Desc is a short human description shown under the model name in the
 	// picker (like the CLIs' own /model menu). Empty when unknown.
 	Desc string
+	// Live marks a LIVE model SET rather than a single model: the picker shows
+	// it as an expandable row (a 4th level) resolved by this row's ID — the
+	// vendor filter itself stays server-side and is never exposed to the UI.
+	Live bool
 }
 
 // SessionLifecycleVM is the per-row lifecycle snapshot the sessions

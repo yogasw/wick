@@ -3,7 +3,7 @@
   import { toastError } from "@wick-fe/common-stores";
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
-  import { createSessionInProject, getPresetOptions } from "../api/options.js";
+  import { createSessionInProject, getPresetOptions, getProviderOptionModels } from "../api/options.js";
   import { searchProjectFiles } from "../api/files.js";
   import { listComposerCommands } from "../api/composer.js";
   import { Composer } from "@wick-fe/common-ui";
@@ -47,6 +47,16 @@
     if (!selectedProvider && providers.length > 0) selectedProvider = defaultProviderKey();
   });
 
+  // Live model loader — same contract as the conversation composer: split the
+  // "type/name" value and fetch that instance's current vendor models, falling
+  // back (composer-side) to the static list on error.
+  function loadProviderModels(optionValue: string, opts?: { entry?: string }) {
+    const slash = optionValue.indexOf("/");
+    const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
+    const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
+    return Effect.runPromise(getProviderOptionModels(base, type, name, opts).pipe(Effect.provide(WickClientLayer)));
+  }
+
   const providerSelect = $derived({
     options: providers.map((p) => ({
       label: p.name && p.name !== p.type ? `${p.type} · ${p.name}` : p.type,
@@ -58,6 +68,7 @@
     })),
     value: selectedProvider,
     onChange: (v: string) => { selectedProvider = v; },
+    loadModels: loadProviderModels,
   });
 
   // Preset selector — same affordance as the new-session page, so an init

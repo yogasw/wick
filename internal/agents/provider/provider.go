@@ -149,6 +149,10 @@ type WickModel struct {
 	Disabled        bool
 	GenConfig       *WickGenConfig
 	RawConfig       string
+	// DiscoveryFilter marks a LIVE model set: non-empty → expand to the
+	// vendor's models filtered by this query at picker time (see
+	// userconfig.WickModel.DiscoveryFilter). Model may be empty then.
+	DiscoveryFilter string
 }
 
 // WickConfig mirrors userconfig.WickConfig in-memory.
@@ -958,6 +962,7 @@ func wickModelsFromUser(in []userconfig.WickModel) []WickModel {
 			Disabled:        m.Disabled,
 			GenConfig:       wickGenFromUser(m.GenConfig),
 			RawConfig:       m.RawConfig,
+			DiscoveryFilter: m.DiscoveryFilter,
 		}
 	}
 	return out
@@ -982,6 +987,7 @@ func wickModelsToUser(in []WickModel) []userconfig.WickModel {
 			Disabled:        m.Disabled,
 			GenConfig:       wickGenToUser(m.GenConfig),
 			RawConfig:       m.RawConfig,
+			DiscoveryFilter: m.DiscoveryFilter,
 		}
 	}
 	return out

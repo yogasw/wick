@@ -313,6 +313,7 @@ func Register(r tool.Router) {
 	r.GET("/projects", projectsRedirect) // legacy entry → all chats
 	r.GET("/projects/options", projectOptionsJSON)
 	r.GET("/providers/options", providerOptionsJSON)
+	r.GET("/providers/options/{type}/{name}/models", providerOptionModelsJSON)
 	r.GET("/presets/options", presetOptionsJSON)
 	r.GET("/projects/{id}", projectSettingsPage)
 	r.POST("/projects", createProject)
@@ -1925,6 +1926,7 @@ func providerOptionsJSON(c *tool.Ctx) {
 		Label   string `json:"label"`
 		Default bool   `json:"default"`
 		Desc    string `json:"desc,omitempty"`
+		Live    bool   `json:"live,omitempty"`
 	}
 	type option struct {
 		Type         string  `json:"type"`
@@ -1938,11 +1940,66 @@ func providerOptionsJSON(c *tool.Ctx) {
 	for _, p := range ps {
 		var models []model
 		for _, m := range p.Models {
-			models = append(models, model{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc})
+			models = append(models, model{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc, Live: m.Live})
 		}
 		opts = append(opts, option{Type: p.Type, Name: p.Name, Version: p.Version, UsesAIRouter: p.UsesAIRouter, Models: models})
 	}
 	c.JSON(http.StatusOK, opts)
+}
+
+// providerOptionModelsJSON returns the model list for one already-configured
+// provider instance, resolved by {type}/{name}. This is the user-facing
+// drill-in used by the composer picker: the user just wants the current list;
+// the key / base URL / vendor filter all live server-side.
+//
+// Two levels:
+//   - default: the instance's model choices. For wick this includes any LIVE
+//     SET as a single expandable row (marked `live`), NOT flattened.
+//   - `?entry=<id>`: expand ONE live set by its entry id — the vendor filter
+//     lives server-side and is applied there (the 4th picker level).
+//
+// Discovery errors are non-fatal: the level-3 list falls back to the curated
+// choices; a failing level-4 expansion returns an empty list.
+func providerOptionModelsJSON(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	type modelDTO struct {
+		ID      string `json:"id"`
+		Label   string `json:"label"`
+		Default bool   `json:"default"`
+		Desc    string `json:"desc,omitempty"`
+		Live    bool   `json:"live,omitempty"`
+	}
+	typ := provider.Type(strings.TrimSpace(c.PathValue("type")))
+	name := strings.TrimSpace(c.PathValue("name"))
+	ins, err := provider.Find(typ, name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
+		return
+	}
+
+	toDTO := func(ms []view.ModelChoiceVM) []modelDTO {
+		out := make([]modelDTO, 0, len(ms))
+		for _, m := range ms {
+			out = append(out, modelDTO{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc, Live: m.Live})
+		}
+		return out
+	}
+
+	// Level 4: expand a single live set by its entry id (filter stays server-side).
+	entry := strings.TrimSpace(c.Query("entry"))
+	if entry != "" && ins.Type == provider.TypeWick {
+		c.JSON(http.StatusOK, map[string]any{"models": toDTO(expandLiveWickSet(c.Context(), ins, entry, ""))})
+		return
+	}
+
+	// Level 3: the instance's model choices (live sets stay as expandable rows).
+	out := toDTO(modelChoicesFor(ins))
+	if out == nil {
+		out = []modelDTO{}
+	}
+	c.JSON(http.StatusOK, map[string]any{"models": out})
 }
 
 // presetOptionsJSON returns [{name}] for every configured preset —

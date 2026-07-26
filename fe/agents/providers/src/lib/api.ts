@@ -1021,6 +1021,9 @@ export interface WickModelDTO {
   TopP: number | null;
   ThinkingBudget: number | null;
   RawConfig: string;
+  /** Non-empty → a live model set: the picker expands this to the vendor's
+      models filtered by this query, rather than one pinned model. */
+  DiscoveryFilter: string;
 }
 
 export interface WickSettingsDTO {
@@ -1052,6 +1055,7 @@ interface WireWickModel {
   top_p?: number | null;
   thinking_budget?: number | null;
   raw_config?: string;
+  discovery_filter?: string;
 }
 
 interface WireWickSettings {
@@ -1082,6 +1086,7 @@ function mapWickModel(w: WireWickModel): WickModelDTO {
     TopP: w.top_p ?? null,
     ThinkingBudget: w.thinking_budget ?? null,
     RawConfig: w.raw_config ?? "",
+    DiscoveryFilter: w.discovery_filter ?? "",
   };
 }
 
@@ -1130,6 +1135,8 @@ export type WickModelInput = {
   top_p?: number;
   thinking_budget?: number;
   raw_config?: string;
+  /** Set for a live model set; `model` may be empty then. */
+  discovery_filter?: string;
 };
 
 export async function apiSaveWickModel(base: string, input: WickModelInput): Promise<{ status: string; id: string }> {

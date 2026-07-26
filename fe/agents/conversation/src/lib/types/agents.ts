@@ -278,6 +278,9 @@ export type ProviderModelOption = {
   label: string;
   default: boolean;
   desc?: string;
+  /** True for a live model set: an expandable picker row (4th level) resolved
+      by `id`; the vendor filter stays server-side. */
+  live?: boolean;
 };
 
 export type ProviderOption = {

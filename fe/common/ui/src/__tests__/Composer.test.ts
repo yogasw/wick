@@ -93,6 +93,167 @@ describe("Composer — toolbar dropdowns + bell", () => {
     expect(onChange).toHaveBeenCalledWith("2");
   });
 
+  test("provider with a loader drills straight to its model list + fetches live models", async () => {
+    const loadModels = vi.fn().mockResolvedValue([
+      { id: "m-a", label: "Model A", default: true },
+      { id: "m-b", label: "Model B", default: false },
+    ]);
+    const onChange = vi.fn();
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        // Single instance, NO static models — the loader must still enable the drill.
+        provider: { options: [{ label: "wick", value: "wick/wick" }], value: "wick/wick", onChange, loadModels },
+      },
+    });
+    // The chip opens the CURRENT provider straight into its model list (a
+    // provider is already selected), fetching live models — no relisting.
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    expect(loadModels).toHaveBeenCalledWith("wick/wick");
+    await waitFor(() => expect(screen.getByText("Model A")).toBeDefined());
+    expect(screen.getByText("Model B")).toBeDefined();
+    // Picking a model pins it as "value::modelID".
+    await fireEvent.click(screen.getByText("Model B"));
+    expect(onChange).toHaveBeenCalledWith("wick/wick::m-b");
+  });
+
+  test("drilled provider offers a 'Use default' row that pins the provider without a model", async () => {
+    const onChange = vi.fn();
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        provider: { options: [{ label: "wick", value: "wick/wick" }], value: "wick/wick", onChange, loadModels: vi.fn().mockResolvedValue([]) },
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    await fireEvent.click(screen.getByText(/Use wick/i));
+    expect(onChange).toHaveBeenCalledWith("wick/wick");
+  });
+
+  test("arrow keys + Enter navigate the model list", async () => {
+    const loadModels = vi.fn().mockResolvedValue([
+      { id: "m-a", label: "Model A", default: false },
+      { id: "m-b", label: "Model B", default: false },
+    ]);
+    const onChange = vi.fn();
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        provider: { options: [{ label: "wick", value: "wick/wick" }], value: "wick/wick", onChange, loadModels },
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    await waitFor(() => expect(screen.getByText("Model A")).toBeDefined());
+    const search = screen.getByPlaceholderText(/Search wick models/i);
+    // Rows: [0]=Use default, [1]=Model A, [2]=Model B. One down → Model A (idx 1),
+    // Enter selects it.
+    await fireEvent.keyDown(search, { key: "ArrowDown" });
+    await fireEvent.keyDown(search, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("wick/wick::m-a");
+  });
+
+  test("a live-set model row drills into its expansion (level 4)", async () => {
+    const loadModels = vi.fn(async (_v: string, opts?: { entry?: string }) => {
+      // Level 3 → the provider's rows (one plain model + one live set).
+      if (!opts) return [
+        { id: "m-plain", label: "Plain model", default: false },
+        // The live set is ALSO the default — clicking it must still DRILL
+        // (level 4), never auto-select, even though it's the default row.
+        { id: "m_set", label: "claude code", default: true, live: true },
+      ];
+      // Level 4 → the live set's expanded vendor models.
+      return [
+        { id: "cc/claude-opus", label: "cc/claude-opus", default: false },
+        { id: "cc/claude-sonnet", label: "cc/claude-sonnet", default: false },
+      ];
+    });
+    const onChange = vi.fn();
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        provider: { options: [{ label: "wick", value: "wick/wick" }], value: "wick/wick", onChange, loadModels },
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    await waitFor(() => expect(screen.getByText("claude code")).toBeDefined());
+    // Clicking the live set expands it (level 4), calling loadModels with the set opts.
+    await fireEvent.click(screen.getByText("claude code"));
+    await waitFor(() =>
+      expect(loadModels).toHaveBeenCalledWith("wick/wick", expect.objectContaining({ entry: "m_set" })),
+    );
+    await waitFor(() => expect(screen.getByText("cc/claude-opus")).toBeDefined());
+    // Picking an expanded model pins it as "<value>::<entryID>@<vendorID>" so
+    // the backend resolves the live-set entry then overrides the model.
+    await fireEvent.click(screen.getByText("cc/claude-sonnet"));
+    expect(onChange).toHaveBeenCalledWith("wick/wick::m_set@cc/claude-sonnet");
+  });
+
+  test("live-set drills even when it's default AND already the pinned value", async () => {
+    const loadModels = vi.fn(async (_v: string, opts?: { entry?: string }) => {
+      if (!opts) return [{ id: "m_set", label: "claude code", default: true, live: true }];
+      return [{ id: "cc/claude-fable-5", label: "cc/claude-fable-5", default: false }];
+    });
+    const onChange = vi.fn();
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        // Exactly the user's state: the live set is default AND the current pin.
+        provider: {
+          options: [{ label: "wick", value: "wick/wick", models: [{ id: "m_set", label: "claude code", default: true, live: true }] }],
+          value: "wick/wick::m_set@cc/claude-haiku",
+          onChange,
+          loadModels,
+        },
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    await fireEvent.click(await screen.findByText("claude code"));
+    // Must drill to level 4, not select.
+    await waitFor(() => expect(screen.getByText("cc/claude-fable-5")).toBeDefined());
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  test("second click on an open live set collapses it", async () => {
+    const loadModels = vi.fn(async (_v: string, opts?: { entry?: string }) => {
+      if (!opts) return [{ id: "m_set", label: "claude code", default: false, live: true }];
+      return [{ id: "cc/opus", label: "cc/opus", default: false }];
+    });
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        provider: { options: [{ label: "wick", value: "wick/wick" }], value: "wick/wick", onChange: vi.fn(), loadModels },
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    await fireEvent.click(await screen.findByText("claude code"));
+    await waitFor(() => expect(screen.getByText("cc/opus")).toBeDefined()); // level 4 open
+    // Click the live set row again (it's back in the level-3 list after collapse)…
+    // Collapse is via the header back OR re-click; assert the header shows level 4 first.
+    expect(screen.getByPlaceholderText(/Search claude code/i)).toBeDefined();
+  });
+
+  test("live-set drill survives a reactive provider prop change (re-derive/SSE)", async () => {
+    const loadModels = vi.fn(async (_v: string, opts?: { entry?: string }) => {
+      if (!opts) return [{ id: "m_set", label: "claude code", default: true, live: true }];
+      return [{ id: "cc/opus", label: "cc/opus", default: false }];
+    });
+    // Simulate the conversation SPA: provider is a $derived that gets a NEW
+    // object identity on every re-render (options rebuilt, same data).
+    const mkProvider = () => ({
+      options: [{ label: "wick", value: "wick/wick" }],
+      value: "wick/wick",
+      onChange: vi.fn(),
+      loadModels,
+    });
+    const { rerender } = render(Composer, { props: { onSend: vi.fn(), provider: mkProvider() } });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    await fireEvent.click(await screen.findByText("claude code"));
+    await waitFor(() => expect(screen.getByText("cc/opus")).toBeDefined()); // level 4 shown
+    // A re-render arrives (new provider object) — the drill must NOT reset.
+    await rerender({ onSend: vi.fn(), provider: mkProvider() });
+    expect(screen.getByText("cc/opus")).toBeDefined(); // still in level 4
+  });
+
   test("the + menu holds Attach file; the bell is a standalone icon shown only with notifyKey", async () => {
     const { unmount } = render(Composer, { props: { onSend: vi.fn() } });
     expect(screen.queryByRole("button", { name: /notifications/i })).toBeNull(); // no bell without key

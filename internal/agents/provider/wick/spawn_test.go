@@ -75,6 +75,22 @@ func TestPickModel_PinnedModelWins(t *testing.T) {
 	}
 }
 
+func TestPickModel_LiveSetOverridesVendorModel(t *testing.T) {
+	// A live set entry ("s", filter-based, no fixed Model) picked as
+	// "<entryID>@<vendorID>" resolves the entry but overrides the model id.
+	inst := &provider.Instance{WickModels: []provider.WickModel{
+		{ID: "a", Model: "gpt-5.2", Default: true},
+		{ID: "s", Kind: "anthropic", BaseURL: "https://x/v1", DiscoveryFilter: "cc"},
+	}}
+	m, ok := pickModel(inst, "s@cc/claude-haiku-4-5")
+	if !ok {
+		t.Fatalf("expected live-set pick to resolve, ok=%v", ok)
+	}
+	if m.ID != "s" || m.Model != "cc/claude-haiku-4-5" || m.Kind != "anthropic" || m.BaseURL != "https://x/v1" {
+		t.Fatalf("expected entry s with overridden model, got %+v", m)
+	}
+}
+
 func TestPickModel_PinnedDisabledFallsBackToDefault(t *testing.T) {
 	inst := &provider.Instance{WickModels: []provider.WickModel{
 		{ID: "a", Default: true},
