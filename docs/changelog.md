@@ -6,17 +6,40 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Wick Provider
-#### Added
-*   **Loop guards + goal mode**: `max_turns` now defaults to `0` (unlimited) — a turn is instead bounded by a consecutive-tool-error cap (`max_consec_errors`, default 20) and a wall-clock cap (`max_turn_minutes`, default 60), both configurable in the provider settings' new **Advanced** section alongside `max_model_retries` and `model_call_timeout_sec`. A cut turn shows `[wick] turn cut: …` inline in the transcript instead of silently ending.
-*   The shared `todo` tool gains an optional **goal latch** (`goal` / `goal_done` / `goal_abandon` fields): while a goal is open, the wick engine keeps working past plain-text replies and turns error/timeout cuts into a nudge to try a different approach — a manual Kill still stops everything immediately.
-*   **Live model sets** gain a sticky **default vendor model**: pin one model as the default used when the set is picked without an explicit `@vendor` override (via the Add/Edit live-set form or a dedicated **Set default model…** picker). Auto-falls back to the top of the list if the pinned model disappears from the vendor. The Add/Edit live-set form now uses a single "default" radio instead of a separate control.
-*   `wick` is now a first-class **skill provider**: `~/.<app>/skills` is registered alongside `~/.claude/skills` etc., appears in the Skills Manager UI and sync flows and the wick session's `/` menu, and the wick agent gets a compact skill catalog in its system prompt (reads a skill's `SKILL.md` on demand).
-#### Fixed
-*   Live model set's filter is now **optional** — leaving it empty matches all of the vendor's models (stored as `*`) instead of requiring a narrowing filter.
-*   Editing a model (including converting a plain model to a live set, or back) now updates it in place instead of leaving a duplicate entry behind.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.35.2](https://github.com/yogasw/wick/compare/v0.35.1...v0.35.2) — Wick Provider
+
+_Released on 2026-07-27_
+
+### Wick Provider
+#### Added
+*   **Loop guards + goal mode**: `max_turns` now defaults to `0` (unlimited). A turn is instead bounded by a consecutive-tool-error cap (`max_consec_errors`, default 20) and a wall-clock cap (`max_turn_minutes`, default 60), both configurable in the provider settings' new **Advanced** section alongside `max_model_retries` and `model_call_timeout_sec`. A cut turn now shows `[wick] turn cut: …` inline in the transcript instead of silently ending.
+*   The shared `todo` tool gains an optional **goal latch** (`goal` / `goal_done` / `goal_abandon` fields): while a goal is open, the wick engine keeps working past plain-text replies and turns error/timeout cuts into a nudge to try a different approach — a manual Kill still stops everything immediately.
+*   **Live model sets** gain a sticky **default vendor model**: pin one model as the default used when the set is picked without an explicit `@vendor` override (via the Add/Edit live-set form or a dedicated **Set default model…** picker). It auto-falls back to the top of the list if the pinned model disappears from the vendor. The Add/Edit live-set form now uses a single "default" radio instead of a separate control. The new-session composer can now expand live model sets.
+*   `wick` is now a first-class **skill provider**: `~/.<app>/skills` is registered alongside `~/.claude/skills` etc., appears in the Skills Manager UI and sync flows and the wick session's `/` menu. The wick agent gets a compact skill catalog in its system prompt, reading a skill's `SKILL.md` on demand, and `read_file` now includes skill directories as read roots.
+*   **Model Capability Chips**: Model pickers now surface per-model capabilities (e.g., context window, max output, vision, reasoning, tools, search) as compact badges. A global toggle and display mode are available in the provider settings' **Advanced** section, with capabilities shown by default.
+*   **Native Reasoning**: Reasoning is now wired per-adapter from a single `ReasoningEffort` knob, which maps to native thinking budgets for OpenAI, Anthropic, and Gemini models.
+*   **Native Vision**: Image attachments now ride as inline generative AI parts through each adapter's wire format (e.g., OpenAI `image_url` data-URL, Anthropic base64 image block, Gemini `inline_data`). The interactions log records image parts for accurate diagnostics.
+*   **Streamed Model Output**: The engine now streams model output over Server-Sent Events (SSE) token-by-token by default, for OpenAI and Anthropic adapters. This is configurable via a toggle in the Wick provider settings.
+*   **Runtime Reasoning Toggle (`/thinking`)**: The new `/thinking` slash command opens a popover in the composer to toggle reasoning on/off and pick an effort level for the current session without sending a message. Typing `/thinking on|off|low|medium|high` also works as a fallback. This feature leverages a new generic, provider-agnostic session-override framework.
+
+#### Fixed
+*   Live model set's filter is now **optional**: leaving it empty matches all of the vendor's models (stored internally as an empty filter) instead of requiring a narrowing filter.
+*   Editing a model (including converting a plain model to a live set, or back) now updates it in place, reusing the existing ID instead of creating a duplicate entry. The Add/Edit button label now reflects the mode ("Save model" / "Save live set").
+*   **Attachment Paths on History Replay**: Fixed an issue where the model couldn't read attached files on history replay because the pool's path block was lost; `turnToContent` now re-appends the path block on replay, mirroring the live send.
+*   `read_file` is now type-aware: image files return an "attach in chat" hint, binaries are refused, and text/SVG are read through.
+
+#### Improved
+*   **Provider Picker UX**: Enhanced keyboard navigation in drill-in pickers, auto-drilling into the selected live set, and added a breadcrumb trail. The `/provider` command now opens the picker focused for immediate navigation.
+*   **Custom Model Editing**: When editing custom models, a custom Base URL is now retained when switching providers (only auto-default is refilled), and a "Saved / Replacing…" indicator is shown for stored API keys.
+*   **Quiet KVList Edits**: Environment variable (`KVList`) edits now save quietly without reloading the detail pane, preventing focus loss or row reordering mid-edit.
+*   **AI Router Visibility**: The AI Router configuration is always editable (install/running is a non-blocking indicator), showing its loopback Base URL and surfacing preferred/bound ports.
+
+---
+
 
 ## [v0.35.1](https://github.com/yogasw/wick/compare/v0.35.0...v0.35.1) — Wick Models
 
