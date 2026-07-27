@@ -404,7 +404,7 @@
     clearOverrides();
     // A live set opens in Multiple + Live with its filter prefilled so editing
     // tweaks the query; a plain model opens in Single.
-    if (m.DiscoveryFilter) {
+    if (m.LiveSet) {
       multiSelect = true; selectMode = "live"; modelSearch = m.DiscoveryFilter;
       liveDefaultVendor = m.DefaultVendorModel || "";
     } else {
@@ -447,14 +447,15 @@
         // this dropped the id when converting plain→live, which left the old
         // plain entry behind and created a duplicate.
         const liveID = editing?.ID;
-        // Empty filter = match ALL of the vendor's models. Store "*" so the
-        // entry is still recognised as a live set (DiscoveryFilter != "").
-        const filter = modelSearch.trim() || "*";
+        // Filter is OPTIONAL: empty = match ALL of the vendor's models. The
+        // entry is flagged live_set explicitly, so no sentinel filter needed.
+        const filter = modelSearch.trim();
         await apiSaveWickModel(base, {
           ...baseModelInput(),
           id: liveID,
           model: "", // live set — no single pinned model
-          label: mLabel.trim() || (filter === "*" ? "Live: all models" : `Live: ${filter}`),
+          label: mLabel.trim() || (filter ? `Live: ${filter}` : "Live: all models"),
+          live_set: true,
           discovery_filter: filter,
           default_vendor_model: liveDefaultVendor, // "" clears the pin (top-of-list)
         });
@@ -648,7 +649,7 @@
 <Modal open={vendorPickerFor !== null} title="Set default model" size="md" onClose={() => { vendorPickerFor = null; }}>
   <div class="space-y-3">
     <p class="text-sm text-black-700 dark:text-black-600">
-      Pick the model used when <span class="font-medium text-black-900 dark:text-white-100">{vendorPickerFor?.Label || vendorPickerFor?.DiscoveryFilter}</span>
+      Pick the model used when <span class="font-medium text-black-900 dark:text-white-100">{vendorPickerFor?.Label || vendorPickerFor?.DiscoveryFilter || "this live set"}</span>
       is chosen without drilling into a specific model. If the pinned model later disappears from the list, the top of the list is used automatically.
     </p>
     {#if vendorLoading}
@@ -904,8 +905,8 @@
                   </td>
                   <td class="px-4 py-3">
                     <div class="flex items-center gap-2">
-                      <span class="text-black-900 dark:text-white-100">{m.Label || m.Model || m.DiscoveryFilter}</span>
-                      {#if m.DiscoveryFilter}
+                      <span class="text-black-900 dark:text-white-100">{m.Label || m.Model || (m.LiveSet ? "Live model set" : "")}</span>
+                      {#if m.LiveSet}
                         <span class="inline-flex items-center rounded-full bg-green-500/10 px-2 py-0.5 text-[11px] font-medium text-green-600 dark:text-green-400">Live set</span>
                       {/if}
                       {#if m.Disabled}
@@ -913,9 +914,11 @@
                       {/if}
                     </div>
                     <div class="font-mono text-xs text-black-700 dark:text-black-600">
-                      {m.DiscoveryFilter ? `filter: ${m.DiscoveryFilter}` : m.Model}
-                      {#if m.DiscoveryFilter}
+                      {#if m.LiveSet}
+                        {m.DiscoveryFilter ? `filter: ${m.DiscoveryFilter}` : "all models"}
                         <span class="ml-1 text-black-600 dark:text-black-700">· default: {m.DefaultVendorModel || "top of list"}</span>
+                      {:else}
+                        {m.Model}
                       {/if}
                     </div>
                   </td>
@@ -936,7 +939,7 @@
                         items={[
                           { label: "Edit", onclick: () => openEdit(m) },
                           { label: "Set default", onclick: () => setDefault(m), disabled: m.Disabled || m.Default },
-                          ...(m.DiscoveryFilter
+                          ...(m.LiveSet
                             ? [{ label: "Set default model…", onclick: () => openVendorPicker(m), disabled: m.Disabled }]
                             : []),
                           { label: "Test", onclick: () => testModel(m), disabled: m.Disabled },

@@ -149,9 +149,11 @@ type WickModel struct {
 	Disabled        bool
 	GenConfig       *WickGenConfig
 	RawConfig       string
-	// DiscoveryFilter marks a LIVE model set: non-empty → expand to the
-	// vendor's models filtered by this query at picker time (see
-	// userconfig.WickModel.DiscoveryFilter). Model may be empty then.
+	// LiveSet marks a LIVE model set (see userconfig.WickModel.LiveSet).
+	// Independent of DiscoveryFilter so a live set can have an empty filter.
+	LiveSet bool
+	// DiscoveryFilter narrows a live set's fetched list; empty = match all.
+	// Only meaningful when LiveSet (see userconfig.WickModel.DiscoveryFilter).
 	DiscoveryFilter string
 	// DefaultVendorModel is the sticky default vendor model id within a live
 	// set (see userconfig.WickModel.DefaultVendorModel). Empty = top-of-list.
@@ -967,8 +969,16 @@ func wickModelsFromUser(in []userconfig.WickModel) []WickModel {
 			Disabled:           m.Disabled,
 			GenConfig:          wickGenFromUser(m.GenConfig),
 			RawConfig:          m.RawConfig,
+			LiveSet:            m.LiveSet,
 			DiscoveryFilter:    m.DiscoveryFilter,
 			DefaultVendorModel: m.DefaultVendorModel,
+		}
+		// Back-compat: entries saved before the LiveSet flag existed marked a
+		// live set by a non-empty DiscoveryFilter. Treat those as live so an
+		// existing live set doesn't silently degrade into a broken plain model
+		// (empty Model). New entries always set LiveSet explicitly.
+		if !out[i].LiveSet && out[i].DiscoveryFilter != "" {
+			out[i].LiveSet = true
 		}
 	}
 	return out
@@ -993,6 +1003,7 @@ func wickModelsToUser(in []WickModel) []userconfig.WickModel {
 			Disabled:           m.Disabled,
 			GenConfig:          wickGenToUser(m.GenConfig),
 			RawConfig:          m.RawConfig,
+			LiveSet:            m.LiveSet,
 			DiscoveryFilter:    m.DiscoveryFilter,
 			DefaultVendorModel: m.DefaultVendorModel,
 		}

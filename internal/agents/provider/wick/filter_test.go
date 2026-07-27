@@ -8,9 +8,8 @@ func TestMatchFilter(t *testing.T) {
 		query string
 		want  bool
 	}{
-		{"", true},               // blank → everything
-		{"*", true},              // wildcard → everything (live set, no filter)
-		{"  *  ", true},          // wildcard with surrounding space
+		{"", true},               // blank → everything (live set, no filter)
+		{"  ", true},             // whitespace-only → everything
 		{"claude", true},         // contains (label)
 		{"cc/", true},            // contains (id)
 		{"gpt", false},           // missing include term
@@ -38,12 +37,8 @@ func TestFilterModels(t *testing.T) {
 	if len(got) != 1 || got[0].ID != "gpt-5.2" {
 		t.Fatalf("FilterModels(gpt -mini) = %+v, want [gpt-5.2]", got)
 	}
-	// Blank query returns the input untouched.
+	// Blank query returns the input untouched (a live set with no filter).
 	if len(FilterModels(models, "  ")) != len(models) {
 		t.Errorf("blank query should return all %d models", len(models))
-	}
-	// "*" wildcard = match-all (a live set with no narrowing filter).
-	if len(FilterModels(models, "*")) != len(models) {
-		t.Errorf("wildcard query should return all %d models", len(models))
 	}
 }

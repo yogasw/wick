@@ -1503,7 +1503,7 @@ func modelChoicesFor(ins provider.Instance) []view.ModelChoiceVM {
 			if label == "" {
 				// A live set has no single model id; use a generic name (the
 				// filter query is never surfaced to the UI).
-				if m.DiscoveryFilter != "" {
+				if m.LiveSet {
 					label = "Live model set"
 				} else {
 					label = m.Model
@@ -1512,7 +1512,7 @@ func modelChoicesFor(ins provider.Instance) []view.ModelChoiceVM {
 			// A live set stays ONE expandable row here (Live=true); the picker
 			// drills into it (a 4th level) by this row's ID — the filter query
 			// stays server-side, never sent to the UI.
-			out = append(out, view.ModelChoiceVM{ID: m.ID, Label: label, Default: m.Default, Live: m.DiscoveryFilter != ""})
+			out = append(out, view.ModelChoiceVM{ID: m.ID, Label: label, Default: m.Default, Live: m.LiveSet})
 		}
 		sort.SliceStable(out, func(i, j int) bool { return out[i].Default && !out[j].Default })
 	} else {

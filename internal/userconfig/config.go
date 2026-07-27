@@ -308,12 +308,16 @@ type WickModel struct {
 	GenConfig *WickGenConfig `json:"gen_config,omitempty"`
 	// RawConfig is per-model raw ADK config (JSON), merged last.
 	RawConfig string `json:"raw_config,omitempty"`
-	// DiscoveryFilter, when set, makes this a LIVE model set rather than a
-	// single pinned model: at picker time the vendor's model list is fetched
-	// and filtered by this query (tiny grammar: space-separated terms;
-	// `term` = contains, `-term`/`!term` = exclude — matched over id+label).
-	// Model may be empty for a live set. Lets one entry stand in for many
-	// models without registering each by hand.
+	// LiveSet marks this entry as a LIVE model set: at picker time the
+	// vendor's model list is fetched and (optionally) filtered by
+	// DiscoveryFilter, rather than pinning one model. Set independently of
+	// DiscoveryFilter so a live set can have an EMPTY filter (= match all)
+	// without a sentinel — the presence of the filter no longer implies
+	// live-set-ness. Model may be empty for a live set.
+	LiveSet bool `json:"live_set,omitempty"`
+	// DiscoveryFilter narrows a live set's fetched model list (tiny grammar:
+	// space-separated terms; `term` = contains, `-term`/`!term` = exclude —
+	// matched over id+label). Empty = match all. Only meaningful when LiveSet.
 	DiscoveryFilter string `json:"discovery_filter,omitempty"`
 	// DefaultVendorModel is the sticky default vendor model id WITHIN a live
 	// set (only meaningful when DiscoveryFilter is set). When this live set is

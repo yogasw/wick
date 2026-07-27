@@ -178,7 +178,7 @@ func pickModel(inst *provider.Instance, modelID string) (provider.WickModel, boo
 			if m.ID == entryID && !m.Disabled {
 				if vendorID != "" {
 					m.Model = vendorID // explicit live-set override
-				} else if m.DiscoveryFilter != "" && m.Model == "" && m.DefaultVendorModel != "" {
+				} else if m.LiveSet && m.Model == "" && m.DefaultVendorModel != "" {
 					// Live set picked WITHOUT an @vendor override → use the
 					// sticky default vendor model so the spawn has a concrete
 					// id (a live set has no base Model of its own). A stale pin

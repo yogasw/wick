@@ -1021,11 +1021,12 @@ export interface WickModelDTO {
   TopP: number | null;
   ThinkingBudget: number | null;
   RawConfig: string;
-  /** Non-empty → a live model set: the picker expands this to the vendor's
-      models filtered by this query, rather than one pinned model. */
+  /** True → a live model set: the picker expands to the vendor's models
+      (optionally narrowed by DiscoveryFilter) rather than one pinned model. */
+  LiveSet: boolean;
+  /** Optional filter narrowing a live set's list; empty = match all. */
   DiscoveryFilter: string;
-  /** Sticky default vendor model id WITHIN a live set (only meaningful when
-      DiscoveryFilter is set). Empty = top-of-list is the effective default. */
+  /** Sticky default vendor model id WITHIN a live set. Empty = top-of-list. */
   DefaultVendorModel: string;
 }
 
@@ -1062,6 +1063,7 @@ interface WireWickModel {
   top_p?: number | null;
   thinking_budget?: number | null;
   raw_config?: string;
+  live_set?: boolean;
   discovery_filter?: string;
   default_vendor_model?: string;
 }
@@ -1098,6 +1100,7 @@ function mapWickModel(w: WireWickModel): WickModelDTO {
     TopP: w.top_p ?? null,
     ThinkingBudget: w.thinking_budget ?? null,
     RawConfig: w.raw_config ?? "",
+    LiveSet: w.live_set ?? false,
     DiscoveryFilter: w.discovery_filter ?? "",
     DefaultVendorModel: w.default_vendor_model ?? "",
   };
@@ -1152,9 +1155,11 @@ export type WickModelInput = {
   top_p?: number;
   thinking_budget?: number;
   raw_config?: string;
-  /** Set for a live model set; `model` may be empty then. */
+  /** Mark this a live model set; `model` may be empty and the filter optional. */
+  live_set?: boolean;
+  /** Optional filter narrowing a live set (empty = all vendor models). */
   discovery_filter?: string;
-  /** Sticky default vendor model within a live set (only with discovery_filter).
+  /** Sticky default vendor model within a live set (only with live_set).
       Empty string clears the pin (→ top-of-list). */
   default_vendor_model?: string;
 };

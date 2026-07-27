@@ -384,14 +384,16 @@ type wickModelDTO struct {
 	TopP            *float64 `json:"top_p,omitempty"`
 	ThinkingBudget  *int     `json:"thinking_budget,omitempty"`
 	RawConfig       string   `json:"raw_config,omitempty"`
-	// DiscoveryFilter, when set, makes this a live model set (Model may be
-	// empty). See userconfig.WickModel.DiscoveryFilter.
+	// LiveSet marks this a live model set (Model may be empty; filter is
+	// optional). See userconfig.WickModel.LiveSet.
+	LiveSet bool `json:"live_set,omitempty"`
+	// DiscoveryFilter narrows a live set's fetched list; empty = match all.
+	// Only meaningful when LiveSet. See userconfig.WickModel.DiscoveryFilter.
 	DiscoveryFilter string `json:"discovery_filter,omitempty"`
 	// DefaultVendorModel pins the sticky default within a live set. Only
-	// honored when DiscoveryFilter is set. Sent by the Add/Edit live-set form
-	// so the pin is saved atomically with the entry. An empty string on a live
-	// set explicitly clears the pin (→ top-of-list); on a plain model it's
-	// ignored. See userconfig.WickModel.DefaultVendorModel.
+	// honored when LiveSet. Sent by the Add/Edit live-set form so the pin is
+	// saved atomically with the entry. Empty on a live set clears the pin
+	// (→ top-of-list); on a plain model it's ignored.
 	DefaultVendorModel string `json:"default_vendor_model,omitempty"`
 }
 
@@ -419,6 +421,7 @@ type wickModelView struct {
 	TopP               *float64 `json:"top_p,omitempty"`
 	ThinkingBudget     *int     `json:"thinking_budget,omitempty"`
 	RawConfig          string   `json:"raw_config"`
+	LiveSet            bool     `json:"live_set,omitempty"`
 	DiscoveryFilter    string   `json:"discovery_filter,omitempty"`
 	DefaultVendorModel string   `json:"default_vendor_model,omitempty"`
 }
@@ -450,6 +453,7 @@ func getWickConfig(c *tool.Ctx) {
 			Default:            m.Default,
 			Disabled:           m.Disabled,
 			RawConfig:          m.RawConfig,
+			LiveSet:            m.LiveSet,
 			DiscoveryFilter:    m.DiscoveryFilter,
 			DefaultVendorModel: m.DefaultVendorModel,
 		}
@@ -513,14 +517,15 @@ func saveWickModel(c *tool.Ctx) {
 	dto.Model = strings.TrimSpace(dto.Model)
 	dto.Kind = strings.ToLower(strings.TrimSpace(dto.Kind))
 	dto.DiscoveryFilter = strings.TrimSpace(dto.DiscoveryFilter)
-	// A live model set is identified by a discovery filter and needs no single
-	// model id; a plain entry still requires one.
+	// A live model set (LiveSet=true) needs no single model id and its filter
+	// is OPTIONAL (empty = match all the vendor's models); a plain entry still
+	// requires a model id.
 	if dto.Kind == "" {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "kind is required"})
 		return
 	}
-	if dto.Model == "" && dto.DiscoveryFilter == "" {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "model is required (or set a discovery filter for a live set)"})
+	if !dto.LiveSet && dto.Model == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "model is required (or mark it a live set)"})
 		return
 	}
 	if dto.Kind == "other" && strings.TrimSpace(dto.BaseURL) == "" {
@@ -547,6 +552,7 @@ func saveWickModel(c *tool.Ctx) {
 		Default:         dto.Default && !dto.Disabled,
 		Disabled:        dto.Disabled,
 		RawConfig:       strings.TrimSpace(dto.RawConfig),
+		LiveSet:         dto.LiveSet,
 		DiscoveryFilter: dto.DiscoveryFilter,
 	}
 	if g := genConfigFromDTO(dto); g != nil {
@@ -571,9 +577,10 @@ func saveWickModel(c *tool.Ctx) {
 	// A live-set form always authoritatively sets the pin (empty = clear);
 	// a plain model never carries one. This runs after the preserve above so
 	// an explicit form value wins over the stored one.
-	if m.DiscoveryFilter != "" {
+	if m.LiveSet {
 		m.DefaultVendorModel = strings.TrimSpace(dto.DefaultVendorModel)
 	} else {
+		m.DiscoveryFilter = ""
 		m.DefaultVendorModel = ""
 	}
 	if m.ID == "" {
@@ -719,7 +726,7 @@ func setWickDefaultVendorModel(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "model not found"})
 		return
 	}
-	if ins.WickModels[target].DiscoveryFilter == "" {
+	if !ins.WickModels[target].LiveSet {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "not a live model set — a plain model has no vendor sub-list"})
 		return
 	}
@@ -988,7 +995,7 @@ func expandLiveWickSet(ctx context.Context, ins provider.Instance, entryID, filt
 	var target *provider.WickModel
 	for i := range ins.WickModels {
 		m := &ins.WickModels[i]
-		if m.Disabled || strings.TrimSpace(m.DiscoveryFilter) == "" {
+		if m.Disabled || !m.LiveSet {
 			continue
 		}
 		if (entryID != "" && m.ID == entryID) || (entryID == "" && m.DiscoveryFilter == filter) {
