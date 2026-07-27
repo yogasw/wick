@@ -46,6 +46,8 @@ Config fields are grouped into cards on the instance's Settings page. **Browser*
 | Live sessions *(collapsed)* | `SessionDir` | Where live-session metadata, browser profiles, and downloaded engines (e.g. CloakBrowser) are stored. Default: the plugin's persistent data dir under the app tree (`~/.<app>/plugins/playwright_browser`) — set this only to override that location. |
 | Live sessions | `MaxLiveSessions` | Max persistent browsers alive at once. Default `1`, `0` = unlimited. |
 | Live sessions | `MaxTabsPerSession` | Max tabs within one live session (`tab_new` cap). Each open tab keeps a live page in RAM, so multi-tab is opt-in — default `1`, `0` = unlimited. |
+| Live sessions | `DefaultProfile` | Named profile used when `session_open` is called without a `profile` argument. Set this so logins persist by default instead of being swept on close. Empty = anonymous throwaway sessions (the original default). See [Named profiles](#named-profiles). |
+| Live sessions | `ForceDefaultProfile` | Always use `DefaultProfile`, ignoring any `profile` argument. Guarantees every session shares one identity. Requires `DefaultProfile` to be set. |
 | Custom binary *(collapsed)* | `ExecutablePath` | Path to a custom browser binary instead of the bundled one. |
 | Custom binary | `Channel` | Branded channel (`chrome`, `chrome-beta`, `msedge`, …) for the chosen browser. |
 | CloakBrowser *(collapsed)* | `CloakRepo` | GitHub `owner/repo` hosting CloakBrowser release assets (free tier). Default `CloakHQ/CloakBrowser`. |
@@ -104,7 +106,7 @@ Persistent browsers that survive across calls — and plugin restarts — until 
 
 | Op | Destructive | Input | What it does |
 |---|---|---|---|
-| `session_open` | yes | `profile` (optional) | Launches a persistent browser, returns its `session_id`. Respects `MaxLiveSessions` (and the CloakBrowser free-tier 1-session lock — see [CloakBrowser](#cloakbrowser)). Pass `profile` to run against a [named profile](#named-profiles) instead of a throwaway anonymous session. |
+| `session_open` | yes | `profile` (optional) | Launches a persistent browser, returns its `session_id`. Respects `MaxLiveSessions` (and the CloakBrowser free-tier 1-session lock — see [CloakBrowser](#cloakbrowser)). Pass `profile` to run against a [named profile](#named-profiles) instead of a throwaway anonymous session; with `DefaultProfile` configured, omitting it uses that profile. |
 | `session_list` | no | — | Lists every live session and its open tabs (index, url, title), plus `max_tabs` (the effective `MaxTabsPerSession` cap, `0` = unlimited) so callers can tell when a session is full. Dead sessions are swept automatically. |
 | `tab_new` | no | `session_id`, `url` | Opens a new tab in a live session, optionally navigating it. Rejected once the session hits `MaxTabsPerSession` — close a tab or raise the cap first. |
 | `tab_close` | yes | `session_id`, `index` | Closes the tab at `index` (from `session_list`). |
@@ -133,6 +135,25 @@ Passing `profile` to `session_open` gives the session a **stable, named** profil
 - `profile_delete` is the only way to remove a named profile; it refuses while a session is using it.
 
 Anonymous sessions (no `profile` passed) keep the original behavior: a per-session dir swept on `session_close`.
+
+#### Making a profile the default
+
+Having to pass `profile` on every call is easy to forget, and forgetting it means the session is anonymous and the login is gone at `session_close`. Two instance configs move that default:
+
+- **`DefaultProfile`** — the profile used when `session_open` is called with no `profile` argument. An explicit argument still wins, so callers can opt into a different identity.
+- **`ForceDefaultProfile`** — pins *every* session to `DefaultProfile`; a `profile` argument is ignored rather than rejected. Use this when all sessions on the instance must share one identity.
+
+With `DefaultProfile = "acme-account-a"`, a bare `session_open` behaves as if `profile` had been passed:
+
+```json
+{"action": "session_open"}
+```
+
+Turning on `ForceDefaultProfile` without a `DefaultProfile` set fails at `session_open` with a clear error rather than silently falling back to anonymous.
+
+::: warning Login still needs a clean shutdown
+A named profile keeps its dir, but Chromium only flushes cookies and session storage to disk on a graceful exit. `session_close` kills the browser by PID, so a login completed moments earlier can still be lost even with a profile set. Give the browser a little time after logging in before closing the session.
+:::
 
 ### Recording network requests
 

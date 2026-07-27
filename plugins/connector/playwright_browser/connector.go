@@ -78,6 +78,13 @@ type Config struct {
 	// extra tabs each hold a live page in RAM, so multi-tab is opt-in. Raise it
 	// to allow parallel tabs; 0 = unlimited. tab_new is rejected past the cap.
 	MaxTabsPerSession int `wick:"default=1;group=Live sessions;desc=Maximum tabs per live session (tab_new cap). Each open tab costs RAM, so multi-tab is opt-in — default 1. Raise to allow parallel tabs; set 0 for unlimited."`
+	// DefaultProfile / ForceDefaultProfile make a named profile the norm instead
+	// of an opt-in. Without them every session_open with no profile arg gets a
+	// throwaway dir that is swept on close, so a login never survives — the
+	// common surprise. Setting DefaultProfile means "no profile arg" resolves to
+	// this name; adding ForceDefaultProfile pins EVERY session to it.
+	DefaultProfile      string `wick:"group=Live sessions;desc=Named profile used when session_open is called without a profile argument. Set this so logins persist by default instead of being swept on close. Letters, digits, dash, underscore only. Leave empty to keep anonymous throwaway sessions as the default."`
+	ForceDefaultProfile bool   `wick:"bool;group=Live sessions;desc=Always use the default profile, ignoring any profile argument passed to session_open. Guarantees every session shares one identity. Requires a default profile to be set."`
 
 	// Custom binary — rarely touched.
 	ExecutablePath string `wick:"group=Custom binary|Point at a non-bundled browser build. Most setups leave these empty.|collapsed;desc=Path to a custom browser binary to launch instead of the bundled one. Example: /usr/bin/google-chrome"`
@@ -153,7 +160,7 @@ type runInput struct {
 // persist across sessions under that name) — empty means an anonymous,
 // swept-on-close session, the original behavior.
 type sessionOpenInput struct {
-	Profile string `wick:"desc=Optional named profile to run this session against. A named profile's login/cookies persist across sessions and plugin restarts, so reopening the same name reuses the login without re-auth. Letters, digits, dash, underscore only. Leave empty for a throwaway anonymous session."`
+	Profile string `wick:"desc=Optional named profile to run this session against. A named profile's login/cookies persist across sessions and plugin restarts, so reopening the same name reuses the login without re-auth. Letters, digits, dash, underscore only. Leave empty to use the instance's default profile, or a throwaway anonymous session when no default is configured."`
 }
 
 // sessionListInput lists live sessions and their tabs. No arguments.
