@@ -1,11 +1,14 @@
 import { Effect } from "effect";
 import { apiGetE } from "@wick-fe/common-api";
+import type { ModelCaps } from "@wick-fe/common-ui";
 
 export type ProviderModelOption = {
   id: string;
   label: string;
   default: boolean;
   desc?: string;
+  live?: boolean;
+  caps?: ModelCaps;
 };
 
 export type ProviderOption = {
@@ -17,6 +20,10 @@ export type ProviderOption = {
   // composer show a nested model picker (the "›" arrow). Absent for
   // single-model / CLI providers.
   models?: ProviderModelOption[];
+  // Capability-chip prefs (wick-scoped, ride on the wick option row). Read by
+  // the composer to decide whether/how to render capability chips.
+  show_capabilities?: boolean;
+  capability_display_mode?: string;
 };
 
 export type PresetOption = {

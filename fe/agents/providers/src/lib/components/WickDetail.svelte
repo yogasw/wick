@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { ConfirmDialog, Breadcrumb, Modal, Select, Button, KebabMenu, type BreadcrumbItem } from "@wick-fe/common-ui";
+  import { ConfirmDialog, Breadcrumb, Modal, Select, Button, KebabMenu, CapabilityChips, CapabilityModal, type BreadcrumbItem } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     apiGetWickConfig,
@@ -110,9 +110,15 @@
   let settingsRaw = $state("");
   let savingSettings = $state(false);
   let showAdvanced = $state(false);
+  // Capability-chip display prefs (global, shown in Advanced). Default: shown,
+  // list mode. Mirrors the BE's hide_capabilities (inverted) + display mode.
+  let showCaps = $state(true);
+  let capsMode = $state<"list" | "name" | "icon">("list");
 
   function seedSettings(s: WickSettingsDTO) {
     shellMode = s.ShellToolDisabled ? "disabled" : "enabled";
+    showCaps = s.ShowCapabilities;
+    capsMode = s.CapabilityMode === "name" ? "name" : s.CapabilityMode === "icon" ? "icon" : "list";
     maxContext = s.MaxContextTokens ? String(s.MaxContextTokens) : "";
     maxTurns = s.MaxTurns ? String(s.MaxTurns) : "";
     maxConsecErrors = s.MaxConsecErrors ? String(s.MaxConsecErrors) : "";
@@ -142,6 +148,8 @@
     try {
       await apiSaveWickSettings(base, {
         shell_tool_disabled: shellMode === "disabled",
+        hide_capabilities: !showCaps,
+        capability_display_mode: capsMode,
         max_context_tokens: intOrUndef(maxContext),
         max_turns: intOrUndef(maxTurns),
         max_consec_errors: intOrUndef(maxConsecErrors),
@@ -262,6 +270,9 @@
     }
     return true;
   }
+
+  // Capability detail modal: which discovered model's full breakdown is open.
+  let capsModalFor = $state<WickDiscoverModel | null>(null);
 
   let filteredModels = $derived.by(() => {
     if (searchTerms.length === 0) return discovered;
@@ -714,6 +725,15 @@
   </div>
 </Modal>
 
+<!-- Full capability breakdown for a discovered model (opened from the ⓘ on a
+     capability chip). Lists every vendor-reported key + whether wick uses it. -->
+<CapabilityModal
+  open={capsModalFor !== null}
+  onClose={() => (capsModalFor = null)}
+  caps={capsModalFor?.caps}
+  modelId={capsModalFor?.id ?? ""}
+/>
+
 <div class="space-y-4">
   <Breadcrumb items={crumbs} />
   <div class="flex items-center gap-2 flex-wrap">
@@ -778,6 +798,31 @@
           </button>
           {#if showAdvanced}
           <div class="px-4 pb-4 pt-1 space-y-5 border-t border-white-300 dark:border-navy-600">
+          <!-- Capability chips: global show/hide + display mode. Chips are the
+               vendor-declared badges (vision, reasoning, context, …) on model
+               rows in the pickers. -->
+          <div class="flex items-center justify-between gap-4 pt-1">
+            <div class="min-w-0">
+              <p class="text-xs font-medium text-black-900 dark:text-white-100">Show model capabilities</p>
+              <p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600">Badges (vision, reasoning, context window, …) on model rows in the pickers, when the provider reports them.</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={showCaps}
+              aria-label="Show model capabilities"
+              onclick={() => (showCaps = !showCaps)}
+              class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors {showCaps ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
+            >
+              <span class="inline-block h-5 w-5 transform rounded-full bg-white-100 shadow transition-transform {showCaps ? 'translate-x-5' : 'translate-x-0.5'}"></span>
+            </button>
+          </div>
+          {#if showCaps}
+            <div class="max-w-xs">
+              <label for="wick-caps-mode" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Capability display</label>
+              <Select value={capsMode} options={[{ label: "List (name + value)", value: "list" }, { label: "Name chips", value: "name" }, { label: "Icons + tooltip", value: "icon" }]} onChange={(v: string) => (capsMode = v === "name" ? "name" : v === "icon" ? "icon" : "list")} />
+            </div>
+          {/if}
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
           <div>
             <label for="wick-maxctx" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Max context tokens</label>
@@ -1154,9 +1199,9 @@
                   type="button"
                   onclick={() => (isLive ? (liveDefaultVendor = isPin ? "" : m.id) : pickModel(m))}
                   title={isLive ? (isPin ? "Default model — click to unpin (top of list)" : "Set as default model") : undefined}
-                  class="flex w-full items-center justify-between gap-2 px-4 py-2 text-left text-sm hover:bg-white-200 dark:hover:bg-navy-800 {selected ? 'text-green-600 dark:text-green-400 font-medium' : 'text-black-900 dark:text-white-100'}"
+                  class="flex w-full items-start justify-between gap-2 px-4 py-2 text-left text-sm hover:bg-white-200 dark:hover:bg-navy-800 {selected ? 'text-green-600 dark:text-green-400 font-medium' : 'text-black-900 dark:text-white-100'}"
                 >
-                  <span class="flex min-w-0 items-center gap-2">
+                  <span class="flex min-w-0 items-start gap-2">
                     {#if isLive}
                       <!-- Live: radio to pin the sticky DEFAULT (one), not a multi-select. -->
                       <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 {isPin ? 'border-green-500 bg-green-500' : 'border-white-400 dark:border-navy-500'}">
@@ -1167,10 +1212,19 @@
                         {#if selected}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>{/if}
                       </span>
                     {/if}
-                    <span class="min-w-0 truncate">
-                      {m.id}
-                      {#if m.label && m.label !== m.id}
-                        <span class="ml-1 text-[11px] font-normal text-black-700 dark:text-black-600">· {m.label}</span>
+                    <span class="flex min-w-0 flex-col">
+                      <span class="min-w-0 truncate">
+                        {m.id}
+                        {#if m.label && m.label !== m.id}
+                          <span class="ml-1 text-[11px] font-normal text-black-700 dark:text-black-600">· {m.label}</span>
+                        {/if}
+                      </span>
+                      <!-- Shared capability chips: inline vision/reasoning +
+                           an ⓘ that opens the full breakdown. Only renders when
+                           the vendor declared capabilities + the global toggle
+                           is on. -->
+                      {#if showCaps}
+                        <CapabilityChips caps={m.caps} mode={capsMode} onInfo={() => (capsModalFor = m)} />
                       {/if}
                     </span>
                   </span>

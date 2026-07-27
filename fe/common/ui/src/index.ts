@@ -18,3 +18,7 @@ export { default as ProviderPicker } from "./ProviderPicker.svelte";
 export type { ComposerSelectOption, ComposerModelOption } from "./composer-types.js";
 export { default as ImageEditor } from "./ImageEditor.svelte";
 export type { ComposerCommand, ComposerSelect } from "./composer-types.js";
+export { default as CapabilityChips } from "./CapabilityChips.svelte";
+export { default as CapabilityModal } from "./CapabilityModal.svelte";
+export type { ModelCaps, CapabilityDisplayMode } from "./capability-types.js";
+export { CAP_DESCRIPTORS, capDescriptor, fmtTokens, hasAnyCaps } from "./capability-types.js";

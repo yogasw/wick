@@ -334,6 +334,13 @@ type WickConfig struct {
 	// ShellToolDisabled turns the bash/cmd tool off. Stored inverted
 	// so the zero value keeps the shell tool enabled (default on).
 	ShellToolDisabled bool `json:"shell_tool_disabled,omitempty"`
+	// HideCapabilities suppresses the model-capability chips in the pickers.
+	// Stored inverted (like ShellToolDisabled) so the zero value SHOWS them —
+	// capabilities are on by default; this only turns them off.
+	HideCapabilities bool `json:"hide_capabilities,omitempty"`
+	// CapabilityDisplayMode picks how chips render: "" / "icon" = icons +
+	// tooltip (default), "label" = text labels.
+	CapabilityDisplayMode string `json:"capability_display_mode,omitempty"`
 	// Connectors limits which connector instances become tools.
 	// Empty = all ready connectors.
 	Connectors []string `json:"connectors,omitempty"`

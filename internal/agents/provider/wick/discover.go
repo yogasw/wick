@@ -2,6 +2,7 @@ package wick
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +14,14 @@ import (
 type DiscoveredModel struct {
 	ID    string `json:"id"`
 	Label string `json:"label,omitempty"`
+	// Caps is the model's declared "capabilities" object copied VERBATIM from
+	// the vendor's /models response (raw JSON, not a fixed struct). Passing it
+	// through unmodified means EVERY key the vendor reports — including ones
+	// wick doesn't act on yet — reaches the UI's detail modal, so a future
+	// capability shows up the moment a vendor sends it, no schema change here.
+	// nil when the vendor reports no capabilities object (distinguishes "no
+	// info" from "all false").
+	Caps json.RawMessage `json:"capabilities,omitempty"`
 }
 
 // MatchFilter reports whether a model matches a discovery-filter query. The
@@ -144,6 +153,9 @@ func fetchOpenAIModels(ctx context.Context, apiKey, baseURL string) ([]Discovere
 	var resp struct {
 		Data []struct {
 			ID string `json:"id"`
+			// Raw capabilities object, kept verbatim (some OpenAI-compatible
+			// gateways attach it; standard OpenAI/OpenRouter omit it → nil).
+			Capabilities json.RawMessage `json:"capabilities"`
 		} `json:"data"`
 	}
 	headers := map[string]string{"Authorization": "Bearer " + apiKey}
@@ -152,7 +164,7 @@ func fetchOpenAIModels(ctx context.Context, apiKey, baseURL string) ([]Discovere
 	}
 	out := make([]DiscoveredModel, 0, len(resp.Data))
 	for _, m := range resp.Data {
-		out = append(out, DiscoveredModel{ID: m.ID})
+		out = append(out, DiscoveredModel{ID: m.ID, Caps: m.Capabilities})
 	}
 	return out, nil
 }

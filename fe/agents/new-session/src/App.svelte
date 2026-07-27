@@ -153,7 +153,23 @@
     return Effect.runPromise(getProviderOptionModels(base, type, name, opts).pipe(Effect.provide(WickClientLayer)));
   }
 
-  const providerSelect = $derived({ options: providerOptions, value: selectedProvider, onChange: (v: string) => (selectedProvider = v), loadModels: loadProviderModels });
+  // Capability-chip prefs come from the wick provider row (wick-scoped global).
+  const capsPrefs = $derived.by(() => {
+    const wick = providers.find((p) => p.type === "wick");
+    const m = wick?.capability_display_mode;
+    return {
+      show: wick?.show_capabilities ?? true,
+      mode: (m === "name" ? "name" : m === "icon" ? "icon" : "list") as "list" | "name" | "icon",
+    };
+  });
+  const providerSelect = $derived({
+    options: providerOptions,
+    value: selectedProvider,
+    onChange: (v: string) => (selectedProvider = v),
+    loadModels: loadProviderModels,
+    showCapabilities: capsPrefs.show,
+    capabilityMode: capsPrefs.mode,
+  });
   const presetSelect = $derived(
     presets.length > 0
       ? { options: presetOptions, value: selectedPreset, onChange: (v: string) => (selectedPreset = v) }

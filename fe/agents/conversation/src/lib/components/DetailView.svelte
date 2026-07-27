@@ -220,6 +220,15 @@
     return Effect.runPromise(getProviderOptionModels(base, type, name, opts).pipe(Effect.provide(WickClientLayer)));
   }
 
+  // Capability-chip prefs (wick-scoped global) ride on the wick option row.
+  const capsPrefs = $derived.by(() => {
+    const wick = providerOptions.find((p) => p.type === "wick");
+    const m = wick?.capability_display_mode;
+    return {
+      show: wick?.show_capabilities ?? true,
+      mode: (m === "name" ? "name" : m === "icon" ? "icon" : "list") as "list" | "name" | "icon",
+    };
+  });
   // Toolbar dropdowns for the shared Composer (same look as the new-session page).
   const providerSelect = $derived({
     options: providerOptions.map((p) => ({
@@ -233,6 +242,8 @@
       : "",
     onChange: (v: string) => handleProviderChange(v),
     loadModels: loadProviderModels,
+    showCapabilities: capsPrefs.show,
+    capabilityMode: capsPrefs.mode,
   });
   const projectSelect = $derived({
     options: [

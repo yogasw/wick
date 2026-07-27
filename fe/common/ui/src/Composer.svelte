@@ -11,6 +11,8 @@
        - submitLabel: text beside the send arrow (omit → icon only) */
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import ImageEditor from "./ImageEditor.svelte";
+  import CapabilityChips from "./CapabilityChips.svelte";
+  import CapabilityModal from "./CapabilityModal.svelte";
   import type { ComposerCommand, ComposerSelect, ComposerSelectOption, ComposerModelOption } from "./composer-types.js";
 
   type Props = {
@@ -502,6 +504,8 @@
   // the set's model row; its expansion is cached under a per-set key so
   // reopening is instant. Back from a set returns to the provider model list.
   let setDrill = $state<ComposerModelOption | null>(null);
+  // Which model row's full capability breakdown is open (ⓘ on a chip).
+  let capsModalFor = $state<ComposerModelOption | null>(null);
   function setCacheKey(optValue: string, m: ComposerModelOption): string {
     return `${optValue}::set::${m.id}`;
   }
@@ -1188,6 +1192,11 @@
                       {#if live}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">live set</span>{/if}
                     </span>
                     {#if m.desc}<span class="text-[11px] text-black-700 dark:text-black-600 leading-snug">{m.desc}</span>{/if}
+                    <!-- Capability chips (vendor-declared) — gated on the
+                         provider's global toggle; ⓘ opens the detail modal. -->
+                    {#if provider?.showCapabilities !== false}
+                      <CapabilityChips caps={m.caps} mode={provider?.capabilityMode ?? "list"} onInfo={() => (capsModalFor = m)} />
+                    {/if}
                   </span>
                   {#if live}
                     <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 mt-0.5 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1378,6 +1387,14 @@
   name={editorName}
   onDone={onEditorDone}
   onCancel={() => (editorOpen = false)}
+/>
+
+<!-- Full capability breakdown for a model row (opened from the ⓘ on a chip). -->
+<CapabilityModal
+  open={capsModalFor !== null}
+  onClose={() => (capsModalFor = null)}
+  caps={capsModalFor?.caps}
+  modelId={capsModalFor?.id ?? ""}
 />
 
 <style>

@@ -16,6 +16,7 @@ import type {
   LiveProcessDTO,
   ConfigFieldDTO,
 } from "./types.js";
+import type { ModelCaps } from "@wick-fe/common-ui";
 
 interface WireProviderInstance {
   type: string;
@@ -1040,6 +1041,10 @@ export interface WickModelDTO {
 
 export interface WickSettingsDTO {
   ShellToolDisabled: boolean;
+  // ShowCapabilities is the FE-friendly inverse of the wire's hide_capabilities
+  // (default true = chips shown). CapabilityMode: "icon" (default) | "label".
+  ShowCapabilities: boolean;
+  CapabilityMode: string;
   Connectors: string[];
   MaxContextTokens: number;
   MaxTurns: number;
@@ -1078,6 +1083,8 @@ interface WireWickModel {
 
 interface WireWickSettings {
   shell_tool_disabled?: boolean;
+  hide_capabilities?: boolean;
+  capability_display_mode?: string;
   connectors?: string[] | null;
   max_context_tokens?: number;
   max_turns?: number;
@@ -1117,6 +1124,8 @@ function mapWickModel(w: WireWickModel): WickModelDTO {
 function mapWickSettings(w: WireWickSettings | null | undefined): WickSettingsDTO {
   return {
     ShellToolDisabled: w?.shell_tool_disabled ?? false,
+    ShowCapabilities: !(w?.hide_capabilities ?? false),
+    CapabilityMode: w?.capability_display_mode ?? "list",
     Connectors: w?.connectors ?? [],
     MaxContextTokens: w?.max_context_tokens ?? 0,
     MaxTurns: w?.max_turns ?? 0,
@@ -1213,6 +1222,8 @@ export async function apiTestWickModel(base: string, id: string): Promise<WickTe
 
 export type WickSettingsInput = {
   shell_tool_disabled: boolean;
+  hide_capabilities?: boolean;
+  capability_display_mode?: string;
   connectors?: string[];
   max_context_tokens?: number;
   max_turns?: number;
@@ -1248,7 +1259,11 @@ export async function apiGetWickLiveSetModels(
 }
 
 export type WickDiscoverInput = { kind: string; api_key?: string; base_url?: string; model_ref?: string };
-export type WickDiscoverModel = { id: string; label: string };
+// WickModelCaps is the shared ModelCaps type (vendor's raw "capabilities"
+// object). Re-exported from common-ui so there's ONE definition — the chips /
+// detail modal + this SPA all use the same shape (dedup rule).
+export type WickModelCaps = ModelCaps;
+export type WickDiscoverModel = { id: string; label: string; caps?: WickModelCaps };
 export type WickDiscoverResult = { models: WickDiscoverModel[]; error: string };
 
 // apiDiscoverWickModels proxies the vendor model-list API server-side so
@@ -1257,13 +1272,13 @@ export type WickDiscoverResult = { models: WickDiscoverModel[]; error: string };
 // key on edit. A non-empty `error` means discovery failed — the caller
 // should fall back to a free-text model id input (non-fatal).
 export async function apiDiscoverWickModels(base: string, input: WickDiscoverInput): Promise<WickDiscoverResult> {
-  const r = await post<{ models?: { id?: string; label?: string }[] | null; error?: string }>(
+  const r = await post<{ models?: { id?: string; label?: string; capabilities?: WickModelCaps }[] | null; error?: string }>(
     `${base}/providers/wick/models/discover`,
     input,
   );
   return {
     models: (r?.models ?? [])
-      .map((m) => ({ id: m.id ?? "", label: m.label ?? m.id ?? "" }))
+      .map((m) => ({ id: m.id ?? "", label: m.label ?? m.id ?? "", caps: m.capabilities }))
       .filter((m) => m.id !== ""),
     error: r?.error ?? "",
   };

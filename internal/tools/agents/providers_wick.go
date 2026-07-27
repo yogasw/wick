@@ -403,6 +403,23 @@ func wickInstance() (provider.Instance, error) {
 	return provider.Find(provider.TypeWick, wickInstanceName)
 }
 
+// wickCapabilityPrefs returns the capability-chip display prefs from the wick
+// instance's config: (show, mode). Defaults to (true, "icon") — chips on,
+// icon mode — when nothing is configured. HideCapabilities is stored inverted,
+// so show = !HideCapabilities.
+func wickCapabilityPrefs() (show bool, mode string) {
+	show, mode = true, "list"
+	ins, err := wickInstance()
+	if err != nil || ins.WickConfig == nil {
+		return
+	}
+	show = !ins.WickConfig.HideCapabilities
+	if m := strings.TrimSpace(ins.WickConfig.CapabilityDisplayMode); m != "" {
+		mode = m
+	}
+	return
+}
+
 // wickModelView is one model as returned to the UI — key masked, never
 // the ciphertext or plaintext.
 type wickModelView struct {
@@ -465,18 +482,22 @@ func getWickConfig(c *tool.Ctx) {
 		models = append(models, v)
 	}
 	settings := map[string]any{
-		"shell_tool_disabled":    false,
-		"connectors":             []string{},
-		"max_context_tokens":     0,
-		"max_turns":              0,
-		"max_consec_errors":      0,
-		"max_turn_minutes":       0,
-		"max_model_retries":      0,
-		"model_call_timeout_sec": 0,
-		"raw_config":             "",
+		"shell_tool_disabled":     false,
+		"hide_capabilities":       false,
+		"capability_display_mode": "",
+		"connectors":              []string{},
+		"max_context_tokens":      0,
+		"max_turns":               0,
+		"max_consec_errors":       0,
+		"max_turn_minutes":        0,
+		"max_model_retries":       0,
+		"model_call_timeout_sec":  0,
+		"raw_config":              "",
 	}
 	if wc := ins.WickConfig; wc != nil {
 		settings["shell_tool_disabled"] = wc.ShellToolDisabled
+		settings["hide_capabilities"] = wc.HideCapabilities
+		settings["capability_display_mode"] = wc.CapabilityDisplayMode
 		settings["connectors"] = wc.Connectors
 		settings["max_context_tokens"] = wc.MaxContextTokens
 		settings["max_turns"] = wc.MaxTurns
@@ -893,6 +914,8 @@ func testWickModel(c *tool.Ctx) {
 // wickSettingsDTO is the Provider-settings card payload.
 type wickSettingsDTO struct {
 	ShellToolDisabled   bool     `json:"shell_tool_disabled"`
+	HideCapabilities    bool     `json:"hide_capabilities"`
+	CapabilityDisplayMode string `json:"capability_display_mode,omitempty"`
 	Connectors          []string `json:"connectors,omitempty"`
 	MaxContextTokens    int      `json:"max_context_tokens,omitempty"`
 	MaxTurns            int      `json:"max_turns,omitempty"`
@@ -925,15 +948,17 @@ func saveWickSettings(c *tool.Ctx) {
 	ins.Type = provider.TypeWick
 	ins.Name = wickInstanceName
 	wc := &provider.WickConfig{
-		ShellToolDisabled:   dto.ShellToolDisabled,
-		Connectors:          dto.Connectors,
-		MaxContextTokens:    dto.MaxContextTokens,
-		MaxTurns:            dto.MaxTurns,
-		MaxConsecErrors:     dto.MaxConsecErrors,
-		MaxTurnMinutes:      dto.MaxTurnMinutes,
-		MaxModelRetries:     dto.MaxModelRetries,
-		ModelCallTimeoutSec: dto.ModelCallTimeoutSec,
-		RawConfig:           strings.TrimSpace(dto.RawConfig),
+		ShellToolDisabled:     dto.ShellToolDisabled,
+		HideCapabilities:      dto.HideCapabilities,
+		CapabilityDisplayMode: strings.TrimSpace(dto.CapabilityDisplayMode),
+		Connectors:            dto.Connectors,
+		MaxContextTokens:      dto.MaxContextTokens,
+		MaxTurns:              dto.MaxTurns,
+		MaxConsecErrors:       dto.MaxConsecErrors,
+		MaxTurnMinutes:        dto.MaxTurnMinutes,
+		MaxModelRetries:       dto.MaxModelRetries,
+		ModelCallTimeoutSec:   dto.ModelCallTimeoutSec,
+		RawConfig:             strings.TrimSpace(dto.RawConfig),
 	}
 	if g := genConfigFromGen(dto.Temperature, dto.TopP, dto.ThinkingBudget, 0); g != nil {
 		wc.GenConfig = g
@@ -1035,7 +1060,7 @@ func markLiveSetDefault(filtered []wick.DiscoveredModel, pin string) []view.Mode
 			label = d.ID
 		}
 		isDefault := (pinnedPresent && d.ID == pin) || (!pinnedPresent && i == 0)
-		out = append(out, view.ModelChoiceVM{ID: d.ID, Label: label, Default: isDefault})
+		out = append(out, view.ModelChoiceVM{ID: d.ID, Label: label, Default: isDefault, Caps: d.Caps})
 	}
 	return out
 }
