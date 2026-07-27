@@ -51,6 +51,12 @@ var builtinComposerCommands = []ComposerCommand{
 	// as the message. The wick engine intercepts it and runs compaction
 	// in-process; the CLI providers pass it through to their own /compact.
 	{ID: "compact", Label: "/compact", Hint: "summarize history to free context", Category: "Session", Action: "send:/compact"},
+	// /thinking toggles the model's reasoning on/off for the rest of the
+	// session, like Claude Code's /thinking. Also a "send" action: the wick
+	// engine intercepts "/thinking" (toggle), "/thinking on|off", or
+	// "/thinking low|medium|high" (set effort) in-process. CLI providers that
+	// don't know it pass it through harmlessly.
+	{ID: "thinking", Label: "/thinking", Hint: "toggle reasoning on/off (or set effort)", Category: "Session", Action: "send:/thinking"},
 }
 
 // apiComposerCommands handles GET /api/composer/commands — the `/` command menu:

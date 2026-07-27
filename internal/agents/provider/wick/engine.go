@@ -32,12 +32,17 @@ type engine struct {
 	// so the config (base_url, kind, api_format, key) can be looked up
 	// on-demand when reconstructing a request — never duplicated into the
 	// log itself.
-	modelID    string
-	sysPrompt  string
-	genCfg     *genai.GenerateContentConfig
-	reasoning  *ReasoningConfig
-	tools      []toolDef
-	toolByName map[string]toolDef
+	modelID   string
+	sysPrompt string
+	genCfg    *genai.GenerateContentConfig
+	reasoning *ReasoningConfig
+	// defaultReasoning is the session's configured reasoning baseline (what
+	// setReasoning was last given). A runtime "/thinking off" clears
+	// e.reasoning; "/thinking on" restores this. Distinct from e.reasoning,
+	// which is the CURRENT (possibly toggled) request.
+	defaultReasoning *ReasoningConfig
+	tools            []toolDef
+	toolByName       map[string]toolDef
 
 	// maxTurns caps total tool-call rounds per user message. 0 = unlimited
 	// (the consec-error + wall-clock guards below are the safety net).
@@ -169,8 +174,13 @@ func (e *engine) setInteractionSink(fn func(interactionRecord)) { e.interactionS
 func (e *engine) setModelID(id string) { e.modelID = id }
 
 // setReasoning attaches the vendor-agnostic reasoning request applied to every
-// model call this turn (nil = vendor default).
-func (e *engine) setReasoning(r *ReasoningConfig) { e.reasoning = r }
+// model call this turn (nil = vendor default). The value is also snapshotted as
+// the session's configured baseline so a runtime "/thinking on" can restore it
+// after a "/thinking off".
+func (e *engine) setReasoning(r *ReasoningConfig) {
+	e.reasoning = r
+	e.defaultReasoning = r
+}
 
 // setLoopGuards wires the operator-configured no-progress guards: cut the
 // turn after maxConsecErr consecutive all-error tool rounds, or when the
@@ -245,6 +255,15 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 	// history anyway).
 	if isCompactCommand(userText) {
 		e.runManualCompact(ctx)
+		return
+	}
+
+	// /thinking — runtime reasoning toggle (like Claude Code's /thinking).
+	// Intercepted so it never reaches the model: flip the live reasoning
+	// request and report the new state. Same last-non-empty-line matching as
+	// /compact so a real message merely mentioning it isn't hijacked.
+	if ok, arg := parseThinkingCommand(userText); ok {
+		e.runThinkingCommand(arg)
 		return
 	}
 
@@ -465,7 +484,11 @@ func (e *engine) drainSteer() {
 				e.steer = nil
 				return
 			}
-			if strings.TrimSpace(msg) == "" || isCompactCommand(msg) {
+			if trimmed := strings.TrimSpace(msg); trimmed == "" || isCompactCommand(msg) {
+				continue
+			} else if ok, _ := parseThinkingCommand(trimmed); ok {
+				// A mid-turn /thinking is honored as its own next turn (like
+				// /compact), not injected into this turn's history.
 				continue
 			}
 			e.emit(thinkingLine("↪ user added mid-turn: " + msg))
