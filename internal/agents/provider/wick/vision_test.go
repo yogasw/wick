@@ -31,7 +31,7 @@ func TestImagePartsFromAttachments(t *testing.T) {
 	p := writeTempImage(t)
 	atts := []store.Attachment{
 		{Name: "shot.png", AbsPath: p, MIME: "image/png"},
-		{Name: "notes.txt", AbsPath: p, MIME: "text/plain"}, // non-image → skip
+		{Name: "notes.txt", AbsPath: p, MIME: "text/plain"},                                    // non-image → skip
 		{Name: "gone.png", AbsPath: filepath.Join(t.TempDir(), "nope.png"), MIME: "image/png"}, // missing → skip
 	}
 	parts := imagePartsFromAttachments(atts)

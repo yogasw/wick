@@ -77,6 +77,7 @@ func (e *engine) compactAggressively(ctx context.Context) bool {
 // tolerating a buffered non-user turn the pool may prepend. Accepts:
 //   - exactly "/compact"
 //   - a buffered "[system] …" block followed by a "/compact" line
+//
 // It requires the last non-empty line to be exactly "/compact" AND every
 // line before it (if any) to be part of a "[system]" buffered notice — so
 // a user whose real message merely ends in "/compact" isn't hijacked.

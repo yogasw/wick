@@ -120,7 +120,6 @@ func userContentWithImages(text string, imgs []*genai.Part) *genai.Content {
 	return &genai.Content{Role: genai.RoleUser, Parts: parts}
 }
 
-
 // maxInlineImageBytes caps a single inline image (5 MB) so a stray huge file
 // can't blow up the request body / token budget. Larger images are skipped
 // (the model just won't see them; the path text still rides along).
