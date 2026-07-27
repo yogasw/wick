@@ -33,6 +33,38 @@ func thinkingLine(text string) []byte {
 	return assistantLine([]map[string]any{{"type": "thinking", "thinking": text}})
 }
 
+// textDeltaLine wraps an incremental text chunk as a `stream_event`
+// content_block_delta → the parser's TextDelta (append) path. Emitting
+// these token-by-token makes wick stream live like a real claude
+// --include-partial-messages run; the parser then SUPPRESSES the trailing
+// full `assistant` text frame (partialTextEmitted), so there's no
+// double-render — this is the whole reason the engine can stream safely.
+func textDeltaLine(text string) []byte {
+	return streamDeltaLine("text_delta", "text", text)
+}
+
+// thinkingDeltaLine is textDeltaLine's reasoning counterpart → Thinking
+// (append). The trailing full thinking block is likewise suppressed.
+func thinkingDeltaLine(text string) []byte {
+	return streamDeltaLine("thinking_delta", "thinking", text)
+}
+
+// streamDeltaLine builds one Anthropic-shaped content_block_delta frame the
+// ClaudeParser recognizes (see claude.go's stream_event case). field is the
+// delta payload key ("text" or "thinking") matching deltaType.
+func streamDeltaLine(deltaType, field, text string) []byte {
+	return mustLine(map[string]any{
+		"type": "stream_event",
+		"event": map[string]any{
+			"type": "content_block_delta",
+			"delta": map[string]any{
+				"type": deltaType,
+				field:  text,
+			},
+		},
+	})
+}
+
 // toolUseLine wraps a tool call → ToolUse. input is the raw JSON args
 // object; toolUseID correlates with the later tool_result.
 func toolUseLine(id, name string, input json.RawMessage) []byte {

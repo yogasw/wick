@@ -1045,6 +1045,9 @@ export interface WickSettingsDTO {
   // (default true = chips shown). CapabilityMode: "icon" (default) | "label".
   ShowCapabilities: boolean;
   CapabilityMode: string;
+  // EnableStreaming is the FE-friendly inverse of the wire's stream_disabled
+  // (default true = SSE streaming on).
+  EnableStreaming: boolean;
   Connectors: string[];
   MaxContextTokens: number;
   MaxTurns: number;
@@ -1084,6 +1087,7 @@ interface WireWickModel {
 interface WireWickSettings {
   shell_tool_disabled?: boolean;
   hide_capabilities?: boolean;
+  stream_disabled?: boolean;
   capability_display_mode?: string;
   connectors?: string[] | null;
   max_context_tokens?: number;
@@ -1125,6 +1129,7 @@ function mapWickSettings(w: WireWickSettings | null | undefined): WickSettingsDT
   return {
     ShellToolDisabled: w?.shell_tool_disabled ?? false,
     ShowCapabilities: !(w?.hide_capabilities ?? false),
+    EnableStreaming: !(w?.stream_disabled ?? false),
     CapabilityMode: w?.capability_display_mode ?? "list",
     Connectors: w?.connectors ?? [],
     MaxContextTokens: w?.max_context_tokens ?? 0,
@@ -1223,6 +1228,7 @@ export async function apiTestWickModel(base: string, id: string): Promise<WickTe
 export type WickSettingsInput = {
   shell_tool_disabled: boolean;
   hide_capabilities?: boolean;
+  stream_disabled?: boolean;
   capability_display_mode?: string;
   connectors?: string[];
   max_context_tokens?: number;

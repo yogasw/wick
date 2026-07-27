@@ -122,6 +122,9 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 	eng.setToolSpillDir(opt.SessionDir)
 	eng.gate = gateCheckerFn
 	eng.setContextBudget(maxContextTokens(wc))
+	// Streaming is on by default (StreamDisabled stored inverted); the engine
+	// falls back to one-shot JSON when off or for adapters without an SSE path.
+	eng.setStream(wc == nil || !wc.StreamDisabled)
 	// Record every model call to the wick session log (why the model
 	// answered as it did) at <SessionDir>/wick-interactions.jsonl.
 	eng.setInteractionSink(newInteractionSink(opt.SessionDir))

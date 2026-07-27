@@ -37,6 +37,9 @@ func newAnthropicModel(m provider.WickModel) *anthropicModel {
 func (m *anthropicModel) Name() string { return m.modelID }
 
 func (m *anthropicModel) GenerateContent(ctx context.Context, req *LLMRequest, stream bool) iter.Seq2[*LLMResponse, error] {
+	if stream {
+		return m.generateStream(ctx, req)
+	}
 	return func(yield func(*LLMResponse, error) bool) {
 		body := m.buildRequest(req)
 		headers := map[string]string{
@@ -49,6 +52,57 @@ func (m *anthropicModel) GenerateContent(ctx context.Context, req *LLMRequest, s
 			return
 		}
 		yield(m.toLLMResponse(&resp), nil)
+	}
+}
+
+func (m *anthropicModel) headers() map[string]string {
+	return map[string]string{
+		"x-api-key":         m.apiKey,
+		"anthropic-version": anthropicVersion,
+	}
+}
+
+// generateStream runs the Anthropic SSE (stream:true) path. It emits text and
+// thinking deltas live as content_block_delta frames arrive, reassembles
+// tool_use blocks (id/name from content_block_start, args JSON from
+// input_json_delta fragments), and finishes with one aggregated yield carrying
+// the full Content + usage — same shape as the non-streaming path.
+func (m *anthropicModel) generateStream(ctx context.Context, req *LLMRequest) iter.Seq2[*LLMResponse, error] {
+	return func(yield func(*LLMResponse, error) bool) {
+		body := m.buildRequest(req)
+		body.Stream = true
+
+		agg := &antStreamAggregator{}
+		yieldErr := false
+		err := postSSE(ctx, m.baseURL+"/messages", m.headers(), body, func(ev sseEvent) bool {
+			var frame antStreamFrame
+			if json.Unmarshal([]byte(ev.Data), &frame) != nil {
+				return true
+			}
+			if frame.Type == "error" && frame.Error != nil {
+				yieldErr = !yield(&LLMResponse{ErrorMessage: frame.Error.Message, ErrorCode: frame.Error.Type}, nil)
+				return false
+			}
+			text, thinking := agg.ingest(&frame)
+			switch {
+			case text != "":
+				yieldErr = !yield(&LLMResponse{TextDelta: text}, nil)
+			case thinking != "":
+				yieldErr = !yield(&LLMResponse{ThinkingDelta: thinking}, nil)
+			}
+			if yieldErr {
+				return false
+			}
+			return frame.Type != "message_stop"
+		})
+		if yieldErr {
+			return
+		}
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		yield(agg.final(), nil)
 	}
 }
 
@@ -65,6 +119,7 @@ type antRequest struct {
 	Temperature *float32       `json:"temperature,omitempty"`
 	TopP        *float32       `json:"top_p,omitempty"`
 	Thinking    *antThinking   `json:"thinking,omitempty"`
+	Stream      bool           `json:"stream,omitempty"`
 }
 
 // antThinking is Anthropic's extended-thinking param: {type:"enabled",
@@ -241,6 +296,156 @@ func contentToAnthropic(c *genai.Content) (antMessage, bool) {
 		return antMessage{}, false
 	}
 	return antMessage{Role: role, Content: blocks}, true
+}
+
+// ── streaming ──────────────────────────────────────────────────────────
+
+// antStreamFrame is one Anthropic Messages-API SSE frame. Only the fields
+// wick acts on are modeled; lifecycle bookends (message_start,
+// content_block_stop) carry nothing we aggregate. Frame types:
+// message_start | content_block_start | content_block_delta |
+// content_block_stop | message_delta | message_stop | error | ping.
+type antStreamFrame struct {
+	Type  string `json:"type"`
+	Index int    `json:"index"`
+	// content_block_start: the opening block (text / thinking / tool_use).
+	ContentBlock *struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`   // tool_use id
+		Name string `json:"name"` // tool_use name
+	} `json:"content_block"`
+	// content_block_delta: the incremental payload.
+	Delta *struct {
+		Type        string `json:"type"` // text_delta | thinking_delta | input_json_delta
+		Text        string `json:"text"`
+		Thinking    string `json:"thinking"`
+		PartialJSON string `json:"partial_json"` // tool_use args fragment
+	} `json:"delta"`
+	// message_start carries the input-token usage; message_delta the output.
+	Message *struct {
+		Usage *antStreamUsage `json:"usage"`
+	} `json:"message"`
+	Usage *antStreamUsage `json:"usage"`
+	Error *struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+type antStreamUsage struct {
+	InputTokens         int `json:"input_tokens"`
+	OutputTokens        int `json:"output_tokens"`
+	CacheReadTokens     int `json:"cache_read_input_tokens"`
+	CacheCreationTokens int `json:"cache_creation_input_tokens"`
+}
+
+// antStreamAggregator folds Anthropic stream frames into a final response.
+// Text/thinking are concatenated; tool_use blocks reassemble from the
+// content_block_start (id/name) plus input_json_delta fragments (args JSON),
+// keyed by the block index. Usage merges the message_start (input) and
+// message_delta (output) halves.
+type antStreamAggregator struct {
+	text   strings.Builder
+	blocks map[int]*antStreamBlock // block index → in-progress block
+	order  []int                   // block indices in first-seen order
+	inTok  int
+	outTok int
+	cacheR int
+	cacheC int
+}
+
+type antStreamBlock struct {
+	kind string // "text" | "thinking" | "tool_use"
+	id   string
+	name string
+	args strings.Builder // accumulated partial_json for tool_use
+}
+
+// ingest folds one frame in and returns any (text, thinking) delta to emit
+// live; both empty when the frame carried only structure/usage.
+func (a *antStreamAggregator) ingest(f *antStreamFrame) (text, thinking string) {
+	if a.blocks == nil {
+		a.blocks = map[int]*antStreamBlock{}
+	}
+	switch f.Type {
+	case "message_start":
+		if f.Message != nil && f.Message.Usage != nil {
+			a.mergeUsage(f.Message.Usage)
+		}
+	case "content_block_start":
+		if f.ContentBlock == nil {
+			return "", ""
+		}
+		b := &antStreamBlock{kind: f.ContentBlock.Type, id: f.ContentBlock.ID, name: f.ContentBlock.Name}
+		a.blocks[f.Index] = b
+		a.order = append(a.order, f.Index)
+	case "content_block_delta":
+		if f.Delta == nil {
+			return "", ""
+		}
+		switch f.Delta.Type {
+		case "text_delta":
+			a.text.WriteString(f.Delta.Text)
+			return f.Delta.Text, ""
+		case "thinking_delta":
+			return "", f.Delta.Thinking
+		case "input_json_delta":
+			if b := a.blocks[f.Index]; b != nil {
+				b.args.WriteString(f.Delta.PartialJSON)
+			}
+		}
+	case "message_delta":
+		if f.Usage != nil {
+			a.mergeUsage(f.Usage)
+		}
+	}
+	return "", ""
+}
+
+func (a *antStreamAggregator) mergeUsage(u *antStreamUsage) {
+	if u.InputTokens > 0 {
+		a.inTok = u.InputTokens
+	}
+	if u.OutputTokens > 0 {
+		a.outTok = u.OutputTokens
+	}
+	if u.CacheReadTokens > 0 {
+		a.cacheR = u.CacheReadTokens
+	}
+	if u.CacheCreationTokens > 0 {
+		a.cacheC = u.CacheCreationTokens
+	}
+}
+
+// final builds the aggregated LLMResponse — same shape toLLMResponse produces,
+// so a streamed turn is indistinguishable to the engine/history.
+func (a *antStreamAggregator) final() *LLMResponse {
+	out := &LLMResponse{}
+	parts := make([]*genai.Part, 0, len(a.order)+1)
+	if t := a.text.String(); t != "" {
+		parts = append(parts, &genai.Part{Text: t})
+	}
+	for _, idx := range a.order {
+		b := a.blocks[idx]
+		if b == nil || b.kind != "tool_use" {
+			continue
+		}
+		var args map[string]any
+		_ = json.Unmarshal([]byte(b.args.String()), &args)
+		parts = append(parts, &genai.Part{FunctionCall: &genai.FunctionCall{
+			ID:   b.id,
+			Name: b.name,
+			Args: args,
+		}})
+	}
+	out.Content = &genai.Content{Role: genai.RoleModel, Parts: parts}
+	out.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{
+		PromptTokenCount:        int32(a.inTok + a.cacheR + a.cacheC),
+		CandidatesTokenCount:    int32(a.outTok),
+		CachedContentTokenCount: int32(a.cacheR),
+		TotalTokenCount:         int32(a.inTok + a.cacheR + a.cacheC + a.outTok),
+	}
+	return out
 }
 
 // ── response ─────────────────────────────────────────────────────────────

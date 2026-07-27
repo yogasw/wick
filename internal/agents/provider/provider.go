@@ -164,6 +164,7 @@ type WickModel struct {
 type WickConfig struct {
 	ShellToolDisabled     bool
 	HideCapabilities      bool
+	StreamDisabled        bool
 	CapabilityDisplayMode string
 	Connectors            []string
 	MaxContextTokens      int
@@ -1025,6 +1026,7 @@ func wickConfigFromUser(in *userconfig.WickConfig) *WickConfig {
 	return &WickConfig{
 		ShellToolDisabled:     in.ShellToolDisabled,
 		HideCapabilities:      in.HideCapabilities,
+		StreamDisabled:        in.StreamDisabled,
 		CapabilityDisplayMode: in.CapabilityDisplayMode,
 		Connectors:            in.Connectors,
 		MaxContextTokens:      in.MaxContextTokens,
@@ -1045,6 +1047,7 @@ func wickConfigToUser(in *WickConfig) *userconfig.WickConfig {
 	return &userconfig.WickConfig{
 		ShellToolDisabled:     in.ShellToolDisabled,
 		HideCapabilities:      in.HideCapabilities,
+		StreamDisabled:        in.StreamDisabled,
 		CapabilityDisplayMode: in.CapabilityDisplayMode,
 		Connectors:            in.Connectors,
 		MaxContextTokens:      in.MaxContextTokens,

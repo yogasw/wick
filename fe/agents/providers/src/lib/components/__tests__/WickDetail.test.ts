@@ -58,6 +58,7 @@ function makeConfig(): WickConfig {
     settings: {
       ShellToolDisabled: false,
       ShowCapabilities: true,
+      EnableStreaming: true,
       CapabilityMode: "icon",
       Connectors: [],
       MaxContextTokens: 0,

@@ -338,6 +338,11 @@ type WickConfig struct {
 	// Stored inverted (like ShellToolDisabled) so the zero value SHOWS them —
 	// capabilities are on by default; this only turns them off.
 	HideCapabilities bool `json:"hide_capabilities,omitempty"`
+	// StreamDisabled turns off SSE streaming of model output (falls back to
+	// the one-shot JSON path). Stored inverted so the zero value STREAMS —
+	// streaming is on by default; this only turns it off (e.g. a gateway that
+	// doesn't support SSE).
+	StreamDisabled bool `json:"stream_disabled,omitempty"`
 	// CapabilityDisplayMode picks how chips render: "" / "icon" = icons +
 	// tooltip (default), "label" = text labels.
 	CapabilityDisplayMode string `json:"capability_display_mode,omitempty"`

@@ -52,9 +52,32 @@ type ReasoningConfig struct {
 // (incl. cached tokens) for the context-budget calibration + spawn-log.
 // ErrorCode/ErrorMessage are set when the vendor returned an error the
 // adapter chose to surface in-band rather than as a Go error.
+//
+// Streaming: when GenerateContent is called with stream=true, an adapter
+// yields the response INCREMENTALLY. Each intermediate yield is a delta
+// (TextDelta or ThinkingDelta set, Content nil) so the engine can emit
+// token-by-token; the FINAL yield carries the fully aggregated Content +
+// UsageMetadata (deltas empty) and is the one the engine keeps as the
+// authoritative response for history + calibration. A non-streaming call
+// yields exactly one response with Content set and no deltas.
 type LLMResponse struct {
 	Content       *genai.Content
 	UsageMetadata *genai.GenerateContentResponseUsageMetadata
 	ErrorCode     string
 	ErrorMessage  string
+
+	// TextDelta / ThinkingDelta carry an incremental chunk on a streaming
+	// yield. Exactly one is non-empty on a delta yield; both empty on the
+	// final aggregated yield (and on every non-streaming yield). The engine
+	// emits these live and does NOT fold them into history — the final
+	// yield's Content is the single source of truth for the turn body, so
+	// there's no double-count.
+	TextDelta     string
+	ThinkingDelta string
+}
+
+// isDelta reports whether this yield is a streaming delta (a live chunk to
+// emit) rather than the final aggregated response.
+func (r *LLMResponse) isDelta() bool {
+	return r != nil && (r.TextDelta != "" || r.ThinkingDelta != "")
 }

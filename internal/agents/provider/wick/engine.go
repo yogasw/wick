@@ -121,7 +121,26 @@ type engine struct {
 	// retryPolicy tunes per-call timeout + retry attempts, applied to every model
 	// call. Zero value → sane defaults (3 attempts, 120s). Set from wick config.
 	retryPolicy retryPolicy
+
+	// stream, when true, drives each model call over SSE: text/thinking is
+	// emitted token-by-token as it arrives (the parser's stream_event delta
+	// path), so the UI renders live instead of all-at-once when the call
+	// returns. The aggregated final response is still used for history +
+	// calibration, so a streamed turn is otherwise identical. false = the
+	// one-shot JSON path. Adapters without an SSE path (Gemini) ignore it.
+	stream bool
+
+	// streamedText / streamedThinking record whether the last model call
+	// already emitted its text / thinking as live deltas. runTurn consults
+	// them so it doesn't ALSO emit the aggregated block (which would
+	// double-render in the wick UI — the parser only dedups its own two
+	// frame shapes, not wick emitting both a delta line and a full textLine).
+	streamedText     bool
+	streamedThinking bool
 }
+
+// setStream toggles SSE streaming of model output for this engine.
+func (e *engine) setStream(v bool) { e.stream = v }
 
 // setSteer wires the mid-turn steering channel (the spawn's msgs channel).
 func (e *engine) setSteer(ch <-chan string) { e.steer = ch }
@@ -297,16 +316,23 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 			return
 		}
 
-		// Emit text + thinking, and collect any function calls.
+		// Emit text + thinking, and collect any function calls. When streaming
+		// already sent the text/thinking as live deltas this same call, the
+		// aggregated block is NOT re-emitted (that would double-render) — but
+		// finalText still accumulates the text so doneLine's .result is whole.
 		var calls []*genai.FunctionCall
 		for _, p := range content.Parts {
 			switch {
 			case p.FunctionCall != nil:
 				calls = append(calls, p.FunctionCall)
 			case p.Thought && p.Text != "":
-				e.emit(thinkingLine(p.Text))
+				if !e.streamedThinking {
+					e.emit(thinkingLine(p.Text))
+				}
 			case p.Text != "":
-				e.emit(textLine(p.Text))
+				if !e.streamedText {
+					e.emit(textLine(p.Text))
+				}
 				finalText.WriteString(p.Text)
 			}
 		}
@@ -549,12 +575,32 @@ func (e *engine) generateAttempt(ctx context.Context, kind string, attempt int, 
 		markModelCallStart(sid, attempt, snap, cancelCall)
 	}
 
+	// Reset the per-call streamed-flags: runTurn reads these to know whether
+	// the text/thinking already went out as live deltas (so it must not
+	// re-emit the aggregated blocks and double-render).
+	e.streamedText = false
+	e.streamedThinking = false
+
 	var out *LLMResponse
 	var gotErr error
-	for resp, err := range e.llm.GenerateContent(callCtx, req, false) {
+	for resp, err := range e.llm.GenerateContent(callCtx, req, e.stream) {
 		if err != nil {
 			gotErr = err
 			break
+		}
+		if resp.isDelta() {
+			// Live streaming chunk — emit it now via the parser's delta path.
+			// It is NOT folded into out; the adapter's final aggregated yield
+			// (Content set, deltas empty) carries the authoritative turn body.
+			if resp.TextDelta != "" {
+				e.emit(textDeltaLine(resp.TextDelta))
+				e.streamedText = true
+			}
+			if resp.ThinkingDelta != "" {
+				e.emit(thinkingDeltaLine(resp.ThinkingDelta))
+				e.streamedThinking = true
+			}
+			continue
 		}
 		out = resp
 	}

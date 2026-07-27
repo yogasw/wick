@@ -487,6 +487,7 @@ func getWickConfig(c *tool.Ctx) {
 	settings := map[string]any{
 		"shell_tool_disabled":     false,
 		"hide_capabilities":       false,
+		"stream_disabled":         false,
 		"capability_display_mode": "",
 		"connectors":              []string{},
 		"max_context_tokens":      0,
@@ -501,6 +502,7 @@ func getWickConfig(c *tool.Ctx) {
 	if wc := ins.WickConfig; wc != nil {
 		settings["shell_tool_disabled"] = wc.ShellToolDisabled
 		settings["hide_capabilities"] = wc.HideCapabilities
+		settings["stream_disabled"] = wc.StreamDisabled
 		settings["capability_display_mode"] = wc.CapabilityDisplayMode
 		settings["connectors"] = wc.Connectors
 		settings["max_context_tokens"] = wc.MaxContextTokens
@@ -918,21 +920,22 @@ func testWickModel(c *tool.Ctx) {
 
 // wickSettingsDTO is the Provider-settings card payload.
 type wickSettingsDTO struct {
-	ShellToolDisabled   bool     `json:"shell_tool_disabled"`
-	HideCapabilities    bool     `json:"hide_capabilities"`
-	CapabilityDisplayMode string `json:"capability_display_mode,omitempty"`
-	Connectors          []string `json:"connectors,omitempty"`
-	MaxContextTokens    int      `json:"max_context_tokens,omitempty"`
-	MaxTurns            int      `json:"max_turns,omitempty"`
-	MaxConsecErrors     int      `json:"max_consec_errors,omitempty"`
-	MaxTurnMinutes      int      `json:"max_turn_minutes,omitempty"`
-	MaxModelRetries     int      `json:"max_model_retries,omitempty"`
-	ModelCallTimeoutSec int      `json:"model_call_timeout_sec,omitempty"`
-	Temperature         *float64 `json:"temperature,omitempty"`
-	TopP                *float64 `json:"top_p,omitempty"`
-	ThinkingBudget      *int     `json:"thinking_budget,omitempty"`
-	ReasoningEffort     string   `json:"reasoning_effort,omitempty"`
-	RawConfig           string   `json:"raw_config,omitempty"`
+	ShellToolDisabled     bool     `json:"shell_tool_disabled"`
+	HideCapabilities      bool     `json:"hide_capabilities"`
+	StreamDisabled        bool     `json:"stream_disabled"`
+	CapabilityDisplayMode string   `json:"capability_display_mode,omitempty"`
+	Connectors            []string `json:"connectors,omitempty"`
+	MaxContextTokens      int      `json:"max_context_tokens,omitempty"`
+	MaxTurns              int      `json:"max_turns,omitempty"`
+	MaxConsecErrors       int      `json:"max_consec_errors,omitempty"`
+	MaxTurnMinutes        int      `json:"max_turn_minutes,omitempty"`
+	MaxModelRetries       int      `json:"max_model_retries,omitempty"`
+	ModelCallTimeoutSec   int      `json:"model_call_timeout_sec,omitempty"`
+	Temperature           *float64 `json:"temperature,omitempty"`
+	TopP                  *float64 `json:"top_p,omitempty"`
+	ThinkingBudget        *int     `json:"thinking_budget,omitempty"`
+	ReasoningEffort       string   `json:"reasoning_effort,omitempty"`
+	RawConfig             string   `json:"raw_config,omitempty"`
 }
 
 // saveWickSettings persists the instance-level WickConfig.
@@ -956,6 +959,7 @@ func saveWickSettings(c *tool.Ctx) {
 	wc := &provider.WickConfig{
 		ShellToolDisabled:     dto.ShellToolDisabled,
 		HideCapabilities:      dto.HideCapabilities,
+		StreamDisabled:        dto.StreamDisabled,
 		CapabilityDisplayMode: strings.TrimSpace(dto.CapabilityDisplayMode),
 		Connectors:            dto.Connectors,
 		MaxContextTokens:      dto.MaxContextTokens,

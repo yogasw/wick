@@ -114,10 +114,14 @@
   // list mode. Mirrors the BE's hide_capabilities (inverted) + display mode.
   let showCaps = $state(true);
   let capsMode = $state<"list" | "name" | "icon">("list");
+  // SSE streaming of model output. Default on; mirrors the BE's stream_disabled
+  // (inverted). Off falls back to the one-shot JSON path.
+  let streamOutput = $state(true);
 
   function seedSettings(s: WickSettingsDTO) {
     shellMode = s.ShellToolDisabled ? "disabled" : "enabled";
     showCaps = s.ShowCapabilities;
+    streamOutput = s.EnableStreaming;
     capsMode = s.CapabilityMode === "name" ? "name" : s.CapabilityMode === "icon" ? "icon" : "list";
     maxContext = s.MaxContextTokens ? String(s.MaxContextTokens) : "";
     maxTurns = s.MaxTurns ? String(s.MaxTurns) : "";
@@ -149,6 +153,7 @@
       await apiSaveWickSettings(base, {
         shell_tool_disabled: shellMode === "disabled",
         hide_capabilities: !showCaps,
+        stream_disabled: !streamOutput,
         capability_display_mode: capsMode,
         max_context_tokens: intOrUndef(maxContext),
         max_turns: intOrUndef(maxTurns),
@@ -823,6 +828,23 @@
               <Select value={capsMode} options={[{ label: "List (name + value)", value: "list" }, { label: "Name chips", value: "name" }, { label: "Icons + tooltip", value: "icon" }]} onChange={(v: string) => (capsMode = v === "name" ? "name" : v === "icon" ? "icon" : "list")} />
             </div>
           {/if}
+          <!-- Streaming: SSE token-by-token output vs one-shot. Default on. -->
+          <div class="flex items-center justify-between gap-4 pt-1">
+            <div class="min-w-0">
+              <p class="text-xs font-medium text-black-900 dark:text-white-100">Stream responses</p>
+              <p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600">Show the model's answer token-by-token as it's generated. Turn off if your gateway doesn't support SSE (falls back to waiting for the full reply).</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={streamOutput}
+              aria-label="Stream responses"
+              onclick={() => (streamOutput = !streamOutput)}
+              class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors {streamOutput ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
+            >
+              <span class="inline-block h-5 w-5 transform rounded-full bg-white-100 shadow transition-transform {streamOutput ? 'translate-x-5' : 'translate-x-0.5'}"></span>
+            </button>
+          </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
           <div>
             <label for="wick-maxctx" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Max context tokens</label>
