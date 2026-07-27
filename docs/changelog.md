@@ -12,6 +12,9 @@ All notable changes to Wick are documented here.
 *   The shared `todo` tool gains an optional **goal latch** (`goal` / `goal_done` / `goal_abandon` fields): while a goal is open, the wick engine keeps working past plain-text replies and turns error/timeout cuts into a nudge to try a different approach — a manual Kill still stops everything immediately.
 *   **Live model sets** gain a sticky **default vendor model**: pin one model as the default used when the set is picked without an explicit `@vendor` override (via the Add/Edit live-set form or a dedicated **Set default model…** picker). Auto-falls back to the top of the list if the pinned model disappears from the vendor. The Add/Edit live-set form now uses a single "default" radio instead of a separate control.
 *   `wick` is now a first-class **skill provider**: `~/.<app>/skills` is registered alongside `~/.claude/skills` etc., appears in the Skills Manager UI and sync flows and the wick session's `/` menu, and the wick agent gets a compact skill catalog in its system prompt (reads a skill's `SKILL.md` on demand).
+#### Fixed
+*   Live model set's filter is now **optional** — leaving it empty matches all of the vendor's models (stored as `*`) instead of requiring a narrowing filter.
+*   Editing a model (including converting a plain model to a live set, or back) now updates it in place instead of leaving a duplicate entry behind.
 
 ---
 
