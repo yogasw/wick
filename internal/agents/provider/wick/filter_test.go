@@ -8,16 +8,18 @@ func TestMatchFilter(t *testing.T) {
 		query string
 		want  bool
 	}{
-		{"", true},                    // blank → everything
-		{"claude", true},              // contains (label)
-		{"cc/", true},                 // contains (id)
-		{"gpt", false},                // missing include term
-		{"cc/ -opus", false},          // excluded by -opus
-		{"cc/ !opus", false},          // excluded by !opus
-		{"cc/ -mini", true},           // exclude term absent → still matches
-		{"claude opus", true},         // multiple include terms, all present
-		{"claude sonnet", false},      // one include term missing
-		{"-", true},                   // lone dash is ignored
+		{"", true},               // blank → everything
+		{"*", true},              // wildcard → everything (live set, no filter)
+		{"  *  ", true},          // wildcard with surrounding space
+		{"claude", true},         // contains (label)
+		{"cc/", true},            // contains (id)
+		{"gpt", false},           // missing include term
+		{"cc/ -opus", false},     // excluded by -opus
+		{"cc/ !opus", false},     // excluded by !opus
+		{"cc/ -mini", true},      // exclude term absent → still matches
+		{"claude opus", true},    // multiple include terms, all present
+		{"claude sonnet", false}, // one include term missing
+		{"-", true},              // lone dash is ignored
 	}
 	for _, c := range cases {
 		if got := MatchFilter(m, c.query); got != c.want {
@@ -39,5 +41,9 @@ func TestFilterModels(t *testing.T) {
 	// Blank query returns the input untouched.
 	if len(FilterModels(models, "  ")) != len(models) {
 		t.Errorf("blank query should return all %d models", len(models))
+	}
+	// "*" wildcard = match-all (a live set with no narrowing filter).
+	if len(FilterModels(models, "*")) != len(models) {
+		t.Errorf("wildcard query should return all %d models", len(models))
 	}
 }

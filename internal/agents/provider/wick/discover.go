@@ -21,6 +21,12 @@ type DiscoveredModel struct {
 // An empty/blank query matches everything. Shared by the FE filter box and the
 // server-side expansion of a live model set, so both agree.
 func MatchFilter(m DiscoveredModel, query string) bool {
+	// "*" (or empty) is the match-all wildcard: a live set with no filter
+	// stands in for the vendor's ENTIRE model list. Lets the user define a
+	// live set without being forced to type a narrowing query.
+	if q := strings.TrimSpace(query); q == "" || q == "*" {
+		return true
+	}
 	hay := strings.ToLower(m.ID + " " + m.Label)
 	for _, raw := range strings.Fields(query) {
 		t := strings.ToLower(raw)
@@ -42,7 +48,7 @@ func MatchFilter(m DiscoveredModel, query string) bool {
 
 // FilterModels returns the subset of models matching query (see MatchFilter).
 func FilterModels(models []DiscoveredModel, query string) []DiscoveredModel {
-	if strings.TrimSpace(query) == "" {
+	if q := strings.TrimSpace(query); q == "" || q == "*" {
 		return models
 	}
 	out := make([]DiscoveredModel, 0, len(models))

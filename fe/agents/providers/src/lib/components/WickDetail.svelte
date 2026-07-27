@@ -439,18 +439,23 @@
     // picker time it expands to the vendor's models matching the filter, so a
     // single entry stands in for many models (no per-model registration).
     if (multiSelect && selectMode === "live") {
-      if (searchTerms.length === 0) { toastError("Type a filter to define the live set"); return; }
       savingModel = true;
       try {
-        // Editing a live set updates in place (carry its id); a live set
-        // switched-on from a plain model edit is a NEW entry (drop the id).
-        const liveID = editing?.DiscoveryFilter ? editing.ID : undefined;
+        // Editing ANY existing entry updates it in place (carry its id) —
+        // including a plain model being converted to a live set. Only a
+        // brand-new live set (no editing target) gets a fresh id. Previously
+        // this dropped the id when converting plain→live, which left the old
+        // plain entry behind and created a duplicate.
+        const liveID = editing?.ID;
+        // Empty filter = match ALL of the vendor's models. Store "*" so the
+        // entry is still recognised as a live set (DiscoveryFilter != "").
+        const filter = modelSearch.trim() || "*";
         await apiSaveWickModel(base, {
           ...baseModelInput(),
           id: liveID,
           model: "", // live set — no single pinned model
-          label: mLabel.trim() || `Live: ${modelSearch.trim()}`,
-          discovery_filter: modelSearch.trim(),
+          label: mLabel.trim() || (filter === "*" ? "Live: all models" : `Live: ${filter}`),
+          discovery_filter: filter,
           default_vendor_model: liveDefaultVendor, // "" clears the pin (top-of-list)
         });
         toastOk(liveID ? "Live model set updated" : "Live model set added");
@@ -1223,7 +1228,7 @@
   {#snippet footer()}
     <Button variant="secondary" disabled={savingModel} onclick={() => { modalOpen = false; }}>Cancel</Button>
     <Button variant="primary" disabled={savingModel} onclick={saveModel}>
-      {#if savingModel}Saving…{:else if multiSelect && selectMode === "live"}Add live set{:else if multiSelect}Add {selectedModels.length || ""} model{selectedModels.length === 1 ? "" : "s"}{:else}Save model{/if}
+      {#if savingModel}Saving…{:else if multiSelect && selectMode === "live"}{editing ? "Save live set" : "Add live set"}{:else if multiSelect}Add {selectedModels.length || ""} model{selectedModels.length === 1 ? "" : "s"}{:else}{editing ? "Save model" : "Add model"}{/if}
     </Button>
   {/snippet}
 </Modal>
