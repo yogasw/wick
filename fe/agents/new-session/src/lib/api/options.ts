@@ -93,9 +93,9 @@ export type ComposerApiCommand = {
   insert?: string;
 };
 
-/* scope=new returns only insert-type commands (skills) — panels/views/switch
-   don't apply before a session exists. provider (a type like "claude") scopes
-   skills to that provider. */
+/* scope=new returns the switch actions (/provider, /project) + insert-type
+   skills — panels/views/send actions need a live session and are dropped.
+   provider (a type like "claude") scopes skills to that provider. */
 export const listComposerCommands = (base: string, scope = "new", provider = "") => {
   const p = new URLSearchParams({ scope });
   if (provider) p.set("provider", provider);

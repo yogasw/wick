@@ -189,6 +189,10 @@
   let keyPlaceholder = $derived(
     editing && editing.HasKey ? "Stored — type to replace" : `Enter API key (e.g. ${kindDefault.keyExample})`,
   );
+  // keyReplacing: an existing key is stored AND the user has typed something —
+  // the new value will overwrite the stored one on save. Drives the API-key
+  // "Saved" → "Replacing…" indicator.
+  let keyReplacing = $derived(mKeyTouched && mKey.trim() !== "");
   let modelPlaceholder = $derived(`e.g. ${kindDefault.modelExample}`);
 
   // discovery
@@ -318,13 +322,26 @@
   function defaultBaseURL(kind: string): string {
     return (KIND_DEFAULTS[kind] ?? KIND_DEFAULTS.other).baseURL;
   }
+  // isAutoBaseURL reports whether the current Base URL is still an
+  // auto-filled vendor default (any known provider's default, or empty) —
+  // i.e. NOT something the user typed themselves. Used to decide whether a
+  // provider switch may re-fill it: a custom proxy URL (e.g. a gateway) is
+  // preserved, an untouched default is swapped for the new vendor's.
+  function isAutoBaseURL(url: string): boolean {
+    const u = url.trim();
+    if (u === "") return true;
+    return Object.values(KIND_DEFAULTS).some((d) => d.baseURL !== "" && d.baseURL === u);
+  }
 
   function onKindChange(v: string) {
     mKind = v;
     // Pre-fill the concrete Base URL for known providers (it's well-known
     // for OpenAI/Anthropic/etc, so show the real value, not a grey hint).
-    // "other" clears it — required, user-supplied.
-    mBaseURL = defaultBaseURL(v);
+    // "other" clears it — required, user-supplied. But NEVER clobber a Base
+    // URL the user typed themselves (a custom proxy / gateway): only re-fill
+    // when the current value is still an auto default. This is what lets an
+    // edited model keep its custom endpoint when the provider is re-picked.
+    if (isAutoBaseURL(mBaseURL)) mBaseURL = defaultBaseURL(v);
     // Reload the model list for the new vendor. Clear the previously
     // discovered list so stale ids don't show.
     discovered = [];
@@ -992,7 +1009,22 @@
     </div>
 
     <div>
-      <label for="m-key" class="block text-sm font-medium text-black-900 dark:text-white-100 mb-1">API key</label>
+      <label for="m-key" class="flex items-center gap-2 text-sm font-medium text-black-900 dark:text-white-100 mb-1">
+        API key
+        <!-- Saved indicator: this model already has a stored (encrypted) key
+             and the user hasn't typed a replacement yet. Turns to "Replacing…"
+             the moment they start typing, so it's clear the new value wins. -->
+        {#if editing && editing.HasKey}
+          {#if keyReplacing}
+            <span class="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">Replacing…</span>
+          {:else}
+            <span class="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-600 dark:text-green-400">
+              <svg viewBox="0 0 16 16" fill="none" class="h-3 w-3"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Saved
+            </span>
+          {/if}
+        {/if}
+      </label>
       <input
         id="m-key"
         type="password"
@@ -1002,7 +1034,9 @@
         placeholder={keyPlaceholder}
         class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
       />
-      <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Encrypted at rest, used server-side only — never sent back to the browser.</p>
+      <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">
+        {#if editing && editing.HasKey && !keyReplacing}A key is already stored for this model — leave blank to keep it. {/if}Encrypted at rest, used server-side only — never sent back to the browser.
+      </p>
     </div>
 
     <div>

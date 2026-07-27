@@ -22,8 +22,23 @@
   let selectedPreset = $state("");
   let selectedProject = $state("");
   let submitting = $state(false);
-  // `/` menu (skills only pre-session) + `@` search over the selected project.
-  let composerCommands = $state<{ value: string; label: string; hint?: string; category?: string }[]>([]);
+  // `/` menu (switch actions + skills, pre-session) + `@` search over the
+  // selected project. A command with an `action` carries a `run` handler; a
+  // skill (insert-type) carries none and inserts its `value` after `/`.
+  let composerCommands = $state<{ value: string; label: string; hint?: string; category?: string; run?: () => void }[]>([]);
+  // Ref to the Composer so a `/provider` command can open its shared picker —
+  // same drill (→ model list) the provider chip uses. Without this the `/`
+  // switch actions had nowhere to route.
+  let composerRef = $state<{ openProvider: () => void; openProject: () => void } | undefined>();
+
+  // Resolve a built-in command's `action` id to a local handler. Only the
+  // switch actions apply before a session exists (the backend already filters
+  // the list to these + skills for scope=new).
+  function actionHandler(action: string): (() => void) | undefined {
+    if (action === "switch:provider") return () => composerRef?.openProvider();
+    if (action === "switch:project") return () => composerRef?.openProject();
+    return undefined;
+  }
 
   function searchMentionFiles(query: string): Promise<string[]> {
     if (!selectedProject) return Promise.resolve([]); // no project → no files to browse
@@ -91,7 +106,11 @@
     const providerType = selectedProvider ? selectedProvider.split("/")[0] : "";
     Effect.runPromise(listComposerCommands(base, "new", providerType).pipe(Effect.provide(WickClientLayer)))
       .then((cmds) => {
-        composerCommands = cmds.map((c) => ({ value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category }));
+        composerCommands = cmds.map((c) =>
+          c.action
+            ? { value: c.id, label: c.label, hint: c.hint, category: c.category, run: actionHandler(c.action) }
+            : { value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category },
+        );
       })
       .catch(() => { /* commands optional */ });
   });
@@ -185,6 +204,7 @@
   {:else}
     <div class="w-full">
       <Composer
+        bind:this={composerRef}
         onSend={handleSend}
         disabled={submitting}
         placeholder="Ask anything…   / commands · @ files"

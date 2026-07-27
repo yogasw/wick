@@ -59,17 +59,17 @@ var builtinComposerCommands = []ComposerCommand{
 // rebuild (as long as any new Action id has an FE handler).
 //
 // ?scope=new (the new-session page, before a session exists) drops the built-in
-// actions — open-panel / change-view / switch-provider only make sense against a
-// live session, and provider/project already have toolbar dropdowns there — so
-// only skills (insert-type) are returned. The default scope returns everything.
+// actions that only make sense against a LIVE session (open-panel / change-view
+// / compact) — but KEEPS the switch actions (/provider, /project), which apply
+// before a session exists and let `/` work even when the selected provider ships
+// no skills (otherwise `/` was inert for a provider like wick). The default scope
+// returns everything.
 func apiComposerCommands(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
 	out := make([]ComposerCommand, 0, len(builtinComposerCommands)+8)
-	if c.Query("scope") != "new" {
-		out = append(out, builtinComposerCommands...)
-	}
+	out = append(out, builtinsForScope(c.Query("scope"))...)
 
 	// ?provider=<type> (claude/codex/gemini) scopes skills to that provider —
 	// each provider has its own skills dir, so their `/` menus differ. Empty
@@ -103,6 +103,24 @@ func apiComposerCommands(c *tool.Ctx) {
 		})
 	}
 	c.JSON(http.StatusOK, ComposerCommandsResponse{Commands: out})
+}
+
+// builtinsForScope returns the built-in `/` commands valid for a scope. The
+// default scope gets all of them; scope=new (pre-session) keeps ONLY the switch
+// actions (/provider, /project) — they apply before a session exists and keep
+// `/` usable even when the selected provider ships no skills. Panels / views /
+// send actions need a live session and are dropped.
+func builtinsForScope(scope string) []ComposerCommand {
+	if scope != "new" {
+		return builtinComposerCommands
+	}
+	out := make([]ComposerCommand, 0, 2)
+	for _, cmd := range builtinComposerCommands {
+		if cmd.Action == "switch:provider" || cmd.Action == "switch:project" {
+			out = append(out, cmd)
+		}
+	}
+	return out
 }
 
 // skillInProvider reports whether a skill exists in the given provider's dir

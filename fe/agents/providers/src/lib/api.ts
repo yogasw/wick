@@ -894,18 +894,26 @@ export type AIRouterStatus = {
   version: string;
   // "not-installed" | "starting" | "running" | "stopped"
   state: string;
+  // prefPort/boundPort: the router's loopback port (preferred / actually bound).
+  // Used to render a concrete default Base URL even before install/start.
+  prefPort: number;
+  boundPort: number;
 };
 
-// apiAIRouterStatus reports install + run state for the given router so the
-// provider form can gate the "Use AI Router" toggle (must be installed +
-// running to enable).
+// apiAIRouterStatus reports install + run state (plus the loopback port) for
+// the given router. The form no longer BLOCKS on this — the config is always
+// editable; status just drives a non-blocking install/run indicator.
 export async function apiAIRouterStatus(base: string, id: string): Promise<AIRouterStatus> {
-  const r = await get<Partial<AIRouterStatus>>(`${base}/airouter/${encodeURIComponent(id)}/status`);
+  const r = await get<Partial<AIRouterStatus> & { pref_port?: number; bound_port?: number }>(
+    `${base}/airouter/${encodeURIComponent(id)}/status`,
+  );
   return {
     installed: r.installed ?? false,
     running: r.running ?? false,
     version: r.version ?? "",
     state: r.state ?? "stopped",
+    prefPort: r.pref_port ?? 0,
+    boundPort: r.bound_port ?? 0,
   };
 }
 
