@@ -321,14 +321,17 @@
     };
   }
 
+  // saveEditor persists ONE kvlist field (env / extra_args / …). It does NOT
+  // reload the detail afterwards: `editorRows` is already the source of truth
+  // for what the user typed, and a reload re-seeds every field + re-fetches
+  // `data`, which yanks focus and reorders rows mid-edit (the "page refreshes
+  // while I type" bug). Persist quietly; the next real page load reconciles.
   async function saveEditor(f: ConfigFieldDTO) {
     const key = `editor-${f.Key}`;
     setBusy(key, true);
     try {
       const serialized = serializeRows(f, editorRows[f.Key] ?? []);
       await apiSaveConfigKey(base, type, name, f.Key, serialized);
-      toastOk(`Saved ${f.Key}`);
-      await load(true);
     } catch (e) {
       toastError(e instanceof Error ? e.message : "Save failed");
     } finally {

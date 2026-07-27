@@ -53,7 +53,7 @@ beforeEach(() => {
   vi.mocked(api.apiDeleteProvider).mockResolvedValue(undefined);
   vi.mocked(api.apiProbeGate).mockResolvedValue(undefined);
   vi.mocked(api.apiGetProviderCatalog).mockResolvedValue({ env: [], args: [] });
-  vi.mocked(api.apiAIRouterStatus).mockResolvedValue({ installed: false, running: false, version: "", state: "stopped" });
+  vi.mocked(api.apiAIRouterStatus).mockResolvedValue({ installed: false, running: false, version: "", state: "stopped", prefPort: 0, boundPort: 0 });
   vi.mocked(api.apiAIRouterSlots).mockResolvedValue([]);
   vi.mocked(api.apiAIRouterModels).mockResolvedValue([]);
 });

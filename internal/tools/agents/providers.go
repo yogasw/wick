@@ -1467,8 +1467,21 @@ func providerChoicesCached(ctx context.Context) []view.ProviderChoiceVM {
 			Name:         st.Instance.Name,
 			Version:      st.Version,
 			UsesAIRouter: st.Instance.UseAIRouter,
-			Models:       modelChoicesFor(st.Instance),
+			Models:       modelChoicesForList(st.Instance),
 		})
+	}
+	return out
+}
+
+// modelChoicesForList is the top-level provider-list variant: it collapses a
+// single-model instance to nil so the picker shows no needless drill arrow
+// (one model = auto-selected). The explicit drill-in endpoint uses
+// modelChoicesFor directly, which returns even a single model so it's still
+// visible/pickable there.
+func modelChoicesForList(ins provider.Instance) []view.ModelChoiceVM {
+	out := modelChoicesFor(ins)
+	if len(out) <= 1 {
+		return nil
 	}
 	return out
 }
@@ -1490,7 +1503,7 @@ func modelChoicesFor(ins provider.Instance) []view.ModelChoiceVM {
 			if label == "" {
 				// A live set has no single model id; use a generic name (the
 				// filter query is never surfaced to the UI).
-				if m.DiscoveryFilter != "" {
+				if m.LiveSet {
 					label = "Live model set"
 				} else {
 					label = m.Model
@@ -1499,7 +1512,7 @@ func modelChoicesFor(ins provider.Instance) []view.ModelChoiceVM {
 			// A live set stays ONE expandable row here (Live=true); the picker
 			// drills into it (a 4th level) by this row's ID — the filter query
 			// stays server-side, never sent to the UI.
-			out = append(out, view.ModelChoiceVM{ID: m.ID, Label: label, Default: m.Default, Live: m.DiscoveryFilter != ""})
+			out = append(out, view.ModelChoiceVM{ID: m.ID, Label: label, Default: m.Default, Live: m.LiveSet})
 		}
 		sort.SliceStable(out, func(i, j int) bool { return out[i].Default && !out[j].Default })
 	} else {
@@ -1509,9 +1522,10 @@ func modelChoicesFor(ins provider.Instance) []view.ModelChoiceVM {
 			out = append(out, view.ModelChoiceVM{ID: m.ID, Label: m.ID, Default: i == 0, Desc: m.Desc})
 		}
 	}
-	if len(out) <= 1 {
-		return nil
-	}
+	// Return the full list — even a single model. The explicit drill-in
+	// endpoint (providerOptionModelsJSON) must show it so the user can still
+	// see/pick the one model; the top-level provider list applies its own
+	// ">1 -> show the arrow" gate itself (see modelChoicesForList).
 	return out
 }
 

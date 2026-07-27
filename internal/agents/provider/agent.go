@@ -127,12 +127,12 @@ const (
 //
 //   - Reason       the enum (clean/idle/stopped/error/respawn)
 //   - ReasonDetail human sentence naming the trigger, e.g.
-//                  "idle grace period expired", "Stop() called (preempt
-//                  or session change)", "respawn for next turn",
-//                  "subprocess exited non-zero"
+//     "idle grace period expired", "Stop() called (preempt
+//     or session change)", "respawn for next turn",
+//     "subprocess exited non-zero"
 //   - ExitCode     OS exit code on abnormal exit (crash); 0 otherwise
 //   - StderrTail   tail of the subprocess stderr on crash — the actual
-//                  error message (bad model id, config.toml error, …)
+//     error message (bad model id, config.toml error, …)
 //   - WaitErr      the raw proc.Wait() error string, if any
 //
 // Only the reader-exit path (natural end / crash) can populate ExitCode
@@ -1027,25 +1027,8 @@ drained:
 		detail.ReasonDetail = "subprocess exited abnormally (no exit code or stderr captured)"
 	}
 
-	// Surface an abnormal exit to the UI as a fatal Error event so the user
-	// sees WHY the agent died — e.g. a codex config.toml error (unsupported
-	// wire_api), a bad model id, or a missing binary — instead of a silent
-	// kill. Emitted via onEvent so it is recorded to history + streamed over
-	// SSE like a parser-level error, before exitReason (store still live).
-	//
-	// Gate on a NON-EMPTY stderr tail, not on ExitError alone: a bare non-zero
-	// exit with no stderr carries nothing user-actionable, and — critically —
-	// also covers idle-kill races and stdin-driven fake spawners (tests) whose
-	// Wait returns an error but which never wrote stderr. Emitting an Error
-	// event for those would inject a spurious turn signal the pool acts on
-	// (double-draining the queue). Real CLI failures write to stderr, so this
-	// keeps the useful case while staying inert for the noise.
-	if reason == ExitError && stderrTail != "" && a.onEvent != nil {
-		a.onEvent(event.AgentEvent{
-			Type:     event.Error,
-			ErrorMsg: "Agent process exited abnormally:\n" + stderrTail,
-		})
-	}
+	// Chat visibility for kill/crash is handled inside exitReasonD so
+	// idle/stop paths (which only call exitReason) also surface a reason.
 	a.exitReasonD(detail)
 }
 
@@ -1099,6 +1082,12 @@ func (a *Agent) exitReason(r ExitReason) {
 // Idempotent because both the idle timer and the reader-exit path call
 // it. OnExit gets the bare enum (unchanged contract); OnExitDetail gets
 // the full detail so the spawn log can record WHY the process ended.
+//
+// Non-clean exits also emit an Error AgentEvent into the live stream /
+// conversation history so the operator AND the next turn's model see
+// WHY the process died (idle TTL, stop, crash) and can re-fix —
+// previously only crash-with-stderr was visible; idle kills were silent
+// in chat ("mati misterius").
 func (a *Agent) exitReasonD(d ExitDetail) {
 	a.mu.Lock()
 	if a.exitReasonSet {
@@ -1108,13 +1097,52 @@ func (a *Agent) exitReasonD(d ExitDetail) {
 	a.exitReasonSet = true
 	hook := a.onExit
 	hookD := a.onExitDetail
+	onEv := a.onEvent
 	a.mu.Unlock()
+
+	if onEv != nil {
+		if msg := exitChatMessage(d); msg != "" {
+			onEv(event.AgentEvent{Type: event.Error, ErrorMsg: msg})
+		}
+	}
 	if hook != nil {
 		hook(d.Reason)
 	}
 	if hookD != nil {
 		hookD(d)
 	}
+}
+
+// exitChatMessage builds the user/model-visible reason for a non-clean
+// exit. Empty = don't emit.
+//
+// Only two paths surface in chat:
+//   - ExitIdle  — the silent-death case ("mati misterius"): no output for
+//     the idle window, process killed. The user/next-turn model needs to
+//     know WHY and that it can resume.
+//   - ExitError with a stderr tail — a real crash (bad model id, config
+//     error); the tail is the actionable message.
+//
+// Deliberately NOT emitted:
+//   - ExitStopped — a deliberate teardown (preempt, session change,
+//     shutdown, pool slot management). It's not a mysterious death, and
+//     emitting an Error event here is read by the pool as a turn signal
+//     (it would drain the queue early — see the concurrent-sessions
+//     scenario test).
+//   - ExitRespawn — a turn boundary for respawn providers, not an end.
+//   - bare ExitError with no stderr — nothing actionable; races idle-kill
+//     and test fakes whose Wait errors without writing stderr.
+func exitChatMessage(d ExitDetail) string {
+	// Only a crash WITH stderr is surfaced in-band: that's the original,
+	// pool-safe behavior. Idle/stopped/respawn exits are NOT emitted as an
+	// Error AgentEvent — doing so corrupts reader/pool turn accounting (an
+	// idle-kill between turns injected a spurious turn, dropping later turns
+	// and wedging the queue). The idle/stop REASON stays in the spawn log via
+	// ExitDetail.ReasonDetail (Recent Spawns), so a kill is never truly silent.
+	if d.Reason == ExitError && d.StderrTail != "" {
+		return "Agent process exited abnormally:\n" + d.StderrTail
+	}
+	return ""
 }
 
 // jsonString escapes s into a JSON string literal so we can embed it

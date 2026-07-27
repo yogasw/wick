@@ -354,11 +354,35 @@ Unlike `claude`/`codex`/`gemini` (which allow multiple named instances), there i
 - **Add a model**: pick a kind (auto-fills the base URL for known vendors), paste the API key, save. Each model gets its own row with edit / set-default / test / duplicate / disable / delete actions.
 - **Single vs Multiple**: the Add/Edit form has a **Single** / **Multiple** toggle above the model search box. Single is the classic flow — pick or type one model id. Multiple lets you register several at once from the discovered vendor list, in one of two sub-modes:
   - **Manual** — tick individual models (or **Select all matching**) and save; each ticked model becomes its own regular entry.
-  - **Live** — type a filter instead of ticking anything, and save **one** entry that stores the filter. This is a **live model set**: no single model id is pinned. At picker time wick re-fetches the vendor's model list and narrows it by the filter live, so the set always reflects whatever the vendor currently offers instead of a fixed snapshot.
-- Filter grammar (used by the Live mode box, and shared by the picker's own filter): space-separated terms; a bare `term` must be contained in the model id or label, a `-term` / `!term` prefix excludes it. Case-insensitive.
+  - **Live** — type a filter (or leave it empty to match **all** of the vendor's models — stored as `*`), and save **one** entry that stores the filter. This is a **live model set**: no single model id is pinned. At picker time wick re-fetches the vendor's model list and narrows it by the filter live, so the set always reflects whatever the vendor currently offers instead of a fixed snapshot.
+- **Sticky default within a live set**: a live set can pin one vendor model as its default — the model used when the set is picked without drilling into a specific `@vendor` model. Set it from the Add/Edit live-set form (click a row in the preview list to pin/unpin it) or via the row's **⋮ → Set default model…** action, which opens a dedicated picker over the vendor's current list. No pin (or a pinned model that has since disappeared from the vendor) falls back to the top of the freshly-fetched, filtered list.
+- Filter grammar (used by the Live mode box, and shared by the picker's own filter): space-separated terms; a bare `term` must be contained in the model id or label, a `-term` / `!term` prefix excludes it. Case-insensitive. An empty filter (or `*`) matches everything — the filter is optional, not required.
+- Editing an entry (plain model or live set) always updates it **in place** — switching a plain model to a live set (or back) reuses the same id instead of leaving a duplicate behind. The Add/Edit button reads "Save …" when editing an existing entry and "Add …" when creating a new one.
 - **Test** sends a minimal 1-token ping to confirm the key + base URL work before relying on it in a session.
 - **Disable** hides a model from the composer without deleting its config.
-- Registering more than one enabled model (or a live set, even alongside a single model) surfaces the same nested provider picker (type ▸ instance ▸ model) in the composer described above — a live model set renders as one expandable row that drills into a 4th level of matching vendor models.
+- Registering more than one enabled model (or a live set, even alongside a single model) surfaces the same nested provider picker (type ▸ instance ▸ model) in the composer described above — a live model set renders as one expandable row that drills into a 4th level of matching vendor models. Both the conversation composer and the new-session composer support this drill-in.
+
+### Loop guards & goal mode
+
+Unlike the CLI providers, wick's agentic loop has no subprocess to fall back on if it stalls — so it carries its own no-progress guards, configurable on the Advanced section of the provider settings card:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `max_turns` | `0` (unlimited) | Caps tool-call rounds in one reply. `0` means the guards below are the only brake. |
+| `max_consec_errors` | `20` | Cuts the turn after this many **consecutive all-error** tool rounds. A round with at least one successful call resets the counter. |
+| `max_turn_minutes` | `60` | Wall-clock ceiling for one reply. |
+| `max_model_retries` | `3` | Total attempts per failing model call (incl. the first). `1` disables retries. |
+| `model_call_timeout_sec` | `120` | Ceiling for one model-call attempt before it counts as failed and retries. |
+
+When a cut fires, it's shown inline in the transcript as `[wick] turn cut: …` (max-turns cap / consecutive errors / wall-clock limit) instead of the turn silently dying.
+
+**Goal mode** overrides the cuts for long-running jobs. The shared `todo` tool (same one used for the checklist widget) accepts an optional `goal` field — passing it opens a durable latch (`goal.json` in the session directory) with the given success criterion. While the goal is **open**:
+
+- A plain-text reply does **not** end the turn — wick nudges the model to keep working toward the goal instead.
+- Hitting the consecutive-error cap or the wall-clock cap does **not** end the turn either — wick emits a nudge (with the error/timeout context) and lets the model try a different approach, resetting that guard's window.
+- A manual **Kill** always wins — it stops the session regardless of an open goal.
+
+The model closes the latch by calling `todo` again with `goal_done: true` (success) or `goal_abandon: true` (giving up); either releases the force-continue behavior and normal turn-ending rules resume. Every provider writes the same `goal.json` file (useful for resuming after a restart), but only the in-process wick engine force-continues on it — CLI providers run their own agentic loop outside wick's control.
 
 ### Session interactions log
 
@@ -383,9 +407,16 @@ A wick session's history is bounded by a context budget. When it nears the limit
 
 Shell commands the wick agent runs don't block on a fixed wall-clock deadline — a long command (installs, builds, crawls) can run as a background job that the agent polls for status/log instead of stalling the turn. This mirrors the same command-gate and approval flow as any other Wick tool call.
 
+### Skills
+
+`wick` is a first-class skill provider, on equal footing with `claude`/`codex`/`gemini`: its own skill directory (`~/.<app>/skills`) is created automatically and registered alongside the others, so it shows up in the [Skills Manager](./skills-manager) UI, the sync/upload flows, and the wick session's `/` menu — no manual folder setup needed. See [Skills Manager](./skills-manager#what-are-skill-directories) for the shared sync mechanics.
+
+Since a wick session runs in-process (no CLI to hand `--add-dir` to and let it load skills itself), wick injects a compact **skill catalog** into its own system prompt: one line per skill (name, one-line description, path to its `SKILL.md`), capped so a large skill library can't blow the prompt budget. The agent reads a skill's full `SKILL.md` on demand via its file-read tool when it actually needs to follow one — the catalog itself never contains the full skill body.
+
 ## See also
 
 - [Projects](./projects) — `default_provider` field per project; how project defaults auto-migrate on rename.
 - [Pool & Sessions](./pool) — how `provider_type` / `provider_name` are forwarded to the spawner.
 - [AI Router](./airouter) — routing provider spawns through an embedded AI router (9router / OmniRoute).
 - [Command Gate](../command-gate) — gate sidecar lives next to the main binary, separate from providers.
+- [Skills Manager](./skills-manager) — shared skill directories, sync, and the file browser UI.

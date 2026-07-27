@@ -2,6 +2,7 @@ package wick
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"iter"
 	"strings"
@@ -32,6 +33,9 @@ func newOpenAIModel(m provider.WickModel) *openAIModel {
 func (m *openAIModel) Name() string { return m.modelID }
 
 func (m *openAIModel) GenerateContent(ctx context.Context, req *LLMRequest, stream bool) iter.Seq2[*LLMResponse, error] {
+	if stream {
+		return m.generateStream(ctx, req)
+	}
 	return func(yield func(*LLMResponse, error) bool) {
 		body := m.buildRequest(req)
 		var resp oaiResponse
@@ -44,14 +48,74 @@ func (m *openAIModel) GenerateContent(ctx context.Context, req *LLMRequest, stre
 	}
 }
 
+// generateStream runs the SSE (stream:true) path: it yields text deltas live
+// as chunks arrive, accumulates tool-call fragments (OpenAI streams tool_calls
+// piecemeal, keyed by index — name+args come in pieces), and finishes with one
+// aggregated yield carrying the full Content + usage. The `[DONE]` sentinel
+// terminates the stream.
+func (m *openAIModel) generateStream(ctx context.Context, req *LLMRequest) iter.Seq2[*LLMResponse, error] {
+	return func(yield func(*LLMResponse, error) bool) {
+		body := m.buildRequest(req)
+		body.Stream = true
+		body.StreamOptions = &oaiStreamOptions{IncludeUsage: true}
+		headers := map[string]string{"Authorization": "Bearer " + m.apiKey}
+
+		agg := &oaiStreamAggregator{}
+		yieldErr := false
+		err := postSSE(ctx, m.baseURL+"/chat/completions", headers, body, func(ev sseEvent) bool {
+			if strings.TrimSpace(ev.Data) == "[DONE]" {
+				return false
+			}
+			var chunk oaiStreamChunk
+			if json.Unmarshal([]byte(ev.Data), &chunk) != nil {
+				return true // skip a malformed frame rather than kill the stream
+			}
+			if chunk.Error != nil {
+				yieldErr = !yield(&LLMResponse{ErrorMessage: chunk.Error.Message, ErrorCode: chunk.Error.Code}, nil)
+				return false
+			}
+			if delta := agg.ingest(&chunk); delta != "" {
+				yieldErr = !yield(&LLMResponse{TextDelta: delta}, nil)
+				if yieldErr {
+					return false
+				}
+			}
+			return true
+		})
+		if yieldErr {
+			return // consumer stopped; nothing more to yield
+		}
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		yield(agg.final(), nil)
+	}
+}
+
 // ── request construction ──────────────────────────────────────────────
 
 type oaiMessage struct {
-	Role       string        `json:"role"`
-	Content    string        `json:"content,omitempty"`
+	Role string `json:"role"`
+	// Content is a plain string for text-only messages, or an array of
+	// oaiContentPart (text + image_url) for a multimodal user message. `any`
+	// so both shapes marshal correctly — OpenAI/OpenRouter accept either.
+	Content    any           `json:"content,omitempty"`
 	ToolCalls  []oaiToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string        `json:"tool_call_id,omitempty"`
 	Name       string        `json:"name,omitempty"`
+}
+
+// oaiContentPart is one element of a multimodal message content array:
+// {type:"text",text:...} or {type:"image_url",image_url:{url:"data:...;base64,..."}}.
+type oaiContentPart struct {
+	Type     string       `json:"type"`
+	Text     string       `json:"text,omitempty"`
+	ImageURL *oaiImageURL `json:"image_url,omitempty"`
+}
+
+type oaiImageURL struct {
+	URL string `json:"url"`
 }
 
 type oaiToolCall struct {
@@ -66,12 +130,31 @@ type oaiToolCallFunc struct {
 }
 
 type oaiRequest struct {
-	Model       string       `json:"model"`
-	Messages    []oaiMessage `json:"messages"`
-	Tools       []oaiTool    `json:"tools,omitempty"`
-	MaxTokens   int          `json:"max_tokens,omitempty"`
-	Temperature *float32     `json:"temperature,omitempty"`
-	TopP        *float32     `json:"top_p,omitempty"`
+	Model         string            `json:"model"`
+	Messages      []oaiMessage      `json:"messages"`
+	Tools         []oaiTool         `json:"tools,omitempty"`
+	MaxTokens     int               `json:"max_tokens,omitempty"`
+	Temperature   *float32          `json:"temperature,omitempty"`
+	TopP          *float32          `json:"top_p,omitempty"`
+	Reasoning     *oaiReasoning     `json:"reasoning,omitempty"`
+	Stream        bool              `json:"stream,omitempty"`
+	StreamOptions *oaiStreamOptions `json:"stream_options,omitempty"`
+}
+
+// oaiStreamOptions asks the server to include a final usage chunk when
+// streaming (OpenAI/OpenRouter omit usage from streamed responses by
+// default), so the engine still gets token counts for calibration.
+type oaiStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+// oaiReasoning is the OpenRouter/OpenAI-compatible reasoning param. Effort is
+// the enum form ("low"|"medium"|"high"); MaxTokens the Anthropic-style token
+// form. OpenRouter normalizes either across vendors; a native OpenAI endpoint
+// reads effort. Only one is sent (effort preferred).
+type oaiReasoning struct {
+	Effort    string `json:"effort,omitempty"`
+	MaxTokens int    `json:"max_tokens,omitempty"`
 }
 
 type oaiTool struct {
@@ -110,6 +193,16 @@ func (m *openAIModel) buildRequest(req *LLMRequest) *oaiRequest {
 			out.MaxTokens = int(req.Config.MaxOutputTokens)
 		}
 	}
+	// Reasoning: prefer the effort enum; else the token budget. OpenRouter
+	// translates either to the underlying model's native param, so this one
+	// shape covers openai / openrouter / grok / other.
+	if r := req.Reasoning; r != nil {
+		if r.Effort != "" {
+			out.Reasoning = &oaiReasoning{Effort: r.Effort}
+		} else if r.BudgetTokens > 0 {
+			out.Reasoning = &oaiReasoning{MaxTokens: r.BudgetTokens}
+		}
+	}
 	return out
 }
 
@@ -124,6 +217,7 @@ func contentToOAI(c *genai.Content) []oaiMessage {
 	var text strings.Builder
 	var toolCalls []oaiToolCall
 	var toolMsgs []oaiMessage
+	var images []oaiContentPart
 	for _, p := range c.Parts {
 		switch {
 		case p == nil:
@@ -144,6 +238,11 @@ func contentToOAI(c *genai.Content) []oaiMessage {
 				Name:       p.FunctionResponse.Name,
 				Content:    responseText(p.FunctionResponse.Response),
 			})
+		case p.InlineData != nil && len(p.InlineData.Data) > 0:
+			// image_url with a base64 data-URL — OpenAI's multimodal shape,
+			// which OpenRouter forwards to any vision model (incl. Claude/Grok).
+			url := "data:" + p.InlineData.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(p.InlineData.Data)
+			images = append(images, oaiContentPart{Type: "image_url", ImageURL: &oaiImageURL{URL: url}})
 		case p.Text != "" && !p.Thought:
 			text.WriteString(p.Text)
 		}
@@ -155,11 +254,24 @@ func contentToOAI(c *genai.Content) []oaiMessage {
 	if c.Role == genai.RoleModel {
 		role = "assistant"
 	}
-	msg := oaiMessage{Role: role, Content: text.String()}
+	msg := oaiMessage{Role: role}
+	if len(images) > 0 {
+		// Multimodal: content is an array — a text part (if any) then the
+		// image parts. Scalar-string form is kept for the text-only path so
+		// existing behaviour is byte-identical when there are no images.
+		parts := make([]oaiContentPart, 0, len(images)+1)
+		if t := text.String(); t != "" {
+			parts = append(parts, oaiContentPart{Type: "text", Text: t})
+		}
+		parts = append(parts, images...)
+		msg.Content = parts
+	} else {
+		msg.Content = text.String()
+	}
 	if len(toolCalls) > 0 {
 		msg.ToolCalls = toolCalls
 	}
-	if msg.Content == "" && len(msg.ToolCalls) == 0 {
+	if len(images) == 0 && text.Len() == 0 && len(msg.ToolCalls) == 0 {
 		return nil
 	}
 	return []oaiMessage{msg}
@@ -187,6 +299,122 @@ type oaiResponse struct {
 		Message string `json:"message"`
 		Code    string `json:"code"`
 	} `json:"error"`
+}
+
+// ── streaming ──────────────────────────────────────────────────────────
+
+// oaiUsage is the token accounting block, shared by the non-streaming
+// response and the streamed trailing usage chunk.
+type oaiUsage struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+}
+
+// oaiStreamChunk is one `chat.completions.chunk` SSE frame: a delta on the
+// first (only) choice, plus an optional trailing usage block (when
+// stream_options.include_usage was set).
+type oaiStreamChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage *oaiUsage `json:"usage"`
+	Error *struct {
+		Message string `json:"message"`
+		Code    string `json:"code"`
+	} `json:"error"`
+}
+
+// oaiStreamAggregator folds streamed chunks into a final response: text is
+// concatenated, tool calls are reassembled by index (id/name arrive once, the
+// arguments string streams in fragments), and the trailing usage chunk is kept.
+type oaiStreamAggregator struct {
+	text  strings.Builder
+	calls []oaiToolCall // dense by first-seen order; index maps into this
+	byIdx map[int]int   // chunk tool-call index → position in calls
+	usage *oaiUsage
+}
+
+// ingest folds one chunk in and returns any text delta to emit live (empty
+// when the chunk carried only tool-call fragments or usage).
+func (a *oaiStreamAggregator) ingest(c *oaiStreamChunk) string {
+	if c.Usage != nil {
+		a.usage = c.Usage
+	}
+	if len(c.Choices) == 0 {
+		return ""
+	}
+	d := c.Choices[0].Delta
+	for _, tc := range d.ToolCalls {
+		if a.byIdx == nil {
+			a.byIdx = map[int]int{}
+		}
+		pos, ok := a.byIdx[tc.Index]
+		if !ok {
+			pos = len(a.calls)
+			a.byIdx[tc.Index] = pos
+			a.calls = append(a.calls, oaiToolCall{Type: "function"})
+		}
+		if tc.ID != "" {
+			a.calls[pos].ID = tc.ID
+		}
+		if tc.Type != "" {
+			a.calls[pos].Type = tc.Type
+		}
+		if tc.Function.Name != "" {
+			a.calls[pos].Function.Name = tc.Function.Name
+		}
+		a.calls[pos].Function.Arguments += tc.Function.Arguments
+	}
+	if d.Content != "" {
+		a.text.WriteString(d.Content)
+	}
+	return d.Content
+}
+
+// final builds the aggregated LLMResponse from everything ingested — the same
+// shape toLLMResponse produces for the non-streaming path, so the engine and
+// history handle a streamed turn identically.
+func (a *oaiStreamAggregator) final() *LLMResponse {
+	out := &LLMResponse{}
+	parts := make([]*genai.Part, 0, 1+len(a.calls))
+	if t := a.text.String(); t != "" {
+		parts = append(parts, &genai.Part{Text: t})
+	}
+	for _, tc := range a.calls {
+		var args map[string]any
+		_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+		parts = append(parts, &genai.Part{FunctionCall: &genai.FunctionCall{
+			ID:   tc.ID,
+			Name: tc.Function.Name,
+			Args: args,
+		}})
+	}
+	out.Content = &genai.Content{Role: genai.RoleModel, Parts: parts}
+	if u := a.usage; u != nil {
+		out.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:        int32(u.PromptTokens),
+			CandidatesTokenCount:    int32(u.CompletionTokens),
+			CachedContentTokenCount: int32(u.PromptTokensDetails.CachedTokens),
+			TotalTokenCount:         int32(u.TotalTokens),
+		}
+	}
+	return out
 }
 
 func (m *openAIModel) toLLMResponse(r *oaiResponse) *LLMResponse {

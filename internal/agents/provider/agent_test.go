@@ -242,6 +242,12 @@ func TestAgentIdleTTLKills(t *testing.T) {
 	}
 }
 
+// NOTE: idle/stopped kills deliberately do NOT emit an in-band Error
+// AgentEvent (see exitChatMessage in agent.go) — that corrupted the pool's
+// turn accounting. The kill REASON lives in the spawn log (ExitDetail),
+// verified via OnExitDetail, not OnEvent. Only a crash-with-stderr surfaces
+// in-band; that path is covered by the reader-exit tests.
+
 // TestAgentStopDoesNotHangOnStubbornStdout reproduces the Windows bug
 // where killing a subprocess does not immediately EOF its stdout pipe.
 // Stop() must return within a bounded time even when the reader loop's
