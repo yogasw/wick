@@ -315,6 +315,13 @@ type WickModel struct {
 	// Model may be empty for a live set. Lets one entry stand in for many
 	// models without registering each by hand.
 	DiscoveryFilter string `json:"discovery_filter,omitempty"`
+	// DefaultVendorModel is the sticky default vendor model id WITHIN a live
+	// set (only meaningful when DiscoveryFilter is set). When this live set is
+	// picked without an explicit "@vendor" override, the spawn uses this id if
+	// it's still present in the freshly-fetched list; if it has vanished, the
+	// picker/spawn auto-fall back to the top of the filtered list. Empty = no
+	// pin, top-of-list is the effective default.
+	DefaultVendorModel string `json:"default_vendor_model,omitempty"`
 }
 
 // WickConfig is the instance-level settings block for the wick
@@ -330,6 +337,11 @@ type WickConfig struct {
 	MaxContextTokens int `json:"max_context_tokens,omitempty"`
 	// MaxTurns caps the agentic loop per user turn. 0 = unlimited.
 	MaxTurns int `json:"max_turns,omitempty"`
+	// MaxConsecErrors cuts a turn after N consecutive all-error tool
+	// rounds (a success resets the counter). 0 = default (20).
+	MaxConsecErrors int `json:"max_consec_errors,omitempty"`
+	// MaxTurnMinutes is the wall-clock ceiling for one turn. 0 = default (60).
+	MaxTurnMinutes int `json:"max_turn_minutes,omitempty"`
 	// MaxModelRetries is the total attempts for a failing model call (incl. the
 	// first). 0 = default (3). 1 disables retries.
 	MaxModelRetries int `json:"max_model_retries,omitempty"`

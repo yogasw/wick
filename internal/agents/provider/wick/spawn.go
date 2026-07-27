@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 	provider "github.com/yogasw/wick/internal/agents/provider"
@@ -106,6 +107,12 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 	if ctxFiles := loadContextFiles(opt.Workspace); ctxFiles != "" {
 		sysPrompt = strings.TrimSpace(sysPrompt + "\n\n" + ctxFiles)
 	}
+	// Skill catalog: wick runs in-process (no CLI --add-dir), so it must tell
+	// the model which skills exist. Compact — names + descriptions + SKILL.md
+	// paths; the agent reads a skill's body on demand via read_file.
+	if cat := skillCatalog(); cat != "" {
+		sysPrompt = strings.TrimSpace(sysPrompt + "\n\n" + cat)
+	}
 
 	eng := newEngine(llm, m.Model, sysPrompt, genCfg, tools, history, resolved.MaxTurns, emit)
 	eng.setModelID(m.ID)
@@ -124,6 +131,7 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 	eng.setSteer(p.msgs)
 	if wc != nil {
 		eng.setRetryPolicy(retryPolicyFromConfig(wc.MaxModelRetries, wc.ModelCallTimeoutSec))
+		eng.setLoopGuards(wc.MaxConsecErrors, time.Duration(wc.MaxTurnMinutes)*time.Minute)
 	}
 	eng.start()
 
@@ -169,7 +177,15 @@ func pickModel(inst *provider.Instance, modelID string) (provider.WickModel, boo
 		for _, m := range inst.WickModels {
 			if m.ID == entryID && !m.Disabled {
 				if vendorID != "" {
-					m.Model = vendorID // live-set override
+					m.Model = vendorID // explicit live-set override
+				} else if m.DiscoveryFilter != "" && m.Model == "" && m.DefaultVendorModel != "" {
+					// Live set picked WITHOUT an @vendor override → use the
+					// sticky default vendor model so the spawn has a concrete
+					// id (a live set has no base Model of its own). A stale pin
+					// is corrected at picker time (expandLiveWickSet re-marks
+					// the top of the fresh list as default); this is the
+					// last-resort resolution when only the entry id arrives.
+					m.Model = m.DefaultVendorModel
 				}
 				return m, true
 			}
@@ -195,8 +211,9 @@ func pickModel(inst *provider.Instance, modelID string) (provider.WickModel, boo
 
 // resolveWickConfig applies defaults to the instance config so the
 // engine + tools always see a populated view (shell + fs on by default;
-// MaxTurns 0 → engine's own safety cap). todo has no toggle here
-// anymore — see WickConfigResolved's doc comment.
+// MaxTurns 0 → unlimited; the engine's consec-error + wall-clock guards
+// are the safety net). todo has no toggle here anymore — see
+// WickConfigResolved's doc comment.
 func resolveWickConfig(wc *provider.WickConfig) *WickConfigResolved {
 	r := &WickConfigResolved{ShellTool: true, FsTools: true, MaxTurns: 0}
 	if wc != nil {

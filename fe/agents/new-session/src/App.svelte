@@ -3,7 +3,7 @@
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastError } from "@wick-fe/common-stores";
   import { ToastHost, Composer } from "@wick-fe/common-ui";
-  import { getProviderOptions, getPresetOptions, getProjectOptions, createSession, searchProjectFiles, listComposerCommands } from "$lib/api/options.js";
+  import { getProviderOptions, getProviderOptionModels, getPresetOptions, getProjectOptions, createSession, searchProjectFiles, listComposerCommands } from "$lib/api/options.js";
   import type { ProviderOption, PresetOption, ProjectOption } from "$lib/api/options.js";
 
   const appEl = document.getElementById("app");
@@ -123,7 +123,18 @@
       ? { options: projectOptions, value: selectedProject, onChange: (v: string) => { selectedProject = v; applyProjectDefaults(v); } }
       : undefined,
   );
-  const providerSelect = $derived({ options: providerOptions, value: selectedProvider, onChange: (v: string) => (selectedProvider = v) });
+  // Live model loader for the composer's model drill-in — same contract as the
+  // conversation composer. `optionValue` is a "type/name" key; ask the server
+  // for that instance's current vendor models (and level-4 live-set expansion
+  // via opts.entry). Without this wired, live-set rows showed "No extra models".
+  function loadProviderModels(optionValue: string, opts?: { entry?: string }) {
+    const slash = optionValue.indexOf("/");
+    const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
+    const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
+    return Effect.runPromise(getProviderOptionModels(base, type, name, opts).pipe(Effect.provide(WickClientLayer)));
+  }
+
+  const providerSelect = $derived({ options: providerOptions, value: selectedProvider, onChange: (v: string) => (selectedProvider = v), loadModels: loadProviderModels });
   const presetSelect = $derived(
     presets.length > 0
       ? { options: presetOptions, value: selectedPreset, onChange: (v: string) => (selectedPreset = v) }

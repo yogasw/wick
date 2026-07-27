@@ -1024,6 +1024,9 @@ export interface WickModelDTO {
   /** Non-empty → a live model set: the picker expands this to the vendor's
       models filtered by this query, rather than one pinned model. */
   DiscoveryFilter: string;
+  /** Sticky default vendor model id WITHIN a live set (only meaningful when
+      DiscoveryFilter is set). Empty = top-of-list is the effective default. */
+  DefaultVendorModel: string;
 }
 
 export interface WickSettingsDTO {
@@ -1031,6 +1034,10 @@ export interface WickSettingsDTO {
   Connectors: string[];
   MaxContextTokens: number;
   MaxTurns: number;
+  MaxConsecErrors: number;
+  MaxTurnMinutes: number;
+  MaxModelRetries: number;
+  ModelCallTimeoutSec: number;
   Temperature: number | null;
   TopP: number | null;
   ThinkingBudget: number | null;
@@ -1056,6 +1063,7 @@ interface WireWickModel {
   thinking_budget?: number | null;
   raw_config?: string;
   discovery_filter?: string;
+  default_vendor_model?: string;
 }
 
 interface WireWickSettings {
@@ -1063,6 +1071,10 @@ interface WireWickSettings {
   connectors?: string[] | null;
   max_context_tokens?: number;
   max_turns?: number;
+  max_consec_errors?: number;
+  max_turn_minutes?: number;
+  max_model_retries?: number;
+  model_call_timeout_sec?: number;
   temperature?: number | null;
   top_p?: number | null;
   thinking_budget?: number | null;
@@ -1087,6 +1099,7 @@ function mapWickModel(w: WireWickModel): WickModelDTO {
     ThinkingBudget: w.thinking_budget ?? null,
     RawConfig: w.raw_config ?? "",
     DiscoveryFilter: w.discovery_filter ?? "",
+    DefaultVendorModel: w.default_vendor_model ?? "",
   };
 }
 
@@ -1096,6 +1109,10 @@ function mapWickSettings(w: WireWickSettings | null | undefined): WickSettingsDT
     Connectors: w?.connectors ?? [],
     MaxContextTokens: w?.max_context_tokens ?? 0,
     MaxTurns: w?.max_turns ?? 0,
+    MaxConsecErrors: w?.max_consec_errors ?? 0,
+    MaxTurnMinutes: w?.max_turn_minutes ?? 0,
+    MaxModelRetries: w?.max_model_retries ?? 0,
+    ModelCallTimeoutSec: w?.model_call_timeout_sec ?? 0,
     Temperature: w?.temperature ?? null,
     TopP: w?.top_p ?? null,
     ThinkingBudget: w?.thinking_budget ?? null,
@@ -1137,6 +1154,9 @@ export type WickModelInput = {
   raw_config?: string;
   /** Set for a live model set; `model` may be empty then. */
   discovery_filter?: string;
+  /** Sticky default vendor model within a live set (only with discovery_filter).
+      Empty string clears the pin (→ top-of-list). */
+  default_vendor_model?: string;
 };
 
 export async function apiSaveWickModel(base: string, input: WickModelInput): Promise<{ status: string; id: string }> {
@@ -1150,6 +1170,14 @@ export async function apiDeleteWickModel(base: string, id: string): Promise<void
 
 export async function apiSetWickModelDefault(base: string, id: string): Promise<void> {
   return post<void>(`${base}/providers/wick/models/${encodeURIComponent(id)}/default`);
+}
+
+// apiSetWickDefaultVendorModel pins the sticky default vendor model WITHIN a
+// live set (the id used when the set is picked with no explicit @vendor).
+// Empty vendorModel clears the pin (→ top-of-list). The entry must be a live
+// set (has a discovery filter).
+export async function apiSetWickDefaultVendorModel(base: string, id: string, vendorModel: string): Promise<void> {
+  return post<void>(`${base}/providers/wick/models/${encodeURIComponent(id)}/default-vendor`, { vendor_model: vendorModel });
 }
 
 export async function apiSetWickModelDisabled(base: string, id: string, disabled: boolean): Promise<void> {
@@ -1175,6 +1203,10 @@ export type WickSettingsInput = {
   connectors?: string[];
   max_context_tokens?: number;
   max_turns?: number;
+  max_consec_errors?: number;
+  max_turn_minutes?: number;
+  max_model_retries?: number;
+  model_call_timeout_sec?: number;
   temperature?: number;
   top_p?: number;
   thinking_budget?: number;
@@ -1183,6 +1215,23 @@ export type WickSettingsInput = {
 
 export async function apiSaveWickSettings(base: string, input: WickSettingsInput): Promise<void> {
   return post<void>(`${base}/providers/wick/settings`, input);
+}
+
+// apiGetWickLiveSetModels expands ONE live set (by its entry id) into its
+// current vendor models, already filtered by the set's discovery query and
+// with the sticky default marked (top-of-list when the pin is missing) —
+// the same server path the composer picker uses. For the "set default model"
+// picker on a live-set row.
+export async function apiGetWickLiveSetModels(
+  base: string,
+  entryId: string,
+): Promise<{ id: string; label: string; default: boolean }[]> {
+  const r = await get<{ models?: { id?: string; label?: string; default?: boolean }[] | null }>(
+    `${base}/providers/options/wick/wick/models?entry=${encodeURIComponent(entryId)}`,
+  );
+  return (r?.models ?? [])
+    .map((m) => ({ id: m.id ?? "", label: m.label ?? m.id ?? "", default: m.default ?? false }))
+    .filter((m) => m.id !== "");
 }
 
 export type WickDiscoverInput = { kind: string; api_key?: string; base_url?: string; model_ref?: string };

@@ -225,9 +225,9 @@ describe("ProvidersList - wick built-in card", () => {
     vi.mocked(api.apiGetProviders).mockResolvedValue(withWick());
     vi.mocked(api.apiGetWickConfig).mockResolvedValue({
       models: [
-        { ID: "m_1", Kind: "google", Label: "Gemini Flash", Model: "gemini-flash-latest", KeyMasked: "••", HasKey: true, BaseURL: "", APIFormat: "gemini", MaxOutputTokens: 0, Default: true, Disabled: false, Temperature: null, TopP: null, ThinkingBudget: null, RawConfig: "" },
+        { ID: "m_1", Kind: "google", Label: "Gemini Flash", Model: "gemini-flash-latest", KeyMasked: "••", HasKey: true, BaseURL: "", APIFormat: "gemini", MaxOutputTokens: 0, Default: true, Disabled: false, Temperature: null, TopP: null, ThinkingBudget: null, RawConfig: "", DiscoveryFilter: "", DefaultVendorModel: "" },
       ],
-      settings: { ShellToolDisabled: false, Connectors: [], MaxContextTokens: 0, MaxTurns: 0, Temperature: null, TopP: null, ThinkingBudget: null, RawConfig: "" },
+      settings: { ShellToolDisabled: false, Connectors: [], MaxContextTokens: 0, MaxTurns: 0, MaxConsecErrors: 0, MaxTurnMinutes: 0, MaxModelRetries: 0, ModelCallTimeoutSec: 0, Temperature: null, TopP: null, ThinkingBudget: null, RawConfig: "" },
     });
     const onNavigate = vi.fn();
     render(ProvidersList, { props: { onNavigate, onOpenSession: vi.fn(), base: "/wick" } });
@@ -245,7 +245,7 @@ describe("ProvidersList - wick built-in card", () => {
     vi.mocked(api.apiGetProviders).mockResolvedValue(withWick());
     vi.mocked(api.apiGetWickConfig).mockResolvedValue({
       models: [],
-      settings: { ShellToolDisabled: false, Connectors: [], MaxContextTokens: 0, MaxTurns: 0, Temperature: null, TopP: null, ThinkingBudget: null, RawConfig: "" },
+      settings: { ShellToolDisabled: false, Connectors: [], MaxContextTokens: 0, MaxTurns: 0, MaxConsecErrors: 0, MaxTurnMinutes: 0, MaxModelRetries: 0, ModelCallTimeoutSec: 0, Temperature: null, TopP: null, ThinkingBudget: null, RawConfig: "" },
     });
     render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "/wick" } });
     expect(await screen.findByText("Needs setup")).toBeTruthy();

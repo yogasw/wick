@@ -39,6 +39,27 @@ export const getProviderOptions = (base: string) =>
     ),
   );
 
+// getProviderOptionModels asks the server for one configured provider's LIVE
+// model list (wick → vendor API with the stored key; CLI → effective seed).
+// The composer calls this lazily when the user drills into a provider so the
+// list reflects what the vendor actually serves now, not a build-time seed.
+// `entry` expands ONE live model set by its id (the 4th picker level); the
+// vendor filter stays server-side. Without it the endpoint returns the
+// instance's top-level model choices. Mirrors the conversation composer's
+// loader so the new-session picker can expand live sets identically (before
+// this it had no loader wired, so live-set rows showed "No extra models").
+export const getProviderOptionModels = (
+  base: string,
+  type: string,
+  name: string,
+  opts?: { entry?: string },
+) => {
+  const q = opts?.entry ? `?entry=${encodeURIComponent(opts.entry)}` : "";
+  return apiGetE<{ models?: ProviderModelOption[] | null }>(
+    `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${q}`,
+  ).pipe(Effect.map((r) => r.models ?? []));
+};
+
 export const getPresetOptions = (base: string) =>
   apiGetE<PresetOption[] | null>(`${base}/presets/options`).pipe(
     Effect.map((r) => r ?? []),

@@ -3,12 +3,18 @@ package wick
 import (
 	"context"
 	"iter"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/genai"
 
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
+	"github.com/yogasw/wick/internal/agents/session"
 )
 
 // fakeModel is a scripted LLM: it returns the queued responses in
@@ -309,5 +315,346 @@ func TestEngineErrorSurfaced(t *testing.T) {
 	}
 	if !gotErr {
 		t.Errorf("missing Error event with key hint; events=%+v", evs)
+	}
+}
+
+// errTool returns a toolDef whose handler always fails (isErr=true) —
+// used to drive the consecutive-error guard.
+func errTool(name string) toolDef {
+	return toolDef{
+		decl: &genai.FunctionDeclaration{Name: name},
+		handler: func(ctx context.Context, args map[string]any) (string, bool) {
+			return "boom: " + name, true
+		},
+	}
+}
+
+func okTool(name string) toolDef {
+	return toolDef{
+		decl: &genai.FunctionDeclaration{Name: name},
+		handler: func(ctx context.Context, args map[string]any) (string, bool) {
+			return "ok", false
+		},
+	}
+}
+
+// repeatResp returns n copies of a tool-call response for the fake model.
+func repeatResp(n int, name string) []*LLMResponse {
+	out := make([]*LLMResponse, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, toolCallResp(name, map[string]any{}))
+	}
+	return out
+}
+
+// doneText returns the turn's full streamed text and asserts the turn
+// ended with a Done event (the parser drops doneLine's .result, so
+// transcript text arrives via TextDelta only).
+func doneText(t *testing.T, lines []string) string {
+	t.Helper()
+	var txt strings.Builder
+	gotDone := false
+	for _, e := range collectParsed(t, lines) {
+		switch e.Type {
+		case event.TextDelta:
+			txt.WriteString(e.Text)
+		case event.Done:
+			gotDone = true
+		}
+	}
+	if !gotDone {
+		t.Fatal("no Done event")
+	}
+	return txt.String()
+}
+
+// TestEngineConsecErrorCut: N consecutive all-error rounds cut the turn
+// with a visible reason in the done text.
+func TestEngineConsecErrorCut(t *testing.T) {
+	f := &fakeModel{responses: repeatResp(10, "bad")}
+	eng, lines := newTestEngine(f, []toolDef{errTool("bad")})
+	eng.setLoopGuards(3, 0)
+	eng.start()
+	eng.runTurn(context.Background(), "go")
+
+	if f.calls != 3 {
+		t.Errorf("model calls = %d, want 3 (cut at 3rd consecutive error)", f.calls)
+	}
+	txt := doneText(t, *lines)
+	if !strings.Contains(txt, "3 consecutive tool errors") {
+		t.Errorf("done text missing cut reason: %q", txt)
+	}
+}
+
+// TestEngineConsecErrorReset: a success between errors resets the counter,
+// so err,err,ok,err,err,ok... never hits maxConsecErr=3.
+func TestEngineConsecErrorReset(t *testing.T) {
+	resp := []*LLMResponse{
+		toolCallResp("bad", map[string]any{}),
+		toolCallResp("bad", map[string]any{}),
+		toolCallResp("good", map[string]any{}),
+		toolCallResp("bad", map[string]any{}),
+		toolCallResp("bad", map[string]any{}),
+		textResp("survived"),
+	}
+	f := &fakeModel{responses: resp}
+	eng, lines := newTestEngine(f, []toolDef{errTool("bad"), okTool("good")})
+	eng.setLoopGuards(3, 0)
+	eng.start()
+	eng.runTurn(context.Background(), "go")
+
+	txt := doneText(t, *lines)
+	if strings.Contains(txt, "turn cut") {
+		t.Errorf("turn was cut despite counter reset: %q", txt)
+	}
+	if !strings.Contains(txt, "survived") {
+		t.Errorf("expected final text, got %q", txt)
+	}
+}
+
+// TestEngineMaxTurnsOptIn: explicit maxTurns still cuts, visibly.
+func TestEngineMaxTurnsOptIn(t *testing.T) {
+	f := &fakeModel{responses: repeatResp(10, "good")}
+	var lines []string
+	emit := func(b []byte) { lines = append(lines, string(b)) }
+	eng := newEngine(f, "fake", "", &genai.GenerateContentConfig{}, []toolDef{okTool("good")}, nil, 3, emit)
+	eng.start()
+	eng.runTurn(context.Background(), "go")
+
+	if f.calls != 3 {
+		t.Errorf("model calls = %d, want 3", f.calls)
+	}
+	txt := doneText(t, lines)
+	if !strings.Contains(txt, "max_turns cap (3)") {
+		t.Errorf("done text missing max_turns reason: %q", txt)
+	}
+}
+
+// TestEngineUnlimitedByDefault: maxTurns 0 = unlimited — 60 successful
+// rounds (past the old 50 cap) run to completion without a cut.
+func TestEngineUnlimitedByDefault(t *testing.T) {
+	resp := repeatResp(60, "good")
+	resp = append(resp, textResp("done after 60"))
+	f := &fakeModel{responses: resp}
+	eng, lines := newTestEngine(f, []toolDef{okTool("good")})
+	eng.start()
+	eng.runTurn(context.Background(), "go")
+
+	txt := doneText(t, *lines)
+	if strings.Contains(txt, "turn cut") {
+		t.Errorf("unexpected cut: %q", txt)
+	}
+	if !strings.Contains(txt, "done after 60") {
+		t.Errorf("expected completion text, got %q", txt)
+	}
+}
+
+// TestEngineWallClockCut: exceeding maxTurnDur cuts the turn with a
+// visible wall-clock reason.
+func TestEngineWallClockCut(t *testing.T) {
+	slow := toolDef{
+		decl: &genai.FunctionDeclaration{Name: "slow"},
+		handler: func(ctx context.Context, args map[string]any) (string, bool) {
+			time.Sleep(20 * time.Millisecond)
+			return "ok", false
+		},
+	}
+	f := &fakeModel{responses: repeatResp(50, "slow")}
+	eng, lines := newTestEngine(f, []toolDef{slow})
+	eng.setLoopGuards(0, 10*time.Millisecond)
+	eng.start()
+	eng.runTurn(context.Background(), "go")
+
+	txt := doneText(t, *lines)
+	if !strings.Contains(txt, "wall-clock limit") {
+		t.Errorf("done text missing wall-clock reason: %q", txt)
+	}
+}
+
+// TestEngineBatchPartialSuccessResets: a round with one err + one ok
+// counts as progress (resets the counter).
+func TestEngineBatchPartialSuccessResets(t *testing.T) {
+	mixed := &LLMResponse{Content: &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{
+		{FunctionCall: &genai.FunctionCall{ID: "c1", Name: "bad", Args: map[string]any{}}},
+		{FunctionCall: &genai.FunctionCall{ID: "c2", Name: "good", Args: map[string]any{}}},
+	}}}
+	f := &fakeModel{responses: []*LLMResponse{mixed, mixed, mixed, textResp("fine")}}
+	eng, lines := newTestEngine(f, []toolDef{errTool("bad"), okTool("good")})
+	eng.setLoopGuards(2, 0)
+	eng.start()
+	eng.runTurn(context.Background(), "go")
+
+	txt := doneText(t, *lines)
+	if strings.Contains(txt, "turn cut") {
+		t.Errorf("mixed batch should reset counter, got cut: %q", txt)
+	}
+}
+
+// TestEngineGoalForceContinue: with an open goal, plain text does NOT end
+// the turn — the engine loops until the model releases the latch.
+func TestEngineGoalForceContinue(t *testing.T) {
+	dir := t.TempDir()
+	if err := session.OpenGoal(agentconfig.NewLayout(""), "", "x", ""); err == nil {
+		// OpenGoal needs a real session id; write the latch via Dir form.
+	}
+	// Seed an open goal file directly under the session dir.
+	writeOpenGoal(t, dir, "find 3 houses")
+
+	// Model: text (no tools) → text → then completes the goal via a tool.
+	completeGoal := toolDef{
+		decl: &genai.FunctionDeclaration{Name: "done_it"},
+		handler: func(ctx context.Context, args map[string]any) (string, bool) {
+			// Close the latch so the next plain-text round ends the turn.
+			closeOpenGoal(t, dir)
+			return "ok", false
+		},
+	}
+	f := &fakeModel{responses: []*LLMResponse{
+		textResp("still looking..."),              // would end turn, but goal open → continue
+		textResp("found some, verifying..."),      // continue again
+		toolCallResp("done_it", map[string]any{}), // closes the latch
+		textResp("done: 3 houses"),                // goal closed → ends turn
+	}}
+	eng, lines := newTestEngine(f, []toolDef{completeGoal})
+	eng.setToolSpillDir(dir) // seeds sessionDir so goal lookups resolve
+	eng.start()
+	eng.runTurn(context.Background(), "go")
+
+	if f.calls < 4 {
+		t.Errorf("expected force-continue past plain text (>=4 model calls), got %d", f.calls)
+	}
+	txt := doneText(t, *lines)
+	if !strings.Contains(txt, "done: 3 houses") {
+		t.Errorf("expected final text after goal closed, got %q", txt)
+	}
+}
+
+// TestEngineWallClockNudgeUnderGoal: wall-clock does NOT cut while a goal
+// is open — it nudges and keeps going instead of truncating. The model
+// eventually closes the goal, and the turn ends cleanly.
+func TestEngineWallClockNudgeUnderGoal(t *testing.T) {
+	dir := t.TempDir()
+	writeOpenGoal(t, dir, "long job")
+	// Close the goal from a tool on the 2nd round; the model then answers.
+	round := 0
+	step := toolDef{
+		decl: &genai.FunctionDeclaration{Name: "step"},
+		handler: func(ctx context.Context, args map[string]any) (string, bool) {
+			round++
+			if round >= 2 {
+				closeOpenGoal(t, dir)
+			}
+			return "ok", false
+		},
+	}
+	f := &fakeModel{responses: []*LLMResponse{
+		toolCallResp("step", map[string]any{}),
+		toolCallResp("step", map[string]any{}), // closes goal
+		textResp("finished"),
+	}}
+	eng, lines := newTestEngine(f, []toolDef{step})
+	eng.setToolSpillDir(dir)
+	// Window large enough that a normal round doesn't trip it, so the
+	// nudge path is exercised only if we force it — here we assert the
+	// turn completes (no cut) with the goal driving continuation.
+	eng.setLoopGuards(0, time.Hour)
+	eng.start()
+	eng.runTurn(context.Background(), "go")
+
+	txt := doneText(t, *lines)
+	if strings.Contains(txt, "turn cut: wall-clock") {
+		t.Errorf("wall-clock should NOT cut under open goal, got %q", txt)
+	}
+	if !strings.Contains(txt, "finished") {
+		t.Errorf("expected completion text, got %q", txt)
+	}
+}
+
+// TestEngineWallClockNudgeEmitted: with a tiny window + open goal, the
+// engine emits the wall-clock nudge (thinking line) rather than cutting.
+func TestEngineWallClockNudgeEmitted(t *testing.T) {
+	dir := t.TempDir()
+	writeOpenGoal(t, dir, "long job")
+	round := 0
+	slow := toolDef{
+		decl: &genai.FunctionDeclaration{Name: "slow"},
+		handler: func(ctx context.Context, args map[string]any) (string, bool) {
+			round++
+			if round >= 4 {
+				closeOpenGoal(t, dir) // let it finish eventually
+			}
+			time.Sleep(15 * time.Millisecond)
+			return "ok", false
+		},
+	}
+	f := &fakeModel{responses: append(repeatResp(6, "slow"), textResp("done"))}
+	eng, lines := newTestEngine(f, []toolDef{slow})
+	eng.setToolSpillDir(dir)
+	eng.setLoopGuards(0, 5*time.Millisecond) // trips most rounds
+	eng.start()
+	eng.runTurn(context.Background(), "go")
+
+	// The wall-clock guard NUDGED (thinking line) while the goal was open
+	// rather than truncating — proving force-continue survives the timer.
+	joined := strings.Join(*lines, "\n")
+	if !strings.Contains(joined, "wall-clock limit") {
+		t.Errorf("expected wall-clock nudge emitted, got:\n%s", joined)
+	}
+	nudges := strings.Count(joined, "↻ wall-clock limit")
+	if nudges == 0 {
+		t.Errorf("expected at least one wall-clock nudge (not a cut), got:\n%s", joined)
+	}
+}
+
+func writeOpenGoal(t *testing.T, dir, goal string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "goal.json"),
+		[]byte(`{"goal":`+strconv.Quote(goal)+`,"status":"open"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func closeOpenGoal(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "goal.json"),
+		[]byte(`{"goal":"x","status":"done"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestEngineKillWinsOverOpenGoal: a cancelled context ends the turn even
+// with an open goal — kill must never be swallowed by force-continue.
+// A text-only model + open goal would otherwise loop forever (each plain
+// text re-nudges); the cancel must break it at the top-of-loop guard.
+func TestEngineKillWinsOverOpenGoal(t *testing.T) {
+	dir := t.TempDir()
+	writeOpenGoal(t, dir, "never ending")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// A tool that cancels the turn on first call, then keeps "succeeding".
+	killOnce := false
+	killer := toolDef{
+		decl: &genai.FunctionDeclaration{Name: "work"},
+		handler: func(_ context.Context, _ map[string]any) (string, bool) {
+			if !killOnce {
+				killOnce = true
+				cancel() // simulate manual Kill mid-turn
+			}
+			return "ok", false
+		},
+	}
+	// Endless tool calls: without the ctx guard the open goal would loop
+	// forever. repeatResp gives plenty; the cancel must stop it fast.
+	f := &fakeModel{responses: repeatResp(1000, "work")}
+	eng, lines := newTestEngine(f, []toolDef{killer})
+	eng.setToolSpillDir(dir)
+	eng.start()
+	eng.runTurn(ctx, "go")
+
+	// Turn ended (Done emitted) despite the open goal + endless tool calls,
+	// and did NOT run anywhere near 1000 rounds.
+	_ = doneText(t, *lines) // asserts a Done event exists
+	if f.calls > 5 {
+		t.Errorf("cancel did not stop the loop promptly: %d model calls", f.calls)
 	}
 }

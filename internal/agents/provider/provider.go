@@ -153,6 +153,9 @@ type WickModel struct {
 	// vendor's models filtered by this query at picker time (see
 	// userconfig.WickModel.DiscoveryFilter). Model may be empty then.
 	DiscoveryFilter string
+	// DefaultVendorModel is the sticky default vendor model id within a live
+	// set (see userconfig.WickModel.DefaultVendorModel). Empty = top-of-list.
+	DefaultVendorModel string
 }
 
 // WickConfig mirrors userconfig.WickConfig in-memory.
@@ -161,6 +164,8 @@ type WickConfig struct {
 	Connectors          []string
 	MaxContextTokens    int
 	MaxTurns            int
+	MaxConsecErrors     int
+	MaxTurnMinutes      int
 	MaxModelRetries     int
 	ModelCallTimeoutSec int
 	GenConfig           *WickGenConfig
@@ -950,19 +955,20 @@ func wickModelsFromUser(in []userconfig.WickModel) []WickModel {
 	out := make([]WickModel, len(in))
 	for i, m := range in {
 		out[i] = WickModel{
-			ID:              m.ID,
-			Kind:            m.Kind,
-			Label:           m.Label,
-			Model:           m.Model,
-			APIKey:          m.APIKey,
-			BaseURL:         m.BaseURL,
-			APIFormat:       m.APIFormat,
-			MaxOutputTokens: m.MaxOutputTokens,
-			Default:         m.Default,
-			Disabled:        m.Disabled,
-			GenConfig:       wickGenFromUser(m.GenConfig),
-			RawConfig:       m.RawConfig,
-			DiscoveryFilter: m.DiscoveryFilter,
+			ID:                 m.ID,
+			Kind:               m.Kind,
+			Label:              m.Label,
+			Model:              m.Model,
+			APIKey:             m.APIKey,
+			BaseURL:            m.BaseURL,
+			APIFormat:          m.APIFormat,
+			MaxOutputTokens:    m.MaxOutputTokens,
+			Default:            m.Default,
+			Disabled:           m.Disabled,
+			GenConfig:          wickGenFromUser(m.GenConfig),
+			RawConfig:          m.RawConfig,
+			DiscoveryFilter:    m.DiscoveryFilter,
+			DefaultVendorModel: m.DefaultVendorModel,
 		}
 	}
 	return out
@@ -975,19 +981,20 @@ func wickModelsToUser(in []WickModel) []userconfig.WickModel {
 	out := make([]userconfig.WickModel, len(in))
 	for i, m := range in {
 		out[i] = userconfig.WickModel{
-			ID:              m.ID,
-			Kind:            m.Kind,
-			Label:           m.Label,
-			Model:           m.Model,
-			APIKey:          m.APIKey,
-			BaseURL:         m.BaseURL,
-			APIFormat:       m.APIFormat,
-			MaxOutputTokens: m.MaxOutputTokens,
-			Default:         m.Default,
-			Disabled:        m.Disabled,
-			GenConfig:       wickGenToUser(m.GenConfig),
-			RawConfig:       m.RawConfig,
-			DiscoveryFilter: m.DiscoveryFilter,
+			ID:                 m.ID,
+			Kind:               m.Kind,
+			Label:              m.Label,
+			Model:              m.Model,
+			APIKey:             m.APIKey,
+			BaseURL:            m.BaseURL,
+			APIFormat:          m.APIFormat,
+			MaxOutputTokens:    m.MaxOutputTokens,
+			Default:            m.Default,
+			Disabled:           m.Disabled,
+			GenConfig:          wickGenToUser(m.GenConfig),
+			RawConfig:          m.RawConfig,
+			DiscoveryFilter:    m.DiscoveryFilter,
+			DefaultVendorModel: m.DefaultVendorModel,
 		}
 	}
 	return out
@@ -1002,6 +1009,8 @@ func wickConfigFromUser(in *userconfig.WickConfig) *WickConfig {
 		Connectors:          in.Connectors,
 		MaxContextTokens:    in.MaxContextTokens,
 		MaxTurns:            in.MaxTurns,
+		MaxConsecErrors:     in.MaxConsecErrors,
+		MaxTurnMinutes:      in.MaxTurnMinutes,
 		MaxModelRetries:     in.MaxModelRetries,
 		ModelCallTimeoutSec: in.ModelCallTimeoutSec,
 		GenConfig:           wickGenFromUser(in.GenConfig),
@@ -1018,6 +1027,8 @@ func wickConfigToUser(in *WickConfig) *userconfig.WickConfig {
 		Connectors:          in.Connectors,
 		MaxContextTokens:    in.MaxContextTokens,
 		MaxTurns:            in.MaxTurns,
+		MaxConsecErrors:     in.MaxConsecErrors,
+		MaxTurnMinutes:      in.MaxTurnMinutes,
 		MaxModelRetries:     in.MaxModelRetries,
 		ModelCallTimeoutSec: in.ModelCallTimeoutSec,
 		GenConfig:           wickGenToUser(in.GenConfig),

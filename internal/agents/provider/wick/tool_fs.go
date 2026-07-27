@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"google.golang.org/genai"
+
+	"github.com/yogasw/wick/internal/agents/skillsync"
 )
 
 // tool_fs.go provides native filesystem tools — read_file, write_file,
@@ -36,15 +38,25 @@ func fsResolvePath(workspace, path string) (string, error) {
 	return fsResolvePathIn(path, workspace, workspace)
 }
 
-// fsResolvePathReadable resolves a path allowed to live in the workspace
-// OR the session's uploads dir. Files the user attaches land in
-// <SessionDir>/uploads (outside the workspace), and the pool tells the
+// fsResolvePathReadable resolves a path allowed to live in the workspace,
+// the session's uploads dir, OR any skill dir. Files the user attaches land
+// in <SessionDir>/uploads (outside the workspace), and the pool tells the
 // agent to read them by absolute path via the "[Attached files]" block —
 // so read_file MUST accept that root, or the agent is told to read a path
-// its own tool rejects ("escapes the session workspace"). Read-only: the
-// uploads dir is never a write target (see fsResolvePath).
+// its own tool rejects ("escapes the session workspace"). The skill dirs
+// (~/.wick/skills, ~/.claude/skills, …) are readable too so the agent can
+// open a SKILL.md the injected catalog points at. All read-only: none is a
+// write target (see fsResolvePath — writes stay confined to the workspace).
 func fsResolvePathReadable(workspace, uploadsDir, path string) (string, error) {
-	return fsResolvePathIn(path, workspace, workspace, uploadsDir)
+	roots := append([]string{workspace, uploadsDir}, skillReadRoots()...)
+	return fsResolvePathIn(path, workspace, roots...)
+}
+
+// skillReadRoots returns the skill dirs read_file may reach, so a wick agent
+// can open the SKILL.md the catalog references. Cached-free (KnownDirs is
+// cheap: a few Stats); returns absolute, cleaned dirs.
+func skillReadRoots() []string {
+	return skillsync.KnownDirs()
 }
 
 // fsResolvePathIn resolves path (relative → against relBase) and confirms

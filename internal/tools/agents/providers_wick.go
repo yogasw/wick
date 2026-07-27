@@ -387,6 +387,12 @@ type wickModelDTO struct {
 	// DiscoveryFilter, when set, makes this a live model set (Model may be
 	// empty). See userconfig.WickModel.DiscoveryFilter.
 	DiscoveryFilter string `json:"discovery_filter,omitempty"`
+	// DefaultVendorModel pins the sticky default within a live set. Only
+	// honored when DiscoveryFilter is set. Sent by the Add/Edit live-set form
+	// so the pin is saved atomically with the entry. An empty string on a live
+	// set explicitly clears the pin (→ top-of-list); on a plain model it's
+	// ignored. See userconfig.WickModel.DefaultVendorModel.
+	DefaultVendorModel string `json:"default_vendor_model,omitempty"`
 }
 
 // wickInstance loads the single wick instance, materialising the
@@ -398,22 +404,23 @@ func wickInstance() (provider.Instance, error) {
 // wickModelView is one model as returned to the UI — key masked, never
 // the ciphertext or plaintext.
 type wickModelView struct {
-	ID              string   `json:"id"`
-	Kind            string   `json:"kind"`
-	Label           string   `json:"label"`
-	Model           string   `json:"model"`
-	KeyMasked       string   `json:"key_masked"`
-	HasKey          bool     `json:"has_key"`
-	BaseURL         string   `json:"base_url"`
-	APIFormat       string   `json:"api_format"`
-	MaxOutputTokens int      `json:"max_output_tokens"`
-	Default         bool     `json:"default"`
-	Disabled        bool     `json:"disabled,omitempty"`
-	Temperature     *float64 `json:"temperature,omitempty"`
-	TopP            *float64 `json:"top_p,omitempty"`
-	ThinkingBudget  *int     `json:"thinking_budget,omitempty"`
-	RawConfig       string   `json:"raw_config"`
-	DiscoveryFilter string   `json:"discovery_filter,omitempty"`
+	ID                 string   `json:"id"`
+	Kind               string   `json:"kind"`
+	Label              string   `json:"label"`
+	Model              string   `json:"model"`
+	KeyMasked          string   `json:"key_masked"`
+	HasKey             bool     `json:"has_key"`
+	BaseURL            string   `json:"base_url"`
+	APIFormat          string   `json:"api_format"`
+	MaxOutputTokens    int      `json:"max_output_tokens"`
+	Default            bool     `json:"default"`
+	Disabled           bool     `json:"disabled,omitempty"`
+	Temperature        *float64 `json:"temperature,omitempty"`
+	TopP               *float64 `json:"top_p,omitempty"`
+	ThinkingBudget     *int     `json:"thinking_budget,omitempty"`
+	RawConfig          string   `json:"raw_config"`
+	DiscoveryFilter    string   `json:"discovery_filter,omitempty"`
+	DefaultVendorModel string   `json:"default_vendor_model,omitempty"`
 }
 
 // getWickConfig returns the wick instance's models (masked keys) +
@@ -431,19 +438,20 @@ func getWickConfig(c *tool.Ctx) {
 	models := make([]wickModelView, 0, len(ins.WickModels))
 	for _, m := range ins.WickModels {
 		v := wickModelView{
-			ID:              m.ID,
-			Kind:            m.Kind,
-			Label:           m.Label,
-			Model:           m.Model,
-			HasKey:          m.APIKey != "",
-			KeyMasked:       maskKey(m.APIKey),
-			BaseURL:         m.BaseURL,
-			APIFormat:       m.APIFormat,
-			MaxOutputTokens: m.MaxOutputTokens,
-			Default:         m.Default,
-			Disabled:        m.Disabled,
-			RawConfig:       m.RawConfig,
-			DiscoveryFilter: m.DiscoveryFilter,
+			ID:                 m.ID,
+			Kind:               m.Kind,
+			Label:              m.Label,
+			Model:              m.Model,
+			HasKey:             m.APIKey != "",
+			KeyMasked:          maskKey(m.APIKey),
+			BaseURL:            m.BaseURL,
+			APIFormat:          m.APIFormat,
+			MaxOutputTokens:    m.MaxOutputTokens,
+			Default:            m.Default,
+			Disabled:           m.Disabled,
+			RawConfig:          m.RawConfig,
+			DiscoveryFilter:    m.DiscoveryFilter,
+			DefaultVendorModel: m.DefaultVendorModel,
 		}
 		if m.GenConfig != nil {
 			v.Temperature = m.GenConfig.Temperature
@@ -453,17 +461,25 @@ func getWickConfig(c *tool.Ctx) {
 		models = append(models, v)
 	}
 	settings := map[string]any{
-		"shell_tool_disabled": false,
-		"connectors":          []string{},
-		"max_context_tokens":  0,
-		"max_turns":           0,
-		"raw_config":          "",
+		"shell_tool_disabled":    false,
+		"connectors":             []string{},
+		"max_context_tokens":     0,
+		"max_turns":              0,
+		"max_consec_errors":      0,
+		"max_turn_minutes":       0,
+		"max_model_retries":      0,
+		"model_call_timeout_sec": 0,
+		"raw_config":             "",
 	}
 	if wc := ins.WickConfig; wc != nil {
 		settings["shell_tool_disabled"] = wc.ShellToolDisabled
 		settings["connectors"] = wc.Connectors
 		settings["max_context_tokens"] = wc.MaxContextTokens
 		settings["max_turns"] = wc.MaxTurns
+		settings["max_consec_errors"] = wc.MaxConsecErrors
+		settings["max_turn_minutes"] = wc.MaxTurnMinutes
+		settings["max_model_retries"] = wc.MaxModelRetries
+		settings["model_call_timeout_sec"] = wc.ModelCallTimeoutSec
 		settings["raw_config"] = wc.RawConfig
 		if wc.GenConfig != nil {
 			settings["temperature"] = wc.GenConfig.Temperature
@@ -538,15 +554,27 @@ func saveWickModel(c *tool.Ctx) {
 	}
 
 	// Find existing by ID to preserve its stored key when the form sends
-	// a masked placeholder (unchanged key).
+	// a masked placeholder (unchanged key), and its live-set default-vendor
+	// pin (unless the form explicitly sends one — the Add/Edit live-set form
+	// carries default_vendor_model so the pin saves atomically with the entry;
+	// the dedicated endpoint is the other way to change it).
 	existingKey := ""
 	idx := -1
 	for i, em := range ins.WickModels {
 		if dto.ID != "" && em.ID == dto.ID {
 			idx = i
 			existingKey = em.APIKey
+			m.DefaultVendorModel = em.DefaultVendorModel
 			break
 		}
+	}
+	// A live-set form always authoritatively sets the pin (empty = clear);
+	// a plain model never carries one. This runs after the preserve above so
+	// an explicit form value wins over the stored one.
+	if m.DiscoveryFilter != "" {
+		m.DefaultVendorModel = strings.TrimSpace(dto.DefaultVendorModel)
+	} else {
+		m.DefaultVendorModel = ""
 	}
 	if m.ID == "" {
 		m.ID = "m_" + uuid.NewString()[:12]
@@ -645,6 +673,57 @@ func setWickDefaultModel(c *tool.Ctx) {
 	for i := range ins.WickModels {
 		ins.WickModels[i].Default = i == target
 	}
+	if err := provider.Save(ins); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+type setDefaultVendorReq struct {
+	VendorModel string `json:"vendor_model"`
+}
+
+// setWickDefaultVendorModel pins the sticky default vendor model WITHIN a live
+// set (the model chosen when the set is picked without an explicit @vendor
+// override). Empty vendor_model clears the pin (→ top-of-list default). The
+// target entry must be a live set (DiscoveryFilter set); a plain model has no
+// vendor sub-list. Stickiness + auto-fallback-when-missing is handled at
+// picker time by expandLiveWickSet.
+// POST /providers/wick/models/{id}/default-vendor
+func setWickDefaultVendorModel(c *tool.Ctx) {
+	if notReady(c) || !requireAdmin(c) {
+		return
+	}
+	id := c.PathValue("id")
+	var req setDefaultVendorReq
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	ins, err := wickInstance()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	ins.Type = provider.TypeWick
+	ins.Name = wickInstanceName
+	target := -1
+	for i := range ins.WickModels {
+		if ins.WickModels[i].ID == id {
+			target = i
+			break
+		}
+	}
+	if target == -1 {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "model not found"})
+		return
+	}
+	if ins.WickModels[target].DiscoveryFilter == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "not a live model set — a plain model has no vendor sub-list"})
+		return
+	}
+	ins.WickModels[target].DefaultVendorModel = strings.TrimSpace(req.VendorModel)
 	if err := provider.Save(ins); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -806,14 +885,18 @@ func testWickModel(c *tool.Ctx) {
 
 // wickSettingsDTO is the Provider-settings card payload.
 type wickSettingsDTO struct {
-	ShellToolDisabled bool     `json:"shell_tool_disabled"`
-	Connectors        []string `json:"connectors,omitempty"`
-	MaxContextTokens  int      `json:"max_context_tokens,omitempty"`
-	MaxTurns          int      `json:"max_turns,omitempty"`
-	Temperature       *float64 `json:"temperature,omitempty"`
-	TopP              *float64 `json:"top_p,omitempty"`
-	ThinkingBudget    *int     `json:"thinking_budget,omitempty"`
-	RawConfig         string   `json:"raw_config,omitempty"`
+	ShellToolDisabled   bool     `json:"shell_tool_disabled"`
+	Connectors          []string `json:"connectors,omitempty"`
+	MaxContextTokens    int      `json:"max_context_tokens,omitempty"`
+	MaxTurns            int      `json:"max_turns,omitempty"`
+	MaxConsecErrors     int      `json:"max_consec_errors,omitempty"`
+	MaxTurnMinutes      int      `json:"max_turn_minutes,omitempty"`
+	MaxModelRetries     int      `json:"max_model_retries,omitempty"`
+	ModelCallTimeoutSec int      `json:"model_call_timeout_sec,omitempty"`
+	Temperature         *float64 `json:"temperature,omitempty"`
+	TopP                *float64 `json:"top_p,omitempty"`
+	ThinkingBudget      *int     `json:"thinking_budget,omitempty"`
+	RawConfig           string   `json:"raw_config,omitempty"`
 }
 
 // saveWickSettings persists the instance-level WickConfig.
@@ -835,11 +918,15 @@ func saveWickSettings(c *tool.Ctx) {
 	ins.Type = provider.TypeWick
 	ins.Name = wickInstanceName
 	wc := &provider.WickConfig{
-		ShellToolDisabled: dto.ShellToolDisabled,
-		Connectors:        dto.Connectors,
-		MaxContextTokens:  dto.MaxContextTokens,
-		MaxTurns:          dto.MaxTurns,
-		RawConfig:         strings.TrimSpace(dto.RawConfig),
+		ShellToolDisabled:   dto.ShellToolDisabled,
+		Connectors:          dto.Connectors,
+		MaxContextTokens:    dto.MaxContextTokens,
+		MaxTurns:            dto.MaxTurns,
+		MaxConsecErrors:     dto.MaxConsecErrors,
+		MaxTurnMinutes:      dto.MaxTurnMinutes,
+		MaxModelRetries:     dto.MaxModelRetries,
+		ModelCallTimeoutSec: dto.ModelCallTimeoutSec,
+		RawConfig:           strings.TrimSpace(dto.RawConfig),
 	}
 	if g := genConfigFromGen(dto.Temperature, dto.TopP, dto.ThinkingBudget, 0); g != nil {
 		wc.GenConfig = g
@@ -917,15 +1004,50 @@ func expandLiveWickSet(ctx context.Context, ins provider.Instance, entryID, filt
 		log.Ctx(ctx).Warn().Err(err).Str("filter", target.DiscoveryFilter).Msg("live wick model set fetch failed")
 		return nil
 	}
-	var out []view.ModelChoiceVM
-	for _, d := range wick.FilterModels(live, target.DiscoveryFilter) {
+	filtered := wick.FilterModels(live, target.DiscoveryFilter)
+	return markLiveSetDefault(filtered, target.DefaultVendorModel)
+}
+
+// markLiveSetDefault turns the filtered vendor list into picker choices with
+// the sticky default marked: the pinned id wins if still present; otherwise
+// the top of the list is the default (auto re-select when the pin vanished).
+// Pure — the sticky/fallback rule is unit-tested here without network.
+func markLiveSetDefault(filtered []wick.DiscoveredModel, pin string) []view.ModelChoiceVM {
+	pin = strings.TrimSpace(pin)
+	pinnedPresent := false
+	for _, d := range filtered {
+		if d.ID == pin {
+			pinnedPresent = true
+			break
+		}
+	}
+	out := make([]view.ModelChoiceVM, 0, len(filtered))
+	for i, d := range filtered {
 		label := d.Label
 		if label == "" {
 			label = d.ID
 		}
-		out = append(out, view.ModelChoiceVM{ID: d.ID, Label: label})
+		isDefault := (pinnedPresent && d.ID == pin) || (!pinnedPresent && i == 0)
+		out = append(out, view.ModelChoiceVM{ID: d.ID, Label: label, Default: isDefault})
 	}
 	return out
+}
+
+// liveSetDefaultVendor returns the effective default vendor model id for a
+// live-set entry: the sticky pin if still present in the fresh list, else the
+// top of the filtered list (auto re-select when the pin has vanished). Empty
+// only when discovery fails / the list is empty.
+func liveSetDefaultVendor(ctx context.Context, ins provider.Instance, entryID string) string {
+	choices := expandLiveWickSet(ctx, ins, entryID, "")
+	for _, c := range choices {
+		if c.Default {
+			return c.ID
+		}
+	}
+	if len(choices) > 0 {
+		return choices[0].ID
+	}
+	return ""
 }
 
 // discoverWickModel lists the vendor's models for one registered wick model,
@@ -943,7 +1065,6 @@ func discoverWickModel(ctx context.Context, m *provider.WickModel) ([]wick.Disco
 	}
 	return wick.DiscoverModels(ctx, m.Kind, key, strings.TrimSpace(m.BaseURL))
 }
-
 
 // storedWickKey returns the decrypted API key for a stored model id, or
 // "" if not found / unavailable.

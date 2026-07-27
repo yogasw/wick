@@ -368,7 +368,7 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 	case "wick_decrypt":
 		handlers.WickDecrypt(w, hreq, rsp, func(s string) string { return handlers.EncfieldsURL(h.appURL, s) })
 	case "todo":
-		handlers.WickTodo(w, hreq, rsp, args)
+		handlers.WickTodo(w, r, hreq, rsp, h.layout, args)
 	case "ask_user":
 		handlers.AskUser(w, r, hreq, rsp, h.askUsers, h.askUserAllowed, args)
 	case "wick_session_workspace":

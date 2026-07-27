@@ -349,6 +349,7 @@ func Register(r tool.Router) {
 	r.POST("/providers/wick/models", saveWickModel)
 	r.DELETE("/providers/wick/models/{id}", deleteWickModel)
 	r.POST("/providers/wick/models/{id}/default", setWickDefaultModel)
+	r.POST("/providers/wick/models/{id}/default-vendor", setWickDefaultVendorModel)
 	r.POST("/providers/wick/models/{id}/disabled", setWickModelDisabled)
 	r.POST("/providers/wick/models/{id}/duplicate", duplicateWickModel)
 	r.POST("/providers/wick/models/{id}/test", testWickModel)

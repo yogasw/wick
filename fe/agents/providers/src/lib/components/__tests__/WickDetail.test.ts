@@ -30,6 +30,8 @@ function makeConfig(): WickConfig {
         TopP: null,
         ThinkingBudget: null,
         RawConfig: "",
+        DiscoveryFilter: "",
+        DefaultVendorModel: "",
       },
       {
         ID: "m_2",
@@ -47,6 +49,8 @@ function makeConfig(): WickConfig {
         TopP: null,
         ThinkingBudget: null,
         RawConfig: "",
+        DiscoveryFilter: "",
+        DefaultVendorModel: "",
       },
     ],
     settings: {
@@ -54,6 +58,10 @@ function makeConfig(): WickConfig {
       Connectors: [],
       MaxContextTokens: 0,
       MaxTurns: 0,
+      MaxConsecErrors: 0,
+      MaxTurnMinutes: 0,
+      MaxModelRetries: 0,
+      ModelCallTimeoutSec: 0,
       Temperature: null,
       TopP: null,
       ThinkingBudget: null,
