@@ -11,6 +11,8 @@ export type ComposerCommand = {
   run?: () => void;
 };
 
+import type { ModelCaps } from "./capability-types.js";
+
 /* One selectable model nested under a provider option (see ComposerSelectOption.models). */
 export type ComposerModelOption = {
   id: string;
@@ -22,6 +24,9 @@ export type ComposerModelOption = {
       shows it as an expandable row (a 4th level) resolved by this row's `id`
       via loadModels({entry: id}). The vendor filter stays server-side. */
   live?: boolean;
+  /** Vendor-reported capabilities for this model (raw). Present only for rows
+      that came from live discovery (live-set expansion); undefined otherwise. */
+  caps?: ModelCaps;
 };
 
 /* A themed dropdown in the Composer toolbar (provider / project / preset).
@@ -54,4 +59,8 @@ export type ComposerSelect = {
     optionValue: string,
     opts?: { entry?: string },
   ) => Promise<ComposerModelOption[]>;
+  /** Render capability chips on model rows. Default true (undefined = show). */
+  showCapabilities?: boolean;
+  /** Chip display mode when shown. Default "icon". */
+  capabilityMode?: import("./capability-types.js").CapabilityDisplayMode;
 };

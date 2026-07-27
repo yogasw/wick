@@ -124,10 +124,10 @@ func TestIsCompactCommand(t *testing.T) {
 	no := []string{
 		"",
 		"compact the logs please",
-		"run /compact later",                      // /compact not on its own last line
-		"please explain what /compact does",       // ends elsewhere
-		"here is my note\n/compact",               // non-[system] prefix → real user msg, don't hijack
-		"/compact now do the thing",               // trailing text
+		"run /compact later",                // /compact not on its own last line
+		"please explain what /compact does", // ends elsewhere
+		"here is my note\n/compact",         // non-[system] prefix → real user msg, don't hijack
+		"/compact now do the thing",         // trailing text
 	}
 	for _, s := range no {
 		if isCompactCommand(s) {

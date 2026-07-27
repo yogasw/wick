@@ -281,6 +281,8 @@ export type ProviderModelOption = {
   /** True for a live model set: an expandable picker row (4th level) resolved
       by `id`; the vendor filter stays server-side. */
   live?: boolean;
+  /** Vendor-declared capabilities (raw); present on live-discovery rows. */
+  caps?: import("@wick-fe/common-ui").ModelCaps;
 };
 
 export type ProviderOption = {
@@ -291,6 +293,9 @@ export type ProviderOption = {
   /** Only populated for wick instances with >1 enabled model — the composer
       picker adds a 3rd "model" level only when there's a real choice. */
   models?: ProviderModelOption[];
+  /** Capability-chip prefs (wick-scoped, ride on the wick option row). */
+  show_capabilities?: boolean;
+  capability_display_mode?: string;
 };
 
 export type ProjectOption = {

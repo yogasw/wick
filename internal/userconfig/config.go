@@ -308,13 +308,24 @@ type WickModel struct {
 	GenConfig *WickGenConfig `json:"gen_config,omitempty"`
 	// RawConfig is per-model raw ADK config (JSON), merged last.
 	RawConfig string `json:"raw_config,omitempty"`
-	// DiscoveryFilter, when set, makes this a LIVE model set rather than a
-	// single pinned model: at picker time the vendor's model list is fetched
-	// and filtered by this query (tiny grammar: space-separated terms;
-	// `term` = contains, `-term`/`!term` = exclude — matched over id+label).
-	// Model may be empty for a live set. Lets one entry stand in for many
-	// models without registering each by hand.
+	// LiveSet marks this entry as a LIVE model set: at picker time the
+	// vendor's model list is fetched and (optionally) filtered by
+	// DiscoveryFilter, rather than pinning one model. Set independently of
+	// DiscoveryFilter so a live set can have an EMPTY filter (= match all)
+	// without a sentinel — the presence of the filter no longer implies
+	// live-set-ness. Model may be empty for a live set.
+	LiveSet bool `json:"live_set,omitempty"`
+	// DiscoveryFilter narrows a live set's fetched model list (tiny grammar:
+	// space-separated terms; `term` = contains, `-term`/`!term` = exclude —
+	// matched over id+label). Empty = match all. Only meaningful when LiveSet.
 	DiscoveryFilter string `json:"discovery_filter,omitempty"`
+	// DefaultVendorModel is the sticky default vendor model id WITHIN a live
+	// set (only meaningful when DiscoveryFilter is set). When this live set is
+	// picked without an explicit "@vendor" override, the spawn uses this id if
+	// it's still present in the freshly-fetched list; if it has vanished, the
+	// picker/spawn auto-fall back to the top of the filtered list. Empty = no
+	// pin, top-of-list is the effective default.
+	DefaultVendorModel string `json:"default_vendor_model,omitempty"`
 }
 
 // WickConfig is the instance-level settings block for the wick
@@ -323,6 +334,18 @@ type WickConfig struct {
 	// ShellToolDisabled turns the bash/cmd tool off. Stored inverted
 	// so the zero value keeps the shell tool enabled (default on).
 	ShellToolDisabled bool `json:"shell_tool_disabled,omitempty"`
+	// HideCapabilities suppresses the model-capability chips in the pickers.
+	// Stored inverted (like ShellToolDisabled) so the zero value SHOWS them —
+	// capabilities are on by default; this only turns them off.
+	HideCapabilities bool `json:"hide_capabilities,omitempty"`
+	// StreamDisabled turns off SSE streaming of model output (falls back to
+	// the one-shot JSON path). Stored inverted so the zero value STREAMS —
+	// streaming is on by default; this only turns it off (e.g. a gateway that
+	// doesn't support SSE).
+	StreamDisabled bool `json:"stream_disabled,omitempty"`
+	// CapabilityDisplayMode picks how chips render: "" / "icon" = icons +
+	// tooltip (default), "label" = text labels.
+	CapabilityDisplayMode string `json:"capability_display_mode,omitempty"`
 	// Connectors limits which connector instances become tools.
 	// Empty = all ready connectors.
 	Connectors []string `json:"connectors,omitempty"`
@@ -330,6 +353,11 @@ type WickConfig struct {
 	MaxContextTokens int `json:"max_context_tokens,omitempty"`
 	// MaxTurns caps the agentic loop per user turn. 0 = unlimited.
 	MaxTurns int `json:"max_turns,omitempty"`
+	// MaxConsecErrors cuts a turn after N consecutive all-error tool
+	// rounds (a success resets the counter). 0 = default (20).
+	MaxConsecErrors int `json:"max_consec_errors,omitempty"`
+	// MaxTurnMinutes is the wall-clock ceiling for one turn. 0 = default (60).
+	MaxTurnMinutes int `json:"max_turn_minutes,omitempty"`
 	// MaxModelRetries is the total attempts for a failing model call (incl. the
 	// first). 0 = default (3). 1 disables retries.
 	MaxModelRetries int `json:"max_model_retries,omitempty"`
@@ -348,10 +376,14 @@ type WickConfig struct {
 // Pointer fields distinguish "not set" from zero. The long tail of
 // options rides WickConfig.RawConfig / WickModel.RawConfig.
 type WickGenConfig struct {
-	Temperature     *float64 `json:"temperature,omitempty"`
-	TopP            *float64 `json:"top_p,omitempty"`
-	ThinkingBudget  *int     `json:"thinking_budget,omitempty"` // tokens; 0 = off, nil = model default
-	MaxOutputTokens int      `json:"max_output_tokens,omitempty"`
+	Temperature    *float64 `json:"temperature,omitempty"`
+	TopP           *float64 `json:"top_p,omitempty"`
+	ThinkingBudget *int     `json:"thinking_budget,omitempty"` // tokens; 0 = off, nil = model default
+	// ReasoningEffort is a vendor-agnostic reasoning level ("low"|"medium"|
+	// "high"), preferred over ThinkingBudget where the vendor speaks an effort
+	// enum. Empty = use ThinkingBudget / model default.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	MaxOutputTokens int    `json:"max_output_tokens,omitempty"`
 }
 
 // StorageConfig defines how a provider instance syncs its credential

@@ -5,20 +5,26 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/session"
 )
 
-// WickTodo handles the todo tool for CLI providers (claude/codex/gemini)
-// reached over MCP — the same tool wick's own in-process engine exposes
-// natively (internal/agents/provider/wick/tool_todo.go). Sharing one
-// tool definition across every provider means the web UI's merged
-// checklist widget (fe/agents/conversation/src/lib/todoGroups.ts) works
-// identically no matter which provider is running: it groups tool_use
-// events named "todo" out of the trace regardless of transport.
+// WickTodo handles the shared `todo` tool for every provider (claude/codex/
+// gemini over MCP, wick in-process via CallAgentTool). One surface for
+// checklist progress AND the optional goal latch — no separate goal tool.
 //
-// No server-side persistence beyond the trace — like wick's native
-// handler, this just validates and echoes a normalized summary; the
-// plan/progress rows are already visible via the tool_use event itself.
-func WickTodo(w http.ResponseWriter, req RPCRequest, rsp Responder, args map[string]any) {
+// Checklist: validates + echoes a normalized summary (UI groups tool_use
+// events named "todo"). Goal mode (optional fields):
+//
+//	goal          — open/replace the durable latch (<SessionDir>/goal.json)
+//	goal_done     — mark latch done (releases wick force-continue)
+//	goal_abandon  — mark latch abandoned
+//
+// Goal writes need a session id (X-Wick-Session-Id header or session_id
+// arg) + layout. Missing either → checklist still works; goal fields
+// return a clear error so the model knows why the latch didn't stick.
+func WickTodo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Responder, layout agentconfig.Layout, args map[string]any) {
 	type substepIn struct {
 		Step   string `json:"step"`
 		Status string `json:"status"`
@@ -32,7 +38,12 @@ func WickTodo(w http.ResponseWriter, req RPCRequest, rsp Responder, args map[str
 		Substeps    []substepIn `json:"substeps,omitempty"`
 	}
 	type input struct {
-		Items []itemIn `json:"items"`
+		Items       []itemIn `json:"items"`
+		Goal        string   `json:"goal,omitempty"`
+		GoalDone    bool     `json:"goal_done,omitempty"`
+		GoalAbandon bool     `json:"goal_abandon,omitempty"`
+		Note        string   `json:"note,omitempty"`
+		SessionID   string   `json:"session_id,omitempty"`
 	}
 	raw, _ := json.Marshal(args)
 	var in input
@@ -68,6 +79,45 @@ func WickTodo(w http.ResponseWriter, req RPCRequest, rsp Responder, args map[str
 		}
 	}
 	fmt.Fprintf(&sb, "(%d/%d done)", done, len(in.Items))
+
+	// Goal latch — optional. All providers write the same file; only the
+	// wick engine force-continues while open. Resolve session id the same
+	// way connector tools do (arg, then header).
+	wantGoal := strings.TrimSpace(in.Goal) != "" || in.GoalDone || in.GoalAbandon
+	if wantGoal {
+		sid := strings.TrimSpace(in.SessionID)
+		if sid == "" && r != nil {
+			sid = strings.TrimSpace(r.Header.Get("X-Wick-Session-Id"))
+		}
+		if sid == "" {
+			fmt.Fprintf(&sb, "\n[goal] skipped — no session id (pass session_id or call from an agent session)")
+		} else if layout.BaseDir == "" {
+			fmt.Fprintf(&sb, "\n[goal] skipped — session layout not wired")
+		} else {
+			note := strings.TrimSpace(in.Note)
+			switch {
+			case in.GoalAbandon:
+				if err := session.AbandonGoal(layout, sid, note); err != nil {
+					fmt.Fprintf(&sb, "\n[goal] abandon failed: %s", err.Error())
+				} else {
+					fmt.Fprintf(&sb, "\n[goal] ABANDONED (turn may end)")
+				}
+			case in.GoalDone:
+				if err := session.CompleteGoal(layout, sid, note); err != nil {
+					fmt.Fprintf(&sb, "\n[goal] complete failed: %s", err.Error())
+				} else {
+					fmt.Fprintf(&sb, "\n[goal] DONE (turn may end)")
+				}
+			default:
+				goal := strings.TrimSpace(in.Goal)
+				if err := session.OpenGoal(layout, sid, goal, note); err != nil {
+					fmt.Fprintf(&sb, "\n[goal] open failed: %s", err.Error())
+				} else {
+					fmt.Fprintf(&sb, "\n[goal] OPEN: %s\n(wick keeps the turn running until todo{goal_done:true} or todo{goal_abandon:true})", goal)
+				}
+			}
+		}
+	}
 
 	rsp.WriteResult(w, req.ID, ToolCallResult{
 		Content: []ToolContent{{Type: "text", Text: sb.String()}},

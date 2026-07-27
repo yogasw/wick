@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/yogasw/wick/internal/appname"
 )
 
 // setTestHome points os.UserHomeDir() at dir for the duration of the test.
@@ -262,8 +264,11 @@ func TestUploadProcessed_CreatesDefaultDirWhenNoneExist(t *testing.T) {
 	if res.Copied == 0 {
 		t.Fatalf("Copied = 0, want > 0 (default dir should be created)")
 	}
-	dst := filepath.Join(home, ".claude", "skills", "notes", "SKILL.md")
+	// With no CLI provider dirs present, wick's own dir (~/.<appname>/skills)
+	// is the always-present target — it's ensure-created by KnownDirs, so the
+	// upload lands there rather than the old .claude fallback.
+	dst := filepath.Join(home, "."+appname.Resolve(), "skills", "notes", "SKILL.md")
 	if _, err := os.Stat(dst); err != nil {
-		t.Fatalf("expected default-dir write at %s: %v", dst, err)
+		t.Fatalf("expected wick-dir write at %s: %v", dst, err)
 	}
 }

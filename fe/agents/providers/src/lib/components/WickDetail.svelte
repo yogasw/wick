@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { ConfirmDialog, Breadcrumb, Modal, Select, Button, KebabMenu, type BreadcrumbItem } from "@wick-fe/common-ui";
+  import { ConfirmDialog, Breadcrumb, Modal, Select, Button, KebabMenu, CapabilityChips, CapabilityModal, type BreadcrumbItem } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     apiGetWickConfig,
@@ -12,6 +12,8 @@
     apiTestWickModel,
     apiSaveWickSettings,
     apiDiscoverWickModels,
+    apiGetWickLiveSetModels,
+    apiSetWickDefaultVendorModel,
   } from "$lib/api.js";
   import type { WickModelDTO, WickSettingsDTO, WickDiscoverModel } from "$lib/api.js";
   import RecentSpawns from "$lib/components/RecentSpawns.svelte";
@@ -99,15 +101,34 @@
   let shellMode = $state("enabled"); // enabled | disabled
   let maxContext = $state("");
   let maxTurns = $state("");
+  let maxConsecErrors = $state("");
+  let maxTurnMinutes = $state("");
+  let maxModelRetries = $state("");
+  let modelCallTimeout = $state("");
   let defTemp = $state("");
   let defThinking = $state("");
   let settingsRaw = $state("");
   let savingSettings = $state(false);
+  let showAdvanced = $state(false);
+  // Capability-chip display prefs (global, shown in Advanced). Default: shown,
+  // list mode. Mirrors the BE's hide_capabilities (inverted) + display mode.
+  let showCaps = $state(true);
+  let capsMode = $state<"list" | "name" | "icon">("list");
+  // SSE streaming of model output. Default on; mirrors the BE's stream_disabled
+  // (inverted). Off falls back to the one-shot JSON path.
+  let streamOutput = $state(true);
 
   function seedSettings(s: WickSettingsDTO) {
     shellMode = s.ShellToolDisabled ? "disabled" : "enabled";
+    showCaps = s.ShowCapabilities;
+    streamOutput = s.EnableStreaming;
+    capsMode = s.CapabilityMode === "name" ? "name" : s.CapabilityMode === "icon" ? "icon" : "list";
     maxContext = s.MaxContextTokens ? String(s.MaxContextTokens) : "";
     maxTurns = s.MaxTurns ? String(s.MaxTurns) : "";
+    maxConsecErrors = s.MaxConsecErrors ? String(s.MaxConsecErrors) : "";
+    maxTurnMinutes = s.MaxTurnMinutes ? String(s.MaxTurnMinutes) : "";
+    maxModelRetries = s.MaxModelRetries ? String(s.MaxModelRetries) : "";
+    modelCallTimeout = s.ModelCallTimeoutSec ? String(s.ModelCallTimeoutSec) : "";
     defTemp = s.Temperature != null ? String(s.Temperature) : "";
     defThinking = s.ThinkingBudget != null ? String(s.ThinkingBudget) : "";
     settingsRaw = s.RawConfig;
@@ -131,8 +152,15 @@
     try {
       await apiSaveWickSettings(base, {
         shell_tool_disabled: shellMode === "disabled",
+        hide_capabilities: !showCaps,
+        stream_disabled: !streamOutput,
+        capability_display_mode: capsMode,
         max_context_tokens: intOrUndef(maxContext),
         max_turns: intOrUndef(maxTurns),
+        max_consec_errors: intOrUndef(maxConsecErrors),
+        max_turn_minutes: intOrUndef(maxTurnMinutes),
+        max_model_retries: intOrUndef(maxModelRetries),
+        model_call_timeout_sec: intOrUndef(modelCallTimeout),
         temperature: floatOrUndef(defTemp),
         thinking_budget: intOrUndef(defThinking),
         raw_config: settingsRaw,
@@ -174,6 +202,10 @@
   let keyPlaceholder = $derived(
     editing && editing.HasKey ? "Stored — type to replace" : `Enter API key (e.g. ${kindDefault.keyExample})`,
   );
+  // keyReplacing: an existing key is stored AND the user has typed something —
+  // the new value will overwrite the stored one on save. Drives the API-key
+  // "Saved" → "Replacing…" indicator.
+  let keyReplacing = $derived(mKeyTouched && mKey.trim() !== "");
   let modelPlaceholder = $derived(`e.g. ${kindDefault.modelExample}`);
 
   // discovery
@@ -198,6 +230,11 @@
   let forcedIDs = $state<Set<string>>(new Set());    // unmatched but added
   // manual-mode explicit picks:
   let selectedIDs = $state<Set<string>>(new Set());
+  // live-mode default vendor: in LIVE mode there is no multi-select — the set
+  // is defined by the filter alone, and the list is a preview. The user may
+  // pin ONE model as the sticky default (saved as DefaultVendorModel). ""
+  // means "top of the filtered list" (no pin).
+  let liveDefaultVendor = $state("");
 
   function modelById(id: string): WickDiscoverModel {
     return discovered.find((m) => m.id === id) ?? { id, label: "" };
@@ -238,6 +275,9 @@
     }
     return true;
   }
+
+  // Capability detail modal: which discovered model's full breakdown is open.
+  let capsModalFor = $state<WickDiscoverModel | null>(null);
 
   let filteredModels = $derived.by(() => {
     if (searchTerms.length === 0) return discovered;
@@ -298,13 +338,26 @@
   function defaultBaseURL(kind: string): string {
     return (KIND_DEFAULTS[kind] ?? KIND_DEFAULTS.other).baseURL;
   }
+  // isAutoBaseURL reports whether the current Base URL is still an
+  // auto-filled vendor default (any known provider's default, or empty) —
+  // i.e. NOT something the user typed themselves. Used to decide whether a
+  // provider switch may re-fill it: a custom proxy URL (e.g. a gateway) is
+  // preserved, an untouched default is swapped for the new vendor's.
+  function isAutoBaseURL(url: string): boolean {
+    const u = url.trim();
+    if (u === "") return true;
+    return Object.values(KIND_DEFAULTS).some((d) => d.baseURL !== "" && d.baseURL === u);
+  }
 
   function onKindChange(v: string) {
     mKind = v;
     // Pre-fill the concrete Base URL for known providers (it's well-known
     // for OpenAI/Anthropic/etc, so show the real value, not a grey hint).
-    // "other" clears it — required, user-supplied.
-    mBaseURL = defaultBaseURL(v);
+    // "other" clears it — required, user-supplied. But NEVER clobber a Base
+    // URL the user typed themselves (a custom proxy / gateway): only re-fill
+    // when the current value is still an auto default. This is what lets an
+    // edited model keep its custom endpoint when the provider is re-picked.
+    if (isAutoBaseURL(mBaseURL)) mBaseURL = defaultBaseURL(v);
     // Reload the model list for the new vendor. Clear the previously
     // discovered list so stale ids don't show.
     discovered = [];
@@ -363,6 +416,7 @@
     advOpen = false;
     modelSearch = "";
     multiSelect = false; clearOverrides();
+    liveDefaultVendor = "";
     discovered = []; discoverErr = ""; discovering = false;
     modalOpen = true;
   }
@@ -383,10 +437,12 @@
     clearOverrides();
     // A live set opens in Multiple + Live with its filter prefilled so editing
     // tweaks the query; a plain model opens in Single.
-    if (m.DiscoveryFilter) {
+    if (m.LiveSet) {
       multiSelect = true; selectMode = "live"; modelSearch = m.DiscoveryFilter;
+      liveDefaultVendor = m.DefaultVendorModel || "";
     } else {
       multiSelect = false; selectMode = "live"; modelSearch = "";
+      liveDefaultVendor = "";
     }
     discovered = []; discoverErr = ""; discovering = false;
     modalOpen = true;
@@ -416,18 +472,25 @@
     // picker time it expands to the vendor's models matching the filter, so a
     // single entry stands in for many models (no per-model registration).
     if (multiSelect && selectMode === "live") {
-      if (searchTerms.length === 0) { toastError("Type a filter to define the live set"); return; }
       savingModel = true;
       try {
-        // Editing a live set updates in place (carry its id); a live set
-        // switched-on from a plain model edit is a NEW entry (drop the id).
-        const liveID = editing?.DiscoveryFilter ? editing.ID : undefined;
+        // Editing ANY existing entry updates it in place (carry its id) —
+        // including a plain model being converted to a live set. Only a
+        // brand-new live set (no editing target) gets a fresh id. Previously
+        // this dropped the id when converting plain→live, which left the old
+        // plain entry behind and created a duplicate.
+        const liveID = editing?.ID;
+        // Filter is OPTIONAL: empty = match ALL of the vendor's models. The
+        // entry is flagged live_set explicitly, so no sentinel filter needed.
+        const filter = modelSearch.trim();
         await apiSaveWickModel(base, {
           ...baseModelInput(),
           id: liveID,
           model: "", // live set — no single pinned model
-          label: mLabel.trim() || `Live: ${modelSearch.trim()}`,
-          discovery_filter: modelSearch.trim(),
+          label: mLabel.trim() || (filter ? `Live: ${filter}` : "Live: all models"),
+          live_set: true,
+          discovery_filter: filter,
+          default_vendor_model: liveDefaultVendor, // "" clears the pin (top-of-list)
         });
         toastOk(liveID ? "Live model set updated" : "Live model set added");
         modalOpen = false;
@@ -503,6 +566,51 @@
     }
   }
 
+  // ── Live-set default vendor model picker ────────────────────────────
+  // A live set expands to many vendor models; this modal pins the sticky
+  // default (used when the set is picked without choosing a specific model).
+  let vendorPickerFor = $state<WickModelDTO | null>(null);
+  let vendorModels = $state<{ id: string; label: string; default: boolean }[]>([]);
+  let vendorLoading = $state(false);
+  let vendorErr = $state("");
+  let vendorSearch = $state("");
+
+  async function openVendorPicker(m: WickModelDTO) {
+    vendorPickerFor = m;
+    vendorModels = [];
+    vendorErr = "";
+    vendorSearch = "";
+    vendorLoading = true;
+    try {
+      vendorModels = await apiGetWickLiveSetModels(base, m.ID);
+      if (vendorModels.length === 0) vendorErr = "No models returned — check the API key and filter.";
+    } catch (e) {
+      vendorErr = e instanceof Error ? e.message : "Failed to load models";
+    } finally {
+      vendorLoading = false;
+    }
+  }
+  let filteredVendorModels = $derived.by(() => {
+    const q = vendorSearch.trim().toLowerCase();
+    if (!q) return vendorModels;
+    return vendorModels.filter((m) => `${m.id} ${m.label}`.toLowerCase().includes(q));
+  });
+  async function pinVendorModel(vendorId: string) {
+    const m = vendorPickerFor;
+    if (!m) return;
+    setBusy(`vendor-${m.ID}`, true);
+    try {
+      await apiSetWickDefaultVendorModel(base, m.ID, vendorId);
+      toastOk(vendorId ? `Default model: ${vendorId}` : "Default cleared — top of list");
+      vendorPickerFor = null;
+      await loadConfig(true);
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : "Failed to set default model");
+    } finally {
+      setBusy(`vendor-${m.ID}`, false);
+    }
+  }
+
   let confirmDelete = $state<WickModelDTO | null>(null);
   async function doDelete(m: WickModelDTO) {
     confirmDelete = null;
@@ -570,6 +678,67 @@
   onCancel={() => { confirmDelete = null; }}
 />
 
+<!-- Live-set default vendor model picker -->
+<Modal open={vendorPickerFor !== null} title="Set default model" size="md" onClose={() => { vendorPickerFor = null; }}>
+  <div class="space-y-3">
+    <p class="text-sm text-black-700 dark:text-black-600">
+      Pick the model used when <span class="font-medium text-black-900 dark:text-white-100">{vendorPickerFor?.Label || vendorPickerFor?.DiscoveryFilter || "this live set"}</span>
+      is chosen without drilling into a specific model. If the pinned model later disappears from the list, the top of the list is used automatically.
+    </p>
+    {#if vendorLoading}
+      <div class="px-4 py-6 text-center text-sm text-black-700 dark:text-black-600">Loading models…</div>
+    {:else if vendorErr}
+      <div class="rounded-lg border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">{vendorErr}</div>
+    {:else}
+      <input
+        type="text"
+        bind:value={vendorSearch}
+        placeholder="Filter models…"
+        class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+      />
+      <div class="max-h-64 overflow-y-auto rounded-lg border border-white-400 dark:border-navy-600">
+        <button
+          type="button"
+          onclick={() => pinVendorModel("")}
+          class="flex w-full items-center justify-between gap-2 px-4 py-2 text-left text-sm hover:bg-white-200 dark:hover:bg-navy-800 {!vendorPickerFor?.DefaultVendorModel ? 'text-green-600 dark:text-green-400 font-medium' : 'text-black-900 dark:text-white-100'}"
+        >
+          <span>Top of list <span class="text-[11px] font-normal text-black-700 dark:text-black-600">(no pin — always the first match)</span></span>
+          {#if !vendorPickerFor?.DefaultVendorModel}<span class="text-[11px]">current</span>{/if}
+        </button>
+        {#each filteredVendorModels as vm (vm.id)}
+          {@const isPin = vm.id === vendorPickerFor?.DefaultVendorModel}
+          <button
+            type="button"
+            onclick={() => pinVendorModel(vm.id)}
+            class="flex w-full items-center justify-between gap-2 border-t border-white-300 dark:border-navy-700 px-4 py-2 text-left text-sm hover:bg-white-200 dark:hover:bg-navy-800 {isPin ? 'text-green-600 dark:text-green-400 font-medium' : 'text-black-900 dark:text-white-100'}"
+          >
+            <span class="min-w-0 truncate">
+              {vm.id}
+              {#if vm.label && vm.label !== vm.id}<span class="ml-1 text-[11px] font-normal text-black-700 dark:text-black-600">· {vm.label}</span>{/if}
+            </span>
+            <span class="flex shrink-0 items-center gap-1.5">
+              {#if vm.default && !isPin}<span class="rounded-full bg-white-300 dark:bg-navy-700 px-1.5 py-0.5 text-[10px] text-black-700 dark:text-black-600">top</span>{/if}
+              {#if isPin}<span class="text-[11px]">current</span>{/if}
+            </span>
+          </button>
+        {/each}
+        {#if filteredVendorModels.length === 0}
+          <div class="px-4 py-3 text-xs text-black-700 dark:text-black-600">No models match “{vendorSearch}”.</div>
+        {/if}
+      </div>
+    {/if}
+  </div>
+</Modal>
+
+<!-- Full capability breakdown for a discovered model (opened from the ⓘ on a
+     capability chip). Lists every vendor-reported key + whether wick uses it. -->
+<CapabilityModal
+  open={capsModalFor !== null}
+  onClose={() => (capsModalFor = null)}
+  caps={capsModalFor?.caps}
+  modelId={capsModalFor?.id ?? ""}
+/>
+
 <div class="space-y-4">
   <Breadcrumb items={crumbs} />
   <div class="flex items-center gap-2 flex-wrap">
@@ -602,28 +771,6 @@
             <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">Wired directly as function tools — no MCP. Per-connector selection is coming later.</p>
           </div>
           <div>
-            <label for="wick-maxctx" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Max context tokens</label>
-            <input
-              id="wick-maxctx"
-              type="text"
-              bind:value={maxContext}
-              placeholder="0 = unlimited (no compaction)"
-              class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
-            />
-            <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">History-replay budget. Above ~80% of this, the model summarizes the oldest turns (compaction). Default 0 = off.</p>
-          </div>
-          <div>
-            <label for="wick-maxturns" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Max turns per message</label>
-            <input
-              id="wick-maxturns"
-              type="text"
-              bind:value={maxTurns}
-              placeholder="0 = default (safety cap 50)"
-              class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
-            />
-            <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">Max tool-call rounds in one reply before wick stops.</p>
-          </div>
-          <div>
             <label for="wick-temp" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Default temperature</label>
             <input
               id="wick-temp"
@@ -644,16 +791,141 @@
             />
           </div>
         </div>
-        <div>
-          <label for="wick-raw" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Raw model config <span class="font-normal text-black-700 dark:text-black-600">(JSON, merged last)</span></label>
-          <textarea
-            id="wick-raw"
-            bind:value={settingsRaw}
-            rows="3"
-            placeholder={'{"safetySettings": [...], "topK": 40}'}
-            class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
-          ></textarea>
-          <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">Escape hatch: extra generation-config fields (e.g. safetySettings, topK) as JSON, merged over the fields above. For options that don't have a control yet.</p>
+        <!-- ── Advanced settings (limits + raw config) ─────────────── -->
+        <div class="rounded-lg border border-white-300 dark:border-navy-600">
+          <button
+            type="button"
+            onclick={() => { showAdvanced = !showAdvanced; }}
+            class="w-full flex items-center justify-between px-4 py-2.5 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+          >
+            <span>Advanced settings <span class="font-normal text-black-700 dark:text-black-600">— limits, retries, raw config</span></span>
+            <span class="text-black-700">{showAdvanced ? "▴" : "▾"}</span>
+          </button>
+          {#if showAdvanced}
+          <div class="px-4 pb-4 pt-1 space-y-5 border-t border-white-300 dark:border-navy-600">
+          <!-- Capability chips: global show/hide + display mode. Chips are the
+               vendor-declared badges (vision, reasoning, context, …) on model
+               rows in the pickers. -->
+          <div class="flex items-center justify-between gap-4 pt-1">
+            <div class="min-w-0">
+              <p class="text-xs font-medium text-black-900 dark:text-white-100">Show model capabilities</p>
+              <p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600">Badges (vision, reasoning, context window, …) on model rows in the pickers, when the provider reports them.</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={showCaps}
+              aria-label="Show model capabilities"
+              onclick={() => (showCaps = !showCaps)}
+              class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors {showCaps ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
+            >
+              <span class="inline-block h-5 w-5 transform rounded-full bg-white-100 shadow transition-transform {showCaps ? 'translate-x-5' : 'translate-x-0.5'}"></span>
+            </button>
+          </div>
+          {#if showCaps}
+            <div class="max-w-xs">
+              <label for="wick-caps-mode" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Capability display</label>
+              <Select value={capsMode} options={[{ label: "List (name + value)", value: "list" }, { label: "Name chips", value: "name" }, { label: "Icons + tooltip", value: "icon" }]} onChange={(v: string) => (capsMode = v === "name" ? "name" : v === "icon" ? "icon" : "list")} />
+            </div>
+          {/if}
+          <!-- Streaming: SSE token-by-token output vs one-shot. Default on. -->
+          <div class="flex items-center justify-between gap-4 pt-1">
+            <div class="min-w-0">
+              <p class="text-xs font-medium text-black-900 dark:text-white-100">Stream responses</p>
+              <p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600">Show the model's answer token-by-token as it's generated. Turn off if your gateway doesn't support SSE (falls back to waiting for the full reply).</p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={streamOutput}
+              aria-label="Stream responses"
+              onclick={() => (streamOutput = !streamOutput)}
+              class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors {streamOutput ? 'bg-green-500' : 'bg-white-400 dark:bg-navy-600'}"
+            >
+              <span class="inline-block h-5 w-5 transform rounded-full bg-white-100 shadow transition-transform {streamOutput ? 'translate-x-5' : 'translate-x-0.5'}"></span>
+            </button>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+          <div>
+            <label for="wick-maxctx" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Max context tokens</label>
+            <input
+              id="wick-maxctx"
+              type="text"
+              bind:value={maxContext}
+              placeholder="0 = unlimited (no compaction)"
+              class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+            />
+            <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">History-replay budget. Above ~80% of this, the model summarizes the oldest turns (compaction). Default 0 = off.</p>
+          </div>
+          <div>
+            <label for="wick-maxturns" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Max turns per message</label>
+            <input
+              id="wick-maxturns"
+              type="text"
+              bind:value={maxTurns}
+              placeholder="0 = unlimited"
+              class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+            />
+            <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">Max tool-call rounds in one reply. 0 = unlimited — the error/time guards below are the safety net.</p>
+          </div>
+          <div>
+            <label for="wick-maxconsecerr" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Max consecutive tool errors</label>
+            <input
+              id="wick-maxconsecerr"
+              type="text"
+              bind:value={maxConsecErrors}
+              placeholder="0 = default (20)"
+              class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+            />
+            <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">Stops a turn after N all-error tool rounds in a row. Any success resets the counter.</p>
+          </div>
+          <div>
+            <label for="wick-maxturnmin" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Max turn duration (minutes)</label>
+            <input
+              id="wick-maxturnmin"
+              type="text"
+              bind:value={maxTurnMinutes}
+              placeholder="0 = default (60)"
+              class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+            />
+            <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">Wall-clock ceiling for one reply — the backstop when max turns is unlimited.</p>
+          </div>
+          <div>
+            <label for="wick-maxretries" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Max model retries</label>
+            <input
+              id="wick-maxretries"
+              type="text"
+              bind:value={maxModelRetries}
+              placeholder="0 = default (3)"
+              class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+            />
+            <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">Total attempts per failing model call (incl. the first). 1 disables retries.</p>
+          </div>
+          <div>
+            <label for="wick-calltimeout" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Model call timeout (seconds)</label>
+            <input
+              id="wick-calltimeout"
+              type="text"
+              bind:value={modelCallTimeout}
+              placeholder="0 = default (120)"
+              class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+            />
+            <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">Ceiling for one model-call attempt before it counts as failed and retries.</p>
+          </div>
+          </div>
+          <div>
+            <label for="wick-raw" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1.5">Raw model config <span class="font-normal text-black-700 dark:text-black-600">(JSON, merged last)</span></label>
+            <textarea
+              id="wick-raw"
+              bind:value={settingsRaw}
+              rows="3"
+              placeholder={'{"safetySettings": [...], "topK": 40}'}
+              class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+            ></textarea>
+            <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">Escape hatch: extra generation-config fields (e.g. safetySettings, topK) as JSON, merged over the fields above. For options that don't have a control yet.</p>
+          </div>
+          </div>
+          {/if}
         </div>
       </div>
       <div class="px-5 py-3 border-t border-white-300 dark:border-navy-600 flex justify-end">
@@ -717,15 +989,22 @@
                   </td>
                   <td class="px-4 py-3">
                     <div class="flex items-center gap-2">
-                      <span class="text-black-900 dark:text-white-100">{m.Label || m.Model || m.DiscoveryFilter}</span>
-                      {#if m.DiscoveryFilter}
+                      <span class="text-black-900 dark:text-white-100">{m.Label || m.Model || (m.LiveSet ? "Live model set" : "")}</span>
+                      {#if m.LiveSet}
                         <span class="inline-flex items-center rounded-full bg-green-500/10 px-2 py-0.5 text-[11px] font-medium text-green-600 dark:text-green-400">Live set</span>
                       {/if}
                       {#if m.Disabled}
                         <span class="inline-flex items-center rounded-full bg-cau-100 px-2 py-0.5 text-[11px] font-medium text-cau-400 dark:bg-cau-400/15">Disabled</span>
                       {/if}
                     </div>
-                    <div class="font-mono text-xs text-black-700 dark:text-black-600">{m.DiscoveryFilter ? `filter: ${m.DiscoveryFilter}` : m.Model}</div>
+                    <div class="font-mono text-xs text-black-700 dark:text-black-600">
+                      {#if m.LiveSet}
+                        {m.DiscoveryFilter ? `filter: ${m.DiscoveryFilter}` : "all models"}
+                        <span class="ml-1 text-black-600 dark:text-black-700">· default: {m.DefaultVendorModel || "top of list"}</span>
+                      {:else}
+                        {m.Model}
+                      {/if}
+                    </div>
                   </td>
                   <td class="px-4 py-3">
                     <span class="inline-flex items-center rounded-full border border-white-400 dark:border-navy-500 px-2.5 py-0.5 text-xs font-medium text-black-800 dark:text-black-600">{kindChip(m.Kind)}</span>
@@ -744,6 +1023,9 @@
                         items={[
                           { label: "Edit", onclick: () => openEdit(m) },
                           { label: "Set default", onclick: () => setDefault(m), disabled: m.Disabled || m.Default },
+                          ...(m.LiveSet
+                            ? [{ label: "Set default model…", onclick: () => openVendorPicker(m), disabled: m.Disabled }]
+                            : []),
                           { label: "Test", onclick: () => testModel(m), disabled: m.Disabled },
                           { label: "Duplicate", onclick: () => duplicateModel(m) },
                           { label: m.Disabled ? "Enable" : "Disable", onclick: () => toggleDisabled(m) },
@@ -794,7 +1076,22 @@
     </div>
 
     <div>
-      <label for="m-key" class="block text-sm font-medium text-black-900 dark:text-white-100 mb-1">API key</label>
+      <label for="m-key" class="flex items-center gap-2 text-sm font-medium text-black-900 dark:text-white-100 mb-1">
+        API key
+        <!-- Saved indicator: this model already has a stored (encrypted) key
+             and the user hasn't typed a replacement yet. Turns to "Replacing…"
+             the moment they start typing, so it's clear the new value wins. -->
+        {#if editing && editing.HasKey}
+          {#if keyReplacing}
+            <span class="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">Replacing…</span>
+          {:else}
+            <span class="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-green-600 dark:text-green-400">
+              <svg viewBox="0 0 16 16" fill="none" class="h-3 w-3"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Saved
+            </span>
+          {/if}
+        {/if}
+      </label>
       <input
         id="m-key"
         type="password"
@@ -804,7 +1101,9 @@
         placeholder={keyPlaceholder}
         class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
       />
-      <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Encrypted at rest, used server-side only — never sent back to the browser.</p>
+      <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">
+        {#if editing && editing.HasKey && !keyReplacing}A key is already stored for this model — leave blank to keep it. {/if}Encrypted at rest, used server-side only — never sent back to the browser.
+      </p>
     </div>
 
     <div>
@@ -845,8 +1144,10 @@
               class="rounded-md px-2.5 py-1 font-medium transition-colors {multiSelect ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'text-black-700 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100'}"
             >Multiple</button>
           </div>
-          {#if multiSelect}
-            <span class="text-[11px] font-medium {selectedModels.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-black-700 dark:text-black-600'}">{selectedModels.length} {selectMode === "live" ? "match now" : "selected"}</span>
+          {#if multiSelect && selectMode === "live"}
+            <span class="text-[11px] font-medium text-black-700 dark:text-black-600">{filteredModels.length} match now{liveDefaultVendor ? ` · default: ${liveDefaultVendor}` : ""}</span>
+          {:else if multiSelect}
+            <span class="text-[11px] font-medium {selectedModels.length > 0 ? 'text-green-600 dark:text-green-400' : 'text-black-700 dark:text-black-600'}">{selectedModels.length} selected</span>
           {/if}
         </div>
 
@@ -881,7 +1182,7 @@
 
         <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">
           {#if multiSelect && selectMode === "live"}
-            Saves <span class="font-medium">one live entry</span> that stores this filter. In the model picker it re-fetches the vendor list and shows everything matching — no per-model registration. The list below is a preview of what matches now.
+            Saves <span class="font-medium">one live entry</span> that stores this filter. In the model picker it re-fetches the vendor list and shows everything matching — no per-model registration. The list below is a preview of what matches now; click one to pin it as the <span class="font-medium">default</span> (used when the set is picked without choosing a model). No pin = top of the list, which auto-re-selects if that model disappears.
           {:else if multiSelect}
             Tick models to add each as its own entry{editing ? " — the model you're editing stays as is" : ""}.
           {:else}
@@ -913,26 +1214,45 @@
               <div class="px-4 py-3 text-xs text-black-700 dark:text-black-600">No models found — type the id above manually.</div>
             {:else}
               {#each filteredModels as m (m.id)}
-                {@const selected = multiSelect ? isSelected(m.id) : mModel === m.id}
+                {@const isLive = multiSelect && selectMode === "live"}
+                {@const isPin = liveDefaultVendor === m.id}
+                {@const selected = isLive ? isPin : multiSelect ? isSelected(m.id) : mModel === m.id}
                 <button
                   type="button"
-                  onclick={() => pickModel(m)}
-                  class="flex w-full items-center justify-between gap-2 px-4 py-2 text-left text-sm hover:bg-white-200 dark:hover:bg-navy-800 {selected ? 'text-green-600 dark:text-green-400 font-medium' : 'text-black-900 dark:text-white-100'}"
+                  onclick={() => (isLive ? (liveDefaultVendor = isPin ? "" : m.id) : pickModel(m))}
+                  title={isLive ? (isPin ? "Default model — click to unpin (top of list)" : "Set as default model") : undefined}
+                  class="flex w-full items-start justify-between gap-2 px-4 py-2 text-left text-sm hover:bg-white-200 dark:hover:bg-navy-800 {selected ? 'text-green-600 dark:text-green-400 font-medium' : 'text-black-900 dark:text-white-100'}"
                 >
-                  <span class="flex min-w-0 items-center gap-2">
-                    {#if multiSelect}
+                  <span class="flex min-w-0 items-start gap-2">
+                    {#if isLive}
+                      <!-- Live: radio to pin the sticky DEFAULT (one), not a multi-select. -->
+                      <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 {isPin ? 'border-green-500 bg-green-500' : 'border-white-400 dark:border-navy-500'}">
+                        {#if isPin}<span class="h-1.5 w-1.5 rounded-full bg-white-100"></span>{/if}
+                      </span>
+                    {:else if multiSelect}
                       <span class="flex h-4 w-4 shrink-0 items-center justify-center rounded border {selected ? 'border-green-500 bg-green-500 text-white-100' : 'border-white-400 dark:border-navy-600'}">
                         {#if selected}<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>{/if}
                       </span>
                     {/if}
-                    <span class="min-w-0 truncate">
-                      {m.id}
-                      {#if m.label && m.label !== m.id}
-                        <span class="ml-1 text-[11px] font-normal text-black-700 dark:text-black-600">· {m.label}</span>
+                    <span class="flex min-w-0 flex-col">
+                      <span class="min-w-0 truncate">
+                        {m.id}
+                        {#if m.label && m.label !== m.id}
+                          <span class="ml-1 text-[11px] font-normal text-black-700 dark:text-black-600">· {m.label}</span>
+                        {/if}
+                      </span>
+                      <!-- Shared capability chips: inline vision/reasoning +
+                           an ⓘ that opens the full breakdown. Only renders when
+                           the vendor declared capabilities + the global toggle
+                           is on. -->
+                      {#if showCaps}
+                        <CapabilityChips caps={m.caps} mode={capsMode} onInfo={() => (capsModalFor = m)} />
                       {/if}
                     </span>
                   </span>
-                  {#if selected && !multiSelect}
+                  {#if isLive && isPin}
+                    <span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">default</span>
+                  {:else if selected && !multiSelect}
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M20 6 9 17l-5-5"/></svg>
                   {/if}
                 </button>
@@ -1021,7 +1341,7 @@
   {#snippet footer()}
     <Button variant="secondary" disabled={savingModel} onclick={() => { modalOpen = false; }}>Cancel</Button>
     <Button variant="primary" disabled={savingModel} onclick={saveModel}>
-      {#if savingModel}Saving…{:else if multiSelect && selectMode === "live"}Add live set{:else if multiSelect}Add {selectedModels.length || ""} model{selectedModels.length === 1 ? "" : "s"}{:else}Save model{/if}
+      {#if savingModel}Saving…{:else if multiSelect && selectMode === "live"}{editing ? "Save live set" : "Add live set"}{:else if multiSelect}Add {selectedModels.length || ""} model{selectedModels.length === 1 ? "" : "s"}{:else}{editing ? "Save model" : "Add model"}{/if}
     </Button>
   {/snippet}
 </Modal>

@@ -2,6 +2,7 @@ package wick
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 	"google.golang.org/genai"
@@ -38,6 +39,36 @@ func buildGenConfig(m provider.WickModel, inst *provider.WickConfig) *genai.Gene
 		cfg.MaxOutputTokens = int32(m.MaxOutputTokens)
 	}
 	return cfg
+}
+
+// buildReasoning derives the vendor-agnostic reasoning request from the merged
+// gen config (instance ← model, model wins). Prefers an explicit effort enum;
+// falls back to a thinking-budget token count. Returns nil when neither is set,
+// so an adapter emits no reasoning param (vendor default). This is what the
+// non-Gemini adapters (OpenAI/Anthropic) read — Gemini uses Config.ThinkingConfig
+// which buildGenConfig already set from the same fields.
+func buildReasoning(m provider.WickModel, inst *provider.WickConfig) *ReasoningConfig {
+	effort := ""
+	budget := 0
+	take := func(g *provider.WickGenConfig) {
+		if g == nil {
+			return
+		}
+		if e := strings.ToLower(strings.TrimSpace(g.ReasoningEffort)); e != "" {
+			effort = e
+		}
+		if g.ThinkingBudget != nil {
+			budget = *g.ThinkingBudget
+		}
+	}
+	if inst != nil {
+		take(inst.GenConfig)
+	}
+	take(m.GenConfig)
+	if effort == "" && budget == 0 {
+		return nil
+	}
+	return &ReasoningConfig{Effort: effort, BudgetTokens: budget}
 }
 
 // applyRawConfig unmarshals raw JSON over the config in place. Invalid

@@ -94,8 +94,10 @@ version: 1.0.0
 	if payload.Total != 1 {
 		t.Fatalf("total = %d, want 1", payload.Total)
 	}
-	if len(payload.Providers) != 2 {
-		t.Fatalf("providers count = %d, want 2", len(payload.Providers))
+	// claude + codex are created here; wick's own dir (~/.<appname>/skills) is
+	// always ensure-created by KnownDirs, so the provider set is those three.
+	if len(payload.Providers) != 3 {
+		t.Fatalf("providers count = %d, want 3 (claude, codex, wick)", len(payload.Providers))
 	}
 
 	skill := payload.Skills[0]
@@ -115,12 +117,25 @@ version: 1.0.0
 		t.Fatalf("meta.version = %q, want 1.0.0", skill.Meta["version"])
 	}
 
-	if len(skill.InProviders) != 1 || skill.InProviders[0].Label != "claude" {
+	// Present in claude only; missing from codex AND the always-present wick
+	// dir. Assert by membership rather than exact slice so the wick dir doesn't
+	// make the test brittle.
+	if !hasProvider(skill.InProviders, "claude") || len(skill.InProviders) != 1 {
 		t.Fatalf("in_providers = %+v, want [{claude}]", skill.InProviders)
 	}
-	if len(skill.MissingProviders) != 1 || skill.MissingProviders[0].Label != "codex" {
-		t.Fatalf("missing_providers = %+v, want [{codex}]", skill.MissingProviders)
+	if !hasProvider(skill.MissingProviders, "codex") {
+		t.Fatalf("missing_providers = %+v, want to include codex", skill.MissingProviders)
 	}
+}
+
+// hasProvider reports whether a provider label is present in the list.
+func hasProvider(locs []skillsync.ProviderLocation, label string) bool {
+	for _, l := range locs {
+		if l.Label == label {
+			return true
+		}
+	}
+	return false
 }
 
 func TestWickSkillList_multiplProviders(t *testing.T) {
@@ -148,7 +163,9 @@ trigger: /wick-workflow
 
 	var resp struct {
 		Result struct {
-			Content []struct{ Text string `json:"text"` } `json:"content"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -163,11 +180,13 @@ trigger: /wick-workflow
 	}
 
 	skill := payload.Skills[0]
-	if len(skill.InProviders) != 2 {
-		t.Fatalf("in_providers = %d, want 2", len(skill.InProviders))
+	// Present in claude + codex (both created here); missing from the always-
+	// present wick dir. Assert membership, not exact counts.
+	if !hasProvider(skill.InProviders, "claude") || !hasProvider(skill.InProviders, "codex") {
+		t.Fatalf("in_providers = %+v, want claude + codex", skill.InProviders)
 	}
-	if len(skill.MissingProviders) != 0 {
-		t.Fatalf("missing_providers = %d, want 0", len(skill.MissingProviders))
+	if len(skill.InProviders) != 2 {
+		t.Fatalf("in_providers count = %d, want 2 (claude, codex)", len(skill.InProviders))
 	}
 	if skill.Meta["trigger"] != "/wick-workflow" {
 		t.Fatalf("meta.trigger = %q, want /wick-workflow", skill.Meta["trigger"])
@@ -201,8 +220,10 @@ description: Test skill
 
 	var resp struct {
 		Result struct {
-			Content []struct{ Text string `json:"text"` } `json:"content"`
-			IsError bool                                   `json:"isError"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -264,7 +285,9 @@ status: no-skill
 
 	var resp struct {
 		Result struct {
-			Content []struct{ Text string `json:"text"` } `json:"content"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {

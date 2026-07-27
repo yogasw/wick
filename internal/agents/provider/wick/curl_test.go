@@ -244,7 +244,7 @@ func TestGeminiQueryParamAuth(t *testing.T) {
 
 // TestSingleQuoteEscaping is the Postman-truncation regression guard: a
 // body containing an apostrophe must NOT terminate the -d '...' string
-// early. The '\'' idiom keeps the whole body inside one shell-quoted arg.
+// early. The '\” idiom keeps the whole body inside one shell-quoted arg.
 func TestSingleQuoteEscaping(t *testing.T) {
 	rec := interactionRecord{
 		ModelID: "m1",
