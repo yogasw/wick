@@ -211,17 +211,18 @@ func openSession(c *connector.Ctx) (any, error) {
 
 	id := newSessionID(c)
 
-	// Resolve the profile dir. A named profile (validated) gives a stable
-	// profile-<name> dir that persists across sessions so login carries over; an
-	// empty profile falls back to the per-session profile-<id> dir (anonymous,
-	// swept on close — the original behavior). A named profile already driven by
-	// a live session is rejected: a Chromium --user-data-dir is single-owner, so
-	// two live browsers on the same dir corrupt it.
-	profile := strings.TrimSpace(c.Input("profile"))
+	// Resolve the profile dir. resolveProfile folds the caller's argument with
+	// the instance defaults (default_profile / force_default_profile): a named
+	// profile (validated) gives a stable profile-<name> dir that persists across
+	// sessions so login carries over, while an empty result falls back to the
+	// per-session profile-<id> dir (anonymous, swept on close). A named profile
+	// already driven by a live session is rejected: a Chromium --user-data-dir is
+	// single-owner, so two live browsers on the same dir corrupt it.
+	profile, err := resolveProfile(c, c.Input("profile"))
+	if err != nil {
+		return nil, err
+	}
 	if profile != "" {
-		if !validProfileName(profile) {
-			return nil, fmt.Errorf("invalid profile name %q: use letters, digits, dash, underscore (no path separators)", profile)
-		}
 		if owner, ok := profileInUse(c, profile); ok {
 			return nil, fmt.Errorf("profile %q is already in use by live session %s: close it first (session_close) before reopening the profile", profile, owner)
 		}

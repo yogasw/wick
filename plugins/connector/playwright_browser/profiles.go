@@ -47,6 +47,43 @@ func profileDir(dir, profile, sessionID string) string {
 	return filepath.Join(dir, profilePrefix+sessionID)
 }
 
+// resolveProfile decides which named profile a session_open runs against,
+// folding the caller's argument together with the instance-level defaults.
+//
+// Precedence: force_default_profile pins every session to default_profile
+// (the argument is ignored, not an error — the point of the switch is that a
+// caller cannot escape the shared identity). Otherwise an explicit argument
+// wins, and an empty one falls back to default_profile. With neither set the
+// result is "" — an anonymous session, the original behavior.
+//
+// The returned name is validated here so a bad config value fails at
+// session_open with a clear message rather than creating a junk dir.
+func resolveProfile(c *connector.Ctx, arg string) (string, error) {
+	arg = strings.TrimSpace(arg)
+	def := strings.TrimSpace(c.Cfg("default_profile"))
+
+	if c.CfgBool("force_default_profile") {
+		if def == "" {
+			return "", fmt.Errorf("force_default_profile is on but default_profile is empty: set a default profile name in this connector's config, or turn the switch off")
+		}
+		if !validProfileName(def) {
+			return "", fmt.Errorf("invalid default_profile %q in config: use letters, digits, dash, underscore (no path separators)", def)
+		}
+		return def, nil
+	}
+
+	if arg == "" {
+		arg = def
+	}
+	if arg == "" {
+		return "", nil // anonymous session
+	}
+	if !validProfileName(arg) {
+		return "", fmt.Errorf("invalid profile name %q: use letters, digits, dash, underscore (no path separators)", arg)
+	}
+	return arg, nil
+}
+
 // profileInUse reports whether a named profile currently has a live session
 // driving it (a Chromium --user-data-dir is single-owner). Returns the owning
 // session id when so. listSessions already sweeps dead sessions, so a crashed
