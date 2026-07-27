@@ -383,6 +383,7 @@ type wickModelDTO struct {
 	Temperature     *float64 `json:"temperature,omitempty"`
 	TopP            *float64 `json:"top_p,omitempty"`
 	ThinkingBudget  *int     `json:"thinking_budget,omitempty"`
+	ReasoningEffort string   `json:"reasoning_effort,omitempty"`
 	RawConfig       string   `json:"raw_config,omitempty"`
 	// LiveSet marks this a live model set (Model may be empty; filter is
 	// optional). See userconfig.WickModel.LiveSet.
@@ -437,6 +438,7 @@ type wickModelView struct {
 	Temperature        *float64 `json:"temperature,omitempty"`
 	TopP               *float64 `json:"top_p,omitempty"`
 	ThinkingBudget     *int     `json:"thinking_budget,omitempty"`
+	ReasoningEffort    string   `json:"reasoning_effort,omitempty"`
 	RawConfig          string   `json:"raw_config"`
 	LiveSet            bool     `json:"live_set,omitempty"`
 	DiscoveryFilter    string   `json:"discovery_filter,omitempty"`
@@ -478,6 +480,7 @@ func getWickConfig(c *tool.Ctx) {
 			v.Temperature = m.GenConfig.Temperature
 			v.TopP = m.GenConfig.TopP
 			v.ThinkingBudget = m.GenConfig.ThinkingBudget
+			v.ReasoningEffort = m.GenConfig.ReasoningEffort
 		}
 		models = append(models, v)
 	}
@@ -492,6 +495,7 @@ func getWickConfig(c *tool.Ctx) {
 		"max_turn_minutes":        0,
 		"max_model_retries":       0,
 		"model_call_timeout_sec":  0,
+		"reasoning_effort":        "",
 		"raw_config":              "",
 	}
 	if wc := ins.WickConfig; wc != nil {
@@ -510,6 +514,7 @@ func getWickConfig(c *tool.Ctx) {
 			settings["temperature"] = wc.GenConfig.Temperature
 			settings["top_p"] = wc.GenConfig.TopP
 			settings["thinking_budget"] = wc.GenConfig.ThinkingBudget
+			settings["reasoning_effort"] = wc.GenConfig.ReasoningEffort
 		}
 	}
 	c.JSON(http.StatusOK, map[string]any{"models": models, "settings": settings})
@@ -926,6 +931,7 @@ type wickSettingsDTO struct {
 	Temperature         *float64 `json:"temperature,omitempty"`
 	TopP                *float64 `json:"top_p,omitempty"`
 	ThinkingBudget      *int     `json:"thinking_budget,omitempty"`
+	ReasoningEffort     string   `json:"reasoning_effort,omitempty"`
 	RawConfig           string   `json:"raw_config,omitempty"`
 }
 
@@ -960,7 +966,7 @@ func saveWickSettings(c *tool.Ctx) {
 		ModelCallTimeoutSec:   dto.ModelCallTimeoutSec,
 		RawConfig:             strings.TrimSpace(dto.RawConfig),
 	}
-	if g := genConfigFromGen(dto.Temperature, dto.TopP, dto.ThinkingBudget, 0); g != nil {
+	if g := genConfigFromGen(dto.Temperature, dto.TopP, dto.ThinkingBudget, strings.TrimSpace(dto.ReasoningEffort), 0); g != nil {
 		wc.GenConfig = g
 	}
 	ins.WickConfig = wc
@@ -1153,17 +1159,18 @@ func normalizeDefault(ins *provider.Instance, savedID string, savedDefault bool)
 }
 
 func genConfigFromDTO(dto wickModelDTO) *provider.WickGenConfig {
-	return genConfigFromGen(dto.Temperature, dto.TopP, dto.ThinkingBudget, dto.MaxOutputTokens)
+	return genConfigFromGen(dto.Temperature, dto.TopP, dto.ThinkingBudget, strings.TrimSpace(dto.ReasoningEffort), dto.MaxOutputTokens)
 }
 
-func genConfigFromGen(temp, topP *float64, thinking *int, maxOut int) *provider.WickGenConfig {
-	if temp == nil && topP == nil && thinking == nil && maxOut == 0 {
+func genConfigFromGen(temp, topP *float64, thinking *int, reasoningEffort string, maxOut int) *provider.WickGenConfig {
+	if temp == nil && topP == nil && thinking == nil && reasoningEffort == "" && maxOut == 0 {
 		return nil
 	}
 	return &provider.WickGenConfig{
 		Temperature:     temp,
 		TopP:            topP,
 		ThinkingBudget:  thinking,
+		ReasoningEffort: reasoningEffort,
 		MaxOutputTokens: maxOut,
 	}
 }

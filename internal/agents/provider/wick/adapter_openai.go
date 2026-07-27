@@ -2,6 +2,7 @@ package wick
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"iter"
 	"strings"
@@ -47,11 +48,26 @@ func (m *openAIModel) GenerateContent(ctx context.Context, req *LLMRequest, stre
 // ── request construction ──────────────────────────────────────────────
 
 type oaiMessage struct {
-	Role       string        `json:"role"`
-	Content    string        `json:"content,omitempty"`
+	Role string `json:"role"`
+	// Content is a plain string for text-only messages, or an array of
+	// oaiContentPart (text + image_url) for a multimodal user message. `any`
+	// so both shapes marshal correctly — OpenAI/OpenRouter accept either.
+	Content    any           `json:"content,omitempty"`
 	ToolCalls  []oaiToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string        `json:"tool_call_id,omitempty"`
 	Name       string        `json:"name,omitempty"`
+}
+
+// oaiContentPart is one element of a multimodal message content array:
+// {type:"text",text:...} or {type:"image_url",image_url:{url:"data:...;base64,..."}}.
+type oaiContentPart struct {
+	Type     string       `json:"type"`
+	Text     string       `json:"text,omitempty"`
+	ImageURL *oaiImageURL `json:"image_url,omitempty"`
+}
+
+type oaiImageURL struct {
+	URL string `json:"url"`
 }
 
 type oaiToolCall struct {
@@ -66,12 +82,22 @@ type oaiToolCallFunc struct {
 }
 
 type oaiRequest struct {
-	Model       string       `json:"model"`
-	Messages    []oaiMessage `json:"messages"`
-	Tools       []oaiTool    `json:"tools,omitempty"`
-	MaxTokens   int          `json:"max_tokens,omitempty"`
-	Temperature *float32     `json:"temperature,omitempty"`
-	TopP        *float32     `json:"top_p,omitempty"`
+	Model       string        `json:"model"`
+	Messages    []oaiMessage  `json:"messages"`
+	Tools       []oaiTool     `json:"tools,omitempty"`
+	MaxTokens   int           `json:"max_tokens,omitempty"`
+	Temperature *float32      `json:"temperature,omitempty"`
+	TopP        *float32      `json:"top_p,omitempty"`
+	Reasoning   *oaiReasoning `json:"reasoning,omitempty"`
+}
+
+// oaiReasoning is the OpenRouter/OpenAI-compatible reasoning param. Effort is
+// the enum form ("low"|"medium"|"high"); MaxTokens the Anthropic-style token
+// form. OpenRouter normalizes either across vendors; a native OpenAI endpoint
+// reads effort. Only one is sent (effort preferred).
+type oaiReasoning struct {
+	Effort    string `json:"effort,omitempty"`
+	MaxTokens int    `json:"max_tokens,omitempty"`
 }
 
 type oaiTool struct {
@@ -110,6 +136,16 @@ func (m *openAIModel) buildRequest(req *LLMRequest) *oaiRequest {
 			out.MaxTokens = int(req.Config.MaxOutputTokens)
 		}
 	}
+	// Reasoning: prefer the effort enum; else the token budget. OpenRouter
+	// translates either to the underlying model's native param, so this one
+	// shape covers openai / openrouter / grok / other.
+	if r := req.Reasoning; r != nil {
+		if r.Effort != "" {
+			out.Reasoning = &oaiReasoning{Effort: r.Effort}
+		} else if r.BudgetTokens > 0 {
+			out.Reasoning = &oaiReasoning{MaxTokens: r.BudgetTokens}
+		}
+	}
 	return out
 }
 
@@ -124,6 +160,7 @@ func contentToOAI(c *genai.Content) []oaiMessage {
 	var text strings.Builder
 	var toolCalls []oaiToolCall
 	var toolMsgs []oaiMessage
+	var images []oaiContentPart
 	for _, p := range c.Parts {
 		switch {
 		case p == nil:
@@ -144,6 +181,11 @@ func contentToOAI(c *genai.Content) []oaiMessage {
 				Name:       p.FunctionResponse.Name,
 				Content:    responseText(p.FunctionResponse.Response),
 			})
+		case p.InlineData != nil && len(p.InlineData.Data) > 0:
+			// image_url with a base64 data-URL — OpenAI's multimodal shape,
+			// which OpenRouter forwards to any vision model (incl. Claude/Grok).
+			url := "data:" + p.InlineData.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(p.InlineData.Data)
+			images = append(images, oaiContentPart{Type: "image_url", ImageURL: &oaiImageURL{URL: url}})
 		case p.Text != "" && !p.Thought:
 			text.WriteString(p.Text)
 		}
@@ -155,11 +197,24 @@ func contentToOAI(c *genai.Content) []oaiMessage {
 	if c.Role == genai.RoleModel {
 		role = "assistant"
 	}
-	msg := oaiMessage{Role: role, Content: text.String()}
+	msg := oaiMessage{Role: role}
+	if len(images) > 0 {
+		// Multimodal: content is an array — a text part (if any) then the
+		// image parts. Scalar-string form is kept for the text-only path so
+		// existing behaviour is byte-identical when there are no images.
+		parts := make([]oaiContentPart, 0, len(images)+1)
+		if t := text.String(); t != "" {
+			parts = append(parts, oaiContentPart{Type: "text", Text: t})
+		}
+		parts = append(parts, images...)
+		msg.Content = parts
+	} else {
+		msg.Content = text.String()
+	}
 	if len(toolCalls) > 0 {
 		msg.ToolCalls = toolCalls
 	}
-	if msg.Content == "" && len(msg.ToolCalls) == 0 {
+	if len(images) == 0 && text.Len() == 0 && len(msg.ToolCalls) == 0 {
 		return nil
 	}
 	return []oaiMessage{msg}

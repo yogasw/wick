@@ -83,6 +83,58 @@ func TestReadFile_ReturnsContent(t *testing.T) {
 	}
 }
 
+// read_file on an IMAGE returns a clear message pointing at the attach-in-chat
+// vision path — NOT the raw bytes (which would be garbage). isErr is false: it's
+// a normal, useful result, not a failure.
+func TestReadFile_ImageReturnsGuidanceNotBytes(t *testing.T) {
+	ws := t.TempDir()
+	png := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 1, 2, 3}
+	if err := os.WriteFile(filepath.Join(ws, "shot.png"), png, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tc := toolContext{Workspace: ws}
+	out, isErr := callFsTool(t, ws, readFileTool(tc), map[string]any{"path": "shot.png"})
+	if isErr {
+		t.Fatalf("image read should not be a tool error, got: %s", out)
+	}
+	if strings.Contains(out, "\x89PNG") || strings.Contains(out, "�") {
+		t.Fatalf("image bytes leaked into text output: %q", out)
+	}
+	if !strings.Contains(strings.ToLower(out), "image") || !strings.Contains(out, "image/png") {
+		t.Fatalf("want image guidance mentioning image/png, got: %q", out)
+	}
+}
+
+// A binary file (NUL bytes, no telling extension) is refused as text.
+func TestReadFile_BinaryRefusedAsText(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "blob.dat"), []byte{1, 2, 0, 3, 4, 0, 5}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tc := toolContext{Workspace: ws}
+	out, isErr := callFsTool(t, ws, readFileTool(tc), map[string]any{"path": "blob.dat"})
+	if isErr {
+		t.Fatalf("unexpected error: %s", out)
+	}
+	if !strings.Contains(strings.ToLower(out), "binary") {
+		t.Fatalf("want binary refusal, got: %q", out)
+	}
+}
+
+// An SVG is XML text — must still be readable (not misclassified as binary).
+func TestReadFile_SVGIsText(t *testing.T) {
+	ws := t.TempDir()
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>`
+	if err := os.WriteFile(filepath.Join(ws, "icon.svg"), []byte(svg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tc := toolContext{Workspace: ws}
+	out, isErr := callFsTool(t, ws, readFileTool(tc), map[string]any{"path": "icon.svg"})
+	if isErr || !strings.Contains(out, "<svg") {
+		t.Fatalf("SVG should read as text, got isErr=%v out=%q", isErr, out)
+	}
+}
+
 func TestReadFile_MissingFileErrors(t *testing.T) {
 	ws := t.TempDir()
 	tc := toolContext{Workspace: ws}

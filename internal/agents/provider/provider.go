@@ -178,9 +178,14 @@ type WickConfig struct {
 
 // WickGenConfig mirrors userconfig.WickGenConfig in-memory.
 type WickGenConfig struct {
-	Temperature     *float64
-	TopP            *float64
-	ThinkingBudget  *int
+	Temperature    *float64
+	TopP           *float64
+	ThinkingBudget *int
+	// ReasoningEffort is the vendor-agnostic reasoning level ("low"|"medium"|
+	// "high"). When set it takes precedence over ThinkingBudget for adapters
+	// that speak an effort enum (OpenAI/OpenRouter reasoning:{effort},
+	// Anthropic maps it to a budget). Empty = fall back to ThinkingBudget.
+	ReasoningEffort string
 	MaxOutputTokens int
 }
 
@@ -1061,6 +1066,7 @@ func wickGenFromUser(in *userconfig.WickGenConfig) *WickGenConfig {
 		Temperature:     in.Temperature,
 		TopP:            in.TopP,
 		ThinkingBudget:  in.ThinkingBudget,
+		ReasoningEffort: in.ReasoningEffort,
 		MaxOutputTokens: in.MaxOutputTokens,
 	}
 }
@@ -1073,6 +1079,7 @@ func wickGenToUser(in *WickGenConfig) *userconfig.WickGenConfig {
 		Temperature:     in.Temperature,
 		TopP:            in.TopP,
 		ThinkingBudget:  in.ThinkingBudget,
+		ReasoningEffort: in.ReasoningEffort,
 		MaxOutputTokens: in.MaxOutputTokens,
 	}
 }

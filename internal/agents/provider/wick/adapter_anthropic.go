@@ -2,6 +2,7 @@ package wick
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"iter"
 	"strings"
@@ -63,6 +64,32 @@ type antRequest struct {
 	Tools       []antTool      `json:"tools,omitempty"`
 	Temperature *float32       `json:"temperature,omitempty"`
 	TopP        *float32       `json:"top_p,omitempty"`
+	Thinking    *antThinking   `json:"thinking,omitempty"`
+}
+
+// antThinking is Anthropic's extended-thinking param: {type:"enabled",
+// budget_tokens:N}. Anthropic has no effort enum, so an effort level maps to a
+// token budget (antThinkingBudgetForEffort).
+type antThinking struct {
+	Type         string `json:"type"` // "enabled"
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+// antThinkingBudgetForEffort maps the vendor-agnostic effort level to a
+// concrete Anthropic thinking budget (tokens). Rough tiers — the point is a
+// sensible non-zero budget per level; operators wanting an exact number set
+// ThinkingBudget directly.
+func antThinkingBudgetForEffort(effort string) int {
+	switch effort {
+	case "low":
+		return 2048
+	case "high":
+		return 16384
+	case "medium":
+		return 8192
+	default:
+		return 0
+	}
 }
 
 // antCacheControl marks a block as a caching breakpoint. Anthropic
@@ -95,6 +122,16 @@ type antBlock struct {
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Content   string `json:"content,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
+	// image
+	Source *antImageSource `json:"source,omitempty"`
+}
+
+// antImageSource is the base64 image payload for an "image" block:
+// {type:"base64", media_type:"image/png", data:"<b64>"}.
+type antImageSource struct {
+	Type      string `json:"type"`       // "base64"
+	MediaType string `json:"media_type"` // e.g. "image/png"
+	Data      string `json:"data"`       // base64-encoded bytes
 }
 
 type antTool struct {
@@ -122,6 +159,24 @@ func (m *anthropicModel) buildRequest(req *LLMRequest) *antRequest {
 		out.TopP = req.Config.TopP
 		if req.Config.MaxOutputTokens > 0 {
 			out.MaxTokens = int(req.Config.MaxOutputTokens)
+		}
+	}
+	// Extended thinking: budget tokens directly, or derived from the effort
+	// level. Anthropic requires budget_tokens < max_tokens and rejects an
+	// explicit temperature/top_p while thinking is on, so bump max_tokens above
+	// the budget when needed and drop the sampling knobs.
+	if r := req.Reasoning; r != nil {
+		budget := r.BudgetTokens
+		if budget <= 0 {
+			budget = antThinkingBudgetForEffort(r.Effort)
+		}
+		if budget > 0 {
+			out.Thinking = &antThinking{Type: "enabled", BudgetTokens: budget}
+			if out.MaxTokens <= budget {
+				out.MaxTokens = budget + anthropicDefaultMaxTokens
+			}
+			out.Temperature = nil
+			out.TopP = nil
 		}
 	}
 	for _, c := range req.Contents {
@@ -168,6 +223,15 @@ func contentToAnthropic(c *genai.Content) (antMessage, bool) {
 				Type:      "tool_result",
 				ToolUseID: p.FunctionResponse.ID,
 				Content:   responseText(p.FunctionResponse.Response),
+			})
+		case p.InlineData != nil && len(p.InlineData.Data) > 0:
+			blocks = append(blocks, antBlock{
+				Type: "image",
+				Source: &antImageSource{
+					Type:      "base64",
+					MediaType: p.InlineData.MIMEType,
+					Data:      base64.StdEncoding.EncodeToString(p.InlineData.Data),
+				},
 			})
 		case p.Text != "" && !p.Thought:
 			blocks = append(blocks, antBlock{Type: "text", Text: p.Text})

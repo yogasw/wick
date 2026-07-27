@@ -51,6 +51,16 @@ type interactionMsg struct {
 	Text     string `json:"text,omitempty"`
 	ToolCall string `json:"tool_call,omitempty"`
 	ToolResp string `json:"tool_resp,omitempty"`
+	// Images summarizes inline image parts on this message (MIME + byte size),
+	// so the interactions panel SHOWS that a picture was actually sent to the
+	// model — the request otherwise looked text-only in the log even when an
+	// image rode along, which made vision impossible to diagnose.
+	Images []interactionImage `json:"images,omitempty"`
+}
+
+type interactionImage struct {
+	MIME  string `json:"mime"`
+	Bytes int    `json:"bytes"`
 }
 
 const interactionTextCap = 4000
@@ -122,6 +132,8 @@ func summarizeRequest(contents []*genai.Content) []interactionMsg {
 				m.ToolCall = p.FunctionCall.Name
 			case p.FunctionResponse != nil:
 				m.ToolResp = capText(responseText(p.FunctionResponse.Response))
+			case p.InlineData != nil && len(p.InlineData.Data) > 0:
+				m.Images = append(m.Images, interactionImage{MIME: p.InlineData.MIMEType, Bytes: len(p.InlineData.Data)})
 			case p.Text != "":
 				text.WriteString(p.Text)
 			}

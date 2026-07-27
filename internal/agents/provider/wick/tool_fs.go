@@ -3,9 +3,11 @@ package wick
 import (
 	"context"
 	"fmt"
+	"mime"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"google.golang.org/genai"
 
@@ -109,6 +111,77 @@ func sessionUploadsDir(tc toolContext) string {
 	return filepath.Join(tc.SessionDir, "uploads")
 }
 
+// detectMIME returns a best-effort MIME for a path: extension first (fast,
+// covers the common cases), then a content sniff fallback. "" when unknown.
+func detectMIME(path string) string {
+	if mt := mime.TypeByExtension(filepath.Ext(path)); mt != "" {
+		// Strip any "; charset=" suffix for a clean label.
+		if i := strings.IndexByte(mt, ';'); i >= 0 {
+			mt = mt[:i]
+		}
+		return strings.TrimSpace(mt)
+	}
+	return ""
+}
+
+// binaryKind classifies a file read_file should NOT return as text: "image"
+// for image/*, "binary" for other non-text content, or "" for text (safe to
+// return). Uses the MIME (by extension) plus a content sniff — a file with no
+// telling extension is checked for NUL bytes / invalid UTF-8, the classic
+// binary tells.
+func binaryKind(path string, data []byte) string {
+	mt := detectMIME(path)
+	switch {
+	case isTextMIME(mt):
+		// Text-ish (incl. SVG, which is XML) — safe to return as text.
+		return ""
+	case strings.HasPrefix(mt, "image/"):
+		return "image"
+	case mt != "" && !isTextMIME(mt):
+		// A known non-text MIME (pdf, zip, audio, video, octet-stream, …).
+		return "binary"
+	}
+	// Unknown/absent MIME: sniff the bytes. NUL byte or non-UTF-8 → binary.
+	if mt == "" && looksBinary(data) {
+		return "binary"
+	}
+	return ""
+}
+
+// isTextMIME reports whether a MIME is something read_file can safely return as
+// text (text/*, plus the common textual application/* types).
+func isTextMIME(mt string) bool {
+	if strings.HasPrefix(mt, "text/") {
+		return true
+	}
+	switch mt {
+	case "application/json", "application/xml", "application/javascript",
+		"application/x-yaml", "application/yaml", "application/toml",
+		"application/x-sh", "image/svg+xml": // SVG is XML text — readable
+		return true
+	}
+	return false
+}
+
+// looksBinary sniffs a byte slice for the classic binary tells: a NUL byte in
+// the first chunk, or content that isn't valid UTF-8.
+func looksBinary(data []byte) bool {
+	n := len(data)
+	if n == 0 {
+		return false
+	}
+	if n > 512 {
+		n = 512
+	}
+	head := data[:n]
+	for _, b := range head {
+		if b == 0 {
+			return true
+		}
+	}
+	return !utf8.Valid(head)
+}
+
 func readFileTool(tc toolContext) toolDef {
 	return toolDef{
 		decl: &genai.FunctionDeclaration{
@@ -138,6 +211,21 @@ func readFileTool(tc toolContext) toolDef {
 			data, err := os.ReadFile(full)
 			if err != nil {
 				return fmt.Sprintf("error: %v", err), true
+			}
+			// Type-aware guard: read_file returns TEXT. If the file is an image
+			// or otherwise binary, dumping the raw bytes as a string produces
+			// garbage (�PNG…) and the model can't use it. Return a clear
+			// message instead — for images, point the model at the attach-in-chat
+			// vision path (the bytes reach the model as an image part when the
+			// user attaches it, NOT via this tool).
+			if kind := binaryKind(full, data); kind != "" {
+				if kind == "image" {
+					return fmt.Sprintf("This is an image file (%s, %d bytes). read_file returns text only, so it can't show you the picture. "+
+						"To actually SEE an image, the user must attach/paste it into the chat — it then reaches you as a viewable image, not a path. "+
+						"Do not try to read image bytes with a tool.", detectMIME(full), len(data)), false
+				}
+				return fmt.Sprintf("This looks like a binary file (%s, %d bytes) — read_file returns text and would show garbage. "+
+					"Not reading it as text.", detectMIME(full), len(data)), false
 			}
 			body := string(data)
 

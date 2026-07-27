@@ -31,6 +31,20 @@ type LLMRequest struct {
 	Model    string
 	Contents []*genai.Content
 	Config   *genai.GenerateContentConfig
+	// Reasoning is wick's vendor-agnostic reasoning request. Each adapter
+	// translates it to its own wire param (OpenAI reasoning:{effort|max_tokens},
+	// Anthropic thinking:{type,budget_tokens}); Gemini reads ThinkingConfig off
+	// Config instead. nil = no explicit reasoning (vendor default).
+	Reasoning *ReasoningConfig
+}
+
+// ReasoningConfig is the normalized reasoning request. Effort is the preferred
+// vendor-agnostic level ("low"|"medium"|"high"); BudgetTokens is the token
+// alternative (Anthropic-style). An adapter uses whichever its vendor accepts,
+// preferring Effort. Both zero = unset (should be nil then).
+type ReasoningConfig struct {
+	Effort       string
+	BudgetTokens int
 }
 
 // LLMResponse is one model response. Content holds the candidate's parts

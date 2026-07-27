@@ -82,6 +82,7 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 		wc = opt.Instance.WickConfig
 	}
 	genCfg := buildGenConfig(m, wc)
+	reasoning := buildReasoning(m, wc)
 	resolved := resolveWickConfig(wc)
 
 	tc := toolContext{
@@ -116,6 +117,7 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 
 	eng := newEngine(llm, m.Model, sysPrompt, genCfg, tools, history, resolved.MaxTurns, emit)
 	eng.setModelID(m.ID)
+	eng.setReasoning(reasoning)
 	eng.setWickSessionID(tc.SessionID)
 	eng.setToolSpillDir(opt.SessionDir)
 	eng.gate = gateCheckerFn

@@ -2,6 +2,7 @@ package wick
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -68,15 +69,141 @@ func loadHistory(sessionDir string, maxContextTokens int) []*genai.Content {
 	return contents
 }
 
+// lastUserAttachments returns the attachments on the most recent user turn in
+// the session's conversation.jsonl. The pool persists the user turn (with
+// attachments) BEFORE handing wick the message, so when runTurn builds the
+// current user content this reads back the image attachments the pool only
+// surfaced to wick as path text. Empty when none / unreadable.
+func lastUserAttachments(sessionDir string) []store.Attachment {
+	if sessionDir == "" {
+		return nil
+	}
+	path := filepath.Join(sessionDir, "conversation.jsonl")
+	var atts []store.Attachment
+	_ = storage.ReadJSONL(path, func(line []byte) bool {
+		var t store.ConversationTurn
+		if json.Unmarshal(line, &t) != nil {
+			return true
+		}
+		if t.Role == "user" && len(t.Attachments) > 0 {
+			atts = t.Attachments // keep the latest; append-order means last wins
+		}
+		return true
+	})
+	return atts
+}
+
+// currentUserContent builds the genai.Content for the message being sent THIS
+// turn: the text plus inline image parts from the latest persisted user turn's
+// image attachments. Falls back to text-only when there are no images.
+func currentUserContent(sessionDir, userText string) *genai.Content {
+	imgs := imagePartsFromAttachments(lastUserAttachments(sessionDir))
+	return userContentWithImages(userText, imgs)
+}
+
+// userContentWithImages builds a user Content: the pool-augmented text (which
+// ALREADY lists every attachment's path under "[Attached files]", so the model
+// can read_file any of them) plus, as a BONUS, inline image parts for image
+// attachments so a vision-capable model can also see them directly. The path
+// text is deliberately KEPT — it's the reliable, all-file-types channel; the
+// image part is an addition, not a replacement. Text-only when there are no
+// images.
+func userContentWithImages(text string, imgs []*genai.Part) *genai.Content {
+	if len(imgs) == 0 {
+		return genai.NewContentFromText(text, genai.RoleUser)
+	}
+	parts := make([]*genai.Part, 0, len(imgs)+1)
+	if strings.TrimSpace(text) != "" {
+		parts = append(parts, &genai.Part{Text: text})
+	}
+	parts = append(parts, imgs...)
+	return &genai.Content{Role: genai.RoleUser, Parts: parts}
+}
+
+
+// maxInlineImageBytes caps a single inline image (5 MB) so a stray huge file
+// can't blow up the request body / token budget. Larger images are skipped
+// (the model just won't see them; the path text still rides along).
+const maxInlineImageBytes = 5 << 20
+
+// imagePartsFromAttachments turns a user turn's IMAGE attachments into inline
+// genai image parts (read from disk, base64 handled by the SDK/adapters via
+// InlineData). Non-image attachments and unreadable/oversize files are skipped.
+// This is the wick vision pipe: the pool only appended file PATHS as text, so
+// without this the model never actually receives the picture.
+func imagePartsFromAttachments(atts []store.Attachment) []*genai.Part {
+	var out []*genai.Part
+	for _, a := range atts {
+		mime := strings.ToLower(strings.TrimSpace(a.MIME))
+		if !strings.HasPrefix(mime, "image/") {
+			continue
+		}
+		path := a.AbsPath
+		if path == "" {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.Size() == 0 || info.Size() > maxInlineImageBytes {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		out = append(out, &genai.Part{InlineData: &genai.Blob{MIMEType: mime, Data: data}})
+	}
+	return out
+}
+
+// appendAttachmentPaths re-appends the "[Attached files]" path block for a
+// replayed user turn, mirroring the pool's augmentWithAttachments (which runs
+// only on the LIVE send, not on what's persisted). Keeping the exact same
+// format means a replayed turn reads identically to when it was first sent, so
+// read_file still resolves the paths. Returns text unchanged when there are no
+// attachments.
+func appendAttachmentPaths(text string, atts []store.Attachment) string {
+	if len(atts) == 0 {
+		return text
+	}
+	var b strings.Builder
+	b.WriteString(text)
+	if text != "" {
+		b.WriteString("\n\n")
+	}
+	b.WriteString("[Attached files]")
+	for _, a := range atts {
+		path := a.AbsPath
+		if path == "" {
+			path = a.StoredName
+		}
+		b.WriteString("\n- ")
+		if a.Name != "" && a.Name != filepath.Base(path) {
+			b.WriteString(a.Name)
+			b.WriteString(": ")
+		}
+		b.WriteString(path)
+	}
+	return b.String()
+}
+
 // turnToContent maps one stored turn to a genai.Content, or nil to skip.
 func turnToContent(t store.ConversationTurn) *genai.Content {
 	text := strings.TrimSpace(t.Text)
 	switch t.Role {
 	case "user":
-		if text == "" {
+		imgs := imagePartsFromAttachments(t.Attachments)
+		if text == "" && len(t.Attachments) == 0 {
 			return nil
 		}
-		return genai.NewContentFromText(text, genai.RoleUser)
+		// The store persists the RAW user text (path list lives structurally in
+		// t.Attachments, not in the text). The pool's live send re-appends the
+		// "[Attached files]" block via augmentWithAttachments, but a HISTORY
+		// replay reads t.Text directly — so we must re-append the path block
+		// here too, or replayed turns lose every attachment path and the model
+		// is told nothing about the files (it then hunts/hallucinates paths).
+		// Images ALSO ride as inline parts (bonus for vision models).
+		text = appendAttachmentPaths(text, t.Attachments)
+		return userContentWithImages(text, imgs)
 	case "assistant":
 		if text == "" {
 			return nil
@@ -171,6 +298,14 @@ func partChars(p *genai.Part) int {
 		if b, err := json.Marshal(fr.Response); err == nil {
 			n += len(b)
 		}
+	}
+	// Inline image: a vision model bills images by area, not bytes, but the
+	// engine's budget only needs a rough, monotonic contribution so a big
+	// image still pushes toward compaction. Approximate at ~1 token per 3
+	// image bytes (in chars/4 terms that's ~0.75 tokens/byte) — deliberately
+	// on the high side so images err toward triggering compaction early.
+	if id := p.InlineData; id != nil {
+		n += len(id.Data) * 3
 	}
 	return n
 }

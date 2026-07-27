@@ -35,6 +35,7 @@ type engine struct {
 	modelID    string
 	sysPrompt  string
 	genCfg     *genai.GenerateContentConfig
+	reasoning  *ReasoningConfig
 	tools      []toolDef
 	toolByName map[string]toolDef
 
@@ -148,6 +149,10 @@ func (e *engine) setInteractionSink(fn func(interactionRecord)) { e.interactionS
 // from later — never the config itself.
 func (e *engine) setModelID(id string) { e.modelID = id }
 
+// setReasoning attaches the vendor-agnostic reasoning request applied to every
+// model call this turn (nil = vendor default).
+func (e *engine) setReasoning(r *ReasoningConfig) { e.reasoning = r }
+
 // setLoopGuards wires the operator-configured no-progress guards: cut the
 // turn after maxConsecErr consecutive all-error tool rounds, or when the
 // turn's wall clock exceeds maxTurnDur. Zero values keep the defaults
@@ -229,7 +234,7 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 	// survives into the request.
 	e.maybeCompact(ctx, e.contextBudget)
 
-	e.history = append(e.history, genai.NewContentFromText(userText, genai.RoleUser))
+	e.history = append(e.history, currentUserContent(e.sessionDir, userText))
 
 	var finalText strings.Builder
 	turnStart := time.Now()
@@ -480,9 +485,10 @@ func (e *engine) snapshotRequest(kind string, cfg *genai.GenerateContentConfig, 
 func (e *engine) generateAttempt(ctx context.Context, kind string, attempt int, reason string) (*LLMResponse, error) {
 	cfg := e.effectiveConfig()
 	req := &LLMRequest{
-		Model:    e.modelName,
-		Contents: e.history,
-		Config:   cfg,
+		Model:     e.modelName,
+		Contents:  e.history,
+		Config:    cfg,
+		Reasoning: e.reasoning,
 	}
 	start := time.Now()
 

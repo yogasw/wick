@@ -371,10 +371,14 @@ type WickConfig struct {
 // Pointer fields distinguish "not set" from zero. The long tail of
 // options rides WickConfig.RawConfig / WickModel.RawConfig.
 type WickGenConfig struct {
-	Temperature     *float64 `json:"temperature,omitempty"`
-	TopP            *float64 `json:"top_p,omitempty"`
-	ThinkingBudget  *int     `json:"thinking_budget,omitempty"` // tokens; 0 = off, nil = model default
-	MaxOutputTokens int      `json:"max_output_tokens,omitempty"`
+	Temperature    *float64 `json:"temperature,omitempty"`
+	TopP           *float64 `json:"top_p,omitempty"`
+	ThinkingBudget *int     `json:"thinking_budget,omitempty"` // tokens; 0 = off, nil = model default
+	// ReasoningEffort is a vendor-agnostic reasoning level ("low"|"medium"|
+	// "high"), preferred over ThinkingBudget where the vendor speaks an effort
+	// enum. Empty = use ThinkingBudget / model default.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	MaxOutputTokens int    `json:"max_output_tokens,omitempty"`
 }
 
 // StorageConfig defines how a provider instance syncs its credential
