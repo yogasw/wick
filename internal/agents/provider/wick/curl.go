@@ -249,7 +249,7 @@ func RenderMultiline(r CurlRequest, bearer string) string {
 }
 
 // sq wraps s in single quotes for a POSIX shell, escaping any embedded
-// single quote via the '\'' idiom (close quote, escaped quote, reopen).
+// single quote via the '\” idiom (close quote, escaped quote, reopen).
 // Without this a body containing an apostrophe (e.g. "don't" in a system
 // prompt) terminated the -d '...' string early — which is exactly what
 // truncated the request when pasted into Postman's curl importer.

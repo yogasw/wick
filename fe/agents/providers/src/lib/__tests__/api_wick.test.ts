@@ -102,7 +102,15 @@ describe("apiGetWickConfig", () => {
     expect(cfg.models).toEqual([]);
     expect(cfg.settings.Connectors).toEqual([]);
     expect(cfg.settings.ShellToolDisabled).toBe(false);
+    // stream_disabled defaults false on the wire → streaming ON in the FE.
+    expect(cfg.settings.EnableStreaming).toBe(true);
     expect(cfg.settings.Temperature).toBeNull();
+  });
+
+  it("inverts stream_disabled into EnableStreaming", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okJson({ models: [], settings: { stream_disabled: true } })));
+    const cfg = await apiGetWickConfig("");
+    expect(cfg.settings.EnableStreaming).toBe(false);
   });
 
   it("throws ApiError on non-ok response", async () => {

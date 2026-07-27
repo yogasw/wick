@@ -4,12 +4,15 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/session"
 )
 
 func callWickTodo(t *testing.T, args map[string]any) ToolCallResult {
 	t.Helper()
 	var got ToolCallResult
-	WickTodo(httptest.NewRecorder(), RPCRequest{}, captureResponder(t, &got), args)
+	WickTodo(httptest.NewRecorder(), httptest.NewRequest("POST", "/mcp", nil), RPCRequest{}, captureResponder(t, &got), agentconfig.Layout{}, args)
 	return got
 }
 
@@ -114,5 +117,52 @@ func TestWickTodo_ItemWithoutTitleOrStepRejectedByRequiredFieldButSchemaAllowsMi
 	}
 	if !strings.Contains(got.Content[0].Text, "(1/1 done)") {
 		t.Errorf("expected simple task without substeps to work, got %+v", got)
+	}
+}
+
+func TestWickTodo_GoalOpenWritesLatch(t *testing.T) {
+	dir := t.TempDir()
+	layout := agentconfig.NewLayout(dir)
+	// session id "s1" → layout.SessionDir
+	sid := "s1"
+	req := httptest.NewRequest("POST", "/mcp", nil)
+	req.Header.Set("X-Wick-Session-Id", sid)
+	var got ToolCallResult
+	WickTodo(httptest.NewRecorder(), req, RPCRequest{}, captureResponder(t, &got), layout, map[string]any{
+		"items": []map[string]any{{"title": "step a", "status": "in_progress"}},
+		"goal":  "find 3 houses",
+	})
+	if got.IsError {
+		t.Fatalf("unexpected error: %+v", got)
+	}
+	text := got.Content[0].Text
+	if !strings.Contains(text, "[goal] OPEN") {
+		t.Errorf("expected OPEN marker, got %q", text)
+	}
+	if !session.HasOpenGoal(layout, sid) {
+		t.Fatal("expected open goal on disk")
+	}
+}
+
+func TestWickTodo_GoalDoneReleases(t *testing.T) {
+	dir := t.TempDir()
+	layout := agentconfig.NewLayout(dir)
+	sid := "s1"
+	_ = session.OpenGoal(layout, sid, "x", "")
+	req := httptest.NewRequest("POST", "/mcp", nil)
+	req.Header.Set("X-Wick-Session-Id", sid)
+	var got ToolCallResult
+	WickTodo(httptest.NewRecorder(), req, RPCRequest{}, captureResponder(t, &got), layout, map[string]any{
+		"items":     []map[string]any{{"title": "step a", "status": "completed"}},
+		"goal_done": true,
+	})
+	if got.IsError {
+		t.Fatalf("unexpected error: %+v", got)
+	}
+	if session.HasOpenGoal(layout, sid) {
+		t.Fatal("expected goal closed")
+	}
+	if !strings.Contains(got.Content[0].Text, "[goal] DONE") {
+		t.Errorf("expected DONE marker, got %q", got.Content[0].Text)
 	}
 }

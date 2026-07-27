@@ -213,6 +213,85 @@ describe("Composer — toolbar dropdowns + bell", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  test("arrow keys navigate the model drill and Enter selects the highlighted row", async () => {
+    const loadModels = vi.fn().mockResolvedValue([
+      { id: "m-a", label: "model a" },
+      { id: "m-b", label: "model b" },
+      { id: "m-c", label: "model c" },
+    ]);
+    const onChange = vi.fn();
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        provider: { options: [{ label: "wick", value: "wick/wick" }], value: "wick/wick", onChange, loadModels },
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    const search = await screen.findByPlaceholderText(/Search wick models/i);
+    await waitFor(() => expect(screen.getByText("model a")).toBeDefined());
+    // Rows: [0]=Use default, [1]=model a, [2]=model b, [3]=model c.
+    // Two ArrowDowns from 0 → land on "model b", Enter selects it.
+    await fireEvent.keyDown(search, { key: "ArrowDown" });
+    await fireEvent.keyDown(search, { key: "ArrowDown" });
+    await fireEvent.keyDown(search, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("wick/wick::m-b");
+  });
+
+  test("arrow keys still work in the provider type list (menu-focused, no search box)", async () => {
+    const onChange = vi.fn();
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        // Two distinct types → level-1 list, no auto-drill, no search input.
+        provider: {
+          options: [
+            { label: "claude", value: "claude/a" },
+            { label: "codex", value: "codex/b" },
+          ],
+          value: "claude/a",
+          onChange,
+        },
+      },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    const menu = await screen.findByRole("menu");
+    // Rows: [0]=claude, [1]=codex. ArrowDown → codex, Enter applies it.
+    await fireEvent.keyDown(menu, { key: "ArrowDown" });
+    await fireEvent.keyDown(menu, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("codex/b");
+  });
+
+  test("opening the provider view auto-drills into the selected live set (level 4)", async () => {
+    const loadModels = vi.fn(async (_v: string, opts?: { entry?: string }) => {
+      if (!opts) return [{ id: "m_set", label: "claude code", default: true, live: true }];
+      return [
+        { id: "cc/claude-fable-5", label: "cc/claude-fable-5", default: false },
+        { id: "cc/claude-haiku", label: "cc/claude-haiku", default: false },
+      ];
+    });
+    const onChange = vi.fn();
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        // A live-set vendor model is already the selection.
+        provider: {
+          options: [{ label: "wick", value: "wick/wick" }],
+          value: "wick/wick::m_set@cc/claude-haiku",
+          onChange,
+          loadModels,
+        },
+      },
+    });
+    // Just OPEN the provider view — no manual click on the set row.
+    await fireEvent.click(screen.getByRole("button", { name: /provider/i }));
+    // It must land on level 4 directly: the set's expanded vendor list is shown
+    // and the header search is scoped to the set, without any extra interaction.
+    await waitFor(() => expect(screen.getByText("cc/claude-fable-5")).toBeDefined());
+    expect(screen.getByPlaceholderText(/Search claude code/i)).toBeDefined();
+    expect(loadModels).toHaveBeenCalledWith("wick/wick", expect.objectContaining({ entry: "m_set" }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   test("second click on an open live set collapses it", async () => {
     const loadModels = vi.fn(async (_v: string, opts?: { entry?: string }) => {
       if (!opts) return [{ id: "m_set", label: "claude code", default: false, live: true }];
@@ -327,6 +406,39 @@ describe("Composer — / commands", () => {
     await fireEvent.mouseDown(screen.getByText("/processes"));
     expect(run).toHaveBeenCalledOnce();
     expect(textarea.value).toBe("");
+  });
+
+  test("/provider opens the picker focused so arrow keys work without a click", async () => {
+    const onChange = vi.fn();
+    // The /provider command's run() opens the shared provider picker (mirrors
+    // the app: the command routes to the component's openProvider()).
+    let openProvider: (() => void) | undefined;
+    const cmds = [{ value: "provider", label: "/provider", run: () => openProvider?.() }];
+    const { component } = render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        commands: cmds,
+        provider: {
+          options: [
+            { label: "claude", value: "claude/a" },
+            { label: "codex", value: "codex/b" },
+          ],
+          value: "claude/a",
+          onChange,
+        },
+      },
+    });
+    openProvider = (component as unknown as { openProvider: () => void }).openProvider;
+    // Run /provider via the slash menu (Enter), exactly like the user.
+    const textarea = screen.getByRole("textbox");
+    await fireEvent.input(textarea, { target: { value: "/prov" } });
+    await fireEvent.keyDown(textarea, { key: "Enter" });
+    // The provider list is up and focused — arrow down + Enter must apply
+    // WITHOUT any intervening click.
+    const menu = await screen.findByRole("menu");
+    await fireEvent.keyDown(menu, { key: "ArrowDown" });
+    await fireEvent.keyDown(menu, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("codex/b");
   });
 
   test("/ triggers mid-message after whitespace, not just as a prefix", async () => {

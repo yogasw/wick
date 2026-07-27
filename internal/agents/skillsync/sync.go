@@ -15,22 +15,39 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/yogasw/wick/internal/appname"
 )
 
-// KnownDirs returns existing skill dirs in a stable order.
+// KnownDirs returns existing skill dirs in a stable order, plus wick's own
+// skills dir (~/.<appname>/skills) which is ENSURE-CREATED so the built-in
+// wick provider is a first-class skill provider even before any skill is
+// added — it appears in the UI chips, sync targets, and the wick session's
+// `/` menu without the user having to create the folder first. The other
+// provider dirs are only returned when they already exist on disk.
 func KnownDirs() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
 	}
+	// Wick's own dir: always present. appname.Resolve() → "wick" (prod) or the
+	// dev/build name (e.g. "wick-lab"), so dev builds stay isolated.
+	wickDir := filepath.Join(home, "."+appname.Resolve(), "skills")
+	_ = os.MkdirAll(wickDir, 0o755)
 	candidates := []string{
 		filepath.Join(home, ".agents", "skills"),
 		filepath.Join(home, ".claude", "skills"),
 		filepath.Join(home, ".codex", "skills"),
 		filepath.Join(home, ".gemini", "skills"),
+		wickDir,
 	}
 	var out []string
+	seen := map[string]bool{}
 	for _, d := range candidates {
+		if seen[d] {
+			continue // guard: appname "agents"/"claude"/… would dup a fixed dir
+		}
+		seen[d] = true
 		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
 			out = append(out, d)
 		}

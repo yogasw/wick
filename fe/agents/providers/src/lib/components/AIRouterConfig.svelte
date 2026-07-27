@@ -88,9 +88,21 @@
   let pickerQuery = $state("");
 
   const installUrl = $derived(`${base}/airouter`);
-  const canEnable = $derived(status?.installed === true && status?.running === true);
+  // The config (slots / key / base URL / raw config) is ALWAYS editable once
+  // the toggle is on — install/running is no longer a gate, just an indicator.
+  // A router that isn't installed or running is fine: the settings still save,
+  // and the operator points at whatever endpoint they run (or start it later).
+  const canEnable = $derived(useAirouter);
   // Human label for the selected router (falls back to a generic name).
   const routerName = $derived(routers.find((r) => r.ID === provider)?.Name ?? "AI Router");
+
+  // defaultBaseURL is the loopback endpoint the router serves once running:
+  // http://127.0.0.1:<port>/v1. Uses the bound port if known, else the
+  // preferred one, so the field shows a concrete default even before install.
+  const defaultBaseURL = $derived.by(() => {
+    const port = status?.boundPort || status?.prefPort || 0;
+    return port > 0 ? `http://127.0.0.1:${port}/v1` : "";
+  });
 
   // Human labels for the owned_by group keys a router emits. Unknown keys
   // fall back to the raw key (uppercased) so new groups still render.
@@ -276,23 +288,53 @@
         </div>
       {/if}
 
+      <!-- Base URL: the endpoint wick routes through. Defaults to the router's
+           loopback port; shown as a concrete value even before install so the
+           operator knows exactly where calls go. Read-only for now (the custom
+           override isn't persisted yet) — copy it if you point another client
+           at the same router. -->
+      <div>
+        <label for="airouter-baseurl" class="block text-xs font-medium text-black-800 dark:text-black-600 mb-1">Base URL</label>
+        <input
+          id="airouter-baseurl"
+          type="text"
+          readonly
+          value={defaultBaseURL || "unavailable — router port unknown"}
+          class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-900 px-3 py-2 text-sm font-mono text-black-800 dark:text-black-600 cursor-default"
+        />
+        <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">The OpenAI-compatible endpoint wick routes through (the router's loopback port). Config below saves regardless of whether the router is installed or running.</p>
+      </div>
+
+      <!-- Install/run state is INFORMATIONAL, never a wall. The settings save
+           either way; this just tells the operator whether the local router is
+           ready to serve, with a one-click Start / Install shortcut. -->
       {#if loadingStatus}
         <p class="text-[11px] text-black-700 dark:text-black-600">Checking {routerName}…</p>
       {:else if status && !status.installed}
-        <div class="rounded-lg border border-cau-400/40 bg-cau-400/10 px-3 py-2 text-[11px] text-cau-400">
-          {routerName} is not installed.
-          <a href={installUrl} class="font-medium text-link-400 hover:underline">Install it here</a>
-          then reopen this form.
+        <div class="flex items-center justify-between gap-2 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-2">
+          <span class="inline-flex items-center gap-1.5 text-[11px] text-black-700 dark:text-black-600">
+            <span class="inline-block h-1.5 w-1.5 rounded-full bg-black-500 dark:bg-black-600"></span>
+            {routerName} isn't installed locally — settings still save; install it when you want wick to run it.
+          </span>
+          <a href={installUrl} class="shrink-0 font-medium text-link-400 hover:underline text-[11px]">Install</a>
         </div>
       {:else if status && status.installed && !status.running}
-        <div class="flex items-center justify-between rounded-lg border border-cau-400/40 bg-cau-400/10 px-3 py-2">
-          <span class="text-[11px] text-cau-400">{routerName} is installed but not running.</span>
+        <div class="flex items-center justify-between gap-2 rounded-lg border border-cau-400/30 bg-cau-400/5 px-3 py-2">
+          <span class="inline-flex items-center gap-1.5 text-[11px] text-cau-400">
+            <span class="inline-block h-1.5 w-1.5 rounded-full bg-cau-400"></span>
+            {routerName} is installed but not running.
+          </span>
           <button
             type="button"
             onclick={startRouter}
             disabled={starting}
-            class="rounded-lg bg-green-500 px-3 py-1 text-[11px] font-medium text-white-100 hover:bg-green-600 disabled:opacity-50"
+            class="shrink-0 rounded-lg bg-green-500 px-3 py-1 text-[11px] font-medium text-white-100 hover:bg-green-600 disabled:opacity-50"
           >{starting ? "Starting…" : "Start"}</button>
+        </div>
+      {:else if status && status.running}
+        <div class="flex items-center gap-1.5 rounded-lg border border-green-400/30 bg-green-400/5 px-3 py-2 text-[11px] text-green-600 dark:text-green-400">
+          <span class="inline-block h-1.5 w-1.5 rounded-full bg-green-500"></span>
+          {routerName} is running{status.version ? ` (v${status.version})` : ""}.
         </div>
       {/if}
     {/if}

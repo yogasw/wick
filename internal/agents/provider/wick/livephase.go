@@ -117,11 +117,11 @@ type ModelCallState struct {
 	RetryReason string
 	// Request is the in-flight request snapshot, or nil. Exposed as the same
 	// shape the finished-record curl/viewer use.
-	Kind    string
-	Model   string
-	ModelID string
-	System  string
-	Tools   []string
+	Kind     string
+	Model    string
+	ModelID  string
+	System   string
+	Tools    []string
 	Messages []interactionMsg
 }
 

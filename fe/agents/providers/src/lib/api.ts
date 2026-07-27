@@ -16,6 +16,7 @@ import type {
   LiveProcessDTO,
   ConfigFieldDTO,
 } from "./types.js";
+import type { ModelCaps } from "@wick-fe/common-ui";
 
 interface WireProviderInstance {
   type: string;
@@ -894,18 +895,26 @@ export type AIRouterStatus = {
   version: string;
   // "not-installed" | "starting" | "running" | "stopped"
   state: string;
+  // prefPort/boundPort: the router's loopback port (preferred / actually bound).
+  // Used to render a concrete default Base URL even before install/start.
+  prefPort: number;
+  boundPort: number;
 };
 
-// apiAIRouterStatus reports install + run state for the given router so the
-// provider form can gate the "Use AI Router" toggle (must be installed +
-// running to enable).
+// apiAIRouterStatus reports install + run state (plus the loopback port) for
+// the given router. The form no longer BLOCKS on this — the config is always
+// editable; status just drives a non-blocking install/run indicator.
 export async function apiAIRouterStatus(base: string, id: string): Promise<AIRouterStatus> {
-  const r = await get<Partial<AIRouterStatus>>(`${base}/airouter/${encodeURIComponent(id)}/status`);
+  const r = await get<Partial<AIRouterStatus> & { pref_port?: number; bound_port?: number }>(
+    `${base}/airouter/${encodeURIComponent(id)}/status`,
+  );
   return {
     installed: r.installed ?? false,
     running: r.running ?? false,
     version: r.version ?? "",
     state: r.state ?? "stopped",
+    prefPort: r.pref_port ?? 0,
+    boundPort: r.bound_port ?? 0,
   };
 }
 
@@ -1021,16 +1030,31 @@ export interface WickModelDTO {
   TopP: number | null;
   ThinkingBudget: number | null;
   RawConfig: string;
-  /** Non-empty → a live model set: the picker expands this to the vendor's
-      models filtered by this query, rather than one pinned model. */
+  /** True → a live model set: the picker expands to the vendor's models
+      (optionally narrowed by DiscoveryFilter) rather than one pinned model. */
+  LiveSet: boolean;
+  /** Optional filter narrowing a live set's list; empty = match all. */
   DiscoveryFilter: string;
+  /** Sticky default vendor model id WITHIN a live set. Empty = top-of-list. */
+  DefaultVendorModel: string;
 }
 
 export interface WickSettingsDTO {
   ShellToolDisabled: boolean;
+  // ShowCapabilities is the FE-friendly inverse of the wire's hide_capabilities
+  // (default true = chips shown). CapabilityMode: "icon" (default) | "label".
+  ShowCapabilities: boolean;
+  CapabilityMode: string;
+  // EnableStreaming is the FE-friendly inverse of the wire's stream_disabled
+  // (default true = SSE streaming on).
+  EnableStreaming: boolean;
   Connectors: string[];
   MaxContextTokens: number;
   MaxTurns: number;
+  MaxConsecErrors: number;
+  MaxTurnMinutes: number;
+  MaxModelRetries: number;
+  ModelCallTimeoutSec: number;
   Temperature: number | null;
   TopP: number | null;
   ThinkingBudget: number | null;
@@ -1055,14 +1079,23 @@ interface WireWickModel {
   top_p?: number | null;
   thinking_budget?: number | null;
   raw_config?: string;
+  live_set?: boolean;
   discovery_filter?: string;
+  default_vendor_model?: string;
 }
 
 interface WireWickSettings {
   shell_tool_disabled?: boolean;
+  hide_capabilities?: boolean;
+  stream_disabled?: boolean;
+  capability_display_mode?: string;
   connectors?: string[] | null;
   max_context_tokens?: number;
   max_turns?: number;
+  max_consec_errors?: number;
+  max_turn_minutes?: number;
+  max_model_retries?: number;
+  model_call_timeout_sec?: number;
   temperature?: number | null;
   top_p?: number | null;
   thinking_budget?: number | null;
@@ -1086,16 +1119,25 @@ function mapWickModel(w: WireWickModel): WickModelDTO {
     TopP: w.top_p ?? null,
     ThinkingBudget: w.thinking_budget ?? null,
     RawConfig: w.raw_config ?? "",
+    LiveSet: w.live_set ?? false,
     DiscoveryFilter: w.discovery_filter ?? "",
+    DefaultVendorModel: w.default_vendor_model ?? "",
   };
 }
 
 function mapWickSettings(w: WireWickSettings | null | undefined): WickSettingsDTO {
   return {
     ShellToolDisabled: w?.shell_tool_disabled ?? false,
+    ShowCapabilities: !(w?.hide_capabilities ?? false),
+    EnableStreaming: !(w?.stream_disabled ?? false),
+    CapabilityMode: w?.capability_display_mode ?? "list",
     Connectors: w?.connectors ?? [],
     MaxContextTokens: w?.max_context_tokens ?? 0,
     MaxTurns: w?.max_turns ?? 0,
+    MaxConsecErrors: w?.max_consec_errors ?? 0,
+    MaxTurnMinutes: w?.max_turn_minutes ?? 0,
+    MaxModelRetries: w?.max_model_retries ?? 0,
+    ModelCallTimeoutSec: w?.model_call_timeout_sec ?? 0,
     Temperature: w?.temperature ?? null,
     TopP: w?.top_p ?? null,
     ThinkingBudget: w?.thinking_budget ?? null,
@@ -1135,8 +1177,13 @@ export type WickModelInput = {
   top_p?: number;
   thinking_budget?: number;
   raw_config?: string;
-  /** Set for a live model set; `model` may be empty then. */
+  /** Mark this a live model set; `model` may be empty and the filter optional. */
+  live_set?: boolean;
+  /** Optional filter narrowing a live set (empty = all vendor models). */
   discovery_filter?: string;
+  /** Sticky default vendor model within a live set (only with live_set).
+      Empty string clears the pin (→ top-of-list). */
+  default_vendor_model?: string;
 };
 
 export async function apiSaveWickModel(base: string, input: WickModelInput): Promise<{ status: string; id: string }> {
@@ -1150,6 +1197,14 @@ export async function apiDeleteWickModel(base: string, id: string): Promise<void
 
 export async function apiSetWickModelDefault(base: string, id: string): Promise<void> {
   return post<void>(`${base}/providers/wick/models/${encodeURIComponent(id)}/default`);
+}
+
+// apiSetWickDefaultVendorModel pins the sticky default vendor model WITHIN a
+// live set (the id used when the set is picked with no explicit @vendor).
+// Empty vendorModel clears the pin (→ top-of-list). The entry must be a live
+// set (has a discovery filter).
+export async function apiSetWickDefaultVendorModel(base: string, id: string, vendorModel: string): Promise<void> {
+  return post<void>(`${base}/providers/wick/models/${encodeURIComponent(id)}/default-vendor`, { vendor_model: vendorModel });
 }
 
 export async function apiSetWickModelDisabled(base: string, id: string, disabled: boolean): Promise<void> {
@@ -1172,9 +1227,16 @@ export async function apiTestWickModel(base: string, id: string): Promise<WickTe
 
 export type WickSettingsInput = {
   shell_tool_disabled: boolean;
+  hide_capabilities?: boolean;
+  stream_disabled?: boolean;
+  capability_display_mode?: string;
   connectors?: string[];
   max_context_tokens?: number;
   max_turns?: number;
+  max_consec_errors?: number;
+  max_turn_minutes?: number;
+  max_model_retries?: number;
+  model_call_timeout_sec?: number;
   temperature?: number;
   top_p?: number;
   thinking_budget?: number;
@@ -1185,8 +1247,29 @@ export async function apiSaveWickSettings(base: string, input: WickSettingsInput
   return post<void>(`${base}/providers/wick/settings`, input);
 }
 
+// apiGetWickLiveSetModels expands ONE live set (by its entry id) into its
+// current vendor models, already filtered by the set's discovery query and
+// with the sticky default marked (top-of-list when the pin is missing) —
+// the same server path the composer picker uses. For the "set default model"
+// picker on a live-set row.
+export async function apiGetWickLiveSetModels(
+  base: string,
+  entryId: string,
+): Promise<{ id: string; label: string; default: boolean }[]> {
+  const r = await get<{ models?: { id?: string; label?: string; default?: boolean }[] | null }>(
+    `${base}/providers/options/wick/wick/models?entry=${encodeURIComponent(entryId)}`,
+  );
+  return (r?.models ?? [])
+    .map((m) => ({ id: m.id ?? "", label: m.label ?? m.id ?? "", default: m.default ?? false }))
+    .filter((m) => m.id !== "");
+}
+
 export type WickDiscoverInput = { kind: string; api_key?: string; base_url?: string; model_ref?: string };
-export type WickDiscoverModel = { id: string; label: string };
+// WickModelCaps is the shared ModelCaps type (vendor's raw "capabilities"
+// object). Re-exported from common-ui so there's ONE definition — the chips /
+// detail modal + this SPA all use the same shape (dedup rule).
+export type WickModelCaps = ModelCaps;
+export type WickDiscoverModel = { id: string; label: string; caps?: WickModelCaps };
 export type WickDiscoverResult = { models: WickDiscoverModel[]; error: string };
 
 // apiDiscoverWickModels proxies the vendor model-list API server-side so
@@ -1195,13 +1278,13 @@ export type WickDiscoverResult = { models: WickDiscoverModel[]; error: string };
 // key on edit. A non-empty `error` means discovery failed — the caller
 // should fall back to a free-text model id input (non-fatal).
 export async function apiDiscoverWickModels(base: string, input: WickDiscoverInput): Promise<WickDiscoverResult> {
-  const r = await post<{ models?: { id?: string; label?: string }[] | null; error?: string }>(
+  const r = await post<{ models?: { id?: string; label?: string; capabilities?: WickModelCaps }[] | null; error?: string }>(
     `${base}/providers/wick/models/discover`,
     input,
   );
   return {
     models: (r?.models ?? [])
-      .map((m) => ({ id: m.id ?? "", label: m.label ?? m.id ?? "" }))
+      .map((m) => ({ id: m.id ?? "", label: m.label ?? m.id ?? "", caps: m.capabilities }))
       .filter((m) => m.id !== ""),
     error: r?.error ?? "",
   };

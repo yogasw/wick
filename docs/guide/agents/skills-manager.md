@@ -21,9 +21,12 @@ Each AI CLI has its own skill folder on disk:
 | Claude Code | `~/.claude/skills/` |
 | Codex | `~/.codex/skills/` |
 | Gemini CLI | `~/.gemini/skills/` |
+| Wick (built-in provider) | `~/.<app>/skills/` |
 | Generic / shared | `~/.agents/skills/` |
 
 Skills are plain `.md` files (or folders containing `.md` files) that the CLI loads as reusable instructions — slash commands, personas, workflow prompts, etc. Each provider has its own copy; keeping them in sync across providers is what this feature solves.
+
+The `wick` directory is auto-created the first time skills are listed (so it always exists, even before any skill has been added) — `wick` is a first-class skill provider alongside the CLIs, not just a sync target. Because a wick session runs in-process rather than shelling out to a CLI, it doesn't load skills the same way: it injects a compact catalog (name, description, `SKILL.md` path) into its system prompt and reads a skill's full body on demand. See [Providers → Skills](./providers#skills).
 
 ## Skill list (`/skills`)
 

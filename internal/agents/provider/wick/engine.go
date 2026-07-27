@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"github.com/yogasw/wick/internal/agents/session"
 	"google.golang.org/genai"
 )
 
@@ -31,12 +32,30 @@ type engine struct {
 	// so the config (base_url, kind, api_format, key) can be looked up
 	// on-demand when reconstructing a request — never duplicated into the
 	// log itself.
-	modelID    string
-	sysPrompt  string
-	genCfg     *genai.GenerateContentConfig
-	tools      []toolDef
-	toolByName map[string]toolDef
-	maxTurns   int
+	modelID   string
+	sysPrompt string
+	genCfg    *genai.GenerateContentConfig
+	reasoning *ReasoningConfig
+	// defaultReasoning is the session's configured reasoning baseline (what
+	// setReasoning was last given). A runtime "/thinking off" clears
+	// e.reasoning; "/thinking on" restores this. Distinct from e.reasoning,
+	// which is the CURRENT (possibly toggled) request.
+	defaultReasoning *ReasoningConfig
+	tools            []toolDef
+	toolByName       map[string]toolDef
+
+	// maxTurns caps total tool-call rounds per user message. 0 = unlimited
+	// (the consec-error + wall-clock guards below are the safety net).
+	maxTurns int
+	// maxConsecErr cuts the turn after this many consecutive all-error
+	// tool rounds (a success resets the counter). <=0 → default 20.
+	maxConsecErr int
+	// maxTurnDur is the wall-clock ceiling for one turn. <=0 → default 1h.
+	maxTurnDur time.Duration
+
+	// sessionDir is where session-scoped state lives (goal.json, tool spill,
+	// interactions). Empty in unit tests that don't need goal force-continue.
+	sessionDir string
 
 	// contextBudget is the token ceiling for the replayed history. When
 	// the estimate nears it, runTurn triggers model-driven compaction
@@ -107,7 +126,26 @@ type engine struct {
 	// retryPolicy tunes per-call timeout + retry attempts, applied to every model
 	// call. Zero value → sane defaults (3 attempts, 120s). Set from wick config.
 	retryPolicy retryPolicy
+
+	// stream, when true, drives each model call over SSE: text/thinking is
+	// emitted token-by-token as it arrives (the parser's stream_event delta
+	// path), so the UI renders live instead of all-at-once when the call
+	// returns. The aggregated final response is still used for history +
+	// calibration, so a streamed turn is otherwise identical. false = the
+	// one-shot JSON path. Adapters without an SSE path (Gemini) ignore it.
+	stream bool
+
+	// streamedText / streamedThinking record whether the last model call
+	// already emitted its text / thinking as live deltas. runTurn consults
+	// them so it doesn't ALSO emit the aggregated block (which would
+	// double-render in the wick UI — the parser only dedups its own two
+	// frame shapes, not wick emitting both a delta line and a full textLine).
+	streamedText     bool
+	streamedThinking bool
 }
+
+// setStream toggles SSE streaming of model output for this engine.
+func (e *engine) setStream(v bool) { e.stream = v }
 
 // setSteer wires the mid-turn steering channel (the spawn's msgs channel).
 func (e *engine) setSteer(ch <-chan string) { e.steer = ch }
@@ -121,7 +159,11 @@ func (e *engine) setRetryPolicy(p retryPolicy) { e.retryPolicy = p }
 func (e *engine) setWickSessionID(id string) { e.wickSessionID = id }
 
 // setToolSpillDir wires the directory large tool results spill into.
-func (e *engine) setToolSpillDir(dir string) { e.toolSpillDir = dir }
+// Also seeds sessionDir (goal.json lives next to tool-out/).
+func (e *engine) setToolSpillDir(dir string) {
+	e.toolSpillDir = dir
+	e.sessionDir = dir
+}
 
 // setInteractionSink wires the per-spawn interaction recorder.
 func (e *engine) setInteractionSink(fn func(interactionRecord)) { e.interactionSink = fn }
@@ -131,14 +173,36 @@ func (e *engine) setInteractionSink(fn func(interactionRecord)) { e.interactionS
 // from later — never the config itself.
 func (e *engine) setModelID(id string) { e.modelID = id }
 
+// setReasoning attaches the vendor-agnostic reasoning request applied to every
+// model call this turn (nil = vendor default). The value is also snapshotted as
+// the session's configured baseline so a runtime "/thinking on" can restore it
+// after a "/thinking off".
+func (e *engine) setReasoning(r *ReasoningConfig) {
+	e.reasoning = r
+	e.defaultReasoning = r
+}
+
+// setLoopGuards wires the operator-configured no-progress guards: cut the
+// turn after maxConsecErr consecutive all-error tool rounds, or when the
+// turn's wall clock exceeds maxTurnDur. Zero values keep the defaults
+// (20 errors / 1h) applied in newEngine.
+func (e *engine) setLoopGuards(maxConsecErr int, maxTurnDur time.Duration) {
+	if maxConsecErr > 0 {
+		e.maxConsecErr = maxConsecErr
+	}
+	if maxTurnDur > 0 {
+		e.maxTurnDur = maxTurnDur
+	}
+}
+
 // newEngine assembles an engine for one spawn.
 func newEngine(llm LLM, modelName, sysPrompt string, genCfg *genai.GenerateContentConfig, tools []toolDef, history []*genai.Content, maxTurns int, emit func([]byte)) *engine {
 	byName := make(map[string]toolDef, len(tools))
 	for _, t := range tools {
 		byName[t.decl.Name] = t
 	}
-	if maxTurns <= 0 {
-		maxTurns = 50 // safety cap on the tool-call loop, not user turns
+	if maxTurns < 0 {
+		maxTurns = 0 // 0 = unlimited; consec-error + wall-clock guards are the brake
 	}
 	return &engine{
 		llm:              llm,
@@ -148,6 +212,8 @@ func newEngine(llm LLM, modelName, sysPrompt string, genCfg *genai.GenerateConte
 		tools:            tools,
 		toolByName:       byName,
 		maxTurns:         maxTurns,
+		maxConsecErr:     20,
+		maxTurnDur:       time.Hour,
 		history:          history,
 		emit:             emit,
 		tokenCalibration: 1.0,
@@ -192,17 +258,50 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 		return
 	}
 
+	// /thinking — runtime reasoning toggle (like Claude Code's /thinking).
+	// Intercepted so it never reaches the model: flip the live reasoning
+	// request and report the new state. Same last-non-empty-line matching as
+	// /compact so a real message merely mentioning it isn't hijacked.
+	if ok, arg := parseThinkingCommand(userText); ok {
+		e.runThinkingCommand(arg)
+		return
+	}
+
 	// Compact BEFORE appending the new turn so the model-driven summary
 	// covers only settled history, and the fresh user message always
 	// survives into the request.
 	e.maybeCompact(ctx, e.contextBudget)
 
-	e.history = append(e.history, genai.NewContentFromText(userText, genai.RoleUser))
+	e.history = append(e.history, currentUserContent(e.sessionDir, userText))
 
 	var finalText strings.Builder
-	for turn := 0; turn < e.maxTurns; turn++ {
+	turnStart := time.Now()
+	consecErr := 0
+	for turn := 0; ; turn++ {
+		// Cancellation (manual Kill / Stop / session reap) wins over every
+		// other guard — an OPEN goal must NEVER keep the loop alive past a
+		// kill. Checked FIRST so the goal force-continue branches below
+		// can't swallow a cancel that raced a wall-clock/error window.
 		if ctx.Err() != nil {
 			e.emit(doneLine(strings.TrimSpace(finalText.String())))
+			return
+		}
+		if e.maxTurns > 0 && turn >= e.maxTurns {
+			e.finishTruncated(&finalText, fmt.Sprintf("turn cut: max_turns cap (%d) reached", e.maxTurns))
+			return
+		}
+		if time.Since(turnStart) > e.maxTurnDur {
+			// Goal open → don't kill (same recovery style as consec-error).
+			// Nudge and reset the window so the next check is another full
+			// maxTurnDur away; a just-closed goal falls through to the cut.
+			if session.HasOpenGoalDir(e.sessionDir) {
+				msg := fmt.Sprintf("wall-clock limit (%s) exceeded — goal still OPEN, keep working (or todo{goal_done:true}/todo{goal_abandon:true})", e.maxTurnDur)
+				e.emit(thinkingLine("↻ " + msg))
+				e.history = append(e.history, genai.NewContentFromText("[wick] "+msg, genai.RoleUser))
+				turnStart = time.Now()
+				continue
+			}
+			e.finishTruncated(&finalText, fmt.Sprintf("turn cut: wall-clock limit (%s) exceeded", e.maxTurnDur))
 			return
 		}
 
@@ -236,16 +335,23 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 			return
 		}
 
-		// Emit text + thinking, and collect any function calls.
+		// Emit text + thinking, and collect any function calls. When streaming
+		// already sent the text/thinking as live deltas this same call, the
+		// aggregated block is NOT re-emitted (that would double-render) — but
+		// finalText still accumulates the text so doneLine's .result is whole.
 		var calls []*genai.FunctionCall
 		for _, p := range content.Parts {
 			switch {
 			case p.FunctionCall != nil:
 				calls = append(calls, p.FunctionCall)
 			case p.Thought && p.Text != "":
-				e.emit(thinkingLine(p.Text))
+				if !e.streamedThinking {
+					e.emit(thinkingLine(p.Text))
+				}
 			case p.Text != "":
-				e.emit(textLine(p.Text))
+				if !e.streamedText {
+					e.emit(textLine(p.Text))
+				}
 				finalText.WriteString(p.Text)
 			}
 		}
@@ -255,6 +361,18 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 		e.history = append(e.history, &genai.Content{Role: genai.RoleModel, Parts: content.Parts})
 
 		if len(calls) == 0 {
+			// Goal latch (todo{goal:...}): while OPEN, plain text is a
+			// progress report, not end-of-turn. Keep looping until the
+			// model calls todo with goal_done/goal_abandon.
+			if session.HasOpenGoalDir(e.sessionDir) {
+				msg := "goal still OPEN — keep working (or todo{goal_done:true} / todo{goal_abandon:true})"
+				if g, _ := session.LoadGoalDir(e.sessionDir); g != nil && g.Goal != "" {
+					msg = fmt.Sprintf("goal still OPEN: %q — keep working toward it, or todo{goal_done:true}/todo{goal_abandon:true}", g.Goal)
+				}
+				e.emit(thinkingLine("↻ " + msg))
+				e.history = append(e.history, genai.NewContentFromText("[wick] "+msg, genai.RoleUser))
+				continue
+			}
 			e.emit(doneLine(strings.TrimSpace(finalText.String())))
 			return
 		}
@@ -262,6 +380,8 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 		// Execute each tool call, emit tool_use/tool_result, and append a
 		// function-response content for the next model call.
 		respParts := make([]*genai.Part, 0, len(calls))
+		batchAllErr := len(calls) > 0
+		var lastErr string
 		for _, fc := range calls {
 			id := fc.ID
 			if id == "" {
@@ -269,7 +389,30 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 			}
 			e.emit(toolUseLine(id, fc.Name, marshalArgs(fc.Args)))
 
+			// Heartbeat while the tool runs: a long shell/scrape can sit
+			// silent for minutes, which looks identical to a hung process
+			// to the idle-kill timer (resets only on pipe writes). Same
+			// pattern as generateAttempt's model-call heartbeat.
+			toolHBDone := make(chan struct{})
+			go func() {
+				t := time.NewTicker(15 * time.Second)
+				defer t.Stop()
+				for {
+					select {
+					case <-t.C:
+						e.emit(heartbeatLine())
+					case <-toolHBDone:
+						return
+					}
+				}
+			}()
 			result, isErr := e.dispatch(ctx, fc.Name, fc.Args)
+			close(toolHBDone)
+			if isErr {
+				lastErr = result
+			} else {
+				batchAllErr = false
+			}
 			// Emit the FULL result to the UI/store (the store spills large
 			// events to its own file for display); only the copy that enters
 			// the model's context is capped, so one giant result can't blow
@@ -285,9 +428,41 @@ func (e *engine) runTurn(ctx context.Context, userText string) {
 			})
 		}
 		e.history = append(e.history, &genai.Content{Role: genai.RoleUser, Parts: respParts})
-	}
 
-	log.Warn().Int("cap", e.maxTurns).Msg("wick.engine: tool-call loop hit safety cap")
+		// No-progress guard: only consecutive ALL-error rounds count; any
+		// round with at least one successful call resets the counter
+		// (parallel calls where one succeeds = progress).
+		if batchAllErr {
+			consecErr++
+		} else {
+			consecErr = 0
+		}
+		if consecErr >= e.maxConsecErr {
+			// Goal open → don't kill (Claude-style: recover & keep
+			// going). Nudge the model with the error streak and reset
+			// the counter so it can try a different approach.
+			if session.HasOpenGoalDir(e.sessionDir) {
+				msg := fmt.Sprintf("%d consecutive tool errors (last: %.200s) — goal still OPEN, try a different approach (or todo{goal_done:true}/todo{goal_abandon:true})", consecErr, lastErr)
+				e.emit(thinkingLine("↻ " + msg))
+				e.history = append(e.history, genai.NewContentFromText("[wick] "+msg, genai.RoleUser))
+				consecErr = 0
+				continue
+			}
+			e.finishTruncated(&finalText, fmt.Sprintf("turn cut: %d consecutive tool errors, last error: %.200s", consecErr, lastErr))
+			return
+		}
+	}
+}
+
+// finishTruncated ends a truncated turn VISIBLY: the reason is emitted as
+// a text event (the parser drops doneLine's .result — text reaches the
+// transcript only via textLine), then the turn closes with doneLine —
+// otherwise a cut turn looks like a mysterious death to the user.
+func (e *engine) finishTruncated(finalText *strings.Builder, reason string) {
+	log.Warn().Str("reason", reason).Msg("wick.engine: turn truncated")
+	marker := "\n\n[wick] " + reason
+	e.emit(textLine(marker))
+	finalText.WriteString(marker)
 	e.emit(doneLine(strings.TrimSpace(finalText.String())))
 }
 
@@ -309,7 +484,11 @@ func (e *engine) drainSteer() {
 				e.steer = nil
 				return
 			}
-			if strings.TrimSpace(msg) == "" || isCompactCommand(msg) {
+			if trimmed := strings.TrimSpace(msg); trimmed == "" || isCompactCommand(msg) {
+				continue
+			} else if ok, _ := parseThinkingCommand(trimmed); ok {
+				// A mid-turn /thinking is honored as its own next turn (like
+				// /compact), not injected into this turn's history.
 				continue
 			}
 			e.emit(thinkingLine("↪ user added mid-turn: " + msg))
@@ -353,11 +532,17 @@ func (e *engine) snapshotRequest(kind string, cfg *genai.GenerateContentConfig, 
 // without killing the turn — generate returns an error the caller handles like
 // any other, and the turn ends gracefully.
 func (e *engine) generateAttempt(ctx context.Context, kind string, attempt int, reason string) (*LLMResponse, error) {
+	// The runtime /thinking override (if the user toggled it this session)
+	// wins over the configured baseline. Resolved per-call so a mid-session
+	// toggle takes effect on the very next model call.
+	reasoning := e.effectiveReasoning()
 	cfg := e.effectiveConfig()
+	applyGeminiThinking(cfg, reasoning)
 	req := &LLMRequest{
-		Model:    e.modelName,
-		Contents: e.history,
-		Config:   cfg,
+		Model:     e.modelName,
+		Contents:  e.history,
+		Config:    cfg,
+		Reasoning: reasoning,
 	}
 	start := time.Now()
 
@@ -418,12 +603,32 @@ func (e *engine) generateAttempt(ctx context.Context, kind string, attempt int, 
 		markModelCallStart(sid, attempt, snap, cancelCall)
 	}
 
+	// Reset the per-call streamed-flags: runTurn reads these to know whether
+	// the text/thinking already went out as live deltas (so it must not
+	// re-emit the aggregated blocks and double-render).
+	e.streamedText = false
+	e.streamedThinking = false
+
 	var out *LLMResponse
 	var gotErr error
-	for resp, err := range e.llm.GenerateContent(callCtx, req, false) {
+	for resp, err := range e.llm.GenerateContent(callCtx, req, e.stream) {
 		if err != nil {
 			gotErr = err
 			break
+		}
+		if resp.isDelta() {
+			// Live streaming chunk — emit it now via the parser's delta path.
+			// It is NOT folded into out; the adapter's final aggregated yield
+			// (Content set, deltas empty) carries the authoritative turn body.
+			if resp.TextDelta != "" {
+				e.emit(textDeltaLine(resp.TextDelta))
+				e.streamedText = true
+			}
+			if resp.ThinkingDelta != "" {
+				e.emit(thinkingDeltaLine(resp.ThinkingDelta))
+				e.streamedThinking = true
+			}
+			continue
 		}
 		out = resp
 	}

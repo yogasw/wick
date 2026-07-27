@@ -243,7 +243,11 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"just a short 'step' label + its own status) — e.g. task 'Build login form' with substeps 'Install " +
 				"deps', 'Wire validation', 'Style form'. Substeps are optional; a simple task can omit them. The UI " +
 				"renders this as a single collapsible checklist that always reflects your latest reported status, " +
-				"not a card per call.",
+				"not a card per call. " +
+				"GOAL MODE (optional): pass 'goal' with a clear success criterion to open a durable latch for long/" +
+				"multi-hour jobs. While the goal is open the wick engine will NOT end the turn on plain text — it " +
+				"keeps looping until you call todo again with goal_done=true (or goal_abandon=true). Checklist and " +
+				"goal share this one tool; no separate goal tool. Other providers still write the latch for resume.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -290,6 +294,29 @@ func MetaToolDescriptors() []ToolDescriptor {
 							},
 							"required": []string{"title", "status"},
 						},
+					},
+					"goal": map[string]any{
+						"type": "string",
+						"description": "Optional. Open/replace the session goal latch with this success criterion " +
+							"(e.g. \"find 3 houses under $400k in Austin with yard\"). While open, wick keeps the " +
+							"turn running past plain-text replies.",
+					},
+					"goal_done": map[string]any{
+						"type":        "boolean",
+						"description": "Set true when the goal criterion is met — releases the wick force-continue latch.",
+					},
+					"goal_abandon": map[string]any{
+						"type":        "boolean",
+						"description": "Set true to give up on the open goal — also releases the latch.",
+					},
+					"note": map[string]any{
+						"type":        "string",
+						"description": "Optional note stored with goal open/done/abandon.",
+					},
+					"session_id": map[string]any{
+						"type": "string",
+						"description": "Active wick agent session id. Required for goal mode outside the in-process " +
+							"wick agent (resolved automatically there via X-Wick-Session-Id).",
 					},
 				},
 				"required": []string{"items"},
@@ -517,7 +544,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 		},
 		{
 			Name: "wick_skill_list",
-			Description: "List all skill entries across all agent skill directories (~/.claude/skills, ~/.codex/skills, ~/.gemini/skills, etc.). " +
+			Description: "List all skill entries across all agent skill directories (~/.wick/skills, ~/.claude/skills, ~/.codex/skills, ~/.gemini/skills, etc.). " +
 				"providers[] contains {label, dir} for every known skill directory — use dir to read or edit skill files manually. " +
 				"Each skill entry has: name, is_dir, in_providers (labels that have it), missing_providers (labels that don't). " +
 				"Use this to see which skills are synced across providers and which are missing.",
@@ -533,7 +560,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 		{
 			Name: "wick_skill_sync",
 			Description: "Sync skill files across all agent skill directories. " +
-				"Copies every skill file/folder to all known provider dirs (~/.claude/skills, ~/.codex/skills, ~/.gemini/skills, etc.). " +
+				"Copies every skill file/folder to all known provider dirs (~/.wick/skills, ~/.claude/skills, ~/.codex/skills, ~/.gemini/skills, etc.). " +
 				"Newest mtime wins on conflict. " +
 				"Returns: copied (files written), skipped (already up to date), errors (list), providers (dirs involved).",
 			InputSchema: map[string]any{

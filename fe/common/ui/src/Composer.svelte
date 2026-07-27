@@ -11,6 +11,8 @@
        - submitLabel: text beside the send arrow (omit → icon only) */
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import ImageEditor from "./ImageEditor.svelte";
+  import CapabilityChips from "./CapabilityChips.svelte";
+  import CapabilityModal from "./CapabilityModal.svelte";
   import type { ComposerCommand, ComposerSelect, ComposerSelectOption, ComposerModelOption } from "./composer-types.js";
 
   type Props = {
@@ -267,8 +269,12 @@
     if (item.run) {
       text = prefix + suffix;
       closeMenu();
+      // Reset the caret/height, but DON'T re-focus the textarea: a command that
+      // run()s owns focus — e.g. /provider opens the provider picker and focuses
+      // its list. Re-focusing here (in a later microtask) would steal it back,
+      // leaving the picker open but unfocused so ↑/↓ don't reach it until the
+      // user clicks. The command decides where focus lands.
       queueMicrotask(() => {
-        textareaEl?.focus();
         textareaEl?.setSelectionRange(prefix.length, prefix.length);
         autoResize();
       });
@@ -407,6 +413,11 @@
   export function openProvider() {
     openProviderPicker();
   }
+  // Same, for `/project` — opens the project picker (when a project selector is
+  // wired). No-op if the parent didn't pass a `project` select.
+  export function openProject() {
+    if (project) openProjectPicker();
+  }
 
   /* ── screenshot + image editor ──────────────────────────────────────── */
   const canScreenshot = typeof navigator !== "undefined" && !!navigator.mediaDevices?.getDisplayMedia;
@@ -493,6 +504,8 @@
   // the set's model row; its expansion is cached under a per-set key so
   // reopening is instant. Back from a set returns to the provider model list.
   let setDrill = $state<ComposerModelOption | null>(null);
+  // Which model row's full capability breakdown is open (ⓘ on a chip).
+  let capsModalFor = $state<ComposerModelOption | null>(null);
   function setCacheKey(optValue: string, m: ComposerModelOption): string {
     return `${optValue}::set::${m.id}`;
   }
@@ -567,6 +580,24 @@
     if (e.key === "ArrowDown") { e.preventDefault(); plusIndex = (plusIndex + 1) % n; }
     else if (e.key === "ArrowUp") { e.preventDefault(); plusIndex = (plusIndex - 1 + n) % n; }
     else if (e.key === "Enter") { e.preventDefault(); plusRows[plusIndex]?.run(); }
+    else return; // not a nav key — let it fall through (typing in the search box)
+    // A nav key was handled here; stop it bubbling to the menu container's own
+    // handler, which would otherwise run handlePlusKeys a SECOND time and
+    // double-step the highlight. Only the innermost handler acts.
+    e.stopPropagation();
+  }
+
+  // scrollIfActive keeps the keyboard-highlighted row visible: when `active`
+  // flips true (arrow nav landed on this row), scroll it into the nearest
+  // edge of the scroll container. Without this a long list (wick / OmniRoute)
+  // scrolls off-screen and ↑/↓ looks like it "does nothing".
+  function scrollIfActive(node: HTMLElement, active: boolean) {
+    const apply = (on: boolean) => {
+      // scrollIntoView is absent in JSDOM (tests) and old engines — guard it.
+      if (on && typeof node.scrollIntoView === "function") node.scrollIntoView({ block: "nearest" });
+    };
+    apply(active);
+    return { update: apply };
   }
 
   // Kick off (or reuse) a live-model load and focus the filter box whenever we
@@ -697,18 +728,43 @@
   // Entering the provider view from the root menu / chip. If a provider is
   // already selected and can drill into models, jump straight to its model
   // list (fetching live models on the way) — no bouncing back through the
-  // whole type list. Otherwise show the type list to choose one.
+  // whole type list. And when the selection is a live-set model, drill ONE
+  // level further into that set's expansion (level 4), so clicking the
+  // already-selected provider lands right on the chosen model's list instead
+  // of stopping at the set row (the "click selected provider doesn't go all the
+  // way to the picked model list" bug).
   function enterProviderView() {
     typeDrillKey = "";
     modelDrillOpt = null;
-    const key = splitModelPin(provider?.value ?? "").key;
+    const { key, modelID } = splitModelPin(provider?.value ?? "");
     const cur = provider?.options.find((o) => o.value === key);
     if (cur && hasModelDrill(cur)) {
       plusView = "provider";
-      openModelDrill(cur);
+      void openModelDrillTo(cur, liveSetEntryOf(modelID));
       return;
     }
     plusView = "provider";
+  }
+
+  // liveSetEntryOf pulls the set-entry id out of a pinned model id: a live-set
+  // pick is encoded "<entryID>@<vendorID>" (or bare "<entryID>" for the set's
+  // default). Returns "" for a plain model id (no "@", not a set).
+  function liveSetEntryOf(modelID: string): string {
+    if (modelID === "") return "";
+    const at = modelID.indexOf("@");
+    return at < 0 ? modelID : modelID.slice(0, at);
+  }
+
+  // openModelDrillTo opens the provider's model list (level 3) and, if the
+  // given entry id resolves to a live-set row once the list is loaded, drills
+  // straight into that set (level 4). entryHint "" = stop at level 3.
+  async function openModelDrillTo(o: ComposerSelectOption, entryHint: string) {
+    openModelDrill(o);
+    if (entryHint === "") return;
+    await loadModelsFor(o);
+    // drillBaseModels reflects the freshly-loaded (or static) list now.
+    const set = drillBaseModels.find((m) => m.id === entryHint && isLiveSet(m));
+    if (set) openSetDrill(set);
   }
 
   // Selecting a provider TYPE at level 1: if it collapses to a single flat
@@ -1047,10 +1103,12 @@
             {@const inSet = setDrill}
             {@const loading = inSet ? modelLoading.has(setCacheKey(drill.value, inSet)) : modelLoading.has(drill.value)}
             {@const showDefaultRow = !inSet && !modelDrillSearch.trim()}
-            <!-- Header row: back + provider name + inline search. The search
-                 lives here (always visible, auto-focused) so drilling in lands
-                 straight on a typeable field. In a live-set (level 4) the back
-                 button returns to the provider's model list. -->
+            <!-- Header: back + breadcrumb trail + inline search. The trail shows
+                 how deep the drill is — "wick › <set>" — with each crumb
+                 clickable to jump back to that level. The search lives here
+                 (always visible, auto-focused) so drilling in lands straight on
+                 a typeable field. Back returns one level: from a live-set (lvl 4)
+                 to the model list, else to the provider list. -->
             <div class="shrink-0 flex items-center gap-2 px-2 py-2 border-b border-white-300 dark:border-navy-600">
               <button
                 type="button"
@@ -1061,10 +1119,27 @@
                 <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
               {@render provIcon(drill.value, "h-4 w-4 shrink-0")}
+              <!-- Breadcrumb: provider crumb (→ model list) then, inside a set,
+                   the set crumb. Only shown when there's depth to show; kept
+                   compact so the search field still gets the room. -->
+              <div class="flex items-center gap-1 shrink-0 max-w-[45%] text-xs font-medium">
+                <button
+                  type="button"
+                  onclick={inSet ? closeSetDrill : undefined}
+                  class="truncate {inSet ? 'text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100' : 'text-black-900 dark:text-white-100 cursor-default'}"
+                  title={drill.label}
+                >{drill.label}</button>
+                {#if inSet}
+                  <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <span class="truncate text-black-900 dark:text-white-100" title={inSet.label}>{inSet.label}</span>
+                {/if}
+              </div>
+              <span class="shrink-0 text-black-400 dark:text-navy-500">·</span>
               <input
                 type="text"
                 bind:this={modelDrillSearchEl}
                 bind:value={modelDrillSearch}
+                onkeydown={handlePlusKeys}
                 placeholder={inSet ? `Search ${inSet.label}…` : `Search ${drill.label} models…`}
                 class="min-w-0 flex-1 bg-transparent text-sm text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none"
               />
@@ -1087,6 +1162,7 @@
                 {@const hi = plusIndex === 0}
                 <button
                   type="button"
+                  use:scrollIfActive={hi}
                   onmouseenter={() => (plusIndex = 0)}
                   onclick={() => { provider?.onChange(drill.value); closeModelDrill(); plusView = "root"; plusOpen = false; }}
                   class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {hi ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : isDefaultSel ? 'bg-green-500/5 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
@@ -1104,6 +1180,7 @@
                 {@const hi = plusIndex === rowIdx}
                 <button
                   type="button"
+                  use:scrollIfActive={hi}
                   onmouseenter={() => (plusIndex = rowIdx)}
                   onclick={() => { if (live) openSetDrill(m); else selectModel(drill, m.id); }}
                   class="flex w-full items-start justify-between gap-3 px-3 py-1.5 text-left transition-colors {hi ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : isSel ? 'bg-green-500/5 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
@@ -1115,6 +1192,11 @@
                       {#if live}<span class="shrink-0 rounded-full bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">live set</span>{/if}
                     </span>
                     {#if m.desc}<span class="text-[11px] text-black-700 dark:text-black-600 leading-snug">{m.desc}</span>{/if}
+                    <!-- Capability chips (vendor-declared) — gated on the
+                         provider's global toggle; ⓘ opens the detail modal. -->
+                    {#if provider?.showCapabilities !== false}
+                      <CapabilityChips caps={m.caps} mode={provider?.capabilityMode ?? "list"} onInfo={() => (capsModalFor = m)} />
+                    {/if}
                   </span>
                   {#if live}
                     <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 mt-0.5 text-black-700 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1143,6 +1225,7 @@
               {@const hi = plusIndex === oi}
               <button
                 type="button"
+                use:scrollIfActive={hi}
                 onmouseenter={() => (plusIndex = oi)}
                 onclick={() => pickInstance(opt)}
                 class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {hi ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : isSel ? 'bg-green-500/5 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
@@ -1177,6 +1260,7 @@
               {@const hi = plusIndex === gi}
               <button
                 type="button"
+                use:scrollIfActive={hi}
                 onmouseenter={() => (plusIndex = gi)}
                 onclick={() => pickType(g)}
                 class="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm transition-colors {hi ? 'bg-green-500/10 text-slate-800 dark:text-white-100' : isSel ? 'bg-green-500/5 text-slate-800 dark:text-white-100' : 'text-black-800 dark:text-white-200 hover:bg-white-200 dark:hover:bg-navy-700'}"
@@ -1303,6 +1387,14 @@
   name={editorName}
   onDone={onEditorDone}
   onCancel={() => (editorOpen = false)}
+/>
+
+<!-- Full capability breakdown for a model row (opened from the ⓘ on a chip). -->
+<CapabilityModal
+  open={capsModalFor !== null}
+  onClose={() => (capsModalFor = null)}
+  caps={capsModalFor?.caps}
+  modelId={capsModalFor?.id ?? ""}
 />
 
 <style>

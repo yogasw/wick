@@ -3,7 +3,7 @@
   import { WickClientLayer } from "@wick-fe/common-api";
   import { toastError } from "@wick-fe/common-stores";
   import { ToastHost, Composer } from "@wick-fe/common-ui";
-  import { getProviderOptions, getPresetOptions, getProjectOptions, createSession, searchProjectFiles, listComposerCommands } from "$lib/api/options.js";
+  import { getProviderOptions, getProviderOptionModels, getPresetOptions, getProjectOptions, createSession, searchProjectFiles, listComposerCommands } from "$lib/api/options.js";
   import type { ProviderOption, PresetOption, ProjectOption } from "$lib/api/options.js";
 
   const appEl = document.getElementById("app");
@@ -22,8 +22,23 @@
   let selectedPreset = $state("");
   let selectedProject = $state("");
   let submitting = $state(false);
-  // `/` menu (skills only pre-session) + `@` search over the selected project.
-  let composerCommands = $state<{ value: string; label: string; hint?: string; category?: string }[]>([]);
+  // `/` menu (switch actions + skills, pre-session) + `@` search over the
+  // selected project. A command with an `action` carries a `run` handler; a
+  // skill (insert-type) carries none and inserts its `value` after `/`.
+  let composerCommands = $state<{ value: string; label: string; hint?: string; category?: string; run?: () => void }[]>([]);
+  // Ref to the Composer so a `/provider` command can open its shared picker —
+  // same drill (→ model list) the provider chip uses. Without this the `/`
+  // switch actions had nowhere to route.
+  let composerRef = $state<{ openProvider: () => void; openProject: () => void } | undefined>();
+
+  // Resolve a built-in command's `action` id to a local handler. Only the
+  // switch actions apply before a session exists (the backend already filters
+  // the list to these + skills for scope=new).
+  function actionHandler(action: string): (() => void) | undefined {
+    if (action === "switch:provider") return () => composerRef?.openProvider();
+    if (action === "switch:project") return () => composerRef?.openProject();
+    return undefined;
+  }
 
   function searchMentionFiles(query: string): Promise<string[]> {
     if (!selectedProject) return Promise.resolve([]); // no project → no files to browse
@@ -91,7 +106,11 @@
     const providerType = selectedProvider ? selectedProvider.split("/")[0] : "";
     Effect.runPromise(listComposerCommands(base, "new", providerType).pipe(Effect.provide(WickClientLayer)))
       .then((cmds) => {
-        composerCommands = cmds.map((c) => ({ value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category }));
+        composerCommands = cmds.map((c) =>
+          c.action
+            ? { value: c.id, label: c.label, hint: c.hint, category: c.category, run: actionHandler(c.action) }
+            : { value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category },
+        );
       })
       .catch(() => { /* commands optional */ });
   });
@@ -123,7 +142,34 @@
       ? { options: projectOptions, value: selectedProject, onChange: (v: string) => { selectedProject = v; applyProjectDefaults(v); } }
       : undefined,
   );
-  const providerSelect = $derived({ options: providerOptions, value: selectedProvider, onChange: (v: string) => (selectedProvider = v) });
+  // Live model loader for the composer's model drill-in — same contract as the
+  // conversation composer. `optionValue` is a "type/name" key; ask the server
+  // for that instance's current vendor models (and level-4 live-set expansion
+  // via opts.entry). Without this wired, live-set rows showed "No extra models".
+  function loadProviderModels(optionValue: string, opts?: { entry?: string }) {
+    const slash = optionValue.indexOf("/");
+    const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
+    const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
+    return Effect.runPromise(getProviderOptionModels(base, type, name, opts).pipe(Effect.provide(WickClientLayer)));
+  }
+
+  // Capability-chip prefs come from the wick provider row (wick-scoped global).
+  const capsPrefs = $derived.by(() => {
+    const wick = providers.find((p) => p.type === "wick");
+    const m = wick?.capability_display_mode;
+    return {
+      show: wick?.show_capabilities ?? true,
+      mode: (m === "name" ? "name" : m === "icon" ? "icon" : "list") as "list" | "name" | "icon",
+    };
+  });
+  const providerSelect = $derived({
+    options: providerOptions,
+    value: selectedProvider,
+    onChange: (v: string) => (selectedProvider = v),
+    loadModels: loadProviderModels,
+    showCapabilities: capsPrefs.show,
+    capabilityMode: capsPrefs.mode,
+  });
   const presetSelect = $derived(
     presets.length > 0
       ? { options: presetOptions, value: selectedPreset, onChange: (v: string) => (selectedPreset = v) }
@@ -174,6 +220,7 @@
   {:else}
     <div class="w-full">
       <Composer
+        bind:this={composerRef}
         onSend={handleSend}
         disabled={submitting}
         placeholder="Ask anything…   / commands · @ files"

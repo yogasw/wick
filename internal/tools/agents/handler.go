@@ -345,10 +345,13 @@ func Register(r tool.Router) {
 	r.GET("/providers/wick/interactions/{session}/{seq}/curl", getWickInteractionCurl)
 	r.GET("/providers/wick/interactions/{session}/live/curl", getWickLiveCurl)
 	r.POST("/providers/wick/interactions/{session}/cancel-call", cancelWickModelCall)
+	r.GET("/providers/wick/sessions/{session}/overrides", getWickSessionOverrides)
+	r.POST("/providers/wick/sessions/{session}/overrides", setWickSessionOverride)
 	r.GET("/providers/wick/models/{id}/key", getWickModelKey)
 	r.POST("/providers/wick/models", saveWickModel)
 	r.DELETE("/providers/wick/models/{id}", deleteWickModel)
 	r.POST("/providers/wick/models/{id}/default", setWickDefaultModel)
+	r.POST("/providers/wick/models/{id}/default-vendor", setWickDefaultVendorModel)
 	r.POST("/providers/wick/models/{id}/disabled", setWickModelDisabled)
 	r.POST("/providers/wick/models/{id}/duplicate", duplicateWickModel)
 	r.POST("/providers/wick/models/{id}/test", testWickModel)
@@ -1922,11 +1925,12 @@ func providerOptionsJSON(c *tool.Ctx) {
 		return
 	}
 	type model struct {
-		ID      string `json:"id"`
-		Label   string `json:"label"`
-		Default bool   `json:"default"`
-		Desc    string `json:"desc,omitempty"`
-		Live    bool   `json:"live,omitempty"`
+		ID      string          `json:"id"`
+		Label   string          `json:"label"`
+		Default bool            `json:"default"`
+		Desc    string          `json:"desc,omitempty"`
+		Live    bool            `json:"live,omitempty"`
+		Caps    json.RawMessage `json:"caps,omitempty"`
 	}
 	type option struct {
 		Type         string  `json:"type"`
@@ -1934,15 +1938,27 @@ func providerOptionsJSON(c *tool.Ctx) {
 		Version      string  `json:"version"`
 		UsesAIRouter bool    `json:"uses_airouter"`
 		Models       []model `json:"models,omitempty"`
+		// Capability-chip settings — wick-scoped, so they ride on the wick
+		// option row. The composer SPAs read them here (the same fetch they
+		// already make) to decide whether/how to render chips. omitempty keeps
+		// non-wick rows clean. ShowCaps is a pointer so "false" round-trips.
+		ShowCaps *bool  `json:"show_capabilities,omitempty"`
+		CapsMode string `json:"capability_display_mode,omitempty"`
 	}
 	ps := providerChoicesCached(c.Context())
 	opts := make([]option, 0, len(ps))
 	for _, p := range ps {
 		var models []model
 		for _, m := range p.Models {
-			models = append(models, model{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc, Live: m.Live})
+			models = append(models, model{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc, Live: m.Live, Caps: m.Caps})
 		}
-		opts = append(opts, option{Type: p.Type, Name: p.Name, Version: p.Version, UsesAIRouter: p.UsesAIRouter, Models: models})
+		o := option{Type: p.Type, Name: p.Name, Version: p.Version, UsesAIRouter: p.UsesAIRouter, Models: models}
+		if p.Type == string(provider.TypeWick) {
+			show, mode := wickCapabilityPrefs()
+			o.ShowCaps = &show
+			o.CapsMode = mode
+		}
+		opts = append(opts, o)
 	}
 	c.JSON(http.StatusOK, opts)
 }
@@ -1965,11 +1981,12 @@ func providerOptionModelsJSON(c *tool.Ctx) {
 		return
 	}
 	type modelDTO struct {
-		ID      string `json:"id"`
-		Label   string `json:"label"`
-		Default bool   `json:"default"`
-		Desc    string `json:"desc,omitempty"`
-		Live    bool   `json:"live,omitempty"`
+		ID      string          `json:"id"`
+		Label   string          `json:"label"`
+		Default bool            `json:"default"`
+		Desc    string          `json:"desc,omitempty"`
+		Live    bool            `json:"live,omitempty"`
+		Caps    json.RawMessage `json:"caps,omitempty"`
 	}
 	typ := provider.Type(strings.TrimSpace(c.PathValue("type")))
 	name := strings.TrimSpace(c.PathValue("name"))
@@ -1982,7 +1999,7 @@ func providerOptionModelsJSON(c *tool.Ctx) {
 	toDTO := func(ms []view.ModelChoiceVM) []modelDTO {
 		out := make([]modelDTO, 0, len(ms))
 		for _, m := range ms {
-			out = append(out, modelDTO{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc, Live: m.Live})
+			out = append(out, modelDTO{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc, Live: m.Live, Caps: m.Caps})
 		}
 		return out
 	}

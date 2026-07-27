@@ -1,6 +1,8 @@
 package view
 
 import (
+	"encoding/json"
+
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
 )
@@ -103,6 +105,11 @@ type ModelChoiceVM struct {
 	// it as an expandable row (a 4th level) resolved by this row's ID — the
 	// vendor filter itself stays server-side and is never exposed to the UI.
 	Live bool
+	// Caps is the vendor's raw "capabilities" object for this model (verbatim
+	// JSON), used by the picker to render capability chips. Populated only for
+	// live-set drill rows (they come from live discovery); nil for plain
+	// registered models, which don't store caps. Raw so any vendor key survives.
+	Caps json.RawMessage
 }
 
 // SessionLifecycleVM is the per-row lifecycle snapshot the sessions

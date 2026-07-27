@@ -458,6 +458,12 @@ type statusResp struct {
 	Running   bool   `json:"running"`
 	State     string `json:"state"` // "not-installed"|"checking"|"starting"|"running"|"stopped"
 	Checking  bool   `json:"checking"`
+	// PrefPort is the router's preferred loopback port and BoundPort the port
+	// it's actually listening on (== PrefPort until the first start remaps it).
+	// Surfaced so the form can show a concrete default Base URL
+	// (http://127.0.0.1:<port>/v1) even before the router is installed/running.
+	PrefPort  int `json:"pref_port"`
+	BoundPort int `json:"bound_port"`
 }
 
 // Status reports install + run state as JSON. Non-blocking.
@@ -483,6 +489,8 @@ func (m *Manager) Status(w http.ResponseWriter, r *http.Request) {
 		Running:   running,
 		State:     state,
 		Checking:  checking,
+		PrefPort:  m.desc.PrefPort,
+		BoundPort: m.boundPort(),
 	})
 }
 

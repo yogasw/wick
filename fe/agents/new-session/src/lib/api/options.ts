@@ -1,11 +1,14 @@
 import { Effect } from "effect";
 import { apiGetE } from "@wick-fe/common-api";
+import type { ModelCaps } from "@wick-fe/common-ui";
 
 export type ProviderModelOption = {
   id: string;
   label: string;
   default: boolean;
   desc?: string;
+  live?: boolean;
+  caps?: ModelCaps;
 };
 
 export type ProviderOption = {
@@ -17,6 +20,10 @@ export type ProviderOption = {
   // composer show a nested model picker (the "›" arrow). Absent for
   // single-model / CLI providers.
   models?: ProviderModelOption[];
+  // Capability-chip prefs (wick-scoped, ride on the wick option row). Read by
+  // the composer to decide whether/how to render capability chips.
+  show_capabilities?: boolean;
+  capability_display_mode?: string;
 };
 
 export type PresetOption = {
@@ -38,6 +45,27 @@ export const getProviderOptions = (base: string) =>
       (r ?? []).map((p) => ({ ...p, usesAIRouter: p.usesAIRouter ?? p.uses_airouter ?? false })),
     ),
   );
+
+// getProviderOptionModels asks the server for one configured provider's LIVE
+// model list (wick → vendor API with the stored key; CLI → effective seed).
+// The composer calls this lazily when the user drills into a provider so the
+// list reflects what the vendor actually serves now, not a build-time seed.
+// `entry` expands ONE live model set by its id (the 4th picker level); the
+// vendor filter stays server-side. Without it the endpoint returns the
+// instance's top-level model choices. Mirrors the conversation composer's
+// loader so the new-session picker can expand live sets identically (before
+// this it had no loader wired, so live-set rows showed "No extra models").
+export const getProviderOptionModels = (
+  base: string,
+  type: string,
+  name: string,
+  opts?: { entry?: string },
+) => {
+  const q = opts?.entry ? `?entry=${encodeURIComponent(opts.entry)}` : "";
+  return apiGetE<{ models?: ProviderModelOption[] | null }>(
+    `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${q}`,
+  ).pipe(Effect.map((r) => r.models ?? []));
+};
 
 export const getPresetOptions = (base: string) =>
   apiGetE<PresetOption[] | null>(`${base}/presets/options`).pipe(
@@ -72,9 +100,9 @@ export type ComposerApiCommand = {
   insert?: string;
 };
 
-/* scope=new returns only insert-type commands (skills) — panels/views/switch
-   don't apply before a session exists. provider (a type like "claude") scopes
-   skills to that provider. */
+/* scope=new returns the switch actions (/provider, /project) + insert-type
+   skills — panels/views/send actions need a live session and are dropped.
+   provider (a type like "claude") scopes skills to that provider. */
 export const listComposerCommands = (base: string, scope = "new", provider = "") => {
   const p = new URLSearchParams({ scope });
   if (provider) p.set("provider", provider);
