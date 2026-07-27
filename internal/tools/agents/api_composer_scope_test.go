@@ -21,3 +21,30 @@ func TestBuiltinsForScope(t *testing.T) {
 		t.Errorf("default scope: want all %d built-ins, got %d", len(builtinComposerCommands), len(all))
 	}
 }
+
+// /thinking (panel:thinking) is wick-only: present for wick + empty provider,
+// hidden for the CLI providers.
+func TestFilterBuiltinsForProvider(t *testing.T) {
+	has := func(cmds []ComposerCommand, action string) bool {
+		for _, c := range cmds {
+			if c.Action == action {
+				return true
+			}
+		}
+		return false
+	}
+	all := builtinsForScope("")
+	if !has(filterBuiltinsForProvider(all, "wick"), "panel:thinking") {
+		t.Error("wick should keep /thinking")
+	}
+	if !has(filterBuiltinsForProvider(all, ""), "panel:thinking") {
+		t.Error("empty provider should keep /thinking (permissive default)")
+	}
+	if has(filterBuiltinsForProvider(all, "claude"), "panel:thinking") {
+		t.Error("claude should NOT get /thinking")
+	}
+	// Non-thinking commands are unaffected by provider.
+	if !has(filterBuiltinsForProvider(all, "claude"), "send:/compact") {
+		t.Error("filtering must not drop unrelated commands like /compact")
+	}
+}

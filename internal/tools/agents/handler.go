@@ -345,6 +345,8 @@ func Register(r tool.Router) {
 	r.GET("/providers/wick/interactions/{session}/{seq}/curl", getWickInteractionCurl)
 	r.GET("/providers/wick/interactions/{session}/live/curl", getWickLiveCurl)
 	r.POST("/providers/wick/interactions/{session}/cancel-call", cancelWickModelCall)
+	r.GET("/providers/wick/sessions/{session}/overrides", getWickSessionOverrides)
+	r.POST("/providers/wick/sessions/{session}/overrides", setWickSessionOverride)
 	r.GET("/providers/wick/models/{id}/key", getWickModelKey)
 	r.POST("/providers/wick/models", saveWickModel)
 	r.DELETE("/providers/wick/models/{id}", deleteWickModel)

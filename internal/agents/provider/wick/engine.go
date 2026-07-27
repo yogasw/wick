@@ -532,12 +532,17 @@ func (e *engine) snapshotRequest(kind string, cfg *genai.GenerateContentConfig, 
 // without killing the turn — generate returns an error the caller handles like
 // any other, and the turn ends gracefully.
 func (e *engine) generateAttempt(ctx context.Context, kind string, attempt int, reason string) (*LLMResponse, error) {
+	// The runtime /thinking override (if the user toggled it this session)
+	// wins over the configured baseline. Resolved per-call so a mid-session
+	// toggle takes effect on the very next model call.
+	reasoning := e.effectiveReasoning()
 	cfg := e.effectiveConfig()
+	applyGeminiThinking(cfg, reasoning)
 	req := &LLMRequest{
 		Model:     e.modelName,
 		Contents:  e.history,
 		Config:    cfg,
-		Reasoning: e.reasoning,
+		Reasoning: reasoning,
 	}
 	start := time.Now()
 

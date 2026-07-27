@@ -51,12 +51,13 @@ var builtinComposerCommands = []ComposerCommand{
 	// as the message. The wick engine intercepts it and runs compaction
 	// in-process; the CLI providers pass it through to their own /compact.
 	{ID: "compact", Label: "/compact", Hint: "summarize history to free context", Category: "Session", Action: "send:/compact"},
-	// /thinking toggles the model's reasoning on/off for the rest of the
-	// session, like Claude Code's /thinking. Also a "send" action: the wick
-	// engine intercepts "/thinking" (toggle), "/thinking on|off", or
-	// "/thinking low|medium|high" (set effort) in-process. CLI providers that
-	// don't know it pass it through harmlessly.
-	{ID: "thinking", Label: "/thinking", Hint: "toggle reasoning on/off (or set effort)", Category: "Session", Action: "send:/thinking"},
+	// /thinking opens a small popover to toggle the model's reasoning on/off
+	// and pick the effort for the rest of the session — it does NOT send a
+	// message. The FE resolves the "panel:thinking" action to that popover
+	// (which saves via the wick thinking endpoint). Typing "/thinking on|off|
+	// low|medium|high" as a message still works as a fallback: the wick engine
+	// intercepts it in-process.
+	{ID: "thinking", Label: "/thinking", Hint: "toggle reasoning on/off · set effort", Category: "Session", Action: "panel:thinking"},
 }
 
 // apiComposerCommands handles GET /api/composer/commands — the `/` command menu:
@@ -74,13 +75,13 @@ func apiComposerCommands(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	out := make([]ComposerCommand, 0, len(builtinComposerCommands)+8)
-	out = append(out, builtinsForScope(c.Query("scope"))...)
-
-	// ?provider=<type> (claude/codex/gemini) scopes skills to that provider —
+	// ?provider=<type> (claude/codex/gemini/wick) scopes skills to that provider —
 	// each provider has its own skills dir, so their `/` menus differ. Empty
 	// returns every skill.
 	providerType := c.Query("provider")
+
+	out := make([]ComposerCommand, 0, len(builtinComposerCommands)+8)
+	out = append(out, filterBuiltinsForProvider(builtinsForScope(c.Query("scope")), providerType)...)
 
 	// A skill is a FOLDER holding a SKILL.md (loose files like CHANGELOG.md /
 	// install_skills.sh that happen to sit in the skills dir are not skills).
@@ -125,6 +126,22 @@ func builtinsForScope(scope string) []ComposerCommand {
 		if cmd.Action == "switch:provider" || cmd.Action == "switch:project" {
 			out = append(out, cmd)
 		}
+	}
+	return out
+}
+
+// filterBuiltinsForProvider drops built-in commands that don't apply to the
+// active provider. /thinking (panel:thinking) is wick-only — its popover saves
+// through the wick reasoning endpoint — so it's hidden for the CLI providers.
+// An empty providerType (menu opened without a known provider) keeps everything,
+// matching the permissive default elsewhere.
+func filterBuiltinsForProvider(cmds []ComposerCommand, providerType string) []ComposerCommand {
+	out := make([]ComposerCommand, 0, len(cmds))
+	for _, cmd := range cmds {
+		if cmd.Action == "panel:thinking" && providerType != "" && providerType != "wick" {
+			continue
+		}
+		out = append(out, cmd)
 	}
 	return out
 }

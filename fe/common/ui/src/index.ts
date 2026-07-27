@@ -20,5 +20,8 @@ export { default as ImageEditor } from "./ImageEditor.svelte";
 export type { ComposerCommand, ComposerSelect } from "./composer-types.js";
 export { default as CapabilityChips } from "./CapabilityChips.svelte";
 export { default as CapabilityModal } from "./CapabilityModal.svelte";
+export { default as ConfigForm } from "./ConfigForm.svelte";
+export type { ConfigField } from "./config-types.js";
+export { dropdownOptions, isVisible, isToggle } from "./config-types.js";
 export type { ModelCaps, CapabilityDisplayMode } from "./capability-types.js";
 export { CAP_DESCRIPTORS, capDescriptor, fmtTokens, hasAnyCaps } from "./capability-types.js";

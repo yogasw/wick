@@ -42,6 +42,9 @@
   import ContextPanel from "./ContextPanel.svelte";
   import FileViewerModal from "./FileViewerModal.svelte";
   import SwitchModal from "./SwitchModal.svelte";
+  import OverridePopover from "./OverridePopover.svelte";
+  import { getSessionOverrides, setSessionOverride } from "../api/overrides.js";
+  import type { ConfigField } from "@wick-fe/common-ui";
   import { setFileContext } from "../richRender.js";
   import ProcessPanel from "./ProcessPanel.svelte";
   import WorkspacePanel from "./WorkspacePanel.svelte";
@@ -167,6 +170,12 @@
   // FE); skills carry `insert` and drop in `/name` as text. A new backend
   // command reusing an existing action id needs no FE change.
   let projectPickerOpen = $state(false);
+  // /thinking (and any future per-session override) opens this popover instead
+  // of sending a message. schema + values come from the provider's override
+  // endpoint; each edit auto-saves via the same endpoint (no chat turn).
+  let overridePopoverOpen = $state(false);
+  let overrideSchema = $state<ConfigField[]>([]);
+  let overrideValues = $state<Record<string, string>>({});
   // Imperative handle to the composer so `/provider` opens ITS provider drill
   // (4-level, live-set aware) — the same picker as the toolbar chip, not a
   // separate flat modal.
@@ -178,10 +187,33 @@
     "panel:workspace": () => toggleRail("workspace"),
     "panel:source": () => toggleRail("source"),
     "panel:context": () => toggleRail("context"),
+    "panel:thinking": () => openOverridePopover(),
     "view:commands": () => handleTabChange("commands"),
     "view:approvals": () => handleTabChange("approvals"),
     "view:raw": () => handleTabChange("raw"),
   };
+
+  // Load the session's override schema + current values, then open the popover.
+  function openOverridePopover() {
+    const providerType = activeProvider ? activeProvider.split("/")[0] : "";
+    run(getSessionOverrides(base, sessionId, providerType).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        overrideSchema = res.schema ?? [];
+        overrideValues = res.values ?? {};
+        overridePopoverOpen = true;
+      })
+      .catch(() => { /* toast handled by run() */ });
+  }
+
+  // Save one override field (auto-save on change); refresh values from the
+  // server so visible_when-gated fields react to the new state.
+  function saveOverride(key: string, value: string) {
+    overrideValues = { ...overrideValues, [key]: value }; // optimistic
+    const providerType = activeProvider ? activeProvider.split("/")[0] : "";
+    run(setSessionOverride(base, sessionId, key, value, providerType).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { if (res?.values) overrideValues = res.values; })
+      .catch(() => { /* toast handled by run() */ });
+  }
   function toComposerCommand(c: ComposerApiCommand): ComposerCommand {
     if (c.action) {
       // "send:<text>" actions (e.g. /compact) submit <text> as a message —
@@ -1112,6 +1144,16 @@
             items={projectItems}
             onSelect={(id) => handleProjectChange(id)}
             onClose={() => (projectPickerOpen = false)}
+          />
+          <!-- /thinking (and future per-session knobs) — a popover that SAVES
+               to the session override store, never sends a message. -->
+          <OverridePopover
+            open={overridePopoverOpen}
+            title="🧠 Thinking"
+            schema={overrideSchema}
+            values={overrideValues}
+            onChange={saveOverride}
+            onClose={() => (overridePopoverOpen = false)}
           />
           <Composer
             bind:this={composerRef}

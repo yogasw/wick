@@ -327,6 +327,94 @@ func cancelWickModelCall(c *tool.Ctx) {
 	c.JSON(http.StatusConflict, map[string]any{"cancelled": false, "error": "no model call in flight"})
 }
 
+// getWickSessionOverrides returns the per-session override FIELD SPEC + current
+// values for a provider so the composer popover can render generically (the
+// same []entity.Config the admin config forms use). ?provider=<type> picks the
+// registered struct; empty → wick. The schema's per-row Value is overlaid with
+// the session's saved value (empty when the user hasn't touched it → the field
+// shows its default). This drives the "/thinking" popover today and any future
+// per-session knob with no new endpoint. Admin-only.
+// GET /providers/wick/sessions/{session}/overrides?provider=wick
+func getWickSessionOverrides(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	session := strings.TrimSpace(c.PathValue("session"))
+	if session == "" || strings.ContainsAny(session, `/\`) || strings.Contains(session, "..") {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid session id"})
+		return
+	}
+	providerType := strings.TrimSpace(c.Query("provider"))
+	if providerType == "" {
+		providerType = "wick"
+	}
+	schema := wick.SessionOverrideSchema(providerType)
+	values := wick.SessionOverrideValues(session)
+	// Overlay saved values onto the spec's Value so the FE renders the CURRENT
+	// state (falling back to each field's tag default when unset).
+	for i := range schema {
+		if v, ok := values[schema[i].Key]; ok {
+			schema[i].Value = v
+		}
+	}
+	c.JSON(http.StatusOK, map[string]any{"schema": schema, "values": values})
+}
+
+// setWickSessionOverride saves ONE override field for a session — the popover's
+// per-field auto-save. It does NOT send a chat message: it writes the runtime
+// per-session value the engine reads before its next model call, so the change
+// takes effect on the next turn without polluting the transcript. Runtime-only
+// (not persisted): a fresh session falls back to the provider's configured
+// baseline. Admin-only.
+// POST /providers/wick/sessions/{session}/overrides  {key, value}
+func setWickSessionOverride(c *tool.Ctx) {
+	if !requireAdmin(c) {
+		return
+	}
+	session := strings.TrimSpace(c.PathValue("session"))
+	if session == "" || strings.ContainsAny(session, `/\`) || strings.Contains(session, "..") {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid session id"})
+		return
+	}
+	var body struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	key := strings.TrimSpace(body.Key)
+	if key == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "key is required"})
+		return
+	}
+	// Only accept keys the active provider actually declares — a stray key would
+	// just sit in the store unread, but rejecting it surfaces FE/BE drift early.
+	providerType := strings.TrimSpace(c.Query("provider"))
+	if providerType == "" {
+		providerType = "wick"
+	}
+	if !overrideKeyKnown(providerType, key) {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "unknown override key: " + key})
+		return
+	}
+	wick.SetSessionOverride(session, key, body.Value)
+	values := wick.SessionOverrideValues(session)
+	c.JSON(http.StatusOK, map[string]any{"values": values})
+}
+
+// overrideKeyKnown reports whether key is a field the provider's override schema
+// declares.
+func overrideKeyKnown(providerType, key string) bool {
+	for _, f := range wick.SessionOverrideSchema(providerType) {
+		if f.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
 // getWickModelKey reveals a model's API key in plaintext for the curl
 // builder's "use real token" option. Admin-only, and deliberately scoped:
 // the admin is the one who entered this key, so returning it to them (never

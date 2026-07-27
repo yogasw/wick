@@ -48,6 +48,13 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 	defer close(p.engineDone)
 
+	// Drop any runtime session overrides (/thinking etc.) when this session's
+	// engine exits, so a re-created session reusing the same id starts from the
+	// configured baseline rather than inheriting a stale toggle.
+	if sid := sessionIDFromDir(opt.SessionDir); sid != "" {
+		defer ClearSessionOverride(sid)
+	}
+
 	emit := func(b []byte) {
 		if _, err := p.w.Write(append(b, '\n')); err != nil {
 			log.Debug().Err(err).Msg("wick.engine: pipe write failed (reader gone)")

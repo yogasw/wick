@@ -18,7 +18,6 @@ import (
 //	/thinking on         → enable (restore the configured effort, or default)
 //	/thinking off        → disable
 //	/thinking low|medium|high  → enable at that effort
-//	/thinking <N>        → enable with an explicit token budget
 //
 // Like /compact it tolerates a buffered "[system] …" turn the pool may prepend
 // (the real command must be the last non-empty line).
@@ -65,43 +64,39 @@ func parseThinkingCommand(userText string) (matched bool, arg string) {
 	return true, arg
 }
 
-// runThinkingCommand applies a /thinking command to the live engine state and
-// reports the result. It flips BOTH channels reasoning travels through:
-// e.reasoning (read by the OpenAI/Anthropic adapters) and the Gemini
-// ThinkingConfig on e.genCfg — so the toggle is honored whatever the model is.
-// The change persists for the rest of the session (until another /thinking).
+// runThinkingCommand applies a /thinking TEXT command (the manual-typing
+// fallback) by writing the SAME per-session override store the popover uses,
+// then reports the result. One source of truth: the engine reads the override
+// before every model call (effectiveReasoning), so this affects
+// OpenAI/Anthropic and Gemini alike. The change lasts the rest of the session
+// (until another /thinking or teardown). An effort budget typed as a number is
+// converted to the nearest effort tier since the override schema is effort-based.
 func (e *engine) runThinkingCommand(arg string) {
+	sid := e.wickSessionID
 	var msg string
 	switch arg {
 	case "off", "no", "false", "0":
-		e.applyReasoning(nil)
+		setThinkingValues(sid, false, "")
 		msg = "🧠 Thinking OFF — the model will answer without extended reasoning."
 	case "", "toggle":
-		// Bare /thinking flips the current state.
-		if e.reasoning != nil {
-			e.applyReasoning(nil)
+		// Bare /thinking flips the CURRENT effective state.
+		if e.effectiveReasoning() != nil {
+			setThinkingValues(sid, false, "")
 			msg = "🧠 Thinking OFF — the model will answer without extended reasoning."
 		} else {
 			r := e.reasoningForOn()
-			e.applyReasoning(r)
+			setThinkingValues(sid, true, r.Effort)
 			msg = "🧠 Thinking ON" + effortSuffix(r) + "."
 		}
 	case "on", "yes", "true", "1":
 		r := e.reasoningForOn()
-		e.applyReasoning(r)
+		setThinkingValues(sid, true, r.Effort)
 		msg = "🧠 Thinking ON" + effortSuffix(r) + "."
 	case "low", "medium", "high":
-		r := &ReasoningConfig{Effort: arg}
-		e.applyReasoning(r)
-		msg = "🧠 Thinking ON" + effortSuffix(r) + "."
+		setThinkingValues(sid, true, arg)
+		msg = "🧠 Thinking ON (effort: " + arg + ")."
 	default:
-		if n := atoiSafe(arg); n > 0 {
-			r := &ReasoningConfig{BudgetTokens: n}
-			e.applyReasoning(r)
-			msg = fmt.Sprintf("🧠 Thinking ON (budget %d tokens).", n)
-		} else {
-			msg = "Usage: /thinking [on|off|low|medium|high|<budget-tokens>] — no argument toggles."
-		}
+		msg = "Usage: /thinking [on|off|low|medium|high] — no argument toggles."
 	}
 	// Report as an assistant text turn so it lands in the transcript and the
 	// user sees the confirmation; no model call.
@@ -109,7 +104,28 @@ func (e *engine) runThinkingCommand(arg string) {
 	e.emit(doneLine(msg))
 }
 
-// reasoningForOn returns the request /thinking on should enable: the session's
+// effectiveReasoning resolves the reasoning to apply on the next model call: the
+// runtime /thinking override (popover or text command) wins over the configured
+// baseline. No override saved → the baseline (e.reasoning). Override OFF → nil.
+// Override ON without an effort → the baseline-or-default (reasoningForOn).
+func (e *engine) effectiveReasoning() *ReasoningConfig {
+	r, set := overrideReasoning(e.wickSessionID)
+	if !set {
+		return e.reasoning // no runtime override → configured baseline
+	}
+	if r != nil {
+		return r // ON with an explicit effort
+	}
+	// The override is set: either OFF (→ nil) or ON-without-effort. Distinguish
+	// by re-reading the flag; ON-without-effort falls back to the baseline/default.
+	o := overrideConfig(e.wickSessionID)
+	if !o.ThinkingOn {
+		return nil
+	}
+	return e.reasoningForOn()
+}
+
+// reasoningForOn returns the request "on" should enable: the session's
 // configured baseline if there was one, else a default-effort request.
 func (e *engine) reasoningForOn() *ReasoningConfig {
 	if e.defaultReasoning != nil {
@@ -118,25 +134,25 @@ func (e *engine) reasoningForOn() *ReasoningConfig {
 	return &ReasoningConfig{Effort: thinkingDefaultEffort}
 }
 
-// applyReasoning sets the live reasoning request AND mirrors it onto the Gemini
-// ThinkingConfig (the SDK adapter reads that, not e.reasoning). nil disables
-// both.
-func (e *engine) applyReasoning(r *ReasoningConfig) {
-	e.reasoning = r
-	if e.genCfg == nil {
-		e.genCfg = &genai.GenerateContentConfig{}
+// applyGeminiThinking mirrors a resolved reasoning request onto a genai config's
+// ThinkingConfig — the channel the Gemini SDK adapter reads (it doesn't see
+// LLMRequest.Reasoning). nil disables thinking (explicit zero budget). Applied
+// per-call on a cloned config so a runtime toggle is honored without mutating
+// the stored baseline.
+func applyGeminiThinking(cfg *genai.GenerateContentConfig, r *ReasoningConfig) {
+	if cfg == nil {
+		return
 	}
 	if r == nil {
-		// Explicit zero budget disables Gemini thinking.
 		zero := int32(0)
-		e.genCfg.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: false, ThinkingBudget: &zero}
+		cfg.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: false, ThinkingBudget: &zero}
 		return
 	}
 	budget := int32(r.BudgetTokens)
 	if budget <= 0 {
 		budget = int32(geminiThinkingBudgetForEffort(r.Effort))
 	}
-	e.genCfg.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true, ThinkingBudget: &budget}
+	cfg.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true, ThinkingBudget: &budget}
 }
 
 // geminiThinkingBudgetForEffort maps an effort level to a Gemini thinking
@@ -166,16 +182,4 @@ func effortSuffix(r *ReasoningConfig) string {
 		return fmt.Sprintf(" (budget %d tokens)", r.BudgetTokens)
 	}
 	return ""
-}
-
-// atoiSafe parses a positive integer, returning 0 on any non-numeric input.
-func atoiSafe(s string) int {
-	n := 0
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0
-		}
-		n = n*10 + int(c-'0')
-	}
-	return n
 }
