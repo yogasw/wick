@@ -48,12 +48,12 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 	defer close(p.engineDone)
 
-	// Drop any runtime session overrides (/thinking etc.) when this session's
-	// engine exits, so a re-created session reusing the same id starts from the
-	// configured baseline rather than inheriting a stale toggle.
-	if sid := sessionIDFromDir(opt.SessionDir); sid != "" {
-		defer ClearSessionOverride(sid)
-	}
+	// Session overrides (/thinking etc.) deliberately OUTLIVE this goroutine:
+	// they are persisted to the session's overrides.json sidecar and reloaded on
+	// the next spawn. Clearing them here used to mean an idle-reaped session lost
+	// the user's toggle with no visible cause ("refresh and thinking is off
+	// again"), since the engine exits long before the user comes back. A reset is
+	// now an explicit action (ClearSessionOverride) or session deletion.
 
 	emit := func(b []byte) {
 		if _, err := p.w.Write(append(b, '\n')); err != nil {

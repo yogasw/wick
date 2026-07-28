@@ -11,6 +11,8 @@ All notable changes to Wick are documented here.
 
 ### Fixed
 *   **`todo` tool over MCP + goal-only calls**: Todo calls arriving over MCP as `mcp__wick__todo` (e.g. from a channel session) are now recognized the same as a bare `todo` call — they merge into the checklist card and no longer leak into the trace as a raw tool card. Releasing the goal latch with `todo{goal_done:true}` and no `items` (as the wick engine instructs) is now accepted instead of rejected; `items` is only required when a call touches no goal field. The conversation UI also gains a goal banner (open/done/abandoned, with an optional note) shown alongside or instead of the checklist.
+*   **Gemini 3.x + `/thinking off`**: Toggling reasoning off used to send `thinkingBudget: 0` to every Gemini model, which the 3.x line rejects with `400 INVALID_ARGUMENT` (those models are thinking-always). Wick now omits `ThinkingConfig` instead for 3.x (and unrecognized) models, and only sends the zero budget on 2.x models that actually accept it. Note: on 3.x this means "off" isn't fully achievable — the model still thinks at its vendor default budget.
+*   **`/thinking` toggle no longer resets on idle/refresh**: Session overrides (the `/thinking` popover's on/off + effort level) were runtime-only and got dropped whenever the session's engine exited (e.g. an idle reap), which looked like the toggle silently reverting after a refresh. They're now persisted to an `overrides.json` sidecar in the session directory and survive engine exit, page refresh, and a wick restart; clearing them is now an explicit reset action rather than an implicit teardown step.
 
 ---
 
