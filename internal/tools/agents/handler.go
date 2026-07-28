@@ -26,12 +26,14 @@ import (
 	"github.com/yogasw/wick/internal/agents/preset"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/provider/sessionoverride"
 	wick "github.com/yogasw/wick/internal/agents/provider/wick"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	"github.com/yogasw/wick/internal/agents/registry"
 	"github.com/yogasw/wick/internal/agents/schedule"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/skills"
+	"github.com/yogasw/wick/internal/agents/storage"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
 	"github.com/yogasw/wick/internal/configs"
@@ -95,7 +97,23 @@ func SetPool(p *pool.Pool) { globalPool = p }
 func SetBroadcaster(b *Broadcaster) { globalBcast = b }
 
 // SetLayout wires in the on-disk layout used for direct file reads.
-func SetLayout(l agentconfig.Layout) { globalLayout = l }
+//
+// It also enables persistence for per-session provider overrides (the composer's
+// /thinking popover): the store needs a session-ID → dir resolver to find its
+// overrides.json sidecar, and this is the one place the layout is known. Without
+// it the store stays memory-only and a toggle dies with the engine goroutine.
+func SetLayout(l agentconfig.Layout) {
+	globalLayout = l
+	sessionoverride.SetSessionDirResolver(func(sessionID string) string {
+		if sessionID == "" || l == (agentconfig.Layout{}) {
+			return ""
+		}
+		if err := storage.ValidateSessionID(sessionID); err != nil {
+			return "" // never let a crafted id escape the sessions dir
+		}
+		return l.SessionDir(sessionID)
+	})
+}
 
 // SetSpawnLogger wires in the per-spawn jsonl writer/reader. The
 // Providers page reads from it via List + Read; the pool factory
