@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import type { ConversationTurn, LiveTurn, TypingState, TurnEvent } from "../types/agents.js";
   import { renderLive } from "../richRender.js";
-  import { mergeTodoItemsWithSteps, stripTodoBlocks } from "../todoGroups.js";
+  import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal, bareToolName } from "../todoGroups.js";
   import type { ThreadBlock } from "../types/agents.js";
   import ThreadMessage from "./ThreadMessage.svelte";
   import ToolCard from "./ToolCard.svelte";
@@ -38,7 +38,12 @@
   };
 
   function typingLabel(substate?: string, toolName?: string): string {
-    if (toolName) return TOOL_LABELS[toolName] ?? `running ${toolName}…`;
+    // Match on the bare name so MCP-namespaced calls (mcp__wick__todo)
+    // get their friendly label instead of "running mcp__wick__todo…".
+    if (toolName) {
+      const bare = bareToolName(toolName);
+      return TOOL_LABELS[bare] ?? `running ${bare}…`;
+    }
     if (!substate || substate === "thinking" || substate === "idle") return "thinking…";
     if (substate === "spawning") return "spawning…";
     // "running_tool" is the backend's generic lifecycle substate for "a tool
@@ -64,6 +69,7 @@
   // progress instead of a stacked card per call.
   const liveMergedTodoItems = $derived(mergeTodoItemsWithSteps(live?.blocks ?? []));
   const liveNonTodoBlocks = $derived(stripTodoBlocks(live?.blocks ?? []));
+  const liveTodoGoal = $derived(latestTodoGoal(live?.blocks ?? []));
 
   function findScrollParent(el: HTMLElement | null): HTMLElement | null {
     let node = el?.parentElement ?? null;
@@ -158,7 +164,7 @@
   {#if live}
     <div class="flex justify-start">
       <div class="flex flex-col gap-1.5 max-w-[92%] min-w-0">
-        {#if liveMergedTodoItems.length > 0}
+        {#if liveMergedTodoItems.length > 0 || liveTodoGoal}
           <!-- Always shown regardless of liveTraceOpen — the todo card is
                task PROGRESS, not raw trace detail, so collapsing the trace
                must not hide it. currentActivity (what's running right now)
@@ -167,6 +173,7 @@
                trace never loses "what's happening" — see typing.active. -->
           <TodoCard
             items={liveMergedTodoItems}
+            goal={liveTodoGoal}
             currentActivity={typing.active ? typingLabel(typing.substate, typing.toolName) : undefined}
           />
         {/if}

@@ -85,9 +85,56 @@ func TestThinkingSetEffort(t *testing.T) {
 		t.Fatalf("effort not set: %+v", r)
 	}
 	cfg := &genai.GenerateContentConfig{}
-	applyGeminiThinking(cfg, r)
+	applyGeminiThinking(cfg, "gemini-2.5-flash", r)
 	if tc := cfg.ThinkingConfig; tc == nil || !tc.IncludeThoughts || tc.ThinkingBudget == nil || *tc.ThinkingBudget != int32(geminiThinkingBudgetForEffort("low")) {
 		t.Fatalf("Gemini budget not mirrored for low effort: %+v", cfg.ThinkingConfig)
+	}
+}
+
+// Thinking-off must be encoded per model generation. Gemini 2.x takes an
+// explicit zero budget; 3.x rejects a zero budget outright (400
+// INVALID_ARGUMENT, empty Details) because it is thinking-always, so the config
+// must carry no ThinkingConfig at all.
+func TestApplyGeminiThinkingOffPerGeneration(t *testing.T) {
+	cases := []struct {
+		model      string
+		wantZeroed bool // true → explicit budget 0; false → ThinkingConfig omitted
+	}{
+		{"gemini-2.5-flash", true},
+		{"gemini-2.0-flash", true},
+		{"models/gemini-2.5-pro", true},
+		{"gemini-3.5-flash-lite", false},
+		{"gemini-3.6-flash", false},
+		{"models/gemini-3-pro-preview", false},
+		{"some-future-model", false}, // unknown → omit (safe default)
+	}
+	for _, c := range cases {
+		cfg := &genai.GenerateContentConfig{}
+		applyGeminiThinking(cfg, c.model, nil)
+		if c.wantZeroed {
+			tc := cfg.ThinkingConfig
+			if tc == nil || tc.ThinkingBudget == nil || *tc.ThinkingBudget != 0 || tc.IncludeThoughts {
+				t.Errorf("%s: want explicit zero budget, got %+v", c.model, tc)
+			}
+			continue
+		}
+		if cfg.ThinkingConfig != nil {
+			t.Errorf("%s: want ThinkingConfig omitted (zero budget is a 400), got %+v",
+				c.model, cfg.ThinkingConfig)
+		}
+	}
+}
+
+// A stale zero budget left on the config by applyGenConfig must be cleared for
+// 3.x — otherwise the merged config still ships thinkingBudget=0 and 400s.
+func TestApplyGeminiThinkingClearsStaleZeroBudget(t *testing.T) {
+	zero := int32(0)
+	cfg := &genai.GenerateContentConfig{
+		ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: &zero},
+	}
+	applyGeminiThinking(cfg, "gemini-3.5-flash-lite", nil)
+	if cfg.ThinkingConfig != nil {
+		t.Fatalf("stale zero budget not cleared for 3.x: %+v", cfg.ThinkingConfig)
 	}
 }
 

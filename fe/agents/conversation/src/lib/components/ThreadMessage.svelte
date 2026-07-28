@@ -3,7 +3,7 @@
   import { renderMarkdown, linkifyText } from "../markdown.js";
   import { turnTime, parseEventTime } from "../timeFormat.js";
   import { enrich } from "../richRender.js";
-  import { mergeTodoItemsWithSteps, stripTodoBlocks } from "../todoGroups.js";
+  import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal } from "../todoGroups.js";
   import ToolCard from "./ToolCard.svelte";
   import TodoCard from "./TodoCard.svelte";
   import ArtifactGallery from "./ArtifactGallery.svelte";
@@ -160,6 +160,9 @@
   // trace below since this merged widget replaces them.
   const mergedTodoItems = $derived(mergeTodoItemsWithSteps(traceBlocks));
   const nonTodoBlocks = $derived(stripTodoBlocks(traceBlocks));
+  // Goal mode is optional and independent of the checklist — a turn can
+  // report a goal with no items at all, so the card renders for either.
+  const todoGoal = $derived(latestTodoGoal(traceBlocks));
 
   async function toggleTrace() {
     if (traceOpen) {
@@ -292,12 +295,13 @@
     <div class="flex flex-col gap-1.5 w-full max-w-full min-w-0">
       {#if showTraceToggle}
         <div class="flex flex-col gap-1">
-          {#if mergedTodoItems.length > 0}
+          {#if mergedTodoItems.length > 0 || todoGoal}
             <!-- Task progress, not raw trace detail — shown regardless of
                  traceOpen so collapsing the trace never hides "what was
                  done" (this turn is already finished, so there's no
-                 currentActivity to show, unlike the live turn). -->
-            <TodoCard items={mergedTodoItems} />
+                 currentActivity to show, unlike the live turn). Also
+                 renders for a goal-only turn, which has no items. -->
+            <TodoCard items={mergedTodoItems} goal={todoGoal} />
           {/if}
           <button
             type="button"

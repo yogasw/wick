@@ -86,7 +86,8 @@ func SessionOverrideSchema(providerType string) []entity.Config {
 }
 
 // SessionOverrideValues / SetSessionOverride / ClearSessionOverride wrap the
-// registry store for the handler + teardown.
+// registry store for the handler. Values are persisted per-session
+// (overrides.json), so Clear is an explicit reset — NOT a teardown step.
 func SessionOverrideValues(sessionID string) map[string]string {
 	return sessionoverride.Values(sessionID)
 }
