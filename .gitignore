@@ -98,3 +98,4 @@ vite.config.ts.timestamp-*
 /plugin-keygen
 
 /test.py
+/test.go
