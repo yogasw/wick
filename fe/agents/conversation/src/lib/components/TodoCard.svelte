@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { TodoItemWithSteps, TodoSubstep } from "../todoGroups.js";
+  import type { TodoItemWithSteps, TodoGoal, TodoSubstep } from "../todoGroups.js";
   import { todoProgress, itemLabel } from "../todoGroups.js";
   import ToolCard from "./ToolCard.svelte";
 
@@ -9,8 +9,12 @@
         shown inline under the in_progress item instead of as a separate
         floating indicator — only meaningful for the LIVE turn. */
     currentActivity?: string;
+    /** Latest goal latch state, when the turn used goal mode. Rendered as
+        a banner above the checklist — a goal-only turn has no items at
+        all, so this is the only thing the card shows. */
+    goal?: TodoGoal | null;
   };
-  let { items, currentActivity }: Props = $props();
+  let { items, currentActivity, goal }: Props = $props();
 
   const plainItems = $derived(items.map((s) => s.item));
   const progress = $derived(todoProgress(plainItems));
@@ -85,6 +89,48 @@
     </svg>
   </button>
   {#if !collapsed}
+    {#if goal}
+      <div class="border-t border-white-300 dark:border-navy-600 px-3 py-2 flex items-start gap-2">
+        {#if goal.status === "done"}
+          <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 mt-0.5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="8" cy="8" r="6"></circle>
+            <path d="M5.5 8l1.8 1.8L10.5 6" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        {:else if goal.status === "abandoned"}
+          <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 mt-0.5 text-black-500 dark:text-black-600" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="8" cy="8" r="6"></circle>
+            <path d="M6 6l4 4M10 6l-4 4" stroke-linecap="round"></path>
+          </svg>
+        {:else}
+          <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 mt-0.5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="8" cy="8" r="6"></circle>
+            <circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"></circle>
+          </svg>
+        {/if}
+        <span class="flex-1 min-w-0">
+          <span class="flex items-center gap-1.5">
+            <span class="text-[10px] font-medium uppercase tracking-wide text-black-500 dark:text-black-600">goal</span>
+            <span
+              class="text-[10px] font-medium {goal.status === 'done'
+                ? 'text-green-600 dark:text-green-400'
+                : goal.status === 'abandoned'
+                  ? 'text-black-500 dark:text-black-600'
+                  : 'text-black-600 dark:text-black-700'}"
+            >{goal.status === "open" ? "in progress" : goal.status}</span>
+          </span>
+          {#if goal.goal}
+            <span
+              class="mt-0.5 block break-words {goal.status === 'abandoned'
+                ? 'text-black-500 dark:text-black-600 line-through'
+                : 'text-black-900 dark:text-white-100'}"
+            >{goal.goal}</span>
+          {/if}
+          {#if goal.note}
+            <span class="mt-0.5 block text-[11px] italic text-black-600 dark:text-black-700 break-words">{goal.note}</span>
+          {/if}
+        </span>
+      </div>
+    {/if}
     {#if items.length > 0}
       <div class="border-t border-white-300 dark:border-navy-600 px-3 pt-2 flex items-center gap-2">
         <div class="h-1.5 flex-1 rounded-full bg-white-300 dark:bg-navy-600 overflow-hidden">
@@ -207,7 +253,7 @@
           </li>
         {/each}
       </ul>
-    {:else}
+    {:else if !goal}
       <div class="border-t border-white-300 dark:border-navy-600">
         <p class="px-3 py-2 text-black-500 dark:text-black-600 italic">no items</p>
       </div>

@@ -253,7 +253,8 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"properties": map[string]any{
 					"items": map[string]any{
 						"type":        "array",
-						"description": "The full task list, in order.",
+						"description": "The full task list, in order. Required unless this call only touches the " +
+							"goal latch (goal / goal_done / goal_abandon), which needs no checklist.",
 						"items": map[string]any{
 							"type": "object",
 							"properties": map[string]any{
@@ -319,7 +320,10 @@ func MetaToolDescriptors() []ToolDescriptor {
 							"wick agent (resolved automatically there via X-Wick-Session-Id).",
 					},
 				},
-				"required": []string{"items"},
+				// No "required" — a goal-only call (goal_done:true and nothing
+				// else) is legal, and the engine explicitly asks the model for
+				// exactly that. The handler still rejects a call with neither
+				// items nor a goal field.
 			},
 			Annotations: &ToolAnnotation{
 				Title:        "Update task list",

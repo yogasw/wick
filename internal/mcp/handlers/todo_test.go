@@ -144,6 +144,48 @@ func TestWickTodo_GoalOpenWritesLatch(t *testing.T) {
 	}
 }
 
+// The wick engine tells the model to release the latch with
+// todo{goal_done:true} and nothing else, so a goal-only call must be
+// accepted rather than rejected for a missing checklist.
+func TestWickTodo_GoalOnlyCallNeedsNoItems(t *testing.T) {
+	dir := t.TempDir()
+	layout := agentconfig.NewLayout(dir)
+	sid := "s1"
+	_ = session.OpenGoal(layout, sid, "x", "")
+	req := httptest.NewRequest("POST", "/mcp", nil)
+	req.Header.Set("X-Wick-Session-Id", sid)
+	var got ToolCallResult
+	WickTodo(httptest.NewRecorder(), req, RPCRequest{}, captureResponder(t, &got), layout, map[string]any{
+		"goal_done": true,
+		"note":      "found them",
+	})
+	if got.IsError {
+		t.Fatalf("goal-only call must be accepted, got %+v", got)
+	}
+	if session.HasOpenGoal(layout, sid) {
+		t.Fatal("expected goal closed")
+	}
+	text := got.Content[0].Text
+	if !strings.Contains(text, "[goal] DONE") {
+		t.Errorf("expected DONE marker, got %q", text)
+	}
+	// No checklist was sent — don't report an empty one.
+	if strings.Contains(text, "done)") {
+		t.Errorf("expected no (n/n done) count for a goal-only call, got %q", text)
+	}
+	if strings.HasPrefix(text, "\n") {
+		t.Errorf("expected no leading newline, got %q", text)
+	}
+}
+
+// Neither a checklist nor a goal field — still an error.
+func TestWickTodo_EmptyCallRejected(t *testing.T) {
+	got := callWickTodo(t, map[string]any{})
+	if !got.IsError {
+		t.Fatalf("expected error for a call with neither items nor goal, got %+v", got)
+	}
+}
+
 func TestWickTodo_GoalDoneReleases(t *testing.T) {
 	dir := t.TempDir()
 	layout := agentconfig.NewLayout(dir)

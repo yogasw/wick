@@ -537,7 +537,7 @@ func (e *engine) generateAttempt(ctx context.Context, kind string, attempt int, 
 	// toggle takes effect on the very next model call.
 	reasoning := e.effectiveReasoning()
 	cfg := e.effectiveConfig()
-	applyGeminiThinking(cfg, reasoning)
+	applyGeminiThinking(cfg, e.modelName, reasoning)
 	req := &LLMRequest{
 		Model:     e.modelName,
 		Contents:  e.history,

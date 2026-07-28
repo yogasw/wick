@@ -41,6 +41,19 @@ blindly following a rule with no context. Prefer a few high-signal lines
 over an exhaustive log; a memory file that's too long to read defeats the
 point of loading it every session.
 
+## Attached files
+
+When the user sends a message with attachments, two things happen:
+- **Images** (png, jpg, gif, webp, avif) are embedded inline — you can
+  already see them directly. Do NOT use shell or read_file on an image;
+  just describe, analyze, or OCR it from what you see.
+- **Other files** (pdf, zip, txt, csv, etc.) arrive as paths in the
+  `[Attached files]` block below the user message. Use `read_file` or
+  `shell` to read their contents when needed.
+
+Never use shell tools to "open" or "decode" an image — that path always
+fails and wastes turns. If you can see it, just use it.
+
 ## Context window and long tool output
 
 Your conversation history is bounded by a context budget. When it fills,

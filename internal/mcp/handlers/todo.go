@@ -47,7 +47,17 @@ func WickTodo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 	}
 	raw, _ := json.Marshal(args)
 	var in input
-	if err := json.Unmarshal(raw, &in); err != nil || len(in.Items) == 0 {
+	if err := json.Unmarshal(raw, &in); err != nil {
+		rsp.ToolError(w, req.ID, "items must be a non-empty array of {title, status}", "todo")
+		return
+	}
+	// A goal-only call is legal: the engine tells the model to release the
+	// latch with todo{goal_done:true} and nothing else (see
+	// internal/agents/provider/wick/engine.go), so requiring items here
+	// would reject the exact call we asked for. Items are still required
+	// when the call touches no goal field at all.
+	goalOnly := strings.TrimSpace(in.Goal) != "" || in.GoalDone || in.GoalAbandon
+	if len(in.Items) == 0 && !goalOnly {
 		rsp.ToolError(w, req.ID, "items must be a non-empty array of {title, status}", "todo")
 		return
 	}
@@ -78,13 +88,16 @@ func WickTodo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 			fmt.Fprintf(&sb, "    %s %s\n", mark(sub.Status), sub.Step)
 		}
 	}
-	fmt.Fprintf(&sb, "(%d/%d done)", done, len(in.Items))
+	// Goal-only calls have no checklist to summarize — "(0/0 done)" would
+	// read as an empty task list rather than "this call was about the goal".
+	if len(in.Items) > 0 {
+		fmt.Fprintf(&sb, "(%d/%d done)", done, len(in.Items))
+	}
 
 	// Goal latch — optional. All providers write the same file; only the
 	// wick engine force-continues while open. Resolve session id the same
 	// way connector tools do (arg, then header).
-	wantGoal := strings.TrimSpace(in.Goal) != "" || in.GoalDone || in.GoalAbandon
-	if wantGoal {
+	if goalOnly {
 		sid := strings.TrimSpace(in.SessionID)
 		if sid == "" && r != nil {
 			sid = strings.TrimSpace(r.Header.Get("X-Wick-Session-Id"))
@@ -119,7 +132,10 @@ func WickTodo(w http.ResponseWriter, r *http.Request, req RPCRequest, rsp Respon
 		}
 	}
 
+	// TrimSpace because the goal lines are written with a leading "\n" to
+	// separate them from the checklist; without a checklist that would
+	// leave the reply starting on a blank line.
 	rsp.WriteResult(w, req.ID, ToolCallResult{
-		Content: []ToolContent{{Type: "text", Text: sb.String()}},
+		Content: []ToolContent{{Type: "text", Text: strings.TrimSpace(sb.String())}},
 	})
 }

@@ -88,3 +88,52 @@ describe("TodoCard", () => {
     expect(screen.queryByText("a")).toBeNull();
   });
 });
+
+/* ── goal mode ────────────────────────────────────────────────────────
+   Goal mode is independent of the checklist: a turn can report a goal
+   latch with no items at all (todo{goal_done:true}), so the card must
+   render for the goal alone. */
+describe("TodoCard goal banner", () => {
+  test("renders the goal criterion and an in-progress state when open", () => {
+    render(TodoCard, {
+      props: { items: [], goal: { status: "open", goal: "find 3 houses under $400k" } },
+    });
+    expect(screen.getByText("find 3 houses under $400k")).toBeDefined();
+    expect(screen.getByText("in progress")).toBeDefined();
+  });
+
+  test("a goal-only card does not show the 'no items' fallback", () => {
+    render(TodoCard, { props: { items: [], goal: { status: "done", goal: "x" } } });
+    expect(screen.queryByText("no items")).toBeNull();
+  });
+
+  test("shows a done state and the note", () => {
+    render(TodoCard, {
+      props: { items: [], goal: { status: "done", goal: "find them", note: "found 3" } },
+    });
+    expect(screen.getByText("done")).toBeDefined();
+    expect(screen.getByText("found 3")).toBeDefined();
+  });
+
+  test("shows an abandoned state", () => {
+    render(TodoCard, { props: { items: [], goal: { status: "abandoned", goal: "give up" } } });
+    expect(screen.getByText("abandoned")).toBeDefined();
+  });
+
+  test("renders the goal alongside a checklist when the turn has both", () => {
+    render(TodoCard, {
+      props: {
+        items: withSteps([{ step: "step a", status: "completed" }]),
+        goal: { status: "open", goal: "the goal" },
+      },
+    });
+    expect(screen.getByText("the goal")).toBeDefined();
+    expect(screen.getByText("step a")).toBeDefined();
+    expect(screen.getByText("1/1 done")).toBeDefined();
+  });
+
+  test("no goal banner when goal is null", () => {
+    render(TodoCard, { props: { items: withSteps([{ step: "a", status: "pending" }]), goal: null } });
+    expect(screen.queryByText("goal")).toBeNull();
+  });
+});

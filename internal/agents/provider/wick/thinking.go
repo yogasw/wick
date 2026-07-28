@@ -136,14 +136,24 @@ func (e *engine) reasoningForOn() *ReasoningConfig {
 
 // applyGeminiThinking mirrors a resolved reasoning request onto a genai config's
 // ThinkingConfig — the channel the Gemini SDK adapter reads (it doesn't see
-// LLMRequest.Reasoning). nil disables thinking (explicit zero budget). Applied
-// per-call on a cloned config so a runtime toggle is honored without mutating
-// the stored baseline.
-func applyGeminiThinking(cfg *genai.GenerateContentConfig, r *ReasoningConfig) {
+// LLMRequest.Reasoning). nil disables thinking. Applied per-call on a cloned
+// config so a runtime toggle is honored without mutating the stored baseline.
+//
+// model is needed because "thinking off" is not encodable the same way on every
+// generation: 2.5 accepts thinkingBudget=0, but the 3.x models are
+// thinking-always and reject a zero budget with a bare
+// "400 INVALID_ARGUMENT / Request contains an invalid argument" (empty Details).
+// For those we omit ThinkingConfig entirely and let the vendor default stand —
+// the closest honest approximation of "off" the API allows.
+func applyGeminiThinking(cfg *genai.GenerateContentConfig, model string, r *ReasoningConfig) {
 	if cfg == nil {
 		return
 	}
 	if r == nil {
+		if !geminiSupportsThinkingOff(model) {
+			cfg.ThinkingConfig = nil
+			return
+		}
 		zero := int32(0)
 		cfg.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: false, ThinkingBudget: &zero}
 		return
@@ -153,6 +163,24 @@ func applyGeminiThinking(cfg *genai.GenerateContentConfig, r *ReasoningConfig) {
 		budget = int32(geminiThinkingBudgetForEffort(r.Effort))
 	}
 	cfg.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true, ThinkingBudget: &budget}
+}
+
+// geminiSupportsThinkingOff reports whether a Gemini model accepts
+// thinkingBudget=0 ("never think"). The 2.x line does; the 3.x line is
+// thinking-always and returns 400 INVALID_ARGUMENT for a zero budget, so
+// callers must omit ThinkingConfig instead. Verified against the live v1beta
+// API: gemini-3.5-flash-lite and gemini-3.6-flash both reject budget=0 and
+// accept -1 (dynamic) or any positive budget.
+//
+// Unknown/new model ids are treated as NOT supporting a zero budget: omitting
+// ThinkingConfig degrades to the vendor default, whereas a wrong zero budget is
+// a hard request failure. Fail toward the request that works.
+func geminiSupportsThinkingOff(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	// Strip a "models/" prefix so both "gemini-2.5-flash" and
+	// "models/gemini-2.5-flash" classify the same.
+	m = strings.TrimPrefix(m, "models/")
+	return strings.HasPrefix(m, "gemini-2.")
 }
 
 // geminiThinkingBudgetForEffort maps an effort level to a Gemini thinking
