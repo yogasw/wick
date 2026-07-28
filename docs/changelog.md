@@ -6,7 +6,8 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **`playwright_browser`: default profile for live sessions**: Two new instance configs make a named profile the default instead of an opt-in. `DefaultProfile` sets the profile used when `session_open` is called with no `profile` argument (an explicit argument still wins); `ForceDefaultProfile` pins *every* session to `DefaultProfile`, ignoring any `profile` argument passed in. Turning on `ForceDefaultProfile` without a `DefaultProfile` set fails at `session_open` with a clear error. Connector bumped to 0.9.0. See [Playwright Browser ▶ Making a profile the default](/connectors/playwright_browser#making-a-profile-the-default).
 
 ---
 
