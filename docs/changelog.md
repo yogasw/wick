@@ -6,15 +6,25 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.35.3](https://github.com/yogasw/wick/compare/v0.35.2...v0.35.3) — Features & Fixes
+
+_Released on 2026-07-28_
+
 ### Added
 *   **`playwright_browser`: default profile for live sessions**: Two new instance configs make a named profile the default instead of an opt-in. `DefaultProfile` sets the profile used when `session_open` is called with no `profile` argument (an explicit argument still wins); `ForceDefaultProfile` pins *every* session to `DefaultProfile`, ignoring any `profile` argument passed in. Turning on `ForceDefaultProfile` without a `DefaultProfile` set fails at `session_open` with a clear error. Connector bumped to 0.9.0. See [Playwright Browser ▶ Making a profile the default](/connectors/playwright_browser#making-a-profile-the-default).
 
 ### Fixed
-*   **`todo` tool over MCP + goal-only calls**: Todo calls arriving over MCP as `mcp__wick__todo` (e.g. from a channel session) are now recognized the same as a bare `todo` call — they merge into the checklist card and no longer leak into the trace as a raw tool card. Releasing the goal latch with `todo{goal_done:true}` and no `items` (as the wick engine instructs) is now accepted instead of rejected; `items` is only required when a call touches no goal field. The conversation UI also gains a goal banner (open/done/abandoned, with an optional note) shown alongside or instead of the checklist.
-*   **Gemini 3.x + `/thinking off`**: Toggling reasoning off used to send `thinkingBudget: 0` to every Gemini model, which the 3.x line rejects with `400 INVALID_ARGUMENT` (those models are thinking-always). Wick now omits `ThinkingConfig` instead for 3.x (and unrecognized) models, and only sends the zero budget on 2.x models that actually accept it. Note: on 3.x this means "off" isn't fully achievable — the model still thinks at its vendor default budget.
-*   **`/thinking` toggle no longer resets on idle/refresh**: Session overrides (the `/thinking` popover's on/off + effort level) were runtime-only and got dropped whenever the session's engine exited (e.g. an idle reap), which looked like the toggle silently reverting after a refresh. They're now persisted to an `overrides.json` sidecar in the session directory and survive engine exit, page refresh, and a wick restart; clearing them is now an explicit reset action rather than an implicit teardown step.
+*   **`todo` tool over MCP + goal-only calls**: Todo calls arriving over MCP as `mcp__wick__todo` are now recognized and merge into the checklist card, no longer leaking into the trace as raw tool cards. The conversation UI also gains a goal banner (open/done/abandoned, with an optional note) shown alongside or instead of the checklist. Releasing the goal latch with `todo{goal_done:true}` and no `items` is now accepted (the `items` array is only required when a call touches no goal field), and goal-only calls mid-checklist now preserve the active item attribution.
+*   **Gemini 3.x + `/thinking off`**: Toggling reasoning off used to send `thinkingBudget: 0`, which Gemini 3.x models reject with `400 INVALID_ARGUMENT`. Wick now omits `ThinkingConfig` for 3.x (and unrecognized) models, degrading to the vendor default budget instead of failing. Zero budget is still sent only on 2.x models that accept it. Note: on 3.x this means "off" isn't fully achievable — the model still thinks at its vendor default budget.
+*   **`/thinking` toggle no longer resets on idle/refresh**: Session overrides (the `/thinking` popover's on/off + effort level) were runtime-only and dropped on engine exit. They are now persisted to an `overrides.json` sidecar in the session directory, surviving engine exit, page refresh, and Wick restarts; clearing them is now an explicit reset action.
+*   **Agent misinterpreting attached images**: Updated system prompt documentation now clarifies that attached images are already inline and visible, preventing agents from attempting to "open" or "decode" them using `shell/read_file`.
 
 ---
+
 
 ## [v0.35.2](https://github.com/yogasw/wick/compare/v0.35.1...v0.35.2) — Wick Provider
 
