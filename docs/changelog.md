@@ -9,6 +9,9 @@ All notable changes to Wick are documented here.
 ### Added
 *   **`playwright_browser`: default profile for live sessions**: Two new instance configs make a named profile the default instead of an opt-in. `DefaultProfile` sets the profile used when `session_open` is called with no `profile` argument (an explicit argument still wins); `ForceDefaultProfile` pins *every* session to `DefaultProfile`, ignoring any `profile` argument passed in. Turning on `ForceDefaultProfile` without a `DefaultProfile` set fails at `session_open` with a clear error. Connector bumped to 0.9.0. See [Playwright Browser ▶ Making a profile the default](/connectors/playwright_browser#making-a-profile-the-default).
 
+### Fixed
+*   **`todo` tool over MCP + goal-only calls**: Todo calls arriving over MCP as `mcp__wick__todo` (e.g. from a channel session) are now recognized the same as a bare `todo` call — they merge into the checklist card and no longer leak into the trace as a raw tool card. Releasing the goal latch with `todo{goal_done:true}` and no `items` (as the wick engine instructs) is now accepted instead of rejected; `items` is only required when a call touches no goal field. The conversation UI also gains a goal banner (open/done/abandoned, with an optional note) shown alongside or instead of the checklist.
+
 ---
 
 ## [v0.35.2](https://github.com/yogasw/wick/compare/v0.35.1...v0.35.2) — Wick Provider
