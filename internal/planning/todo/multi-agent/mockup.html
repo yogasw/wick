@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-Agent — Visual Design</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root {
+    --green-200:#D1ECE5; --green-500:#27B199; --green-600:#288372; --green-700:#24584E; --green-800:#1B312C;
+    --navy-500:#01416C; --navy-600:#103352; --navy-700:#14263A; --navy-800:#121923;
+    --black-600:#BFBFBF; --black-700:#A0A0A0; --black-800:#565656; --black-900:#0A0A0A;
+    --white-100:#FFFFFF; --white-200:#FAFAFA; --white-300:#ECECEC; --white-400:#DFDFDF;
+    --pos-100:#E3F3EF; --pos-400:#288C7A; --cau-100:#FBF1DD; --cau-400:#D78E08;
+    --neg-100:#FCE7E2; --neg-400:#EB5757; --prog-100:#EEFAFE; --prog-400:#56CCF2;
+  }
+  body { font-family:'Inter',system-ui,sans-serif; background:var(--white-200); color:var(--black-900); }
+  pre,code,.mono { font-family:'JetBrains Mono','Consolas',monospace; }
+
+  .card     { background:var(--white-100); border:1px solid var(--white-300); border-radius:12px; }
+  .card-sub { background:var(--white-200); border:1px solid var(--white-300); border-radius:8px; }
+
+  .chip      { display:inline-flex; align-items:center; gap:5px; padding:3px 9px; border-radius:999px; font-size:11px; font-weight:600; }
+  .chip-run  { background:var(--pos-100); color:var(--pos-400); border:1px solid var(--pos-400); }
+  .chip-idle { background:var(--cau-100); color:var(--cau-400); border:1px solid var(--cau-400); }
+  .chip-spawn{ background:var(--prog-100); color:var(--prog-400); border:1px solid var(--prog-400); }
+  .chip-bad  { background:var(--neg-100); color:var(--neg-400); border:1px solid var(--neg-400); }
+  .chip-muted{ background:var(--white-300); color:var(--black-800); border:1px solid var(--white-400); }
+
+  .badge      { display:inline-block; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
+  .badge-prov { background:var(--green-200); color:var(--green-700); }
+  .badge-img  { background:var(--prog-100); color:var(--navy-500); border:1px solid var(--prog-400); }
+  .badge-new  { background:var(--green-200); color:var(--green-700); }
+  .badge-text { background:var(--white-300); color:var(--black-800); }
+
+  .btn-ghost  { background:var(--white-100); color:var(--black-900); border:1px solid var(--white-400);
+                display:inline-flex; align-items:center; gap:6px; border-radius:8px; font-weight:600; cursor:pointer; }
+  .btn-stop   { background:var(--neg-100); color:var(--neg-400); border:1px solid var(--neg-400); padding:3px 8px; font-size:11px; border-radius:6px; font-weight:600; cursor:pointer; }
+
+  .label     { font-size:12px; font-weight:600; color:var(--black-800); margin-bottom:4px; display:block; }
+  .input     { width:100%; padding:8px 12px; border:1px solid var(--white-400); border-radius:8px; font-size:13px;
+               background:var(--white-100); color:var(--black-900); font-family:inherit; }
+  .helper    { font-size:11px; color:var(--black-800); margin-top:4px; }
+  .section-h { font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--black-800); }
+
+  .ftab      { background:transparent; color:var(--black-800); border:none; border-bottom:3px solid transparent; padding:10px 13px; font-size:13px; font-weight:600; cursor:pointer; text-decoration:none; display:inline-block; }
+  .ftab:hover{ color:var(--green-600); }
+  .ftab-on   { color:var(--green-600); border-bottom-color:var(--green-500); }
+  main section { scroll-margin-top:60px; }
+
+  .shell     { border:1px solid var(--white-400); border-radius:12px; overflow:hidden; background:var(--white-100); }
+  .shell-bar { background:var(--white-200); border-bottom:1px solid var(--white-300); padding:7px 12px; font-size:11px; color:var(--black-800); display:flex; align-items:center; gap:8px; }
+
+  /* ── right rail: vertical tabs, mirrors DetailView.svelte ── */
+  .rail      { background:var(--navy-800); display:flex; flex-direction:column; align-items:center; gap:3px; padding:8px 0; width:46px; flex-shrink:0; }
+  .rtab      { writing-mode:vertical-rl; text-orientation:mixed; transform:rotate(180deg);
+               color:var(--black-600); font-size:11px; font-weight:600; padding:11px 6px; border-radius:7px;
+               cursor:pointer; position:relative; }
+  .rtab-on   { background:var(--navy-700); color:var(--green-500); }
+  .rbadge    { position:absolute; bottom:-3px; left:50%; transform:translateX(-50%) rotate(180deg);
+               background:var(--green-500); color:var(--white-100); font-size:8.5px; font-weight:700;
+               border-radius:999px; padding:1px 4px; writing-mode:horizontal-tb; }
+  .rpanel    { background:var(--white-100); border-left:1px solid var(--white-300); flex-shrink:0; }
+
+  .sub-row   { display:flex; align-items:center; gap:6px; padding:6px 8px; border-radius:7px; font-size:11.5px; cursor:pointer;
+               border:1px solid transparent; }
+  .sub-row:hover { background:var(--white-200); }
+  .sub-on    { background:var(--prog-100); border-color:var(--prog-400); font-weight:600; }
+  .sub-d2    { margin-left:14px; border-left:2px solid var(--white-400); padding-left:9px; border-radius:0 7px 7px 0; }
+
+  .crumb     { font-size:12px; color:var(--black-800); }
+  .crumb b   { color:var(--black-900); }
+
+  .msg-user  { background:var(--prog-100); border:1px solid var(--prog-400); border-radius:10px; padding:8px 12px; font-size:12.5px; }
+  .msg-bot   { background:var(--white-200); border:1px solid var(--white-300); border-radius:10px; padding:8px 12px; font-size:12.5px; }
+  .tool-call { background:var(--navy-700); color:var(--white-100); border-radius:8px; padding:6px 10px; font-size:11.5px; }
+
+  .dcard     { border:1px solid var(--white-400); border-radius:9px; padding:8px 10px; background:var(--white-100);
+               display:flex; align-items:center; gap:9px; font-size:12px; }
+
+  .imgcard  { border:1px solid var(--white-400); border-radius:9px; overflow:hidden; background:var(--white-100); }
+  .imgthumb { aspect-ratio:1/1; display:flex; align-items:center; justify-content:center; font-size:10px; text-align:center; padding:6px;
+              background:linear-gradient(135deg,var(--navy-700),var(--green-700)); color:var(--white-100); }
+
+  .reject   { background:var(--neg-100); border:1px solid var(--neg-400); border-radius:8px; padding:8px 10px; font-size:12px; }
+  .accept   { background:var(--pos-100); border:1px solid var(--pos-400); border-radius:8px; padding:8px 10px; font-size:12px; }
+  .note     { background:var(--cau-100); border:1px solid var(--cau-400); border-radius:8px; padding:8px 10px; font-size:12px; }
+  .flow-box { background:var(--white-100); border:1px solid var(--white-400); border-radius:8px; padding:7px 10px; font-size:11.5px; }
+  .arrow    { color:var(--black-700); font-size:15px; text-align:center; }
+  .spin     { display:inline-block; width:9px; height:9px; border:2px solid var(--pos-400); border-top-color:transparent; border-radius:999px; animation:s .7s linear infinite; }
+  @keyframes s { to { transform:rotate(360deg) } }
+  .tbl th   { font-weight:600; color:var(--black-800); text-align:left; padding:8px 14px 8px 0; }
+  .tbl td   { padding:9px 14px 9px 0; vertical-align:top; }
+  .tbl tr+tr td { border-top:1px solid var(--white-300); }
+</style>
+</head>
+<body>
+
+<header class="max-w-7xl mx-auto px-6 pt-10 pb-4">
+  <div class="flex items-center gap-3 mb-2 flex-wrap">
+    <h1 class="text-2xl font-bold">Multi-Agent</h1>
+    <span class="badge badge-new">Proposal</span>
+    <span class="badge badge-text">Fase 1</span>
+  </div>
+  <p class="text-sm" style="color:var(--black-800)">
+    Sub-agent delegation + rail UI + interrupt. Sub-agent = <strong>satu tab di rail kanan</strong>,
+    bukan nested penuh di transcript. Main thread cuma <strong>kartu hasil ringkas</strong>.
+  </p>
+  <p class="text-xs mt-2" style="color:var(--black-800)">
+    Paired doc: <code class="mono">design.md</code> — update keduanya barengan.
+  </p>
+  <div class="note mt-3">
+    <strong>Konsolidasi 2026-07-29:</strong> dokumen ini menggabungkan
+    <code class="mono">sub-agent-delegation/</code> + <code class="mono">multi-agent-rail/</code> jadi satu.
+    Rencana awal "pohon delegasi <strong>nested</strong> di transcript" <strong>diganti</strong> rail kanan —
+    rail sudah punya tab-kondisional + badge count + panel dengan aksi per-baris, sementara sidebar kiri
+    adalah daftar <em>conversation</em> dan sub-agent justru <strong>disembunyikan</strong> dari daftar itu (§4).
+  </div>
+</header>
+
+<nav class="max-w-7xl mx-auto px-6 border-b sticky top-0 z-10" style="border-color:var(--white-400); background:var(--white-200)">
+  <a href="#masalah" class="ftab">Masalah</a>
+  <a href="#profil" class="ftab">Profil</a>
+  <a href="#rail" class="ftab">1 · Rail tab</a>
+  <a href="#isi" class="ftab">2 · Isi panel</a>
+  <a href="#interrupt" class="ftab">3 · Interrupt</a>
+  <a href="#hidden" class="ftab">4 · Child hidden</a>
+  <a href="#config" class="ftab">5 · Config</a>
+  <a href="#mcp" class="ftab">6 · MCP spawn</a>
+  <a href="#governor" class="ftab">Governor</a>
+  <a href="#states" class="ftab">Semua state</a>
+  <a href="#image" class="ftab">Profil image</a>
+  <a href="#ditolak" class="ftab">Ditolak</a>
+</nav>
+
+<main class="max-w-7xl mx-auto px-6 py-8 space-y-8">
+
+  <!-- ===== MASALAH ===== -->
+  <section id="masalah" class="card p-6">
+    <div class="section-h mb-4">Masalah — kenapa nested transcript berantakan</div>
+    <div class="grid md:grid-cols-2 gap-5">
+      <div>
+        <div class="text-xs font-semibold mb-2" style="color:var(--neg-400)">✗ Nested (design induk §9③)</div>
+        <div class="card-sub p-3 space-y-1.5" style="max-height:270px; overflow:hidden; position:relative">
+          <div class="msg-user">bikin 3 opsi hero image + riset kompetitor</div>
+          <div class="tool-call mono">▸ wick_delegate researcher</div>
+          <div class="msg-bot" style="font-size:11px">└ transcript researcher turn 1…</div>
+          <div class="msg-bot" style="font-size:11px">└ transcript researcher turn 2…</div>
+          <div class="msg-bot" style="font-size:11px">└ transcript researcher turn 3…</div>
+          <div class="tool-call mono">▸ wick_delegate image</div>
+          <div class="msg-bot" style="font-size:11px">└ image turn 1: generate…</div>
+          <div class="msg-bot" style="font-size:11px">└ image turn 2: nilai, ulang…</div>
+          <div class="msg-bot" style="font-size:11px">└ image turn 3…</div>
+          <div style="position:absolute; inset:auto 0 0 0; height:70px; background:linear-gradient(transparent,var(--white-200))"></div>
+        </div>
+        <p class="helper">Hasil akhir leader terkubur ratusan baris.</p>
+      </div>
+      <div>
+        <div class="text-xs font-semibold mb-2" style="color:var(--pos-400)">✓ Kartu ringkas + rail (usulan)</div>
+        <div class="card-sub p-3 space-y-2">
+          <div class="msg-user">bikin 3 opsi hero image + riset kompetitor</div>
+          <div class="dcard">
+            <span class="badge badge-prov">researcher</span>
+            <span class="chip chip-muted">done · 3 turn</span>
+            <span class="flex-1 truncate" style="color:var(--black-800)">5 kompetitor, gaya dominan: minimal…</span>
+            <button class="btn-ghost" style="padding:2px 8px; font-size:11px">Open</button>
+          </div>
+          <div class="dcard">
+            <span class="badge badge-img">image</span>
+            <span class="chip chip-muted">done · 4 turn</span>
+            <span class="flex-1 truncate" style="color:var(--black-800)">3 opsi hero, iterasi 2×</span>
+            <button class="btn-ghost" style="padding:2px 8px; font-size:11px">Open</button>
+          </div>
+          <div class="msg-bot">
+            Ini 3 opsi hero-nya, gaya minimal sesuai temuan riset —
+            <div class="grid grid-cols-3 gap-2 mt-2">
+              <div class="imgcard"><div class="imgthumb">hero v1</div></div>
+              <div class="imgcard"><div class="imgthumb">hero v2</div></div>
+              <div class="imgcard"><div class="imgthumb">hero v3</div></div>
+            </div>
+          </div>
+        </div>
+        <p class="helper">Transcript penuh tiap sub-agent tetap ada — di panel rail.</p>
+      </div>
+    </div>
+
+    <div class="mt-5 overflow-x-auto">
+      <table class="w-full text-xs tbl">
+        <thead><tr><th>Situasi</th><th>Nested</th><th>Rail tab</th></tr></thead>
+        <tbody>
+          <tr><td>4 sub-agent jalan</td><td style="color:var(--neg-400)">4 transcript expand → ratusan baris</td><td style="color:var(--pos-400)">4 baris ringkas</td></tr>
+          <tr><td>Baca hasil akhir leader</td><td style="color:var(--neg-400)">scroll lewat semua anak</td><td style="color:var(--pos-400)">langsung</td></tr>
+          <tr><td>Depth 2–3</td><td style="color:var(--neg-400)">indent bertumpuk</td><td style="color:var(--pos-400)">tree + breadcrumb</td></tr>
+          <tr><td>Interrupt 1 anak</td><td style="color:var(--neg-400)">tak ada tempat natural</td><td style="color:var(--pos-400)">tombol di baris (pola <code class="mono">ProcessPanel</code>)</td></tr>
+          <tr><td>Tahu ada aktivitas tanpa membuka</td><td style="color:var(--neg-400)">—</td><td style="color:var(--pos-400)">badge angka di tab</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== PROFIL ===== -->
+  <section id="profil" class="card p-6">
+    <div class="section-h mb-1">Profil editor — setelan <span style="color:var(--green-600)">per-role</span></div>
+    <p class="helper mb-4">
+      <code class="mono">/manager/agents/profiles/new</code> · Plafon keras global ada di
+      <a href="#governor" style="color:var(--green-600)">tab Governor</a> — sengaja dipisah (scope beda: role vs sistem).
+    </p>
+
+    <div class="grid lg:grid-cols-2 gap-6">
+      <div class="space-y-3">
+        <div><label class="label">Name</label><input class="input" value="Researcher"></div>
+        <div>
+          <label class="label">Key (slug)</label><input class="input" value="researcher">
+          <p class="helper">Dipakai di <code class="mono">wick_delegate(profile=…)</code>.</p>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Provider</label>
+            <select class="input"><option>claude</option><option>codex</option><option>gemini</option></select></div>
+          <div><label class="label">Model</label><input class="input" value="opus-5" placeholder="provider default"></div>
+        </div>
+        <div>
+          <label class="label">System prompt (role instruction)</label>
+          <textarea class="input" rows="3">You are a focused research sub-agent. Return a concise, cited summary.</textarea>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Default mode</label>
+            <select class="input"><option>sync</option><option>async</option></select>
+            <p class="helper">Fase 2 · override per-call</p></div>
+          <div><label class="label">Default workspace</label>
+            <select class="input"><option>shared</option><option>worktree</option></select>
+            <p class="helper">Fase 3</p></div>
+        </div>
+      </div>
+
+      <div class="space-y-3">
+        <div>
+          <label class="label">Tool access (tags) — opsional</label>
+          <div class="card-sub p-3 flex flex-wrap gap-2">
+            <span class="chip" style="background:var(--green-200);color:var(--green-700);border:1px solid var(--green-500)">web ✓</span>
+            <span class="chip" style="background:var(--green-200);color:var(--green-700);border:1px solid var(--green-500)">loki ✓</span>
+            <span class="chip chip-muted">git +</span><span class="chip chip-muted">slack +</span>
+          </div>
+          <p class="helper">
+            <strong>Kosong = warisi tag user pemicu.</strong> Pilih subset untuk persempit (least-privilege).
+            <strong>Tak pernah menambah</strong> akses. Mencakup connector + tools + jobs
+            (bukan native provider / MCP eksternal — itu jalur terpisah).
+          </p>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div><label class="label">Default max turns</label><input class="input" value="12">
+            <p class="helper">≤ <strong>cap max turns</strong> global</p></div>
+          <div><label class="label">Can delegate (leader)</label>
+            <div class="card-sub p-2.5 flex items-center justify-between">
+              <span class="text-xs">Allow wick_delegate</span><span class="chip chip-muted">off</span></div>
+            <p class="helper">Butuh MCP tool-use. Auto-off untuk provider tak dukung.</p></div>
+        </div>
+        <div class="card-sub p-3">
+          <div class="flex items-center justify-between">
+            <span class="text-xs">Allow take-over <span class="chip chip-idle">⏸ ditahan</span></span>
+            <span class="chip chip-muted">off</span>
+          </div>
+          <p class="helper">User kirim pesan langsung ke sub-agent. Default false; profil <code class="mono">image</code> → true.</p>
+        </div>
+        <div class="reject">
+          ⚠️ <strong>Enforcement-critical:</strong> agent yang di-spawn sekarang pakai <code class="mono">MCPToken</code>
+          global → principal admin → <strong>filter tag di-BYPASS</strong>. Tanpa token MCP ber-scope,
+          kolom di atas <strong>tak berefek</strong>. Item implementasi nyata, bukan UI.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 1 RAIL ===== -->
+  <section id="rail" class="card p-6">
+    <div class="section-h mb-1">1 · Rail tab — tambah satu, bukan mekanisme baru</div>
+    <p class="helper mb-4">
+      Rail hidup di <code class="mono">DetailView.svelte</code>. Sub-agent jadi anggota baru
+      <code class="mono">RailTab</code> — semua yang dibutuhkan sudah ada.
+    </p>
+
+    <div class="shell mb-5">
+      <div class="shell-bar"><span class="mono">agents/session/a91f</span></div>
+      <div class="flex" style="min-height:340px">
+        <!-- main -->
+        <div class="flex-1 p-4 min-w-0">
+          <p class="helper mb-2">Main thread — kartu ringkas, hasil langsung terbaca</p>
+          <div class="space-y-2" style="max-width:400px">
+            <div class="msg-user">bikin 3 opsi hero image</div>
+            <div class="dcard" style="border-color:var(--pos-400); background:var(--pos-100)">
+              <span class="badge badge-img">image</span>
+              <span class="chip chip-run"><span class="spin"></span>4/6</span>
+              <span class="flex-1 truncate" style="color:var(--black-800)">iterasi ke-2…</span>
+              <button class="btn-ghost" style="padding:2px 8px; font-size:11px">Open</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- panel -->
+        <div class="rpanel p-3" style="width:268px">
+          <div class="flex items-center justify-between mb-2">
+            <span class="section-h">Sub-agents</span>
+            <button class="btn-stop">Stop all</button>
+          </div>
+          <div class="space-y-1">
+            <div class="sub-row">
+              <span class="badge badge-prov">research</span>
+              <span class="flex-1 truncate">kompetitor</span>
+              <span class="chip chip-muted">done</span>
+            </div>
+            <div class="sub-row sub-on">
+              <span class="badge badge-img">image</span>
+              <span class="flex-1 truncate">hero v3</span>
+              <span class="chip chip-run"><span class="spin"></span></span>
+              <button class="btn-stop">Stop</button>
+            </div>
+            <div class="sub-row sub-d2">
+              <span class="badge badge-text">d2</span>
+              <span class="flex-1 truncate">upscale</span>
+              <span class="chip chip-spawn">spawn</span>
+              <button class="btn-stop">Stop</button>
+            </div>
+          </div>
+          <div class="mt-3 pt-3 border-t" style="border-color:var(--white-300)">
+            <div class="crumb mb-2">Main <span style="color:var(--black-700)">›</span> <b>image #2</b></div>
+            <div class="space-y-1.5">
+              <div class="tool-call mono" style="font-size:10px">▸ generate_image n:3</div>
+              <div class="msg-bot" style="font-size:11px">Opsi 1 &amp; 3 terlalu terang, ulang…</div>
+              <div class="grid grid-cols-3 gap-1">
+                <div class="imgcard"><div class="imgthumb" style="font-size:8px">v1</div></div>
+                <div class="imgcard"><div class="imgthumb" style="font-size:8px">v2</div></div>
+                <div class="imgcard"><div class="imgthumb" style="font-size:8px">v3</div></div>
+              </div>
+            </div>
+            <p class="helper">read-only — tak ada composer</p>
+          </div>
+        </div>
+
+        <!-- rail -->
+        <div class="rail">
+          <div class="rtab rtab-on"><span class="rbadge">2</span>Sub-agents</div>
+          <div class="rtab"><span class="rbadge">99+</span>Context</div>
+          <div class="rtab">Process</div>
+          <div class="rtab">Workspace</div>
+          <div class="rtab">Scheduled</div>
+          <div class="rtab">Source</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-4">
+      <div>
+        <div class="text-xs font-semibold mb-2" style="color:var(--pos-400)">Sudah ada — dipakai apa adanya</div>
+        <table class="w-full text-xs tbl">
+          <tbody>
+            <tr><td>Daftar tab + ikon</td><td class="mono">railTabsAll <span class="helper">:1016</span></td></tr>
+            <tr><td>Buka/tutup panel</td><td class="mono">toggleRail() <span class="helper">:921</span></td></tr>
+            <tr><td>Badge angka</td><td class="mono">railCount() <span class="helper">:1070</span></td></tr>
+            <tr><td>Tab kondisional</td><td class="mono">hasBrowserInstance <span class="helper">:1048</span></td></tr>
+            <tr><td>Auto-close saat tab hilang</td><td class="mono">$effect <span class="helper">:1053</span></td></tr>
+            <tr><td>Aksi per-baris</td><td class="mono">ProcessPanel onKill <span class="helper">:1297</span></td></tr>
+            <tr><td>Coalesce refetch SSE</td><td class="mono">scheduleProcessReload <span class="helper">:481</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <div class="text-xs font-semibold mb-2" style="color:var(--navy-500)">Yang ditambah</div>
+        <div class="card-sub p-3">
+          <pre class="mono whitespace-pre-wrap" style="font-size:10.5px; color:var(--black-800)">type RailTab = … | "subagents"
+
+railTabsAll += { id:"subagents",
+                 label:"Sub-agents", icon:… }
+railTabs     = filter juga "subagents"
+               kalau subAgents.length === 0
+railCount()  += liveSubAgents.length
+shortcut     += "panel:subagents"
+
++ SubAgentPanel.svelte</pre>
+        </div>
+        <div class="accept mt-2">
+          <strong>Badge = jumlah hidup, bukan total.</strong> Ikuti <code class="mono">processCount</code> yang
+          memfilter baris idle — anak <code class="mono">done</code> tak boleh menaikkan badge, kalau tidak
+          badge nyangkut setelah semua selesai.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 2 ISI ===== -->
+  <section id="isi" class="card p-6">
+    <div class="section-h mb-1">2 · Isi panel — sama seperti conversation, tapi jangan sama persis</div>
+    <p class="helper mb-4">
+      Reuse <code class="mono">ConversationThread</code>, <strong>bukan</strong> <code class="mono">DetailView</code>.
+    </p>
+    <div class="overflow-x-auto mb-4">
+      <table class="w-full text-xs tbl">
+        <thead><tr><th>Elemen</th><th>Ikut?</th><th>Alasan</th></tr></thead>
+        <tbody>
+          <tr><td>Transcript, tool card, thinking, artifact, imagecard</td>
+              <td style="color:var(--pos-400)">✅ reuse</td>
+              <td>rendering harus identik — tak ada alasan beda</td></tr>
+          <tr><td>Composer (kotak kirim)</td>
+              <td style="color:var(--neg-400)">❌ kecuali <code class="mono">allow_take_over</code></td>
+              <td>v1 read-only; kalau ada, leader bisa dapat hasil yang tak ia minta</td></tr>
+          <tr><td>Rail sendiri (Context/Process/…)</td>
+              <td style="color:var(--neg-400)">❌</td>
+              <td><strong>rail bersarang di dalam rail</strong>; rail milik session main</td></tr>
+          <tr><td>Header session (kill, delete, provider switch)</td>
+              <td style="color:var(--neg-400)">❌</td>
+              <td>ganti breadcrumb + Stop</td></tr>
+          <tr><td>Approvals / AskUser modal</td>
+              <td style="color:var(--cau-400)">⚠️ perlu keputusan</td>
+              <td>muncul di panel (bisa terlewat) atau naik ke session? → open question #6</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">
+      <strong>Belum diverifikasi:</strong> <code class="mono">ConversationThread</code> mungkin punya dependensi
+      implisit ke state milik <code class="mono">DetailView</code> (file context, approvals, override popover).
+      Kalau ya → prop-drilling atau varian read-only. Bukan blocker desain, tapi menentukan effort.
+    </div>
+  </section>
+
+  <!-- ===== 3 INTERRUPT ===== -->
+  <section id="interrupt" class="card p-6">
+    <div class="section-h mb-1">3 · Interrupt — 3 tingkat</div>
+    <p class="helper mb-4">
+      Semua memanfaatkan <code class="mono">pool.Kill(sessionID, agentName)</code> yang <strong>sudah per-agent</strong>.
+      Yang ada sekarang cuma <code class="mono">POST /sessions/{id}/kill</code> (seluruh session).
+    </p>
+
+    <div class="overflow-x-auto mb-5">
+      <table class="w-full text-xs tbl">
+        <thead><tr><th>Aksi</th><th>Di mana</th><th>Efek</th><th>Jalur</th></tr></thead>
+        <tbody>
+          <tr><td><button class="btn-stop">Stop</button> sub-agent</td>
+              <td>baris panel rail</td>
+              <td>1 anak berhenti, <strong>partial</strong> balik ke leader</td>
+              <td class="mono">pool.Kill(child)</td></tr>
+          <tr><td><button class="btn-stop">Stop all</button></td>
+              <td>header panel</td>
+              <td>semua anak root ini berhenti, leader lanjut</td>
+              <td class="mono">loop per root_id</td></tr>
+          <tr><td><button class="btn-stop">Kill</button> leader</td>
+              <td>header conversation (existing)</td>
+              <td>seluruh pohon berhenti (<strong>cascade baru</strong>)</td>
+              <td class="mono">/kill + cascade</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-5">
+      <div>
+        <div class="text-xs font-semibold mb-2">Alur — partial, bukan error</div>
+        <div class="space-y-1.5">
+          <div class="flow-box">user klik <strong>Stop</strong> di baris sub-agent #2</div>
+          <div class="arrow">↓</div>
+          <div class="flow-box mono" style="font-size:11px">POST /agents/delegations/{id}/interrupt</div>
+          <div class="arrow">↓</div>
+          <div class="flow-box">ACL → <code class="mono">pool.Kill</code> → ambil partial → status <code class="mono">interrupted</code></div>
+          <div class="arrow">↓</div>
+          <div class="flow-box" style="border-color:var(--pos-400); background:var(--pos-100)">
+            <code class="mono" style="font-size:10.5px">delegation.Run</code> unblock → tool result ke leader</div>
+        </div>
+        <div class="card-sub p-3 mt-2">
+          <pre class="mono whitespace-pre-wrap" style="font-size:10.5px; color:var(--black-800)">Sub-agent image was interrupted by the
+user after 3 turns.
+
+Partial result:
+&lt;2 gambar sudah dibuat, path …&gt;
+
+Decide: continue without it,
+re-delegate, or ask the user.</pre>
+        </div>
+      </div>
+      <div class="space-y-3">
+        <div class="reject">
+          <strong>✗ Interrupt = error ke leader.</strong> Leader yang menerima error cenderung
+          <strong>retry buta</strong> — user klik Stop, agent malah mulai ulang.
+        </div>
+        <div class="accept"><strong>✓ Partial + instruksi keputusan.</strong> Leader berhenti, kalau perlu tanya user.</div>
+        <div class="card-sub p-3">
+          <div class="text-xs font-semibold mb-1.5">Race yang wajib ditangani</div>
+          <p class="text-xs" style="color:var(--black-800)">
+            Anak bisa selesai <strong>tepat saat</strong> user klik Stop. Endpoint idempotent: kalau status sudah
+            <code class="mono">done</code>/<code class="mono">failed</code> → <strong>409</strong>, UI tampilkan hasil normal.
+            Jangan menimpa hasil sukses dengan <code class="mono">interrupted</code>.
+          </p>
+        </div>
+        <div class="card-sub p-3">
+          <div class="text-xs font-semibold mb-1.5">Status baru</div>
+          <p class="text-xs" style="color:var(--black-800)">
+            <code class="mono">interrupted</code> — beda dari <code class="mono">stopped_max_turns</code>/<code class="mono">stopped_budget</code>
+            (governor) dan <code class="mono">failed</code> (error). Ini <strong>manusia yang menghentikan</strong>.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-4 card-sub p-3">
+      <span class="chip chip-idle">cascade</span>
+      <span class="text-xs ml-2" style="color:var(--black-800)">
+        Stop leader <strong>harus</strong> menghentikan anak — tanpa ini sub-agent jadi orphan, terutama async
+        Fase 2 yang <strong>detached by design</strong> (design induk §6.6).
+      </span>
+    </div>
+  </section>
+
+  <!-- ===== 4 HIDDEN ===== -->
+  <section id="hidden" class="card p-6">
+    <div class="section-h mb-1">4 · Child session disembunyikan dari daftar conversation</div>
+    <p class="helper mb-4">
+      <em>"Sub-agent itu conversation baru tapi type sub-agent, jadi ngak masuk di list?"</em> —
+      <strong>tepat</strong>, dan itu memang arah design induk.
+    </p>
+
+    <div class="grid md:grid-cols-2 gap-4 mb-4">
+      <div class="card-sub p-4">
+        <div class="text-xs font-semibold mb-2">Secara teknis: session penuh</div>
+        <ul class="text-xs space-y-1" style="color:var(--black-800)">
+          <li>• punya <code class="mono">ChildSessionID</code>, store, transcript, workspace sendiri</li>
+          <li>• bukan objek kelas dua</li>
+          <li>• di-link via <code class="mono">parent_session_id</code> + <code class="mono">root_id</code></li>
+        </ul>
+      </div>
+      <div class="card-sub p-4">
+        <div class="text-xs font-semibold mb-2">Secara tampilan: disembunyikan</div>
+        <ul class="text-xs space-y-1" style="color:var(--black-800)">
+          <li>• difilter dari daftar conversation</li>
+          <li>• muncul di rail session induknya</li>
+          <li>• <code class="mono">GET /sessions</code> perlu exclude <code class="mono">parent_session_id IS NOT NULL</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-3">
+      <div class="reject">
+        <strong>✗ Field <code class="mono">type: subagent</code> pada session.</strong>
+        <code class="mono">parent_session_id</code> sudah cukup menentukan "ini anak" —
+        dua sumber kebenaran bisa saling bertentangan.
+      </div>
+      <div class="note">
+        <strong>Jaga:</strong> URL langsung ke child session (dibookmark) harus tetap bisa dibuka →
+        redirect ke parent dengan rail terbuka pada anak itu. <strong>Jangan 404.</strong>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 5 CONFIG ===== -->
+  <section id="config" class="card p-6">
+    <div class="section-h mb-1">5 · Scoping config — berlapis, bukan pilih satu</div>
+    <p class="helper mb-4">
+      <em>"Enaknya config agent per apa — project, provider, atau global?"</em> → <strong>berlapis</strong>,
+      dan wick sudah punya lapisannya (<code class="mono">project.Defaults</code>, <code class="mono">sessionoverride</code>).
+    </p>
+
+    <div class="overflow-x-auto mb-4">
+      <table class="w-full text-xs tbl">
+        <thead><tr><th>Level</th><th>Isi</th><th>Siapa</th><th>Kenapa di situ</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Global</strong></td>
+              <td class="mono">max_depth, budget/root, max_parallel, cap max_turns</td>
+              <td>admin</td>
+              <td>guardrail — user <strong>tak boleh</strong> menaikkan</td></tr>
+          <tr style="background:var(--green-200)"><td><strong>Profil</strong> <span class="badge badge-new">utama</span></td>
+              <td class="mono">provider, model, system_prompt, default_max_turns, tag ACL, allow_take_over</td>
+              <td>admin</td>
+              <td><strong>identitas role</strong> — reusable lintas project &amp; conversation</td></tr>
+          <tr><td><strong>Project</strong></td>
+              <td>roster profil aktif + override model</td>
+              <td>pemilik project</td>
+              <td>tim/repo beda butuh roster beda; <code class="mono">project.Defaults</code> sudah pola ini</td></tr>
+          <tr><td><strong>Session</strong></td>
+              <td>override sekali pakai</td>
+              <td>user</td>
+              <td>eksperimen tanpa mengubah profil (<code class="mono">sessionoverride</code>)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-3">
+      <div class="accept">
+        <strong>Presedensi:</strong> session &gt; project &gt; profil &gt; global-cap.
+        Global selalu jadi <strong>plafon</strong>, bukan default yang bisa dilampaui.
+      </div>
+      <div class="reject">
+        <strong>✗ Per-provider.</strong> Provider adalah pilihan <em>di dalam</em> profil ("researcher pakai claude").
+        Kalau config per-provider: satu role tak bisa punya dua varian model, dan pindah provider =
+        kehilangan seluruh setelan role.
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 6 MCP ===== -->
+  <section id="mcp" class="card p-6">
+    <div class="section-h mb-1">6 · Agent bikin sub-agent sendiri lewat MCP</div>
+    <p class="helper mb-4">
+      <em>"AI bisa buat sub model sendiri pakai MCP kalau task-nya besar, dan bisa kill sub agent itu?"</em> —
+      <strong>bisa, tapi jangan penuh di v1.</strong>
+    </p>
+
+    <div class="overflow-x-auto mb-4">
+      <table class="w-full text-xs tbl">
+        <thead><tr><th></th><th>Spawn ad-hoc</th><th>Bikin profil persisten</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Apa</strong></td><td>delegasi task + model, sekali pakai</td><td>menulis row <code class="mono">agent_profiles</code></td></tr>
+          <tr><td><strong>Tag/izin</strong></td>
+              <td><strong>diwarisi</strong> dari user pemicu, tak bisa menambah</td>
+              <td style="color:var(--neg-400)">agent menentukan sendiri → <strong>privilege escalation</strong></td></tr>
+          <tr><td><strong>v1</strong></td>
+              <td style="color:var(--pos-400)">✅ usul: izinkan</td>
+              <td style="color:var(--neg-400)">❌ usul: tunda</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-3">
+      <div class="reject">
+        <strong>Alasan penolakan:</strong> design induk §10.1 tegas — <em>"akses melekat ke user;
+        profil hanya menyempit"</em>. Agent yang boleh menerbitkan profil bisa membuat profil dengan tag
+        lebih luas dari user pemicunya.
+      </div>
+      <div class="accept">
+        <strong>Kill oleh agent:</strong> leader boleh menghentikan <strong>anaknya sendiri</strong> —
+        dia yang mendelegasikan, dia yang tahu hasilnya sudah cukup. <strong>Tak boleh:</strong> sibling,
+        parent, atau delegasi user lain. Interrupt oleh <strong>manusia</strong> jalur terpisah dan selalu menang.
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== GOVERNOR ===== -->
+  <section id="governor" class="card p-6">
+    <div class="section-h mb-1">Governor — <span style="color:var(--green-600)">GLOBAL / system-wide</span></div>
+    <p class="helper mb-3"><code class="mono">/manager/agents/settings</code> — halaman terpisah, <strong>bukan</strong> di profile editor.</p>
+
+    <div class="accept mb-4">
+      <strong>Kenapa terpisah dari Profile editor?</strong> Ini <strong>plafon keras untuk SEMUA delegasi &amp;
+      profil</strong> — rem keamanan tingkat-sistem, bukan setelan per-role. Profil <strong>tak bisa
+      melampaui</strong> nilai di sini (mis. <code class="mono">default_max_turns</code> profil di-clamp ke
+      <strong>cap max turns</strong>). Presedensi: session &gt; project &gt; profil &gt; <strong>global-cap</strong>.
+    </div>
+
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-3">
+      <div><label class="label">Max depth</label><input class="input" value="3">
+        <p class="helper">cegah nesting tak terhingga</p></div>
+      <div><label class="label">Budget / root (turns)</label><input class="input" value="40">
+        <p class="helper">agregat seluruh pohon</p></div>
+      <div><label class="label">Max parallel</label><input class="input" value="4">
+        <p class="helper">konkuren per-root</p></div>
+      <div><label class="label">Cap max turns</label><input class="input" value="20">
+        <p class="helper">plafon per sub-agent</p></div>
+      <div class="col-span-full"><label class="label">Kill-switch</label>
+        <div class="card-sub p-3 flex items-center justify-between">
+          <span class="text-xs">Disable semua delegasi (emergency + rilis bertahap)</span>
+          <span class="chip chip-muted">off</span></div></div>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-3">
+      <div class="card-sub p-3 text-xs" style="color:var(--black-800)">
+        Turn budget di-enforce <strong>wick-side</strong> (hitung <code class="mono">event.Done</code> +
+        <code class="mono">pool.Kill</code>) → jalan juga di provider <strong>tanpa</strong>
+        <code class="mono">--max-turns</code> native. Flag native hanya optimisasi.
+      </div>
+      <div class="reject">
+        ⚠️ <strong>Jangan hilangkan max_depth.</strong> multica <strong>tak punya</strong> kolom
+        <code class="mono">depth</code>/<code class="mono">root_id</code> dan grep <code class="mono">max_depth</code>
+        nol hasil → dua agent yang saling mention bisa spawn task <strong>tanpa henti</strong>.
+      </div>
+    </div>
+
+    <div class="note mt-3">
+      <strong>Token budget di-defer ke Fase 6</strong> — tapi prioritasnya <strong>naik</strong>:
+      tak satu pun dari 3 repo pembanding punya cost cap, dan routa punya mode <code class="mono">ralph_loop</code>
+      + retry = jalur belanja tak terbatas. Sementara itu tampilkan per-root: total turns, wall-clock,
+      jumlah sub-agent (murah, langsung kelihatan kalau meledak).
+    </div>
+  </section>
+
+  <!-- ===== SEMUA STATE ===== -->
+  <section id="states" class="card p-6">
+    <div class="section-h mb-1">Semua state — yang wajib dibangun tapi tak terlihat di happy path</div>
+    <p class="helper mb-5">
+      Spec kode: <code class="mono">IMPLEMENT.md</code>. Bagian ini mengunci tampilannya supaya
+      tak ada state yang diam-diam terlewat.
+    </p>
+
+    <div class="grid md:grid-cols-2 gap-5">
+
+      <!-- A. tab tidak ada -->
+      <div>
+        <div class="text-xs font-semibold mb-2">A · Nol sub-agent → tab TIDAK ADA</div>
+        <div class="shell">
+          <div class="flex" style="min-height:96px">
+            <div class="flex-1 p-3"><p class="helper">Thread biasa, tanpa panel.</p></div>
+            <div class="rail">
+              <div class="rtab"><span class="rbadge">99+</span>Context</div>
+              <div class="rtab">Process</div>
+              <div class="rtab">Source</div>
+            </div>
+          </div>
+        </div>
+        <p class="helper">Pola tab Browser: filter <code class="mono">railTabs</code> + <code class="mono">$effect</code> yang menutup panel. Tanpa <code class="mono">$effect</code>, panel bisa yatim saat anak terakhir selesai.</p>
+      </div>
+
+      <!-- B. badge kosong tapi tab ada -->
+      <div>
+        <div class="text-xs font-semibold mb-2">B · Semua selesai → badge KOSONG, tab TETAP ADA</div>
+        <div class="shell">
+          <div class="flex" style="min-height:96px">
+            <div class="flex-1 p-3">
+              <div class="sub-row"><span class="badge badge-prov">research</span><span class="flex-1 truncate">kompetitor</span><span class="chip chip-muted">done</span></div>
+              <div class="sub-row"><span class="badge badge-img">image</span><span class="flex-1 truncate">hero v3</span><span class="chip chip-muted">done</span></div>
+            </div>
+            <div class="rail">
+              <div class="rtab rtab-on">Sub-agents</div>
+              <div class="rtab">Process</div>
+            </div>
+          </div>
+        </div>
+        <p class="helper">
+          <code class="mono">railCount</code> pakai <strong>liveSubAgents</strong> (queued+running);
+          <code class="mono">railTabs</code> pakai <strong>total</strong> — user masih perlu baca hasil.
+        </p>
+      </div>
+
+      <!-- C. queued -->
+      <div>
+        <div class="text-xs font-semibold mb-2" style="color:var(--cau-400)">C · Anak QUEUED — Stop wajib tetap ada</div>
+        <div class="card-sub p-3 space-y-1">
+          <div class="sub-row sub-on">
+            <span class="badge badge-img">image</span><span class="flex-1 truncate">hero v3</span>
+            <span class="chip chip-run"><span class="spin"></span></span><button class="btn-stop">Stop</button>
+          </div>
+          <div class="sub-row">
+            <span class="badge badge-prov">review</span><span class="flex-1 truncate">audit copy</span>
+            <span class="chip chip-idle">queued</span><button class="btn-stop">Stop</button>
+          </div>
+          <p class="helper">menunggu slot <code class="mono">max_parallel</code></p>
+        </div>
+        <div class="reject mt-2">
+          Stop di baris <strong>queued</strong> = keluarkan dari antrean + hasil
+          <code class="mono">(cancelled before processing)</code>. <strong>Bukan</strong> <code class="mono">KillAgent</code> —
+          prosesnya belum ada. Tanpa cabang ini tombolnya <strong>diam-diam no-op</strong> (bukti: stoa <code class="mono">stoa.js:479-490</code>;
+          multica malah menyembunyikan tombolnya, <code class="mono">activity-tab.tsx:528-533</code>).
+        </div>
+      </div>
+
+      <!-- D. interrupted -->
+      <div>
+        <div class="text-xs font-semibold mb-2" style="color:var(--neg-400)">D · INTERRUPTED — partial tetap terbaca</div>
+        <div class="card-sub p-3 space-y-2">
+          <div class="sub-row">
+            <span class="badge badge-img">image</span><span class="flex-1 truncate">hero v3</span>
+            <span class="chip chip-bad">interrupted</span>
+          </div>
+          <div class="dcard" style="background:var(--neg-100); border-color:var(--neg-400)">
+            <span class="badge badge-img">image</span>
+            <span class="chip chip-bad">interrupted · 3 turn</span>
+            <span class="flex-1 truncate" style="color:var(--black-800)">2 gambar sudah dibuat…</span>
+            <button class="btn-ghost" style="padding:2px 8px; font-size:11px">Open</button>
+          </div>
+        </div>
+        <p class="helper">
+          Status <code class="mono">interrupted</code> berbeda dari <code class="mono">stopped_max_turns</code>/<code class="mono">stopped_budget</code>
+          (governor) dan <code class="mono">failed</code> (error). Ini <strong>manusia</strong>.
+        </p>
+      </div>
+
+      <!-- E. race 409 -->
+      <div>
+        <div class="text-xs font-semibold mb-2">E · RACE — selesai tepat saat klik Stop</div>
+        <div class="space-y-1.5">
+          <div class="flow-box">user klik Stop</div>
+          <div class="arrow">↓</div>
+          <div class="flow-box">anak sudah <code class="mono">done</code> lebih dulu</div>
+          <div class="arrow">↓</div>
+          <div class="flow-box" style="border-color:var(--pos-400); background:var(--pos-100)">
+            <strong>409</strong> → UI tampilkan hasil <strong>sukses</strong> apa adanya
+          </div>
+        </div>
+        <div class="accept mt-2">
+          409 <strong>bukan</strong> toast error — ini balapan yang diharapkan.
+          Kebenarannya dijaga guard <code class="mono">WHERE status='running'</code>, bukan cek di handler
+          (pola multica <code class="mono">agent.sql:701</code>).
+        </div>
+      </div>
+
+      <!-- F. detached + depth -->
+      <div>
+        <div class="text-xs font-semibold mb-2">F · DETACHED + depth 2</div>
+        <div class="card-sub p-3 space-y-1">
+          <div class="sub-row">
+            <span class="badge badge-prov">research</span><span class="flex-1 truncate">riset async</span>
+            <span class="chip chip-idle">detached</span><button class="btn-stop">Stop</button>
+          </div>
+          <div class="sub-row sub-d2">
+            <span class="badge badge-text">d2</span><span class="flex-1 truncate">upscale</span>
+            <span class="chip chip-spawn">spawn</span><button class="btn-stop">Stop</button>
+          </div>
+        </div>
+        <p class="helper">
+          Indent 14px/level. <code class="mono">detached</code> = async Fase 2, induk sudah idle/killed tapi anak
+          tetap jalan → panel harus bisa menampilkannya. Cascade kill = <strong>deepest-first</strong>.
+        </p>
+      </div>
+
+    </div>
+
+    <div class="mt-5 pt-5 border-t" style="border-color:var(--white-300)">
+      <div class="text-xs font-semibold mb-2">URL child session — jangan 404</div>
+      <div class="flex items-center gap-2 flex-wrap text-xs">
+        <span class="flow-box mono">/sessions/&lt;childID&gt;</span>
+        <span class="arrow">→</span>
+        <span class="flow-box mono" style="border-color:var(--pos-400); background:var(--pos-100)">303 → /sessions/&lt;parentID&gt;?rail=subagents&amp;sub=&lt;childID&gt;</span>
+      </div>
+      <p class="helper">Child disembunyikan dari daftar, tapi link yang dibookmark harus tetap mendarat di tempat yang benar.</p>
+    </div>
+  </section>
+
+  <!-- ===== PROFIL IMAGE ===== -->
+  <section id="image" class="card p-6">
+    <div class="section-h mb-1">Lampiran · Profil <code class="mono">image</code> — driver desain ini</div>
+    <p class="helper mb-4">
+      <em>"Lebih bagus ada sub-agent khusus image, ngak sih?"</em> →
+      <strong>Ya, tapi sebagai profil — bukan pengganti tool.</strong>
+    </p>
+
+    <div class="grid md:grid-cols-2 gap-4 mb-5">
+      <div class="card-sub p-4">
+        <div class="flex items-center gap-2 mb-2"><span class="badge badge-text">lapis 1</span>
+          <span class="text-xs font-semibold mono">generate_image</span></div>
+        <ul class="text-xs space-y-1" style="color:var(--black-800)">
+          <li>• satu HTTP call ke vendor</li>
+          <li>• prompt → PNG</li>
+          <li>• <strong>tak melihat</strong> hasilnya → tak bisa menilai</li>
+          <li>• biaya: 1 image call</li>
+        </ul>
+      </div>
+      <div class="card-sub p-4">
+        <div class="flex items-center gap-2 mb-2"><span class="badge badge-img">lapis 2</span>
+          <span class="text-xs font-semibold">sub-agent profil <code class="mono">image</code></span></div>
+        <ul class="text-xs space-y-1" style="color:var(--black-800)">
+          <li>• agent: system prompt + akses tool</li>
+          <li>• susun prompt → generate → <strong>nilai</strong> → ulangi</li>
+          <li>• <strong>butuh</strong> <code class="mono">generate_image</code> sebagai tangannya</li>
+          <li>• biaya: banyak turn × banyak image call</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card-sub p-4 mb-5">
+      <div class="text-xs font-semibold mb-2">Urutan implementasi terkunci — nol kode baru di langkah 3</div>
+      <div class="flex items-center gap-2 flex-wrap text-xs">
+        <span class="flow-box"><code class="mono">wick-image-gen</code> Fase 1<br><span class="helper">tool</span></span>
+        <span class="arrow">→</span>
+        <span class="flow-box">design induk Fase 1<br><span class="helper">delegation</span></span>
+        <span class="arrow">→</span>
+        <span class="flow-box" style="border-color:var(--green-500); background:var(--green-200); color:var(--green-700)">
+          profil <code class="mono">image</code><br><span style="font-size:10px">1 row agent_profiles</span></span>
+      </div>
+      <p class="helper mt-2">Tanpa tool, sub-agent tak punya tangan.</p>
+    </div>
+
+    <div class="card-sub p-4 mb-5">
+      <pre class="mono text-xs whitespace-pre-wrap" style="color:var(--black-800)">key: "image"        provider: &lt;yang dukung MCP tool-use&gt;
+system_prompt:      "You generate images. Draft a precise prompt, call
+                     generate_image, evaluate the result against the
+                     request, and iterate at most N times. Return the
+                     best images as an imagecard fence."
+allowed_tag_ids:    [tag yang memuat generate_image]   ← least-privilege
+default_max_turns:  6      (iterasi visual boros turn)
+default_mode:       sync   (user menunggu gambarnya)
+allow_take_over:    true   ← satu-satunya field baru</pre>
+    </div>
+
+    <div class="text-xs font-semibold mb-2">Kenapa profil ini pembenaran terkuat untuk rail + interrupt</div>
+    <div class="grid md:grid-cols-2 gap-2">
+      <div class="card-sub p-3 text-xs" style="color:var(--black-800)">
+        <strong style="color:var(--black-900)">Boros turn.</strong> generate → nilai → ulang.
+        Nested langsung banjir; kartu ringkas menyelamatkan main thread.
+      </div>
+      <div class="card-sub p-3 text-xs" style="color:var(--black-800)">
+        <strong style="color:var(--black-900)">Output visual per turn.</strong> Main cuma perlu hasil final —
+        percobaan tengah adalah kebisingan yang tepat untuk panel rail.
+      </div>
+      <div class="card-sub p-3 text-xs" style="color:var(--black-800)">
+        <strong style="color:var(--black-900)">Sering dihentikan di tengah.</strong> "udah, yang kedua aja" =
+        interaksi <strong>normal</strong> → menutup design induk §14.3.
+      </div>
+      <div class="card-sub p-3 text-xs" style="color:var(--black-800)">
+        <strong style="color:var(--black-900)">Butuh koreksi manusia.</strong> "yang ketiga tapi lebih gelap" →
+        menggeser usulan take-over ke per-profil.
+      </div>
+    </div>
+
+    <div class="mt-4 card-sub p-3">
+      <span class="chip chip-idle">biaya berlapis</span>
+      <span class="text-xs ml-2" style="color:var(--black-800)">
+        <code class="mono">default_max_turns</code> (profil) × cap <code class="mono">n</code> (tool).
+        Tanpa keduanya, satu delegasi bisa membakar puluhan image call.
+      </span>
+    </div>
+  </section>
+
+  <!-- ===== DITOLAK ===== -->
+  <section id="ditolak" class="card p-6">
+    <div class="section-h mb-4">Sengaja ditolak</div>
+    <div class="grid md:grid-cols-2 gap-3">
+      <div class="reject"><strong>Satu rail tab per sub-agent</strong> — rail habis ruang. Satu tab + tree di panel.</div>
+      <div class="reject"><strong>Pane kiri / level-2 di <code class="mono">SessionList</code></strong> (usulan versi pertama) — sidebar kiri adalah daftar conversation, dan sub-agent justru disembunyikan dari daftar itu (§4).</div>
+      <div class="reject"><strong>Reuse <code class="mono">DetailView</code> utuh</strong> — panel dapat rail bersarang di dalam rail (§2).</div>
+      <div class="reject"><strong>Field <code class="mono">type: subagent</code></strong> — <code class="mono">parent_session_id</code> sudah cukup; dua sumber kebenaran bisa bertentangan (§4).</div>
+      <div class="reject"><strong>Config per-provider</strong> (§5) — satu role tak bisa punya dua varian model.</div>
+      <div class="reject"><strong>Agent menerbitkan profil persisten</strong> (§6) — privilege escalation lewat tag ACL.</div>
+      <div class="reject"><strong>Interrupt = error ke leader</strong> — memicu retry buta.</div>
+      <div class="reject"><strong>Hub SSE baru</strong> — <code class="mono">/stream</code> existing sudah broadcast lifecycle (design induk §8.3).</div>
+      <div class="reject md:col-span-2"><strong>Menghapus nested view sepenuhnya</strong> — kartu ringkas di main thread tetap perlu, supaya transcript leader tetap jadi catatan audit yang utuh ("di sini dia delegasi, ini hasilnya").</div>
+    </div>
+
+    <div class="mt-5 pt-4 border-t" style="border-color:var(--white-300)">
+      <div class="text-xs font-semibold mb-2">Ditahan sampai sign-off</div>
+      <div class="grid md:grid-cols-2 gap-2">
+        <div class="card-sub p-3 text-xs" style="color:var(--black-800)">
+          <span class="chip chip-idle">⏸</span> <strong>Take-over</strong> — usulan bergeser ke per-profil
+          (<code class="mono">allow_take_over</code>, default false; image → true), hasil ditandai
+          <code class="mono">user_steered</code>.
+        </div>
+        <div class="card-sub p-3 text-xs" style="color:var(--black-800)">
+          <span class="chip chip-idle">⏸</span> <strong>Agent bikin profil sendiri</strong> — v1 hanya spawn
+          ad-hoc dengan tag warisan (§6).
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="max-w-7xl mx-auto px-6 pb-10">
+  <p class="text-xs" style="color:var(--black-800)">
+    Mockup ini pasangan <code class="mono">plan.md</code> — kalau salah satu diubah, ubah dua-duanya.
+    Kalau plan ini disetujui, <strong>§9③ design induk harus di-update</strong> supaya tak bertentangan.
+  </p>
+</footer>
+
+<script>
+  const links = [...document.querySelectorAll('nav .ftab')];
+  const byId = new Map(links.map(a => [a.getAttribute('href').slice(1), a]));
+  const obs = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      links.forEach(a => a.classList.remove('ftab-on'));
+      byId.get(e.target.id)?.classList.add('ftab-on');
+    }
+  }, { rootMargin: '-60px 0px -70% 0px' });
+  byId.forEach((_, id) => { const el = document.getElementById(id); if (el) obs.observe(el); });
+</script>
+
+</body>
+</html>
