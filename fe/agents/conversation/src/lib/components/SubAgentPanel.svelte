@@ -5,6 +5,7 @@
     subAgentStatusCls,
     subAgentStatusLabel,
     isSubAgentLive,
+    isSubAgentWorking,
   } from "../lifecycleCls.js";
 
   type Props = {
@@ -64,45 +65,72 @@
     {:else}
       {#each subAgents as sub (sub.delegation_id)}
         <div style={indentStyle(sub.depth)}>
+          <!--
+            The whole card opens the sub-agent, not just its title. The most
+            informative part of a row is the result preview at the bottom,
+            and that is exactly the part a reader reaches for when they want
+            to see more — a card where it is the one dead zone teaches the
+            wrong thing about what is clickable.
+
+            A div with role="button" rather than a real <button> because the
+            card holds its own Stop button, and a button inside a button is
+            invalid HTML that browsers resolve by dropping one of them.
+          -->
           <div
-            class={"rounded-xl border p-3 space-y-2 transition-colors " +
+            role="button"
+            tabindex="0"
+            aria-label={`Open sub-agent ${sub.handle || sub.profile_key}`}
+            onclick={() => onSelect(sub.child_session_id)}
+            onkeydown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect(sub.child_session_id);
+              }
+            }}
+            class={"cursor-pointer rounded-xl border p-3 space-y-2 text-left transition-colors " +
               (selectedId === sub.child_session_id
                 ? "border-green-500 bg-white-200 dark:bg-navy-800"
-                : "border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800")}
+                : "border-white-300 hover:border-green-500 dark:border-navy-600 dark:hover:border-green-500 bg-white-200 dark:bg-navy-800")}
           >
             <div class="flex items-center justify-between gap-2">
-              <button
-                type="button"
-                onclick={() => onSelect(sub.child_session_id)}
-                class="flex items-center gap-2 min-w-0 text-left"
-              >
+              <div class="flex items-center gap-2 min-w-0">
                 <span class="text-xs font-semibold text-black-900 dark:text-white-100 truncate"
                   >{sub.profile_key}</span
                 >
+                <!-- A spinner, not just a "Running" chip: the chip says what
+                     the row is, the spinner says it is happening right now,
+                     and in a list of finished rows only the second one is
+                     visible at a glance. -->
+                {#if isSubAgentWorking(sub.status, sub.lifecycle)}
+                  <span
+                    class="h-3 w-3 shrink-0 rounded-full border-2 border-green-500 border-t-transparent animate-spin"
+                    aria-label="Working"
+                  ></span>
+                {/if}
                 <span class={"rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0 " + subAgentStatusCls(sub.status)}
                   >{subAgentStatusLabel(sub.status)}</span
                 >
-              </button>
+              </div>
               <!--
                 Stop is offered for queued rows too, not just running ones.
                 A queued sub-agent is cancelled by dropping it from the
                 queue; hiding the button there leaves work the user cannot
                 call off before it starts.
+
+                stopPropagation because the card behind it opens the
+                sub-agent: a Stop that also opened the transcript would put
+                a panel in front of the thing you just asked to end.
               -->
               {#if isSubAgentLive(sub.status)}
                 <button
                   type="button"
-                  onclick={() => onInterrupt(sub.delegation_id)}
+                  onclick={(e) => { e.stopPropagation(); onInterrupt(sub.delegation_id); }}
                   class="shrink-0 rounded px-2 py-1 text-[10px] font-medium bg-neg-100 text-neg-400 hover:bg-neg-200 transition-colors"
                 >Stop</button>
               {/if}
             </div>
 
-            <button
-              type="button"
-              onclick={() => onSelect(sub.child_session_id)}
-              class="block w-full text-left text-[11px] text-black-800 dark:text-black-600 line-clamp-2"
-            >{sub.label}</button>
+            <p class="text-[11px] text-black-800 dark:text-black-600 line-clamp-2">{sub.label}</p>
 
             <div class="flex items-center gap-2 text-[10px] text-black-700 dark:text-black-600">
               <span>{turnsLabel(sub)}</span>

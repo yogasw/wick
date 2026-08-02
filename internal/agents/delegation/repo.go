@@ -199,11 +199,16 @@ func (r *Repo) FindByChildSession(ctx context.Context, sessionID string) (*entit
 
 // ListByParent returns delegations whose direct parent is parentSessionID,
 // newest first. Drives the rail panel for one conversation.
+//
+// Newest first because the rail is read top-down while work is in flight:
+// the delegation you just watched the leader make is the one you want to
+// open, and with oldest-first it sinks further down the panel with every
+// new sub-agent.
 func (r *Repo) ListByParent(ctx context.Context, parentSessionID string) ([]entity.AgentDelegation, error) {
 	var out []entity.AgentDelegation
 	err := r.db.WithContext(ctx).
 		Where("parent_session_id = ?", parentSessionID).
-		Order("started_at asc").
+		Order("started_at desc").
 		Find(&out).Error
 	return out, err
 }

@@ -11,9 +11,39 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/entity"
 )
+
+// childSegRunes is how much of the delegation UUID names the child's
+// folder. Twelve hex chars keep collisions out of reach within one
+// parent while keeping a deep session's trace path inside the Windows
+// path limit — nesting with full UUIDs overflows it around depth 2.
+const childSegRunes = 12
+
+// childSessionIDFor derives a sub-agent's session ID from its parent and
+// the delegation that spawned it.
+//
+// The ID carries the parent's, so config.Layout can resolve the child's
+// nested folder without consulting anything. Deriving the segment from
+// the delegation UUID (rather than a fresh random) means a retried
+// dispatch of the same delegation lands on the same folder instead of
+// leaving an abandoned transcript behind.
+//
+// A delegation with no parent session — nothing dispatches one today,
+// but the request shape allows it — falls back to the flat `sub-<uuid>`
+// form rather than producing an ID that starts with the separator.
+func childSessionIDFor(parentSessionID, delegationID string) string {
+	seg := strings.ReplaceAll(delegationID, "-", "")
+	if len(seg) > childSegRunes {
+		seg = seg[:childSegRunes]
+	}
+	if parentSessionID == "" {
+		return "sub-" + delegationID
+	}
+	return agentconfig.SubSessionID(parentSessionID, seg)
+}
 
 // EventStream is the subset of the SSE broadcaster this package needs:
 // subscribe to one session's normalized agent events.
@@ -247,7 +277,7 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 	if rootID == "" {
 		rootID = id
 	}
-	childSessionID := "sub-" + id
+	childSessionID := childSessionIDFor(req.ParentSessionID, id)
 	agentName := profile.Provider
 	maxTurns := EffectiveMaxTurns(req.MaxTurns, profile, limits)
 	maxTokens := EffectiveMaxTokens(req.MaxTokens, profile, limits)

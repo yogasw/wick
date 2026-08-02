@@ -1339,7 +1339,7 @@ func NewServer() *Server {
 	mcpScopedTokens := mcp.NewScopedTokens()
 	delegationSvc = &delegation.Service{
 		Repo:   delegation.NewRepo(db),
-		Runner: delegation.NewPoolRunner(agentsPool, agentsLayout),
+		Runner: delegation.NewPoolRunner(agentsPool, agentsLayout, agentsMgr.Register),
 		Stream: agentstool.NewDelegationStream(agentsBcast),
 		Tokens: mcpScopedTokens,
 		Tags:   authSvc,

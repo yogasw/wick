@@ -493,6 +493,7 @@ func Register(r tool.Router) {
 	r.GET("/workflows/api/lookup", workflowLookupAPI)
 
 	r.GET("/stream", streamSSE)
+	r.GET("/stream/sessions", sessionsLifecycleSSE)
 	r.GET("/stream/snapshot", streamSnapshot)
 
 	// Data Tables tab — n8n-style standalone shared key/value store.
@@ -723,33 +724,18 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 	access := callerProjectAccess(c)
 	allSessions := globalMgr.Registry().Sessions()
 	// Per-project session counts across ALL sessions (sidebar pills).
+	// Sub-agents are excluded: the pill counts conversations, and a leader
+	// that fanned out to eight roles has not started eight chats.
 	counts := make(map[string]int, len(allSessions))
 	for _, s := range allSessions {
-		if s.Meta.ProjectID != "" {
+		if s.Meta.ProjectID != "" && s.Meta.ParentSessionID == "" {
 			counts[s.Meta.ProjectID]++
 		}
 	}
-	allIDs := globalMgr.Registry().SessionIDs()
-	// Keep only sessions the caller may see (project access). When scoped to a
-	// project, also drop sessions outside it. Sorted-desc order is preserved.
-	{
-		filtered := allIDs[:0:0]
-		for _, id := range allIDs {
-			s, ok := allSessions[id]
-			if !ok {
-				continue
-			}
-			if scopedProjectID != "" && s.Meta.ProjectID != scopedProjectID {
-				continue
-			}
-			if !access.allowSession(s.Meta.ProjectID, s.Meta.UserID) {
-				continue
-			}
-			filtered = append(filtered, id)
-		}
-		allIDs = filtered
-	}
-	ids := allIDs
+	// Same filter the JSON list uses, so the templ sidebar and /api/sessions
+	// never disagree about what a conversation is — sub-agent sessions are
+	// dropped here too, since they belong to their parent's rail panel.
+	ids := accessibleSessionIDs(globalMgr.Registry().SessionIDs(), allSessions, access, scopedProjectID)
 	if len(ids) > sidebarCap {
 		ids = ids[:sidebarCap]
 	}

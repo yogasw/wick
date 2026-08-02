@@ -67,6 +67,18 @@ export function subAgentStatusLabel(status: string): string {
   return map[status] ?? status;
 }
 
+// isSubAgentWorking reports whether a sub-agent has a process actually
+// producing output right now, as opposed to merely being unfinished.
+//
+// Reads the pool lifecycle first and only falls back to the delegation
+// status: a row can sit at status "running" for a while with nothing
+// spawned yet (queued behind a slot), and spinning there would promise
+// progress that is not happening.
+export function isSubAgentWorking(status: string, lifecycle: string): boolean {
+  if (lifecycle) return lifecycle === "working" || lifecycle === "spawning";
+  return status === "running";
+}
+
 // isSubAgentLive reports whether a sub-agent can still be stopped. Both
 // queued and running qualify: a queued one is cancelled by dropping it
 // from the queue, and hiding its Stop button would leave the user unable

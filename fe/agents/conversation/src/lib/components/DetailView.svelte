@@ -37,6 +37,7 @@
     bumpHops,
   } from "../api/subagents.js";
   import SubAgentPanel from "./SubAgentPanel.svelte";
+  import SubAgentModal from "./SubAgentModal.svelte";
   import type { AgentMessageItem, SubAgentItem } from "../types/agents.js";
   import {
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
@@ -314,10 +315,20 @@
 
   /* ── sub-agents panel state ───────────────────────────────────── */
   let subAgents = $state<SubAgentItem[]>([]);
-  // Which child's transcript the panel is showing. null = list only.
+  // Which child's transcript the inspector modal is showing. null = closed.
   let selectedSubAgent = $state<string | null>(null);
   let subAgentsInFlight = false;
   let subAgentReloadPending = false;
+
+  // The selected row itself, which the modal needs (status, task, turn
+  // budget) rather than just the session id. Resolves to undefined while a
+  // `?sub=` deep link waits for the roster to load, and the modal stays shut
+  // until it does.
+  const selectedSubAgentRow = $derived(
+    selectedSubAgent === null
+      ? undefined
+      : subAgents.find((s) => s.child_session_id === selectedSubAgent),
+  );
 
   /* ── workspace panel state ────────────────────────────────────── */
   let wsInstances = $state<WsInstance[]>([]);
@@ -597,6 +608,37 @@
       loadAgentMessages();
     }, 200);
   }
+
+  /* While a sub-agent is live, poll its row.
+
+     Everything else in this panel rides the leader's SSE stream, but a
+     sub-agent publishes its lifecycle on the CHILD's session id, which
+     this stream is not subscribed to. Between the delegation call and the
+     leader's end-of-turn the leader emits nothing at all — which is
+     exactly the stretch where a running sub-agent's spinner and turn
+     count need to move. Polling stops the moment none are live, so an
+     idle conversation issues no requests. */
+  const SUB_AGENT_POLL_MS = 3000;
+  let subAgentPollTimer: ReturnType<typeof setInterval> | null = null;
+
+  $effect(() => {
+    const anyLive = liveSubAgents(subAgents).length > 0;
+    if (!anyLive) {
+      if (subAgentPollTimer !== null) {
+        clearInterval(subAgentPollTimer);
+        subAgentPollTimer = null;
+      }
+      return;
+    }
+    if (subAgentPollTimer !== null) return;
+    subAgentPollTimer = setInterval(loadSubAgents, SUB_AGENT_POLL_MS);
+    return () => {
+      if (subAgentPollTimer !== null) {
+        clearInterval(subAgentPollTimer);
+        subAgentPollTimer = null;
+      }
+    };
+  });
 
   function stopSubAgent(delegationId: string) {
     run(interruptSubAgent(base, delegationId).pipe(Effect.provide(WickClientLayer)))
@@ -1781,6 +1823,19 @@
 />
 
 <DetailModal content={$currentDetail} onClose={hideDetail} />
+
+<!-- Inspector for the sub-agent selected in the rail. Rendered only once the
+     row is known: the selection can arrive from the `?sub=` query parameter
+     before the roster has loaded. -->
+{#if selectedSubAgentRow}
+  <SubAgentModal
+    {base}
+    {sessionId}
+    row={selectedSubAgentRow}
+    onClose={() => { selectedSubAgent = null; }}
+    onChanged={loadSubAgents}
+  />
+{/if}
 
 <ConfirmDialog
   open={confirmKill !== null}

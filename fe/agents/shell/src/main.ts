@@ -98,7 +98,73 @@ function wireDragToMove(): void {
   });
 }
 
+/* statusDotClass mirrors view.StatusDotClass in layout.templ — the server
+   renders the first paint, this re-renders the same node from live events.
+   Change both together. */
+function statusDotClass(lifecycle: string): string {
+  const base = "ml-2 shrink-0 rounded-full";
+  switch (lifecycle) {
+    case "working":
+      return `${base} h-3 w-3 border-2 border-green-500 border-t-transparent animate-spin`;
+    case "spawning":
+      return `${base} h-3 w-3 border-2 border-amber-400 border-t-transparent animate-spin`;
+    case "queued":
+      return `${base} h-1.5 w-1.5 bg-orange-500 animate-pulse`;
+    case "idle":
+      return `${base} h-1.5 w-1.5 bg-blue-400`;
+    default:
+      return `${base} hidden`;
+  }
+}
+
+/* Live sidebar liveness.
+
+   Without this the spinners are a snapshot of whatever was running when
+   the page was rendered: a session that starts working while you are
+   reading another one never shows it, and one that finished keeps
+   spinning until the next navigation.
+
+   /stream/sessions carries lifecycle only, already filtered to the
+   sessions this user may see. EventSource reconnects on its own, and the
+   endpoint replays what is running on connect, so a dropped connection
+   self-heals without any retry logic here. */
+function wireLiveStatus(): void {
+  const base = resolveBase();
+  if (!base || typeof EventSource === "undefined") {
+    return;
+  }
+  if (document.querySelectorAll("[data-session-dot]").length === 0) {
+    return;
+  }
+  const es = new EventSource(`${base}/stream/sessions`, { withCredentials: true });
+  es.addEventListener("session", (e) => {
+    let ev: { session_id?: string; lifecycle?: string };
+    try {
+      ev = JSON.parse((e as MessageEvent).data as string);
+    } catch {
+      return;
+    }
+    if (!ev.session_id) {
+      return;
+    }
+    const dot = document.querySelector<HTMLElement>(
+      `[data-session-dot="${CSS.escape(ev.session_id)}"]`,
+    );
+    // A session outside the sidebar's capped window has no node here.
+    // Nothing to do — the row will render with the right state whenever
+    // it does appear.
+    if (dot) {
+      // "killed" is the pool tearing a finished process down, not a
+      // state worth a colour: it would leave a stale marker on a row
+      // that is simply done.
+      dot.className = statusDotClass(ev.lifecycle === "killed" ? "" : (ev.lifecycle ?? ""));
+    }
+  });
+  window.addEventListener("pagehide", () => es.close());
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   wirePin();
   wireDragToMove();
+  wireLiveStatus();
 });

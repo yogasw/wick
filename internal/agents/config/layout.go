@@ -8,6 +8,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/yogasw/wick/internal/appname"
 )
@@ -115,8 +116,68 @@ func (l Layout) ProjectManagedPath(id string) string {
 	return filepath.Join(l.ProjectDir(id), "files")
 }
 
-func (l Layout) SessionDir(id string) string  { return filepath.Join(l.SessionsDir(), id) }
+// SubSessionSep separates a parent session ID from a sub-agent child's
+// own segment. A child's ID carries its whole ancestry, which is what
+// lets SessionDir stay a pure function of the ID — no database lookup,
+// no index file, no boot walk that could fall out of sync with the tree
+// on disk.
+//
+// The separator is not "-" or "." because session IDs already contain
+// single dashes (UUIDs, channel-derived IDs) and a bare dot reads as a
+// file extension when browsing the folder by hand. "--sub-" cannot occur
+// in any ID wick generates.
+const SubSessionSep = "--sub-"
+
+// SubSessionID builds the ID of a sub-agent session under parentID.
+//
+// seed should be short and derived from something stable (delegation
+// dispatch uses the first 12 hex of the delegation UUID) so a retried
+// delegation resolves to the same folder. Short matters: nesting plus
+// full UUIDs would push a deep session's `thinking/<turn>/<event>.json`
+// past the Windows path limit.
+func SubSessionID(parentID, seed string) string {
+	return parentID + SubSessionSep + seed
+}
+
+// ParentOfSubSession returns the ID of id's immediate parent, or "" when
+// id is not a sub-agent session.
+func ParentOfSubSession(id string) string {
+	i := strings.LastIndex(id, SubSessionSep)
+	if i < 0 {
+		return ""
+	}
+	return id[:i]
+}
+
+// SessionDir resolves a session ID to its folder.
+//
+// A plain ID maps straight to `sessions/<id>/`. A sub-agent ID maps to a
+// folder nested inside its parent's, one `subagents/<seg>` level per
+// ancestor, so deleting a conversation takes its whole delegation tree
+// with it and a human browsing the data dir finds a session's children
+// where they belong.
+//
+// Sessions created before sub-agent nesting have IDs like `sub-<uuid>`,
+// which carry no separator and therefore keep resolving to their
+// existing flat path. That is why this change needs no migration.
+func (l Layout) SessionDir(id string) string {
+	segs := strings.Split(id, SubSessionSep)
+	dir := filepath.Join(l.SessionsDir(), segs[0])
+	for _, seg := range segs[1:] {
+		dir = filepath.Join(dir, "subagents", seg)
+	}
+	return dir
+}
+
 func (l Layout) SessionMeta(id string) string { return filepath.Join(l.SessionDir(id), "meta.json") }
+
+// SessionSubagentsDir holds the sessions of the sub-agents this session
+// delegated to (`<session dir>/subagents/<seg>/`). The folder is created
+// lazily by the first child and is absent for sessions that never
+// delegated.
+func (l Layout) SessionSubagentsDir(id string) string {
+	return filepath.Join(l.SessionDir(id), "subagents")
+}
 func (l Layout) SessionAgents(id string) string {
 	return filepath.Join(l.SessionDir(id), "agents.json")
 }
