@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ThreadBlock } from "../types/agents.js";
+  import { subAgentStatusCls, subAgentStatusLabel } from "../lifecycleCls.js";
 
   type ToolBlock = Extract<ThreadBlock, { kind: "tool" }>;
 
@@ -15,8 +16,11 @@
     // Such a tool call has no result but is NOT live — show "interrupted", not a
     // running spinner that never resolves.
     interrupted?: boolean;
+    // Opens the Sub-agents rail panel on this delegation's child. Only
+    // meaningful for wick_delegate cards; omitted elsewhere.
+    onOpenSubAgent?: (delegationId: string) => void;
   };
-  let { block, onCancel, onDismiss, interrupted = false }: Props = $props();
+  let { block, onCancel, onDismiss, interrupted = false, onOpenSubAgent }: Props = $props();
 
   let cancelling = $state(false);
 
@@ -80,6 +84,38 @@
       : ""
   );
 
+  // ── sub-agent delegation summary ────────────────────────────────
+  // A wick_delegate call gets a one-line summary here instead of a raw
+  // JSON dump: which role ran, how it ended, and the first line of what
+  // it returned. The full transcript lives in the Sub-agents rail panel,
+  // but this card stays in the thread as the audit record of "here is
+  // where the leader delegated, and here is what came back".
+  const isDelegate = $derived(block.toolName.replace(/^mcp__[^_]+__/, "") === "wick_delegate");
+
+  const delegateInfo = $derived.by(() => {
+    if (!isDelegate) return null;
+    let profile = "";
+    try {
+      profile = JSON.parse(block.toolInput || "{}")?.profile ?? "";
+    } catch { /* malformed input — fall back to the result payload */ }
+    let status = "";
+    let text = "";
+    let delegationId = "";
+    try {
+      const r = JSON.parse(block.result || "{}");
+      status = r?.status ?? "";
+      text = r?.result ?? "";
+      delegationId = r?.delegation_id ?? "";
+      if (!profile) profile = r?.profile ?? "";
+    } catch { /* still running, or a plain-text error */ }
+    return { profile, status, text, delegationId };
+  });
+
+  // First non-empty line of the sub-agent's answer, for the one-line preview.
+  const delegateLine = $derived(
+    (delegateInfo?.text ?? "").split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "",
+  );
+
   const duration = $derived(fmtDuration(block.startedAt, block.endedAt));
   const startLabel = $derived(fmtTime(block.startedAt));
   // Live elapsed while running (now − startedAt), formatted the same way.
@@ -141,6 +177,34 @@
       <path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path>
     </svg>
   </button>
+
+  {#if delegateInfo}
+    <div class="flex items-center gap-2 border-t border-white-300 dark:border-navy-600 px-3 py-2">
+      {#if delegateInfo.profile}
+        <span class="rounded-full bg-white-200 dark:bg-navy-700 px-2 py-0.5 text-[10px] font-medium text-black-900 dark:text-white-100 shrink-0"
+          >{delegateInfo.profile}</span
+        >
+      {/if}
+      {#if delegateInfo.status}
+        <span class={"rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0 " + subAgentStatusCls(delegateInfo.status)}
+          >{subAgentStatusLabel(delegateInfo.status)}</span
+        >
+      {/if}
+      {#if delegateLine}
+        <span class="min-w-0 flex-1 truncate text-[11px] text-black-800 dark:text-black-600"
+          >{delegateLine}</span
+        >
+      {/if}
+      {#if onOpenSubAgent && delegateInfo.delegationId}
+        <button
+          type="button"
+          onclick={(e) => { e.stopPropagation(); onOpenSubAgent(delegateInfo.delegationId); }}
+          class="shrink-0 rounded px-2 py-1 text-[10px] font-medium text-link-400 hover:bg-white-200 dark:hover:bg-navy-700 transition-colors"
+        >Open</button>
+      {/if}
+    </div>
+  {/if}
+
   {#if !inputCollapsed}
     <div class="border-t border-white-300 dark:border-navy-600">
       {#if prettyInput}

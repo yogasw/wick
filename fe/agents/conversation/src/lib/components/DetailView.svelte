@@ -29,6 +29,14 @@
   import { listComposerCommands, type ComposerApiCommand } from "../api/composer.js";
   import { getProcesses, killProcess, dequeueProcess, liveProcesses as filterLiveProcesses } from "../api/processes.js";
   import {
+    getSubAgents,
+    interruptSubAgent,
+    interruptAllSubAgents,
+    liveSubAgents,
+  } from "../api/subagents.js";
+  import SubAgentPanel from "./SubAgentPanel.svelte";
+  import type { SubAgentItem } from "../types/agents.js";
+  import {
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
     duplicateWorkspace, renameWorkspace, removeWorkspace,
   } from "../api/workspace.js";
@@ -145,7 +153,7 @@
   let sseStatus = $state<SSEStatus>("connecting");
 
   /* ── vertical rail tabs ────────────────────────────────────────── */
-  type RailTab = "context" | "process" | "workspace" | "scheduled" | "browser" | "source";
+  type RailTab = "context" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents";
   let railTab = $state<RailTab | null>(null);
 
   /* ── thread scroll ref ─────────────────────────────────────────── */
@@ -187,6 +195,7 @@
     "panel:workspace": () => toggleRail("workspace"),
     "panel:source": () => toggleRail("source"),
     "panel:context": () => toggleRail("context"),
+    "panel:subagents": () => toggleRail("subagents"),
     "panel:thinking": () => openOverridePopover(),
     "view:commands": () => handleTabChange("commands"),
     "view:approvals": () => handleTabChange("approvals"),
@@ -300,6 +309,13 @@
   // Set when a refresh is requested while one is already in flight, so the
   // load re-runs once on completion (see loadProcesses).
   let processReloadPending = false;
+
+  /* ── sub-agents panel state ───────────────────────────────────── */
+  let subAgents = $state<SubAgentItem[]>([]);
+  // Which child's transcript the panel is showing. null = list only.
+  let selectedSubAgent = $state<string | null>(null);
+  let subAgentsInFlight = false;
+  let subAgentReloadPending = false;
 
   /* ── workspace panel state ────────────────────────────────────── */
   let wsInstances = $state<WsInstance[]>([]);
@@ -484,6 +500,65 @@
       processReloadTimer = null;
       loadProcesses();
     }, 200);
+  }
+
+  function loadSubAgents() {
+    // Same in-flight guard + re-arm as loadProcesses: a delegation burst
+    // fires many lifecycle events, and a refresh requested mid-flight must
+    // not be dropped or the panel settles on a stale state.
+    if (subAgentsInFlight) {
+      subAgentReloadPending = true;
+      return;
+    }
+    subAgentsInFlight = true;
+    run(getSubAgents(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { subAgents = res; })
+      .catch((e: unknown) => toastError(`Sub-agents: ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => {
+        subAgentsInFlight = false;
+        if (subAgentReloadPending) {
+          subAgentReloadPending = false;
+          loadSubAgents();
+        }
+      });
+  }
+
+  // Coalesced refetch, mirroring scheduleProcessReload: one fetch ~200ms
+  // after the last transition in a burst, reusing the existing /stream SSE
+  // rather than opening a second event source.
+  let subAgentReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleSubAgentReload() {
+    if (subAgentReloadTimer !== null) clearTimeout(subAgentReloadTimer);
+    subAgentReloadTimer = setTimeout(() => {
+      subAgentReloadTimer = null;
+      loadSubAgents();
+    }, 200);
+  }
+
+  function stopSubAgent(delegationId: string) {
+    run(interruptSubAgent(base, delegationId).pipe(Effect.provide(WickClientLayer)))
+      // A 409 is mapped to outcome "already_done" by the API layer, so it
+      // lands here as a normal result: refresh and show the real outcome
+      // instead of an error toast for a race the user cannot avoid.
+      .then(() => loadSubAgents())
+      .catch((e: unknown) => toastError(`Stop sub-agent: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
+  // Opens the rail on a delegation's child. The thread card knows the
+  // delegation id; the panel selects by child session, so resolve through
+  // the already-loaded rows and fall back to just opening the panel when
+  // the list has not caught up yet.
+  function openSubAgent(delegationId: string) {
+    railTab = "subagents";
+    const row = subAgents.find((s) => s.delegation_id === delegationId);
+    if (row) selectedSubAgent = row.child_session_id;
+    loadSubAgents();
+  }
+
+  function stopAllSubAgents() {
+    run(interruptAllSubAgents(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then(() => loadSubAgents())
+      .catch((e: unknown) => toastError(`Stop all: ${e instanceof Error ? e.message : String(e)}`));
   }
 
   function loadWorkspace() {
@@ -809,8 +884,14 @@
         try { hideApproval(JSON.parse(ev.data ?? "{}")); } catch (_) { /* skip */ }
       } else if (ev.type === "done" || ev.type === "error") {
         void loadConversation();
+        // A sub-agent's own lifecycle events are published on the CHILD's
+        // session id, which this stream is not subscribed to. The leader's
+        // end-of-turn is the reliable moment its delegations changed state,
+        // so refresh the panel here as well as on lifecycle.
+        scheduleSubAgentReload();
       } else if (ev.type === "lifecycle") {
         scheduleProcessReload();
+        scheduleSubAgentReload();
         scheduleFileReload();
       } else if (ev.type === "git_status") {
         try {
@@ -964,9 +1045,21 @@
       })
       .catch(() => { title = sessionId; });
 
+    // A bookmarked sub-agent URL redirects here as
+    // ?rail=subagents&sub=<childSessionId>. Honour it so the link lands on
+    // that child's row rather than a plain conversation view.
+    try {
+      const q = new URLSearchParams(window.location.search);
+      if (q.get("rail") === "subagents") {
+        railTab = "subagents";
+        selectedSubAgent = q.get("sub");
+      }
+    } catch (_) { /* no query string — nothing to restore */ }
+
     startSSE();
     loadFiles();
     loadProcesses();
+    loadSubAgents();
     loadWorkspace();
     loadSchedules();
     loadProviderOptions();
@@ -994,6 +1087,7 @@
     sseStream?.resync();
     void loadConversation();
     scheduleProcessReload();
+    scheduleSubAgentReload();
   }
 
   onDestroy(() => {
@@ -1014,6 +1108,11 @@
   let hasBrowserInstance = $state(false);
 
   const railTabsAll: { id: RailTab; label: string; icon: string }[] = [
+    {
+      id: "subagents",
+      label: "Sub-agents",
+      icon: '<circle cx="8" cy="4" r="2.5"></circle><circle cx="3.5" cy="12" r="2"></circle><circle cx="12.5" cy="12" r="2"></circle><path d="M8 6.5v2M8 8.5H4.5a1 1 0 00-1 1v.5M8 8.5h3.5a1 1 0 011 1v.5" stroke-linecap="round" stroke-linejoin="round"></path>',
+    },
     {
       id: "context",
       label: "Context",
@@ -1046,13 +1145,25 @@
     },
   ];
 
-  // Drop the Browser tab until an enabled playwright_browser instance is known.
+  // Drop the Browser tab until an enabled playwright_browser instance is known,
+  // and the Sub-agents tab until this session has actually delegated. The
+  // Sub-agents filter uses the TOTAL count, not the live one, so finished
+  // results stay reachable after every sub-agent has returned.
   const railTabs = $derived(
-    hasBrowserInstance ? railTabsAll : railTabsAll.filter((t) => t.id !== "browser"),
+    railTabsAll.filter(
+      (t) =>
+        (t.id !== "browser" || hasBrowserInstance) &&
+        (t.id !== "subagents" || subAgents.length > 0),
+    ),
   );
   // If the Browser panel is open but its tab just disappeared, close the panel.
   $effect(() => {
     if (railTab === "browser" && !hasBrowserInstance) railTab = null;
+  });
+  // Same for Sub-agents: without this the panel is orphaned when the last
+  // sub-agent row goes away.
+  $effect(() => {
+    if (railTab === "subagents" && subAgents.length === 0) railTab = null;
   });
 
   const sideOpen = $derived(railTab !== null);
@@ -1067,11 +1178,16 @@
   const processCount = $derived(liveProcesses.length);
   const workspaceCount = $derived(wsInstances.length);
   const scheduledCount = $derived(schedules.filter((s) => (s.status === "pending" || s.status === "active") && !s.paused).length);
+  // Badge counts LIVE sub-agents only. Using the total would leave the
+  // badge stuck at "3" after everything finished; the tab itself stays
+  // visible on the total so results remain readable.
+  const subAgentCount = $derived(liveSubAgents(subAgents).length);
   function railCount(id: RailTab): number {
     if (id === "context") return contextCount;
     if (id === "process") return processCount;
     if (id === "workspace") return workspaceCount;
     if (id === "scheduled") return scheduledCount;
+    if (id === "subagents") return subAgentCount;
     return 0;
   }
 </script>
@@ -1103,7 +1219,7 @@
         data-chat-panel
       >
         <div class="max-w-4xl mx-auto w-full px-6 pt-14 pb-6 md:pt-6">
-          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} />
+          <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} />
         </div>
       </div>
 
@@ -1300,6 +1416,14 @@
           onKill={(sid) => { confirmKill = { sid, queued: false }; }}
           onDequeue={(sid) => { confirmKill = { sid, queued: true }; }}
         />
+      {:else if railTab === "subagents"}
+        <SubAgentPanel
+          {subAgents}
+          selectedId={selectedSubAgent}
+          onSelect={(cid) => { selectedSubAgent = selectedSubAgent === cid ? null : cid; }}
+          onInterrupt={stopSubAgent}
+          onInterruptAll={stopAllSubAgents}
+        />
       {:else if railTab === "workspace"}
         <WorkspacePanel
           instances={wsInstances}
@@ -1424,6 +1548,14 @@
               processes={liveProcesses}
               onKill={(sid) => { confirmKill = { sid, queued: false }; }}
               onDequeue={(sid) => { confirmKill = { sid, queued: true }; }}
+            />
+          {:else if railTab === "subagents"}
+            <SubAgentPanel
+              {subAgents}
+              selectedId={selectedSubAgent}
+              onSelect={(cid) => { selectedSubAgent = selectedSubAgent === cid ? null : cid; }}
+              onInterrupt={stopSubAgent}
+              onInterruptAll={stopAllSubAgents}
             />
           {:else if railTab === "workspace"}
             <WorkspacePanel

@@ -28,6 +28,7 @@ import (
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
 	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/delegation"
 	agentevent "github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
 	agentgate "github.com/yogasw/wick/internal/agents/gate"
@@ -57,7 +58,9 @@ import (
 	"github.com/yogasw/wick/internal/connectors"
 	customconn "github.com/yogasw/wick/internal/connectors/custom"
 	customconnector "github.com/yogasw/wick/internal/connectors/customconnector"
+	dtconn "github.com/yogasw/wick/internal/connectors/datatables"
 	"github.com/yogasw/wick/internal/connectors/notifications"
+	subagents "github.com/yogasw/wick/internal/connectors/sub-agents"
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
@@ -1158,6 +1161,10 @@ func NewServer() *Server {
 	if wfMgr != nil && wfMgr.MCP != nil {
 		wfRunner := wftest.New(wfMgr.Engine, wfMgr.Service, wfMgr.Layout)
 		connectors.Register(wfconn.ModuleWithRunner(wfMgr.MCP, wfRunner))
+		// Data tables ride the same Ops bundle but live in their own
+		// connector so table access can be tagged and audited apart from
+		// the workflow authoring surface.
+		connectors.Register(dtconn.Module(wfMgr.MCP))
 	}
 
 	// wickmanager is a built-in single-instance connector that exposes
@@ -1177,6 +1184,20 @@ func NewServer() *Server {
 	connectors.Register(notifications.Module(notifications.Deps{
 		DB:   db,
 		Push: pushSvc,
+	}))
+	// Declared before the connector registration below and assigned much
+	// further down, once every service it needs exists. The sub-agents
+	// connector closes over this variable rather than its value.
+	var delegationSvc *delegation.Service
+
+	// Sub-agent delegation. Registered here — before Bootstrap — so its
+	// fixed instance is seeded in the same pass as every other connector,
+	// even though the delegation service itself is built much further
+	// down. The closure is what bridges that gap: it is not called until
+	// an op runs, by which time delegationSvc is assigned.
+	connectors.Register(subagents.Module(subagents.Deps{
+		Service: func() *delegation.Service { return delegationSvc },
+		Layout:  agentsLayout,
 	}))
 
 	// Custom connectors: replay admin-built definitions from the DB
@@ -1308,6 +1329,45 @@ func NewServer() *Server {
 	// OAuth-issued tokens both flow through the same middleware —
 	// dispatch by prefix.
 	scheduleStore := schedule.NewStore(db)
+
+	// ── Sub-agent delegation ─────────────────────────────────────
+	// Sub-agents authenticate to the loopback MCP server with SCOPED
+	// tokens (their triggering user + an already-narrowed tag set), never
+	// with mcpInternalToken — that one maps to a synthetic admin and
+	// would bypass tag filtering entirely, making a profile's tool
+	// restrictions decorative.
+	mcpScopedTokens := mcp.NewScopedTokens()
+	delegationSvc = &delegation.Service{
+		Repo:   delegation.NewRepo(db),
+		Runner: delegation.NewPoolRunner(agentsPool, agentsLayout),
+		Stream: agentstool.NewDelegationStream(agentsBcast),
+		Tokens: mcpScopedTokens,
+		Tags:   authSvc,
+		// Phase 3: private git worktrees for sub-agents that edit code.
+		// Falls back to the shared workspace (with a note) on non-git
+		// projects rather than refusing the work.
+		Workspaces: delegation.NewGitWorktrees(agentsLayout),
+		// Phase 2/4: where an async result goes once it lands.
+		Deliver: poolDeliverer{pool: agentsPool, channels: channelReg},
+		// Take-over: a human steering a running sub-agent.
+		Steerer: poolSteerer{pool: agentsPool},
+		// Resolved per call, so flipping the kill-switch or tightening a
+		// ceiling takes effect on the next delegation, not the next boot.
+		LimitsFn: func() delegation.Limits { return delegationLimits(configsSvc) },
+	}
+	// Hand the same service to the HTTP layer so the rail panel, the
+	// interrupt endpoints and the leader-kill cascade all act on the very
+	// delegations the MCP tool created.
+	agentstool.SetDelegation(delegationSvc)
+
+	// Return board tasks whose worker vanished to the queue; without this
+	// a crashed worker's claim pins its task forever.
+	staleAfter := time.Duration(intOr(
+		configsSvc.GetOwned("agents", "sub_agents_stale_claim_min"),
+		agentconfig.DefaultGeneralConfig().SubAgentsStaleClaimMin,
+	)) * time.Minute
+	delegation.NewStaleClaimSweeper(delegationSvc.Repo, staleAfter).Start(context.Background())
+
 	mcpHandler := mcp.NewHandler(connectorsSvc).
 		WithBuildInfo(releaseAppVersion, buildCommit, buildTime).
 		WithAppURL(configsSvc.AppURL).
@@ -1432,7 +1492,7 @@ func NewServer() *Server {
 		authSvc,
 		oauthSvc,
 		strings.TrimRight(configsSvc.AppURL(), "/")+"/.well-known/oauth-protected-resource",
-	).WithInternalToken(mcpInternalToken)
+	).WithInternalToken(mcpInternalToken).WithScopedTokens(mcpScopedTokens)
 
 	// Tools declare routes through a write-only Router; wick collects
 	// them here so duplicate "METHOD PATH" across modules fails the boot
@@ -1480,7 +1540,7 @@ func NewServer() *Server {
 	// so the AI reads/writes only tables the human behind the session owns or
 	// was granted — same rule as the /data-tables UI.
 	if wfMgr != nil && wfMgr.DataTables != nil {
-		wfconn.SetDataTableACL(dataTableACL{tags: tagsSvc, login: authSvc, dt: wfMgr.DataTables, cfg: configsSvc})
+		dtconn.SetDataTableACL(dataTableACL{tags: tagsSvc, login: authSvc, dt: wfMgr.DataTables, cfg: configsSvc})
 	}
 	// Connect MCP custom connectors before the gate lifts: boot
 	// registered them without probing, this pass pulls each server's

@@ -1,0 +1,151 @@
+package entity
+
+import "time"
+
+// Delegation status values. Strings (not iota) so rows stay
+// self-describing for ad-hoc queries.
+//
+// The four terminal-by-failure states are deliberately distinct because
+// they mean different things to both the leader and the operator:
+//
+//   - DelegationInterrupted    — a HUMAN stopped it.
+//   - DelegationStoppedMaxTurns — the per-sub-agent turn cap hit.
+//   - DelegationStoppedBudget   — the per-root aggregate budget ran out.
+//   - DelegationFailed          — a runtime error.
+//
+// Collapsing them loses the ability to tell "the user changed their mind"
+// from "the agent ran away", which is exactly the distinction the leader
+// needs in order to decide whether retrying is sensible.
+//
+// SubAgentStatuses below is the single source of truth; the TypeScript
+// union is generated against it by a test so the two lists cannot drift.
+const (
+	DelegationQueued          = "queued"
+	DelegationRunning         = "running"
+	DelegationDone            = "done"
+	DelegationFailed          = "failed"
+	DelegationInterrupted     = "interrupted"
+	DelegationStoppedMaxTurns = "stopped_max_turns"
+	DelegationStoppedBudget   = "stopped_budget"
+)
+
+// DelegationStatuses is the complete, ordered status set. Kept in one
+// place so the enum-drift test and any UI mapping read the same list.
+var DelegationStatuses = []string{
+	DelegationQueued,
+	DelegationRunning,
+	DelegationDone,
+	DelegationFailed,
+	DelegationInterrupted,
+	DelegationStoppedMaxTurns,
+	DelegationStoppedBudget,
+}
+
+// IsTerminalDelegationStatus reports whether no further work will happen
+// on a delegation in this status. Used by Interrupt to short-circuit
+// before killing anything.
+func IsTerminalDelegationStatus(s string) bool {
+	switch s {
+	case DelegationDone, DelegationFailed, DelegationInterrupted,
+		DelegationStoppedMaxTurns, DelegationStoppedBudget:
+		return true
+	}
+	return false
+}
+
+// AgentDelegation is the audit + control record for exactly one
+// wick_delegate call. It is written before the child spawns and updated
+// as the child progresses, so an interrupted or crashed run still leaves
+// a durable row behind.
+//
+// RootID + Depth are what keep recursion bounded: the governor counts
+// aggregate turns per RootID and refuses to spawn past MaxDepth. A tree
+// without those two columns has no enforceable stopping condition.
+type AgentDelegation struct {
+	ID string `gorm:"primaryKey;type:varchar(64)" json:"id"`
+	// RootID is the id of the top-most delegation in this tree; equal to
+	// ID when Depth == 0. Turn budget is pooled across the whole root.
+	RootID string `gorm:"type:varchar(64);not null;index" json:"root_id"`
+	// ParentSessionID is the leader session that called wick_delegate.
+	ParentSessionID string `gorm:"type:varchar(128);not null;index" json:"parent_session_id"`
+	ParentAgent     string `gorm:"type:varchar(128);not null;default:''" json:"parent_agent"`
+	ProfileKey      string `gorm:"type:varchar(128);not null" json:"profile_key"`
+	// ChildSessionID is the isolated execution context spawned for this
+	// delegation. A real session (own transcript + store), just hidden
+	// from the conversation list.
+	ChildSessionID string `gorm:"type:varchar(128);not null;index" json:"child_session_id"`
+	ChildAgent     string `gorm:"type:varchar(128);not null;default:''" json:"child_agent"`
+
+	Task  string `gorm:"type:text;not null;default:''" json:"task"`
+	Depth int    `gorm:"not null;default:0" json:"depth"`
+	Mode  string `gorm:"type:varchar(16);not null;default:'sync'" json:"mode"`
+	// AncestorKeys is the JSON-encoded profile-key chain from root to
+	// parent. The cycle guard rejects a delegation whose profile already
+	// appears here, which is what stops A→B→A from looping forever.
+	AncestorKeys string `gorm:"type:text;not null;default:'[]'" json:"ancestor_keys"`
+
+	// DeliverySink routes an async result: "channel" posts back to the
+	// originating thread, "session" re-prompts the leader (collect),
+	// "none" leaves it for the monitor only.
+	DeliverySink string `gorm:"type:varchar(32);not null;default:''" json:"delivery_sink"`
+	// Detached marks an async delegation that must outlive its leader.
+	// A detached sub-agent is NOT torn down when the leader goes idle or
+	// is killed — it was fired deliberately to run on its own.
+	Detached bool `gorm:"not null;default:false" json:"detached"`
+	// Collected marks an async result the leader has already picked up
+	// via wick_delegate_collect, so a second call does not re-deliver it.
+	Collected bool `gorm:"not null;default:false" json:"collected"`
+
+	// ProjectID is the scope the delegation ran in, copied from the parent
+	// session. Roles are scoped, so resolving ProfileKey later without it
+	// would find the GLOBAL role of the same name — a different prompt and
+	// a different tool list, with nothing to signal the mismatch.
+	ProjectID string `gorm:"type:varchar(64);not null;default:'';index" json:"project_id"`
+
+	Workspace     string `gorm:"type:varchar(16);not null;default:'shared'" json:"workspace"`
+	WorkspacePath string `gorm:"type:text;not null;default:''" json:"workspace_path"`
+	// WorkspaceNote records why a requested workspace mode was not honoured
+	// (e.g. worktree asked for on a non-git project, fell back to shared).
+	// Surfaced to the leader so a silent downgrade never looks like success.
+	WorkspaceNote string `gorm:"type:text;not null;default:''" json:"workspace_note"`
+	// SquadKey links this delegation to the named squad that produced it.
+	SquadKey string `gorm:"type:varchar(128);not null;default:'';index" json:"squad_key"`
+	// UserSteered marks a delegation a human sent a message into
+	// mid-flight. The result is no longer purely the sub-agent's own work,
+	// and the leader is told so rather than being handed a steered answer
+	// as though the role produced it unaided.
+	UserSteered bool `gorm:"not null;default:false" json:"user_steered"`
+
+	Status    string `gorm:"type:varchar(32);not null;index" json:"status"`
+	TurnsUsed int    `gorm:"not null;default:0" json:"turns_used"`
+	MaxTurns  int    `gorm:"not null;default:0" json:"max_turns"`
+
+	// Token accounting. Populated when the provider reports usage in its
+	// stream; 0 means "this provider did not tell us", never "free".
+	//
+	// Usage is recorded BEFORE any cancellation check, deliberately: a
+	// turn that gets cancelled still consumed tokens, and skipping the
+	// write there silently under-reports spend.
+	InputTokens  int `gorm:"not null;default:0" json:"input_tokens"`
+	OutputTokens int `gorm:"not null;default:0" json:"output_tokens"`
+	TokensUsed   int `gorm:"not null;default:0" json:"tokens_used"`
+	// MaxTokens is the per-delegation token cap, 0 = uncapped by the
+	// delegation itself (the per-tree budget still applies).
+	MaxTokens int `gorm:"not null;default:0" json:"max_tokens"`
+	// Result carries the final answer on success and the PARTIAL text on
+	// interrupt / turn-exhaustion. Never empty-on-stop by design: the
+	// leader receives partial work as a normal tool result rather than an
+	// error, because an error tends to trigger a blind retry right after
+	// the user asked for a stop.
+	Result   string `gorm:"type:text;not null;default:''" json:"result"`
+	ErrorMsg string `gorm:"type:text;not null;default:''" json:"error_msg"`
+
+	// TriggeredBy is the human user id at the root of this tree. Drives
+	// both tag inheritance and interrupt authorization; it is NOT the
+	// leader agent's identity.
+	TriggeredBy string     `gorm:"type:varchar(128);not null;default:'';index" json:"triggered_by"`
+	StartedAt   time.Time  `json:"started_at"`
+	EndedAt     *time.Time `json:"ended_at,omitempty"`
+}
+
+func (AgentDelegation) TableName() string { return "agent_delegations" }

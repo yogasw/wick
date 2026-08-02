@@ -18,6 +18,7 @@ import (
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
+	dtconn "github.com/yogasw/wick/internal/connectors/datatables"
 	"github.com/yogasw/wick/internal/connectors/notifications"
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
@@ -142,6 +143,7 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 	} else {
 		stdioRunner := wftest.New(stdioWfMgr.Engine, stdioWfMgr.Service, stdioWfMgr.Layout)
 		connectors.Register(wfconn.ModuleWithRunner(stdioWfMgr.MCP, stdioRunner))
+		connectors.Register(dtconn.Module(stdioWfMgr.MCP))
 	}
 
 	connectors.RegisterProfile(configsSvc.Profile())
