@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -159,17 +160,28 @@ func TestFormatCostUSDNeverReadsAsFree(t *testing.T) {
 /* ── Phase 2: async fire-and-forget ─────────────────────────────────── */
 
 type recordingDeliverer struct {
+	mu      sync.Mutex
 	channel []string
 	session []string
 }
 
 func (d *recordingDeliverer) DeliverToChannel(_ context.Context, _, text string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.channel = append(d.channel, text)
 	return nil
 }
 func (d *recordingDeliverer) DeliverToSession(_ context.Context, _, _, text string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.session = append(d.session, text)
 	return nil
+}
+
+func (d *recordingDeliverer) channelDeliveries() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.channel...)
 }
 
 func TestAsyncReturnsHandleImmediatelyAndDelivers(t *testing.T) {
@@ -201,8 +213,8 @@ func TestAsyncReturnsHandleImmediatelyAndDelivers(t *testing.T) {
 	}
 
 	waitForStatus(t, r, res.DelegationID, entity.DelegationDone)
-	if len(del.channel) != 1 {
-		t.Fatalf("channel deliveries = %v, want exactly one", del.channel)
+	if got := del.channelDeliveries(); len(got) != 1 {
+		t.Fatalf("channel deliveries = %v, want exactly one", got)
 	}
 }
 
