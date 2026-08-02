@@ -81,6 +81,9 @@ Governor values are **ceilings**. A profile can ask for less; it can never raise
 | Turn budget per tree | `40` | One conversation quietly burning an unbounded number of turns |
 | Max parallel | `4` | A leader fanning out to dozens of concurrent children |
 | Max turns ceiling | `50` | Any single sub-agent running away |
+| Max hops | `10` | Two agents messaging each other in a loop between human turns |
+| Ask timeout | `10 min` | A blocking `ask` waiting forever for an answer |
+| Inbox cap | `20` | A fast agent burying a slow one under messages it will never read |
 
 Turning the master switch off takes effect on the **next delegation** — no restart. Sub-agents already running are left to finish.
 
@@ -91,7 +94,7 @@ top-level tools: `wick_get "sub-agents"` to resolve it, then `wick_execute`
 per op. That buys it the connector contract — an admin page, tag
 visibility, and run history — at the cost of one resolution hop.
 
-Five ops: `list_agents`, `delegate`, `collect`, `create_agent`, `tasks`.
+Nine ops: `list_agents`, `delegate`, `collect`, `create_agent`, `list_access`, `tasks`, `message`, `reply`, `stop`. The last three are covered in [Talking to other agents](#talking-to-other-agents).
 
 ### `list_agents`
 
@@ -123,10 +126,13 @@ The result always carries a `status`:
 
 ### `create_agent`
 
-An agent can define its own roles. `key`, `description` and
-`system_prompt` are all required — a role without a description is
-invisible to the reasoning that picks it, and one without a prompt is a
-generic assistant wearing a role's name.
+An agent can define its own roles — and, calling it again with the same
+`key`, patch one it already defined. On a first create, `key`,
+`description` and `system_prompt` are all required — a role without a
+description is invisible to the reasoning that picks it, and one without
+a prompt is a generic assistant wearing a role's name. On a patch, any
+field left out keeps its current value, so raising a turn budget cannot
+accidentally blank out the prompt.
 
 The role is created in **the calling conversation's project**, never
 globally. That scoping is what makes the op safe to hand to every user:
@@ -137,6 +143,15 @@ refused rather than silently creating something global.
 
 Creating a **global** role stays admin-only and is done from the
 Sub-agents page.
+
+Besides the basics, `create_agent` also takes:
+
+| Input | What it does |
+|---|---|
+| `allowed_tags` | Comma-separated tag ids narrowing which tools/connectors the role may use. Call `list_access` first to see what you can grant — narrowing only ever *restricts*, it can never hand a role access you do not already have. Empty inherits everything you can reach. |
+| `can_delegate` | Lets the role delegate and define roles of its own. Off by default: most roles should do their own work. |
+| `allow_take_over` | Lets a human send messages into this role's running sub-agents mid-run (see [Take-over](#take-over)). |
+| `mode` | `sync` (default, returns the answer to the caller) or `async` (returns immediately, delivers later). |
 
 **A stopped sub-agent returns partial work, not an error.** That is deliberate: a tool error reads to a model as "that call failed, try again," which is the exact opposite of what someone who just clicked Stop wanted.
 
@@ -193,6 +208,8 @@ Configure it under Settings → Sub-agents: `Max hops`, `Ask timeout` (how long 
 
 A sub-agent's session is a **real** session — own transcript, own store — but it is hidden from the conversation list and shown in its parent's rail panel instead. Opening a sub-agent's URL directly redirects to the parent with the panel open on that child, so old links keep working.
 
+It also starts pre-titled from the first line of its `task`, so the rail panel shows something readable instead of a generic placeholder or the sub-agent spending a turn titling a session nobody but its parent will ever open.
+
 ## Permissions
 
 Access attaches to the **human** who started the delegation, never to the profile.
@@ -237,6 +254,8 @@ An async result reaches you through its **delivery sink**:
 | `none` | Recorded only; visible in the panel and monitor |
 
 The leader can also **pull**: `collect` with a `delegation_id`, or with no arguments to list everything waiting. A delegation still running comes back `pending` rather than blocking.
+
+A delivered result reads `@<handle> finished (<status>) · <elapsed>`, followed by its text — named by handle, not just profile key, so a second reviewer's result is distinguishable from the first. In the web UI it also arrives tagged with a `subagent` source rather than looking like something the user typed, so it's clearly marked as an agent reporting back.
 
 A result is handed over **exactly once**. Collecting the same delegation twice returns it flagged as a repeat, because acting on the same answer twice duplicates whatever the leader did with it.
 

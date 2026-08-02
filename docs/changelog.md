@@ -6,7 +6,12 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **Agent-to-agent messaging**: Every agent in a delegation tree now has an address — `@main` for the leader, deduplicated role keys (`reviewer`, `reviewer-2`) for sub-agents. The `sub-agents` connector gains `message` (`kind=tell` or `ask`), `reply`, `stop`, and `list_access` ops, so a running agent can be messaged, asked a question, or stopped without re-explaining what it's doing. A **hop limit** (default 10 consecutive agent-to-agent messages between human turns, configurable under Agents settings → Sub-agents along with `Ask timeout` and `Inbox cap`) guards against two agents looping; a human turn or the rail panel's **Allow 10 more** button refills it. The rail panel's Sub-agents tab gains a "Between agents" message thread, and the composer's `@` menu now lists agents ahead of files. See [Sub-agents ▶ Talking to other agents](/guide/agents/sub-agents#talking-to-other-agents).
+*   **`create_agent` is now create-or-patch**: Calling it again with a role's existing `key` updates that role instead of requiring every field again; omitted fields keep their current value. It also accepts `allowed_tags` (narrow a role's tool access — see the new `list_access` op), `can_delegate`, `allow_take_over`, and `mode`.
+
+### Changed
+*   Async sub-agent results now arrive labelled as a sub-agent (source `subagent`) with the agent's handle and elapsed time, rather than looking like the user typed them. Sub-agent sessions are also pre-titled from their task instead of showing a generic placeholder.
 
 ---
 
