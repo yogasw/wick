@@ -222,7 +222,9 @@
       const target = e.target as Node;
       if (menuEl && menuEl.contains(target)) return;
       if (textareaEl && textareaEl.contains(target)) return;
-      closeMenu();
+      // Clicking away is a refusal too, not an accident to undo on the
+      // next keystroke.
+      closeMenu(true);
     }
     window.addEventListener("mousedown", onDown, true);
     return () => window.removeEventListener("mousedown", onDown, true);
@@ -256,11 +258,13 @@
   function refreshMenu() {
     const caret = textareaEl?.selectionStart ?? text.length;
     const t = detectTrigger(text.slice(0, caret));
-    if (!t) { closeMenu(); return; }
+    if (!t) { dismissedPos = null; closeMenu(); return; }
     const hasSource = t.kind === "@"
       ? (!!onSearchFiles || mentionFiles.length > 0 || mentionAgents.length > 0)
       : commands.length > 0;
     if (!hasSource) { closeMenu(); return; }
+    // Still editing the token the human dismissed — stay out of the way.
+    if (dismissedPos === t.pos) { closeMenu(); return; }
     const wasClosed = !menuOpen;
     menuKind = t.kind;
     menuTriggerPos = t.pos;
@@ -278,7 +282,22 @@
     }
   }
 
-  function closeMenu() {
+  /* closeMenu(dismiss) — dismiss=true means the human said no.
+
+     Without the distinction, Esc was useless: refreshMenu runs on every
+     keystroke and the `@foo` you are still typing keeps matching, so the
+     popup reappeared on the very next character and sat over the composer
+     saying "No matches". A dismissal therefore sticks to the token it was
+     made against, and is remembered by trigger position.
+
+     It clears itself the moment detectTrigger stops matching — deleting
+     the token or moving off it. So typing a FRESH `@` opens the menu
+     again (the token was gone in between), while editing the dismissed
+     one leaves it shut. */
+  let dismissedPos = $state<number | null>(null);
+
+  function closeMenu(dismiss = false) {
+    if (dismiss && menuKind) dismissedPos = menuTriggerPos;
     menuOpen = false;
     menuKind = null;
   }
@@ -315,7 +334,7 @@
 
   function handleMenuKeys(e: KeyboardEvent): boolean {
     if (!menuOpen) return false;
-    if (e.key === "Escape") { e.preventDefault(); closeMenu(); textareaEl?.focus(); return true; }
+    if (e.key === "Escape") { e.preventDefault(); closeMenu(true); textareaEl?.focus(); return true; }
     if (filtered.length === 0) return false;
     if (e.key === "ArrowDown") { e.preventDefault(); menuIndex = (menuIndex + 1) % filtered.length; return true; }
     if (e.key === "ArrowUp") { e.preventDefault(); menuIndex = (menuIndex - 1 + filtered.length) % filtered.length; return true; }
