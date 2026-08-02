@@ -11,6 +11,13 @@ vi.mock("@wick-fe/common-api", () => ({
   apiGetE: vi.fn(() => inertEffect),
   apiPostE: vi.fn(() => inertEffect),
   apiDeleteE: vi.fn(() => inertEffect),
+  // Promise-based, unlike the Effect helpers above: the composer's @ menu
+  // loads the role list directly rather than through a provided layer.
+  listAgentProfiles: vi.fn(async () => ({
+    profiles: [],
+    owned: [],
+    inherited: [],
+  })),
 }));
 
 vi.mock("@wick-fe/common-stores", () => ({

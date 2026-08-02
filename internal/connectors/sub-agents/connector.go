@@ -81,6 +81,21 @@ type delegateInput struct {
 	Workspace    string `wick:"desc=shared (default) or worktree for a private git worktree. Falls back to shared with a note on a non-git project."`
 }
 
+type messageInput struct {
+	To   string `wick:"required;desc=Handle of the agent to message, without the @ (see list_agents)."`
+	Body string `wick:"required;textarea;desc=What you want to say or ask."`
+	Kind string `wick:"desc=tell (default) sends and returns immediately. ask waits for that agent's answer."`
+}
+
+type replyInput struct {
+	MessageID string `wick:"required;desc=The id of the question you are answering, shown with the question."`
+	Body      string `wick:"required;textarea;desc=Your answer."`
+}
+
+type stopInput struct {
+	Handle string `wick:"required;desc=Handle of the agent to stop, without the @."`
+}
+
 type collectInput struct {
 	DelegationID string `wick:"desc=The delegation to collect. Omit to list every async result waiting for this conversation."`
 }
@@ -93,6 +108,13 @@ type createAgentInput struct {
 	Provider     string `wick:"desc=Agent runtime: claude (default), codex, wick, gemini."`
 	Model        string `wick:"desc=Provider-specific model id. Empty uses the provider default."`
 	MaxTurns     int    `wick:"desc=Default turn budget for this role. Clamped to the system ceiling."`
+	// Tool access. Narrowed against your own tags server-side, so this can
+	// only ever restrict a role — it can never grant it something you do
+	// not already have.
+	AllowedTags   string `wick:"desc=Comma-separated tag ids limiting which tools/connectors this role may use. See list_access for what you can grant. Empty = the role inherits everything you can reach."`
+	CanDelegate   bool   `wick:"desc=Let this role delegate and define roles of its own. Off by default: most roles should do their own work."`
+	AllowTakeOver bool   `wick:"desc=Let a human send messages into this role mid-run. Its answers are then flagged as human-steered."`
+	Mode          string `wick:"desc=sync (default) returns the answer to the caller. async returns immediately and delivers later."`
 }
 
 type tasksInput struct {
@@ -137,7 +159,41 @@ func Operations(deps Deps) []connector.Category {
 				collectInput{}, h.collect, wickdocs.Docs{}),
 		),
 
+		connector.Cat("Messaging", "Talk to the other agents working in this conversation.",
+			connector.Op("message", "Message an Agent",
+				"Send a message to another agent already working in this conversation, addressed by handle (list_agents shows them). "+
+					"kind=tell delivers it and returns immediately — use it to report progress or hand over information. "+
+					"kind=ask waits for that agent's answer and returns it, for something you cannot continue without. "+
+					"The recipient keeps the context of its own work, so you do not need to re-explain what it is doing. "+
+					"Every message counts against this conversation's shared budget and its hop limit; when the hop limit runs out, "+
+					"summarise and report to the user instead of messaging again.",
+				messageInput{}, h.message, wickdocs.Docs{}),
+
+			connector.Op("reply", "Answer a Question",
+				"Answer a question another agent asked you. Pass the message_id shown with the question. "+
+					"If you finish your turn without replying, your closing message is sent as the answer automatically — "+
+					"so reply explicitly whenever the answer matters.",
+				replyInput{}, h.reply, wickdocs.Docs{}),
+
+			// Not destructive: stopping returns the sub-agent's partial work
+			// as a normal result rather than discarding it, and the human
+			// interrupt path is ungated for the same reason. Marking it
+			// destructive would default it off on every row, leaving a leader
+			// able to start work it cannot stop.
+			connector.Op("stop", "Stop an Agent",
+				"Stop another agent in this conversation. Its partial work is kept and returned, not discarded. "+
+					"Use it when an agent is stuck, redundant, or working on something no longer needed.",
+				stopInput{}, h.stop, wickdocs.Docs{}),
+		),
+
 		connector.Cat("Roles", "Define the roles you can delegate to.",
+			connector.Op("list_access", "List Grantable Tool Access",
+				"List the tool-access tags you can give a role, as {id, name}. Call this before create_agent when you want to "+
+					"restrict what a role may reach: pass a subset of these ids as allowed_tags. Omitting allowed_tags gives the "+
+					"role everything you can reach, which is the right default for a role doing work on your behalf. "+
+					"A role can never exceed this set, so narrowing is the only thing allowed_tags can do.",
+				emptyInput{}, h.listAccess, wickdocs.Docs{}),
+
 			connector.Op("create_agent", "Create or Update a Role",
 				"Create a sub-agent role, or update one you already own. "+
 					"The role is created in THIS conversation's project, so it is visible only inside that project; "+

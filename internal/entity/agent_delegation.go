@@ -146,6 +146,22 @@ type AgentDelegation struct {
 	TriggeredBy string     `gorm:"type:varchar(128);not null;default:'';index" json:"triggered_by"`
 	StartedAt   time.Time  `json:"started_at"`
 	EndedAt     *time.Time `json:"ended_at,omitempty"`
+
+	// Handle is this instance's address inside its tree ("reviewer-2").
+	// Unique per RootID and never reused, because a handle that could be
+	// recycled would let a message land on a different agent than the one
+	// the sender was talking to.
+	Handle string `gorm:"type:varchar(64);not null;default:''" json:"handle"`
+	// HopCount is the number of consecutive agent-to-agent messages in
+	// this tree since a human last spoke. Stored on the ROOT row only, and
+	// reset only by a human turn — a leader that could reset its own limit
+	// would not be limited.
+	HopCount int `gorm:"not null;default:0" json:"hop_count"`
 }
+
+// LeaderHandle is the address of the conversation owner (the MAIN agent).
+// Reserved: a profile literally named "main" must not be able to take the
+// leader's address and inherit the authority that goes with it.
+const LeaderHandle = "main"
 
 func (AgentDelegation) TableName() string { return "agent_delegations" }

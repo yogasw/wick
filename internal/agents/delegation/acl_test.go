@@ -106,3 +106,37 @@ func TestVisibleProfilesHidesDisabledFromAdmins(t *testing.T) {
 		t.Fatalf("got %v, want none", got)
 	}
 }
+
+func TestCanAgentStopOnlyInsideItsOwnTree(t *testing.T) {
+	d := &entity.AgentDelegation{RootID: "root1", Handle: "worker"}
+	if !CanAgentStop(d, "root1") {
+		t.Fatal("an agent must be able to stop a peer in its own tree")
+	}
+	if CanAgentStop(d, "root2") {
+		t.Fatal("stopping across trees must be refused")
+	}
+	if CanAgentStop(nil, "root1") {
+		t.Fatal("nil delegation must not be stoppable")
+	}
+	if CanAgentStop(d, "") {
+		t.Fatal("a caller with no tree must not be able to stop anything")
+	}
+}
+
+func TestNarrowTagsCannotWidenBeyondTheCaller(t *testing.T) {
+	caller := []string{"tag-a", "tag-b"}
+
+	if got := NarrowTags([]string{"tag-a"}, caller); len(got) != 1 || got[0] != "tag-a" {
+		t.Fatalf("a held tag must survive: %v", got)
+	}
+	// The whole reason an agent may pick tags at all.
+	if got := NarrowTags([]string{"tag-a", "tag-zzz"}, caller); len(got) != 1 || got[0] != "tag-a" {
+		t.Fatalf("a tag the caller does not hold must be dropped: %v", got)
+	}
+	if got := NarrowTags(nil, caller); got != nil {
+		t.Fatalf("no request means inherit everything, not an empty set: %v", got)
+	}
+	if got := NarrowTags([]string{"tag-a", "tag-a"}, caller); len(got) != 1 {
+		t.Fatalf("duplicates must collapse: %v", got)
+	}
+}

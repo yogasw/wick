@@ -1351,6 +1351,17 @@ func NewServer() *Server {
 		Deliver: poolDeliverer{pool: agentsPool, channels: channelReg},
 		// Take-over: a human steering a running sub-agent.
 		Steerer: poolSteerer{pool: agentsPool},
+		// Messaging: make an exited sub-agent addressable again, and say
+		// so when it can only come back without its memory.
+		Waker: poolWaker{pool: agentsPool, layout: agentsLayout},
+		AskTimeout: time.Duration(intOr(
+			configsSvc.GetOwned("agents", "sub_agents_ask_timeout_min"),
+			agentconfig.DefaultGeneralConfig().SubAgentsAskTimeoutMin,
+		)) * time.Minute,
+		InboxCap: intOr(
+			configsSvc.GetOwned("agents", "sub_agents_inbox_cap"),
+			agentconfig.DefaultGeneralConfig().SubAgentsInboxCap,
+		),
 		// Resolved per call, so flipping the kill-switch or tightening a
 		// ceiling takes effect on the next delegation, not the next boot.
 		LimitsFn: func() delegation.Limits { return delegationLimits(configsSvc) },

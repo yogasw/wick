@@ -190,6 +190,9 @@ export type SubAgentItem = {
   delegation_id: string;
   child_session_id: string;
   profile_key: string;
+  /** Address inside the delegation tree — what an @mention resolves to.
+      Absent on rows written before handles existed. */
+  handle?: string;
   // label is the delegated task, truncated server-side.
   label: string;
   status: SubAgentStatus;
@@ -337,4 +340,16 @@ export type ProjectOption = {
   managed: boolean;
   pinned: boolean;
   defaultProvider?: string;
+};
+
+/** One message between two agents inside a delegation tree. */
+export type AgentMessageItem = {
+  id: string;
+  from_handle: string;
+  to_handle: string;
+  body: string;
+  kind: "ask" | "tell" | "reply";
+  /** Set when wick promoted a closing turn into an answer nobody wrote. */
+  auto_reply?: boolean;
+  created_at: string;
 };

@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { get } from "svelte/store";
   import { Effect } from "effect";
-  import { WickClientLayer } from "@wick-fe/common-api";
+  import { WickClientLayer, listAgentProfiles } from "@wick-fe/common-api";
   import { toastError, toastOk } from "@wick-fe/common-stores";
   import { ConfirmDialog, Composer } from "@wick-fe/common-ui";
   import { NOTIFY_KEY } from "../notify-pref.js";
@@ -33,9 +33,11 @@
     interruptSubAgent,
     interruptAllSubAgents,
     liveSubAgents,
+    getMessages,
+    bumpHops,
   } from "../api/subagents.js";
   import SubAgentPanel from "./SubAgentPanel.svelte";
-  import type { SubAgentItem } from "../types/agents.js";
+  import type { AgentMessageItem, SubAgentItem } from "../types/agents.js";
   import {
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
     duplicateWorkspace, renameWorkspace, removeWorkspace,
@@ -523,6 +525,66 @@
       });
   }
 
+  // Agent-to-agent thread, loaded alongside the sub-agent list so the
+  // panel never shows a roster without the conversation that goes with it.
+  let agentMessages = $state<AgentMessageItem[]>([]);
+  let hopsLeft = $state(0);
+
+  function loadAgentMessages() {
+    run(getMessages(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { agentMessages = res.messages; hopsLeft = res.hopsLeft; })
+      // Quiet on failure: the thread is secondary to the sub-agent list,
+      // and a toast per poll would bury the panel it decorates.
+      .catch(() => {});
+  }
+
+  // Roles this conversation may delegate to, for the composer's @ menu.
+  // Loaded once: the roster changes when someone edits a profile, not
+  // during a conversation.
+  let agentRoles = $state<{ key: string; name: string; description: string }[]>([]);
+
+  function loadAgentRoles() {
+    // Scoped to this session's project so the menu offers the same roles
+    // delegate would actually resolve — a project role shadows a global
+    // one, and offering the shadowed name would be a lie.
+    listAgentProfiles(base, activeProjectId || undefined)
+      .then((res) => {
+        agentRoles = res.profiles.map((p) => ({
+          key: p.key,
+          name: p.name,
+          description: p.description,
+        }));
+      })
+      // Silent: the @ menu still lists files, and a toast on every load
+      // would nag on installs where sub-agents are switched off.
+      .catch(() => {});
+  }
+
+  // Live instances first, then roles. Mentioning a running agent talks to
+  // the one that already has context; mentioning a role starts a new one,
+  // so the cheaper, better-informed target is offered first.
+  const mentionableAgents = $derived.by(() => {
+    const out: { handle: string; label: string; hint?: string }[] = [];
+    const seen = new Set<string>();
+    for (const s of subAgents) {
+      if (!s.handle || seen.has(s.handle)) continue;
+      seen.add(s.handle);
+      out.push({ handle: s.handle, label: s.handle, hint: `${s.profile_key} · running here` });
+    }
+    for (const r of agentRoles) {
+      if (seen.has(r.key)) continue;
+      seen.add(r.key);
+      out.push({ handle: r.key, label: r.key, hint: r.description || r.name });
+    }
+    return out;
+  });
+
+  function bumpAgentHops() {
+    run(bumpHops(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then(() => loadAgentMessages())
+      .catch((e: unknown) => toastError(`Allow more hops: ${e instanceof Error ? e.message : String(e)}`));
+  }
+
   // Coalesced refetch, mirroring scheduleProcessReload: one fetch ~200ms
   // after the last transition in a burst, reusing the existing /stream SSE
   // rather than opening a second event source.
@@ -532,6 +594,7 @@
     subAgentReloadTimer = setTimeout(() => {
       subAgentReloadTimer = null;
       loadSubAgents();
+      loadAgentMessages();
     }, 200);
   }
 
@@ -1060,6 +1123,8 @@
     loadFiles();
     loadProcesses();
     loadSubAgents();
+    loadAgentMessages();
+    loadAgentRoles();
     loadWorkspace();
     loadSchedules();
     loadProviderOptions();
@@ -1279,6 +1344,7 @@
             provider={providerSelect}
             project={projectSelect}
             onSearchFiles={searchMentionFiles}
+            mentionAgents={mentionableAgents}
             commands={composerCommands}
           />
         </div>
@@ -1423,6 +1489,9 @@
           onSelect={(cid) => { selectedSubAgent = selectedSubAgent === cid ? null : cid; }}
           onInterrupt={stopSubAgent}
           onInterruptAll={stopAllSubAgents}
+          messages={agentMessages}
+          {hopsLeft}
+          onBumpHops={bumpAgentHops}
         />
       {:else if railTab === "workspace"}
         <WorkspacePanel
@@ -1556,6 +1625,9 @@
               onSelect={(cid) => { selectedSubAgent = selectedSubAgent === cid ? null : cid; }}
               onInterrupt={stopSubAgent}
               onInterruptAll={stopAllSubAgents}
+              messages={agentMessages}
+              {hopsLeft}
+              onBumpHops={bumpAgentHops}
             />
           {:else if railTab === "workspace"}
             <WorkspacePanel

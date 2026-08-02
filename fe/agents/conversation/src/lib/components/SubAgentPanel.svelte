@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { SubAgentItem } from "../types/agents.js";
+  import type { AgentMessageItem, SubAgentItem } from "../types/agents.js";
+  import MessageThread from "./MessageThread.svelte";
   import {
     subAgentStatusCls,
     subAgentStatusLabel,
@@ -12,9 +13,21 @@
     onSelect: (childSessionId: string) => void;
     onInterrupt: (delegationId: string) => void;
     onInterruptAll: () => void;
+    messages: AgentMessageItem[];
+    hopsLeft: number;
+    onBumpHops: () => void;
   };
 
-  let { subAgents, selectedId, onSelect, onInterrupt, onInterruptAll }: Props = $props();
+  let {
+    subAgents,
+    selectedId,
+    onSelect,
+    onInterrupt,
+    onInterruptAll,
+    messages,
+    hopsLeft,
+    onBumpHops,
+  }: Props = $props();
 
   const anyLive = $derived(subAgents.some((s) => isSubAgentLive(s.status)));
 
@@ -106,6 +119,15 @@
           </div>
         </div>
       {/each}
+    {/if}
+
+    {#if messages.length > 0 || hopsLeft <= 0}
+      <div class="border-t border-white-300 dark:border-navy-600">
+        <div class="px-4 pt-3 text-xs font-semibold text-black-900 dark:text-white-100">
+          Between agents
+        </div>
+        <MessageThread {messages} {hopsLeft} {onBumpHops} />
+      </div>
     {/if}
   </div>
 </div>

@@ -110,6 +110,19 @@ func (r *PoolRunner) StartAgent(ctx context.Context, spec ChildSpec) error {
 	if err := session.SetActiveAgent(r.Layout, spec.SessionID, spec.AgentName); err != nil {
 		log.Debug().Err(err).Msg("delegation: set active agent")
 	}
+	// Title the child from its task, and mark it custom.
+	//
+	// Not cosmetic. The spawn factory shows every agent its session's
+	// title state, and the standing rule is "if title_custom is false,
+	// derive a title and call wick_set_title". A sub-agent therefore
+	// spends a tool call titling a session that is HIDDEN from the
+	// conversation list — nobody will ever read it. Pre-setting the title
+	// satisfies the same rule instead of contradicting it, and the rail
+	// gets a better label than the model would have invented anyway.
+	if err := titleChildFromTask(r.Layout, spec.SessionID, spec.Task); err != nil {
+		log.Debug().Err(err).Str("session", spec.SessionID).
+			Msg("delegation: pre-titling the child failed; it may spend a turn titling itself")
+	}
 
 	return r.Pool.Send(ctx, spec.SessionID, spec.AgentName, string(session.OriginUI), "user", spec.Task)
 }
@@ -122,4 +135,33 @@ func (r *PoolRunner) KillAgent(sessionID, agentName string) error {
 // PartialText returns the child's in-flight, unflushed output.
 func (r *PoolRunner) PartialText(sessionID, agentName string) string {
 	return r.Pool.PartialText(sessionID, agentName)
+}
+
+// childTitleRunes caps a generated child title. Long enough to identify
+// the task in the rail, short enough not to wrap.
+const childTitleRunes = 60
+
+// titleChildFromTask names a sub-agent's session after its task and marks
+// the title as explicitly chosen, so the agent leaves it alone.
+//
+// Idempotent by check: a title already set by a human (or by an earlier
+// delegation reusing the session) is never overwritten.
+func titleChildFromTask(layout agentconfig.Layout, sessionID, task string) error {
+	sess, err := session.Load(layout, sessionID)
+	if err != nil {
+		return err
+	}
+	if sess.Meta.TitleCustom || sess.Meta.Label != "" {
+		return nil
+	}
+	title := strings.TrimSpace(strings.SplitN(strings.TrimSpace(task), "\n", 2)[0])
+	if title == "" {
+		title = "Sub-agent task"
+	}
+	if r := []rune(title); len(r) > childTitleRunes {
+		title = strings.TrimSpace(string(r[:childTitleRunes])) + "…"
+	}
+	sess.Meta.Label = title
+	sess.Meta.TitleCustom = true
+	return session.SaveMeta(layout, sessionID, sess.Meta)
 }

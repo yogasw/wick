@@ -265,6 +265,9 @@ func Register(r tool.Router) {
 	// /api/sessions routes so sessionAccessMW covers them too.
 	r.GET("/api/sessions/{id}/subagents", sessionSubAgents)
 	r.POST("/api/sessions/{id}/subagents/interrupt-all", interruptAllSubAgents)
+	// Agent-to-agent thread + the human-only hop refill.
+	r.GET("/api/sessions/{id}/messages", sessionMessages)
+	r.POST("/api/sessions/{id}/hops/reset", resetSessionHops)
 	r.POST("/api/delegations/{delegationID}/interrupt", interruptSubAgent)
 	r.POST("/api/delegations/{delegationID}/message", takeOverSubAgent)
 
@@ -1481,6 +1484,10 @@ func sendMessage(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// A person speaking is what refills the agent-to-agent hop budget.
+	// Deliberately not something an agent can do for itself: a leader deep
+	// in a loop is exactly the one most convinced it needs more hops.
+	resetHopsForSession(c, id)
 	c.JSON(http.StatusOK, map[string]string{"status": "queued"})
 }
 

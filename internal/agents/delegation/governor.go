@@ -30,6 +30,12 @@ const (
 	DefaultMaxTokensPerDelegation = 200_000
 	// DefaultRootTokenBudget bounds spend across a whole delegation tree.
 	DefaultRootTokenBudget = 1_000_000
+	// DefaultMaxHops bounds consecutive agent-to-agent messages between
+	// human turns. Ten is enough for a real exchange (ask, clarify,
+	// answer, confirm) and short enough that a loop costs a few turns
+	// rather than a whole budget. Turn budget alone is a poor brake here:
+	// two agents can trade short messages cheaply for a long time.
+	DefaultMaxHops = 10
 )
 
 // Limits is the resolved governor configuration.
@@ -44,6 +50,9 @@ type Limits struct {
 	// RootTokenBudget caps total spend across one delegation tree.
 	// 0 = no token ceiling; turn limits remain the only brake.
 	RootTokenBudget int
+	// MaxHops bounds consecutive agent-to-agent messages between human
+	// turns. Reset when a person speaks, never by an agent.
+	MaxHops int
 	// Disabled is the global kill-switch. When true, every delegation is
 	// refused before anything spawns — the emergency stop and the
 	// staged-rollout lever.
@@ -59,6 +68,7 @@ func DefaultLimits() Limits {
 		MaxTurnsCap:            MaxTurnsCeiling,
 		MaxTokensPerDelegation: DefaultMaxTokensPerDelegation,
 		RootTokenBudget:        DefaultRootTokenBudget,
+		MaxHops:                DefaultMaxHops,
 	}
 }
 
@@ -77,6 +87,9 @@ func (l Limits) normalize() Limits {
 	}
 	if l.MaxTurnsCap <= 0 {
 		l.MaxTurnsCap = MaxTurnsCeiling
+	}
+	if l.MaxHops <= 0 {
+		l.MaxHops = DefaultMaxHops
 	}
 	// Token ceilings are allowed to be 0 = "no token cap", unlike the
 	// others: a provider that reports no usage cannot be capped on spend,
@@ -104,6 +117,9 @@ const (
 	RefusedTokenBudget RefusalReason = "token_budget"
 	RefusedParallel    RefusalReason = "max_parallel"
 	RefusedProfileGone RefusalReason = "profile_disabled"
+	// RefusedHops means agents have been messaging each other for too
+	// many consecutive turns with no human in the loop.
+	RefusedHops RefusalReason = "max_hops"
 )
 
 // Refusal is a governor rejection carrying a human-readable message.
@@ -258,6 +274,33 @@ func (r *Repo) Admit(
 			Message: fmt.Sprintf(
 				"Already running %d sub-agents concurrently (limit %d). Wait for one to finish before delegating again.",
 				active, lim.MaxParallel),
+		}
+	}
+	return nil
+}
+
+// AdmitMessage decides whether one more agent-to-agent message may be
+// sent, given the tree's current hop count.
+//
+// Hitting the cap stops MESSAGES, not the agents: every instance stays
+// addressable and its work stands, so a human can allow more hops and the
+// conversation resumes where it left off. Killing the tree here would
+// punish the work for the chatter.
+func AdmitMessage(lim Limits, hop int) error {
+	lim = lim.normalize()
+	if lim.Disabled {
+		return &Refusal{
+			Reason:  RefusedDisabled,
+			Message: "Sub-agent delegation is currently disabled by an administrator.",
+		}
+	}
+	if hop >= lim.MaxHops {
+		return &Refusal{
+			Reason: RefusedHops,
+			Message: fmt.Sprintf(
+				"Agents have exchanged %d messages since the last human turn (limit %d). "+
+					"Stop messaging, summarise what you have, and report back to the user.",
+				hop, lim.MaxHops),
 		}
 	}
 	return nil

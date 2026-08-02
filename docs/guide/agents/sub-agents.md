@@ -156,6 +156,39 @@ Stop works on a **queued** sub-agent too, not just a running one — it is dropp
 
 If a sub-agent happens to finish in the instant between your click and the server handling it, its real result stands and nothing is overwritten.
 
+## Talking to other agents
+
+Delegation hands work down one level and waits. Messaging is the other direction: an agent that is already running can be reached, asked a question, and answered — without re-explaining what it is doing.
+
+Every agent in a conversation has a **handle**: the leader is `@main`, and each sub-agent gets its role key, deduplicated (`reviewer`, `reviewer-2`). Handles address an *instance*, not a role, so a second reviewer is a separate correspondent.
+
+| Op | What it does |
+|---|---|
+| `message` with `kind=tell` | Delivers and returns immediately. For progress reports and hand-offs. |
+| `message` with `kind=ask` | Waits for that agent's answer and returns it. For something the sender cannot continue without. |
+| `reply` | Answers a question, using the `message_id` it arrived with. |
+| `stop` | Ends another agent's work here; its partial result is kept, not discarded. |
+
+An agent whose process has already exited is **resumed** when a message arrives, with its earlier work intact. If the transcript cannot be recovered, the sender is told plainly that the agent is answering fresh — a confident answer from an agent that has forgotten the question is worse than no answer.
+
+Messages queue per recipient and arrive as **one turn**, not one turn each, so a burst does not cost a model round per line. Each delivery carries the live roster and what is left of the budget:
+
+```
+── from @reviewer says ──
+2 of 5 files done. auth.go looks wrong.
+
+roster: @main (leader, working) · @reviewer (code-reviewer, working)
+left: 12/40 turns left · 3/10 hops left · 660k/1000k tokens left
+```
+
+### The hop limit
+
+Two agents can trade short messages cheaply for a very long time, which is why turn and token budgets are not enough on their own. A **hop** is one agent-to-agent message; the default limit is 10 consecutive hops **between human turns**.
+
+When it runs out, sending is refused and the agents are told to summarise and report — nothing is killed, and every agent stays addressable. The counter resets whenever a person sends a message, or when someone clicks **Allow 10 more** in the rail panel. Agents cannot reset it themselves: a leader deep in a loop is exactly the one most convinced it needs more.
+
+Configure it under Settings → Sub-agents: `Max hops`, `Ask timeout` (how long a blocking ask waits before giving up — the question stays in the inbox either way), and `Inbox cap` (how far behind one agent may fall before senders are refused).
+
 ## Sub-agent sessions
 
 A sub-agent's session is a **real** session — own transcript, own store — but it is hidden from the conversation list and shown in its parent's rail panel instead. Opening a sub-agent's URL directly redirects to the parent with the panel open on that child, so old links keep working.
@@ -269,7 +302,7 @@ Teardown asks the process tree to exit, then forces it after a grace window. The
 
 ## Limits worth knowing
 
-- **One delegation is one question.** The child returns on its first complete answer; it is not a long-running conversation.
+- **One delegation is one question — unless someone messages it.** The child returns on its first complete answer. If a message arrives while it works, it keeps going and answers that too, still bounded by its turn cap and the tree's hop limit.
 - **Turn caps are enforced by wick**, by counting normalized end-of-turn events and stopping the process — not by a provider flag. Only some CLIs have `--max-turns`; the cap behaves identically on the ones that do not.
 - **Cycles are refused.** A profile already active higher in the chain cannot be delegated to again, so `A → B → A` cannot loop.
 - **Budget exhaustion lets running work finish** and refuses only *new* delegations. A manual stop, by contrast, cascades.

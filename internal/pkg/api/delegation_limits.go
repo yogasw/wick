@@ -37,6 +37,7 @@ func (p delegationLimitsProvider) current() delegation.Limits {
 		MaxTurnsCap:            def.SubAgentsMaxTurns,
 		MaxTokensPerDelegation: def.SubAgentsMaxTokens,
 		RootTokenBudget:        def.SubAgentsRootTokens,
+		MaxHops:                def.SubAgentsMaxHops,
 		Disabled:               !def.SubAgentsEnabled,
 	}
 	if p.cfg == nil {
@@ -51,6 +52,7 @@ func (p delegationLimitsProvider) current() delegation.Limits {
 	lim.RootBudget = intOr(p.cfg.GetOwned("agents", "sub_agents_root_budget"), lim.RootBudget)
 	lim.MaxParallel = intOr(p.cfg.GetOwned("agents", "sub_agents_max_parallel"), lim.MaxParallel)
 	lim.MaxTurnsCap = intOr(p.cfg.GetOwned("agents", "sub_agents_max_turns"), lim.MaxTurnsCap)
+	lim.MaxHops = intOr(p.cfg.GetOwned("agents", "sub_agents_max_hops"), lim.MaxHops)
 	// Token ceilings accept an explicit 0 = "no cap", unlike the others:
 	// providers that report no usage cannot be capped on spend at all, so
 	// forcing a floor here would be a limit that silently never fires.

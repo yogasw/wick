@@ -10,6 +10,7 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
+	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -34,6 +35,7 @@ func testRepo(t *testing.T) *Repo {
 	if err := db.AutoMigrate(
 		&entity.AgentProfile{}, &entity.AgentDelegation{},
 		&entity.AgentSquad{}, &entity.AgentBoard{}, &entity.AgentTask{},
+		&entity.AgentMessage{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -204,5 +206,45 @@ func TestEffectiveMaxTurnsPrecedenceAndClamp(t *testing.T) {
 				t.Fatalf("got %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAdmitMessage(t *testing.T) {
+	lim := Limits{MaxHops: 3}
+	if err := AdmitMessage(lim, 2); err != nil {
+		t.Fatalf("hop 2 of 3 must be allowed: %v", err)
+	}
+	err := AdmitMessage(lim, 3)
+	if err == nil {
+		t.Fatal("hop 3 of 3 must be refused")
+	}
+	var ref *Refusal
+	if !errors.As(err, &ref) || ref.Reason != RefusedHops {
+		t.Fatalf("want RefusedHops refusal, got %T %v", err, err)
+	}
+	// A refusal that only says no leaves the agent looping on retries.
+	if !strings.Contains(ref.Message, "report back to the user") {
+		t.Fatalf("refusal gives no next step: %q", ref.Message)
+	}
+}
+
+func TestAdmitMessageRespectsKillSwitch(t *testing.T) {
+	if err := AdmitMessage(Limits{Disabled: true, MaxHops: 10}, 0); err == nil {
+		t.Fatal("the kill-switch must stop messages too, not only spawns")
+	}
+}
+
+// A zero hop cap from a half-filled config row must mean "use the
+// default", never "unlimited" — the same rule the other brakes follow.
+func TestZeroHopCapFallsBackToTheDefault(t *testing.T) {
+	if err := AdmitMessage(Limits{MaxHops: 0}, DefaultMaxHops); err == nil {
+		t.Fatal("a zero cap must normalize to the default, not disable the brake")
+	}
+}
+
+func TestConfigDefaultMatchesGovernorDefault(t *testing.T) {
+	if config.DefaultGeneralConfig().SubAgentsMaxHops != DefaultMaxHops {
+		t.Fatalf("config default %d drifted from governor default %d",
+			config.DefaultGeneralConfig().SubAgentsMaxHops, DefaultMaxHops)
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/delegation"
 	event "github.com/yogasw/wick/internal/agents/event"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/session"
@@ -51,8 +53,16 @@ func (d poolDeliverer) DeliverToSession(ctx context.Context, parentSessionID, ag
 	if d.pool == nil {
 		return nil
 	}
-	return d.pool.Send(ctx, parentSessionID, agentName, string(session.OriginUI), "user", text)
+	// Source "subagent", not OriginUI. This text did not come from the
+	// person at the keyboard, and labelling it as though it did tells the
+	// leader its operator said something they never said — and hides from
+	// the reader that a sub-agent came back at all.
+	return d.pool.Send(ctx, parentSessionID, agentName, sourceSubAgent, "user", text)
 }
+
+// sourceSubAgent marks a turn wick posted on a sub-agent's behalf. The
+// front-end badges any source that is not the local UI.
+const sourceSubAgent = "subagent"
 
 // poolSteerer delivers a human take-over message into a running
 // sub-agent's session.
@@ -68,4 +78,45 @@ func (s poolSteerer) SendToChild(ctx context.Context, childSessionID, agentName,
 		return nil
 	}
 	return s.pool.Send(ctx, childSessionID, agentName, string(session.OriginUI), "user", message)
+}
+
+// poolWaker makes a sub-agent readable-to again after its process has
+// exited, so a message sent minutes later still reaches somebody.
+type poolWaker struct {
+	pool   *agentpool.Pool
+	layout agentconfig.Layout
+}
+
+// WakeChild reports whether the target can receive a message with its
+// memory intact.
+//
+// It does not spawn: pool.Send already spawns on demand, and the delivery
+// that follows this call goes through exactly that path. What this adds is
+// the HONESTY check — whether the spawn about to happen will resume the
+// child's transcript or start a blank one. A resumed agent answers from
+// what it did before; a blank one answers confidently from nothing, and
+// the sender cannot tell the two apart without being told.
+func (w poolWaker) WakeChild(_ context.Context, childSessionID, agentName string) error {
+	if w.pool == nil {
+		return nil
+	}
+	// Already running: its context is whatever it currently holds.
+	for _, a := range w.pool.ActiveSnapshot() {
+		if a.SessionID == childSessionID {
+			return nil
+		}
+	}
+	sess, err := session.Load(w.layout, childSessionID)
+	if err != nil {
+		return delegation.ErrContextLost
+	}
+	for _, a := range sess.Agents {
+		if agentName != "" && a.Name != agentName {
+			continue
+		}
+		if a.CLISessionID != "" {
+			return nil // resumable — the next Send will pass --resume
+		}
+	}
+	return delegation.ErrContextLost
 }

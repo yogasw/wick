@@ -65,13 +65,13 @@ func TestEveryOperationIsDescribed(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"list_agents", "delegate", "collect", "create_agent", "tasks"} {
+	for _, want := range []string{"list_agents", "delegate", "collect", "create_agent", "tasks", "message", "reply", "stop", "list_access"} {
 		if !seen[want] {
 			t.Fatalf("missing op %q", want)
 		}
 	}
-	if count != 5 {
-		t.Fatalf("got %d ops, want 5", count)
+	if count != 9 {
+		t.Fatalf("got %d ops, want 9", count)
 	}
 }
 
@@ -86,6 +86,10 @@ func TestOpsFailClosedWithoutService(t *testing.T) {
 		"collect":      h.collect,
 		"create_agent": h.createAgent,
 		"tasks":        h.tasks,
+		"message":      h.message,
+		"reply":        h.reply,
+		"stop":         h.stop,
+		"list_access":  h.listAccess,
 	} {
 		if _, err := fn(c); err == nil {
 			t.Fatalf("%s returned no error with delegation unconfigured", name)

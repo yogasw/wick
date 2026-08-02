@@ -131,9 +131,15 @@ steps would flood this conversation. `wick_get "sub-agents"` →
   conversation, so `task` must contain everything it needs. There is no
   second round: it cannot ask you a follow-up question.
 - Several `delegate` calls in one turn run in parallel.
-- `create_agent` defines a new role, scoped to this project. Create one
-  only when you will delegate the same kind of work repeatedly; for
-  one-off work a good `task` is enough.
+- `create_agent` defines OR edits a role, scoped to this project. Create
+  one only when you will delegate the same kind of work repeatedly; for
+  one-off work a good `task` is enough. Editing is a patch — send only
+  the fields you are changing.
+- You may also set a role's tool access (`allowed_tags`, see
+  `list_access`), whether it can delegate (`can_delegate`, off by
+  default), and its default `mode`. Tool access is narrowed against your
+  own, so a role can only ever reach LESS than you — tighten it when a
+  role has no business with your full toolset.
 
 Read the `status` on every result:
 
@@ -145,6 +151,28 @@ Read the `status` on every result:
 
 Don't delegate work you can just do. A spawn costs real time and real
 tokens, so a task you could finish in one step is cheaper done yourself.
+
+Agents already working here have handles (`list_agents` shows them).
+`message` reaches one: `kind=tell` delivers and returns, `kind=ask`
+waits for that agent's answer. They keep the context of their own work,
+so do not re-explain it.
+
+- Message an agent when it knows something you do not, or when your work
+  changes what it should be doing. Delegate instead when the work is
+  self-contained.
+- Every message carries the turns, tokens and hops you have left. When
+  hops run out, stop messaging, summarise, and report to the user — only
+  a person can grant more.
+- Answer a question with `reply` and the message_id it came with.
+  Finishing your turn without replying sends your closing message as the
+  answer, which is rarely the answer the asker wanted.
+- `stop` ends another agent's work here and returns what it had so far.
+
+When the USER writes `@name` in their message, they are naming an agent
+and asking for it, not describing one. Use it: `message` it if that
+handle is already running here, otherwise `delegate` to the role of that
+name. Do the work yourself only if the name resolves to nothing — say so
+rather than silently substituting your own answer.
 
 ### Session connectors (`wick_session_workspace`)
 

@@ -2,6 +2,7 @@ package subagents
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -118,4 +119,104 @@ func (d Deps) visibleRoles(ctx context.Context, c caller) ([]entity.AgentProfile
 	}
 	resolved := delegation.ResolveScoped(rows, c.projectID)
 	return delegation.VisibleProfiles(resolved, c.tagIDs, c.user.IsAdmin()), nil
+}
+
+// errNoTree means the calling conversation has no delegation tree yet, so
+// there is nobody to address.
+var errNoTree = errors.New("no other agents are working in this conversation yet — delegate one first")
+
+// treePosition resolves the calling session to its place in a delegation
+// tree: the tree's root id and the caller's own handle.
+//
+// Both come from the SESSION, never from op input. A model that could
+// name its own handle could claim to be the leader, and one that could
+// name a root could post into a tree it has no part in.
+func (d Deps) treePosition(ctx context.Context, sessionID string) (rootID, handle string, err error) {
+	if sessionID == "" {
+		return "", "", errNoSession
+	}
+	repo := d.svc().Repo
+	// A sub-agent: its own row carries both answers.
+	if row, ferr := repo.FindByChildSession(ctx, sessionID); ferr == nil && row != nil {
+		if row.Handle == "" {
+			// Pre-dates handle allocation. Addressable neither way, and
+			// saying so beats messaging into the void.
+			return "", "", errNoTree
+		}
+		return row.RootID, row.Handle, nil
+	} else if ferr != nil {
+		return "", "", ferr
+	}
+
+	// A leader: it owns the trees it started. Any delegation it launched
+	// names the same root, so the first one is enough.
+	rows, lerr := repo.ListByParent(ctx, sessionID)
+	if lerr != nil {
+		return "", "", lerr
+	}
+	for _, r := range rows {
+		if r.RootID != "" {
+			return r.RootID, entity.LeaderHandle, nil
+		}
+	}
+	return "", "", errNoTree
+}
+
+// callerMayDelegate reports whether the calling session is allowed to
+// delegate or define roles.
+//
+// This is what makes `can_delegate` a real setting rather than a stored
+// boolean nobody reads. A LEADER session (a human's conversation) always
+// may; a SUB-AGENT may only when its own role opted in. Without the
+// check, a role marked "cannot delegate" still could, and the field in
+// the editor would be decoration.
+func (d Deps) callerMayDelegate(ctx context.Context, sessionID string) (bool, string, error) {
+	repo := d.svc().Repo
+	row, err := repo.FindByChildSession(ctx, sessionID)
+	if err != nil {
+		return false, "", err
+	}
+	if row == nil {
+		return true, "", nil // a human's own conversation
+	}
+	// Scope-exact by the role's own project, matching how the delegation
+	// resolved it in the first place.
+	profile, err := repo.GetProfileScoped(ctx, row.ProjectID, row.ProfileKey)
+	if err != nil || profile == nil {
+		// Unresolvable role: allow rather than strand a running tree on a
+		// lookup failure. The governor's depth and budget caps still hold.
+		return true, "", nil //nolint:nilerr // deliberate fail-open, see comment
+	}
+	if profile.CanDelegate {
+		return true, "", nil
+	}
+	return false, profile.Key, nil
+}
+
+// splitList parses a comma-separated op input into trimmed, non-empty
+// items. Comma-separated rather than a JSON array because these arrive
+// from a model typing a flat string field.
+func splitList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if v := strings.TrimSpace(p); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// encodeTagIDs renders a tag id list for the profile column. Empty stays
+// "[]", which the ACL reads as "inherit the caller's tags in full" — not
+// as "no access".
+func encodeTagIDs(ids []string) string {
+	if len(ids) == 0 {
+		return "[]"
+	}
+	b, err := json.Marshal(ids)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
 }

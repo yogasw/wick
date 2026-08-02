@@ -63,6 +63,14 @@ func (h *handlers) delegate(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 
+	if ok, role, derr := h.deps.callerMayDelegate(c.Context(), c.SessionID()); derr != nil {
+		return nil, derr
+	} else if !ok {
+		return nil, fmt.Errorf(
+			"the %q role is not allowed to delegate. Do this part of the work yourself, "+
+				"or report back to whoever delegated to you", role)
+	}
+
 	profileKey := strings.TrimSpace(c.Input("profile"))
 	if profileKey == "" {
 		return nil, errors.New("profile is required — call list_agents to see the available keys")
@@ -189,37 +197,60 @@ func (h *handlers) createAgent(c *connector.Ctx) (any, error) {
 			"this conversation is not in a project, so there is no scope to create a role in. " +
 				"Move the session into a project first, or ask an admin to add a global role.")
 	}
+	// A role that may not delegate has no use for roles it could define.
+	if ok, role, derr := h.deps.callerMayDelegate(c.Context(), c.SessionID()); derr != nil {
+		return nil, derr
+	} else if !ok {
+		return nil, fmt.Errorf("the %q role is not allowed to define or change roles", role)
+	}
 
 	key := strings.TrimSpace(c.Input("key"))
 	if key == "" {
 		return nil, errors.New("key is required")
 	}
-	description := strings.TrimSpace(c.Input("description"))
-	if description == "" {
-		return nil, errors.New(
-			"description is required — it is what a delegating agent reads to decide when to pick this role")
-	}
-	systemPrompt := strings.TrimSpace(c.Input("system_prompt"))
-	if systemPrompt == "" {
-		return nil, errors.New(
-			"system_prompt is required — without it the role has no instructions and behaves like a generic assistant")
-	}
-
-	provider := strings.TrimSpace(c.Input("provider"))
-	if provider == "" {
-		provider = "claude"
-	}
-	name := strings.TrimSpace(c.Input("name"))
-	if name == "" {
-		name = key
-	}
-
 	// Scope-exact, never resolved: a resolved lookup would find a GLOBAL
 	// role of the same key and overwrite it, silently editing the role
 	// every other project sees.
 	existing, err := h.deps.svc().Repo.GetProfileExact(c.Context(), caller.projectID, key)
 	if err != nil && !errors.Is(err, delegation.ErrProfileNotFound) {
 		return nil, fmt.Errorf("look up role: %w", err)
+	}
+
+	// Editing an existing role is a PATCH: omitted fields keep their
+	// current value. Requiring the full role on every tweak would make
+	// "raise its turn budget" a chance to silently drop its prompt.
+	description := strings.TrimSpace(c.Input("description"))
+	if description == "" {
+		if existing == nil {
+			return nil, errors.New(
+				"description is required — it is what a delegating agent reads to decide when to pick this role")
+		}
+		description = existing.Description
+	}
+	systemPrompt := strings.TrimSpace(c.Input("system_prompt"))
+	if systemPrompt == "" {
+		if existing == nil {
+			return nil, errors.New(
+				"system_prompt is required — without it the role has no instructions and behaves like a generic assistant")
+		}
+		systemPrompt = existing.SystemPrompt
+	}
+
+	provider := strings.TrimSpace(c.Input("provider"))
+	if provider == "" {
+		if existing != nil {
+			provider = existing.Provider
+		} else {
+			provider = "claude"
+		}
+	}
+	name := strings.TrimSpace(c.Input("name"))
+	if name == "" {
+		if existing != nil {
+			name = existing.Name
+		} else {
+			name = key
+		}
 	}
 
 	p := &entity.AgentProfile{
@@ -230,17 +261,50 @@ func (h *handlers) createAgent(c *connector.Ctx) (any, error) {
 		Provider:     provider,
 		Model:        strings.TrimSpace(c.Input("model")),
 		SystemPrompt: systemPrompt,
-		// Inherit the caller's tags in full rather than narrowing: an
-		// agent has no way to reason about which tags matter, and an
-		// empty list is the safe default because effective access is
-		// still intersected with the triggering human's own tags.
-		AllowedTagIDs:      "[]",
+		// Narrowed against the caller's own tags, so an agent choosing a
+		// role's tool access can only ever pick a SUBSET of what the human
+		// who triggered it already has. Empty = inherit that set in full.
+		AllowedTagIDs:      encodeTagIDs(delegation.NarrowTags(splitList(c.Input("allowed_tags")), caller.tagIDs)),
 		AllowedNativeTools: "[]",
 		StrictMCP:          true,
 		DefaultMaxTurns:    c.InputInt("max_turns"),
 		DefaultMode:        delegation.ModeSync,
 		DefaultWorkspace:   delegation.WorkspaceShared,
+		CanDelegate:        c.InputBool("can_delegate"),
+		AllowTakeOver:      c.InputBool("allow_take_over"),
 		CreatedBy:          caller.user.ID,
+	}
+	if mode := strings.TrimSpace(c.Input("mode")); mode != "" {
+		if mode != delegation.ModeSync && mode != delegation.ModeAsync {
+			return nil, fmt.Errorf("mode must be %q or %q, got %q",
+				delegation.ModeSync, delegation.ModeAsync, mode)
+		}
+		p.DefaultMode = mode
+	}
+	// Carry forward anything this call did not mention.
+	if existing != nil {
+		if strings.TrimSpace(c.Input("allowed_tags")) == "" {
+			p.AllowedTagIDs = existing.AllowedTagIDs
+		}
+		if strings.TrimSpace(c.Input("mode")) == "" {
+			p.DefaultMode = existing.DefaultMode
+		}
+		if c.Input("can_delegate") == "" {
+			p.CanDelegate = existing.CanDelegate
+		}
+		if c.Input("allow_take_over") == "" {
+			p.AllowTakeOver = existing.AllowTakeOver
+		}
+		if c.InputInt("max_turns") <= 0 {
+			p.DefaultMaxTurns = existing.DefaultMaxTurns
+		}
+		p.Model = strings.TrimSpace(c.Input("model"))
+		if p.Model == "" {
+			p.Model = existing.Model
+		}
+		p.AllowedNativeTools = existing.AllowedNativeTools
+		p.StrictMCP = existing.StrictMCP
+		p.DefaultWorkspace = existing.DefaultWorkspace
 	}
 	if p.DefaultMaxTurns <= 0 {
 		p.DefaultMaxTurns = delegation.DefaultMaxTurns
@@ -420,4 +484,136 @@ func (h *handlers) tasks(c *connector.Ctx) (any, error) {
 	default:
 		return nil, errors.New("action must be one of: list, add, claim, start, complete, fail")
 	}
+}
+
+/* ── messaging ───────────────────────────────────────────────────────── */
+
+// messageMaxRunes bounds one message the way delegate bounds a task.
+const messageMaxRunes = 8000
+
+func (h *handlers) message(c *connector.Ctx) (any, error) {
+	if _, err := h.deps.resolveCaller(c.Context(), c.SessionID(), true); err != nil {
+		return nil, err
+	}
+	root, from, err := h.deps.treePosition(c.Context(), c.SessionID())
+	if err != nil {
+		return nil, err
+	}
+	to := strings.TrimPrefix(strings.TrimSpace(c.Input("to")), "@")
+	if to == "" {
+		return nil, errors.New("to is required — call list_agents for the handles")
+	}
+	body := strings.TrimSpace(c.Input("body"))
+	if body == "" {
+		return nil, errors.New("body is required")
+	}
+	if len([]rune(body)) > messageMaxRunes {
+		return nil, fmt.Errorf("message too long (max %d characters)", messageMaxRunes)
+	}
+	kind := strings.TrimSpace(c.Input("kind"))
+	if kind == "" {
+		kind = entity.MessageTell
+	}
+
+	res, err := h.deps.svc().SendMessage(c.Context(), delegation.SendInput{
+		RootID: root, FromHandle: from, ToHandle: to, Body: body, Kind: kind,
+	})
+	if err != nil {
+		// A governor refusal is guidance, not a crash: its text tells the
+		// model what to do instead of messaging again.
+		var refusal *delegation.Refusal
+		if errors.As(err, &refusal) {
+			return nil, errors.New(refusal.Message)
+		}
+		return nil, err
+	}
+	return res, nil
+}
+
+func (h *handlers) reply(c *connector.Ctx) (any, error) {
+	if _, err := h.deps.resolveCaller(c.Context(), c.SessionID(), true); err != nil {
+		return nil, err
+	}
+	_, from, err := h.deps.treePosition(c.Context(), c.SessionID())
+	if err != nil {
+		return nil, err
+	}
+	id := strings.TrimSpace(c.Input("message_id"))
+	if id == "" {
+		return nil, errors.New("message_id is required — it is shown with the question")
+	}
+	body := strings.TrimSpace(c.Input("body"))
+	if body == "" {
+		return nil, errors.New("body is required")
+	}
+	if err := h.deps.svc().Reply(c.Context(), id, from, body); err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": "sent"}, nil
+}
+
+func (h *handlers) stop(c *connector.Ctx) (any, error) {
+	caller, err := h.deps.resolveCaller(c.Context(), c.SessionID(), true)
+	if err != nil {
+		return nil, err
+	}
+	root, _, err := h.deps.treePosition(c.Context(), c.SessionID())
+	if err != nil {
+		return nil, err
+	}
+	handle := strings.TrimPrefix(strings.TrimSpace(c.Input("handle")), "@")
+	if handle == "" {
+		return nil, errors.New("handle is required")
+	}
+	target, err := h.deps.svc().Repo.FindByHandle(c.Context(), root, handle)
+	if err != nil {
+		return nil, err
+	}
+	// Same wording for "absent" and "not yours": confirming that a handle
+	// exists elsewhere would leak the shape of other conversations.
+	if target == nil || !delegation.CanAgentStop(target, root) {
+		return nil, fmt.Errorf("no such agent in this conversation: @%s", handle)
+	}
+	out, err := h.deps.svc().Interrupt(c.Context(), target.ID, caller.user.ID, caller.user.IsAdmin())
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"handle": handle, "outcome": out}, nil
+}
+
+// listAccess reports what the caller can hand to a role.
+//
+// Discovery is the missing half of letting an agent choose tool access:
+// without it the model can only guess tag ids, and a guessed id is
+// silently dropped by the narrowing rule — which looks identical to a
+// role that simply has no tools.
+func (h *handlers) listAccess(c *connector.Ctx) (any, error) {
+	caller, err := h.deps.resolveCaller(c.Context(), c.SessionID(), false)
+	if err != nil {
+		return nil, err
+	}
+	type tagItem struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	out := make([]tagItem, 0, len(caller.tagIDs))
+	if namer, ok := any(h.deps.svc().Tags).(delegation.TagNamer); ok && len(caller.tagIDs) > 0 {
+		tags, terr := namer.TagsByIDs(c.Context(), caller.tagIDs)
+		if terr != nil {
+			return nil, fmt.Errorf("resolve tags: %w", terr)
+		}
+		for _, t := range tags {
+			out = append(out, tagItem{ID: t.ID, Name: t.Name})
+		}
+	} else {
+		// No namer wired: ids alone are still usable, just harder to read.
+		for _, id := range caller.tagIDs {
+			out = append(out, tagItem{ID: id, Name: id})
+		}
+	}
+	return map[string]any{
+		"tags": out,
+		"note": "Pass a subset of these ids as allowed_tags on create_agent to restrict a role. " +
+			"Omitting allowed_tags gives the role everything listed here. A role can never exceed this set.",
+	}, nil
 }

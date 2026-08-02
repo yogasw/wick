@@ -130,6 +130,13 @@ type Service struct {
 	// Steerer delivers human take-over messages into a running sub-agent.
 	// nil = take-over is unavailable on this transport.
 	Steerer Steerer
+	// Waker resumes an exited sub-agent so it can read its inbox.
+	// nil = messages queue but nobody is woken to read them.
+	Waker Waker
+	// AskTimeout bounds a blocking ask. 0 = defaultAskTimeout.
+	AskTimeout time.Duration
+	// InboxCap bounds undelivered messages per handle. 0 = defaultInboxCap.
+	InboxCap int
 	// Limits is the fallback ceiling set, used when LimitsFn is nil.
 	Limits Limits
 	// LimitsFn, when set, is consulted on EVERY delegation so config
@@ -275,8 +282,18 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 		}
 	}
 
+	// Address this instance inside its tree. Allocated here, before the
+	// row exists, so every delegation is reachable from the moment it is
+	// recorded — a sub-agent that spawns without a handle can be spoken
+	// about but never spoken to.
+	takenHandles, err := s.Repo.TakenHandles(ctx, rootID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve handles: %w", err)
+	}
+
 	now := time.Now().UTC()
 	row := &entity.AgentDelegation{
+		Handle: AllocateHandle(profile.Key, takenHandles),
 		ID:              id,
 		RootID:          rootID,
 		ParentSessionID: req.ParentSessionID,
@@ -453,7 +470,19 @@ func (s *Service) deliver(ctx context.Context, row *entity.AgentDelegation, sink
 // formatDelivery renders an async result for a human-facing sink.
 func formatDelivery(row *entity.AgentDelegation, res *Result) string {
 	var b strings.Builder
-	b.WriteString("Sub-agent `" + row.ProfileKey + "` finished (" + res.Status + ").\n\n")
+	// Name the agent by its handle and say how long it took. A reader
+	// watching agents work needs to know WHICH one came back — and an
+	// elapsed time is the difference between "it answered" and "it spent
+	// twenty-eight minutes on this".
+	name := row.Handle
+	if name == "" {
+		name = row.ProfileKey
+	}
+	elapsed := ""
+	if row.EndedAt != nil && !row.StartedAt.IsZero() {
+		elapsed = " · " + row.EndedAt.Sub(row.StartedAt).Round(time.Second).String()
+	}
+	b.WriteString("@" + name + " finished (" + res.Status + ")" + elapsed + "\n\n")
 	if res.Result != "" {
 		b.WriteString(res.Result)
 	} else {
@@ -608,6 +637,27 @@ func (s *Service) await(
 				// an answer would end the run at turn 1 and make the turn
 				// cap unreachable.
 				if out := strings.TrimSpace(text.String()); out != "" {
+					// A peer may have asked this agent something. Its
+					// closing text is the only answer that will ever
+					// exist once the run ends, so promote it before
+					// finishing — otherwise the asker blocks until its
+					// timeout waiting on an agent that has already gone.
+					if err := s.CloseUnansweredAsk(ctx, row.RootID, row.Handle, out); err != nil {
+						log.Warn().Err(err).Str("handle", row.Handle).
+							Msg("delegation: auto-reply on turn end failed")
+					}
+					// New work may have arrived while this turn ran.
+					// Delivering it keeps the agent alive for another turn
+					// rather than closing on the answer it just gave —
+					// which is what makes a back-and-forth possible at all.
+					// Bounded by the same turn cap as everything else.
+					if n, derr := s.DeliverInbox(ctx, row.RootID, row.Handle); derr != nil {
+						log.Warn().Err(derr).Str("handle", row.Handle).
+							Msg("delegation: inbox delivery on turn end failed")
+					} else if n > 0 {
+						text.Reset()
+						continue
+					}
 					s.finish(ctx, row, entity.DelegationRunning, entity.DelegationDone, out, "", turns)
 					return s.doneResult(ctx, row, turns, tokens(), out), nil
 				}

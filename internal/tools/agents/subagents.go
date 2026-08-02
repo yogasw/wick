@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -27,6 +28,9 @@ type SubAgentItem struct {
 	DelegationID   string `json:"delegation_id"`
 	ChildSessionID string `json:"child_session_id"`
 	ProfileKey     string `json:"profile_key"`
+	// Handle is this instance's address inside its tree — what an @mention
+	// resolves to. Empty on rows written before handles existed.
+	Handle string `json:"handle,omitempty"`
 	// Label is the task, truncated for display.
 	Label  string `json:"label"`
 	Status string `json:"status"`
@@ -81,6 +85,7 @@ func sessionSubAgents(c *tool.Ctx) {
 			DelegationID:   d.ID,
 			ChildSessionID: d.ChildSessionID,
 			ProfileKey:     d.ProfileKey,
+			Handle:         d.Handle,
 			Label:          truncateRunes(d.Task, subAgentLabelRunes),
 			Status:         d.Status,
 			Lifecycle:      lcBySession[d.ChildSessionID],
@@ -210,3 +215,78 @@ func parentOfChildSession(sessionID string) string {
 // subAgentStatusesJSON exposes the canonical status list so the
 // front-end union can be checked against it rather than hand-maintained.
 func subAgentStatusesJSON() []string { return entity.DelegationStatuses }
+
+// rootForSession returns the delegation-tree root a session belongs to,
+// or "" when it has no tree. A leader owns the trees it started; a
+// sub-agent's own row names its root.
+func rootForSession(ctx context.Context, sessionID string) string {
+	if globalDelegation == nil || globalDelegation.Repo == nil || sessionID == "" {
+		return ""
+	}
+	if row, err := globalDelegation.Repo.FindByChildSession(ctx, sessionID); err == nil && row != nil {
+		return row.RootID
+	}
+	rows, err := globalDelegation.Repo.ListByParent(ctx, sessionID)
+	if err != nil {
+		return ""
+	}
+	for _, r := range rows {
+		if r.RootID != "" {
+			return r.RootID
+		}
+	}
+	return ""
+}
+
+// resetHopsForSession refills the agent-to-agent hop budget for the tree
+// this session owns. Best-effort: a failed reset must never fail the
+// human's message, which is the actual work being done here.
+func resetHopsForSession(c *tool.Ctx, sessionID string) {
+	root := rootForSession(c.Context(), sessionID)
+	if root == "" {
+		return
+	}
+	if err := globalDelegation.Repo.ResetHops(c.Context(), root); err != nil {
+		log.Ctx(c.Context()).Warn().Err(err).Str("root", root).
+			Msg("subagents: hop reset failed")
+	}
+}
+
+// sessionMessages returns the agent-to-agent thread for a session's tree.
+//
+// Empty rather than 404 when there is no tree: the panel asks for this on
+// every conversation, and "nobody has talked yet" is a normal state.
+func sessionMessages(c *tool.Ctx) {
+	root := rootForSession(c.Context(), c.PathValue("id"))
+	if root == "" || globalDelegation == nil {
+		c.JSON(http.StatusOK, map[string]any{"messages": []any{}, "hops_left": 0})
+		return
+	}
+	msgs, err := globalDelegation.Repo.ListThread(c.Context(), root, 200)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{
+		"messages":  msgs,
+		"hops_left": globalDelegation.HopsLeft(c.Context(), root),
+	})
+}
+
+// resetSessionHops refills the hop budget from the UI.
+//
+// Human-only by construction: it lives on the HTTP surface a person
+// clicks, and there is no matching connector op, so an agent cannot lift
+// its own limit.
+func resetSessionHops(c *tool.Ctx) {
+	root := rootForSession(c.Context(), c.PathValue("id"))
+	if root == "" || globalDelegation == nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "no sub-agent conversation for this session"})
+		return
+	}
+	if err := globalDelegation.Repo.ResetHops(c.Context(), root); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true})
+}

@@ -42,6 +42,12 @@ type GeneralConfig struct {
 	SubAgentsMaxTokens     int `wick:"number;group=Sub-agents;desc=Hard ceiling on tokens any single sub-agent may spend. 0 = no per-sub-agent token cap (turn limits still apply). Only enforceable for providers that report usage. Default: 200000."`
 	SubAgentsRootTokens    int `wick:"number;group=Sub-agents;desc=Total tokens one delegation tree may spend across every sub-agent in it. When exhausted, running sub-agents finish but no new ones start. 0 = no token budget. Default: 1000000."`
 	SubAgentsStaleClaimMin int `wick:"number;group=Sub-agents;desc=Minutes before a task-board claim held by a vanished worker is released back to the queue. Without this a crashed worker pins its task forever. Default: 30."`
+	// Agent-to-agent messaging. Turn and token budgets bound a tree's
+	// total work; none of them bounds two agents trading short messages,
+	// which is cheap per message and unbounded in count.
+	SubAgentsMaxHops       int `wick:"number;group=Sub-agents;desc=How many messages agents may exchange with each other between human turns. Guards against two agents talking in a loop. Reset whenever a person sends a message; agents cannot reset it themselves. Default: 10."`
+	SubAgentsAskTimeoutMin int `wick:"number;group=Sub-agents;desc=Minutes an agent waits for an answer to a blocking ask before giving up. The question stays in the recipient's inbox either way. Default: 10."`
+	SubAgentsInboxCap      int `wick:"number;group=Sub-agents;desc=How many undelivered messages one agent may have waiting before senders are refused. Stops a fast agent from burying a slow one under work it will never read. Default: 20."`
 }
 
 // DefaultGeneralConfig returns the seed values used when the configs
@@ -73,5 +79,13 @@ func DefaultGeneralConfig() GeneralConfig {
 		SubAgentsMaxTokens:     200_000,
 		SubAgentsRootTokens:    1_000_000,
 		SubAgentsStaleClaimMin: 30,
+		SubAgentsMaxHops:       delegationDefaultMaxHops,
+		SubAgentsAskTimeoutMin: 10,
+		SubAgentsInboxCap:      20,
 	}
 }
+
+// delegationDefaultMaxHops mirrors delegation.DefaultMaxHops. Duplicated
+// rather than imported because config must not depend on the delegation
+// package; a test in delegation asserts the two stay equal.
+const delegationDefaultMaxHops = 10

@@ -78,6 +78,7 @@ func Migrate(db *gorm.DB) {
 		&entity.AgentSquad{},
 		&entity.AgentBoard{},
 		&entity.AgentTask{},
+		&entity.AgentMessage{},
 	)
 	if err != nil {
 		log.Fatal().Msgf("failed to run migration: %s", err.Error())
@@ -95,6 +96,16 @@ func Migrate(db *gorm.DB) {
 	// boot via IF NOT EXISTS, so it installs once duplicates are cleared.
 	if res := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_storage_tree ON provider_storage (provider_type, instance_name, parent_id, name)`); res.Error != nil {
 		log.Warn().Err(res.Error).Msg("migrate: idx_storage_tree creation failed (duplicates present?)")
+	}
+
+	// One handle per tree. Not managed by AutoMigrate because the column
+	// is added to an existing table: rows written before this migration
+	// carry an empty handle, and a partial index is the only portable way
+	// to let those coexist with the constraint. Soft-fail for the same
+	// reason as idx_storage_tree — addressing still works, just without
+	// the DB-level guarantee.
+	if res := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_delegations_root_handle ON agent_delegations (root_id, handle) WHERE handle <> ''`); res.Error != nil {
+		log.Warn().Err(res.Error).Msg("migrate: idx_agent_delegations_root_handle creation failed (duplicate handles?)")
 	}
 
 	seedOwner(db)
