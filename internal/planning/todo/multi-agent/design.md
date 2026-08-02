@@ -1,8 +1,106 @@
 # Multi-Agent — Sub-Agent Delegation, Rail UI, Interrupt (design + implementasi)
 
-Status: **Bagian A–C proposal (butuh sign-off), Bagian D siap dikerjakan.**
+Status: **Fase 1–8 backend mendarat.** Bagian A–C jadi catatan desain, bukan
+proposal lagi. Sisa pekerjaan = UI + beberapa knob yang belum ter-wire (§Status).
 Dokumen tunggal: dari konsep sampai langkah implementasi.
-Update terakhir: 2026-07-29.
+Update terakhir: 2026-08-02.
+
+---
+
+# STATUS
+
+Tiga kategori. Yang penting dibaca duluan: **⚠️ ada kodenya tapi belum
+ter-wire** — di situ knob-nya terlihat hidup di API padahal runtime tak ada
+yang membacanya.
+
+## ✅ Jalan end-to-end
+
+| Item | Isi | File utama |
+|---|---|---|
+| B1 Storage | `agent_profiles`, `agent_delegations`, `agent_squads`, `agent_boards`, `agent_tasks` (GORM AutoMigrate) | `internal/entity/agent_*.go`, `pkg/postgres/migrate.go` |
+| B2 MCP | `wick_delegate`, `wick_agents`, `wick_delegate_collect`, `wick_tasks` | `internal/mcp/handlers/delegation*.go` |
+| B3 Governor | depth, budget turn/root, cycle-guard, parallel, `max_turns` provider-agnostik, kill-switch live | `delegation/governor.go` |
+| B4.1 #2 | **Scoped MCP token** — gap enforcement admin-bypass ditutup | `internal/mcp/scopedtoken.go`, `auth.go` |
+| D1 | `pool.KillAgent` + `ErrAgentNotActive` | `pool/pool.go` |
+| D2 | Interrupt 3 outcome + guard idempotensi di storage | `delegation/interrupt.go` |
+| D3 | `Meta.ParentSessionID`, filter sebelum cap, redirect 303 | `session.go`, `api_conversation.go` |
+| D4 | Rail tab + `SubAgentPanel` + badge live-only + coalesced refetch | `fe/.../SubAgentPanel.svelte`, `tools/agents/subagents.go` |
+| D5 | Kartu ringkas `wick_delegate` di thread | `ToolCard.svelte` |
+| D6 | Cascade kill leader → keturunan (kecuali detached) | `handler.go` `killAgent` |
+| D8 | Grace → force **tanpa syarat**, process group POSIX + Windows kelas satu | `provider/terminate_*.go`, `provider/procgroup/` |
+| Take-over | `allow_take_over` per-profil + `user_steered`; manusia saja | `delegation/takeover.go` |
+| Fase 2 | `mode=async`, `delivery_sink`, `Detached`, context `WithoutCancel` | `delegation/{mode,run}.go` |
+| Fase 3 | `workspace=worktree`, non-git → fallback shared + note | `delegation/worktree.go` |
+| Fase 4 | `wick_delegate_collect` + callback; serah-terima tepat sekali | `delegation/collect.go` |
+| Fase 6 | Cap token per-delegasi + per-root; usage ditulis sebelum cek cancel | `delegation/cost.go` |
+| Fase 7 | Board: enqueue/claim/start/complete, claim exclusive, sweeper stale-claim | `delegation/{board,sweeper}.go` |
+| Fase 8 | Kanban: stage ≠ column id, evidence-gate di jalur MCP **dan** drag | `delegation/board.go`, `tools/agents/api_boards.go` |
+| Fleet monitor | `GET /api/monitor/snapshot` (data + ACL) | `tools/agents/monitor.go` |
+| Config | Semua knob governor di `GeneralConfig`, key snake_case terverifikasi test | `agents/config/general.go` |
+
+## ⚠️ Ada kodenya, BELUM ter-wire — knob mati
+
+Doc ini menolak "menambah knob governor tanpa kode yang membacanya"
+([§Rejected](#rejected-alternatives), bukti: stoa punya dua setting mati).
+Empat item di bawah **persis kasus itu** dan harus diselesaikan atau dihapus:
+
+| Item | Kondisi sekarang | Akibatnya |
+|---|---|---|
+| **Fase 5 squad — roster narrowing** | `FilterBySquad` + `SquadAllows` ada + diuji, CRUD API ada. **Tak dipanggil** dari `WickAgents`/`WickDelegate` | Squad tersimpan rapi tapi **runtime-nya nol**: leader tetap lihat semua profil yang lolos tag. Fase 5 baru separuh |
+| **`board.AutoDelegate`** | Kolom ada, disimpan, dikembalikan API. Tak ada yang membaca | Toggle "auto-delegate saat stage=ready" di UI nanti akan terlihat aktif tapi tak melakukan apa-apa |
+| **`Request.TaskID`** | Field dideklarasi. Tak ada satu pun caller yang mengisi | Delegasi yang lahir dari task board tak bisa dilacak balik ke task-nya |
+| **`StartTask(..., delegationID)`** | Handler MCP mengirim `""` | Task `started` tak pernah tertaut ke delegasi yang mengeksekusinya — kolom `delegation_id` selalu kosong |
+
+Tiga yang terakhir saling terkait: menyambung task → delegasi menutup ketiganya
+sekaligus.
+
+## ❌ Belum ada sama sekali
+
+| Item | Catatan |
+|---|---|
+| **UI board / kanban** | API + data lengkap (`/api/boards`, `/api/tasks/*`), **nol komponen Svelte**. Bikin board pertama sekarang harus lewat `POST /api/boards` |
+| **UI fleet monitor** | Endpoint snapshot siap; halaman `/agents/monitor` + grid kartu belum ada |
+| **Editor profil / squad** | CRUD API admin-only siap; halaman editor belum ada |
+| **Approval/AskUser dari sub-agent** | [OQ #2](#open-questions) belum diputuskan — usul: naik ke level session + badge |
+| **Gemini sebagai leader** | [OQ #1](#open-questions) belum diverifikasi; sementara `can_delegate` dipaksa off (bukan leader-capable) |
+| **mockup.html** | Belum disinkronkan dengan Bagian C sekarang |
+
+## Koreksi terhadap dokumen ini (ditemukan saat implementasi)
+
+- `internal/entity/migrations/NNNN_*.go` **tidak ada** — repo pakai GORM
+  `AutoMigrate` di `internal/pkg/postgres/migrate.go`.
+- Setelan governor **bukan** halaman `/manager/agents/settings` terpisah; masuk
+  `GeneralConfig` group *Sub-agents* supaya dapat UI setelan gratis.
+- **OQ #3 terjawab: `ConversationThread` reusable.** 236 baris, murni props, tak
+  ada dependensi ke state `DetailView` — panel tak perlu dikirim degraded.
+- `session_id` diambil dari header `X-Wick-Session-Id`, **bukan** argumen model —
+  kalau dari model, leader bisa menempel delegasi ke pohon milik orang lain dan
+  mewarisi identitas pohon itu.
+- `InterruptAll` dipecah dua: **cascade** (kill leader) melewati sub-agent
+  `Detached`; **Stop all** eksplisit tetap menghentikan semuanya.
+- Token ceiling boleh `0` = "tanpa cap" (beda dari brake lain yang 0-nya
+  di-normalize ke default) — provider yang tak melapor usage tak bisa di-cap,
+  memaksa floor cuma bikin limit yang diam-diam tak pernah nyala.
+
+## Bug yang ketangkep test (bukan produksi)
+
+- **`ParseUsage` case-sensitive** — guard `Contains(raw, "tokens")` tak match
+  `inputTokens`. Provider camelCase dilaporkan **0 token = dianggap gratis =
+  lolos semua cap biaya**. Yang paling mahal dari ketiganya.
+- **`setProcessGroup` duplikat** dengan package `procgroup` → build gagal di test
+  pool.
+- **Guard arsitektur `TestNoDirectOSExec`** — repo mewajibkan `safeexec`, bukan
+  `os/exec`. Kena di worktree + taskkill.
+
+## Verifikasi terakhir (2026-08-02)
+
+- **86 paket Go pass**, build + vet bersih.
+- Satu-satunya fail: `provider/codex` integration (2 test) — dibuktikan
+  **pre-existing** lewat stash-compare uncached; butuh binary/kredensial codex.
+- FE: svelte-check 21 error = **identik baseline**; vitest 2 fail / 672 pass =
+  identik baseline (`browser.test.ts`, pre-existing).
+
+---
 
 **Paradigma sekarang:** wick = **1 conversation → 1 active agent** yang spawn
 CLI subprocess (`internal/agents/provider/*`). Konsep multi-agent persisten
@@ -60,25 +158,29 @@ Riset pembanding (bukti `file:line` dari routa/stoa/multica): [Bagian E](#bagian
 
 ### Ditahan sampai sign-off
 
-- ⏸ **Take-over** (user kirim pesan ke sub-agent) — usulan bergeser ke per-profil
-  `allow_take_over` (default false), hasil ditandai `user_steered`. Pemicu
-  pergeseran: profil `image` ([§F](#bagian-f--lampiran-profil-image)).
+- ✓ **Take-over** — SUDAH ADA. Per-profil `allow_take_over` (default false),
+  hasil ditandai `user_steered` dan leader diberitahu. Manusia saja, bukan agent.
 - ⏸ **Agent bikin profil sendiri lewat MCP** — privilege escalation lewat tag ACL.
   v1: hanya **spawn ad-hoc** dengan tag warisan ([§C6](#c6--agent-spawn-lewat-mcp)).
 - ⏸ **Human-in-the-loop pada sub-agent** — v1 sub-agent warisi gate config parent.
-- ⏸ **Grace period + process group** saat kill — gap nyata di wick, tapi
-  **jangan** digabung ke PR fitur ini ([§D8](#d8--catatan-teardown-proses)).
+- ✓ **Grace period + process group** — SUDAH ADA, dikerjakan **sebagai perubahan
+  terpisah** setelah Fase 1 mendarat (persis maksud catatan aslinya: jangan
+  digabung ke PR fitur UI). Windows kelas satu, bukan jalur kedua
+  ([§D8](#d8--catatan-teardown-proses)).
 
-### Fase berikutnya
+### Fase berikutnya — backend mendarat (2026-08-02), UI belum
 
-- → **Fase 2 — Async fire-and-forget** (`mode`, `delivery_sink`).
-- → **Fase 3 — Workspace isolation** (`workspace=worktree`).
-- → **Fase 4 — Async collect** (callback ke leader + `wick_delegate_collect`).
-- → **Fase 5 — Squad eksplisit** (leader + member tetap).
-- → **Fase 6 — Token budget** (parse usage raw CLI). **Prioritas naik** — tak
-  satu pun dari 3 repo pembanding punya ini, dan profil `image` mahal.
-- → **Fase 7 — Async task-board** (multica-style; opsional).
-- → **Fase 8 — Kanban** kalau dibutuhkan ([§E5](#e5--kanban-untuk-nanti)).
+- ✓ **Fase 2 — Async fire-and-forget** (`mode`, `delivery_sink`, detached).
+- ✓ **Fase 3 — Workspace isolation** (`workspace=worktree`, fallback shared).
+- ✓ **Fase 4 — Async collect** (callback ke leader + `wick_delegate_collect`).
+- ⚠️ **Fase 5 — Squad eksplisit** — storage + logika + CRUD API ada, tapi
+  `FilterBySquad` **belum dipanggil** dari jalur delegasi. Lihat §Status.
+- ✓ **Fase 6 — Token budget** (parse usage raw CLI, cap per-delegasi + per-root).
+- ✓ **Fase 7 — Async task-board** (enqueue/claim/start/complete).
+- ✓ **Fase 8 — Kanban** (stage discriminator, evidence-gate, policy satu evaluator).
+
+Sisa yang belum: **UI Svelte** untuk board/kanban/monitor, dan halaman editor
+profil/squad/board. API + data sudah lengkap.
 
 ---
 

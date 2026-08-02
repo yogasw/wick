@@ -305,6 +305,11 @@ func negotiateProtocolVersion(requested string) string {
 
 func (h *Handler) handleToolsList(w http.ResponseWriter, r *http.Request, req rpcRequest) {
 	tools := handlers.MetaToolDescriptors()
+	// Sub-agent delegation is no longer a top-level tool surface. It moved
+	// behind the `sub-agents` connector, so it is discovered through
+	// wick_list / wick_get and invoked through wick_execute like every
+	// other connector — which also gives it an admin page, tag visibility
+	// and connector_runs audit for free.
 	if user := login.GetUser(r.Context()); user != nil {
 		tagIDs := login.GetUserTagIDs(r.Context())
 		tools = append(tools, handlers.WickManagerToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)

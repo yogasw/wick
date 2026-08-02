@@ -131,6 +131,7 @@ export default withMermaid(defineConfig({
           { text: 'Channels (Slack / Telegram / Web)', link: '/guide/agents/channels' },
           { text: 'Scheduled Messages', link: '/guide/agents/scheduled-messages' },
           { text: 'Pool & Sessions', link: '/guide/agents/pool' },
+          { text: 'Sub-agents', link: '/guide/agents/sub-agents' },
           { text: 'Source Control', link: '/guide/agents/source-control' },
           { text: 'AI Router', link: '/guide/agents/airouter' },
           { text: 'Command Gate', link: '/guide/command-gate' },

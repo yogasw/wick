@@ -12,6 +12,7 @@
     }
   },
   "dependencies": {
+    "@wick-fe/common-api": "*",
     "@wick-fe/common-stores": "*",
     "ace-builds": "^1.44.0"
   },

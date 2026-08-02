@@ -78,6 +78,15 @@ type Meta struct {
 	// Factory reads the preset content from presets/<name>/agent.md on
 	// every spawn so edits to the preset take effect on next respawn.
 	Preset string `json:"preset,omitempty"`
+	// SystemAddon is free-text system-prompt content appended after the
+	// preset on every spawn. Unlike Preset it is not a named file, so it
+	// carries prompt text that belongs to THIS session and has no reason
+	// to appear in the shared preset list — a sub-agent role's system
+	// prompt, or a project's default addon.
+	//
+	// Read by the pool on each spawn, so an edit takes effect on the next
+	// respawn exactly like a preset edit does.
+	SystemAddon string `json:"system_addon,omitempty"`
 	// Subscribers is the list of user IDs that opted in to receive
 	// browser push notifications for this session's lifecycle
 	// transitions (queue → working → idle). Persisted in meta.json so
@@ -97,6 +106,17 @@ type Meta struct {
 	// the channel's in-memory state is lost. Only meaningful for Slack
 	// channel sessions; absent/false everywhere else.
 	AutoReply bool `json:"auto_reply,omitempty"`
+	// ParentSessionID links a sub-agent's isolated session back to the
+	// session that delegated it. Non-empty = this is a child: hidden
+	// from the conversation list and surfaced in the parent's Sub-agents
+	// rail panel instead.
+	//
+	// This relation is the ONLY marker of "is a child" — there is
+	// deliberately no separate `type: subagent` field, because two
+	// sources of truth for the same fact can disagree. Absent on every
+	// session created before sub-agents existed, which reads correctly
+	// as "not a child".
+	ParentSessionID string `json:"parent_session_id,omitempty"`
 }
 
 // IsSubscribed returns true when userID has opted in to receive
@@ -166,6 +186,9 @@ type CreateOptions struct {
 	// UserID is the wick user who is creating this session. Stored in
 	// meta.json for ownership checks in MCP handlers.
 	UserID string
+	// ParentSessionID marks this session as a delegated sub-agent's
+	// isolated context. See Meta.ParentSessionID.
+	ParentSessionID string
 }
 
 // Create materializes sessions/<id>/: meta.json, agents.json (empty
@@ -201,6 +224,8 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 		CreatedAt:  now,
 		LastActive: now,
 		UserID:     opt.UserID,
+
+		ParentSessionID: opt.ParentSessionID,
 	}
 	if err := storage.WriteJSON(layout.SessionMeta(opt.ID), &meta); err != nil {
 		_ = os.RemoveAll(dir)
@@ -256,6 +281,25 @@ func Delete(_ context.Context, layout config.Layout, id string) error {
 		return err
 	}
 	return os.RemoveAll(layout.SessionDir(id))
+}
+
+// SetSystemAddon replaces a session's free-text system-prompt addon.
+//
+// Takes effect on the next spawn, like a preset edit. Used by delegation
+// to give a sub-agent its role's system prompt: a role is not a named
+// preset, so writing one would put a per-role file into the shared
+// preset list where nobody expects it.
+func SetSystemAddon(layout config.Layout, id, addon string) error {
+	sess, err := Load(layout, id)
+	if err != nil {
+		return err
+	}
+	if sess.Meta.SystemAddon == addon {
+		return nil
+	}
+	sess.Meta.SystemAddon = addon
+	sess.Meta.LastActive = time.Now().UTC()
+	return SaveMeta(layout, id, sess.Meta)
 }
 
 // SetProject changes the project a session points at. No filesystem

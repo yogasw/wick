@@ -47,6 +47,18 @@ type AuthMiddleware struct {
 	// internalToken authenticates wick's own agent spawns over loopback;
 	// matching it grants a synthetic admin principal. Empty = off.
 	internalToken string
+	// scoped issues per-sub-agent tokens that authenticate as the REAL
+	// triggering user with an already-narrowed tag set, instead of the
+	// admin principal internalToken grants. Sub-agents must never hold
+	// internalToken, or profile tag limits would be bypassed entirely.
+	// nil = no sub-agent tokens accepted.
+	scoped *ScopedTokens
+}
+
+// WithScopedTokens attaches the sub-agent token issuer.
+func (m *AuthMiddleware) WithScopedTokens(s *ScopedTokens) *AuthMiddleware {
+	m.scoped = s
+	return m
 }
 
 // WithInternalToken sets the per-boot internal MCP secret agent spawns
@@ -86,6 +98,32 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 		token, ok := bearerFromHeader(r)
 		if !ok {
 			m.reject(w, "")
+			return
+		}
+
+		// Sub-agent tokens are checked BEFORE the internal token so a
+		// scoped principal can never fall through to the admin branch.
+		// These carry the human who triggered the delegation plus a tag
+		// set already intersected down to what that human may reach, so
+		// downstream tag filtering applies normally.
+		if m.scoped != nil && strings.HasPrefix(token, ScopedTokenPrefix) {
+			userID, tagIDs, ok := m.scoped.Lookup(token)
+			if !ok {
+				m.reject(w, "invalid_token")
+				return
+			}
+			user, err := m.users.GetUserByID(r.Context(), userID)
+			if err != nil || user == nil || !user.Approved {
+				m.reject(w, "invalid_token")
+				return
+			}
+			// Strip admin: a sub-agent must be filtered by tags even when
+			// the human who triggered it is an administrator, because the
+			// profile's narrowing list is the whole point of the scope.
+			scopedUser := *user
+			scopedUser.Role = entity.RoleUser
+			ctx := login.WithUser(r.Context(), &scopedUser, tagIDs)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 

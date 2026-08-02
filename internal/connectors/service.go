@@ -1550,6 +1550,10 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 	}
 	cctx.SetCallerUserID(callerUID)
+	// Ops that act ON the calling conversation rather than on an external
+	// API need to know which session that is — sub-agent delegation keys
+	// the parent, the tree, and the project scope off it.
+	cctx.SetSessionID(sessionID)
 	// Resolve the session-owning bot and stamp it onto the Ctx so the Slack
 	// footer names the owner's bot regardless of which connector sends. All
 	// optional — no session, no resolver, or no match just leaves OwnerBotID

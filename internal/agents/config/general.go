@@ -25,6 +25,23 @@ type GeneralConfig struct {
 	TraceEventInlineKB        int    `wick:"number;group=Tracing|Limits on how trace-event payloads are stored on disk.;desc=Max KB for a trace event payload stored inline in the turn index. Events larger than this are written to a separate file and loaded on demand. Default: 10."`
 	TraceEventMaxKB           int    `wick:"number;group=Tracing;desc=Hard cap in KB for a single trace event payload file. Payloads exceeding this are truncated before write. 0 = no cap. Default: 512."`
 	AdminSeeAll               bool   `wick:"bool;group=Access|Visibility scope for admins.;desc=When on, admins see every project and every session (legacy behaviour). When off (default), admins are scoped like regular users: only projects granted via tags plus their own unscoped sessions. Ownerless sessions (no creator) are hidden from everyone while off."`
+
+	// Sub-agent governor. These are SYSTEM-WIDE CEILINGS, not per-role
+	// defaults: an agent profile can lower them but never raise them.
+	// Role-level settings (provider, model, prompt, tool tags) live on
+	// the profile itself, at /manager/agents/profiles.
+	SubAgentsEnabled     bool `wick:"bool;group=Sub-agents|System-wide ceilings for sub-agent delegation. Individual roles are configured under Agent Profiles; these values cap every role and cannot be raised by one.;desc=Master switch for sub-agent delegation. Off = the wick_delegate and wick_agents tools disappear entirely and no sub-agent can be spawned. Use as an emergency stop or for a staged rollout."`
+	SubAgentsMaxDepth    int  `wick:"number;group=Sub-agents;desc=How many levels deep delegation may nest (a sub-agent delegating again). Guards against runaway recursion. Default: 3."`
+	SubAgentsRootBudget  int  `wick:"number;group=Sub-agents;desc=Total agentic turns one delegation tree may consume across every sub-agent in it. When exhausted, running sub-agents finish but no new ones start. Default: 40."`
+	SubAgentsMaxParallel int  `wick:"number;group=Sub-agents;desc=Max sub-agents running concurrently within one delegation tree. Default: 4."`
+	SubAgentsMaxTurns    int  `wick:"number;group=Sub-agents;desc=Hard ceiling on turns for any single sub-agent. Both the profile default and a caller's request are clamped to this. Default: 50."`
+	// Token ceilings. Turn limits bound how MANY times a sub-agent runs;
+	// they do not bound what each run costs — one turn that reads a large
+	// file can cost more than ten small ones. 0 disables a ceiling, which
+	// is also what happens in practice for providers that report no usage.
+	SubAgentsMaxTokens     int `wick:"number;group=Sub-agents;desc=Hard ceiling on tokens any single sub-agent may spend. 0 = no per-sub-agent token cap (turn limits still apply). Only enforceable for providers that report usage. Default: 200000."`
+	SubAgentsRootTokens    int `wick:"number;group=Sub-agents;desc=Total tokens one delegation tree may spend across every sub-agent in it. When exhausted, running sub-agents finish but no new ones start. 0 = no token budget. Default: 1000000."`
+	SubAgentsStaleClaimMin int `wick:"number;group=Sub-agents;desc=Minutes before a task-board claim held by a vanished worker is released back to the queue. Without this a crashed worker pins its task forever. Default: 30."`
 }
 
 // DefaultGeneralConfig returns the seed values used when the configs
@@ -44,5 +61,17 @@ func DefaultGeneralConfig() GeneralConfig {
 		TraceEventInlineKB: 10,
 		TraceEventMaxKB:    512,
 		AirouterEnabled:    true,
+		// Sub-agents ship OFF: delegation spawns real processes and spends
+		// real tokens, so it is opt-in rather than something a fresh
+		// install discovers by surprise. The ceilings below apply the
+		// moment it is switched on.
+		SubAgentsEnabled:     false,
+		SubAgentsMaxDepth:    3,
+		SubAgentsRootBudget:  40,
+		SubAgentsMaxParallel: 4,
+		SubAgentsMaxTurns:      50,
+		SubAgentsMaxTokens:     200_000,
+		SubAgentsRootTokens:    1_000_000,
+		SubAgentsStaleClaimMin: 30,
 	}
 }
