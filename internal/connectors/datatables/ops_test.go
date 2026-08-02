@@ -1,19 +1,19 @@
 // Self-test: exercise every datatable_* MCP op end-to-end through the
 // same connector.Ctx surface `wick mcp serve` dispatches into.
-package workflow
+package datatables
 
 import (
 	"context"
 	"encoding/json"
 	"testing"
 
-	"github.com/yogasw/wick/internal/agents/workflow/datatable"
+	dtcore "github.com/yogasw/wick/internal/agents/workflow/datatable"
 	wfmcp "github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/pkg/connector"
 )
 
 func newSelfTestHandlers() *handlers {
-	svc := datatable.NewMock()
+	svc := dtcore.NewMock()
 	ops := &wfmcp.Ops{DataTables: svc}
 	return &handlers{ops: ops}
 }

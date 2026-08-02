@@ -14,7 +14,7 @@
 
 - **Never `git commit`.** The user commits. Plans elsewhere in Superpowers end tasks with a commit step; here every task ends at "tests pass". Do not stage, commit, push, or open a PR.
 - **UI copy is English.** Every label, placeholder, helper string, and error message.
-- **No "qiscus" in samples.** Use `abc.com`, `example.com`, generic names.
+- Use `abc.com`, `example.com`, generic names.
 - **Never edit `*_templ.go`.** Edit the `.templ` source and run `templ generate`.
 - **Design system:** Inter (`font-sans`), 8px spacing grid, named Tailwind tokens only (no raw hex, no arbitrary values), a `dark:` counterpart on every colour class, status from the `pos/prog/cau/neg` ramps — green is the accent, never "success".
 - **Zerolog:** `l := log.With().Str("component", "x").Logger()`, then `l.Debug()...`. Never `log.Debug()` directly.

@@ -58,6 +58,7 @@ import (
 	"github.com/yogasw/wick/internal/connectors"
 	customconn "github.com/yogasw/wick/internal/connectors/custom"
 	customconnector "github.com/yogasw/wick/internal/connectors/customconnector"
+	dtconn "github.com/yogasw/wick/internal/connectors/datatables"
 	"github.com/yogasw/wick/internal/connectors/notifications"
 	subagents "github.com/yogasw/wick/internal/connectors/sub-agents"
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
@@ -1160,6 +1161,10 @@ func NewServer() *Server {
 	if wfMgr != nil && wfMgr.MCP != nil {
 		wfRunner := wftest.New(wfMgr.Engine, wfMgr.Service, wfMgr.Layout)
 		connectors.Register(wfconn.ModuleWithRunner(wfMgr.MCP, wfRunner))
+		// Data tables ride the same Ops bundle but live in their own
+		// connector so table access can be tagged and audited apart from
+		// the workflow authoring surface.
+		connectors.Register(dtconn.Module(wfMgr.MCP))
 	}
 
 	// wickmanager is a built-in single-instance connector that exposes
@@ -1535,7 +1540,7 @@ func NewServer() *Server {
 	// so the AI reads/writes only tables the human behind the session owns or
 	// was granted — same rule as the /data-tables UI.
 	if wfMgr != nil && wfMgr.DataTables != nil {
-		wfconn.SetDataTableACL(dataTableACL{tags: tagsSvc, login: authSvc, dt: wfMgr.DataTables, cfg: configsSvc})
+		dtconn.SetDataTableACL(dataTableACL{tags: tagsSvc, login: authSvc, dt: wfMgr.DataTables, cfg: configsSvc})
 	}
 	// Connect MCP custom connectors before the gate lifts: boot
 	// registered them without probing, this pass pulls each server's
