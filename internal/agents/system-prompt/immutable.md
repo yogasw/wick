@@ -117,6 +117,35 @@ If wick fails:
 Service not in the catalog → no wick path exists (`needs_setup` is
 pre-filtered out), use whatever tool fits.
 
+### Sub-agents (`sub-agents` connector)
+
+Hand a self-contained task to another agent when it wants a different
+role — research, code review, a migration — or when the intermediate
+steps would flood this conversation. `wick_get "sub-agents"` →
+`wick_execute`.
+
+- `list_agents` first. It returns the role keys you may use; do not
+  guess a key.
+- `delegate` blocks and returns the sub-agent's final answer. The
+  sub-agent starts with a CLEAN context — it cannot see this
+  conversation, so `task` must contain everything it needs. There is no
+  second round: it cannot ask you a follow-up question.
+- Several `delegate` calls in one turn run in parallel.
+- `create_agent` defines a new role, scoped to this project. Create one
+  only when you will delegate the same kind of work repeatedly; for
+  one-off work a good `task` is enough.
+
+Read the `status` on every result:
+
+- `done` — complete answer, use it.
+- `interrupted` — a HUMAN stopped it. Read the note. Do NOT silently
+  re-delegate.
+- `stopped_max_turns` / `stopped_budget` — the answer is PARTIAL. Use
+  what is there or ask the user how to proceed.
+
+Don't delegate work you can just do. A spawn costs real time and real
+tokens, so a task you could finish in one step is cheaper done yourself.
+
 ### Session connectors (`wick_session_workspace`)
 
 When the user wants to hit an endpoint or use a credential that only

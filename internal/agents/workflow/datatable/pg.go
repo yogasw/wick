@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/yogasw/wick/internal/agents/workflow"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
@@ -514,6 +515,13 @@ func (s *PgService) Insert(slug string, row map[string]any) error {
 // Upsert insert-or-updates by id. When row["id"] hits an existing
 // row, fields are merged via JSONB concat; otherwise a fresh id is
 // minted and the row is inserted.
+// mergeExpr adapts dialect.jsonMerge to the clause.Expr gorm's Updates
+// map wants.
+func mergeExpr(d dialect, payload string) clause.Expr {
+	sql, args := d.jsonMerge(payload)
+	return gorm.Expr(sql, args...)
+}
+
 func (s *PgService) Upsert(slug string, row map[string]any) (string, error) {
 	var action string
 	err := s.db.Transaction(func(tx *gorm.DB) error {
@@ -547,7 +555,7 @@ func (s *PgService) Upsert(slug string, row map[string]any) (string, error) {
 			res := tx.Model(&entity.DataTableRow{}).
 				Where("table_slug = ? AND id = ?", slug, targetID).
 				Updates(map[string]any{
-					"data":       gorm.Expr(`COALESCE("data", '{}'::jsonb) || ?::jsonb`, string(data)),
+					"data":       mergeExpr(dialectOf(tx), string(data)),
 					"updated_at": now,
 				})
 			if res.Error != nil {
@@ -585,6 +593,58 @@ func (s *PgService) Upsert(slug string, row map[string]any) (string, error) {
 		return nil
 	})
 	return action, err
+}
+
+// Update patches an existing row by id, never creating one.
+//
+// Upsert exists for "make this row look like that"; Update exists for
+// "change the row I already have". They are not the same call with a
+// flag: Upsert silently inserts at whatever id it was handed, so a typo
+// in the id produces a brand-new row that looks like a successful edit.
+// Callers that mean to edit want to hear about that.
+func (s *PgService) Update(slug string, row map[string]any) (bool, error) {
+	var found bool
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		m, err := s.lockMeta(tx, slug)
+		if err != nil {
+			return err
+		}
+		sc, err := metaToSchema(m)
+		if err != nil {
+			return err
+		}
+		targetID, hasID := coerceInt64(row[ColID])
+		if !hasID {
+			return fmt.Errorf("update needs an %q to identify the row; use upsert to create one", ColID)
+		}
+		delete(row, ColID)
+		delete(row, ColCreatedAt)
+		delete(row, ColUpdatedAt)
+		cleaned, err := normalizeRow(sc, row)
+		if err != nil {
+			return err
+		}
+		encoded, err := BuildIDMap(sc).Encode(cleaned, sc.Mode)
+		if err != nil {
+			return err
+		}
+		data, err := json.Marshal(encoded)
+		if err != nil {
+			return err
+		}
+		res := tx.Model(&entity.DataTableRow{}).
+			Where("table_slug = ? AND id = ?", slug, targetID).
+			Updates(map[string]any{
+				"data":       mergeExpr(dialectOf(tx), string(data)),
+				"updated_at": time.Now().UTC(),
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		found = res.RowsAffected > 0
+		return nil
+	})
+	return found, err
 }
 
 // Get returns the first row matching the caller-supplied filter
@@ -668,8 +728,7 @@ func (s *PgService) buildWhere(idmap IDMap, eq map[string]any, conds []Condition
 				w.args = append(w.args, args...)
 				continue
 			}
-			cast := pgIndexCast(idmap.Cols[cid].Type)
-			expr, args, err := jsonbPredicate(cid, cast, c)
+			expr, args, err := jsonbPredicate(dialectOf(s.db), cid, idmap.Cols[cid].Type, c)
 			if err != nil {
 				return w, err
 			}
@@ -702,8 +761,8 @@ func (s *PgService) buildWhere(idmap IDMap, eq map[string]any, conds []Condition
 }
 
 // jsonbPredicate renders one Condition against `data->>'<cid>'`.
-func jsonbPredicate(cid, cast string, c Condition) (string, []any, error) {
-	col := fmt.Sprintf(`(data->>'%s')%s`, cid, cast)
+func jsonbPredicate(d dialect, cid, colType string, c Condition) (string, []any, error) {
+	col := d.cast(d.text(cid), colType)
 	switch c.Op {
 	case "", OpEquals:
 		return col + " = ?", []any{c.Value}, nil
@@ -718,7 +777,7 @@ func jsonbPredicate(cid, cast string, c Condition) (string, []any, error) {
 	case OpLTE:
 		return col + " <= ?", []any{c.Value}, nil
 	case OpContains:
-		return fmt.Sprintf(`(data->>'%s') ILIKE ?`, cid), []any{"%" + fmt.Sprintf("%v", c.Value) + "%"}, nil
+		return fmt.Sprintf(`%s %s ?`, d.text(cid), d.iLike()), []any{"%" + fmt.Sprintf("%v", c.Value) + "%"}, nil
 	case OpIn:
 		vals, ok := c.Value.([]any)
 		if !ok {
@@ -737,9 +796,9 @@ func jsonbPredicate(cid, cast string, c Condition) (string, []any, error) {
 		}
 		return col + " IN (" + strings.Join(placeholders, ", ") + ")", vals, nil
 	case OpIsEmpty:
-		return fmt.Sprintf(`((data ? '%s') IS FALSE OR data->>'%s' IS NULL OR data->>'%s' = '')`, cid, cid, cid), nil, nil
+		return fmt.Sprintf(`(NOT (%s) OR %s IS NULL OR %s = '')`, d.keyExists(cid), d.text(cid), d.text(cid)), nil, nil
 	case OpIsNotEmpty:
-		return fmt.Sprintf(`(data ? '%s') AND data->>'%s' IS NOT NULL AND data->>'%s' <> ''`, cid, cid, cid), nil, nil
+		return fmt.Sprintf(`(%s) AND %s IS NOT NULL AND %s <> ''`, d.keyExists(cid), d.text(cid), d.text(cid)), nil, nil
 	}
 	return "", nil, fmt.Errorf("unknown op %q", c.Op)
 }
@@ -768,7 +827,7 @@ func systemColumnPredicate(c Condition) (string, []any, error) {
 
 // orderBy renders ORDER BY for a request. Falls back to `id ASC` so
 // pagination is deterministic.
-func orderBy(idmap IDMap, order []workflow.DataTableOrder) string {
+func orderBy(d dialect, idmap IDMap, order []workflow.DataTableOrder) string {
 	if len(order) == 0 {
 		return ` ORDER BY "id" ASC`
 	}
@@ -786,8 +845,7 @@ func orderBy(idmap IDMap, order []workflow.DataTableOrder) string {
 		if !ok {
 			continue
 		}
-		cast := pgIndexCast(idmap.Cols[cid].Type)
-		parts = append(parts, fmt.Sprintf(`(data->>'%s')%s %s`, cid, cast, dir))
+		parts = append(parts, fmt.Sprintf(`%s %s`, d.cast(d.text(cid), idmap.Cols[cid].Type), dir))
 	}
 	if len(parts) == 0 {
 		return ` ORDER BY "id" ASC`
@@ -818,7 +876,7 @@ func (s *PgService) queryNameKeyed(slug string, eq map[string]any, conds []Condi
 		clause += " AND " + w.clause
 		args = append(args, w.args...)
 	}
-	sqlStr := `SELECT "id", "data", "created_at", "updated_at" FROM wick_data_table_rows WHERE ` + clause + orderBy(idmap, order)
+	sqlStr := `SELECT "id", "data", "created_at", "updated_at" FROM wick_data_table_rows WHERE ` + clause + orderBy(dialectOf(s.db), idmap, order)
 	if limit > 0 {
 		sqlStr += fmt.Sprintf(" LIMIT %d", limit)
 	}
@@ -953,9 +1011,17 @@ func (s *PgService) stripDataKeys(tx *gorm.DB, slug string, dropped []Column) er
 		if c.ID == "" {
 			continue
 		}
+		d := dialectOf(tx)
+		removeSQL, removeArgs := d.removeKeyExpr(c.ID)
+		// updated_at is bound as a Go value rather than spelled now() /
+		// CURRENT_TIMESTAMP: the function name differs per dialect and so
+		// does the stored text format, and the column is a time.Time.
+		args := append([]any{}, removeArgs...)
+		args = append(args, time.Now().UTC(), slug)
 		if err := tx.Exec(
-			`UPDATE wick_data_table_rows SET "data" = "data" - ?, updated_at = now() WHERE table_slug = ? AND ("data" ? ?)`,
-			c.ID, slug, c.ID,
+			fmt.Sprintf(`UPDATE wick_data_table_rows SET "data" = %s, updated_at = ? WHERE table_slug = ? AND (%s)`,
+				removeSQL, d.keyExists(c.ID)),
+			args...,
 		).Error; err != nil {
 			return err
 		}
@@ -1018,8 +1084,8 @@ func (s *PgService) createIndex(tx *gorm.DB, slug string, c Column) error {
 	if err != nil {
 		return err
 	}
-	cast := pgIndexCast(c.Type)
-	expr := fmt.Sprintf(`((data->>'%s')%s)`, c.ID, cast)
+	d := dialectOf(tx)
+	expr := "(" + d.cast(d.text(c.ID), c.Type) + ")"
 	// table_slug literal in the WHERE clause is fine — slug shape is
 	// already validated by parse.ValidateID before any DDL runs.
 	return tx.Exec(fmt.Sprintf(

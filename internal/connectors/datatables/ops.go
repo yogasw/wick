@@ -1,4 +1,4 @@
-package workflow
+package datatables
 
 import (
 	"context"
@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	wf "github.com/yogasw/wick/internal/agents/workflow"
-	"github.com/yogasw/wick/internal/agents/workflow/datatable"
+	dtcore "github.com/yogasw/wick/internal/agents/workflow/datatable"
 	wfmcp "github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/pkg/connector"
 )
@@ -91,7 +90,7 @@ func (h *handlers) datatableCreate(c *connector.Ctx) (any, error) {
 		}
 	}
 	if raw := strings.TrimSpace(c.Input("access")); raw != "" {
-		var acc datatable.Access
+		var acc dtcore.Access
 		if err := json.Unmarshal([]byte(raw), &acc); err != nil {
 			return nil, fmt.Errorf("parse access: %w", err)
 		}
@@ -176,6 +175,28 @@ func (h *handlers) datatableUpsert(c *connector.Ctx) (any, error) {
 	return map[string]any{"action": action, "row": row}, nil
 }
 
+func (h *handlers) datatableUpdate(c *connector.Ctx) (any, error) {
+	if err := guardDataTable(c, c.Input("slug")); err != nil {
+		return nil, err
+	}
+	row, err := parseRowJSON(c.Input("row"))
+	if err != nil {
+		return nil, err
+	}
+	found, err := h.ops.DataTableUpdate(wfmcp.DataTableInsertInput{Slug: c.Input("slug"), Row: row})
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		// An error, not {found:false}: the caller asked to change a
+		// specific row and nothing changed. Reported as a no-op it would
+		// read as success and the wrong number would stay on screen.
+		return nil, fmt.Errorf("no row with that id in %q — nothing was changed. "+
+			"Check the id with datatable_query, or use datatable_upsert if you meant to create the row", c.Input("slug"))
+	}
+	return map[string]any{"updated": true, "row": row}, nil
+}
+
 func (h *handlers) datatableDelete(c *connector.Ctx) (any, error) {
 	if err := guardDataTable(c, c.Input("slug")); err != nil {
 		return nil, err
@@ -236,13 +257,13 @@ func parseFilterInput(c *connector.Ctx) (wfmcp.DataTableDeleteInput, error) {
 }
 
 // parseColumnsForMCP parses `name:type` per line into Column structs.
-func parseColumnsForMCP(raw string) ([]datatable.Column, error) {
+func parseColumnsForMCP(raw string) ([]dtcore.Column, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, fmt.Errorf("columns is required")
 	}
 	lines := strings.Split(raw, "\n")
-	out := []datatable.Column{}
+	out := []dtcore.Column{}
 	for _, l := range lines {
 		l = strings.TrimSpace(l)
 		if l == "" {
@@ -257,13 +278,10 @@ func parseColumnsForMCP(raw string) ([]datatable.Column, error) {
 		if name == "" {
 			continue
 		}
-		out = append(out, datatable.Column{Name: name, Type: typ})
+		out = append(out, dtcore.Column{Name: name, Type: typ})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("at least one column required")
 	}
 	return out, nil
 }
-
-// Compile-time use of wf to satisfy import (DataTableCondition lives there).
-var _ = wf.NodeDataTableGet

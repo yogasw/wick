@@ -26,6 +26,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/capability"
 	provider "github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/provider/procgroup"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -94,6 +95,9 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	cmd.Dir = opt.Workspace
 	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
 	hideConsole(cmd)
+	// Own process group: teardown must reach the descendants this CLI
+	// spawns (MCP servers, tool subprocesses), not just the leader.
+	procgroup.Apply(cmd)
 
 	// Masked view of the env wick injected (instance ExtraEnv), for the log.
 	addedEnv := provider.MaskSpawnEnv(opt.ExtraEnv)

@@ -148,6 +148,15 @@ func (m *Ops) DataTableUpsert(in DataTableInsertInput) (string, error) {
 	return m.DataTables.Upsert(in.Slug, in.Row)
 }
 
+// DataTableUpdate patches an existing row by id and never creates one.
+// found=false means the id did not exist.
+func (m *Ops) DataTableUpdate(in DataTableInsertInput) (bool, error) {
+	if m.DataTables == nil {
+		return false, fmt.Errorf("data tables not configured")
+	}
+	return m.DataTables.Update(in.Slug, in.Row)
+}
+
 // DataTableDeleteInput is the payload for datatable_delete.
 type DataTableDeleteInput struct {
 	Slug       string                `json:"slug"`
