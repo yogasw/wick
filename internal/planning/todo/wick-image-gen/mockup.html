@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wick Image Generation — Visual Design</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  /* Tokens mirror wick design-system: green (accent), navy (dark surface),
+     black ramp (text), white ramp (light surface), status pos/cau/neg/prog. */
+  :root {
+    --green-200:#D1ECE5; --green-500:#27B199; --green-600:#288372; --green-700:#24584E; --green-800:#1B312C;
+    --navy-500:#01416C; --navy-600:#103352; --navy-700:#14263A; --navy-800:#121923;
+    --black-600:#BFBFBF; --black-700:#A0A0A0; --black-800:#565656; --black-900:#0A0A0A;
+    --white-100:#FFFFFF; --white-200:#FAFAFA; --white-300:#ECECEC; --white-400:#DFDFDF;
+    --pos-100:#E3F3EF; --pos-400:#288C7A; --cau-100:#FBF1DD; --cau-400:#D78E08;
+    --neg-100:#FCE7E2; --neg-400:#EB5757; --prog-100:#EEFAFE; --prog-400:#56CCF2;
+  }
+  body { font-family: 'Inter', system-ui, sans-serif; background: var(--white-200); color: var(--black-900); }
+  pre, code, .mono { font-family: 'JetBrains Mono', 'Consolas', monospace; }
+
+  .card       { background: var(--white-100); border: 1px solid var(--white-300); border-radius: 12px; }
+  .card-sub   { background: var(--white-200); border: 1px solid var(--white-300); border-radius: 8px; }
+
+  .chip       { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+  .chip-ok    { background: var(--pos-100); color: var(--pos-400); border:1px solid var(--pos-400); }
+  .chip-warn  { background: var(--cau-100); color: var(--cau-400); border:1px solid var(--cau-400); }
+  .chip-bad   { background: var(--neg-100); color: var(--neg-400); border:1px solid var(--neg-400); }
+  .chip-muted { background: var(--white-300); color: var(--black-800); border:1px solid var(--white-400); }
+
+  .badge       { display:inline-block; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; }
+  .badge-img   { background: var(--prog-100); color: var(--navy-500); border:1px solid var(--prog-400); }
+  .badge-text  { background: var(--white-300); color: var(--black-800); }
+  .badge-new   { background: var(--green-200); color: var(--green-700); }
+
+  .btn         { display:inline-flex; align-items:center; gap:6px; padding:8px 14px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; }
+  .btn-primary { background: var(--green-500); color: var(--white-100); }
+  .btn-ghost   { background: var(--white-100); color: var(--black-900); border:1px solid var(--white-400); }
+
+  .input     { width:100%; padding:8px 12px; border:1px solid var(--white-400); border-radius:8px; font-size:13px; background:var(--white-100); color:var(--black-900); }
+  .label     { font-size:12px; font-weight:600; color: var(--black-800); margin-bottom:4px; display:block; }
+  .helper    { font-size:11px; color: var(--black-800); margin-top:4px; }
+  .section-h { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--black-800); }
+
+  .ftab    { background:transparent; color:var(--black-800); border:none; border-bottom:3px solid transparent; padding:10px 16px; font-size:14px; font-weight:600; cursor:pointer; text-decoration:none; }
+  .ftab:hover { color:var(--green-600); }
+  .ftab-on { color:var(--green-600); border-bottom-color:var(--green-500); }
+  /* nav is sticky — keep section headings clear of it when jumped to */
+  main section { scroll-margin-top: 60px; }
+
+  .msg-user  { background:var(--prog-100); border:1px solid var(--prog-400); border-radius:10px; padding:8px 12px; font-size:13px; }
+  .msg-bot   { background:var(--white-200); border:1px solid var(--white-300); border-radius:10px; padding:8px 12px; font-size:13px; }
+  .tool-call { background:var(--navy-700); color:var(--white-100); border-radius:8px; padding:6px 10px; font-size:12px; }
+
+  /* image card grid — mirrors the imagecard fence render in fe/agents/conversation */
+  .imgcard   { border:1px solid var(--white-400); border-radius:10px; overflow:hidden; background:var(--white-100); }
+  .imgthumb  { aspect-ratio:1/1; display:flex; align-items:center; justify-content:center;
+               background:linear-gradient(135deg,var(--navy-700),var(--green-700)); color:var(--white-100);
+               font-size:11px; text-align:center; padding:8px; }
+  .imgmeta   { padding:6px 8px; font-size:11px; color:var(--black-800); border-top:1px solid var(--white-300); }
+
+  .flow-box  { background:var(--white-100); border:1px solid var(--white-400); border-radius:8px; padding:8px 10px; font-size:12px; text-align:center; }
+  .flow-hl   { background:var(--green-200); border-color:var(--green-500); color:var(--green-700); font-weight:600; }
+  .flow-arrow{ color:var(--black-700); font-size:16px; text-align:center; }
+  .reject    { background:var(--neg-100); border:1px solid var(--neg-400); border-radius:8px; padding:8px 10px; font-size:12px; }
+</style>
+</head>
+<body>
+
+<header class="max-w-7xl mx-auto px-6 pt-10 pb-4">
+  <div class="flex items-center gap-3 mb-2">
+    <h1 class="text-2xl font-bold">Wick Image Generation</h1>
+    <span class="badge badge-new">Proposal</span>
+  </div>
+  <p class="text-sm" style="color:var(--black-800)">
+    Text-to-image sebagai <strong>tool</strong> (<code class="mono">generate_image</code>), engine-nya
+    <strong>wick provider</strong>. Bukan module tools baru, bukan provider baru — satu lapis tipis di atas
+    <code class="mono">WickModel</code> (key terenkripsi per-model) + adapter vendor.
+  </p>
+  <p class="text-xs mt-2" style="color:var(--black-800)">
+    Paired doc: <code class="mono">plan.md</code> — update keduanya barengan.
+  </p>
+</header>
+
+<nav class="max-w-7xl mx-auto px-6 border-b sticky top-0 z-10" style="border-color:var(--white-400); background:var(--white-200)">
+  <a href="#arsitektur" class="ftab inline-block">Arsitektur</a>
+  <a href="#models-ui" class="ftab inline-block">Models UI</a>
+  <a href="#agent-flow" class="ftab inline-block">Agent flow</a>
+  <a href="#output" class="ftab inline-block">Output</a>
+  <a href="#roadmap" class="ftab inline-block">Roadmap</a>
+  <a href="#ditolak" class="ftab inline-block">Ditolak</a>
+</nav>
+
+<main class="max-w-7xl mx-auto px-6 py-8 space-y-8">
+
+  <!-- ============ 1. ARSITEKTUR ============ -->
+  <section id="arsitektur" class="card p-6">
+    <div class="section-h mb-4">1 · Arsitektur — dua jalur, satu core</div>
+
+    <div class="grid grid-cols-12 gap-3 items-center">
+      <div class="col-span-3 space-y-2">
+        <div class="flow-box">agent <span class="badge badge-text">claude</span></div>
+        <div class="flow-box">agent <span class="badge badge-text">codex</span></div>
+        <div class="flow-box">agent <span class="badge badge-text">wick</span></div>
+        <div class="helper text-center">semua provider</div>
+      </div>
+
+      <div class="col-span-1 flow-arrow">→</div>
+
+      <div class="col-span-3">
+        <div class="flow-box flow-hl">tool <code class="mono">generate_image</code></div>
+        <div class="helper text-center mt-1">
+          <code class="mono">internal/mcp/handlers/image.go</code><br>
+          satu definisi via <code class="mono">externalToolDefs</code>
+        </div>
+      </div>
+
+      <div class="col-span-1 flow-arrow">→</div>
+
+      <div class="col-span-4">
+        <div class="card-sub p-3">
+          <div class="text-xs font-semibold mb-2">wick.ImageGen <span class="helper">(imagegen.go)</span></div>
+          <div class="space-y-1.5">
+            <div class="flow-box text-left">
+              <code class="mono">imagegen_openai.go</code>
+              <div class="helper">POST {base}/images/generations · openai · openrouter · other</div>
+            </div>
+            <div class="flow-box text-left">
+              <code class="mono">imagegen_gemini.go</code>
+              <div class="helper">genai GenerateImages</div>
+            </div>
+            <div class="reject">
+              <code class="mono">imagegen_anthropic.go</code> — <strong>tidak ada.</strong>
+              Anthropic tak punya endpoint T2I.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="mt-5 pt-5 border-t grid md:grid-cols-2 gap-4" style="border-color:var(--white-300)">
+      <div class="card-sub p-4">
+        <div class="text-xs font-semibold mb-2" style="color:var(--green-700)">Yang di-reuse (tak ada kode baru)</div>
+        <ul class="text-xs space-y-1.5" style="color:var(--black-800)">
+          <li>• <code class="mono">provider.WickModel</code> — API key terenkripsi per-model, Kind/BaseURL/APIFormat</li>
+          <li>• <code class="mono">externalToolDefs</code> — jalur tool ke semua provider sekaligus</li>
+          <li>• <code class="mono">store.Artifact</code> (Kind=image) — derive read-time dari trace, preview gratis</li>
+          <li>• <code class="mono">imagecard</code> fence — galeri + carousel di FE, sudah ada</li>
+        </ul>
+      </div>
+      <div class="card-sub p-4">
+        <div class="text-xs font-semibold mb-2" style="color:var(--navy-500)">Yang baru (lapis tipis)</div>
+        <ul class="text-xs space-y-1.5" style="color:var(--black-800)">
+          <li>• <code class="mono">ImageGen</code> interface — <strong>bukan</strong> perluasan <code class="mono">LLM</code></li>
+          <li>• 2 adapter vendor (openai-compatible + gemini)</li>
+          <li>• <code class="mono">WickModel.Modality</code> — <code class="mono">text</code> | <code class="mono">image</code></li>
+          <li>• <code class="mono">WickConfig.ImageModel</code> — id model default</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 2. MODELS UI ============ -->
+  <section id="models-ui" class="card p-6">
+    <div class="section-h mb-1">2 · Models table — satu registry, kolom Modality baru</div>
+    <p class="helper mb-4">
+      Tak ada tabel baru. Model image duduk di registry yang sama dengan model chat, dibedakan kolom
+      <strong>Modality</strong>. Picker percakapan memfilter <code class="mono">!= image</code>;
+      tool <code class="mono">generate_image</code> memfilter <code class="mono">== image</code>.
+    </p>
+
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs">
+        <thead>
+          <tr class="text-left" style="color:var(--black-800)">
+            <th class="py-2 pr-3 font-semibold">Label</th>
+            <th class="py-2 pr-3 font-semibold">Kind</th>
+            <th class="py-2 pr-3 font-semibold">Model</th>
+            <th class="py-2 pr-3 font-semibold">Modality</th>
+            <th class="py-2 pr-3 font-semibold">Key</th>
+            <th class="py-2 pr-3 font-semibold">Default</th>
+            <th class="py-2 font-semibold">Test</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="border-t" style="border-color:var(--white-300)">
+            <td class="py-2.5 pr-3 font-medium">Sonnet</td>
+            <td class="py-2.5 pr-3">anthropic</td>
+            <td class="py-2.5 pr-3 mono">claude-sonnet-5</td>
+            <td class="py-2.5 pr-3"><span class="badge badge-text">text</span></td>
+            <td class="py-2.5 pr-3"><span class="chip chip-ok">set</span></td>
+            <td class="py-2.5 pr-3"><span class="chip chip-ok">chat</span></td>
+            <td class="py-2 mono" style="color:var(--black-800)">1-token ping</td>
+          </tr>
+          <tr class="border-t" style="border-color:var(--white-300)">
+            <td class="py-2.5 pr-3 font-medium">GPT Image</td>
+            <td class="py-2.5 pr-3">openai</td>
+            <td class="py-2.5 pr-3 mono">gpt-image-1</td>
+            <td class="py-2.5 pr-3"><span class="badge badge-img">image</span></td>
+            <td class="py-2.5 pr-3"><span class="chip chip-ok">set</span></td>
+            <td class="py-2.5 pr-3"><span class="chip chip-ok">image</span></td>
+            <td class="py-2 mono" style="color:var(--black-800)">1 img @ min size</td>
+          </tr>
+          <tr class="border-t" style="border-color:var(--white-300)">
+            <td class="py-2.5 pr-3 font-medium">Imagen</td>
+            <td class="py-2.5 pr-3">google</td>
+            <td class="py-2.5 pr-3 mono">imagen-4.0</td>
+            <td class="py-2.5 pr-3"><span class="badge badge-img">image</span></td>
+            <td class="py-2.5 pr-3"><span class="chip chip-warn">missing</span></td>
+            <td class="py-2.5 pr-3"><span class="chip chip-muted">—</span></td>
+            <td class="py-2 mono" style="color:var(--black-800)">1 img @ min size</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="mt-5 grid md:grid-cols-2 gap-4">
+      <div class="card-sub p-4">
+        <div class="text-xs font-semibold mb-3">Add / edit model — field baru</div>
+        <label class="label">Modality</label>
+        <select class="input">
+          <option>text — percakapan (default)</option>
+          <option selected>image — text-to-image</option>
+        </select>
+        <p class="helper">Model <code class="mono">image</code> tak muncul di picker percakapan.</p>
+
+        <label class="label mt-3">Default image model</label>
+        <select class="input">
+          <option selected>GPT Image · gpt-image-1</option>
+          <option>Imagen · imagen-4.0</option>
+        </select>
+        <p class="helper">Dipakai <code class="mono">generate_image</code> saat param <code class="mono">model</code> kosong.</p>
+      </div>
+
+      <div class="card-sub p-4">
+        <div class="text-xs font-semibold mb-3">Open question #3 — Modality skalar atau list?</div>
+        <p class="text-xs mb-2" style="color:var(--black-800)">
+          Sebagian model Gemini bisa chat <em>dan</em> keluarkan gambar. Kalau itu perlu didukung,
+          <code class="mono">Modality</code> harus jadi list, bukan skalar.
+        </p>
+        <div class="reject">
+          Harus dicek terhadap model Gemini terkini <strong>sebelum</strong> skema dikunci — ganti
+          skalar→list setelah rilis itu migrasi.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3. AGENT FLOW ============ -->
+  <section id="agent-flow" class="card p-6">
+    <div class="section-h mb-4">3 · Agent flow — satu tool call</div>
+
+    <div class="max-w-3xl space-y-3">
+      <div class="msg-user"><strong>User:</strong> bikinin gambar rubah merah di salju, gaya sinematik</div>
+
+      <div class="tool-call mono">
+        ▸ generate_image { "prompt": "a red fox in snow, cinematic", "n": 2, "size": "1024x1024" }
+      </div>
+
+      <div class="card-sub p-3">
+        <div class="helper mb-2">tool result (teks yang dibaca model — <strong>bukan</strong> base64)</div>
+        <pre class="mono text-xs whitespace-pre-wrap" style="color:var(--black-800)">Generated 2 images:
+generated/20260729-101500-1.png
+generated/20260729-101500-2.png
+
+Show them to the user with an imagecard fence using the URLs above.</pre>
+      </div>
+
+      <div class="msg-bot">
+        <strong>Agent:</strong> Ini dua variasinya —
+        <div class="grid grid-cols-2 gap-3 mt-3 max-w-md">
+          <div class="imgcard">
+            <div class="imgthumb">red fox in snow<br>cinematic · v1</div>
+            <div class="imgmeta">fox-1.png</div>
+          </div>
+          <div class="imgcard">
+            <div class="imgthumb">red fox in snow<br>cinematic · v2</div>
+            <div class="imgmeta">fox-2.png</div>
+          </div>
+        </div>
+        <p class="helper mt-2">↑ dirender dari <code class="mono">```imagecard</code> fence — klik → carousel full-screen</p>
+      </div>
+    </div>
+
+    <div class="mt-6 pt-5 border-t" style="border-color:var(--white-300)">
+      <div class="text-xs font-semibold mb-3">Error dibuat eksplisit — supaya model tak retry buta</div>
+      <div class="grid md:grid-cols-2 gap-2">
+        <div class="reject"><code class="mono">no image model configured</code> → arahkan user ke settings</div>
+        <div class="reject"><code class="mono">model X is not an image model</code></div>
+        <div class="reject"><code class="mono">size not supported by vendor</code></div>
+        <div class="reject"><code class="mono">content rejected by vendor</code> → <strong>jangan retry</strong></div>
+      </div>
+      <div class="mt-3 card-sub p-3">
+        <span class="chip chip-warn">guardrail</span>
+        <span class="text-xs ml-2" style="color:var(--black-800)">
+          <code class="mono">n</code> di-cap (default max 4) — image call jauh lebih mahal dari text turn,
+          dan tak balikin token usage untuk dihitung spawn-log.
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4. OUTPUT ============ -->
+  <section id="output" class="card p-6">
+    <div class="section-h mb-1">4 · Output — dua jalur, dua tujuan</div>
+    <p class="helper mb-4">
+      Fase 1 kerjakan <strong>Artifact</strong> dulu (otomatis, tak butuh model kooperatif).
+      <strong>imagecard</strong> menyusul sebagai instruksi system-prompt.
+    </p>
+
+    <div class="grid md:grid-cols-2 gap-4">
+      <div class="card-sub p-4">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="badge badge-img">jalur A</span>
+          <span class="text-xs font-semibold">store.Artifact</span>
+        </div>
+        <p class="text-xs mb-3" style="color:var(--black-800)">
+          "File ini dihasilkan turn ini." Derive <strong>read-time</strong> dari trace —
+          muncul walau model tak menulis apa pun. <code class="mono">Kind: "image"</code>,
+          <code class="mono">URL</code> + <code class="mono">DownloadURL</code> sudah ada di struct.
+        </p>
+        <span class="chip chip-ok">gratis · sudah ada</span>
+      </div>
+
+      <div class="card-sub p-4">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="badge badge-img">jalur B</span>
+          <span class="text-xs font-semibold">imagecard fence</span>
+        </div>
+        <p class="text-xs mb-3" style="color:var(--black-800)">
+          "Tampilkan sebagai galeri." Model menulis fence-nya sendiri → butuh <strong>URL langsung</strong>.
+          Ini alasan tool result balikin path/URL, <strong>bukan base64</strong>.
+        </p>
+        <span class="chip chip-warn">butuh model kooperatif</span>
+      </div>
+    </div>
+
+    <div class="mt-5 card-sub p-4">
+      <div class="text-xs font-semibold mb-2">Open question #2 — file disimpan di mana?</div>
+      <div class="grid md:grid-cols-2 gap-3 text-xs" style="color:var(--black-800)">
+        <div>
+          <code class="mono">&lt;cwd&gt;/generated/</code>
+          <p class="helper">Kelihatan sebagai file workspace — tapi ikut ke-commit kalau cwd = repo.</p>
+        </div>
+        <div>
+          <code class="mono">&lt;SessionDir&gt;/generated/</code> <span class="chip chip-ok">usul</span>
+          <p class="helper">Gambar bukan source code; <code class="mono">Artifact.URL</code> sudah punya jalur serve session-scoped.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ROADMAP ============ -->
+  <section id="roadmap" class="card p-6">
+    <div class="section-h mb-4">Roadmap</div>
+    <div class="space-y-2">
+      <div class="flex items-start gap-3 card-sub p-3">
+        <span class="chip chip-ok shrink-0">Fase 1</span>
+        <div class="text-xs">
+          <strong>Tool + 2 adapter.</strong> <code class="mono">ImageGen</code> interface, openai + gemini,
+          <code class="mono">Modality</code> field, MCP handler, Artifact output, Test button per-model, cap <code class="mono">n</code>.
+        </div>
+      </div>
+      <div class="flex items-start gap-3 card-sub p-3">
+        <span class="chip chip-muted shrink-0">Fase 2</span>
+        <div class="text-xs">
+          <strong>UI manual.</strong> <code class="mono">internal/tools/image-gen/</code> tipis (form prompt → hasil) yang
+          <em>memanggil</em> <code class="mono">wick.ImageGen</code> — bukan implement HTTP sendiri. Dua permukaan, satu core.
+        </div>
+      </div>
+      <div class="flex items-start gap-3 card-sub p-3">
+        <span class="chip chip-muted shrink-0">Fase 3</span>
+        <div class="text-xs"><strong>image-to-image / edit + mask.</strong> Butuh input attachment, bukan cuma prompt.</div>
+      </div>
+      <div class="flex items-start gap-3 card-sub p-3">
+        <span class="chip chip-muted shrink-0">Fase 4</span>
+        <div class="text-xs">
+          <strong>provider-storage sink.</strong> Hasil ke S3/lokal supaya URL tahan lama, bukan cuma dalam session dir.
+        </div>
+      </div>
+      <div class="flex items-start gap-3" style="opacity:.65">
+        <span class="chip chip-bad shrink-0">⏸ ditahan</span>
+        <div class="text-xs pt-1.5">
+          <strong>Video / audio gen.</strong> Jangan generalisasi <code class="mono">ImageGen</code> → <code class="mono">MediaGen</code>
+          sebelum ada use-case kedua yang nyata.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ REJECTED ============ -->
+  <section id="ditolak" class="card p-6">
+    <div class="section-h mb-4">Sengaja ditolak</div>
+    <div class="grid md:grid-cols-2 gap-3">
+      <div class="reject">
+        <strong>Menumpang <code class="mono">LLM.GenerateContent</code></strong> dengan part khusus —
+        memaksa T2I ke bentuk percakapan bikin adapter text kotor, dan streaming semantics tak berlaku.
+      </div>
+      <div class="reject">
+        <strong>Provider <code class="mono">TypeImage</code> baru</strong> — provider = runner percakapan;
+        image gen tak punya turn/history/tools.
+      </div>
+      <div class="reject">
+        <strong>Base64 di tool result</strong> — satu PNG 1024² ≈ ratusan KB base64 membanjiri context,
+        dan <code class="mono">imagecard</code> tak bisa render.
+      </div>
+      <div class="reject">
+        <strong>Module <code class="mono">internal/tools/text-to-image/</code> di fase 1</strong> —
+        duplikat key management + model list yang sudah ada di <code class="mono">WickModel</code>.
+        User isi API key dua kali untuk vendor yang sama.
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="max-w-7xl mx-auto px-6 pb-10">
+  <p class="text-xs" style="color:var(--black-800)">
+    Mockup ini pasangan <code class="mono">plan.md</code> — kalau salah satu diubah, ubah dua-duanya.
+  </p>
+</footer>
+
+<script>
+  // Highlight the nav link for whichever section is currently in view.
+  // Pure progressive enhancement — the anchors already work without this.
+  const links = [...document.querySelectorAll('nav .ftab')];
+  const byId = new Map(links.map(a => [a.getAttribute('href').slice(1), a]));
+  const obs = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      links.forEach(a => a.classList.remove('ftab-on'));
+      byId.get(e.target.id)?.classList.add('ftab-on');
+    }
+  }, { rootMargin: '-60px 0px -70% 0px' });
+  byId.forEach((_, id) => {
+    const el = document.getElementById(id);
+    if (el) obs.observe(el);
+  });
+</script>
+
+</body>
+</html>

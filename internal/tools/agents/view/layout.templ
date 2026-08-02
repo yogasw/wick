@@ -146,6 +146,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 							@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
 						}
 						@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
+						@agentsNavLink(vm.Base+"/agent-profiles", "Sub-agents", vm.ActivePage == "agent-profiles")
 						@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
 						if user != nil && user.IsAdmin() {
 							@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
@@ -687,7 +688,7 @@ templ agentsNavLink(href, label string, active bool) {
 // (otherwise the active row would be hidden).
 func agentsMoreOpenAttr(activePage string) templ.Attributes {
 	switch activePage {
-	case "presets", "providers", "skills", "channels", "data-tables", "scheduled", "airouter":
+	case "presets", "providers", "skills", "channels", "data-tables", "scheduled", "airouter", "agent-profiles":
 		return templ.Attributes{"open": ""}
 	}
 	return templ.Attributes{}
@@ -724,6 +725,14 @@ templ agentsNavIcon(label string) {
 		case "Projects":
 			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
 				<path d="M2 5a2 2 0 012-2h2.586a1 1 0 01.707.293L8.414 4.5A1 1 0 009.121 4.5H12a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V5z"></path>
+			</svg>
+		case "Sub-agents":
+			// One leader branching to two children — the delegation shape.
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<circle cx="3.5" cy="4" r="2"></circle>
+				<circle cx="12.5" cy="4" r="2"></circle>
+				<circle cx="12.5" cy="12" r="2"></circle>
+				<path d="M3.5 6v6h7M5.5 4h5" stroke-linecap="round" stroke-linejoin="round"></path>
 			</svg>
 		case "Presets":
 			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">

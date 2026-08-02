@@ -10,6 +10,24 @@ import (
 	"gorm.io/gorm"
 )
 
+// DropStaleProfileKeyIndex removes the pre-scoping unique index on
+// agent_profiles(key).
+//
+// Sub-agent roles became scoped: uniqueness is now (project_id, key), so a
+// project may define a role under a key the global scope already uses.
+// AutoMigrate creates that composite index but leaves the old one in
+// place, and the old one keeps rejecting the second row — surfacing as a
+// constraint violation on save, nowhere near its cause.
+//
+// Idempotent, and a no-op on databases that never had the index.
+func DropStaleProfileKeyIndex(db *gorm.DB) {
+	l := log.With().Str("component", "migrate").Logger()
+	if res := db.Exec(`DROP INDEX IF EXISTS idx_agent_profiles_key`); res.Error != nil {
+		l.Warn().Err(res.Error).
+			Msg("could not drop the stale agent_profiles key index; project-scoped roles may be rejected on save")
+	}
+}
+
 func Migrate(db *gorm.DB) {
 	err := db.AutoMigrate(
 		&entity.User{},
@@ -51,10 +69,24 @@ func Migrate(db *gorm.DB) {
 		&entity.PluginState{},
 		&entity.ConnectorState{},
 		&entity.ScheduledMessage{},
+		// Multi-agent sub-agent delegation — see
+		// internal/planning/todo/multi-agent/design.md. Profiles are the
+		// reusable role definitions; delegations are the per-call audit +
+		// control records the governor and the rail UI both read.
+		&entity.AgentProfile{},
+		&entity.AgentDelegation{},
+		&entity.AgentSquad{},
+		&entity.AgentBoard{},
+		&entity.AgentTask{},
 	)
 	if err != nil {
 		log.Fatal().Msgf("failed to run migration: %s", err.Error())
 	}
+
+	// Must run AFTER AutoMigrate: the composite (project_id, key) index has
+	// to exist before the single-column one is removed, so the table is
+	// never briefly without a uniqueness guard on the key.
+	DropStaleProfileKeyIndex(db)
 
 	// Create adjacency-list unique index — not managed by AutoMigrate.
 	// Soft-fail: a DB with duplicate (provider, instance, parent_id, name)

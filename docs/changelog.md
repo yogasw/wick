@@ -10,6 +10,39 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.36.0](https://github.com/yogasw/wick/compare/v0.35.3...v0.36.0) — Agents & Connectors
+
+_Released on 2026-08-02_
+
+### Multi-Agent Planning & Delegation
+
+#### Changed
+-   **Multi-Agent Planning Documentation Consolidated**: The `sub-agent-delegation/` and `multi-agent-rail/` documents have been merged into a single, linear `internal/planning/todo/multi-agent/` document. This resolves previous contradictions, specifically regarding the sub-agent transcript location (now uniformly on the right-rail tab), and provides a cohesive design covering roadmap, concepts, runtime, UI, implementation steps, prior art, and appendices.
+    -   Documentation details verified against code: Sessions are file-based, `pool.Kill` stops all entries under a session prefix (highlighting the need for a future `KillAgent`), and `agent.Stop` performs a hard-kill without a SIGTERM grace period.
+    -   Prior-art findings from `routa`/`stoa`/`multica` were condensed to inform decisions on returning partial work as tool results, distinguishing queued from running cancellations, and ensuring concurrent completions win by design.
+    -   Added plans for `wick-image-gen` (text-to-image as a tool over the existing wick provider) and escape-analysis notes.
+-   **Sub-Agent Roles Scoped and Connector-Driven**: Sub-agent roles are now project-scoped, moving from global, admin-only settings to editable configurations accessible via a new, fixed `internal/connectors/sub-agents` connector.
+    -   `AgentProfile` now includes `ProjectID`, with uniqueness based on `(project_id, key)`. Project roles can shadow global ones.
+    -   A GORM `AutoMigrate` fix explicitly drops the old unique index on `key` to prevent constraint violations during database migration.
+    -   New UI pages/tabs are available for managing global and project-scoped sub-agents, sharing a common editor component.
+    -   Delegation operations (`list_agents`, `delegate`, `collect`, `create_agent`, `tasks`) are now exposed through the `sub-agents` connector, enabling discovery, admin pages, tag visibility, and run history. `create_agent` is now project-scoped.
+    -   The `system_prompt` and `project.Defaults.SystemAddon` settings have been revived to properly configure child sessions.
+    -   `strict_mcp`, `allowed_native_tools`, and `can_delegate` are now documented as unwired controls, correcting previous erroneous claims about `strict_mcp` as a host-MCP escalation path.
+    -   **Security**: The `X-Wick-Session-Id` header now takes precedence over a model-supplied `session_id` for consistency in determining the session tree, tag inheritance, and accessible project roles.
+-   **Thread-Safe Delivery Tracking**: A mutex has been added to `recordingDeliverer` to ensure thread-safe delivery tracking for delegation operations.
+
+### Data Tables
+
+#### Added
+-   **New MCP Connector for Data Tables**: A new `datatable` connector has been introduced, allowing workflows to interact with data tables via `datatable_*` nodes.
+    -   **Operations**: Supports comprehensive operations including listing, creating, dropping, querying, inserting, upserting, updating, deleting, and counting rows.
+    -   **Access Control**: Includes an ACL mechanism for managing data table access.
+    -   Existing workflow connector operations related to data tables were refactored and centralized under the new `datatable` connector.
+    -   Comprehensive tests were added for all new data table operations.
+
+---
+
+
 ## [v0.35.3](https://github.com/yogasw/wick/compare/v0.35.2...v0.35.3) — Features & Fixes
 
 _Released on 2026-07-28_

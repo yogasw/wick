@@ -90,6 +90,88 @@ func TestMigrate_FreshDB_NoOpExceptSchema(t *testing.T) {
 	Migrate(db)
 }
 
+// AutoMigrate creates the new composite index on (project_id, key) but
+// never drops the old single-column one on key. Left behind, it keeps
+// rejecting the second scope's row — and the failure surfaces as a
+// constraint violation on save, far from its cause. This reproduces an
+// UPGRADED database, which is the only place the bug can appear.
+func TestDropStaleProfileKeyIndexAllowsCrossScopeKeys(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: NewLogLevel("silent")})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := db.AutoMigrate(&entity.AgentProfile{}); err != nil {
+		t.Fatalf("automigrate: %v", err)
+	}
+	// Recreate the pre-scoping index exactly as the old struct tag produced it.
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_profiles_key ON agent_profiles(key)`).Error; err != nil {
+		t.Fatalf("seed stale index: %v", err)
+	}
+
+	DropStaleProfileKeyIndex(db)
+
+	if err := db.Create(&entity.AgentProfile{ID: "g1", Key: "researcher", Provider: "claude"}).Error; err != nil {
+		t.Fatalf("insert global: %v", err)
+	}
+	if err := db.Create(&entity.AgentProfile{ID: "p1", ProjectID: "proj-abc", Key: "researcher", Provider: "codex"}).Error; err != nil {
+		t.Fatalf("the stale index was not dropped: %v", err)
+	}
+}
+
+// The two tests above drive AutoMigrate directly. This one goes through
+// the real boot path, Migrate(), on a database that already carries the
+// pre-scoping index — the actual upgrade an existing install performs.
+// Without it, the drop could be correct while never being called.
+func TestMigrateUpgradesAnInstallWithTheOldProfileIndex(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: NewLogLevel("silent")})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	// Stand up the schema the way a pre-scoping install had it, then add
+	// the index that version's struct tag produced.
+	if err := db.AutoMigrate(&entity.AgentProfile{}); err != nil {
+		t.Fatalf("automigrate: %v", err)
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_profiles_key ON agent_profiles(key)`).Error; err != nil {
+		t.Fatalf("seed stale index: %v", err)
+	}
+
+	Migrate(db)
+
+	if err := db.Create(&entity.AgentProfile{ID: "g1", Key: "researcher", Provider: "claude"}).Error; err != nil {
+		t.Fatalf("insert global: %v", err)
+	}
+	if err := db.Create(&entity.AgentProfile{ID: "p1", ProjectID: "proj-abc", Key: "researcher", Provider: "codex"}).Error; err != nil {
+		t.Fatalf("boot did not clear the stale index: %v", err)
+	}
+	// And the new guard is in force after the upgrade.
+	if err := db.Create(&entity.AgentProfile{ID: "p2", ProjectID: "proj-abc", Key: "researcher", Provider: "wick"}).Error; err == nil {
+		t.Fatal("a duplicate within one scope must still be rejected after the upgrade")
+	}
+}
+
+// Every boot calls it, so running it twice — and on a database that never
+// carried the index — must be a no-op. It must also not take the
+// composite guard down with it.
+func TestDropStaleProfileKeyIndexIsIdempotent(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: NewLogLevel("silent")})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := db.AutoMigrate(&entity.AgentProfile{}); err != nil {
+		t.Fatalf("automigrate: %v", err)
+	}
+	DropStaleProfileKeyIndex(db)
+	DropStaleProfileKeyIndex(db)
+
+	if err := db.Create(&entity.AgentProfile{ID: "a1", ProjectID: "proj-abc", Key: "dup", Provider: "claude"}).Error; err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := db.Create(&entity.AgentProfile{ID: "a2", ProjectID: "proj-abc", Key: "dup", Provider: "codex"}).Error; err == nil {
+		t.Fatal("dropping the stale index must not remove the composite uniqueness guard")
+	}
+}
+
 // TestMigrate_IdxStorageTree_DuplicatesDontCrash forces a duplicate
 // (provider_type, instance_name, parent_id, name) tuple and asserts
 // Migrate logs a warning but does NOT crash. The runtime falls back to

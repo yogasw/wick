@@ -57,6 +57,18 @@ func accessibleSessionIDs(ids []string, sessions map[string]session.Session, acc
 		if !ok {
 			continue
 		}
+		// Sub-agent sessions are real sessions but belong to their
+		// parent's Sub-agents panel, not the conversation list. Filtered
+		// HERE rather than after the list cap: a leader that fans out to
+		// many sub-agents would otherwise push legitimate conversations
+		// out of the capped window.
+		//
+		// Only the JSON/sidebar view filters. session.List stays
+		// unfiltered so reapers, sweepers and migrations keep seeing
+		// every session.
+		if s.Meta.ParentSessionID != "" {
+			continue
+		}
 		if scoped != "" && s.Meta.ProjectID != scoped {
 			continue
 		}

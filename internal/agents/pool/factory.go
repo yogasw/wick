@@ -187,6 +187,13 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			presetContent += "\n\n" + p.Body
 		}
 	}
+	// Per-session free-text addon, after the named preset so it can
+	// refine it. This is how a sub-agent role's system prompt reaches its
+	// spawn — a role is not a named preset and must not pollute the
+	// shared preset list.
+	if addon := strings.TrimSpace(opt.SystemAddon); addon != "" {
+		presetContent += "\n\n" + addon
+	}
 	if f.SystemPromptLoader != nil {
 		if extra := strings.TrimSpace(f.SystemPromptLoader()); extra != "" {
 			presetContent += "\n\n" + extra

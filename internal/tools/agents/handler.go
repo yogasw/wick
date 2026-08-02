@@ -261,6 +261,31 @@ func Register(r tool.Router) {
 	r.GET("/api/sessions/{id}/conversation", apiSessionConversation)
 	r.GET("/api/sessions/{id}/meta", apiSessionMeta)
 
+	// JSON API — Sub-agents rail panel. Registered alongside the other
+	// /api/sessions routes so sessionAccessMW covers them too.
+	r.GET("/api/sessions/{id}/subagents", sessionSubAgents)
+	r.POST("/api/sessions/{id}/subagents/interrupt-all", interruptAllSubAgents)
+	r.POST("/api/delegations/{delegationID}/interrupt", interruptSubAgent)
+	r.POST("/api/delegations/{delegationID}/message", takeOverSubAgent)
+
+	// JSON API — fleet monitor (read-only; stopping lives on the
+	// delegation endpoints above).
+	r.GET("/api/monitor/snapshot", apiMonitorSnapshot)
+
+	// JSON API — task boards + Kanban.
+	r.GET("/api/boards", apiBoardList)
+	r.POST("/api/boards", apiBoardSave)
+	r.DELETE("/api/boards/{id}", apiBoardDelete)
+	r.GET("/api/boards/{key}/tasks", apiBoardTasks)
+	r.POST("/api/boards/{key}/tasks", apiTaskCreate)
+	r.POST("/api/tasks/{id}/move", apiTaskMove)
+	r.DELETE("/api/tasks/{id}", apiTaskDelete)
+
+	// JSON API — squads (fixed leader + member line-ups).
+	r.GET("/api/squads", apiSquadList)
+	r.POST("/api/squads", apiSquadSave)
+	r.DELETE("/api/squads/{id}", apiSquadDelete)
+
 	// JSON API — composer `/` command menu (built-in actions + skills).
 	r.GET("/api/composer/commands", apiComposerCommands)
 
@@ -271,6 +296,12 @@ func Register(r tool.Router) {
 	r.GET("/api/skills/{provider}/{path...}", apiSkillProviderPath)
 
 	// JSON API — presets SPA endpoints.
+	// JSON API — sub-agent profiles (roles). List is readable by anyone
+	// (filtered to what they may use); mutations are admin-only.
+	r.GET("/api/agent-profiles", apiAgentProfileList)
+	r.POST("/api/agent-profiles", apiAgentProfileSave)
+	r.DELETE("/api/agent-profiles/{id}", apiAgentProfileDelete)
+
 	r.GET("/api/presets", apiPresetList)
 	r.GET("/api/presets/{name}", apiPresetDetail)
 
@@ -339,6 +370,7 @@ func Register(r tool.Router) {
 	r.POST("/projects/{id}/pin", toggleProjectPin)
 	r.DELETE("/projects/{id}", deleteProject)
 
+	r.GET("/agent-profiles", agentProfilesPage)
 	r.GET("/presets", presetsPage)
 	r.GET("/presets/{name}", presetDetail)
 	r.POST("/presets", createPreset)
@@ -1234,6 +1266,14 @@ func sessionDetail(c *tool.Ctx) {
 		c.NotFound()
 		return
 	}
+	// A sub-agent's own URL still has to resolve — someone may have
+	// bookmarked or shared it — but it has no page of its own. Send it to
+	// the parent conversation with the Sub-agents panel already open on
+	// that child, which is where its transcript actually renders.
+	if parent := sess.Meta.ParentSessionID; parent != "" {
+		c.Redirect(c.Base()+"/sessions/"+parent+"?rail=subagents&sub="+id, http.StatusSeeOther)
+		return
+	}
 	c.HTML(view.Conversation(view.ConversationVM{
 		Layout:         sidebarVMScoped(c, "sessions", id, sess.Meta.ProjectID),
 		Base:           c.Base(),
@@ -1695,6 +1735,11 @@ func killAgent(c *tool.Ctx) {
 	if agentName == "" && len(sess.Agents) > 0 {
 		agentName = sess.Agents[0].Name
 	}
+	// Stop this session's sub-agents first (deepest-first inside), then
+	// the leader. Without the cascade, killing a conversation orphans
+	// every sub-agent it spawned: nothing is waiting on their results
+	// any more, but the processes keep running and spending tokens.
+	cascadeInterruptChildren(c, id)
 	if err := globalPool.Kill(id, agentName); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("kill agent %s/%s: %s", id, agentName, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -2178,6 +2223,21 @@ func deleteProject(c *tool.Ctx) {
 }
 
 // ── Presets ───────────────────────────────────────────────────────────
+
+// agentProfilesPage renders the global sub-agent roles SPA. Readable by
+// anyone (the list filters itself to what the caller may use); the page
+// hides its own write controls when the caller is not an admin, and the
+// API refuses the write regardless.
+func agentProfilesPage(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	c.HTML(view.AgentProfilesSPA(view.AgentProfilesSPAVM{
+		Layout:   sidebarVM(c, "agent-profiles", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("agent-profiles"),
+	}))
+}
 
 func presetsPage(c *tool.Ctx) {
 	if notReady(c) {

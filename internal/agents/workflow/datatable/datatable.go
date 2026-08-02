@@ -160,6 +160,11 @@ type Service interface {
 	// Row ops — equality where for backward compat.
 	Insert(slug string, row map[string]any) error
 	Upsert(slug string, row map[string]any) (action string, err error)
+	// Update patches an EXISTING row by id and never creates one.
+	// Reports found=false when the id does not exist, so a caller that
+	// meant to edit a row is told rather than silently getting a new row
+	// at an id it guessed — which is what Upsert does by design.
+	Update(slug string, row map[string]any) (found bool, err error)
 	Delete(slug string, where map[string]any) (int, error)
 	Get(slug string, key map[string]any) (map[string]any, bool, error)
 	Exists(slug string, where map[string]any) (bool, error)
@@ -513,6 +518,50 @@ func (s *MockService) Upsert(slug string, row map[string]any) (string, error) {
 	encoded[ColUpdatedAt] = now
 	s.rows[slug] = append(s.rows[slug], encoded)
 	return "insert", nil
+}
+
+// Update patches an existing row by id and never creates one. See the
+// Service interface for why this is a separate call from Upsert.
+func (s *MockService) Update(slug string, row map[string]any) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sc, ok := s.schemas[slug]
+	if !ok {
+		return false, fmt.Errorf("data table %q not registered", slug)
+	}
+	targetID, hasID := coerceInt64(row[ColID])
+	if !hasID {
+		return false, fmt.Errorf("update needs an %q to identify the row; use upsert to create one", ColID)
+	}
+	delete(row, ColCreatedAt)
+	delete(row, ColUpdatedAt)
+	delete(row, ColID)
+	cleaned, err := normalizeRow(sc, row)
+	if err != nil {
+		return false, err
+	}
+	encoded, err := BuildIDMap(sc).Encode(cleaned, sc.Mode)
+	if err != nil {
+		return false, err
+	}
+	for i, existing := range s.rows[slug] {
+		eid, _ := coerceInt64(existing[ColID])
+		if eid != targetID {
+			continue
+		}
+		next := map[string]any{}
+		for k, v := range existing {
+			next[k] = v
+		}
+		for k, v := range encoded {
+			next[k] = v
+		}
+		next[ColID] = targetID
+		next[ColUpdatedAt] = time.Now().UTC()
+		s.rows[slug][i] = next
+		return true, nil
+	}
+	return false, nil
 }
 
 // stripSystemKeys drops user attempts to set id/created_at/updated_at.

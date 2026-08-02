@@ -171,6 +171,38 @@ export type ProcessInfo = {
   kind?: "process" | "idle";
 };
 
+// SubAgentStatus mirrors entity.DelegationStatuses in Go exactly. The two
+// lists are compared by a Go test, so adding a status on one side without
+// the other fails the build rather than silently rendering an unknown
+// status as blank.
+export type SubAgentStatus =
+  | "queued"
+  | "running"
+  | "done"
+  | "failed"
+  | "interrupted"
+  | "stopped_max_turns"
+  | "stopped_budget";
+
+// SubAgentItem is one row in the Sub-agents rail panel — a single
+// delegation from this conversation to another agent profile.
+export type SubAgentItem = {
+  delegation_id: string;
+  child_session_id: string;
+  profile_key: string;
+  // label is the delegated task, truncated server-side.
+  label: string;
+  status: SubAgentStatus;
+  // lifecycle comes from the live pool snapshot; "" when the sub-agent
+  // has no running process (queued, or already finished).
+  lifecycle: string;
+  depth: number;
+  turns_used: number;
+  max_turns: number;
+  result?: string;
+  started_at?: string;
+};
+
 export type FileContent = {
   path: string;
   size: number;

@@ -241,6 +241,10 @@ type FactoryOptions struct {
 	// the content from disk — pool passes the name so factory avoids a
 	// redundant session.Load.
 	PresetName string
+	// SystemAddon is free-text prompt content appended AFTER the preset.
+	// Carries per-session prompt text that has no named preset file — a
+	// sub-agent role's system prompt, or a project's default addon.
+	SystemAddon string
 	// Origin is the session origin (e.g. "slack", "ui", "rest") written
 	// into the spawn log so Recent Spawns can show the channel without a
 	// registry lookup.
@@ -678,6 +682,32 @@ func (p *Pool) preemptIdleSlot() bool {
 // buffer into one combined input, and starts it. Caller must NOT hold
 // p.mu (we acquire and release it ourselves so the spawn can take
 // time without blocking other Send calls).
+// composeSystemAddon assembles the free-text prompt appended after the
+// named preset: the session's project default first, then the session's
+// own addon.
+//
+// That order is deliberate — the project addon is shared context ("this
+// repo uses X"), while the session addon is the specific instruction (a
+// sub-agent role's prompt). The specific one comes last so it can refine
+// the general one rather than being buried by it.
+//
+// Resolved per spawn rather than copied at session creation, so editing a
+// project's default reaches existing sessions on their next respawn.
+func composeSystemAddon(layout config.Layout, sess session.Session) string {
+	parts := make([]string, 0, 2)
+	if sess.Meta.ProjectID != "" {
+		if proj, err := project.Load(layout, sess.Meta.ProjectID); err == nil {
+			if v := strings.TrimSpace(proj.Meta.Defaults.SystemAddon); v != "" {
+				parts = append(parts, v)
+			}
+		}
+	}
+	if v := strings.TrimSpace(sess.Meta.SystemAddon); v != "" {
+		parts = append(parts, v)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
 func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) error {
 	p.mu.Lock()
 	if p.closed {
@@ -764,6 +794,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		IdleTimeout:    p.cfg.IdleTimeout,
 		KillAfterIdle:  p.cfg.KillAfterIdle,
 		PresetName:     sess.Meta.Preset,
+		SystemAddon:    composeSystemAddon(p.cfg.Layout, sess),
 		Origin:         string(sess.Meta.Origin),
 		Title:          sess.Meta.Label,
 		TitleCustom:    sess.Meta.TitleCustom,
@@ -1447,6 +1478,56 @@ func (p *Pool) Kill(sessionID, agentName string) error {
 			log.Error().Str("session", e.sessID).Str("agent", e.agentNm).Err(err).Msg("pool.kill: agent.Stop failed")
 			return err
 		}
+	}
+	return nil
+}
+
+// PartialText returns the assistant text one agent has produced in its
+// current, not-yet-flushed turn. Empty when the agent is not active or
+// no turn is mid-stream.
+//
+// This is how partial work is captured before a kill: the last turn of
+// an interrupted or turn-capped sub-agent never reaches Done, so it is
+// never persisted by the normal path, and reading it here is the only
+// way to hand it back to the leader instead of losing it.
+func (p *Pool) PartialText(sessionID, agentName string) string {
+	p.mu.Lock()
+	e, ok := p.active[sessionID+"::"+agentName]
+	p.mu.Unlock()
+	if !ok || e.agent == nil {
+		return ""
+	}
+	return e.agent.PartialText()
+}
+
+// ErrAgentNotActive means the requested sessionID+agentName had no live
+// entry in the pool. Callers MUST treat this as a distinct outcome, not
+// a failure: it covers "already finished", "never spawned", and "still
+// queued". A queued sub-agent is cancelled by dropping it from the
+// queue, not by killing a process that does not exist yet.
+var ErrAgentNotActive = errors.New("agent not active in pool")
+
+// KillAgent stops exactly ONE agent inside a session, leaving its
+// siblings running.
+//
+// Kill remains "stop the whole session" — cascade teardown and the
+// existing /sessions/{id}/kill route depend on that semantic, so this is
+// a new method rather than a fix to Kill's ignored agentName parameter.
+//
+// Returns ErrAgentNotActive when no live entry matches.
+func (p *Pool) KillAgent(sessionID, agentName string) error {
+	p.mu.Lock()
+	e, ok := p.active[sessionID+"::"+agentName]
+	p.mu.Unlock()
+	// Stop() blocks for up to 5s waiting on the reader goroutine, so it
+	// must never run while holding p.mu — Kill releases the lock first
+	// for the same reason.
+	if !ok {
+		return ErrAgentNotActive
+	}
+	if err := e.agent.Stop(); err != nil {
+		log.Error().Str("session", sessionID).Str("agent", agentName).Err(err).Msg("pool.killAgent: agent.Stop failed")
+		return err
 	}
 	return nil
 }

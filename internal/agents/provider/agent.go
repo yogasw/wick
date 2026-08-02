@@ -539,22 +539,61 @@ func (a *Agent) respawnWithMessage(text string) error {
 // hasn't EOF'd (Windows Kill does not reliably EOF) — no <-done hang.
 // A short timeout still guards against any unexpected stall. Safe with
 // a nil proc.
+// terminateGrace is how long a process tree gets to exit on its own
+// after being asked, before it is forced. Long enough for a CLI to flush
+// its output, short enough that a human waiting on Stop does not notice.
+const terminateGrace = 5 * time.Second
+
 func terminateProc(proc Process, done <-chan struct{}) {
 	pid := 0
 	if proc != nil {
 		pid = proc.Pid()
 		_ = proc.Stdin().Close()
+
+		// Ask the whole process TREE to exit before forcing it. An agent
+		// CLI spawns descendants (MCP servers, tool subprocesses); killing
+		// only the leader orphans them, and they keep running and spending
+		// resources with nothing supervising them.
+		//
+		// Escalation is unconditional: after the grace window the group is
+		// force-killed whether or not the leader has exited. Gating that on
+		// the leader's exit lets a descendant that ignored the polite
+		// signal survive indefinitely.
+		if pid > 0 && terminateGroupGracefully(pid) {
+			exited := waitForExit(done, terminateGrace)
+			killGroup(pid)
+			_ = proc.Kill()
+			if exited {
+				return
+			}
+			log.Warn().Int("pid", pid).Msg("agent.terminate: tree did not exit within grace; force-killed")
+			return
+		}
+
+		// No group teardown available: fall back to killing the process
+		// directly, which is the pre-existing behaviour.
 		_ = proc.Kill()
 	}
 	if done == nil {
 		return
 	}
-	t := time.NewTimer(5 * time.Second)
+	if !waitForExit(done, terminateGrace) {
+		log.Warn().Int("pid", pid).Msg("agent.terminate: reader did not exit within 5s after kill; proceeding")
+	}
+}
+
+// waitForExit waits up to d for done to close. Reports whether it did.
+func waitForExit(done <-chan struct{}, d time.Duration) bool {
+	if done == nil {
+		return true
+	}
+	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
 	case <-done:
+		return true
 	case <-t.C:
-		log.Warn().Int("pid", pid).Msg("agent.terminate: reader did not exit within 5s after kill; proceeding")
+		return false
 	}
 }
 

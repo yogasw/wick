@@ -591,6 +591,26 @@ func callSessionID(args map[string]any) string {
 // single-call path. ctx flows from the caller so batch can impose a per-call
 // deadline. On failure the returned error message already includes the
 // connector's response body when present.
+// ResolveCallSession picks the session a connector call belongs to.
+//
+// The per-spawn X-Wick-Session-Id header WINS over any session_id the
+// model supplied; the argument is only a fallback for transports that
+// set no header.
+//
+// The precedence is an authorization decision, not a convenience. The
+// runtime sets the header and the model cannot forge it, while a
+// session_id argument is whatever the model typed. Ops that key off the
+// session act INSIDE it — sub-agent delegation attaches to that
+// session's tree, inherits its identity for tag purposes, and resolves
+// roles in its project scope — so trusting the argument would let a
+// caller name someone else's conversation and operate in it.
+func ResolveCallSession(header, argSessionID string) string {
+	if h := strings.TrimSpace(header); h != "" {
+		return h
+	}
+	return strings.TrimSpace(argSessionID)
+}
+
 func executeOne(r *http.Request, svc *connectors.Service, layout agentconfig.Layout, toolID string, rawParams map[string]any, sessionID string, user *entity.User, tagIDs []string) (string, error) {
 	return executeOneCtx(r.Context(), r, svc, layout, toolID, rawParams, sessionID, user, tagIDs)
 }
@@ -613,13 +633,7 @@ func executeOneCtx(ctx context.Context, r *http.Request, svc *connectors.Service
 			return "", errors.New("tool_id not found or not accessible")
 		}
 	}
-	// Fall back to the X-Wick-Session-Id header when the call carried no
-	// explicit session_id argument. The agent runtime sets this header per
-	// spawn, so identity-aware ops (e.g. the Slack "Sent using @bot" footer)
-	// work even when the LLM didn't pass session_id.
-	if sessionID == "" {
-		sessionID = strings.TrimSpace(r.Header.Get("X-Wick-Session-Id"))
-	}
+	sessionID = ResolveCallSession(r.Header.Get("X-Wick-Session-Id"), sessionID)
 	input := StringifyArgs(rawParams)
 	res, execErr := svc.Execute(ctx, connectors.ExecuteParams{
 		ConnectorID:     connectorID,

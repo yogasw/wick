@@ -71,6 +71,13 @@ type Ctx struct {
 	// from the execute params (empty for internal/system calls). Read via
 	// CallerUserID() by connectors that scope data per owner.
 	callerUserID string
+	// sessionID is the agent session this call was made within, stamped
+	// by the framework from ExecuteParams. Read via SessionID() by ops
+	// that act ON the calling session rather than on an external API —
+	// sub-agent delegation needs it to know which conversation is the
+	// parent, which tree the call belongs to, and which project scope to
+	// resolve roles in. Empty on panel-test and retry paths.
+	sessionID string
 }
 
 // Masker is the narrow slice of the encrypted-fields service
@@ -326,3 +333,14 @@ func (c *Ctx) SetCallerUserID(userID string) { c.callerUserID = userID }
 // CallerUserID returns the user id set by SetCallerUserID, or "" when the call
 // has no associated user (internal/system context).
 func (c *Ctx) CallerUserID() string { return c.callerUserID }
+
+// SetSessionID stamps the calling agent session. Framework-only.
+func (c *Ctx) SetSessionID(sessionID string) { c.sessionID = sessionID }
+
+// SessionID returns the agent session this call was made within, or "".
+//
+// Trustworthy for authorization only because the MCP layer resolves it
+// from the per-spawn X-Wick-Session-Id header in preference to any
+// session_id the model supplied — see executeOneCtx. An op that keys
+// access off this value must not fall back to caller-supplied input.
+func (c *Ctx) SessionID() string { return c.sessionID }
