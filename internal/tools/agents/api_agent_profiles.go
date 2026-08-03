@@ -53,6 +53,24 @@ var leaderCapableProviders = map[string]bool{
 	"wick":   true,
 }
 
+// providerTypeOf reduces a stored provider value to its bare TYPE.
+//
+// A profile's Provider is now "type/name", optionally with a pinned
+// model appended as "::modelID" — the same shape the composer and the
+// project defaults already store. Every rule expressed in types (leader
+// capability, above all) has to strip both parts first; comparing the
+// whole string would quietly drop can_delegate the moment a role moved
+// to a named instance.
+func providerTypeOf(v string) string {
+	if i := strings.Index(v, "::"); i >= 0 {
+		v = v[:i]
+	}
+	if i := strings.Index(v, "/"); i >= 0 {
+		v = v[:i]
+	}
+	return v
+}
+
 func profileToItem(p entity.AgentProfile) AgentProfileItem {
 	return AgentProfileItem{
 		ID: p.ID, ProjectID: p.ProjectID, Key: p.Key, Name: p.Name, Description: p.Description,
@@ -179,28 +197,6 @@ func callerTagOptions(c *tool.Ctx) []tagOption {
 	return out
 }
 
-// leaderProviderOptions lists the providers a role may run on, healthy
-// instances first and falling back to the leader-capable set when the
-// provider cache is cold — an empty dropdown would make the form look
-// broken rather than merely uninformed.
-func leaderProviderOptions(c *tool.Ctx) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, 4)
-	for _, ch := range providerChoicesCached(c.Context()) {
-		if ch.Type == "" || seen[ch.Type] {
-			continue
-		}
-		seen[ch.Type] = true
-		out = append(out, ch.Type)
-	}
-	if len(out) == 0 {
-		for _, p := range []string{"claude", "codex", "wick"} {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 // apiAgentProfileList handles GET /api/agent-profiles.
 //
 // Admins see every profile so they can manage them. Everyone else sees
@@ -266,7 +262,10 @@ func apiAgentProfileList(c *tool.Ctx) {
 		"owned":     owned,
 		"inherited": inherited,
 		"tags":      callerTagOptions(c),
-		"providers": leaderProviderOptions(c),
+		// The same list the composer and the project defaults picker use,
+		// so the three surfaces cannot disagree about which providers are
+		// healthy or which models an instance offers.
+		"provider_list": projectProviderList(c),
 		"is_admin":  isAdmin,
 	})
 }
@@ -327,7 +326,7 @@ func apiAgentProfileSave(c *tool.Ctx) {
 	}
 	// Force can_delegate off for providers that cannot use MCP tools; a
 	// stored true would just fail at runtime.
-	if !leaderCapableProviders[req.Provider] {
+	if !leaderCapableProviders[providerTypeOf(req.Provider)] {
 		req.CanDelegate = false
 	}
 

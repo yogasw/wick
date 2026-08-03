@@ -135,3 +135,31 @@ func TestProfileToItemCarriesLocked(t *testing.T) {
 		t.Fatal("locked did not survive profileToItem")
 	}
 }
+
+// Provider values now carry an instance and may carry a pinned model
+// ("wick/wick::cc/claude-fable-5"). Every rule that used to key off a
+// bare type — leader capability above all — has to strip both first, or
+// a role on a named instance silently loses can_delegate on every save.
+func TestProviderTypeOf(t *testing.T) {
+	cases := map[string]string{
+		"claude":                       "claude",
+		"claude/claude":                "claude",
+		"codex/abc":                    "codex",
+		"wick/wick::cc/claude-fable-5": "wick",
+		"":                             "",
+	}
+	for in, want := range cases {
+		if got := providerTypeOf(in); got != want {
+			t.Fatalf("providerTypeOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLeaderCapabilityUsesProviderType(t *testing.T) {
+	if !leaderCapableProviders[providerTypeOf("wick/wick::cc/claude-fable-5")] {
+		t.Fatal("a pinned wick instance lost its leader capability")
+	}
+	if leaderCapableProviders[providerTypeOf("gemini/gemini")] {
+		t.Fatal("gemini must not be leader-capable")
+	}
+}
