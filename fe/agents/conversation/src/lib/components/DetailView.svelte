@@ -17,6 +17,7 @@
   import { currentApproval, showApproval, hideApproval } from "../stores/approvals.js";
   import { notify } from "../notify.js";
   import { push } from "../router.js";
+  import { bareToolName } from "../todoGroups.js";
   import { readScmWidth, writeScmWidth, clampScmWidth } from "../scmWidth.js";
   import { isValidFileName } from "../fileName.js";
 
@@ -36,6 +37,7 @@
     getMessages,
     bumpHops,
   } from "../api/subagents.js";
+  import { isSubAgentWorking } from "../lifecycleCls.js";
   import SubAgentPanel from "./SubAgentPanel.svelte";
   import SubAgentModal from "./SubAgentModal.svelte";
   import type { AgentMessageItem, SubAgentItem } from "../types/agents.js";
@@ -609,6 +611,14 @@
     }, 200);
   }
 
+  /* Tools whose call means this session's sub-agent roster just changed.
+     Matched on the BARE name so an MCP-namespaced call
+     (mcp__wick__wick_delegate) counts too. */
+  const DELEGATION_TOOLS = new Set(["wick_delegate", "wick_delegate_collect"]);
+  function isDelegationTool(name?: string): boolean {
+    return !!name && DELEGATION_TOOLS.has(bareToolName(name));
+  }
+
   /* While a sub-agent is live, poll its row.
 
      Everything else in this panel rides the leader's SSE stream, but a
@@ -994,6 +1004,13 @@
         // end-of-turn is the reliable moment its delegations changed state,
         // so refresh the panel here as well as on lifecycle.
         scheduleSubAgentReload();
+      } else if (ev.type === "tool_use" || ev.type === "tool_result") {
+        // A delegation is made MID-TURN, and the leader emits no lifecycle
+        // event while it keeps working — so without this the rail tab and
+        // its badge did not appear until the turn ended or the page was
+        // reloaded, which is precisely when you most want to see that
+        // sub-agents are running.
+        if (isDelegationTool(ev.tool_name)) scheduleSubAgentReload();
       } else if (ev.type === "lifecycle") {
         scheduleProcessReload();
         scheduleSubAgentReload();
@@ -1289,6 +1306,20 @@
   // badge stuck at "3" after everything finished; the tab itself stays
   // visible on the total so results remain readable.
   const subAgentCount = $derived(liveSubAgents(subAgents).length);
+
+  /* Whether a rail has work running behind a closed panel.
+
+     The badge alone cannot say this: "2" reads the same whether both
+     sub-agents are grinding away or both are queued behind a slot. A
+     spinning ring on the tab is the only thing that tells you something
+     is happening on a rail you are not looking at. */
+  const subAgentsBusy = $derived(
+    subAgents.some((s) => isSubAgentWorking(s.status, s.lifecycle)),
+  );
+  function railBusy(id: RailTab): boolean {
+    return id === "subagents" && subAgentsBusy;
+  }
+
   function railCount(id: RailTab): number {
     if (id === "context") return contextCount;
     if (id === "process") return processCount;
@@ -1760,7 +1791,31 @@
             : "hover:bg-white-200 dark:hover:bg-navy-800",
         ].join(" ")}
       >
-        {#if tab.id === "source" && scmChangeCount > 0}
+        {#if railBusy(tab.id)}
+          <!-- Ring around the icon rather than a badge replacement: the
+               count still matters (how many), the ring adds the part a
+               number cannot carry (right now). -->
+          <span class="relative inline-flex h-4 w-4 items-center justify-center">
+            <span
+              class="absolute inset-[-3px] rounded-full border-2 border-green-500 border-t-transparent animate-spin"
+              aria-label="Working"
+            ></span>
+            <svg
+              viewBox="0 0 16 16"
+              class="h-4 w-4 text-green-500"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+            >
+              {@html tab.icon}
+            </svg>
+            {#if railCount(tab.id) > 0}
+              <span
+                class="absolute -top-1.5 -right-1.5 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-green-500 px-0.5 text-[9px] font-semibold text-white-100"
+              >{railCount(tab.id) > 99 ? "99+" : railCount(tab.id)}</span>
+            {/if}
+          </span>
+        {:else if tab.id === "source" && scmChangeCount > 0}
           <span class="relative">
             <svg
               viewBox="0 0 16 16"
