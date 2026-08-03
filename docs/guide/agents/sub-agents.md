@@ -79,7 +79,7 @@ Governor values are **ceilings**. A profile can ask for less; it can never raise
 | Sub-agents enabled | `false` | Everything — the emergency stop and the staged-rollout lever |
 | Max depth | `3` | A sub-agent delegating to a sub-agent, forever |
 | Turn budget per tree | `40` | One conversation quietly burning an unbounded number of turns |
-| Max parallel | `4` | A leader fanning out to dozens of concurrent children |
+| Max parallel | `1` | More than one sub-agent streaming into a room at once — see [One at a time: the queue](#one-at-a-time-the-queue) |
 | Max turns ceiling | `50` | Any single sub-agent running away |
 | Max hops | `10` | Two agents messaging each other in a loop between human turns |
 | Ask timeout | `10 min` | A blocking `ask` waiting forever for an answer |
@@ -112,7 +112,7 @@ exists rather than guessing one.
 | `context` | no | Extra background; not the leader's transcript |
 | `max_turns` | no | Clamped to the system ceiling |
 
-Emitting several `delegate` calls in one turn runs them **in parallel**, up to `max_parallel`. There is no batch op — parallelism falls out of multiple calls naturally.
+Emitting several `delegate` calls in one turn queues them behind whichever sub-agent is already running, up to `max_parallel` concurrently — `1` by default, so they run **one at a time**; see [One at a time: the queue](#one-at-a-time-the-queue). There is no batch op — the queue falls out of multiple calls naturally.
 
 The result always carries a `status`:
 
