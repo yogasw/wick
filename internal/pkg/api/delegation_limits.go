@@ -87,20 +87,25 @@ func (p delegationLimitsProvider) current() delegation.Limits {
 // missing" and "a deleted role stays deleted" cannot both be true: a role
 // an operator removed IS missing, and re-adding it every boot would make
 // deletion impossible.
-type configSeedMarker struct{ cfg *configs.Service }
+// The key is a field, not a constant, because more than one one-off boot
+// step needs the same "has this already happened?" record.
+type configSeedMarker struct {
+	cfg *configs.Service
+	key string
+}
 
 func (m configSeedMarker) Get() string {
 	if m.cfg == nil {
 		return ""
 	}
-	return m.cfg.GetOwned("agents", delegation.SeedMarkerKey)
+	return m.cfg.GetOwned("agents", m.key)
 }
 
 func (m configSeedMarker) Set(value string) error {
 	if m.cfg == nil {
 		return nil
 	}
-	return m.cfg.SetOwned(context.Background(), "agents", delegation.SeedMarkerKey, value)
+	return m.cfg.SetOwned(context.Background(), "agents", m.key, value)
 }
 
 // secretValuesFor lists the values that must never reach a

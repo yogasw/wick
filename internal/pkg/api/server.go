@@ -1418,8 +1418,17 @@ func NewServer() *Server {
 	// configs afterwards: an operator's edits survive every restart, and
 	// a role they deleted stays deleted.
 	if err := delegation.SeedProductionRoles(context.Background(), delegationSvc.Repo,
-		configSeedMarker{cfg: configsSvc}); err != nil {
+		configSeedMarker{cfg: configsSvc, key: delegation.SeedMarkerKey}); err != nil {
 		log.Warn().Err(err).Msg("agents: investigation roles not seeded")
+	}
+
+	// Sub-agents now run in the background unless a role opts into
+	// foreground. Roles created before that change carry the old blocking
+	// default because it was the only value create_agent ever wrote, so
+	// move them once — see delegation.MigrateModeDefault.
+	if err := delegation.MigrateModeDefault(context.Background(), delegationSvc.Repo,
+		configSeedMarker{cfg: configsSvc, key: delegation.ModeMigrationMarkerKey}); err != nil {
+		log.Warn().Err(err).Msg("agents: role mode default not migrated")
 	}
 
 	mcpHandler := mcp.NewHandler(connectorsSvc).

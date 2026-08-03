@@ -59,10 +59,15 @@ func runService(t *testing.T, stream EventStream, runner *fakeRunner) (*Service,
 	}, r, tok
 }
 
+// baseReq is the FOREGROUND request shape. Stated explicitly because the
+// default is background: every test built on this one asserts on the
+// child's answer arriving as the call's own result, which is exactly what
+// the background mode does not do.
 func baseReq() Request {
 	return Request{
 		ProfileKey: "researcher", Task: "find the changelog",
 		ParentSessionID: "leader", TriggeredBy: "user-1",
+		Mode: ModeForeground,
 	}
 }
 

@@ -175,7 +175,7 @@ func (s *Service) startNextQueued(ctx context.Context, rootID string) {
 	}
 }
 
-// queuedResult is what an async caller gets when the room is busy.
+// queuedResult is what a background caller gets when the room is busy.
 func queuedResult(row *entity.AgentDelegation, pos int) *Result {
 	note := "Queued — nothing else is ahead of it; it starts as soon as the current sub-agent finishes."
 	if pos > 1 {
@@ -187,7 +187,7 @@ func queuedResult(row *entity.AgentDelegation, pos int) *Result {
 		DelegationID:  row.ID,
 		Profile:       row.ProfileKey,
 		Status:        entity.DelegationQueued,
-		Mode:          ModeAsync,
+		Mode:          ModeBackground,
 		QueuePosition: pos,
 		Note:          note,
 		WorkspaceNote: row.WorkspaceNote,

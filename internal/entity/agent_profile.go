@@ -63,9 +63,11 @@ type AgentProfile struct {
 	StrictMCP bool `gorm:"not null;default:true" json:"strict_mcp"`
 
 	DefaultMaxTurns int `gorm:"not null;default:12" json:"default_max_turns"`
-	// DefaultMode is "sync" today. "async" lands in Phase 2; the column
-	// exists now so the enum does not have to be migrated later.
-	DefaultMode string `gorm:"type:varchar(16);not null;default:'sync'" json:"default_mode"`
+	// DefaultMode is "async" unless a role opts into "sync". Empty is
+	// read as async too (see delegation.NormalizeMode): only an explicit
+	// "sync" makes a caller block, so a role created without an opinion
+	// runs in the background.
+	DefaultMode string `gorm:"type:varchar(16);not null;default:'async'" json:"default_mode"`
 	// DefaultWorkspace is "shared" today. "worktree" lands in Phase 3.
 	DefaultWorkspace string `gorm:"type:varchar(16);not null;default:'shared'" json:"default_workspace"`
 	// DefaultMemoryMode decides what this role is told about the rest of

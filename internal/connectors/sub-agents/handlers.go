@@ -104,9 +104,9 @@ func (h *handlers) delegate(c *connector.Ctx) (any, error) {
 		return nil, fmt.Errorf("no such role: %s — call list_agents for the list", profileKey)
 	}
 
-	mode := strings.TrimSpace(c.Input("mode"))
-	if !delegation.ValidMode(mode) {
-		return nil, errors.New("mode must be 'sync' or 'async'")
+	mode, modeOK := delegation.ParseMode(c.Input("mode"))
+	if !modeOK {
+		return nil, errors.New("mode must be 'background' or 'foreground'")
 	}
 	sink := strings.TrimSpace(c.Input("delivery_sink"))
 	if !delegation.ValidSink(sink) {
@@ -463,17 +463,18 @@ func (h *handlers) createAgent(c *connector.Ctx) (any, error) {
 		DefaultMaxTokens:   c.InputInt("max_tokens"),
 		Disabled:           c.InputBool("disabled"),
 		DefaultMaxTurns:    c.InputInt("max_turns"),
-		DefaultMode:        delegation.ModeSync,
+		DefaultMode:        delegation.ModeAsync,
 		DefaultWorkspace:   delegation.WorkspaceShared,
 		CanDelegate:        c.InputBool("can_delegate"),
 		AllowTakeOver:      c.InputBool("allow_take_over"),
 		Locked:             c.InputBool("locked"),
 		CreatedBy:          caller.user.ID,
 	}
-	if mode := strings.TrimSpace(c.Input("mode")); mode != "" {
-		if mode != delegation.ModeSync && mode != delegation.ModeAsync {
+	if raw := strings.TrimSpace(c.Input("mode")); raw != "" {
+		mode, ok := delegation.ParseMode(raw)
+		if !ok {
 			return nil, fmt.Errorf("mode must be %q or %q, got %q",
-				delegation.ModeSync, delegation.ModeAsync, mode)
+				delegation.ModeBackground, delegation.ModeForeground, raw)
 		}
 		p.DefaultMode = mode
 	}

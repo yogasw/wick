@@ -151,7 +151,7 @@ Besides the basics, `create_agent` also takes:
 | `allowed_tags` | Comma-separated tag ids narrowing which tools/connectors the role may use. Call `list_access` first to see what you can grant — narrowing only ever *restricts*, it can never hand a role access you do not already have. Empty inherits everything you can reach. |
 | `can_delegate` | Lets the role delegate and define roles of its own. Off by default: most roles should do their own work. |
 | `allow_take_over` | Lets a human send messages into this role's running sub-agents mid-run (see [Take-over](#take-over)). |
-| `mode` | `sync` (default, returns the answer to the caller) or `async` (returns immediately, delivers later). |
+| `mode` | `background` (default, returns immediately and delivers the result later) or `foreground` (the caller blocks until this role answers). |
 | `workspace` | `shared` (default) or `worktree` for a private git worktree. Falls back to shared, with a note, on a project that is not a git repo. |
 | `icon` | A single emoji shown beside the role in lists. |
 | `max_tokens` | Token budget for one delegation of this role. `0` adds no cap of its own; the per-tree budget still applies. |
@@ -272,16 +272,24 @@ Other rules:
 - **Stopping** is limited to the person who triggered the tree, or an admin.
 - A leader may stop **its own** children — never a sibling, its parent, or another user's delegation.
 
-## Async delegation
+## Background delegation
 
-By default a delegation is **synchronous**: the leader waits. Some work does not deserve that — a research write-up whose reader is a human, not the leader's next step. Pass `mode: "async"` and `delegate` returns immediately with a `delegation_id`.
+A delegation runs in the **background** by default: `delegate` returns a `delegation_id` straight away, the leader ends its turn, and it is woken when the result lands.
 
-An async result reaches you through its **delivery sink**:
+That is the default because of what a blocked leader costs. Its provider process stays resident with the whole conversation loaded while it does nothing, so a room full of leaders waiting on children is a room full of idle processes holding memory — and a blocked leader cannot be talked to either: the human sees a spinner and the only way out is to kill it.
+
+Pass `mode: "foreground"` for the exception — a short lookup whose answer the leader's very next sentence depends on. It blocks the call until the child answers.
+
+::: tip The two words used to be `sync` and `async`
+Both spellings are still accepted on input, and the stored values are unchanged. Everything wick shows you now says background/foreground, because that is what the choice actually is: does the caller have to wait?
+:::
+
+A background result reaches you through its **delivery sink**:
 
 | Sink | Where the result goes |
 |---|---|
-| `channel` (default) | Posted back into the conversation that started it |
-| `session` | Re-prompts the leader, waking it with the result |
+| `session` (default) | Re-prompts the leader, waking it with the result so it can take the next step |
+| `channel` | Posted back into the conversation that started it, for a result written for a human to read |
 | `none` | Recorded only; visible in the panel and monitor |
 
 The leader can also **pull**: `collect` with a `delegation_id`, or with no arguments to list everything waiting. A delegation still running comes back `pending` rather than blocking.
@@ -290,7 +298,7 @@ A delivered result reads `@<handle> finished (<status>) · <elapsed>`, followed 
 
 A result is handed over **exactly once**. Collecting the same delegation twice returns it flagged as a repeat, because acting on the same answer twice duplicates whatever the leader did with it.
 
-::: info Async sub-agents are detached
+::: info Background sub-agents are detached
 They were fired to run on their own, so killing the leader does **not** stop them. An explicit **Stop all** does.
 :::
 
@@ -358,15 +366,15 @@ Installed as global roles on first boot. They are starting points, not fixtures 
 
 | Role | Does | Runs |
 |---|---|---|
-| `log-investigator` | Groups errors, builds a timeline, quotes log lines. | async |
-| `code-investigator` | Maps symptoms to a code path and names a probable cause. | async |
-| `docs-investigator` | Establishes what the system is *supposed* to do. | async |
-| `data-validator` | Checks the tenant's config, flags and data. Read-only. | async |
-| `evidence-checker` | Judges whether the evidence supports the findings. | sync |
-| `client-response-drafter` | Drafts a customer reply from confirmed findings. Drafts — never sends. | sync |
-| `incident-supervisor` | Plans and dispatches when no human is in the room. | async |
+| `log-investigator` | Groups errors, builds a timeline, quotes log lines. | background |
+| `code-investigator` | Maps symptoms to a code path and names a probable cause. | background |
+| `docs-investigator` | Establishes what the system is *supposed* to do. | background |
+| `data-validator` | Checks the tenant's config, flags and data. Read-only. | background |
+| `evidence-checker` | Judges whether the evidence supports the findings. | foreground |
+| `client-response-drafter` | Drafts a customer reply from confirmed findings. Drafts — never sends. | foreground |
+| `incident-supervisor` | Plans and dispatches when no human is in the room. | background |
 
-The four that read a large surface run in the background. The two that work on already-collected material run synchronously, because the supervisor is waiting on their answer to decide what happens next.
+The four that read a large surface run in the background. The two that work on already-collected material are the exception and block their caller, because the supervisor is waiting on their answer to decide what happens next — and they are the only two roles an upgrade leaves in foreground.
 
 Every investigating prompt ends with the same rule: **quote a source and an excerpt, or report it as a gap.** A finding with no excerpt is a guess, and a supervisor cannot tell the two apart.
 
@@ -539,7 +547,7 @@ A conversation runs **one sub-agent at a time**. Ask for four at once and the fi
 
 That is a deliberate default, not a capacity limit. Several sub-agents streaming into one room at once produce output nobody can follow, and they burn the tree's shared turn and token budget in parallel. The cost of running them serially is waiting, which is the cheaper failure.
 
-An async delegation that cannot start yet comes back `queued` with its place in line:
+A background delegation that cannot start yet comes back `queued` with its place in line:
 
 ```json
 {
@@ -552,7 +560,7 @@ An async delegation that cannot start yet comes back `queued` with its place in 
 
 `collect` reports a queued delegation as `pending`, exactly as it reports a running one — from the leader's side "not ready yet" is one state.
 
-A **synchronous** call simply waits its turn and then behaves normally. It has no timeout of its own: it lives as long as the call that made it, so if the caller goes away the queued work is cancelled rather than started for nobody.
+A **foreground** call simply waits its turn and then behaves normally. It has no timeout of its own: it lives as long as the call that made it, so if the caller goes away the queued work is cancelled rather than started for nobody.
 
 The rail panel groups by **Working**, **Queued**, then **Finished**, and a queued row shows its position. There is no estimated start time, because there is no honest one to give.
 
@@ -560,9 +568,9 @@ The rail panel groups by **Working**, **Queued**, then **Finished**, and a queue
 
 ### A sub-agent that delegates does not deadlock
 
-A sub-agent waiting on a synchronous child of its own is *waiting*, not working, so it releases its place while it waits. Without that, a one-at-a-time room would wedge the first time a sub-agent delegated — the parent holding the only slot until a child that can never start finishes.
+A sub-agent waiting on a foreground child of its own is *waiting*, not working, so it releases its place while it waits. Without that, a one-at-a-time room would wedge the first time a sub-agent delegated — the parent holding the only slot until a child that can never start finishes.
 
-A sub-agent that fires an **async** child keeps working and keeps its place; the child queues normally.
+A sub-agent that fires a **background** child keeps working and keeps its place; the child queues normally.
 
 ### Raising the limit
 

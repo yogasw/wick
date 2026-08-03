@@ -76,8 +76,8 @@ type delegateInput struct {
 	// Turn and token caps are clamped to the system ceiling, never raised.
 	MaxTurns     int    `wick:"desc=Optional cap on the sub-agent's turns. Clamped to the system ceiling."`
 	MaxTokens    int    `wick:"desc=Optional cap on tokens this sub-agent may spend. Clamped to the system ceiling."`
-	Mode         string `wick:"desc=sync (default) blocks and returns the answer. async returns a delegation_id and delivers later."`
-	DeliverySink string `wick:"desc=Where an async result goes: channel (default), session (wake the caller), none (record only)."`
+	Mode         string `wick:"desc=background (default) returns a delegation_id immediately and the result is delivered later. foreground blocks this call until the sub-agent answers — only for a short lookup you cannot continue without."`
+	DeliverySink string `wick:"desc=Where a background result goes: session (default) wakes you with it, channel posts it to the chat thread, none records it only."`
 	Workspace    string `wick:"desc=shared (default) or worktree for a private git worktree. Falls back to shared with a note on a non-git project."`
 	MemoryMode   string `wick:"desc=What this sub-agent is told beyond its task. no_history = nothing. state_summary (default) = one line per finished sibling. relevant_chunks = your context field only, curated by you. full_history = every sibling's full result, for audit and debugging only — expensive, noisy, and it biases the agent toward earlier conclusions."`
 }
@@ -144,7 +144,7 @@ type createAgentInput struct {
 	StrictMCP          bool   `wick:"desc=Drop the host's own MCP servers from this role's spawn. NOT ENFORCED today: whether a spawn gets --strict-mcp-config is decided globally by the WICK_STRICT_MCP environment variable, identically for every role."`
 	CanDelegate        bool   `wick:"desc=Let this role delegate and define roles of its own. Off by default: most roles should do their own work."`
 	AllowTakeOver      bool   `wick:"desc=Let a human send messages into this role mid-run. Its answers are then flagged as human-steered."`
-	Mode               string `wick:"desc=sync (default) returns the answer to the caller. async returns immediately and delivers later."`
+	Mode               string `wick:"desc=background (default) runs this role detached and delivers its result later. foreground makes the caller block until it answers — pick it only for roles that answer in seconds."`
 	Workspace          string `wick:"desc=Default working directory for this role: shared (default), or worktree for a private git worktree. Falls back to shared with a note on a non-git project."`
 	MemoryMode         string `wick:"desc=Default for what this role is told beyond its task. One of no_history, state_summary (the default), relevant_chunks, full_history. A caller can override it per delegation."`
 	Disabled           bool   `wick:"desc=Keep the role on record but hide it from every roster. A disabled role cannot be delegated to."`
@@ -178,16 +178,19 @@ func Operations(deps Deps) []connector.Category {
 				emptyInput{}, h.listAgents, wickdocs.Docs{}),
 
 			connector.Op("delegate", "Delegate a Task",
-				"Delegate one self-contained sub-task to another agent and WAIT for its result. "+
+				"Hand one self-contained sub-task to another agent. Runs in the BACKGROUND by default: this call returns a "+
+					"delegation_id and status 'running' or 'queued', NOT an answer. Say what you started, end your turn, and you are woken "+
+					"when the result lands — do not sit in a loop calling collect, and never report a result you have not been given. "+
 					"The sub-agent starts with a CLEAN context — it cannot see this conversation, so `task` must state everything it needs. "+
-					"It returns its final answer as this call's result, carrying a `status`: "+
-					"'done' is a complete answer; 'interrupted' means a HUMAN stopped it, so read the note and do NOT silently retry; "+
+					"Dispatch several in one turn and they queue behind one another, one at a time per conversation. "+
+					"Pass mode=foreground ONLY for a short lookup whose answer your very next sentence needs; it blocks this call and holds your process idle meanwhile. "+
+					"Every finished result carries a `status`: 'done' is a complete answer; 'interrupted' means a HUMAN stopped it, so read the note and do NOT silently retry; "+
 					"'stopped_max_turns' and 'stopped_budget' mean the result is PARTIAL — use what is there or ask the user. "+
 					"Delegate when a sub-task wants a different role or would otherwise flood this conversation; do simple work yourself rather than paying a spawn.",
 				delegateInput{}, h.delegate, wickdocs.Docs{}),
 
-			connector.Op("collect", "Collect an Async Result",
-				"Pick up the result of an async delegation started earlier. Pass delegation_id, or omit it to list everything waiting for this conversation. "+
+			connector.Op("collect", "Collect a Background Result",
+				"Pick up the result of a background delegation started earlier. Pass delegation_id, or omit it to list everything waiting for this conversation. "+
 					"A delegation still running comes back pending=true — carry on with other work rather than looping on it. "+
 					"A result is handed over ONCE: if the reply says it was already collected, you have seen it before and must not act on it twice.",
 				collectInput{}, h.collect, wickdocs.Docs{}),

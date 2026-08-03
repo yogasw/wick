@@ -211,13 +211,45 @@ func TestAsyncReturnsHandleImmediatelyAndDelivers(t *testing.T) {
 	if res.Result != "" {
 		t.Fatalf("async handle carried a result: %q", res.Result)
 	}
-	if res.Mode != ModeAsync || res.DelegationID == "" {
+	if res.Mode != ModeBackground || res.DelegationID == "" {
 		t.Fatalf("bad handle: %+v", res)
 	}
 	if res.Note == "" {
 		t.Fatal("async handle must tell the leader not to wait on it")
 	}
 
+	waitForStatus(t, r, res.DelegationID, entity.DelegationDone)
+	// No sink asked for: the leader that dispatched it gets woken, rather
+	// than the result being posted next to the conversation with nobody to
+	// act on it.
+	if got := del.sessionDeliveries(); len(got) != 1 {
+		t.Fatalf("session deliveries = %v, want exactly one", got)
+	}
+	if got := del.channelDeliveries(); len(got) != 0 {
+		t.Fatalf("channel deliveries = %v, want none by default", got)
+	}
+}
+
+// The channel sink still works when it is asked for by name: a role whose
+// output is written for a HUMAN reading the thread does not need the
+// leader woken to relay it.
+func TestBackgroundDeliversToChannelWhenAsked(t *testing.T) {
+	stream := &scriptedStream{events: []StreamEvent{
+		{Type: event.TextDelta, Text: "for the thread"},
+		{Type: event.Done},
+	}}
+	s, r, _ := runService(t, stream, &fakeRunner{})
+	del := &recordingDeliverer{}
+	s.Deliver = del
+
+	req := baseReq()
+	req.Mode = ModeAsync
+	req.DeliverySink = SinkChannel
+
+	res, err := s.Run(context.Background(), req)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
 	waitForStatus(t, r, res.DelegationID, entity.DelegationDone)
 	if got := del.channelDeliveries(); len(got) != 1 {
 		t.Fatalf("channel deliveries = %v, want exactly one", got)

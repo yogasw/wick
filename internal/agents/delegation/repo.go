@@ -157,6 +157,20 @@ func (r *Repo) DeleteProfile(ctx context.Context, id string) error {
 	return r.db.WithContext(ctx).Where("id = ?", id).Delete(&entity.AgentProfile{}).Error
 }
 
+// SwitchProfilesToBackground moves every role still stored as foreground
+// onto background, skipping the keys named in keepForeground.
+//
+// Used once, by MigrateModeDefault. Returns how many rows changed.
+func (r *Repo) SwitchProfilesToBackground(ctx context.Context, keepForeground []string) (int64, error) {
+	q := r.db.WithContext(ctx).Model(&entity.AgentProfile{}).
+		Where("default_mode = ?", ModeSync)
+	if len(keepForeground) > 0 {
+		q = q.Where("key NOT IN ?", keepForeground)
+	}
+	res := q.Update("default_mode", ModeAsync)
+	return res.RowsAffected, res.Error
+}
+
 // ---------- delegations ----------
 
 // Create inserts a new delegation row.

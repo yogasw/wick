@@ -239,8 +239,9 @@ type Result struct {
 	TokensUsed   int    `json:"tokens_used,omitempty"`
 	Result       string `json:"result"`
 	Note         string `json:"note,omitempty"`
-	// Mode echoes how this ran. For async it is the signal that Result is
-	// intentionally empty and the answer arrives later.
+	// Mode echoes how this ran, in the spoken names: "background" or
+	// "foreground" (ModeLabel). For a background run it is the signal that
+	// Result is intentionally empty and the answer arrives later.
 	Mode string `json:"mode,omitempty"`
 	// QueuePosition is the 1-based place in this conversation's queue for
 	// a delegation that has not started yet. 0 for anything already
@@ -312,10 +313,13 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 		return nil, fmt.Errorf("unknown delivery_sink %q", sink)
 	}
 	// An async delegation with nowhere to deliver would run, cost money,
-	// and hand its answer to nobody. Default it to the channel it came
-	// from rather than letting the result evaporate.
+	// and hand its answer to nobody. Default it to waking the leader:
+	// async is the default mode now, so the common case is a leader that
+	// dispatched work and still has the next step to take once it lands.
+	// SinkChannel posts the raw result next to the conversation and leaves
+	// nobody to act on it, which reads as the flow stalling.
 	if mode == ModeAsync && sink == "" {
-		sink = SinkChannel
+		sink = SinkSession
 	}
 
 	// Workspace: resolve the mode, then let the runner tell us whether it
@@ -422,7 +426,7 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 				"", "the caller went away while this was queued", 0)
 			return &Result{
 				DelegationID: id, Profile: profile.Key,
-				Status: entity.DelegationInterrupted, Mode: ModeSync,
+				Status: entity.DelegationInterrupted, Mode: ModeForeground,
 				Note: "Cancelled before it started — the caller went away while this was queued.",
 			}, nil
 		}
@@ -551,9 +555,10 @@ func (s *Service) execute(
 			DelegationID: id,
 			Profile:      row.ProfileKey,
 			Status:       entity.DelegationRunning,
-			Mode:         ModeAsync,
+			Mode:         ModeBackground,
 			Note: "Started in the background. The result is NOT in this reply — it will be delivered via " +
-				sink + ". Use wick_delegate_collect with this delegation_id to pick it up, and do not wait on it here.",
+				sink + ". Say what you started and end your turn; you are woken when it lands. " +
+				"Do not wait on it here, and do not invent its answer.",
 			WorkspaceNote: workspaceNote,
 		}, nil
 	}
@@ -561,7 +566,7 @@ func (s *Service) execute(
 	defer cleanup()
 	res, err := s.await(ctx, runCtx, row, spec, ch)
 	if res != nil {
-		res.Mode = ModeSync
+		res.Mode = ModeForeground
 		res.WorkspaceNote = workspaceNote
 	}
 	return res, err

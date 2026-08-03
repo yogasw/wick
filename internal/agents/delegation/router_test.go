@@ -104,10 +104,18 @@ func TestMultiMentionForcesAsyncSessionSink(t *testing.T) {
 	}
 }
 
-// One mention is not a fan-out: the role's own default decides.
+// One mention is not a fan-out: the role's own default decides. Here the
+// role declares foreground, which is the only way to get blocking now —
+// an undeclared role runs in the background like everything else.
 func TestSingleMentionUsesTheRoleDefaultMode(t *testing.T) {
 	s, r := routerService(t)
 	ctx := context.Background()
+
+	p := seedProfile(t, r, "researcher")
+	p.DefaultMode = ModeForeground
+	if err := r.SaveProfile(ctx, p); err != nil {
+		t.Fatalf("set role mode: %v", err)
+	}
 
 	got := s.Route(ctx, RouteInput{
 		SessionID: "parent", FromHandle: entity.LeaderHandle, Human: true,
@@ -122,7 +130,7 @@ func TestSingleMentionUsesTheRoleDefaultMode(t *testing.T) {
 		t.Fatalf("get: %v", err)
 	}
 	if row.Mode != ModeSync {
-		t.Fatalf("mode = %q, want the profile default (sync)", row.Mode)
+		t.Fatalf("mode = %q, want the profile default (foreground)", row.Mode)
 	}
 }
 
