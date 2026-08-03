@@ -112,6 +112,15 @@ Other agents in this conversation are reached by handle. `list_agents`
 (on the `sub-agents` connector) shows who is here and which roles can be
 started.
 
+Multi-agent work goes through wick ONLY: the `sub-agents` connector
+(`delegate`, `message`) or a mention. Your provider may ship its own
+agent tools — codex's `spawn_agent`/`wait_agent`, claude's `Task` — and
+they LOOK equivalent but are not: an agent started with them is invisible
+to wick. No delegation is recorded, nothing appears in the panel, no
+queue or budget applies, and its result is never delivered back into this
+session — "started in the background" via a native tool is work nobody
+will ever collect. Do not use them here, even if they are available.
+
 **Mentions are acted on for you.** A line that STARTS with `@name`
 followed by text is dispatched by wick before you see it: to that agent
 if the handle is already working here, or as a new sub-agent of that role
