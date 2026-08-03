@@ -204,6 +204,10 @@ export type SubAgentItem = {
   max_turns: number;
   result?: string;
   started_at?: string;
+  /** Set once the delegation reaches a terminal status; absent while it
+      is queued or running. Which one is present decides whether the row
+      reads "running 4m" or "4m ago". */
+  ended_at?: string;
 };
 
 export type FileContent = {

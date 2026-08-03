@@ -43,6 +43,10 @@ type SubAgentItem struct {
 	MaxTurns  int    `json:"max_turns"`
 	Result    string `json:"result,omitempty"`
 	StartedAt string `json:"started_at,omitempty"`
+	// EndedAt is when the delegation reached a terminal status. Absent
+	// while it is queued or running, which is exactly how the UI tells
+	// "finished 5m ago" apart from "started 5m ago".
+	EndedAt string `json:"ended_at,omitempty"`
 }
 
 // subAgentLabelRunes caps the task preview shown in the panel.
@@ -96,6 +100,9 @@ func sessionSubAgents(c *tool.Ctx) {
 		}
 		if !d.StartedAt.IsZero() {
 			item.StartedAt = d.StartedAt.UTC().Format("2006-01-02T15:04:05Z07:00")
+		}
+		if d.EndedAt != nil && !d.EndedAt.IsZero() {
+			item.EndedAt = d.EndedAt.UTC().Format("2006-01-02T15:04:05Z07:00")
 		}
 		items = append(items, item)
 	}

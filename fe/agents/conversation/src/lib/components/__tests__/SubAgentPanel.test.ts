@@ -15,6 +15,7 @@ function subAgent(over: Partial<SubAgentItem> = {}): SubAgentItem {
     turns_used: 1,
     max_turns: 3,
     result: '{"participant":"B","secret_word":"kursi"}',
+    started_at: new Date(Date.now() - 60_000).toISOString(),
     ...over,
   };
 }
@@ -82,6 +83,51 @@ describe("SubAgentPanel", () => {
       props: props({ subAgents: [subAgent({ status: "running", lifecycle: "idle" })] }),
     });
     expect(screen.queryByLabelText("Working")).toBeNull();
+  });
+
+  // A finished row is dated by when it FINISHED — that is what you want
+  // when scanning results — and the rounded label carries the exact time
+  // in its tooltip for when the age actually matters.
+  test("a finished sub-agent shows how long ago it ended", () => {
+    const ended = new Date(Date.now() - 5 * 60_000).toISOString();
+    render(SubAgentPanel, {
+      props: props({
+        subAgents: [
+          subAgent({
+            started_at: new Date(Date.now() - 20 * 60_000).toISOString(),
+            ended_at: ended,
+          }),
+        ],
+      }),
+    });
+    const stamp = screen.getByText(/5m ago/);
+    expect(stamp).toBeTruthy();
+    expect(stamp.getAttribute("title")).toContain(String(new Date(ended).getFullYear()));
+  });
+
+  // The only interesting question about a running sub-agent is how long
+  // it has been at it, so a live row is dated by its start instead.
+  test("a running sub-agent shows how long it has been running", () => {
+    render(SubAgentPanel, {
+      props: props({
+        subAgents: [
+          subAgent({
+            status: "running",
+            lifecycle: "working",
+            started_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+            ended_at: undefined,
+          }),
+        ],
+      }),
+    });
+    expect(screen.getByText(/running 3m/)).toBeTruthy();
+  });
+
+  test("a row with no timestamps shows no stamp at all", () => {
+    render(SubAgentPanel, {
+      props: props({ subAgents: [subAgent({ started_at: undefined, ended_at: undefined })] }),
+    });
+    expect(screen.queryByText(/ago|running \d/)).toBeNull();
   });
 
   // Stop sits on top of a card that opens the transcript. Letting the click

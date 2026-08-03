@@ -7,6 +7,8 @@
     isSubAgentLive,
     isSubAgentWorking,
   } from "../lifecycleCls.js";
+  import { timeAgo, exactTime, shortDuration, parseEventTime } from "../timeFormat.js";
+  import { now } from "../stores/now.js";
 
   type Props = {
     subAgents: SubAgentItem[];
@@ -41,6 +43,24 @@
   function turnsLabel(s: SubAgentItem): string {
     return s.max_turns > 0 ? `${s.turns_used}/${s.max_turns} turns` : `${s.turns_used} turns`;
   }
+
+  /* When it happened, phrased by what it is doing.
+
+     A finished row is dated by when it FINISHED — that is what you want
+     to know when scanning results — while a live one is dated by when it
+     started, because the only interesting question about a running
+     sub-agent is how long it has been at it. */
+  function stamp(s: SubAgentItem): { text: string; exact: string } {
+    const live = isSubAgentLive(s.status);
+    const raw = live ? s.started_at : (s.ended_at ?? s.started_at);
+    const exact = exactTime(raw);
+    if (!exact) return { text: "", exact: "" };
+    if (live) {
+      const d = shortDuration($now - (parseEventTime(raw) ?? $now));
+      return { text: d === "just now" ? "just started" : `running ${d}`, exact };
+    }
+    return { text: timeAgo(raw, $now), exact };
+  }
 </script>
 
 <div class="flex-1 overflow-y-auto">
@@ -64,6 +84,7 @@
       </p>
     {:else}
       {#each subAgents as sub (sub.delegation_id)}
+        {@const ts = stamp(sub)}
         <div style={indentStyle(sub.depth)}>
           <!--
             The whole card opens the sub-agent, not just its title. The most
@@ -136,6 +157,11 @@
               <span>{turnsLabel(sub)}</span>
               {#if sub.depth > 0}
                 <span>· depth {sub.depth}</span>
+              {/if}
+              <!-- The rounded label is what you scan; the tooltip is what
+                   you check when a row's age actually matters. -->
+              {#if ts.text}
+                <span title={ts.exact}>· {ts.text}</span>
               {/if}
             </div>
 

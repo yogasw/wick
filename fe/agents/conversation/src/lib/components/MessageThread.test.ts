@@ -23,6 +23,25 @@ const msgs: AgentMessageItem[] = [
 ];
 
 describe("MessageThread", () => {
+  // Ordering alone cannot tell a live exchange from a stalled one.
+  it("dates each message, with the exact time in a tooltip", () => {
+    const sent = new Date(Date.now() - 7 * 60_000).toISOString();
+    render(MessageThread, {
+      messages: [{ ...msgs[0], created_at: sent }],
+      onBumpHops: vi.fn(),
+      hopsLeft: 4,
+    });
+    const stamp = screen.getByText("7m ago");
+    expect(stamp.getAttribute("title")).toContain(String(new Date(sent).getFullYear()));
+  });
+
+  // Rows written before timestamps existed carry an empty created_at;
+  // an empty tooltip on a blank label is worse than no label.
+  it("renders no stamp when the message has no timestamp", () => {
+    render(MessageThread, { messages: msgs, onBumpHops: vi.fn(), hopsLeft: 4 });
+    expect(screen.queryByText(/ago$/)).toBeNull();
+  });
+
   it("shows who spoke to whom", () => {
     render(MessageThread, { messages: msgs, onBumpHops: vi.fn(), hopsLeft: 4 });
     expect(screen.getByText("start please")).toBeTruthy();

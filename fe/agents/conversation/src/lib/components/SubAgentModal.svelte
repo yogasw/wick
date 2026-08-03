@@ -26,6 +26,8 @@
   import { getSubAgents, interruptSubAgent } from "../api/subagents.js";
   import { sendMessage } from "../api/messages.js";
   import ConversationThread from "./ConversationThread.svelte";
+  import { timeAgo, exactTime, shortDuration, parseEventTime } from "../timeFormat.js";
+  import { now } from "../stores/now.js";
   import {
     subAgentStatusCls,
     subAgentStatusLabel,
@@ -235,6 +237,18 @@
 
   const live_ = $derived(current ? isSubAgentLive(current.status) : false);
   const working = $derived(current ? isSubAgentWorking(current.status, current.lifecycle) : false);
+
+  // A live sub-agent is dated by when it started (how long has it been at
+  // this?); a finished one by when it ended (how fresh is this answer?).
+  const stampRaw = $derived(
+    current ? (live_ ? current.started_at : (current.ended_at ?? current.started_at)) : undefined,
+  );
+  const stampText = $derived.by(() => {
+    if (!stampRaw) return "";
+    if (!live_) return timeAgo(stampRaw, $now);
+    const d = shortDuration($now - (parseEventTime(stampRaw) ?? $now));
+    return d === "just now" ? "just started" : `running ${d}`;
+  });
   const turnsLabel = $derived(
     current
       ? current.max_turns > 0
@@ -307,6 +321,12 @@
           >{subAgentStatusLabel(current.status)}</span
         >
         <span class="shrink-0 text-[10px] text-black-700 dark:text-black-600">{turnsLabel}</span>
+        {#if stampText}
+          <span
+            class="shrink-0 text-[10px] text-black-700 dark:text-black-600"
+            title={exactTime(stampRaw)}
+          >· {stampText}</span>
+        {/if}
 
         {#if live_}
           <button

@@ -1,5 +1,7 @@
 <script lang="ts">
   import type { AgentMessageItem } from "../types/agents.js";
+  import { timeAgo, exactTime } from "../timeFormat.js";
+  import { now } from "../stores/now.js";
 
   type Props = {
     messages: AgentMessageItem[];
@@ -34,12 +36,24 @@
   {/if}
 
   {#each messages as m (m.id)}
+    {@const sent = timeAgo(m.created_at, $now)}
     <div class="rounded-lg border border-white-300 dark:border-navy-600 p-3">
       <div class="mb-1 flex items-center gap-1.5 text-[11px]">
         <span class="truncate font-medium text-black-900 dark:text-white-100">@{m.from_handle}</span>
         <span class="shrink-0 text-black-700 dark:text-black-600">&rarr;</span>
         <span class="truncate font-medium text-black-900 dark:text-white-100">@{m.to_handle}</span>
-        <span class="ml-auto shrink-0 rounded-full px-2 py-0.5 {kindCls(m.kind)}">{m.kind}</span>
+        <!-- Ordering alone does not say whether two agents traded messages
+             seconds apart or hours apart, and that is the difference
+             between a live exchange and a stalled one. -->
+        {#if sent}
+          <span
+            class="ml-auto shrink-0 text-black-700 dark:text-black-600"
+            title={exactTime(m.created_at)}
+          >{sent}</span>
+        {/if}
+        <span class={"shrink-0 rounded-full px-2 py-0.5 " + kindCls(m.kind) + (sent ? "" : " ml-auto")}
+          >{m.kind}</span
+        >
       </div>
       <p class="whitespace-pre-wrap break-words text-xs text-black-800 dark:text-black-600">{m.body}</p>
       {#if m.auto_reply}
