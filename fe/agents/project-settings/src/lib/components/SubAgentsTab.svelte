@@ -15,11 +15,27 @@
     type ProviderListItem,
     type TagOption,
   } from "@wick-fe/common-api";
-  import { AgentProfileEditor, Button, ConfirmDialog } from "@wick-fe/common-ui";
+  import {
+    AgentModelQuickChange,
+    AgentProfileEditor,
+    AgentProfileRow,
+    Button,
+    ConfirmDialog,
+  } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
+  import { getProviderOptionModels } from "$lib/api.js";
 
   type Props = { projectID: string; base: string };
   let { projectID, base }: Props = $props();
+
+  // Same lazy loader the project's provider picker uses, so a role can be
+  // pinned to a wick live-set leaf here too rather than only to an instance.
+  function loadProviderModels(optionValue: string, opts?: { entry?: string }) {
+    const slash = optionValue.indexOf("/");
+    const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
+    const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
+    return getProviderOptionModels(type, name, opts);
+  }
 
   let owned = $state<AgentProfile[]>([]);
   let inherited = $state<AgentProfile[]>([]);
@@ -32,6 +48,7 @@
   let loadError = $state("");
   let formError = $state("");
   let pendingDelete = $state<AgentProfile | null>(null);
+  let quickChange = $state<AgentProfile | null>(null);
 
   const shadowed = $derived(
     shadowedKeys({
@@ -109,6 +126,27 @@
     formError = "";
     editing = emptyAgentProfile(projectID);
   }
+
+  /* Save straight from a row action (quick change, disable toggle) without
+     opening the editor. The whole role is sent because the API replaces the
+     row; only the field the action names is altered. */
+  async function saveInline(p: AgentProfile, what: string) {
+    saving = true;
+    try {
+      await saveAgentProfile(base, { ...p, project_id: projectID });
+      toastOk(`${what} — ${p.name || p.key}`);
+      quickChange = null;
+      await load();
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : String(e));
+    } finally {
+      saving = false;
+    }
+  }
+
+  function toggleDisabled(p: AgentProfile) {
+    void saveInline({ ...p, disabled: !p.disabled }, p.disabled ? "Enabled" : "Disabled");
+  }
 </script>
 
 {#if loading}
@@ -116,7 +154,9 @@
 {:else if loadError}
   <p class="text-sm text-rose-600 dark:text-rose-400">{loadError}</p>
 {:else if editing}
-  <div class="flex flex-col gap-4">
+  <div
+    class="flex flex-col gap-4 rounded-xl border border-white-300 bg-white-100 p-6 shadow-sm dark:border-navy-600 dark:bg-navy-700"
+  >
     <div class="flex items-center gap-2">
       <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">
         {editing.id ? `Edit ${editing.key}` : "New agent"}
@@ -141,105 +181,102 @@
     />
   </div>
 {:else}
-  <div class="flex flex-col gap-8">
-    <section class="flex flex-col gap-2">
-      <h2 class="text-xs font-semibold uppercase tracking-wider text-black-700 dark:text-black-600">
-        Inherited from global
-      </h2>
-      {#if availableToOverride.length === 0}
+  <div class="flex flex-col gap-6">
+    <!-- Panelled to match the General tab: these sections used to float on the
+         page background, which read as unfinished next to the settings form. -->
+    <section
+      class="rounded-xl border border-white-300 bg-white-100 p-6 shadow-sm dark:border-navy-600 dark:bg-navy-700"
+    >
+      <div class="mb-1 flex items-center justify-between gap-3">
+        <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">This project</h2>
+        <Button variant="secondary" size="sm" onclick={startNew}>+ New agent</Button>
+      </div>
+      <p class="mb-4 text-xs text-black-700 dark:text-black-600">
+        Roles only sessions in this project can delegate to. Click a role to edit it; use
+        ⋮ for its other actions.
+      </p>
+      {#if owned.length === 0}
         <p class="text-xs text-black-700 dark:text-black-600">
-          {inherited.length === 0
-            ? "No global roles defined yet."
-            : "Every global role is overridden below."}
+          No roles of its own yet.
         </p>
       {:else}
-        <ul class="flex flex-col gap-1">
-          {#each availableToOverride as p (p.id)}
-            <li
-              class="flex items-center gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600"
-            >
-              <span class="min-w-0 flex-1">
-                <span class="block truncate text-sm text-black-900 dark:text-white-100">
-                  {p.name || p.key}
-                </span>
-                <span class="block truncate text-[11px] text-black-700 dark:text-black-600">
-                  {p.provider}{p.description ? ` · ${p.description}` : ""}
-                </span>
-              </span>
-              <Button variant="secondary" size="sm" onclick={() => override(p)}>Override</Button>
-            </li>
+        <ul class="flex flex-col gap-2">
+          {#each owned as p (p.id)}
+            <AgentProfileRow
+              profile={p}
+              shadowsGlobal={shadowed.has(p.key)}
+              onedit={(x) => {
+                formError = "";
+                editing = x;
+              }}
+              onchangeModel={(x) => (quickChange = x)}
+              ontoggle={toggleDisabled}
+              ondelete={(x) => (pendingDelete = x)}
+            />
           {/each}
         </ul>
       {/if}
     </section>
 
-    <section class="flex flex-col gap-2">
-      <div class="flex items-center justify-between">
-        <h2
-          class="text-xs font-semibold uppercase tracking-wider text-black-700 dark:text-black-600"
-        >
-          This project
-        </h2>
-        <button
-          type="button"
-          class="text-[11px] font-semibold text-green-600 transition-colors hover:text-green-500 dark:text-green-400"
-          onclick={startNew}
-        >
-          + New agent
-        </button>
-      </div>
-      {#if owned.length === 0}
+    <section
+      class="rounded-xl border border-white-300 bg-white-100 p-6 shadow-sm dark:border-navy-600 dark:bg-navy-700"
+    >
+      <h2 class="mb-1 text-sm font-semibold text-black-900 dark:text-white-100">
+        Inherited from global
+      </h2>
+      <p class="mb-4 text-xs text-black-700 dark:text-black-600">
+        Available here but owned globally. Override one to keep a project-specific copy —
+        the global role stays untouched everywhere else.
+      </p>
+      {#if availableToOverride.length === 0}
         <p class="text-xs text-black-700 dark:text-black-600">
-          No roles of its own yet. Roles added here are visible only inside this
-          project.
+          {inherited.length === 0
+            ? "No global roles defined yet."
+            : "Every global role is overridden above."}
         </p>
       {:else}
-        <ul class="flex flex-col gap-1">
-          {#each owned as p (p.id)}
-            <li
-              class="flex items-center gap-3 rounded-lg border border-white-300 px-3 py-2 dark:border-navy-600"
-            >
-              <span class="min-w-0 flex-1">
-                <span class="flex items-center gap-2">
-                  <span class="truncate text-sm text-black-900 dark:text-white-100">
+        <ul class="flex flex-col gap-2">
+          {#each availableToOverride as p (p.id)}
+            <li>
+              <div
+                class="flex items-center gap-3 rounded-lg border border-white-300 bg-white-100 px-4 py-3 dark:border-navy-600 dark:bg-navy-800"
+              >
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-sm font-medium text-black-900 dark:text-white-100">
                     {p.name || p.key}
                   </span>
-                  {#if shadowed.has(p.key)}
+                  <span class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
                     <span
-                      class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium text-cau-400 ring-1 ring-cau-400/40"
+                      class="shrink-0 rounded bg-white-200 px-1.5 py-0.5 font-mono text-[10px] text-black-800 dark:bg-navy-700 dark:text-black-600"
                     >
-                      shadows global
+                      {p.provider.split("::")[0] || "no provider"}
                     </span>
-                  {/if}
-                  {#if p.disabled}
-                    <span
-                      class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium text-black-700 ring-1 ring-white-400 dark:text-black-600 dark:ring-navy-600"
-                    >
-                      Disabled
-                    </span>
-                  {/if}
+                    {#if p.description}
+                      <span class="min-w-0 truncate text-[11px] text-black-700 dark:text-black-600">
+                        {p.description}
+                      </span>
+                    {/if}
+                  </span>
                 </span>
-                <span class="block truncate text-[11px] text-black-700 dark:text-black-600">
-                  {p.provider}{p.description ? ` · ${p.description}` : ""}
-                </span>
-              </span>
-              <Button
-                variant="secondary"
-                size="sm"
-                onclick={() => {
-                  formError = "";
-                  editing = p;
-                }}
-              >
-                Edit
-              </Button>
-              <Button variant="danger" size="sm" onclick={() => (pendingDelete = p)}>Delete</Button>
+                <Button variant="secondary" size="sm" onclick={() => override(p)}>Override</Button>
+              </div>
             </li>
           {/each}
         </ul>
       {/if}
     </section>
   </div>
+{/if}
+
+{#if quickChange}
+  <AgentModelQuickChange
+    profile={quickChange}
+    {providerList}
+    {saving}
+    loadModels={loadProviderModels}
+    onsave={(p) => saveInline(p, "Provider / model updated")}
+    onclose={() => (quickChange = null)}
+  />
 {/if}
 
 {#if pendingDelete}
