@@ -7,20 +7,22 @@
      Scope-agnostic — the caller owns `profile.project_id` and decides
      which surface is showing. This component only edits what it is given. */
   import { untrack } from "svelte";
-  import type { AgentProfile } from "@wick-fe/common-api";
-  import { canLeadDelegation } from "@wick-fe/common-api";
+  import type { AgentProfile, ProviderListItem } from "@wick-fe/common-api";
+  import { canLeadDelegation, normalizeProviderKey } from "@wick-fe/common-api";
   import Button from "./Button.svelte";
   import LabeledInput from "./LabeledInput.svelte";
   import NumberInput from "./NumberInput.svelte";
-  import Select from "./Select.svelte";
+  import ProviderPicker from "./ProviderPicker.svelte";
   import TextArea from "./TextArea.svelte";
   import TextInput from "./TextInput.svelte";
+  import { buildProviderOptions } from "./provider-options.js";
 
   type TagOption = { id: string; name: string };
 
   type Props = {
     profile: AgentProfile;
-    providers?: string[];
+    /** Provider instances this role may run on, with their models. */
+    providerList?: ProviderListItem[];
     tags?: TagOption[];
     /** Read-only mode: every control disabled, Save and Delete hidden.
         How a non-admin sees a global role. */
@@ -35,7 +37,7 @@
 
   let {
     profile,
-    providers = ["claude", "codex", "wick", "gemini"],
+    providerList = [],
     tags = [],
     readonly = false,
     saving = false,
@@ -69,6 +71,21 @@
 
   const isNew = $derived(draft.id === "");
   const leaderCapable = $derived(canLeadDelegation(draft.provider));
+
+  // Provider and model are two columns but one choice. The picker speaks
+  // the composer's packed form ("type/name::modelID"); the form splits it
+  // back apart on the way to the server, so nothing downstream changes.
+  // normalizeProviderKey is what keeps a role stored before instances
+  // existed ("claude") pointing at a real option ("claude/claude").
+  const providerKey = $derived(draft.provider ? normalizeProviderKey(draft.provider) : "");
+  const pickerValue = $derived(draft.model ? `${providerKey}::${draft.model}` : providerKey);
+  const providerOptions = $derived(buildProviderOptions(providerList, pickerValue));
+
+  function pickProvider(v: string) {
+    const i = v.indexOf("::");
+    draft.provider = i < 0 ? v : v.slice(0, i);
+    draft.model = i < 0 ? "" : v.slice(i + 2);
+  }
 
   // The description is what a leader model reads to decide whether this
   // role is the right one to hand work to, so the server refuses an empty
@@ -161,21 +178,37 @@
   </LabeledInput>
 
   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-    <LabeledInput label="Provider">
-      <Select
-        value={draft.provider}
-        options={providers}
-        onChange={(v) => (draft.provider = v)}
-        disabled={readonly}
-      />
+    <LabeledInput
+      label="Provider"
+      helper="Pick the instance, and its model where the provider offers a choice"
+    >
+      <!-- ProviderPicker has no disabled prop: a read-only or frozen form
+           blocks it from the outside instead of growing one. -->
+      {#if readonly}
+        <div class="pointer-events-none opacity-60">
+          <ProviderPicker
+            options={providerOptions}
+            value={pickerValue}
+            onChange={pickProvider}
+            placeholder="Select provider"
+          />
+        </div>
+      {:else}
+        <ProviderPicker
+          options={providerOptions}
+          value={pickerValue}
+          onChange={pickProvider}
+          placeholder="Select provider"
+        />
+      {/if}
     </LabeledInput>
 
-    <LabeledInput label="Model" helper="Empty uses the provider default">
-      <TextInput
-        value={draft.model}
-        onChange={(v) => (draft.model = v)}
+    <LabeledInput label="Max turns" helper="Clamped to the system ceiling">
+      <NumberInput
+        value={draft.default_max_turns}
+        onChange={(v) => (draft.default_max_turns = v)}
+        min={1}
         disabled={readonly}
-        placeholder="default"
       />
     </LabeledInput>
   </div>
@@ -216,28 +249,17 @@
     {/if}
   </LabeledInput>
 
-  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-    <LabeledInput label="Max turns" helper="Clamped to the system ceiling">
-      <NumberInput
-        value={draft.default_max_turns}
-        onChange={(v) => (draft.default_max_turns = v)}
-        min={1}
-        disabled={readonly}
-      />
-    </LabeledInput>
-
-    <LabeledInput
-      label="Allowed native tools"
-      helper="Comma-separated. Empty uses the provider's default set."
-    >
-      <TextInput
-        value={nativeToolsText}
-        onChange={setNativeTools}
-        disabled={readonly}
-        placeholder="Read, Grep, WebSearch"
-      />
-    </LabeledInput>
-  </div>
+  <LabeledInput
+    label="Allowed native tools"
+    helper="Comma-separated. Empty uses the provider's default set."
+  >
+    <TextInput
+      value={nativeToolsText}
+      onChange={setNativeTools}
+      disabled={readonly}
+      placeholder="Read, Grep, WebSearch"
+    />
+  </LabeledInput>
 
   <div class="flex flex-col gap-2">
     <label class="flex items-start gap-2 text-xs text-black-800 dark:text-white-100">
