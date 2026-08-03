@@ -6,19 +6,69 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Added
-*   **Mention-driven investigation workflow**: `@name` at the start of a line now dispatches — a live handle gets messaged, a role key starts a new sub-agent, and a person's own mention shows the leader a "Routed to @name" chip so it isn't delegated a second time. A conversation now runs sub-agents **one at a time by default** (was 4 in parallel) with an async delegation queuing behind whichever is running rather than being refused; a sub-agent waiting on its own child releases its slot so a one-at-a-time room can't deadlock. Sub-agents report back through a structured `report_result` (summary, findings, quoted evidence, confidence) instead of prose alone, and `memory_mode` (`no_history` / `state_summary` / `relevant_chunks` / `full_history`) makes what a sub-agent is told explicit. Each delegation tree can now hold an **incident** record (evidence, hypotheses, next actions) and a **checker loop** built on seven seeded roles (`log-investigator`, `code-investigator`, `docs-investigator`, `data-validator`, `evidence-checker`, `client-response-drafter`, `incident-supervisor`) that rounds evidence past an `evidence-checker` until it's confirmed, contradicted, or escalated — bounded by new Max iterations / Max runtime / No-evidence-rounds settings under Agents settings → Sub-agents, alongside the existing `Mention router` toggle and `Max parallel sub-agents`. See [Sub-agents ▶ Mentions](/guide/agents/sub-agents#mentions) and [The investigation loop](/guide/agents/sub-agents#the-investigation-loop).
-*   **Agent-to-agent messaging**: Every agent in a delegation tree now has an address — `@main` for the leader, deduplicated role keys (`reviewer`, `reviewer-2`) for sub-agents. The `sub-agents` connector gains `message` (`kind=tell` or `ask`), `reply`, `stop`, and `list_access` ops, so a running agent can be messaged, asked a question, or stopped without re-explaining what it's doing. A **hop limit** (default 10 consecutive agent-to-agent messages between human turns, configurable under Agents settings → Sub-agents along with `Ask timeout` and `Inbox cap`) guards against two agents looping; a human turn or the rail panel's **Allow 10 more** button refills it. The rail panel's Sub-agents tab gains a "Between agents" message thread, and the composer's `@` menu now lists agents ahead of files. See [Sub-agents ▶ Talking to other agents](/guide/agents/sub-agents#talking-to-other-agents).
-*   **`create_agent` is now create-or-patch**: Calling it again with a role's existing `key` updates that role instead of requiring every field again; omitted fields keep their current value. It also accepts `allowed_tags` (narrow a role's tool access — see the new `list_access` op), `can_delegate`, `allow_take_over`, and `mode`.
-
-### Changed
-*   Async sub-agent results now arrive labelled as a sub-agent (source `subagent`) with the agent's handle and elapsed time, rather than looking like the user typed them. Sub-agent sessions are also pre-titled from their task instead of showing a generic placeholder.
-
-### Fixed
-*   **A mention could be dispatched twice**: a person's own `@handle`/`@role` mention was routed after the message had already reached the leader, so the leader — seeing a bare mention with no sign anything had started — delegated it again itself. The router now runs in the send path and appends a `[routed]` marker the leader reads before the message, rendered as a "Routed to @name" chip rather than as text.
-*   **wick provider: sub-agents on a live model set could fail to spawn**: a "live" model set (no single vendor model pinned — the list is fetched from the vendor at call time) only fell back to its sticky default model on an explicit pin; any other spawn — every sub-agent whose role names no model — reached the vendor SDK with an empty model id and died with "model is empty". The sticky default is now resolved on every branch, and an entry that still can't resolve is skipped with a message pointing at Providers → Wick instead of a raw vendor error.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.36.1](https://github.com/yogasw/wick/compare/v0.36.0...v0.36.1) — Agent Orchestration
+
+_Released on 2026-08-03_
+
+### Added
+*   **Mention-driven investigation workflow**:
+    *   Using `@name` at the start of a line now dispatches to a live agent handle, starts a new sub-agent for a role key, or shows the leader a "Routed to @name" chip when mentioning itself to prevent re-delegation.
+    *   Sub-agents now run **one at a time by default** (previously 4 in parallel). Async delegation requests are queued instead of being refused. A sub-agent waiting on its own child releases its slot, preventing deadlocks in one-at-a-time rooms.
+    *   Sub-agents report back through a structured `report_result` operation (including summary, findings, quoted evidence, confidence) instead of prose alone. If `report_result` is not called, the closing message becomes the summary with "unknown" confidence.
+    *   `memory_mode` (`no_history` / `state_summary` / `relevant_chunks` / `full_history`) explicitly defines what a sub-agent is told.
+    *   Each delegation tree can now hold an `incident` record (evidence, hypotheses, next actions), created lazily. Evidence is stored and deduplicated, but findings are not automatically merged.
+    *   A **checker loop** is introduced, built on seven seeded roles (`log-investigator`, `code-investigator`, `docs-investigator`, `data-validator`, `evidence-checker`, `client-response-drafter`, `incident-supervisor`). This loop rounds evidence past an `evidence-checker` until it's confirmed, contradicted, or escalated. Validation for reports is split into Go logic for well-formedness and round completion, and the `evidence-checker` role for evidence validity. An empty or unrecognized verdict escalates.
+    *   The workflow is bounded by new Max iterations / Max runtime / No-evidence-rounds settings under Agents settings → Sub-agents.
+    *   Sub-agents now learn the roster at spawn, making messaging operations immediately usable.
+    *   See [Sub-agents ▶ Mentions](/guide/agents/sub-agents#mentions) and [The investigation loop](/guide/agents/sub-agents#the-investigation-loop).
+*   **Agent-to-agent messaging**:
+    *   Every agent in a delegation tree now has an address (`@main` for the leader, deduplicated role keys for sub-agents).
+    *   The `sub-agents` connector gains `message` (`kind=tell` or `ask`), `reply`, `stop`, and `list_access` operations, allowing a running agent to be messaged, asked a question, or stopped without re-explaining its task.
+    *   The `ask` operation blocks for a reply, while `tell` returns immediately. If a recipient ends its turn without replying, its closing text is promoted to the answer to prevent hanging the sender.
+    *   Queued messages arrive as one batched turn, only at a turn boundary.
+    *   A delegation that receives a message continues running instead of closing on its pending answer.
+    *   An exited sub-agent is resumed on message delivery. If its transcript cannot be recovered, the sender is informed the agent is answering fresh.
+    *   A **hop limit** (default 10 consecutive agent-to-agent messages between human turns, configurable under Agents settings → Sub-agents along with `Ask timeout` and `Inbox cap`) guards against agents looping. A human turn or the rail panel's "Allow 10 more" button refills it. Hitting the cap stops messages, not agents.
+    *   Every message delivery includes the live roster and remaining turns, tokens, and hops, informing agents of their budget.
+    *   The rail panel's Sub-agents tab gains a "Between agents" message thread.
+    *   The composer's `@` menu now lists agents ahead of files; picking one inserts the mention and prompts the leader to use that agent.
+    *   `can_delegate` is now enforced.
+    *   See [Sub-agents ▶ Talking to other agents](/guide/agents/sub-agents#talking-to-other-agents).
+*   **`create_agent` is now create-or-patch**:
+    *   Calling `create_agent` again with a role's existing `key` updates that role, rather than requiring every field again; omitted fields keep their current value. It now accepts every sub-agent field.
+    *   It also accepts `allowed_tags` (to narrow a role's tool access — see the new `list_access` op), `can_delegate`, `allow_take_over`, and `mode`. `list_access` returns tags a caller may grant, intersected with the caller's own permissions.
+    *   The full provider list is now served to the role editor.
+    *   New `Locked` flag for sub-agent roles: roles can be locked from the editor, preventing editing, deleting, or re-creation with the same key.
+*   **Sub-agent Session Nesting & UI Improvements**:
+    *   Sub-agent sessions are now nested on disk within their parent's folder (`<parent_id>--sub-<12 hex>`), allowing deletion of a conversation to remove its entire delegation tree. Nested IDs use 12 hex chars to prevent Windows path limits.
+    *   Clicking a sub-agent row in the rail panel now opens its transcript in a modal, rendered with the same `ConversationThread` as the main conversation, including thinking blocks and tool cards. A sub-agent's own sub-agents push onto a breadcrumb inside that modal.
+    *   The entire rail card is now a single click target, including the result preview.
+    *   Sub-agent rows and agent-to-agent messages now include timestamps. Live sub-agents are dated by when they started, and finished ones by when they ended.
+    *   Liveness indicators on the rail panel now spin to show active progress.
+    *   `GET /stream/sessions` now provides live updates for the sidebar.
+*   **Top-level `wick_agent_*` tools**: Sub-agent connector operations are now surfaced as top-level `wick_agent_<op>` tools (e.g., `wick_agent_delegate`, `wick_agent_collect`). This reduces the tool call hop count from two to one, preventing models from drifting to provider-native multi-agent features.
+
+### Changed
+*   Async sub-agent results now arrive labelled as a sub-agent (source `subagent`) with the agent's handle and elapsed time, rather than looking like the user typed them.
+*   Sub-agent sessions are now pre-titled from their task instead of showing a generic placeholder.
+*   Sub-agent delegations no longer block the caller by default; an unstated mode now resolves to `background` (async), returns a `delegation_id`, and wakes the leader via the session sink when the result lands. `foreground` (sync) is now an opt-in for short lookups. Existing roles were migrated to `background` by default, except for `evidence-checker` and `client-response-drafter`.
+*   The immutable prompt served to agents has been split into three audience-specific files (`immutable.md`, `immutable_main.md`, `immutable_subagent.md`). This reduces a sub-agent's immutable prompt from ~7.3k to ~2.6k tokens by removing irrelevant instructions.
+
+### Fixed
+*   **A mention could be dispatched twice**: The router now runs in the send path and appends a `[routed]` marker, which the leader reads before the message and renders as a "Routed to @name" chip, preventing duplicate delegation.
+*   **Wick provider: sub-agents on a live model set could fail to spawn**: The sticky default model is now resolved on every branch for live model sets. An entry that cannot resolve to a concrete model ID is skipped with a message pointing at Providers → Wick, preventing "model is empty" errors from vendor SDKs.
+*   **A dismissed autocomplete menu could reappear**: Autocomplete dismissals are now remembered against the trigger position, preventing the popup from reappearing until a fresh trigger is detected.
+*   **Delegation not surfaced without a page reload**: The Sub-agents rail roster now refreshes immediately on `wick_delegate` / `wick_delegate_collect` tool events. A spinning ring on the rail tab now indicates active sub-agent work.
+*   **Boot markers not persisting**: One-shot boot markers for seeded roles and background-default migration are now properly declared as hidden config rows, ensuring they persist across restarts and preventing re-running on every boot.
+*   **Multi-agent work drifting outside Wick**: Codex multi-agent features are now disabled by default for Wick spawns (`-c features.multi_agent=false`) to ensure that all multi-agent orchestration is managed by Wick's sub-agents surface or mentions, preventing unmanaged child agents and hangs.
+*   **Minor fixes**: A semicolon in a `wick:"desc=..."` tag no longer truncates max_tokens' description, and a `report_result` path now fails closed when the delegation service is unavailable.
+
+---
+
 
 ## [v0.36.0](https://github.com/yogasw/wick/compare/v0.35.3...v0.36.0) — Agents & Connectors
 
