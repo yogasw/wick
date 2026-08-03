@@ -13,6 +13,8 @@
  * inline <script> in layout.templ and are NOT duplicated here.
  */
 
+import { statusDotClass, effectiveStatus, applyEvent, type DotState } from "./statusDot.js";
+
 function resolveBase(): string {
   const el = document.querySelector<HTMLElement>("[data-base]");
   if (el?.dataset["base"]) {
@@ -98,25 +100,6 @@ function wireDragToMove(): void {
   });
 }
 
-/* statusDotClass mirrors view.StatusDotClass in layout.templ — the server
-   renders the first paint, this re-renders the same node from live events.
-   Change both together. */
-function statusDotClass(lifecycle: string): string {
-  const base = "ml-2 shrink-0 rounded-full";
-  switch (lifecycle) {
-    case "working":
-      return `${base} h-3 w-3 border-2 border-green-500 border-t-transparent animate-spin`;
-    case "spawning":
-      return `${base} h-3 w-3 border-2 border-amber-400 border-t-transparent animate-spin`;
-    case "queued":
-      return `${base} h-1.5 w-1.5 bg-orange-500 animate-pulse`;
-    case "idle":
-      return `${base} h-1.5 w-1.5 bg-blue-400`;
-    default:
-      return `${base} hidden`;
-  }
-}
-
 /* Live sidebar liveness.
 
    Without this the spinners are a snapshot of whatever was running when
@@ -136,9 +119,15 @@ function wireLiveStatus(): void {
   if (document.querySelectorAll("[data-session-dot]").length === 0) {
     return;
   }
+  // Per-row state, because a row has two independent halves: its own
+  // process and its sub-agents'. Collapsing them into the single string
+  // the dot renders would mean a leader's "idle" event erased a running
+  // sub-agent's marker — the exact moment that marker is the only thing
+  // left worth showing.
+  const rows = new Map<string, DotState>();
   const es = new EventSource(`${base}/stream/sessions`, { withCredentials: true });
   es.addEventListener("session", (e) => {
-    let ev: { session_id?: string; lifecycle?: string };
+    let ev: { session_id?: string; lifecycle?: string; sub_agent?: string };
     try {
       ev = JSON.parse((e as MessageEvent).data as string);
     } catch {
@@ -147,6 +136,8 @@ function wireLiveStatus(): void {
     if (!ev.session_id) {
       return;
     }
+    const next = applyEvent(rows.get(ev.session_id), ev);
+    rows.set(ev.session_id, next);
     const dot = document.querySelector<HTMLElement>(
       `[data-session-dot="${CSS.escape(ev.session_id)}"]`,
     );
@@ -154,10 +145,7 @@ function wireLiveStatus(): void {
     // Nothing to do — the row will render with the right state whenever
     // it does appear.
     if (dot) {
-      // "killed" is the pool tearing a finished process down, not a
-      // state worth a colour: it would leave a stale marker on a row
-      // that is simply done.
-      dot.className = statusDotClass(ev.lifecycle === "killed" ? "" : (ev.lifecycle ?? ""));
+      dot.className = statusDotClass(effectiveStatus(next));
     }
   });
   window.addEventListener("pagehide", () => es.close());
