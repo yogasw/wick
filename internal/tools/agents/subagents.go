@@ -316,6 +316,26 @@ func resetHopsForSession(c *tool.Ctx, sessionID string) {
 	}
 }
 
+// humanMentionNote is the line appended to a person's message telling the
+// leader which of its mentions wick is taking.
+//
+// Synchronous on purpose, and cheap on purpose: it only resolves the
+// roster, so it costs two queries and never a spawn. The dispatch itself
+// still runs detached below — a role whose default mode is sync would
+// otherwise hold the person's POST open for the whole sub-agent run.
+func humanMentionNote(ctx context.Context, sess session.Session, sessionID, text string) string {
+	if globalDelegation == nil || globalDelegation.Repo == nil || strings.TrimSpace(text) == "" {
+		return ""
+	}
+	return globalDelegation.PreRouteNote(ctx, delegation.RouteInput{
+		SessionID:  sessionID,
+		ProjectID:  sess.Meta.ProjectID,
+		FromHandle: entity.LeaderHandle,
+		Human:      true,
+		Text:       text,
+	})
+}
+
 // routeHumanMentions acts on @names a PERSON wrote in a session.
 //
 // Runs detached and best-effort: routing is a side channel, and the

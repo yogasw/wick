@@ -1465,7 +1465,17 @@ func sendMessage(c *tool.Ctx) {
 	// inheriting c.Context() would SIGKILL claude.exe the moment the
 	// response returns. Copy request_id over so logs still correlate.
 	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
-	if err := globalPool.SendWithAttachments(bgCtx, id, agentName, "ui", "user", req.Text, "", atts); err != nil {
+	// The person's words are never rewritten, but the leader is told, in
+	// the same message and before it reads them, which mentions wick is
+	// dispatching itself. Routing runs detached below, so without this
+	// marker the leader sees a bare "@investigator ..." with no sign that
+	// anything started and delegates it a second time — the work then runs
+	// twice, which is the one thing the router exists to prevent.
+	text := req.Text
+	if note := humanMentionNote(bgCtx, sess, id, req.Text); note != "" {
+		text = req.Text + "\n\n" + note
+	}
+	if err := globalPool.SendWithAttachments(bgCtx, id, agentName, "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("pool send %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

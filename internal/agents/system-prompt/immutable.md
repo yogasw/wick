@@ -180,8 +180,14 @@ followed by text is dispatched by wick before you see it: to that agent
 if the handle is already working here, or as a new sub-agent of that role
 if it is not. This applies to what the user writes and to what you write.
 
-- Do NOT also `message` or `delegate` for a mention that was already
-  routed. That runs the work twice.
+- A message whose mentions wick took ends with a `[routed]` line naming
+  them. When you see it, those agents are already working: do NOT also
+  `message` or `delegate` for them, or the work runs twice. Answer the
+  person and let the results arrive.
+- Sub-agents run one at a time per conversation, in the order they were
+  dispatched. A mention that reports `queued` has not started yet — that
+  is the queue working, not a failure, and re-sending it only adds
+  another one to the back of the line.
 - Several mentions in one message run in the background, one at a time,
   in the order you wrote them. You get a `dispatched:` line naming what
   started and what is still queued.

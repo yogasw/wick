@@ -180,6 +180,81 @@ func TestRouteIsSilentOnUnknownTokens(t *testing.T) {
 	}
 }
 
+// The marker is what stops the leader dispatching a mention wick has
+// already taken. It must name the mention WITHOUT starting anything —
+// the send path runs it, and a spawn there would block the person's POST.
+func TestPreRouteNoteNamesMentionsWithoutDispatching(t *testing.T) {
+	s, r := routerService(t)
+	ctx := context.Background()
+	seedLiveWorker(t, r)
+
+	note := s.PreRouteNote(ctx, RouteInput{
+		SessionID: "parent", FromHandle: entity.LeaderHandle, Human: true,
+		Text: "@researcher find the changelog\n@worker what have you got?",
+	})
+
+	if !strings.HasPrefix(note, RoutedMarker) {
+		t.Fatalf("note = %q, want it to open with %q", note, RoutedMarker)
+	}
+	for _, want := range []string{"@researcher", "@worker"} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("note = %q, want it to name %s", note, want)
+		}
+	}
+
+	rows, err := r.ListByRoot(ctx, "root-1")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	// Only the two seeded rows: the note must not have spawned anything.
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want the 2 seeded ones — the note dispatched something", len(rows))
+	}
+	msgs, err := r.ListThread(ctx, "root-1", 10)
+	if err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("messages = %+v, want none", msgs)
+	}
+}
+
+// Nothing to say, nothing appended: an ordinary message must reach the
+// leader exactly as the person wrote it.
+func TestPreRouteNoteIsEmptyWhenNothingResolves(t *testing.T) {
+	s, _ := routerService(t)
+	ctx := context.Background()
+
+	for _, in := range []string{
+		"how is the deploy going?",
+		"@nobody-at-all please help",
+		"mail me at researcher@abc.com about it",
+		"",
+	} {
+		if got := s.PreRouteNote(ctx, RouteInput{
+			SessionID: "parent", FromHandle: entity.LeaderHandle, Human: true, Text: in,
+		}); got != "" {
+			t.Fatalf("%q produced %q, want no marker", in, got)
+		}
+	}
+}
+
+// The kill switch has to silence the marker too, or a leader told not to
+// dispatch would leave the work undone.
+func TestPreRouteNoteIsEmptyWhenTheRouterIsOff(t *testing.T) {
+	s, _ := routerService(t)
+	lim := s.Limits
+	lim.MentionRouter = false
+	s.Limits = lim
+
+	if got := s.PreRouteNote(context.Background(), RouteInput{
+		SessionID: "parent", FromHandle: entity.LeaderHandle, Human: true,
+		Text: "@researcher find the changelog",
+	}); got != "" {
+		t.Fatalf("note = %q, want none while the router is off", got)
+	}
+}
+
 func TestFormatDispatches(t *testing.T) {
 	got := FormatDispatches([]Dispatch{
 		{Token: "log-investigator", Kind: TargetRole, DelegationID: "D-7f3a"},

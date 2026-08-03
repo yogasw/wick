@@ -496,7 +496,17 @@ The name resolves in one order, and the order matters:
 
 A live agent always wins. Otherwise "@code-investigator follow up on that" would start a fresh agent with no memory of the thing it was asked to follow up on.
 
-Both people and agents can mention. Whoever wrote it gets a short report of what actually started:
+Both people and agents can mention. When a person's message carries one, the leader is told so in the same message, before it reads it:
+
+```text
+@history-player-a run the bash check
+
+[routed] wick is dispatching @history-player-a for the message above. Do not delegate or message them again for it — that runs the work twice.
+```
+
+The conversation shows that line as a small **Routed to @history-player-a** chip under the message rather than as text. Without it the leader sees a bare mention, has no way to know the work already started, and dispatches it a second time.
+
+Whoever wrote the mention gets a short report of what actually started:
 
 ```text
 dispatched: @log-investigator (running, d-7f3a) · @docs-investigator (queued #1, d-7f3b)

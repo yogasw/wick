@@ -95,6 +95,54 @@ func (s *Service) Route(ctx context.Context, in RouteInput) []Dispatch {
 	return out
 }
 
+// RoutedMarker opens the line appended to a message whose mentions wick
+// is dispatching itself.
+const RoutedMarker = "[routed]"
+
+// PreRouteNote reports which mentions in a piece of text wick will act on,
+// WITHOUT acting on them.
+//
+// Ordering is the whole point. Route runs detached, after the message has
+// already been handed to the leader, so a leader reading "@investigator
+// check the 401s" has no evidence that anything happened and does the
+// obvious thing — it delegates. The work then runs twice, which is
+// exactly what the router exists to avoid. Two roster queries and no
+// spawn are cheap enough to run in the send path, and they are what makes
+// "mentions are acted on for you" true at the moment the leader reads it.
+func (s *Service) PreRouteNote(ctx context.Context, in RouteInput) string {
+	if s == nil || s.Repo == nil || !s.limits().MentionRouter {
+		return ""
+	}
+	if strings.TrimSpace(in.Text) == "" {
+		return ""
+	}
+	res, err := s.NewResolver(ctx, s.RootForSession(ctx, in.SessionID), in.ProjectID)
+	if err != nil {
+		log.Warn().Err(err).Str("session", in.SessionID).
+			Msg("delegation: routed marker skipped; roster unavailable")
+		return ""
+	}
+
+	seen := map[string]bool{}
+	tokens := make([]string, 0, 2)
+	for _, m := range ParseMentions(in.Text, res.AllNames()) {
+		// Same exclusions Route applies, so the note never promises a
+		// dispatch that will then be refused: an unknown token is plain
+		// text, and an author cannot address itself.
+		if res.Resolve(m.Handle).Kind == TargetUnknown || m.Handle == in.FromHandle || seen[m.Handle] {
+			continue
+		}
+		seen[m.Handle] = true
+		tokens = append(tokens, "@"+m.Handle)
+	}
+	if len(tokens) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(
+		"%s wick is dispatching %s for the message above. Do not delegate or message them again for it — that runs the work twice. Their results arrive in this thread on their own.",
+		RoutedMarker, strings.Join(tokens, ", "))
+}
+
 // routeToAgent delivers a mention addressed to a live instance.
 //
 // Always `tell`, never `ask`: an ask blocks its sender, and the sender
