@@ -13,6 +13,7 @@ import (
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
+	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/entity"
 )
 
@@ -90,8 +91,17 @@ type ChildSpec struct {
 	SessionID string
 	AgentName string
 	Profile   *entity.AgentProfile
-	Task      string
-	Context   string
+	// Target is the resolved provider instance + model this child runs on
+	// (see resolveChildTarget). Already carries the role's own pin, or the
+	// parent conversation's, or the project's — the runner must use this
+	// rather than re-reading Profile.Provider/Model, which is only the
+	// first candidate in that chain.
+	//
+	// Empty Provider means nothing in the chain named one; the spawn path
+	// then applies its own per-type default.
+	Target provider.RunTarget
+	Task   string
+	Context string
 	// MCPToken is the SCOPED token minted for this child. It
 	// authenticates as the triggering human with an already-narrowed tag
 	// set. It must never be the global internal token, which would make
@@ -181,6 +191,13 @@ type Service struct {
 	// paths can be reduced to filenames in a draft. nil = paths are left
 	// as written.
 	ProjectRoot func(ctx context.Context, projectID string) string
+	// SessionTarget reports which provider+model a session is running on,
+	// so a sub-agent whose role names none inherits its parent's rather
+	// than jumping to a global default. nil = no session inheritance.
+	SessionTarget SessionRunTarget
+	// ProjectTarget reports a project's default provider+model, the last
+	// step of the inheritance chain. nil = no project inheritance.
+	ProjectTarget ProjectRunTarget
 
 	// mu guards inflight and slotWaiters.
 	mu sync.Mutex
@@ -505,10 +522,22 @@ func (s *Service) execute(
 	runCtx, cancel := context.WithCancel(baseCtx)
 	s.trackInflight(id, cancel)
 
+	// Resolved here rather than in the runner: the parent session and the
+	// project are known at this level, and the runner should be handed a
+	// decision rather than the inputs to one.
+	target := resolveChildTarget(profile, row.ParentSessionID, row.ProjectID, s.SessionTarget, s.ProjectTarget)
+	log.Debug().
+		Str("delegation", id).
+		Str("child_session", childSessionID).
+		Str("provider", target.Provider).
+		Str("model", target.ModelID).
+		Msg("delegation: resolved child run target")
+
 	spec := ChildSpec{
 		SessionID:     childSessionID,
 		AgentName:     row.ChildAgent,
 		Profile:       profile,
+		Target:        target,
 		Task:          composeTask(row.Task, row.ContextText, s.spawnPreamble(ctx, row)),
 		Context:       row.ContextText,
 		MCPToken:      token,

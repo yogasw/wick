@@ -377,6 +377,10 @@ export type ProjectOption = {
   managed: boolean;
   pinned: boolean;
   defaultProvider?: string;
+  /** Model pinned on defaultProvider, in that instance's own id space (for
+      wick, "<entryID>@<vendorModelID>"). Only meaningful together with
+      defaultProvider — a model id does not resolve on its own. */
+  defaultModel?: string;
 };
 
 /** One message between two agents inside a delegation tree. */

@@ -153,3 +153,31 @@ func TestPickModel_NoRunnableModel(t *testing.T) {
 		t.Fatalf("got %+v, want ok=false when no entry resolves to a model id", m)
 	}
 }
+
+// liveSetPick is the spawn path's half of the "which model does a live set
+// default to" rule. It must agree with the picker UI's markLiveSetDefault,
+// or wick runs a different model than the UI shows as default.
+func TestLiveSetPick(t *testing.T) {
+	list := []DiscoveredModel{{ID: "first"}, {ID: "second"}, {ID: "third"}}
+
+	if got := liveSetPick(list, "second"); got != "second" {
+		t.Errorf("sticky pin present: got %q, want second", got)
+	}
+	// A pin that has vanished from the vendor list must not win — it would
+	// resolve to a model the vendor no longer serves.
+	if got := liveSetPick(list, "retired-model"); got != "first" {
+		t.Errorf("vanished pin: got %q, want the top of the list", got)
+	}
+	// No sticky default: this is the prod case that used to fail outright.
+	if got := liveSetPick(list, ""); got != "first" {
+		t.Errorf("no pin: got %q, want the top of the list", got)
+	}
+	if got := liveSetPick(list, "   "); got != "first" {
+		t.Errorf("whitespace pin: got %q, want the top of the list", got)
+	}
+	// Nothing discovered is nothing to run; the caller reports the original
+	// configuration error rather than inventing a model.
+	if got := liveSetPick(nil, "anything"); got != "" {
+		t.Errorf("empty list: got %q, want empty", got)
+	}
+}

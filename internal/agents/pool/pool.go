@@ -728,34 +728,61 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	// Channels like Slack auto-create sessions without going through the
 	// UI flow that would call AddAgent, so agents.json stays [] and
 	// CLISessionID is never written — breaking --resume on respawn.
+	// An entry that exists but names NO provider needs the same treatment as
+	// a missing one. Without this, a blank provider fell straight through to
+	// factory.go's per-type default, silently landing the spawn on claude no
+	// matter what the project asked for — and there was no way to tell that
+	// from a deliberate choice.
 	hasEntry := false
+	blankProvider := false
 	for _, a := range sess.Agents {
 		if a.Name == agentName {
 			hasEntry = true
+			blankProvider = strings.TrimSpace(a.Provider) == ""
 			break
 		}
 	}
-	if !hasEntry {
-		// Provider precedence for a fresh agent entry: the session's project
-		// default → the global default → (empty →) the per-type claude
-		// default in factory.go. Channels create sessions without going
-		// through the UI's AddAgent, so this is the only place a channel
-		// spawn picks up the project's configured provider — without it the
-		// bind always fell through to the global/claude default.
+	if !hasEntry || blankProvider {
+		// Provider precedence: the session's project default → the global
+		// default → (empty →) the per-type claude default in factory.go.
+		// Channels create sessions without going through the UI's AddAgent,
+		// so this is the only place a channel spawn picks up the project's
+		// configured provider.
+		//
+		// The project's model travels WITH its provider — a pin belongs to
+		// the instance it was chosen on, so taking one without the other
+		// resolves against the wrong model registry. The global default
+		// contributes no model (it is a bare instance key).
 		prov := p.cfg.DefaultProvider
+		provModel := ""
 		if sess.Meta.ProjectID != "" {
 			if proj, perr := project.Load(p.cfg.Layout, sess.Meta.ProjectID); perr == nil && proj.Meta.Defaults.Provider != "" {
 				prov = proj.Meta.Defaults.Provider
+				provModel = proj.Meta.Defaults.Model
 			}
 		}
-		if err := session.AddAgent(p.cfg.Layout, sessionID, agentName, prov); err != nil {
+		if hasEntry {
+			// Repair in place: AddAgent refuses a duplicate name, and the
+			// entry carries a resume id we must not discard.
+			if err := session.SetAgentProvider(p.cfg.Layout, sessionID, agentName, prov); err != nil {
+				return err
+			}
+		} else if err := session.AddAgent(p.cfg.Layout, sessionID, agentName, prov); err != nil {
 			return err
+		}
+		// Only write the inherited pin when the entry has none of its own:
+		// a session already pinned to a model keeps it, and an empty
+		// provModel must not blank an existing pin.
+		if provModel != "" {
+			if err := session.SetModelIDIfEmpty(p.cfg.Layout, sessionID, agentName, provModel); err != nil {
+				return err
+			}
 		}
 		sess, err = session.Load(p.cfg.Layout, sessionID)
 		if err != nil {
 			return err
 		}
-		if p.cfg.OnAgentAdded != nil {
+		if !hasEntry && p.cfg.OnAgentAdded != nil {
 			p.cfg.OnAgentAdded(sessionID)
 		}
 	}

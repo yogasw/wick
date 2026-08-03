@@ -428,12 +428,28 @@ func (h *handlers) createAgent(c *connector.Ctx) (any, error) {
 		systemPrompt = existing.SystemPrompt
 	}
 
-	provider := strings.TrimSpace(c.Input("provider"))
-	if provider == "" {
-		if existing != nil {
-			provider = existing.Provider
-		} else {
-			provider = "claude"
+	// Provider + model resolve as ONE unit, from a single level: an explicit
+	// pair from the call, else the existing role's pair, else the calling
+	// conversation's. Mixing levels would pair a provider with a model id
+	// from another instance's registry, which resolves to the wrong model or
+	// to none.
+	//
+	// Inheriting from the caller (rather than defaulting to "claude", as this
+	// did before) is the point: an agent asked to create a sub-agent has no
+	// way to know which instance the conversation runs on, so a hardcoded
+	// default silently moved new roles onto a different provider — and onto a
+	// different model — than the one the user was working with.
+	providerKey := strings.TrimSpace(c.Input("provider"))
+	model := strings.TrimSpace(c.Input("model"))
+	if providerKey == "" {
+		// Model alone cannot select a level: without a provider there is no
+		// registry to resolve it against, so it is dropped with the level.
+		model = ""
+		switch {
+		case existing != nil && strings.TrimSpace(existing.Provider) != "":
+			providerKey, model = existing.Provider, existing.Model
+		default:
+			providerKey, model = caller.providerKey, caller.modelID
 		}
 	}
 	name := strings.TrimSpace(c.Input("name"))
@@ -450,8 +466,8 @@ func (h *handlers) createAgent(c *connector.Ctx) (any, error) {
 		Key:          key,
 		Name:         name,
 		Description:  description,
-		Provider:     provider,
-		Model:        strings.TrimSpace(c.Input("model")),
+		Provider:     providerKey,
+		Model:        model,
 		SystemPrompt: systemPrompt,
 		// Narrowed against the caller's own tags, so an agent choosing a
 		// role's tool access can only ever pick a SUBSET of what the human

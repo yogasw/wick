@@ -116,6 +116,7 @@ describe("updateProject", () => {
       custom_path: "",
       preset: "default",
       provider: "claude",
+      model: "",
       system_addon: "",
     });
     expect(mockFetch).toHaveBeenCalledOnce();
@@ -125,6 +126,62 @@ describe("updateProject", () => {
     expect(opts.headers).toMatchObject({ "Content-Type": "application/json" });
     const body = JSON.parse(opts.body as string);
     expect(body.name).toBe("Updated");
+  });
+
+  // The model is what lets a project pin a wick live-set leaf rather than
+  // only an instance, so it has to reach the server.
+  it("sends the pinned model alongside the provider", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ status: "ok" }) });
+    const { updateProject } = await import("$lib/api.js");
+    await updateProject("proj-abc", {
+      name: "Updated",
+      icon: "",
+      description: "",
+      folder_mode: "managed",
+      custom_path: "",
+      preset: "default",
+      provider: "wick/x",
+      model: "set1@gemini-3.6-flash",
+      system_addon: "",
+    });
+    const [, opts] = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(opts.body as string);
+    expect(body.provider).toBe("wick/x");
+    expect(body.model).toBe("set1@gemini-3.6-flash");
+  });
+});
+
+describe("getProviderOptionModels", () => {
+  let cleanup: () => void;
+
+  beforeEach(() => {
+    cleanup = mockApp(BASE, "proj-abc");
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("expands one live set via the entry query param", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ models: [{ id: "gemini-3-pro", label: "Gemini 3 Pro" }] }),
+    });
+    const { getProviderOptionModels } = await import("$lib/api.js");
+    const models = await getProviderOptionModels("wick", "x", { entry: "set1" });
+    const [url] = mockFetch.mock.calls[0] as [string];
+    expect(url).toBe(`${BASE}/providers/options/wick/x/models?entry=set1`);
+    expect(models).toEqual([{ id: "gemini-3-pro", label: "Gemini 3 Pro" }]);
+  });
+
+  // A provider whose vendor is unreachable must not break the settings form;
+  // the picker shows no extra models instead.
+  it("returns an empty list when the request fails", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, text: async () => "boom" });
+    const { getProviderOptionModels } = await import("$lib/api.js");
+    expect(await getProviderOptionModels("wick", "x")).toEqual([]);
   });
 });
 
