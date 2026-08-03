@@ -152,6 +152,37 @@ Besides the basics, `create_agent` also takes:
 | `can_delegate` | Lets the role delegate and define roles of its own. Off by default: most roles should do their own work. |
 | `allow_take_over` | Lets a human send messages into this role's running sub-agents mid-run (see [Take-over](#take-over)). |
 | `mode` | `sync` (default, returns the answer to the caller) or `async` (returns immediately, delivers later). |
+| `workspace` | `shared` (default) or `worktree` for a private git worktree. Falls back to shared, with a note, on a project that is not a git repo. |
+| `icon` | A single emoji shown beside the role in lists. |
+| `max_tokens` | Token budget for one delegation of this role. `0` adds no cap of its own; the per-tree budget still applies. |
+| `disabled` | Keeps the role on record but hides it from every roster. A disabled role cannot be delegated to. |
+| `locked` | Freezes the role — see [Locking a role](#locking-a-role). One-way from MCP: an agent can lock, never unlock. |
+| `allowed_native_tools` | Comma-separated provider-native tool names. **Stored but not enforced today** — nothing forwards it to the spawn, so it does not restrict what the role can call. |
+| `strict_mcp` | Meant to drop the host's own MCP servers from the spawn. **Stored but not enforced today** — `WICK_STRICT_MCP` decides this globally, identically for every role. |
+
+Every field the web form has is reachable here, so an agent can define a
+role that is actually right rather than one it has to ask a human to
+finish. The two marked *not enforced* are the exception worth knowing:
+they save and read back, and nothing acts on them yet.
+
+## Locking a role
+
+A role you rely on can be frozen. Tick **Locked** on the role and save:
+from then on nothing edits or deletes it — not the web form, and not an
+agent calling `create_agent` over MCP. An agent that tries is told the
+role is locked and where to unlock it, rather than being left to retry the
+same call.
+
+Unlocking is a web-UI action, and only a web-UI action. Untick **Locked**
+and save; that save changes nothing else, so editing a locked role is
+deliberately two steps. An agent may lock a role it created, but it can
+never unlock one — otherwise the lock would guard nothing.
+
+Whoever can edit a role can lock and unlock it: an admin for a global
+role, anyone with access to the project for a project role. Locked also
+blocks **delete** — without that, a role could be removed and recreated
+under the same key with different behaviour, which is the very thing the
+lock exists to prevent.
 
 **A stopped sub-agent returns partial work, not an error.** That is deliberate: a tool error reads to a model as "that call failed, try again," which is the exact opposite of what someone who just clicked Stop wanted.
 
