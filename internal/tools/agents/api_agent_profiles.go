@@ -37,6 +37,9 @@ type AgentProfileItem struct {
 	CanDelegate        bool     `json:"can_delegate"`
 	AllowTakeOver      bool     `json:"allow_take_over"`
 	Disabled           bool     `json:"disabled"`
+	// Locked freezes the role: no edit, no delete, from any surface. Only
+	// this UI can clear it — MCP may set it, never unset it.
+	Locked bool `json:"locked"`
 }
 
 // leaderCapableProviders lists the providers that can act as a LEADER —
@@ -62,6 +65,7 @@ func profileToItem(p entity.AgentProfile) AgentProfileItem {
 		CanDelegate:        p.CanDelegate,
 		AllowTakeOver:      p.AllowTakeOver,
 		Disabled:           p.Disabled,
+		Locked:             p.Locked,
 	}
 }
 
@@ -267,6 +271,23 @@ func apiAgentProfileList(c *tool.Ctx) {
 	})
 }
 
+// lockGuardSave decides what a save may do to a role that is already
+// locked.
+//
+// unlockOnly=true means "keep every stored field and flip Locked to
+// false". Unlock and edit are deliberately two separate saves: if one
+// request could do both, the lock would stop being a guard and become a
+// single extra click on the way to the same change.
+func lockGuardSave(existing *entity.AgentProfile, reqLocked bool) (unlockOnly bool, err error) {
+	if existing == nil || !existing.Locked {
+		return false, nil
+	}
+	if reqLocked {
+		return false, delegation.CheckMutable(existing)
+	}
+	return true, nil
+}
+
 // apiAgentProfileSave handles POST /api/agent-profiles — create or update.
 func apiAgentProfileSave(c *tool.Ctx) {
 	if notReady(c) || !delegationReady(c) {
@@ -319,6 +340,25 @@ func apiAgentProfileSave(c *tool.Ctx) {
 		return
 	}
 
+	unlockOnly, lerr := lockGuardSave(existing, req.Locked)
+	if lerr != nil {
+		c.JSON(http.StatusConflict, map[string]string{"error": lerr.Error()})
+		return
+	}
+	// An unlock is applied to the STORED row, not to the submitted one:
+	// the form disables every other control while locked, but a hand-made
+	// request must not be able to ride along on the unlock.
+	if unlockOnly {
+		row := *existing
+		row.Locked = false
+		if err := globalDelegation.Repo.SaveProfile(c.Context(), &row); err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, profileToItem(row))
+		return
+	}
+
 	p := &entity.AgentProfile{
 		ID: req.ID, ProjectID: req.ProjectID,
 		Key: req.Key, Name: req.Name, Description: req.Description,
@@ -331,6 +371,7 @@ func apiAgentProfileSave(c *tool.Ctx) {
 		CanDelegate:        req.CanDelegate,
 		AllowTakeOver:      req.AllowTakeOver,
 		Disabled:           req.Disabled,
+		Locked:             req.Locked,
 	}
 	if existing != nil {
 		p.ID = existing.ID
@@ -377,6 +418,13 @@ func apiAgentProfileDelete(c *tool.Ctx) {
 	// The row's own scope decides who may remove it — the same rule the
 	// save path applies, via the same function.
 	if !requireProfileScope(c, existing.ProjectID) {
+		return
+	}
+	// Locked blocks delete too. If it did not, the lock would guard
+	// nothing: the role could be removed and recreated under the same key
+	// with different behaviour.
+	if err := delegation.CheckMutable(existing); err != nil {
+		c.JSON(http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
 	if err := globalDelegation.Repo.DeleteProfile(c.Context(), id); err != nil {
