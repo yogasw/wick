@@ -65,13 +65,13 @@ func TestEveryOperationIsDescribed(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"list_agents", "delegate", "collect", "create_agent", "tasks", "message", "reply", "stop", "list_access"} {
+	for _, want := range []string{"list_agents", "delegate", "collect", "report_result", "incident", "create_agent", "tasks", "message", "reply", "stop", "list_access"} {
 		if !seen[want] {
 			t.Fatalf("missing op %q", want)
 		}
 	}
-	if count != 9 {
-		t.Fatalf("got %d ops, want 9", count)
+	if count != 11 {
+		t.Fatalf("got %d ops, want 11", count)
 	}
 }
 
@@ -89,7 +89,9 @@ func TestOpsFailClosedWithoutService(t *testing.T) {
 		"message":      h.message,
 		"reply":        h.reply,
 		"stop":         h.stop,
-		"list_access":  h.listAccess,
+		"list_access":   h.listAccess,
+		"report_result": h.reportResult,
+		"incident":      h.incident,
 	} {
 		if _, err := fn(c); err == nil {
 			t.Fatalf("%s returned no error with delegation unconfigured", name)
@@ -105,6 +107,34 @@ func TestNilResolverIsTreatedAsUnavailable(t *testing.T) {
 	if err := d.ready(); err == nil {
 		t.Fatal("a resolver that yields nil must report unavailable")
 	}
+}
+
+// A mode the model cannot discover is a mode it will never use. Both
+// surfaces that accept one must name every value, since there is nowhere
+// else for a caller to learn them.
+func TestMemoryModeIsAdvertisedWithEveryValue(t *testing.T) {
+	for _, opKey := range []string{"delegate", "create_agent"} {
+		op := findOp(t, opKey)
+		field, ok := fieldByName(op, "memory_mode")
+		if !ok {
+			t.Fatalf("op %q has no memory_mode input", opKey)
+		}
+		for _, want := range delegation.MemoryModes() {
+			if !strings.Contains(field, want) {
+				t.Fatalf("op %q memory_mode description omits %q: %s", opKey, want, field)
+			}
+		}
+	}
+}
+
+// fieldByName returns an op input's description by field key.
+func fieldByName(op *connector.Operation, key string) (string, bool) {
+	for _, f := range op.Input {
+		if f.Key == key {
+			return f.Description, true
+		}
+	}
+	return "", false
 }
 
 // findOp returns the named operation from the module, or fails the test.

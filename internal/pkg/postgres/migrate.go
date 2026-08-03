@@ -79,6 +79,11 @@ func Migrate(db *gorm.DB) {
 		&entity.AgentBoard{},
 		&entity.AgentTask{},
 		&entity.AgentMessage{},
+		// Incident state: what a delegation tree has established, and the
+		// quoted evidence behind it. Created lazily, so most trees never
+		// write a row here.
+		&entity.AgentIncident{},
+		&entity.AgentEvidence{},
 	)
 	if err != nil {
 		log.Fatal().Msgf("failed to run migration: %s", err.Error())

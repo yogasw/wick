@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/agents/delegation"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
@@ -47,6 +49,14 @@ type SubAgentItem struct {
 	// while it is queued or running, which is exactly how the UI tells
 	// "finished 5m ago" apart from "started 5m ago".
 	EndedAt string `json:"ended_at,omitempty"`
+	// QueuePosition is the 1-based place this delegation holds in its
+	// tree's waiting line, 0 when it is not queued. Computed server-side
+	// so the panel never has to infer ordering from timestamps it may
+	// have received out of order.
+	QueuePosition int `json:"queue_position,omitempty"`
+	// Envelope is the sub-agent's structured answer, when it finished.
+	// Absent while it is still working.
+	Envelope *delegation.ResultEnvelope `json:"envelope,omitempty"`
 }
 
 // subAgentLabelRunes caps the task preview shown in the panel.
@@ -104,9 +114,56 @@ func sessionSubAgents(c *tool.Ctx) {
 		if d.EndedAt != nil && !d.EndedAt.IsZero() {
 			item.EndedAt = d.EndedAt.UTC().Format("2006-01-02T15:04:05Z07:00")
 		}
+		item.Envelope = delegation.EnvelopeOf(&d)
+		if d.Status == entity.DelegationQueued {
+			// Only queued rows are queried: QueuePosition costs a row read
+			// plus a count, and running rows always answer 0.
+			if pos, perr := globalDelegation.Repo.QueuePosition(c.Context(), d.RootID, d.ID); perr == nil {
+				item.QueuePosition = pos
+			}
+		}
 		items = append(items, item)
 	}
-	c.JSON(http.StatusOK, map[string]any{"subagents": items})
+	out := map[string]any{"subagents": items}
+	if inc := sessionIncident(c, id); inc != nil {
+		out["incident"] = inc
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// IncidentSummary is the compact incident header the rail shows above the
+// agent list. Deliberately not the whole record: the panel answers "is
+// this an investigation, and how is it going", and the full state belongs
+// to whoever opens it.
+type IncidentSummary struct {
+	Status        string `json:"status"`
+	Iteration     int    `json:"iteration"`
+	Summary       string `json:"summary"`
+	StopReason    string `json:"stop_reason,omitempty"`
+	EvidenceCount int    `json:"evidence_count"`
+}
+
+// sessionIncident returns the tree's incident header, or nil when this
+// conversation has no investigation — which is most of them.
+func sessionIncident(c *tool.Ctx, sessionID string) *IncidentSummary {
+	root := rootForSession(c.Context(), sessionID)
+	if root == "" {
+		return nil
+	}
+	inc, err := globalDelegation.IncidentForRoot(c.Context(), root)
+	if err != nil || inc == nil {
+		return nil
+	}
+	n, err := globalDelegation.CountEvidence(c.Context(), inc.ID)
+	if err != nil {
+		log.Ctx(c.Context()).Debug().Err(err).Str("incident", inc.ID).
+			Msg("subagents: evidence count failed")
+	}
+	return &IncidentSummary{
+		Status: inc.Status, Iteration: inc.Iteration,
+		Summary: truncateRunes(inc.Summary, 240), StopReason: inc.StopReason,
+		EvidenceCount: n,
+	}
 }
 
 // interruptSubAgent handles POST /api/delegations/{delegationID}/interrupt.
@@ -257,6 +314,30 @@ func resetHopsForSession(c *tool.Ctx, sessionID string) {
 		log.Ctx(c.Context()).Warn().Err(err).Str("root", root).
 			Msg("subagents: hop reset failed")
 	}
+}
+
+// routeHumanMentions acts on @names a PERSON wrote in a session.
+//
+// Runs detached and best-effort: routing is a side channel, and the
+// message it rode in on has already been delivered. A dispatch that fails
+// must never turn a person's message into an error.
+//
+// The human's own text is never edited, so the leader still sees exactly
+// what was typed even when a mention took the work elsewhere.
+func routeHumanMentions(ctx context.Context, sess session.Session, sessionID, text string) {
+	if globalDelegation == nil || globalDelegation.Repo == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	go globalDelegation.Route(ctx, delegation.RouteInput{
+		SessionID:  sessionID,
+		ProjectID:  sess.Meta.ProjectID,
+		FromHandle: entity.LeaderHandle,
+		Human:      true,
+		Text:       text,
+		// A human turn is attributed to the session's owner, which is what
+		// the sub-agent's tool access is then narrowed from.
+		TriggeredBy: sess.Meta.UserID,
+	})
 }
 
 // sessionMessages returns the agent-to-agent thread for a session's tree.

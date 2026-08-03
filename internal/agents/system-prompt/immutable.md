@@ -141,6 +141,13 @@ steps would flood this conversation. `wick_get "sub-agents"` →
   own, so a role can only ever reach LESS than you — tighten it when a
   role has no business with your full toolset.
 
+When YOU are the sub-agent, finish by calling `report_result`: summary,
+findings, quoted evidence (a source and an excerpt someone else could
+check), and confidence. Then close with a SHORT message — do not repeat
+the report as prose. Skipping the call records your closing message with
+confidence `unknown`, which tells the caller your findings were never
+actually asserted.
+
 Read the `status` on every result:
 
 - `done` — complete answer, use it.
@@ -168,11 +175,22 @@ so do not re-explain it.
   answer, which is rarely the answer the asker wanted.
 - `stop` ends another agent's work here and returns what it had so far.
 
-When the USER writes `@name` in their message, they are naming an agent
-and asking for it, not describing one. Use it: `message` it if that
-handle is already running here, otherwise `delegate` to the role of that
-name. Do the work yourself only if the name resolves to nothing — say so
-rather than silently substituting your own answer.
+**Mentions are acted on for you.** A line that STARTS with `@name`
+followed by text is dispatched by wick before you see it: to that agent
+if the handle is already working here, or as a new sub-agent of that role
+if it is not. This applies to what the user writes and to what you write.
+
+- Do NOT also `message` or `delegate` for a mention that was already
+  routed. That runs the work twice.
+- Several mentions in one message run in the background, one at a time,
+  in the order you wrote them. You get a `dispatched:` line naming what
+  started and what is still queued.
+- A name that matches no handle and no role is left as plain text and
+  nothing happens. If the user meant an agent, say the name resolves to
+  nothing rather than silently answering as though they had asked you.
+- Write `@name` mid-sentence, or inside a code fence, when you mean the
+  literal text — only a line that begins with it is treated as an
+  instruction.
 
 ### Session connectors (`wick_session_workspace`)
 

@@ -30,7 +30,7 @@
   import { listComposerCommands, type ComposerApiCommand } from "../api/composer.js";
   import { getProcesses, killProcess, dequeueProcess, liveProcesses as filterLiveProcesses } from "../api/processes.js";
   import {
-    getSubAgents,
+    getSubAgentPanel,
     interruptSubAgent,
     interruptAllSubAgents,
     liveSubAgents,
@@ -40,7 +40,7 @@
   import { isSubAgentWorking } from "../lifecycleCls.js";
   import SubAgentPanel from "./SubAgentPanel.svelte";
   import SubAgentModal from "./SubAgentModal.svelte";
-  import type { AgentMessageItem, SubAgentItem } from "../types/agents.js";
+  import type { AgentMessageItem, IncidentSummary, SubAgentItem } from "../types/agents.js";
   import {
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
     duplicateWorkspace, renameWorkspace, removeWorkspace,
@@ -317,6 +317,9 @@
 
   /* ── sub-agents panel state ───────────────────────────────────── */
   let subAgents = $state<SubAgentItem[]>([]);
+  // The tree's investigation record, when it has one. null for an
+  // ordinary conversation, which is most of them.
+  let incident = $state<IncidentSummary | null>(null);
   // Which child's transcript the inspector modal is showing. null = closed.
   let selectedSubAgent = $state<string | null>(null);
   let subAgentsInFlight = false;
@@ -526,8 +529,8 @@
       return;
     }
     subAgentsInFlight = true;
-    run(getSubAgents(base, sessionId).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => { subAgents = res; })
+    run(getSubAgentPanel(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { subAgents = res.subAgents; incident = res.incident; })
       .catch((e: unknown) => toastError(`Sub-agents: ${e instanceof Error ? e.message : String(e)}`))
       .finally(() => {
         subAgentsInFlight = false;
@@ -1557,6 +1560,7 @@
         />
       {:else if railTab === "subagents"}
         <SubAgentPanel
+          {incident}
           {subAgents}
           selectedId={selectedSubAgent}
           onSelect={(cid) => { selectedSubAgent = selectedSubAgent === cid ? null : cid; }}
@@ -1693,6 +1697,7 @@
             />
           {:else if railTab === "subagents"}
             <SubAgentPanel
+              {incident}
               {subAgents}
               selectedId={selectedSubAgent}
               onSelect={(cid) => { selectedSubAgent = selectedSubAgent === cid ? null : cid; }}

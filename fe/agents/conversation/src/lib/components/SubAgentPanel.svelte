@@ -1,16 +1,21 @@
 <script lang="ts">
-  import type { AgentMessageItem, SubAgentItem } from "../types/agents.js";
+  import type { AgentMessageItem, IncidentSummary, SubAgentItem } from "../types/agents.js";
   import MessageThread from "./MessageThread.svelte";
   import {
     subAgentStatusCls,
     subAgentStatusLabel,
     isSubAgentLive,
     isSubAgentWorking,
+    confidenceCls,
+    confidenceLabel,
+    incidentStatusCls,
+    incidentStatusLabel,
   } from "../lifecycleCls.js";
   import { timeAgo, exactTime, shortDuration, parseEventTime } from "../timeFormat.js";
   import { now } from "../stores/now.js";
 
   type Props = {
+    incident?: IncidentSummary | null;
     subAgents: SubAgentItem[];
     selectedId: string | null;
     onSelect: (childSessionId: string) => void;
@@ -22,6 +27,7 @@
   };
 
   let {
+    incident = null,
     subAgents,
     selectedId,
     onSelect,
@@ -33,6 +39,33 @@
   }: Props = $props();
 
   const anyLive = $derived(subAgents.some((s) => isSubAgentLive(s.status)));
+
+  /* A room runs one sub-agent at a time, so the rail's job is to answer
+     "what is happening, what is next, what is done" in that order.
+     Grouping does it; a flat list sorted by time makes the reader
+     cross-reference status chips row by row to work out the same thing.
+
+     Queued rows are ordered by the server-computed position rather than
+     by timestamp: the panel must not re-derive an ordering it can be
+     told, especially from times it may have received out of order. */
+  const groups = $derived(
+    [
+      {
+        title: "Working",
+        rows: subAgents.filter((s) => s.status === "running"),
+      },
+      {
+        title: "Queued",
+        rows: subAgents
+          .filter((s) => s.status === "queued")
+          .sort((a, b) => (a.queue_position ?? 0) - (b.queue_position ?? 0)),
+      },
+      {
+        title: "Finished",
+        rows: subAgents.filter((s) => !isSubAgentLive(s.status)),
+      },
+    ].filter((g) => g.rows.length > 0),
+  );
 
   // Depth indent: 14px per level, matching the design doc. Capped so a
   // deep chain cannot push a row's text off a narrow rail.
@@ -77,13 +110,45 @@
     {/if}
   </div>
 
+  <!-- The investigation is the frame every row below sits in, so it goes
+       above the list rather than inside one card. Absent for an ordinary
+       conversation: a header on all of them would be noise that teaches
+       people to stop reading it. -->
+  {#if incident}
+    <div
+      data-testid="incident-header"
+      class="border-b border-white-300 dark:border-navy-600 px-4 py-3 space-y-1"
+    >
+      <div class="flex items-center gap-2">
+        <span class={"rounded px-1.5 py-0.5 text-[10px] font-medium " + incidentStatusCls(incident.status)}
+          >{incidentStatusLabel(incident.status)}</span>
+        <span class="text-[10px] text-black-700 dark:text-black-600">round {incident.iteration}</span>
+        <span class="text-[10px] text-black-700 dark:text-black-600"
+          >{incident.evidence_count} evidence</span>
+      </div>
+      {#if incident.summary}
+        <p class="text-[11px] text-black-800 dark:text-black-600 line-clamp-3">{incident.summary}</p>
+      {/if}
+      <!-- An investigation that stopped without saying why looks
+           identical to one still running. -->
+      {#if incident.stop_reason}
+        <p class="text-[10px] text-black-700 dark:text-black-600">stopped: {incident.stop_reason}</p>
+      {/if}
+    </div>
+  {/if}
+
   <div class="p-4 space-y-3">
     {#if subAgents.length === 0}
       <p class="text-xs text-black-700 dark:text-black-600 py-4 px-2">
         No sub-agents for this session.
       </p>
     {:else}
-      {#each subAgents as sub (sub.delegation_id)}
+      {#each groups as group (group.title)}
+      <p
+        data-testid="subagent-group"
+        class="px-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600"
+      >{group.title}</p>
+      {#each group.rows as sub (sub.delegation_id)}
         {@const ts = stamp(sub)}
         <div style={indentStyle(sub.depth)}>
           <!--
@@ -131,6 +196,15 @@
                 <span class={"rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0 " + subAgentStatusCls(sub.status)}
                   >{subAgentStatusLabel(sub.status)}</span
                 >
+                <!-- Position, and deliberately no estimate: an honest
+                     "starts in" is not available, and a dishonest one is
+                     worse than saying nothing. -->
+                {#if sub.status === "queued" && (sub.queue_position ?? 0) > 0}
+                  <span
+                    class="shrink-0 text-[10px] font-medium text-black-700 dark:text-black-600"
+                    title="Place in this conversation's queue"
+                  >#{sub.queue_position}</span>
+                {/if}
               </div>
               <!--
                 Stop is offered for queued rows too, not just running ones.
@@ -153,6 +227,23 @@
 
             <p class="text-[11px] text-black-800 dark:text-black-600 line-clamp-2">{sub.label}</p>
 
+            <!-- Confidence sits with the other facts about the run, not
+                 with the status chips: it describes the ANSWER, and a
+                 reader scanning for "can I act on this" reads it here
+                 alongside how long it took and what it cost. -->
+            {#if sub.envelope}
+              <div class="flex items-center gap-2">
+                <span
+                  class={"rounded px-1.5 py-0.5 text-[10px] font-medium " +
+                    confidenceCls(sub.envelope.structured ? sub.envelope.confidence : "")}
+                >{confidenceLabel(sub.envelope.confidence, sub.envelope.structured)}</span>
+                {#if sub.envelope.evidence?.length}
+                  <span class="text-[10px] text-black-700 dark:text-black-600"
+                    >{sub.envelope.evidence.length} evidence</span>
+                {/if}
+              </div>
+            {/if}
+
             <div class="flex items-center gap-2 text-[10px] text-black-700 dark:text-black-600">
               <span>{turnsLabel(sub)}</span>
               {#if sub.depth > 0}
@@ -172,6 +263,7 @@
             {/if}
           </div>
         </div>
+      {/each}
       {/each}
     {/if}
 

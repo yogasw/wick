@@ -130,6 +130,154 @@ describe("SubAgentPanel", () => {
     expect(screen.queryByText(/ago|running \d/)).toBeNull();
   });
 
+  // A room runs one sub-agent at a time. Reading the rail top-down should
+  // answer "what is happening, what is next, what is done" without
+  // cross-referencing status chips row by row.
+  test("rows are grouped Working, Queued, Finished", () => {
+    render(SubAgentPanel, {
+      props: props({
+        subAgents: [
+          subAgent({ delegation_id: "d-done", status: "done" }),
+          subAgent({
+            delegation_id: "d-queued",
+            status: "queued",
+            lifecycle: "",
+            queue_position: 2,
+          }),
+          subAgent({ delegation_id: "d-run", status: "running", lifecycle: "working" }),
+        ],
+      }),
+    });
+
+    const headings = screen
+      .getAllByTestId("subagent-group")
+      .map((el) => el.textContent?.trim());
+    expect(headings).toEqual(["Working", "Queued", "Finished"]);
+  });
+
+  // The position is the whole point of showing a queue: a leader that
+  // fanned out four investigators needs to see three of them have not
+  // started yet.
+  test("a queued row shows its place in line", () => {
+    render(SubAgentPanel, {
+      props: props({
+        subAgents: [
+          subAgent({ status: "queued", lifecycle: "", queue_position: 3, result: undefined }),
+        ],
+      }),
+    });
+    expect(screen.getByText("#3")).toBeTruthy();
+  });
+
+  // No time estimate anywhere: an honest one is not available, and a
+  // dishonest one is worse than nothing.
+  test("a queued row promises no start time", () => {
+    render(SubAgentPanel, {
+      props: props({
+        subAgents: [
+          subAgent({ status: "queued", lifecycle: "", queue_position: 1, result: undefined }),
+        ],
+      }),
+    });
+    expect(screen.queryByText(/starts in|eta|estimated/i)).toBeNull();
+  });
+
+  // Empty groups must not render their heading — three headings over one
+  // row reads as two things having gone missing.
+  test("a group with no rows shows no heading", () => {
+    render(SubAgentPanel, { props: props() });
+    const headings = screen
+      .getAllByTestId("subagent-group")
+      .map((el) => el.textContent?.trim());
+    expect(headings).toEqual(["Finished"]);
+  });
+
+  // Confidence is the first thing a reader checks before acting on a
+  // finding, so it has to be visible without opening the transcript.
+  test("a finished sub-agent shows its reported confidence", () => {
+    render(SubAgentPanel, {
+      props: props({
+        subAgents: [
+          subAgent({
+            envelope: {
+              summary: "401 spike traced to the retry path",
+              confidence: "high",
+              structured: true,
+              evidence: [{ kind: "log", source: "loki: app=abc", excerpt: "401 signature_invalid" }],
+            },
+          }),
+        ],
+      }),
+    });
+    expect(screen.getByText("High confidence")).toBeTruthy();
+  });
+
+  // An agent that never called report_result asserted nothing. That is a
+  // different state from "asserted, but unsure", and conflating them lets
+  // a supervisor act on findings nobody stood behind.
+  test("an unreported result is labelled Unreported, not Unknown", () => {
+    render(SubAgentPanel, {
+      props: props({
+        subAgents: [
+          subAgent({
+            envelope: { summary: "some prose", confidence: "unknown", structured: false },
+          }),
+        ],
+      }),
+    });
+    expect(screen.getByText("Unreported")).toBeTruthy();
+    expect(screen.queryByText(/confidence/i)).toBeNull();
+  });
+
+  test("a sub-agent with no envelope shows no confidence chip", () => {
+    render(SubAgentPanel, { props: props() });
+    expect(screen.queryByText(/confidence|unreported/i)).toBeNull();
+  });
+
+  // An investigation's state is the frame every row below it sits in, so
+  // it belongs above the list rather than buried in one card.
+  test("an investigation shows its status, round and evidence count", () => {
+    render(SubAgentPanel, {
+      props: props({
+        incident: {
+          status: "investigating",
+          iteration: 2,
+          summary: "401s on the abc.com webhook",
+          evidence_count: 5,
+        },
+      }),
+    });
+    expect(screen.getByText("Investigating")).toBeTruthy();
+    expect(screen.getByText(/round 2/i)).toBeTruthy();
+    expect(screen.getByText(/5 evidence/i)).toBeTruthy();
+    expect(screen.getByText(/401s on the abc.com webhook/)).toBeTruthy();
+  });
+
+  // Most conversations are not investigations. A header on all of them
+  // would be noise that teaches people to ignore it.
+  test("a conversation with no investigation shows no incident header", () => {
+    render(SubAgentPanel, { props: props() });
+    expect(screen.queryByTestId("incident-header")).toBeNull();
+  });
+
+  // A stopped investigation that does not say why is indistinguishable
+  // from one still running.
+  test("an escalated investigation shows why it stopped", () => {
+    render(SubAgentPanel, {
+      props: props({
+        incident: {
+          status: "escalated",
+          iteration: 5,
+          summary: "",
+          stop_reason: "iteration cap",
+          evidence_count: 3,
+        },
+      }),
+    });
+    expect(screen.getByText("Escalated")).toBeTruthy();
+    expect(screen.getByText(/iteration cap/)).toBeTruthy();
+  });
+
   // Stop sits on top of a card that opens the transcript. Letting the click
   // through would put a panel in front of the run you just ended.
   test("Stop interrupts without also opening the sub-agent", async () => {

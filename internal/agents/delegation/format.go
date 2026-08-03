@@ -44,13 +44,49 @@ func FormatInbound(msgs []entity.AgentMessage, roster []RosterEntry, b BudgetLin
 		fmt.Fprintf(&sb, "── from @%s %s ──\n%s\n\n", m.FromHandle, verb, strings.TrimSpace(m.Body))
 	}
 	if len(roster) > 0 {
-		parts := make([]string, 0, len(roster))
-		for _, r := range roster {
-			parts = append(parts, fmt.Sprintf("@%s (%s, %s)", r.Handle, r.Role, r.State))
-		}
-		fmt.Fprintf(&sb, "roster: %s\n", strings.Join(parts, " · "))
+		fmt.Fprintf(&sb, "roster: %s\n", rosterLine(roster))
 	}
 	sb.WriteString("left: " + b.String() + "\n")
+	return sb.String()
+}
+
+// rosterLine renders the address list. Shared with the spawn-time block
+// so the two cannot drift into different formats for the same thing.
+func rosterLine(roster []RosterEntry) string {
+	parts := make([]string, 0, len(roster))
+	for _, r := range roster {
+		parts = append(parts, fmt.Sprintf("@%s (%s, %s)", r.Handle, r.Role, r.State))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// FormatRosterBlock is what a sub-agent is told about its colleagues at
+// SPAWN time.
+//
+// Until this existed a fresh sub-agent learned the roster only when
+// somebody messaged it, so it never considered asking anyone anything —
+// the messaging ops were reachable and invisible at the same time.
+//
+// The snapshot is labelled as one, with the op that refreshes it named in
+// the same breath. That is the honest answer to the objection that a
+// roster goes stale: the problem is not the snapshot, it is a snapshot
+// presented as current.
+func FormatRosterBlock(roster []RosterEntry, spawnable []string, b BudgetLine) string {
+	if len(roster) == 0 && len(spawnable) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	if len(roster) > 0 {
+		sb.WriteString("roster (snapshot at spawn — call list_agents for the current list):\n")
+		sb.WriteString("  " + rosterLine(roster) + "\n")
+	}
+	if len(spawnable) > 0 {
+		// Keys only: a description would grow every spawn's prompt without
+		// changing the decision, and list_agents returns them on demand.
+		fmt.Fprintf(&sb, "spawnable roles: %s\n", strings.Join(spawnable, ", "))
+	}
+	sb.WriteString("left: " + b.String() + "\n")
+	sb.WriteString("Message a peer with the message op, or open a line with @handle at the start of a line.\n")
 	return sb.String()
 }
 

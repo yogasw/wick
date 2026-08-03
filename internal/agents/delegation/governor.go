@@ -17,9 +17,14 @@ import (
 // stopped_* status) is far cheaper than the failure mode of a too-high
 // one.
 const (
-	DefaultMaxDepth    = 3
-	DefaultRootBudget  = 40
-	DefaultMaxParallel = 4
+	DefaultMaxDepth   = 3
+	DefaultRootBudget = 40
+	// DefaultMaxParallel is 1: a conversation runs ONE sub-agent at a
+	// time and queues the rest. Several agents streaming into one room at
+	// once is unreadable and burns the tree's budget in parallel, while
+	// the cost of serial is waiting. The knob stays for operators who
+	// have the headroom and want throughput.
+	DefaultMaxParallel = 1
 	DefaultMaxTurns    = 12
 	// MaxTurnsCeiling caps what any single sub-agent may request, even
 	// when both the profile and the caller ask for more.
@@ -36,6 +41,16 @@ const (
 	// rather than a whole budget. Turn budget alone is a poor brake here:
 	// two agents can trade short messages cheaply for a long time.
 	DefaultMaxHops = 10
+	// DefaultMaxIterations bounds checker rounds per investigation.
+	DefaultMaxIterations = 5
+	// DefaultMaxRuntimeMinutes bounds an investigation by wall clock, for
+	// the case turn counting cannot catch: an agent that is slow rather
+	// than chatty.
+	DefaultMaxRuntimeMinutes = 20
+	// DefaultNoNewEvidenceRounds is 2, not 1. An investigation that comes
+	// up empty once and lands the next round is the normal case, and
+	// stopping at the first empty round throws the run away.
+	DefaultNoNewEvidenceRounds = 2
 )
 
 // Limits is the resolved governor configuration.
@@ -53,6 +68,25 @@ type Limits struct {
 	// MaxHops bounds consecutive agent-to-agent messages between human
 	// turns. Reset when a person speaks, never by an agent.
 	MaxHops int
+	// MaxIterations caps checker rounds for one investigation.
+	MaxIterations int
+	// MaxRuntimeMinutes caps an investigation by wall clock from the
+	// moment its incident was created.
+	MaxRuntimeMinutes int
+	// MinConfidence is the enum floor for producing a customer-facing
+	// draft: unknown | low | medium | high. An enum rather than a number
+	// because a decimal from a language model is false precision.
+	MinConfidence string
+	// NoNewEvidenceRounds is how many consecutive rounds may add nothing
+	// before the investigation stops.
+	NoNewEvidenceRounds int
+	// MentionRouter enables acting on @name at the start of a line.
+	//
+	// Deliberately NOT normalized: false is a real operator choice, so
+	// there is nothing here to "repair" the way a zero turn cap is
+	// repaired. Callers build Limits through DefaultLimits or the config
+	// provider, both of which set it explicitly.
+	MentionRouter bool
 	// Disabled is the global kill-switch. When true, every delegation is
 	// refused before anything spawns — the emergency stop and the
 	// staged-rollout lever.
@@ -69,6 +103,11 @@ func DefaultLimits() Limits {
 		MaxTokensPerDelegation: DefaultMaxTokensPerDelegation,
 		RootTokenBudget:        DefaultRootTokenBudget,
 		MaxHops:                DefaultMaxHops,
+		MentionRouter:          true,
+		MaxIterations:          DefaultMaxIterations,
+		MaxRuntimeMinutes:      DefaultMaxRuntimeMinutes,
+		MinConfidence:          ConfidenceMedium,
+		NoNewEvidenceRounds:    DefaultNoNewEvidenceRounds,
 	}
 }
 
@@ -87,6 +126,22 @@ func (l Limits) normalize() Limits {
 	}
 	if l.MaxTurnsCap <= 0 {
 		l.MaxTurnsCap = MaxTurnsCeiling
+	}
+	if l.MaxIterations <= 0 {
+		l.MaxIterations = DefaultMaxIterations
+	}
+	if l.MaxRuntimeMinutes <= 0 {
+		l.MaxRuntimeMinutes = DefaultMaxRuntimeMinutes
+	}
+	if l.NoNewEvidenceRounds <= 0 {
+		l.NoNewEvidenceRounds = DefaultNoNewEvidenceRounds
+	}
+	switch l.MinConfidence {
+	case ConfidenceLow, ConfidenceMedium, ConfidenceHigh:
+	default:
+		// Including "unknown": a gate that accepts an unvouched-for answer
+		// is not a gate.
+		l.MinConfidence = ConfidenceMedium
 	}
 	if l.MaxHops <= 0 {
 		l.MaxHops = DefaultMaxHops
@@ -115,7 +170,6 @@ const (
 	RefusedCycle       RefusalReason = "cycle"
 	RefusedBudget      RefusalReason = "budget"
 	RefusedTokenBudget RefusalReason = "token_budget"
-	RefusedParallel    RefusalReason = "max_parallel"
 	RefusedProfileGone RefusalReason = "profile_disabled"
 	// RefusedHops means agents have been messaging each other for too
 	// many consecutive turns with no human in the loop.
@@ -264,18 +318,11 @@ func (r *Repo) Admit(
 		}
 	}
 
-	active, err := r.CountActiveByRoot(ctx, rootID)
-	if err != nil {
-		return err
-	}
-	if int(active) >= lim.MaxParallel {
-		return &Refusal{
-			Reason: RefusedParallel,
-			Message: fmt.Sprintf(
-				"Already running %d sub-agents concurrently (limit %d). Wait for one to finish before delegating again.",
-				active, lim.MaxParallel),
-		}
-	}
+	// The parallel cap is deliberately NOT checked here. Depth, cycle and
+	// budget mean "this must not happen"; a full room means "not yet", and
+	// the answer to "not yet" is a queue, not a rejection. Run enqueues
+	// instead — see queue.go. Refusing here would throw away three
+	// quarters of a four-way fan-out.
 	return nil
 }
 

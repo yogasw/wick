@@ -208,6 +208,39 @@ export type SubAgentItem = {
       is queued or running. Which one is present decides whether the row
       reads "running 4m" or "4m ago". */
   ended_at?: string;
+  /** 1-based place in this conversation's waiting line; absent or 0 once
+      the sub-agent is running. Computed server-side so the panel never
+      infers ordering from timestamps it may have received out of order. */
+  queue_position?: number;
+  /** The sub-agent's answer as typed fields. `structured: false` means it
+      never called report_result and this was reconstructed from its
+      closing message — the findings were never actually asserted. */
+  envelope?: SubAgentEnvelope;
+};
+
+/** The compact incident header the rail shows above the agent list.
+    Absent for a conversation with no investigation, which is most. */
+export type IncidentSummary = {
+  status: string;
+  iteration: number;
+  summary: string;
+  stop_reason?: string;
+  evidence_count: number;
+};
+
+export type SubAgentEvidence = {
+  kind: string;
+  source: string;
+  excerpt: string;
+};
+
+export type SubAgentEnvelope = {
+  summary: string;
+  findings?: string[];
+  evidence?: SubAgentEvidence[];
+  confidence: string;
+  needs_followup?: boolean;
+  structured: boolean;
 };
 
 export type FileContent = {

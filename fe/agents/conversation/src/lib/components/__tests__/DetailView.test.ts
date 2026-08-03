@@ -128,6 +128,7 @@ vi.mock("../../api/messages.js", () => ({
 
 vi.mock("../../api/subagents.js", () => ({
   getSubAgents: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  getSubAgentPanel: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   interruptSubAgent: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   interruptAllSubAgents: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   getMessages: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
@@ -188,7 +189,7 @@ import DetailView from "../DetailView.svelte";
 import { killProcess, getProcesses } from "../../api/processes.js";
 import { getAsks } from "../../api/asks.js";
 import { getConversation } from "../../api/sessions.js";
-import { getSubAgents } from "../../api/subagents.js";
+import { getSubAgentPanel } from "../../api/subagents.js";
 import { Effect } from "effect";
 
 const DEFAULT_PROPS = {
@@ -654,7 +655,7 @@ describe("DetailView — conversation refetch on turn completion (artifacts)", (
    exactly the stretch where you want to see that work has fanned out. */
 describe("DetailView — sub-agent roster follows delegation tool calls", () => {
   const runPromise = Effect.runPromise as unknown as ReturnType<typeof vi.fn>;
-  const calls = () => (getSubAgents as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+  const calls = () => (getSubAgentPanel as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
 
   beforeEach(() => {
     vi.clearAllMocks();

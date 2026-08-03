@@ -173,12 +173,23 @@ type Service struct {
 	// changes — above all the kill-switch — take effect immediately
 	// rather than at the next restart.
 	LimitsFn func() Limits
+	// Secrets yields the values that must never reach a customer-facing
+	// draft. nil = no value masking, and the drafter's prompt is then the
+	// only thing standing between an injection and a leaked token.
+	Secrets func(ctx context.Context, projectID string) []string
+	// ProjectRoot resolves a project's working directory, so absolute
+	// paths can be reduced to filenames in a draft. nil = paths are left
+	// as written.
+	ProjectRoot func(ctx context.Context, projectID string) string
 
-	// mu guards inflight.
+	// mu guards inflight and slotWaiters.
 	mu sync.Mutex
 	// inflight maps delegation id → cancel func, so Interrupt can
 	// unblock a Run that is waiting on its child.
 	inflight map[string]context.CancelFunc
+	// slotWaiters maps root id → callers parked in waitForSlot. Woken by
+	// pokeSlot when a delegation in that tree reaches a terminal status.
+	slotWaiters map[string][]chan struct{}
 }
 
 // Request is one wick_delegate call.
@@ -197,6 +208,9 @@ type Request struct {
 	DeliverySink string
 	// Workspace is "shared" or "worktree". Empty = the profile default.
 	Workspace string
+	// MemoryMode decides what the sub-agent is told about the rest of the
+	// conversation. Empty = the profile default, then state_summary.
+	MemoryMode string
 	// SquadKey scopes which profiles the resulting sub-agent may reach.
 	SquadKey string
 	// TaskID links this delegation back to a board task, when one drove it.
@@ -228,12 +242,22 @@ type Result struct {
 	// Mode echoes how this ran. For async it is the signal that Result is
 	// intentionally empty and the answer arrives later.
 	Mode string `json:"mode,omitempty"`
+	// QueuePosition is the 1-based place in this conversation's queue for
+	// a delegation that has not started yet. 0 for anything already
+	// running — a leader reading "queued #3" knows its fan-out is lined
+	// up rather than all reading at once.
+	QueuePosition int `json:"queue_position,omitempty"`
 	// UserSteered marks a result a human intervened in mid-flight, so the
 	// leader does not present it as the role's own unaided work.
 	UserSteered bool `json:"user_steered,omitempty"`
 	// WorkspaceNote explains a downgraded workspace mode (e.g. worktree
 	// requested on a non-git project).
 	WorkspaceNote string `json:"workspace_note,omitempty"`
+	// Envelope is the sub-agent's answer as typed fields. Additive: Result
+	// still carries the prose, so a caller that ignores this sees no
+	// change. `structured: false` means the sub-agent never called
+	// report_result and this was reconstructed from its closing message.
+	Envelope *ResultEnvelope `json:"envelope,omitempty"`
 }
 
 // interruptNote is the exact text handed to a leader whose sub-agent a
@@ -349,10 +373,87 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 		MaxTokens:     maxTokens,
 		TriggeredBy:   req.TriggeredBy,
 		StartedAt:     now,
+		// Preserved so a row that waits in the queue can be started later
+		// with exactly the background its caller supplied.
+		ContextText: req.Context,
+		MemoryMode:  NormalizeMemoryMode(req.MemoryMode, profile.DefaultMemoryMode),
 	}
+	// Stamp the investigation round this delegation belongs to, so "is
+	// the round finished?" stays a query. One indexed lookup against a
+	// process spawn is not worth avoiding, and it returns nothing for the
+	// ordinary trees that have no incident.
+	if inc, ierr := s.IncidentForRoot(ctx, rootID); ierr == nil && inc != nil {
+		row.IncidentID = inc.ID
+		row.Iteration = inc.Iteration
+	}
+
 	if err := s.Repo.Create(ctx, row); err != nil {
 		return nil, err
 	}
+
+	// A parent blocked on a synchronous child is waiting, not working, and
+	// must release its slot for the duration. Without this a serial room
+	// deadlocks the moment a sub-agent delegates: the parent holds the only
+	// slot until a child that can never start finishes.
+	if mode == ModeSync {
+		if parent, perr := s.Repo.FindByChildSession(ctx, req.ParentSessionID); perr == nil && parent != nil {
+			if berr := s.Repo.SetBlocked(ctx, parent.ID, true); berr == nil {
+				defer func() {
+					// WithoutCancel: a cancelled caller must still release
+					// the slot, or the tree wedges on a phantom holder.
+					if cerr := s.Repo.SetBlocked(context.WithoutCancel(ctx), parent.ID, false); cerr != nil {
+						log.Warn().Err(cerr).Str("delegation", parent.ID).
+							Msg("delegation: unblock failed; the sweeper will clear it")
+					}
+					s.pokeSlot(rootID)
+				}()
+			}
+		}
+	}
+
+	// Wait our turn. The room runs one sub-agent at a time by default.
+	if !s.hasSlot(ctx, rootID) {
+		if mode == ModeAsync {
+			pos, _ := s.Repo.QueuePosition(ctx, rootID, id)
+			return queuedResult(row, pos), nil
+		}
+		if werr := s.waitForSlot(ctx, rootID, id); werr != nil {
+			s.finish(ctx, row, entity.DelegationQueued, entity.DelegationInterrupted,
+				"", "the caller went away while this was queued", 0)
+			return &Result{
+				DelegationID: id, Profile: profile.Key,
+				Status: entity.DelegationInterrupted, Mode: ModeSync,
+				Note: "Cancelled before it started — the caller went away while this was queued.",
+			}, nil
+		}
+	}
+
+	if err := s.Repo.MarkRunning(ctx, id); err != nil {
+		log.Warn().Err(err).Str("delegation", id).Msg("delegation: mark running failed")
+	}
+	row.Status = entity.DelegationRunning
+
+	return s.execute(ctx, row, profile, effTags)
+}
+
+// execute spawns and drives a delegation whose row already exists, is
+// already marked running, and already holds its parallel slot.
+//
+// Split out of Run so the queue dispatcher can start work nobody is
+// blocking on: everything it needs is on the row, so a delegation started
+// two minutes after it was requested runs exactly as it was asked for.
+func (s *Service) execute(
+	ctx context.Context,
+	row *entity.AgentDelegation,
+	profile *entity.AgentProfile,
+	effTags []string,
+) (*Result, error) {
+	id := row.ID
+	mode := row.Mode
+	sink := row.DeliverySink
+	childSessionID := row.ChildSessionID
+	workspacePath := row.WorkspacePath
+	workspaceNote := row.WorkspaceNote
 
 	// An async delegation outlives the request that started it, so its
 	// work must not hang off that request's context — the HTTP handler
@@ -368,12 +469,13 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 	// async that happens on the background goroutine, not here, or the
 	// child would lose its credential the moment this call returned.
 	var token string
-	if s.Tokens != nil && req.TriggeredBy != "" {
-		token, err = s.Tokens.Issue(req.TriggeredBy, effTags)
+	if s.Tokens != nil && row.TriggeredBy != "" {
+		issued, err := s.Tokens.Issue(row.TriggeredBy, effTags)
 		if err != nil {
-			s.finish(ctx, row, entity.DelegationQueued, entity.DelegationFailed, "", "mint scoped token: "+err.Error(), 0)
+			s.finish(ctx, row, entity.DelegationRunning, entity.DelegationFailed, "", "mint scoped token: "+err.Error(), 0)
 			return nil, err
 		}
+		token = issued
 	}
 	revoke := func() {
 		if token != "" && s.Tokens != nil {
@@ -381,9 +483,9 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 		}
 	}
 
-	if err := s.Runner.EnsureChildSession(baseCtx, childSessionID, req.ParentSessionID, req.ProjectID, req.TriggeredBy); err != nil {
+	if err := s.Runner.EnsureChildSession(baseCtx, childSessionID, row.ParentSessionID, row.ProjectID, row.TriggeredBy); err != nil {
 		revoke()
-		s.finish(ctx, row, entity.DelegationQueued, entity.DelegationFailed, "", "create child session: "+err.Error(), 0)
+		s.finish(ctx, row, entity.DelegationRunning, entity.DelegationFailed, "", "create child session: "+err.Error(), 0)
 		return nil, err
 	}
 
@@ -399,21 +501,16 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 	runCtx, cancel := context.WithCancel(baseCtx)
 	s.trackInflight(id, cancel)
 
-	if err := s.Repo.MarkRunning(baseCtx, id); err != nil {
-		log.Warn().Err(err).Str("delegation", id).Msg("delegation: mark running failed")
-	}
-	row.Status = entity.DelegationRunning
-
 	spec := ChildSpec{
 		SessionID:     childSessionID,
-		AgentName:     agentName,
+		AgentName:     row.ChildAgent,
 		Profile:       profile,
-		Task:          composeTask(req.Task, req.Context),
-		Context:       req.Context,
+		Task:          composeTask(row.Task, row.ContextText, s.spawnPreamble(ctx, row)),
+		Context:       row.ContextText,
 		MCPToken:      token,
 		TagIDs:        effTags,
-		MaxTurns:      maxTurns,
-		MaxTokens:     maxTokens,
+		MaxTurns:      row.MaxTurns,
+		MaxTokens:     row.MaxTokens,
 		WorkspacePath: workspacePath,
 	}
 	if err := s.Runner.StartAgent(runCtx, spec); err != nil {
@@ -452,7 +549,7 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 		}()
 		return &Result{
 			DelegationID: id,
-			Profile:      profile.Key,
+			Profile:      row.ProfileKey,
 			Status:       entity.DelegationRunning,
 			Mode:         ModeAsync,
 			Note: "Started in the background. The result is NOT in this reply — it will be delivered via " +
@@ -513,6 +610,15 @@ func formatDelivery(row *entity.AgentDelegation, res *Result) string {
 		elapsed = " · " + row.EndedAt.Sub(row.StartedAt).Round(time.Second).String()
 	}
 	b.WriteString("@" + name + " finished (" + res.Status + ")" + elapsed + "\n\n")
+	// A one-line verdict before the prose. A supervisor deciding what to
+	// do next reads confidence and evidence count first; making it read
+	// the whole write-up to find them is what the envelope exists to stop.
+	// The items themselves are NOT inlined: waking a leader with twenty
+	// excerpts spends its context on data it may not need.
+	if e := res.Envelope; e != nil && e.Structured {
+		fmt.Fprintf(&b, "[%s confidence · %d evidence item(s) · collect %s for detail]\n\n",
+			e.Confidence, len(e.Evidence), row.ID)
+	}
 	if res.Result != "" {
 		b.WriteString(res.Result)
 	} else {
@@ -710,11 +816,58 @@ func (s *Service) doneResult(ctx context.Context, row *entity.AgentDelegation, t
 		Status: entity.DelegationDone, TurnsUsed: turns,
 		TokensUsed: tokens, Result: out,
 	}
-	if fresh, err := s.Repo.Get(context.WithoutCancel(ctx), row.ID); err == nil && fresh.UserSteered {
-		res.UserSteered = true
-		res.Note = "A human sent guidance to this sub-agent while it worked, so the result reflects their steering as well as the role's own reasoning."
+	// A customer-facing draft is sanitised on the way OUT, before anyone
+	// can act on it. Doing it here rather than trusting the role's prompt
+	// is what makes "no credentials" a control instead of a request.
+	if row.ProfileKey == ClientDrafterRoleKey {
+		if sanitised, masked := s.sanitizeDraft(ctx, row, out); masked {
+			res.Result = sanitised
+			res.Note = strings.TrimSpace(res.Note + " " + SanitizeNote)
+		}
+	}
+
+	detached := context.WithoutCancel(ctx)
+	if fresh, err := s.Repo.Get(detached, row.ID); err == nil {
+		if fresh.UserSteered {
+			res.UserSteered = true
+			res.Note = "A human sent guidance to this sub-agent while it worked, so the result reflects their steering as well as the role's own reasoning."
+		}
+		res.Envelope = s.resolveEnvelope(detached, fresh, out)
+		// Gate first, then ingest. Only well-formed evidence reaches the
+		// pool, so a later contradiction is between two things somebody
+		// actually quoted. Best-effort throughout: the answer is already
+		// durable on the row, and failing the delegation because a
+		// secondary index could not be written would be the wrong trade.
+		verdict := s.GateEnvelope(detached, fresh, res.Envelope)
+		if _, err := s.IngestEvidence(detached, fresh, &ResultEnvelope{Evidence: verdict.Accepted}); err != nil {
+			log.Warn().Err(err).Str("delegation", row.ID).
+				Msg("delegation: evidence not ingested; the result is still recorded")
+		}
+		s.OnDelegationFinished(detached, fresh, verdict)
 	}
 	return res
+}
+
+// resolveEnvelope returns the structured answer for a finished
+// delegation, reconstructing one from prose when report_result was never
+// called.
+//
+// The reconstruction is PERSISTED, not just returned, so every later
+// reader — collect, the panel, the incident store — sees the same answer
+// as the caller who was there when it finished.
+func (s *Service) resolveEnvelope(ctx context.Context, row *entity.AgentDelegation, finalText string) *ResultEnvelope {
+	if env := EnvelopeOf(row); env != nil {
+		return env
+	}
+	env := FallbackEnvelope(finalText)
+	if env.Summary == "" {
+		return env
+	}
+	if err := s.Repo.SaveResultJSON(ctx, row.ID, env); err != nil {
+		log.Warn().Err(err).Str("delegation", row.ID).
+			Msg("delegation: fallback envelope not persisted")
+	}
+	return env
 }
 
 // finish writes a terminal status, tolerating the case where another
@@ -731,7 +884,11 @@ func (s *Service) finish(ctx context.Context, row *entity.AgentDelegation, expec
 	if !ok {
 		log.Debug().Str("delegation", row.ID).Str("status", status).
 			Msg("delegation: finish skipped, row already terminal")
+		return
 	}
+	// A slot just freed. Poking here rather than on a timer is what keeps
+	// the gap between two queued sub-agents imperceptible.
+	s.pokeSlot(row.RootID)
 }
 
 // limits resolves the governor ceilings for this call, preferring the
@@ -773,13 +930,92 @@ func (s *Service) cancelInflight(id string) bool {
 // composeTask builds the child's first message. The sub-agent starts
 // with a clean context — it never sees the leader's history — so any
 // background it needs must be stated explicitly here.
-func composeTask(task, extra string) string {
+func composeTask(task, extra, preamble string) string {
 	task = strings.TrimSpace(task)
 	extra = strings.TrimSpace(extra)
-	if extra == "" {
-		return task
+	preamble = strings.TrimSpace(preamble)
+	if extra != "" {
+		task += "\n\nContext from the delegating agent:\n" + extra
 	}
-	return task + "\n\nContext from the delegating agent:\n" + extra
+	if preamble != "" {
+		task += "\n\n" + preamble
+	}
+	return task
+}
+
+// spawnPreamble is everything wick tells a sub-agent beyond its task and
+// its caller's context: what the other agents have established, and who
+// they are.
+//
+// Best-effort throughout. A sub-agent that cannot be told these things is
+// worse off, not broken, so a lookup failure costs the preamble rather
+// than the spawn.
+func (s *Service) spawnPreamble(ctx context.Context, row *entity.AgentDelegation) string {
+	var parts []string
+	if mem := s.memoryPayload(ctx, row); mem != "" {
+		parts = append(parts, mem)
+	}
+	if roster := s.spawnRosterBlock(ctx, row); roster != "" {
+		parts = append(parts, roster)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// memoryPayload renders the history this delegation's memory mode calls
+// for. Siblings are only fetched by the modes that use them — a
+// no_history spawn must not pay for a query it will discard.
+func (s *Service) memoryPayload(ctx context.Context, row *entity.AgentDelegation) string {
+	mode := row.MemoryMode
+	if mode == MemoryNone || mode == MemoryChunks {
+		return ""
+	}
+	siblings, err := s.Repo.ListByRoot(ctx, row.RootID)
+	if err != nil {
+		log.Debug().Err(err).Str("delegation", row.ID).
+			Msg("delegation: memory payload unavailable")
+		return ""
+	}
+	trimmed := siblings[:0]
+	for _, d := range siblings {
+		if d.ID != row.ID {
+			trimmed = append(trimmed, d)
+		}
+	}
+	// Only looked up for the modes that render it: a tree with no
+	// incident is the common case, and the query would be discarded.
+	inc, err := s.IncidentForRoot(ctx, row.RootID)
+	if err != nil {
+		log.Debug().Err(err).Str("delegation", row.ID).
+			Msg("delegation: incident state unavailable for the memory payload")
+	}
+	return MemoryPayload(mode, trimmed, inc)
+}
+
+// spawnRosterBlock builds the colleague list a sub-agent starts with.
+//
+// Best-effort: a sub-agent that cannot be told who else exists is worse
+// off, but not broken, so a lookup failure costs the block rather than
+// the spawn.
+func (s *Service) spawnRosterBlock(ctx context.Context, row *entity.AgentDelegation) string {
+	roster, budget, err := s.rosterAndBudget(ctx, row.RootID)
+	if err != nil {
+		log.Debug().Err(err).Str("delegation", row.ID).
+			Msg("delegation: spawn roster unavailable")
+		return ""
+	}
+	// The spawning agent's own row is already in the roster; naming itself
+	// as a colleague invites it to message itself.
+	trimmed := roster[:0]
+	for _, e := range roster {
+		if e.Handle != row.Handle {
+			trimmed = append(trimmed, e)
+		}
+	}
+	var spawnable []string
+	if res, rerr := s.NewResolver(ctx, row.RootID, row.ProjectID); rerr == nil {
+		spawnable = res.SpawnableRoles()
+	}
+	return FormatRosterBlock(trimmed, spawnable, budget)
 }
 
 // ErrNoService is returned by wiring when delegation is not configured.

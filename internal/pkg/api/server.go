@@ -548,6 +548,20 @@ func NewServer() *Server {
 	}
 	var agentsPool *agentpool.Pool
 	channelReg := agentchannels.NewRegistry()
+	// Assembles each agent turn and hands it to the mention router. The
+	// service is wired in later (delegationSvc does not exist yet), so the
+	// observer reads it through a pointer that is nil until then — a turn
+	// finishing before the service exists simply is not routed, which is
+	// the correct behaviour during boot.
+	var delegationSvc *delegation.Service
+	turnObserver := delegation.NewTurnObserver(func(sid, agentName, text string) {
+		if delegationSvc == nil {
+			return
+		}
+		// Detached: routing must never delay the event fan-out that the
+		// UI and the channels are waiting on.
+		go delegationSvc.RouteAgentTurn(context.Background(), sid, agentName, text)
+	})
 	// Per-boot secret: agent spawns use it to reach the live MCP server
 	// over loopback instead of cold-starting `wick mcp serve` per run.
 	mcpInternalToken := genMCPInternalToken()
@@ -559,6 +573,7 @@ func NewServer() *Server {
 		OnEvent: func(sid, name string, ev agentevent.AgentEvent) {
 			agentsBcast.Publish(sid, name, ev)
 			channelReg.DispatchAgentEvent(sid, ev)
+			turnObserver.OnEvent(sid, name, ev)
 		},
 		OnExit: func(sid, name string, reason provider.ExitReason) {
 			// OnExit fires from the agent reader goroutine — no HTTP ctx
@@ -575,6 +590,10 @@ func NewServer() *Server {
 			doneEv := agentevent.AgentEvent{Type: agentevent.Done}
 			agentsBcast.Publish(sid, name, doneEv)
 			channelReg.DispatchAgentEvent(sid, doneEv)
+			// Catches a turn whose real Done never arrived because the
+			// agent exited first. Already-flushed turns are a no-op here:
+			// the observer drops a Done with an empty buffer.
+			turnObserver.OnEvent(sid, name, doneEv)
 		},
 	}
 	maxConc := 2
@@ -1185,10 +1204,9 @@ func NewServer() *Server {
 		DB:   db,
 		Push: pushSvc,
 	}))
-	// Declared before the connector registration below and assigned much
-	// further down, once every service it needs exists. The sub-agents
-	// connector closes over this variable rather than its value.
-	var delegationSvc *delegation.Service
+	// delegationSvc is declared with the spawn factory above and assigned
+	// much further down, once every service it needs exists. The
+	// sub-agents connector closes over the variable, not its value.
 
 	// Sub-agent delegation. Registered here — before Bootstrap — so its
 	// fixed instance is seeded in the same pass as every other connector,
@@ -1354,6 +1372,16 @@ func NewServer() *Server {
 		// Messaging: make an exited sub-agent addressable again, and say
 		// so when it can only come back without its memory.
 		Waker: poolWaker{pool: agentsPool, layout: agentsLayout},
+		// Customer-facing drafts are masked on the way out. The drafter's
+		// prompt asks it not to include credentials; this is what makes
+		// that true when a prompt injection asks otherwise.
+		Secrets: secretValuesFor(configsSvc),
+		ProjectRoot: func(ctx context.Context, projectID string) string {
+			if projectID == "" {
+				return ""
+			}
+			return agentsLayout.ProjectDir(projectID)
+		},
 		AskTimeout: time.Duration(intOr(
 			configsSvc.GetOwned("agents", "sub_agents_ask_timeout_min"),
 			agentconfig.DefaultGeneralConfig().SubAgentsAskTimeoutMin,
@@ -1378,6 +1406,21 @@ func NewServer() *Server {
 		agentconfig.DefaultGeneralConfig().SubAgentsStaleClaimMin,
 	)) * time.Minute
 	delegation.NewStaleClaimSweeper(delegationSvc.Repo, staleAfter).Start(context.Background())
+
+	// Backstop for the serial queue: release slots held by delegations
+	// that finished without clearing their flag, and restart queues whose
+	// wake-up poke was lost. The poke path does the real work; this only
+	// has to be eventually right.
+	delegation.NewDelegationSweeper(delegationSvc, 15*time.Second).Start(context.Background())
+
+	// Install the investigation roles once, so a team gets a working
+	// incident workflow without writing seven prompts first. Marked in
+	// configs afterwards: an operator's edits survive every restart, and
+	// a role they deleted stays deleted.
+	if err := delegation.SeedProductionRoles(context.Background(), delegationSvc.Repo,
+		configSeedMarker{cfg: configsSvc}); err != nil {
+		log.Warn().Err(err).Msg("agents: investigation roles not seeded")
+	}
 
 	mcpHandler := mcp.NewHandler(connectorsSvc).
 		WithBuildInfo(releaseAppVersion, buildCommit, buildTime).

@@ -79,6 +79,7 @@ type delegateInput struct {
 	Mode         string `wick:"desc=sync (default) blocks and returns the answer. async returns a delegation_id and delivers later."`
 	DeliverySink string `wick:"desc=Where an async result goes: channel (default), session (wake the caller), none (record only)."`
 	Workspace    string `wick:"desc=shared (default) or worktree for a private git worktree. Falls back to shared with a note on a non-git project."`
+	MemoryMode   string `wick:"desc=What this sub-agent is told beyond its task. no_history = nothing. state_summary (default) = one line per finished sibling. relevant_chunks = your context field only, curated by you. full_history = every sibling's full result, for audit and debugging only — expensive, noisy, and it biases the agent toward earlier conclusions."`
 }
 
 type messageInput struct {
@@ -100,6 +101,29 @@ type collectInput struct {
 	DelegationID string `wick:"desc=The delegation to collect. Omit to list every async result waiting for this conversation."`
 }
 
+type reportResultInput struct {
+	Summary  string `wick:"required;textarea;desc=Your finished answer in a few sentences. This is what the agent that delegated to you acts on."`
+	Findings string `wick:"textarea;desc=One finding per line. A finding is a conclusion you are prepared to defend."`
+	Evidence string `wick:"textarea;desc=JSON array of {kind, source, excerpt}. kind is log | code | doc | data | observation. Quote real material: a claim with no excerpt is a guess."`
+	Confidence           string `wick:"desc=low, medium, or high — how sure you are of the summary overall. Anything else is recorded as unknown."`
+	NeedsFollowup        bool   `wick:"desc=True when the task is not fully answered and someone should continue it."`
+	RecommendedNextTasks string `wick:"textarea;desc=JSON array of {role, task, reason} for work you recommend dispatching next."`
+}
+
+type incidentInput struct {
+	Action    string `wick:"required;desc=get | update | close."`
+	Title     string `wick:"desc=Short incident title, for update."`
+	UserIssue string `wick:"textarea;desc=The problem as the user reported it, for update."`
+	Summary   string `wick:"textarea;desc=Current best understanding, for update."`
+	Status    string `wick:"desc=investigating | confirmed | escalated, for update. Use action=close to close."`
+	Hypotheses      string `wick:"textarea;desc=JSON array of strings REPLACING the hypothesis list, for update. Omit to leave it unchanged."`
+	MissingEvidence string `wick:"textarea;desc=JSON array of strings REPLACING the missing-evidence list, for update. Omit to leave it unchanged."`
+	NextActions     string `wick:"textarea;desc=JSON array of strings REPLACING the next-actions list, for update. Omit to leave it unchanged."`
+	ClientContext   string `wick:"textarea;desc=JSON object with the affected client (app id, name, environment), for update. Omit to leave it unchanged."`
+	StopReason      string `wick:"desc=Why the investigation stopped, for update. An investigation that ends without saying why looks identical to one still running."`
+	FinalSummary    string `wick:"textarea;desc=Closing summary. Required for close — it is what anyone reading this later gets."`
+}
+
 type createAgentInput struct {
 	Key         string `wick:"required;desc=Stable handle other calls use, lowercase-kebab (e.g. code-reviewer)."`
 	Description string `wick:"required;textarea;desc=What this role is for. Read by the delegating agent to decide when to pick it — a vague description makes the role unusable."`
@@ -109,7 +133,7 @@ type createAgentInput struct {
 	Provider     string `wick:"desc=Agent runtime: claude (default), codex, wick, gemini. A specific instance may be named as type/name (e.g. codex/abc)."`
 	Model        string `wick:"desc=Provider-specific model id. Empty uses the provider default."`
 	MaxTurns     int    `wick:"desc=Default turn budget for this role. Clamped to the system ceiling."`
-	MaxTokens    int    `wick:"desc=Default token budget for one delegation of this role. 0 = the role adds no cap of its own; the per-tree budget still applies."`
+	MaxTokens    int    `wick:"desc=Default token budget for one delegation of this role. 0 = the role adds no cap of its own, and the per-tree budget still applies."`
 	// Tool access. Narrowed against your own tags server-side, so this can
 	// only ever restrict a role — it can never grant it something you do
 	// not already have.
@@ -122,6 +146,7 @@ type createAgentInput struct {
 	AllowTakeOver      bool   `wick:"desc=Let a human send messages into this role mid-run. Its answers are then flagged as human-steered."`
 	Mode               string `wick:"desc=sync (default) returns the answer to the caller. async returns immediately and delivers later."`
 	Workspace          string `wick:"desc=Default working directory for this role: shared (default), or worktree for a private git worktree. Falls back to shared with a note on a non-git project."`
+	MemoryMode         string `wick:"desc=Default for what this role is told beyond its task. One of no_history, state_summary (the default), relevant_chunks, full_history. A caller can override it per delegation."`
 	Disabled           bool   `wick:"desc=Keep the role on record but hide it from every roster. A disabled role cannot be delegated to."`
 	Locked             bool   `wick:"desc=Freeze this role. Once locked, no further edit or delete is accepted over MCP — only a human can unlock it in the web UI. One-way from here: you can lock, you cannot unlock."`
 }
@@ -166,6 +191,21 @@ func Operations(deps Deps) []connector.Category {
 					"A delegation still running comes back pending=true — carry on with other work rather than looping on it. "+
 					"A result is handed over ONCE: if the reply says it was already collected, you have seen it before and must not act on it twice.",
 				collectInput{}, h.collect, wickdocs.Docs{}),
+
+			connector.Op("report_result", "Report Your Result",
+				"Report your finished work as structured fields, so the agent that delegated to you can act on it without re-reading your prose. "+
+					"Call this ONCE, as the last thing you do before your closing message. "+
+					"Evidence must be QUOTED, not described: a source and an excerpt someone else could verify — a claim with no excerpt is a guess. "+
+					"If you never call this, your closing message is recorded as the summary with confidence 'unknown', which tells the caller your findings were never actually asserted.",
+				reportResultInput{}, h.reportResult, wickdocs.Docs{}),
+
+			connector.Op("incident", "Work the Incident Record",
+				"Read or update this conversation's incident record — the durable state of an investigation, so what you know survives a context that does not. "+
+					"get returns status, iteration, summary, hypotheses, missing evidence, next actions, and the evidence collected so far grouped by kind. "+
+					"update patches ONLY the fields you pass, so you can add a hypothesis without restating everything else. "+
+					"close writes a terminal status with a final summary; a closed incident refuses further updates and only a human can reopen it. "+
+					"There is no open action: the record appears by itself the first time there is something to store.",
+				incidentInput{}, h.incident, wickdocs.Docs{}),
 		),
 
 		connector.Cat("Messaging", "Talk to the other agents working in this conversation.",

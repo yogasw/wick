@@ -294,6 +294,270 @@ A result is handed over **exactly once**. Collecting the same delegation twice r
 They were fired to run on their own, so killing the leader does **not** stop them. An explicit **Stop all** does.
 :::
 
+## Structured results
+
+A sub-agent's answer comes back as prose *and* as typed fields. The prose stays authoritative for people; the fields exist so the agent that delegated can act without re-reading a write-up.
+
+A sub-agent fills them by calling `report_result` before it finishes:
+
+| Field | Meaning |
+|---|---|
+| `summary` | The answer, in a few sentences. Required. |
+| `findings` | Conclusions the agent is prepared to defend. |
+| `evidence` | `{kind, source, excerpt}` — quoted material someone else could verify. `kind` is `log`, `code`, `doc`, `data`, or `observation`. |
+| `confidence` | `low`, `medium`, or `high`. |
+| `needs_followup` | The task is not fully answered. |
+| `recommended_next_tasks` | `{role, task, reason}` work worth dispatching next. |
+
+The result carries them alongside the prose:
+
+```json
+{
+  "delegation_id": "d-7f3a",
+  "status": "done",
+  "result": "the retry path drops the signature header …",
+  "envelope": {
+    "summary": "401s come from the retry path dropping the signature header",
+    "confidence": "high",
+    "evidence": [{"kind": "log", "source": "loki: app=abc", "excerpt": "401 signature_invalid"}],
+    "structured": true
+  }
+}
+```
+
+**A forgotten call is not a failure.** If a sub-agent never calls `report_result`, its closing message becomes the `summary`, `confidence` is `unknown`, and `structured` is `false`. Failing the run instead would punish the *leader* for the sub-agent's omission and throw away work already paid for. The rail panel labels these **Unreported** rather than "unknown confidence" — the distinction that matters is whether anyone claimed anything, not how sure they were.
+
+Evidence is capped at 20 items and 4 KB per excerpt. Without a bound, a sub-agent can turn its token budget into a database problem by quoting a whole log file.
+
+## Memory modes
+
+A sub-agent starts with a clean context, so what it knows is exactly what it is told. `memory_mode` makes that an explicit choice instead of an accident of whatever the leader pasted into `context`:
+
+| Mode | What wick adds to the task |
+|---|---|
+| `no_history` | Nothing. For work whose answer does not depend on what anyone else found. |
+| `state_summary` *(default)* | One line per finished sibling: role, status, its summary. |
+| `relevant_chunks` | Nothing — your `context` field is the payload. The leader curates. |
+| `full_history` | Every sibling's full result. |
+
+Set it per call on `delegate`, or as a role default with `create_agent`. A call always wins over the role.
+
+`context` is appended in every mode, so a leader can always say something of its own.
+
+::: warning full_history is for audit and debugging
+It is expensive, it is noisy, and it biases a fresh agent toward the conclusions of the agents before it — which is exactly what you do not want when the point of a second opinion is that it is independent.
+:::
+
+## The investigation loop
+
+Put the pieces together and an incident investigates itself: mentions fan work out, the queue runs it one at a time, results come back structured, evidence lands in the incident, and a checker decides whether it holds.
+
+### The seven roles
+
+Installed as global roles on first boot. They are starting points, not fixtures — unlocked, editable, and never overwritten once you have touched them. A role you delete stays deleted.
+
+| Role | Does | Runs |
+|---|---|---|
+| `log-investigator` | Groups errors, builds a timeline, quotes log lines. | async |
+| `code-investigator` | Maps symptoms to a code path and names a probable cause. | async |
+| `docs-investigator` | Establishes what the system is *supposed* to do. | async |
+| `data-validator` | Checks the tenant's config, flags and data. Read-only. | async |
+| `evidence-checker` | Judges whether the evidence supports the findings. | sync |
+| `client-response-drafter` | Drafts a customer reply from confirmed findings. Drafts — never sends. | sync |
+| `incident-supervisor` | Plans and dispatches when no human is in the room. | async |
+
+The four that read a large surface run in the background. The two that work on already-collected material run synchronously, because the supervisor is waiting on their answer to decide what happens next.
+
+Every investigating prompt ends with the same rule: **quote a source and an excerpt, or report it as a gap.** A finding with no excerpt is a guess, and a supervisor cannot tell the two apart.
+
+### Two gates, not one
+
+"Validate the sub-agent's work" is two different jobs, and they belong in different places.
+
+**The intake gate** runs in Go on every result, before its evidence is stored. It is mechanical — no model is called, because whether a string is empty is not a judgement:
+
+- An evidence item with no source or no excerpt is sent back **once**, naming exactly what was missing. A second failure drops the item and records the drop.
+- Findings with no evidence behind them are not rejected — the agent may be right — but the checker is told, so a plausible sentence is not weighed like a verified one.
+- A confidence outside the enum becomes `unknown`.
+
+**The judgement gate** is the `evidence-checker` role: contradictions between sources, sufficiency, and what is still missing. That is the part that needs reading comprehension, and it is the only part that pays for a spawn.
+
+Validating only at the checker — as is tempting — lets unsourced claims into the evidence pool, where a model then has to argue them back out.
+
+### The loop
+
+```text
+result arrives
+  └─ intake gate (Go): missing source/excerpt → one re-ask, then drop
+                       otherwise             → evidence stored
+
+round completes (every agent in this round finished)
+  └─ did the round add evidence?
+        no, twice running  → stop, escalated
+        yes                → dispatch evidence-checker
+              confirmed          → status confirmed, stop
+              contradiction      → record, stop, escalated
+              escalate_to_human  → stop, escalated
+              need_more_evidence → record what is missing, round++,
+                                   dispatch the follow-ups
+```
+
+Whether a round is complete and whether it added anything are **queries**, not judgements — Go answers both. Paying for a spawn to answer them is expensive and occasionally wrong.
+
+Every stop writes a reason to the incident. A loop that ends without saying why is indistinguishable from one still running.
+
+A checker that returns no decision, a blank one, or something unrecognised is treated as **escalate to a human**. An unreadable verdict is not a pass — that would be exactly the failure the checker exists to prevent.
+
+### Brakes
+
+| Setting | Default | Stops the investigation when |
+|---|---|---|
+| Max iterations | 5 | that many checker rounds have run |
+| Max runtime | 20 min | wall clock passes it — catches an agent that is slow rather than chatty |
+| No-evidence rounds | 2 | that many consecutive rounds add nothing |
+| Min confidence | medium | *(gates the customer draft rather than stopping the loop)* |
+
+All four live under **Settings → Agents → Sub-agents** and are re-read per decision, so a change applies to the next round without a restart.
+
+No-evidence rounds is **2**, not 1: an investigation that comes up empty once and lands the next round is the normal case, and stopping at the first blank round throws the run away.
+
+Follow-up dispatches go through the same governor and the same queue as everything else. The loop gets no privileged route around the caps, and a refusal is written to the incident's next actions rather than swallowed into a log.
+
+### Customer drafts are masked, not merely asked
+
+`client-response-drafter` is told not to include logs, stack traces, hostnames or credentials. That is guidance, and guidance is not a control.
+
+Its output passes through a sanitiser on the way out:
+
+- Every secret-marked configuration value is replaced with `***`.
+- Absolute paths under the project root are reduced to their filename.
+- When anything was masked, the result carries a note telling a human to review before sending.
+
+A prompt injection that persuades the drafter to quote a token therefore produces a **masked** token. The drafter never sends anything either way — it returns a draft.
+
+## The incident record
+
+An investigation that spans several sub-agents needs somewhere to keep what it has established, so "what do we know so far?" is a lookup rather than a leader's recollection.
+
+Each delegation tree can have one **incident**: status, iteration, summary, hypotheses, missing evidence, next actions, and the evidence collected so far.
+
+**It appears by itself.** There is no "open" action. The record is created the first time either of these happens:
+
+- a sub-agent reports evidence, or
+- someone calls the `incident` op.
+
+A conversation that does neither leaves no row — most delegation trees are code reviews, not investigations, and a header on all of them would be noise.
+
+### Evidence
+
+Every `evidence` item a sub-agent reports is filed automatically when its delegation finishes, tagged with which agent found it. **Findings are not** — a finding is an interpretation, and merging four agents' interpretations without a check is how a supervisor ends up confidently wrong. The incident stores what was *quoted*.
+
+The same log line found by two investigators is stored **once**. That is a database constraint, not a check-before-insert: two agents finishing at the same moment would both pass a "does this exist?" test and both write.
+
+### The `incident` op
+
+| Action | Does |
+|---|---|
+| `get` | Returns the record plus its evidence, grouped by kind. A conversation with no incident answers `exists: false` — that is a normal state, not an error. |
+| `update` | Patches **only** the fields you pass. Add a hypothesis without restating the summary. |
+| `close` | Terminal status plus a `final_summary`, which is required — it is what anyone reading this later gets. |
+
+A closed incident refuses further updates. Reopening is a human action in the UI, the same way role locking works.
+
+Scoping is structural: the caller's session resolves to a tree, and the tree resolves to its incident. There is no way to name someone else's.
+
+### Effect on sub-agents
+
+With an incident present, `state_summary` gains two lines:
+
+```text
+current hypotheses: signature mismatch on webhook retry
+missing evidence: the signature header from a failing request
+```
+
+That is the whole point of the store — an agent spawned in round 3 should not re-derive what rounds 1 and 2 established, nor go hunting for evidence somebody already recorded as missing.
+
+The rail panel shows the same state as a header above the agent list: status, round, evidence count, and — when it stopped — why.
+
+## Mentions
+
+Write `@name` at the start of a line and wick acts on it:
+
+```text
+@log-investigator check the 401s on abc.com between 10:00 and 11:00
+@docs-investigator find the webhook signature runbook
+```
+
+The name resolves in one order, and the order matters:
+
+1. **A handle already working here** → the text is delivered to that agent as a message. It keeps the context of its own work, so there is no need to re-explain anything.
+2. **A role** (`list_agents` shows them) → a new sub-agent of that role starts on the task.
+3. **Neither** → nothing happens and the text stays as written.
+
+A live agent always wins. Otherwise "@code-investigator follow up on that" would start a fresh agent with no memory of the thing it was asked to follow up on.
+
+Both people and agents can mention. Whoever wrote it gets a short report of what actually started:
+
+```text
+dispatched: @log-investigator (running, d-7f3a) · @docs-investigator (queued #1, d-7f3b)
+```
+
+Two or more mentions in one message run in the background rather than blocking their author — though they still run [one at a time](#one-at-a-time-the-queue).
+
+### What is not a mention
+
+The scanner is deliberately strict, because the two mistakes cost very different amounts: a missed mention costs one clarifying turn, while a false one spawns an agent and spends tokens because a model happened to write an email address.
+
+A mention must begin its line and be followed by text. These are left alone:
+
+```text
+@media (min-width: 40rem) { … }     ← not line-leading intent, no task
+mail researcher@abc.com about it    ← an address
+`@researcher` in backticks          ← inside code
+@researcher                          ← no task
+```
+
+Anything inside a fenced code block is skipped entirely.
+
+### Turning it off
+
+**Settings → Agents → Sub-agents → Mention router.** Off means `@name` is plain text again and only `delegate` spawns anything.
+
+## One at a time: the queue
+
+A conversation runs **one sub-agent at a time**. Ask for four at once and the first starts while the other three line up behind it, in the order they were requested.
+
+That is a deliberate default, not a capacity limit. Several sub-agents streaming into one room at once produce output nobody can follow, and they burn the tree's shared turn and token budget in parallel. The cost of running them serially is waiting, which is the cheaper failure.
+
+An async delegation that cannot start yet comes back `queued` with its place in line:
+
+```json
+{
+  "delegation_id": "d-7f3a",
+  "status": "queued",
+  "queue_position": 3,
+  "note": "Queued behind 2 other sub-agent(s) in this conversation. Carry on with other work; the result is delivered when it finishes."
+}
+```
+
+`collect` reports a queued delegation as `pending`, exactly as it reports a running one — from the leader's side "not ready yet" is one state.
+
+A **synchronous** call simply waits its turn and then behaves normally. It has no timeout of its own: it lives as long as the call that made it, so if the caller goes away the queued work is cancelled rather than started for nobody.
+
+The rail panel groups by **Working**, **Queued**, then **Finished**, and a queued row shows its position. There is no estimated start time, because there is no honest one to give.
+
+**Stop works before a sub-agent starts.** Cancelling a queued delegation is total: no process is ever spawned, and the row records that it never started rather than looking like an agent that produced nothing.
+
+### A sub-agent that delegates does not deadlock
+
+A sub-agent waiting on a synchronous child of its own is *waiting*, not working, so it releases its place while it waits. Without that, a one-at-a-time room would wedge the first time a sub-agent delegated — the parent holding the only slot until a child that can never start finishes.
+
+A sub-agent that fires an **async** child keeps working and keeps its place; the child queues normally.
+
+### Raising the limit
+
+**Settings → Agents → Sub-agents → Max parallel sub-agents.** Raising it to *n* lets *n* run concurrently in one conversation, at the cost of interleaved output and faster budget burn. The setting is re-read per delegation, so a change applies to the next one without a restart.
+
 ## Workspace isolation
 
 Set `workspace: "worktree"` (or make it the profile default) and the sub-agent gets its own git worktree. Use it when several sub-agents edit code at once — in a shared directory they overwrite each other.
@@ -355,4 +619,5 @@ Teardown asks the process tree to exit, then forces it after a grace window. The
 - **One delegation is one question — unless someone messages it.** The child returns on its first complete answer. If a message arrives while it works, it keeps going and answers that too, still bounded by its turn cap and the tree's hop limit.
 - **Turn caps are enforced by wick**, by counting normalized end-of-turn events and stopping the process — not by a provider flag. Only some CLIs have `--max-turns`; the cap behaves identically on the ones that do not.
 - **Cycles are refused.** A profile already active higher in the chain cannot be delegated to again, so `A → B → A` cannot loop.
+- **A busy room queues, it does not refuse.** Depth, cycle and budget mean "this must not happen"; a full room means "not yet", so the work waits instead of being thrown away.
 - **Budget exhaustion lets running work finish** and refuses only *new* delegations. A manual stop, by contrast, cascades.

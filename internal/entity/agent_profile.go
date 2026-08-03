@@ -68,6 +68,11 @@ type AgentProfile struct {
 	DefaultMode string `gorm:"type:varchar(16);not null;default:'sync'" json:"default_mode"`
 	// DefaultWorkspace is "shared" today. "worktree" lands in Phase 3.
 	DefaultWorkspace string `gorm:"type:varchar(16);not null;default:'shared'" json:"default_workspace"`
+	// DefaultMemoryMode decides what this role is told about the rest of
+	// the conversation beyond its own task: no_history, state_summary
+	// (the default), relevant_chunks, or full_history. Empty means the
+	// system default rather than "nothing".
+	DefaultMemoryMode string `gorm:"type:varchar(32);not null;default:''" json:"default_memory_mode"`
 	// CanDelegate marks a profile as eligible to be a leader, i.e. to
 	// call wick_delegate itself (nested delegation). Forced false for
 	// providers without MCP tool-use.

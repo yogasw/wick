@@ -184,6 +184,12 @@ func (d *recordingDeliverer) channelDeliveries() []string {
 	return append([]string(nil), d.channel...)
 }
 
+func (d *recordingDeliverer) sessionDeliveries() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.session...)
+}
+
 func TestAsyncReturnsHandleImmediatelyAndDelivers(t *testing.T) {
 	stream := &scriptedStream{events: []StreamEvent{
 		{Type: event.TextDelta, Text: "the async answer"},

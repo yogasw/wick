@@ -32,10 +32,18 @@ func testRepo(t *testing.T) *Repo {
 	// Keep at least one connection alive for the test's duration —
 	// a shared-cache memory DB is dropped when the last one closes.
 	t.Cleanup(func() { _ = sqlDB.Close() })
+	// Match how production opens sqlite (see postgres.NewGORM): one writer
+	// and a busy timeout. Without this a test that writes from a request
+	// goroutine and a background one at the same time fails with "table is
+	// locked" — a fixture artefact that production does not have, and one
+	// that reads exactly like a real concurrency bug.
+	db.Exec("PRAGMA busy_timeout=5000")
+	sqlDB.SetMaxOpenConns(1)
 	if err := db.AutoMigrate(
 		&entity.AgentProfile{}, &entity.AgentDelegation{},
 		&entity.AgentSquad{}, &entity.AgentBoard{}, &entity.AgentTask{},
 		&entity.AgentMessage{},
+		&entity.AgentIncident{}, &entity.AgentEvidence{},
 	); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -140,18 +148,20 @@ func TestAdmitRejectsWhenRootBudgetExhausted(t *testing.T) {
 	}
 }
 
-func TestAdmitRejectsBeyondMaxParallel(t *testing.T) {
+// A full room is "not yet", not "no". Admit deliberately says nothing
+// about the parallel cap — Run enqueues instead, so a fan-out lines up
+// rather than losing everything past the first item. The queueing
+// behaviour itself is covered in queue_test.go.
+func TestAdmitLeavesTheParallelCapToTheQueue(t *testing.T) {
 	r := testRepo(t)
 	p := seedProfile(t, r, "researcher")
 	lim := DefaultLimits()
-	lim.MaxParallel = 2
+	lim.MaxParallel = 1
 
 	seedDelegation(t, r, "d1", "root-1", entity.DelegationRunning, 0)
-	seedDelegation(t, r, "d2", "root-1", entity.DelegationQueued, 0)
 
-	err := r.Admit(context.Background(), lim, p, "root-1", 1, nil)
-	if got := asRefusal(t, err).Reason; got != RefusedParallel {
-		t.Fatalf("reason = %q, want %q", got, RefusedParallel)
+	if err := r.Admit(context.Background(), lim, p, "root-1", 1, nil); err != nil {
+		t.Fatalf("a busy room must be admitted and queued, not refused: %v", err)
 	}
 }
 
@@ -159,16 +169,18 @@ func TestAdmitRejectsBeyondMaxParallel(t *testing.T) {
 // wedges permanently after max_parallel total delegations.
 func TestTerminalSiblingsDoNotConsumeParallelSlots(t *testing.T) {
 	r := testRepo(t)
-	p := seedProfile(t, r, "researcher")
-	lim := DefaultLimits()
-	lim.MaxParallel = 2
+	ctx := context.Background()
 
 	seedDelegation(t, r, "d1", "root-1", entity.DelegationDone, 1)
 	seedDelegation(t, r, "d2", "root-1", entity.DelegationInterrupted, 1)
 	seedDelegation(t, r, "d3", "root-1", entity.DelegationRunning, 0)
 
-	if err := r.Admit(context.Background(), lim, p, "root-1", 1, nil); err != nil {
-		t.Fatalf("terminal siblings must not hold slots: %v", err)
+	n, err := r.CountActiveByRoot(ctx, "root-1")
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("active = %d, want 1 — terminal siblings still hold slots", n)
 	}
 }
 
@@ -206,6 +218,36 @@ func TestEffectiveMaxTurnsPrecedenceAndClamp(t *testing.T) {
 				t.Fatalf("got %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// A half-filled config row must not disable a brake. Zero on a limit
+// reads as "unlimited" unless normalize repairs it.
+func TestInvestigationBrakesFallBackToDefaults(t *testing.T) {
+	got := Limits{}.normalize()
+	if got.MaxIterations != DefaultMaxIterations {
+		t.Fatalf("max iterations = %d, want %d", got.MaxIterations, DefaultMaxIterations)
+	}
+	if got.MaxRuntimeMinutes != DefaultMaxRuntimeMinutes {
+		t.Fatalf("max runtime = %d, want %d", got.MaxRuntimeMinutes, DefaultMaxRuntimeMinutes)
+	}
+	if got.NoNewEvidenceRounds != DefaultNoNewEvidenceRounds {
+		t.Fatalf("dry rounds = %d, want %d", got.NoNewEvidenceRounds, DefaultNoNewEvidenceRounds)
+	}
+}
+
+// A gate that accepts an answer nobody vouched for is not a gate, so
+// "unknown" is repaired like any other junk value.
+func TestMinConfidenceRepairsUnrecognisedValues(t *testing.T) {
+	for _, raw := range []string{"", "unknown", "0.8", "quite"} {
+		if got := (Limits{MinConfidence: raw}).normalize().MinConfidence; got != ConfidenceMedium {
+			t.Fatalf("%q normalised to %q, want %q", raw, got, ConfidenceMedium)
+		}
+	}
+	for _, raw := range []string{ConfidenceLow, ConfidenceMedium, ConfidenceHigh} {
+		if got := (Limits{MinConfidence: raw}).normalize().MinConfidence; got != raw {
+			t.Fatalf("%q was changed to %q", raw, got)
+		}
 	}
 }
 

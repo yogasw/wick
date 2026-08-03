@@ -1474,6 +1474,11 @@ func sendMessage(c *tool.Ctx) {
 	// Deliberately not something an agent can do for itself: a leader deep
 	// in a loop is exactly the one most convinced it needs more hops.
 	resetHopsForSession(c, id)
+	// Act on any @mentions the person wrote. The text still reached the
+	// agent above, unedited — routing is a side channel, not a filter, so
+	// the leader always sees what was said even when a mention took work
+	// straight to someone else.
+	routeHumanMentions(bgCtx, sess, id, req.Text)
 	c.JSON(http.StatusOK, map[string]string{"status": "queued"})
 }
 
