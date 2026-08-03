@@ -82,6 +82,13 @@ type AgentProfile struct {
 	// 0 = uncapped by the profile; the per-tree budget still applies.
 	DefaultMaxTokens int `gorm:"not null;default:0" json:"default_max_tokens"`
 
+	// Locked freezes this role's behaviour. While true, no edit and no
+	// delete is accepted from ANY surface — web UI or MCP. Unlocking is a
+	// UI-only action, so an agent can never widen its own definition.
+	// Distinct from Disabled: a disabled role is switched off, a locked
+	// role is switched in stone.
+	Locked bool `gorm:"not null;default:false" json:"locked"`
+
 	Disabled  bool      `gorm:"not null;default:false" json:"disabled"`
 	CreatedBy string    `gorm:"type:varchar(128);not null;default:''" json:"created_by"`
 	CreatedAt time.Time `json:"created_at"`
