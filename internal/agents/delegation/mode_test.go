@@ -97,7 +97,5 @@ func TestDelegationWithNoModeRunsInTheBackground(t *testing.T) {
 	}
 
 	waitForStatus(t, r, res.DelegationID, entity.DelegationDone)
-	if got := del.sessionDeliveries(); len(got) != 1 {
-		t.Fatalf("session deliveries = %v, want exactly one", got)
-	}
+	waitForDeliveries(t, del.sessionDeliveries, 1)
 }

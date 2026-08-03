@@ -222,9 +222,7 @@ func TestAsyncReturnsHandleImmediatelyAndDelivers(t *testing.T) {
 	// No sink asked for: the leader that dispatched it gets woken, rather
 	// than the result being posted next to the conversation with nobody to
 	// act on it.
-	if got := del.sessionDeliveries(); len(got) != 1 {
-		t.Fatalf("session deliveries = %v, want exactly one", got)
-	}
+	waitForDeliveries(t, del.sessionDeliveries, 1)
 	if got := del.channelDeliveries(); len(got) != 0 {
 		t.Fatalf("channel deliveries = %v, want none by default", got)
 	}
@@ -251,9 +249,7 @@ func TestBackgroundDeliversToChannelWhenAsked(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 	waitForStatus(t, r, res.DelegationID, entity.DelegationDone)
-	if got := del.channelDeliveries(); len(got) != 1 {
-		t.Fatalf("channel deliveries = %v, want exactly one", got)
-	}
+	waitForDeliveries(t, del.channelDeliveries, 1)
 }
 
 // An async delegation must survive the request that started it: the
@@ -749,4 +745,23 @@ func waitForStatus(t *testing.T, r *Repo, id, want string) {
 	}
 	got, _ := r.Get(context.Background(), id)
 	t.Fatalf("delegation %s never reached %q (last: %q)", id, want, got.Status)
+}
+
+// waitForDeliveries polls until fetch returns exactly want entries.
+// Needed wherever a test asserts on delivery after waitForStatus: the
+// async goroutine marks the row terminal INSIDE await and calls deliver
+// after it returns, so "status is done" runs slightly ahead of "the
+// result has been delivered" and a single read races that gap.
+func waitForDeliveries(t *testing.T, fetch func() []string, want int) []string {
+	t.Helper()
+	var got []string
+	for i := 0; i < 400; i++ {
+		got = fetch()
+		if len(got) == want {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("deliveries = %v, want exactly %d", got, want)
+	return nil
 }
