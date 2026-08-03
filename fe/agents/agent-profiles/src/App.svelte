@@ -8,6 +8,7 @@
     listAgentProfiles,
     saveAgentProfile,
     type AgentProfile,
+    type ProviderListItem,
     type TagOption,
   } from "@wick-fe/common-api";
   import { AgentProfileEditor, ConfirmDialog, ToastHost } from "@wick-fe/common-ui";
@@ -19,7 +20,7 @@
 
   let profiles = $state<AgentProfile[]>([]);
   let tags = $state<TagOption[]>([]);
-  let providers = $state<string[]>([]);
+  let providerList = $state<ProviderListItem[]>([]);
   let isAdmin = $state(false);
 
   let selected = $state<AgentProfile | null>(null);
@@ -36,7 +37,7 @@
       const r = await listAgentProfiles(base);
       profiles = r.profiles;
       tags = r.tags;
-      providers = r.providers;
+      providerList = r.provider_list;
       isAdmin = r.is_admin;
       // Keep the editor pointed at the same role across a reload, so
       // saving does not bounce the user back to an empty pane.
@@ -128,7 +129,7 @@
           <AgentProfileEditor
             profile={selected}
             {tags}
-            {providers}
+            {providerList}
             readonly={!isAdmin}
             {saving}
             error={formError}

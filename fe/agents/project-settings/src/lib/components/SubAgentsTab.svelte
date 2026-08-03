@@ -12,6 +12,7 @@
     saveAgentProfile,
     shadowedKeys,
     type AgentProfile,
+    type ProviderListItem,
     type TagOption,
   } from "@wick-fe/common-api";
   import { AgentProfileEditor, Button, ConfirmDialog } from "@wick-fe/common-ui";
@@ -23,7 +24,7 @@
   let owned = $state<AgentProfile[]>([]);
   let inherited = $state<AgentProfile[]>([]);
   let tags = $state<TagOption[]>([]);
-  let providers = $state<string[]>([]);
+  let providerList = $state<ProviderListItem[]>([]);
 
   let editing = $state<AgentProfile | null>(null);
   let loading = $state(true);
@@ -33,7 +34,14 @@
   let pendingDelete = $state<AgentProfile | null>(null);
 
   const shadowed = $derived(
-    shadowedKeys({ profiles: [], owned, inherited, tags, providers, is_admin: false }),
+    shadowedKeys({
+      profiles: [],
+      owned,
+      inherited,
+      tags,
+      provider_list: providerList,
+      is_admin: false,
+    }),
   );
   // A global role this project has already overridden is not offered for
   // override again — its replacement is listed below, under this project.
@@ -47,7 +55,7 @@
       owned = r.owned;
       inherited = r.inherited;
       tags = r.tags;
-      providers = r.providers;
+      providerList = r.provider_list;
     } catch (e) {
       loadError = e instanceof Error ? e.message : String(e);
     } finally {
@@ -124,7 +132,7 @@
     <AgentProfileEditor
       profile={editing}
       {tags}
-      {providers}
+      {providerList}
       {saving}
       error={formError}
       onsave={save}

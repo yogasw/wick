@@ -72,6 +72,12 @@
   const isNew = $derived(draft.id === "");
   const leaderCapable = $derived(canLeadDelegation(draft.provider));
 
+  // Locked freezes the role; readonly is how a non-admin sees a global
+  // role. Both disable the form, but only readonly hides the way out —
+  // the Locked checkbox stays live under a lock, or the lock would have
+  // no key.
+  const frozen = $derived(readonly || draft.locked);
+
   // Provider and model are two columns but one choice. The picker speaks
   // the composer's packed form ("type/name::modelID"); the form splits it
   // back apart on the way to the server, so nothing downstream changes.
@@ -142,6 +148,15 @@
     </p>
   {/if}
 
+  {#if draft.locked && !readonly}
+    <p
+      class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200"
+    >
+      Locked — untick Locked and save to edit this role. Its fields and the
+      Delete button stay frozen until you do.
+    </p>
+  {/if}
+
   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
     <LabeledInput
       label="Key"
@@ -152,7 +167,7 @@
       <TextInput
         value={draft.key}
         onChange={(v) => (draft.key = v)}
-        disabled={readonly || !isNew}
+        disabled={frozen || !isNew}
         placeholder="code-reviewer"
       />
     </LabeledInput>
@@ -161,7 +176,7 @@
       <TextInput
         value={draft.name}
         onChange={(v) => (draft.name = v)}
-        disabled={readonly}
+        disabled={frozen}
         placeholder="Code Reviewer"
       />
     </LabeledInput>
@@ -172,7 +187,7 @@
       value={draft.description}
       onChange={(v) => (draft.description = v)}
       rows={2}
-      disabled={readonly}
+      disabled={frozen}
       placeholder="Reviews a diff and returns findings ranked by severity."
     />
   </LabeledInput>
@@ -184,7 +199,7 @@
     >
       <!-- ProviderPicker has no disabled prop: a read-only or frozen form
            blocks it from the outside instead of growing one. -->
-      {#if readonly}
+      {#if frozen}
         <div class="pointer-events-none opacity-60">
           <ProviderPicker
             options={providerOptions}
@@ -208,7 +223,7 @@
         value={draft.default_max_turns}
         onChange={(v) => (draft.default_max_turns = v)}
         min={1}
-        disabled={readonly}
+        disabled={frozen}
       />
     </LabeledInput>
   </div>
@@ -218,7 +233,7 @@
       value={draft.system_prompt}
       onChange={(v) => (draft.system_prompt = v)}
       rows={6}
-      disabled={readonly}
+      disabled={frozen}
       placeholder="You review code and return findings ranked by severity."
     />
   </LabeledInput>
@@ -239,7 +254,7 @@
               type="checkbox"
               class="accent-green-500"
               checked={draft.allowed_tag_ids.includes(t.id)}
-              disabled={readonly}
+              disabled={frozen}
               onchange={() => toggleTag(t.id)}
             />
             {t.name}
@@ -256,7 +271,7 @@
     <TextInput
       value={nativeToolsText}
       onChange={setNativeTools}
-      disabled={readonly}
+      disabled={frozen}
       placeholder="Read, Grep, WebSearch"
     />
   </LabeledInput>
@@ -267,7 +282,7 @@
         type="checkbox"
         class="mt-0.5 accent-green-500"
         bind:checked={draft.strict_mcp}
-        disabled={readonly}
+        disabled={frozen}
       />
       <span>
         Strict MCP
@@ -283,7 +298,7 @@
         type="checkbox"
         class="mt-0.5 accent-green-500"
         bind:checked={draft.can_delegate}
-        disabled={readonly || !leaderCapable}
+        disabled={frozen || !leaderCapable}
       />
       <span>
         Can delegate
@@ -302,7 +317,7 @@
         type="checkbox"
         class="mt-0.5 accent-green-500"
         bind:checked={draft.allow_take_over}
-        disabled={readonly}
+        disabled={frozen}
       />
       <span>
         Allow take-over
@@ -318,12 +333,30 @@
         type="checkbox"
         class="mt-0.5 accent-green-500"
         bind:checked={draft.disabled}
-        disabled={readonly}
+        disabled={frozen}
       />
       <span>
         Disabled
         <span class="block text-[11px] text-black-700 dark:text-black-600">
           Kept on record but hidden from every roster.
+        </span>
+      </span>
+    </label>
+
+    <!-- Deliberately keyed on `readonly`, not `frozen`: this is the one
+         control a locked role leaves alive, or the lock would have no key. -->
+    <label class="flex items-start gap-2 text-xs text-black-800 dark:text-white-100">
+      <input
+        type="checkbox"
+        class="mt-0.5 accent-green-500"
+        bind:checked={draft.locked}
+        disabled={readonly}
+      />
+      <span>
+        Locked
+        <span class="block text-[11px] text-black-700 dark:text-black-600">
+          Freezes this role: no edit and no delete, from this page or from an
+          agent over MCP. Untick and save to change it again.
         </span>
       </span>
     </label>
@@ -337,7 +370,7 @@
       {#if oncancel}
         <Button variant="secondary" onclick={oncancel}>Cancel</Button>
       {/if}
-      {#if ondelete && !isNew}
+      {#if ondelete && !isNew && !draft.locked}
         <Button variant="danger" class="ml-auto" onclick={() => ondelete?.(draft)}>
           Delete
         </Button>

@@ -157,4 +157,44 @@ describe("AgentProfileEditor", () => {
     const boxes = container.querySelectorAll('input[type="checkbox"]');
     expect((boxes[1] as HTMLInputElement).disabled).toBe(false);
   });
+
+  // A locked role is frozen everywhere. The Locked checkbox itself has to
+  // stay live, though — if it went dead with the rest, the only way out of
+  // a lock would be a SQL statement.
+  test("locked disables every control except Locked itself", () => {
+    const { container } = render(AgentProfileEditor, {
+      profile: profile({ key: "k", description: "d", locked: true }),
+      providerList: [{ type: "claude", name: "claude" }],
+      onsave: vi.fn(),
+    });
+    const boxes = Array.from(
+      container.querySelectorAll('input[type="checkbox"]'),
+    ) as HTMLInputElement[];
+    // Order follows the template: strict_mcp, can_delegate, allow_take_over, disabled, locked.
+    const lockedBox = boxes[boxes.length - 1];
+    expect(lockedBox.disabled).toBe(false);
+    expect(lockedBox.checked).toBe(true);
+    for (const b of boxes.slice(0, -1)) expect(b.disabled).toBe(true);
+    expect(container.querySelector("textarea")?.disabled).toBe(true);
+  });
+
+  test("locked hides Delete", () => {
+    render(AgentProfileEditor, {
+      profile: profile({ id: "p1", key: "k", description: "d", locked: true }),
+      providerList: [{ type: "claude", name: "claude" }],
+      onsave: vi.fn(),
+      ondelete: vi.fn(),
+    });
+    expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+  });
+
+  test("an unlocked role still offers Delete", () => {
+    render(AgentProfileEditor, {
+      profile: profile({ id: "p1", key: "k", description: "d" }),
+      providerList: [{ type: "claude", name: "claude" }],
+      onsave: vi.fn(),
+      ondelete: vi.fn(),
+    });
+    expect(screen.getByRole("button", { name: /delete/i })).toBeTruthy();
+  });
 });
