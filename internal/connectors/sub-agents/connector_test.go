@@ -106,3 +106,57 @@ func TestNilResolverIsTreatedAsUnavailable(t *testing.T) {
 		t.Fatal("a resolver that yields nil must report unavailable")
 	}
 }
+
+// findOp returns the named operation from the module, or fails the test.
+// Two tests below need it and a second copy would be a second chance to
+// look up the wrong op.
+func findOp(t *testing.T, key string) *connector.Operation {
+	t.Helper()
+	for _, cat := range Module(Deps{}).Operations {
+		for i := range cat.Ops {
+			if cat.Ops[i].Key == key {
+				return &cat.Ops[i]
+			}
+		}
+	}
+	t.Fatalf("op %q is missing", key)
+	return nil
+}
+
+// create_agent is the only way an agent can define a role, so a field it
+// cannot reach is a role it cannot get right. This pins the full set
+// against the entity — a column added later without an input here shows
+// up as a failure rather than as a silently unreachable setting.
+func TestCreateAgentCoversEveryProfileField(t *testing.T) {
+	op := findOp(t, "create_agent")
+	got := map[string]bool{}
+	for _, f := range op.Input {
+		got[f.Key] = true
+	}
+	want := []string{
+		"key", "name", "description", "system_prompt", "provider", "model",
+		"max_turns", "max_tokens", "allowed_tags", "allowed_native_tools",
+		"strict_mcp", "can_delegate", "allow_take_over", "mode", "workspace",
+		"icon", "disabled", "locked",
+	}
+	for _, k := range want {
+		if !got[k] {
+			t.Fatalf("create_agent cannot set %q", k)
+		}
+	}
+}
+
+// Two of those fields are stored and read by nobody. Saying so in the desc
+// is the difference between an inert setting and a false promise the LLM
+// will act on.
+func TestUnwiredFieldsSaySo(t *testing.T) {
+	op := findOp(t, "create_agent")
+	for _, f := range op.Input {
+		if f.Key != "allowed_native_tools" && f.Key != "strict_mcp" {
+			continue
+		}
+		if !strings.Contains(strings.ToUpper(f.Description), "NOT ENFORCED") {
+			t.Fatalf("%q must say it is not enforced yet, got %q", f.Key, f.Description)
+		}
+	}
+}

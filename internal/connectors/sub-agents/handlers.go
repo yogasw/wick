@@ -271,8 +271,11 @@ func (h *handlers) createAgent(c *connector.Ctx) (any, error) {
 		// role's tool access can only ever pick a SUBSET of what the human
 		// who triggered it already has. Empty = inherit that set in full.
 		AllowedTagIDs:      encodeTagIDs(delegation.NarrowTags(splitList(c.Input("allowed_tags")), caller.tagIDs)),
-		AllowedNativeTools: "[]",
-		StrictMCP:          true,
+		Icon:               strings.TrimSpace(c.Input("icon")),
+		AllowedNativeTools: encodeTagIDs(splitList(c.Input("allowed_native_tools"))),
+		StrictMCP:          c.InputBool("strict_mcp"),
+		DefaultMaxTokens:   c.InputInt("max_tokens"),
+		Disabled:           c.InputBool("disabled"),
 		DefaultMaxTurns:    c.InputInt("max_turns"),
 		DefaultMode:        delegation.ModeSync,
 		DefaultWorkspace:   delegation.WorkspaceShared,
@@ -287,6 +290,18 @@ func (h *handlers) createAgent(c *connector.Ctx) (any, error) {
 				delegation.ModeSync, delegation.ModeAsync, mode)
 		}
 		p.DefaultMode = mode
+	}
+	if ws := strings.TrimSpace(c.Input("workspace")); ws != "" {
+		if ws != delegation.WorkspaceShared && ws != delegation.WorkspaceWorktree {
+			return nil, fmt.Errorf("workspace must be %q or %q, got %q",
+				delegation.WorkspaceShared, delegation.WorkspaceWorktree, ws)
+		}
+		p.DefaultWorkspace = ws
+	}
+	// A new role keeps the historical default when the caller says nothing.
+	// Reading the raw input distinguishes "false" from "not mentioned".
+	if existing == nil && c.Input("strict_mcp") == "" {
+		p.StrictMCP = true
 	}
 	// Carry forward anything this call did not mention.
 	if existing != nil {
@@ -312,9 +327,24 @@ func (h *handlers) createAgent(c *connector.Ctx) (any, error) {
 		if p.Model == "" {
 			p.Model = existing.Model
 		}
-		p.AllowedNativeTools = existing.AllowedNativeTools
-		p.StrictMCP = existing.StrictMCP
-		p.DefaultWorkspace = existing.DefaultWorkspace
+		if strings.TrimSpace(c.Input("icon")) == "" {
+			p.Icon = existing.Icon
+		}
+		if strings.TrimSpace(c.Input("allowed_native_tools")) == "" {
+			p.AllowedNativeTools = existing.AllowedNativeTools
+		}
+		if c.Input("strict_mcp") == "" {
+			p.StrictMCP = existing.StrictMCP
+		}
+		if c.InputInt("max_tokens") <= 0 {
+			p.DefaultMaxTokens = existing.DefaultMaxTokens
+		}
+		if c.Input("disabled") == "" {
+			p.Disabled = existing.Disabled
+		}
+		if strings.TrimSpace(c.Input("workspace")) == "" {
+			p.DefaultWorkspace = existing.DefaultWorkspace
+		}
 	}
 	if p.DefaultMaxTurns <= 0 {
 		p.DefaultMaxTurns = delegation.DefaultMaxTurns

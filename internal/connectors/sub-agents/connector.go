@@ -105,16 +105,25 @@ type createAgentInput struct {
 	Description string `wick:"required;textarea;desc=What this role is for. Read by the delegating agent to decide when to pick it — a vague description makes the role unusable."`
 	SystemPrompt string `wick:"required;textarea;desc=The role's instructions. This becomes the sub-agent's system prompt."`
 	Name         string `wick:"desc=Display name. Defaults to the key."`
-	Provider     string `wick:"desc=Agent runtime: claude (default), codex, wick, gemini."`
+	Icon         string `wick:"desc=A single emoji shown beside this role in lists. Optional."`
+	Provider     string `wick:"desc=Agent runtime: claude (default), codex, wick, gemini. A specific instance may be named as type/name (e.g. codex/abc)."`
 	Model        string `wick:"desc=Provider-specific model id. Empty uses the provider default."`
 	MaxTurns     int    `wick:"desc=Default turn budget for this role. Clamped to the system ceiling."`
+	MaxTokens    int    `wick:"desc=Default token budget for one delegation of this role. 0 = the role adds no cap of its own; the per-tree budget still applies."`
 	// Tool access. Narrowed against your own tags server-side, so this can
 	// only ever restrict a role — it can never grant it something you do
 	// not already have.
-	AllowedTags   string `wick:"desc=Comma-separated tag ids limiting which tools/connectors this role may use. See list_access for what you can grant. Empty = the role inherits everything you can reach."`
-	CanDelegate   bool   `wick:"desc=Let this role delegate and define roles of its own. Off by default: most roles should do their own work."`
-	AllowTakeOver bool   `wick:"desc=Let a human send messages into this role mid-run. Its answers are then flagged as human-steered."`
-	Mode          string `wick:"desc=sync (default) returns the answer to the caller. async returns immediately and delivers later."`
+	AllowedTags string `wick:"desc=Comma-separated tag ids limiting which tools/connectors this role may use. See list_access for what you can grant. Empty = the role inherits everything you can reach."`
+	// Stored, returned, and read by nothing. Said plainly because an inert
+	// field the model believes in is worse than an absent one.
+	AllowedNativeTools string `wick:"desc=Comma-separated provider-native tool names (e.g. Read, Grep, WebSearch). NOT ENFORCED today: the value is stored but nothing forwards it to the spawn, so it does not restrict what this role can call."`
+	StrictMCP          bool   `wick:"desc=Drop the host's own MCP servers from this role's spawn. NOT ENFORCED today: whether a spawn gets --strict-mcp-config is decided globally by the WICK_STRICT_MCP environment variable, identically for every role."`
+	CanDelegate        bool   `wick:"desc=Let this role delegate and define roles of its own. Off by default: most roles should do their own work."`
+	AllowTakeOver      bool   `wick:"desc=Let a human send messages into this role mid-run. Its answers are then flagged as human-steered."`
+	Mode               string `wick:"desc=sync (default) returns the answer to the caller. async returns immediately and delivers later."`
+	Workspace          string `wick:"desc=Default working directory for this role: shared (default), or worktree for a private git worktree. Falls back to shared with a note on a non-git project."`
+	Disabled           bool   `wick:"desc=Keep the role on record but hide it from every roster. A disabled role cannot be delegated to."`
+	Locked             bool   `wick:"desc=Freeze this role. Once locked, no further edit or delete is accepted over MCP — only a human can unlock it in the web UI. One-way from here: you can lock, you cannot unlock."`
 }
 
 type tasksInput struct {
