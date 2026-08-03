@@ -76,6 +76,40 @@ describe("ProviderPicker live sets", () => {
     expect(onChange).toHaveBeenCalledWith("wick/x::m1");
   });
 
+  // The popup must be fixed-positioned, not absolute: inside a Modal (whose
+  // body is overflow-auto) an absolute popup is clipped by the body and makes
+  // the dialog scroll instead of painting over it.
+  test("renders the menu fixed so no overflow ancestor can clip it", async () => {
+    render(ProviderPicker, { options: [WICK], value: "", onChange: vi.fn() });
+    await fireEvent.click(screen.getByRole("button", { name: /select provider/i }));
+
+    // Read the resolved style property, not the raw attribute text: the DOM
+    // normalizes "position:fixed" to "position: fixed".
+    const menu = Array.from(document.querySelectorAll<HTMLElement>("div[style]")).find(
+      (d) => d.style.position === "fixed",
+    );
+    expect(menu).toBeTruthy();
+    expect(menu?.style.zIndex).toBe("9999");
+  });
+
+  // The menu is no longer a DOM child of the trigger's wrapper, so the
+  // outside-click handler has to know about it explicitly or the first click
+  // on any row would close the menu instead of selecting.
+  test("a click inside the menu does not close it", async () => {
+    const onChange = vi.fn();
+    const loadModels = vi.fn().mockResolvedValue([
+      { id: "m1", label: "Model One", default: true },
+      { id: "m2", label: "Model Two", default: false },
+    ]);
+    render(ProviderPicker, { options: [WICK], value: "", onChange, loadModels });
+
+    await openAndDrill();
+    const row = await screen.findByText("Model One");
+    await fireEvent.mouseDown(row);
+    // Still open: the filter/rows are reachable after a mousedown inside.
+    expect(screen.queryByText("Model Two")).toBeTruthy();
+  });
+
   // A live-set pin matches no entry in the static list, so showing the bare
   // instance name would read as "no model chosen" for a project that pinned
   // a specific leaf.

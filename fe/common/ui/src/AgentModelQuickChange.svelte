@@ -58,7 +58,9 @@
 <Modal open title={`Provider / model — ${profile.name || profile.key}`} size="md" onClose={onclose}>
   <div class="space-y-4">
     <div>
-      <span class="mb-1 block text-xs text-black-600 dark:text-black-700">Runs on</span>
+      <!-- black-800, not black-600: in light mode black-600 is #BFBFBF, which
+           is a disabled-text grey and reads as washed out for a live label. -->
+      <span class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600">Runs on</span>
       <ProviderPicker
         options={options}
         {value}

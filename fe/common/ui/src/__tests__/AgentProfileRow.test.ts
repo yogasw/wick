@@ -12,10 +12,15 @@ async function openMenu() {
   await fireEvent.click(screen.getByRole("button", { name: /actions for/i }));
 }
 
-/** The row body button — named exactly, since the ⋮ trigger's aria-label
-    also contains the role name. */
+/** The row body — a role="button" div, named exactly, since the ⋮ trigger's
+    aria-label also contains the role name. */
 function rowButton() {
   return screen.getByRole("button", { name: /^Researcher/ });
+}
+
+/** A provider/model chip, which doubles as the quick-change shortcut. */
+function chip(text: string | RegExp) {
+  return screen.getByRole("button", { name: text });
 }
 
 /** This project has no jest-dom, so disabled state is read off the DOM. */
@@ -144,6 +149,63 @@ describe("AgentProfileRow", () => {
     await openMenu();
     expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
     expect(screen.queryByRole("menuitem", { name: /change provider/i })).toBeNull();
+  });
+
+  // Swapping a model is the frequent edit, so it must not cost a trip through
+  // the ⋮ menu.
+  test("clicking a provider chip opens quick change directly", async () => {
+    const onchangeModel = vi.fn();
+    const onedit = vi.fn();
+    render(AgentProfileRow, {
+      profile: profile({ provider: "wick/x", model: "set1@gemini-3-pro" }),
+      onedit,
+      onchangeModel,
+    });
+
+    await fireEvent.click(chip("wick/x"));
+    expect(onchangeModel).toHaveBeenCalledOnce();
+    // The chip must not ALSO open the editor, which would render the full
+    // form behind the dialog.
+    expect(onedit).not.toHaveBeenCalled();
+  });
+
+  test("the model chip is a shortcut too", async () => {
+    const onchangeModel = vi.fn();
+    render(AgentProfileRow, {
+      profile: profile({ provider: "wick/x", model: "set1@gemini-3-pro" }),
+      onedit: vi.fn(),
+      onchangeModel,
+    });
+    await fireEvent.click(chip("gemini-3-pro"));
+    expect(onchangeModel).toHaveBeenCalledOnce();
+  });
+
+  // "no model pinned" is the state most worth changing, so that chip is a
+  // shortcut as well rather than inert text.
+  test("the default-model placeholder is clickable", async () => {
+    const onchangeModel = vi.fn();
+    render(AgentProfileRow, {
+      profile: profile({ provider: "claude/claude", model: "" }),
+      onedit: vi.fn(),
+      onchangeModel,
+    });
+    // Exact name: the row container's accessible name includes all of its
+    // text, so a substring match would also hit the row itself.
+    await fireEvent.click(chip("provider default model"));
+    expect(onchangeModel).toHaveBeenCalledOnce();
+  });
+
+  // A locked role's chips are inert: the lock has to hold on the shortcut too,
+  // or it is trivially bypassed.
+  test("a locked role's chips are not clickable", () => {
+    const onchangeModel = vi.fn();
+    render(AgentProfileRow, {
+      profile: profile({ provider: "wick/x", locked: true }),
+      onedit: vi.fn(),
+      onchangeModel,
+    });
+    expect(screen.queryByRole("button", { name: "wick/x" })).toBeNull();
+    expect(screen.getByText("wick/x")).toBeTruthy();
   });
 
   test("marks a project role that shadows a global one", () => {

@@ -100,12 +100,21 @@
       ? 'border-green-500 bg-white-200 dark:bg-navy-800'
       : 'border-white-300 bg-white-100 hover:border-white-400 dark:border-navy-600 dark:bg-navy-800 dark:hover:border-navy-500'}"
   >
-    <!-- The row is the edit affordance. A button (not a div+onclick) so it is
-         reachable by keyboard and announced as actionable. -->
-    <button
-      type="button"
-      class="min-w-0 flex-1 text-left"
+    <!-- Two nested click targets would be invalid HTML (a button inside a
+         button) and ambiguous to a screen reader, so the row is a plain
+         clickable div and the chips are real buttons inside it. Keyboard
+         access is preserved by the explicit role/tabindex/key handler. -->
+    <div
+      role="button"
+      tabindex="0"
+      class="min-w-0 flex-1 cursor-pointer text-left"
       onclick={() => onedit(profile)}
+      onkeydown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onedit(profile);
+        }
+      }}
     >
       <span class="flex items-center gap-2">
         <span class="truncate text-sm font-medium text-black-900 dark:text-white-100">
@@ -138,23 +147,45 @@
 
       <!-- Which provider and model this role runs on, stated on the row: it
            is the thing most often checked and previously required opening
-           the editor to see. -->
-      <span class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span
-          class="shrink-0 rounded bg-white-200 px-1.5 py-0.5 font-mono text-[10px] text-black-800 dark:bg-navy-700 dark:text-black-600"
-        >
-          {instance || "no provider"}
-        </span>
-        {#if modelLabel}
-          <span
-            class="shrink-0 rounded bg-white-200 px-1.5 py-0.5 font-mono text-[10px] text-black-800 dark:bg-navy-700 dark:text-black-600"
+           the editor to see.
+
+           The chips are also the shortcut for CHANGING it — clicking one
+           opens the quick-change dialog directly. Swapping a model is the
+           frequent edit, and routing it through ⋮ costs two clicks for the
+           thing people came to do. Propagation is stopped so a chip does not
+           also open the full editor behind the dialog. -->
+      {#snippet chip(text: string, mono: boolean)}
+        {#if onchangeModel && !frozen}
+          <button
+            type="button"
+            title="Change provider / model"
+            onclick={(e) => {
+              e.stopPropagation();
+              onchangeModel?.(profile);
+            }}
+            class="shrink-0 rounded bg-white-200 px-1.5 py-0.5 text-[10px] text-black-800 transition-colors hover:bg-green-500/10 hover:text-green-600 dark:bg-navy-700 dark:text-black-600 dark:hover:text-green-400 {mono
+              ? 'font-mono'
+              : ''}"
           >
-            {modelLabel}
-          </span>
+            {text}
+          </button>
         {:else}
-          <span class="shrink-0 text-[10px] text-black-700 dark:text-black-600">
-            provider default model
+          <span
+            class="shrink-0 rounded bg-white-200 px-1.5 py-0.5 text-[10px] text-black-800 dark:bg-navy-700 dark:text-black-600 {mono
+              ? 'font-mono'
+              : ''}"
+          >
+            {text}
           </span>
+        {/if}
+      {/snippet}
+
+      <span class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+        {@render chip(instance || "no provider", true)}
+        {#if modelLabel}
+          {@render chip(modelLabel, true)}
+        {:else}
+          {@render chip("provider default model", false)}
         {/if}
         {#if profile.description}
           <span class="min-w-0 truncate text-[11px] text-black-700 dark:text-black-600">
@@ -162,7 +193,7 @@
           </span>
         {/if}
       </span>
-    </button>
+    </div>
 
     <div class="shrink-0">
       <KebabMenu {items} ariaLabel={`Actions for ${profile.name || profile.key}`} width={216} />
