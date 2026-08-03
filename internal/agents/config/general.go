@@ -55,6 +55,15 @@ type GeneralConfig struct {
 	SubAgentsMaxRuntimeMin    int    `wick:"number;group=Sub-agents;desc=Minutes one investigation may run before it stops, keeps whatever it has, and escalates. Catches an agent that is slow rather than chatty, which turn limits do not. Default: 20."`
 	SubAgentsMinConfidence    string `wick:"group=Sub-agents;desc=Minimum checker confidence before a customer-facing draft may be produced: low, medium, or high. Default: medium."`
 	SubAgentsNoEvidenceRounds int    `wick:"number;group=Sub-agents;desc=Consecutive rounds that add no new evidence before an investigation stops. 1 would abandon a run that came up empty once and would have landed the next round. Default: 2."`
+
+	// Boot markers. SetOwned refuses a key with no declared meta row, so
+	// a marker that is not listed here is silently never persisted — the
+	// role seeder's marker had exactly that bug, which made every boot
+	// re-run it (and would have re-flipped a role an operator had moved
+	// back to foreground, forever). Hidden: the UI has no business
+	// showing them, but the declaration is what makes the write legal.
+	SubAgentsSeededRoles       string `wick:"hidden;key=sub_agents_seeded_roles_v1;desc=Boot marker: the investigation roles have been seeded once. Managed by wick — do not edit."`
+	SubAgentsBackgroundDefault string `wick:"hidden;key=sub_agents_background_default_v1;desc=Boot marker: pre-existing roles were moved to the background default once. Managed by wick — do not edit."`
 }
 
 // DefaultGeneralConfig returns the seed values used when the configs
