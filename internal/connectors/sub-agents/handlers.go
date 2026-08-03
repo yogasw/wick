@@ -215,6 +215,12 @@ func (h *handlers) createAgent(c *connector.Ctx) (any, error) {
 	if err != nil && !errors.Is(err, delegation.ErrProfileNotFound) {
 		return nil, fmt.Errorf("look up role: %w", err)
 	}
+	// Before a single field is read: a locked role is frozen for MCP
+	// entirely, and unlocking is a human action in the web UI. An agent
+	// that could unlock what it locked would be guarding nothing.
+	if err := delegation.CheckMutable(existing); err != nil {
+		return nil, err
+	}
 
 	// Editing an existing role is a PATCH: omitted fields keep their
 	// current value. Requiring the full role on every tweak would make
@@ -272,6 +278,7 @@ func (h *handlers) createAgent(c *connector.Ctx) (any, error) {
 		DefaultWorkspace:   delegation.WorkspaceShared,
 		CanDelegate:        c.InputBool("can_delegate"),
 		AllowTakeOver:      c.InputBool("allow_take_over"),
+		Locked:             c.InputBool("locked"),
 		CreatedBy:          caller.user.ID,
 	}
 	if mode := strings.TrimSpace(c.Input("mode")); mode != "" {
@@ -294,6 +301,9 @@ func (h *handlers) createAgent(c *connector.Ctx) (any, error) {
 		}
 		if c.Input("allow_take_over") == "" {
 			p.AllowTakeOver = existing.AllowTakeOver
+		}
+		if c.Input("locked") == "" {
+			p.Locked = existing.Locked
 		}
 		if c.InputInt("max_turns") <= 0 {
 			p.DefaultMaxTurns = existing.DefaultMaxTurns
