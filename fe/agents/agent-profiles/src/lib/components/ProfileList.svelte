@@ -2,13 +2,20 @@
   /* Left rail: the roles in this scope, one row each. Selection is
      controlled by the parent so the editor and the list cannot disagree
      about what is being edited. */
-  import type { AgentProfile } from "@wick-fe/common-api";
+  import type { AgentProfile, ProviderListItem } from "@wick-fe/common-api";
   import { AgentProfileRow } from "@wick-fe/common-ui";
 
   type Props = {
     profiles: AgentProfile[];
     selectedID: string;
     canCreate: boolean;
+    /** Forwarded so a row can name a stored model instead of printing its id. */
+    providerList?: ProviderListItem[];
+    /** Fallback label lookup, for instances the list carries no models for. */
+    loadModels?: (
+      optionValue: string,
+      opts?: { entry?: string },
+    ) => Promise<{ id: string; label: string }[]>;
     onselect: (p: AgentProfile) => void;
     oncreate: () => void;
     /** Quick provider/model change. Omit for a read-only (non-admin) view. */
@@ -23,6 +30,8 @@
     profiles,
     selectedID,
     canCreate,
+    providerList = [],
+    loadModels,
     onselect,
     oncreate,
     onchangeModel,
@@ -60,6 +69,8 @@
       {#each profiles as p (p.id)}
         <AgentProfileRow
           profile={p}
+          {providerList}
+          {loadModels}
           selected={p.id === selectedID}
           readonly={!canCreate}
           onedit={onselect}

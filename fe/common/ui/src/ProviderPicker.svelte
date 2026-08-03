@@ -206,7 +206,25 @@
     const at = modelID.indexOf("@");
     if (at >= 0) return `${opt.label} · ${modelID.slice(at + 1)}`;
     const m = opt.models?.find((x) => x.id === modelID);
-    return m ? `${opt.label} · ${m.label}` : `${opt.label} · ${modelID}`;
+    // A loaded list can name an id the static options do not carry: the
+    // provider list collapses a single-model instance to no models at all, so
+    // without this the closed trigger shows a bare id like "m_0370951f-68d".
+    const loaded = modelCache[cacheKey(opt.value)]?.find((x) => x.id === modelID);
+    const name = m?.label || loaded?.label || modelID;
+    return `${opt.label} · ${name}`;
+  });
+
+  /* Resolve the current pin's name once on mount when the static options
+     cannot, so the closed trigger reads as a model name rather than an id.
+     Only for an id-shaped pin (no "@" — a live-set leaf is already named). */
+  $effect(() => {
+    if (!loadModels) return;
+    const { key, modelID } = splitPin(value);
+    if (!key || !modelID || modelID.includes("@")) return;
+    const opt = options.find((o) => o.value === key);
+    if (!opt || opt.models?.some((x) => x.id === modelID)) return;
+    if (modelCache[cacheKey(opt.value)]) return;
+    void ensureModels(opt.value);
   });
 
   function reset() { typeDrill = ""; modelDrill = null; setDrill = null; modelSearch = ""; }

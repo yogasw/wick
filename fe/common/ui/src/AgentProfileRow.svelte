@@ -11,11 +11,22 @@
      how you find out what it does. What the lock removes is Delete and the
      disable toggle, and the row says so rather than silently ignoring a
      click on a menu item. */
-  import type { AgentProfile } from "@wick-fe/common-api";
+  import type { AgentProfile, ProviderListItem } from "@wick-fe/common-api";
   import KebabMenu from "./KebabMenu.svelte";
 
   type Props = {
     profile: AgentProfile;
+    /** Used to resolve a stored model id to its human label. wick's ids are
+        opaque ("m_0370951f-68d"), so without this the chip shows plumbing. */
+    providerList?: ProviderListItem[];
+    /** Fallback label lookup for a model the provider list does not carry.
+        providerChoicesCached collapses a single-model instance to no list at
+        all (to hide a pointless drill arrow), so for those the id can only be
+        named by asking. Optional: without it such a chip shows the raw id. */
+    loadModels?: (
+      optionValue: string,
+      opts?: { entry?: string },
+    ) => Promise<{ id: string; label: string }[]>;
     /** Opens the role. Called on row click and on the menu's Edit item. */
     onedit: (p: AgentProfile) => void;
     /** Flips `disabled`. Omit to hide the item (e.g. a read-only scope). */
@@ -33,6 +44,8 @@
   };
   let {
     profile,
+    providerList = [],
+    loadModels,
     onedit,
     ontoggle,
     ondelete,
@@ -80,16 +93,70 @@
   });
 
   // "wick/x::set1@gemini-3-pro" reads as two facts — which instance, which
-  // model — so it is split for display. The vendor half of a live-set pin is
-  // what the user actually chose; the entry id is plumbing.
+  // model — so it is split for display.
   const instance = $derived(profile.provider.split("::")[0] ?? "");
-  const modelLabel = $derived.by(() => {
-    const pinned = profile.provider.includes("::")
+
+  // The model chip must show a NAME, never a stored id. wick's registry keys
+  // its entries with opaque ids ("m_0370951f-68d"), so a pin printed verbatim
+  // tells the reader nothing about which model is actually running.
+  //
+  // Two id shapes reach here:
+  //   "<entryID>@<vendorModelID>" — a live-set leaf. The vendor half IS the
+  //     model name the user picked, so it is readable as-is.
+  //   "<entryID>" — a plain registered model. Only the provider list knows its
+  //     label, so it is looked up there; falling back to the raw id when the
+  //     instance is gone or the entry was deleted, since a stale id is still
+  //     more informative than an empty chip.
+  // The raw pin as stored, before any naming.
+  const pinnedID = $derived.by(() => {
+    const v = profile.provider.includes("::")
       ? profile.provider.slice(profile.provider.indexOf("::") + 2)
       : profile.model;
-    if (!pinned) return "";
-    const at = pinned.indexOf("@");
-    return at >= 0 ? pinned.slice(at + 1) : pinned;
+    return v ?? "";
+  });
+
+  /* Labels fetched for ids the static list could not name. Keyed by pin so
+     several rows on the same instance each resolve their own. */
+  let fetched = $state<Record<string, string>>({});
+
+  const modelLabel = $derived.by(() => {
+    if (!pinnedID) return "";
+
+    const at = pinnedID.indexOf("@");
+    if (at >= 0) return pinnedID.slice(at + 1);
+
+    const opt = providerList.find((p) => `${p.type}/${p.name}` === instance);
+    const found = opt?.models?.find((m) => m.id === pinnedID);
+    // Raw id last: a stale pin is still more informative than an empty chip,
+    // and it is what makes a deleted model visible instead of silently blank.
+    return found?.label || fetched[pinnedID] || pinnedID;
+  });
+
+  /* Ask the server only when the id still looks unresolved — an id-shaped
+     label means the static list did not carry this instance's models (a
+     single-model wick instance is collapsed to none). Skipped for a live-set
+     leaf, whose vendor half is already a name. */
+  $effect(() => {
+    if (!loadModels || !instance || !pinnedID) return;
+    if (pinnedID.includes("@")) return;
+    if (fetched[pinnedID]) return;
+    const opt = providerList.find((p) => `${p.type}/${p.name}` === instance);
+    if (opt?.models?.some((m) => m.id === pinnedID)) return;
+
+    let cancelled = false;
+    const want = pinnedID;
+    void loadModels(instance)
+      .then((models) => {
+        if (cancelled) return;
+        const hit = models?.find((m) => m.id === want);
+        if (hit?.label) fetched = { ...fetched, [want]: hit.label };
+      })
+      .catch(() => {
+        // Leave the raw id showing — a failed lookup is not worth an error.
+      });
+    return () => {
+      cancelled = true;
+    };
   });
 </script>
 

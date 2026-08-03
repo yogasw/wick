@@ -50,6 +50,68 @@ describe("AgentProfileRow", () => {
     expect(screen.getByText("gemini-3-pro")).toBeTruthy();
   });
 
+  // wick keys its registry with opaque ids ("m_0370951f-68d"). Printing one
+  // verbatim tells the reader nothing about which model is running, so the
+  // provider list is consulted for its label.
+  test("names a wick model id from the provider list", () => {
+    render(AgentProfileRow, {
+      profile: profile({ provider: "wick/wick", model: "m_0370951f-68d" }),
+      providerList: [
+        {
+          type: "wick",
+          name: "wick",
+          models: [{ id: "m_0370951f-68d", label: "Grok 4.5", default: true }],
+        },
+      ],
+      onedit: vi.fn(),
+    });
+    expect(screen.getByText("Grok 4.5")).toBeTruthy();
+    expect(screen.queryByText("m_0370951f-68d")).toBeNull();
+  });
+
+  // A single-model wick instance is collapsed to no list at all by the server
+  // (to hide a pointless drill arrow), so the label can only come from a
+  // lookup. Without it the chip would show the id.
+  test("falls back to asking the server for an unnamed id", async () => {
+    const loadModels = vi
+      .fn()
+      .mockResolvedValue([{ id: "m_0370951f-68d", label: "Grok 4.5" }]);
+    render(AgentProfileRow, {
+      profile: profile({ provider: "wick/wick", model: "m_0370951f-68d" }),
+      providerList: [{ type: "wick", name: "wick" }], // no models carried
+      loadModels,
+      onedit: vi.fn(),
+    });
+    expect(await screen.findByText("Grok 4.5")).toBeTruthy();
+    expect(loadModels).toHaveBeenCalledWith("wick/wick");
+  });
+
+  // A live-set leaf's vendor half is already a name, so it must not trigger a
+  // needless request.
+  test("does not look up a live-set leaf", () => {
+    const loadModels = vi.fn();
+    render(AgentProfileRow, {
+      profile: profile({ provider: "wick/wick", model: "set1@gemini-3-pro" }),
+      loadModels,
+      onedit: vi.fn(),
+    });
+    expect(screen.getByText("gemini-3-pro")).toBeTruthy();
+    expect(loadModels).not.toHaveBeenCalled();
+  });
+
+  // A pin whose model was deleted still shows the id rather than going blank —
+  // that is what makes the breakage visible.
+  test("keeps the raw id when nothing can name it", async () => {
+    const loadModels = vi.fn().mockResolvedValue([]);
+    render(AgentProfileRow, {
+      profile: profile({ provider: "wick/wick", model: "m_gone" }),
+      providerList: [{ type: "wick", name: "wick" }],
+      loadModels,
+      onedit: vi.fn(),
+    });
+    expect(screen.getByText("m_gone")).toBeTruthy();
+  });
+
   test("says so when no model is pinned", () => {
     render(AgentProfileRow, {
       profile: profile({ provider: "claude/claude", model: "" }),

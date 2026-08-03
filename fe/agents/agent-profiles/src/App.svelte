@@ -166,6 +166,8 @@
       >
         <ProfileList
           {profiles}
+          {providerList}
+          loadModels={loadProviderModels}
           selectedID={selected?.id ?? ""}
           canCreate={isAdmin}
           onselect={(p) => {

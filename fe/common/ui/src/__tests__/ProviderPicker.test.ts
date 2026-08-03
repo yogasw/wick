@@ -110,6 +110,22 @@ describe("ProviderPicker live sets", () => {
     expect(screen.queryByText("Model Two")).toBeTruthy();
   });
 
+  // The provider list collapses a single-model instance to no models at all,
+  // so a stored wick id has nothing static to name it and the closed trigger
+  // would read "wick/x · m_0370951f-68d".
+  test("names an id-shaped pin on the closed trigger via the loader", async () => {
+    const loadModels = vi
+      .fn()
+      .mockResolvedValue([{ id: "m_0370951f-68d", label: "Grok 4.5", default: true }]);
+    render(ProviderPicker, {
+      options: [WICK],
+      value: "wick/x::m_0370951f-68d",
+      onChange: vi.fn(),
+      loadModels,
+    });
+    expect(await screen.findByRole("button", { name: /Grok 4\.5/ })).toBeTruthy();
+  });
+
   // A live-set pin matches no entry in the static list, so showing the bare
   // instance name would read as "no model chosen" for a project that pinned
   // a specific leaf.

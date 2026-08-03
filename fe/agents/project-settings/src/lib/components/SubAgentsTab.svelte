@@ -204,6 +204,8 @@
           {#each owned as p (p.id)}
             <AgentProfileRow
               profile={p}
+              {providerList}
+              loadModels={loadProviderModels}
               shadowsGlobal={shadowed.has(p.key)}
               onedit={(x) => {
                 formError = "";
