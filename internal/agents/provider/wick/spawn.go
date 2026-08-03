@@ -70,7 +70,7 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 	m, ok := pickModel(opt.Instance, opt.ModelID)
 	if !ok {
 		emit(initLine(newSessionID()))
-		emit(errorLine("No model configured for the wick provider. Open Providers → Wick and add a model."))
+		emit(errorLine("No runnable model for the wick provider. Open Providers → Wick and add a model, or pick a default model inside the live set."))
 		emit(doneLine(""))
 		return
 	}
@@ -172,8 +172,8 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 // models are never auto-picked — parked, not gone. A pin that no longer
 // resolves (model deleted/disabled since the pin was set) silently falls
 // back rather than erroring, since the session otherwise still works fine
-// on the instance's own default. Returns false when none are configured or
-// every one is disabled.
+// on the instance's own default. Returns false when none are configured,
+// every one is disabled, or none resolves to a concrete vendor model id.
 func pickModel(inst *provider.Instance, modelID string) (provider.WickModel, bool) {
 	if inst == nil || len(inst.WickModels) == 0 {
 		return provider.WickModel{}, false
@@ -187,38 +187,58 @@ func pickModel(inst *provider.Instance, modelID string) (provider.WickModel, boo
 			entryID, vendorID = modelID[:at], modelID[at+1:]
 		}
 		for _, m := range inst.WickModels {
-			if m.ID == entryID && !m.Disabled {
-				if vendorID != "" {
-					m.Model = vendorID // explicit live-set override
-				} else if m.LiveSet && m.Model == "" && m.DefaultVendorModel != "" {
-					// Live set picked WITHOUT an @vendor override → use the
-					// sticky default vendor model so the spawn has a concrete
-					// id (a live set has no base Model of its own). A stale pin
-					// is corrected at picker time (expandLiveWickSet re-marks
-					// the top of the fresh list as default); this is the
-					// last-resort resolution when only the entry id arrives.
-					m.Model = m.DefaultVendorModel
-				}
-				return m, true
+			if m.ID != entryID || m.Disabled {
+				continue
 			}
+			if r, ok := runnableModel(m, vendorID); ok {
+				return r, true
+			}
+			// The pin names an entry that cannot be called as-is. Fall
+			// through to the default rather than spawning with no model id.
+			break
 		}
 	}
-	var firstEnabled *provider.WickModel
-	for i, m := range inst.WickModels {
+	var firstEnabled provider.WickModel
+	haveFirst := false
+	for _, m := range inst.WickModels {
 		if m.Disabled {
 			continue
 		}
-		if m.Default {
-			return m, true
+		r, ok := runnableModel(m, "")
+		if !ok {
+			continue
 		}
-		if firstEnabled == nil {
-			firstEnabled = &inst.WickModels[i]
+		if r.Default {
+			return r, true
+		}
+		if !haveFirst {
+			firstEnabled, haveFirst = r, true
 		}
 	}
-	if firstEnabled != nil {
-		return *firstEnabled, true
+	return firstEnabled, haveFirst
+}
+
+// runnableModel resolves one catalogue entry to something the vendor SDK
+// can actually be called with, and reports whether it got there.
+//
+// A LIVE set carries no Model of its own — its list is fetched from the
+// vendor — so an entry taken without an explicit "@vendor" override has to
+// fall back to its sticky default. Every spawn that supplies no pin goes
+// through here, which is every sub-agent whose role names no model: those
+// used to reach the vendor with an empty model id and fail inside the SDK
+// ("model is empty"), which reads as a wick bug rather than as "this live
+// set has no model picked yet".
+func runnableModel(m provider.WickModel, vendorID string) (provider.WickModel, bool) {
+	switch {
+	case vendorID != "":
+		m.Model = vendorID // explicit live-set override
+	case m.Model == "" && m.LiveSet:
+		// A stale pin is corrected at picker time (expandLiveWickSet
+		// re-marks the top of the fresh list as default); this is the
+		// last-resort resolution when only the entry id arrives.
+		m.Model = m.DefaultVendorModel
 	}
-	return provider.WickModel{}, false
+	return m, strings.TrimSpace(m.Model) != ""
 }
 
 // resolveWickConfig applies defaults to the instance config so the
