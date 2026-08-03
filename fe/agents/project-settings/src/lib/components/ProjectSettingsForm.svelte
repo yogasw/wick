@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ConfirmDialog, ProviderPicker } from "@wick-fe/common-ui";
+  import { ConfirmDialog, ProviderPicker, buildProviderOptions } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import {
     getProjectSettings,
@@ -37,31 +37,9 @@
     return key.includes("/") ? key : `${key}/${key}`;
   }
 
-  // Build the provider dropdown from the healthy instances the backend
-  // reports. Each option's value is the "type/name" key stored in
-  // Defaults.Provider; the label drops the redundant name for the
-  // canonical default (claude/claude → Claude). If the currently-saved
-  // provider isn't in the list (instance deleted/renamed), surface it as
-  // a trailing "(unavailable)" option so the form doesn't silently
-  // change the saved value to something else.
-  let providerOptions = $derived.by(() => {
-    const list = data?.provider_list ?? [];
-    const opts = list.map((p) => {
-      const value = `${p.type}/${p.name}`;
-      const label = p.name === p.type
-        ? p.type.charAt(0).toUpperCase() + p.type.slice(1)
-        : value;
-      return {
-        value,
-        label,
-        models: (p.models ?? []).map((m) => ({ id: m.id, label: m.label, default: m.default, desc: m.desc })),
-      };
-    });
-    if (provider && !opts.some((o) => o.value === provider.split("::")[0])) {
-      opts.push({ value: provider.split("::")[0], label: `${provider.split("::")[0]} (unavailable)`, models: [] });
-    }
-    return opts;
-  });
+  // Options come from the shared builder: the sub-agent role editor renders
+  // the same list, and two copies of this mapping would drift.
+  let providerOptions = $derived(buildProviderOptions(data?.provider_list ?? [], provider));
 
   async function load() {
     loading = true;

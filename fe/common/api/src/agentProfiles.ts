@@ -1,4 +1,5 @@
 import { apiDelete, apiGet, apiPost } from "./client.js";
+import type { ProviderListItem } from "./providerList.js";
 
 /**
  * AgentProfile is one sub-agent role.
@@ -25,6 +26,9 @@ export interface AgentProfile {
   can_delegate: boolean;
   allow_take_over: boolean;
   disabled: boolean;
+  /** Frozen: no edit and no delete is accepted while true. Only the web
+      UI can clear it — MCP may set it, never unset it. */
+  locked: boolean;
 }
 
 export interface AgentProfileList {
@@ -45,8 +49,9 @@ export interface AgentProfileList {
   /** Tags the caller holds. allowed_tag_ids only narrows the delegating
       human's own set, so a tag they lack would be inert if offered. */
   tags: TagOption[];
-  /** Providers a role may run on, healthy instances first. */
-  providers: string[];
+  /** Provider instances a role may run on, with their models — the same
+      list the composer and the project defaults picker use. */
+  provider_list: ProviderListItem[];
   /** Whether the caller may mutate GLOBAL roles. Project roles are
       governed by project access instead and are not covered by this. */
   is_admin: boolean;
@@ -63,8 +68,24 @@ export interface TagOption {
  * disables the field rather than letting a saved value vanish. */
 export const LEADER_CAPABLE_PROVIDERS = ["claude", "codex", "wick"];
 
+/** Reduces a stored provider value ("wick/wick::cc/claude-fable-5") to its
+    bare type. Mirrors providerTypeOf in
+    internal/tools/agents/api_agent_profiles.go. */
+export function providerTypeOf(v: string): string {
+  return v.split("::")[0].split("/")[0];
+}
+
+/** Returns the "type/name" form a picker option carries. A bare type —
+    what every role stored before instances existed — becomes its canonical
+    instance ("claude" → "claude/claude"), so an old row matches a real
+    option instead of rendering as "(unavailable)". Mirrors
+    normalizeProviderKey in internal/agents/provider/switcher.go. */
+export function normalizeProviderKey(key: string): string {
+  return key.includes("/") ? key : `${key}/${key}`;
+}
+
 export function canLeadDelegation(provider: string): boolean {
-  return LEADER_CAPABLE_PROVIDERS.includes(provider);
+  return LEADER_CAPABLE_PROVIDERS.includes(providerTypeOf(provider));
 }
 
 export function emptyAgentProfile(projectID = ""): AgentProfile {
@@ -85,6 +106,7 @@ export function emptyAgentProfile(projectID = ""): AgentProfile {
     can_delegate: false,
     allow_take_over: false,
     disabled: false,
+    locked: false,
   };
 }
 
@@ -106,7 +128,7 @@ export async function listAgentProfiles(
     owned: r.owned ?? [],
     inherited: r.inherited ?? [],
     tags: r.tags ?? [],
-    providers: r.providers ?? [],
+    provider_list: r.provider_list ?? [],
     is_admin: r.is_admin ?? false,
   };
 }
