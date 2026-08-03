@@ -265,6 +265,9 @@ func Register(r tool.Router) {
 	// /api/sessions routes so sessionAccessMW covers them too.
 	r.GET("/api/sessions/{id}/subagents", sessionSubAgents)
 	r.POST("/api/sessions/{id}/subagents/interrupt-all", interruptAllSubAgents)
+	// Agent-to-agent thread + the human-only hop refill.
+	r.GET("/api/sessions/{id}/messages", sessionMessages)
+	r.POST("/api/sessions/{id}/hops/reset", resetSessionHops)
 	r.POST("/api/delegations/{delegationID}/interrupt", interruptSubAgent)
 	r.POST("/api/delegations/{delegationID}/message", takeOverSubAgent)
 
@@ -490,6 +493,7 @@ func Register(r tool.Router) {
 	r.GET("/workflows/api/lookup", workflowLookupAPI)
 
 	r.GET("/stream", streamSSE)
+	r.GET("/stream/sessions", sessionsLifecycleSSE)
 	r.GET("/stream/snapshot", streamSnapshot)
 
 	// Data Tables tab — n8n-style standalone shared key/value store.
@@ -720,33 +724,18 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 	access := callerProjectAccess(c)
 	allSessions := globalMgr.Registry().Sessions()
 	// Per-project session counts across ALL sessions (sidebar pills).
+	// Sub-agents are excluded: the pill counts conversations, and a leader
+	// that fanned out to eight roles has not started eight chats.
 	counts := make(map[string]int, len(allSessions))
 	for _, s := range allSessions {
-		if s.Meta.ProjectID != "" {
+		if s.Meta.ProjectID != "" && s.Meta.ParentSessionID == "" {
 			counts[s.Meta.ProjectID]++
 		}
 	}
-	allIDs := globalMgr.Registry().SessionIDs()
-	// Keep only sessions the caller may see (project access). When scoped to a
-	// project, also drop sessions outside it. Sorted-desc order is preserved.
-	{
-		filtered := allIDs[:0:0]
-		for _, id := range allIDs {
-			s, ok := allSessions[id]
-			if !ok {
-				continue
-			}
-			if scopedProjectID != "" && s.Meta.ProjectID != scopedProjectID {
-				continue
-			}
-			if !access.allowSession(s.Meta.ProjectID, s.Meta.UserID) {
-				continue
-			}
-			filtered = append(filtered, id)
-		}
-		allIDs = filtered
-	}
-	ids := allIDs
+	// Same filter the JSON list uses, so the templ sidebar and /api/sessions
+	// never disagree about what a conversation is — sub-agent sessions are
+	// dropped here too, since they belong to their parent's rail panel.
+	ids := accessibleSessionIDs(globalMgr.Registry().SessionIDs(), allSessions, access, scopedProjectID)
 	if len(ids) > sidebarCap {
 		ids = ids[:sidebarCap]
 	}
@@ -1476,11 +1465,30 @@ func sendMessage(c *tool.Ctx) {
 	// inheriting c.Context() would SIGKILL claude.exe the moment the
 	// response returns. Copy request_id over so logs still correlate.
 	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
-	if err := globalPool.SendWithAttachments(bgCtx, id, agentName, "ui", "user", req.Text, "", atts); err != nil {
+	// The person's words are never rewritten, but the leader is told, in
+	// the same message and before it reads them, which mentions wick is
+	// dispatching itself. Routing runs detached below, so without this
+	// marker the leader sees a bare "@investigator ..." with no sign that
+	// anything started and delegates it a second time — the work then runs
+	// twice, which is the one thing the router exists to prevent.
+	text := req.Text
+	if note := humanMentionNote(bgCtx, sess, id, req.Text); note != "" {
+		text = req.Text + "\n\n" + note
+	}
+	if err := globalPool.SendWithAttachments(bgCtx, id, agentName, "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("pool send %s: %s", id, err.Error())
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// A person speaking is what refills the agent-to-agent hop budget.
+	// Deliberately not something an agent can do for itself: a leader deep
+	// in a loop is exactly the one most convinced it needs more hops.
+	resetHopsForSession(c, id)
+	// Act on any @mentions the person wrote. The text still reached the
+	// agent above, unedited — routing is a side channel, not a filter, so
+	// the leader always sees what was said even when a mention took work
+	// straight to someone else.
+	routeHumanMentions(bgCtx, sess, id, req.Text)
 	c.JSON(http.StatusOK, map[string]string{"status": "queued"})
 }
 

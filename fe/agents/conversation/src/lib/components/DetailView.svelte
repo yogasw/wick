@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { get } from "svelte/store";
   import { Effect } from "effect";
-  import { WickClientLayer } from "@wick-fe/common-api";
+  import { WickClientLayer, listAgentProfiles } from "@wick-fe/common-api";
   import { toastError, toastOk } from "@wick-fe/common-stores";
   import { ConfirmDialog, Composer } from "@wick-fe/common-ui";
   import { NOTIFY_KEY } from "../notify-pref.js";
@@ -17,6 +17,7 @@
   import { currentApproval, showApproval, hideApproval } from "../stores/approvals.js";
   import { notify } from "../notify.js";
   import { push } from "../router.js";
+  import { bareToolName } from "../todoGroups.js";
   import { readScmWidth, writeScmWidth, clampScmWidth } from "../scmWidth.js";
   import { isValidFileName } from "../fileName.js";
 
@@ -29,13 +30,17 @@
   import { listComposerCommands, type ComposerApiCommand } from "../api/composer.js";
   import { getProcesses, killProcess, dequeueProcess, liveProcesses as filterLiveProcesses } from "../api/processes.js";
   import {
-    getSubAgents,
+    getSubAgentPanel,
     interruptSubAgent,
     interruptAllSubAgents,
     liveSubAgents,
+    getMessages,
+    bumpHops,
   } from "../api/subagents.js";
+  import { isSubAgentWorking } from "../lifecycleCls.js";
   import SubAgentPanel from "./SubAgentPanel.svelte";
-  import type { SubAgentItem } from "../types/agents.js";
+  import SubAgentModal from "./SubAgentModal.svelte";
+  import type { AgentMessageItem, IncidentSummary, SubAgentItem } from "../types/agents.js";
   import {
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
     duplicateWorkspace, renameWorkspace, removeWorkspace,
@@ -312,10 +317,23 @@
 
   /* ── sub-agents panel state ───────────────────────────────────── */
   let subAgents = $state<SubAgentItem[]>([]);
-  // Which child's transcript the panel is showing. null = list only.
+  // The tree's investigation record, when it has one. null for an
+  // ordinary conversation, which is most of them.
+  let incident = $state<IncidentSummary | null>(null);
+  // Which child's transcript the inspector modal is showing. null = closed.
   let selectedSubAgent = $state<string | null>(null);
   let subAgentsInFlight = false;
   let subAgentReloadPending = false;
+
+  // The selected row itself, which the modal needs (status, task, turn
+  // budget) rather than just the session id. Resolves to undefined while a
+  // `?sub=` deep link waits for the roster to load, and the modal stays shut
+  // until it does.
+  const selectedSubAgentRow = $derived(
+    selectedSubAgent === null
+      ? undefined
+      : subAgents.find((s) => s.child_session_id === selectedSubAgent),
+  );
 
   /* ── workspace panel state ────────────────────────────────────── */
   let wsInstances = $state<WsInstance[]>([]);
@@ -511,8 +529,8 @@
       return;
     }
     subAgentsInFlight = true;
-    run(getSubAgents(base, sessionId).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => { subAgents = res; })
+    run(getSubAgentPanel(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { subAgents = res.subAgents; incident = res.incident; })
       .catch((e: unknown) => toastError(`Sub-agents: ${e instanceof Error ? e.message : String(e)}`))
       .finally(() => {
         subAgentsInFlight = false;
@@ -521,6 +539,66 @@
           loadSubAgents();
         }
       });
+  }
+
+  // Agent-to-agent thread, loaded alongside the sub-agent list so the
+  // panel never shows a roster without the conversation that goes with it.
+  let agentMessages = $state<AgentMessageItem[]>([]);
+  let hopsLeft = $state(0);
+
+  function loadAgentMessages() {
+    run(getMessages(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { agentMessages = res.messages; hopsLeft = res.hopsLeft; })
+      // Quiet on failure: the thread is secondary to the sub-agent list,
+      // and a toast per poll would bury the panel it decorates.
+      .catch(() => {});
+  }
+
+  // Roles this conversation may delegate to, for the composer's @ menu.
+  // Loaded once: the roster changes when someone edits a profile, not
+  // during a conversation.
+  let agentRoles = $state<{ key: string; name: string; description: string }[]>([]);
+
+  function loadAgentRoles() {
+    // Scoped to this session's project so the menu offers the same roles
+    // delegate would actually resolve — a project role shadows a global
+    // one, and offering the shadowed name would be a lie.
+    listAgentProfiles(base, activeProjectId || undefined)
+      .then((res) => {
+        agentRoles = res.profiles.map((p) => ({
+          key: p.key,
+          name: p.name,
+          description: p.description,
+        }));
+      })
+      // Silent: the @ menu still lists files, and a toast on every load
+      // would nag on installs where sub-agents are switched off.
+      .catch(() => {});
+  }
+
+  // Live instances first, then roles. Mentioning a running agent talks to
+  // the one that already has context; mentioning a role starts a new one,
+  // so the cheaper, better-informed target is offered first.
+  const mentionableAgents = $derived.by(() => {
+    const out: { handle: string; label: string; hint?: string }[] = [];
+    const seen = new Set<string>();
+    for (const s of subAgents) {
+      if (!s.handle || seen.has(s.handle)) continue;
+      seen.add(s.handle);
+      out.push({ handle: s.handle, label: s.handle, hint: `${s.profile_key} · running here` });
+    }
+    for (const r of agentRoles) {
+      if (seen.has(r.key)) continue;
+      seen.add(r.key);
+      out.push({ handle: r.key, label: r.key, hint: r.description || r.name });
+    }
+    return out;
+  });
+
+  function bumpAgentHops() {
+    run(bumpHops(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then(() => loadAgentMessages())
+      .catch((e: unknown) => toastError(`Allow more hops: ${e instanceof Error ? e.message : String(e)}`));
   }
 
   // Coalesced refetch, mirroring scheduleProcessReload: one fetch ~200ms
@@ -532,8 +610,48 @@
     subAgentReloadTimer = setTimeout(() => {
       subAgentReloadTimer = null;
       loadSubAgents();
+      loadAgentMessages();
     }, 200);
   }
+
+  /* Tools whose call means this session's sub-agent roster just changed.
+     Matched on the BARE name so an MCP-namespaced call
+     (mcp__wick__wick_delegate) counts too. */
+  const DELEGATION_TOOLS = new Set(["wick_delegate", "wick_delegate_collect"]);
+  function isDelegationTool(name?: string): boolean {
+    return !!name && DELEGATION_TOOLS.has(bareToolName(name));
+  }
+
+  /* While a sub-agent is live, poll its row.
+
+     Everything else in this panel rides the leader's SSE stream, but a
+     sub-agent publishes its lifecycle on the CHILD's session id, which
+     this stream is not subscribed to. Between the delegation call and the
+     leader's end-of-turn the leader emits nothing at all — which is
+     exactly the stretch where a running sub-agent's spinner and turn
+     count need to move. Polling stops the moment none are live, so an
+     idle conversation issues no requests. */
+  const SUB_AGENT_POLL_MS = 3000;
+  let subAgentPollTimer: ReturnType<typeof setInterval> | null = null;
+
+  $effect(() => {
+    const anyLive = liveSubAgents(subAgents).length > 0;
+    if (!anyLive) {
+      if (subAgentPollTimer !== null) {
+        clearInterval(subAgentPollTimer);
+        subAgentPollTimer = null;
+      }
+      return;
+    }
+    if (subAgentPollTimer !== null) return;
+    subAgentPollTimer = setInterval(loadSubAgents, SUB_AGENT_POLL_MS);
+    return () => {
+      if (subAgentPollTimer !== null) {
+        clearInterval(subAgentPollTimer);
+        subAgentPollTimer = null;
+      }
+    };
+  });
 
   function stopSubAgent(delegationId: string) {
     run(interruptSubAgent(base, delegationId).pipe(Effect.provide(WickClientLayer)))
@@ -889,6 +1007,13 @@
         // end-of-turn is the reliable moment its delegations changed state,
         // so refresh the panel here as well as on lifecycle.
         scheduleSubAgentReload();
+      } else if (ev.type === "tool_use" || ev.type === "tool_result") {
+        // A delegation is made MID-TURN, and the leader emits no lifecycle
+        // event while it keeps working — so without this the rail tab and
+        // its badge did not appear until the turn ended or the page was
+        // reloaded, which is precisely when you most want to see that
+        // sub-agents are running.
+        if (isDelegationTool(ev.tool_name)) scheduleSubAgentReload();
       } else if (ev.type === "lifecycle") {
         scheduleProcessReload();
         scheduleSubAgentReload();
@@ -1060,6 +1185,8 @@
     loadFiles();
     loadProcesses();
     loadSubAgents();
+    loadAgentMessages();
+    loadAgentRoles();
     loadWorkspace();
     loadSchedules();
     loadProviderOptions();
@@ -1182,6 +1309,20 @@
   // badge stuck at "3" after everything finished; the tab itself stays
   // visible on the total so results remain readable.
   const subAgentCount = $derived(liveSubAgents(subAgents).length);
+
+  /* Whether a rail has work running behind a closed panel.
+
+     The badge alone cannot say this: "2" reads the same whether both
+     sub-agents are grinding away or both are queued behind a slot. A
+     spinning ring on the tab is the only thing that tells you something
+     is happening on a rail you are not looking at. */
+  const subAgentsBusy = $derived(
+    subAgents.some((s) => isSubAgentWorking(s.status, s.lifecycle)),
+  );
+  function railBusy(id: RailTab): boolean {
+    return id === "subagents" && subAgentsBusy;
+  }
+
   function railCount(id: RailTab): number {
     if (id === "context") return contextCount;
     if (id === "process") return processCount;
@@ -1279,6 +1420,7 @@
             provider={providerSelect}
             project={projectSelect}
             onSearchFiles={searchMentionFiles}
+            mentionAgents={mentionableAgents}
             commands={composerCommands}
           />
         </div>
@@ -1418,11 +1560,15 @@
         />
       {:else if railTab === "subagents"}
         <SubAgentPanel
+          {incident}
           {subAgents}
           selectedId={selectedSubAgent}
           onSelect={(cid) => { selectedSubAgent = selectedSubAgent === cid ? null : cid; }}
           onInterrupt={stopSubAgent}
           onInterruptAll={stopAllSubAgents}
+          messages={agentMessages}
+          {hopsLeft}
+          onBumpHops={bumpAgentHops}
         />
       {:else if railTab === "workspace"}
         <WorkspacePanel
@@ -1551,11 +1697,15 @@
             />
           {:else if railTab === "subagents"}
             <SubAgentPanel
+              {incident}
               {subAgents}
               selectedId={selectedSubAgent}
               onSelect={(cid) => { selectedSubAgent = selectedSubAgent === cid ? null : cid; }}
               onInterrupt={stopSubAgent}
               onInterruptAll={stopAllSubAgents}
+              messages={agentMessages}
+              {hopsLeft}
+              onBumpHops={bumpAgentHops}
             />
           {:else if railTab === "workspace"}
             <WorkspacePanel
@@ -1646,7 +1796,31 @@
             : "hover:bg-white-200 dark:hover:bg-navy-800",
         ].join(" ")}
       >
-        {#if tab.id === "source" && scmChangeCount > 0}
+        {#if railBusy(tab.id)}
+          <!-- Ring around the icon rather than a badge replacement: the
+               count still matters (how many), the ring adds the part a
+               number cannot carry (right now). -->
+          <span class="relative inline-flex h-4 w-4 items-center justify-center">
+            <span
+              class="absolute inset-[-3px] rounded-full border-2 border-green-500 border-t-transparent animate-spin"
+              aria-label="Working"
+            ></span>
+            <svg
+              viewBox="0 0 16 16"
+              class="h-4 w-4 text-green-500"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+            >
+              {@html tab.icon}
+            </svg>
+            {#if railCount(tab.id) > 0}
+              <span
+                class="absolute -top-1.5 -right-1.5 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-green-500 px-0.5 text-[9px] font-semibold text-white-100"
+              >{railCount(tab.id) > 99 ? "99+" : railCount(tab.id)}</span>
+            {/if}
+          </span>
+        {:else if tab.id === "source" && scmChangeCount > 0}
           <span class="relative">
             <svg
               viewBox="0 0 16 16"
@@ -1709,6 +1883,19 @@
 />
 
 <DetailModal content={$currentDetail} onClose={hideDetail} />
+
+<!-- Inspector for the sub-agent selected in the rail. Rendered only once the
+     row is known: the selection can arrive from the `?sub=` query parameter
+     before the roster has loaded. -->
+{#if selectedSubAgentRow}
+  <SubAgentModal
+    {base}
+    {sessionId}
+    row={selectedSubAgentRow}
+    onClose={() => { selectedSubAgent = null; }}
+    onChanged={loadSubAgents}
+  />
+{/if}
 
 <ConfirmDialog
   open={confirmKill !== null}

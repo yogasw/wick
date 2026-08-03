@@ -157,6 +157,20 @@ func (r *Repo) DeleteProfile(ctx context.Context, id string) error {
 	return r.db.WithContext(ctx).Where("id = ?", id).Delete(&entity.AgentProfile{}).Error
 }
 
+// SwitchProfilesToBackground moves every role still stored as foreground
+// onto background, skipping the keys named in keepForeground.
+//
+// Used once, by MigrateModeDefault. Returns how many rows changed.
+func (r *Repo) SwitchProfilesToBackground(ctx context.Context, keepForeground []string) (int64, error) {
+	q := r.db.WithContext(ctx).Model(&entity.AgentProfile{}).
+		Where("default_mode = ?", ModeSync)
+	if len(keepForeground) > 0 {
+		q = q.Where("key NOT IN ?", keepForeground)
+	}
+	res := q.Update("default_mode", ModeAsync)
+	return res.RowsAffected, res.Error
+}
+
 // ---------- delegations ----------
 
 // Create inserts a new delegation row.
@@ -199,11 +213,16 @@ func (r *Repo) FindByChildSession(ctx context.Context, sessionID string) (*entit
 
 // ListByParent returns delegations whose direct parent is parentSessionID,
 // newest first. Drives the rail panel for one conversation.
+//
+// Newest first because the rail is read top-down while work is in flight:
+// the delegation you just watched the leader make is the one you want to
+// open, and with oldest-first it sinks further down the panel with every
+// new sub-agent.
 func (r *Repo) ListByParent(ctx context.Context, parentSessionID string) ([]entity.AgentDelegation, error) {
 	var out []entity.AgentDelegation
 	err := r.db.WithContext(ctx).
 		Where("parent_session_id = ?", parentSessionID).
-		Order("started_at asc").
+		Order("started_at desc").
 		Find(&out).Error
 	return out, err
 }
@@ -359,15 +378,141 @@ func (r *Repo) ListCollectable(ctx context.Context, parentSessionID string) ([]e
 	return out, err
 }
 
-// CountActiveByRoot counts in-flight delegations in a tree — the
-// max_parallel check.
+// CountActiveByRoot counts the delegations HOLDING a parallel slot in a
+// tree: running, and not blocked.
+//
+// Two exclusions carry the whole queueing design. Queued rows are waiting
+// rather than working — counting them would let the first queued item
+// fill the only slot and admit nothing, ever. Blocked rows are parents
+// paused on a synchronous child; counting them deadlocks a serial room,
+// because the parent cannot finish until a child that can never start
+// does.
 func (r *Repo) CountActiveByRoot(ctx context.Context, rootID string) (int64, error) {
 	var n int64
 	err := r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
-		Where("root_id = ? AND status IN ?", rootID,
-			[]string{entity.DelegationQueued, entity.DelegationRunning}).
+		Where("root_id = ? AND status = ? AND blocked = ?",
+			rootID, entity.DelegationRunning, false).
 		Count(&n).Error
 	return n, err
+}
+
+// SetBlocked flips the waiting flag on a running delegation.
+//
+// Guarded to running rows so a late unblock — a deferred clear racing a
+// completion — cannot resurrect a terminal row into the slot count.
+func (r *Repo) SetBlocked(ctx context.Context, id string, blocked bool) error {
+	return r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
+		Where("id = ? AND status = ?", id, entity.DelegationRunning).
+		Update("blocked", blocked).Error
+}
+
+// OldestQueued returns the next delegation in line for a tree, or nil
+// when nothing is waiting.
+//
+// FIFO by StartedAt, which for a queued row is its enqueue moment. There
+// is deliberately no priority column: on a queue this short, priority
+// buys little and hides starvation, and the order a leader dispatched
+// work in is the order it expects it back in.
+func (r *Repo) OldestQueued(ctx context.Context, rootID string) (*entity.AgentDelegation, error) {
+	var d entity.AgentDelegation
+	err := r.db.WithContext(ctx).
+		Where("root_id = ? AND status = ?", rootID, entity.DelegationQueued).
+		Order("started_at asc").First(&d).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// QueuePosition is the 1-based place a delegation holds in its tree's
+// queue. 0 means the row is not queued — the panel asks for a position on
+// every row, and "already running" is not a fault.
+func (r *Repo) QueuePosition(ctx context.Context, rootID, id string) (int, error) {
+	row, err := r.Get(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	if row.Status != entity.DelegationQueued {
+		return 0, nil
+	}
+	var ahead int64
+	err = r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
+		Where("root_id = ? AND status = ? AND started_at < ?",
+			rootID, entity.DelegationQueued, row.StartedAt).
+		Count(&ahead).Error
+	if err != nil {
+		return 0, err
+	}
+	return int(ahead) + 1, nil
+}
+
+// ListQueued returns a tree's waiting line in FIFO order.
+func (r *Repo) ListQueued(ctx context.Context, rootID string) ([]entity.AgentDelegation, error) {
+	var rows []entity.AgentDelegation
+	err := r.db.WithContext(ctx).
+		Where("root_id = ? AND status = ?", rootID, entity.DelegationQueued).
+		Order("started_at asc").Find(&rows).Error
+	return rows, err
+}
+
+// RootsWithQueued lists every tree that has something waiting. The
+// dispatcher's backstop sweep uses it so a lost poke cannot strand a
+// queue forever.
+func (r *Repo) RootsWithQueued(ctx context.Context) ([]string, error) {
+	var roots []string
+	err := r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
+		Where("status = ?", entity.DelegationQueued).
+		Distinct().Pluck("root_id", &roots).Error
+	return roots, err
+}
+
+// ClearStaleBlocked drops the Blocked flag from any row that is no longer
+// running. Backstop only: the normal path clears it in a defer. A crash
+// between the two would otherwise leave a tree holding a phantom slot
+// that nothing ever releases.
+func (r *Repo) ClearStaleBlocked(ctx context.Context) (int64, error) {
+	res := r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
+		Where("blocked = ? AND status <> ?", true, entity.DelegationRunning).
+		Update("blocked", false)
+	return res.RowsAffected, res.Error
+}
+
+// MarkCollectNudged records that the leader has been woken once about
+// this uncollected result, so a periodic sweep does not become a
+// periodic interruption.
+func (r *Repo) MarkCollectNudged(ctx context.Context, id string) error {
+	return r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
+		Where("id = ? AND collect_nudged = ?", id, false).
+		Update("collect_nudged", true).Error
+}
+
+// MarkIntakeReasked records that the mechanical gate has spent this
+// delegation's one follow-up.
+func (r *Repo) MarkIntakeReasked(ctx context.Context, id string) error {
+	return r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
+		Where("id = ?", id).Update("intake_reasked", true).Error
+}
+
+// SaveResultJSON records a delegation's structured envelope.
+//
+// Clamped on the way in rather than trusting the caller: this is the last
+// point before storage, and every path that writes an envelope — the op,
+// the fallback, the checker — has to obey the same bounds.
+func (r *Repo) SaveResultJSON(ctx context.Context, id string, e *ResultEnvelope) error {
+	if e == nil {
+		return nil
+	}
+	e.Clamp()
+	raw, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	return r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
+		Where("id = ?", id).
+		Update("result_json", string(raw)).Error
 }
 
 // SumTurnsByRoot returns the aggregate turns consumed across a whole

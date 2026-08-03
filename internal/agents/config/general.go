@@ -33,7 +33,7 @@ type GeneralConfig struct {
 	SubAgentsEnabled     bool `wick:"bool;group=Sub-agents|System-wide ceilings for sub-agent delegation. Individual roles are configured under Agent Profiles; these values cap every role and cannot be raised by one.;desc=Master switch for sub-agent delegation. Off = the wick_delegate and wick_agents tools disappear entirely and no sub-agent can be spawned. Use as an emergency stop or for a staged rollout."`
 	SubAgentsMaxDepth    int  `wick:"number;group=Sub-agents;desc=How many levels deep delegation may nest (a sub-agent delegating again). Guards against runaway recursion. Default: 3."`
 	SubAgentsRootBudget  int  `wick:"number;group=Sub-agents;desc=Total agentic turns one delegation tree may consume across every sub-agent in it. When exhausted, running sub-agents finish but no new ones start. Default: 40."`
-	SubAgentsMaxParallel int  `wick:"number;group=Sub-agents;desc=Max sub-agents running concurrently within one delegation tree. Default: 4."`
+	SubAgentsMaxParallel int  `wick:"number;group=Sub-agents;desc=Max sub-agents running concurrently within one conversation. 1 (default) runs them one at a time in a visible queue; raise it for parallel throughput at the cost of interleaved output and faster budget burn."`
 	SubAgentsMaxTurns    int  `wick:"number;group=Sub-agents;desc=Hard ceiling on turns for any single sub-agent. Both the profile default and a caller's request are clamped to this. Default: 50."`
 	// Token ceilings. Turn limits bound how MANY times a sub-agent runs;
 	// they do not bound what each run costs — one turn that reads a large
@@ -42,6 +42,28 @@ type GeneralConfig struct {
 	SubAgentsMaxTokens     int `wick:"number;group=Sub-agents;desc=Hard ceiling on tokens any single sub-agent may spend. 0 = no per-sub-agent token cap (turn limits still apply). Only enforceable for providers that report usage. Default: 200000."`
 	SubAgentsRootTokens    int `wick:"number;group=Sub-agents;desc=Total tokens one delegation tree may spend across every sub-agent in it. When exhausted, running sub-agents finish but no new ones start. 0 = no token budget. Default: 1000000."`
 	SubAgentsStaleClaimMin int `wick:"number;group=Sub-agents;desc=Minutes before a task-board claim held by a vanished worker is released back to the queue. Without this a crashed worker pins its task forever. Default: 30."`
+	// Agent-to-agent messaging. Turn and token budgets bound a tree's
+	// total work; none of them bounds two agents trading short messages,
+	// which is cheap per message and unbounded in count.
+	SubAgentsMaxHops       int `wick:"number;group=Sub-agents;desc=How many messages agents may exchange with each other between human turns. Guards against two agents talking in a loop. Reset whenever a person sends a message; agents cannot reset it themselves. Default: 10."`
+	SubAgentsAskTimeoutMin int `wick:"number;group=Sub-agents;desc=Minutes an agent waits for an answer to a blocking ask before giving up. The question stays in the recipient's inbox either way. Default: 10."`
+	SubAgentsInboxCap      int `wick:"number;group=Sub-agents;desc=How many undelivered messages one agent may have waiting before senders are refused. Stops a fast agent from burying a slow one under work it will never read. Default: 20."`
+
+	SubAgentsMentionRouter bool `wick:"bool;group=Sub-agents;desc=Act on @name at the start of a line. An @handle messages that agent, an @role starts one. Off = mentions stay plain text and only the delegate operation spawns anything. Default: on."`
+
+	SubAgentsMaxIterations    int    `wick:"number;group=Sub-agents;desc=Checker rounds one investigation may run before it stops and escalates to a human. Default: 5."`
+	SubAgentsMaxRuntimeMin    int    `wick:"number;group=Sub-agents;desc=Minutes one investigation may run before it stops, keeps whatever it has, and escalates. Catches an agent that is slow rather than chatty, which turn limits do not. Default: 20."`
+	SubAgentsMinConfidence    string `wick:"group=Sub-agents;desc=Minimum checker confidence before a customer-facing draft may be produced: low, medium, or high. Default: medium."`
+	SubAgentsNoEvidenceRounds int    `wick:"number;group=Sub-agents;desc=Consecutive rounds that add no new evidence before an investigation stops. 1 would abandon a run that came up empty once and would have landed the next round. Default: 2."`
+
+	// Boot markers. SetOwned refuses a key with no declared meta row, so
+	// a marker that is not listed here is silently never persisted — the
+	// role seeder's marker had exactly that bug, which made every boot
+	// re-run it (and would have re-flipped a role an operator had moved
+	// back to foreground, forever). Hidden: the UI has no business
+	// showing them, but the declaration is what makes the write legal.
+	SubAgentsSeededRoles       string `wick:"hidden;key=sub_agents_seeded_roles_v1;desc=Boot marker: the investigation roles have been seeded once. Managed by wick — do not edit."`
+	SubAgentsBackgroundDefault string `wick:"hidden;key=sub_agents_background_default_v1;desc=Boot marker: pre-existing roles were moved to the background default once. Managed by wick — do not edit."`
 }
 
 // DefaultGeneralConfig returns the seed values used when the configs
@@ -65,13 +87,34 @@ func DefaultGeneralConfig() GeneralConfig {
 		// real tokens, so it is opt-in rather than something a fresh
 		// install discovers by surprise. The ceilings below apply the
 		// moment it is switched on.
-		SubAgentsEnabled:     false,
-		SubAgentsMaxDepth:    3,
-		SubAgentsRootBudget:  40,
-		SubAgentsMaxParallel: 4,
-		SubAgentsMaxTurns:      50,
-		SubAgentsMaxTokens:     200_000,
-		SubAgentsRootTokens:    1_000_000,
-		SubAgentsStaleClaimMin: 30,
+		SubAgentsEnabled:          false,
+		SubAgentsMaxDepth:         3,
+		SubAgentsRootBudget:       40,
+		SubAgentsMaxParallel:      1,
+		SubAgentsMaxTurns:         50,
+		SubAgentsMaxTokens:        200_000,
+		SubAgentsRootTokens:       1_000_000,
+		SubAgentsStaleClaimMin:    30,
+		SubAgentsMaxHops:          delegationDefaultMaxHops,
+		SubAgentsAskTimeoutMin:    10,
+		SubAgentsInboxCap:         20,
+		SubAgentsMentionRouter:    true,
+		SubAgentsMaxIterations:    delegationDefaultMaxIterations,
+		SubAgentsMaxRuntimeMin:    delegationDefaultMaxRuntimeMin,
+		SubAgentsMinConfidence:    "medium",
+		SubAgentsNoEvidenceRounds: delegationDefaultNoEvidenceRounds,
 	}
 }
+
+// delegationDefaultMaxHops mirrors delegation.DefaultMaxHops. Duplicated
+// rather than imported because config must not depend on the delegation
+// package; a test in delegation asserts the two stay equal.
+const delegationDefaultMaxHops = 10
+
+// The investigation brakes, mirrored from delegation for the same reason
+// and pinned by the same test.
+const (
+	delegationDefaultMaxIterations    = 5
+	delegationDefaultMaxRuntimeMin    = 20
+	delegationDefaultNoEvidenceRounds = 2
+)

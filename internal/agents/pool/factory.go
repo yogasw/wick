@@ -167,15 +167,12 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	if pTypeStrEarly == "" {
 		pTypeStrEarly = string(provider.TypeClaude)
 	}
-	var immutable string
-	switch provider.Type(pTypeStrEarly) {
-	case provider.TypeCodex:
-		immutable = systemprompt.ImmutableSystemPromptCodex()
-	case provider.TypeWick:
-		immutable = systemprompt.ImmutableSystemPromptWick()
-	default:
-		immutable = systemprompt.ImmutableSystemPrompt()
-	}
+	// Audience — a sub-agent spawn gets the delegated-child overlay
+	// (report_result, no ask_user) instead of the human-facing one
+	// (render formats, session title, scheduling). Decided by the
+	// session's parentage, which the pool read off meta; a role or
+	// preset cannot override it.
+	immutable := systemprompt.ImmutableFor(pTypeStrEarly, opt.IsSubAgent)
 	presetContent := immutable
 	if f.ConnectorCatalogLoader != nil {
 		if catalog := strings.TrimSpace(f.ConnectorCatalogLoader()); catalog != "" {

@@ -32,6 +32,32 @@ describe("ThreadMessage - user turn", () => {
   });
 });
 
+describe("ThreadMessage - routed mentions", () => {
+  const routedTurn = () =>
+    makeTurn({
+      role: "user",
+      text:
+        "@history-player-a run the bash check\n\n[routed] wick is dispatching @history-player-a for the message above. " +
+        "Do not delegate or message them again for it — that runs the work twice.",
+    });
+
+  test("the marker line is kept out of the bubble", () => {
+    render(ThreadMessage, { props: { turn: routedTurn() } });
+    expect(screen.getByText("@history-player-a run the bash check")).toBeDefined();
+    expect(screen.queryByText(/Do not delegate/)).toBeNull();
+  });
+
+  test("routing shows as a chip naming the sub-agents", () => {
+    render(ThreadMessage, { props: { turn: routedTurn() } });
+    expect(screen.getByTestId("routed-chip").textContent).toContain("@history-player-a");
+  });
+
+  test("an ordinary message gets no chip", () => {
+    render(ThreadMessage, { props: { turn: makeTurn({ role: "user", text: "how is the deploy going?" }) } });
+    expect(screen.queryByTestId("routed-chip")).toBeNull();
+  });
+});
+
 describe("ThreadMessage - assistant turn", () => {
   test("renders assistant text as markdown (bullet becomes li)", () => {
     const { container } = render(ThreadMessage, {

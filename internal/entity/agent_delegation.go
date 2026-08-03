@@ -139,6 +139,11 @@ type AgentDelegation struct {
 	// the user asked for a stop.
 	Result   string `gorm:"type:text;not null;default:''" json:"result"`
 	ErrorMsg string `gorm:"type:text;not null;default:''" json:"error_msg"`
+	// ResultJSON is the structured envelope a sub-agent reported through
+	// report_result, or one reconstructed from Result when it never
+	// called. Result stays authoritative for humans; this column exists
+	// so a supervisor can act on an answer without re-reading prose.
+	ResultJSON string `gorm:"type:text;not null;default:''" json:"result_json,omitempty"`
 
 	// TriggeredBy is the human user id at the root of this tree. Drives
 	// both tag inheritance and interrupt authorization; it is NOT the
@@ -146,6 +151,58 @@ type AgentDelegation struct {
 	TriggeredBy string     `gorm:"type:varchar(128);not null;default:'';index" json:"triggered_by"`
 	StartedAt   time.Time  `json:"started_at"`
 	EndedAt     *time.Time `json:"ended_at,omitempty"`
+
+	// Handle is this instance's address inside its tree ("reviewer-2").
+	// Unique per RootID and never reused, because a handle that could be
+	// recycled would let a message land on a different agent than the one
+	// the sender was talking to.
+	Handle string `gorm:"type:varchar(64);not null;default:''" json:"handle"`
+	// HopCount is the number of consecutive agent-to-agent messages in
+	// this tree since a human last spoke. Stored on the ROOT row only, and
+	// reset only by a human turn — a leader that could reset its own limit
+	// would not be limited.
+	HopCount int `gorm:"not null;default:0" json:"hop_count"`
+
+	// Blocked marks a RUNNING delegation whose agent is waiting on a
+	// synchronous child rather than working. A blocked row does not hold a
+	// parallel slot — without this, a serial room deadlocks the moment a
+	// sub-agent delegates: the parent owns the only slot while its child
+	// queues behind it, and neither can ever proceed.
+	Blocked bool `gorm:"not null;default:false" json:"blocked"`
+	// ContextText preserves the caller's `context` argument so a delegation
+	// that waits in the queue can be started later exactly as it was
+	// requested. Without it a queued row would lose the background its
+	// caller supplied, and the sub-agent would start on a thinner task than
+	// the one that was asked for.
+	ContextText string `gorm:"type:text;not null;default:''" json:"-"`
+	// MemoryMode is the resolved choice of what this sub-agent was told
+	// about the rest of the conversation. Stored so a delegation that
+	// waits in the queue is started with the memory its caller asked for,
+	// not with whatever the default happens to be by then.
+	MemoryMode string `gorm:"type:varchar(32);not null;default:''" json:"memory_mode,omitempty"`
+	// IncidentID links this delegation to its tree's incident record, once
+	// one exists. This column is the whole of what a separate agent_tasks
+	// table would have been: status, timestamps, error and once-only
+	// collection already live on this row, under test.
+	IncidentID string `gorm:"type:varchar(64);not null;default:'';index" json:"incident_id,omitempty"`
+	// Iteration is the checker round this delegation belongs to, stamped
+	// from the incident when it was created. Round completion is a query
+	// over it rather than a judgement.
+	Iteration int `gorm:"not null;default:0" json:"iteration"`
+	// IntakeReasked records that the mechanical gate already sent this
+	// sub-agent one follow-up about malformed evidence. Bounded at one:
+	// unbounded re-asking turns a turn budget into an argument about
+	// formatting.
+	IntakeReasked bool `gorm:"not null;default:false" json:"intake_reasked,omitempty"`
+	// CollectNudged records that the leader has already been woken once
+	// about this uncollected async result. Without it a sweep every
+	// fifteen seconds becomes a wake every fifteen seconds.
+	CollectNudged bool `gorm:"not null;default:false" json:"collect_nudged,omitempty"`
 }
+
+// LeaderHandle is the address of the conversation owner (the MAIN agent).
+// Reserved: a profile literally named "main" must not be able to take the
+// leader's address and inherit the authority that goes with it.
+const LeaderHandle = "main"
 
 func (AgentDelegation) TableName() string { return "agent_delegations" }

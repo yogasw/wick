@@ -366,7 +366,7 @@ templ sidebarSessionRow(base, id string, sess session.Session, label string, lc 
 				New session
 			}
 		</span>
-		@statusDot(effectiveStatus(lc.Lifecycle, string(sess.Meta.Status)))
+		@statusDot(id, effectiveStatus(lc.Lifecycle, string(sess.Meta.Status)))
 	</a>
 }
 
@@ -385,18 +385,38 @@ func effectiveStatus(lifecycle, status string) string {
 	return ""
 }
 
-// statusDot is the 1.5×1.5px coloured circle shared by sidebar rows
-// and session cards. Empty status renders nothing so the caller need
-// not branch.
-templ statusDot(status string) {
-	if status != "" {
-		<span class={
-			"ml-2 h-1.5 w-1.5 shrink-0 rounded-full",
-			templ.KV("bg-green-500", status == "working"),
-			templ.KV("bg-amber-400", status == "spawning"),
-			templ.KV("bg-blue-400", status == "idle"),
-			templ.KV("bg-orange-500 animate-pulse", status == "queued"),
-		}></span>
+// statusDot is the liveness indicator on a sidebar row: a spinner while
+// the session's agent is actually working, a coloured dot otherwise.
+//
+// The node is always rendered, even for a session with no status at all.
+// The shell island updates it live from /stream/sessions, and an element
+// that only exists once the server happened to render it working would
+// mean a session that starts working after page load stays silent.
+templ statusDot(sessionID, status string) {
+	<span data-session-dot={ sessionID } class={ StatusDotClass(status) }></span>
+}
+
+// StatusDotClass maps a lifecycle to the indicator's classes.
+//
+// Spinning, not just coloured, for working/spawning: a static dot in a
+// list of dots does not read as "this one is busy right now", which is
+// the single thing someone scanning the sidebar wants to know.
+//
+// MIRRORED in fe/agents/shell/src/main.ts (statusDotClass) — the island
+// re-renders this same node from live events. Change both together.
+func StatusDotClass(status string) string {
+	const base = "ml-2 shrink-0 rounded-full"
+	switch status {
+	case "working":
+		return base + " h-3 w-3 border-2 border-green-500 border-t-transparent animate-spin"
+	case "spawning":
+		return base + " h-3 w-3 border-2 border-amber-400 border-t-transparent animate-spin"
+	case "queued":
+		return base + " h-1.5 w-1.5 bg-orange-500 animate-pulse"
+	case "idle":
+		return base + " h-1.5 w-1.5 bg-blue-400"
+	default:
+		return base + " hidden"
 	}
 }
 

@@ -1,15 +1,40 @@
 package delegation
 
+import "strings"
+
 // Delegation modes.
 //
-// Sync is the default and the simple case: the leader blocks and the
-// answer comes back as the tool result. Async exists because some roles
-// produce output for a HUMAN, not for the leader — a research write-up
-// posted to a Slack thread does not need the leader sitting idle while
-// it is written.
+// BACKGROUND is the DEFAULT: the leader gets a handle back, ends its turn,
+// and is woken when the result lands. FOREGROUND — the leader blocking
+// inside the tool call until the child answers — is the opt-in.
+//
+// The default is that way round because of what a blocked leader costs.
+// Its provider process stays resident with the whole conversation loaded
+// while it does nothing, and a room full of leaders waiting on children is
+// a room full of idle processes holding memory. Worse, a blocked leader
+// cannot be talked to: the human sees a spinner, and the run is only
+// cancellable by killing it.
+//
+// Foreground is still right for a short lookup whose answer the very next
+// sentence depends on — under a handful of seconds, one child, nothing
+// else to get on with. Anything longer, or more than one child, wants the
+// background and the queue.
+//
+// Two vocabularies, deliberately. The stored values stay "sync"/"async"
+// because rows in agent_delegations and agent_profiles already hold them
+// and renaming a column's contents buys nothing. Everything a person or a
+// model reads says background/foreground, which is what the mode actually
+// does — nobody has to remember which of two Greek-derived adjectives
+// means "I have to wait". ParseMode reads both spellings; ModeLabel is
+// what goes back out.
 const (
 	ModeSync  = "sync"
 	ModeAsync = "async"
+
+	// ModeForeground / ModeBackground are the spoken names for the two
+	// stored values above.
+	ModeForeground = "foreground"
+	ModeBackground = "background"
 )
 
 // Delivery sinks decide where an async result goes.
@@ -24,9 +49,36 @@ const (
 	SinkSession = "session"
 )
 
-// ValidMode reports whether m is a supported mode. Empty means sync.
+// ParseMode canonicalizes an incoming mode to a stored value.
+//
+// Accepts the spoken names and the stored ones, so a caller that learned
+// "async" from an older tool description is not punished for it. Empty
+// stays empty — "no opinion" is a real answer that NormalizeMode resolves
+// against the role.
+func ParseMode(m string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(m)) {
+	case "":
+		return "", true
+	case ModeBackground, ModeAsync:
+		return ModeAsync, true
+	case ModeForeground, ModeSync:
+		return ModeSync, true
+	}
+	return "", false
+}
+
+// ModeLabel renders a stored mode as the name people and models use.
+func ModeLabel(m string) string {
+	if m == ModeSync {
+		return ModeForeground
+	}
+	return ModeBackground
+}
+
+// ValidMode reports whether m is a supported mode. Empty means background.
 func ValidMode(m string) bool {
-	return m == "" || m == ModeSync || m == ModeAsync
+	_, ok := ParseMode(m)
+	return ok
 }
 
 // ValidSink reports whether s is a supported delivery sink. Empty is
@@ -40,15 +92,20 @@ func ValidSink(s string) bool {
 }
 
 // NormalizeMode resolves the mode for one call: an explicit request
-// wins, then the profile default, then sync.
+// wins, then the profile default, then background.
+//
+// Only an explicit foreground — asked for by the caller or set on the role
+// — blocks. Anything else, including a role whose default_mode was never
+// filled in, runs in the background. Both arguments may arrive in either
+// spelling.
 func NormalizeMode(requested, profileDefault string) string {
-	if requested == ModeAsync || requested == ModeSync {
-		return requested
+	if m, ok := ParseMode(requested); ok && m != "" {
+		return m
 	}
-	if profileDefault == ModeAsync {
-		return ModeAsync
+	if m, ok := ParseMode(profileDefault); ok && m == ModeSync {
+		return ModeSync
 	}
-	return ModeSync
+	return ModeAsync
 }
 
 // Workspace modes.

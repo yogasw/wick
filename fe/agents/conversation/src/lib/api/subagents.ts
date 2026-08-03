@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiPostE, APIError } from "@wick-fe/common-api";
-import type { SubAgentItem } from "../types/agents.js";
+import type { AgentMessageItem, IncidentSummary, SubAgentItem } from "../types/agents.js";
 
 // liveSubAgents keeps only the sub-agents that are still working. Finished
 // ones must NOT raise the rail badge — otherwise the badge sticks at "3"
@@ -13,6 +13,20 @@ export const getSubAgents = (base: string, id: string) =>
   apiGetE<{ subagents: SubAgentItem[] }>(
     `${base}/api/sessions/${encodeURIComponent(id)}/subagents`,
   ).pipe(Effect.map((r) => r?.subagents ?? []));
+
+// getSubAgentPanel fetches the rail's whole payload: the agent rows plus
+// the investigation header, when this conversation has one. Separate from
+// getSubAgents so the existing badge path keeps its narrow return type
+// rather than every caller learning about incidents.
+export const getSubAgentPanel = (base: string, id: string) =>
+  apiGetE<{ subagents: SubAgentItem[]; incident?: IncidentSummary }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/subagents`,
+  ).pipe(
+    Effect.map((r) => ({
+      subAgents: r?.subagents ?? [],
+      incident: r?.incident ?? null,
+    })),
+  );
 
 // interruptSubAgent stops one sub-agent.
 //
@@ -37,3 +51,16 @@ export const interruptAllSubAgents = (base: string, sessionId: string) =>
     `${base}/api/sessions/${encodeURIComponent(sessionId)}/subagents/interrupt-all`,
     {},
   );
+
+// getMessages loads the agent-to-agent thread for this session's tree,
+// with the hop budget that governs whether more may be sent.
+export const getMessages = (base: string, id: string) =>
+  apiGetE<{ messages: AgentMessageItem[]; hops_left: number }>(
+    `${base}/api/sessions/${encodeURIComponent(id)}/messages`,
+  ).pipe(Effect.map((r) => ({ messages: r?.messages ?? [], hopsLeft: r?.hops_left ?? 0 })));
+
+// bumpHops refills the agent-to-agent message budget. Human-only: there
+// is no matching agent-facing op, so a looping leader cannot lift its own
+// limit.
+export const bumpHops = (base: string, id: string) =>
+  apiPostE<{ ok: boolean }>(`${base}/api/sessions/${encodeURIComponent(id)}/hops/reset`, {});

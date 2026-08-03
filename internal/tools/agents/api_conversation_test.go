@@ -140,6 +140,37 @@ func TestAccessibleSessionIDs(t *testing.T) {
 	}
 }
 
+// Sub-agent sessions are real sessions the caller owns, so every access
+// check passes them; only the parent link keeps them out of the
+// conversation list. Both the JSON list and the templ sidebar route
+// through this helper, so this is the single place the rule holds.
+func TestAccessibleSessionIDsDropsSubAgents(t *testing.T) {
+	child := makeSession("s2", "p1", "u1")
+	child.Meta.ParentSessionID = "s1"
+	sessions := map[string]session.Session{
+		"s1": makeSession("s1", "p1", "u1"),
+		"s2": child,
+	}
+	ids := []string{"s1", "s2"}
+
+	for _, tc := range []struct {
+		name   string
+		access projectAccess
+	}{
+		{"scoped caller", access("p1")},
+		// Even an unrestricted view: seeing everything means seeing every
+		// conversation, not every session object.
+		{"see-all caller", projectAccess{seeAll: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := accessibleSessionIDs(ids, sessions, tc.access, "")
+			if len(got) != 1 || got[0] != "s1" {
+				t.Fatalf("got %v, want only the parent conversation [s1]", got)
+			}
+		})
+	}
+}
+
 /* ── ConversationTurn JSON tags smoke test ───────────────────────────── */
 
 func TestConversationTurnHasJSONTags(t *testing.T) {

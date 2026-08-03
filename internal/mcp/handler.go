@@ -305,14 +305,16 @@ func negotiateProtocolVersion(requested string) string {
 
 func (h *Handler) handleToolsList(w http.ResponseWriter, r *http.Request, req rpcRequest) {
 	tools := handlers.MetaToolDescriptors()
-	// Sub-agent delegation is no longer a top-level tool surface. It moved
-	// behind the `sub-agents` connector, so it is discovered through
-	// wick_list / wick_get and invoked through wick_execute like every
-	// other connector — which also gives it an admin page, tag visibility
-	// and connector_runs audit for free.
+	// Two connectors also surface their ops as top-level tools:
+	// wickmanager (admin) and sub-agents (delegation). Both stay real
+	// connector rows — wick_list discovery, the admin page, tag
+	// visibility and connector_runs audit hang off the row — the
+	// top-level names just skip the wick_get→wick_execute hop for ops
+	// hot enough to be called every turn.
 	if user := login.GetUser(r.Context()); user != nil {
 		tagIDs := login.GetUserTagIDs(r.Context())
 		tools = append(tools, handlers.WickManagerToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)
+		tools = append(tools, handlers.SubAgentsToolDescriptors(r.Context(), h.connectors, tagIDs, user.IsAdmin())...)
 	}
 	writeRPCResult(w, req.ID, handlers.ToolListResult{Tools: tools})
 }
@@ -391,9 +393,12 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 	case "wick_schedule_message":
 		handlers.WickScheduleMessage(w, r, hreq, rsp, h.schedule, h.layout, args, user)
 	default:
-		if strings.HasPrefix(name, handlers.WickManagerPrefix) {
+		switch {
+		case strings.HasPrefix(name, handlers.WickManagerPrefix):
 			handlers.WickManagerExecute(w, r, hreq, rsp, h.connectors, name, args, user, tagIDs)
-		} else {
+		case strings.HasPrefix(name, handlers.SubAgentsPrefix):
+			handlers.SubAgentsExecute(w, r, hreq, rsp, h.connectors, h.layout, name, args, user, tagIDs)
+		default:
 			rsp.WriteError(w, hreq.ID, errInvalidParams, "unknown tool: "+name, nil)
 		}
 	}
