@@ -79,9 +79,9 @@ describe("renderMarkdown - inline formatting", () => {
   });
 
   test("renders external link", () => {
-    const html = renderMarkdown("[Qiscus](https://qiscus.com)");
-    expect(html).toContain('href="https://qiscus.com"');
-    expect(html).toContain("Qiscus");
+    const html = renderMarkdown("[Test](https://test.com)");
+    expect(html).toContain('href="https://test.com"');
+    expect(html).toContain("Test");
   });
 });
 

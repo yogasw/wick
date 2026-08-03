@@ -65,13 +65,13 @@ func TestEveryOperationIsDescribed(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"list_agents", "delegate", "collect", "create_agent", "tasks"} {
+	for _, want := range []string{"list_agents", "delegate", "collect", "report_result", "incident", "create_agent", "tasks", "message", "reply", "stop", "list_access"} {
 		if !seen[want] {
 			t.Fatalf("missing op %q", want)
 		}
 	}
-	if count != 5 {
-		t.Fatalf("got %d ops, want 5", count)
+	if count != 11 {
+		t.Fatalf("got %d ops, want 11", count)
 	}
 }
 
@@ -86,6 +86,12 @@ func TestOpsFailClosedWithoutService(t *testing.T) {
 		"collect":      h.collect,
 		"create_agent": h.createAgent,
 		"tasks":        h.tasks,
+		"message":      h.message,
+		"reply":        h.reply,
+		"stop":         h.stop,
+		"list_access":   h.listAccess,
+		"report_result": h.reportResult,
+		"incident":      h.incident,
 	} {
 		if _, err := fn(c); err == nil {
 			t.Fatalf("%s returned no error with delegation unconfigured", name)
@@ -100,5 +106,87 @@ func TestNilResolverIsTreatedAsUnavailable(t *testing.T) {
 	d := Deps{Service: func() *delegation.Service { return nil }}
 	if err := d.ready(); err == nil {
 		t.Fatal("a resolver that yields nil must report unavailable")
+	}
+}
+
+// A mode the model cannot discover is a mode it will never use. Both
+// surfaces that accept one must name every value, since there is nowhere
+// else for a caller to learn them.
+func TestMemoryModeIsAdvertisedWithEveryValue(t *testing.T) {
+	for _, opKey := range []string{"delegate", "create_agent"} {
+		op := findOp(t, opKey)
+		field, ok := fieldByName(op, "memory_mode")
+		if !ok {
+			t.Fatalf("op %q has no memory_mode input", opKey)
+		}
+		for _, want := range delegation.MemoryModes() {
+			if !strings.Contains(field, want) {
+				t.Fatalf("op %q memory_mode description omits %q: %s", opKey, want, field)
+			}
+		}
+	}
+}
+
+// fieldByName returns an op input's description by field key.
+func fieldByName(op *connector.Operation, key string) (string, bool) {
+	for _, f := range op.Input {
+		if f.Key == key {
+			return f.Description, true
+		}
+	}
+	return "", false
+}
+
+// findOp returns the named operation from the module, or fails the test.
+// Two tests below need it and a second copy would be a second chance to
+// look up the wrong op.
+func findOp(t *testing.T, key string) *connector.Operation {
+	t.Helper()
+	for _, cat := range Module(Deps{}).Operations {
+		for i := range cat.Ops {
+			if cat.Ops[i].Key == key {
+				return &cat.Ops[i]
+			}
+		}
+	}
+	t.Fatalf("op %q is missing", key)
+	return nil
+}
+
+// create_agent is the only way an agent can define a role, so a field it
+// cannot reach is a role it cannot get right. This pins the full set
+// against the entity — a column added later without an input here shows
+// up as a failure rather than as a silently unreachable setting.
+func TestCreateAgentCoversEveryProfileField(t *testing.T) {
+	op := findOp(t, "create_agent")
+	got := map[string]bool{}
+	for _, f := range op.Input {
+		got[f.Key] = true
+	}
+	want := []string{
+		"key", "name", "description", "system_prompt", "provider", "model",
+		"max_turns", "max_tokens", "allowed_tags", "allowed_native_tools",
+		"strict_mcp", "can_delegate", "allow_take_over", "mode", "workspace",
+		"icon", "disabled", "locked",
+	}
+	for _, k := range want {
+		if !got[k] {
+			t.Fatalf("create_agent cannot set %q", k)
+		}
+	}
+}
+
+// Two of those fields are stored and read by nobody. Saying so in the desc
+// is the difference between an inert setting and a false promise the LLM
+// will act on.
+func TestUnwiredFieldsSaySo(t *testing.T) {
+	op := findOp(t, "create_agent")
+	for _, f := range op.Input {
+		if f.Key != "allowed_native_tools" && f.Key != "strict_mcp" {
+			continue
+		}
+		if !strings.Contains(strings.ToUpper(f.Description), "NOT ENFORCED") {
+			t.Fatalf("%q must say it is not enforced yet, got %q", f.Key, f.Description)
+		}
 	}
 }

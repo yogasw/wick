@@ -14,12 +14,21 @@ type fakeRunner struct {
 	kills   []string
 	partial string
 	killErr error
+	// onStart lets a test act at the moment a sub-agent starts — standing
+	// in for something the child itself would do mid-run, such as calling
+	// report_result.
+	onStart func(ChildSpec)
 }
 
 func (f *fakeRunner) EnsureChildSession(context.Context, string, string, string, string) error {
 	return nil
 }
-func (f *fakeRunner) StartAgent(context.Context, ChildSpec) error { return nil }
+func (f *fakeRunner) StartAgent(_ context.Context, spec ChildSpec) error {
+	if f.onStart != nil {
+		f.onStart(spec)
+	}
+	return nil
+}
 func (f *fakeRunner) KillAgent(sessionID, agentName string) error {
 	f.kills = append(f.kills, sessionID+"::"+agentName)
 	return f.killErr

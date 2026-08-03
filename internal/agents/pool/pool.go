@@ -249,6 +249,11 @@ type FactoryOptions struct {
 	// into the spawn log so Recent Spawns can show the channel without a
 	// registry lookup.
 	Origin string
+	// IsSubAgent selects the delegated-child immutable prompt instead of
+	// the human-facing one. Set from the session's ParentSessionID — the
+	// one property that makes a session a sub-agent — so a role or preset
+	// cannot claim the wrong audience.
+	IsSubAgent bool
 	// Title / TitleCustom are the session's current title state, surfaced
 	// in the "This session" system-prompt block so the agent knows
 	// whether it still needs to set a title without a wick_session_info
@@ -796,6 +801,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		PresetName:     sess.Meta.Preset,
 		SystemAddon:    composeSystemAddon(p.cfg.Layout, sess),
 		Origin:         string(sess.Meta.Origin),
+		IsSubAgent:     sess.Meta.ParentSessionID != "",
 		Title:          sess.Meta.Label,
 		TitleCustom:    sess.Meta.TitleCustom,
 		MaxTurns:       maxTurns,

@@ -36,6 +36,10 @@
     mentionFiles?: string[];
     /** `@` mention: backend search; when set it drives the menu (fresh per keystroke). */
     onSearchFiles?: (query: string) => Promise<string[]>;
+    /** `@` mention: agents reachable from this conversation. Listed above
+        files, because naming an agent asks for work while naming a file
+        only supplies context — the more consequential pick goes first. */
+    mentionAgents?: { handle: string; label: string; hint?: string }[];
     /** `/` command menu entries (built-in actions + skills). */
     commands?: ComposerCommand[];
   };
@@ -53,6 +57,7 @@
     preset,
     mentionFiles = [],
     onSearchFiles,
+    mentionAgents = [],
     commands = [],
   }: Props = $props();
 
@@ -170,7 +175,21 @@
         : commands;
       return matches.slice(0, 50);
     }
-    if (onSearchFiles) return fileResults.slice(0, 50).map((p) => ({ value: p, label: p }));
+    // Agents first, then files. A handle is a short exact token, so a
+    // plain substring match is enough — and matching on the description
+    // too would surface an agent for a query aimed at a file path.
+    const aq = menuQuery.toLowerCase();
+    const agentRows: MenuItem[] = mentionAgents
+      .filter((a) => !aq || a.handle.toLowerCase().includes(aq))
+      .map((a) => ({
+        value: a.handle,
+        label: a.label,
+        category: a.hint ? `agent · ${a.hint}` : "agent",
+      }));
+
+    if (onSearchFiles) {
+      return [...agentRows, ...fileResults.map((p) => ({ value: p, label: p }))].slice(0, 50);
+    }
     const terms = menuQuery.toLowerCase().split(/\s+/).filter(Boolean);
     const scored: { item: MenuItem; score: number }[] = [];
     for (const p of mentionFiles) {
@@ -178,7 +197,7 @@
       if (s !== null) scored.push({ item: { value: p, label: p }, score: s });
     }
     scored.sort((a, b) => a.score - b.score);
-    return scored.slice(0, 50).map((s) => s.item);
+    return [...agentRows, ...scored.map((s) => s.item)].slice(0, 50);
   });
 
   $effect(() => {
@@ -203,7 +222,9 @@
       const target = e.target as Node;
       if (menuEl && menuEl.contains(target)) return;
       if (textareaEl && textareaEl.contains(target)) return;
-      closeMenu();
+      // Clicking away is a refusal too, not an accident to undo on the
+      // next keystroke.
+      closeMenu(true);
     }
     window.addEventListener("mousedown", onDown, true);
     return () => window.removeEventListener("mousedown", onDown, true);
@@ -237,9 +258,13 @@
   function refreshMenu() {
     const caret = textareaEl?.selectionStart ?? text.length;
     const t = detectTrigger(text.slice(0, caret));
-    if (!t) { closeMenu(); return; }
-    const hasSource = t.kind === "@" ? (!!onSearchFiles || mentionFiles.length > 0) : commands.length > 0;
+    if (!t) { dismissedPos = null; closeMenu(); return; }
+    const hasSource = t.kind === "@"
+      ? (!!onSearchFiles || mentionFiles.length > 0 || mentionAgents.length > 0)
+      : commands.length > 0;
     if (!hasSource) { closeMenu(); return; }
+    // Still editing the token the human dismissed — stay out of the way.
+    if (dismissedPos === t.pos) { closeMenu(); return; }
     const wasClosed = !menuOpen;
     menuKind = t.kind;
     menuTriggerPos = t.pos;
@@ -257,7 +282,22 @@
     }
   }
 
-  function closeMenu() {
+  /* closeMenu(dismiss) — dismiss=true means the human said no.
+
+     Without the distinction, Esc was useless: refreshMenu runs on every
+     keystroke and the `@foo` you are still typing keeps matching, so the
+     popup reappeared on the very next character and sat over the composer
+     saying "No matches". A dismissal therefore sticks to the token it was
+     made against, and is remembered by trigger position.
+
+     It clears itself the moment detectTrigger stops matching — deleting
+     the token or moving off it. So typing a FRESH `@` opens the menu
+     again (the token was gone in between), while editing the dismissed
+     one leaves it shut. */
+  let dismissedPos = $state<number | null>(null);
+
+  function closeMenu(dismiss = false) {
+    if (dismiss && menuKind) dismissedPos = menuTriggerPos;
     menuOpen = false;
     menuKind = null;
   }
@@ -294,7 +334,7 @@
 
   function handleMenuKeys(e: KeyboardEvent): boolean {
     if (!menuOpen) return false;
-    if (e.key === "Escape") { e.preventDefault(); closeMenu(); textareaEl?.focus(); return true; }
+    if (e.key === "Escape") { e.preventDefault(); closeMenu(true); textareaEl?.focus(); return true; }
     if (filtered.length === 0) return false;
     if (e.key === "ArrowDown") { e.preventDefault(); menuIndex = (menuIndex + 1) % filtered.length; return true; }
     if (e.key === "ArrowUp") { e.preventDefault(); menuIndex = (menuIndex - 1 + filtered.length) % filtered.length; return true; }
@@ -374,7 +414,9 @@
     });
   }
 
-  const hasMentionSource = $derived(!!onSearchFiles || mentionFiles.length > 0);
+  const hasMentionSource = $derived(
+    !!onSearchFiles || mentionFiles.length > 0 || mentionAgents.length > 0,
+  );
 
   // Pick above/below by whichever side of the composer has more room, so a
   // toolbar menu doesn't clip when the composer sits high on the page.
@@ -917,7 +959,7 @@
           onkeydown={handleMenuKeys}
           type="text"
           class="w-full bg-transparent text-sm text-black-900 dark:text-white-100 placeholder:text-black-600 dark:placeholder:text-black-700 outline-none"
-          placeholder={menuKind === "@" ? "Search files… (space-separate terms)" : "Search commands…"}
+          placeholder={menuKind === "@" ? (mentionAgents.length > 0 ? "Search agents and files…" : "Search files… (space-separate terms)") : "Search commands…"}
           aria-label={menuKind === "@" ? "Search files" : "Search commands"}
         />
       </div>

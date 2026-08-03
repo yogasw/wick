@@ -99,3 +99,67 @@ func TestLeaderCapabilityIsProviderGated(t *testing.T) {
 		t.Fatal("gemini is not verified for MCP tool use; it must not be leader-capable by default")
 	}
 }
+
+// Lock is the whole point of the feature, and save + delete both route
+// through the same decision — so it is tested as a pure function rather
+// than through two HTTP handlers that could drift apart.
+func TestLockGuardSave(t *testing.T) {
+	locked := &entity.AgentProfile{Key: "reviewer", Locked: true}
+	open := &entity.AgentProfile{Key: "reviewer"}
+
+	if unlockOnly, err := lockGuardSave(nil, false); unlockOnly || err != nil {
+		t.Fatalf("create: unlockOnly=%v err=%v", unlockOnly, err)
+	}
+	if unlockOnly, err := lockGuardSave(open, false); unlockOnly || err != nil {
+		t.Fatalf("unlocked role: unlockOnly=%v err=%v", unlockOnly, err)
+	}
+	// Editing a locked role while leaving it locked is the case the whole
+	// feature exists to refuse.
+	if _, err := lockGuardSave(locked, true); err == nil {
+		t.Fatal("a locked role accepted an edit")
+	}
+	// Unticking Locked is the one save a locked role accepts, and it is
+	// accepted ALONE: unlockOnly tells the handler to keep every stored
+	// field, so an unlock cannot smuggle an edit through with it.
+	unlockOnly, err := lockGuardSave(locked, false)
+	if err != nil {
+		t.Fatalf("unlock refused: %v", err)
+	}
+	if !unlockOnly {
+		t.Fatal("unlock did not report unlockOnly")
+	}
+}
+
+func TestProfileToItemCarriesLocked(t *testing.T) {
+	if got := profileToItem(entity.AgentProfile{Locked: true}); !got.Locked {
+		t.Fatal("locked did not survive profileToItem")
+	}
+}
+
+// Provider values now carry an instance and may carry a pinned model
+// ("wick/wick::cc/claude-fable-5"). Every rule that used to key off a
+// bare type — leader capability above all — has to strip both first, or
+// a role on a named instance silently loses can_delegate on every save.
+func TestProviderTypeOf(t *testing.T) {
+	cases := map[string]string{
+		"claude":                       "claude",
+		"claude/claude":                "claude",
+		"codex/abc":                    "codex",
+		"wick/wick::cc/claude-fable-5": "wick",
+		"":                             "",
+	}
+	for in, want := range cases {
+		if got := providerTypeOf(in); got != want {
+			t.Fatalf("providerTypeOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLeaderCapabilityUsesProviderType(t *testing.T) {
+	if !leaderCapableProviders[providerTypeOf("wick/wick::cc/claude-fable-5")] {
+		t.Fatal("a pinned wick instance lost its leader capability")
+	}
+	if leaderCapableProviders[providerTypeOf("gemini/gemini")] {
+		t.Fatal("gemini must not be leader-capable")
+	}
+}

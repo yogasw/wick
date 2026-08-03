@@ -3,18 +3,12 @@ export interface PinnedSession {
   label: string;
 }
 
-export interface ProviderModelItem {
-  id: string;
-  label: string;
-  default: boolean;
-  desc?: string;
-}
-
-export interface ProviderListItem {
-  type: string;
-  name: string;
-  models?: ProviderModelItem[];
-}
+/* Provider shapes live in common-api: the sub-agent role editor renders the
+   same list, and a second declaration here would be a second thing to keep
+   in step with the server. Imported for local use AND re-exported, so the
+   modules already importing them from here keep working. */
+import type { ProviderListItem } from "@wick-fe/common-api";
+export type { ProviderListItem, ProviderModelItem } from "@wick-fe/common-api";
 
 export interface ProjectSettingsData {
   id: string;

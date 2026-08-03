@@ -97,4 +97,104 @@ describe("AgentProfileEditor", () => {
     const freshKey = fresh.container.querySelector("input[type='text']") as HTMLInputElement;
     expect(freshKey.disabled).toBe(false);
   });
+
+  // Provider and model used to be two controls: a type dropdown and a free
+  // text box nobody could fill correctly. One picker that descends to the
+  // model replaces both, and the packed value is split on save.
+  test("saves a picked provider and model into their own fields", async () => {
+    const onsave = vi.fn();
+    render(AgentProfileEditor, {
+      profile: profile({
+        key: "k",
+        description: "d",
+        provider: "wick/wick",
+        model: "cc/claude-fable-5",
+      }),
+      providerList: [
+        {
+          type: "wick",
+          name: "wick",
+          models: [{ id: "cc/claude-fable-5", label: "Fable", default: true }],
+        },
+      ],
+      onsave,
+    });
+
+    await fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    const saved = onsave.mock.calls[0][0];
+    expect(saved.provider).toBe("wick/wick");
+    expect(saved.model).toBe("cc/claude-fable-5");
+  });
+
+  // A role stored before instances existed holds a bare type. It must show
+  // as the instance it means, not as a phantom "(unavailable)" option.
+  test("renders a legacy bare provider as its canonical instance", () => {
+    render(AgentProfileEditor, {
+      profile: profile({ key: "k", description: "d", provider: "claude" }),
+      providerList: [{ type: "claude", name: "claude" }],
+      onsave: vi.fn(),
+    });
+    expect(screen.queryByText(/unavailable/i)).toBeNull();
+  });
+
+  test("there is no separate model field any more", () => {
+    const { container } = render(AgentProfileEditor, {
+      profile: profile({ key: "k", description: "d" }),
+      providerList: [{ type: "claude", name: "claude" }],
+      onsave: vi.fn(),
+    });
+    expect(container.textContent).not.toContain("Empty uses the provider default");
+  });
+
+  // can_delegate keys off the provider TYPE. A role pinned to an instance
+  // and a model must not lose the checkbox.
+  test("keeps can_delegate editable on a pinned leader-capable instance", () => {
+    const { container } = render(AgentProfileEditor, {
+      profile: profile({ key: "k", description: "d", provider: "wick/wick", model: "m1" }),
+      providerList: [{ type: "wick", name: "wick" }],
+      onsave: vi.fn(),
+    });
+    const boxes = container.querySelectorAll('input[type="checkbox"]');
+    expect((boxes[1] as HTMLInputElement).disabled).toBe(false);
+  });
+
+  // A locked role is frozen everywhere. The Locked checkbox itself has to
+  // stay live, though — if it went dead with the rest, the only way out of
+  // a lock would be a SQL statement.
+  test("locked disables every control except Locked itself", () => {
+    const { container } = render(AgentProfileEditor, {
+      profile: profile({ key: "k", description: "d", locked: true }),
+      providerList: [{ type: "claude", name: "claude" }],
+      onsave: vi.fn(),
+    });
+    const boxes = Array.from(
+      container.querySelectorAll('input[type="checkbox"]'),
+    ) as HTMLInputElement[];
+    // Order follows the template: strict_mcp, can_delegate, allow_take_over, disabled, locked.
+    const lockedBox = boxes[boxes.length - 1];
+    expect(lockedBox.disabled).toBe(false);
+    expect(lockedBox.checked).toBe(true);
+    for (const b of boxes.slice(0, -1)) expect(b.disabled).toBe(true);
+    expect(container.querySelector("textarea")?.disabled).toBe(true);
+  });
+
+  test("locked hides Delete", () => {
+    render(AgentProfileEditor, {
+      profile: profile({ id: "p1", key: "k", description: "d", locked: true }),
+      providerList: [{ type: "claude", name: "claude" }],
+      onsave: vi.fn(),
+      ondelete: vi.fn(),
+    });
+    expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+  });
+
+  test("an unlocked role still offers Delete", () => {
+    render(AgentProfileEditor, {
+      profile: profile({ id: "p1", key: "k", description: "d" }),
+      providerList: [{ type: "claude", name: "claude" }],
+      onsave: vi.fn(),
+      ondelete: vi.fn(),
+    });
+    expect(screen.getByRole("button", { name: /delete/i })).toBeTruthy();
+  });
 });

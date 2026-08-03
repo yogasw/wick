@@ -37,6 +37,9 @@ type AgentProfileItem struct {
 	CanDelegate        bool     `json:"can_delegate"`
 	AllowTakeOver      bool     `json:"allow_take_over"`
 	Disabled           bool     `json:"disabled"`
+	// Locked freezes the role: no edit, no delete, from any surface. Only
+	// this UI can clear it — MCP may set it, never unset it.
+	Locked bool `json:"locked"`
 }
 
 // leaderCapableProviders lists the providers that can act as a LEADER —
@@ -48,6 +51,24 @@ var leaderCapableProviders = map[string]bool{
 	"claude": true,
 	"codex":  true,
 	"wick":   true,
+}
+
+// providerTypeOf reduces a stored provider value to its bare TYPE.
+//
+// A profile's Provider is now "type/name", optionally with a pinned
+// model appended as "::modelID" — the same shape the composer and the
+// project defaults already store. Every rule expressed in types (leader
+// capability, above all) has to strip both parts first; comparing the
+// whole string would quietly drop can_delegate the moment a role moved
+// to a named instance.
+func providerTypeOf(v string) string {
+	if i := strings.Index(v, "::"); i >= 0 {
+		v = v[:i]
+	}
+	if i := strings.Index(v, "/"); i >= 0 {
+		v = v[:i]
+	}
+	return v
 }
 
 func profileToItem(p entity.AgentProfile) AgentProfileItem {
@@ -62,6 +83,7 @@ func profileToItem(p entity.AgentProfile) AgentProfileItem {
 		CanDelegate:        p.CanDelegate,
 		AllowTakeOver:      p.AllowTakeOver,
 		Disabled:           p.Disabled,
+		Locked:             p.Locked,
 	}
 }
 
@@ -175,28 +197,6 @@ func callerTagOptions(c *tool.Ctx) []tagOption {
 	return out
 }
 
-// leaderProviderOptions lists the providers a role may run on, healthy
-// instances first and falling back to the leader-capable set when the
-// provider cache is cold — an empty dropdown would make the form look
-// broken rather than merely uninformed.
-func leaderProviderOptions(c *tool.Ctx) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, 4)
-	for _, ch := range providerChoicesCached(c.Context()) {
-		if ch.Type == "" || seen[ch.Type] {
-			continue
-		}
-		seen[ch.Type] = true
-		out = append(out, ch.Type)
-	}
-	if len(out) == 0 {
-		for _, p := range []string{"claude", "codex", "wick"} {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 // apiAgentProfileList handles GET /api/agent-profiles.
 //
 // Admins see every profile so they can manage them. Everyone else sees
@@ -262,9 +262,29 @@ func apiAgentProfileList(c *tool.Ctx) {
 		"owned":     owned,
 		"inherited": inherited,
 		"tags":      callerTagOptions(c),
-		"providers": leaderProviderOptions(c),
+		// The same list the composer and the project defaults picker use,
+		// so the three surfaces cannot disagree about which providers are
+		// healthy or which models an instance offers.
+		"provider_list": projectProviderList(c),
 		"is_admin":  isAdmin,
 	})
+}
+
+// lockGuardSave decides what a save may do to a role that is already
+// locked.
+//
+// unlockOnly=true means "keep every stored field and flip Locked to
+// false". Unlock and edit are deliberately two separate saves: if one
+// request could do both, the lock would stop being a guard and become a
+// single extra click on the way to the same change.
+func lockGuardSave(existing *entity.AgentProfile, reqLocked bool) (unlockOnly bool, err error) {
+	if existing == nil || !existing.Locked {
+		return false, nil
+	}
+	if reqLocked {
+		return false, delegation.CheckMutable(existing)
+	}
+	return true, nil
 }
 
 // apiAgentProfileSave handles POST /api/agent-profiles — create or update.
@@ -306,7 +326,7 @@ func apiAgentProfileSave(c *tool.Ctx) {
 	}
 	// Force can_delegate off for providers that cannot use MCP tools; a
 	// stored true would just fail at runtime.
-	if !leaderCapableProviders[req.Provider] {
+	if !leaderCapableProviders[providerTypeOf(req.Provider)] {
 		req.CanDelegate = false
 	}
 
@@ -316,6 +336,25 @@ func apiAgentProfileSave(c *tool.Ctx) {
 	existing, err := globalDelegation.Repo.GetProfileExact(c.Context(), req.ProjectID, req.Key)
 	if err != nil && !errors.Is(err, delegation.ErrProfileNotFound) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	unlockOnly, lerr := lockGuardSave(existing, req.Locked)
+	if lerr != nil {
+		c.JSON(http.StatusConflict, map[string]string{"error": lerr.Error()})
+		return
+	}
+	// An unlock is applied to the STORED row, not to the submitted one:
+	// the form disables every other control while locked, but a hand-made
+	// request must not be able to ride along on the unlock.
+	if unlockOnly {
+		row := *existing
+		row.Locked = false
+		if err := globalDelegation.Repo.SaveProfile(c.Context(), &row); err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, profileToItem(row))
 		return
 	}
 
@@ -331,6 +370,7 @@ func apiAgentProfileSave(c *tool.Ctx) {
 		CanDelegate:        req.CanDelegate,
 		AllowTakeOver:      req.AllowTakeOver,
 		Disabled:           req.Disabled,
+		Locked:             req.Locked,
 	}
 	if existing != nil {
 		p.ID = existing.ID
@@ -377,6 +417,13 @@ func apiAgentProfileDelete(c *tool.Ctx) {
 	// The row's own scope decides who may remove it — the same rule the
 	// save path applies, via the same function.
 	if !requireProfileScope(c, existing.ProjectID) {
+		return
+	}
+	// Locked blocks delete too. If it did not, the lock would guard
+	// nothing: the role could be removed and recreated under the same key
+	// with different behaviour.
+	if err := delegation.CheckMutable(existing); err != nil {
+		c.JSON(http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
 	if err := globalDelegation.Repo.DeleteProfile(c.Context(), id); err != nil {

@@ -219,6 +219,8 @@ Typing `@` opens a file-search popup. Space-separated terms are ANDed; matches a
 
 Both endpoints cache the underlying file-tree walk for a few seconds so rapid typing doesn't re-walk the disk on every keystroke. Selecting a result inserts `@path`.
 
+On a live session's Conversation tab, `@` also lists [sub-agent](./agents/sub-agents) handles and roles ahead of files — a running instance's handle first, then roles you could delegate to — since naming an agent asks it for work while naming a file only supplies context. Picking one inserts `@handle` into your message to the leader, which can then use it to [message that agent](./agents/sub-agents#talking-to-other-agents).
+
 ### `/` command palette
 
 Typing `/` (or clicking **Commands** in the `+` menu) opens a command menu backed by `GET /api/composer/commands?scope=<scope>&provider=<type>` — built-in actions (switch provider, switch project, open a panel: processes / workspace / source / context, or change the view: commands / approvals / raw) grouped by category, followed by every installed [skill](./agents/skills-manager). Picking a built-in action runs it directly; picking a skill inserts `/<skill-name>`.

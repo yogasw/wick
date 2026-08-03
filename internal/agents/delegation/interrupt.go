@@ -69,6 +69,10 @@ func (s *Service) Interrupt(ctx context.Context, delegationID, actorID string, i
 		if !ok {
 			return OutcomeAlreadyDone, nil
 		}
+		// Cancelling a queued item does not free a slot (it never held
+		// one), but it does change who is at the head of the line — the
+		// next item must be started rather than waiting for a sweep.
+		s.pokeSlot(d.RootID)
 		return OutcomeDequeued, nil
 	}
 
@@ -105,6 +109,9 @@ func (s *Service) Interrupt(ctx context.Context, delegationID, actorID string, i
 	if !ok {
 		return OutcomeAlreadyDone, nil
 	}
+	// A stopped sub-agent frees its slot; the queue must move immediately
+	// rather than idling until the next sweep.
+	s.pokeSlot(d.RootID)
 	return OutcomeKilled, nil
 }
 

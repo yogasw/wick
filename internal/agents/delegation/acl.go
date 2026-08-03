@@ -120,3 +120,57 @@ func VisibleProfiles(profiles []entity.AgentProfile, userTags []string, isAdmin 
 	}
 	return out
 }
+
+// CanAgentStop reports whether an agent may stop another agent.
+//
+// Same tree only. This is the one authority an agent gains over a peer,
+// and it is deliberately narrow: takeover.go draws the line at STEERING
+// ("letting one agent inject turns into another would blur the delegation
+// boundary"), while stopping stays allowed. A leader that can spawn work
+// it cannot stop is the worse failure — it has to wait out a runaway it
+// can see going wrong.
+//
+// The human's own authorization still applies on top: the caller passes
+// its user id to Interrupt, so an agent can never stop something its
+// operator could not.
+func CanAgentStop(d *entity.AgentDelegation, callerRootID string) bool {
+	if d == nil || callerRootID == "" {
+		return false
+	}
+	return d.RootID == callerRootID
+}
+
+// TagNamer resolves tag ids to human names.
+//
+// Separate from TagResolver because it is only needed for DISCOVERY: an
+// agent choosing which tools a role should carry has to see what the ids
+// mean. Enforcement never needs a name, so the security path does not
+// depend on this being wired.
+type TagNamer interface {
+	TagsByIDs(ctx context.Context, ids []string) ([]*entity.Tag, error)
+}
+
+// NarrowTags intersects a requested tag set with what the caller holds.
+//
+// The rule that makes it safe to let an AGENT choose a role's tools: a
+// request for a tag the caller does not have is dropped, not honoured, so
+// a role can only ever be narrower than the human who triggered it.
+// Requesting nothing means "inherit everything the caller has".
+func NarrowTags(requested, callerTags []string) []string {
+	if len(requested) == 0 {
+		return nil
+	}
+	have := make(map[string]bool, len(callerTags))
+	for _, t := range callerTags {
+		have[t] = true
+	}
+	out := make([]string, 0, len(requested))
+	seen := map[string]bool{}
+	for _, t := range requested {
+		if have[t] && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
+}

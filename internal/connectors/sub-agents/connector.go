@@ -8,6 +8,14 @@
 // deal wickmanager takes — at the cost of an extra hop: the leader must
 // resolve the instance id before it can execute an op.
 //
+// That hop is paid back at the MCP layer: every enabled op here ALSO
+// surfaces as a top-level wick_agent_<op> tool (see
+// internal/mcp/handlers/wickmanager.go), routed through the same
+// wick_execute path so visibility, per-op access and audit are
+// identical. Delegation is called every turn of a multi-agent flow, and
+// making the hot path one call keeps models from drifting to a
+// provider's native agent tools.
+//
 // Unlike wickmanager this connector is NOT tagged System: every user's
 // agent needs to be able to delegate, and a System tag would hide the
 // whole feature from non-admins. Write access is governed per-op
@@ -76,13 +84,52 @@ type delegateInput struct {
 	// Turn and token caps are clamped to the system ceiling, never raised.
 	MaxTurns     int    `wick:"desc=Optional cap on the sub-agent's turns. Clamped to the system ceiling."`
 	MaxTokens    int    `wick:"desc=Optional cap on tokens this sub-agent may spend. Clamped to the system ceiling."`
-	Mode         string `wick:"desc=sync (default) blocks and returns the answer. async returns a delegation_id and delivers later."`
-	DeliverySink string `wick:"desc=Where an async result goes: channel (default), session (wake the caller), none (record only)."`
+	Mode         string `wick:"desc=background (default) returns a delegation_id immediately and the result is delivered later. foreground blocks this call until the sub-agent answers — only for a short lookup you cannot continue without."`
+	DeliverySink string `wick:"desc=Where a background result goes: session (default) wakes you with it, channel posts it to the chat thread, none records it only."`
 	Workspace    string `wick:"desc=shared (default) or worktree for a private git worktree. Falls back to shared with a note on a non-git project."`
+	MemoryMode   string `wick:"desc=What this sub-agent is told beyond its task. no_history = nothing. state_summary (default) = one line per finished sibling. relevant_chunks = your context field only, curated by you. full_history = every sibling's full result, for audit and debugging only — expensive, noisy, and it biases the agent toward earlier conclusions."`
+}
+
+type messageInput struct {
+	To   string `wick:"required;desc=Handle of the agent to message, without the @ (see list_agents)."`
+	Body string `wick:"required;textarea;desc=What you want to say or ask."`
+	Kind string `wick:"desc=tell (default) sends and returns immediately. ask waits for that agent's answer."`
+}
+
+type replyInput struct {
+	MessageID string `wick:"required;desc=The id of the question you are answering, shown with the question."`
+	Body      string `wick:"required;textarea;desc=Your answer."`
+}
+
+type stopInput struct {
+	Handle string `wick:"required;desc=Handle of the agent to stop, without the @."`
 }
 
 type collectInput struct {
 	DelegationID string `wick:"desc=The delegation to collect. Omit to list every async result waiting for this conversation."`
+}
+
+type reportResultInput struct {
+	Summary  string `wick:"required;textarea;desc=Your finished answer in a few sentences. This is what the agent that delegated to you acts on."`
+	Findings string `wick:"textarea;desc=One finding per line. A finding is a conclusion you are prepared to defend."`
+	Evidence string `wick:"textarea;desc=JSON array of {kind, source, excerpt}. kind is log | code | doc | data | observation. Quote real material: a claim with no excerpt is a guess."`
+	Confidence           string `wick:"desc=low, medium, or high — how sure you are of the summary overall. Anything else is recorded as unknown."`
+	NeedsFollowup        bool   `wick:"desc=True when the task is not fully answered and someone should continue it."`
+	RecommendedNextTasks string `wick:"textarea;desc=JSON array of {role, task, reason} for work you recommend dispatching next."`
+}
+
+type incidentInput struct {
+	Action    string `wick:"required;desc=get | update | close."`
+	Title     string `wick:"desc=Short incident title, for update."`
+	UserIssue string `wick:"textarea;desc=The problem as the user reported it, for update."`
+	Summary   string `wick:"textarea;desc=Current best understanding, for update."`
+	Status    string `wick:"desc=investigating | confirmed | escalated, for update. Use action=close to close."`
+	Hypotheses      string `wick:"textarea;desc=JSON array of strings REPLACING the hypothesis list, for update. Omit to leave it unchanged."`
+	MissingEvidence string `wick:"textarea;desc=JSON array of strings REPLACING the missing-evidence list, for update. Omit to leave it unchanged."`
+	NextActions     string `wick:"textarea;desc=JSON array of strings REPLACING the next-actions list, for update. Omit to leave it unchanged."`
+	ClientContext   string `wick:"textarea;desc=JSON object with the affected client (app id, name, environment), for update. Omit to leave it unchanged."`
+	StopReason      string `wick:"desc=Why the investigation stopped, for update. An investigation that ends without saying why looks identical to one still running."`
+	FinalSummary    string `wick:"textarea;desc=Closing summary. Required for close — it is what anyone reading this later gets."`
 }
 
 type createAgentInput struct {
@@ -90,9 +137,26 @@ type createAgentInput struct {
 	Description string `wick:"required;textarea;desc=What this role is for. Read by the delegating agent to decide when to pick it — a vague description makes the role unusable."`
 	SystemPrompt string `wick:"required;textarea;desc=The role's instructions. This becomes the sub-agent's system prompt."`
 	Name         string `wick:"desc=Display name. Defaults to the key."`
-	Provider     string `wick:"desc=Agent runtime: claude (default), codex, wick, gemini."`
+	Icon         string `wick:"desc=A single emoji shown beside this role in lists. Optional."`
+	Provider     string `wick:"desc=Agent runtime: claude (default), codex, wick, gemini. A specific instance may be named as type/name (e.g. codex/abc)."`
 	Model        string `wick:"desc=Provider-specific model id. Empty uses the provider default."`
 	MaxTurns     int    `wick:"desc=Default turn budget for this role. Clamped to the system ceiling."`
+	MaxTokens    int    `wick:"desc=Default token budget for one delegation of this role. 0 = the role adds no cap of its own, and the per-tree budget still applies."`
+	// Tool access. Narrowed against your own tags server-side, so this can
+	// only ever restrict a role — it can never grant it something you do
+	// not already have.
+	AllowedTags string `wick:"desc=Comma-separated tag ids limiting which tools/connectors this role may use. See list_access for what you can grant. Empty = the role inherits everything you can reach."`
+	// Stored, returned, and read by nothing. Said plainly because an inert
+	// field the model believes in is worse than an absent one.
+	AllowedNativeTools string `wick:"desc=Comma-separated provider-native tool names (e.g. Read, Grep, WebSearch). NOT ENFORCED today: the value is stored but nothing forwards it to the spawn, so it does not restrict what this role can call."`
+	StrictMCP          bool   `wick:"desc=Drop the host's own MCP servers from this role's spawn. NOT ENFORCED today: whether a spawn gets --strict-mcp-config is decided globally by the WICK_STRICT_MCP environment variable, identically for every role."`
+	CanDelegate        bool   `wick:"desc=Let this role delegate and define roles of its own. Off by default: most roles should do their own work."`
+	AllowTakeOver      bool   `wick:"desc=Let a human send messages into this role mid-run. Its answers are then flagged as human-steered."`
+	Mode               string `wick:"desc=background (default) runs this role detached and delivers its result later. foreground makes the caller block until it answers — pick it only for roles that answer in seconds."`
+	Workspace          string `wick:"desc=Default working directory for this role: shared (default), or worktree for a private git worktree. Falls back to shared with a note on a non-git project."`
+	MemoryMode         string `wick:"desc=Default for what this role is told beyond its task. One of no_history, state_summary (the default), relevant_chunks, full_history. A caller can override it per delegation."`
+	Disabled           bool   `wick:"desc=Keep the role on record but hide it from every roster. A disabled role cannot be delegated to."`
+	Locked             bool   `wick:"desc=Freeze this role. Once locked, no further edit or delete is accepted over MCP — only a human can unlock it in the web UI. One-way from here: you can lock, you cannot unlock."`
 }
 
 type tasksInput struct {
@@ -122,22 +186,74 @@ func Operations(deps Deps) []connector.Category {
 				emptyInput{}, h.listAgents, wickdocs.Docs{}),
 
 			connector.Op("delegate", "Delegate a Task",
-				"Delegate one self-contained sub-task to another agent and WAIT for its result. "+
+				"Hand one self-contained sub-task to another agent. Runs in the BACKGROUND by default: this call returns a "+
+					"delegation_id and status 'running' or 'queued', NOT an answer. Say what you started, end your turn, and you are woken "+
+					"when the result lands — do not sit in a loop calling collect, and never report a result you have not been given. "+
 					"The sub-agent starts with a CLEAN context — it cannot see this conversation, so `task` must state everything it needs. "+
-					"It returns its final answer as this call's result, carrying a `status`: "+
-					"'done' is a complete answer; 'interrupted' means a HUMAN stopped it, so read the note and do NOT silently retry; "+
+					"Dispatch several in one turn and they queue behind one another, one at a time per conversation. "+
+					"Pass mode=foreground ONLY for a short lookup whose answer your very next sentence needs; it blocks this call and holds your process idle meanwhile. "+
+					"Every finished result carries a `status`: 'done' is a complete answer; 'interrupted' means a HUMAN stopped it, so read the note and do NOT silently retry; "+
 					"'stopped_max_turns' and 'stopped_budget' mean the result is PARTIAL — use what is there or ask the user. "+
 					"Delegate when a sub-task wants a different role or would otherwise flood this conversation; do simple work yourself rather than paying a spawn.",
 				delegateInput{}, h.delegate, wickdocs.Docs{}),
 
-			connector.Op("collect", "Collect an Async Result",
-				"Pick up the result of an async delegation started earlier. Pass delegation_id, or omit it to list everything waiting for this conversation. "+
+			connector.Op("collect", "Collect a Background Result",
+				"Pick up the result of a background delegation started earlier. Pass delegation_id, or omit it to list everything waiting for this conversation. "+
 					"A delegation still running comes back pending=true — carry on with other work rather than looping on it. "+
 					"A result is handed over ONCE: if the reply says it was already collected, you have seen it before and must not act on it twice.",
 				collectInput{}, h.collect, wickdocs.Docs{}),
+
+			connector.Op("report_result", "Report Your Result",
+				"Report your finished work as structured fields, so the agent that delegated to you can act on it without re-reading your prose. "+
+					"Call this ONCE, as the last thing you do before your closing message. "+
+					"Evidence must be QUOTED, not described: a source and an excerpt someone else could verify — a claim with no excerpt is a guess. "+
+					"If you never call this, your closing message is recorded as the summary with confidence 'unknown', which tells the caller your findings were never actually asserted.",
+				reportResultInput{}, h.reportResult, wickdocs.Docs{}),
+
+			connector.Op("incident", "Work the Incident Record",
+				"Read or update this conversation's incident record — the durable state of an investigation, so what you know survives a context that does not. "+
+					"get returns status, iteration, summary, hypotheses, missing evidence, next actions, and the evidence collected so far grouped by kind. "+
+					"update patches ONLY the fields you pass, so you can add a hypothesis without restating everything else. "+
+					"close writes a terminal status with a final summary; a closed incident refuses further updates and only a human can reopen it. "+
+					"There is no open action: the record appears by itself the first time there is something to store.",
+				incidentInput{}, h.incident, wickdocs.Docs{}),
+		),
+
+		connector.Cat("Messaging", "Talk to the other agents working in this conversation.",
+			connector.Op("message", "Message an Agent",
+				"Send a message to another agent already working in this conversation, addressed by handle (list_agents shows them). "+
+					"kind=tell delivers it and returns immediately — use it to report progress or hand over information. "+
+					"kind=ask waits for that agent's answer and returns it, for something you cannot continue without. "+
+					"The recipient keeps the context of its own work, so you do not need to re-explain what it is doing. "+
+					"Every message counts against this conversation's shared budget and its hop limit; when the hop limit runs out, "+
+					"summarise and report to the user instead of messaging again.",
+				messageInput{}, h.message, wickdocs.Docs{}),
+
+			connector.Op("reply", "Answer a Question",
+				"Answer a question another agent asked you. Pass the message_id shown with the question. "+
+					"If you finish your turn without replying, your closing message is sent as the answer automatically — "+
+					"so reply explicitly whenever the answer matters.",
+				replyInput{}, h.reply, wickdocs.Docs{}),
+
+			// Not destructive: stopping returns the sub-agent's partial work
+			// as a normal result rather than discarding it, and the human
+			// interrupt path is ungated for the same reason. Marking it
+			// destructive would default it off on every row, leaving a leader
+			// able to start work it cannot stop.
+			connector.Op("stop", "Stop an Agent",
+				"Stop another agent in this conversation. Its partial work is kept and returned, not discarded. "+
+					"Use it when an agent is stuck, redundant, or working on something no longer needed.",
+				stopInput{}, h.stop, wickdocs.Docs{}),
 		),
 
 		connector.Cat("Roles", "Define the roles you can delegate to.",
+			connector.Op("list_access", "List Grantable Tool Access",
+				"List the tool-access tags you can give a role, as {id, name}. Call this before create_agent when you want to "+
+					"restrict what a role may reach: pass a subset of these ids as allowed_tags. Omitting allowed_tags gives the "+
+					"role everything you can reach, which is the right default for a role doing work on your behalf. "+
+					"A role can never exceed this set, so narrowing is the only thing allowed_tags can do.",
+				emptyInput{}, h.listAccess, wickdocs.Docs{}),
+
 			connector.Op("create_agent", "Create or Update a Role",
 				"Create a sub-agent role, or update one you already own. "+
 					"The role is created in THIS conversation's project, so it is visible only inside that project; "+

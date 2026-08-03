@@ -131,8 +131,11 @@ func apiProjectDetail(c *tool.Ctx) {
 		Pinned:          []ProjectPinnedSession{},
 	}
 
+	// Chats, not sessions: a sub-agent runs in its leader's project but is
+	// not a chat anyone started, and counting it inflates every project a
+	// delegation has ever run in.
 	for sid, s := range globalMgr.Registry().Sessions() {
-		if s.Meta.ProjectID == id {
+		if s.Meta.ProjectID == id && s.Meta.ParentSessionID == "" {
 			resp.ChatCount++
 		}
 		_ = sid

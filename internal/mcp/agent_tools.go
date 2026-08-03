@@ -25,6 +25,7 @@ func (h *Handler) AgentToolDescriptors(ctx context.Context) []handlers.ToolDescr
 	user := internalSystemUser()
 	tools := handlers.MetaToolDescriptors()
 	tools = append(tools, handlers.WickManagerToolDescriptors(ctx, h.connectors, nil, user.IsAdmin())...)
+	tools = append(tools, handlers.SubAgentsToolDescriptors(ctx, h.connectors, nil, user.IsAdmin())...)
 	return tools
 }
 

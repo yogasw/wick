@@ -63,11 +63,18 @@ type AgentProfile struct {
 	StrictMCP bool `gorm:"not null;default:true" json:"strict_mcp"`
 
 	DefaultMaxTurns int `gorm:"not null;default:12" json:"default_max_turns"`
-	// DefaultMode is "sync" today. "async" lands in Phase 2; the column
-	// exists now so the enum does not have to be migrated later.
-	DefaultMode string `gorm:"type:varchar(16);not null;default:'sync'" json:"default_mode"`
+	// DefaultMode is "async" unless a role opts into "sync". Empty is
+	// read as async too (see delegation.NormalizeMode): only an explicit
+	// "sync" makes a caller block, so a role created without an opinion
+	// runs in the background.
+	DefaultMode string `gorm:"type:varchar(16);not null;default:'async'" json:"default_mode"`
 	// DefaultWorkspace is "shared" today. "worktree" lands in Phase 3.
 	DefaultWorkspace string `gorm:"type:varchar(16);not null;default:'shared'" json:"default_workspace"`
+	// DefaultMemoryMode decides what this role is told about the rest of
+	// the conversation beyond its own task: no_history, state_summary
+	// (the default), relevant_chunks, or full_history. Empty means the
+	// system default rather than "nothing".
+	DefaultMemoryMode string `gorm:"type:varchar(32);not null;default:''" json:"default_memory_mode"`
 	// CanDelegate marks a profile as eligible to be a leader, i.e. to
 	// call wick_delegate itself (nested delegation). Forced false for
 	// providers without MCP tool-use.
@@ -81,6 +88,13 @@ type AgentProfile struct {
 	// DefaultMaxTokens caps token spend for one delegation of this role.
 	// 0 = uncapped by the profile; the per-tree budget still applies.
 	DefaultMaxTokens int `gorm:"not null;default:0" json:"default_max_tokens"`
+
+	// Locked freezes this role's behaviour. While true, no edit and no
+	// delete is accepted from ANY surface — web UI or MCP. Unlocking is a
+	// UI-only action, so an agent can never widen its own definition.
+	// Distinct from Disabled: a disabled role is switched off, a locked
+	// role is switched in stone.
+	Locked bool `gorm:"not null;default:false" json:"locked"`
 
 	Disabled  bool      `gorm:"not null;default:false" json:"disabled"`
 	CreatedBy string    `gorm:"type:varchar(128);not null;default:''" json:"created_by"`

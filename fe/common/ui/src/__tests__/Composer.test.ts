@@ -518,3 +518,69 @@ describe("Composer — menu behavior", () => {
     expect(screen.queryByRole("textbox", { name: /search files/i })).toBeNull();
   });
 });
+
+/* The menu reopening on the next keystroke made Esc worthless: it sat over
+   the composer saying "No matches" while you finished typing a mention it
+   was never going to complete. */
+describe("Composer — a dismissed menu stays dismissed", () => {
+  const menu = () => screen.queryByRole("textbox", { name: /search files/i });
+
+  async function openThenEscape() {
+    render(Composer, { props: { onSend: vi.fn(), mentionFiles: ["a.txt"] } });
+    const textarea = screen.getByRole("textbox", { name: "" }) as HTMLTextAreaElement;
+    await fireEvent.input(textarea, { target: { value: "@a" } });
+    expect(menu()).not.toBeNull();
+    await fireEvent.keyDown(textarea, { key: "Escape" });
+    expect(menu()).toBeNull();
+    return textarea;
+  }
+
+  test("typing more of the same mention does not reopen it", async () => {
+    const textarea = await openThenEscape();
+    await fireEvent.input(textarea, { target: { value: "@ap" } });
+    expect(menu()).toBeNull();
+  });
+
+  test("clicking away also counts as a refusal", async () => {
+    render(Composer, { props: { onSend: vi.fn(), mentionFiles: ["a.txt"] } });
+    const textarea = screen.getByRole("textbox", { name: "" }) as HTMLTextAreaElement;
+    await fireEvent.input(textarea, { target: { value: "@a" } });
+    await fireEvent.mouseDown(document.body);
+    await fireEvent.input(textarea, { target: { value: "@ap" } });
+    expect(menu()).toBeNull();
+  });
+
+  // A `@` mention deliberately swallows spaces so a file search can be
+  // "src main", which means everything after it on the LINE is still the
+  // same token. A newline is what ends it.
+  test("a mention on the next line is a new token and opens again", async () => {
+    const textarea = await openThenEscape();
+    await fireEvent.input(textarea, { target: { value: "@ap and more" } });
+    expect(menu()).toBeNull();
+    await fireEvent.input(textarea, { target: { value: "@ap and more\n@" } });
+    expect(menu()).not.toBeNull();
+  });
+
+  test("deleting the mention re-arms it, so retyping @ works", async () => {
+    const textarea = await openThenEscape();
+    await fireEvent.input(textarea, { target: { value: "" } });
+    expect(menu()).toBeNull();
+    await fireEvent.input(textarea, { target: { value: "@" } });
+    expect(menu()).not.toBeNull();
+  });
+
+  test("dismissing a mention does not silence the / command menu", async () => {
+    render(Composer, {
+      props: {
+        onSend: vi.fn(),
+        mentionFiles: ["a.txt"],
+        commands: [{ value: "processes", label: "/processes" }],
+      },
+    });
+    const textarea = screen.getByRole("textbox", { name: "" }) as HTMLTextAreaElement;
+    await fireEvent.input(textarea, { target: { value: "@a" } });
+    await fireEvent.keyDown(textarea, { key: "Escape" });
+    await fireEvent.input(textarea, { target: { value: "@a /" } });
+    expect(screen.queryByRole("textbox", { name: /search commands/i })).not.toBeNull();
+  });
+});

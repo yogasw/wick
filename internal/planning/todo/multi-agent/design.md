@@ -60,7 +60,11 @@ sekaligus.
 |---|---|
 | **UI board / kanban** | API + data lengkap (`/api/boards`, `/api/tasks/*`), **nol komponen Svelte**. Bikin board pertama sekarang harus lewat `POST /api/boards` |
 | **UI fleet monitor** | Endpoint snapshot siap; halaman `/agents/monitor` + grid kartu belum ada |
-| **Editor profil / squad** | CRUD API admin-only siap; halaman editor belum ada |
+| **Editor squad** | CRUD API siap; halaman editor belum ada. (**Editor profil sudah mendarat** — SPA `fe/agents/agent-profiles/` + tab di project-settings, lihat `in-progress/agent-scope/`) |
+| **Kill-switch tidak sesuai deskripsinya** | Desc `SubAgentsEnabled` menjanjikan "the tools disappear entirely". Nyatanya connector `sub-agents` tetap terlihat, `list_agents`/`create_agent` sukses, hanya `delegate` yang ditolak `governor.go:186`. Agent bisa bikin role, list-nya jalan, baru mentok di langkah terakhir — bacaan yang wajar dari situ: "diblokir admin", bukan "belum dinyalakan". Pilih: sembunyikan connector saat off, atau perbaiki desc-nya |
+| **Section prompt tidak kondisional** | Blok Sub-agents di `system-prompt/immutable.md:120-147` selalu ikut terkirim, termasuk saat `sub_agents_enabled=false` → prompt menyuruh delegasi ke fitur yang pasti menolak |
+| **Roster tidak pernah disuntik** | Desain menjanjikan roster masuk system context leader; implementasinya nol. Agent wajib `list_agents` dulu, kalau lupa ya menebak key. Ditangani di [agent-mention](../agent-mention/design.md) §2.2 |
+| **Tiga knob mati di editor profil** | `can_delegate`, `strict_mcp`, `allowed_native_tools` tersimpan dan tampil di form, tak ada yang membacanya (`in-progress/agent-scope/design.md`). Persis pola yang doc ini tolak — selesaikan atau hapus dari form |
 | **Approval/AskUser dari sub-agent** | [OQ #2](#open-questions) belum diputuskan — usul: naik ke level session + badge |
 | **Gemini sebagai leader** | [OQ #1](#open-questions) belum diverifikasi; sementara `can_delegate` dipaksa off (bukan leader-capable) |
 | **mockup.html** | Belum disinkronkan dengan Bagian C sekarang |

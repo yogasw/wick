@@ -27,10 +27,29 @@ func TestGovernorConfigKeysMatchStructFields(t *testing.T) {
 		"sub_agents_max_tokens",
 		"sub_agents_root_tokens",
 		"sub_agents_stale_claim_min",
+		"sub_agents_mention_router",
+		"sub_agents_max_iterations",
+		"sub_agents_max_runtime_min",
+		"sub_agents_min_confidence",
+		"sub_agents_no_evidence_rounds",
 	} {
 		if !have[key] {
 			t.Fatalf("config key %q is read at runtime but no GeneralConfig field produces it", key)
 		}
+	}
+}
+
+// The mention router defaults ON and is turned off only by an explicit
+// "false". Anything else — an absent row, a typo — must leave the feature
+// as shipped rather than silently disabling it.
+func TestMentionRouterDefaultsOnAndIsExplicitlyDisabled(t *testing.T) {
+	if !config.DefaultGeneralConfig().SubAgentsMentionRouter {
+		t.Fatal("the mention router must ship on")
+	}
+
+	p := delegationLimitsProvider{}
+	if !p.current().MentionRouter {
+		t.Fatal("with no config service the packaged default must win")
 	}
 }
 

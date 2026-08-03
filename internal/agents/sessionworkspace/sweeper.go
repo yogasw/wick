@@ -100,7 +100,10 @@ func runSweeper(layout agentconfig.Layout) {
 // instances remain across all sessions (in still-active sessions). The reaper
 // uses that count to decide whether to keep ticking.
 func sweepOnce(layout agentconfig.Layout, now time.Time) (int, error) {
-	entries, err := os.ReadDir(layout.SessionsDir())
+	// ListAll walks into the nested sub-agent sessions too. A sub-agent
+	// spins up its own connector instances, so scanning only the top level
+	// would leak every instance a delegation ever created.
+	sessionIDs, err := session.ListAll(layout)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, nil
@@ -108,11 +111,7 @@ func sweepOnce(layout agentconfig.Layout, now time.Time) (int, error) {
 		return 0, err
 	}
 	remaining := 0
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		sid := e.Name()
+	for _, sid := range sessionIDs {
 		ws, err := Load(layout, sid)
 		if err != nil || len(ws.Instances) == 0 {
 			continue // unreadable, or nothing live to reap (tombstones-only is fine)

@@ -190,6 +190,9 @@ export type SubAgentItem = {
   delegation_id: string;
   child_session_id: string;
   profile_key: string;
+  /** Address inside the delegation tree — what an @mention resolves to.
+      Absent on rows written before handles existed. */
+  handle?: string;
   // label is the delegated task, truncated server-side.
   label: string;
   status: SubAgentStatus;
@@ -201,6 +204,43 @@ export type SubAgentItem = {
   max_turns: number;
   result?: string;
   started_at?: string;
+  /** Set once the delegation reaches a terminal status; absent while it
+      is queued or running. Which one is present decides whether the row
+      reads "running 4m" or "4m ago". */
+  ended_at?: string;
+  /** 1-based place in this conversation's waiting line; absent or 0 once
+      the sub-agent is running. Computed server-side so the panel never
+      infers ordering from timestamps it may have received out of order. */
+  queue_position?: number;
+  /** The sub-agent's answer as typed fields. `structured: false` means it
+      never called report_result and this was reconstructed from its
+      closing message — the findings were never actually asserted. */
+  envelope?: SubAgentEnvelope;
+};
+
+/** The compact incident header the rail shows above the agent list.
+    Absent for a conversation with no investigation, which is most. */
+export type IncidentSummary = {
+  status: string;
+  iteration: number;
+  summary: string;
+  stop_reason?: string;
+  evidence_count: number;
+};
+
+export type SubAgentEvidence = {
+  kind: string;
+  source: string;
+  excerpt: string;
+};
+
+export type SubAgentEnvelope = {
+  summary: string;
+  findings?: string[];
+  evidence?: SubAgentEvidence[];
+  confidence: string;
+  needs_followup?: boolean;
+  structured: boolean;
 };
 
 export type FileContent = {
@@ -337,4 +377,16 @@ export type ProjectOption = {
   managed: boolean;
   pinned: boolean;
   defaultProvider?: string;
+};
+
+/** One message between two agents inside a delegation tree. */
+export type AgentMessageItem = {
+  id: string;
+  from_handle: string;
+  to_handle: string;
+  body: string;
+  kind: "ask" | "tell" | "reply";
+  /** Set when wick promoted a closing turn into an answer nobody wrote. */
+  auto_reply?: boolean;
+  created_at: string;
 };

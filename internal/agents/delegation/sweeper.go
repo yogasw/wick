@@ -2,9 +2,12 @@ package delegation
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/yogasw/wick/internal/entity"
 )
 
 // StaleClaimSweeper returns board tasks held by vanished workers to the
@@ -69,6 +72,158 @@ func (s *StaleClaimSweeper) Start(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// DelegationSweeper is the queue's backstop.
+//
+// The primary mechanism is the poke fired wherever a delegation reaches a
+// terminal status; this loop only has to be eventually right. It exists
+// for two failure modes the poke cannot cover: a process that died
+// between marking a parent blocked and clearing the flag, and a poke lost
+// because the goroutine that would have sent it never ran.
+//
+// Deliberately separate from StaleClaimSweeper, which sweeps task-board
+// claims. Same shape, different table, different reason to fire.
+type DelegationSweeper struct {
+	Svc *Service
+	// Every is the sweep interval.
+	Every time.Duration
+
+	stop chan struct{}
+}
+
+// NewDelegationSweeper builds a sweeper with a sane interval.
+func NewDelegationSweeper(svc *Service, every time.Duration) *DelegationSweeper {
+	if every <= 0 {
+		every = 15 * time.Second
+	}
+	return &DelegationSweeper{Svc: svc, Every: every, stop: make(chan struct{})}
+}
+
+// Start runs the sweeper until Stop is called.
+func (d *DelegationSweeper) Start(ctx context.Context) {
+	if d.Svc == nil || d.Svc.Repo == nil {
+		return
+	}
+	go func() {
+		t := time.NewTicker(d.Every)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-d.stop:
+				return
+			case <-t.C:
+				d.Pass(ctx)
+			}
+		}
+	}()
+}
+
+// Pass runs one sweep. Exported so a test can drive it without waiting on
+// a ticker.
+func (d *DelegationSweeper) Pass(ctx context.Context) {
+	if n, err := d.Svc.Repo.ClearStaleBlocked(ctx); err != nil {
+		log.Warn().Err(err).Msg("delegation: stale-blocked sweep failed")
+	} else if n > 0 {
+		log.Info().Int64("cleared", n).
+			Msg("delegation: released parallel slots held by delegations that had already finished")
+	}
+	if roots, err := d.Svc.Repo.RootsWithQueued(ctx); err != nil {
+		log.Warn().Err(err).Msg("delegation: queued-root sweep failed")
+	} else {
+		for _, root := range roots {
+			d.Svc.startNextQueued(ctx, root)
+		}
+	}
+	d.Svc.expireOverrunningInvestigations(ctx)
+	d.Svc.nudgeStalledCollects(ctx, d.Every)
+}
+
+// expireOverrunningInvestigations stops investigations that have run past
+// the wall-clock cap.
+//
+// Wall clock catches what turn counting cannot: an agent that is slow
+// rather than chatty. Partial results are kept — an investigation that
+// ran out of time still established whatever it established.
+func (s *Service) expireOverrunningInvestigations(ctx context.Context) {
+	lim := s.limits().normalize()
+	cutoff := time.Now().Add(-time.Duration(lim.MaxRuntimeMinutes) * time.Minute)
+
+	var stale []entity.AgentIncident
+	if err := s.Repo.DB().WithContext(ctx).
+		Where("status = ? AND created_at < ?", entity.IncidentInvestigating, cutoff).
+		Find(&stale).Error; err != nil {
+		log.Warn().Err(err).Msg("delegation: runtime-cap sweep failed")
+		return
+	}
+	for i := range stale {
+		inc := &stale[i]
+		s.stopInvestigation(ctx, inc, entity.IncidentEscalated,
+			fmt.Sprintf("runtime cap reached (%d minutes)", lim.MaxRuntimeMinutes))
+		// Stop the work too, or the tree keeps spending on an
+		// investigation nobody is going to act on.
+		rows, err := s.Repo.ListActiveByRoot(ctx, inc.RootID)
+		if err != nil {
+			continue
+		}
+		for _, row := range rows {
+			if _, err := s.Interrupt(ctx, row.ID, row.TriggeredBy, true); err != nil {
+				log.Debug().Err(err).Str("delegation", row.ID).
+					Msg("delegation: runtime-cap stop failed")
+			}
+		}
+	}
+}
+
+// nudgeStalledCollects wakes a leader whose async result landed while it
+// was away.
+//
+// delivery_sink=session covers the normal case. It fails in exactly one:
+// the leader had already exited, so the wake had nowhere to go and the
+// result sits collected-by-nobody. One nudge per delegation, marked, so a
+// sweep every fifteen seconds does not become a wake every fifteen
+// seconds.
+func (s *Service) nudgeStalledCollects(ctx context.Context, grace time.Duration) {
+	if s.Deliver == nil {
+		return
+	}
+	if grace <= 0 {
+		grace = time.Minute
+	}
+	cutoff := time.Now().Add(-grace)
+
+	var rows []entity.AgentDelegation
+	if err := s.Repo.DB().WithContext(ctx).
+		Where("mode = ? AND delivery_sink = ? AND collected = ? AND collect_nudged = ? AND ended_at IS NOT NULL AND ended_at < ?",
+			ModeAsync, SinkSession, false, false, cutoff).
+		Limit(50).Find(&rows).Error; err != nil {
+		log.Warn().Err(err).Msg("delegation: stalled-collect sweep failed")
+		return
+	}
+	for i := range rows {
+		row := &rows[i]
+		if err := s.Repo.MarkCollectNudged(ctx, row.ID); err != nil {
+			continue
+		}
+		text := fmt.Sprintf(
+			"@%s finished while you were away. Collect delegation %s to pick up its result.",
+			row.Handle, row.ID)
+		if err := s.Deliver.DeliverToSession(ctx, row.ParentSessionID, row.ParentAgent, text); err != nil {
+			log.Debug().Err(err).Str("delegation", row.ID).
+				Msg("delegation: stalled-collect nudge not delivered")
+		}
+	}
+}
+
+// Stop halts the sweeper.
+func (d *DelegationSweeper) Stop() {
+	select {
+	case <-d.stop:
+	default:
+		close(d.stop)
+	}
 }
 
 // Stop halts the sweeper.
