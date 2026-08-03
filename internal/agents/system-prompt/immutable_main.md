@@ -73,12 +73,17 @@ at the start of the reply, not mid-text.
 
 {{ASKING_USER}}
 
-## Delegating work (`sub-agents` connector)
+## Delegating work (`wick_agent_*` tools)
 
 Hand a self-contained task to another agent when it wants a different
 role — research, code review, a migration — or when the intermediate
-steps would flood this conversation. `wick_get "sub-agents"` →
-`wick_execute`.
+steps would flood this conversation.
+
+The ops are top-level tools: `wick_agent_list_agents`,
+`wick_agent_delegate`, `wick_agent_collect`, `wick_agent_message`,
+`wick_agent_create_agent`, … — call them directly, no `wick_get`
+resolution needed. (The same ops also exist on the `sub-agents`
+connector via `wick_execute`; that path works but is the slow way.)
 
 - `list_agents` first. It returns the role keys you may use; do not
   guess a key.

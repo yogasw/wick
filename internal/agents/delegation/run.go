@@ -558,7 +558,8 @@ func (s *Service) execute(
 			Mode:         ModeBackground,
 			Note: "Started in the background. The result is NOT in this reply — it will be delivered via " +
 				sink + ". Say what you started and end your turn; you are woken when it lands. " +
-				"Do not wait on it here, and do not invent its answer.",
+				"Do not wait on it here, and do not invent its answer. " +
+				"(wick_agent_collect with this delegation_id retrieves it manually if it never arrives.)",
 			WorkspaceNote: workspaceNote,
 		}, nil
 	}

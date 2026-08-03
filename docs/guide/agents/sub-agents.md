@@ -17,7 +17,7 @@ Web UI: [`internal/tools/agents/subagents.go`](https://github.com/yogasw/wick/bl
 
 A **profile** is a reusable role: provider, model, system prompt, tool access, turn budget. A **delegation** is one call against that role. A profile is either global or owned by a project — see [Scope](#scope-global-and-per-project).
 
-The delegating agent (the *leader*) calls the `sub-agents` connector's `delegate` op, which blocks. wick spawns a fresh session for the profile, feeds it the task, waits for it to answer, and returns the final text as the tool's result. The leader then carries on with that answer in hand.
+The delegating agent (the *leader*) calls the `delegate` op (as the top-level `wick_agent_delegate` tool, or through the `sub-agents` connector). wick spawns a fresh session for the profile, feeds it the task, waits for it to answer, and returns the final text as the tool's result. The leader then carries on with that answer in hand.
 
 ```
 leader session
@@ -89,10 +89,7 @@ Turning the master switch off takes effect on the **next delegation** — no res
 
 ## The operations
 
-Delegation is reached through the **`sub-agents` connector**, not through
-top-level tools: `wick_get "sub-agents"` to resolve it, then `wick_execute`
-per op. That buys it the connector contract — an admin page, tag
-visibility, and run history — at the cost of one resolution hop.
+Delegation lives on the **`sub-agents` connector**, which buys it the connector contract — an admin page, tag visibility, and run history. Every enabled op is *also* exposed as a top-level MCP tool named `wick_agent_<op>` (`wick_agent_delegate`, `wick_agent_collect`, …), routed through the same execute path with the same visibility and per-op access checks — so the hot path is one call instead of the `wick_get "sub-agents"` → `wick_execute` two-hop. Both paths hit identical code; the shortcut is just faster to reach.
 
 Nine ops: `list_agents`, `delegate`, `collect`, `create_agent`, `list_access`, `tasks`, `message`, `reply`, `stop`. The last three are covered in [Talking to other agents](#talking-to-other-agents).
 

@@ -8,6 +8,14 @@
 // deal wickmanager takes — at the cost of an extra hop: the leader must
 // resolve the instance id before it can execute an op.
 //
+// That hop is paid back at the MCP layer: every enabled op here ALSO
+// surfaces as a top-level wick_agent_<op> tool (see
+// internal/mcp/handlers/wickmanager.go), routed through the same
+// wick_execute path so visibility, per-op access and audit are
+// identical. Delegation is called every turn of a multi-agent flow, and
+// making the hot path one call keeps models from drifting to a
+// provider's native agent tools.
+//
 // Unlike wickmanager this connector is NOT tagged System: every user's
 // agent needs to be able to delegate, and a System tag would hide the
 // whole feature from non-admins. Write access is governed per-op
