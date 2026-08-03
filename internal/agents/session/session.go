@@ -268,9 +268,61 @@ func SaveMeta(layout config.Layout, id string, meta Meta) error {
 	return storage.WriteJSON(layout.SessionMeta(id), &meta)
 }
 
-// List returns every session ID, sorted.
+// List returns every top-level session ID, sorted. Sub-agent sessions
+// live inside their parent's folder and are deliberately NOT returned —
+// this is what keeps them out of the conversation list.
 func List(layout config.Layout) ([]string, error) {
 	return storage.ScanDirNames(layout.SessionsDir())
+}
+
+// ListChildren returns the IDs of the sub-agent sessions delegated
+// directly by parentID, sorted. Empty for a session that never
+// delegated.
+func ListChildren(layout config.Layout, parentID string) ([]string, error) {
+	segs, err := storage.ScanDirNames(layout.SessionSubagentsDir(parentID))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(segs))
+	for _, seg := range segs {
+		out = append(out, config.SubSessionID(parentID, seg))
+	}
+	return out, nil
+}
+
+// ListAll returns every session ID, sub-agents included, parents before
+// their children.
+//
+// Callers that hydrate runtime state — the boot registry, the workspace
+// sweeper — must use this rather than List: a sub-agent is a real session
+// with a real transcript and real connector instances, and skipping it
+// would leave it unrecoverable after a restart and its instances
+// unreaped. Anything that renders the conversation list wants List.
+func ListAll(layout config.Layout) ([]string, error) {
+	tops, err := List(layout)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(tops))
+	for _, id := range tops {
+		out = appendSubtree(layout, id, out)
+	}
+	return out, nil
+}
+
+// appendSubtree appends id and every descendant beneath it.
+func appendSubtree(layout config.Layout, id string, out []string) []string {
+	out = append(out, id)
+	children, err := ListChildren(layout, id)
+	if err != nil {
+		// An unreadable subagents/ folder must not sink the whole scan;
+		// the rest of the tree is still recoverable.
+		return out
+	}
+	for _, child := range children {
+		out = appendSubtree(layout, child, out)
+	}
+	return out
 }
 
 // Delete removes the session folder. The project it points at is

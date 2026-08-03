@@ -14,6 +14,7 @@ package registry
 
 import (
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -89,7 +90,10 @@ func (r *Registry) Reload() error {
 		projects[id] = p
 	}
 
-	sessionIDs, err := session.List(r.layout)
+	// ListAll, not List: sub-agent sessions are nested inside their
+	// parents and would otherwise be invisible to the registry, leaving a
+	// restarted wick unable to render or resume them.
+	sessionIDs, err := session.ListAll(r.layout)
 	if err != nil {
 		return err
 	}
@@ -274,10 +278,22 @@ func (r *Registry) deleteProject(id string) {
 	delete(r.projects, id)
 }
 
+// deleteSession drops a session and every sub-agent session beneath it.
+//
+// Deleting a conversation removes its children from disk too — they live
+// inside its folder — so leaving them in the map would hand out sessions
+// whose transcript is already gone. Descendants are identifiable from the
+// id alone: a child's id is its parent's plus a separator and a segment.
 func (r *Registry) deleteSession(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.sessions, id)
+	prefix := id + config.SubSessionSep
+	for sid := range r.sessions {
+		if strings.HasPrefix(sid, prefix) {
+			delete(r.sessions, sid)
+		}
+	}
 }
 
 func (r *Registry) deletePreset(name string) {

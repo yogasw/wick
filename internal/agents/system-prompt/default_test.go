@@ -85,21 +85,22 @@ func TestImmutableSplicesEverySection(t *testing.T) {
 	}
 }
 
-// TestImmutableSectionOrder pins the placeholder splice order relative
-// to the surrounding base headings — the reason placeholders replaced a
-// plain append: render formats sits with the link guidance up top,
-// asking-user lands just before the connector rules. Anchors are
-// derived from the splice files themselves (their heading line), not
+// TestImmutableSectionOrder pins the assembly order: global core first
+// (links, connectors, agent comms), then the main overlay (render
+// formats, title, asking-user, delegation). Anchors for spliced sections
+// are derived from the splice files themselves (their heading line), not
 // re-typed, so a renamed heading can't silently drift out of the check.
 func TestImmutableSectionOrder(t *testing.T) {
 	askUserHead := nonBlankLines(strings.TrimSpace(immutableAskUserTemplate))[0]
 	renderHead := nonBlankLines(strings.TrimSpace(immutableRenderFormatsTemplate))[0]
 	order := []string{
 		"## Sending links",
+		"## Wick connectors",
+		"## Working with other agents",
 		renderHead,
 		"## Session title",
 		askUserHead,
-		"## Wick connectors",
+		"## Delegating work",
 	}
 	p := ImmutableSystemPrompt()
 	prev := -1
@@ -112,6 +113,66 @@ func TestImmutableSectionOrder(t *testing.T) {
 			t.Errorf("section %q out of order (idx %d <= prev %d)", s, idx, prev)
 		}
 		prev = idx
+	}
+}
+
+// The audience split is the point: a sub-agent spawn must not carry the
+// human-facing machinery, and a main spawn must not carry the
+// delegated-child contract. Anchored on one distinctive line per side.
+func TestSubAgentPromptCarriesOnlyItsAudience(t *testing.T) {
+	for _, pt := range []string{"claude", "codex", "wick"} {
+		main := ImmutableFor(pt, false)
+		sub := ImmutableFor(pt, true)
+
+		// Both audiences share the global core.
+		for _, shared := range []string{
+			"## Sending links",
+			"## Wick connectors",
+			"## Working with other agents",
+		} {
+			if !strings.Contains(main, shared) {
+				t.Errorf("%s main: missing shared section %q", pt, shared)
+			}
+			if !strings.Contains(sub, shared) {
+				t.Errorf("%s sub: missing shared section %q", pt, shared)
+			}
+		}
+
+		// Main-only machinery must not reach a sub-agent.
+		for _, mainOnly := range []string{
+			"## Renderable formats in chat",
+			"## Session title",
+			"## Scheduling yourself",
+			"## Asking the user",
+			"## Delegating work",
+		} {
+			if !strings.Contains(main, mainOnly) {
+				t.Errorf("%s main: missing section %q", pt, mainOnly)
+			}
+			if strings.Contains(sub, mainOnly) {
+				t.Errorf("%s sub: leaked main-only section %q", pt, mainOnly)
+			}
+		}
+
+		// The child contract must not reach a main agent.
+		for _, subOnly := range []string{
+			"## You are a sub-agent",
+			"report_result",
+		} {
+			if !strings.Contains(sub, subOnly) {
+				t.Errorf("%s sub: missing section %q", pt, subOnly)
+			}
+		}
+		if strings.Contains(main, "## You are a sub-agent") {
+			t.Errorf("%s main: leaked the sub-agent contract", pt)
+		}
+
+		// The split exists to shrink the child's prompt; if the sub
+		// variant is not substantially smaller the wiring regressed.
+		if len(sub) >= len(main) {
+			t.Errorf("%s: sub prompt (%d bytes) not smaller than main (%d bytes)",
+				pt, len(sub), len(main))
+		}
 	}
 }
 

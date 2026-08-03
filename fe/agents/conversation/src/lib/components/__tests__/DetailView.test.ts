@@ -1,5 +1,5 @@
-import { describe, test, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/svelte";
+import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 
 // A stand-in Effect: `.pipe(...)` returns itself so options.ts's builders
 // (apiGetE(...).pipe(Effect.map(...))) don't throw at module load. Nothing
@@ -11,6 +11,13 @@ vi.mock("@wick-fe/common-api", () => ({
   apiGetE: vi.fn(() => inertEffect),
   apiPostE: vi.fn(() => inertEffect),
   apiDeleteE: vi.fn(() => inertEffect),
+  // Promise-based, unlike the Effect helpers above: the composer's @ menu
+  // loads the role list directly rather than through a provided layer.
+  listAgentProfiles: vi.fn(async () => ({
+    profiles: [],
+    owned: [],
+    inherited: [],
+  })),
 }));
 
 vi.mock("@wick-fe/common-stores", () => ({
@@ -119,6 +126,18 @@ vi.mock("../../api/messages.js", () => ({
   sendMessage: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
 }));
 
+vi.mock("../../api/subagents.js", () => ({
+  getSubAgents: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  getSubAgentPanel: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  interruptSubAgent: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  interruptAllSubAgents: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  getMessages: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  bumpHops: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  // Real behaviour — the rail badge and the poll both key off it.
+  liveSubAgents: (subs: { status: string }[]) =>
+    subs.filter((s) => s.status === "queued" || s.status === "running"),
+}));
+
 vi.mock("../../api/files.js", () => ({
   listFiles: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   searchFiles: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
@@ -170,6 +189,8 @@ import DetailView from "../DetailView.svelte";
 import { killProcess, getProcesses } from "../../api/processes.js";
 import { getAsks } from "../../api/asks.js";
 import { getConversation } from "../../api/sessions.js";
+import { getSubAgentPanel } from "../../api/subagents.js";
+import { Effect } from "effect";
 
 const DEFAULT_PROPS = {
   base: "/api",
@@ -625,5 +646,60 @@ describe("DetailView — conversation refetch on turn completion (artifacts)", (
     render(DetailView, { props: DEFAULT_PROPS });
     sseBus.handler!({ type: "text_delta" });
     expect(getConversation).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* A delegation happens MID-TURN. The leader keeps working afterwards, so no
+   lifecycle or done event follows for a while — and the Sub-agents rail used
+   to stay hidden until the turn ended or the page was reloaded, which is
+   exactly the stretch where you want to see that work has fanned out. */
+describe("DetailView — sub-agent roster follows delegation tool calls", () => {
+  const runPromise = Effect.runPromise as unknown as ReturnType<typeof vi.fn>;
+  const calls = () => (getSubAgentPanel as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sseBus.handler = null;
+    // The file-wide stub never settles, which parks loadSubAgents behind its
+    // own in-flight guard forever — a refetch would be indistinguishable from
+    // no refetch. Resolve here so the guard clears between events.
+    runPromise.mockReturnValue(Promise.resolve([]));
+    if (!document.getElementById("app")) {
+      const el = document.createElement("div");
+      el.id = "app";
+      document.body.appendChild(el);
+    }
+  });
+
+  afterEach(() => {
+    runPromise.mockReturnValue(new Promise(() => {}));
+  });
+
+  test("a wick_delegate call refreshes the roster", async () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    await waitFor(() => expect(calls()).toBeGreaterThan(0));
+    const before = calls();
+    sseBus.handler!({ type: "tool_use", tool_name: "wick_delegate" });
+    await waitFor(() => expect(calls()).toBeGreaterThan(before));
+  });
+
+  // Providers namespace MCP calls; matching the raw name would miss them.
+  test("an MCP-namespaced delegate call counts too", async () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    await waitFor(() => expect(calls()).toBeGreaterThan(0));
+    const before = calls();
+    sseBus.handler!({ type: "tool_use", tool_name: "mcp__wick__wick_delegate" });
+    await waitFor(() => expect(calls()).toBeGreaterThan(before));
+  });
+
+  // Every turn is full of unrelated tool calls; refetching on each one would
+  // put the rail's endpoint behind every file read.
+  test("an unrelated tool call does not refresh it", async () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    await waitFor(() => expect(calls()).toBeGreaterThan(0));
+    const before = calls();
+    sseBus.handler!({ type: "tool_use", tool_name: "read_file" });
+    await new Promise((r) => setTimeout(r, 350));
+    expect(calls()).toBe(before);
   });
 });

@@ -120,6 +120,18 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		"exec",
 		"--json",
 		"--skip-git-repo-check",
+		// Codex ships its own multi-agent feature (spawn_agent /
+		// wait_agent, stable and ON by default). Under wick those tools
+		// are a trap: the children they spawn live inside the codex
+		// process, so wick records no delegation, shows nothing in the
+		// rail, applies no queue or budget, and never delivers a result
+		// back into the session — a leader that "spawned an agent in the
+		// background" with them waits forever for a wake-up that cannot
+		// come. All multi-agent work must go through wick's sub-agents
+		// connector or a mention. Placed before ExtraArgs so an operator
+		// who truly wants the native tools can override with
+		// `-c features.multi_agent=true`.
+		"-c", "features.multi_agent=false",
 	}
 	sandboxMode := provider.CodexSandboxFullAccess
 	if opt.Instance != nil && opt.Instance.CodexConfig != nil && opt.Instance.CodexConfig.SandboxMode != "" {

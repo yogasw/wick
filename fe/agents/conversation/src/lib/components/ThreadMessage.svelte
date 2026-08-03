@@ -30,6 +30,21 @@
     isSilentReply ? (turn.text ?? "").replace(/^\s*\[silent\]\s*/i, "") : (turn.text ?? ""),
   );
 
+  /* The server appends a "[routed] …" line to a person's message so the
+     leader reads, in the same message, which @mentions wick already
+     dispatched — without it the leader delegates them a second time. That
+     line is plumbing addressed to the agent, not something the person
+     typed, so the bubble keeps their words and the routing shows as a chip
+     underneath. */
+  const routed = $derived.by(() => {
+    const raw = turn.text ?? "";
+    if (!isUser) return { text: raw, note: "" };
+    const at = raw.lastIndexOf("\n\n[routed]");
+    if (at < 0) return { text: raw, note: "" };
+    return { text: raw.slice(0, at), note: raw.slice(at + 2) };
+  });
+  const routedHandles = $derived(routed.note.match(/@[a-z0-9-]+/g) ?? []);
+
   /* Source badge for user turns that did NOT come from this web session —
      a channel (Slack/Telegram/…) or the schedule runner. "ui"/empty = typed
      here, no badge. Keeps it clear which messages arrived from elsewhere. */
@@ -281,9 +296,21 @@
             </span>
           {/if}
           <div class="min-w-0 max-w-full overflow-hidden rounded-2xl rounded-tr-sm bg-green-500 px-4 py-2.5 text-base text-white-100 whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm">
-            {@html linkifyText(turn.text)}
+            {@html linkifyText(routed.text)}
           </div>
         </div>
+        {#if routedHandles.length > 0}
+          <span
+            data-testid="routed-chip"
+            title="wick dispatched these sub-agents for this message"
+            class="inline-flex items-center gap-1 rounded-full bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[10px] font-medium text-black-600 dark:text-black-500"
+          >
+            <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M2 4h5l2 2h5M13 6v6H3" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+            Routed to {routedHandles.join(", ")}
+          </span>
+        {/if}
         {#if stamp}
           <span class="text-[10px] leading-none text-black-500 dark:text-black-600 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">{stamp}</span>
         {/if}

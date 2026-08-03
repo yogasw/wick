@@ -29,6 +29,51 @@ export function parseEventTime(raw?: string): number | undefined {
 
 const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate());
 
+/** Short elapsed time: "just now", "4m", "3h", "2d".
+
+    Coarse on purpose. These labels sit next to a status chip and a turn
+    count, and "3h" answers "is this stale?" as well as "3h 12m" does
+    while taking a third of the width. */
+export function shortDuration(ms: number): string {
+  if (!isFinite(ms) || ms < 0) return "";
+  const s = Math.floor(ms / 1000);
+  if (s < 45) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.round(h / 24)}d`;
+}
+
+/** "4m ago" / "just now" for an RFC3339 timestamp, "" when unparseable.
+
+    Pass `nowMs` from the `now` store so the label keeps up with the
+    clock; it defaults to Date.now() for callers that render once. */
+export function timeAgo(raw?: string, nowMs: number = Date.now()): string {
+  const ms = parseEventTime(raw);
+  if (ms === undefined) return "";
+  const d = shortDuration(nowMs - ms);
+  return d === "just now" || d === "" ? d : `${d} ago`;
+}
+
+/** Full local timestamp for a `title` tooltip — the exact moment behind
+    a rounded "4m ago". Empty when unparseable, so the caller can leave
+    the attribute off rather than render an empty tooltip. */
+export function exactTime(raw?: string): string {
+  const ms = parseEventTime(raw);
+  if (ms === undefined) return "";
+  return new Date(ms).toLocaleString([], {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
 export function turnTime(turn: ConversationTurn): string {
   const d = turnDate(turn);
   if (!d) return "";

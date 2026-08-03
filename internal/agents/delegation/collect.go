@@ -34,6 +34,8 @@ type CollectResult struct {
 	// Pending marks a delegation that has not finished yet: Result is
 	// empty and the leader should carry on rather than wait here.
 	Pending bool `json:"pending,omitempty"`
+	// Envelope is the sub-agent's answer as typed fields, when it has one.
+	Envelope *ResultEnvelope `json:"envelope,omitempty"`
 }
 
 // Collect picks up one async delegation's result by id.
@@ -66,6 +68,7 @@ func (s *Service) Collect(ctx context.Context, delegationID, actorID string, isA
 
 	out.Result = d.Result
 	out.Note = collectNote(d)
+	out.Envelope = EnvelopeOf(d)
 
 	// Guarded: only the first collector gets it. A second call sees the
 	// result again but is told it was already taken, so the leader does
@@ -96,6 +99,7 @@ func (s *Service) CollectPending(ctx context.Context, parentSessionID string) ([
 			row := d
 			item.Result = d.Result
 			item.Note = collectNote(&row)
+			item.Envelope = EnvelopeOf(&row)
 		} else {
 			item.Pending = true
 		}
