@@ -95,8 +95,8 @@ func TestRunStopsOnTokenCap(t *testing.T) {
 	if res.TokensUsed < 1000 {
 		t.Fatalf("tokens = %d, want at least the cap", res.TokensUsed)
 	}
-	if len(runner.kills) != 1 {
-		t.Fatalf("kills = %v, want one — the cap must stop the process", runner.kills)
+	if k := runner.killed(); len(k) != 1 {
+		t.Fatalf("kills = %v, want one — the cap must stop the process", k)
 	}
 	// Spend must be durable, not just reported.
 	got, _ := r.Get(context.Background(), res.DelegationID)

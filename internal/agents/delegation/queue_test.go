@@ -398,8 +398,8 @@ func TestInterruptQueuedRowNeverSpawns(t *testing.T) {
 	if row.Status != entity.DelegationInterrupted {
 		t.Fatalf("status = %q, want interrupted", row.Status)
 	}
-	if len(run.kills) != 0 {
-		t.Fatalf("kills = %v, want none — a queued row has no process", run.kills)
+	if k := run.killed(); len(k) != 0 {
+		t.Fatalf("kills = %v, want none — a queued row has no process", k)
 	}
 
 	// A later sweep must not resurrect it.

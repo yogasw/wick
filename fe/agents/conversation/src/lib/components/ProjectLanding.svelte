@@ -31,12 +31,21 @@
 
   // Resolve the project's configured default ("codex" or "codex/name") to a
   // provider actually present in the list: exact key first, then bare type.
+  //
+  // The project's model rides along as the composer's packed
+  // "type/name::modelID" value, but ONLY on an exact instance match: the
+  // fallbacks land on a different instance, and a model id resolves against
+  // the registry of the instance it was chosen on.
   function defaultProviderKey(): string {
     if (providers.length === 0) return "";
     const want = (project.defaultProvider ?? "").trim();
     if (want) {
       const exact = providers.find((p) => providerKey(p) === want);
-      if (exact) return providerKey(exact);
+      if (exact) {
+        const key = providerKey(exact);
+        const model = (project.defaultModel ?? "").trim();
+        return model ? `${key}::${model}` : key;
+      }
       const byType = providers.find((p) => p.type === want.split("/")[0]);
       if (byType) return providerKey(byType);
     }

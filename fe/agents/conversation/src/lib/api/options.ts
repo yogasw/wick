@@ -43,13 +43,18 @@ export const getPresetOptions = (base: string) =>
   );
 
 export const getProjectOptions = (base: string) =>
-  apiGetE<(ProjectOption & { default_provider?: string })[] | null>(`${base}/projects/options`).pipe(
+  apiGetE<(ProjectOption & { default_provider?: string; default_model?: string })[] | null>(
+    `${base}/projects/options`,
+  ).pipe(
     Effect.map((r) =>
       (r ?? []).map((p) => ({
         ...p,
         managed: p.managed ?? false,
         pinned: p.pinned ?? false,
         defaultProvider: p.defaultProvider ?? p.default_provider ?? "",
+        // Carried alongside the provider so the landing composer can preselect
+        // the exact model the project pins, down to a live-set leaf.
+        defaultModel: p.defaultModel ?? p.default_model ?? "",
       })),
     ),
   );

@@ -63,7 +63,13 @@
       const key = proj.default_provider.includes("/")
         ? proj.default_provider
         : `${proj.default_provider}/${proj.default_provider}`;
-      if (providers.some((p) => providerKey(p) === key)) selectedProvider = key;
+      // Provider and model applied together, as the composer's packed
+      // "type/name::modelID" value. Taking the provider alone would leave the
+      // instance to pick its own default — which for a wick live set with no
+      // sticky default is exactly the "no runnable model" dead end.
+      if (providers.some((p) => providerKey(p) === key)) {
+        selectedProvider = proj.default_model ? `${key}::${proj.default_model}` : key;
+      }
     }
     if (proj.default_preset) {
       selectedPreset = proj.default_preset === "default" ? "" : proj.default_preset;

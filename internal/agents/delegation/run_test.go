@@ -2,6 +2,8 @@ package delegation
 
 import (
 	"context"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,18 +33,43 @@ func (s *scriptedStream) SubscribeSession(string) (<-chan StreamEvent, func()) {
 	return ch, func() {}
 }
 
+// fakeTokens is mutex-guarded because async delegations issue and revoke on
+// their own background goroutines: a multi-mention fan-out touches these
+// counters concurrently, and the assertions read them from the test goroutine.
 type fakeTokens struct {
+	mu      sync.Mutex
 	issued  int
 	revoked int
 	last    []string
 }
 
 func (f *fakeTokens) Issue(_ string, tagIDs []string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.issued++
 	f.last = tagIDs
 	return "wick_sub_test", nil
 }
-func (f *fakeTokens) Revoke(string) { f.revoked++ }
+
+func (f *fakeTokens) Revoke(string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revoked++
+}
+
+// counts snapshots the tallies under the lock, so assertions never read a
+// field a still-draining background run is writing.
+func (f *fakeTokens) counts() (issued, revoked int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.issued, f.revoked
+}
+
+func (f *fakeTokens) lastTags() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.last)
+}
 
 type staticTags struct{ tags []string }
 
@@ -97,8 +124,8 @@ func TestRunReturnsFinalTextOnDone(t *testing.T) {
 		t.Fatalf("persisted status = %q", got.Status)
 	}
 	// The scoped credential must not outlive the run.
-	if tok.issued != 1 || tok.revoked != 1 {
-		t.Fatalf("token issued=%d revoked=%d, want 1/1", tok.issued, tok.revoked)
+	if issued, revoked := tok.counts(); issued != 1 || revoked != 1 {
+		t.Fatalf("token issued=%d revoked=%d, want 1/1", issued, revoked)
 	}
 }
 
@@ -126,8 +153,8 @@ func TestRunEnforcesMaxTurnsWithoutProviderFlag(t *testing.T) {
 	if res.TurnsUsed != 2 {
 		t.Fatalf("turns = %d, want exactly the cap (2)", res.TurnsUsed)
 	}
-	if len(runner.kills) != 1 {
-		t.Fatalf("kills = %v, want one — the cap must stop the process", runner.kills)
+	if k := runner.killed(); len(k) != 1 {
+		t.Fatalf("kills = %v, want one — the cap must stop the process", k)
 	}
 	// Partial work still reaches the leader.
 	if res.Result != "work in progress" {
@@ -233,8 +260,8 @@ func TestRunIssuesScopedTokenWithNarrowedTags(t *testing.T) {
 	if _, err := s.Run(context.Background(), baseReq()); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	if len(tok.last) != 1 || tok.last[0] != "a" {
-		t.Fatalf("token tags = %v, want only the intersection [a]", tok.last)
+	if last := tok.lastTags(); len(last) != 1 || last[0] != "a" {
+		t.Fatalf("token tags = %v, want only the intersection [a]", last)
 	}
 }
 
@@ -246,8 +273,8 @@ func TestRunRefusedByGovernorDoesNotSpawn(t *testing.T) {
 	if _, err := s.Run(context.Background(), baseReq()); err == nil {
 		t.Fatal("kill-switch did not refuse the delegation")
 	}
-	if len(runner.kills) != 0 {
-		t.Fatalf("unexpected process activity: %v", runner.kills)
+	if k := runner.killed(); len(k) != 0 {
+		t.Fatalf("unexpected process activity: %v", k)
 	}
 }
 

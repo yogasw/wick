@@ -29,6 +29,10 @@ export function buildProviderOptions(
       label: m.label,
       default: m.default,
       desc: m.desc,
+      // Carried through so the picker knows this row is a model SET to
+      // expand, not a model to select. Dropping it made every live set look
+      // like a single selectable model whose id no provider could resolve.
+      live: m.live,
     })),
   }));
   const bare = (current ?? "").split("::")[0];

@@ -262,14 +262,14 @@
 
 {#if current}
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-navy-900/40 p-4"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black-900/40 p-4"
     role="button"
     tabindex="-1"
     onclick={onClose}
     onkeydown={(e) => e.key === "Enter" && onClose()}
   >
     <div
-      class="flex h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 shadow-2xl"
+      class="flex h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 shadow-xl"
       role="dialog"
       aria-modal="true"
       aria-label={`Sub-agent ${current.profile_key}`}
@@ -298,7 +298,7 @@
         <div class="flex min-w-0 flex-1 items-center gap-1 text-xs">
           <span class="shrink-0 text-black-700 dark:text-black-600">Sub-agent</span>
           {#each stack as crumb, i (crumb.delegation_id)}
-            <span class="shrink-0 text-black-600 dark:text-black-500">·</span>
+            <span class="shrink-0 text-black-600 dark:text-black-700">·</span>
             <button
               type="button"
               onclick={() => jumpTo(i)}

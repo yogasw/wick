@@ -20,6 +20,11 @@
     sseStatus: SSEStatus;
     lifecycle?: LifecycleState;
     idleTimeoutMs?: number;
+    /** How many sub-agents are working right now. Rendered as its own badge
+        rather than folded into the lifecycle one: the leader's process can
+        be idle while its children work, and both facts have to stay
+        readable. 0 hides it. */
+    subAgentsBusy?: number;
     activeView?: ActiveView;
     onKill: () => void;
     onDelete: () => void;
@@ -32,6 +37,7 @@
     sseStatus,
     lifecycle,
     idleTimeoutMs = 120_000,
+    subAgentsBusy = 0,
     activeView = "conversation",
     onKill,
     onDelete,
@@ -217,6 +223,23 @@
         {#if effectiveState === "idle" && countdownText}
           <span data-idle-countdown class="ml-0.5 opacity-80">{countdownText}</span>
         {/if}
+      </span>
+    {/if}
+
+    <!-- Teal, matching the sidebar dot for delegated work, so the two read
+         as the same fact seen from two places — and distinct from the
+         leader's green so neither is mistaken for the other. -->
+    {#if subAgentsBusy > 0}
+      <span
+        data-subagent-badge
+        title="Sub-agents are still working in this conversation"
+        class="inline-flex items-center gap-1 rounded-full border border-teal-500 bg-teal-100 dark:bg-teal-800/30 px-2 py-0.5 text-[10px] font-medium text-teal-600 dark:text-teal-500"
+      >
+        <span
+          class="h-2 w-2 shrink-0 rounded-full border-2 border-teal-500 border-t-transparent animate-spin"
+          aria-hidden="true"
+        ></span>
+        {subAgentsBusy} {subAgentsBusy === 1 ? "sub-agent" : "sub-agents"}
       </span>
     {/if}
 

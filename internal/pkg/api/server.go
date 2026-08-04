@@ -1382,6 +1382,29 @@ func NewServer() *Server {
 			}
 			return agentsLayout.ProjectDir(projectID)
 		},
+		// Inheritance chain for a sub-agent whose role names no provider:
+		// the parent conversation first, then its project. Deliberately NOT
+		// the global DefaultProvider — that is a new-session default, and
+		// falling through to it is how delegated work ended up on whichever
+		// instance was configured globally instead of the one its own
+		// conversation runs on.
+		SessionTarget: func(sessionID string) (provider.RunTarget, bool) {
+			prov, model, ok := agentsession.ActiveRunTarget(agentsLayout, sessionID)
+			if !ok {
+				return provider.RunTarget{}, false
+			}
+			return provider.RunTarget{Provider: prov, ModelID: model}, true
+		},
+		ProjectTarget: func(projectID string) (provider.RunTarget, bool) {
+			p, err := agentproject.Load(agentsLayout, projectID)
+			if err != nil {
+				return provider.RunTarget{}, false
+			}
+			return provider.RunTarget{
+				Provider: p.Meta.Defaults.Provider,
+				ModelID:  p.Meta.Defaults.Model,
+			}, true
+		},
 		AskTimeout: time.Duration(intOr(
 			configsSvc.GetOwned("agents", "sub_agents_ask_timeout_min"),
 			agentconfig.DefaultGeneralConfig().SubAgentsAskTimeoutMin,

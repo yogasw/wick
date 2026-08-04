@@ -9,6 +9,10 @@ export interface ProviderModelItem {
   label: string;
   default: boolean;
   desc?: string;
+  /** True when this row is a live model SET rather than a single model: it
+      expands one level further (resolved server-side by this row's id) and is
+      not selectable itself. Its leaves are pinned as "<id>@<vendorModelID>". */
+  live?: boolean;
 }
 
 /** One selectable provider instance. `type/name` is the stored key. */

@@ -69,12 +69,26 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 
 	m, ok := pickModel(opt.Instance, opt.ModelID)
 	if !ok {
-		emit(initLine(newSessionID()))
-		emit(errorLine("No runnable model for the wick provider. Open Providers → Wick and add a model, or pick a default model inside the live set."))
-		emit(doneLine(""))
-		return
+		// Nothing resolved statically. The common cause is a live set whose
+		// sticky default was never picked: it carries no Model of its own, so
+		// there is nothing to run until the vendor list is fetched. Ask the
+		// vendor now rather than failing — the set exists precisely to be
+		// resolved at use time, and an operator who added one has already said
+		// which models they want.
+		m, ok = resolveLiveSetFallback(p.ctx, opt.Instance)
+		if !ok {
+			emit(initLine(newSessionID()))
+			emit(errorLine("No runnable model for the wick provider. Open Providers → Wick and add a model, or pick a default model inside the live set."))
+			emit(doneLine(""))
+			return
+		}
+		log.Info().
+			Str("model", m.Model).
+			Str("entry", m.ID).
+			Msg("wick.spawn: no model pinned; auto-picked the top of the live set")
+	} else {
+		m.APIKey = secretDecryptor(m.APIKey)
 	}
-	m.APIKey = secretDecryptor(m.APIKey)
 
 	llm, err := resolveModel(p.ctx, m)
 	if err != nil {
@@ -216,6 +230,78 @@ func pickModel(inst *provider.Instance, modelID string) (provider.WickModel, boo
 		}
 	}
 	return firstEnabled, haveFirst
+}
+
+// resolveLiveSetFallback asks the vendor which models a live set actually
+// contains, and returns the one that set would default to.
+//
+// This is the last resort when pickModel found nothing runnable. A live
+// set stores no concrete model id — its whole purpose is to be resolved
+// against the vendor's current list — so an operator who added one but
+// never opened the picker to choose a sticky default left every spawn with
+// nothing to run. Failing there is technically correct and practically
+// useless: the set names the models they want, and the picker's own rule
+// for "no sticky pin" is already "the top of the list".
+//
+// That rule is mirrored here rather than shared, because the picker lives
+// in the tools layer (HTTP handlers, config decryption) and the spawn path
+// must not depend on it. markLiveSetDefault is the tools-side twin.
+//
+// Only ENABLED live sets are considered — a disabled entry is parked, not
+// a fallback — and the first one that resolves wins, matching pickModel's
+// own top-down scan. Returns ok=false when the instance has no live set,
+// discovery fails, or every set comes back empty; the caller then reports
+// the original error.
+func resolveLiveSetFallback(ctx context.Context, inst *provider.Instance) (provider.WickModel, bool) {
+	if inst == nil {
+		return provider.WickModel{}, false
+	}
+	for _, m := range inst.WickModels {
+		if m.Disabled || !m.LiveSet {
+			continue
+		}
+		// Decrypted before the call, not after: discovery authenticates with
+		// this key, and the returned model carries it into the engine.
+		entry := m
+		entry.APIKey = secretDecryptor(entry.APIKey)
+		if strings.TrimSpace(entry.APIKey) == "" && strings.ToLower(strings.TrimSpace(entry.Kind)) != "other" {
+			continue
+		}
+		live, err := DiscoverModels(ctx, entry.Kind, entry.APIKey, strings.TrimSpace(entry.BaseURL))
+		if err != nil {
+			log.Debug().Err(err).Str("entry", entry.ID).
+				Msg("wick.spawn: live-set discovery failed while looking for a fallback model")
+			continue
+		}
+		pick := liveSetPick(FilterModels(live, entry.DiscoveryFilter), entry.DefaultVendorModel)
+		if pick == "" {
+			continue
+		}
+		entry.Model = pick
+		return entry, true
+	}
+	return provider.WickModel{}, false
+}
+
+// liveSetPick chooses which model in a resolved live set to run: the sticky
+// pin when it is still in the list, else the top of it.
+//
+// Pure, and separate from the network call, so the rule is testable — the
+// tools layer's markLiveSetDefault makes the same decision for the picker
+// UI, and the two must agree or wick would run a different model than the
+// UI shows as default. Empty when the list is empty.
+func liveSetPick(models []DiscoveredModel, stickyPin string) string {
+	if len(models) == 0 {
+		return ""
+	}
+	if want := strings.TrimSpace(stickyPin); want != "" {
+		for _, d := range models {
+			if d.ID == want {
+				return d.ID
+			}
+		}
+	}
+	return models[0].ID
 }
 
 // runnableModel resolves one catalogue entry to something the vendor SDK

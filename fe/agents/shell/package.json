@@ -8,6 +8,7 @@
     "build": "vite build",
     "build:watch": "vite build --watch",
     "preview": "vite preview",
+    "test:unit": "vitest run",
     "check": "tsc --noEmit && vite build"
   }
 }

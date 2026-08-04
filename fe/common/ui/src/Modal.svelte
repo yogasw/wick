@@ -71,7 +71,11 @@
           onclick={onClose}
         >×</button>
       </div>
-      <div class="overflow-auto px-4 py-3">
+      <!-- overflow-y-auto, not overflow-auto: `auto` on both axes made a short
+           body show a horizontal-plus-vertical scrollbar pair as soon as any
+           child overflowed by a pixel. min-h-0 lets it shrink inside the
+           flex column so the cap applies to the body, not the whole dialog. -->
+      <div class="min-h-0 overflow-y-auto px-4 py-3">
         {@render children()}
       </div>
       {#if footer}

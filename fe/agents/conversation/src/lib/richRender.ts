@@ -468,13 +468,13 @@ function renderImageCards(node: HTMLElement): void {
       img.loading = "lazy";
       img.referrerPolicy = "no-referrer";
       /* natural aspect ratio — no fixed height, no crop */
-      img.className = "block w-full h-auto bg-white-200 dark:bg-navy-900";
+      img.className = "block w-full h-auto bg-white-200 dark:bg-navy-800";
       /* broken / hotlink-blocked image → replace the whole card body with a
          domain chip so it degrades to a readable link, not a broken icon. */
       img.onerror = () => {
         btn.classList.remove("cursor-zoom-in");
         btn.innerHTML =
-          `<span class="flex min-h-[5rem] w-full items-center justify-center px-3 py-6 text-center text-xs text-black-600 dark:text-black-500 break-all">` +
+          `<span class="flex min-h-[5rem] w-full items-center justify-center px-3 py-6 text-center text-xs text-black-600 dark:text-black-700 break-all">` +
           `${esc(card.host || card.url)}</span>`;
         btn.onclick = () => window.open(card.url, "_blank", "noopener");
       };

@@ -26,7 +26,11 @@ type ProjectSettingsResponse struct {
 	IsNew           bool                   `json:"is_new"`
 	DefaultPreset   string                 `json:"default_preset"`
 	DefaultProvider string                 `json:"default_provider"`
-	SystemAddon     string                 `json:"system_addon"`
+	// DefaultModel pins which model on DefaultProvider this project runs,
+	// in that instance's own id space (for wick, down to a live-set leaf).
+	// Only meaningful alongside DefaultProvider.
+	DefaultModel string `json:"default_model"`
+	SystemAddon  string `json:"system_addon"`
 	ChatCount       int                    `json:"chat_count"`
 	CreatedAt       string                 `json:"created_at"`
 	PresetList      []string               `json:"preset_list"`
@@ -55,6 +59,11 @@ type ProviderModelItem struct {
 	Label   string `json:"label"`
 	Default bool   `json:"default"`
 	Desc    string `json:"desc,omitempty"`
+	// Live marks a live model SET, not a single model: the picker expands it
+	// one level further (lazily, via the models endpoint with ?entry=) and
+	// pins a chosen leaf as "<id>@<vendorModelID>". Without this flag the set
+	// looked like an ordinary model whose id resolves to nothing runnable.
+	Live bool `json:"live,omitempty"`
 }
 
 // ProjectPinnedSession is one pinned session row in the API response.
@@ -72,7 +81,9 @@ func projectProviderList(c *tool.Ctx) []ProviderListItem {
 	for _, p := range ps {
 		var models []ProviderModelItem
 		for _, m := range p.Models {
-			models = append(models, ProviderModelItem{ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc})
+			models = append(models, ProviderModelItem{
+				ID: m.ID, Label: m.Label, Default: m.Default, Desc: m.Desc, Live: m.Live,
+			})
 		}
 		out = append(out, ProviderListItem{Type: p.Type, Name: p.Name, Models: models})
 	}
@@ -123,6 +134,7 @@ func apiProjectDetail(c *tool.Ctx) {
 		IsProtected:     project.IsProtected(p.Meta),
 		DefaultPreset:   p.Meta.Defaults.Preset,
 		DefaultProvider: p.Meta.Defaults.Provider,
+		DefaultModel:    p.Meta.Defaults.Model,
 		SystemAddon:     p.Meta.Defaults.SystemAddon,
 		CreatedAt:       p.Meta.CreatedAt.Format("2006-01-02"),
 		PresetList:      presetList,
@@ -172,6 +184,7 @@ func apiProjectUpdate(c *tool.Ctx) {
 		CustomPath  string `json:"custom_path"`
 		Preset      string `json:"preset"`
 		Provider    string `json:"provider"`
+		Model       string `json:"model"`
 		SystemAddon string `json:"system_addon"`
 	}
 	if err := c.BindJSON(&req); err != nil {
@@ -197,7 +210,8 @@ func apiProjectUpdate(c *tool.Ctx) {
 	if v := req.Preset; v != "" {
 		meta.Defaults.Preset = v
 	}
-	meta.Defaults.Provider = req.Provider
+	meta.Defaults.Provider = strings.TrimSpace(req.Provider)
+	meta.Defaults.Model = modelWithProvider(req.Provider, req.Model)
 	meta.Defaults.SystemAddon = req.SystemAddon
 
 	customPath := strings.TrimSpace(req.CustomPath)

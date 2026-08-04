@@ -1316,9 +1316,13 @@
      sub-agents are grinding away or both are queued behind a slot. A
      spinning ring on the tab is the only thing that tells you something
      is happening on a rail you are not looking at. */
-  const subAgentsBusy = $derived(
-    subAgents.some((s) => isSubAgentWorking(s.status, s.lifecycle)),
+  // How many are actually producing output, not merely unfinished. Drives
+  // both the rail's spinning ring and the header badge, so the two can
+  // never disagree about whether anything is running.
+  const busySubAgentCount = $derived(
+    subAgents.filter((s) => isSubAgentWorking(s.status, s.lifecycle)).length,
   );
+  const subAgentsBusy = $derived(busySubAgentCount > 0);
   function railBusy(id: RailTab): boolean {
     return id === "subagents" && subAgentsBusy;
   }
@@ -1346,6 +1350,7 @@
       {sseStatus}
       lifecycle={agentLifecycle}
       {idleTimeoutMs}
+      subAgentsBusy={busySubAgentCount}
       {activeView}
       onKill={handleKill}
       onDelete={handleDelete}

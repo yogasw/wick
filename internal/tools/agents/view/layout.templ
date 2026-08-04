@@ -366,16 +366,31 @@ templ sidebarSessionRow(base, id string, sess session.Session, label string, lc 
 				New session
 			}
 		</span>
-		@statusDot(id, effectiveStatus(lc.Lifecycle, string(sess.Meta.Status)))
+		@statusDot(id, effectiveStatus(lc.Lifecycle, string(sess.Meta.Status), lc.SubAgent))
 	</a>
 }
 
-// effectiveStatus collapses the pool's in-memory lifecycle and the
-// session's on-disk Status into one label the UI dot/badge can render.
-// Lifecycle wins when present (it's the live view); falls back to
-// Status="queued" so sessions waiting for a slot still show a colour
-// instead of going invisible. Empty result = no dot.
-func effectiveStatus(lifecycle, status string) string {
+// effectiveStatus collapses the pool's in-memory lifecycle, the session's
+// on-disk Status and the liveness of its sub-agents into one label the UI
+// dot/badge can render. Empty result = no dot.
+//
+// Order matters. The leader's own lifecycle wins whenever it is doing
+// something, because "this conversation's process is working" is a
+// stronger claim than "something it delegated is" — collapsing the two
+// would erase the distinction the sub-agent dot exists to draw. Only once
+// the leader is idle, killed or gone does a working child take the row,
+// under its own "subagent" status.
+//
+// A queued child is deliberately not work: nothing has spawned yet, and
+// a spinner there would promise progress that is not happening (the same
+// rule isSubAgentWorking applies in the rail).
+func effectiveStatus(lifecycle, status, subAgent string) string {
+	if lifecycle != "" && lifecycle != "killed" && lifecycle != "idle" {
+		return lifecycle
+	}
+	if subAgent == "working" || subAgent == "spawning" {
+		return "subagent"
+	}
 	if lifecycle != "" && lifecycle != "killed" {
 		return lifecycle
 	}
@@ -411,6 +426,11 @@ func StatusDotClass(status string) string {
 		return base + " h-3 w-3 border-2 border-green-500 border-t-transparent animate-spin"
 	case "spawning":
 		return base + " h-3 w-3 border-2 border-amber-400 border-t-transparent animate-spin"
+	// Delegated work: spinning, so it reads as busy, but teal rather than
+	// the leader's green — the row is saying "a sub-agent is working",
+	// which is not the same as "this conversation is working".
+	case "subagent":
+		return base + " h-3 w-3 border-2 border-teal-500 border-t-transparent animate-spin"
 	case "queued":
 		return base + " h-1.5 w-1.5 bg-orange-500 animate-pulse"
 	case "idle":

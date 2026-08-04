@@ -24,11 +24,20 @@ import (
 	"github.com/yogasw/wick/internal/agents/storage"
 )
 
-// Defaults holds the preset/provider/system_addon that new sessions
-// in this project inherit when not explicitly overridden.
+// Defaults holds the preset/provider/model/system_addon that new
+// sessions in this project inherit when not explicitly overridden.
 type Defaults struct {
-	Preset      string `json:"preset,omitempty"`
-	Provider    string `json:"provider,omitempty"`
+	Preset   string `json:"preset,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	// Model pins which model on Provider this project runs, in that
+	// instance's own id space — for wick that is "<entryID>@<vendorModelID>",
+	// i.e. down to the leaf of a live set.
+	//
+	// Meaningless without Provider, and never applied across a provider
+	// change: a pin belongs to the instance it was chosen on. Empty means
+	// "let the instance pick its own default", which is a real choice and
+	// not a missing value.
+	Model       string `json:"model,omitempty"`
 	SystemAddon string `json:"system_addon,omitempty"`
 }
 
