@@ -54,6 +54,44 @@ func TestResolveChildTargetRolePinWinsWhole(t *testing.T) {
 	}
 }
 
+// The reported case: a role naming only a bare provider ("codex") while the
+// parent conversation runs on that same instance with a model picked in the
+// composer. The role has an opinion about the runtime and none about the
+// model, so the session's model must come through — withholding it made the
+// role silently override the switch.
+func TestResolveChildTargetTakesParentModelOnTheSameInstance(t *testing.T) {
+	got := resolveChildTarget(
+		&entity.AgentProfile{Key: "test-agent", Provider: "codex"}, // bare type, no model
+		"parent-1", "proj-1",
+		sessionTargets(map[string]provider.RunTarget{
+			"parent-1": {Provider: "codex/codex", ModelID: "gpt-5.5"},
+		}),
+		nil,
+	)
+	if got.Provider != "codex" {
+		t.Fatalf("provider = %q, want codex (the role's own pick)", got.Provider)
+	}
+	if got.ModelID != "gpt-5.5" {
+		t.Fatalf("model = %q, want gpt-5.5 from the session — same instance, so the pin applies", got.ModelID)
+	}
+}
+
+// The role's OWN model still wins when it has one: the parent only fills a
+// gap, it never overrules a stated choice.
+func TestResolveChildTargetPrefersTheRolesOwnModel(t *testing.T) {
+	got := resolveChildTarget(
+		&entity.AgentProfile{Key: "r", Provider: "codex/codex", Model: "gpt-5.4-mini"},
+		"parent-1", "",
+		sessionTargets(map[string]provider.RunTarget{
+			"parent-1": {Provider: "codex/codex", ModelID: "gpt-5.5"},
+		}),
+		nil,
+	)
+	if got.ModelID != "gpt-5.4-mini" {
+		t.Fatalf("model = %q, want the role's own gpt-5.4-mini", got.ModelID)
+	}
+}
+
 // The cross-instance rule: a role that names a DIFFERENT provider must not
 // inherit the parent's model pin. That pin names an entry in another
 // instance's registry, so applying it here resolves to the wrong model or

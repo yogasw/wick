@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -136,5 +137,36 @@ func TestSetModelIDIfEmptyDoesNotOverwriteExistingPin(t *testing.T) {
 	sess, _ = Load(layout, "S1")
 	if sess.Agents[0].ModelID != "project@default" {
 		t.Fatalf("model = %q, want the inherited default", sess.Agents[0].ModelID)
+	}
+}
+
+// A blank agent name is always a caller bug. The setters create an entry when
+// the name does not match, so writing one produced a row nothing could ever
+// address again — and every later call appended another, making the session
+// look like it held agents nobody created.
+func TestSettersRejectABlankAgentName(t *testing.T) {
+	layout := newLayout(t)
+	mkSession(t, layout, "S1")
+	if err := AddAgent(layout, "S1", "main", "codex/codex"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SetModelID(layout, "S1", "", "opus"); !errors.Is(err, ErrNoAgentName) {
+		t.Errorf("SetModelID: err = %v, want ErrNoAgentName", err)
+	}
+	if err := SetMaxTurns(layout, "S1", "", 3); !errors.Is(err, ErrNoAgentName) {
+		t.Errorf("SetMaxTurns: err = %v, want ErrNoAgentName", err)
+	}
+	if err := SetThinkingTokens(layout, "S1", "", "0"); !errors.Is(err, ErrNoAgentName) {
+		t.Errorf("SetThinkingTokens: err = %v, want ErrNoAgentName", err)
+	}
+
+	// Nothing was appended: the real agent is still the only one.
+	sess, err := Load(layout, "S1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sess.Agents) != 1 {
+		t.Fatalf("agents = %d, want 1 — a blank name must not create a row", len(sess.Agents))
 	}
 }

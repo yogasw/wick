@@ -39,10 +39,18 @@ type ProjectRunTarget func(projectID string) (provider.RunTarget, bool)
 // per-type default — a visible, documented fallback rather than a
 // surprising jump.
 //
-// A model never crosses an instance boundary: provider.ResolveRunTarget
-// takes the winning candidate whole, so a role that names only a provider
-// gets that provider with NO model rather than the parent's pin, which
-// belongs to a different model registry.
+// A model never crosses an instance boundary: a pin belongs to the model
+// registry of the instance it was chosen on, so a role pointing at a
+// DIFFERENT instance than its parent gets no model at all and lets that
+// provider resolve its own default.
+//
+// It does, however, cross when the instance is the SAME. A role that names
+// only a provider ("codex") has expressed an opinion about the runtime and
+// none about the model, so when the parent conversation runs on that very
+// instance its model is the best available answer — and it is what the user
+// picked in the composer. Withholding it made a role with a bare provider
+// silently override the session's model, which reads as the switch being
+// ignored.
 func resolveChildTarget(
 	profile *entity.AgentProfile,
 	parentSessionID, projectID string,
@@ -57,9 +65,12 @@ func resolveChildTarget(
 			ModelID:  profile.Model,
 		})
 	}
+	var parent provider.RunTarget
+	haveParent := false
 	if sessionTarget != nil && strings.TrimSpace(parentSessionID) != "" {
 		if t, ok := sessionTarget(parentSessionID); ok {
 			candidates = append(candidates, t)
+			parent, haveParent = t, true
 		}
 	}
 	if projectTarget != nil && strings.TrimSpace(projectID) != "" {
@@ -67,5 +78,14 @@ func resolveChildTarget(
 			candidates = append(candidates, t)
 		}
 	}
-	return provider.ResolveRunTarget(candidates...)
+	got := provider.ResolveRunTarget(candidates...)
+
+	// Fill a missing model from the parent when both run on the same
+	// instance. Guarded by SameInstance so this can never move a pin across
+	// registries — the property the whole type exists to protect.
+	if got.ModelID == "" && haveParent && parent.ModelID != "" &&
+		provider.SameInstance(got.Provider, parent.Provider) {
+		got.ModelID = parent.ModelID
+	}
+	return got
 }

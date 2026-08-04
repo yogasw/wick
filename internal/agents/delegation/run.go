@@ -320,7 +320,22 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 		rootID = id
 	}
 	childSessionID := childSessionIDFor(req.ParentSessionID, id)
-	agentName := profile.Provider
+	// The agent entry's name inside the child session.
+	//
+	// The role KEY, not its provider. Naming it after the provider produced an
+	// entry called "" for every role that names no provider — and an unnamed
+	// entry is unaddressable: SetModelID and SetMaxTurns create a row when the
+	// name does not match, so each spawn appended another blank one instead of
+	// updating the real agent. It also read as a second agent in the session's
+	// own agents.json. The key is stable, unique within a scope, and already
+	// what the rest of the tree addresses this role by.
+	agentName := strings.TrimSpace(profile.Key)
+	if agentName == "" {
+		// A profile with no key cannot happen through the API (it is
+		// required), but a blank name is exactly the bug above, so refuse
+		// rather than write one.
+		return nil, errors.New("delegation: profile has no key to name its agent entry")
+	}
 	maxTurns := EffectiveMaxTurns(req.MaxTurns, profile, limits)
 	maxTokens := EffectiveMaxTokens(req.MaxTokens, profile, limits)
 

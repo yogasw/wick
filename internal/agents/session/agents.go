@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -56,6 +57,15 @@ func SaveAgents(layout config.Layout, id string, agents []AgentEntry) error {
 	}
 	return storage.WriteJSON(layout.SessionAgents(id), agents)
 }
+
+// ErrNoAgentName rejects a blank agent name.
+//
+// The setters below create an entry when the name does not match, which is
+// how a single blank name turned into a growing list of unaddressable rows:
+// nothing can ever match "" again, so every later call appended another one,
+// and the session appeared to hold a second agent nobody created. A blank
+// name is always a caller bug, so it fails loudly instead of writing.
+var ErrNoAgentName = errors.New("session: agent name is empty")
 
 // AddAgent appends a new agent entry. Errors on duplicate name within
 // the same session.
@@ -142,6 +152,9 @@ func SetCLISessionID(layout config.Layout, id, name, cliID string) error {
 // SetMaxTurns persists the per-spawn turn cap on the agent entry,
 // creating it if missing. 0 = unlimited (provider default).
 func SetMaxTurns(layout config.Layout, id, name string, maxTurns int) error {
+	if name == "" {
+		return ErrNoAgentName
+	}
 	sess, err := Load(layout, id)
 	if err != nil {
 		return err
@@ -166,6 +179,9 @@ func SetMaxTurns(layout config.Layout, id, name string, maxTurns int) error {
 // thinking on); "0" = disabled; "<n>" = budget. Always persisted (including
 // "") so switching a reused session back to full thinking clears a prior value.
 func SetThinkingTokens(layout config.Layout, id, name, v string) error {
+	if name == "" {
+		return ErrNoAgentName
+	}
 	sess, err := Load(layout, id)
 	if err != nil {
 		return err
@@ -188,6 +204,9 @@ func SetThinkingTokens(layout config.Layout, id, name, v string) error {
 // SetModelID persists the pinned model id on the agent entry, creating it
 // if missing. Empty = unset (the active provider's own default applies).
 func SetModelID(layout config.Layout, id, name, modelID string) error {
+	if name == "" {
+		return ErrNoAgentName
+	}
 	sess, err := Load(layout, id)
 	if err != nil {
 		return err

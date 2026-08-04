@@ -476,7 +476,46 @@ func (p *Pool) SendWithAttachments(ctx context.Context, sessionID, agentName, so
 	return p.send(ctx, sessionID, agentName, source, role, text, projectID, atts)
 }
 
+// resolveAgentName turns an empty agent name into the session's actual one:
+// Meta.ActiveAgent, else the first entry on disk.
+//
+// Same rule switchProvider and session.ActiveRunTarget already use, so
+// "no name given" resolves identically no matter which door the message came
+// through — a sub-agent result, a channel, or a person in the composer.
+//
+// A name is returned unchanged, and a session with no entries keeps the empty
+// name: the caller's spawn path creates the entry from its own defaults, and
+// inventing a name here would pre-empt that with one nothing else knows.
+func (p *Pool) resolveAgentName(sessionID, agentName string) string {
+	if agentName != "" {
+		return agentName
+	}
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err != nil || len(sess.Agents) == 0 {
+		return agentName
+	}
+	if active := sess.Meta.ActiveAgent; active != "" {
+		for _, a := range sess.Agents {
+			if a.Name == active {
+				return active
+			}
+		}
+	}
+	return sess.Agents[0].Name
+}
+
 func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, text, projectID string, atts []store.Attachment) error {
+	// An empty agent name means "whoever this session is talking to" — the
+	// same thing a person typing in the composer means. Resolved to the
+	// session's real agent before anything keys off it.
+	//
+	// Without this, a sub-agent's result (delivered with no agent name,
+	// because nothing populates ParentAgent) keyed on sessionID+"" — which
+	// matches no live agent, so it never reached the leader's running
+	// process. It spawned a second, nameless track instead and every
+	// name-keyed write after it landed on a row nobody reads.
+	agentName = p.resolveAgentName(sessionID, agentName)
+
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -749,6 +788,12 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		// so this is the only place a channel spawn picks up the project's
 		// configured provider.
 		//
+		// Deliberately NOT parent-aware. A sub-agent's provider is resolved by
+		// the delegation service before its entry is written (see
+		// delegation.resolveChildTarget), so a child never arrives here with a
+		// blank one; adding a second, subtly different chain here would be two
+		// places to keep in step for a case that cannot happen.
+		//
 		// The project's model travels WITH its provider — a pin belongs to
 		// the instance it was chosen on, so taking one without the other
 		// resolves against the wrong model registry. The global default
@@ -798,6 +843,22 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 			maxTurns = a.MaxTurns
 			thinkingTokens = a.ThinkingTokens
 			modelID = a.ModelID
+			// A pin only means anything on the instance it was chosen on.
+			// wick's ids are opaque ("m_…", or "<entry>@<vendorModel>") and a
+			// CLI given one dies on `--model m_…`. This happens when a pin
+			// outlives its instance — a session switched away from wick, or a
+			// child that inherited its parent's wick pin before being
+			// repointed. Dropped rather than carried, so the target resolves
+			// its own default instead of failing to spawn.
+			if modelID != "" && !strings.HasPrefix(a.Provider, "wick") &&
+				(strings.ContainsRune(modelID, '@') || strings.HasPrefix(modelID, "m_")) {
+				log.Warn().
+					Str("session", sessionID).
+					Str("provider", a.Provider).
+					Str("model", modelID).
+					Msg("agents.spawn: dropping a wick model pin that does not belong to this provider")
+				modelID = ""
+			}
 			// Provider field is stored as "type/name" (e.g. "claude/work").
 			// Fall back to bare type when no slash present.
 			if idx := strings.Index(a.Provider, "/"); idx >= 0 {
