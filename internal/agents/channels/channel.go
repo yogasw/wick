@@ -132,6 +132,17 @@ type AgentEventReceiver interface {
 	OnAgentEvent(sessionID string, ev event.AgentEvent)
 }
 
+// LiveTurnReporter is implemented by channels that render a live status
+// banner for an in-flight turn. The sub-agent progress relay uses it to find
+// which ancestor session a child's progress should be shown on: a channel with
+// a live turn has a banner to update, one without would drop the event.
+//
+// Optional — a channel that does not implement it simply never receives
+// relayed sub-agent progress.
+type LiveTurnReporter interface {
+	HasLiveTurn(sessionID string) bool
+}
+
 // ApprovalReceiver is fanned-out for gate approval lifecycle.
 type ApprovalReceiver interface {
 	OnApprovalRequest(sessionID string, req gate.ApprovalRequest)

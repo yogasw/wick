@@ -99,4 +99,16 @@ type AgentEvent struct {
 	SessionID string // SessionStart: CLI session ID (or first event for Claude)
 	ErrorMsg  string // Error: short reason
 	Raw       string // verbatim source line
+
+	// SubAgent names the sub-agent an event was RELAYED from, and is set
+	// only on that relay — never by a parser. A leader's own events leave
+	// it empty; a child's status event forwarded onto the leader's thread
+	// carries the child's label ("researcher") so a channel can say whose
+	// work it is showing.
+	//
+	// Relay is status-only by design: a channel that renders progress needs
+	// to know a sub-agent is moving, but the child's REPLY reaches the
+	// conversation through the delegation result, so relaying its text too
+	// would post the same answer twice.
+	SubAgent string
 }
