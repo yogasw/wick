@@ -6,7 +6,8 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+*   **Sub-agent progress frozen on Slack:** A delegated sub-agent's status events were addressed to its own session, which no channel has a thread for, so every event was dropped and the Slack assistant banner sat on "Delegating: …" for the whole child run, looking like a hung agent. Sub-agent progress (tool use, tool results, thinking) is now relayed to the nearest ancestor session with a live turn and shown labelled with the sub-agent's name, e.g. `researcher → Reading store.go`. The child's reply and any error still arrive only through the delegation result. Telegram has no equivalent banner and is unaffected.
 
 ---
 
