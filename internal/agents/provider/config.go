@@ -28,8 +28,8 @@ type InstanceConfig struct {
 // (claude/codex/gemini). Kept separate from InstanceConfig so it's only
 // appended for those types — wick has its own WickModels UI.
 type CLIModelConfig struct {
-	ModelSelect bool   `wick:"bool;key=model_select;group=Model selection|Let sessions pick a model for this instance. When on, the composer shows a model picker and passes the choice to the CLI via --model.;desc=Show a model picker for this instance. Off = the CLI's own default model."`
-	Models      string `wick:"key=models;kvlist=id|desc;group=Model selection;visible_when=model_select:true;desc=Models to offer: an id/alias (e.g. opus) and a short description. Leave empty to use the built-in defaults for this provider. The CLI can't list its own models, so this is edited by hand (or Load defaults)."`
+	ModelSelect bool   `wick:"bool;key=model_select;group=Model selection|Let sessions pick a model for this instance. When on, the composer shows a picker of the models below and passes the choice to the CLI via --model.;desc=Off = the CLI's own default model."`
+	Models      string `wick:"key=models;kvlist=id|desc;group=Model selection;visible_when=model_select:true;desc=Models the picker offers (id/alias + short description). Empty = this provider's built-in defaults."`
 }
 
 // SeedInstanceConfig returns populated entity.Config rows for an Instance.
