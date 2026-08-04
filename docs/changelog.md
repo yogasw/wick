@@ -10,6 +10,32 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.36.2](https://github.com/yogasw/wick/compare/v0.36.1...v0.36.2) — Sub-agents
+
+_Released on 2026-08-04_
+
+### Fixed
+*   **Sub-agent Provider/Model Inheritance:** Addressed issues where sub-agents failed to inherit their provider and model, often falling back to global defaults or running on incorrect instances. Provider and model now travel as a unified `provider.RunTarget` through the inheritance chain (role's pair, parent conversation's, then project's). This also resolved the "No runnable model for the wick provider" error.
+*   **Sub-agent Modal Theming:** Corrected dark mode theming for the sub-agent modal, ensuring its background, breadcrumb separator, and backdrop now correctly follow the dark theme. The image card renderer also received similar fixes.
+*   **Sub-agent Liveness Indicators:** Ensured that a conversation's liveness indicators (sidebar dot, header badge) reflect ongoing sub-agent activity, preventing a dormant appearance when only sub-agents are working. Delegated work is now explicitly rendered in teal, with a new header badge showing the sub-agent count.
+*   **Provider Dropdown Clipping:** Resolved an issue where the provider dropdown in the quick-change dialog would clip, forcing the dialog to scroll. The dropdown now uses `position:fixed` for correct rendering and handles external clicks, re-anchoring on UI changes.
+*   **Wick Model Names on Agent Rows:** Displayed human-readable names for wick models on agent rows and in the quick-change dialog's closed trigger, instead of their internal registry IDs. Raw IDs are preserved for deleted or renamed models to ensure visibility.
+*   **Sub-agent Result Delivery:** Ensured that a sub-agent's result is delivered back to the leader using the conversation's own provider and model, rather than falling back to a per-type default. This involved resolving empty agent names to the session's active agent and correcting how child agent entries are named.
+*   **Provider Models Editor Columns:** The provider configuration editor now correctly retains `id` and `description` columns for the `models` field, preventing data loss and ensuring proper round-tripping for different field types.
+*   **Test Synchronization:** Synchronized access to kills and tokens in delegation tests to improve reliability.
+
+### Improved
+*   **Sub-agent Role List UX and Visibility:** The project's Sub-agents tab and the global Sub-agents page now use a unified `AgentProfileRow` with panelled sections, matching the General tab. Provider and model are explicitly stated as chips on the row, with "provider default model" for roles without a specific pin.
+*   **Quick-Change Dialog for Provider/Model:** Introduced a new quick-change dialog for roles, allowing users to rapidly update a role's provider and model. The provider and model chips on the agent row now act as direct shortcuts to this dialog.
+*   **Role Locking Legibility:** Locked roles remain clickable for read-only viewing, but destructive actions (Delete) and modification options (disable toggle, quick change) are now rendered disabled rather than hidden, providing clearer feedback.
+*   **UI Responsiveness:** The global page's rail width was increased to 320px to better accommodate the new provider/model chips.
+
+### Refactored
+*   **Sub-agent Role List Unification:** The agent profile rows and related rendering logic were unified across the project-level Sub-agents tab and the global Sub-agents page, ensuring a consistent look and behavior wherever a role appears.
+
+---
+
+
 ## [v0.36.1](https://github.com/yogasw/wick/compare/v0.36.0...v0.36.1) — Agent Orchestration
 
 _Released on 2026-08-03_
