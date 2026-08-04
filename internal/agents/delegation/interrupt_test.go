@@ -3,14 +3,19 @@ package delegation
 import (
 	"context"
 	"errors"
+	"slices"
+	"sync"
 	"testing"
 
 	"github.com/yogasw/wick/internal/entity"
 )
 
 // fakeRunner records kills so tests can assert that a queued delegation
-// is cancelled WITHOUT touching the process manager.
+// is cancelled WITHOUT touching the process manager. The mutex is required
+// because async delegations start and stop on their own goroutines: a
+// multi-mention fan-out reaches KillAgent concurrently.
 type fakeRunner struct {
+	mu      sync.Mutex
 	kills   []string
 	partial string
 	killErr error
@@ -30,8 +35,19 @@ func (f *fakeRunner) StartAgent(_ context.Context, spec ChildSpec) error {
 	return nil
 }
 func (f *fakeRunner) KillAgent(sessionID, agentName string) error {
+	f.mu.Lock()
 	f.kills = append(f.kills, sessionID+"::"+agentName)
-	return f.killErr
+	err := f.killErr
+	f.mu.Unlock()
+	return err
+}
+
+// killed snapshots the recorded kills under the lock, so assertions never
+// read the slice while a background run is appending to it.
+func (f *fakeRunner) killed() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.kills)
 }
 func (f *fakeRunner) PartialText(string, string) string { return f.partial }
 
@@ -53,8 +69,8 @@ func TestInterruptRunningKillsAndKeepsPartial(t *testing.T) {
 	if out != OutcomeKilled {
 		t.Fatalf("outcome = %q, want %q", out, OutcomeKilled)
 	}
-	if len(run.kills) != 1 {
-		t.Fatalf("kills = %v, want exactly one", run.kills)
+	if k := run.killed(); len(k) != 1 {
+		t.Fatalf("kills = %v, want exactly one", k)
 	}
 
 	got, err := r.Get(context.Background(), "d1")
@@ -86,8 +102,8 @@ func TestInterruptQueuedDequeuesWithoutKilling(t *testing.T) {
 	if out != OutcomeDequeued {
 		t.Fatalf("outcome = %q, want %q", out, OutcomeDequeued)
 	}
-	if len(run.kills) != 0 {
-		t.Fatalf("kills = %v, want none for a queued delegation", run.kills)
+	if k := run.killed(); len(k) != 0 {
+		t.Fatalf("kills = %v, want none for a queued delegation", k)
 	}
 
 	got, _ := r.Get(context.Background(), "d1")
@@ -167,8 +183,8 @@ func TestInterruptForbiddenForOtherUsers(t *testing.T) {
 	if _, err := s.Interrupt(context.Background(), "d1", "someone-else", false); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("err = %v, want ErrForbidden", err)
 	}
-	if len(run.kills) != 0 {
-		t.Fatalf("kills = %v, want none for an unauthorized actor", run.kills)
+	if k := run.killed(); len(k) != 0 {
+		t.Fatalf("kills = %v, want none for an unauthorized actor", k)
 	}
 	got, _ := r.Get(context.Background(), "d1")
 	if got.Status != entity.DelegationRunning {
