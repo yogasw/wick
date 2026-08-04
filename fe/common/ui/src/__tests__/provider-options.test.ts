@@ -42,4 +42,25 @@ describe("buildProviderOptions", () => {
     const opts = buildProviderOptions([{ type: "claude", name: "claude" }], "claude");
     expect(opts).toHaveLength(1);
   });
+
+  // Dropping `live` made a model SET look like a single selectable model,
+  // whose id resolves to nothing runnable — the picker could never reach the
+  // set's actual leaves.
+  test("carries the live-set flag through so the picker can expand it", () => {
+    const opts = buildProviderOptions(
+      [
+        {
+          type: "wick",
+          name: "x",
+          models: [
+            { id: "set1", label: "Gemini (live)", default: false, live: true },
+            { id: "m1", label: "M1", default: true },
+          ],
+        },
+      ],
+      "",
+    );
+    expect(opts[0].models?.[0].live).toBe(true);
+    expect(opts[0].models?.[1].live).toBeUndefined();
+  });
 });

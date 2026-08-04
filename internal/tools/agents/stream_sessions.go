@@ -19,8 +19,10 @@ import (
 // project access check, so opening it to any logged-in user leaks
 // nothing they could not already see in their own session list.
 //
-// Sub-agent sessions are dropped: they are not rows in the sidebar, and
-// their liveness is the Sub-agents rail's job.
+// A sub-agent's own session is never a row here, but its liveness is
+// re-attributed to the conversation that owns it (see
+// projectSidebarEvent) — otherwise a row goes dark the moment its leader
+// idles, while the work it delegated is still running.
 func sessionsLifecycleSSE(c *tool.Ctx) {
 	if notReady(c) || globalBcast == nil {
 		c.Error(http.StatusServiceUnavailable, "broadcaster not ready")
@@ -41,6 +43,10 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 	ch, unsub := globalBcast.Subscribe("")
 	defer unsub()
 
+	// visible gates on the ROOT conversation, since that is the row an
+	// event ends up addressing. A child inherits its parent's visibility:
+	// it lives in the same project and belongs to the same user, so no
+	// access decision is skipped by resolving it first.
 	visible := func(sessionID string) bool {
 		sess, ok := globalMgr.Registry().Session(sessionID)
 		if !ok || sess.Meta.ParentSessionID != "" {
@@ -55,11 +61,17 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 	// transition — which for a long-running turn may be minutes away.
 	if globalPool != nil {
 		for _, e := range globalPool.ActiveSnapshot() {
-			if !visible(e.SessionID) {
+			ev, ok := projectSidebarEvent(e.SessionID, e.Lifecycle, sessionParentOf)
+			if !ok || !visible(ev.SessionID) {
 				continue
 			}
-			fmt.Fprintf(w, "event: session\ndata: %s\n\n",
-				Event{SessionID: e.SessionID, Type: "lifecycle", Lifecycle: e.Lifecycle}.JSON())
+			// A replayed child that is not working carries no information:
+			// the row starts clean, so an empty marker would only overwrite
+			// a sibling's live one during the replay loop.
+			if ev.Lifecycle == "" && ev.SubAgent == "" {
+				continue
+			}
+			fmt.Fprintf(w, "event: session\ndata: %s\n\n", ev.JSON())
 		}
 	}
 	flush()
@@ -74,15 +86,20 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 			if !open {
 				return
 			}
-			if ev.Type != "lifecycle" || ev.SessionID == "" || !visible(ev.SessionID) {
+			if ev.Type != "lifecycle" || ev.SessionID == "" {
 				continue
 			}
 			// Re-projected rather than forwarded: the source event also
 			// carries PID, substate and agent name, none of which the
 			// sidebar renders, and a stream should not ship fields whose
 			// only effect is to widen what a subscriber can observe.
-			fmt.Fprintf(w, "event: session\ndata: %s\n\n",
-				Event{SessionID: ev.SessionID, Type: "lifecycle", Lifecycle: ev.Lifecycle}.JSON())
+			// Projection also re-addresses a sub-agent's transition to the
+			// conversation that owns it.
+			out, ok := projectSidebarEvent(ev.SessionID, ev.Lifecycle, sessionParentOf)
+			if !ok || !visible(out.SessionID) {
+				continue
+			}
+			fmt.Fprintf(w, "event: session\ndata: %s\n\n", out.JSON())
 			flush()
 		case <-keepalive.C:
 			fmt.Fprintf(w, ": keepalive\n\n")

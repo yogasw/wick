@@ -256,6 +256,87 @@ describe("ProviderDetail - key-value editor (env)", () => {
   });
 });
 
+describe("ProviderDetail - model selection (id|desc kvlist)", () => {
+  function withModels(value: string, defaults: { id: string; desc: string }[] = []): ProviderDetailResponse {
+    const data = makeDetail();
+    data.ConfigFields = [
+      { Key: "model_select", Value: "true", Type: "bool", Options: "", IsSecret: false, Description: "Show a model picker", Required: false },
+      { Key: "models", Value: value, Type: "kvlist", Options: "id|desc", IsSecret: false, Description: "Models to offer", Required: false },
+    ];
+    data.DefaultModels = defaults;
+    return data;
+  }
+
+  it("renders saved id/desc rows in their own columns", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(
+      withModels('[{"id":"opus","desc":"most capable"}]'),
+    );
+    render(ProviderDetail, { props: defaultProps });
+    await screen.findByText("Model selection");
+    const vals = (Array.from(document.querySelectorAll("input")) as HTMLInputElement[]).map((i) => i.value);
+    expect(vals).toContain("opus");
+    expect(vals).toContain("most capable");
+  });
+
+  it("serializes rows as [{id,desc}] on save", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(
+      withModels('[{"id":"opus","desc":"most capable"}]'),
+    );
+    render(ProviderDetail, { props: defaultProps });
+    await screen.findByText("Model selection");
+    const idInput = (Array.from(document.querySelectorAll("input")) as HTMLInputElement[]).find((i) => i.value === "opus")!;
+    await fireEvent.blur(idInput);
+    await vi.waitFor(() => expect(api.apiSaveConfigKey).toHaveBeenCalled());
+    const lastCall = vi.mocked(api.apiSaveConfigKey).mock.calls.at(-1)!;
+    expect(lastCall[3]).toBe("models");
+    expect(JSON.parse(lastCall[4])).toEqual([{ id: "opus", desc: "most capable" }]);
+  });
+
+  it("Load defaults fills the rows with the catalog seed ids and descs", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(
+      withModels("", [
+        { id: "opus", desc: "most capable" },
+        { id: "sonnet", desc: "balanced" },
+      ]),
+    );
+    render(ProviderDetail, { props: defaultProps });
+    await screen.findByText("Load defaults");
+    await fireEvent.click(screen.getByText("Load defaults"));
+    const vals = (Array.from(document.querySelectorAll("input")) as HTMLInputElement[]).map((i) => i.value);
+    expect(vals).toContain("opus");
+    expect(vals).toContain("balanced");
+    const lastCall = vi.mocked(api.apiSaveConfigKey).mock.calls.at(-1)!;
+    expect(lastCall[3]).toBe("models");
+    expect(JSON.parse(lastCall[4])).toEqual([
+      { id: "opus", desc: "most capable" },
+      { id: "sonnet", desc: "balanced" },
+    ]);
+  });
+
+  it("renders the models list exactly once (not again as a generic kvlist)", async () => {
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(
+      withModels('[{"id":"opus","desc":"most capable"}]'),
+    );
+    render(ProviderDetail, { props: defaultProps });
+    await screen.findByText("Model selection");
+    /* the `models` key label belongs to the generic section only */
+    expect(screen.queryByText("models")).toBeNull();
+    expect(screen.getAllByText("+ Add model")).toHaveLength(1);
+    const idInputs = (Array.from(document.querySelectorAll("input")) as HTMLInputElement[])
+      .filter((i) => i.value === "opus");
+    expect(idInputs).toHaveLength(1);
+  });
+
+  it("hides the model list when selection is off", async () => {
+    const data = withModels('[{"id":"opus","desc":"x"}]');
+    data.ConfigFields[0].Value = "false";
+    vi.mocked(api.apiGetProviderDetail).mockResolvedValue(data);
+    render(ProviderDetail, { props: defaultProps });
+    await screen.findByText("Model selection");
+    expect(screen.queryByText("+ Add model")).toBeNull();
+  });
+});
+
 describe("ProviderDetail - callbacks", () => {
   it("calls apiHookCheck when Check clicked", async () => {
     render(ProviderDetail, { props: defaultProps });

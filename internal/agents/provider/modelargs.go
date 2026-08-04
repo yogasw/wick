@@ -1,6 +1,9 @@
 package provider
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // modelargs.go supplies the --model flag for the CLI spawners (claude /
 // codex / gemini) from the per-session pinned model. All three accept
@@ -28,5 +31,40 @@ func ModelArgs(opt SpawnOptions, existingArgs []string) []string {
 	if slices.Contains(existingArgs, "--model") {
 		return nil
 	}
+	// A wick-shaped pin is not a CLI model name. wick keys its registry with
+	// opaque ids ("m_0370951f-68d") and addresses a live-set leaf as
+	// "<entryID>@<vendorModelID>"; handing either to a CLI produces
+	// `--model m_0370951f-68d`, which the binary rejects and the spawn dies.
+	//
+	// This happens when a pin outlives the instance it was chosen on — a
+	// session switched from wick to claude, or a sub-agent that inherited its
+	// parent's wick pin. The switch path clears the pin, but a session whose
+	// entry predates that (or was repaired elsewhere) still carries one, so
+	// the check belongs here, at the point of use.
+	//
+	// Dropping the flag lets the CLI use its own default, which is what "this
+	// pin does not apply to me" should mean. Refusing to spawn would strand
+	// the session on a value the user cannot see.
+	if isForeignModelPin(opt.ModelID) {
+		return nil
+	}
 	return []string{"--model", opt.ModelID}
+}
+
+// isForeignModelPin reports whether a pinned model id belongs to wick's
+// registry rather than being a CLI model name.
+//
+// Keyed on shape, not on a provider list: this runs on the spawn path, where
+// the only thing available is the string itself. Both wick id forms are
+// recognizable and neither is a legal CLI model name, so the test is precise
+// in practice.
+func isForeignModelPin(modelID string) bool {
+	// A live-set leaf: "<entryID>@<vendorModelID>". No CLI model name has an
+	// '@' in it.
+	if strings.ContainsRune(modelID, '@') {
+		return true
+	}
+	// A registered wick model: "m_" + uuid-ish. Real CLI aliases are words
+	// ("opus", "sonnet", "gpt-5-codex"), never this shape.
+	return strings.HasPrefix(modelID, "m_")
 }

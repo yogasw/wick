@@ -36,6 +36,9 @@ export type ProjectOption = {
   path: string;
   managed: boolean;
   default_provider: string;
+  /** Model pinned on default_provider, in that instance's id space (for wick,
+      "<entryID>@<vendorModelID>"). Applied WITH the provider, never alone. */
+  default_model: string;
   default_preset: string;
 };
 
@@ -79,6 +82,7 @@ export const getProjectOptions = (base: string) =>
         ...p,
         managed: p.managed ?? false,
         default_provider: p.default_provider ?? "",
+        default_model: p.default_model ?? "",
         default_preset: p.default_preset ?? "",
       })),
     ),

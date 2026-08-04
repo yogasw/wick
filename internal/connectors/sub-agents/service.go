@@ -56,6 +56,16 @@ type caller struct {
 	sessionID string
 	projectID string
 	tagIDs    []string
+	// providerKey and modelID are what the CALLING conversation is running
+	// on, read off its active agent entry. A role created without an
+	// explicit provider adopts these, so an agent asked to "make me a
+	// sub-agent" produces one that runs where the conversation runs instead
+	// of on whatever instance is configured as the global default.
+	//
+	// The two always travel together: a model id is scoped to the instance
+	// it was chosen on.
+	providerKey string
+	modelID     string
 }
 
 func (d Deps) ready() error {
@@ -97,6 +107,12 @@ func (d Deps) resolveCaller(ctx context.Context, sessionID string, requireSessio
 		if sess.Meta.UserID != "" {
 			ownerID = sess.Meta.UserID
 		}
+	}
+	// Read separately from the meta above: this comes off the active AGENT
+	// entry, not meta.json, and is what a new role inherits when it names no
+	// provider of its own.
+	if prov, model, ok := session.ActiveRunTarget(d.Layout, c.sessionID); ok {
+		c.providerKey, c.modelID = prov, model
 	}
 	c.tagIDs = d.userTags(ctx, ownerID)
 	return c, nil

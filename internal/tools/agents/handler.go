@@ -740,12 +740,23 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		ids = ids[:sidebarCap]
 	}
 	lc := make(map[string]view.SessionLifecycleVM)
+	liveBySession := make(map[string]string)
 	for _, e := range globalPool.ActiveSnapshot() {
 		entry := view.SessionLifecycleVM{Lifecycle: e.Lifecycle, PID: e.PID}
 		if !e.LastActive.IsZero() {
 			entry.LastActiveMs = e.LastActive.UnixMilli()
 		}
 		lc[e.SessionID] = entry
+		liveBySession[e.SessionID] = e.Lifecycle
+	}
+	// Sub-agents run under their own session ids, which have no sidebar row
+	// of their own, so their liveness is folded into the conversation that
+	// owns them. Without this a row goes dark as soon as the leader idles,
+	// even while its children are still working.
+	for root, sub := range rollUpSubAgentWork(liveBySession, sessionParentOf) {
+		entry := lc[root]
+		entry.SubAgent = sub
+		lc[root] = entry
 	}
 	// Read labels concurrently — buffered channel = no goroutine leak.
 	type result struct{ id, label string }
@@ -1011,22 +1022,49 @@ func splitProviderModel(v string) (provider, modelID string) {
 	return v, ""
 }
 
-func resolveSessionProvider(c *tool.Ctx, formValue, projectID string) string {
-	prov := strings.TrimSpace(formValue)
-	if prov == "" && projectID != "" {
+// resolveSessionTarget resolves the provider AND model a new session runs
+// on, as one unit.
+//
+// formModel is the model the composer packed alongside its provider value;
+// it is only meaningful when formValue named a provider, because a model id
+// resolves against one instance's registry. When the form named no
+// provider and the project supplies one, the project's model comes with it
+// — dropping it (as resolving provider alone used to) is what made a
+// project unable to pin anything finer than an instance.
+//
+// Priority: the form's pair → the project's pair → the first healthy
+// instance (no model) → canonical "claude" (no model).
+func resolveSessionTarget(c *tool.Ctx, formValue, formModel, projectID string) (providerKey, modelID string) {
+	if prov := strings.TrimSpace(formValue); prov != "" {
+		return normalizeProviderKey(prov), strings.TrimSpace(formModel)
+	}
+	if projectID != "" {
 		if p, perr := project.Load(globalLayout, projectID); perr == nil {
-			prov = strings.TrimSpace(p.Meta.Defaults.Provider)
+			if prov := strings.TrimSpace(p.Meta.Defaults.Provider); prov != "" {
+				return normalizeProviderKey(prov), strings.TrimSpace(p.Meta.Defaults.Model)
+			}
 		}
 	}
-	if prov == "" {
-		if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
-			prov = ps[0].Type + "/" + ps[0].Name
-		}
+	// Neither level named a provider, so no level named a model either: an
+	// instance picked here is one nobody chose a model on.
+	if ps := providerChoicesCached(c.Context()); len(ps) > 0 {
+		return normalizeProviderKey(ps[0].Type + "/" + ps[0].Name), ""
 	}
-	if prov == "" {
-		prov = "claude"
+	return normalizeProviderKey("claude"), ""
+}
+
+// modelWithProvider returns the model only when a provider accompanies it.
+//
+// A model id is scoped to one provider instance's registry, so a stored
+// pin with no provider beside it is an orphan: whichever instance the
+// project later resolves to would inherit a pin chosen for a different
+// one. Keeping the rule in a helper means every project write path applies
+// it identically.
+func modelWithProvider(providerKey, modelID string) string {
+	if strings.TrimSpace(providerKey) == "" {
+		return ""
 	}
-	return normalizeProviderKey(prov)
+	return strings.TrimSpace(modelID)
 }
 
 // normalizeProviderKey returns the "type/name" form the spawn path
@@ -1064,8 +1102,8 @@ func startNewSession(c *tool.Ctx) {
 		return
 	}
 	projectID := c.Form("project_id")
-	provForm, modelID := splitProviderModel(c.Form("provider"))
-	prov := resolveSessionProvider(c, provForm, projectID)
+	provForm, formModel := splitProviderModel(c.Form("provider"))
+	prov, modelID := resolveSessionTarget(c, provForm, formModel, projectID)
 	presetName := c.Form("preset")
 	if presetName == "" {
 		presetName = "default"
@@ -1211,8 +1249,8 @@ func createSession(c *tool.Ctx) {
 		return
 	}
 	projectID := c.Form("project_id")
-	provForm, modelID := splitProviderModel(c.Form("provider"))
-	prov := resolveSessionProvider(c, provForm, projectID)
+	provForm, formModel := splitProviderModel(c.Form("provider"))
+	prov, modelID := resolveSessionTarget(c, provForm, formModel, projectID)
 	id := uuid.New().String()
 	presetName := "default"
 	if projectID != "" {
@@ -1961,7 +1999,11 @@ func projectOptionsJSON(c *tool.Ctx) {
 		Managed         bool   `json:"managed"`
 		Pinned          bool   `json:"pinned"`
 		DefaultProvider string `json:"default_provider"`
-		DefaultPreset   string `json:"default_preset"`
+		// DefaultModel is the model pinned on DefaultProvider. Sent with it
+		// so the composer applies the pair together — a model id belongs to
+		// one instance's registry and is meaningless beside another.
+		DefaultModel  string `json:"default_model"`
+		DefaultPreset string `json:"default_preset"`
 	}
 	access := callerProjectAccess(c)
 	pinned := pinnedProjectID(c)
@@ -1983,6 +2025,7 @@ func projectOptionsJSON(c *tool.Ctx) {
 			Managed:         managed,
 			Pinned:          id == pinned,
 			DefaultProvider: p.Meta.Defaults.Provider,
+			DefaultModel:    p.Meta.Defaults.Model,
 			DefaultPreset:   p.Meta.Defaults.Preset,
 		})
 	}
@@ -2131,8 +2174,11 @@ func createProject(c *tool.Ctx) {
 		CustomPath:  customPath,
 		OwnerUserID: actorID(c),
 		Defaults: project.Defaults{
-			Preset:      c.Form("preset"),
-			Provider:    c.Form("provider"),
+			Preset:   c.Form("preset"),
+			Provider: strings.TrimSpace(c.Form("provider")),
+			// Only kept alongside a provider: a model id resolves against one
+			// instance's registry, so it cannot stand on its own.
+			Model:       modelWithProvider(c.Form("provider"), c.Form("model")),
 			SystemAddon: c.Form("system_addon"),
 		},
 	}
@@ -2190,7 +2236,8 @@ func updateProject(c *tool.Ctx) {
 	if v := c.Form("preset"); v != "" {
 		meta.Defaults.Preset = v
 	}
-	meta.Defaults.Provider = c.Form("provider")
+	meta.Defaults.Provider = strings.TrimSpace(c.Form("provider"))
+	meta.Defaults.Model = modelWithProvider(c.Form("provider"), c.Form("model"))
 	meta.Defaults.SystemAddon = c.Form("system_addon")
 	// Folder mode radio: "managed" forces empty custom path; "custom"
 	// keeps the path input. Managed files/ left in place on switch (§4.2).

@@ -7,6 +7,7 @@
     createProject,
     deleteProject,
     unpinSession,
+    getProviderOptionModels,
   } from "$lib/api.js";
   import type { ProjectSettingsData } from "$lib/types.js";
 
@@ -25,7 +26,6 @@
   let folderMode = $state<"managed" | "custom">("managed");
   let customPath = $state("");
   let preset = $state("default");
-  let provider = $state("");
   let systemAddon = $state("");
 
   // Promote a bare provider type ("claude") to its canonical default
@@ -37,9 +37,30 @@
     return key.includes("/") ? key : `${key}/${key}`;
   }
 
+  // Provider and model are two stored fields but ONE choice, so the picker
+  // owns them as its packed "type/name::modelID" value and they are split
+  // apart only on submit. Holding them separately here would let a save
+  // pair a provider with a model belonging to a different instance.
+  let pickerValue = $state("");
+  const providerKey = $derived(pickerValue.split("::")[0] ?? "");
+  const modelID = $derived(() => {
+    const i = pickerValue.indexOf("::");
+    return i < 0 ? "" : pickerValue.slice(i + 2);
+  });
+
   // Options come from the shared builder: the sub-agent role editor renders
   // the same list, and two copies of this mapping would drift.
-  let providerOptions = $derived(buildProviderOptions(data?.provider_list ?? [], provider));
+  let providerOptions = $derived(buildProviderOptions(data?.provider_list ?? [], pickerValue));
+
+  // Lazy model loader for the picker's 3rd/4th levels. wick's live sets are
+  // resolved against the vendor on demand — a build-time list would go stale
+  // and could not offer the leaf models a project needs to pin.
+  function loadProviderModels(optionValue: string, opts?: { entry?: string }) {
+    const slash = optionValue.indexOf("/");
+    const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
+    const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
+    return getProviderOptionModels(type, name, opts);
+  }
 
   async function load() {
     loading = true;
@@ -57,7 +78,11 @@
       // projects stored a bare type (e.g. "claude"); promote it to the
       // canonical default instance "claude/claude". Empty stays empty so
       // the dropdown falls back to the first available instance.
-      provider = normalizeProviderKey(d.default_provider);
+      //
+      // Repacked into the picker's single value, with the model only when a
+      // provider exists to resolve it against.
+      const key = normalizeProviderKey(d.default_provider);
+      pickerValue = key && d.default_model ? `${key}::${d.default_model}` : key;
       systemAddon = d.system_addon;
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -79,7 +104,8 @@
           folder_mode: folderMode,
           custom_path: folderMode === "managed" ? "" : customPath.trim(),
           preset,
-          provider,
+          provider: providerKey,
+          model: modelID(),
           system_addon: systemAddon,
         });
         window.location.href = redirectURL;
@@ -92,7 +118,8 @@
         folder_mode: folderMode,
         custom_path: folderMode === "managed" ? "" : customPath.trim(),
         preset,
-        provider,
+        provider: providerKey,
+        model: modelID(),
         system_addon: systemAddon,
       });
       toastOk("Project saved");
@@ -250,10 +277,15 @@
                 <ProviderPicker
                   id="ps-provider"
                   options={providerOptions}
-                  value={provider}
-                  onChange={(v) => (provider = v)}
+                  value={pickerValue}
+                  onChange={(v) => (pickerValue = v)}
+                  loadModels={loadProviderModels}
                   placeholder="Select provider"
                 />
+                <p class="mt-1 text-xs text-black-600 dark:text-black-700">
+                  New sessions in this project start here. Pick a model too where the provider offers a
+                  choice — sub-agents inherit it.
+                </p>
               </div>
               <div>
                 <label for="ps-preset" class="block text-black-600 dark:text-black-700 text-xs mb-0.5">Preset</label>

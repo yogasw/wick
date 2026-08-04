@@ -138,8 +138,8 @@ type createAgentInput struct {
 	SystemPrompt string `wick:"required;textarea;desc=The role's instructions. This becomes the sub-agent's system prompt."`
 	Name         string `wick:"desc=Display name. Defaults to the key."`
 	Icon         string `wick:"desc=A single emoji shown beside this role in lists. Optional."`
-	Provider     string `wick:"desc=Agent runtime: claude (default), codex, wick, gemini. A specific instance may be named as type/name (e.g. codex/abc)."`
-	Model        string `wick:"desc=Provider-specific model id. Empty uses the provider default."`
+	Provider     string `wick:"desc=Agent runtime: claude, codex, wick, gemini. A specific instance may be named as type/name (e.g. codex/abc). Empty inherits whatever THIS conversation is running on — usually what you want, so omit it unless the role must run somewhere else."`
+	Model        string `wick:"desc=Model id within the chosen provider. Only read when you also set provider, because a model id is scoped to one instance: omit both to inherit this conversation's provider AND model together. Empty with an explicit provider uses that provider's own default."`
 	MaxTurns     int    `wick:"desc=Default turn budget for this role. Clamped to the system ceiling."`
 	MaxTokens    int    `wick:"desc=Default token budget for one delegation of this role. 0 = the role adds no cap of its own, and the per-tree budget still applies."`
 	// Tool access. Narrowed against your own tags server-side, so this can

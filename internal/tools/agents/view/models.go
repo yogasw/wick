@@ -119,6 +119,12 @@ type SessionLifecycleVM struct {
 	Lifecycle    string
 	PID          int
 	LastActiveMs int64
+	// SubAgent is the busiest lifecycle among this session's sub-agents
+	// ("working" / "spawning"), or "" when none of them is doing anything.
+	// Rolled up from the pool because a child runs under its OWN session
+	// id, which never appears in the sidebar — without this the row goes
+	// dark the moment the leader idles, even though work continues.
+	SubAgent string
 }
 
 // ProviderCapVM is the used / effective-max slot count for one provider

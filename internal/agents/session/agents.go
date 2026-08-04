@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -57,6 +58,15 @@ func SaveAgents(layout config.Layout, id string, agents []AgentEntry) error {
 	return storage.WriteJSON(layout.SessionAgents(id), agents)
 }
 
+// ErrNoAgentName rejects a blank agent name.
+//
+// The setters below create an entry when the name does not match, which is
+// how a single blank name turned into a growing list of unaddressable rows:
+// nothing can ever match "" again, so every later call appended another one,
+// and the session appeared to hold a second agent nobody created. A blank
+// name is always a caller bug, so it fails loudly instead of writing.
+var ErrNoAgentName = errors.New("session: agent name is empty")
+
 // AddAgent appends a new agent entry. Errors on duplicate name within
 // the same session.
 func AddAgent(layout config.Layout, id, name, provider string) error {
@@ -78,6 +88,51 @@ func AddAgent(layout config.Layout, id, name, provider string) error {
 	return SaveAgents(layout, id, sess.Agents)
 }
 
+// SetAgentProvider repoints an existing agent entry at another provider
+// instance, leaving the rest of the entry (resume id, caps) intact.
+//
+// Distinct from AddAgent, which refuses a name that already exists. Used
+// to repair an entry created with no provider: the spawn path has to fill
+// one in, and re-adding would drop the resume id the entry already
+// carries. No-op when the entry doesn't exist.
+func SetAgentProvider(layout config.Layout, id, name, providerKey string) error {
+	sess, err := Load(layout, id)
+	if err != nil {
+		return err
+	}
+	for i := range sess.Agents {
+		if sess.Agents[i].Name == name {
+			sess.Agents[i].Provider = providerKey
+			return SaveAgents(layout, id, sess.Agents)
+		}
+	}
+	return nil
+}
+
+// SetModelIDIfEmpty pins a model only when the entry carries no pin.
+//
+// Inherited defaults use this rather than SetModelID: a session already
+// pinned to a model chose that deliberately, and a project default must
+// not silently move it. No-op when the entry doesn't exist or already has
+// a pin.
+func SetModelIDIfEmpty(layout config.Layout, id, name, modelID string) error {
+	sess, err := Load(layout, id)
+	if err != nil {
+		return err
+	}
+	for i := range sess.Agents {
+		if sess.Agents[i].Name != name {
+			continue
+		}
+		if sess.Agents[i].ModelID != "" {
+			return nil
+		}
+		sess.Agents[i].ModelID = modelID
+		return SaveAgents(layout, id, sess.Agents)
+	}
+	return nil
+}
+
 // SetCLISessionID writes (or clears, with "") the CLI resume id on the
 // agent entry. No-op when the entry doesn't exist.
 func SetCLISessionID(layout config.Layout, id, name, cliID string) error {
@@ -97,6 +152,9 @@ func SetCLISessionID(layout config.Layout, id, name, cliID string) error {
 // SetMaxTurns persists the per-spawn turn cap on the agent entry,
 // creating it if missing. 0 = unlimited (provider default).
 func SetMaxTurns(layout config.Layout, id, name string, maxTurns int) error {
+	if name == "" {
+		return ErrNoAgentName
+	}
 	sess, err := Load(layout, id)
 	if err != nil {
 		return err
@@ -121,6 +179,9 @@ func SetMaxTurns(layout config.Layout, id, name string, maxTurns int) error {
 // thinking on); "0" = disabled; "<n>" = budget. Always persisted (including
 // "") so switching a reused session back to full thinking clears a prior value.
 func SetThinkingTokens(layout config.Layout, id, name, v string) error {
+	if name == "" {
+		return ErrNoAgentName
+	}
 	sess, err := Load(layout, id)
 	if err != nil {
 		return err
@@ -143,6 +204,9 @@ func SetThinkingTokens(layout config.Layout, id, name, v string) error {
 // SetModelID persists the pinned model id on the agent entry, creating it
 // if missing. Empty = unset (the active provider's own default applies).
 func SetModelID(layout config.Layout, id, name, modelID string) error {
+	if name == "" {
+		return ErrNoAgentName
+	}
 	sess, err := Load(layout, id)
 	if err != nil {
 		return err
@@ -160,6 +224,45 @@ func SetModelID(layout config.Layout, id, name, modelID string) error {
 		ModelID:   modelID,
 	})
 	return SaveAgents(layout, id, sess.Agents)
+}
+
+// ActiveRunTarget reports the provider instance + model a session is
+// actually running on, read from its active agent entry.
+//
+// This is the pair a delegated sub-agent inherits when its role names no
+// provider of its own, so it must read the SAME fields the pool reads on
+// spawn — Provider and ModelID off ONE entry — rather than reconstructing
+// the choice from elsewhere. Returned as two strings rather than a
+// provider.RunTarget because provider imports this package; the caller
+// pairs them.
+//
+// The entry is picked by Meta.ActiveAgent, falling back to the first one:
+// a session created outside the UI flow may never have had an active
+// agent set, and treating that as "runs on nothing" would silently drop
+// the inheritance the caller asked for.
+//
+// ok=false means the session could not be read or has no agent entries —
+// distinct from an entry that names no provider, which is a real answer
+// ("this session has no opinion") and returns ok=true with an empty
+// providerKey.
+func ActiveRunTarget(layout config.Layout, id string) (providerKey, modelID string, ok bool) {
+	sess, err := Load(layout, id)
+	if err != nil {
+		return "", "", false
+	}
+	if len(sess.Agents) == 0 {
+		return "", "", false
+	}
+	pick := sess.Agents[0]
+	if active := sess.Meta.ActiveAgent; active != "" {
+		for _, a := range sess.Agents {
+			if a.Name == active {
+				pick = a
+				break
+			}
+		}
+	}
+	return pick.Provider, pick.ModelID, true
 }
 
 // SetActiveAgent updates meta.json's active_agent field. The named
