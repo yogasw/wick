@@ -37,6 +37,12 @@ type Event struct {
 	IsError   bool   `json:"is_error,omitempty"`
 	PID       int    `json:"pid,omitempty"`
 	Lifecycle string `json:"lifecycle,omitempty"`
+	// SubAgent carries a DELEGATED lifecycle attributed to the session in
+	// SessionID — set when a sub-agent of that conversation transitioned,
+	// not the conversation's own process. Kept separate from Lifecycle so
+	// a child's work can never be mistaken for the leader's, and so a
+	// subscriber can render both at once. Sidebar-stream only.
+	SubAgent string `json:"sub_agent,omitempty"`
 	// At / EndAt carry Unix ms timestamps for tool_use/tool_result events
 	// so the UI can show "started HH:MM:SS, took Ns".
 	At    int64 `json:"at,omitempty"`

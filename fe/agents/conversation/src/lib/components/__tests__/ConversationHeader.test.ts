@@ -295,4 +295,57 @@ describe("ConversationHeader", () => {
       expect(container.textContent).toContain("gemini_flash");
     });
   });
+
+  /* The header used to say nothing about delegated work: with the leader
+     idle and a sub-agent grinding away, the only green thing on screen was
+     the SSE "live" pill, which means "connected", not "busy". */
+  describe("sub-agent badge", () => {
+    test("absent when no sub-agent is working", () => {
+      const { container } = render(ConversationHeader, {
+        props: { ...baseProps, lifecycle: lc("idle"), subAgentsBusy: 0 },
+      });
+      expect(container.querySelector("[data-subagent-badge]")).toBeNull();
+    });
+
+    test("shows a count while sub-agents work", () => {
+      const { container } = render(ConversationHeader, {
+        props: { ...baseProps, lifecycle: lc("idle"), subAgentsBusy: 2 },
+      });
+      const badge = container.querySelector("[data-subagent-badge]");
+      expect(badge).not.toBeNull();
+      expect(badge?.textContent).toContain("2");
+      expect(badge?.textContent).toContain("sub-agents");
+    });
+
+    test("singular for one", () => {
+      const { container } = render(ConversationHeader, {
+        props: { ...baseProps, lifecycle: lc("idle"), subAgentsBusy: 1 },
+      });
+      const badge = container.querySelector("[data-subagent-badge]");
+      expect(badge?.textContent).toContain("1 sub-agent");
+      expect(badge?.textContent).not.toContain("sub-agents");
+    });
+
+    /* The leader's own badge is not rewritten: claiming "working" while its
+       process is idle would be a lie, and the point of a separate badge is
+       that both facts stay readable. */
+    test("does not alter the leader's lifecycle badge", () => {
+      const { container } = render(ConversationHeader, {
+        props: { ...baseProps, lifecycle: lc("idle"), subAgentsBusy: 3 },
+      });
+      expect(container.querySelector("[data-lifecycle-label]")?.textContent).toBe("idle");
+      expect(container.querySelector("[data-subagent-badge]")).not.toBeNull();
+    });
+
+    /* Delegated work outlives the leader's process — killing the leader is
+       one way to end up with only sub-agents running — so the badge must
+       not depend on a lifecycle badge being present. */
+    test("shows even when the leader has no lifecycle at all", () => {
+      const { container } = render(ConversationHeader, {
+        props: { ...baseProps, lifecycle: lc(""), subAgentsBusy: 1 },
+      });
+      expect(container.querySelector("[data-lifecycle-badge]")).toBeNull();
+      expect(container.querySelector("[data-subagent-badge]")).not.toBeNull();
+    });
+  });
 });

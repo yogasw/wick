@@ -2,17 +2,42 @@
   /* Left rail: the roles in this scope, one row each. Selection is
      controlled by the parent so the editor and the list cannot disagree
      about what is being edited. */
-  import type { AgentProfile } from "@wick-fe/common-api";
+  import type { AgentProfile, ProviderListItem } from "@wick-fe/common-api";
+  import { AgentProfileRow } from "@wick-fe/common-ui";
 
   type Props = {
     profiles: AgentProfile[];
     selectedID: string;
     canCreate: boolean;
+    /** Forwarded so a row can name a stored model instead of printing its id. */
+    providerList?: ProviderListItem[];
+    /** Fallback label lookup, for instances the list carries no models for. */
+    loadModels?: (
+      optionValue: string,
+      opts?: { entry?: string },
+    ) => Promise<{ id: string; label: string }[]>;
     onselect: (p: AgentProfile) => void;
     oncreate: () => void;
+    /** Quick provider/model change. Omit for a read-only (non-admin) view. */
+    onchangeModel?: (p: AgentProfile) => void;
+    /** Flips `disabled`. Omit for a read-only view. */
+    ontoggle?: (p: AgentProfile) => void;
+    /** Asks to delete. Omit for a read-only view. */
+    ondelete?: (p: AgentProfile) => void;
   };
 
-  let { profiles, selectedID, canCreate, onselect, oncreate }: Props = $props();
+  let {
+    profiles,
+    selectedID,
+    canCreate,
+    providerList = [],
+    loadModels,
+    onselect,
+    oncreate,
+    onchangeModel,
+    ontoggle,
+    ondelete,
+  }: Props = $props();
 </script>
 
 <div class="flex h-full flex-col">
@@ -38,34 +63,21 @@
       No sub-agent roles yet.
     </p>
   {:else}
-    <ul class="flex-1 overflow-y-auto px-2 pb-4">
+    <!-- Same row component the project tab renders, so a role looks and
+         behaves identically in both scopes. -->
+    <ul class="flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-4">
       {#each profiles as p (p.id)}
-        <li>
-          <button
-            type="button"
-            class="mb-0.5 flex w-full flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left transition-colors
-              {p.id === selectedID
-              ? 'bg-white-200 dark:bg-navy-700'
-              : 'hover:bg-white-200 dark:hover:bg-navy-700'}"
-            onclick={() => onselect(p)}
-          >
-            <span class="flex w-full items-center gap-2">
-              <span class="truncate text-sm font-medium text-black-900 dark:text-white-100">
-                {p.name || p.key}
-              </span>
-              {#if p.disabled}
-                <span
-                  class="ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium text-cau-400 ring-1 ring-cau-400/40"
-                >
-                  Disabled
-                </span>
-              {/if}
-            </span>
-            <span class="truncate text-[11px] text-black-700 dark:text-black-600">
-              {p.provider}{p.model ? ` · ${p.model}` : ""}
-            </span>
-          </button>
-        </li>
+        <AgentProfileRow
+          profile={p}
+          {providerList}
+          {loadModels}
+          selected={p.id === selectedID}
+          readonly={!canCreate}
+          onedit={onselect}
+          {onchangeModel}
+          {ontoggle}
+          {ondelete}
+        />
       {/each}
     </ul>
   {/if}

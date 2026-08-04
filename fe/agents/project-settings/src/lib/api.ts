@@ -27,6 +27,43 @@ export async function getProjectSettings(id: string): Promise<ProjectSettingsDat
   return get<ProjectSettingsData>(`${base}/api/projects/${encodeURIComponent(id)}`);
 }
 
+/** One selectable model returned by the lazy loader. `live` marks a model
+    SET, which expands one level further via `entry`. */
+export interface ProviderModelOption {
+  id: string;
+  label: string;
+  default?: boolean;
+  desc?: string;
+  live?: boolean;
+}
+
+/**
+ * getProviderOptionModels asks the server for one instance's current model
+ * list, and with `entry` expands a single live set into the vendor models it
+ * actually contains (the picker's 4th level).
+ *
+ * Fetched on demand rather than shipped with the page: a live set is
+ * resolved against the vendor, so a list baked in at render time would go
+ * stale and could not offer the leaf a project needs to pin. A failure
+ * yields an empty list — the picker then shows no extra models instead of
+ * breaking the form.
+ */
+export async function getProviderOptionModels(
+  type: string,
+  name: string,
+  opts?: { entry?: string },
+): Promise<ProviderModelOption[]> {
+  const base = getBase();
+  const q = opts?.entry ? `?entry=${encodeURIComponent(opts.entry)}` : "";
+  const path = `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${q}`;
+  try {
+    const r = await get<{ models?: ProviderModelOption[] | null }>(path);
+    return r.models ?? [];
+  } catch {
+    return [];
+  }
+}
+
 export async function updateProject(id: string, req: UpdateProjectRequest): Promise<void> {
   const base = getBase();
   const resp = await fetch(`${base}/api/projects/${encodeURIComponent(id)}`, {
@@ -51,6 +88,9 @@ export async function createProject(req: UpdateProjectRequest): Promise<string> 
   form.set("custom_path", req.custom_path);
   form.set("preset", req.preset);
   form.set("provider", req.provider);
+  // Sent with the provider: the server drops a model that arrives without
+  // one, since a model id resolves against a single instance's registry.
+  form.set("model", req.model);
   form.set("system_addon", req.system_addon);
   const resp = await fetch(`${base}/projects`, {
     method: "POST",

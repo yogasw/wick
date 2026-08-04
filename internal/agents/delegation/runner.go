@@ -109,9 +109,15 @@ func (r *PoolRunner) StartAgent(ctx context.Context, spec ChildSpec) error {
 	if spec.Profile == nil {
 		return errors.New("delegation: nil profile")
 	}
-	// Register the agent entry so the pool resolves the right provider
-	// for this child rather than the session default.
-	if err := session.AddAgent(r.Layout, spec.SessionID, spec.AgentName, spec.Profile.Provider); err != nil {
+	// Register the agent entry so the pool resolves the right provider for
+	// this child rather than the session default.
+	//
+	// spec.Target, not spec.Profile.Provider: the profile is only the first
+	// candidate in the inheritance chain, and a role that names no provider
+	// must land on its parent conversation's instance. Writing the profile's
+	// empty string here is what used to leave the entry blank, which the
+	// pool then silently coerced to the per-type default.
+	if err := session.AddAgent(r.Layout, spec.SessionID, spec.AgentName, spec.Target.Provider); err != nil {
 		// Already present is fine — a retried delegation reuses the entry.
 		log.Debug().Err(err).Str("session", spec.SessionID).Msg("delegation: add agent entry")
 	}
@@ -122,10 +128,13 @@ func (r *PoolRunner) StartAgent(ctx context.Context, spec ChildSpec) error {
 		log.Error().Err(err).Str("session", spec.SessionID).Str("profile", spec.Profile.Key).
 			Msg("delegation: could not apply the role's system prompt; the sub-agent will run without its persona")
 	}
-	if spec.Profile.Model != "" {
-		if err := session.SetModelID(r.Layout, spec.SessionID, spec.AgentName, spec.Profile.Model); err != nil {
-			log.Warn().Err(err).Msg("delegation: pin model failed")
-		}
+	// Written unconditionally, including empty. A retried delegation reuses
+	// the session, so skipping the write on an empty model would leave a pin
+	// from a previous run in place — against an instance this spawn may not
+	// even be using. Empty means "let the instance pick", which has to be
+	// expressible.
+	if err := session.SetModelID(r.Layout, spec.SessionID, spec.AgentName, spec.Target.ModelID); err != nil {
+		log.Warn().Err(err).Msg("delegation: pin model failed")
 	}
 	// Set the native turn cap too where the provider supports it. This is
 	// an OPTIMISATION, not the enforcement: it lets the CLI stop cleanly

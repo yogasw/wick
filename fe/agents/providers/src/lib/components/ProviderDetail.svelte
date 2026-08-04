@@ -35,7 +35,10 @@
     { label: `${type}/${name}`, truncate: true },
   ]);
 
-  type KVRow = { key: string; value: string };
+  /* A row is keyed by the field's OWN column names (`kvCols`), not always
+     key/value: `env` is key|value, `extra_args` is value, `models` is id|desc.
+     Anything that hardcoded key/value silently blanked the models editor. */
+  type KVRow = Record<string, string>;
 
   let data = $state<ProviderDetailResponse | null>(null);
   let loading = $state(true);
@@ -161,6 +164,17 @@
     return !isKvlist(f);
   }
 
+  // pickCols keeps only the field's own columns on a row, defaulting the
+  // missing ones to "" — so a row always has exactly the shape the storage
+  // format (and KvList) expects for that field.
+  function pickCols(f: ConfigFieldDTO, r: Record<string, string>): KVRow {
+    const out: KVRow = {};
+    for (const c of kvCols(f)) {
+      out[c] = r[c] ?? "";
+    }
+    return out;
+  }
+
   function parseRows(f: ConfigFieldDTO): KVRow[] {
     if (f.Value === "") {
       return [];
@@ -170,16 +184,20 @@
       if (!Array.isArray(parsed)) {
         return [];
       }
-      return parsed.map((r) => ({ key: r.key ?? "", value: r.value ?? "" }));
+      return parsed.map((r) => pickCols(f, r));
     } catch {
       return [];
     }
   }
 
+  // serializeRows drops rows whose every column is blank, then emits the
+  // field's own columns — [{key,value}] for env, [{value}] for extra_args,
+  // [{id,desc}] for models.
   function serializeRows(f: ConfigFieldDTO, rows: KVRow[]): string {
-    const kv = isKeyValueEditor(f);
-    const cleaned = rows.filter((r) => (kv ? r.key.trim() !== "" || r.value.trim() !== "" : r.value.trim() !== ""));
-    const out = cleaned.map((r) => (kv ? { key: r.key, value: r.value } : { value: r.value }));
+    const cols = kvCols(f);
+    const out = rows
+      .map((r) => pickCols(f, r))
+      .filter((r) => cols.some((c) => r[c].trim() !== ""));
     return JSON.stringify(out);
   }
 
@@ -200,7 +218,10 @@
 
   let simpleFields = $derived(data ? data.ConfigFields.filter((f) => isSimpleField(f) && !isModelField(f)) : []);
   let valueListFields = $derived(data ? data.ConfigFields.filter((f) => isValueListEditor(f) && !isModelField(f) && fieldVisible(f)) : []);
-  let keyValueFields = $derived(data ? data.ConfigFields.filter(isKeyValueEditor) : []);
+  // `models` is a 2-column (id|desc) kvlist, so it matches isKeyValueEditor
+  // too — exclude it here as well or the Model selection card's list renders
+  // a second time under Environment / key-value.
+  let keyValueFields = $derived(data ? data.ConfigFields.filter((f) => isKeyValueEditor(f) && !isModelField(f)) : []);
 
   // The two model-picker fields, for the dedicated card.
   const modelSelectField = $derived(data?.ConfigFields.find((f) => f.Key === "model_select"));
@@ -317,7 +338,7 @@
   function setRows(f: ConfigFieldDTO, rows: Record<string, string>[]) {
     editorRows = {
       ...editorRows,
-      [f.Key]: rows.map((r) => ({ key: r.key ?? "", value: r.value ?? "" })),
+      [f.Key]: rows.map((r) => pickCols(f, r)),
     };
   }
 
@@ -813,7 +834,7 @@
         <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
           <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Model selection</h3>
           <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
-            Let sessions pick a model for this instance. When on, the composer shows a model picker and passes the choice to the CLI via <code class="font-mono">--model</code>.
+            Let sessions pick a model for this instance. When on, the composer shows a picker of the models below and passes the choice to the CLI via <code class="font-mono">--model</code>.
           </p>
         </div>
         <div class="p-5 space-y-4">
@@ -828,20 +849,20 @@
             >
               <span class="inline-block h-5 w-5 transform rounded-full bg-white-100 shadow transition-transform {fieldValues['model_select'] === 'true' ? 'translate-x-5' : 'translate-x-0.5'}"></span>
             </button>
-            <span class="text-sm text-black-900 dark:text-white-100">Allow model selection</span>
+            <span class="text-sm text-black-900 dark:text-white-100">
+              Allow model selection
+              <span class="ml-1 text-[11px] text-black-700 dark:text-black-600">— off uses the CLI's own default model</span>
+            </span>
           </label>
 
+          <!-- The models list is part of the same control, not a second
+               section: one heading, one description, no `models` key label. -->
           {#if fieldValues["model_select"] === "true" && modelsField}
             {@const f = modelsField}
             {@const empty = (editorRows[f.Key] ?? []).length === 0}
             <div>
-              <div class="mb-1.5 flex items-start justify-between gap-2 flex-wrap">
-                <div class="min-w-0">
-                  <span class="font-mono text-xs font-semibold text-black-900 dark:text-white-100">models</span>
-                  {#if f.Description}
-                    <p class="mt-0.5 text-[11px] text-black-700 dark:text-black-600 leading-relaxed whitespace-pre-line">{f.Description}</p>
-                  {/if}
-                </div>
+              <div class="mb-1.5 flex items-center justify-between gap-2 flex-wrap">
+                <span class="text-xs font-medium text-black-900 dark:text-white-100">Models offered</span>
                 {#if defaultModels.length > 0}
                   <button
                     type="button"
@@ -850,11 +871,6 @@
                   >Load defaults</button>
                 {/if}
               </div>
-              {#if empty && defaultModels.length > 0}
-                <p class="mb-2 text-[11px] text-black-700 dark:text-black-600">
-                  Currently using built-in defaults: <span class="font-mono text-black-900 dark:text-white-100">{defaultModels.map((m) => m.id).join(", ")}</span>. Add your own below (or Load defaults to edit them).
-                </p>
-              {/if}
               <KvList
                 columns={kvCols(f)}
                 rows={editorRows[f.Key] ?? []}
@@ -862,8 +878,13 @@
                 onCommit={() => saveEditor(f)}
                 placeholders={{ id: "model id (e.g. opus)", desc: "short description" }}
                 addLabel="+ Add model"
-                emptyText="No models added — using the built-in defaults above."
+                emptyText={defaultModels.length > 0
+                  ? `Empty — using the built-in defaults: ${defaultModels.map((m) => m.id).join(", ")}`
+                  : "No models added yet."}
               />
+              {#if !empty}
+                <p class="mt-1.5 text-[11px] text-black-700 dark:text-black-600">Leave the list empty to fall back to this provider's built-in defaults.</p>
+              {/if}
             </div>
           {/if}
         </div>

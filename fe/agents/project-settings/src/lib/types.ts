@@ -21,6 +21,10 @@ export interface ProjectSettingsData {
   is_new: boolean;
   default_preset: string;
   default_provider: string;
+  /** Model pinned on default_provider, in that instance's own id space
+      (for wick, "<entryID>@<vendorModelID>" — down to a live-set leaf).
+      Only meaningful alongside default_provider. */
+  default_model: string;
   system_addon: string;
   chat_count: number;
   created_at: string;
@@ -39,5 +43,8 @@ export interface UpdateProjectRequest {
   custom_path: string;
   preset: string;
   provider: string;
+  /** Sent with provider, never alone: a model id resolves against one
+      instance's registry, so the server drops it when provider is empty. */
+  model: string;
   system_addon: string;
 }
