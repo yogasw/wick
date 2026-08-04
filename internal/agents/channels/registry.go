@@ -27,6 +27,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
 )
@@ -451,6 +452,23 @@ func (r *Registry) StopAll() {
 // turn's silent verdict is recorded (silentLast) so the idle push alert can be
 // skipped too. State is per-session and reset on the terminal event.
 func (r *Registry) DispatchAgentEvent(sessionID string, ev event.AgentEvent) {
+	r.DispatchAgentEventFrom(sessionID, "", ev)
+}
+
+// DispatchAgentEventFrom is DispatchAgentEvent plus the agent name the event
+// came from, used to label a sub-agent's progress when it is relayed onto its
+// leader's thread. Callers without a name can use DispatchAgentEvent.
+func (r *Registry) DispatchAgentEventFrom(sessionID, agentName string, ev event.AgentEvent) {
+	// A sub-agent's session has no thread on any channel, so its events would
+	// be dropped by every receiver. Re-address the ones that carry progress to
+	// the leader's thread instead, and return: the child must not accumulate
+	// silent-turn state of its own, which nothing would ever clear for a status
+	// event stream that has no reply to decide about.
+	if agentconfig.ParentOfSubSession(sessionID) != "" {
+		r.relayFromSubAgent(sessionID, agentName, ev)
+		return
+	}
+
 	r.mu.Lock()
 	ts := r.turns[sessionID]
 	if ts == nil {
