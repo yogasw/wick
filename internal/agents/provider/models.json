@@ -1,13 +1,32 @@
 {
-  "updated_at": "2026-07-25T00:00:00Z",
+  "updated_at": "2026-08-04T00:00:00Z",
+  "_readme": {
+    "what": "Baseline model catalog for the CLI provider types (claude/codex/gemini). Feeds the per-session model picker. Not used by the wick provider — that one has its own registry (see WickModels / internal/agents/provider/wick).",
+    "contract": "internal/agents/provider/modelcatalog.go — modelCatalog{updated_at, providers} + modelEntry{id, desc, enabled, updated_at}. Unknown keys (like this one) are ignored by encoding/json, so keep decoration here, not inside a provider list.",
+    "id_is_a_cli_flag": "An entry's `id` is passed verbatim as `--model <id>` to the provider binary (internal/agents/provider/modelargs.go). So it MUST be a name/alias that CLI accepts, not a display label. Wrong id = spawn dies. Aliases (opus, sonnet, haiku, fable) and full names (claude-opus-5) are both fine as long as the CLI takes them.",
+    "load_order": "3 layers of this same schema, merged per-model by id, newest `updated_at` wins: (1) EMBEDDED — this file, go:embed'd into the binary; (2) REMOTE — same path on master via raw.githubusercontent.com, fetched lazily behind a 6h TTL; (3) DISK — last successful remote fetch, cached under the app data dir as models.json and hand-editable to force a change without a release.",
+    "add_a_model": "Append an entry to the right provider array with enabled=true and today's date as `updated_at`; bump the top-level `updated_at` too. Because merge is newest-wins per id, the date is what makes your change beat an older remote/disk copy — a stale date means the edit silently loses.",
+    "remove_a_model": "Prefer `enabled: false` over deleting the entry (bump its `updated_at`): a deleted id can be resurrected by the remote/disk layer, a disabled one stays hidden because the flag merges too. Delete only when the id never shipped remotely.",
+    "propagation": "Editing this file only affects builds that embed it. Live servers pick the change up from the remote layer once it lands on master (<=6h, or immediately via RefreshRemoteModels). Existing sessions keep whatever model they already pinned.",
+    "tests": "internal/agents/provider/modelcatalog_test.go covers seeding + merge; modelargs_test.go covers the --model flag. Run: go test ./internal/agents/provider/..."
+  },
   "providers": {
     "claude": [
       { "id": "opus", "desc": "Opus 4.8 with 1M context · best for everyday, complex tasks", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" },
       { "id": "sonnet", "desc": "Sonnet 5 · efficient for routine tasks", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" },
       { "id": "haiku", "desc": "Haiku 4.5 · fastest for quick answers", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" },
-      { "id": "fable", "desc": "Fable 5 · most capable for your hardest, longest-running tasks", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" }
+      { "id": "fable", "desc": "Fable 5 · most capable for your hardest, longest-running tasks", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" },
+      { "id": "claude-fable-5", "desc": "Anthropic's most capable widely released model. Optimized for complex agentic workflows, multi-file reasoning, and long-running autonomous tasks.", "enabled": true, "updated_at": "2026-08-04T00:00:00Z" },
+      { "id": "claude-opus-5", "desc": "Current flagship Opus generation. Enterprise-grade reasoning for advanced architecture decisions and full-scale codebase management.", "enabled": true, "updated_at": "2026-08-04T00:00:00Z" },
+      { "id": "claude-sonnet-5", "desc": "Latest balanced release. The default high-speed workhorse optimized for everyday programming, refactoring, and general terminal coding tasks.", "enabled": true, "updated_at": "2026-08-04T00:00:00Z" },
+      { "id": "claude-opus-4-8", "desc": "High-reliability legacy flagship. Exceptional at complex long-context reasoning with support for low-latency fast mode where available.", "enabled": true, "updated_at": "2026-08-04T00:00:00Z" },
+      { "id": "claude-haiku-4-5-20251001", "desc": "Fast and cheap tier. Ideal for high-volume mechanical code adjustments, instant autocomplete, and low-cost subagent fan-outs.", "enabled": true, "updated_at": "2026-08-04T00:00:00Z" }
     ],
     "codex": [
+      { "id": "gpt-5.6-sol", "desc": "Frontier tier for complex reasoning, long-horizon coding, and advanced agentic workflows.", "enabled": true, "updated_at": "2026-08-04T00:00:00Z" },
+      { "id": "gpt-5.6-terra", "desc": "Balanced tier for everyday programming and professional development tasks.", "enabled": true, "updated_at": "2026-08-04T00:00:00Z" },
+      { "id": "gpt-5.6-luna", "desc": "Fast, high-volume automation, and ultra-affordable tier for lighter coding tasks.", "enabled": true, "updated_at": "2026-08-04T00:00:00Z" },
+      { "id": "gpt-5.5-agentic", "desc": "Outcome-first architecture optimized for autonomous code generation and tool usage.", "enabled": true, "updated_at": "2026-08-04T00:00:00Z" },
       { "id": "gpt-5.5", "desc": "Frontier model for complex coding, research, and real-world work", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" },
       { "id": "gpt-5.4", "desc": "Strong model for everyday coding", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" },
       { "id": "gpt-5.4-mini", "desc": "Small, fast, and cost-efficient model for simpler coding tasks", "enabled": true, "updated_at": "2026-07-25T00:00:00Z" }
