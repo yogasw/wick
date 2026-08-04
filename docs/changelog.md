@@ -6,10 +6,27 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Fixed
-*   **Sub-agent progress frozen on Slack:** A delegated sub-agent's status events were addressed to its own session, which no channel has a thread for, so every event was dropped and the Slack assistant banner sat on "Delegating: …" for the whole child run, looking like a hung agent. Sub-agent progress (tool use, tool results, thinking) is now relayed to the nearest ancestor session with a live turn and shown labelled with the sub-agent's name, e.g. `researcher → Reading store.go`. The child's reply and any error still arrive only through the delegation result. Telegram has no equivalent banner and is unaffected.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.36.3](https://github.com/yogasw/wick/compare/v0.36.2...v0.36.3) — Fixes & Improvements
+
+_Released on 2026-08-04_
+
+### Fixed
+*   **Sub-agent progress frozen on Slack:** A delegated sub-agent's status events were previously addressed to its own session, which had no active thread, causing events to be dropped and the Slack assistant banner to appear frozen on "Delegating: …" for the entire child run. Sub-agent progress (tool use, tool results, thinking) is now relayed to the nearest ancestor session with a live turn and shown labelled with the sub-agent's name, e.g., `researcher → Reading store.go`. The child's reply and any error still arrive only through the delegation result. This change also includes a documentation note for the Slack banner. Telegram has no equivalent banner and is unaffected.
+
+### Changed
+*   **CLI Model Catalog:**
+    *   Refreshed the CLI model catalog.
+    *   Added `gpt-5.6` tiers and `gpt-5.5-agentic` models to the codex.
+    *   Included the full `claude-*` model names alongside existing short aliases; both ID styles remain supported for `--model <id>`.
+    *   Added a `_readme` block to `models.json` to document its contract, detailing the multi-layer merge strategy (embedded / remote / disk cache) where the newest `updated_at` wins, and explaining how forgetting to bump a date can cause edits to be silently lost, or how deleting an entry might allow the remote layer to restore it.
+    *   Updated the embedded-baseline test to assert the `gpt-5` prefix, allowing for future catalog refreshes without requiring test edits.
+
+---
+
 
 ## [v0.36.2](https://github.com/yogasw/wick/compare/v0.36.1...v0.36.2) — Sub-agents
 
