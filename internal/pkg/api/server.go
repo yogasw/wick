@@ -572,7 +572,9 @@ func NewServer() *Server {
 		SpawnLogger: agentsSpawnLogger,
 		OnEvent: func(sid, name string, ev agentevent.AgentEvent) {
 			agentsBcast.Publish(sid, name, ev)
-			channelReg.DispatchAgentEvent(sid, ev)
+			// Name passed through so a sub-agent's relayed progress is labelled
+			// with the agent that produced it rather than its session seed.
+			channelReg.DispatchAgentEventFrom(sid, name, ev)
 			turnObserver.OnEvent(sid, name, ev)
 		},
 		OnExit: func(sid, name string, reason provider.ExitReason) {

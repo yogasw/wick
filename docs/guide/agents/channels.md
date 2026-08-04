@@ -135,6 +135,8 @@ When the workspace has Slack AI features enabled and the bot holds the `chat:wri
 
 The banner is cleared on `done` / `blocked` / `error`. Workspaces without AI features get a one-line debug log and rely on the reaction emoji alone.
 
+**Sub-agent progress** shows up on the same banner. A delegated child runs under its own session with no thread of its own, so its progress used to go nowhere and the banner sat frozen on "Delegating: …" for the whole child run. The registry now relays a child's `ToolUse` / `ToolResult` / `Thinking` events onto the nearest ancestor session a channel is actually rendering, labelled with the child's role: `researcher → Reading store.go`. The child's final reply and any error still arrive only through the delegation result, not through this relay, so nothing is shown twice. Channels opt in by implementing `HasLiveTurn`; Telegram doesn't, so it has no equivalent banner and sees no change.
+
 ### Streaming reply
 
 Rather than waiting until the full response is ready, wick posts an empty placeholder as soon as the first text token arrives and then edits it in place via `chat.update` as the reply streams in (~1.5 s flush interval). The final edit lands on `done`. This means users see the reply grow word-by-word in Slack, matching the streaming feel of the web UI. Chunking still applies (see below) — long replies are split across multiple threaded messages, each of which streams independently.

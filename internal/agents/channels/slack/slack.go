@@ -607,6 +607,15 @@ func (s *Channel) OwnsSession(sessionID string) bool {
 	return true
 }
 
+// HasLiveTurn satisfies channels.LiveTurnReporter — reports whether this
+// channel is currently rendering a status banner for sessionID. The sub-agent
+// relay uses it to pick which ancestor thread a child's progress belongs on.
+func (s *Channel) HasLiveTurn(sessionID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turns[sessionID] != nil
+}
+
 // Status satisfies channels.StatusReporter — returns identity + transport
 // state for the admin UI panel under the Test Integration button.
 func (s *Channel) Status() []agentchannels.StatusField {
@@ -1950,6 +1959,17 @@ func (s *Channel) setAssistantStatusWithLoading(channelID, threadTS, status stri
 
 // OnAgentEvent satisfies channels.AgentEventReceiver.
 func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
+	// Progress relayed from a sub-agent: paint whose work it is and stop. Only
+	// status events are ever relayed (the registry filters), so there is no
+	// text to buffer and no turn lifecycle to advance here — the leader's own
+	// turn still owns Done/Error. Falling through would let a child's
+	// ToolResult reset the banner to the leader's generic "Working", dropping
+	// the attribution the operator needs to read a delegated run.
+	if ev.SubAgent != "" {
+		s.setStatusLabel(sessionKey, subAgentStatusLabel(ev))
+		return
+	}
+
 	switch ev.Type {
 	case event.TextDelta:
 		var notifyRunning bool
@@ -2498,6 +2518,27 @@ func toolStatusLabel(toolName, toolInput string) string {
 		// Unknown/MCP tool — show its name so the operator still sees activity.
 		return "Running " + toolName
 	}
+}
+
+// subAgentStatusLabel renders a relayed sub-agent event as one banner line,
+// prefixed with the child's name so a delegated run reads as "who is doing
+// what" rather than as the leader's own activity: "researcher → Reading
+// store.go".
+//
+// A relayed ToolResult becomes the child's generic working state, not the
+// leader's: the child finished a step and is deciding its next one, while the
+// leader is still blocked waiting for it.
+func subAgentStatusLabel(ev event.AgentEvent) string {
+	var activity string
+	switch ev.Type {
+	case event.ToolUse:
+		activity = toolStatusLabel(ev.ToolName, ev.ToolInput)
+	case event.Thinking:
+		activity = statusLabelThinking
+	default:
+		activity = statusLabelWorking
+	}
+	return ev.SubAgent + " → " + activity
 }
 
 func (s *Channel) withBackoff(fn func() error) {
