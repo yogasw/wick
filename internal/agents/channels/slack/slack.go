@@ -15,6 +15,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -63,6 +64,18 @@ const (
 	// limits while still feeling live. Adjustable.
 	statusAnimInterval = 1500 * time.Millisecond
 
+	// staleActivityAfter is how long a banner label may stand without a new
+	// event before the keep-alive stops claiming that specific activity.
+	//
+	// The label is set from events and nothing clears it between them, so a
+	// sub-agent that goes quiet mid-run — a long model call, a wedged tool, a
+	// child that died without a Done — used to leave its last activity
+	// asserted indefinitely. Past this point the banner falls back to a
+	// neutral "still working" rather than naming work that may be over.
+	//
+	// Well above a normal tool call so ordinary gaps never trip it.
+	staleActivityAfter = 90 * time.Second
+
 	// streamEditInterval throttles the live message edit during a turn. Text
 	// deltas accumulate in turn.buf; a ticker flushes the buffer with one
 	// chat.update per interval (NOT one per delta), so the reply grows like
@@ -87,6 +100,12 @@ const (
 )
 
 const (
+	// subAgentArrow separates a relayed sub-agent's name from the activity it
+	// is doing ("researcher → Reading store.go"). Declared once because the
+	// label is written in one place and parsed back in another (footerState),
+	// and a mismatch there silently degrades every child phase to "Working".
+	subAgentArrow = " → "
+
 	// traceMax caps how many recent activity lines the loading bubble keeps
 	// (Slack rotates through them). bubbleLineMax clips each line so a long
 	// command stays short and Slack accepts it.
@@ -107,6 +126,15 @@ type turn struct {
 	msgTS      string // ts of the user message — used for reactions
 	buf        strings.Builder
 	hasStarted bool // true after first TextDelta (banner already set)
+	// running is true while this turn is still in flight. The turn ENTRY
+	// outlives the turn itself — threadTS/msgTS stay readable for reactions,
+	// approvals and the status heartbeat after the reply lands — so presence
+	// in the turns map does not mean "still working". Set when the turn is
+	// created, cleared on Done/Error.
+	//
+	// HasLiveTurn reads this: relaying a sub-agent's progress onto a thread
+	// whose turn finished long ago would paint a banner nobody is waiting on.
+	running bool
 	// queueTimer fires after queueReactionDelay if the pool hasn't accepted
 	// the message yet. Cancelled (and set to nil) on successful dispatch
 	// so a fast-path send never flashes the ⏳ reaction.
@@ -145,6 +173,22 @@ type turn struct {
 	// approval tracking
 	pendingApprovalID    string // gate request UUID while waiting for decision
 	pendingApprovalMsgTS string // ts of the Slack approval message (for update)
+	// detachedNoticeTS is the ts of the "leader stopped, sub-agents still
+	// running" notice. Kept so the notice is posted ONCE and then edited in
+	// place as survivors finish — a fresh message per change would bury the
+	// thread under near-identical updates.
+	detachedNoticeTS string
+	// detachedNoticeText is the body last written to that notice, so an
+	// unchanged survivor list costs no API call.
+	detachedNoticeText string
+	// lastActivity is when the banner label last changed. The keep-alive uses
+	// it to age out a stale label: a sub-agent that goes quiet mid-run (a long
+	// model call, a wedged tool) would otherwise leave "researcher → Working"
+	// asserted forever, which reads as live work when nothing is moving.
+	lastActivity time.Time
+	// staleShown is set once the label has been aged out, so the downgrade is
+	// painted once rather than on every tick.
+	staleShown bool
 }
 
 // Channel implements agentchannels.Channel for Slack, supporting both
@@ -607,13 +651,132 @@ func (s *Channel) OwnsSession(sessionID string) bool {
 	return true
 }
 
+// OnDetachedSurvivors satisfies channels.DetachedNoticeReceiver.
+//
+// Killing a leader deliberately spares its detached async sub-agents, but from
+// the thread that reads as the agent stopping while work silently continues.
+// This posts one notice saying what is still running, then EDITS that same
+// message as the list changes — so a long-running child produces a single
+// message that stays accurate, not a stream of near-identical ones.
+//
+// An empty survivor list rewrites the notice to say the work is done rather
+// than deleting it: the thread should keep a record that work outlived the
+// leader at all.
+func (s *Channel) OnDetachedSurvivors(sessionKey string, survivors []agentchannels.DetachedSurvivor) {
+	body := detachedNoticeBody(survivors)
+
+	s.mu.Lock()
+	t := s.turns[sessionKey]
+	if t == nil {
+		// No thread was ever opened for this session on this instance, so there
+		// is nowhere to post. Another channel (or the web UI) owns it.
+		s.mu.Unlock()
+		return
+	}
+	// Nothing new to say — skip the API call entirely.
+	if t.detachedNoticeText == body {
+		s.mu.Unlock()
+		return
+	}
+	channelID, threadTS, noticeTS := t.channelID, t.threadTS, t.detachedNoticeTS
+	t.detachedNoticeText = body
+	s.mu.Unlock()
+
+	if channelID == "" || body == "" {
+		return
+	}
+
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return
+	}
+
+	// First notice for this session → post and remember its ts. Afterwards →
+	// edit that message so the thread keeps exactly one.
+	if noticeTS == "" {
+		var newTS string
+		s.withBackoff(func() error {
+			_, ts, err := api.PostMessage(
+				channelID,
+				slackgo.MsgOptionText(body, false),
+				slackgo.MsgOptionTS(threadTS),
+			)
+			if err == nil {
+				newTS = ts
+			}
+			return err
+		})
+		if newTS == "" {
+			return
+		}
+		s.mu.Lock()
+		if cur := s.turns[sessionKey]; cur != nil {
+			cur.detachedNoticeTS = newTS
+		}
+		s.mu.Unlock()
+		return
+	}
+
+	s.withBackoff(func() error {
+		_, _, _, err := api.UpdateMessage(
+			channelID, noticeTS,
+			slackgo.MsgOptionText(body, false),
+		)
+		return err
+	})
+}
+
+// detachedNoticeBody renders the survivor list as one short thread message.
+func detachedNoticeBody(survivors []agentchannels.DetachedSurvivor) string {
+	if len(survivors) == 0 {
+		return "Agent stopped. Its background sub-agents have finished."
+	}
+	names := make([]string, 0, len(survivors))
+	for _, sv := range survivors {
+		switch {
+		case sv.Handle != "" && sv.ProfileKey != "":
+			names = append(names, fmt.Sprintf("%s (%s)", sv.Handle, sv.ProfileKey))
+		case sv.Handle != "":
+			names = append(names, sv.Handle)
+		case sv.ProfileKey != "":
+			names = append(names, sv.ProfileKey)
+		}
+	}
+	if len(names) == 0 {
+		names = append(names, "unnamed")
+	}
+	noun := "sub-agent"
+	if len(names) > 1 {
+		noun = "sub-agents"
+	}
+	return fmt.Sprintf(
+		"Agent stopped, but %d background %s %s still running: %s.\nProgress continues below; results arrive when each finishes.",
+		len(names), noun, pluralIsAre(len(names)), strings.Join(names, ", "),
+	)
+}
+
+func pluralIsAre(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
+}
+
 // HasLiveTurn satisfies channels.LiveTurnReporter — reports whether this
 // channel is currently rendering a status banner for sessionID. The sub-agent
 // relay uses it to pick which ancestor thread a child's progress belongs on.
+//
+// Tests the turn's running flag, not merely its presence: a finished turn keeps
+// its entry so threadTS/msgTS stay available to reactions and approvals, and
+// treating that as live would relay a child's progress onto a thread whose
+// conversation ended.
 func (s *Channel) HasLiveTurn(sessionID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.turns[sessionID] != nil
+	t := s.turns[sessionID]
+	return t != nil && t.running
 }
 
 // Status satisfies channels.StatusReporter — returns identity + transport
@@ -1366,7 +1529,10 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 
 	s.mu.Lock()
 	old := s.turns[sessionID]
-	t := &turn{channelID: ev.Channel, threadTS: threadTS, msgTS: ev.TimeStamp}
+	t := &turn{
+		channelID: ev.Channel, threadTS: threadTS, msgTS: ev.TimeStamp,
+		running: true, lastActivity: time.Now(),
+	}
 	if old != nil {
 		t.buf.WriteString(old.buf.String())
 		t.hasStarted = old.hasStarted
@@ -1526,9 +1692,30 @@ func footerState(label string) string {
 		return footerIdle
 	case footerThinking:
 		return footerThinking
-	default:
+	}
+	// A relayed sub-agent label carries a "<name> → " prefix, so an exact match
+	// misses it and every child phase collapses to "Working" — including the
+	// one that is actually thinking. Read the activity after the arrow.
+	if _, activity, ok := strings.Cut(label, subAgentArrow); ok {
+		if activity == footerThinking {
+			return footerThinking
+		}
 		return footerWorking
 	}
+	return footerWorking
+}
+
+// staleLabel downgrades a label whose activity nothing has refreshed.
+//
+// The specific activity is dropped — it may well be over — but a relayed
+// sub-agent's NAME is kept, because "who is still out there" remains true and
+// is the part an operator reads a delegated run by. A leader's own stale label
+// has no name to keep and becomes the plain working state.
+func staleLabel(label string) string {
+	if name, _, ok := strings.Cut(label, subAgentArrow); ok && name != "" {
+		return name + subAgentArrow + statusLabelWorking
+	}
+	return statusLabelWorking
 }
 
 // setStatusLabel updates the phase shown in the loading bubble for sessionKey
@@ -1544,6 +1731,11 @@ func (s *Channel) setStatusLabel(sessionKey, label string) {
 	}
 	changed := t.statusLabel != label
 	t.statusLabel = label
+	// Stamp every set, not only a change: repeated identical events (a child
+	// looping the same tool) are still proof of life, and treating them as
+	// silence would age out a label that is genuinely current.
+	t.lastActivity = time.Now()
+	t.staleShown = false
 	// Append to the rotating trace on a real change (skip consecutive dups),
 	// keeping only the last traceMax entries.
 	if changed && label != "" && (len(t.trace) == 0 || t.trace[len(t.trace)-1] != label) {
@@ -1575,6 +1767,14 @@ func (s *Channel) startStatusAnimation(sessionID string) {
 	s.mu.Lock()
 	t := s.turns[sessionID]
 	if t == nil || t.statusTicker != nil {
+		s.mu.Unlock()
+		return
+	}
+	// Never restart the keep-alive for a turn that already ended. Done/Error
+	// stop the ticker, but a later event on the same session — a relayed
+	// sub-agent still working, a late tool result — would otherwise revive it
+	// with nothing left to stop it again, leaving the banner pinging forever.
+	if !t.running {
 		s.mu.Unlock()
 		return
 	}
@@ -1611,6 +1811,19 @@ func (s *Channel) startStatusAnimation(sessionID string) {
 				var traceCopy []string
 				if stillCurrent {
 					cur.dotPhase++
+					// Age out a label nothing has refreshed. Without this the
+					// last event's activity is re-asserted forever, so a child
+					// that goes quiet still reads as actively working on it.
+					if !cur.lastActivity.IsZero() && time.Since(cur.lastActivity) > staleActivityAfter {
+						if !cur.staleShown {
+							cur.staleShown = true
+							cur.statusLabel = staleLabel(cur.statusLabel)
+							cur.trace = append(cur.trace, cur.statusLabel)
+							if len(cur.trace) > traceMax {
+								cur.trace = cur.trace[len(cur.trace)-traceMax:]
+							}
+						}
+					}
 					label = cur.statusLabel
 					dot = cur.dotPhase
 					traceCopy = append([]string(nil), cur.trace...)
@@ -1687,6 +1900,27 @@ func (s *Channel) stopEditTicker(t *turn) {
 	t.editStop = nil
 }
 
+// silentMarkerPrefix matches a leading [silent] marker, tolerating leading
+// whitespace and any case — the same shape the web UI strips for display.
+var silentMarkerPrefix = regexp.MustCompile(`(?i)^\s*\[silent\]\s*`)
+
+// stripSilentMarker removes a leading [silent] marker from reply text.
+//
+// The marker is plumbing: it tells wick to keep a turn off channels, and is
+// never meant to be read by a human. The registry normally suppresses such a
+// turn entirely, so text reaching Slack with the marker still attached means
+// the suppression did not apply to it — most often because the agent opened
+// with a preamble and put the marker on a later line, so the prefix test the
+// suppression relies on did not match.
+//
+// Whatever the reason, showing "[silent]" to the operator is never right, so
+// this strips it at the two points where reply text is actually posted. The web
+// UI does the same for the conversation view; this keeps Slack consistent with
+// it rather than inventing separate rules for the two surfaces.
+func stripSilentMarker(text string) string {
+	return silentMarkerPrefix.ReplaceAllString(text, "")
+}
+
 // flushLiveMessage posts (first call) or edits (subsequent calls) the live
 // streaming reply for sessionKey from the current contents of turn.buf. It
 // shows only the first chunk while streaming — overflow is reconciled into
@@ -1699,7 +1933,7 @@ func (s *Channel) flushLiveMessage(sessionKey string) {
 		s.mu.Unlock()
 		return
 	}
-	body := t.buf.String()
+	body := stripSilentMarker(t.buf.String())
 	channelID := t.channelID
 	threadTS := t.threadTS
 	liveTS := t.liveTS
@@ -1856,6 +2090,10 @@ func (s *Channel) NotifyState(sessionKey, state, text string) {
 // state is cleared afterwards so a follow-up turn on the same session starts
 // a fresh message.
 func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, lastSent string) {
+	// Strip before the reconcile so every branch below (fresh post, update,
+	// continuation chunks) works from the same clean text, and so the
+	// text == lastSent comparison matches what flushLiveMessage actually sent.
+	text = stripSilentMarker(text)
 	defer func() {
 		s.mu.Lock()
 		if cur := s.turns[sessionKey]; cur != nil {
@@ -2024,6 +2262,7 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		text = t.buf.String()
 		t.buf.Reset()
 		t.hasStarted = false
+		t.running = false
 		s.mu.Unlock()
 
 		state := "done"
@@ -2039,6 +2278,7 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		if t != nil {
 			s.stopStatusAnimation(t)
 			s.stopEditTicker(t)
+			t.running = false
 		}
 		s.mu.Unlock()
 		if t == nil {
@@ -2538,7 +2778,7 @@ func subAgentStatusLabel(ev event.AgentEvent) string {
 	default:
 		activity = statusLabelWorking
 	}
-	return ev.SubAgent + " → " + activity
+	return ev.SubAgent + subAgentArrow + activity
 }
 
 func (s *Channel) withBackoff(fn func() error) {
