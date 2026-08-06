@@ -99,8 +99,8 @@ type ChildSpec struct {
 	//
 	// Empty Provider means nothing in the chain named one; the spawn path
 	// then applies its own per-type default.
-	Target provider.RunTarget
-	Task   string
+	Target  provider.RunTarget
+	Task    string
 	Context string
 	// MCPToken is the SCOPED token minted for this child. It
 	// authenticates as the triggering human with an already-narrowed tag
@@ -198,6 +198,15 @@ type Service struct {
 	// ProjectTarget reports a project's default provider+model, the last
 	// step of the inheritance chain. nil = no project inheritance.
 	ProjectTarget ProjectRunTarget
+	// OnDetachedChange is called with the CURRENT list of still-running
+	// detached sub-agents under a parent session whenever one of them ends.
+	//
+	// Killing a leader spares its detached children by design, and a channel
+	// may be showing a notice that says so. Without this the notice would
+	// keep claiming work is in progress after it finished. Passing the whole
+	// list rather than a delta lets the consumer keep one message and edit it.
+	// nil = nobody is showing such a notice.
+	OnDetachedChange func(parentSessionID string, survivors []Survivor)
 
 	// mu guards inflight and slotWaiters.
 	mu sync.Mutex
@@ -383,7 +392,7 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 
 	now := time.Now().UTC()
 	row := &entity.AgentDelegation{
-		Handle: AllocateHandle(profile.Key, takenHandles),
+		Handle:          AllocateHandle(profile.Key, takenHandles),
 		ID:              id,
 		RootID:          rootID,
 		ParentSessionID: req.ParentSessionID,
@@ -939,6 +948,40 @@ func (s *Service) finish(ctx context.Context, row *entity.AgentDelegation, expec
 	// A slot just freed. Poking here rather than on a timer is what keeps
 	// the gap between two queued sub-agents imperceptible.
 	s.pokeSlot(row.RootID)
+
+	// A detached run that just ended may have been the reason a channel is
+	// showing "leader stopped, work still running". Re-report the survivors so
+	// that notice corrects itself instead of claiming forever that a finished
+	// sub-agent is still going.
+	if row.Detached && row.ParentSessionID != "" {
+		s.reportSurvivors(context.WithoutCancel(ctx), row.ParentSessionID)
+	}
+}
+
+// reportSurvivors recomputes which detached sub-agents are still running under
+// parentSessionID and hands the list to OnDetachedChange, if wired.
+func (s *Service) reportSurvivors(ctx context.Context, parentSessionID string) {
+	if s.OnDetachedChange == nil {
+		return
+	}
+	rows, err := s.Repo.ListActiveDescendants(ctx, parentSessionID)
+	if err != nil {
+		log.Warn().Err(err).Str("session", parentSessionID).
+			Msg("delegation: survivor re-report failed")
+		return
+	}
+	var survivors []Survivor
+	for i := range rows {
+		if !rows[i].Detached {
+			continue
+		}
+		survivors = append(survivors, Survivor{
+			Handle:     rows[i].Handle,
+			ProfileKey: rows[i].ProfileKey,
+			AgentName:  rows[i].ChildAgent,
+		})
+	}
+	s.OnDetachedChange(parentSessionID, survivors)
 }
 
 // limits resolves the governor ceilings for this call, preferring the
