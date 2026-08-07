@@ -98,6 +98,21 @@ var (
 		SortOrder:   53,
 	}
 
+	// Platform groups wick's own building blocks — the connectors that
+	// expose wick capabilities (data tables, workflows, delegation) rather
+	// than wrapping a third-party API.
+	//
+	// Deliberately NOT tags.System: System is IsFilter+IsSystem, which no
+	// user can carry, so it would hide these rows from every non-admin.
+	// These are end-user features and must stay reachable — same reasoning
+	// as the sub-agents connector's DefaultTags comment.
+	Platform = tool.DefaultTag{
+		Name:        "Platform",
+		Description: "Built-in wick capabilities: data, workflows, and delegation.",
+		IsGroup:     true,
+		SortOrder:   56,
+	}
+
 	// Job groups background jobs that run on a cron schedule or are
 	// triggered manually.
 	Job = tool.DefaultTag{
