@@ -6,12 +6,24 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Fixed
-*   **Slack sub-agent banner stuck or wrong:** Four follow-up defects in the sub-agent progress relay are fixed. Relayed `Thinking` events were never rendered as such and collapsed to "Working" (the parser didn't split the shared `researcher → Thinking` label on its separator). The banner could keep pinging Slack forever after a turn ended, because liveness was based on a turn entry's mere presence rather than an explicit running flag, and the keep-alive ticker could be revived after `Done`. A child that went quiet mid-run (long model call, wedged tool, no final `Done`) left its last activity asserted indefinitely — labels now age out after 90s to a neutral working state while keeping the sub-agent's name.
-*   **Silent leader kill on detached sub-agents:** Killing a leader has always spared its detached async sub-agents by design, but the thread went quiet with no indication work continued. Slack now posts one notice naming the survivors and edits that same message as they finish, instead of staying silent or spamming repeats. Telegram has no banner and doesn't implement this.
-*   **`[silent]` marker leaking into Slack replies:** Slack now strips a leading `[silent]` marker before posting, matching the web UI. Detection of a fully-silent turn is unchanged — a reply that opens with the marker is still suppressed entirely; this only prevents the literal marker text from showing if it reaches Slack some other way.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.36.4](https://github.com/yogasw/wick/compare/v0.36.3...v0.36.4) — Sub-agent Banners
+
+_Released on 2026-08-07_
+
+### Fixed
+*   **Slack sub-agent banner display and liveness:** Addressed four defects in the sub-agent progress relay.
+    *   Relayed `Thinking` events now render correctly; the parser now splits the `researcher → Thinking` label on its separator, preventing collapse to "Working".
+    *   The banner no longer pings Slack indefinitely after a turn ends. Liveness is now based on an explicit `running` flag, preventing the keep-alive ticker from being revived post-`Done`/`Error`.
+    *   Sub-agent activity labels now age out after 90 seconds to a neutral "Working" state, rather than indefinitely asserting the last activity if a child goes quiet mid-run. The sub-agent's name remains visible.
+*   **Silent leader kill on detached sub-agents:** When a leader agent is killed, and its detached asynchronous sub-agents continue working, Slack now posts a single notice naming the surviving sub-agents. This message is subsequently edited as they finish, providing continuous status without spamming. (Telegram does not implement this.)
+*   **`[silent]` marker in Slack replies:** Slack now strips a leading `[silent]` marker from replies before posting, aligning with the web UI behavior. This prevents the literal marker text from appearing while maintaining the existing detection for entirely suppressed silent turns.
+
+---
+
 
 ## [v0.36.3](https://github.com/yogasw/wick/compare/v0.36.2...v0.36.3) — Fixes & Improvements
 
