@@ -1,7 +1,9 @@
 package manager
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 	customconn "github.com/yogasw/wick/internal/connectors/custom"
@@ -34,6 +36,7 @@ func (h *Handler) customConnectorAPIRoutes(mux *http.ServeMux, authMidd *login.M
 	mux.Handle("POST /manager/api/connectors/custom/parse", auth(h.customParse))
 	mux.Handle("POST /manager/api/connectors/custom/save", auth(h.customSaveNew))
 	mux.Handle("POST /manager/api/connectors/custom/{defID}/save", auth(h.customSaveExisting))
+	mux.Handle("POST /manager/api/connectors/custom/{defID}/rename", auth(h.apiCustomRename))
 	mux.Handle("POST /manager/api/connectors/custom/{defID}/delete", auth(h.apiCustomDelete))
 	mux.Handle("POST /manager/api/connectors/custom/{defID}/disable", auth(h.apiCustomSetDisabled(true)))
 	mux.Handle("POST /manager/api/connectors/custom/{defID}/enable", auth(h.apiCustomSetDisabled(false)))
@@ -69,6 +72,11 @@ func (h *Handler) apiConnectorReload(w http.ResponseWriter, r *http.Request) {
 // shared by every instance — refreshing the stored connection status. Custom
 // MCP connectors only; available to any authenticated caller (the catalog is
 // deterministic per connector, so this is not gated to admins/creators).
+//
+// An optional instance_id runs the probe under that instance's own OAuth
+// account. Servers may expose a different tools/list per account, so a
+// resync triggered from an instance row must not probe as some other row:
+// the caller that owns the credentials is the one that gets asked.
 func (h *Handler) apiResyncMCPTools(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	key := r.PathValue("key")
@@ -90,7 +98,17 @@ func (h *Handler) apiResyncMCPTools(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not an MCP connector"})
 		return
 	}
-	if err := h.custom.ReloadFor(ctx, defID, ""); err != nil {
+	// A probe instance must belong to THIS connector and be visible to the
+	// caller — otherwise the id is a side door into another row's token.
+	instanceID := strings.TrimSpace(r.URL.Query().Get("instance_id"))
+	if instanceID != "" {
+		row, err := h.connectors.Get(ctx, instanceID)
+		if err != nil || row.Key != key || !h.canSeeRow(r, login.GetUser(ctx), row.ID) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "instance not found"})
+			return
+		}
+	}
+	if err := h.custom.ReloadFor(ctx, defID, instanceID); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
@@ -171,6 +189,73 @@ func (h *Handler) apiCustomDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// apiTestInstanceAuth serves
+// POST /manager/api/connectors/{key}/{id}/test-auth: an auth check scoped
+// to ONE instance row. Under the oauth scheme each row carries its own
+// token, so this is the only way to tell whether a specific account still
+// works — a connector-wide probe would answer for whichever row it happened
+// to borrow credentials from.
+//
+// Always 200 with an ok flag: a refused or expired token is a verdict about
+// the credentials, not an HTTP failure of this endpoint.
+func (h *Handler) apiTestInstanceAuth(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if h.custom == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "custom connectors unavailable"})
+		return
+	}
+	user := login.GetUser(ctx)
+	key := r.PathValue("key")
+	row, err := h.connectors.Get(ctx, r.PathValue("id"))
+	if err != nil || row.Key != key || !h.canSeeRow(r, user, row.ID) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "instance not found"})
+		return
+	}
+	res, err := h.custom.ProbeInstance(ctx, row.ID, customSSOClaims(r))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         res.OK,
+		"error":      res.Error,
+		"latency_ms": res.LatencyMs,
+		"tools":      len(res.Tools),
+	})
+}
+
+// apiCustomRename serves POST /manager/api/connectors/custom/{defID}/rename.
+// Display-name only: the connector key is immutable, so existing instances,
+// tags, and MCP tool ids keep working. Reloads so the new name serves at
+// once rather than waiting on the dirty banner.
+func (h *Handler) apiCustomRename(w http.ResponseWriter, r *http.Request) {
+	if h.customNotReady(w, r, true) {
+		return
+	}
+	def := h.requireDefMutableJSON(w, r, r.PathValue("defID"))
+	if def == nil {
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	if err := h.custom.Rename(r.Context(), def.ID, body.Name); err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := h.custom.Reload(r.Context(), def.ID); err != nil {
+		// The rename is committed; only the live swap failed. Report OK and
+		// let the dirty banner drive the reload rather than losing the edit.
+		l := log.With().Str("component", "custom-connector").Logger()
+		l.Warn().Err(err).Str("def_id", def.ID).Msg("rename saved but reload failed")
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true", "name": strings.TrimSpace(body.Name)})
 }
 
 // apiCustomSetDisabled is the JSON variant of customSetDisabled: toggles a

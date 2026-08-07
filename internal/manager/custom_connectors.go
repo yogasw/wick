@@ -81,6 +81,9 @@ func (h *Handler) customConnectorRoutes(mux *http.ServeMux, authMidd *login.Midd
 	mux.Handle("GET /manager/connectors/custom/mcp-servers/oauth/status", authOnly(h.customMCPOAuthStatus))
 	mux.Handle("GET /manager/connectors/custom/mcp-servers/oauth/callback", authOnly(h.customMCPOAuthCallback))
 	mux.Handle("POST /manager/connectors/custom/mcp-servers/connect", authOnly(h.customMCPConnectInstance))
+	// GET twin for the connector list's per-row Connect/Re-connect, which
+	// opens this in a popup rather than navigating the page away.
+	mux.Handle("GET /manager/connectors/custom/mcp-servers/connect", authOnly(h.customMCPConnectInstance))
 }
 
 // customNotReady guards every builder handler: the custom-connector
@@ -574,6 +577,15 @@ func (h *Handler) customMCPOAuthCallback(w http.ResponseWriter, r *http.Request)
 				log.Warn().Err(err).Str("key", res.Key).Msg("re-sync after oauth connect")
 			}
 		}
+		// A login started from the connector list runs in a popup, so it must
+		// end by closing itself and signalling the opener. Redirecting would
+		// leave the popup parked on the instance page while the list waits
+		// forever for a completion that never arrives. Full-page logins carry
+		// no popup marker and still land on the instance.
+		if res.Popup {
+			customOAuthPopupHTML(w, res.LoginID, "")
+			return
+		}
 		http.Redirect(w, r, "/manager/connectors/"+res.Key+"/"+res.InstanceID, http.StatusFound)
 		return
 	}
@@ -608,14 +620,18 @@ func popupMessage(loginID, errMsg string) string {
 }
 
 // customMCPConnectInstance attaches an account to an existing instance
-// row: full-page redirect into the authorization URL (no form state to
-// lose), callback persists the tokens and returns to the instance.
+// row: a redirect into the authorization URL, whose callback persists the
+// tokens. Reached two ways — a POST full-page navigation from the instance
+// page (callback lands back on that page), and a GET from the connector
+// list's per-row Connect/Re-connect, which opens this in a popup (callback
+// closes the window and signals the opener instead).
 func (h *Handler) customMCPConnectInstance(w http.ResponseWriter, r *http.Request) {
 	if h.customNotReady(w, r, false) {
 		return
 	}
 	ctx := r.Context()
 	user := login.GetUser(ctx)
+	popup := r.Method == http.MethodGet
 	instanceID := r.FormValue("instance_id")
 	row, err := h.connectors.Get(ctx, instanceID)
 	if err != nil || !h.canSeeRow(r, user, row.ID) {
@@ -643,7 +659,11 @@ func (h *Handler) customMCPConnectInstance(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "mcp server row missing", http.StatusNotFound)
 		return
 	}
-	authURL, _, err := h.custom.StartOAuthLoginForServer(srv, h.customOAuthRedirectURI(r), instanceID)
+	start := h.custom.StartOAuthLoginForServer
+	if popup {
+		start = h.custom.StartOAuthLoginForServerPopup
+	}
+	authURL, _, err := start(srv, h.customOAuthRedirectURI(r), instanceID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
