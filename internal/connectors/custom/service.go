@@ -391,6 +391,41 @@ func (s *Service) SaveNew(ctx context.Context, d *Draft, createdBy string) (*ent
 	return def, instanceID, nil
 }
 
+// Rename changes only a definition's display name. It exists alongside
+// Update because MCP-sourced defs have no editable draft (their ops are
+// probed live, never stored), so the draft round-trip cannot carry a
+// rename for them.
+//
+// The key stays untouched — it is baked into the registry, the instance
+// rows, and the access tag, so renaming is presentation-only and never
+// re-points an existing grant. The caller reloads to serve the new name.
+func (s *Service) Rename(ctx context.Context, defID, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	def, err := s.store.GetDef(ctx, defID)
+	if err != nil {
+		return err
+	}
+	if def.Name == name {
+		return nil
+	}
+	def.Name = name
+	// Keep the MCP server row's label in step: it is the same string in
+	// the edit form, and a drift would resurface the old name on the next
+	// SaveServer (which syncs label → def.Name).
+	if serverID := ServerIDForDef(def); serverID != "" {
+		if srv, gerr := s.store.GetServer(ctx, serverID); gerr == nil && srv != nil && srv.Label != name {
+			srv.Label = name
+			if uerr := s.store.UpdateServer(ctx, srv); uerr != nil {
+				return fmt.Errorf("rename mcp server row: %w", uerr)
+			}
+		}
+	}
+	return s.store.UpdateDef(ctx, def)
+}
+
 // Update rewrites a definition's mutable fields. The key is immutable —
 // it is baked into the registry, the instance rows, and the tag name.
 // The live module keeps serving until the admin clicks Reload.
@@ -1037,6 +1072,57 @@ func (s *Service) ProbeStored(ctx context.Context, serverID string, caller *SSOC
 	row.LastTestOK = res.OK
 	_ = s.store.UpdateServer(ctx, row)
 	return res, nil
+}
+
+// ProbeInstance runs the Test-connection round-trip using ONE instance
+// row's own credentials — the per-row "Test auth" button. Under the oauth
+// scheme every instance holds a different token, so a connector-wide probe
+// says nothing about whether a given row's account still works: one row can
+// be fine while another's grant was revoked.
+//
+// Unlike ProbeStored this deliberately does NOT write the server row's
+// LastTest columns. Those describe the connector as a whole, and one
+// instance's expired token must not flip the whole connector to
+// "Disconnected" for everyone else.
+func (s *Service) ProbeInstance(ctx context.Context, instanceID string, caller *SSOClaims) (ProbeResult, error) {
+	row, err := s.conns.Get(ctx, instanceID)
+	if err != nil {
+		return ProbeResult{}, err
+	}
+	defID, ok := s.DefIDForKey(row.Key)
+	if !ok {
+		return ProbeResult{}, fmt.Errorf("instance %s is not a custom connector", instanceID)
+	}
+	def, err := s.store.GetDef(ctx, defID)
+	if err != nil {
+		return ProbeResult{}, err
+	}
+	serverID := ServerIDForDef(def)
+	if serverID == "" {
+		return ProbeResult{}, fmt.Errorf("connector %q is not MCP-backed", row.Key)
+	}
+	srvRow, err := s.store.GetServer(ctx, serverID)
+	if err != nil {
+		return ProbeResult{}, err
+	}
+	srv, err := resolveServerConfig(srvRow.URL, srvRow.AuthScheme, srvRow.AuthSecret, srvRow.AuthHeaders, srvRow.AuthExtra, srvRow.Headers)
+	if err != nil {
+		return ProbeResult{}, err
+	}
+	if srvRow.AuthScheme == "oauth" {
+		meta := parseOAuthMeta(srvRow.AuthExtra)
+		tok, terr := s.instanceAccessToken(ctx, &meta, instanceID)
+		if terr != nil {
+			// A failed refresh IS the auth verdict, not a transport error —
+			// report it as a failed probe so the row shows why.
+			return ProbeResult{OK: false, Error: terr.Error()}, nil
+		}
+		if tok == "" {
+			return ProbeResult{OK: false, Error: "no connected account — use Connect to sign in"}, nil
+		}
+		srv.AccessToken = tok
+	}
+	return s.mcp(nil).Probe(ctx, srv, caller), nil
 }
 
 var destructiveToolRe = regexp.MustCompile(`(?i)^(delete|remove|drop|destroy|disable|revoke|purge|wipe)_`)

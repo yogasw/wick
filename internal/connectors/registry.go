@@ -196,7 +196,7 @@ func RegisterBuiltins() {
 // do not call this; they register their own connectors via main.go.
 func RegisterLabSamples() {
 	registerOnce(connector.Module{
-		Meta:       withConnectorTag(crudcrud.Meta()),
+		Meta:       withConnectorTag(crudcrud.Meta(), tags.API),
 		Configs:    entity.StructToConfigs(crudcrud.Configs{}),
 		Operations: crudcrud.Operations(),
 	})

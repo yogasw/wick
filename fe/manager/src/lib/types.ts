@@ -37,6 +37,29 @@ export interface ConnectorRow {
   enable_sso?: boolean;
   multi_account?: boolean;
   accounts?: ConnectorAccount[] | null;
+  /* Per-instance MCP login state, present only for MCP-backed custom
+     connectors whose server uses the oauth scheme. Each instance holds its
+     own token against the shared server URL, so Connect / Re-connect is a
+     row action. start_url is empty when the caller may not configure. */
+  mcp_auth?: ConnectorMCPAuth | null;
+}
+
+export interface ConnectorMCPAuth {
+  connected: boolean;
+  account: string;
+  start_url: string;
+  /* Token past its expiry with no refresh left — looks connected but every
+     call will 401. Rendered as a red flag, not a reassuring account chip. */
+  expired?: boolean;
+  /* Per-instance auth probe endpoint; empty when the caller can't configure. */
+  test_url?: string;
+}
+
+export interface InstanceAuthTestResult {
+  ok: boolean;
+  error: string;
+  latency_ms: number;
+  tools: number;
 }
 
 export interface ConnectorList {

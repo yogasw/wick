@@ -55,6 +55,9 @@ func (h *Handler) connectorRoutes(mux *http.ServeMux, authMidd *login.Middleware
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/disable", auth(h.apiToggleConnectorDisabled))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/delete", auth(h.apiDeleteConnectorRow))
 	mux.Handle("POST /manager/api/connectors/{key}/{id}/health-check", auth(h.runConnectorHealthCheck))
+	// Per-instance auth probe: each MCP row holds its own token, so a
+	// connector-wide check cannot answer for a specific account.
+	mux.Handle("POST /manager/api/connectors/{key}/{id}/test-auth", auth(h.apiTestInstanceAuth))
 	// Phase 3 — test runner + run history JSON for the SPA. test-meta
 	// exposes each op's input schema (previously templ-only); test runs
 	// the op (alias of the legacy /test JSON handler); history serves the

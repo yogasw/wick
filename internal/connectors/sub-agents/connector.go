@@ -60,13 +60,14 @@ func Meta() connector.Meta {
 
 // Module returns the fully-wired connector.Module.
 //
-// DefaultTags carry tags.Connector only — deliberately NOT tags.System.
-// System is IsFilter+IsSystem, which no user can carry, so it hides the
-// row from every non-admin; delegation has to be reachable by ordinary
-// users or the feature does not exist for them.
+// DefaultTags carry tags.Connector + tags.Platform — deliberately NOT
+// tags.System. System is IsFilter+IsSystem, which no user can carry, so
+// it hides the row from every non-admin; delegation has to be reachable
+// by ordinary users or the feature does not exist for them. Platform is
+// a plain group tag, so it categorises without restricting access.
 func Module(deps Deps) connector.Module {
 	m := Meta()
-	m.DefaultTags = []tool.DefaultTag{tags.Connector}
+	m.DefaultTags = []tool.DefaultTag{tags.Connector, tags.Platform}
 	return connector.Module{
 		Meta:       m,
 		Operations: Operations(deps),

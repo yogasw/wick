@@ -77,7 +77,13 @@ type oauthLogin struct {
 	Tokens     *oauthTokens
 	Account    string // resolved identity label (userinfo / id_token)
 	InstanceID string // non-empty when connecting an account to an existing row
-	Expires    time.Time
+	// Popup marks a login opened in a popup window rather than a full-page
+	// navigation. The callback must then close itself and signal the opener;
+	// redirecting would strand the popup on a page nobody is looking at.
+	// The redirect URI is fixed (it must match what the AS registered), so
+	// this rides the session instead of a query parameter.
+	Popup   bool
+	Expires time.Time
 }
 
 const oauthLoginTTL = 10 * time.Minute
@@ -351,23 +357,35 @@ func (s *Service) StartOAuthLogin(ctx context.Context, f *ServerForm, redirectUR
 		meta.ClientID, meta.ClientSecret = id, secret
 	}
 
-	return s.newLogin(*f, *meta, redirectURI, instanceID)
+	// The edit-form "Test now" login always runs in a popup.
+	return s.newLogin(*f, *meta, redirectURI, instanceID, true)
 }
 
 // StartOAuthLoginForServer begins a browser login against a stored
 // server's existing client material — the per-instance "Connect
 // account" flow, where no re-discovery or registration is needed.
 func (s *Service) StartOAuthLoginForServer(srv *entity.CustomConnectorMCPServer, redirectURI, instanceID string) (authURL, loginID string, err error) {
+	return s.startOAuthLoginForServer(srv, redirectURI, instanceID, false)
+}
+
+// StartOAuthLoginForServerPopup is StartOAuthLoginForServer for a login
+// opened in a popup: the callback closes the window and signals the opener
+// instead of redirecting to the instance page.
+func (s *Service) StartOAuthLoginForServerPopup(srv *entity.CustomConnectorMCPServer, redirectURI, instanceID string) (authURL, loginID string, err error) {
+	return s.startOAuthLoginForServer(srv, redirectURI, instanceID, true)
+}
+
+func (s *Service) startOAuthLoginForServer(srv *entity.CustomConnectorMCPServer, redirectURI, instanceID string, popup bool) (authURL, loginID string, err error) {
 	meta := parseOAuthMeta(srv.AuthExtra)
 	if meta.AuthEndpoint == "" || meta.TokenEndpoint == "" || meta.ClientID == "" {
 		return "", "", fmt.Errorf("server has no OAuth client material — edit the server and run Test once")
 	}
-	return s.newLogin(ServerForm{URL: srv.URL, AuthScheme: "oauth"}, meta, redirectURI, instanceID)
+	return s.newLogin(ServerForm{URL: srv.URL, AuthScheme: "oauth"}, meta, redirectURI, instanceID, popup)
 }
 
 // newLogin creates the in-flight session and assembles the PKCE
 // authorization URL.
-func (s *Service) newLogin(form ServerForm, meta oauthClientMeta, redirectURI, instanceID string) (string, string, error) {
+func (s *Service) newLogin(form ServerForm, meta oauthClientMeta, redirectURI, instanceID string, popup bool) (string, string, error) {
 	login := &oauthLogin{
 		ID:         randB64(16),
 		State:      randB64(24),
@@ -375,6 +393,7 @@ func (s *Service) newLogin(form ServerForm, meta oauthClientMeta, redirectURI, i
 		Form:       form,
 		Meta:       meta,
 		InstanceID: instanceID,
+		Popup:      popup,
 		Expires:    time.Now().Add(oauthLoginTTL),
 	}
 	s.logins.put(login)
@@ -408,6 +427,9 @@ type OAuthLoginResult struct {
 	LoginID    string
 	InstanceID string
 	Key        string // connector key when the login was instance-bound
+	// Popup echoes how the login was opened. An instance-bound login from a
+	// popup must end by closing the window, not by redirecting.
+	Popup bool
 }
 
 // CompleteOAuthLogin exchanges the callback code (PKCE) and stashes the
@@ -434,7 +456,7 @@ func (s *Service) CompleteOAuthLogin(ctx context.Context, state, code, redirectU
 	}
 	login.Tokens = tokens
 	login.Account = s.resolveAccountLabel(ctx, &login.Meta, tokens)
-	res := &OAuthLoginResult{LoginID: login.ID, InstanceID: login.InstanceID}
+	res := &OAuthLoginResult{LoginID: login.ID, InstanceID: login.InstanceID, Popup: login.Popup}
 	if login.InstanceID != "" {
 		if err := s.persistInstanceTokens(ctx, login.InstanceID, tokens, login.Account); err != nil {
 			return nil, err

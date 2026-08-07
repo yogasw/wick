@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/yogasw/wick/internal/connectors"
+	customconn "github.com/yogasw/wick/internal/connectors/custom"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/connector"
@@ -37,6 +39,32 @@ type connectorRowJSON struct {
 	EnableSSO    bool                   `json:"enable_sso"`
 	MultiAccount bool                   `json:"multi_account"`
 	Accounts     []connectorAccountJSON `json:"accounts"`
+	// MCPAuth is the per-instance login state for an MCP-backed custom
+	// connector whose server uses the oauth scheme. Every instance
+	// authenticates as its own account against the shared server URL, so
+	// Connect / Re-connect belongs on the row — not the connector header.
+	// Nil for built-ins, non-MCP defs, and MCP servers on any other auth
+	// scheme (those need no per-row login).
+	MCPAuth *connectorMCPAuthJSON `json:"mcp_auth"`
+}
+
+// connectorMCPAuthJSON drives one instance row's Connect / Re-connect
+// button. Connected reflects a stored access token; Account is the
+// identity label the login resolved (empty when never connected).
+// StartURL is empty when the caller may not configure the row, which
+// hides the button rather than failing the POST.
+type connectorMCPAuthJSON struct {
+	Connected bool   `json:"connected"`
+	Account   string `json:"account"`
+	StartURL  string `json:"start_url"`
+	// Expired is true when the stored token's expiry has passed and no
+	// refresh token remains to renew it — the row is "connected" on paper
+	// but every call will 401 until someone re-connects. The UI flags this
+	// in red rather than showing a reassuring account chip.
+	Expired bool `json:"expired"`
+	// TestURL runs the per-instance auth probe. Empty when the caller may
+	// not configure the row (same gate as StartURL).
+	TestURL string `json:"test_url"`
 }
 
 // connectorListJSON is the shape served at GET /manager/api/connectors/{key}:
@@ -219,6 +247,7 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 			rowJSON.OAuth = h.rowOAuthJSON(mod, row, user)
 			rowJSON.Accounts = h.rowAccountsJSON(ctx, row, user)
 		}
+		rowJSON.MCPAuth = h.rowMCPAuthJSON(ctx, key, row, user)
 		out.Rows = append(out.Rows, rowJSON)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -401,6 +430,58 @@ func (h *Handler) rowOAuthJSON(mod connector.Module, row entity.Connector, user 
 		if strings.TrimSpace(h.connectors.LoadConfigs(row)["client_id"]) != "" {
 			out.StartURL = "/manager/connectors/" + mod.Meta.Key + "/oauth/start?connector_id=" + row.ID
 		}
+	}
+	return out
+}
+
+// rowMCPAuthJSON builds the per-instance MCP login state, or nil when the
+// row needs no per-instance login: non-custom keys, non-MCP defs, and MCP
+// servers whose auth scheme is not "oauth" (a bearer/header/none server
+// authenticates identically for every row, so there is nothing to connect).
+//
+// The oauth scheme is the case that matters: instances share only the
+// server URL and connector name, each holding its own token in its own
+// config rows, so the button belongs here rather than on the connector.
+func (h *Handler) rowMCPAuthJSON(ctx context.Context, key string, row entity.Connector, user *entity.User) *connectorMCPAuthJSON {
+	if h.custom == nil {
+		return nil
+	}
+	defID, ok := h.custom.DefIDForKey(key)
+	if !ok {
+		return nil
+	}
+	def, err := h.custom.Store().GetDef(ctx, defID)
+	if err != nil || def == nil {
+		return nil
+	}
+	serverID := customconn.ServerIDForDef(def)
+	if serverID == "" {
+		return nil
+	}
+	srv, err := h.custom.Store().GetServer(ctx, serverID)
+	if err != nil || srv == nil || srv.AuthScheme != "oauth" {
+		return nil
+	}
+	cfgs := h.connectors.LoadConfigs(row)
+	out := &connectorMCPAuthJSON{
+		Connected: strings.TrimSpace(cfgs["oauth_access_token"]) != "",
+		Account:   strings.TrimSpace(cfgs["oauth_account"]),
+	}
+	// A token past its expiry with no refresh token left is dead: it still
+	// looks connected but every call 401s. Surface it so the row can warn
+	// before the next call fails. With a refresh token present the renewal
+	// happens transparently, so that is NOT flagged.
+	if out.Connected && strings.TrimSpace(cfgs["oauth_refresh_token"]) == "" {
+		if exp := strings.TrimSpace(cfgs["oauth_expires_at"]); exp != "" {
+			if t, perr := time.Parse(time.RFC3339, exp); perr == nil && time.Now().After(t) {
+				out.Expired = true
+			}
+		}
+	}
+	// Attaching an account configures the row — same gate the POST enforces.
+	if h.canConfigureRow(user, &row) {
+		out.StartURL = "/manager/connectors/custom/mcp-servers/connect?instance_id=" + row.ID
+		out.TestURL = "/manager/api/connectors/" + row.Key + "/" + row.ID + "/test-auth"
 	}
 	return out
 }

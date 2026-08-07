@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, ConfirmDialog, KebabMenu } from "@wick-fe/common-ui";
+  import { Button, ConfirmDialog, KebabMenu, Modal, TextInput } from "@wick-fe/common-ui";
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import { push } from "$lib/router.js";
   import {
@@ -15,9 +15,13 @@
     listPlugins,
     updatePluginStream,
     removePlugin as uninstallPlugin,
+    deleteCustomDef,
+    renameCustomDef,
+    testInstanceAuth,
   } from "$lib/api.js";
   import type { PluginProgress } from "$lib/api.js";
   import { startConnectorOAuth, type OAuthConnect } from "./connectorOAuth.js";
+  import { startInstanceOAuth } from "./custom/mcpInstanceOAuth.js";
   import type { ConnectorList, ConnectorRow, ConnectorAccount, PluginEntry } from "$lib/types.js";
   import { setBreadcrumbNames, clearBreadcrumbNames } from "$lib/stores/breadcrumb.js";
 
@@ -45,6 +49,14 @@
   let typeBusy = $state(false);
   let pluginBusy = $state(false);
   let confirmUninstall = $state(false);
+  /* Custom-connector definition actions (header kebab). Deleting drops the
+     def, every instance, and the MCP server row — hence a typed-name
+     confirmation rather than a plain OK. Renaming is display-only. */
+  let confirmDeleteDef = $state(false);
+  let deleteConfirmText = $state("");
+  let defBusy = $state(false);
+  let renameOpen = $state(false);
+  let renameDraft = $state("");
   /* Live update progress, non-null only while an update is streaming. Drives
      the progress bar + phase label. pct is -1 for indeterminate. */
   let updateProgress = $state<PluginProgress | null>(null);
@@ -63,10 +75,38 @@
   /* Per-row kebab (⋮) menu items. History/Disable/Duplicate/Delete —
      Duplicate + Delete only when the connector isn't fixed. */
   function rowMenuItems(row: ConnectorRow) {
-    const items = [
+    const items: { label: string; onclick: () => void; danger?: boolean; disabled?: boolean }[] = [];
+    /* MCP instances authenticate individually, so connecting is a row action.
+       First in the menu: an unconnected instance can't do anything else. */
+    if (canMcpConnect(row)) {
+      items.push({
+        label: connectingId === row.id ? "Connecting…" : mcpConnectLabel(row),
+        onclick: () => mcpConnect(row),
+        disabled: connectingId !== "",
+      });
+    }
+    /* Verifies THIS row's stored credentials against the server — the only
+       way to know an individual account still works. */
+    if (canTestAuth(row)) {
+      items.push({
+        label: testingId === row.id ? "Testing…" : "Test auth",
+        onclick: () => testAuth(row),
+        disabled: testingId !== "",
+      });
+    }
+    items.push(
       { label: "History", onclick: () => push(`/connectors/${encodeURIComponent(connectorKey)}/${encodeURIComponent(row.id)}/history`) },
       { label: row.disabled ? "Enable" : "Disable", onclick: () => toggleDisabled(row) },
-    ];
+    );
+    /* MCP rows can re-probe under their own account — a server may expose a
+       different tool set per connected identity. */
+    if (data?.mcp) {
+      items.push({
+        label: resyncRowId === row.id ? "Syncing…" : "Re-sync tools",
+        onclick: () => resyncRow(row),
+        disabled: resyncRowId !== "",
+      });
+    }
     if (!data?.fixed) {
       items.push({ label: "Duplicate", onclick: () => duplicateRow(row), disabled: busy });
       items.push({ label: "Delete", onclick: () => (confirmRow = row), danger: true });
@@ -107,6 +147,110 @@
         connectingId = "";
         oauthHandle = null;
       });
+  }
+
+  /* Per-instance MCP login. Distinct from the generic connector OAuth above:
+     an MCP instance holds its OWN token against the connector's shared server
+     URL, so every row connects (and re-connects) independently. The popup
+     reuses startConnectorOAuth — the callback closes it the same way. */
+  function canMcpConnect(row: ConnectorRow): boolean {
+    return !!row.mcp_auth && !!row.mcp_auth.start_url;
+  }
+
+  function mcpConnectLabel(row: ConnectorRow): string {
+    return row.mcp_auth?.connected ? "Re-connect" : "Connect";
+  }
+
+  function mcpConnect(row: ConnectorRow): void {
+    const url = row.mcp_auth?.start_url;
+    if (!url || connectingId) return;
+    connectingId = row.id;
+    /* The MCP callback signals over its own BroadcastChannel and persists the
+       token itself — a different contract from the generic connector SSO
+       popup, hence the dedicated helper. */
+    oauthHandle = startInstanceOAuth(url);
+    oauthHandle.promise
+      .then(async () => {
+        await load(true);
+        /* The popup-closed fallback also fires when the user simply dismisses
+           the window, so confirm against the reloaded row rather than
+           claiming success for an abandoned login. */
+        const fresh = (data?.rows ?? []).find((r) => r.id === row.id);
+        if (fresh?.mcp_auth?.connected) {
+          // A fresh token invalidates the old failure — drop the stale flag.
+          const { [row.id]: _dropped, ...rest } = authVerdicts;
+          authVerdicts = rest;
+          toastOk(fresh.mcp_auth.account ? `Connected as ${fresh.mcp_auth.account}` : "Account connected");
+        }
+      })
+      .catch((e) => toastError("Connect failed", e instanceof Error ? e.message : String(e)))
+      .finally(() => {
+        connectingId = "";
+        oauthHandle = null;
+      });
+  }
+
+  /* Per-instance auth probe. Verdicts are keyed by row id so each row shows
+     its own result — one row's dead token says nothing about the others.
+     A failed probe is a verdict, not an exception: it renders as a red flag
+     on that row rather than a toast that scrolls away. */
+  type AuthVerdict = { ok: boolean; error: string };
+  let authVerdicts = $state<Record<string, AuthVerdict>>({});
+  let testingId = $state("");
+
+  function canTestAuth(row: ConnectorRow): boolean {
+    return !!row.mcp_auth?.test_url;
+  }
+
+  async function testAuth(row: ConnectorRow) {
+    if (testingId) return;
+    testingId = row.id;
+    try {
+      const res = await testInstanceAuth(connectorKey, row.id);
+      authVerdicts = { ...authVerdicts, [row.id]: { ok: res.ok, error: res.error } };
+      if (res.ok) {
+        toastOk(`Auth OK — ${res.tools} tool(s), ${res.latency_ms}ms`);
+      } else {
+        toastError("Auth failed", res.error || "the server refused these credentials");
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      authVerdicts = { ...authVerdicts, [row.id]: { ok: false, error: msg } };
+      toastError("Auth check failed", msg);
+    } finally {
+      testingId = "";
+    }
+  }
+
+  /* A row is flagged when the stored token is known-dead (expired, no
+     refresh) or the last probe refused it. */
+  function authBroken(row: ConnectorRow): boolean {
+    const v = authVerdicts[row.id];
+    if (v) return !v.ok;
+    return row.mcp_auth?.expired === true;
+  }
+
+  function authBrokenReason(row: ConnectorRow): string {
+    const v = authVerdicts[row.id];
+    if (v && !v.ok) return v.error || "The server refused these credentials.";
+    return "The stored token has expired and cannot be refreshed. Re-connect this instance.";
+  }
+
+  /* Per-instance tool re-sync: probes tools/list under THIS row's account,
+     so a server that varies its catalog per account reports the right set. */
+  let resyncRowId = $state("");
+  async function resyncRow(row: ConnectorRow) {
+    if (resyncRowId) return;
+    resyncRowId = row.id;
+    try {
+      const res = await resyncMcpTools(connectorKey, row.id);
+      toastOk(`Tools re-synced — ${res.operations} operation(s)`);
+      await load(true);
+    } catch (e) {
+      toastError("Re-sync failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      resyncRowId = "";
+    }
   }
 
   async function confirmDisconnectAccount() {
@@ -283,10 +427,48 @@
     }
   }
 
+  /* Rename applies to the display name only — the connector key is
+     immutable server-side, so instances and access grants survive it. */
+  function openRename() {
+    renameDraft = data?.name ?? "";
+    renameOpen = true;
+  }
+
+  async function doRename() {
+    const name = renameDraft.trim();
+    const defID = data?.def_id;
+    if (!defID || !name || defBusy) return;
+    defBusy = true;
+    try {
+      await renameCustomDef(defID, name);
+      renameOpen = false;
+      toastOk("Connector renamed");
+      await load(true);
+    } catch (e) {
+      toastError("Rename failed", e instanceof Error ? e.message : String(e));
+    } finally {
+      defBusy = false;
+    }
+  }
+
+  async function doDeleteDef() {
+    const defID = data?.def_id;
+    if (!defID || defBusy) return;
+    defBusy = true;
+    try {
+      await deleteCustomDef(defID);
+      toastOk("Connector deleted");
+      push("/"); // the connector no longer exists — back to the index
+    } catch (e) {
+      toastError("Delete failed", e instanceof Error ? e.message : String(e));
+      defBusy = false;
+    }
+  }
+
   /* Header kebab items: the type on/off switch for every connector, plus
-     Update (when a newer version exists) + Uninstall for plugins. Every item
-     is an admin-only action server-side, so non-admins get an empty menu (the
-     kebab itself is hidden when empty). */
+     Rename/Delete for custom definitions and Update/Uninstall for plugins.
+     Every item is an admin-only action server-side, so non-admins get an
+     empty menu (the kebab itself is hidden when empty). */
   let headerMenu = $derived.by(() => {
     if (!isAdmin) return [];
     const items: { label: string; onclick: () => void; danger?: boolean; disabled?: boolean }[] = [
@@ -296,6 +478,20 @@
         disabled: typeBusy,
       },
     ];
+    /* Custom connectors are admin-created, so they're admin-removable too —
+       built-ins and plugins have no def to delete and keep only Disable. */
+    if (data?.custom && data.def_id) {
+      items.push({ label: "Rename connector", onclick: openRename, disabled: defBusy });
+      items.push({
+        label: "Delete connector",
+        onclick: () => {
+          deleteConfirmText = "";
+          confirmDeleteDef = true;
+        },
+        danger: true,
+        disabled: defBusy,
+      });
+    }
     if (plugin) {
       if (plugin.update_available) {
         items.push({
@@ -429,7 +625,8 @@
             disabled={resyncBusy}
             onclick={resyncTools}
             class="whitespace-nowrap rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:border-green-400 hover:text-green-600 disabled:opacity-50 disabled:cursor-not-allowed"
-          >{resyncBusy ? "Syncing…" : "Re-sync tools"}</button>
+            title="Re-probe the server's tool list using the connector's default credentials. To sync as a specific instance's account, use that row's menu."
+          >{resyncBusy ? "Syncing…" : "Re-sync all"}</button>
         {/if}
         {#if data.custom && data.def_id}
           <button
@@ -498,6 +695,36 @@
                       {connectingId === row.id ? "Connecting…" : connectLabel(row)}
                     </Button>
                   {/if}
+                  <!-- MCP instances carry their own account. The identity is
+                       status, so it stays inline as a chip; connecting is an
+                       action and lives in the kebab with History/Delete. -->
+                  <!-- Auth state is per instance. Broken auth wins over the
+                       account chip: a reassuring identity next to a dead
+                       token is worse than no chip at all. -->
+                  {#if row.mcp_auth && authBroken(row)}
+                    <span
+                      class="inline-flex min-w-0 max-w-[16rem] items-center gap-1 rounded-md border border-neg-400 bg-neg-100 px-2 py-0.5 text-[11px] font-medium text-neg-400"
+                      title={authBrokenReason(row)}
+                    >
+                      <svg class="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>
+                      <span class="truncate">Auth failed{row.mcp_auth.account ? ` · ${row.mcp_auth.account}` : ""}</span>
+                    </span>
+                  {:else if row.mcp_auth?.connected && row.mcp_auth.account}
+                    <span class="inline-flex min-w-0 max-w-[12rem] items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600" title="Connected account for this instance">
+                      <svg class="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                      <span class="truncate">{row.mcp_auth.account}</span>
+                    </span>
+                  {:else if row.mcp_auth?.connected}
+                    <span class="inline-flex items-center gap-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-2 py-0.5 text-[11px] text-black-800 dark:text-black-600" title="This instance has a connected account">Connected</span>
+                  {:else if row.mcp_auth}
+                    <span class="inline-flex items-center rounded-md border border-dashed border-white-400 dark:border-navy-600 px-2 py-0.5 text-[11px] text-black-700 dark:text-black-600" title="This instance has no connected account yet">Not connected</span>
+                  {/if}
+                  {#if authVerdicts[row.id]?.ok}
+                    <span class="inline-flex items-center gap-1 rounded-md border border-green-600/40 bg-green-900/20 px-2 py-0.5 text-[11px] font-medium text-green-500" title="Last auth check succeeded">
+                      <svg class="h-3 w-3 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="m20 6-11 11-5-5"/></svg>
+                      Auth OK
+                    </span>
+                  {/if}
                   <KebabMenu ariaLabel={`Actions for ${row.label}`} items={rowMenuItems(row)} />
                 </div>
               </div>
@@ -536,6 +763,71 @@
     onConfirm={confirmDelete}
     onCancel={() => (confirmRow = null)}
   />
+
+  <!-- Rename: display name only. The key stays fixed server-side, so
+       instances, access tags, and MCP tool ids are untouched. -->
+  <Modal open={renameOpen} title="Rename connector" size="sm" onClose={() => (renameOpen = false)}>
+    <div class="space-y-2">
+      <label for="rename-connector" class="block text-sm font-medium text-black-900 dark:text-white-100">Display name</label>
+      <TextInput
+        id="rename-connector"
+        value={renameDraft}
+        onChange={(v) => (renameDraft = v)}
+        placeholder="Connector name"
+        ariaLabel="Connector display name"
+      />
+      <p class="text-xs text-black-700 dark:text-black-600">
+        Only the display name changes. The connector key stays the same, so existing instances, access tags, and tool ids keep working.
+      </p>
+    </div>
+    {#snippet footer()}
+      <div class="flex justify-end gap-2">
+        <Button variant="secondary" size="lg" onclick={() => (renameOpen = false)}>Cancel</Button>
+        <Button variant="primary" size="lg" disabled={defBusy || renameDraft.trim() === ""} onclick={doRename}>
+          {defBusy ? "Saving…" : "Save"}
+        </Button>
+      </div>
+    {/snippet}
+  </Modal>
+
+  <!-- Delete: destructive and cascading, so it asks for the name to be typed
+       rather than a single OK click. -->
+  <Modal
+    open={confirmDeleteDef}
+    title="Delete this connector?"
+    size="sm"
+    onClose={() => (confirmDeleteDef = false)}
+  >
+    <div class="space-y-3">
+      <p class="text-sm text-black-800 dark:text-black-600">
+        This removes the connector definition, all
+        <strong>{rows.length}</strong> instance row(s), and their stored credentials. Run history is kept for audit. This cannot be undone.
+      </p>
+      <label for="delete-confirm" class="block text-sm text-black-800 dark:text-black-600">
+        Type <strong class="font-mono text-black-900 dark:text-white-100">{data?.name}</strong> to confirm:
+      </label>
+      <TextInput
+        id="delete-confirm"
+        value={deleteConfirmText}
+        onChange={(v) => (deleteConfirmText = v)}
+        placeholder={data?.name ?? ""}
+        ariaLabel="Type the connector name to confirm deletion"
+      />
+    </div>
+    {#snippet footer()}
+      <div class="flex justify-end gap-2">
+        <Button variant="secondary" size="lg" onclick={() => (confirmDeleteDef = false)}>Cancel</Button>
+        <Button
+          variant="danger"
+          size="lg"
+          disabled={defBusy || deleteConfirmText.trim() !== (data?.name ?? "").trim()}
+          onclick={doDeleteDef}
+        >
+          {defBusy ? "Deleting…" : "Delete connector"}
+        </Button>
+      </div>
+    {/snippet}
+  </Modal>
 
   <ConfirmDialog
     open={confirmAcc !== null}

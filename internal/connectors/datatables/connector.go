@@ -49,7 +49,7 @@ func Meta() connector.Meta {
 // connectors.Service.Bootstrap runs.
 func Module(ops *wfmcp.Ops) connector.Module {
 	m := Meta()
-	m.DefaultTags = []tool.DefaultTag{tags.Connector}
+	m.DefaultTags = []tool.DefaultTag{tags.Connector, tags.Platform}
 	return connector.Module{
 		Meta:       m,
 		Operations: Operations(ops),
