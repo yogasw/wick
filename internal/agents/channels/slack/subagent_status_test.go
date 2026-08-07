@@ -49,9 +49,11 @@ func TestOnAgentEventRelayWithNoTurnIsNoop(t *testing.T) {
 	}
 }
 
-// HasLiveTurn is what the relay uses to choose the thread to paint.
+// HasLiveTurn is what the relay uses to choose the thread to paint. Only a turn
+// still in flight counts — see TestHasLiveTurnFalseAfterDone for the finished
+// case, which keeps its entry but must not report live.
 func TestHasLiveTurnReflectsInFlightTurn(t *testing.T) {
-	c := &Channel{turns: map[string]*turn{"slack-123": {}}}
+	c := &Channel{turns: map[string]*turn{"slack-123": {running: true}}}
 	if !c.HasLiveTurn("slack-123") {
 		t.Fatal("session with a turn should report live")
 	}
