@@ -13,7 +13,9 @@ import (
 func TestStatusAnimationLifecycle(t *testing.T) {
 	s := &Channel{turns: map[string]*turn{}}
 	const sid = "slack:__owner__:1700000000.000400"
-	s.turns[sid] = &turn{channelID: "C1", threadTS: "1700000000.000400"}
+	// running: true — the keep-alive is deliberately refused for a turn that
+	// already ended, so a live-turn fixture must say it is live.
+	s.turns[sid] = &turn{channelID: "C1", threadTS: "1700000000.000400", running: true}
 
 	s.startStatusAnimation(sid)
 
@@ -55,7 +57,7 @@ func TestStatusAnimationLifecycle(t *testing.T) {
 func TestStatusAnimationStoppedOnTurnReplace(t *testing.T) {
 	s := &Channel{turns: map[string]*turn{}}
 	const sid = "slack:__owner__:1700000000.000500"
-	old := &turn{channelID: "C1", threadTS: "1700000000.000500"}
+	old := &turn{channelID: "C1", threadTS: "1700000000.000500", running: true}
 	s.turns[sid] = old
 	s.startStatusAnimation(sid)
 

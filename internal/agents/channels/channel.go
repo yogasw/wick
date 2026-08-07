@@ -143,6 +143,27 @@ type LiveTurnReporter interface {
 	HasLiveTurn(sessionID string) bool
 }
 
+// DetachedSurvivor names one sub-agent still running after its leader was
+// killed. Mirrors delegation.Survivor without importing that package, keeping
+// the channel layer free of a dependency on the delegation service.
+type DetachedSurvivor struct {
+	Handle     string
+	ProfileKey string
+}
+
+// DetachedNoticeReceiver is notified when a session's leader was killed while
+// detached sub-agents kept running. Killing a leader deliberately spares async
+// children, but from the thread that is indistinguishable from work stopping,
+// so a channel that can show the difference implements this.
+//
+// Called with the full current survivor list each time it changes, not with
+// deltas: an implementation is expected to keep ONE notice per session and edit
+// it, so it needs the whole picture rather than a stream of additions. An empty
+// list means nothing is left running.
+type DetachedNoticeReceiver interface {
+	OnDetachedSurvivors(sessionID string, survivors []DetachedSurvivor)
+}
+
 // ApprovalReceiver is fanned-out for gate approval lifecycle.
 type ApprovalReceiver interface {
 	OnApprovalRequest(sessionID string, req gate.ApprovalRequest)

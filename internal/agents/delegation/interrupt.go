@@ -131,21 +131,44 @@ func (s *Service) Interrupt(ctx context.Context, delegationID, actorID string, i
 // would be wrong to take down work that was fired precisely so it would
 // keep running on its own.
 func (s *Service) InterruptAll(ctx context.Context, sessionID, actorID string, isAdmin bool) (int, error) {
-	return s.interruptAll(ctx, sessionID, actorID, isAdmin, false)
+	// An explicit "Stop all" leaves nothing running, so it has no survivors to
+	// report — the cascade path is the only caller that needs them.
+	n, _, err := s.interruptAll(ctx, sessionID, actorID, isAdmin, false)
+	return n, err
 }
 
 // CascadeInterrupt stops a session's descendants as a side effect of the
 // leader being killed, leaving detached async work alone.
 func (s *Service) CascadeInterrupt(ctx context.Context, sessionID, actorID string, isAdmin bool) (int, error) {
+	n, _, err := s.CascadeInterruptReport(ctx, sessionID, actorID, isAdmin)
+	return n, err
+}
+
+// Survivor names one sub-agent that a cascade deliberately left running.
+//
+// Killing a leader does not stop its detached async children, which is the
+// intended behaviour but is invisible from the conversation: the thread shows
+// the leader stopping and then nothing, while work continues. Reporting the
+// survivors lets a channel say so.
+type Survivor struct {
+	Handle     string // addressable handle within the tree, e.g. "researcher-1"
+	ProfileKey string // role that was delegated to
+	AgentName  string // pool agent name, for correlating with relayed progress
+}
+
+// CascadeInterruptReport is CascadeInterrupt plus the list of detached
+// sub-agents it left running, in the order encountered.
+func (s *Service) CascadeInterruptReport(ctx context.Context, sessionID, actorID string, isAdmin bool) (int, []Survivor, error) {
 	return s.interruptAll(ctx, sessionID, actorID, isAdmin, true)
 }
 
-func (s *Service) interruptAll(ctx context.Context, sessionID, actorID string, isAdmin bool, cascade bool) (int, error) {
+func (s *Service) interruptAll(ctx context.Context, sessionID, actorID string, isAdmin bool, cascade bool) (int, []Survivor, error) {
 	rows, err := s.Repo.ListActiveDescendants(ctx, sessionID)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	n := 0
+	var survivors []Survivor
 	for i := range rows {
 		d := rows[i]
 		if !CanInterrupt(&d, actorID, isAdmin) {
@@ -156,6 +179,9 @@ func (s *Service) interruptAll(ctx context.Context, sessionID, actorID string, i
 		// stays possible — just explicitly, by its own Stop button, not as
 		// collateral from killing the conversation that started it.
 		if d.Detached && cascade {
+			survivors = append(survivors, Survivor{
+				Handle: d.Handle, ProfileKey: d.ProfileKey, AgentName: d.ChildAgent,
+			})
 			continue
 		}
 		out, err := s.Interrupt(ctx, d.ID, actorID, isAdmin)
@@ -169,5 +195,5 @@ func (s *Service) interruptAll(ctx context.Context, sessionID, actorID string, i
 			n++
 		}
 	}
-	return n, nil
+	return n, survivors, nil
 }

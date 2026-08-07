@@ -538,6 +538,17 @@ func (r *Registry) forward(sessionID string, evs []event.AgentEvent) {
 	}
 }
 
+// DispatchDetachedSurvivors tells every interested channel which detached
+// sub-agents outlived a killed leader, so the thread can say that work is still
+// running instead of just going quiet.
+func (r *Registry) DispatchDetachedSurvivors(sessionID string, survivors []DetachedSurvivor) {
+	for _, c := range r.Channels() {
+		if x, ok := c.(DetachedNoticeReceiver); ok {
+			x.OnDetachedSurvivors(sessionID, survivors)
+		}
+	}
+}
+
 // DispatchApprovalRequest fans out an approval request to every channel
 // that implements ApprovalReceiver. The channel decides whether the
 // request belongs to one of its sessions (by checking its session table).

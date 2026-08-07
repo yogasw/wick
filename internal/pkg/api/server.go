@@ -1371,6 +1371,18 @@ func NewServer() *Server {
 		Deliver: poolDeliverer{pool: agentsPool, channels: channelReg},
 		// Take-over: a human steering a running sub-agent.
 		Steerer: poolSteerer{pool: agentsPool},
+		// Keeps the "leader stopped, sub-agents still running" thread notice
+		// honest: each detached child that ends re-reports the remaining set,
+		// so the notice is edited rather than left claiming stale work.
+		OnDetachedChange: func(parentSessionID string, survivors []delegation.Survivor) {
+			out := make([]agentchannels.DetachedSurvivor, 0, len(survivors))
+			for _, sv := range survivors {
+				out = append(out, agentchannels.DetachedSurvivor{
+					Handle: sv.Handle, ProfileKey: sv.ProfileKey,
+				})
+			}
+			channelReg.DispatchDetachedSurvivors(parentSessionID, out)
+		},
 		// Messaging: make an exited sub-agent addressable again, and say
 		// so when it can only come back without its memory.
 		Waker: poolWaker{pool: agentsPool, layout: agentsLayout},

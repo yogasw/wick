@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	"github.com/yogasw/wick/internal/agents/delegation"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/entity"
@@ -256,10 +257,32 @@ func cascadeInterruptChildren(c *tool.Ctx, sessionID string) {
 	actorID, isAdmin := callerIdentity(c)
 	// Cascade, not Stop all: detached async sub-agents were fired to
 	// outlive this conversation and must survive its teardown.
-	if _, err := globalDelegation.CascadeInterrupt(c.Context(), sessionID, actorID, isAdmin); err != nil {
+	_, survivors, err := globalDelegation.CascadeInterruptReport(c.Context(), sessionID, actorID, isAdmin)
+	if err != nil {
 		log.Ctx(c.Context()).Warn().Err(err).Str("session", sessionID).
 			Msg("subagents: cascade interrupt failed; killing leader anyway")
+		return
 	}
+	// Work that outlived the leader is invisible from a channel thread — the
+	// agent goes quiet while the sub-agent keeps going. Say so.
+	if len(survivors) > 0 {
+		notifyDetachedSurvivors(sessionID, survivors)
+	}
+}
+
+// notifyDetachedSurvivors tells the channels which sub-agents outlived a killed
+// leader. No-op when no channel layer is wired (headless/tests).
+func notifyDetachedSurvivors(sessionID string, survivors []delegation.Survivor) {
+	if globalChannels == nil {
+		return
+	}
+	out := make([]agentchannels.DetachedSurvivor, 0, len(survivors))
+	for _, sv := range survivors {
+		out = append(out, agentchannels.DetachedSurvivor{
+			Handle: sv.Handle, ProfileKey: sv.ProfileKey,
+		})
+	}
+	globalChannels.DispatchDetachedSurvivors(sessionID, out)
 }
 
 // parentOfChildSession returns the parent session id when sessionID is a
