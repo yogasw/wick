@@ -10,6 +10,32 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.37.0](https://github.com/yogasw/wick/compare/v0.36.4...v0.37.0) — MCP & Connectors
+
+_Released on 2026-08-07_
+
+### Custom MCP Connector Management and Per-Instance Authentication
+#### Added
+*   Ability to rename and delete custom MCP connector definitions from the header kebab menu. Deletion requires typed confirmation and cascades to instances and credentials.
+*   A dedicated endpoint for renaming MCP connector definitions ensures key immutability and preserves instances, access tags, and MCP tool IDs.
+*   Per-instance authentication actions (Connect, Re-connect, Test auth) are now available in the instance row kebab menu, driven by a new `mcp_auth` field per row.
+*   `ProbeInstance` verifies credentials for a single instance row without affecting the connector's overall `LastTest` status.
+*   Refused or expired authentication tokens are reported as `ok=false` (a verdict on credentials, not a check failure).
+*   Instance rows flag broken authentication in red (expired with no refresh, or refused probe), overriding the account chip for clearer status.
+*   `resync-tools` now accepts an optional `instance_id` to probe using that specific instance's account; an instance from another connector is refused.
+#### Fixed
+*   Popup login flow for re-connecting instances: The callback now correctly closes the popup rather than redirecting, using a `Popup` flag in the login session. The MCP flow has its own popup helper signaling over `wick-mcp-oauth`. Success is claimed only upon a successfully reloaded and connected row.
+#### Improved
+*   UI clarity for MCP connector edit forms: The tool list is now labelled as a read-only preview, and its description is marked as connector-wide, pointing to the per-instance AI description.
+*   Long cURL-imported connector descriptions now wrap instead of overflowing the card.
+
+### Connectors
+#### Added
+*   Platform tag support for connector modules, enabling better categorization.
+
+---
+
+
 ## [v0.36.4](https://github.com/yogasw/wick/compare/v0.36.3...v0.36.4) — Sub-agent Banners
 
 _Released on 2026-08-07_
