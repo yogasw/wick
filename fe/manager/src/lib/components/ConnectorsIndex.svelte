@@ -349,8 +349,11 @@
                   Plugin · v{card.version}
                 </span>
               </span>
+              <!-- break-words + line-clamp: a cURL-imported description can be
+                   one long unbroken URL with nowhere to wrap, which otherwise
+                   overflows the card. -->
               {#if card.description}
-                <span class="mt-1 block text-xs leading-relaxed text-black-700 dark:text-black-600">{card.description}</span>
+                <span class="mt-1 block break-words line-clamp-2 text-xs leading-relaxed text-black-700 dark:text-black-600">{card.description}</span>
               {/if}
               {#if !card.arch_ok}
                 <span class="mt-2 block text-xs font-medium text-cau-400">
@@ -407,8 +410,11 @@
                 <span class="flex-shrink-0 rounded-full bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400" title={`Update available · v${installedPlugins[card.key].latest_version}`}>⬆ Update</span>
               {/if}
             </span>
+            <!-- break-words + line-clamp: a cURL-imported description can be
+                 one long unbroken URL with nowhere to wrap, which otherwise
+                 overflows the card. -->
             {#if card.description}
-              <span class="mt-1 block text-xs leading-relaxed text-black-700 dark:text-black-600">{card.description}</span>
+              <span class="mt-1 block break-words line-clamp-2 text-xs leading-relaxed text-black-700 dark:text-black-600">{card.description}</span>
             {/if}
             <span class="mt-2 block text-xs text-black-700 dark:text-black-600">
               {statsLine(card)}

@@ -65,7 +65,7 @@ func Module(ops *wfmcp.Ops) connector.Module {
 // workflow_test and workflow_test_coverage ops are functional.
 func ModuleWithRunner(ops *wfmcp.Ops, runner *wftest.Runner) connector.Module {
 	m := Meta()
-	m.DefaultTags = []tool.DefaultTag{tags.Connector}
+	m.DefaultTags = []tool.DefaultTag{tags.Connector, tags.Platform}
 	return connector.Module{
 		Meta:       m,
 		Operations: Operations(ops, runner),

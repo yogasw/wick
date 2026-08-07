@@ -123,8 +123,25 @@ export async function runHealthCheck(key: string, id: string): Promise<HealthChe
   return apiPost<HealthCheckResult>(`${rowBase(key, id)}/health-check`);
 }
 
-export async function resyncMcpTools(key: string): Promise<{ ok: boolean; operations: number }> {
-  return apiPost<{ ok: boolean; operations: number }>(`${connBase(key)}/resync-tools`);
+/* Probe ONE instance's stored credentials. Resolves with ok=false and a
+   reason for a refused/expired token — that's a verdict about the account,
+   not a transport failure, so it does not reject. */
+export async function testInstanceAuth(
+  key: string,
+  id: string,
+): Promise<import("./types.js").InstanceAuthTestResult> {
+  return apiPost<import("./types.js").InstanceAuthTestResult>(`${rowBase(key, id)}/test-auth`);
+}
+
+/* Re-sync a custom MCP connector's tool catalog. instanceID probes under
+   that instance's own OAuth account (servers may list different tools per
+   account); omit it to probe with the connector's default credentials. */
+export async function resyncMcpTools(
+  key: string,
+  instanceID?: string,
+): Promise<{ ok: boolean; operations: number }> {
+  const q = instanceID ? `?instance_id=${encodeURIComponent(instanceID)}` : "";
+  return apiPost<{ ok: boolean; operations: number }>(`${connBase(key)}/resync-tools${q}`);
 }
 
 /* Per-row admin controls (Phase 7a). Each POSTs JSON to a /manager/api
@@ -314,6 +331,12 @@ export async function updateCustomDraft(defID: string, draft: Draft): Promise<Sa
 
 export async function deleteCustomDef(defID: string): Promise<void> {
   await apiPost(`${customBase}/${encodeURIComponent(defID)}/delete`);
+}
+
+/* Rename a custom connector's display name. The connector key is immutable
+   server-side, so instances, access tags, and MCP tool ids are unaffected. */
+export async function renameCustomDef(defID: string, name: string): Promise<void> {
+  await apiPost(`${customBase}/${encodeURIComponent(defID)}/rename`, { name });
 }
 
 export async function setCustomDefDisabled(defID: string, disabled: boolean): Promise<boolean> {

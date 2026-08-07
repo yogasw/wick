@@ -258,7 +258,7 @@
             <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Streamable-HTTP endpoint.</p>
           </div>
           <div class="col-span-12">
-            <span class="block text-xs font-medium text-black-800 dark:text-black-600">Description (optional)</span>
+            <span class="block text-xs font-medium text-black-800 dark:text-black-600">Description (optional) <span class="font-normal">· applies to every instance</span></span>
             <div class="mt-1">
               <TextArea
                 value={form.description}
@@ -268,7 +268,7 @@
                 ariaLabel="Description"
               />
             </div>
-            <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Empty = adopt the server's self-description (from its <code class="font-mono">initialize</code> instructions) and keep it fresh on every re-sync. Write your own to lock it — clearing the field hands it back to the server.</p>
+            <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Empty = adopt the server's self-description (from its <code class="font-mono">initialize</code> instructions) and keep it fresh on every re-sync. Write your own to lock it — clearing the field hands it back to the server. For notes about one specific instance (which account it uses, when to pick it), use that instance's <strong>AI description</strong> instead — the agent reads both.</p>
           </div>
         </div>
 
@@ -312,9 +312,10 @@
         </div>
 
         <div class="mt-6 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-4">
-          <p class="text-sm font-semibold text-black-900 dark:text-white-100">Tools</p>
+          <p class="text-sm font-semibold text-black-900 dark:text-white-100">Tools <span class="ml-1 font-normal text-black-700 dark:text-black-600">· preview</span></p>
           <p class="mt-0.5 text-xs text-black-800 dark:text-black-600">
-            Every tool this server lists is exposed automatically. Use Exclude to hide a tool.
+            Read-only list of what this server currently exposes — nothing here is stored. Wick re-reads it on every
+            sync, so new server-side tools appear on their own. Use Exclude to hide one.
           </p>
           <div class="mt-3">
             <McpToolExcludeList {tools} excluded={form.excluded} onChange={(ex) => { form.excluded = ex; }} />
