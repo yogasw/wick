@@ -104,12 +104,22 @@ func (s *Service) Collect(ctx context.Context, delegationID, actorID string, isA
 	out.Envelope = EnvelopeOf(d)
 
 	// Guarded: only the first collector gets it. A second call sees the
-	// result again but is told it was already taken, so the leader does
-	// not act on the same answer twice.
+	// result again but is told it was already handed over, so the leader
+	// does not act on the same answer twice.
+	//
+	// "Already" does NOT imply this leader ran collect before. The common
+	// case is the opposite: delivery_sink=session marks the row collected
+	// when it wakes the leader WITH the result (see deliver), so the very
+	// first manual collect after an async run lands here. The wording has
+	// to survive that reading — a note saying "you have seen this" to an
+	// agent that has not would be read as "this is stale, discard it", and
+	// a correct result would be thrown away.
 	if ok, err := s.Repo.MarkCollected(ctx, d.ID); err != nil {
 		return nil, err
 	} else if !ok {
-		out.Note = "Already collected earlier — this is a repeat of a result you have seen. Do not act on it a second time."
+		out.Note = "This result was already handed over once — most likely delivered to you when this sub-agent " +
+			"finished. The content above is the real, complete result: use it if you have not acted on it yet, " +
+			"but do not act on it a second time if you already have."
 	}
 	return out, nil
 }

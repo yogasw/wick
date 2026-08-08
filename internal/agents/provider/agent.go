@@ -199,6 +199,11 @@ type Options struct {
 	// SpawnOptions so providers write session-scoped files (codex's
 	// soul.md) there instead of the shared project workspace.
 	SessionDir string
+	// SessionID is the session's real id, forwarded into every
+	// SpawnOptions. Carried explicitly because it cannot be recovered
+	// from SessionDir: a sub-agent's path is nested while its id is flat
+	// (see SpawnOptions.SessionID).
+	SessionID string
 	// MessageEncoder formats a user message before writing to stdin.
 	// nil = default Claude stream-json envelope. Ignored unless SendMode
 	// is SendAppend.
@@ -332,6 +337,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
 		Workspace:      a.cfg.Workspace,
 		SessionDir:     a.cfg.SessionDir,
+		SessionID:      a.cfg.SessionID,
 		ResumeID:       a.resumeID,
 		ExtraEnv:       a.cfg.ExtraEnv,
 		ExtraArgs:      a.cfg.ExtraArgs,
@@ -486,6 +492,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
 		Workspace:      a.cfg.Workspace,
 		SessionDir:     a.cfg.SessionDir,
+		SessionID:      a.cfg.SessionID,
 		ResumeID:       resumeID,
 		ExtraEnv:       a.cfg.ExtraEnv,
 		ExtraArgs:      a.cfg.ExtraArgs,
