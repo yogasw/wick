@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+*   **Claude spawns failing on Windows with "The filename or extension is too long"**: The system prompt is now passed via `--append-system-prompt-file` (a per-session file) instead of inlined on the command line. Wick's preset alone is ~28KB, which could push the argv past Windows's 32767-character `CreateProcess` limit and fail every `claude` spawn with that misleading error naming the binary.
+*   **Sub-agent supervision silently no-op'd**: A sub-agent's `X-Wick-Session-Id` header was derived from its storage directory's basename, which doesn't match its real (flat) session id. This made ops that resolve a delegation from the caller's own session report "not a delegation" for every sub-agent call.
 
 ---
 
