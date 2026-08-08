@@ -3,7 +3,7 @@
   import { get } from "svelte/store";
   import { Effect } from "effect";
   import { WickClientLayer, listAgentProfiles } from "@wick-fe/common-api";
-  import { toastError, toastOk } from "@wick-fe/common-stores";
+  import { toastError, toastOk, toastWarn } from "@wick-fe/common-stores";
   import { ConfirmDialog, Composer } from "@wick-fe/common-ui";
   import { NOTIFY_KEY } from "../notify-pref.js";
 
@@ -33,6 +33,7 @@
     getSubAgentPanel,
     interruptSubAgent,
     interruptAllSubAgents,
+    continueSubAgent,
     liveSubAgents,
     getMessages,
     bumpHops,
@@ -671,6 +672,25 @@
     const row = subAgents.find((s) => s.delegation_id === delegationId);
     if (row) selectedSubAgent = row.child_session_id;
     loadSubAgents();
+  }
+
+  // Sends a finished sub-agent back to work in its own session.
+  //
+  // `resumed: false` is surfaced as a warning rather than swallowed: the
+  // sub-agent woke inside its old session but WITHOUT its transcript, so
+  // the instruction just sent has to stand on its own. A plain success
+  // toast there would tell the user their follow-up landed on an agent
+  // that remembers the work, when it does not.
+  function continueSubAgentRow(delegationId: string, task: string) {
+    run(continueSubAgent(base, delegationId, task).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        if (res.resumed) toastOk("Sub-agent continued");
+        else toastWarn("Continued, but it could not resume its earlier work — it is starting fresh");
+        loadSubAgents();
+      })
+      .catch((e: unknown) =>
+        toastError(`Continue sub-agent: ${e instanceof Error ? e.message : String(e)}`),
+      );
   }
 
   function stopAllSubAgents() {
@@ -1571,6 +1591,7 @@
           onSelect={(cid) => { selectedSubAgent = selectedSubAgent === cid ? null : cid; }}
           onInterrupt={stopSubAgent}
           onInterruptAll={stopAllSubAgents}
+          onContinue={continueSubAgentRow}
           messages={agentMessages}
           {hopsLeft}
           onBumpHops={bumpAgentHops}
@@ -1708,6 +1729,7 @@
               onSelect={(cid) => { selectedSubAgent = selectedSubAgent === cid ? null : cid; }}
               onInterrupt={stopSubAgent}
               onInterruptAll={stopAllSubAgents}
+              onContinue={continueSubAgentRow}
               messages={agentMessages}
               {hopsLeft}
               onBumpHops={bumpAgentHops}

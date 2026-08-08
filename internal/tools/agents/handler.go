@@ -269,6 +269,7 @@ func Register(r tool.Router) {
 	r.GET("/api/sessions/{id}/messages", sessionMessages)
 	r.POST("/api/sessions/{id}/hops/reset", resetSessionHops)
 	r.POST("/api/delegations/{delegationID}/interrupt", interruptSubAgent)
+	r.POST("/api/delegations/{delegationID}/continue", continueSubAgent)
 	r.POST("/api/delegations/{delegationID}/message", takeOverSubAgent)
 
 	// JSON API — fleet monitor (read-only; stopping lives on the

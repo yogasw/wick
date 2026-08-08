@@ -12,6 +12,7 @@ All notable changes to Wick are documented here.
 *   `progress` op (`wick_agent_progress`) lets a sub-agent report where it is mid-task, waking the supervising agent without ending its own turn. `delegate` gained a `supervised` flag to ask a sub-agent to file these.
 *   `list_agents` now also returns `instances` — the sub-agents that already exist in the conversation, including finished ones, so a leader can continue or message one instead of spawning a stranger.
 *   `collect` on a still-running delegation now returns `progress` (a peek at its in-flight work) and `last_report` (its latest `progress` note) instead of an empty pending result.
+*   **Continue** button in the Sub-agents rail panel, on any stopped row. Asks what to do next, then sends that sub-agent back to work in its own session. Warns explicitly when the transcript could not be resumed, so a follow-up is never written on the assumption the agent remembers work it has lost.
 #### Changed
 *   Messaging a stopped sub-agent is now allowed for every terminal status (not just `done`); the recipient resumes in its own session with its transcript intact where possible.
 
