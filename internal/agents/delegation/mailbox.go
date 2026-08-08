@@ -104,10 +104,21 @@ func (s *Service) SendMessage(ctx context.Context, in SendInput) (*SendResult, e
 	if target == nil {
 		return nil, fmt.Errorf("%w: @%s is not part of this conversation", ErrUnknownHandle, in.ToHandle)
 	}
-	// A stopped agent is refused rather than queued: a message that waits
-	// forever on a dead recipient looks identical to one being considered.
-	if entity.IsTerminalDelegationStatus(target.Status) && target.Status != entity.DelegationDone {
-		return nil, fmt.Errorf("@%s stopped (%s) and cannot take messages", in.ToHandle, target.Status)
+	// A finished agent is NOT refused. It used to be: a message to a dead
+	// recipient would queue forever, indistinguishable from one being
+	// considered. That reasoning stopped holding once the waker respawns a
+	// child in its own session — the reader does arrive, and it arrives
+	// with its transcript, so "@developer keep going" reaches the agent
+	// that did the work rather than nobody.
+	//
+	// Refusing it was also what made a stopped sub-agent unreachable in
+	// the one state where reaching it matters most: stopped_max_turns
+	// means the work was cut short, not that it was wrong.
+	//
+	// What IS still refused is a row with no session to wake at all — a
+	// message there really would go nowhere.
+	if target.ChildSessionID == "" {
+		return nil, fmt.Errorf("@%s has no session to deliver to", in.ToHandle)
 	}
 
 	capacity := s.InboxCap

@@ -65,13 +65,13 @@ func TestEveryOperationIsDescribed(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"list_agents", "delegate", "collect", "report_result", "incident", "create_agent", "tasks", "message", "reply", "stop", "list_access"} {
+	for _, want := range []string{"list_agents", "delegate", "continue", "collect", "progress", "report_result", "incident", "create_agent", "tasks", "message", "reply", "stop", "list_access"} {
 		if !seen[want] {
 			t.Fatalf("missing op %q", want)
 		}
 	}
-	if count != 11 {
-		t.Fatalf("got %d ops, want 11", count)
+	if count != 13 {
+		t.Fatalf("got %d ops, want 13", count)
 	}
 }
 
@@ -92,6 +92,8 @@ func TestOpsFailClosedWithoutService(t *testing.T) {
 		"list_access":   h.listAccess,
 		"report_result": h.reportResult,
 		"incident":      h.incident,
+		"continue":      h.continueDelegation,
+		"progress":      h.progress,
 	} {
 		if _, err := fn(c); err == nil {
 			t.Fatalf("%s returned no error with delegation unconfigured", name)
@@ -188,5 +190,57 @@ func TestUnwiredFieldsSaySo(t *testing.T) {
 		if !strings.Contains(strings.ToUpper(f.Description), "NOT ENFORCED") {
 			t.Fatalf("%q must say it is not enforced yet, got %q", f.Key, f.Description)
 		}
+	}
+}
+
+// The whole point of continue is that the model reaches for it INSTEAD of
+// spawning a stranger. Both halves have to be said: what it does, and
+// that the task field is the next step rather than the brief again — a
+// restated brief makes a resumed agent start over, which looks identical
+// to the bug this op exists to fix.
+func TestContinueOpTellsTheModelHowItDiffersFromDelegate(t *testing.T) {
+	op := findOp(t, "continue")
+	desc := strings.ToLower(op.Description)
+	for _, want := range []string{"same session", "next instruction", "needs_followup", "message"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("continue description never mentions %q — the model cannot tell when to pick it:\n%s", want, op.Description)
+		}
+	}
+	// Destructive would default the toggle OFF on every row, leaving a
+	// leader able to start work it cannot carry forward.
+	if op.Destructive {
+		t.Fatal("continue must not be destructive: it adds work, it never discards any")
+	}
+}
+
+// Continuing must not offer to change what the agent IS. Those were
+// settled at spawn, and altering one mid-life continues a different agent
+// than the transcript being resumed belongs to.
+func TestContinueOpCannotRedefineTheAgent(t *testing.T) {
+	op := findOp(t, "continue")
+	for _, forbidden := range []string{"profile", "workspace", "memory_mode"} {
+		if _, ok := fieldByName(op, forbidden); ok {
+			t.Fatalf("continue accepts %q — that continues a DIFFERENT agent than the one being resumed", forbidden)
+		}
+	}
+	for _, required := range []string{"delegation_id", "task"} {
+		if _, ok := fieldByName(op, required); !ok {
+			t.Fatalf("continue has no %q input", required)
+		}
+	}
+}
+
+// delegate's continue_id is a shortcut onto the same handler. It has to
+// stay ONE sentence: that description is what steers the model between
+// spawning and following up, and a second mode explained at length there
+// is what makes it choose wrong.
+func TestDelegateContinueIDPointsAtTheContinueOp(t *testing.T) {
+	op := findOp(t, "delegate")
+	desc, ok := fieldByName(op, "continue_id")
+	if !ok {
+		t.Fatal("delegate has no continue_id input")
+	}
+	if !strings.Contains(strings.ToLower(desc), "continue") {
+		t.Fatalf("continue_id never names the continue op: %q", desc)
 	}
 }
