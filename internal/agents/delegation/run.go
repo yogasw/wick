@@ -881,7 +881,6 @@ func (s *Service) await(
 						text.Reset()
 						continue
 					}
-					s.finish(ctx, row, entity.DelegationRunning, entity.DelegationDone, out, "", turns)
 					return s.doneResult(ctx, row, turns, tokens(), out), nil
 				}
 			}
@@ -897,6 +896,7 @@ func (s *Service) await(
 // otherwise told a role produced unaided work that a human actually
 // shaped.
 func (s *Service) doneResult(ctx context.Context, row *entity.AgentDelegation, turns, tokens int, out string) *Result {
+	out = s.authoritativeResult(ctx, row, out)
 	s.finish(ctx, row, entity.DelegationRunning, entity.DelegationDone, out, "", turns)
 	res := &Result{
 		DelegationID: row.ID, Profile: row.ProfileKey,

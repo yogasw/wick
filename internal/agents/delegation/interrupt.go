@@ -2,6 +2,7 @@ package delegation
 
 import (
 	"context"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -76,23 +77,44 @@ func (s *Service) Interrupt(ctx context.Context, delegationID, actorID string, i
 		return OutcomeDequeued, nil
 	}
 
-	// Running: capture partial output first.
+	// Running: capture whatever work exists before killing it.
+	//
+	// PartialText is the in-flight turn's buffer, which is empty between
+	// turns — and a respawn-per-turn provider (codex) is between turns for
+	// most of its life. Stopping one there recorded result:"" and the
+	// operator lost every completed step, even though the sub-agent had
+	// been reporting them all along.
+	//
+	// So fall back to its last progress note. It is not the whole answer
+	// and does not pretend to be, but "steps 1-4 done, starting 5" is the
+	// difference between a partial result and none.
 	partial := ""
 	if s.Runner != nil {
-		partial = s.Runner.PartialText(d.ChildSessionID, d.ChildAgent)
+		partial = strings.TrimSpace(s.Runner.PartialText(d.ChildSessionID, d.ChildAgent))
+	}
+	if partial == "" && strings.TrimSpace(d.LastReport) != "" {
+		partial = "(stopped mid-run; this is the sub-agent's last progress report, not a finished answer)\n\n" +
+			strings.TrimSpace(d.LastReport)
 	}
 
-	// Unblock any Run waiting on this child. When a waiter exists it owns
-	// the terminal write and the kill, so returning here avoids two paths
-	// racing to close the same row.
-	if s.cancelInflight(delegationID) {
-		return OutcomeKilled, nil
-	}
-
-	// No local waiter (e.g. the leader's request already went away):
-	// stop the process directly. A missing agent is not a failure — it
-	// means the child exited on its own between the status read and now,
-	// and the status still needs writing.
+	// Kill FIRST, unconditionally, before handing off to any waiter.
+	//
+	// This used to return as soon as cancelInflight found a waiter, on the
+	// grounds that the waiter owns the kill. It does — but only once its
+	// select actually reaches the ctx.Done branch, and a child that is
+	// streaming keeps that select busy on event branches. Meanwhile a
+	// respawn-per-turn provider (codex) starts its NEXT turn from a
+	// process the waiter has not been told about yet.
+	//
+	// The observed result: Stop answered "killed", the row went
+	// interrupted, and the sub-agent worked on to step 10 — only its
+	// progress calls started failing, because the row was terminal. Work
+	// carried on with nobody watching, which is the opposite of what
+	// pressing Stop asks for.
+	//
+	// Killing here is safe to do twice: KillAgent on an already-stopped
+	// agent returns ErrAgentNotActive, and the waiter's own kill is a
+	// no-op on a dead process.
 	if s.Runner != nil {
 		if err := s.Runner.KillAgent(d.ChildSessionID, d.ChildAgent); err != nil {
 			log.Debug().Err(err).Str("delegation", delegationID).
@@ -100,9 +122,28 @@ func (s *Service) Interrupt(ctx context.Context, delegationID, actorID string, i
 		}
 	}
 
+	// Then unblock any Run waiting on this child. When a waiter exists it
+	// owns the terminal write, so returning here avoids two paths racing
+	// to close the same row.
+	if s.cancelInflight(delegationID) {
+		return OutcomeKilled, nil
+	}
+
+	// Re-read the turn count instead of reusing the snapshot taken at the
+	// top of this function. The child kept working while we killed it, and
+	// UpdateTurns writes on every Done — so the snapshot can be several
+	// turns stale, and writing it back walks the counter BACKWARDS. An
+	// interrupted delegation then reports fewer turns than it really spent
+	// (observed: 1 → 0), which under-reports the bill and makes a
+	// continuation's budget arithmetic wrong.
+	turns := d.TurnsUsed
+	if fresh, ferr := s.Repo.Get(ctx, delegationID); ferr == nil && fresh.TurnsUsed > turns {
+		turns = fresh.TurnsUsed
+	}
+
 	ok, err := s.Repo.FinishGuarded(ctx, delegationID,
 		entity.DelegationRunning, entity.DelegationInterrupted,
-		partial, "", d.TurnsUsed)
+		partial, "", turns)
 	if err != nil {
 		return "", err
 	}
