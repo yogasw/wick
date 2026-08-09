@@ -300,6 +300,12 @@ type Result struct {
 	// WorkspaceNote explains a downgraded workspace mode (e.g. worktree
 	// requested on a non-git project).
 	WorkspaceNote string `json:"workspace_note,omitempty"`
+	// TurnsNote explains a clamped max_turns. Same contract as
+	// WorkspaceNote: a request the system quietly reduces must say so —
+	// a leader that asked for 120 turns and got 40 planned a task the
+	// budget cannot carry, and deserves to find that out at delegate
+	// time, not from error_max_turns an hour later.
+	TurnsNote string `json:"turns_note,omitempty"`
 	// Envelope is the sub-agent's answer as typed fields. Additive: Result
 	// still carries the prose, so a caller that ignores this sees no
 	// change. `structured: false` means the sub-agent never called
@@ -376,6 +382,16 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 	}
 	maxTurns := EffectiveMaxTurns(req.MaxTurns, profile, limits)
 	maxTokens := EffectiveMaxTokens(req.MaxTokens, profile, limits)
+	// Clamping keeps a too-ambitious request working — but silently is how
+	// a leader that asked for 120 turns finds out from error_max_turns 49
+	// calls in that its sub-agent only ever had 40. Same say-the-downgrade
+	// contract as workspaceNote below.
+	turnsNote := ""
+	if req.MaxTurns > maxTurns {
+		turnsNote = fmt.Sprintf(
+			"max_turns clamped: you asked for %d, the cap is %d — plan the task to fit %d turns or raise the delegation turn cap in agents settings",
+			req.MaxTurns, maxTurns, maxTurns)
+	}
 
 	mode := NormalizeMode(req.Mode, profile.DefaultMode)
 	sink := req.DeliverySink
@@ -441,6 +457,7 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 		Workspace:     workspace,
 		WorkspacePath: workspacePath,
 		WorkspaceNote: workspaceNote,
+		TurnsNote:     turnsNote,
 		SquadKey:      req.SquadKey,
 		Status:        entity.DelegationQueued,
 		MaxTurns:      maxTurns,
@@ -529,6 +546,7 @@ func (s *Service) execute(
 	childSessionID := row.ChildSessionID
 	workspacePath := row.WorkspacePath
 	workspaceNote := row.WorkspaceNote
+	turnsNote := row.TurnsNote
 
 	// An async delegation outlives the request that started it, so its
 	// work must not hang off that request's context — the HTTP handler
@@ -644,6 +662,7 @@ func (s *Service) execute(
 				"Do not wait on it here, and do not invent its answer. " +
 				"(wick_agent_collect with this delegation_id retrieves it manually if it never arrives.)",
 			WorkspaceNote: workspaceNote,
+			TurnsNote:     turnsNote,
 		}, nil
 	}
 
@@ -652,6 +671,7 @@ func (s *Service) execute(
 	if res != nil {
 		res.Mode = ModeForeground
 		res.WorkspaceNote = workspaceNote
+		res.TurnsNote = turnsNote
 	}
 	return res, err
 }
@@ -758,6 +778,30 @@ func (s *Service) await(
 		_ = s.Repo.UpdateUsage(context.WithoutCancel(ctx), row.ID, usageIn, usageOut, tokens())
 	}
 
+	// providerTurns is the provider's OWN turn count, read from the raw
+	// events (claude's result carries num_turns). Our `turns` counts
+	// normalized Done events — which for a single agentic run that dies
+	// mid-loop is still ZERO, because no Done ever arrived. A sub-agent
+	// that spent 49 calls then hit the provider's turn cap was recorded as
+	// turns_used:0, which under-reports the bill and poisons a
+	// continuation's budget arithmetic. Trust whichever counter is larger.
+	providerTurns := 0
+	recordProviderTurns := func(raw string) {
+		if n := firstIntField(raw, "num_turns", "numTurns"); n > providerTurns {
+			providerTurns = n
+		}
+	}
+	billedTurns := func() int {
+		if providerTurns > turns {
+			return providerTurns
+		}
+		return turns
+	}
+
+	withLastReport := func(out string) string {
+		return s.enrichWithLastReport(ctx, row.ID, out)
+	}
+
 	// finalText prefers accumulated stream text, falling back to whatever
 	// the runner still holds for an in-flight turn. The fallback matters
 	// on the kill paths, where the last turn never reaches Done and so
@@ -782,7 +826,8 @@ func (s *Service) await(
 			// Cancelled: either a human interrupt (Interrupt cancels the
 			// inflight context) or the leader's own context dying. Capture
 			// partial work and hand it back as a normal result.
-			out := finalText()
+			out := withLastReport(finalText())
+			turns = billedTurns()
 			_ = s.Runner.KillAgent(spec.SessionID, spec.AgentName)
 			ok, _ := s.Repo.FinishGuarded(ctx, row.ID, entity.DelegationRunning, entity.DelegationInterrupted, out, "", turns)
 			status := entity.DelegationInterrupted
@@ -807,12 +852,20 @@ func (s *Service) await(
 			// Usage can ride any event, so account for it before the type
 			// switch decides whether this event ends the run.
 			recordUsage(ev.Raw)
+			recordProviderTurns(ev.Raw)
 
 			switch ev.Type {
 			case event.TextDelta:
 				text.WriteString(ev.Text)
 			case event.Error:
-				out := finalText()
+				// The provider killed the run itself (claude's
+				// error_max_turns rides this path as is_error=true on its
+				// result). The streamed accumulator holds only the model's
+				// early narration — the actual position lives in
+				// last_report, and the provider's own num_turns is the
+				// only honest turn count.
+				out := withLastReport(finalText())
+				turns = billedTurns()
 				s.finish(ctx, row, entity.DelegationRunning, entity.DelegationFailed, out, ev.Text, turns)
 				return &Result{
 					DelegationID: row.ID, Profile: row.ProfileKey,
@@ -829,7 +882,8 @@ func (s *Service) await(
 				// actually reported usage; 0 means "unknown", not "free",
 				// so an unreporting provider is bounded by turns alone.
 				if spec.MaxTokens > 0 && tokens() >= spec.MaxTokens {
-					out := finalText()
+					out := withLastReport(finalText())
+					turns = billedTurns()
 					_ = s.Runner.KillAgent(spec.SessionID, spec.AgentName)
 					s.finish(ctx, row, entity.DelegationRunning, entity.DelegationStoppedBudget, out, "", turns)
 					return &Result{
@@ -847,7 +901,8 @@ func (s *Service) await(
 				// providers that have no such flag, which is the whole
 				// point of enforcing it wick-side.
 				if turns >= spec.MaxTurns {
-					out := finalText()
+					out := withLastReport(finalText())
+					turns = billedTurns()
 					_ = s.Runner.KillAgent(spec.SessionID, spec.AgentName)
 					s.finish(ctx, row, entity.DelegationRunning, entity.DelegationStoppedMaxTurns, out, "", turns)
 					return &Result{
@@ -894,6 +949,32 @@ func (s *Service) await(
 			}
 		}
 	}
+}
+
+// enrichWithLastReport augments a kill/error-path result with the
+// sub-agent's own freshest progress note.
+//
+// The stream accumulator only holds STREAMED text, and a sub-agent that
+// worked through its steps by calling tools streamed almost nothing —
+// its early narration. On error_max_turns that narration became the
+// recorded result while the real position ("step 48 of 80") sat in
+// last_report, invisible to collect's result field: 48 steps of work
+// reported lost. The row is re-fetched because any snapshot from run
+// start predates every report filed since. Success paths must NOT use
+// this — a finished answer needs no progress appendix.
+func (s *Service) enrichWithLastReport(ctx context.Context, id, out string) string {
+	fresh, err := s.Repo.Get(context.WithoutCancel(ctx), id)
+	if err != nil {
+		return out
+	}
+	lr := strings.TrimSpace(fresh.LastReport)
+	if lr == "" || strings.Contains(out, lr) {
+		return out
+	}
+	if out == "" {
+		return "(unfinished — this is the sub-agent's last progress report, not an answer)\n\n" + lr
+	}
+	return out + "\n\n(sub-agent's last progress report: " + lr + ")"
 }
 
 // doneResult builds the success result and records the outcome.

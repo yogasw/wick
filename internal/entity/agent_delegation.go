@@ -121,6 +121,11 @@ type AgentDelegation struct {
 	// (e.g. worktree asked for on a non-git project, fell back to shared).
 	// Surfaced to the leader so a silent downgrade never looks like success.
 	WorkspaceNote string `gorm:"type:text;not null;default:''" json:"workspace_note"`
+	// TurnsNote records a clamped max_turns request (asked 120, cap 40) —
+	// same never-silent contract as WorkspaceNote. Without it the leader
+	// plans a task for a budget its sub-agent never had and learns the
+	// truth from error_max_turns instead of at delegate time.
+	TurnsNote string `gorm:"type:text;not null;default:''" json:"turns_note"`
 	// SquadKey links this delegation to the named squad that produced it.
 	SquadKey string `gorm:"type:varchar(128);not null;default:'';index" json:"squad_key"`
 	// UserSteered marks a delegation a human sent a message into
