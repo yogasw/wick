@@ -979,10 +979,15 @@ func NewServer() *Server {
 			}
 			return p
 		},
-		// A prompt only waits indefinitely while somebody can still answer
-		// it. Once every tab watching the session is gone, the wait loop's
-		// grace window expires and the command is blocked.
-		HasViewer: agentsBcast.HasSubscribers,
+		// A prompt only waits while somebody can still answer it. That is
+		// a browser tab on the SSE stream, OR a channel (Slack, Telegram)
+		// currently driving the session — it renders the same approval as
+		// buttons, so treating "no tab" as "unattended" would revoke them
+		// before anyone could press one.
+		HasViewer: func(sessionID string) bool {
+			return agentsBcast.HasSubscribers(sessionID) ||
+				channelReg.CanAnswerApproval(sessionID)
+		},
 	})
 	if amErr != nil {
 		log.Warn().Err(amErr).Msg("agents: gate ApprovalManager init failed — interactive approval disabled")

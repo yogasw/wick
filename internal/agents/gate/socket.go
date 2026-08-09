@@ -183,13 +183,27 @@ func (p WaitPolicy) awaitDecision(
 		}
 	}
 
-	// Viewer-tracking mode. lastSeen is the most recent moment a tab
-	// was observed; it starts now so a request that arrives during a
-	// reload gets the full grace window before being judged.
+	// Viewer-tracking mode. The grace window exists to ride out a viewer
+	// that goes away — a page reload drops the SSE connection for a
+	// second or two, and blocking then would lose a prompt somebody is
+	// still sitting in front of.
+	//
+	// It does NOT apply before any viewer has been seen. A headless
+	// caller (Slack, cron, the API) has nobody to answer from the start,
+	// so waiting the window out only delays an inevitable block on every
+	// gated command. seen records whether a tab was ever observed.
 	ticker := time.NewTicker(viewerPollInterval)
 	defer ticker.Stop()
 	grace := p.grace()
+	seen := p.HasViewer()
 	lastSeen := time.Now()
+	if !seen {
+		// Nobody is watching yet. Give the browser one poll interval to
+		// attach — the request can land a beat before the tab subscribes,
+		// and a reload in that window would otherwise be judged as
+		// headless.
+		grace = viewerPollInterval * 2
+	}
 
 	for {
 		select {
@@ -201,6 +215,12 @@ func (p WaitPolicy) awaitDecision(
 			return giveUp("cancelled")
 		case <-ticker.C:
 			if p.HasViewer() {
+				if !seen {
+					// A viewer arrived — from here on this is a watched
+					// prompt and earns the full grace window.
+					seen = true
+					grace = p.grace()
+				}
 				lastSeen = time.Now()
 				continue
 			}

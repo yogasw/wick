@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -346,5 +347,138 @@ func TestListener_ExpiredRequestLeavesPending(t *testing.T) {
 	}
 	if l.Resolve("wv-3", DecisionApproveOnce, "late click") {
 		t.Error("Resolve accepted a decision for an expired request")
+	}
+}
+
+// A prompt that never had a viewer is not the same as one whose viewer
+// left. Nobody was there to miss it, so waiting out the full grace window
+// only delays a block that was inevitable — headless callers (Slack, cron,
+// the API) pay that delay on every gated command.
+func TestListener_NoViewerEverBlocksFast(t *testing.T) {
+	sockPath := socketPathFor(t)
+	l, err := NewListener(ListenerOptions{
+		SocketPath: sockPath,
+		Timeout:    time.Hour, // proves the block came from viewer absence
+		Policy: func(ApprovalRequest) WaitPolicy {
+			return WaitPolicy{
+				TimeoutEnabled: false,
+				Grace:          10 * time.Second, // long enough that waiting it out would fail this test
+				HasViewer:      func() bool { return false },
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	defer l.Close()
+
+	start := time.Now()
+	resp := dialAndSend(t, sockPath, ApprovalRequest{ID: "nv-1", SessionID: "S1", Cmd: "ls"})
+	elapsed := time.Since(start)
+
+	if resp.Decision != DecisionBlock {
+		t.Errorf("Decision: got %q, want %q", resp.Decision, DecisionBlock)
+	}
+	if resp.Reason != "no viewer" {
+		t.Errorf("Reason: got %q, want %q", resp.Reason, "no viewer")
+	}
+	// Should resolve on the first poll, not after the grace window.
+	if elapsed > 3*time.Second {
+		t.Errorf("waited %v for a prompt nobody was watching — grace should not apply when no viewer was ever seen", elapsed)
+	}
+}
+
+// The grace window still protects a viewer that goes away mid-wait, which
+// is what makes a page reload survivable.
+func TestListener_GraceAfterViewerLeaves(t *testing.T) {
+	sockPath := socketPathFor(t)
+	var watching atomic.Bool
+	watching.Store(true)
+	l, err := NewListener(ListenerOptions{
+		SocketPath: sockPath,
+		Timeout:    time.Hour,
+		Policy: func(ApprovalRequest) WaitPolicy {
+			return WaitPolicy{
+				TimeoutEnabled: false,
+				Grace:          1500 * time.Millisecond,
+				HasViewer:      func() bool { return watching.Load() },
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	defer l.Close()
+
+	done := make(chan ApprovalResponse, 1)
+	go func() {
+		done <- dialAndSend(t, sockPath, ApprovalRequest{ID: "nv-2", SessionID: "S1", Cmd: "sleep 999"})
+	}()
+
+	// Let the loop observe a viewer, then take it away (a reload).
+	time.Sleep(700 * time.Millisecond)
+	watching.Store(false)
+	start := time.Now()
+
+	select {
+	case resp := <-done:
+		if resp.Reason != "no viewer" {
+			t.Errorf("Reason: got %q, want %q", resp.Reason, "no viewer")
+		}
+		// The grace window must actually be honoured, or a reload blocks.
+		if time.Since(start) < time.Second {
+			t.Errorf("blocked %v after the viewer left — grace window was skipped, a reload would lose the prompt", time.Since(start))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("never blocked after the viewer left")
+	}
+}
+
+// A browser tab is not the only thing that can answer a prompt. Slack and
+// Telegram render the same approval as buttons, so a session driven from a
+// channel has a responder even with no tab open. Treating "no SSE
+// subscriber" as "nobody can answer" would blow those buttons away before
+// anyone could press them.
+func TestListener_ChannelCountsAsViewer(t *testing.T) {
+	sockPath := socketPathFor(t)
+	l, err := NewListener(ListenerOptions{
+		SocketPath: sockPath,
+		Timeout:    time.Hour,
+		Policy: func(ApprovalRequest) WaitPolicy {
+			return WaitPolicy{
+				TimeoutEnabled: false,
+				Grace:          500 * time.Millisecond,
+				// No browser, but a channel is holding the request.
+				HasViewer: func() bool { return true },
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	defer l.Close()
+
+	done := make(chan ApprovalResponse, 1)
+	go func() {
+		done <- dialAndSend(t, sockPath, ApprovalRequest{ID: "ch-1", SessionID: "S1", Cmd: "deploy"})
+	}()
+
+	select {
+	case resp := <-done:
+		t.Fatalf("blocked a channel-answerable prompt: decision=%q reason=%q", resp.Decision, resp.Reason)
+	case <-time.After(1500 * time.Millisecond):
+		// Still waiting well past the grace window — correct.
+	}
+
+	if !l.Resolve("ch-1", DecisionApproveOnce, "slack button") {
+		t.Fatal("Resolve reported the request was gone while a channel was watching")
+	}
+	select {
+	case resp := <-done:
+		if resp.Decision != DecisionApproveOnce {
+			t.Errorf("Decision: got %q, want %q", resp.Decision, DecisionApproveOnce)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("channel decision never reached the gate binary")
 	}
 }
