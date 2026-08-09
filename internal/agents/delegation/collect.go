@@ -2,6 +2,7 @@ package delegation
 
 import (
 	"context"
+	"strings"
 
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -34,9 +35,34 @@ type CollectResult struct {
 	// Pending marks a delegation that has not finished yet: Result is
 	// empty and the leader should carry on rather than wait here.
 	Pending bool `json:"pending,omitempty"`
+	// Progress is what a STILL-RUNNING sub-agent has produced so far,
+	// scraped from its in-flight turn. Empty on a terminal row, where
+	// Result is the real answer.
+	//
+	// It is a peek at work in flight, not a verdict: the sub-agent may
+	// contradict it before the turn ends. Its purpose is to let a
+	// supervising agent notice work going the wrong way EARLY, while a
+	// correction is still cheap — waiting for a terminal status means
+	// reviewing a wrong direction after it has been fully taken.
+	Progress string `json:"progress,omitempty"`
+	// LastReport is the sub-agent's own most recent progress note, if it
+	// filed one. Preferred over Progress when judging direction: it is the
+	// agent stating where it is, rather than a scrape of its prose.
+	LastReport string `json:"last_report,omitempty"`
 	// Envelope is the sub-agent's answer as typed fields, when it has one.
 	Envelope *ResultEnvelope `json:"envelope,omitempty"`
 }
+
+// pendingNote is what a leader is told about a delegation still working.
+//
+// It separates two things the previous wording ran together. "Do not
+// block on this" is right for a caller waiting on the ANSWER — that is
+// what the sink is for. It is wrong for a supervising agent deliberately
+// checking on progress, which is now a supported thing to do and the only
+// way to catch a sub-agent going astray before it finishes.
+const pendingNote = "Still working — this is a progress check, not the answer. The result arrives on its own; " +
+	"do not sit in a loop waiting for it here. If the progress below shows the wrong direction, correct it with " +
+	"message rather than waiting for it to finish."
 
 // Collect picks up one async delegation's result by id.
 //
@@ -62,7 +88,14 @@ func (s *Service) Collect(ctx context.Context, delegationID, actorID string, isA
 	}
 	if !entity.IsTerminalDelegationStatus(d.Status) {
 		out.Pending = true
-		out.Note = "Still running. Carry on with other work and collect again later; do not block on this."
+		out.Note = pendingNote
+		out.Progress = s.progressOf(d)
+		out.LastReport = d.LastReport
+		// Returns BEFORE MarkCollected, and must keep doing so. The
+		// one-shot guard belongs to the final answer; marking a running row
+		// collected would make its real result unreachable — the sub-agent
+		// would finish, and the leader would be told it had already seen an
+		// answer that was never handed over.
 		return out, nil
 	}
 
@@ -111,11 +144,28 @@ func (s *Service) CollectPending(ctx context.Context, parentSessionID string) ([
 			item.Note = collectNote(&row)
 			item.Envelope = EnvelopeOf(&row)
 		} else {
+			row := d
 			item.Pending = true
+			item.Note = pendingNote
+			item.Progress = s.progressOf(&row)
+			item.LastReport = d.LastReport
 		}
 		out = append(out, item)
 	}
 	return out, nil
+}
+
+// progressOf reads what a running sub-agent has produced so far.
+//
+// Best-effort: a runner that cannot answer costs the peek, never the
+// call. Only meaningful for a row still in flight — a terminal row's work
+// is in Result, and reading the runner for one would return whatever
+// happens to be left in a buffer for a process that has already gone.
+func (s *Service) progressOf(d *entity.AgentDelegation) string {
+	if s.Runner == nil || d == nil || entity.IsTerminalDelegationStatus(d.Status) {
+		return ""
+	}
+	return strings.TrimSpace(s.Runner.PartialText(d.ChildSessionID, d.ChildAgent))
 }
 
 // collectNote explains a non-clean terminal status to the leader, reusing

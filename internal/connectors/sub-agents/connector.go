@@ -81,6 +81,11 @@ type emptyInput struct{}
 type delegateInput struct {
 	Profile string `wick:"required;desc=Role key from list_agents (e.g. researcher)."`
 	Task    string `wick:"required;textarea;desc=The complete self-contained instruction. The sub-agent sees none of this conversation."`
+	// A shortcut onto the continue op, not a second implementation. Kept
+	// to one sentence on purpose: this description already steers the
+	// model's choice between spawning and following up, and spelling out
+	// a second mode here is what makes it pick the wrong one.
+	ContinueID string `wick:"desc=Set this to a delegation id to CONTINUE that sub-agent in its existing session instead of spawning a new one. See the continue op, which is the same thing said plainly."`
 	Context string `wick:"textarea;desc=Optional background the sub-agent needs. Not this conversation's transcript."`
 	// Turn and token caps are clamped to the system ceiling, never raised.
 	MaxTurns     int    `wick:"desc=Optional cap on the sub-agent's turns. Clamped to the system ceiling."`
@@ -89,7 +94,28 @@ type delegateInput struct {
 	DeliverySink string `wick:"desc=Where a background result goes: session (default) wakes you with it, channel posts it to the chat thread, none records it only."`
 	Workspace    string `wick:"desc=shared (default) or worktree for a private git worktree. Falls back to shared with a note on a non-git project."`
 	MemoryMode   string `wick:"desc=What this sub-agent is told beyond its task. no_history = nothing. state_summary (default) = one line per finished sibling. relevant_chunks = your context field only, curated by you. full_history = every sibling's full result, for audit and debugging only — expensive, noisy, and it biases the agent toward earlier conclusions."`
+	Supervised   bool   `wick:"desc=Ask this sub-agent to report progress as it works, waking you when it does. Turn it on for long work you intend to watch, so you can correct a wrong direction while it is still cheap. Off by default: a short task finishes before a report would be useful."`
 }
+
+type progressInput struct {
+	Note    string `wick:"required;textarea;desc=Where you are now, in a sentence or two: what you just finished and what you are moving to."`
+	Done    string `wick:"textarea;desc=Optional. What is finished so far, one item per line."`
+	Next    string `wick:"textarea;desc=Optional. What you are about to do next."`
+	Blocked string `wick:"textarea;desc=Optional. What is stopping you, if anything. Say it here rather than pushing on — the agent supervising you can unblock it."`
+}
+
+type continueInput struct {
+	DelegationID string `wick:"required;desc=The delegation to carry further, from delegate or collect."`
+	Task         string `wick:"required;textarea;desc=What to do NEXT. The sub-agent still has its earlier work in context, so give it the next step — restating the original brief invites it to start over."`
+	MaxTurns     int    `wick:"desc=Extra turns to grant for this leg, ADDED to what it already spent. Omit for another full allowance."`
+	MaxTokens    int    `wick:"desc=Extra tokens to grant for this leg, added the same way."`
+	Mode         string `wick:"desc=background (default, keeps whatever it ran as before) or foreground."`
+}
+
+// Deliberately absent from continueInput: profile, workspace, memory_mode.
+// All three were settled when the delegation was created, and changing
+// one mid-life would continue a DIFFERENT agent than the one whose
+// transcript is being resumed.
 
 type messageInput struct {
 	To   string `wick:"required;desc=Handle of the agent to message, without the @ (see list_agents)."`
@@ -180,10 +206,14 @@ func Operations(deps Deps) []connector.Category {
 	h := newHandlers(deps)
 	return []connector.Category{
 		connector.Cat("Delegation", "Hand work to another agent and collect the answer.",
-			connector.Op("list_agents", "List Roles",
-				"List the sub-agent roles you may delegate to. Returns [{key, name, description, provider, default_max_turns}]. "+
-					"Roles are scoped: you see the global ones plus any this project defines, with a project role shadowing a global one of the same key. "+
-					"Call this before delegate so you use a key that exists.",
+			connector.Op("list_agents", "List Roles and Live Sub-agents",
+				"Returns two lists. `agents` is the ROLES you may delegate to — [{key, name, description, provider, default_max_turns}], "+
+					"scoped so you see the global ones plus any this project defines, a project role shadowing a global one of the same key. "+
+					"`instances` is the sub-agents that already EXIST in this conversation — [{handle, role, delegation_id, status, live}] — "+
+					"including ones that have finished, which stay reachable. "+
+					"Read `instances` FIRST. An agent that already did related work can be continued or messaged for a fraction of what a fresh "+
+					"spawn costs, and it remembers what it did; delegating instead gets you a stranger who has to rediscover all of it. "+
+					"Call this before delegate, continue, or message so you use a key or handle that exists.",
 				emptyInput{}, h.listAgents, wickdocs.Docs{}),
 
 			connector.Op("delegate", "Delegate a Task",
@@ -198,11 +228,41 @@ func Operations(deps Deps) []connector.Category {
 					"Delegate when a sub-task wants a different role or would otherwise flood this conversation; do simple work yourself rather than paying a spawn.",
 				delegateInput{}, h.delegate, wickdocs.Docs{}),
 
+			// Not destructive: continuing ADDS work to a sub-agent that has
+			// already stopped. Nothing is discarded and nothing is undone, so
+			// defaulting the toggle off on every row would leave a leader able
+			// to start work it cannot carry forward — the exact gap this op
+			// exists to close.
+			connector.Op("continue", "Continue a Sub-agent",
+				"Carry an EXISTING delegation further in the SAME session, so the sub-agent keeps everything it "+
+					"learned. This is how you follow up: a new delegate call spawns a stranger with a blank context, "+
+					"while continue wakes the agent that did the work. "+
+					"Use it when a sub-agent finished but the job is not done ('needs_followup'), when it stopped at "+
+					"'stopped_max_turns' or 'stopped_budget' with partial work, or when you have reviewed its answer "+
+					"and want the next step done. "+
+					"`task` is the NEXT instruction, not the original brief — the sub-agent still has that. Restating it "+
+					"makes it start over. "+
+					"Turn and token grants are ADDED to what it already spent, so a turn-exhausted agent gets real room "+
+					"rather than a budget it has already used. "+
+					"Only for a delegation that has STOPPED: to steer one still working, use message. "+
+					"Check `resumed` in the reply — false means the transcript could not be recovered and the agent is "+
+					"working from nothing despite being in its old session, so your instruction must stand alone.",
+				continueInput{}, h.continueDelegation, wickdocs.Docs{}),
+
 			connector.Op("collect", "Collect a Background Result",
 				"Pick up the result of a background delegation started earlier. Pass delegation_id, or omit it to list everything waiting for this conversation. "+
 					"A delegation still running comes back pending=true — carry on with other work rather than looping on it. "+
 					"A result is handed over ONCE: if the reply says it was already collected, you have seen it before and must not act on it twice.",
 				collectInput{}, h.collect, wickdocs.Docs{}),
+
+			connector.Op("progress", "Report Your Progress",
+				"Tell the agent supervising you where you are, WHILE you are still working. It wakes them, so use it "+
+					"when you reach something they would want to know: a milestone finished, a plan that changed, or "+
+					"something blocking you. "+
+					"Report meaning, not activity — 'auth handler works, writing tests now', never 'read three files'. "+
+					"Do NOT wait for a reply; file it and keep working. If they want a change they will message you. "+
+					"This is not your answer: finish with report_result, which is a different op and ends your work.",
+				progressInput{}, h.progress, wickdocs.Docs{}),
 
 			connector.Op("report_result", "Report Your Result",
 				"Report your finished work as structured fields, so the agent that delegated to you can act on it without re-reading your prose. "+

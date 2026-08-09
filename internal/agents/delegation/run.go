@@ -173,6 +173,14 @@ type Service struct {
 	// Waker resumes an exited sub-agent so it can read its inbox.
 	// nil = messages queue but nobody is woken to read them.
 	Waker Waker
+	// Resumable reports whether a child's provider transcript can still be
+	// picked up — i.e. whether the next spawn will carry --resume rather
+	// than start blank. Read by Continue so a leader is told when its
+	// sub-agent woke up without its memory.
+	//
+	// nil = assume resumable. A wiring that cannot answer must not make
+	// every continuation announce a memory loss it has no evidence for.
+	Resumable func(childSessionID, agentName string) bool
 	// AskTimeout bounds a blocking ask. 0 = defaultAskTimeout.
 	AskTimeout time.Duration
 	// InboxCap bounds undelivered messages per handle. 0 = defaultInboxCap.
@@ -237,6 +245,10 @@ type Request struct {
 	// MemoryMode decides what the sub-agent is told about the rest of the
 	// conversation. Empty = the profile default, then state_summary.
 	MemoryMode string
+	// Supervised asks this sub-agent to file progress notes as it works,
+	// which wake the delegating agent. Off by default: a short task should
+	// not pay for reporting nobody is watching for.
+	Supervised bool
 	// SquadKey scopes which profiles the resulting sub-agent may reach.
 	SquadKey string
 	// TaskID links this delegation back to a board task, when one drove it.
@@ -285,6 +297,15 @@ type Result struct {
 	// change. `structured: false` means the sub-agent never called
 	// report_result and this was reconstructed from its closing message.
 	Envelope *ResultEnvelope `json:"envelope,omitempty"`
+	// Continued marks a result produced by Continue rather than by a fresh
+	// delegation — the same sub-agent, in the session it already had.
+	Continued bool `json:"continued,omitempty"`
+	// Resumed reports whether that continuation actually recovered the
+	// sub-agent's earlier transcript. Only meaningful with Continued.
+	// False means the session was reused but the memory was not, which the
+	// leader must know before writing a follow-up that refers back to work
+	// the sub-agent can no longer see.
+	Resumed bool `json:"resumed,omitempty"`
 }
 
 // interruptNote is the exact text handed to a leader whose sub-agent a
@@ -422,6 +443,7 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 		// with exactly the background its caller supplied.
 		ContextText: req.Context,
 		MemoryMode:  NormalizeMemoryMode(req.MemoryMode, profile.DefaultMemoryMode),
+		Supervised:  req.Supervised,
 	}
 	// Stamp the investigation round this delegation belongs to, so "is
 	// the round finished?" stays a query. One indexed lookup against a
@@ -698,11 +720,17 @@ func (s *Service) await(
 	spec ChildSpec,
 	ch <-chan StreamEvent,
 ) (*Result, error) {
+	// Seeded from the row, not zeroed. A continued delegation (see
+	// Continue) re-enters this loop on a row that already spent turns and
+	// tokens, and both caps are absolute: starting the counters at zero
+	// would make UpdateTurns walk the count backwards, drop the earlier
+	// spend from the bill, and hand a continuation the full budget again
+	// however many times it was continued.
 	var (
-		turns    int
+		turns    = row.TurnsUsed
 		text     strings.Builder
-		usageIn  int
-		usageOut int
+		usageIn  = row.InputTokens
+		usageOut = row.OutputTokens
 	)
 	tokens := func() int { return usageIn + usageOut }
 
@@ -1050,6 +1078,13 @@ func (s *Service) spawnPreamble(ctx context.Context, row *entity.AgentDelegation
 	}
 	if roster := s.spawnRosterBlock(ctx, row); roster != "" {
 		parts = append(parts, roster)
+	}
+	// Only for a delegation that asked to be supervised. Telling every
+	// sub-agent to file progress notes would wake leaders for work nobody
+	// is watching, and spend a turn on reporting for tasks that finish in
+	// two.
+	if row.Supervised {
+		parts = append(parts, SupervisionBrief)
 	}
 	return strings.Join(parts, "\n")
 }

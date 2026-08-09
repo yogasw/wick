@@ -60,8 +60,8 @@ import (
 	customconnector "github.com/yogasw/wick/internal/connectors/customconnector"
 	dtconn "github.com/yogasw/wick/internal/connectors/datatables"
 	"github.com/yogasw/wick/internal/connectors/notifications"
-	subagents "github.com/yogasw/wick/internal/connectors/sub-agents"
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
+	subagents "github.com/yogasw/wick/internal/connectors/sub-agents"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
@@ -1386,6 +1386,10 @@ func NewServer() *Server {
 		// Messaging: make an exited sub-agent addressable again, and say
 		// so when it can only come back without its memory.
 		Waker: poolWaker{pool: agentsPool, layout: agentsLayout},
+		// Continue: the same check, asked before a continuation rather
+		// than before a message, so a leader is told when its sub-agent
+		// came back to the session without its memory.
+		Resumable: poolWaker{pool: agentsPool, layout: agentsLayout}.resumable,
 		// Customer-facing drafts are masked on the way out. The drafter's
 		// prompt asks it not to include credentials; this is what makes
 		// that true when a prompt injection asks otherwise.
