@@ -15,6 +15,10 @@ All notable changes to Wick are documented here.
 #### Changed
 *   Messaging a stopped sub-agent is now allowed for every terminal status (not just `done`); the recipient resumes in its own session with its transcript intact where possible.
 
+### Fixed
+*   **Claude spawns failing on Windows with "The filename or extension is too long"**: The system prompt is now passed via `--append-system-prompt-file` (a per-session file) instead of inlined on the command line. Wick's preset alone is ~28KB, which could push the argv past Windows's 32767-character `CreateProcess` limit and fail every `claude` spawn with that misleading error naming the binary.
+*   **Sub-agent supervision silently no-op'd**: A sub-agent's `X-Wick-Session-Id` header was derived from its storage directory's basename, which doesn't match its real (flat) session id. This made ops that resolve a delegation from the caller's own session report "not a delegation" for every sub-agent call.
+
 ---
 
 ## [v0.37.0](https://github.com/yogasw/wick/compare/v0.36.4...v0.37.0) — MCP & Connectors
