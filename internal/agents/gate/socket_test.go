@@ -229,3 +229,122 @@ func TestIsApprove(t *testing.T) {
 		}
 	}
 }
+
+// ── Wait policy over the real socket ────────────────────────────────
+
+// TestListener_WaitsWhileViewerPresent: with the approval deadline off,
+// a prompt must outlive the fixed timeout for as long as a browser is
+// watching. This is the wire-level version — the gate binary's own
+// connection is what has to stay open.
+func TestListener_WaitsWhileViewerPresent(t *testing.T) {
+	sockPath := socketPathFor(t)
+	l, err := NewListener(ListenerOptions{
+		SocketPath: sockPath,
+		Timeout:    100 * time.Millisecond, // must not be what decides this
+		Policy: func(ApprovalRequest) WaitPolicy {
+			return WaitPolicy{
+				TimeoutEnabled: false,
+				Grace:          100 * time.Millisecond,
+				HasViewer:      func() bool { return true },
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	defer l.Close()
+
+	done := make(chan ApprovalResponse, 1)
+	go func() {
+		done <- dialAndSend(t, sockPath, ApprovalRequest{ID: "wv-1", SessionID: "S1", Cmd: "sleep 999"})
+	}()
+
+	select {
+	case resp := <-done:
+		t.Fatalf("returned early: decision=%q reason=%q", resp.Decision, resp.Reason)
+	case <-time.After(600 * time.Millisecond):
+	}
+
+	// Still pending, so a decision can still land.
+	if !l.Resolve("wv-1", DecisionApproveOnce, "user clicked") {
+		t.Fatal("Resolve reported the request was gone while a viewer was watching")
+	}
+	select {
+	case resp := <-done:
+		if resp.Decision != DecisionApproveOnce {
+			t.Errorf("Decision: got %q, want %q", resp.Decision, DecisionApproveOnce)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("gate connection never received the decision")
+	}
+}
+
+// TestListener_BlocksWhenViewerGone: nobody left to answer means the
+// command is blocked — the wait is conditional, not unconditional.
+func TestListener_BlocksWhenViewerGone(t *testing.T) {
+	sockPath := socketPathFor(t)
+	expired := make(chan string, 1)
+	l, err := NewListener(ListenerOptions{
+		SocketPath: sockPath,
+		Timeout:    time.Hour, // proves the block came from viewer loss
+		Policy: func(ApprovalRequest) WaitPolicy {
+			return WaitPolicy{
+				TimeoutEnabled: false,
+				Grace:          100 * time.Millisecond,
+				HasViewer:      func() bool { return false },
+			}
+		},
+		OnExpired: func(r ApprovalRequest, decision, reason string) {
+			select {
+			case expired <- r.ID + ":" + decision + ":" + reason:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	defer l.Close()
+
+	resp := dialAndSend(t, sockPath, ApprovalRequest{ID: "wv-2", SessionID: "S1", Cmd: "rm -rf /"})
+	if resp.Decision != DecisionBlock {
+		t.Errorf("Decision: got %q, want %q", resp.Decision, DecisionBlock)
+	}
+	if resp.Reason != "no viewer" {
+		t.Errorf("Reason: got %q, want %q", resp.Reason, "no viewer")
+	}
+
+	// The browser must be told, or a modal opened by another tab hangs
+	// around offering buttons that can only return 410.
+	select {
+	case got := <-expired:
+		if got != "wv-2:"+DecisionBlock+":no viewer" {
+			t.Errorf("OnExpired payload: got %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnExpired never fired")
+	}
+}
+
+// A request the wait loop gave up on must not still look pending, or a
+// late click would be delivered into a channel nobody reads.
+func TestListener_ExpiredRequestLeavesPending(t *testing.T) {
+	sockPath := socketPathFor(t)
+	l, err := NewListener(ListenerOptions{
+		SocketPath: sockPath,
+		Timeout:    100 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewListener: %v", err)
+	}
+	defer l.Close()
+
+	dialAndSend(t, sockPath, ApprovalRequest{ID: "wv-3", SessionID: "S1", Cmd: "ls"})
+
+	if _, ok := l.LookupPending("wv-3"); ok {
+		t.Error("expired request is still in the pending set")
+	}
+	if l.Resolve("wv-3", DecisionApproveOnce, "late click") {
+		t.Error("Resolve accepted a decision for an expired request")
+	}
+}

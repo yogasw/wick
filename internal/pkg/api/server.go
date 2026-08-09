@@ -965,6 +965,24 @@ func NewServer() *Server {
 			agentsBcast.PublishApprovalResolved(sessionID, requestID, decision)
 			channelReg.DispatchApprovalResolved(sessionID, requestID, decision)
 		},
+		// Read on every request so flipping the Permission Gate config
+		// applies to the next prompt without restarting the daemon.
+		WaitPolicy: func() gate.WaitPolicy {
+			p := gate.WaitPolicy{
+				TimeoutEnabled: configsSvc.GetOwned("agents", "approval_timeout_enabled") == "true",
+			}
+			// n > 0 only: a zero or unparseable value would otherwise mean
+			// "block instantly", which is never what an operator wants from
+			// a blank field. Zero falls back to DefaultApprovalTimeout.
+			if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "approval_timeout_sec")); err == nil && n > 0 {
+				p.Timeout = time.Duration(n) * time.Second
+			}
+			return p
+		},
+		// A prompt only waits indefinitely while somebody can still answer
+		// it. Once every tab watching the session is gone, the wait loop's
+		// grace window expires and the command is blocked.
+		HasViewer: agentsBcast.HasSubscribers,
 	})
 	if amErr != nil {
 		log.Warn().Err(amErr).Msg("agents: gate ApprovalManager init failed — interactive approval disabled")
@@ -2720,6 +2738,9 @@ func wickRequestApproval(ctx context.Context, mgr *gate.ApprovalManager, pool *a
 		Cmd:       cmd,
 		WorkDir:   cwd,
 		MatchKey:  matchKey,
+		// Stamped like the gate binary does, so a countdown rendered for
+		// an in-process request is measured from the same origin.
+		Timestamp: time.Now().UnixMilli(),
 	})
 	if gate.IsApprove(resp.Decision) {
 		return false, ""

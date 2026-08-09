@@ -103,6 +103,21 @@ func (b *Broadcaster) Subscribe(sessionID string) (<-chan Event, func()) {
 	return ch, unsub
 }
 
+// HasSubscribers reports whether any SSE connection is currently
+// watching sessionID. Global ("") subscribers count too: the sidebar
+// stream renders approval prompts as well, so a user sitting on the
+// session list is still able to answer one.
+//
+// Used by the approval gate to decide whether a prompt still has a
+// human behind it. Liveness is only as fresh as the SSE keepalive
+// (15s in serveStream) — a tab closed abruptly stays counted until the
+// next keepalive write fails and the handler unsubscribes.
+func (b *Broadcaster) HasSubscribers(sessionID string) bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.subs[sessionID]) > 0 || len(b.subs[""]) > 0
+}
+
 // Publish fires ev to all subscribers of sessionID and all global ("") subscribers.
 // Non-blocking: a full channel's event is dropped rather than blocking.
 func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) {
