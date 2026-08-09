@@ -2456,8 +2456,32 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		Addr:              addr,
 		Handler:           h,
 		ReadHeaderTimeout: 30 * time.Second,
-		// ReadTimeout and WriteTimeout unset — SSE connections stay open
-		// indefinitely and must not be cut by server-side timeouts.
+		// Close idle keep-alive connections OURSELVES, well before anything
+		// else on the path does it silently.
+		//
+		// With IdleTimeout unset, Go falls back to ReadTimeout — also unset
+		// here (deliberately: SSE streams must never be cut server-side), so
+		// an idle connection was kept forever. Nothing on the Go side ever
+		// closed it; instead the OS, a NAT, or an intermediary eventually
+		// dropped it WITHOUT a FIN that reached the browser. Chrome kept that
+		// socket in its keep-alive pool, believed it live, and wrote the next
+		// request into a dead one: the request stalls at the TCP layer with no
+		// error and no response — fetch neither resolves nor rejects, and the
+		// entry sits at "pending" indefinitely. That is the "server has been
+		// up a while, then suddenly everything hangs" report, and it needs no
+		// unusual load to trigger — just an idle tab.
+		//
+		// A server-initiated close is the fix because it is orderly: Go sends
+		// the FIN, Chrome retires the socket, and the next request opens a
+		// fresh one. 60s is comfortably under the ~2min idle window where
+		// intermediaries start reaping, and comfortably above normal
+		// think-time between requests on a live page.
+		//
+		// SSE is unaffected: IdleTimeout only applies between requests, and a
+		// stream always has one in flight. sw.js documents the client-side
+		// mitigation for the same failure (an 8s AbortController) — that stays
+		// as defence in depth for network-level stalls this cannot cover.
+		IdleTimeout: 60 * time.Second,
 		// BaseContext propagates the caller's logger (tray injects
 		// serverLogger here) into every request context. Without this,
 		// r.Context() defaults to context.Background() and middleware's
