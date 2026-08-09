@@ -48,10 +48,22 @@ func (s *Service) Interrupt(ctx context.Context, delegationID, actorID string, i
 		return "", ErrForbidden
 	}
 
-	// Cheap pre-check: skip the kill entirely when the row is already
-	// closed. This is an optimisation, not the correctness guarantee —
-	// the guarded write below is what actually makes the race safe.
+	// The row being closed does NOT mean the process is gone. A
+	// prematurely closed delegation (a turn-boundary text mistaken for
+	// the answer, a lost event) leaves the sub-agent alive and working
+	// with nobody supervising it — and answering "already_done" here
+	// while its progress kept flowing was exactly the observed bug: Stop
+	// became a no-op on the one process the operator most wanted dead.
+	// Kill any survivor first; KillAgent on a dead agent is a cheap
+	// ErrAgentNotActive.
 	if entity.IsTerminalDelegationStatus(d.Status) {
+		if s.Runner != nil && d.ChildSessionID != "" {
+			if err := s.Runner.KillAgent(d.ChildSessionID, d.ChildAgent); err == nil {
+				log.Warn().Str("delegation", delegationID).
+					Str("child_session", d.ChildSessionID).
+					Msg("delegation.interrupt: row was already terminal but the agent was still alive; killed it")
+			}
+		}
 		return OutcomeAlreadyDone, nil
 	}
 

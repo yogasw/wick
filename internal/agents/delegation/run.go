@@ -389,7 +389,7 @@ func (s *Service) Run(ctx context.Context, req Request) (*Result, error) {
 	turnsNote := ""
 	if req.MaxTurns > maxTurns {
 		turnsNote = fmt.Sprintf(
-			"max_turns clamped: you asked for %d, the cap is %d — plan the task to fit %d turns or raise the delegation turn cap in agents settings",
+			"max_turns clamped: you asked for %d, the per-delegation cap is %d — plan the task to fit %d turns or raise the delegation turn cap in agents settings. (The tree's pooled turn budget is a separate, additional limit.)",
 			req.MaxTurns, maxTurns, maxTurns)
 	}
 
@@ -840,12 +840,17 @@ func (s *Service) await(
 			res := &Result{DelegationID: row.ID, Profile: row.ProfileKey, Status: status, TurnsUsed: turns, Result: out}
 			if status == entity.DelegationInterrupted {
 				res.Note = interruptNote
+				// Same degraded envelope every other unfinished path gets:
+				// structured:false + confidence:unknown is the caller-side
+				// signal that nothing was ever asserted by the sub-agent.
+				res.Envelope = FallbackEnvelope(out)
 			}
 			return res, nil
 
 		case ev, ok := <-ch:
 			if !ok {
 				out := finalText()
+				turns = billedTurns()
 				s.finish(ctx, row, entity.DelegationRunning, entity.DelegationDone, out, "", turns)
 				return s.doneResult(ctx, row, turns, tokens(), out), nil
 			}
@@ -864,13 +869,19 @@ func (s *Service) await(
 				// early narration — the actual position lives in
 				// last_report, and the provider's own num_turns is the
 				// only honest turn count.
-				out := withLastReport(finalText())
+				//
+				// The label matters as much as the content: interrupted
+				// results say "not an answer" while this path handed the
+				// caller raw concatenated narration with nothing marking
+				// it unfinished — indistinguishable from a real result.
+				out := labelUnfinished(withLastReport(finalText()))
 				turns = billedTurns()
 				s.finish(ctx, row, entity.DelegationRunning, entity.DelegationFailed, out, ev.Text, turns)
 				return &Result{
 					DelegationID: row.ID, Profile: row.ProfileKey,
 					Status: entity.DelegationFailed, TurnsUsed: turns, Result: out,
-					Note: "Sub-agent reported an error: " + ev.Text,
+					Note:     "Sub-agent reported an error: " + ev.Text,
+					Envelope: FallbackEnvelope(out),
 				}, nil
 			case event.Done:
 				turns++
@@ -882,7 +893,7 @@ func (s *Service) await(
 				// actually reported usage; 0 means "unknown", not "free",
 				// so an unreporting provider is bounded by turns alone.
 				if spec.MaxTokens > 0 && tokens() >= spec.MaxTokens {
-					out := withLastReport(finalText())
+					out := labelUnfinished(withLastReport(finalText()))
 					turns = billedTurns()
 					_ = s.Runner.KillAgent(spec.SessionID, spec.AgentName)
 					s.finish(ctx, row, entity.DelegationRunning, entity.DelegationStoppedBudget, out, "", turns)
@@ -890,7 +901,8 @@ func (s *Service) await(
 						DelegationID: row.ID, Profile: row.ProfileKey,
 						Status: entity.DelegationStoppedBudget, TurnsUsed: turns,
 						TokensUsed: tokens(), Result: out,
-						Note: TokenBudgetNote(tokens(), spec.MaxTokens),
+						Note:     TokenBudgetNote(tokens(), spec.MaxTokens),
+						Envelope: FallbackEnvelope(out),
 					}, nil
 				}
 
@@ -901,14 +913,15 @@ func (s *Service) await(
 				// providers that have no such flag, which is the whole
 				// point of enforcing it wick-side.
 				if turns >= spec.MaxTurns {
-					out := withLastReport(finalText())
+					out := labelUnfinished(withLastReport(finalText()))
 					turns = billedTurns()
 					_ = s.Runner.KillAgent(spec.SessionID, spec.AgentName)
 					s.finish(ctx, row, entity.DelegationRunning, entity.DelegationStoppedMaxTurns, out, "", turns)
 					return &Result{
 						DelegationID: row.ID, Profile: row.ProfileKey,
 						Status: entity.DelegationStoppedMaxTurns, TurnsUsed: turns, Result: out,
-						Note: fmt.Sprintf("Stopped at max_turns=%d. The result above is partial.", spec.MaxTurns),
+						Note:     fmt.Sprintf("Stopped at max_turns=%d. The result above is partial.", spec.MaxTurns),
+						Envelope: FallbackEnvelope(out),
 					}, nil
 				}
 
@@ -923,6 +936,33 @@ func (s *Service) await(
 				// an answer would end the run at turn 1 and make the turn
 				// cap unreachable.
 				if out := strings.TrimSpace(text.String()); out != "" {
+					// A SUPERVISED sub-agent that has been filing progress
+					// reports signals completion with report_result — its
+					// turn-boundary text is narration, not an answer.
+					// Closing on it recorded "Gunung 1 selesai. Lanjut
+					// ke-2." as the final result of a 12-step task and
+					// threw the other 11 steps away, with status done and
+					// nothing for the caller to be suspicious about. Nudge
+					// it onward instead; the turn cap still bounds how
+					// long it can narrate without asserting a result.
+					if row.Supervised {
+						fresh, ferr := s.Repo.Get(context.WithoutCancel(ctx), row.ID)
+						if ferr == nil && EnvelopeOf(fresh) == nil &&
+							strings.TrimSpace(fresh.LastReport) != "" && s.Deliver != nil {
+							nudge := "Your last message ended your turn WITHOUT report_result, so it was NOT " +
+								"recorded as a final answer. If the task is COMPLETE: call report_result now, " +
+								"then restate your final answer. If NOT complete: continue working — and do not " +
+								"end a turn with narration; file wick_agent_progress instead."
+							if derr := s.Deliver.DeliverToSession(ctx, row.ChildSessionID, row.ChildAgent, nudge); derr == nil {
+								log.Debug().Str("delegation", row.ID).
+									Msg("delegation: turn-boundary narration from a supervised sub-agent; nudged onward instead of closing")
+								text.Reset()
+								continue
+							}
+							// Nudge undeliverable: closing with what exists
+							// beats hanging a run nobody can reach.
+						}
+					}
 					// A peer may have asked this agent something. Its
 					// closing text is the only answer that will ever
 					// exist once the run ends, so promote it before
@@ -944,11 +984,28 @@ func (s *Service) await(
 						text.Reset()
 						continue
 					}
+					turns = billedTurns()
 					return s.doneResult(ctx, row, turns, tokens(), out), nil
 				}
 			}
 		}
 	}
+}
+
+// labelUnfinished prefixes a failure-path result so nobody mistakes it
+// for a completed answer. The interrupted path already labels its
+// fallback; the failed path handed back raw concatenated narration with
+// nothing marking it unfinished, and a caller reading `result` had no
+// reason to be suspicious. Empty stays empty — there is nothing to
+// mislabel.
+func labelUnfinished(out string) string {
+	if strings.TrimSpace(out) == "" {
+		return out
+	}
+	if strings.HasPrefix(out, "(unfinished") {
+		return out
+	}
+	return "(unfinished — the run ended before the task was completed; the text below is the sub-agent's narration and last position, NOT a completed answer)\n\n" + out
 }
 
 // enrichWithLastReport augments a kill/error-path result with the
