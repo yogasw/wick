@@ -3,6 +3,7 @@ package delegation
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -49,20 +50,61 @@ type CollectResult struct {
 	// filed one. Preferred over Progress when judging direction: it is the
 	// agent stating where it is, rather than a scrape of its prose.
 	LastReport string `json:"last_report,omitempty"`
+	// LastReportAt is when that note was filed, RFC3339 UTC.
+	//
+	// Without it a supervisor cannot tell a report filed ten seconds ago
+	// from one filed ten minutes ago, and those mean opposite things: the
+	// first is a healthy run, the second is one that has gone quiet. The
+	// text alone reads identically in both cases.
+	LastReportAt string `json:"last_report_at,omitempty"`
 	// Envelope is the sub-agent's answer as typed fields, when it has one.
 	Envelope *ResultEnvelope `json:"envelope,omitempty"`
 }
 
 // pendingNote is what a leader is told about a delegation still working.
 //
-// It separates two things the previous wording ran together. "Do not
-// block on this" is right for a caller waiting on the ANSWER — that is
-// what the sink is for. It is wrong for a supervising agent deliberately
-// checking on progress, which is now a supported thing to do and the only
-// way to catch a sub-agent going astray before it finishes.
-const pendingNote = "Still working — this is a progress check, not the answer. The result arrives on its own; " +
-	"do not sit in a loop waiting for it here. If the progress below shows the wrong direction, correct it with " +
-	"message rather than waiting for it to finish."
+// Written from what this particular reply actually carries, not from what
+// the shape can carry. The previous text was one fixed sentence promising
+// "the progress below" — and `progress` is empty whenever the sub-agent
+// is between turns, which for a respawn-per-turn provider is most of the
+// time. A note pointing at a field that is not there teaches a leader to
+// stop reading notes.
+//
+// It also no longer recommends `message` unconditionally. That op waits
+// for the recipient's turn boundary and times out often enough that
+// naming it as THE way to intervene sends a supervisor down a path that
+// frequently fails. Stop is named instead: it is the one control that
+// always applies to a running sub-agent.
+func pendingNote(progress, lastReport string) string {
+	var b strings.Builder
+	b.WriteString("Still working — this is a progress check, not the answer. ")
+	b.WriteString("The result arrives on its own; do not sit in a loop waiting for it here. ")
+
+	switch {
+	case lastReport != "":
+		b.WriteString("`last_report` is where this sub-agent says it has got to. ")
+	case progress != "":
+		b.WriteString("`progress` is a scrape of its in-flight turn — a partial thought, not a conclusion. ")
+	default:
+		b.WriteString("It has not reported anything yet, so there is nothing to judge: either it is early, " +
+			"or it was not asked to report (delegate with supervised=true for work you intend to watch). ")
+	}
+
+	if progress != "" || lastReport != "" {
+		b.WriteString("If it is going the wrong way, stop it and start again with a corrected brief — " +
+			"message reaches it only at its next turn boundary and may not arrive in time.")
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// formatStamp renders a nullable timestamp for the wire, or "" when the
+// event never happened.
+func formatStamp(t *time.Time) string {
+	if t == nil || t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
 
 // Collect picks up one async delegation's result by id.
 //
@@ -88,9 +130,10 @@ func (s *Service) Collect(ctx context.Context, delegationID, actorID string, isA
 	}
 	if !entity.IsTerminalDelegationStatus(d.Status) {
 		out.Pending = true
-		out.Note = pendingNote
 		out.Progress = s.progressOf(d)
-		out.LastReport = d.LastReport
+		out.LastReport = strings.TrimSpace(d.LastReport)
+		out.LastReportAt = formatStamp(d.LastReportAt)
+		out.Note = pendingNote(out.Progress, out.LastReport)
 		// Returns BEFORE MarkCollected, and must keep doing so. The
 		// one-shot guard belongs to the final answer; marking a running row
 		// collected would make its real result unreachable — the sub-agent
@@ -146,9 +189,10 @@ func (s *Service) CollectPending(ctx context.Context, parentSessionID string) ([
 		} else {
 			row := d
 			item.Pending = true
-			item.Note = pendingNote
 			item.Progress = s.progressOf(&row)
-			item.LastReport = d.LastReport
+			item.LastReport = strings.TrimSpace(d.LastReport)
+			item.LastReportAt = formatStamp(d.LastReportAt)
+			item.Note = pendingNote(item.Progress, item.LastReport)
 		}
 		out = append(out, item)
 	}

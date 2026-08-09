@@ -55,7 +55,16 @@ func (b *Buffer) Append(text string) error {
 // Drain returns all buffered lines joined by newline and clears the
 // buffer (both in-memory and on-disk PendingInput). Returns "" if
 // empty.
+//
+// Nil-safe: a nil buffer drains to "". Drain is reached from bare
+// goroutines (queue grants), where a nil deref is not a recovered
+// request error but the whole process going down — it did, once, when a
+// wake-path spawn arrived without a buffer. spawn now guarantees the
+// buffer exists; this guard is the backstop for the next wiring gap.
 func (b *Buffer) Drain() (string, error) {
+	if b == nil {
+		return "", nil
+	}
 	b.mu.Lock()
 	if len(b.lines) == 0 {
 		b.mu.Unlock()

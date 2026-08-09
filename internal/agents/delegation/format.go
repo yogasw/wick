@@ -96,8 +96,14 @@ func FormatRosterBlock(roster []RosterEntry, spawnable []string, b BudgetLine) s
 // changes a decision, and the decision is always "can I afford one more
 // round?".
 func (b BudgetLine) String() string {
+	// "tree" is load-bearing: this is the POOLED budget shared by the
+	// whole delegation tree, a different number from the per-delegation
+	// max_turns cap. Unlabelled, agents (and the humans reading their
+	// transcripts) conflated the two — "budget 40" vs "cap 50" read as a
+	// contradiction when both were correct.
 	parts := []string{
-		fmt.Sprintf("%d/%d turns left", max(b.TurnsMax-b.TurnsUsed, 0), b.TurnsMax),
+		fmt.Sprintf("%d/%d tree turns left (pooled across all sub-agents; separate from your own max_turns)",
+			max(b.TurnsMax-b.TurnsUsed, 0), b.TurnsMax),
 		fmt.Sprintf("%d/%d hops left", max(b.HopMax-b.Hop, 0), b.HopMax),
 	}
 	if b.TokensMax > 0 {

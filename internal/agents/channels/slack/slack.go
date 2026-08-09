@@ -2433,6 +2433,17 @@ func (s *Channel) buildSessionContext(ev *slackevents.MessageEvent, threadTS str
 	return strings.Join(lines, "\n")
 }
 
+// CanAnswerApproval satisfies channels.ApprovalResponder: this channel
+// can answer for a session it is currently driving, since that is exactly
+// when OnApprovalRequest renders the approve/block buttons into the
+// thread. Without this the gate would see no browser tab, judge the
+// session unattended, and revoke the buttons before anyone pressed them.
+func (s *Channel) CanAnswerApproval(sessionID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turns[sessionID] != nil
+}
+
 // OnApprovalRequest satisfies channels.ApprovalReceiver.
 func (s *Channel) OnApprovalRequest(sessionID string, req gate.ApprovalRequest) {
 	s.mu.Lock()

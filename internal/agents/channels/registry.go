@@ -560,6 +560,19 @@ func (r *Registry) DispatchApprovalRequest(sessionID string, req gate.ApprovalRe
 	}
 }
 
+// CanAnswerApproval reports whether any registered channel has a human
+// able to answer an approval for sessionID. The gate consults this
+// alongside the browser's SSE subscribers so a Slack- or Telegram-driven
+// session is not mistaken for an unattended one.
+func (r *Registry) CanAnswerApproval(sessionID string) bool {
+	for _, c := range r.Channels() {
+		if x, ok := c.(ApprovalResponder); ok && x.CanAnswerApproval(sessionID) {
+			return true
+		}
+	}
+	return false
+}
+
 // DispatchApprovalResolved fans out an approval-resolved notification.
 func (r *Registry) DispatchApprovalResolved(sessionID, requestID, decision string) {
 	for _, c := range r.Channels() {

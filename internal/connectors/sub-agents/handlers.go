@@ -95,16 +95,29 @@ func (h *handlers) instancesFor(c *connector.Ctx, caller caller) []instanceItem 
 		return nil
 	}
 	svc := h.deps.svc()
-	rootID := caller.sessionID
-	if row, err := svc.Repo.FindByChildSession(c.Context(), caller.sessionID); err == nil && row != nil {
-		rootID = row.RootID
-	} else if rows, err := svc.Repo.ListByParent(c.Context(), caller.sessionID); err == nil && len(rows) > 0 {
-		rootID = rows[0].RootID
-	}
 
-	rows, err := svc.Repo.ListByRoot(c.Context(), rootID)
-	if err != nil {
-		return nil
+	// A LEADER's sub-agents are its direct children, and each top-level
+	// delegate call starts its own tree (RootID == its own id). Listing by
+	// root therefore showed only the most recent one and silently dropped
+	// every earlier delegation — six dispatches, one visible row, and no
+	// way to find the others once their ids scrolled out of the
+	// conversation. Listing by parent is the query that matches the
+	// question "who have I delegated to".
+	//
+	// A SUB-AGENT asking the same question means something different: it
+	// wants its colleagues, which is its tree. That path keeps ListByRoot.
+	var rows []entity.AgentDelegation
+	if self, err := svc.Repo.FindByChildSession(c.Context(), caller.sessionID); err == nil && self != nil {
+		rows, err = svc.Repo.ListByRoot(c.Context(), self.RootID)
+		if err != nil {
+			return nil
+		}
+	} else {
+		var err error
+		rows, err = svc.Repo.ListByParent(c.Context(), caller.sessionID)
+		if err != nil {
+			return nil
+		}
 	}
 	out := make([]instanceItem, 0, len(rows))
 	for _, d := range rows {

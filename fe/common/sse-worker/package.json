@@ -3,5 +3,8 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
-  "main": "src/sse-worker.ts"
+  "main": "src/sse-worker.ts",
+  "scripts": {
+    "test:unit": "vitest run"
+  }
 }

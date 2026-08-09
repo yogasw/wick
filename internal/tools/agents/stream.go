@@ -29,6 +29,13 @@ type Event struct {
 	AgentName string `json:"agent_name"`
 	Type      string `json:"type"`
 	Data      string `json:"data"`
+	// Raw is the verbatim provider line, carried IN-MEMORY for the
+	// delegation bridge and never serialized to browser subscribers
+	// (hence json:"-"): token usage and the provider's own turn count
+	// (num_turns) only exist here. Dropping it at this hop was why a
+	// sub-agent's spend read tokens_used:0 and a 49-call run billed
+	// turns_used:0 — every cap keyed on usage was flying blind.
+	Raw string `json:"-"`
 	// ToolName, ToolInput, ToolUseID are populated for tool_use events;
 	// ToolUseID and IsError are also set for tool_result events.
 	ToolName  string `json:"tool_name,omitempty"`
@@ -96,6 +103,21 @@ func (b *Broadcaster) Subscribe(sessionID string) (<-chan Event, func()) {
 	return ch, unsub
 }
 
+// HasSubscribers reports whether any SSE connection is currently
+// watching sessionID. Global ("") subscribers count too: the sidebar
+// stream renders approval prompts as well, so a user sitting on the
+// session list is still able to answer one.
+//
+// Used by the approval gate to decide whether a prompt still has a
+// human behind it. Liveness is only as fresh as the SSE keepalive
+// (15s in serveStream) — a tab closed abruptly stays counted until the
+// next keepalive write fails and the handler unsubscribes.
+func (b *Broadcaster) HasSubscribers(sessionID string) bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.subs[sessionID]) > 0 || len(b.subs[""]) > 0
+}
+
 // Publish fires ev to all subscribers of sessionID and all global ("") subscribers.
 // Non-blocking: a full channel's event is dropped rather than blocking.
 func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) {
@@ -104,6 +126,7 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 		AgentName: agentName,
 		Type:      ev.Type.String(),
 		Data:      ev.Text,
+		Raw:       ev.Raw,
 	}
 	now := time.Now().UnixMilli()
 	switch ev.Type {

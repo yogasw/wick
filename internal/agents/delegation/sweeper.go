@@ -3,6 +3,7 @@ package delegation
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -138,7 +139,125 @@ func (d *DelegationSweeper) Pass(ctx context.Context) {
 		}
 	}
 	d.Svc.expireOverrunningInvestigations(ctx)
+	d.Svc.closeAbandonedRuns(ctx)
 	d.Svc.nudgeStalledCollects(ctx, d.Every)
+}
+
+// abandonedRunGrace is how long a delegation may read "running" with no
+// live process before the sweep treats it as stranded.
+//
+// Sized against the worst-case spawn, not the typical one. A provider
+// launch can take many seconds — resolving a binary, starting an MCP
+// server, a cold model — and for that whole time the row is running with
+// nothing in the pool yet. The sweep runs every 15s, so anything short
+// here reliably lands inside that window and finishes runs that were
+// about to start.
+//
+// The asymmetry is the point: rescuing a stranded run one sweep later
+// costs a minute of a leader's patience, while closing a live one throws
+// the work away, releases its slot, and wakes the leader with an empty
+// result. When in doubt, wait.
+const abandonedRunGrace = 3 * time.Minute
+
+// closeAbandonedRuns finishes delegations whose agent is gone but whose
+// row still says running.
+//
+// A run ends when await sees the Done event. If that event never arrives
+// the wait never returns: the sub-agent answers, writes its transcript,
+// goes idle — and the row reads "running, 0/12 turns" forever. The leader
+// is never woken, collect keeps reporting pending, and from the UI it is
+// indistinguishable from an agent that hung. Observed in the wild.
+//
+// The dropped-event path that caused it is closed (terminal events no
+// longer get discarded when a consumer falls behind, see
+// tools/agents.DelegationStream), but this is the backstop for every
+// other way a Done can go missing — a crashed reader, a lost
+// subscription, a process killed outside the pool. One missed event must
+// not strand a delegation permanently.
+//
+// Deliberately conservative: it only acts when the runtime confirms the
+// agent is NOT alive. A slow sub-agent that has simply not spoken in a
+// while is still working, and killing it would be worse than the bug.
+func (s *Service) closeAbandonedRuns(ctx context.Context) {
+	if s.AgentAlive == nil {
+		return
+	}
+	// Only rows that have been running a WHILE.
+	//
+	// A delegation is marked running before its process exists: minting
+	// the scoped token, creating the child session, subscribing to the
+	// stream and resolving the run target all happen between MarkRunning
+	// and StartAgent. During that window AgentAlive correctly answers
+	// "no live process" — and without this cutoff the sweep read that as
+	// an abandoned run and finished a delegation that had not started.
+	//
+	// The damage was not limited to one row: closing it also released the
+	// parallel slot and delivered an empty result, so the queue started
+	// the next delegation early and the leader was woken with nothing.
+	// That is where the duplicate instances and the "already finished
+	// (done)" refusals on the very first progress call came from.
+	//
+	// The grace period must therefore exceed the worst-case spawn, not
+	// the typical one — a slow provider launch is normal, and being late
+	// to rescue a stranded run costs one sweep interval, while being
+	// early destroys a live one.
+	cutoff := time.Now().UTC().Add(-abandonedRunGrace)
+
+	var running []entity.AgentDelegation
+	if err := s.Repo.DB().WithContext(ctx).
+		Where("status = ? AND started_at < ?", entity.DelegationRunning, cutoff).
+		Find(&running).Error; err != nil {
+		log.Warn().Err(err).Msg("delegation: abandoned-run sweep failed")
+		return
+	}
+	for i := range running {
+		row := &running[i]
+		if row.ChildSessionID == "" || s.AgentAlive(row.ChildSessionID, row.ChildAgent) {
+			continue
+		}
+		// A recent progress note also means alive.
+		//
+		// AgentAlive reads the pool, and a respawn-per-turn provider
+		// (codex) has NO process between turns — it is genuinely absent
+		// for a moment on every turn boundary, while being perfectly
+		// healthy. Liveness alone would finish such a sub-agent the first
+		// time a sweep landed in one of those gaps.
+		//
+		// Its own report is the second opinion: an agent that said where
+		// it was a moment ago is working, whatever the pool shows.
+		if row.LastReportAt != nil && time.Since(*row.LastReportAt) < abandonedRunGrace {
+			continue
+		}
+		// Whatever it managed to say still counts. Its own progress note
+		// is the fallback for a provider that leaves no in-flight buffer.
+		out := ""
+		if s.Runner != nil {
+			out = strings.TrimSpace(s.Runner.PartialText(row.ChildSessionID, row.ChildAgent))
+		}
+		if out == "" {
+			out = strings.TrimSpace(row.LastReport)
+		}
+		out = s.authoritativeResult(ctx, row, out)
+
+		ok, err := s.Repo.FinishGuarded(ctx, row.ID,
+			entity.DelegationRunning, entity.DelegationDone, out, "", row.TurnsUsed)
+		if err != nil || !ok {
+			continue
+		}
+		log.Warn().
+			Str("delegation", row.ID).
+			Str("child_session", row.ChildSessionID).
+			Msg("delegation: agent had already exited but the run never closed; finishing it and delivering the result")
+
+		// Deliver, or the leader still never learns the work finished —
+		// which is the half of the bug that actually costs the user.
+		fresh, ferr := s.Repo.Get(ctx, row.ID)
+		if ferr != nil {
+			continue
+		}
+		s.deliver(ctx, fresh, fresh.DeliverySink, s.doneResult(ctx, fresh, fresh.TurnsUsed, fresh.TokensUsed, out))
+		s.pokeSlot(fresh.RootID)
+	}
 }
 
 // expireOverrunningInvestigations stops investigations that have run past

@@ -577,8 +577,18 @@ func terminateProc(proc Process, done <-chan struct{}) {
 			return
 		}
 
-		// No group teardown available: fall back to killing the process
-		// directly, which is the pre-existing behaviour.
+		// The graceful dispatch failed — which on Windows is the NORMAL
+		// case for a windowless console tree (`taskkill` without /F answers
+		// "can only be terminated forcefully"). The fallback used to kill
+		// only the leader: for a launcher-shim binary (an msys2-installed
+		// CLI that spawns the real worker as a child) that killed the shim
+		// and ORPHANED the worker, which kept running and calling tools for
+		// many more steps after Stop had already answered "killed".
+		// Observed in the wild: a sub-agent stopped at step 3 worked on
+		// through step 9. Force the whole tree, then the leader handle.
+		if pid > 0 {
+			killGroup(pid)
+		}
 		_ = proc.Kill()
 	}
 	if done == nil {

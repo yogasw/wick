@@ -44,10 +44,30 @@ function makeWorkerTransport(base: string, sessionID: string): SSETransport {
     );
     const port = worker.port;
     port.start();
+    /* A page reload or tab close never runs component teardown, so without
+       this the worker keeps a port that will never speak again — and since a
+       MessagePort emits no event when its other side dies, the session's
+       EventSource then lives forever. Every reload while viewing a session
+       leaked one stream this way; a handful of reloads exhausted the
+       browser's ~6-connections-per-origin quota and everything after sat at
+       "pending". */
+    const onPageHide = () => {
+      try { port.postMessage({ type: "unsubscribe", sessionID }); } catch (_) { /* gone */ }
+    };
+    window.addEventListener("pagehide", onPageHide);
     return {
       post(msg) { port.postMessage(msg); },
       onMessage(cb) { port.onmessage = (e) => cb(e.data); },
-      close() { port.close(); },
+      close() {
+        window.removeEventListener("pagehide", onPageHide);
+        /* Closing the port in the same tick as the final unsubscribe post is
+           a race: close() disentangles the port immediately and the message
+           can be dropped, so the worker never learns the subscriber left and
+           the stream leaks. Opening/closing the sub-agent modal a few times
+           accumulated exactly such zombie streams. The delay lets the post
+           flush; closing a port late is harmless. */
+        setTimeout(() => port.close(), 1000);
+      },
     };
   }
 

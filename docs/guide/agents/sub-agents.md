@@ -240,6 +240,21 @@ Stop works on a **queued** sub-agent too, not just a running one — it is dropp
 
 If a sub-agent happens to finish in the instant between your click and the server handling it, its real result stands and nothing is overwritten.
 
+### Continue a finished sub-agent
+
+A row that has **stopped** shows **Continue** where a live one shows Stop. It asks what to do next, then sends that sub-agent back to work **in its own session**, keeping everything it learned — the human-facing half of the [`continue` op](#continue).
+
+Use it when a result is nearly right, when a run ended at `stopped_max_turns` with partial work, or when reviewing the answer suggests the obvious next step. Delegating again instead gets you a new sub-agent with a blank context that has to rediscover what the first one already knew.
+
+The box asks for the **next instruction**, not the original brief. The sub-agent still has that; restating it invites it to start over.
+
+Two outcomes are worth reading:
+
+- **"Sub-agent continued"** — it resumed with its transcript intact.
+- **"…could not resume its earlier work — it is starting fresh"** — the session was reused but the provider could not replay the transcript. Your instruction has to stand on its own, or re-delegate instead.
+
+If the sub-agent started working again between the page rendering and your click, the continue is refused rather than queued: nothing was delivered, so reporting it as sent would be a lie. Refresh and use **message** to steer it instead.
+
 ## Talking to other agents
 
 Delegation hands work down one level and waits. Messaging is the other direction: an agent that is already running can be reached, asked a question, and answered — without re-explaining what it is doing.

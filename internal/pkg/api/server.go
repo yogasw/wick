@@ -965,6 +965,29 @@ func NewServer() *Server {
 			agentsBcast.PublishApprovalResolved(sessionID, requestID, decision)
 			channelReg.DispatchApprovalResolved(sessionID, requestID, decision)
 		},
+		// Read on every request so flipping the Permission Gate config
+		// applies to the next prompt without restarting the daemon.
+		WaitPolicy: func() gate.WaitPolicy {
+			p := gate.WaitPolicy{
+				TimeoutEnabled: configsSvc.GetOwned("agents", "approval_timeout_enabled") == "true",
+			}
+			// n > 0 only: a zero or unparseable value would otherwise mean
+			// "block instantly", which is never what an operator wants from
+			// a blank field. Zero falls back to DefaultApprovalTimeout.
+			if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "approval_timeout_sec")); err == nil && n > 0 {
+				p.Timeout = time.Duration(n) * time.Second
+			}
+			return p
+		},
+		// A prompt only waits while somebody can still answer it. That is
+		// a browser tab on the SSE stream, OR a channel (Slack, Telegram)
+		// currently driving the session — it renders the same approval as
+		// buttons, so treating "no tab" as "unattended" would revoke them
+		// before anyone could press one.
+		HasViewer: func(sessionID string) bool {
+			return agentsBcast.HasSubscribers(sessionID) ||
+				channelReg.CanAnswerApproval(sessionID)
+		},
 	})
 	if amErr != nil {
 		log.Warn().Err(amErr).Msg("agents: gate ApprovalManager init failed — interactive approval disabled")
@@ -1390,6 +1413,17 @@ func NewServer() *Server {
 		// than before a message, so a leader is told when its sub-agent
 		// came back to the session without its memory.
 		Resumable: poolWaker{pool: agentsPool, layout: agentsLayout}.resumable,
+		// Lets the sweeper tell a slow sub-agent from one that exited
+		// without its run ever being closed — the difference between
+		// leaving it alone and rescuing a stranded delegation.
+		AgentAlive: func(childSessionID, agentName string) bool {
+			for _, a := range agentsPool.ActiveSnapshot() {
+				if a.SessionID == childSessionID {
+					return true
+				}
+			}
+			return false
+		},
 		// Customer-facing drafts are masked on the way out. The drafter's
 		// prompt asks it not to include credentials; this is what makes
 		// that true when a prompt injection asks otherwise.
@@ -2445,8 +2479,32 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		Addr:              addr,
 		Handler:           h,
 		ReadHeaderTimeout: 30 * time.Second,
-		// ReadTimeout and WriteTimeout unset — SSE connections stay open
-		// indefinitely and must not be cut by server-side timeouts.
+		// Close idle keep-alive connections OURSELVES, well before anything
+		// else on the path does it silently.
+		//
+		// With IdleTimeout unset, Go falls back to ReadTimeout — also unset
+		// here (deliberately: SSE streams must never be cut server-side), so
+		// an idle connection was kept forever. Nothing on the Go side ever
+		// closed it; instead the OS, a NAT, or an intermediary eventually
+		// dropped it WITHOUT a FIN that reached the browser. Chrome kept that
+		// socket in its keep-alive pool, believed it live, and wrote the next
+		// request into a dead one: the request stalls at the TCP layer with no
+		// error and no response — fetch neither resolves nor rejects, and the
+		// entry sits at "pending" indefinitely. That is the "server has been
+		// up a while, then suddenly everything hangs" report, and it needs no
+		// unusual load to trigger — just an idle tab.
+		//
+		// A server-initiated close is the fix because it is orderly: Go sends
+		// the FIN, Chrome retires the socket, and the next request opens a
+		// fresh one. 60s is comfortably under the ~2min idle window where
+		// intermediaries start reaping, and comfortably above normal
+		// think-time between requests on a live page.
+		//
+		// SSE is unaffected: IdleTimeout only applies between requests, and a
+		// stream always has one in flight. sw.js documents the client-side
+		// mitigation for the same failure (an 8s AbortController) — that stays
+		// as defence in depth for network-level stalls this cannot cover.
+		IdleTimeout: 60 * time.Second,
 		// BaseContext propagates the caller's logger (tray injects
 		// serverLogger here) into every request context. Without this,
 		// r.Context() defaults to context.Background() and middleware's
@@ -2685,6 +2743,9 @@ func wickRequestApproval(ctx context.Context, mgr *gate.ApprovalManager, pool *a
 		Cmd:       cmd,
 		WorkDir:   cwd,
 		MatchKey:  matchKey,
+		// Stamped like the gate binary does, so a countdown rendered for
+		// an in-process request is measured from the same origin.
+		Timestamp: time.Now().UnixMilli(),
 	})
 	if gate.IsApprove(resp.Decision) {
 		return false, ""

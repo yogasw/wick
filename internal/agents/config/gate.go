@@ -29,6 +29,12 @@ type GateConfig struct {
 	AskUserMode         string `wick:"dropdown=on|off;group=Permission Gate;desc=Ask-user policy (independent of the command gate). on = route ask_user MCP calls to the web UI. off = return an error so the agent picks a sensible default instead of blocking."`
 	AllowedCmds         string `wick:"kvlist=pattern|scope;group=Permission Gate;desc=Command whitelist for the permission gate. pattern supports a trailing * wildcard (e.g. 'git *'). scope (optional) restricts path args to a directory prefix."`
 	AllowShellMetachars bool   `wick:"bool;group=Permission Gate;desc=Allow shell metacharacters (semicolon, pipe, ampersand, backtick, angle brackets, dollar sign, newline) inside otherwise-whitelisted commands, e.g. sleep 60 && echo done. Off (default) blocks them unconditionally since a single whitelisted command like git * could otherwise smuggle in a second, unreviewed command. Turning this on trusts the whitelist patterns themselves to be safe under chaining/redirects; it does not bypass the whitelist itself."`
+
+	// Approval wait policy. Off (default) keeps a prompt open for as
+	// long as a browser is watching the session, so stepping away does
+	// not silently turn into a block. On restores a fixed deadline.
+	ApprovalTimeoutEnabled bool `wick:"bool;group=Permission Gate;desc=Give each approval prompt a fixed deadline. Off (default) keeps the prompt open while a browser tab is watching the session and only blocks once every tab is gone, so walking away does not auto-block your command. On blocks the command after the timeout below, even with a tab open."`
+	ApprovalTimeoutSec     int  `wick:"number;group=Permission Gate;desc=Seconds an approval prompt stays open before it is blocked. Only applies when the deadline above is on. Default: 25."`
 }
 
 // DefaultGateConfig returns the seed values for the gate config.
@@ -43,5 +49,11 @@ func DefaultGateConfig() GateConfig {
 		PermissionMode: "on",
 		AskUserMode:    "on",
 		AllowedCmds:    "",
+		// Deadline off by default: a prompt that expires while the
+		// operator is away reads as a mysterious failure. Waiting on
+		// the browser tab is the safer default because the block still
+		// happens — just when nobody is left to answer, not on a clock.
+		ApprovalTimeoutEnabled: false,
+		ApprovalTimeoutSec:     25,
 	}
 }

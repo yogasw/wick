@@ -282,7 +282,9 @@ func Operations(deps Deps) []connector.Category {
 
 		connector.Cat("Messaging", "Talk to the other agents working in this conversation.",
 			connector.Op("message", "Message an Agent",
-				"Send a message to another agent already working in this conversation, addressed by handle (list_agents shows them). "+
+				"Send a message to an agent working under you, addressed by handle (list_agents shows who you can reach). "+
+					"Scope: you can only message agents visible in YOUR list_agents. A sub-agent sees only itself — "+
+					"it CANNOT message its siblings; to influence one, report to your supervisor (progress or ask) and let it re-steer. "+
 					"kind=tell delivers it and returns immediately — use it to report progress or hand over information. "+
 					"kind=ask waits for that agent's answer and returns it, for something you cannot continue without. "+
 					"The recipient keeps the context of its own work, so you do not need to re-explain what it is doing. "+
