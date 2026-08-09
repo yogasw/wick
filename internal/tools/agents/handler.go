@@ -494,6 +494,7 @@ func Register(r tool.Router) {
 	r.GET("/workflows/api/lookup", workflowLookupAPI)
 
 	r.GET("/stream", streamSSE)
+	r.GET("/stream/multi", streamMultiSSE)
 	r.GET("/stream/sessions", sessionsLifecycleSSE)
 	r.GET("/stream/snapshot", streamSnapshot)
 
@@ -2486,6 +2487,125 @@ func streamSSE(c *tool.Ctx) {
 			if !open {
 				return
 			}
+			fmt.Fprintf(w, "event: agent\ndata: %s\n\n", ev.JSON())
+			flush()
+		case <-keepalive.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flush()
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// streamMultiSSE serves every requested session's agent events over ONE SSE
+// connection: GET /stream/multi?sessions=a,b,c.
+//
+// It exists because of arithmetic, not elegance. A browser allows only ~6
+// concurrent HTTP/1.1 connections per origin, and an SSE stream holds its
+// slot for as long as the page lives. With one connection per session, four
+// conversation tabs plus the lifecycle and dev-reload streams hit that
+// ceiling exactly — and every request issued afterwards (an icon, an API
+// call, a navigation) sat unsent in the browser's queue, indistinguishable
+// from a hung server. The SharedWorker multiplexes every tab's subscriptions
+// onto this single stream instead, so the per-origin cost of N open sessions
+// is one connection, constant.
+//
+// Events need no envelope: Event already carries SessionID, which is how the
+// worker routes each one to its subscribers.
+//
+// A session the caller may not open is SKIPPED rather than failing the whole
+// stream — one revoked/deleted session must not black out every other tab.
+// The skip is indistinguishable from a silent session by design: this is the
+// same information a per-session subscribe would leak via its 404, minus the
+// channel to observe it.
+func streamMultiSSE(c *tool.Ctx) {
+	if globalBcast == nil {
+		c.Error(http.StatusServiceUnavailable, "broadcaster not ready")
+		return
+	}
+	var ids []string
+	seen := map[string]bool{}
+	for _, raw := range strings.Split(c.Query("sessions"), ",") {
+		id := strings.TrimSpace(raw)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		// Same access guard as the single-session stream. Unauthorized or
+		// unknown sessions are dropped, not fatal.
+		sess, ok := globalMgr.Registry().Session(id)
+		if !ok || !ownsSession(c, sess) {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		c.Error(http.StatusNotFound, "no accessible sessions")
+		return
+	}
+
+	w := c.W
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Time{})
+
+	ctx := c.R.Context()
+
+	// Fan-in: one forwarder per session into a shared channel. Buffered and
+	// non-blocking on the forward so one stalled reader can never wedge the
+	// others — same contract as the Broadcaster itself.
+	merged := make(chan Event, 256)
+	for _, id := range ids {
+		ch, unsub := globalBcast.Subscribe(id)
+		defer unsub()
+		// Per-session git watcher, ref-counted exactly like the
+		// single-session stream, so the SCM badge stays live.
+		if globalMgr != nil {
+			if sess, found := globalMgr.Registry().Session(id); found {
+				if cwd, cerr := resolveSessionCwd(sess); cerr == nil {
+					globalGitWatch.acquire(id, cwd)
+					defer globalGitWatch.release(id)
+				}
+			}
+		}
+		go func() {
+			for ev := range ch {
+				select {
+				case merged <- ev:
+				case <-ctx.Done():
+					return
+				default:
+					// Full merged buffer: drop rather than block the
+					// broadcaster's fan-out path.
+				}
+			}
+		}()
+	}
+
+	keepalive := time.NewTicker(15 * time.Second)
+	defer keepalive.Stop()
+	flush := func() { _ = rc.Flush() }
+
+	fmt.Fprintf(w, ": connected\n\n")
+	flush()
+
+	// Per-session snapshots so every subscribed tab paints its current
+	// state immediately, exactly as the single-session stream would.
+	if globalPool != nil {
+		for _, id := range ids {
+			for _, ev := range snapshotEvents(id) {
+				fmt.Fprintf(w, "event: agent\ndata: %s\n\n", ev.JSON())
+			}
+		}
+		flush()
+	}
+
+	for {
+		select {
+		case ev := <-merged:
 			fmt.Fprintf(w, "event: agent\ndata: %s\n\n", ev.JSON())
 			flush()
 		case <-keepalive.C:
