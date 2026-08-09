@@ -22,7 +22,7 @@ func TestFormatRosterBlockAtSpawn(t *testing.T) {
 	want := "roster (snapshot at spawn — call list_agents for the current list):\n" +
 		"  @main (leader, working) · @code-investigator (code-investigator, working)\n" +
 		"spawnable roles: log-investigator, docs-investigator\n" +
-		"left: 34/40 turns left · 10/10 hops left\n" +
+		"left: 34/40 tree turns left (pooled across all sub-agents; separate from your own max_turns) · 10/10 hops left\n" +
 		"Message a peer with the message op, or open a line with @handle at the start of a line.\n"
 	if got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
@@ -72,7 +72,9 @@ func TestFormatInboundCarriesSenderRosterAndBudget(t *testing.T) {
 		t.Fatalf("roster missing:\n%s", out)
 	}
 	// Remaining, not consumed: an agent budgets against what is LEFT.
-	if !strings.Contains(out, "12/40 turns left") {
+	// Labelled "tree turns" because agents read this next to their own
+	// per-delegation max_turns and conflated the two numbers.
+	if !strings.Contains(out, "12/40 tree turns left") {
 		t.Fatalf("turn remainder missing or wrong:\n%s", out)
 	}
 	if !strings.Contains(out, "3/10 hops left") {

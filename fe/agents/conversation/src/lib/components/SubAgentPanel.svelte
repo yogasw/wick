@@ -21,6 +21,10 @@
     onSelect: (childSessionId: string) => void;
     onInterrupt: (delegationId: string) => void;
     onInterruptAll: () => void;
+    /** Sends a finished sub-agent back to work in its own session.
+        Optional: a surface that has not wired it shows no button, which
+        beats offering one that does nothing. */
+    onContinue?: (delegationId: string, task: string) => void;
     messages: AgentMessageItem[];
     hopsLeft: number;
     onBumpHops: () => void;
@@ -33,10 +37,32 @@
     onSelect,
     onInterrupt,
     onInterruptAll,
+    onContinue = undefined,
     messages,
     hopsLeft,
     onBumpHops,
   }: Props = $props();
+
+  /* Which row has its continue composer open, and what has been typed
+     into it. One at a time: two open composers on a narrow rail is a
+     reader deciding which box they are in rather than what to write. */
+  let continuingId = $state<string | null>(null);
+  let continueTask = $state("");
+
+  function openContinue(delegationId: string) {
+    continuingId = delegationId;
+    continueTask = "";
+  }
+
+  function submitContinue(delegationId: string) {
+    const task = continueTask.trim();
+    // An empty instruction would reach the server only to be refused, so
+    // the form must not behave as though it were sent.
+    if (!task || !onContinue) return;
+    onContinue(delegationId, task);
+    continuingId = null;
+    continueTask = "";
+  }
 
   const anyLive = $derived(subAgents.some((s) => isSubAgentLive(s.status)));
 
@@ -222,6 +248,22 @@
                   onclick={(e) => { e.stopPropagation(); onInterrupt(sub.delegation_id); }}
                   class="shrink-0 rounded px-2 py-1 text-[10px] font-medium bg-neg-100 text-neg-400 hover:bg-neg-200 transition-colors"
                 >Stop</button>
+              {:else if onContinue}
+                <!--
+                  Only on a stopped row: continuing a working sub-agent
+                  would put two drivers on one session, interleaving with
+                  the turn it is already thinking through.
+
+                  stopPropagation for the same reason Stop does it — the
+                  card behind opens the transcript, and a composer with a
+                  panel on top of it is unusable.
+                -->
+                <button
+                  type="button"
+                  onclick={(e) => { e.stopPropagation(); openContinue(sub.delegation_id); }}
+                  class="shrink-0 rounded px-2 py-1 text-[10px] font-medium bg-white-300 text-black-800 hover:bg-white-400 dark:bg-navy-700 dark:text-white-100 dark:hover:bg-navy-600 transition-colors"
+                  title="Send this sub-agent back to work in the same session, keeping everything it learned"
+                >Continue</button>
               {/if}
             </div>
 
@@ -260,6 +302,43 @@
               <p class="text-[11px] text-black-800 dark:text-black-600 line-clamp-3 border-l-2 border-white-400 dark:border-navy-500 pl-2">
                 {sub.result}
               </p>
+            {/if}
+
+            <!--
+              The instruction is the point of continuing, so it is asked
+              for rather than defaulted. A one-click "carry on" sends the
+              sub-agent back with no idea what changed since it stopped,
+              which is how a supervisor gets the same wrong answer twice.
+
+              The wrapper swallows clicks and Enter so typing inside the
+              composer never opens the transcript behind it.
+            -->
+            {#if continuingId === sub.delegation_id}
+              <div
+                role="presentation"
+                onclick={(e) => e.stopPropagation()}
+                onkeydown={(e) => e.stopPropagation()}
+                class="space-y-2 rounded-lg border border-white-300 dark:border-navy-600 p-2"
+              >
+                <textarea
+                  bind:value={continueTask}
+                  rows="2"
+                  placeholder="What should it do next? It still remembers its earlier work."
+                  class="w-full resize-none rounded border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-900 px-2 py-1 text-[11px] text-black-900 dark:text-white-100 placeholder:text-black-600 focus:border-green-500 focus:outline-none"
+                ></textarea>
+                <div class="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onclick={() => { continuingId = null; continueTask = ""; }}
+                    class="rounded px-2 py-1 text-[10px] font-medium text-black-800 hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-700 transition-colors"
+                  >Cancel</button>
+                  <button
+                    type="button"
+                    onclick={() => submitContinue(sub.delegation_id)}
+                    class="rounded px-2 py-1 text-[10px] font-medium bg-green-500 text-white-100 hover:bg-green-600 disabled:opacity-50 transition-colors"
+                  >Send</button>
+                </div>
+              </div>
             {/if}
           </div>
         </div>

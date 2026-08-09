@@ -83,6 +83,26 @@ type SpawnOptions struct {
 	// a workspace-local file would clobber across sessions / race on
 	// concurrent spawns. Empty = fall back to Workspace (tests).
 	SessionDir string
+	// SessionID is the session's real id, as everything else in wick
+	// addresses it.
+	//
+	// Carried separately from SessionDir because THE PATH AND THE ID ARE
+	// NOT THE SAME STRING, and nothing guarantees they ever will be. The
+	// id is the identifier; the directory is where its bytes happen to
+	// live, and Layout owns that mapping (see config.Layout.SessionDir).
+	//
+	// Sub-agents are where the two visibly diverge today: the directory
+	// nests (sessions/<parent>/subagents/<seg>) while the id stays flat
+	// (<parent>--sub-<seg>). Taking the basename of the path therefore
+	// yielded a bare segment matching no session, and every op that looks
+	// a delegation up from its own session — progress, report_result —
+	// answered "this conversation is not a delegation". Supervision looked
+	// wired and did nothing.
+	//
+	// So: pass it. A provider that re-derives an id from a path is
+	// duplicating Layout's mapping in a place that will not be updated
+	// when that mapping changes.
+	SessionID string
 	// ExtraEnv lets the gate (phase 3) inject hook config paths
 	// without coupling the agent package to gate internals.
 	// Instance.Env is merged in by the factory before every spawn.

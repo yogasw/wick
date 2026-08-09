@@ -1,5 +1,6 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
+import { tick } from "svelte";
 import ApprovalsModal from "../ApprovalsModal.svelte";
 import type { ApprovalRequest, ApprovalDecision } from "../../types/agents.js";
 
@@ -72,17 +73,36 @@ describe("ApprovalsModal", () => {
     expect(onDecide).toHaveBeenCalledWith("block" satisfies ApprovalDecision);
   });
 
-  test("renders a starting countdown value when request is provided", () => {
-    render(ApprovalsModal, { props: { request: REQ, onDecide: vi.fn() } });
+  test("renders the countdown from expires_in_sec", () => {
+    render(ApprovalsModal, { props: { request: { ...REQ, expires_in_sec: 25 }, onDecide: vi.fn() } });
     expect(screen.getByText("25s")).toBeDefined();
   });
 
-  test("countdown auto-block after 25s via fake timers", async () => {
+  test("shows Waiting instead of a countdown when no deadline is set", () => {
+    render(ApprovalsModal, { props: { request: REQ, onDecide: vi.fn() } });
+    expect(screen.getByText(/waiting/i)).toBeDefined();
+    expect(screen.queryByText(/^\d+s$/)).toBeNull();
+  });
+
+  // The daemon decides expiry, not the browser. A modal that blocks on
+  // its own races the server: it POSTs a decision for a request the
+  // daemon has already resolved, gets 410, and used to reopen itself
+  // with an error no button could clear.
+  test("never decides on its own when the countdown reaches zero", () => {
+    vi.useFakeTimers();
+    const onDecide = vi.fn();
+    render(ApprovalsModal, { props: { request: { ...REQ, expires_in_sec: 25 }, onDecide } });
+    vi.advanceTimersByTime(30000);
+    expect(onDecide).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  test("countdown does not run without a deadline", () => {
     vi.useFakeTimers();
     const onDecide = vi.fn();
     render(ApprovalsModal, { props: { request: REQ, onDecide } });
-    vi.advanceTimersByTime(25000);
-    expect(onDecide).toHaveBeenCalledWith("block" satisfies ApprovalDecision);
+    vi.advanceTimersByTime(120000);
+    expect(onDecide).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 
@@ -114,5 +134,232 @@ describe("ApprovalsModal", () => {
     const { container } = render(ApprovalsModal, { props: { request, onDecide: vi.fn(), onClose } });
     await fireEvent.click(container.querySelector("[data-approval-backdrop]")!);
     expect(onClose).toHaveBeenCalled();
+  });
+  // "Block" ends the agent's turn. A guided refusal also refuses the
+  // command, but hands back a correction so the agent can try another
+  // way — useless without a reason, hence the note field.
+  describe("guided refusal", () => {
+    test("Block with note reveals a note field instead of deciding immediately", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.click(screen.getByText("Block with note"));
+      expect(onDecide).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText(/what should it do instead/i)).toBeDefined();
+    });
+
+    test("sends guide with the typed note", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.click(screen.getByText("Block with note"));
+      const note = screen.getByPlaceholderText(/what should it do instead/i);
+      await fireEvent.input(note, { target: { value: "use git clean -n first" } });
+      await fireEvent.click(screen.getByText("Send"));
+      expect(onDecide).toHaveBeenCalledWith("guide", "use git clean -n first");
+    });
+
+    test("will not send an empty note", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.click(screen.getByText("Block with note"));
+      await fireEvent.click(screen.getByText("Send"));
+      expect(onDecide).not.toHaveBeenCalled();
+    });
+
+    test("plain Block still decides immediately with no reason", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.click(screen.getByText("Block"));
+      expect(onDecide).toHaveBeenCalledWith("block");
+    });
+  });
+  // The modal interrupts whatever the user was doing, so it has to be
+  // answerable from the keyboard alone — reaching for the mouse is the
+  // slow path this exists to avoid.
+  describe("keyboard shortcuts", () => {
+    test("A approves once", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.keyDown(window, { key: "a" });
+      expect(onDecide).toHaveBeenCalledWith("approve_once");
+    });
+
+    test("S allows the session", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.keyDown(window, { key: "s" });
+      expect(onDecide).toHaveBeenCalledWith("approve_session");
+    });
+
+    test("W allows always", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.keyDown(window, { key: "w" });
+      expect(onDecide).toHaveBeenCalledWith("approve_always");
+    });
+
+    test("B blocks", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.keyDown(window, { key: "b" });
+      expect(onDecide).toHaveBeenCalledWith("block");
+    });
+
+    test("N opens the note field without deciding", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.keyDown(window, { key: "n" });
+      expect(onDecide).not.toHaveBeenCalled();
+      expect(screen.getByPlaceholderText(/what should it do instead/i)).toBeDefined();
+    });
+
+    test("Enter approves once as the default action", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.keyDown(window, { key: "Enter" });
+      expect(onDecide).toHaveBeenCalledWith("approve_once");
+    });
+
+    // Once the note is open the user is typing prose — a bare letter must
+    // reach the textarea, not fire a decision behind their back.
+    test("letters type into the note instead of deciding", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.keyDown(window, { key: "n" });
+      await fireEvent.keyDown(window, { key: "b" });
+      await fireEvent.keyDown(window, { key: "a" });
+      expect(onDecide).not.toHaveBeenCalled();
+    });
+
+    test("Enter sends the note, Shift+Enter does not", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.click(screen.getByText("Block with note"));
+      const note = screen.getByPlaceholderText(/what should it do instead/i);
+      await fireEvent.input(note, { target: { value: "use git clean -n" } });
+
+      await fireEvent.keyDown(note, { key: "Enter", shiftKey: true });
+      expect(onDecide).not.toHaveBeenCalled();
+
+      await fireEvent.keyDown(note, { key: "Enter" });
+      expect(onDecide).toHaveBeenCalledWith("guide", "use git clean -n");
+    });
+
+    test("Escape closes the note field before closing the modal", async () => {
+      const onDecide = vi.fn();
+      const onClose = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide, onClose } });
+      await fireEvent.keyDown(window, { key: "n" });
+      await fireEvent.keyDown(window, { key: "Escape" });
+      // First Escape backs out of the note, leaving the modal open.
+      expect(onDecide).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
+      // Second Escape dismisses as before.
+      await fireEvent.keyDown(window, { key: "Escape" });
+      expect(onDecide).toHaveBeenCalledWith("block");
+    });
+  });
+  // The prompt arrives while the user is mid-sentence in the composer.
+  // If focus stays there, the shortcuts type into the message box instead
+  // of answering — so the modal has to take focus itself.
+  describe("focus handling", () => {
+    test("takes focus away from whatever had it when the request arrives", async () => {
+      const composer = document.createElement("textarea");
+      document.body.appendChild(composer);
+      composer.focus();
+      expect(document.activeElement).toBe(composer);
+
+      render(ApprovalsModal, { props: { request: REQ, onDecide: vi.fn() } });
+      await tick();
+
+      expect(document.activeElement).not.toBe(composer);
+      expect(document.querySelector("[data-approval-dialog]")).toBe(document.activeElement);
+      composer.remove();
+    });
+
+    test("moves focus into the note field when it opens", async () => {
+      render(ApprovalsModal, { props: { request: REQ, onDecide: vi.fn() } });
+      await fireEvent.keyDown(window, { key: "n" });
+      await tick();
+      expect(document.activeElement).toBe(screen.getByPlaceholderText(/what should it do instead/i));
+    });
+
+    test("Escape from inside the note cancels it and returns focus to the dialog", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.keyDown(window, { key: "n" });
+      await tick();
+      const note = screen.getByPlaceholderText(/what should it do instead/i);
+      await fireEvent.keyDown(note, { key: "Escape" });
+      await tick();
+      expect(onDecide).not.toHaveBeenCalled();
+      expect(document.querySelector("[data-approval-dialog]")).toBe(document.activeElement);
+    });
+  });
+  // A phone has no room for hint chips next to already-cramped buttons,
+  // and no soft keyboard shows them anyway. The shortcuts themselves stay
+  // wired — an Android tablet with a bluetooth keyboard still gets them;
+  // only the visual affordance is desktop-only.
+  describe("keyboard hints are desktop-only", () => {
+    test("every hint chip is hidden below the sm breakpoint", () => {
+      const { container } = render(ApprovalsModal, {
+        props: { request: REQ, onDecide: vi.fn() },
+      });
+      const chips = container.querySelectorAll("kbd");
+      expect(chips.length).toBeGreaterThan(0);
+      for (const chip of chips) {
+        expect(chip.className).toContain("hidden");
+        expect(chip.className).toContain("sm:inline");
+      }
+    });
+
+    test("the note's shortcut line is hidden below the sm breakpoint", async () => {
+      render(ApprovalsModal, { props: { request: REQ, onDecide: vi.fn() } });
+      await fireEvent.click(screen.getByText("Block with note"));
+      const hint = screen.getByText(/Enter to send/);
+      expect(hint.className).toContain("hidden");
+      expect(hint.className).toContain("sm:block");
+    });
+
+    test("shortcuts still work regardless — a hardware keyboard on mobile is real", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.keyDown(window, { key: "a" });
+      expect(onDecide).toHaveBeenCalledWith("approve_once");
+    });
+  });
+  // A long command made the dialog taller than the viewport, pushing the
+  // buttons off-screen with nothing to scroll — the prompt became
+  // unanswerable by mouse. The body scrolls; header and actions stay put.
+  describe("fits the viewport", () => {
+    test("the dialog is bounded by the viewport height", () => {
+      const { container } = render(ApprovalsModal, {
+        props: { request: REQ, onDecide: vi.fn() },
+      });
+      const dialog = container.querySelector("[data-approval-dialog]")!;
+      expect(dialog.className).toMatch(/max-h-\[/);
+      // A flex column is what lets the body shrink while the action row
+      // keeps its natural height.
+      expect(dialog.className).toContain("flex");
+      expect(dialog.className).toContain("flex-col");
+    });
+
+    test("the detail body scrolls rather than growing without bound", () => {
+      const { container } = render(ApprovalsModal, {
+        props: { request: REQ, onDecide: vi.fn() },
+      });
+      const body = container.querySelector("[data-approval-body]")!;
+      expect(body.className).toContain("overflow-y-auto");
+      // Without min-h-0 a flex child refuses to shrink below its content,
+      // so overflow-y-auto alone would not produce a scrollbar.
+      expect(body.className).toContain("min-h-0");
+    });
+
+    test("the action row stays visible when the body overflows", () => {
+      const { container } = render(ApprovalsModal, {
+        props: { request: REQ, onDecide: vi.fn() },
+      });
+      const actions = container.querySelector("[data-approval-actions]")!;
+      expect(actions.className).toContain("shrink-0");
+    });
   });
 });

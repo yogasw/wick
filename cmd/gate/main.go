@@ -56,10 +56,64 @@ type hookInput struct {
 }
 
 type hookToolInput struct {
-	Command  string `json:"command"`   // Bash
+	Command  string `json:"command"`   // Bash, PowerShell
 	FilePath string `json:"file_path"` // Read, Write, Edit
 	Pattern  string `json:"pattern"`   // Glob
 	Path     string `json:"path"`      // Glob base / LS
+
+	// Raw is the undecoded tool_input. A tool we don't model explicitly
+	// may still carry the shell command under some other key, and gating
+	// a command we cannot see is worthless — worse, it produces an empty
+	// match key that is identical for every such call. Raw lets
+	// commandFromInput recover the text so the user sees, and approves,
+	// what actually runs.
+	Raw json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON decodes the known fields and keeps the original bytes so
+// commandFromInput can look for command-carrying keys we don't model.
+func (t *hookToolInput) UnmarshalJSON(data []byte) error {
+	type plain hookToolInput // no recursion
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*t = hookToolInput(p)
+	t.Raw = append(json.RawMessage(nil), data...)
+	return nil
+}
+
+// commandKeys are the tool_input fields that carry executable text,
+// ordered by how specific they are. Any tool exposing one of these is
+// treated as a shell tool: whitelist-matched, metachar-checked, and
+// keyed by the command itself rather than by an empty path.
+var commandKeys = []string{"command", "script", "cmd", "code"}
+
+// commandFromInput returns the shell text a tool is about to execute, or
+// "" if it is not executing one. Falls back to scanning the raw payload
+// so a tool the gate does not model by name (PowerShell was exactly
+// this) still gets command-level gating instead of being mistaken for a
+// pathless, and therefore uniformly hashed, unknown tool.
+func commandFromInput(in hookInput) string {
+	// Whitespace-only is not a command: MatchKey trims before hashing, so
+	// treating it as one would produce the empty key this whole change
+	// exists to avoid.
+	if strings.TrimSpace(in.ToolInput.Command) != "" {
+		return in.ToolInput.Command
+	}
+	if len(in.ToolInput.Raw) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(in.ToolInput.Raw, &m); err != nil {
+		return ""
+	}
+	for _, k := range commandKeys {
+		if s, ok := m[k].(string); ok && strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // Version is the gate binary's release version, injected at build
@@ -75,7 +129,7 @@ var Version = "dev"
 const stdinReadTimeout = 3 * time.Second
 
 // emitBlock writes the PreToolUse deny envelope to stdout and the
-// human-readable reason to stderr.
+// human-readable reason to stderr, ending the agent's turn.
 //
 // Per Claude Code docs: JSON output is processed ONLY on exit 0.
 // Exit 2 makes claude ignore the JSON and the tool still runs (we
@@ -83,14 +137,31 @@ const stdinReadTimeout = 3 * time.Second
 // this with `return 0`, not `return 2`. The deny is conveyed via
 // hookSpecificOutput.permissionDecision="deny".
 func emitBlock(reason string) {
-	payload := map[string]any{
-		"continue":   false,
-		"stopReason": reason,
-		"hookSpecificOutput": map[string]any{
-			"hookEventName":            "PreToolUse",
-			"permissionDecision":       "deny",
-			"permissionDecisionReason": reason,
-		},
+	emitDeny(reason, true)
+}
+
+// emitDeny writes the deny envelope. halt selects between the two
+// meanings of "no" in the PreToolUse contract:
+//
+//   - halt=true adds `continue: false`, which stops the whole turn.
+//     The agent cannot adapt — this is the hard stop.
+//   - halt=false sends permissionDecision alone, which refuses just
+//     this call. reason is delivered to the model as feedback, so the
+//     agent can take a different route and keep working.
+//
+// The two fields are not additive: when `continue: false` is present
+// claude ignores permissionDecision entirely, so a guided refusal must
+// omit it rather than set both.
+func emitDeny(reason string, halt bool) {
+	hookOutput := map[string]any{
+		"hookEventName":            "PreToolUse",
+		"permissionDecision":       "deny",
+		"permissionDecisionReason": reason,
+	}
+	payload := map[string]any{"hookSpecificOutput": hookOutput}
+	if halt {
+		payload["continue"] = false
+		payload["stopReason"] = reason
 	}
 	if data, err := json.Marshal(payload); err == nil {
 		fmt.Fprintln(os.Stdout, string(data))
@@ -129,9 +200,16 @@ func emitAllow(reason string) {
 const socketDialTimeout = 2 * time.Second
 
 // socketResponseTimeout is the upper bound for waiting on the daemon
-// reply. Daemon-side default is 25s; we allow a little extra so a
-// borderline-slow user click still races our exit.
-const socketResponseTimeout = 28 * time.Second
+// reply. The daemon owns the real approval deadline — it may be a
+// configured timeout or, by default, "as long as a browser tab is
+// watching" — so this is only a backstop against a daemon that has
+// wedged and will never answer at all. Keep it comfortably above any
+// deadline an operator would plausibly configure; the daemon always
+// replies first in normal operation.
+//
+// Must stay under the PreToolUse hook timeout claude is given (see
+// gate.ClaudeSettings) or claude kills us before we can answer.
+const socketResponseTimeout = 55 * time.Minute
 
 func main() {
 	if len(os.Args) > 1 {
@@ -271,7 +349,7 @@ func run() int {
 		return 2
 	}
 
-	logStage(requestID, "received", "", "", "", "")
+	logStage(requestID, "received", "", "", "", "", "")
 
 	in, perr := readHookInput(os.Stdin, stdinReadTimeout)
 	if perr != nil {
@@ -284,15 +362,20 @@ func run() int {
 		return 0
 	}
 
-	if in.ToolName != "Bash" {
+	// Route on what the call DOES, not on the tool's name. Any tool
+	// carrying shell text is gated as a command — PowerShell used to fall
+	// through to the path gate, where it had no path, so every call
+	// collapsed onto one match key and a single "allow this session"
+	// silently approved every later PowerShell command in that session.
+	cmd := commandFromInput(in)
+	if cmd == "" {
 		return runPathGate(requestID, spec, in)
 	}
-
-	cmd := in.ToolInput.Command
-	if cmd == "" {
-		logTerminalEntry(requestID, "Bash", "", in.CWD, "blocked", "", "empty command")
-		emitBlock("empty command")
-		return 0
+	// Tool name rides through so the prompt, the log, and the match key
+	// all name the interpreter that will actually run this.
+	tool := in.ToolName
+	if tool == "" {
+		tool = "Bash"
 	}
 	cwd := in.CWD
 	claudeSID := in.SessionID
@@ -304,7 +387,7 @@ func run() int {
 			"request_id": requestID,
 			"cmd":        cmd,
 		})
-		logTerminalEntry(requestID, "Bash", cmd, cwd, "allowed", "whitelist", "")
+		logTerminalEntry(requestID, tool, cmd, cwd, "allowed", "whitelist", "")
 		emitAllow("whitelist")
 		return 0
 	}
@@ -312,14 +395,14 @@ func run() int {
 	// Auto-approved (user clicked "Always allow" earlier). Same
 	// zero-latency path as whitelist; daemon doesn't even need to
 	// be running.
-	key := gate.MatchKey("Bash", cmd)
+	key := gate.MatchKey(tool, cmd)
 	if gate.IsAutoApproved(spec, key) {
 		gate.LogDaily(app, "info", "allowed via auto_approved", map[string]any{
 			"request_id": requestID,
 			"cmd":        cmd,
 			"match_key":  key,
 		})
-		logTerminalEntry(requestID, "Bash", cmd, cwd, "allowed", "auto_approved", "")
+		logTerminalEntry(requestID, tool, cmd, cwd, "allowed", "auto_approved", "")
 		emitAllow("auto_approved")
 		return 0
 	}
@@ -331,8 +414,8 @@ func run() int {
 		"cmd":        cmd,
 		"socket":     socketPath,
 	})
-	logStage(requestID, "socket_dial", cmd, cwd, "", socketPath)
-	decision, reason, err := requestApprovalWithLog(socketPath, "Bash", cmd, cwd, claudeSID, key, requestID)
+	logStage(requestID, "socket_dial", tool, cmd, cwd, "", socketPath)
+	decision, reason, err := requestApprovalWithLog(socketPath, tool, cmd, cwd, claudeSID, key, requestID)
 	if err != nil {
 		// Fail-open: when the daemon socket is unavailable the wick
 		// server isn't running (or this isn't a wick session).
@@ -342,7 +425,7 @@ func run() int {
 			"cmd":        cmd,
 			"error":      err.Error(),
 		})
-		logTerminalEntry(requestID, "Bash", cmd, cwd, "allowed", "no_socket", err.Error())
+		logTerminalEntry(requestID, tool, cmd, cwd, "allowed", "no_socket", err.Error())
 		emitAllow("no_socket")
 		return 0
 	}
@@ -352,7 +435,7 @@ func run() int {
 			"cmd":        cmd,
 			"reason":     reason,
 		})
-		logTerminalEntry(requestID, "Bash", cmd, cwd, "allowed", decision, reason)
+		logTerminalEntry(requestID, tool, cmd, cwd, "allowed", decision, reason)
 		emitAllow(decision)
 		return 0
 	}
@@ -361,8 +444,10 @@ func run() int {
 		"cmd":        cmd,
 		"reason":     reason,
 	})
-	logTerminalEntry(requestID, "Bash", cmd, cwd, "blocked", decision, reason)
-	emitBlock(reason)
+	logTerminalEntry(requestID, tool, cmd, cwd, "blocked", decision, reason)
+	// A guided refusal keeps the turn alive so the agent can act on the
+	// reason; a plain block ends it.
+	emitDeny(reason, gate.HaltsTurn(decision))
 	return 0
 }
 
@@ -442,6 +527,11 @@ func runPathGate(requestID string, spec gate.Spec, in hookInput) int {
 
 	// Unknown tool (MCP or future tool) — no path to scope-check.
 	// Always ask the user rather than silently allowing.
+	//
+	// With no path, MatchKey returns "" and neither the auto-approved
+	// list nor the session set can match it, so every such call reaches
+	// the user. That is deliberate: a remembered decision describes one
+	// specific command, and we have not been able to read this one.
 	knownFileTool := tool == "Read" || tool == "Write" || tool == "Edit" || tool == "Glob" || tool == "LS"
 	if !knownFileTool {
 		key := gate.MatchKey(tool, path)
@@ -463,7 +553,7 @@ func runPathGate(requestID string, spec gate.Spec, in hookInput) int {
 			return 0
 		}
 		logTerminalEntry(requestID, tool, path, in.CWD, "blocked", decision, reason)
-		emitBlock(fmt.Sprintf("%s — %s", tool, reason))
+		emitDeny(fmt.Sprintf("%s — %s", tool, reason), gate.HaltsTurn(decision))
 		return 0
 	}
 
@@ -515,18 +605,24 @@ func runPathGate(requestID string, spec gate.Spec, in hookInput) int {
 		return 0
 	}
 	logTerminalEntry(requestID, tool, path, in.CWD, "blocked", decision, reason)
-	emitBlock(fmt.Sprintf("%s(%q) — %s", tool, path, reason))
+	emitDeny(fmt.Sprintf("%s(%q) — %s", tool, path, reason), gate.HaltsTurn(decision))
 	return 0
 }
 
 // logStage writes one intermediate audit-trail entry. Used to track
 // progress through the decision flow before a terminal status is
 // known. reason can hold extra metadata (e.g. socket path on dial).
-func logStage(requestID, stage, cmd, cwd, decision, reason string) {
+//
+// tool names the interpreter the call belongs to; "" is logged as Bash
+// for the pre-parse stages, where the tool is not known yet.
+func logStage(requestID, stage, tool, cmd, cwd, decision, reason string) {
+	if tool == "" {
+		tool = "Bash"
+	}
 	entry := gate.Entry{
 		Timestamp: time.Now().UTC(),
 		Stage:     stage,
-		Tool:      "Bash",
+		Tool:      tool,
 		Cmd:       cmd,
 		WorkDir:   cwd,
 		Decision:  decision,
@@ -568,7 +664,7 @@ func requestApprovalWithLog(socketPath, toolName, cmd, cwd, claudeSID, matchKey,
 	conn, err := net.DialTimeout("unix", socketPath, socketDialTimeout)
 	if err != nil {
 		if requestID != "" {
-			logStage(requestID, "socket_error", cmd, cwd, "", "dial: "+err.Error())
+			logStage(requestID, "socket_error", toolName, cmd, cwd, "", "dial: "+err.Error())
 		}
 		return "", "", fmt.Errorf("dial %q: %w", socketPath, err)
 	}
@@ -588,24 +684,24 @@ func requestApprovalWithLog(socketPath, toolName, cmd, cwd, claudeSID, matchKey,
 	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		if requestID != "" {
-			logStage(requestID, "socket_error", cmd, cwd, "", "send: "+err.Error())
+			logStage(requestID, "socket_error", toolName, cmd, cwd, "", "send: "+err.Error())
 		}
 		return "", "", fmt.Errorf("send request: %w", err)
 	}
 	if requestID != "" {
-		logStage(requestID, "socket_sent", cmd, cwd, "", "request_id="+socketReqID)
+		logStage(requestID, "socket_sent", toolName, cmd, cwd, "", "request_id="+socketReqID)
 	}
 
 	_ = conn.SetReadDeadline(time.Now().Add(socketResponseTimeout))
 	var resp gate.ApprovalResponse
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
 		if requestID != "" {
-			logStage(requestID, "socket_error", cmd, cwd, "", "recv: "+err.Error())
+			logStage(requestID, "socket_error", toolName, cmd, cwd, "", "recv: "+err.Error())
 		}
 		return "", "", fmt.Errorf("read response: %w", err)
 	}
 	if requestID != "" {
-		logStage(requestID, "socket_recv", cmd, cwd, resp.Decision, resp.Reason)
+		logStage(requestID, "socket_recv", toolName, cmd, cwd, resp.Decision, resp.Reason)
 	}
 	return resp.Decision, resp.Reason, nil
 }

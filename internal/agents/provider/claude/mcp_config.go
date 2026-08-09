@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +37,30 @@ func helpHasMCPConfig(help string) bool {
 // Not a security boundary — wick enforces per-op access server-side
 // (e.g. wickmanager's requireAdmin/requireTray gates).
 const wickMCPAllowedTools = "mcp__wick"
+
+// mcpSessionID picks the session id sent as X-Wick-Session-Id.
+//
+// It prefers the id the caller passed and treats the directory only as a
+// fallback, because the two disagree for a sub-agent: its directory is
+// NESTED (sessions/<parent>/subagents/<seg>) while its id is FLAT
+// (<parent>--sub-<seg>). Deriving the id from the path yielded a bare
+// segment that matched no session, so every op resolving a delegation
+// from its own session — progress, report_result — answered "this
+// conversation is not a delegation". Sub-agent supervision looked wired
+// and did nothing.
+//
+// The basename fallback stays for callers that predate SessionID (tests,
+// legacy paths): it is correct for a top-level session, and no worse than
+// sending no header at all for a child.
+func mcpSessionID(sessionID, sessionDir string) string {
+	if sessionID != "" {
+		return sessionID
+	}
+	if sessionDir == "" {
+		return ""
+	}
+	return filepath.Base(sessionDir)
+}
 
 // mcpConfigArgs builds the claude argv for the wick MCP HTTP server.
 // strict=true isolates to only wick; always pre-approves wick's tools.

@@ -41,14 +41,27 @@ var DelegationStatuses = []string{
 	DelegationStoppedBudget,
 }
 
+// TerminalDelegationStatuses is every status in which no further work is
+// happening. Exported as a slice because the guard on reopening a
+// delegation is a SQL `status IN (...)` and cannot call a predicate;
+// keeping one list means the query and IsTerminalDelegationStatus can
+// never disagree about what "finished" means.
+var TerminalDelegationStatuses = []string{
+	DelegationDone,
+	DelegationFailed,
+	DelegationInterrupted,
+	DelegationStoppedMaxTurns,
+	DelegationStoppedBudget,
+}
+
 // IsTerminalDelegationStatus reports whether no further work will happen
 // on a delegation in this status. Used by Interrupt to short-circuit
 // before killing anything.
 func IsTerminalDelegationStatus(s string) bool {
-	switch s {
-	case DelegationDone, DelegationFailed, DelegationInterrupted,
-		DelegationStoppedMaxTurns, DelegationStoppedBudget:
-		return true
+	for _, t := range TerminalDelegationStatuses {
+		if s == t {
+			return true
+		}
 	}
 	return false
 }
@@ -108,6 +121,11 @@ type AgentDelegation struct {
 	// (e.g. worktree asked for on a non-git project, fell back to shared).
 	// Surfaced to the leader so a silent downgrade never looks like success.
 	WorkspaceNote string `gorm:"type:text;not null;default:''" json:"workspace_note"`
+	// TurnsNote records a clamped max_turns request (asked 120, cap 40) —
+	// same never-silent contract as WorkspaceNote. Without it the leader
+	// plans a task for a budget its sub-agent never had and learns the
+	// truth from error_max_turns instead of at delegate time.
+	TurnsNote string `gorm:"type:text;not null;default:''" json:"turns_note"`
 	// SquadKey links this delegation to the named squad that produced it.
 	SquadKey string `gorm:"type:varchar(128);not null;default:'';index" json:"squad_key"`
 	// UserSteered marks a delegation a human sent a message into
@@ -151,6 +169,20 @@ type AgentDelegation struct {
 	TriggeredBy string     `gorm:"type:varchar(128);not null;default:'';index" json:"triggered_by"`
 	StartedAt   time.Time  `json:"started_at"`
 	EndedAt     *time.Time `json:"ended_at,omitempty"`
+
+	// LastReport is the sub-agent's own most recent progress note, filed
+	// through the progress op while it was still working.
+	//
+	// Only the LATEST is kept, deliberately. This is a "where are you now"
+	// field read by whoever is supervising, not a log: a growing history
+	// would be read in full on every check, and the sub-agent's earlier
+	// positions are already in its transcript.
+	LastReport   string     `gorm:"type:text;not null;default:''" json:"last_report,omitempty"`
+	LastReportAt *time.Time `json:"last_report_at,omitempty"`
+	// Supervised records that this delegation was asked to file progress
+	// notes. Read at spawn to decide whether the preamble tells it to; a
+	// short task should not pay for reporting nobody asked for.
+	Supervised bool `gorm:"not null;default:false" json:"supervised,omitempty"`
 
 	// Handle is this instance's address inside its tree ("reviewer-2").
 	// Unique per RootID and never reused, because a handle that could be

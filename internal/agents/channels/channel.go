@@ -170,6 +170,21 @@ type ApprovalReceiver interface {
 	OnApprovalResolved(sessionID, requestID, decision string)
 }
 
+// ApprovalResponder reports whether this channel currently has a human
+// who could answer an approval for sessionID — a Slack thread or Telegram
+// chat showing the approve/block buttons.
+//
+// The gate keeps a prompt open only while somebody can still answer it,
+// and a browser tab is not the only such somebody. Without this, a
+// session driven from Slack looks unattended, and its buttons are
+// revoked before anyone can press them.
+//
+// Optional: a channel that never renders answerable approvals (REST,
+// which auto-blocks) simply does not implement it.
+type ApprovalResponder interface {
+	CanAnswerApproval(sessionID string) bool
+}
+
 // ── Workflow integration (opt-in) ─────────────────────────────────────
 // Channels that want to be usable from the workflow editor implement
 // these interfaces. Channels that don't (UI, API, REST one-shot) are

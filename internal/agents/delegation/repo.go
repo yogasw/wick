@@ -535,6 +535,69 @@ func (r *Repo) MarkRunning(ctx context.Context, id string) error {
 		Updates(map[string]any{"status": entity.DelegationRunning}).Error
 }
 
+// ReopenForContinue flips a FINISHED delegation back to running for
+// another leg, guarded on it still being finished.
+//
+// The guard is what makes two concurrent continues safe: both read the
+// same terminal row, both try to reopen it, and exactly one wins. The
+// loser is told the delegation is already running rather than joining a
+// session that now has another driver writing into it.
+//
+// Turn and token counters are deliberately NOT reset. They are the
+// running total for the delegation's whole life, and the caps were just
+// raised relative to them (applyContinuationBudget); zeroing them here
+// would hand back a budget the sub-agent has already spent.
+//
+// What IS cleared is the previous leg's ending: result, error, ended_at,
+// and the flags that record one-shot events against it. Leaving
+// `collected` set would make the continuation's own result unreachable —
+// collect refuses a row it has already handed over.
+func (r *Repo) ReopenForContinue(ctx context.Context, d *entity.AgentDelegation) (bool, error) {
+	res := r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
+		Where("id = ? AND status IN ?", d.ID, entity.TerminalDelegationStatuses).
+		Updates(map[string]any{
+			"status":       entity.DelegationRunning,
+			"task":         d.Task,
+			"context_text": d.ContextText,
+			"max_turns":    d.MaxTurns,
+			"max_tokens":   d.MaxTokens,
+			"mode":         d.Mode,
+			"detached":     d.Detached,
+			"result":       "",
+			"error_msg":    "",
+			// gorm.Expr, not a plain nil: Updates with a map drops nil
+			// values, so a plain nil would leave the previous leg's end
+			// time in place and a monitor reading the row mid-continuation
+			// would see a delegation that is running and ended.
+			"ended_at":       gorm.Expr("NULL"),
+			"collected":      false,
+			"collect_nudged": false,
+			"intake_reasked": false,
+			"blocked":        false,
+			"result_json":    "",
+		})
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+// SaveProgress records a sub-agent's latest progress note.
+//
+// Overwrites rather than appends: this is the agent's CURRENT position,
+// read by whoever is supervising it. A growing log would be re-read in
+// full on every check, and the earlier positions are already in the
+// sub-agent's own transcript.
+func (r *Repo) SaveProgress(ctx context.Context, id, note string) error {
+	now := time.Now().UTC()
+	return r.db.WithContext(ctx).Model(&entity.AgentDelegation{}).
+		Where("id = ?", id).
+		Updates(map[string]any{
+			"last_report":    note,
+			"last_report_at": &now,
+		}).Error
+}
+
 // UpdateTurns records progress mid-run so the monitor and the per-root
 // budget see live numbers rather than only end-of-run totals.
 func (r *Repo) UpdateTurns(ctx context.Context, id string, turns int) error {

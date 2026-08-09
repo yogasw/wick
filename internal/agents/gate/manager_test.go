@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -370,5 +371,223 @@ func TestManager_RequestApproval_AfterStopReturnsBlock(t *testing.T) {
 	})
 	if resp.Decision != DecisionBlock {
 		t.Errorf("decision after Stop: got %q, want %q", resp.Decision, DecisionBlock)
+	}
+}
+
+// ── Wait policy: deadline off, wait while a browser is watching ──────
+
+// newWaitingManager wires a manager in the default shipping mode: the
+// approval deadline is off, so prompts live as long as hasViewer says a
+// tab is watching. grace is deliberately short so tests don't crawl.
+func newWaitingManager(t *testing.T, app string, hasViewer func(string) bool, grace time.Duration) *ApprovalManager {
+	t.Helper()
+	mgr, err := NewApprovalManager(ApprovalManagerOptions{
+		AppName:    app,
+		Timeout:    50 * time.Millisecond, // must NOT be what decides these tests
+		RouteByCWD: func(string) (string, bool) { return "S1", true },
+		WaitPolicy: func() WaitPolicy {
+			return WaitPolicy{TimeoutEnabled: false, Grace: grace}
+		},
+		HasViewer: hasViewer,
+	})
+	if err != nil {
+		t.Fatalf("NewApprovalManager: %v", err)
+	}
+	return mgr
+}
+
+func TestManager_WaitsPastTimeoutWhileViewerPresent(t *testing.T) {
+	setupSharedHome(t)
+	mgr := newWaitingManager(t, "appW1", func(string) bool { return true }, 100*time.Millisecond)
+	defer mgr.Stop()
+
+	respCh := make(chan ApprovalResponse, 1)
+	go func() {
+		respCh <- mgr.RequestApproval(context.Background(), ApprovalRequest{
+			ID: "wait-1", SessionID: "S1", Tool: "shell", Cmd: "sleep 999", MatchKey: "wait-key-1",
+		})
+	}()
+
+	// Well past the 50ms fixed deadline this manager would use if the
+	// policy were ignored — the whole point is that it is not.
+	select {
+	case resp := <-respCh:
+		t.Fatalf("blocked while a viewer was watching: decision=%q reason=%q", resp.Decision, resp.Reason)
+	case <-time.After(400 * time.Millisecond):
+	}
+
+	if ok, err := mgr.Resolve("S1", "wait-1", DecisionApproveOnce, "user clicked", "wait-key-1"); err != nil || !ok {
+		t.Fatalf("Resolve: ok=%v err=%v", ok, err)
+	}
+	select {
+	case resp := <-respCh:
+		if resp.Decision != DecisionApproveOnce {
+			t.Errorf("decision: got %q, want %q", resp.Decision, DecisionApproveOnce)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RequestApproval did not return after Resolve")
+	}
+}
+
+func TestManager_BlocksAfterGraceWhenViewerLeaves(t *testing.T) {
+	setupSharedHome(t)
+	var watching atomic.Bool
+	watching.Store(true)
+	mgr := newWaitingManager(t, "appW2", func(string) bool { return watching.Load() }, 100*time.Millisecond)
+	defer mgr.Stop()
+
+	respCh := make(chan ApprovalResponse, 1)
+	go func() {
+		respCh <- mgr.RequestApproval(context.Background(), ApprovalRequest{
+			ID: "wait-2", SessionID: "S1", Tool: "shell", Cmd: "sleep 999", MatchKey: "wait-key-2",
+		})
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	watching.Store(false) // every tab closed
+
+	select {
+	case resp := <-respCh:
+		if resp.Decision != DecisionBlock {
+			t.Errorf("decision: got %q, want %q", resp.Decision, DecisionBlock)
+		}
+		if resp.Reason != "no viewer" {
+			t.Errorf("reason: got %q, want %q", resp.Reason, "no viewer")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("did not block after the viewer left")
+	}
+}
+
+// A prompt that dies on its own must still reach the browser, or the
+// modal stays open with buttons that can only ever return 410.
+func TestManager_NotifiesResolvedOnSelfExpiry(t *testing.T) {
+	setupSharedHome(t)
+	type resolved struct {
+		sessionID, requestID, decision string
+	}
+	got := make(chan resolved, 1)
+	mgr, err := NewApprovalManager(ApprovalManagerOptions{
+		AppName:    "appW3",
+		Timeout:    50 * time.Millisecond,
+		RouteByCWD: func(string) (string, bool) { return "S1", true },
+		OnResolved: func(sessionID, requestID, decision string) {
+			select {
+			case got <- resolved{sessionID, requestID, decision}:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	mgr.RequestApproval(context.Background(), ApprovalRequest{
+		ID: "wait-3", SessionID: "S1", Tool: "shell", Cmd: "sleep 999", MatchKey: "wait-key-3",
+	})
+
+	select {
+	case r := <-got:
+		if r.requestID != "wait-3" || r.decision != DecisionBlock {
+			t.Errorf("got %+v, want request wait-3 blocked", r)
+		}
+		if r.sessionID != "S1" {
+			t.Errorf("sessionID: got %q, want S1", r.sessionID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout did not broadcast approval_resolved")
+	}
+}
+
+// The UI renders a countdown only when the daemon is actually enforcing
+// one; advertising a deadline that nothing enforces is what made the old
+// modal auto-block against a request the daemon still held open.
+func TestManager_StampsDeadlineOnlyWhenTimeoutEnabled(t *testing.T) {
+	setupSharedHome(t)
+
+	seen := make(chan ApprovalRequest, 1)
+	onReq := func(_ string, r ApprovalRequest) {
+		select {
+		case seen <- r:
+		default:
+		}
+	}
+
+	waiting, err := NewApprovalManager(ApprovalManagerOptions{
+		AppName:    "appW4",
+		RouteByCWD: func(string) (string, bool) { return "S1", true },
+		OnRequest:  onReq,
+		WaitPolicy: func() WaitPolicy { return WaitPolicy{TimeoutEnabled: false, Grace: 50 * time.Millisecond} },
+		HasViewer:  func(string) bool { return false },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting.RequestApproval(context.Background(), ApprovalRequest{
+		ID: "stamp-1", SessionID: "S1", Tool: "shell", Cmd: "ls", MatchKey: "stamp-key-1",
+	})
+	waiting.Stop()
+	select {
+	case r := <-seen:
+		if r.ExpiresInSec != 0 {
+			t.Errorf("ExpiresInSec: got %d, want 0 (no deadline is being enforced)", r.ExpiresInSec)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnRequest never fired for the waiting manager")
+	}
+
+	timed, err := NewApprovalManager(ApprovalManagerOptions{
+		AppName:    "appW5",
+		RouteByCWD: func(string) (string, bool) { return "S1", true },
+		OnRequest:  onReq,
+		WaitPolicy: func() WaitPolicy { return WaitPolicy{TimeoutEnabled: true, Timeout: 30 * time.Second} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go timed.RequestApproval(context.Background(), ApprovalRequest{
+		ID: "stamp-2", SessionID: "S1", Tool: "shell", Cmd: "ls", MatchKey: "stamp-key-2",
+	})
+	defer timed.Stop()
+	select {
+	case r := <-seen:
+		if r.ExpiresInSec != 30 {
+			t.Errorf("ExpiresInSec: got %d, want 30", r.ExpiresInSec)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnRequest never fired for the timed manager")
+	}
+}
+
+// Without a viewer probe there is nothing to wait on, so a manager must
+// fall back to the fixed deadline rather than hang forever.
+func TestManager_FallsBackToDeadlineWithoutViewerProbe(t *testing.T) {
+	setupSharedHome(t)
+	mgr, err := NewApprovalManager(ApprovalManagerOptions{
+		AppName:    "appW6",
+		Timeout:    50 * time.Millisecond,
+		RouteByCWD: func(string) (string, bool) { return "S1", true },
+		WaitPolicy: func() WaitPolicy { return WaitPolicy{TimeoutEnabled: false} },
+		// HasViewer deliberately nil.
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Stop()
+
+	done := make(chan ApprovalResponse, 1)
+	go func() {
+		done <- mgr.RequestApproval(context.Background(), ApprovalRequest{
+			ID: "wait-4", SessionID: "S1", Tool: "shell", Cmd: "sleep 999", MatchKey: "wait-key-4",
+		})
+	}()
+	select {
+	case resp := <-done:
+		if resp.Decision != DecisionBlock || resp.Reason != "timeout" {
+			t.Errorf("got decision=%q reason=%q, want block/timeout", resp.Decision, resp.Reason)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("hung with no viewer probe available")
 	}
 }

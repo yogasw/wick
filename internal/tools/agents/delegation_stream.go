@@ -1,6 +1,8 @@
 package agents
 
 import (
+	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/agents/delegation"
 	"github.com/yogasw/wick/internal/agents/event"
 )
@@ -23,22 +25,60 @@ func NewDelegationStream(b *Broadcaster) *DelegationStream {
 // SSE wire shape back into the typed events the turn counter reads.
 func (d *DelegationStream) SubscribeSession(sessionID string) (<-chan delegation.StreamEvent, func()) {
 	src, unsub := d.Bcast.Subscribe(sessionID)
-	out := make(chan delegation.StreamEvent, 64)
+	out := make(chan delegation.StreamEvent, delegationStreamBuffer)
 
 	go func() {
 		defer close(out)
 		for ev := range src {
-			se := delegation.StreamEvent{Type: eventTypeFromString(ev.Type), Text: ev.Data}
+			// Raw rides along: usage and the provider's own turn count
+			// (num_turns) exist ONLY there, and this hop dropping it was
+			// why delegations billed turns_used:0 and tokens_used:0 no
+			// matter how much a run actually spent.
+			se := delegation.StreamEvent{Type: eventTypeFromString(ev.Type), Text: ev.Data, Raw: ev.Raw}
 			select {
 			case out <- se:
 			default:
 				// Never block the broadcaster: a stalled delegation
 				// consumer must not wedge the agent reader goroutine that
 				// every other subscriber also depends on.
+				//
+				// But some events cannot be dropped. Done is how the turn
+				// counter learns a turn ended and how a run learns it is
+				// over — lose one and the delegation waits forever on an
+				// event that will never come again. The sub-agent finishes,
+				// writes its answer, goes idle, and the row still reads
+				// "running 0/12 turns" with nobody ever woken. Observed in
+				// the wild, and indistinguishable from a hung agent.
+				//
+				// A dropped TextDelta costs a fragment of prose that later
+				// events supersede; a dropped Done costs the whole run. So
+				// terminal events block, and only they.
+				if isTerminalStreamEvent(se.Type) {
+					out <- se
+					continue
+				}
+				log.Warn().
+					Str("session", sessionID).
+					Str("event_type", ev.Type).
+					Msg("delegation stream: consumer behind, dropping a non-terminal event")
 			}
 		}
 	}()
 	return out, unsub
+}
+
+// delegationStreamBuffer sizes the per-delegation event channel.
+//
+// The consumer (Service.await) does real work between reads — database
+// writes, auto-reply, inbox delivery — so events arrive faster than they
+// are taken during those windows. The old 64 was small enough that a
+// chatty turn could overrun it while await was mid-write.
+const delegationStreamBuffer = 512
+
+// isTerminalStreamEvent reports whether losing this event would strand
+// the run rather than merely thin its output.
+func isTerminalStreamEvent(t event.EventType) bool {
+	return t == event.Done || t == event.Error
 }
 
 // eventTypeFromString reverses event.EventType.String(). Only the types

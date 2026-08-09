@@ -3,6 +3,7 @@ package delegation
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -156,9 +157,13 @@ func TestRunEnforcesMaxTurnsWithoutProviderFlag(t *testing.T) {
 	if k := runner.killed(); len(k) != 1 {
 		t.Fatalf("kills = %v, want one — the cap must stop the process", k)
 	}
-	// Partial work still reaches the leader.
-	if res.Result != "work in progress" {
+	// Partial work still reaches the leader — now labelled so nobody
+	// mistakes a truncated run's narration for a completed answer.
+	if !strings.Contains(res.Result, "work in progress") {
 		t.Fatalf("result = %q, want captured partial", res.Result)
+	}
+	if !strings.Contains(res.Result, "NOT a completed answer") {
+		t.Fatalf("result = %q, want the unfinished label", res.Result)
 	}
 	if res.Note == "" {
 		t.Fatal("a truncated run must explain itself to the leader")

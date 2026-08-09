@@ -97,26 +97,40 @@ type poolWaker struct {
 // what it did before; a blank one answers confidently from nothing, and
 // the sender cannot tell the two apart without being told.
 func (w poolWaker) WakeChild(_ context.Context, childSessionID, agentName string) error {
-	if w.pool == nil {
+	if w.resumable(childSessionID, agentName) {
 		return nil
+	}
+	return delegation.ErrContextLost
+}
+
+// resumable answers the honesty check itself: will the next spawn of this
+// child carry --resume, or start it blank?
+//
+// Shared with delegation.Service.Resumable so message-and-wake and
+// continue cannot disagree about whether a sub-agent still remembers
+// anything — two copies of this rule would drift, and the whole value of
+// the answer is that it is trustworthy.
+func (w poolWaker) resumable(childSessionID, agentName string) bool {
+	if w.pool == nil {
+		return true
 	}
 	// Already running: its context is whatever it currently holds.
 	for _, a := range w.pool.ActiveSnapshot() {
 		if a.SessionID == childSessionID {
-			return nil
+			return true
 		}
 	}
 	sess, err := session.Load(w.layout, childSessionID)
 	if err != nil {
-		return delegation.ErrContextLost
+		return false
 	}
 	for _, a := range sess.Agents {
 		if agentName != "" && a.Name != agentName {
 			continue
 		}
 		if a.CLISessionID != "" {
-			return nil // resumable — the next Send will pass --resume
+			return true // the next Send will pass --resume
 		}
 	}
-	return delegation.ErrContextLost
+	return false
 }

@@ -9,9 +9,10 @@
 //     index.html (multi-app: one dist/ root holds dist/<app>/index.html).
 //     Cached per-app in production; re-read on every call in live-disk mode.
 //
-//  3. Dev reload — a single global SSE endpoint (/_dev/reload) that watches
-//     all registered dist/ directories and broadcasts a "reload" event to every
-//     connected browser tab whenever any bundle rebuilds. Only active when
+//  3. Dev reload — a single global SSE endpoint (/_dev/reload) backed by ONE
+//     process-wide fsnotify watcher that watches all registered dist/
+//     directories and fans a "reload" event out to every connected browser tab
+//     whenever any bundle rebuilds. Only active when
 //     WICK_DEV_REPO_ROOT is set. Call RegisterGlobalHandler(mux) once in the
 //     root server; ui.Layout injects DevReloadScript() unconditionally
 //     (returns "" in production).
@@ -37,7 +38,29 @@ import (
 // emptyOutDir off, so old bundles accumulate).
 var bundleSrcRe = regexp.MustCompile(`<script[^>]*\bsrc="([^"]*/index-[^"]+\.js)"`)
 
-const devReloadPath = "/_dev/reload"
+const (
+	devReloadPath       = "/_dev/reload"
+	devReloadWorkerPath = "/_dev/reload-worker.js"
+)
+
+// devReloadWorkerJS is the SharedWorker that holds THE one /_dev/reload
+// EventSource for the whole browser and fans the reload signal out to every
+// connected tab.
+//
+// Served from Go rather than bundled with any SPA so it covers every page
+// type — templ pages, admin pages, SPAs — without a frontend build. This
+// matters because the reload stream used to be one connection PER TAB, and a
+// browser only allows ~6 concurrent HTTP/1.1 connections per origin: with a
+// few tabs open, the reload streams (plus the app's own SSE) exhausted the
+// quota and every later request sat at "pending" in the browser, looking
+// exactly like a hung server.
+const devReloadWorkerJS = `var ports=[];
+var es=new EventSource('/_dev/reload');
+es.addEventListener('reload',function(){
+  ports.forEach(function(p){try{p.postMessage('reload');}catch(e){}});
+});
+onconnect=function(e){var p=e.ports[0];ports.push(p);p.start();};
+`
 
 // global registry of live-disk watch dirs, populated by New().
 var (
@@ -59,15 +82,29 @@ func DevReloadScript() string {
 	// in the DOM. ui.Dialog() always renders a hidden <div role="dialog">, so
 	// a plain presence check would never reload. offsetParent === null means
 	// the element (or an ancestor) is display:none / hidden.
+	//
+	// The stream is joined through a SharedWorker so every tab shares ONE
+	// /_dev/reload connection (see devReloadWorkerJS for why that matters);
+	// the direct EventSource remains as the fallback for browsers without
+	// SharedWorker.
 	return `<script>(function(){` +
-		`var es=new EventSource('` + devReloadPath + `');` +
-		`es.addEventListener('reload',function(){` +
+		`var apply=function(){` +
 		`var open=false;` +
 		`document.querySelectorAll('dialog[open],[role="dialog"]').forEach(function(el){` +
 		`if(el.offsetParent!==null)open=true;` +
 		`});` +
 		`if(!open)location.reload();` +
-		`});` +
+		`};` +
+		`if(typeof SharedWorker!=='undefined'){` +
+		`try{` +
+		`var w=new SharedWorker('` + devReloadWorkerPath + `');` +
+		`w.port.onmessage=apply;` +
+		`w.port.start();` +
+		`return;` +
+		`}catch(e){}` +
+		`}` +
+		`var es=new EventSource('` + devReloadPath + `');` +
+		`es.addEventListener('reload',apply);` +
 		`es.onerror=function(){es.close();};` +
 		`})()</script>`
 }
@@ -82,6 +119,107 @@ func RegisterGlobalHandler(mux *http.ServeMux) {
 		return
 	}
 	mux.Handle("GET "+devReloadPath, globalSSEHandler(dirs))
+	mux.HandleFunc("GET "+devReloadWorkerPath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		w.Header().Set("Cache-Control", "no-cache")
+		_, _ = w.Write([]byte(devReloadWorkerJS))
+	})
+}
+
+// reloadHub owns the ONE fsnotify watcher for the whole process and fans
+// its rebuild events out to every connected tab.
+//
+// One watcher per SSE connection was the obvious shape and the wrong one:
+// on Windows fsnotify blocks a dedicated OS thread per watcher
+// (GetQueuedCompletionStatus, locked to thread), so every open tab pinned a
+// thread and a set of directory handles for as long as it stayed open.
+// Subscribers are cheap; watchers are not.
+type reloadHub struct {
+	mu   sync.Mutex
+	subs map[chan struct{}]struct{}
+}
+
+var (
+	hubOnce sync.Once
+	hub     *reloadHub
+)
+
+// reloadHubFor returns the process-wide hub, starting its watcher on first
+// use. Later calls ignore watchDirs — the dirs are fixed at registration.
+func reloadHubFor(watchDirs []string) *reloadHub {
+	hubOnce.Do(func() {
+		hub = &reloadHub{subs: make(map[chan struct{}]struct{})}
+		go hub.watch(watchDirs)
+	})
+	return hub
+}
+
+// watch runs for the life of the process. A watcher that fails to start
+// leaves the hub with no publisher: tabs still connect and keepalive, they
+// just never auto-reload — strictly better than failing their requests.
+func (h *reloadHub) watch(watchDirs []string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return
+	}
+	defer watcher.Close()
+	for _, dir := range watchDirs {
+		// Watch the dist/ root and every immediate subdir so a rebuild of
+		// any app (dist/<app>/index.html) is detected. Vite writes the
+		// index.html inside the per-app subdir.
+		_ = watcher.Add(dir)
+		if entries, err := os.ReadDir(dir); err == nil {
+			for _, e := range entries {
+				if e.IsDir() {
+					_ = watcher.Add(filepath.Join(dir, e.Name()))
+				}
+			}
+		}
+	}
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if (event.Has(fsnotify.Write) || event.Has(fsnotify.Create)) &&
+				filepath.Base(event.Name) == "index.html" {
+				h.publish()
+			}
+		case _, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+		}
+	}
+}
+
+// publish signals every subscriber. Non-blocking: a tab whose buffered slot
+// is already filled has a reload pending and does not need a second one, so
+// a slow reader can never stall the watcher loop.
+func (h *reloadHub) publish() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for ch := range h.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (h *reloadHub) subscribe() chan struct{} {
+	ch := make(chan struct{}, 1)
+	h.mu.Lock()
+	h.subs[ch] = struct{}{}
+	h.mu.Unlock()
+	return ch
+}
+
+func (h *reloadHub) unsubscribe(ch chan struct{}) {
+	h.mu.Lock()
+	delete(h.subs, ch)
+	h.mu.Unlock()
 }
 
 func globalSSEHandler(watchDirs []string) http.Handler {
@@ -92,25 +230,9 @@ func globalSSEHandler(watchDirs []string) http.Handler {
 		rc := http.NewResponseController(w)
 		flush := func() { _ = rc.Flush() }
 
-		watcher, err := fsnotify.NewWatcher()
-		if err != nil {
-			http.Error(w, "watcher failed", http.StatusInternalServerError)
-			return
-		}
-		defer watcher.Close()
-		for _, dir := range watchDirs {
-			// Watch the dist/ root and every immediate subdir so a rebuild of
-			// any app (dist/<app>/index.html) is detected. Vite writes the
-			// index.html inside the per-app subdir.
-			_ = watcher.Add(dir)
-			if entries, err := os.ReadDir(dir); err == nil {
-				for _, e := range entries {
-					if e.IsDir() {
-						_ = watcher.Add(filepath.Join(dir, e.Name()))
-					}
-				}
-			}
-		}
+		reloads := reloadHubFor(watchDirs).subscribe()
+		defer reloadHubFor(watchDirs).unsubscribe(reloads)
+
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -124,17 +246,12 @@ func globalSSEHandler(watchDirs []string) http.Handler {
 			select {
 			case <-r.Context().Done():
 				return
-			case event, ok := <-watcher.Events:
+			case _, ok := <-reloads:
 				if !ok {
 					return
 				}
-				if (event.Has(fsnotify.Write) || event.Has(fsnotify.Create)) &&
-					filepath.Base(event.Name) == "index.html" {
-					fmt.Fprintf(w, "event: reload\ndata: {}\n\n")
-					flush()
-				}
-			case <-watcher.Errors:
-				return
+				fmt.Fprintf(w, "event: reload\ndata: {}\n\n")
+				flush()
 			case <-ticker.C:
 				fmt.Fprintf(w, ": keepalive\n\n")
 				flush()

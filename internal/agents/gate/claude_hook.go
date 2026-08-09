@@ -103,7 +103,20 @@ type claudeHookGroup struct {
 type claudeHookEntry struct {
 	Type    string `json:"type"`
 	Command string `json:"command"`
+	// Timeout is claude's own cap on the hook process, in seconds. Its
+	// default (60s) would kill the gate binary mid-wait and run the
+	// command unapproved, so we raise it past any approval wait the
+	// daemon can impose — including the default "wait while a tab is
+	// open", which has no fixed end.
+	Timeout int `json:"timeout,omitempty"`
 }
+
+// claudeHookTimeoutSec is what we tell claude to allow the gate hook.
+// One hour: long enough that the daemon's own policy (configured
+// deadline, or viewer-presence) always decides first, which is the only
+// place the decision belongs. The gate binary's socketResponseTimeout
+// sits just under this as a second backstop.
+const claudeHookTimeoutSec = 3600
 
 // ClaudeSettings produces the JSON bytes claude expects in its
 // `--settings` file. gateBin is the absolute path to the gate
@@ -117,7 +130,7 @@ type claudeHookEntry struct {
 // all platforms.
 func ClaudeSettings(gateBin string) ([]byte, error) {
 	gateBin = strings.ReplaceAll(gateBin, "\\", "/")
-	hook := claudeHookEntry{Type: "command", Command: gateBin}
+	hook := claudeHookEntry{Type: "command", Command: gateBin, Timeout: claudeHookTimeoutSec}
 	// Catch-all matcher: every tool call (Bash, Read, Write, Edit, Glob,
 	// MCP tools, etc.) routes through the gate so the user can approve
 	// or deny before execution.

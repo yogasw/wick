@@ -50,7 +50,7 @@ var longToolCases = []longToolCase{
 		// Spawns a background process and waits — tests that claude
 		// survives a wait-style tool call where there is no output until
 		// the very end.
-		prompt: "Run this exact bash command and report what it printed: `(sleep 305 && echo MARKER_BG_DONE) & wait`",
+		prompt:       "Run this exact bash command and report what it printed: `(sleep 305 && echo MARKER_BG_DONE) & wait`",
 		wantText:     "MARKER_BG_DONE",
 		toolDuration: 310 * time.Second,
 	},

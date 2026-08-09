@@ -46,6 +46,26 @@ export const interruptSubAgent = (base: string, delegationId: string) =>
     ),
   );
 
+// continueSubAgent sends a finished sub-agent back to work in the SAME
+// session, so it keeps everything it learned.
+//
+// Unlike interruptSubAgent, a 409 is NOT mapped to a value. There it
+// means the work genuinely finished and the real result stands; here it
+// means the sub-agent started working again between the render and the
+// click, so nothing happened and the instruction was never delivered.
+// Reporting that as success would leave the user believing they had sent
+// work that no agent ever received.
+export const continueSubAgent = (
+  base: string,
+  delegationId: string,
+  task: string,
+  extra?: { maxTurns?: number; maxTokens?: number },
+) =>
+  apiPostE<{ delegation_id: string; status: string; resumed: boolean; note?: string }>(
+    `${base}/api/delegations/${encodeURIComponent(delegationId)}/continue`,
+    { task, max_turns: extra?.maxTurns ?? 0, max_tokens: extra?.maxTokens ?? 0 },
+  );
+
 export const interruptAllSubAgents = (base: string, sessionId: string) =>
   apiPostE<{ stopped: number }>(
     `${base}/api/sessions/${encodeURIComponent(sessionId)}/subagents/interrupt-all`,

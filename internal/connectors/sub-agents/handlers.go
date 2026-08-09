@@ -60,7 +60,81 @@ func (h *handlers) listAgents(c *connector.Ctx) (any, error) {
 			MemoryMode: delegation.NormalizeMemoryMode("", p.DefaultMemoryMode),
 		})
 	}
-	return map[string]any{"agents": out}, nil
+
+	// Roles are what you can START. Instances are who is already HERE —
+	// including the ones that have finished, which stay addressable and
+	// continuable. Without this list a leader cannot tell "delegate a
+	// reviewer" from "the reviewer that already read this is one message
+	// away", and it will reliably pick the expensive one.
+	return map[string]any{
+		"agents":    out,
+		"instances": h.instancesFor(c, caller),
+	}, nil
+}
+
+// instanceItem is one sub-agent that exists in this conversation.
+type instanceItem struct {
+	Handle       string `json:"handle"`
+	Role         string `json:"role"`
+	DelegationID string `json:"delegation_id"`
+	Status       string `json:"status"`
+	// Live separates "working right now" from "stopped". Both are
+	// reachable; what differs is what to do with them, and the note says
+	// which is which rather than leaving the model to infer it from the
+	// status string.
+	Live bool   `json:"live"`
+	Note string `json:"note,omitempty"`
+}
+
+// instancesFor lists the sub-agents already present in the caller's tree.
+//
+// Best-effort: a leader that cannot be told who exists is worse off, not
+// broken, so a lookup failure costs the list rather than the whole call.
+func (h *handlers) instancesFor(c *connector.Ctx, caller caller) []instanceItem {
+	if caller.sessionID == "" {
+		return nil
+	}
+	svc := h.deps.svc()
+
+	// A LEADER's sub-agents are its direct children, and each top-level
+	// delegate call starts its own tree (RootID == its own id). Listing by
+	// root therefore showed only the most recent one and silently dropped
+	// every earlier delegation — six dispatches, one visible row, and no
+	// way to find the others once their ids scrolled out of the
+	// conversation. Listing by parent is the query that matches the
+	// question "who have I delegated to".
+	//
+	// A SUB-AGENT asking the same question means something different: it
+	// wants its colleagues, which is its tree. That path keeps ListByRoot.
+	var rows []entity.AgentDelegation
+	if self, err := svc.Repo.FindByChildSession(c.Context(), caller.sessionID); err == nil && self != nil {
+		rows, err = svc.Repo.ListByRoot(c.Context(), self.RootID)
+		if err != nil {
+			return nil
+		}
+	} else {
+		var err error
+		rows, err = svc.Repo.ListByParent(c.Context(), caller.sessionID)
+		if err != nil {
+			return nil
+		}
+	}
+	out := make([]instanceItem, 0, len(rows))
+	for _, d := range rows {
+		if d.Handle == "" {
+			continue
+		}
+		live := !entity.IsTerminalDelegationStatus(d.Status)
+		note := "Finished. Use continue to carry its work further in the same session, or message it a question."
+		if live {
+			note = "Still working. Use message to steer it; do not continue or collect it yet."
+		}
+		out = append(out, instanceItem{
+			Handle: d.Handle, Role: d.ProfileKey, DelegationID: d.ID,
+			Status: d.Status, Live: live, Note: note,
+		})
+	}
+	return out
 }
 
 func (h *handlers) delegate(c *connector.Ctx) (any, error) {
@@ -75,6 +149,15 @@ func (h *handlers) delegate(c *connector.Ctx) (any, error) {
 		return nil, fmt.Errorf(
 			"the %q role is not allowed to delegate. Do this part of the work yourself, "+
 				"or report back to whoever delegated to you", role)
+	}
+
+	// continue_id turns this into a continuation. Routed AFTER the
+	// may-delegate check, deliberately: a role barred from delegating is
+	// barred from driving another agent by any spelling. Everything past
+	// this point is about spawning something new, which is exactly what a
+	// continuation must not do.
+	if id := strings.TrimSpace(c.Input("continue_id")); id != "" {
+		return h.continueDelegation(c)
 	}
 
 	profileKey := strings.TrimSpace(c.Input("profile"))
@@ -135,6 +218,7 @@ func (h *handlers) delegate(c *connector.Ctx) (any, error) {
 		DeliverySink:    sink,
 		Workspace:       workspace,
 		MemoryMode:      memory,
+		Supervised:      c.InputBool("supervised"),
 		ParentSessionID: caller.sessionID,
 		ProjectID:       caller.projectID,
 		TriggeredBy:     caller.user.ID,
@@ -164,6 +248,70 @@ func (h *handlers) delegate(c *connector.Ctx) (any, error) {
 	return res, nil
 }
 
+// continueDelegation carries an existing sub-agent further in its own
+// session.
+//
+// Authority mirrors collect and stop rather than delegate: this does not
+// create work in the caller's tree, it drives a delegation that already
+// exists, so the question is "may this caller touch that row" — which
+// CanInterrupt already answers inside the service.
+func (h *handlers) continueDelegation(c *connector.Ctx) (any, error) {
+	caller, err := h.deps.resolveCaller(c.Context(), c.SessionID(), true)
+	if err != nil {
+		return nil, err
+	}
+
+	// Two spellings reach here: the continue op's own delegation_id, and
+	// delegate's continue_id shortcut. Read both rather than duplicating
+	// the handler, so the two surfaces cannot drift apart in behaviour.
+	id := strings.TrimSpace(c.Input("delegation_id"))
+	if id == "" {
+		id = strings.TrimSpace(c.Input("continue_id"))
+	}
+	if id == "" {
+		return nil, errors.New("delegation_id is required — it is in the reply from delegate, or from collect")
+	}
+	task := strings.TrimSpace(c.Input("task"))
+	if task == "" {
+		return nil, errors.New("task is required — say what the sub-agent should do next")
+	}
+	if runes := []rune(task); len(runes) > delegateMaxTaskRunes {
+		return nil, fmt.Errorf("task too long (max %d characters)", delegateMaxTaskRunes)
+	}
+	mode, modeOK := delegation.ParseMode(c.Input("mode"))
+	if !modeOK {
+		return nil, errors.New("mode must be 'background' or 'foreground'")
+	}
+
+	res, err := h.deps.svc().Continue(c.Context(), delegation.ContinueRequest{
+		DelegationID: id,
+		Task:         task,
+		ExtraTurns:   c.InputInt("max_turns"),
+		ExtraTokens:  c.InputInt("max_tokens"),
+		Mode:         mode,
+		ActorID:      caller.user.ID,
+		IsAdmin:      caller.user.IsAdmin(),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, delegation.ErrForbidden):
+			return nil, errors.New("that delegation belongs to someone else")
+		case errors.Is(err, delegation.ErrDelegationNotFound):
+			return nil, fmt.Errorf("no such delegation: %s", id)
+		case errors.Is(err, delegation.ErrNotContinuable):
+			// Passed through verbatim: the service message already names
+			// the way out, and rewrapping it would bury that.
+			return nil, err
+		}
+		var refusal *delegation.Refusal
+		if errors.As(err, &refusal) {
+			return nil, errors.New(refusal.Message)
+		}
+		return nil, fmt.Errorf("continue: %w", err)
+	}
+	return res, nil
+}
+
 func (h *handlers) collect(c *connector.Ctx) (any, error) {
 	caller, err := h.deps.resolveCaller(c.Context(), c.SessionID(), true)
 	if err != nil {
@@ -188,6 +336,33 @@ func (h *handlers) collect(c *connector.Ctx) (any, error) {
 		default:
 			return nil, fmt.Errorf("collect: %w", err)
 		}
+	}
+	return res, nil
+}
+
+// progress records a sub-agent's mid-flight position and wakes whoever
+// is supervising it.
+//
+// Scoped by construction, like report_result: the row is resolved from
+// the CALLING session, so a sub-agent can only ever report on its own
+// work. There is no delegation_id input, and there must not be — one
+// would let an agent file progress against somebody else's run.
+func (h *handlers) progress(c *connector.Ctx) (any, error) {
+	if err := h.deps.ready(); err != nil {
+		return nil, err
+	}
+	res, err := h.deps.svc().ReportProgress(c.Context(), c.SessionID(), delegation.ProgressReport{
+		Note:    c.Input("note"),
+		Done:    c.Input("done"),
+		Next:    c.Input("next"),
+		Blocked: c.Input("blocked"),
+	})
+	if err != nil {
+		if errors.Is(err, delegation.ErrNotASubAgent) {
+			return nil, errors.New(
+				"only a sub-agent can report progress — this conversation is not a delegation, so there is nobody supervising it")
+		}
+		return nil, fmt.Errorf("progress: %w", err)
 	}
 	return res, nil
 }

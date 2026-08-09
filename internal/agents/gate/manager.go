@@ -27,6 +27,8 @@ import (
 type ApprovalManager struct {
 	appName    string
 	timeout    func() time.Duration
+	waitPolicy func() WaitPolicy
+	hasViewer  func(sessionID string) bool
 	routeByCWD func(cwd string) (sessionID string, ok bool)
 	onRequest  func(sessionID string, r ApprovalRequest)
 	onResolved func(sessionID, requestID, decision string)
@@ -51,7 +53,20 @@ type ApprovalManagerOptions struct {
 	// AppName drives SharedSocketPath / SharedSpecPath. Required.
 	AppName string
 	// Timeout overrides DefaultApprovalTimeout. Zero = default.
+	// Ignored when WaitPolicy is supplied.
 	Timeout time.Duration
+	// WaitPolicy is read once per approval request, so changing the
+	// Permission Gate config takes effect on the next prompt without a
+	// daemon restart. Its HasViewer field is filled in per request by
+	// the manager (it knows the wick session; the config does not), so
+	// implementations only need to set TimeoutEnabled/Timeout/Grace.
+	// Nil = fixed deadline from Timeout.
+	WaitPolicy func() WaitPolicy
+	// HasViewer reports whether any browser is watching sessionID's SSE
+	// stream. Required for the wait-while-watching mode; without it the
+	// manager falls back to the fixed deadline even when the config asks
+	// to wait, since it would otherwise wait on a signal nobody sends.
+	HasViewer func(sessionID string) bool
 	// RouteByCWD maps a hook payload's cwd to the wick sessionID
 	// that owns that workspace. Required — without it the manager
 	// can't tag inbound requests with a session for SSE broadcast.
@@ -80,6 +95,8 @@ func NewApprovalManager(opt ApprovalManagerOptions) (*ApprovalManager, error) {
 	return &ApprovalManager{
 		appName:            opt.AppName,
 		timeout:            func() time.Duration { return timeout },
+		waitPolicy:         opt.WaitPolicy,
+		hasViewer:          opt.HasViewer,
 		routeByCWD:         opt.RouteByCWD,
 		onRequest:          opt.OnRequest,
 		onResolved:         opt.OnResolved,
@@ -87,6 +104,33 @@ func NewApprovalManager(opt ApprovalManagerOptions) (*ApprovalManager, error) {
 		sessionAllApproved: make(map[string]bool),
 		inProcPending:      make(map[string]chan ApprovalResponse),
 	}, nil
+}
+
+// policyFor builds the wait policy for one request, binding the viewer
+// probe to the wick session that owns it.
+//
+// sessionID is the WICK session, already resolved from the request's
+// cwd — ApprovalRequest.SessionID carries claude's own id, which means
+// nothing to the SSE broadcaster. An unrouted request (empty
+// sessionID) has no session stream to watch, so it keeps the fixed
+// deadline rather than waiting on a viewer that can never appear.
+func (m *ApprovalManager) policyFor(sessionID string) WaitPolicy {
+	p := WaitPolicy{TimeoutEnabled: true, Timeout: m.timeout()}
+	if m.waitPolicy != nil {
+		p = m.waitPolicy()
+	}
+	if p.Timeout <= 0 {
+		p.Timeout = m.timeout()
+	}
+	if !p.TimeoutEnabled && m.hasViewer != nil && sessionID != "" {
+		p.HasViewer = func() bool { return m.hasViewer(sessionID) }
+	} else {
+		// Either the config wants a deadline, or we have no way to see
+		// viewers. Both must resolve to the fixed-deadline branch.
+		p.HasViewer = nil
+		p.TimeoutEnabled = true
+	}
+	return p
 }
 
 // Start binds the shared listener at SharedSocketPath(appName).
@@ -102,6 +146,16 @@ func (m *ApprovalManager) Start() (string, error) {
 		SocketPath: socketPath,
 		Timeout:    m.timeout(),
 		OnRequest:  m.handleRequest,
+		Policy: func(r ApprovalRequest) WaitPolicy {
+			sessionID, _ := m.routeByCWD(r.WorkDir)
+			return m.policyFor(sessionID)
+		},
+		OnExpired: func(r ApprovalRequest, decision, reason string) {
+			sessionID, _ := m.routeByCWD(r.WorkDir)
+			if m.onResolved != nil {
+				m.onResolved(sessionID, r.ID, decision)
+			}
+		},
 	})
 	if err != nil {
 		return "", err
@@ -169,30 +223,24 @@ func (m *ApprovalManager) RequestApproval(ctx context.Context, r ApprovalRequest
 	m.mu.Unlock()
 
 	if m.onRequest != nil {
-		m.onRequest(sessionID, r)
+		m.onRequest(sessionID, m.withDeadline(sessionID, r))
 	}
 
-	timeout := m.timeout()
-	if timeout <= 0 {
-		timeout = DefaultApprovalTimeout
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-
-	select {
-	case resp := <-ch:
-		return resp
-	case <-timer.C:
+	// An in-process caller already knows its wick session, so the viewer
+	// probe binds directly — no cwd routing needed.
+	expired := false
+	resp := m.policyFor(sessionID).awaitDecision(r.ID, ch, nil, ctx.Done(), func() {
+		expired = true
 		m.mu.Lock()
 		delete(m.inProcPending, r.ID)
 		m.mu.Unlock()
-		return ApprovalResponse{ID: r.ID, Decision: DecisionBlock, Reason: "timeout"}
-	case <-ctx.Done():
-		m.mu.Lock()
-		delete(m.inProcPending, r.ID)
-		m.mu.Unlock()
-		return ApprovalResponse{ID: r.ID, Decision: DecisionBlock, Reason: "cancelled"}
+	})
+	// Same reason as the socket path: a prompt that died on its own
+	// still has a modal open in the browser waiting to hear about it.
+	if expired && m.onResolved != nil {
+		m.onResolved(sessionID, r.ID, resp.Decision)
 	}
+	return resp
 }
 
 // handleRequest is the per-request entry from the listener. We
@@ -217,8 +265,36 @@ func (m *ApprovalManager) handleRequest(r ApprovalRequest) {
 		return
 	}
 	if m.onRequest != nil {
-		m.onRequest(sessionID, r)
+		m.onRequest(sessionID, m.withDeadline(sessionID, r))
 	}
+}
+
+// withDeadline stamps the request with the countdown the browser should
+// show, if any. Derived from the same policy the wait loop uses, so the
+// modal can never advertise a deadline the daemon isn't enforcing.
+//
+// The value is time REMAINING, not the configured total: a tab that
+// reloads 20s into a 25s deadline must resume at 5, not restart at 25.
+func (m *ApprovalManager) withDeadline(sessionID string, r ApprovalRequest) ApprovalRequest {
+	p := m.policyFor(sessionID)
+	if p.waitsForViewer() {
+		return r
+	}
+	remaining := p.timeout()
+	if r.Timestamp > 0 {
+		elapsed := time.Since(time.UnixMilli(r.Timestamp))
+		if elapsed > 0 {
+			remaining -= elapsed
+		}
+	}
+	// Floor at 1s rather than 0: zero is the wire value for "no
+	// deadline", and a prompt this close to expiry should still show a
+	// countdown rather than silently look like it will wait forever.
+	if remaining < time.Second {
+		remaining = time.Second
+	}
+	r.ExpiresInSec = int(remaining / time.Second)
+	return r
 }
 
 // Resolve delivers a UI decision into the matching pending request.
@@ -288,6 +364,13 @@ func (m *ApprovalManager) IsSessionAllApproved(sessionID string) bool {
 // IsSessionApproved reports whether the user clicked "Allow this
 // session" for matchKey in sessionID's current pool lifetime.
 func (m *ApprovalManager) IsSessionApproved(sessionID, matchKey string) bool {
+	// An empty key means the command could not be read. It must never
+	// match a remembered decision — otherwise one click approves every
+	// later unreadable call in the session, which is how a PowerShell
+	// `rm -rf` once ran unprompted.
+	if matchKey == "" {
+		return false
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	set := m.sessionApproved[sessionID]
@@ -319,7 +402,15 @@ func (m *ApprovalManager) PendingFor(_ string) []ApprovalRequest {
 	if l == nil {
 		return nil
 	}
-	return l.PendingSnapshot()
+	// Stamp the deadline the same way the SSE broadcast does, so a tab
+	// rehydrating after a reload renders the prompt identically to one
+	// that received the live event.
+	out := l.PendingSnapshot()
+	for i, r := range out {
+		routed, _ := m.routeByCWD(r.WorkDir)
+		out[i] = m.withDeadline(routed, r)
+	}
+	return out
 }
 
 // AutoApproved returns the persistent always-allow list from the

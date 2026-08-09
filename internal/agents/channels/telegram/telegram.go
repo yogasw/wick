@@ -383,6 +383,14 @@ func (t *Channel) handleCallback(_ context.Context, cb *tgbotapi.CallbackQuery) 
 }
 
 // OnApprovalRequest satisfies channels.ApprovalReceiver.
+// CanAnswerApproval satisfies channels.ApprovalResponder — see the Slack
+// implementation for why an unattended-looking session still has a human.
+func (t *Channel) CanAnswerApproval(sessionID string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.turns[sessionID] != nil
+}
+
 func (t *Channel) OnApprovalRequest(sessionID string, req gate.ApprovalRequest) {
 	t.mu.Lock()
 	tn := t.turns[sessionID]

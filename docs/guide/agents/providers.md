@@ -169,6 +169,14 @@ Pattern lives in two spots:
 
 Same pattern is used by `internal/systemtray/{editor,notify}_windows.go`. Dev mode (`go run` from a shell) has an attached console → child inherits → no flash; CREATE_NO_WINDOW is safe to apply universally.
 
+## System prompt on Windows: argv length limit
+
+Windows caps a process command line at 32767 UTF-16 characters. Wick's default preset alone is ~28KB, so inlining it via `--append-system-prompt` could push a `claude` spawn's argv over that limit — the process then fails to start with `CreateProcess`'s generic `The filename or extension is too long`, which names the binary and gives no hint that the argv (not the binary) is the problem.
+
+The claude provider now writes the rendered preset to `<session dir>/.claude/system-prompt.md` (mode `0600`) and passes it with `--append-system-prompt-file` instead, keeping the argv small regardless of preset size. If the file can't be written, it falls back to the inline flag and logs a warning.
+
+Source: [`provider/claude/prompt_file.go`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/claude/prompt_file.go).
+
 ## Spawn log
 
 Every spawn writes a JSONL file under `~/.<app>/agents/providers/spawns/`:

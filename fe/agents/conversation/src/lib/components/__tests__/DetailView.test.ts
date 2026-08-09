@@ -188,6 +188,7 @@ vi.mock("svelte/store", async (importActual) => {
 import DetailView from "../DetailView.svelte";
 import { killProcess, getProcesses } from "../../api/processes.js";
 import { getAsks } from "../../api/asks.js";
+import { getApprovals } from "../../api/approvals.js";
 import { getConversation } from "../../api/sessions.js";
 import { getSubAgentPanel } from "../../api/subagents.js";
 import { Effect } from "effect";
@@ -488,6 +489,15 @@ describe("DetailView — approvals modal error propagation (#35)", () => {
   test("ApprovalsModal receives error prop (data-approval-error absent when no error)", () => {
     const { container } = render(DetailView, { props: DEFAULT_PROPS });
     expect(container.querySelector("[data-approval-error]")).toBeNull();
+  });
+
+  // The approval_request SSE event fires once. Reloading the page while a
+  // prompt is open means missing it entirely — and the daemon is still
+  // waiting, so the agent hangs with no visible way to answer. Rehydrate
+  // from the server on mount instead of only when the tab is clicked.
+  test("fetches pending approvals on mount, not just on tab click", () => {
+    render(DetailView, { props: DEFAULT_PROPS });
+    expect(getApprovals).toHaveBeenCalledWith(DEFAULT_PROPS.base, DEFAULT_PROPS.sessionId);
   });
 });
 

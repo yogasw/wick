@@ -188,6 +188,80 @@ func interruptSubAgent(c *tool.Ctx) {
 	writeInterruptOutcome(c, out, err)
 }
 
+// continueSubAgent handles POST /api/delegations/{delegationID}/continue.
+//
+// The human-facing half of the continue op: a person reading a finished
+// sub-agent's result can send it back to work in the SAME session rather
+// than delegating again and getting a stranger who has to rediscover
+// everything the first one learned.
+//
+// Authorisation is CanInterrupt, applied inside the service — continuing
+// someone else's sub-agent is the same authority as stopping it.
+//
+// Runs in the background always. A foreground continue would hold the
+// HTTP request open for however long the sub-agent takes, and a browser
+// that gives up mid-run would look, from the caller's side, exactly like
+// a failure — while the sub-agent kept working.
+func continueSubAgent(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	if globalDelegation == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sub-agents are not enabled"})
+		return
+	}
+	var body struct {
+		Task      string `json:"task"`
+		MaxTurns  int    `json:"max_turns"`
+		MaxTokens int    `json:"max_tokens"`
+	}
+	if err := c.BindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if strings.TrimSpace(body.Task) == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "say what the sub-agent should do next",
+		})
+		return
+	}
+
+	actorID, isAdmin := callerIdentity(c)
+	res, err := globalDelegation.Continue(c.Context(), delegation.ContinueRequest{
+		DelegationID: c.PathValue("delegationID"),
+		Task:         body.Task,
+		ExtraTurns:   body.MaxTurns,
+		ExtraTokens:  body.MaxTokens,
+		Mode:         delegation.ModeAsync,
+		ActorID:      actorID,
+		IsAdmin:      isAdmin,
+	})
+	switch {
+	case err == nil:
+		// `resumed` is the load-bearing field here, not `status`: it tells
+		// the UI whether the sub-agent came back with its memory or is
+		// starting over inside its old session.
+		c.JSON(http.StatusOK, map[string]any{
+			"delegation_id": res.DelegationID,
+			"status":        res.Status,
+			"resumed":       res.Resumed,
+			"note":          res.Note,
+		})
+	case errors.Is(err, delegation.ErrForbidden):
+		c.JSON(http.StatusForbidden, map[string]string{"error": "not allowed to continue this sub-agent"})
+	case errors.Is(err, delegation.ErrDelegationNotFound):
+		c.JSON(http.StatusNotFound, map[string]string{"error": "sub-agent not found"})
+	case errors.Is(err, delegation.ErrNotContinuable):
+		// 409, like the interrupt race: the sub-agent is working again, so
+		// the button the user clicked no longer applies. Its own message
+		// names the way out, so pass it through rather than flattening it.
+		c.JSON(http.StatusConflict, map[string]string{"error": err.Error()})
+	default:
+		log.Ctx(c.Context()).Error().Err(err).Msg("subagents: continue failed")
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+}
+
 // interruptAllSubAgents handles POST /api/sessions/{id}/subagents/interrupt-all.
 // Stops every live descendant while LEAVING THE LEADER RUNNING, so it can
 // react to the partial results it already has.
