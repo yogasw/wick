@@ -117,6 +117,11 @@ export type ApprovalRequest = {
   work_dir: string;
   cmd: string;
   match_key: string;
+  // Seconds left before the daemon blocks this command on its own.
+  // Absent or 0 when the approval timeout is switched off: the prompt
+  // then stays open while a tab is watching the session, so there is no
+  // deadline to count down to.
+  expires_in_sec?: number;
 };
 
 export type ApprovedItem = {
@@ -128,7 +133,11 @@ export type ApprovalDecision =
   | "approve_once"
   | "approve_session"
   | "approve_always"
-  | "block";
+  // Refuse and end the agent's turn.
+  | "block"
+  // Refuse this one command but keep the turn alive, handing the agent
+  // a reason so it can take a different route. Requires a reason.
+  | "guide";
 
 export type ApprovalsResponse = {
   pending: ApprovalRequest[];

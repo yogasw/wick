@@ -10,6 +10,56 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.38.0](https://github.com/yogasw/wick/compare/v0.37.0...v0.38.0) — Sub-agents & Approvals
+
+_Released on 2026-08-09_
+
+### Sub-agents
+#### Added
+*   `continue` op (`wick_agent_continue`) allows carrying a stopped delegation further in its own session, preserving its transcript. Turn and token grants are added to what the delegation already spent, not reassigned over it. `delegate` gained a `continue_id` shortcut for this behavior.
+*   `progress` op (`wick_agent_progress`) enables a sub-agent to report its mid-task status, waking the supervising agent without ending its own turn. `delegate` gained a `supervised` flag to request these reports from a sub-agent.
+*   `list_agents` now also returns `instances` — all sub-agents that exist in the conversation, including finished ones, allowing a leader to continue or message an existing sub-agent instead of spawning a new one.
+*   `collect` on a still-running delegation now returns `progress` (a peek at its in-flight work) and `last_report` (its latest `progress` note) instead of an empty pending result.
+*   A **Continue** button has been added to the Sub-agents rail panel, appearing on any stopped row. It prompts for the next action and sends the sub-agent back to work in its own session. It explicitly warns if the transcript could not be resumed, preventing a follow-up from being written under false assumptions.
+
+#### Changed
+*   Messaging a stopped sub-agent is now allowed for every terminal status (not just `done`); the recipient resumes in its own session with its transcript intact where possible.
+*   `list_agents` for a leader now lists sub-agents by parent (who the leader delegated to), while a sub-agent still gets its own tree.
+
+### Fixed
+*   **Claude spawns failing on Windows with "The filename or extension is too long"**: The system prompt is now passed via `--append-system-prompt-file` (a per-session file) instead of inlined on the command line. Wick's preset alone (~28KB) could push the command line arguments past Windows's 32767-character `CreateProcess` limit, causing `claude` spawns to fail with a misleading error.
+*   **Sub-agent supervision silently no-op'd**: The `X-Wick-Session-Id` header for sub-agents was incorrectly derived from its storage directory's basename instead of its flat session ID. This caused ops like `progress` and `report_result` to fail for sub-agent calls, making `supervised=true` ineffective and `collect`'s `progress`/`last_report` always absent. `SessionID` is now carried through `SpawnOptions` to ensure correctness.
+*   **Delegation & Agent Execution Reliability**:
+    *   **Inaccurate Results on Peer Messages**: `report_result` now takes precedence over the closing prose when a peer message was delivered mid-run, preventing the reply to a peer message from being recorded as the final answer to the original delegation.
+    *   **Stop did not stop**: The `Interrupt` operation now unconditionally kills any running agent process *before* returning, preventing sub-agents from continuing work invisibly after being stopped. `PartialText` now falls back to the last progress note, and `turns_used` is re-read before writing a terminal status to prevent backward updates.
+    *   **Pending `collect` replies**: `collect` on a running delegation now accurately reports `last_report` when available, states when nothing has been reported (and mentions `supervised=true` to enable reports), and advises `stop` instead of `message` for intervention. It also adds `last_report_at` for better context.
+    *   **Stranded Runs on Lost Done Events**: Terminal events (`Done`, `Error`) in `DelegationStream` now block rather than being dropped when consumers are behind, preventing runs from being stranded. The event buffer size has been increased to 512. A sweeper now finishes delegations whose agent processes are confirmed `GONE`, recording existing work to prevent permanent stranding.
+    *   **Abandoned-run sweep eating new runs**: The sweep now includes a three-minute grace period for newly started delegations and considers a recent progress report as an indicator of liveness, even if the agent process is temporarily absent (e.g., respawn-per-turn providers). This prevents the sweeper from prematurely terminating healthy, just-started, or between-turn runs.
+    *   **Loss of Work and Turns on Kill/Error**: On `kill`/`error` finishes, the freshest `last_report` is now appended to the result (or becomes the result if nothing was streamed), clearly labeled as not a completed answer. `turns_used` now correctly uses `max(our Done count, provider num_turns)`.
+    *   **Max Turns clamping**: A delegation request exceeding `max_turns` is now silently clamped. The clamp is recorded on the row and surfaced as `turns_note` on the delegate reply, ensuring transparency.
+    *   **Raw Provider Line Loss**: The SSE bridge now carries the raw provider line (containing token usage and provider-specific turn counts) in memory, ensuring that `tokens_used` and agent turn counts are accurately billed and reported for delegations.
+    *   **Supervised Runs Closing Prematurely**: Supervised sub-agents that have filed progress but no `report_result` are now nudged to continue on turn-boundary narration (text that indicates ongoing work) instead of being closed with a `done` status. Unsupervised one-question delegations still close on text. `Stop` on a terminal row now always kills any surviving agent first. Failure paths now consistently return a degraded envelope (`structured:false`, `confidence:unknown`). Turn numbers are clarified as "tree turns" (pooled budget) vs. "per-delegation cap".
+*   **Frontend & Streaming Improvements**:
+    *   **One dev-reload watcher and connection for all tabs**: A process-wide hub now manages a single `fsnotify` watcher, fanning rebuild events out to subscribers. All tabs now share one `_dev/reload` connection via a `SharedWorker`, conserving browser connection quotas.
+    *   **Idle keep-alive connections server-side**: A 60s `IdleTimeout` has been set for the HTTP server, ensuring orderly, server-initiated closure of idle keep-alive connections. This prevents requests from stalling indefinitely into dead sockets.
+    *   **Share one `/stream/sessions` connection across all tabs**: The sidebar's lifecycle stream is now routed through the existing `SharedWorker`, reducing the connection cost to one for `N` tabs.
+    *   **Multiplex all session streams over one SSE connection**: `GET /stream/multi?sessions=a,b,c` now carries all requested session's agent events on a single connection. This reduces the browser's SSE connection cost, preventing requests from being capped by per-origin limits.
+    *   **Mux sessions onto one stream and reap dead subscriber ports**: The `SharedWorker` now uses `/stream/multi`. It also addresses leaks by unsubscribing on `pagehide` and reaping dead `MessagePort`s via their `close` event, ensuring that unused streams are properly cleaned up.
+*   **Permission Gate & Approval Prompts**:
+    *   **Keep approval prompts open while a tab is watching**: The deadline for an approval prompt is now optional and off by default, allowing prompts to stay open as long as a browser is watching the session. A 20s grace period is applied only once all tabs are gone. New knobs (`approval_timeout_enabled`, `approval_timeout_sec`) are introduced. Internal timeouts (gate binary's socket read, Claude's `PreToolUse` hook) have been raised. `approval_resolved` is now broadcast on all exit paths.
+    *   **Gate every shell tool, and key approvals by the command**: PowerShell commands are now correctly gated as commands (not paths). Any tool carrying shell text is gated as a command, using the tool_input payload. An empty command key (`MatchKey` returning `""`) is now impossible to inherit, ensuring such commands are always asked about. The audit trail now names the real interpreter.
+    *   **Refuse a command with guidance, and answer prompts by keyboard**: A new refusal mechanism allows keeping the agent's turn alive and providing a correction back to the model, in addition to the hard block. The approval prompt now takes focus on arrival and offers keyboard shortcuts (A, S, W, N, B, Enter, Esc) for various actions.
+    *   **Keep shortcut hints off small screens**: Shortcut hint chips and the note's shortcut line are now hidden below the `sm` breakpoint on smaller screens. The shortcuts themselves remain wired for keyboard users on tablets.
+    *   **Keep the approval prompt inside the viewport**: The approval dialog is now capped at viewport height using `dvh` and made a flex column, allowing the detail body to scroll while the header and action row remain visible.
+    *   **Count channels as viewers, and stop waiting when nobody is there**: The grace period for prompts now starts short and only widens once a viewer has been observed. An opt-in `ApprovalResponder` has been added for channels (like Slack/Telegram) to count as viewers, allowing their buttons to remain active. This ensures prompts wait for human interaction but block promptly if nobody is attached.
+    *   **Restore an open approval prompt after a page reload**: Pending approvals are now fetched on page mount, and the modal is reopened if the server indicates a request is still waiting, preventing agents from being blocked invisibly after a browser reload.
+*   **Process Management**:
+    *   **Never spawn with a nil buffer**: `spawn` now resolves the buffer through `bufferFor`, which lazy-creates and reads any `PendingInput` from disk. `Drain` is also made nil-safe as a backstop.
+    *   **Force-kill the whole tree when graceful teardown fails**: `taskkill` is now used with `/T /F` to walk and forcefully terminate the entire process tree, preventing orphaned worker processes (e.g., from launcher-shim binaries) from continuing to run after a `Stop` command.
+
+---
+
+
 ## [v0.37.0](https://github.com/yogasw/wick/compare/v0.36.4...v0.37.0) — MCP & Connectors
 
 _Released on 2026-08-07_

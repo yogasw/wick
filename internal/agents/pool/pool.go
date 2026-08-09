@@ -938,6 +938,22 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 			})
 		})
 	}
+	// Every spawn drains the session's buffer, so the buffer must exist for
+	// every spawn — not only for sessions that entered through send().
+	//
+	// A bare p.buffers lookup here left entry.buffer nil for any session
+	// that reached the queue WITHOUT a send: a leader woken by a
+	// delegation result, a preempt-requeue. The nil then panicked in
+	// Drain, and because queue grants spawn on a bare goroutine
+	// (tryGrantQueue), that single nil took the whole process down.
+	// Observed in the wild. bufferFor lazy-creates and, crucially, reads
+	// any PendingInput persisted on disk — exactly what a wake-path spawn
+	// should drain.
+	buf, err := p.bufferFor(sessionID)
+	if err != nil {
+		return err
+	}
+
 	p.mu.Lock()
 	if p.closed {
 		// Stop raced ahead of us — bail before publishing the entry,
@@ -946,9 +962,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		p.mu.Unlock()
 		return errors.New("pool closed")
 	}
-	if buf, ok := p.buffers[sessionID]; ok {
-		entry.buffer = buf
-	}
+	entry.buffer = buf
 	p.active[key] = entry
 	p.mu.Unlock()
 

@@ -3,7 +3,7 @@
   import { get } from "svelte/store";
   import { Effect } from "effect";
   import { WickClientLayer, listAgentProfiles } from "@wick-fe/common-api";
-  import { toastError, toastOk } from "@wick-fe/common-stores";
+  import { toastError, toastOk, toastWarn } from "@wick-fe/common-stores";
   import { ConfirmDialog, Composer } from "@wick-fe/common-ui";
   import { NOTIFY_KEY } from "../notify-pref.js";
 
@@ -14,7 +14,7 @@
   import { currentAsk, showAsk, hideAsk } from "../stores/asks.js";
   import { currentDetail, showDetail, hideDetail } from "../stores/detail.js";
   import DetailModal from "./DetailModal.svelte";
-  import { currentApproval, showApproval, hideApproval } from "../stores/approvals.js";
+  import { currentApproval, showApproval, hideApproval, isExpiredApprovalError } from "../stores/approvals.js";
   import { notify } from "../notify.js";
   import { push } from "../router.js";
   import { bareToolName } from "../todoGroups.js";
@@ -33,6 +33,7 @@
     getSubAgentPanel,
     interruptSubAgent,
     interruptAllSubAgents,
+    continueSubAgent,
     liveSubAgents,
     getMessages,
     bumpHops,
@@ -403,15 +404,28 @@
   let approvalsTabSession = $state<ApprovedItem[]>([]);
   let approvalsTabAlways = $state<ApprovedItem[]>([]);
 
-  function loadApprovalsTab() {
+  function loadApprovalsTab(showPending = false) {
     run(getApprovals(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
         approvalsTabPending = res.pending;
         approvalsTabSession = res.session_approved;
         approvalsTabAlways = res.always_approved;
+        // On a fresh page the approval_request event has already come and
+        // gone, but the daemon is still holding the prompt open — so the
+        // agent sits there with no visible way to answer. Reopen the modal
+        // from server state rather than relying on an event we missed.
+        if (showPending && res.pending.length > 0 && !get(currentApproval)) {
+          showApproval(res.pending[0]);
+        }
       })
       .catch((e: unknown) => toastError(`Approvals: ${e instanceof Error ? e.message : String(e)}`));
   }
+
+  // Rehydrate whenever the session changes, including first render.
+  $effect(() => {
+    void sessionId;
+    loadApprovalsTab(true);
+  });
 
   async function handleRevokeApproval(matchKey: string, scope: "session" | "always") {
     try {
@@ -671,6 +685,25 @@
     const row = subAgents.find((s) => s.delegation_id === delegationId);
     if (row) selectedSubAgent = row.child_session_id;
     loadSubAgents();
+  }
+
+  // Sends a finished sub-agent back to work in its own session.
+  //
+  // `resumed: false` is surfaced as a warning rather than swallowed: the
+  // sub-agent woke inside its old session but WITHOUT its transcript, so
+  // the instruction just sent has to stand on its own. A plain success
+  // toast there would tell the user their follow-up landed on an agent
+  // that remembers the work, when it does not.
+  function continueSubAgentRow(delegationId: string, task: string) {
+    run(continueSubAgent(base, delegationId, task).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        if (res.resumed) toastOk("Sub-agent continued");
+        else toastWarn("Continued, but it could not resume its earlier work — it is starting fresh");
+        loadSubAgents();
+      })
+      .catch((e: unknown) =>
+        toastError(`Continue sub-agent: ${e instanceof Error ? e.message : String(e)}`),
+      );
   }
 
   function stopAllSubAgents() {
@@ -996,10 +1029,21 @@
           const req = JSON.parse(ev.data ?? "{}");
           approvalError = "";
           showApproval(req);
+          if (!approvalsTabPending.some((p) => p.id === req.id)) {
+            approvalsTabPending = [...approvalsTabPending, req];
+          }
           notify("Approval needed", req.cmd ?? "");
         } catch (_) { /* skip */ }
       } else if (ev.type === "approval_resolved") {
-        try { hideApproval(JSON.parse(ev.data ?? "{}")); } catch (_) { /* skip */ }
+        try {
+          const payload = JSON.parse(ev.data ?? "{}");
+          hideApproval(payload);
+          // Drop the row too, so the tab does not keep offering buttons
+          // for a request the daemon has already decided.
+          if (payload?.id) {
+            approvalsTabPending = approvalsTabPending.filter((p) => p.id !== payload.id);
+          }
+        } catch (_) { /* skip */ }
       } else if (ev.type === "done" || ev.type === "error") {
         void loadConversation();
         // A sub-agent's own lifecycle events are published on the CHILD's
@@ -1085,23 +1129,57 @@
     }
   }
 
-  async function handleApprovalDecide(decision: ApprovalDecision) {
-    const approval = get(currentApproval);
+  // Which pending row (if any) has its note field open, and the text in
+  // it. Keyed by request id so a note typed for one row can't be sent
+  // against another.
+  let tabNoteFor = $state("");
+  let tabNote = $state("");
+
+  function sendTabGuide(req: import("../types/agents.js").ApprovalRequest) {
+    const trimmed = tabNote.trim();
+    if (!trimmed) return;
+    tabNoteFor = "";
+    tabNote = "";
+    void handleApprovalDecide("guide", trimmed, req);
+  }
+
+  // reason carries a "guide" decision's correction back to the agent.
+  // req is explicit so the Approvals tab can decide a row that is not the
+  // one in the modal; it defaults to the modal's own request.
+  async function handleApprovalDecide(
+    decision: ApprovalDecision,
+    reason?: string,
+    req?: import("../types/agents.js").ApprovalRequest,
+  ) {
+    const approval = req ?? get(currentApproval);
     if (!approval) return;
     approvalError = "";
-    hideApproval();
+    hideApproval({ id: approval.id });
     try {
       await run(
         sendApprovalDecision(base, sessionId, {
           id: approval.id,
           decision,
           match_key: approval.match_key,
+          ...(reason ? { reason } : {}),
         }).pipe(Effect.provide(WickClientLayer))
       );
+      approvalsTabPending = approvalsTabPending.filter((p) => p.id !== approval.id);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
+      // Expired requests stay closed. Reopening one would leave a modal
+      // whose every button re-POSTs a dead id for another 410, escapable
+      // only by reloading the page.
+      if (isExpiredApprovalError(e)) {
+        approvalsTabPending = approvalsTabPending.filter((p) => p.id !== approval.id);
+        toastWarn("Approval expired — the command was blocked. Ask the agent to retry it.");
+        return;
+      }
       approvalError = msg;
-      showApproval(approval);
+      // Only the modal reopens on a retryable failure; a tab row keeps
+      // its own buttons and needs no modal.
+      if (!req) showApproval(approval);
+      else toastError(`Approval: ${msg}`);
     }
   }
 
@@ -1453,27 +1531,69 @@
                         <dd class="font-mono text-black-900 dark:text-white-100 break-all">{req.cmd || "—"}</dd>
                       </div>
                     </dl>
-                    <div class="grid grid-cols-4 gap-2">
-                      <button
-                        type="button"
-                        class="rounded-lg bg-green-500 px-3 py-2 text-xs font-medium text-white-100 hover:bg-green-600 transition-colors"
-                        onclick={() => handleApprovalDecide("approve_once")}
-                      >Approve once</button>
-                      <button
-                        type="button"
-                        class="rounded-lg border border-green-500 dark:border-green-600 px-3 py-2 text-xs font-medium text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
-                        onclick={() => handleApprovalDecide("approve_session")}
-                      >Allow session</button>
-                      <button
-                        type="button"
-                        class="rounded-lg border border-green-500 dark:border-green-600 px-3 py-2 text-xs font-medium text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
-                        onclick={() => handleApprovalDecide("approve_always")}
-                      >Always allow</button>
-                      <button
-                        type="button"
-                        class="rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white-100 hover:bg-red-700 transition-colors"
-                        onclick={() => handleApprovalDecide("block")}
-                      >Block</button>
+                    <div class="flex flex-col gap-2">
+                      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          class="rounded-lg bg-green-500 px-3 py-2 text-xs font-medium text-white-100 hover:bg-green-600 transition-colors"
+                          onclick={() => handleApprovalDecide("approve_once", undefined, req)}
+                        >Approve once</button>
+                        <button
+                          type="button"
+                          class="rounded-lg border border-green-500 dark:border-green-600 px-3 py-2 text-xs font-medium text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+                          onclick={() => handleApprovalDecide("approve_session", undefined, req)}
+                        >Allow session</button>
+                        <button
+                          type="button"
+                          class="rounded-lg border border-green-500 dark:border-green-600 px-3 py-2 text-xs font-medium text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
+                          onclick={() => handleApprovalDecide("approve_always", undefined, req)}
+                        >Always allow</button>
+                      </div>
+                      {#if tabNoteFor === req.id}
+                        <div class="flex flex-col gap-2">
+                          <textarea
+                            rows="2"
+                            bind:value={tabNote}
+                            onkeydown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+                                e.preventDefault();
+                                sendTabGuide(req);
+                              } else if (e.key === "Escape") {
+                                e.preventDefault();
+                                tabNoteFor = "";
+                              }
+                            }}
+                            placeholder="Why not, and what should it do instead?"
+                            class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-xs text-black-900 dark:text-white-100 placeholder:text-black-700 dark:placeholder:text-black-600 focus:outline-none focus:border-green-500 resize-none"
+                          ></textarea>
+                          <div class="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              class="rounded-lg border border-white-400 dark:border-navy-600 px-3 py-2 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600 transition-colors"
+                              onclick={() => { tabNoteFor = ""; tabNote = ""; }}
+                            >Cancel</button>
+                            <button
+                              type="button"
+                              disabled={tabNote.trim() === ""}
+                              class="rounded-lg bg-cau-400 px-3 py-2 text-xs font-medium text-white-100 hover:bg-cau-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                              onclick={() => sendTabGuide(req)}
+                            >Send</button>
+                          </div>
+                        </div>
+                      {:else}
+                        <div class="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            class="rounded-lg border border-cau-400 px-3 py-2 text-xs font-medium text-cau-400 hover:bg-cau-50 dark:hover:bg-cau-900/20 transition-colors"
+                            onclick={() => { tabNoteFor = req.id; tabNote = ""; }}
+                          >Block with note</button>
+                          <button
+                            type="button"
+                            class="rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white-100 hover:bg-red-700 transition-colors"
+                            onclick={() => handleApprovalDecide("block", undefined, req)}
+                          >Block</button>
+                        </div>
+                      {/if}
                     </div>
                   </div>
                 {/each}
@@ -1571,6 +1691,7 @@
           onSelect={(cid) => { selectedSubAgent = selectedSubAgent === cid ? null : cid; }}
           onInterrupt={stopSubAgent}
           onInterruptAll={stopAllSubAgents}
+          onContinue={continueSubAgentRow}
           messages={agentMessages}
           {hopsLeft}
           onBumpHops={bumpAgentHops}
@@ -1708,6 +1829,7 @@
               onSelect={(cid) => { selectedSubAgent = selectedSubAgent === cid ? null : cid; }}
               onInterrupt={stopSubAgent}
               onInterruptAll={stopAllSubAgents}
+              onContinue={continueSubAgentRow}
               messages={agentMessages}
               {hopsLeft}
               onBumpHops={bumpAgentHops}

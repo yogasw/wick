@@ -91,14 +91,22 @@ Turning the master switch off takes effect on the **next delegation** — no res
 
 Delegation lives on the **`sub-agents` connector**, which buys it the connector contract — an admin page, tag visibility, and run history. Every enabled op is *also* exposed as a top-level MCP tool named `wick_agent_<op>` (`wick_agent_delegate`, `wick_agent_collect`, …), routed through the same execute path with the same visibility and per-op access checks — so the hot path is one call instead of the `wick_get "sub-agents"` → `wick_execute` two-hop. Both paths hit identical code; the shortcut is just faster to reach.
 
-Nine ops: `list_agents`, `delegate`, `collect`, `create_agent`, `list_access`, `tasks`, `message`, `reply`, `stop`. The last three are covered in [Talking to other agents](#talking-to-other-agents).
+Eleven ops: `list_agents`, `delegate`, `continue`, `collect`, `progress`, `create_agent`, `list_access`, `tasks`, `message`, `reply`, `stop`. The last three are covered in [Talking to other agents](#talking-to-other-agents).
 
 ### `list_agents`
 
-Lists the roles this caller may delegate to — `key`, `name`, `description`,
-`provider`, and `scope` (`global` or `project`). Call it before `delegate`:
-the agent's system prompt tells it to, precisely so it uses a key that
-exists rather than guessing one.
+Returns two lists. `agents` are the **roles** this caller may delegate to —
+`key`, `name`, `description`, `provider`, and `scope` (`global` or
+`project`). `instances` are the sub-agents that **already exist** in this
+conversation — handle, role, delegation id, status, and whether they are
+still `live` — including ones that have finished, which stay reachable
+through `continue` or `message`.
+
+Read `instances` first: an agent that already did related work can be
+continued or messaged for a fraction of what a fresh spawn costs, and it
+remembers what it did, so `delegate`-ing a stranger instead throws that
+away. Call `list_agents` before `delegate`, `continue`, or `message` so
+you use a key or handle that exists.
 
 ### `delegate`
 
@@ -108,6 +116,8 @@ exists rather than guessing one.
 | `task` | yes | The complete, self-contained instruction |
 | `context` | no | Extra background; not the leader's transcript |
 | `max_turns` | no | Clamped to the system ceiling |
+| `continue_id` | no | A delegation id to continue instead of spawning — a shortcut onto [`continue`](#continue) |
+| `supervised` | no | Ask the sub-agent to file [progress](#progress) notes as it works. Off by default. |
 
 Emitting several `delegate` calls in one turn queues them behind whichever sub-agent is already running, up to `max_parallel` concurrently — `1` by default, so they run **one at a time**; see [One at a time: the queue](#one-at-a-time-the-queue). There is no batch op — the queue falls out of multiple calls naturally.
 
@@ -117,9 +127,40 @@ The result always carries a `status`:
 |---|---|---|
 | `done` | Complete answer | Use it |
 | `interrupted` | A **human** pressed Stop | Read the note; do *not* silently retry |
-| `stopped_max_turns` | Hit its turn cap | Result is partial — use it or ask the user |
-| `stopped_budget` | The tree's budget ran out | Summarise with what is already there |
+| `stopped_max_turns` | Hit its turn cap | Result is partial — use `continue` to carry it further, or use it as-is |
+| `stopped_budget` | The tree's budget ran out | Use `continue` with more budget, or summarise with what is already there |
 | `failed` | Runtime error | Report it |
+
+### `continue`
+
+Carries an **existing** delegation further in the **same session**, so the
+sub-agent keeps everything it learned. A fresh `delegate` call spawns a
+stranger with a blank context; `continue` wakes the agent that did the
+work.
+
+Use it when a sub-agent finished but the job is not done
+(`needs_followup`), when it stopped at `stopped_max_turns` or
+`stopped_budget` with partial work, or when its answer has been reviewed
+and the next step is ready. Only valid on a delegation that has
+**stopped** — to steer one still running, use `message` instead.
+
+| Input | Required | Notes |
+|---|---|---|
+| `delegation_id` | yes | From `delegate` or `collect` |
+| `task` | yes | The **next** instruction, not the original brief — the sub-agent still has that in context; restating it invites a restart |
+| `max_turns` | no | Extra turns for this leg, **added** to what it already spent, not reassigned over it. Omit for another full allowance. |
+| `max_tokens` | no | Extra tokens, added the same way |
+| `mode` | no | `background` (default, keeps whatever it ran as before) or `foreground` |
+
+`profile`, `workspace`, and `memory_mode` are not inputs here — they were
+settled when the delegation was created, and changing one mid-life would
+continue a different agent than the one whose transcript is being
+resumed.
+
+Check `resumed` in the reply: `false` means the sub-agent's transcript
+could not be recovered, so despite running in its old session it is
+working from nothing — the `task` must stand alone rather than assume it
+remembers.
 
 ### `create_agent`
 
@@ -198,6 +239,21 @@ Three ways to stop things:
 Stop works on a **queued** sub-agent too, not just a running one — it is dropped from the queue rather than killed. Without that, the button would appear to do nothing and the work would run anyway.
 
 If a sub-agent happens to finish in the instant between your click and the server handling it, its real result stands and nothing is overwritten.
+
+### Continue a finished sub-agent
+
+A row that has **stopped** shows **Continue** where a live one shows Stop. It asks what to do next, then sends that sub-agent back to work **in its own session**, keeping everything it learned — the human-facing half of the [`continue` op](#continue).
+
+Use it when a result is nearly right, when a run ended at `stopped_max_turns` with partial work, or when reviewing the answer suggests the obvious next step. Delegating again instead gets you a new sub-agent with a blank context that has to rediscover what the first one already knew.
+
+The box asks for the **next instruction**, not the original brief. The sub-agent still has that; restating it invites it to start over.
+
+Two outcomes are worth reading:
+
+- **"Sub-agent continued"** — it resumed with its transcript intact.
+- **"…could not resume its earlier work — it is starting fresh"** — the session was reused but the provider could not replay the transcript. Your instruction has to stand on its own, or re-delegate instead.
+
+If the sub-agent started working again between the page rendering and your click, the continue is refused rather than queued: nothing was delivered, so reporting it as sent would be a lie. Refresh and use **message** to steer it instead.
 
 ## Talking to other agents
 
@@ -289,11 +345,36 @@ A background result reaches you through its **delivery sink**:
 | `channel` | Posted back into the conversation that started it, for a result written for a human to read |
 | `none` | Recorded only; visible in the panel and monitor |
 
-The leader can also **pull**: `collect` with a `delegation_id`, or with no arguments to list everything waiting. A delegation still running comes back `pending` rather than blocking.
+The leader can also **pull**: `collect` with a `delegation_id`, or with no arguments to list everything waiting. A delegation still running comes back `pending` rather than blocking — and, since it is a progress check rather than the answer, it also carries `progress` (a peek at the in-flight turn's output) and `last_report` (the sub-agent's own most recent [`progress`](#progress) note, if it filed one). Neither replaces the final result; both exist so a supervisor can notice a wrong direction early, while correcting it with `message` is still cheap.
 
 A delivered result reads `@<handle> finished (<status>) · <elapsed>`, followed by its text — named by handle, not just profile key, so a second reviewer's result is distinguishable from the first. In the web UI it also arrives tagged with a `subagent` source rather than looking like something the user typed, so it's clearly marked as an agent reporting back.
 
 A result is handed over **exactly once**. Collecting the same delegation twice returns it flagged as a repeat, because acting on the same answer twice duplicates whatever the leader did with it.
+
+### `progress`
+
+A sub-agent's own way of reporting where it is, **while still working**,
+so a supervisor finds out early instead of only at the end. Call it when
+you reach something worth waking the supervisor for: a milestone
+finished, a plan that changed, or something blocking you.
+
+| Input | Required | Notes |
+|---|---|---|
+| `note` | yes | Where you are now — what just finished, what you're moving to |
+| `done` | no | What's finished so far, one item per line |
+| `next` | no | What you're about to do next |
+| `blocked` | no | What's stopping you, if anything |
+
+Report meaning, not activity — "auth handler works, writing tests now",
+never "read three files". Filing a report does not pause the sub-agent:
+it does not wait for a reply and keeps working, and if the supervisor
+wants a change it sends a `message` instead. This is not a final answer;
+a sub-agent still finishes with `report_result`.
+
+Only the **latest** note is kept per delegation — it is a "where are you
+now" field, not a log. Only a sub-agent can call it: a conversation with
+no delegation above it has nobody to report to. Turn on `supervised` on
+`delegate` to ask a sub-agent to file these as it goes.
 
 ::: info Background sub-agents are detached
 They were fired to run on their own, so killing the leader does **not** stop them. An explicit **Stop all** does.

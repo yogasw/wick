@@ -367,6 +367,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	a := provider.New(provider.Options{
 		Workspace:     opt.Workspace,
 		SessionDir:    f.Layout.SessionDir(opt.SessionID),
+		SessionID:     opt.SessionID,
 		ResumeID:      opt.ResumeID,
 		IdleTimeout:   opt.IdleTimeout,
 		KillAfterIdle: opt.KillAfterIdle,

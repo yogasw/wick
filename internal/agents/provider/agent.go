@@ -199,6 +199,11 @@ type Options struct {
 	// SpawnOptions so providers write session-scoped files (codex's
 	// soul.md) there instead of the shared project workspace.
 	SessionDir string
+	// SessionID is the session's real id, forwarded into every
+	// SpawnOptions. Carried explicitly because it cannot be recovered
+	// from SessionDir: a sub-agent's path is nested while its id is flat
+	// (see SpawnOptions.SessionID).
+	SessionID string
 	// MessageEncoder formats a user message before writing to stdin.
 	// nil = default Claude stream-json envelope. Ignored unless SendMode
 	// is SendAppend.
@@ -332,6 +337,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
 		Workspace:      a.cfg.Workspace,
 		SessionDir:     a.cfg.SessionDir,
+		SessionID:      a.cfg.SessionID,
 		ResumeID:       a.resumeID,
 		ExtraEnv:       a.cfg.ExtraEnv,
 		ExtraArgs:      a.cfg.ExtraArgs,
@@ -486,6 +492,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
 		Workspace:      a.cfg.Workspace,
 		SessionDir:     a.cfg.SessionDir,
+		SessionID:      a.cfg.SessionID,
 		ResumeID:       resumeID,
 		ExtraEnv:       a.cfg.ExtraEnv,
 		ExtraArgs:      a.cfg.ExtraArgs,
@@ -570,8 +577,18 @@ func terminateProc(proc Process, done <-chan struct{}) {
 			return
 		}
 
-		// No group teardown available: fall back to killing the process
-		// directly, which is the pre-existing behaviour.
+		// The graceful dispatch failed — which on Windows is the NORMAL
+		// case for a windowless console tree (`taskkill` without /F answers
+		// "can only be terminated forcefully"). The fallback used to kill
+		// only the leader: for a launcher-shim binary (an msys2-installed
+		// CLI that spawns the real worker as a child) that killed the shim
+		// and ORPHANED the worker, which kept running and calling tools for
+		// many more steps after Stop had already answered "killed".
+		// Observed in the wild: a sub-agent stopped at step 3 worked on
+		// through step 9. Force the whole tree, then the leader handle.
+		if pid > 0 {
+			killGroup(pid)
+		}
 		_ = proc.Kill()
 	}
 	if done == nil {

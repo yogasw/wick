@@ -26,7 +26,7 @@ func TestResolvePrefersLiveAgentOverRole(t *testing.T) {
 	}
 }
 
-func TestNewResolverExcludesTerminalHandlesAndDisabledRoles(t *testing.T) {
+func TestNewResolverKeepsFinishedHandlesAndExcludesDisabledRoles(t *testing.T) {
 	s, repo := serialService(t, &scriptedStream{})
 	ctx := context.Background()
 
@@ -54,10 +54,20 @@ func TestNewResolverExcludesTerminalHandlesAndDisabledRoles(t *testing.T) {
 	if got := res.Resolve("worker"); got.Kind != TargetAgent {
 		t.Fatalf("worker → %+v, want a live agent", got)
 	}
-	// A finished instance has no process; a message to it would queue for
-	// a reader that never comes.
-	if got := res.Resolve("worker-2"); got.Kind != TargetUnknown {
-		t.Fatalf("worker-2 → %+v, want unknown (its agent is gone)", got)
+	// A finished instance stays addressable. It used to resolve to nothing,
+	// on the grounds that its process was gone and a message would queue
+	// for a reader that never came — but the waker respawns a child in its
+	// own session, so the reader arrives, with its transcript. Dropping the
+	// handle is what made "@worker-2 keep going" spawn a stranger with no
+	// memory of the work it was asked to continue.
+	if got := res.Resolve("worker-2"); got.Kind != TargetAgent {
+		t.Fatalf("worker-2 → %+v, want the finished agent — a follow-up must reach the agent that did the work", got)
+	}
+	if status, done := res.Finished("worker-2"); !done || status != entity.DelegationDone {
+		t.Fatalf("finished(worker-2) = (%q, %v), want its terminal status so a caller knows it needs waking", status, done)
+	}
+	if _, done := res.Finished("worker"); done {
+		t.Fatal("a working agent must not be reported as finished")
 	}
 	if got := res.Resolve("researcher"); got.Kind != TargetRole {
 		t.Fatalf("researcher → %+v, want a role", got)

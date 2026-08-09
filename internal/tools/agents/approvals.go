@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/pkg/tool"
@@ -48,10 +49,18 @@ func approveCommand(c *tool.Ctx) {
 	}
 	switch req.Decision {
 	case gate.DecisionApproveOnce, gate.DecisionApproveSession,
-		gate.DecisionApproveAlways, gate.DecisionBlock:
+		gate.DecisionApproveAlways, gate.DecisionBlock, gate.DecisionGuide:
 	default:
 		c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "decision must be approve_once | approve_session | approve_always | block",
+			"error": "decision must be approve_once | approve_session | approve_always | block | guide",
+		})
+		return
+	}
+	// A guided refusal exists to carry the user's correction back to the
+	// agent; without one it is just a block that failed to say why.
+	if req.Decision == gate.DecisionGuide && strings.TrimSpace(req.Reason) == "" {
+		c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "guide requires a reason — tell the agent what to do instead",
 		})
 		return
 	}

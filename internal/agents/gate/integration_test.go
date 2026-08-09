@@ -304,3 +304,83 @@ func terminalOnly(entries []gate.Entry) []gate.Entry {
 	}
 	return out
 }
+
+// ── PowerShell is a shell, not a pathless unknown tool ──────────────
+
+// The regression this guards: PowerShell carries a command but is not
+// named Bash, so it used to reach the path gate, where it had no path.
+// That meant no whitelist match, no metachar guard, and — worst — a
+// match key derived from an empty string, identical for every
+// PowerShell call. One "allow this session" click then stood in for
+// every later PowerShell command in that session, including an
+// unreviewed `rm -rf`.
+func TestGate_PowerShellMatchesWhitelist(t *testing.T) {
+	bin, app, _ := setupGate(t, []gate.CommandRule{{Pattern: "Get-ChildItem *"}})
+	exit, stdout := runGate(t, bin,
+		`{"hook_event_name":"PreToolUse","tool_name":"PowerShell","tool_input":{"command":"Get-ChildItem -Path ."}}`)
+	if exit != 0 {
+		t.Fatalf("exit: got %d, want 0", exit)
+	}
+	if !strings.Contains(stdout, `"permissionDecision":"allow"`) {
+		t.Errorf("whitelisted PowerShell should be allowed, got %q", stdout)
+	}
+	entries := terminalOnly(readSharedCommands(t, app))
+	if len(entries) == 0 {
+		t.Fatal("no terminal entry logged")
+	}
+	last := entries[len(entries)-1]
+	if last.Tool != "PowerShell" {
+		t.Errorf("Tool: got %q, want PowerShell (the log must name the real interpreter)", last.Tool)
+	}
+	if last.Cmd != "Get-ChildItem -Path ." {
+		t.Errorf("Cmd: got %q — the gate must record what it actually inspected", last.Cmd)
+	}
+	if last.Status != "allowed" {
+		t.Errorf("Status: got %q, want allowed", last.Status)
+	}
+	if last.Decision != "whitelist" {
+		t.Errorf("Decision: got %q, want whitelist", last.Decision)
+	}
+}
+
+// A non-whitelisted PowerShell command with no daemon listening
+// fail-opens (same as Bash), but the audit trail must still carry the
+// command and a command-specific match key — that key is what a later
+// approval remembers, and what stops it applying to anything else.
+func TestGate_PowerShellLogsDistinctMatchKeys(t *testing.T) {
+	bin, app, _ := setupGate(t, nil)
+
+	runGate(t, bin,
+		`{"hook_event_name":"PreToolUse","tool_name":"PowerShell","tool_input":{"command":"Get-Date"}}`)
+	runGate(t, bin,
+		`{"hook_event_name":"PreToolUse","tool_name":"PowerShell","tool_input":{"command":"Remove-Item -Recurse 1111"}}`)
+
+	entries := terminalOnly(readSharedCommands(t, app))
+	if len(entries) < 2 {
+		t.Fatalf("want 2 terminal entries, got %d", len(entries))
+	}
+	a, b := entries[len(entries)-2], entries[len(entries)-1]
+	if a.Cmd == "" || b.Cmd == "" {
+		t.Fatalf("commands not recorded: %q / %q", a.Cmd, b.Cmd)
+	}
+	if a.MatchKey == "" || b.MatchKey == "" {
+		t.Fatal("a readable command must produce a match key")
+	}
+	if a.MatchKey == b.MatchKey {
+		t.Errorf("two different PowerShell commands share a match key (%s) — approving one would approve the other", a.MatchKey)
+	}
+}
+
+// Metachar smuggling has to be caught for PowerShell too: a whitelisted
+// prefix must not carry a second, unreviewed command along with it.
+func TestGate_PowerShellMetacharNotWhitelisted(t *testing.T) {
+	bin, app, _ := setupGate(t, []gate.CommandRule{{Pattern: "Get-ChildItem *"}})
+	runGate(t, bin,
+		`{"hook_event_name":"PreToolUse","tool_name":"PowerShell","tool_input":{"command":"Get-ChildItem . ; Remove-Item -Recurse 1111"}}`)
+
+	entries := terminalOnly(readSharedCommands(t, app))
+	last := entries[len(entries)-1]
+	if last.Decision == "whitelist" {
+		t.Error("chained PowerShell command passed the whitelist — the metachar guard did not run")
+	}
+}

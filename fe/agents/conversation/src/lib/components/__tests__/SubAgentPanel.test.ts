@@ -23,10 +23,14 @@ function subAgent(over: Partial<SubAgentItem> = {}): SubAgentItem {
 function props(over: Record<string, unknown> = {}) {
   return {
     subAgents: [subAgent()],
-    selectedId: null,
+    selectedId: null as string | null,
     onSelect: vi.fn(),
     onInterrupt: vi.fn(),
     onInterruptAll: vi.fn(),
+    // Declared here rather than only in `over` so the spread keeps a
+    // callable type: without it the inferred shape has no onContinue and
+    // every override widens to `unknown`.
+    onContinue: undefined as ((delegationId: string, task: string) => void) | undefined,
     messages: [],
     hopsLeft: 4,
     onBumpHops: vi.fn(),
@@ -287,5 +291,83 @@ describe("SubAgentPanel", () => {
     await fireEvent.click(screen.getByRole("button", { name: /^stop$/i }));
     expect(p.onInterrupt).toHaveBeenCalledWith("d1");
     expect(p.onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("SubAgentPanel — continuing a finished sub-agent", () => {
+  // The whole point of continue: the agent that did the work is one
+  // click away, instead of a fresh delegation that has to rediscover it.
+  test("offers Continue on a finished sub-agent", () => {
+    render(SubAgentPanel, { props: props({ onContinue: vi.fn() }) });
+    expect(screen.getByRole("button", { name: /continue/i })).toBeTruthy();
+  });
+
+  // A running sub-agent cannot be continued — two drivers on one session
+  // interleave. Steering it is what message is for.
+  test("hides Continue while the sub-agent is still working", () => {
+    render(
+      SubAgentPanel,
+      { props: props({ subAgents: [subAgent({ status: "running" })], onContinue: vi.fn() }) },
+    );
+    expect(screen.queryByRole("button", { name: /continue/i })).toBeNull();
+  });
+
+  // stopped_max_turns is the case continue exists for: the work was cut
+  // short, not wrong.
+  test("offers Continue on a turn-exhausted sub-agent", () => {
+    render(
+      SubAgentPanel,
+      {
+        props: props({
+          subAgents: [subAgent({ status: "stopped_max_turns" })],
+          onContinue: vi.fn(),
+        }),
+      },
+    );
+    expect(screen.getByRole("button", { name: /continue/i })).toBeTruthy();
+  });
+
+  // The instruction is the point. A one-click "carry on" sends the
+  // sub-agent back with no idea what changed, which is how a supervisor
+  // gets the same wrong answer twice.
+  test("asks what to do next before continuing", async () => {
+    const p = props({ onContinue: vi.fn() });
+    render(SubAgentPanel, { props: p });
+
+    await fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    const box = screen.getByPlaceholderText(/what should it do next/i);
+    await fireEvent.input(box, { target: { value: "fix the failing auth test" } });
+    await fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+
+    expect(p.onContinue).toHaveBeenCalledWith("d1", "fix the failing auth test");
+  });
+
+  // An empty instruction would reach the server only to be refused, so
+  // the form must not pretend it was sent.
+  test("does not send an empty instruction", async () => {
+    const p = props({ onContinue: vi.fn() });
+    render(SubAgentPanel, { props: p });
+
+    await fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await fireEvent.click(screen.getByRole("button", { name: /^send$/i }));
+
+    expect(p.onContinue).not.toHaveBeenCalled();
+  });
+
+  // Opening the composer must not open the transcript behind it — the
+  // same reason Stop stops propagation.
+  test("opening the composer does not open the sub-agent", async () => {
+    const p = props({ onContinue: vi.fn() });
+    render(SubAgentPanel, { props: p });
+
+    await fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    expect(p.onSelect).not.toHaveBeenCalled();
+  });
+
+  // Without a handler the feature is not wired on this surface; showing
+  // a button that does nothing is worse than showing none.
+  test("hides Continue when no handler is supplied", () => {
+    render(SubAgentPanel, { props: props() });
+    expect(screen.queryByRole("button", { name: /continue/i })).toBeNull();
   });
 });

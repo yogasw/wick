@@ -125,14 +125,7 @@ function wireLiveStatus(): void {
   // sub-agent's marker — the exact moment that marker is the only thing
   // left worth showing.
   const rows = new Map<string, DotState>();
-  const es = new EventSource(`${base}/stream/sessions`, { withCredentials: true });
-  es.addEventListener("session", (e) => {
-    let ev: { session_id?: string; lifecycle?: string; sub_agent?: string };
-    try {
-      ev = JSON.parse((e as MessageEvent).data as string);
-    } catch {
-      return;
-    }
+  const paint = (ev: { session_id?: string; lifecycle?: string; sub_agent?: string }) => {
     if (!ev.session_id) {
       return;
     }
@@ -147,6 +140,56 @@ function wireLiveStatus(): void {
     if (dot) {
       dot.className = statusDotClass(effectiveStatus(next));
     }
+  };
+
+  // Route through the SharedWorker so every tab shares ONE /stream/sessions
+  // connection.
+  //
+  // A browser allows only ~6 concurrent HTTP/1.1 connections per origin and an
+  // SSE stream holds its slot for the life of the tab. One lifecycle stream per
+  // tab, on top of the per-session stream and the dev-reload stream, exhausted
+  // that quota: every request issued afterwards — an API call, an icon, a
+  // navigation — sat unsent in the browser's own queue, which is
+  // indistinguishable from a hung server. Closing a tab freed a slot and the
+  // queued requests completed instantly; that is what pinned the cause here
+  // rather than on the server.
+  if (typeof SharedWorker !== "undefined") {
+    try {
+      const worker = new SharedWorker(
+        new URL("@wick-fe/common-sse-worker/src/sse-worker.ts", import.meta.url),
+        { type: "module" },
+      );
+      const port = worker.port;
+      port.onmessage = (e: MessageEvent) => {
+        const msg = e.data as { type?: string; event?: unknown } | null;
+        if (!msg || msg.type !== "session") {
+          return;
+        }
+        paint(msg.event as { session_id?: string; lifecycle?: string; sub_agent?: string });
+      };
+      port.start();
+      port.postMessage({ type: "subscribe-lifecycle", base });
+      window.addEventListener("pagehide", () => {
+        port.postMessage({ type: "unsubscribe-lifecycle" });
+        port.close();
+      });
+      return;
+    } catch {
+      // Fall through to the direct EventSource below.
+    }
+  }
+
+  // Fallback for environments without SharedWorker (it costs a connection per
+  // tab, which is what the worker path exists to avoid).
+  const es = new EventSource(`${base}/stream/sessions`, { withCredentials: true });
+  es.addEventListener("session", (e) => {
+    let ev: { session_id?: string; lifecycle?: string; sub_agent?: string };
+    try {
+      ev = JSON.parse((e as MessageEvent).data as string);
+    } catch {
+      return;
+    }
+    paint(ev);
   });
   window.addEventListener("pagehide", () => es.close());
 }

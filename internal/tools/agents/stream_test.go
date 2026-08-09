@@ -53,3 +53,39 @@ func TestBroadcasterPublishAfterUnsub(t *testing.T) {
 	default:
 	}
 }
+
+// HasSubscribers is what the approval gate uses to decide whether a
+// prompt still has somebody who can answer it, so a wrong answer here
+// either blocks a watched command or waits on an empty room.
+func TestBroadcaster_HasSubscribers(t *testing.T) {
+	b := NewBroadcaster()
+
+	if b.HasSubscribers("S1") {
+		t.Error("reported a viewer with nobody subscribed")
+	}
+
+	_, unsub := b.Subscribe("S1")
+	if !b.HasSubscribers("S1") {
+		t.Error("missed a subscriber on the session's own stream")
+	}
+	if b.HasSubscribers("S2") {
+		t.Error("another session's subscriber leaked into S2")
+	}
+
+	unsub()
+	if b.HasSubscribers("S1") {
+		t.Error("still reporting a viewer after unsubscribe")
+	}
+}
+
+// The sidebar stream subscribes globally (""), and it renders approval
+// prompts too — so a user sitting on the session list can still answer.
+func TestBroadcaster_HasSubscribers_GlobalCounts(t *testing.T) {
+	b := NewBroadcaster()
+	_, unsub := b.Subscribe("")
+	defer unsub()
+
+	if !b.HasSubscribers("S1") {
+		t.Error("global subscriber should count as a viewer for any session")
+	}
+}
