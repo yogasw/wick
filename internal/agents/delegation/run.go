@@ -173,6 +173,14 @@ type Service struct {
 	// Waker resumes an exited sub-agent so it can read its inbox.
 	// nil = messages queue but nobody is woken to read them.
 	Waker Waker
+	// AgentAlive reports whether a child still has a live process in the
+	// pool. Read by the sweeper to tell a slow sub-agent from one that has
+	// exited without its run ever being closed.
+	//
+	// nil = the sweep is skipped entirely. A wiring that cannot answer
+	// must never guess an agent is dead: finishing a delegation that is
+	// actually still working would throw away the run.
+	AgentAlive func(childSessionID, agentName string) bool
 	// Resumable reports whether a child's provider transcript can still be
 	// picked up — i.e. whether the next spawn will carry --resume rather
 	// than start blank. Read by Continue so a leader is told when its

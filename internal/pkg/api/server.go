@@ -1390,6 +1390,17 @@ func NewServer() *Server {
 		// than before a message, so a leader is told when its sub-agent
 		// came back to the session without its memory.
 		Resumable: poolWaker{pool: agentsPool, layout: agentsLayout}.resumable,
+		// Lets the sweeper tell a slow sub-agent from one that exited
+		// without its run ever being closed — the difference between
+		// leaving it alone and rescuing a stranded delegation.
+		AgentAlive: func(childSessionID, agentName string) bool {
+			for _, a := range agentsPool.ActiveSnapshot() {
+				if a.SessionID == childSessionID {
+					return true
+				}
+			}
+			return false
+		},
 		// Customer-facing drafts are masked on the way out. The drafter's
 		// prompt asks it not to include credentials; this is what makes
 		// that true when a prompt injection asks otherwise.

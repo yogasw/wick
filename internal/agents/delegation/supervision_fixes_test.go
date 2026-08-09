@@ -327,3 +327,100 @@ func TestSupervisionCheckDoesNotEatTheFinalAnswer(t *testing.T) {
 	}
 	_ = r
 }
+
+/* ── a run must never be stranded by a missing Done ──────────────────── */
+
+// Observed in the wild: a sub-agent answered, wrote its transcript and
+// went idle, while its row still read "running · 0/12 turns" four minutes
+// later. Nobody was ever woken, collect kept saying pending, and from the
+// UI it was indistinguishable from a hung agent.
+//
+// A run ends when await sees Done. If that event is lost — a consumer
+// behind on its buffer, a crashed reader, a process killed outside the
+// pool — the wait never returns and the delegation is stranded forever.
+// The sweeper is the backstop: an agent the runtime confirms is GONE has
+// its run closed and its result delivered.
+func TestSweeperClosesARunWhoseAgentAlreadyExited(t *testing.T) {
+	s, r, runner := newService(t)
+	del := &recordingDeliverer{}
+	s.Deliver = del
+	s.AgentAlive = func(string, string) bool { return false } // exited
+	runner.partial = "Python is interpreted and dynamically typed."
+
+	row := seedRunning(t, r, "a1")
+	row.DeliverySink = SinkSession
+	if err := r.SaveDelegationForTest(context.Background(), row); err != nil {
+		t.Fatalf("seed sink: %v", err)
+	}
+
+	(&DelegationSweeper{Svc: s, Every: time.Minute}).Pass(context.Background())
+
+	got, err := r.Get(context.Background(), "a1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != entity.DelegationDone {
+		t.Fatalf("status = %q, want done — the row is stranded", got.Status)
+	}
+	if !strings.Contains(got.Result, "Python is interpreted") {
+		t.Fatalf("result = %q, want the work the agent had produced", got.Result)
+	}
+	// Closing the row is only half of it: the leader has to be told, or
+	// the answer exists and nobody ever learns it landed.
+	if len(del.sessionDeliveries()) == 0 {
+		t.Fatal("the leader was never woken — the result exists but is invisible")
+	}
+}
+
+// The dangerous half of that sweep. A sub-agent that is simply slow has
+// said nothing for a while and looks identical to a stranded one from the
+// row alone; finishing it would throw away a run that was still working.
+// Only a runtime confirmation that the process is gone may trigger this.
+func TestSweeperLeavesALiveAgentAlone(t *testing.T) {
+	s, r, _ := newService(t)
+	s.AgentAlive = func(string, string) bool { return true } // still working
+	seedRunning(t, r, "a1")
+
+	(&DelegationSweeper{Svc: s, Every: time.Minute}).Pass(context.Background())
+
+	got, _ := r.Get(context.Background(), "a1")
+	if got.Status != entity.DelegationRunning {
+		t.Fatalf("status = %q, want running — a working sub-agent must not be finished by the sweeper", got.Status)
+	}
+}
+
+// A wiring that cannot answer "is this agent alive" must not guess. With
+// no prober the sweep is skipped entirely rather than assuming the worst.
+func TestSweeperSkipsWithoutALivenessProbe(t *testing.T) {
+	s, r, _ := newService(t)
+	s.AgentAlive = nil
+	seedRunning(t, r, "a1")
+
+	(&DelegationSweeper{Svc: s, Every: time.Minute}).Pass(context.Background())
+
+	got, _ := r.Get(context.Background(), "a1")
+	if got.Status != entity.DelegationRunning {
+		t.Fatalf("status = %q, want running — without a probe nothing may be concluded", got.Status)
+	}
+}
+
+// A provider that leaves no in-flight buffer (codex between turns) still
+// has its reported position, and that is worth more than an empty result.
+func TestSweeperFallsBackToTheLastProgressReport(t *testing.T) {
+	s, r, runner := newService(t)
+	s.Deliver = &recordingDeliverer{}
+	s.AgentAlive = func(string, string) bool { return false }
+	runner.partial = ""
+
+	row := seedRunning(t, r, "a1")
+	if err := r.SaveProgress(context.Background(), row.ID, "step 7/10 done"); err != nil {
+		t.Fatalf("save progress: %v", err)
+	}
+
+	(&DelegationSweeper{Svc: s, Every: time.Minute}).Pass(context.Background())
+
+	got, _ := r.Get(context.Background(), "a1")
+	if !strings.Contains(got.Result, "step 7/10") {
+		t.Fatalf("result = %q, want the last reported position", got.Result)
+	}
+}
