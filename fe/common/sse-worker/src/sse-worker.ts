@@ -14,6 +14,23 @@
 /* Ports and EventSources keyed by sessionID. */
 const ports: Record<string, Set<MessagePort>> = {};
 const sources: Record<string, EventSource> = {};
+
+/* The sidebar's lifecycle stream (/stream/sessions) lives here too, keyed
+   separately because it is per-USER, not per-session: every tab wants the same
+   one. Routing it through the worker is what keeps it to a single connection
+   no matter how many tabs are open.
+
+   Why it matters beyond tidiness: a browser allows only ~6 concurrent HTTP/1.1
+   connections per origin, and an SSE stream holds its slot for as long as the
+   tab lives. Two tabs each opening their own lifecycle stream plus a per-session
+   stream exhausted the quota, and every request made afterwards — an API call,
+   an icon, a navigation — sat unsent in the browser's queue looking exactly
+   like a hung server. */
+const lifecyclePorts = new Set<MessagePort>();
+let lifecycleSource: EventSource | null = null;
+let lifecycleBase = "";
+let lifecycleRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let lifecycleRetryAttempts = 0;
 /* Remembered per sid so a background reconnect can rebuild the stream and
    refetch the snapshot without another subscribe from the page. */
 const bases: Record<string, string> = {};
@@ -93,6 +110,50 @@ function connect(sid: string, base: string): void {
   };
 }
 
+function broadcastLifecycle(msg: unknown): void {
+  lifecyclePorts.forEach((p) => {
+    try { p.postMessage(msg); } catch (_) { /* port gone */ }
+  });
+}
+
+/* Same backoff shape as the per-session streams: only armed once the browser's
+   own reconnect has given up (CLOSED). */
+function scheduleLifecycleReconnect(): void {
+  if (lifecycleRetryTimer) return;
+  if (lifecyclePorts.size === 0) return;
+  lifecycleRetryAttempts += 1;
+  const delay = Math.min(1000 * 2 ** (lifecycleRetryAttempts - 1), 15000);
+  lifecycleRetryTimer = setTimeout(() => {
+    lifecycleRetryTimer = null;
+    if (lifecyclePorts.size === 0) return;
+    try { lifecycleSource?.close(); } catch (_) { /* already gone */ }
+    lifecycleSource = null;
+    connectLifecycle(lifecycleBase);
+  }, delay);
+}
+
+function connectLifecycle(base: string): void {
+  lifecycleBase = base;
+  const es = new EventSource(`${base}/stream/sessions`, { withCredentials: true });
+  lifecycleSource = es;
+
+  es.addEventListener("session", (ev: MessageEvent) => {
+    let parsed: unknown;
+    try { parsed = JSON.parse(ev.data as string); } catch (_) { return; }
+    broadcastLifecycle({ type: "session", event: parsed });
+  });
+
+  es.onopen = () => {
+    lifecycleRetryAttempts = 0;
+    broadcastLifecycle({ type: "lifecycle-status", status: "connected" });
+  };
+
+  es.onerror = () => {
+    broadcastLifecycle({ type: "lifecycle-status", status: "error" });
+    if (es.readyState === EventSource.CLOSED) scheduleLifecycleReconnect();
+  };
+}
+
 (self as unknown as SharedWorkerGlobalScope).onconnect = function (e: MessageEvent) {
   const port = (e as MessageEvent & { ports: MessagePort[] }).ports[0];
 
@@ -126,6 +187,34 @@ function connect(sid: string, base: string): void {
       // No live source (first subscriber, or the previous one closed/died):
       // open a fresh stream that self-heals from here on.
       connect(sid, base);
+
+    } else if (data.type === "subscribe-lifecycle") {
+      const base = data.base;
+      if (!base) return;
+      lifecyclePorts.add(port);
+      // A live stream already exists — the newcomer just joins it. No snapshot
+      // replay: the endpoint replays what is running on connect, and the page
+      // paints its dots from the server-rendered HTML, so there is no gap to
+      // fill for a late subscriber.
+      if (lifecycleSource && lifecycleSource.readyState !== EventSource.CLOSED) {
+        port.postMessage({
+          type: "lifecycle-status",
+          status: lifecycleSource.readyState === EventSource.OPEN ? "connected" : "connecting",
+        });
+        return;
+      }
+      connectLifecycle(base);
+
+    } else if (data.type === "unsubscribe-lifecycle") {
+      lifecyclePorts.delete(port);
+      if (lifecyclePorts.size === 0) {
+        if (lifecycleRetryTimer) { clearTimeout(lifecycleRetryTimer); lifecycleRetryTimer = null; }
+        lifecycleRetryAttempts = 0;
+        if (lifecycleSource) {
+          lifecycleSource.close();
+          lifecycleSource = null;
+        }
+      }
 
     } else if (data.type === "unsubscribe") {
       const sid = data.sessionID;
