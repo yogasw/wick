@@ -295,4 +295,36 @@ describe("ApprovalsModal", () => {
       expect(document.querySelector("[data-approval-dialog]")).toBe(document.activeElement);
     });
   });
+  // A phone has no room for hint chips next to already-cramped buttons,
+  // and no soft keyboard shows them anyway. The shortcuts themselves stay
+  // wired — an Android tablet with a bluetooth keyboard still gets them;
+  // only the visual affordance is desktop-only.
+  describe("keyboard hints are desktop-only", () => {
+    test("every hint chip is hidden below the sm breakpoint", () => {
+      const { container } = render(ApprovalsModal, {
+        props: { request: REQ, onDecide: vi.fn() },
+      });
+      const chips = container.querySelectorAll("kbd");
+      expect(chips.length).toBeGreaterThan(0);
+      for (const chip of chips) {
+        expect(chip.className).toContain("hidden");
+        expect(chip.className).toContain("sm:inline");
+      }
+    });
+
+    test("the note's shortcut line is hidden below the sm breakpoint", async () => {
+      render(ApprovalsModal, { props: { request: REQ, onDecide: vi.fn() } });
+      await fireEvent.click(screen.getByText("Block with note"));
+      const hint = screen.getByText(/Enter to send/);
+      expect(hint.className).toContain("hidden");
+      expect(hint.className).toContain("sm:block");
+    });
+
+    test("shortcuts still work regardless — a hardware keyboard on mobile is real", async () => {
+      const onDecide = vi.fn();
+      render(ApprovalsModal, { props: { request: REQ, onDecide } });
+      await fireEvent.keyDown(window, { key: "a" });
+      expect(onDecide).toHaveBeenCalledWith("approve_once");
+    });
+  });
 });

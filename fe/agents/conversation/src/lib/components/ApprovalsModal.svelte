@@ -232,17 +232,17 @@
             type="button"
             class="rounded-lg bg-green-500 px-3 py-2 text-xs font-medium text-white-100 hover:bg-green-600 active:bg-green-700 transition-colors"
             onclick={() => decide("approve_once")}
-          >Approve once<kbd class="ml-1 rounded border border-current/30 px-1 py-px text-[10px] font-mono opacity-70">A</kbd></button>
+          >Approve once<kbd class="hidden sm:inline ml-1 rounded border border-current/30 px-1 py-px text-[10px] font-mono opacity-70">A</kbd></button>
           <button
             type="button"
             class="rounded-lg border border-green-500 dark:border-green-600 px-3 py-2 text-xs font-medium text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
             onclick={() => decide("approve_session")}
-          >Allow this session<kbd class="ml-1 rounded border border-current/30 px-1 py-px text-[10px] font-mono opacity-70">S</kbd></button>
+          >Allow this session<kbd class="hidden sm:inline ml-1 rounded border border-current/30 px-1 py-px text-[10px] font-mono opacity-70">S</kbd></button>
           <button
             type="button"
             class="rounded-lg border border-green-500 dark:border-green-600 px-3 py-2 text-xs font-medium text-green-700 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors"
             onclick={() => decide("approve_always")}
-          >Always allow<kbd class="ml-1 rounded border border-current/30 px-1 py-px text-[10px] font-mono opacity-70">W</kbd></button>
+          >Always allow<kbd class="hidden sm:inline ml-1 rounded border border-current/30 px-1 py-px text-[10px] font-mono opacity-70">W</kbd></button>
         </div>
 
         {#if noteOpen}
@@ -270,9 +270,9 @@
                 disabled={note.trim() === ""}
                 class="rounded-lg bg-cau-400 px-3 py-2 text-xs font-medium text-white-100 hover:bg-cau-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 onclick={sendGuide}
-              >Send<kbd class="ml-1 rounded border border-current/30 px-1 py-px text-[10px] font-mono opacity-70">&crarr;</kbd></button>
+              >Send<kbd class="hidden sm:inline ml-1 rounded border border-current/30 px-1 py-px text-[10px] font-mono opacity-70">&crarr;</kbd></button>
             </div>
-            <div class="text-[10px] text-black-700 dark:text-black-600">
+            <div class="hidden sm:block text-[10px] text-black-700 dark:text-black-600">
               Enter to send &middot; Shift+Enter for a new line &middot; Esc to cancel
             </div>
           </div>
@@ -282,12 +282,12 @@
               type="button"
               class="rounded-lg border border-cau-400 px-3 py-2 text-xs font-medium text-cau-400 hover:bg-cau-50 dark:hover:bg-cau-900/20 transition-colors"
               onclick={() => { noteOpen = true; }}
-            >Block with note<kbd class="ml-1 rounded border border-current/30 px-1 py-px text-[10px] font-mono opacity-70">N</kbd></button>
+            >Block with note<kbd class="hidden sm:inline ml-1 rounded border border-current/30 px-1 py-px text-[10px] font-mono opacity-70">N</kbd></button>
             <button
               type="button"
               class="rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white-100 hover:bg-red-700 active:bg-red-800 transition-colors"
               onclick={() => decide("block")}
-            >Block<kbd class="ml-1 rounded border border-current/30 px-1 py-px text-[10px] font-mono opacity-70">B</kbd></button>
+            >Block<kbd class="hidden sm:inline ml-1 rounded border border-current/30 px-1 py-px text-[10px] font-mono opacity-70">B</kbd></button>
           </div>
         {/if}
       </div>
