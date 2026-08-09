@@ -30,7 +30,11 @@ func (d *DelegationStream) SubscribeSession(sessionID string) (<-chan delegation
 	go func() {
 		defer close(out)
 		for ev := range src {
-			se := delegation.StreamEvent{Type: eventTypeFromString(ev.Type), Text: ev.Data}
+			// Raw rides along: usage and the provider's own turn count
+			// (num_turns) exist ONLY there, and this hop dropping it was
+			// why delegations billed turns_used:0 and tokens_used:0 no
+			// matter how much a run actually spent.
+			se := delegation.StreamEvent{Type: eventTypeFromString(ev.Type), Text: ev.Data, Raw: ev.Raw}
 			select {
 			case out <- se:
 			default:

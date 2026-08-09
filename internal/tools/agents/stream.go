@@ -29,6 +29,13 @@ type Event struct {
 	AgentName string `json:"agent_name"`
 	Type      string `json:"type"`
 	Data      string `json:"data"`
+	// Raw is the verbatim provider line, carried IN-MEMORY for the
+	// delegation bridge and never serialized to browser subscribers
+	// (hence json:"-"): token usage and the provider's own turn count
+	// (num_turns) only exist here. Dropping it at this hop was why a
+	// sub-agent's spend read tokens_used:0 and a 49-call run billed
+	// turns_used:0 — every cap keyed on usage was flying blind.
+	Raw string `json:"-"`
 	// ToolName, ToolInput, ToolUseID are populated for tool_use events;
 	// ToolUseID and IsError are also set for tool_result events.
 	ToolName  string `json:"tool_name,omitempty"`
@@ -104,6 +111,7 @@ func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) 
 		AgentName: agentName,
 		Type:      ev.Type.String(),
 		Data:      ev.Text,
+		Raw:       ev.Raw,
 	}
 	now := time.Now().UnixMilli()
 	switch ev.Type {
