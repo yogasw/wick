@@ -206,3 +206,120 @@ func TestIsAutoApprovedShortCircuit(t *testing.T) {
 		t.Errorf("IsAutoApproved should return false for key not in list")
 	}
 }
+
+// ── Command extraction: any tool that runs shell text is gated as one ──
+
+func TestCommandFromInput_Bash(t *testing.T) {
+	in := decodeHook(t, `{"tool_name":"Bash","tool_input":{"command":"ls -la"}}`)
+	if got := commandFromInput(in); got != "ls -la" {
+		t.Errorf("got %q, want %q", got, "ls -la")
+	}
+}
+
+// PowerShell is the regression: it carries a command but is not named
+// Bash, so it used to reach the path gate with no path at all — no
+// whitelist check, no metachar check, and one shared match key.
+func TestCommandFromInput_PowerShell(t *testing.T) {
+	in := decodeHook(t, `{"tool_name":"PowerShell","tool_input":{"command":"Remove-Item -Recurse 1111"}}`)
+	if got := commandFromInput(in); got != "Remove-Item -Recurse 1111" {
+		t.Errorf("got %q, want the PowerShell command", got)
+	}
+}
+
+// A tool we do not model by name may still carry executable text under
+// another key. Reading it is what keeps the prompt honest about what
+// will run.
+func TestCommandFromInput_UnmodelledKeys(t *testing.T) {
+	for _, tc := range []struct{ name, payload, want string }{
+		{"script", `{"tool_name":"X","tool_input":{"script":"rm -rf /"}}`, "rm -rf /"},
+		{"cmd", `{"tool_name":"X","tool_input":{"cmd":"del /f"}}`, "del /f"},
+		{"code", `{"tool_name":"X","tool_input":{"code":"print(1)"}}`, "print(1)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := commandFromInput(decodeHook(t, tc.payload)); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCommandFromInput_FileToolsAreNotCommands(t *testing.T) {
+	in := decodeHook(t, `{"tool_name":"Read","tool_input":{"file_path":"/etc/passwd"}}`)
+	if got := commandFromInput(in); got != "" {
+		t.Errorf("file tool reported a command: %q", got)
+	}
+}
+
+func TestCommandFromInput_BlankIsNotACommand(t *testing.T) {
+	in := decodeHook(t, `{"tool_name":"PowerShell","tool_input":{"command":"   "}}`)
+	if got := commandFromInput(in); got != "" {
+		t.Errorf("whitespace-only command should not count: %q", got)
+	}
+}
+
+func decodeHook(t *testing.T, payload string) hookInput {
+	t.Helper()
+	in, err := readHookInput(strings.NewReader(payload), time.Second)
+	if err != nil {
+		t.Fatalf("readHookInput: %v", err)
+	}
+	return in
+}
+
+// ── Deny envelope: two meanings of "no" ─────────────────────────────
+
+// `continue: false` stops the agent's whole turn; permissionDecision
+// alone refuses one call and hands the reason back so the agent can
+// take a different route. Claude ignores permissionDecision whenever
+// `continue: false` is present, so a guided refusal must not set both.
+func TestEmitDeny_GuidedRefusalKeepsTurnAlive(t *testing.T) {
+	out := captureStdout(t, func() { emitDeny("use git clean -n first", false) })
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal %q: %v", out, err)
+	}
+	if _, ok := payload["continue"]; ok {
+		t.Error("guided refusal sent `continue` — that halts the turn and voids permissionDecision")
+	}
+	if _, ok := payload["stopReason"]; ok {
+		t.Error("guided refusal sent `stopReason`")
+	}
+	hook, ok := payload["hookSpecificOutput"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing hookSpecificOutput in %q", out)
+	}
+	if hook["permissionDecision"] != "deny" {
+		t.Errorf("permissionDecision: got %v, want deny", hook["permissionDecision"])
+	}
+	// The reason is the whole point: it reaches the model as feedback.
+	if hook["permissionDecisionReason"] != "use git clean -n first" {
+		t.Errorf("reason not carried through: got %v", hook["permissionDecisionReason"])
+	}
+}
+
+func TestEmitDeny_HardBlockStopsTurn(t *testing.T) {
+	out := captureStdout(t, func() { emitDeny("nope", true) })
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal %q: %v", out, err)
+	}
+	if payload["continue"] != false {
+		t.Errorf("hard block must set continue=false, got %v", payload["continue"])
+	}
+	if payload["stopReason"] != "nope" {
+		t.Errorf("stopReason: got %v, want nope", payload["stopReason"])
+	}
+}
+
+func TestEmitBlock_IsAHardBlock(t *testing.T) {
+	out := captureStdout(t, func() { emitBlock("nope") })
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("unmarshal %q: %v", out, err)
+	}
+	if payload["continue"] != false {
+		t.Error("emitBlock must remain the turn-ending form")
+	}
+}
