@@ -14,7 +14,8 @@
       "env": {
         "WICK_DEV_REPO_ROOT": "${workspaceFolder}",
         "WICK_STRICT_MCP": "1",
-        "WICK_SW_ENABLED": "false"
+        "WICK_SW_ENABLED": "false",
+        "WICK_PPROF": "1"
       },
       "preLaunchTask": "debug: prep"
     },
