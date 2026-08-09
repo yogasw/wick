@@ -327,4 +327,39 @@ describe("ApprovalsModal", () => {
       expect(onDecide).toHaveBeenCalledWith("approve_once");
     });
   });
+  // A long command made the dialog taller than the viewport, pushing the
+  // buttons off-screen with nothing to scroll — the prompt became
+  // unanswerable by mouse. The body scrolls; header and actions stay put.
+  describe("fits the viewport", () => {
+    test("the dialog is bounded by the viewport height", () => {
+      const { container } = render(ApprovalsModal, {
+        props: { request: REQ, onDecide: vi.fn() },
+      });
+      const dialog = container.querySelector("[data-approval-dialog]")!;
+      expect(dialog.className).toMatch(/max-h-\[/);
+      // A flex column is what lets the body shrink while the action row
+      // keeps its natural height.
+      expect(dialog.className).toContain("flex");
+      expect(dialog.className).toContain("flex-col");
+    });
+
+    test("the detail body scrolls rather than growing without bound", () => {
+      const { container } = render(ApprovalsModal, {
+        props: { request: REQ, onDecide: vi.fn() },
+      });
+      const body = container.querySelector("[data-approval-body]")!;
+      expect(body.className).toContain("overflow-y-auto");
+      // Without min-h-0 a flex child refuses to shrink below its content,
+      // so overflow-y-auto alone would not produce a scrollbar.
+      expect(body.className).toContain("min-h-0");
+    });
+
+    test("the action row stays visible when the body overflows", () => {
+      const { container } = render(ApprovalsModal, {
+        props: { request: REQ, onDecide: vi.fn() },
+      });
+      const actions = container.querySelector("[data-approval-actions]")!;
+      expect(actions.className).toContain("shrink-0");
+    });
+  });
 });

@@ -169,10 +169,10 @@
       aria-modal="true"
       aria-label="Approve command"
       tabindex="-1"
-      class="relative w-full max-w-lg mx-4 rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-xl focus:outline-none"
+      class="relative flex flex-col w-full max-w-lg mx-4 max-h-[calc(100dvh-2rem)] rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-xl focus:outline-none"
     >
       <div
-        class="border-b border-white-300 dark:border-navy-600 px-6 py-4 flex items-center justify-between"
+        class="shrink-0 border-b border-white-300 dark:border-navy-600 px-6 py-4 flex items-center justify-between"
       >
         <div class="flex items-center gap-2">
           <span class="inline-flex h-2 w-2 rounded-full bg-amber-500 animate-pulse"></span>
@@ -199,7 +199,7 @@
         </div>
       </div>
 
-      <div class="px-6 py-5 space-y-4">
+      <div data-approval-body class="min-h-0 flex-1 overflow-y-auto px-6 py-5 space-y-4">
         <dl class="space-y-2 text-xs">
           <div class="flex gap-3">
             <dt class="w-20 shrink-0 text-black-700 dark:text-black-600">Agent</dt>
@@ -223,10 +223,10 @@
       </div>
 
       {#if error}
-        <div data-approval-error class="px-6 pb-1 text-xs font-medium text-neg-400">{error}</div>
+        <div data-approval-error class="shrink-0 px-6 pb-1 text-xs font-medium text-neg-400">{error}</div>
       {/if}
 
-      <div class="border-t border-white-300 dark:border-navy-600 px-6 py-4 flex flex-col gap-2">
+      <div data-approval-actions class="shrink-0 border-t border-white-300 dark:border-navy-600 px-6 py-4 flex flex-col gap-2">
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
           <button
             type="button"
