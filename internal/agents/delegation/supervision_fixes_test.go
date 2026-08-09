@@ -328,6 +328,17 @@ func TestSupervisionCheckDoesNotEatTheFinalAnswer(t *testing.T) {
 	_ = r
 }
 
+// ageRow backdates a delegation past the sweep's start-up grace, so a
+// test about rescuing a stranded run is not silently exempted by the
+// guard that protects runs which have only just started.
+func ageRow(t *testing.T, r *Repo, id string) {
+	t.Helper()
+	if err := r.DB().Model(&entity.AgentDelegation{}).Where("id = ?", id).
+		Update("started_at", time.Now().UTC().Add(-30*time.Minute)).Error; err != nil {
+		t.Fatalf("age the row: %v", err)
+	}
+}
+
 /* ── a run must never be stranded by a missing Done ──────────────────── */
 
 // Observed in the wild: a sub-agent answered, wrote its transcript and
@@ -352,6 +363,7 @@ func TestSweeperClosesARunWhoseAgentAlreadyExited(t *testing.T) {
 	if err := r.SaveDelegationForTest(context.Background(), row); err != nil {
 		t.Fatalf("seed sink: %v", err)
 	}
+	ageRow(t, r, row.ID)
 
 	(&DelegationSweeper{Svc: s, Every: time.Minute}).Pass(context.Background())
 
@@ -413,8 +425,15 @@ func TestSweeperFallsBackToTheLastProgressReport(t *testing.T) {
 	runner.partial = ""
 
 	row := seedRunning(t, r, "a1")
+	ageRow(t, r, row.ID)
 	if err := r.SaveProgress(context.Background(), row.ID, "step 7/10 done"); err != nil {
 		t.Fatalf("save progress: %v", err)
+	}
+	// The report must ALSO be old, or the recent-report guard keeps it
+	// running — that guard is what the previous test covers.
+	if err := r.DB().Model(&entity.AgentDelegation{}).Where("id = ?", row.ID).
+		Update("last_report_at", time.Now().UTC().Add(-30*time.Minute)).Error; err != nil {
+		t.Fatalf("age the report: %v", err)
 	}
 
 	(&DelegationSweeper{Svc: s, Every: time.Minute}).Pass(context.Background())
@@ -422,5 +441,89 @@ func TestSweeperFallsBackToTheLastProgressReport(t *testing.T) {
 	got, _ := r.Get(context.Background(), "a1")
 	if !strings.Contains(got.Result, "step 7/10") {
 		t.Fatalf("result = %q, want the last reported position", got.Result)
+	}
+}
+
+/* ── the sweep must not eat runs that have not started ───────────────── */
+
+// The regression the abandoned-run sweep caused, and the reason it now
+// waits.
+//
+// A delegation is marked running BEFORE its process exists: minting the
+// scoped token, creating the child session, subscribing to the stream and
+// resolving the run target all happen between MarkRunning and StartAgent.
+// AgentAlive correctly reports "no live process" for that whole window,
+// and the sweep read that as abandonment.
+//
+// It then finished a delegation that had not started — released its
+// parallel slot, delivered an empty result, and left the sub-agent to
+// spawn into a row already marked done. Every first progress call came
+// back "already finished (done)", supervision produced nothing at all,
+// and the freed slot let the queue start duplicates.
+func TestSweeperLeavesAJustStartedRunAlone(t *testing.T) {
+	s, r, _ := newService(t)
+	s.AgentAlive = func(string, string) bool { return false } // not spawned yet
+	s.Deliver = &recordingDeliverer{}
+
+	// StartedAt defaults to now — a delegation created this instant.
+	seedRunning(t, r, "a1")
+
+	(&DelegationSweeper{Svc: s, Every: time.Minute}).Pass(context.Background())
+
+	got, _ := r.Get(context.Background(), "a1")
+	if got.Status != entity.DelegationRunning {
+		t.Fatalf("status = %q, want running — a delegation still spawning must not be finished", got.Status)
+	}
+}
+
+// A respawn-per-turn provider (codex) has no process between turns: it is
+// genuinely absent for a moment on every turn boundary while being
+// perfectly healthy. Liveness alone would finish it the first time a
+// sweep landed in one of those gaps, so a recent report counts as alive.
+func TestSweeperTrustsARecentProgressReportOverLiveness(t *testing.T) {
+	s, r, _ := newService(t)
+	s.AgentAlive = func(string, string) bool { return false } // between turns
+	s.Deliver = &recordingDeliverer{}
+
+	row := seedRunning(t, r, "a1")
+	// Old enough to clear the start-up grace, so only the report saves it.
+	if err := r.DB().Model(&entity.AgentDelegation{}).Where("id = ?", row.ID).
+		Update("started_at", time.Now().UTC().Add(-30*time.Minute)).Error; err != nil {
+		t.Fatalf("age the row: %v", err)
+	}
+	if err := r.SaveProgress(context.Background(), row.ID, "step 3/10, still going"); err != nil {
+		t.Fatalf("save progress: %v", err)
+	}
+
+	(&DelegationSweeper{Svc: s, Every: time.Minute}).Pass(context.Background())
+
+	got, _ := r.Get(context.Background(), "a1")
+	if got.Status != entity.DelegationRunning {
+		t.Fatalf("status = %q, want running — it reported a moment ago, so it is working", got.Status)
+	}
+}
+
+// And the rescue still has to happen for a genuinely stranded run: old,
+// no process, nothing reported recently.
+func TestSweeperStillRescuesAnOldSilentRun(t *testing.T) {
+	s, r, runner := newService(t)
+	s.AgentAlive = func(string, string) bool { return false }
+	s.Deliver = &recordingDeliverer{}
+	runner.partial = "the answer it managed to produce"
+
+	row := seedRunning(t, r, "a1")
+	if err := r.DB().Model(&entity.AgentDelegation{}).Where("id = ?", row.ID).
+		Update("started_at", time.Now().UTC().Add(-30*time.Minute)).Error; err != nil {
+		t.Fatalf("age the row: %v", err)
+	}
+
+	(&DelegationSweeper{Svc: s, Every: time.Minute}).Pass(context.Background())
+
+	got, _ := r.Get(context.Background(), "a1")
+	if got.Status != entity.DelegationDone {
+		t.Fatalf("status = %q, want done — this one really is stranded", got.Status)
+	}
+	if !strings.Contains(got.Result, "the answer it managed") {
+		t.Fatalf("result = %q, want the work it produced", got.Result)
 	}
 }

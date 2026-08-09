@@ -143,6 +143,22 @@ func (d *DelegationSweeper) Pass(ctx context.Context) {
 	d.Svc.nudgeStalledCollects(ctx, d.Every)
 }
 
+// abandonedRunGrace is how long a delegation may read "running" with no
+// live process before the sweep treats it as stranded.
+//
+// Sized against the worst-case spawn, not the typical one. A provider
+// launch can take many seconds — resolving a binary, starting an MCP
+// server, a cold model — and for that whole time the row is running with
+// nothing in the pool yet. The sweep runs every 15s, so anything short
+// here reliably lands inside that window and finishes runs that were
+// about to start.
+//
+// The asymmetry is the point: rescuing a stranded run one sweep later
+// costs a minute of a leader's patience, while closing a live one throws
+// the work away, releases its slot, and wakes the leader with an empty
+// result. When in doubt, wait.
+const abandonedRunGrace = 3 * time.Minute
+
 // closeAbandonedRuns finishes delegations whose agent is gone but whose
 // row still says running.
 //
@@ -166,9 +182,30 @@ func (s *Service) closeAbandonedRuns(ctx context.Context) {
 	if s.AgentAlive == nil {
 		return
 	}
+	// Only rows that have been running a WHILE.
+	//
+	// A delegation is marked running before its process exists: minting
+	// the scoped token, creating the child session, subscribing to the
+	// stream and resolving the run target all happen between MarkRunning
+	// and StartAgent. During that window AgentAlive correctly answers
+	// "no live process" — and without this cutoff the sweep read that as
+	// an abandoned run and finished a delegation that had not started.
+	//
+	// The damage was not limited to one row: closing it also released the
+	// parallel slot and delivered an empty result, so the queue started
+	// the next delegation early and the leader was woken with nothing.
+	// That is where the duplicate instances and the "already finished
+	// (done)" refusals on the very first progress call came from.
+	//
+	// The grace period must therefore exceed the worst-case spawn, not
+	// the typical one — a slow provider launch is normal, and being late
+	// to rescue a stranded run costs one sweep interval, while being
+	// early destroys a live one.
+	cutoff := time.Now().UTC().Add(-abandonedRunGrace)
+
 	var running []entity.AgentDelegation
 	if err := s.Repo.DB().WithContext(ctx).
-		Where("status = ?", entity.DelegationRunning).
+		Where("status = ? AND started_at < ?", entity.DelegationRunning, cutoff).
 		Find(&running).Error; err != nil {
 		log.Warn().Err(err).Msg("delegation: abandoned-run sweep failed")
 		return
@@ -176,6 +213,19 @@ func (s *Service) closeAbandonedRuns(ctx context.Context) {
 	for i := range running {
 		row := &running[i]
 		if row.ChildSessionID == "" || s.AgentAlive(row.ChildSessionID, row.ChildAgent) {
+			continue
+		}
+		// A recent progress note also means alive.
+		//
+		// AgentAlive reads the pool, and a respawn-per-turn provider
+		// (codex) has NO process between turns — it is genuinely absent
+		// for a moment on every turn boundary, while being perfectly
+		// healthy. Liveness alone would finish such a sub-agent the first
+		// time a sweep landed in one of those gaps.
+		//
+		// Its own report is the second opinion: an agent that said where
+		// it was a moment ago is working, whatever the pool shows.
+		if row.LastReportAt != nil && time.Since(*row.LastReportAt) < abandonedRunGrace {
 			continue
 		}
 		// Whatever it managed to say still counts. Its own progress note

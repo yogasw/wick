@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yogasw/wick/internal/entity"
 )
@@ -17,6 +18,10 @@ func seedRunning(t *testing.T, r *Repo, id string) *entity.AgentDelegation {
 		ID: id, RootID: id, ParentSessionID: "leader", ProfileKey: "researcher",
 		ChildSessionID: "sub-" + id, ChildAgent: "researcher", Handle: "researcher",
 		Mode: ModeAsync, Status: entity.DelegationRunning, TriggeredBy: "user-1",
+		// Set, as Run sets it. A zero StartedAt reads as infinitely old to
+		// anything that ages rows, which would let a fixture pass a
+		// grace-period check that production traffic fails.
+		StartedAt: time.Now().UTC(),
 	}
 	if err := r.Create(context.Background(), d); err != nil {
 		t.Fatalf("seed: %v", err)
