@@ -404,15 +404,28 @@
   let approvalsTabSession = $state<ApprovedItem[]>([]);
   let approvalsTabAlways = $state<ApprovedItem[]>([]);
 
-  function loadApprovalsTab() {
+  function loadApprovalsTab(showPending = false) {
     run(getApprovals(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
         approvalsTabPending = res.pending;
         approvalsTabSession = res.session_approved;
         approvalsTabAlways = res.always_approved;
+        // On a fresh page the approval_request event has already come and
+        // gone, but the daemon is still holding the prompt open — so the
+        // agent sits there with no visible way to answer. Reopen the modal
+        // from server state rather than relying on an event we missed.
+        if (showPending && res.pending.length > 0 && !get(currentApproval)) {
+          showApproval(res.pending[0]);
+        }
       })
       .catch((e: unknown) => toastError(`Approvals: ${e instanceof Error ? e.message : String(e)}`));
   }
+
+  // Rehydrate whenever the session changes, including first render.
+  $effect(() => {
+    void sessionId;
+    loadApprovalsTab(true);
+  });
 
   async function handleRevokeApproval(matchKey: string, scope: "session" | "always") {
     try {
