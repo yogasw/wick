@@ -61,8 +61,19 @@ type providerGuide struct {
 	Gotcha string
 }
 
+// guideScope is one permission to grant.
+//
+// Name is the identifier the host itself uses — "write:repository:bitbucket", not
+// "Repositories: Write". A UI label drifts when the vendor redesigns their page and
+// cannot be searched for or copied; the scope string is what appears in the token's
+// own summary, so it is what an operator can actually verify against.
+//
+// Access says whether the scope grants read or write, so "do I need this to push?"
+// is answerable at a glance rather than inferred from prose.
 type guideScope struct {
 	Name     string
+	Label    string // the vendor's UI wording, when it differs from the identifier
+	Access   string // "read" or "write"
 	Why      string
 	Required bool
 }
@@ -87,9 +98,12 @@ var providerGuides = []providerGuide{
 		UsernameNote:    "Literal. GitHub checks only the token, so this is a placeholder.",
 		TokenKind:       "Personal access token",
 		Scopes: []guideScope{
-			{Name: "repo", Why: "Private repositories. Tick this one.", Required: true},
-			{Name: "public_repo", Why: "Public-only repositories.", Required: false},
-			{Name: "Contents: Read and write", Why: "Fine-grained tokens, under Repository permissions.", Required: false},
+			{Name: "repo", Access: "write", Required: true,
+				Why: "Classic token, private repositories."},
+			{Name: "public_repo", Access: "write", Required: false,
+				Why: "Classic token, public repositories only."},
+			{Name: "contents:write", Label: "Contents: Read and write", Access: "write", Required: false,
+				Why: "Fine-grained token instead of repo. Use contents:read for read-only."},
 		},
 		Steps: []guideStep{
 			{Title: "Open token settings", Body: "Avatar → Settings.",
@@ -110,8 +124,10 @@ var providerGuides = []providerGuide{
 		UsernameNote:    "NOT your email. Bitbucket checks the username too — email is the usual cause of a 401.",
 		TokenKind:       "App Password",
 		Scopes: []guideScope{
-			{Name: "Repositories: Read", Why: "Clone and fetch.", Required: true},
-			{Name: "Repositories: Write", Why: "Push. Omit for read-only.", Required: false},
+			{Name: "read:repository:bitbucket", Label: "Repositories: Read", Access: "read", Required: true,
+				Why: "Clone and fetch."},
+			{Name: "write:repository:bitbucket", Label: "Repositories: Write", Access: "write", Required: false,
+				Why: "Push. Omit for a read-only connector."},
 		},
 		Steps: []guideStep{
 			{Title: "Find your username", Body: "This is the Username value — not your email.",
@@ -134,9 +150,12 @@ var providerGuides = []providerGuide{
 		UsernameNote:    "Your sign-in username.",
 		TokenKind:       "HTTP access token",
 		Scopes: []guideScope{
-			{Name: "Project read", Why: "See the repository.", Required: true},
-			{Name: "Repository read", Why: "Clone and fetch.", Required: true},
-			{Name: "Repository write", Why: "Push. Omit for read-only.", Required: false},
+			{Name: "PROJECT_READ", Label: "Project read", Access: "read", Required: true,
+				Why: "See the project."},
+			{Name: "REPO_READ", Label: "Repository read", Access: "read", Required: true,
+				Why: "Clone and fetch."},
+			{Name: "REPO_WRITE", Label: "Repository write", Access: "write", Required: false,
+				Why: "Push. Omit for a read-only connector."},
 		},
 		Steps: []guideStep{
 			{Title: "Open your profile", Body: "Avatar → Manage account."},
@@ -158,8 +177,10 @@ var providerGuides = []providerGuide{
 		UsernameNote:    "Literal, for a personal access token. Your username also works.",
 		TokenKind:       "Personal / project / group token",
 		Scopes: []guideScope{
-			{Name: "read_repository", Why: "Clone and fetch.", Required: true},
-			{Name: "write_repository", Why: "Push. Omit for read-only.", Required: false},
+			{Name: "read_repository", Access: "read", Required: true,
+				Why: "Clone and fetch."},
+			{Name: "write_repository", Access: "write", Required: false,
+				Why: "Push. The broad api scope is not needed."},
 		},
 		Steps: []guideStep{
 			{Title: "Open access tokens", Body: "Avatar → Edit profile.",
@@ -253,6 +274,10 @@ func renderSetupGuide(picked string) string {
 .%[1]s-note{opacity:.7;font-size:11px;margin-top:1px}
 .%[1]s-scope{display:flex;gap:7px;margin-bottom:6px}
 .%[1]s-tick{font-family:monospace;color:%[4]s}
+.%[1]s-acc{font-family:monospace;font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding:1px 4px;border-radius:3px;border:1px solid;vertical-align:1px}
+.%[1]s-rd{color:%[4]s;border-color:%[4]s}
+.%[1]s-wr{color:#D9A03C;border-color:#D9A03C}
+.%[1]s-lbl{font-size:11px;opacity:.6}
 .%[1]s-opt{color:inherit;opacity:.5}
 .%[1]s-step{display:flex;gap:8px;margin-bottom:8px}
 .%[1]s-num{flex:0 0 auto;width:18px;height:18px;border-radius:50%%;border:1px solid %[3]s;color:%[4]s;display:flex;align-items:center;justify-content:center;font-family:monospace;font-size:10px}
@@ -381,9 +406,31 @@ func renderGuidePanel(b *strings.Builder, p string, g providerGuide) {
 		if s.Required {
 			mark, cls, pre = "✓", "", ""
 		}
-		fmt.Fprintf(b, `<div class="%[1]s-scope"><span class="%[1]s-tick%[2]s">%[3]s</span>`+
-			`<div><code class="%[1]s-v">%[4]s</code><div class="%[1]s-note">%[5]s%[6]s</div></div></div>`,
-			p, cls, mark, esc(s.Name), esc(pre), esc(s.Why))
+
+		// The scope identifier leads, because that is the string the operator ticks,
+		// searches for, and later sees in the token's own summary.
+		fmt.Fprintf(b, `<div class="%[1]s-scope"><span class="%[1]s-tick%[2]s">%[3]s</span><div>`,
+			p, cls, mark)
+		fmt.Fprintf(b, `<code class="%[1]s-v">%[2]s</code>`, p, esc(s.Name))
+
+		// read / write, so "is this the one I need to push?" needs no reading.
+		if s.Access != "" {
+			accessCls := p + "-rd"
+			if s.Access == "write" {
+				accessCls = p + "-wr"
+			}
+			fmt.Fprintf(b, ` <span class="%[1]s-acc %[2]s">%[3]s</span>`, p, accessCls, esc(s.Access))
+		}
+
+		// The vendor's own wording, when their page says something different from the
+		// scope name — otherwise the operator hunts for a checkbox labelled
+		// "write:repository:bitbucket" that does not exist.
+		if s.Label != "" && s.Label != s.Name {
+			fmt.Fprintf(b, ` <span class="%[1]s-lbl">%[2]s</span>`, p, esc(s.Label))
+		}
+
+		fmt.Fprintf(b, `<div class="%[1]s-note">%[2]s%[3]s</div></div></div>`,
+			p, esc(pre), esc(s.Why))
 	}
 	fmt.Fprintf(b, `</div></div>`)
 

@@ -87,6 +87,53 @@ func TestSetupGuideEveryHostRenders(t *testing.T) {
 	}
 }
 
+func TestSetupGuideScopesAreRealIdentifiers(t *testing.T) {
+	// A scope must be the string the host itself uses — write:repository:bitbucket,
+	// REPO_WRITE, read_repository — not a UI label like "Repositories: Write".
+	// The identifier is what the operator ticks, searches for, and later sees in the
+	// token's own summary; a label drifts whenever the vendor redesigns the page and
+	// cannot be verified against anything.
+	for _, g := range providerGuides {
+		for _, s := range g.Scopes {
+			if strings.ContainsAny(s.Name, " ") {
+				t.Errorf("%s: scope %q contains a space, so it is a label rather than an identifier",
+					g.Key, s.Name)
+			}
+			// Vendors write scopes in one of these shapes; prose does not match any.
+			looksReal := strings.Contains(s.Name, ":") ||
+				strings.Contains(s.Name, "_") ||
+				s.Name == strings.ToLower(s.Name) ||
+				s.Name == strings.ToUpper(s.Name)
+			if !looksReal {
+				t.Errorf("%s: scope %q does not look like a scope identifier", g.Key, s.Name)
+			}
+			// read or write, so "do I need this to push?" is answerable at a glance.
+			if s.Access != "read" && s.Access != "write" {
+				t.Errorf("%s: scope %q has Access %q, want read or write", g.Key, s.Name, s.Access)
+			}
+		}
+	}
+}
+
+func TestSetupGuideRendersScopeAccessAndVendorLabel(t *testing.T) {
+	// Bitbucket is the case that prompted this: the scope is
+	// write:repository:bitbucket, but the checkbox on their page says
+	// "Repositories: Write". Showing only one of the two sends the operator hunting
+	// for something that is not there, so both are rendered.
+	html := renderSetupGuide("bitbucket_cloud")
+
+	for _, want := range []string{
+		"write:repository:bitbucket", // the identifier
+		"Repositories: Write",        // the vendor's wording
+		">write<",                    // the access badge
+		">read<",
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("scope rendering is missing %q", want)
+		}
+	}
+}
+
 func TestSetupGuideUnknownHostShowsNothingSelected(t *testing.T) {
 	// A stale or hand-edited value must not pre-select anything, leaving the
 	// operator with the chooser rather than a half-empty guide.
