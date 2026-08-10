@@ -1,12 +1,16 @@
 package postgres
 
 import (
+	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/yogasw/wick/internal/entity"
 
 	"github.com/rs/zerolog/log"
+	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -28,7 +32,98 @@ func DropStaleProfileKeyIndex(db *gorm.DB) {
 	}
 }
 
+// migrated records which databases this process has already migrated,
+// keyed by DSN.
+//
+// Tray mode runs the server and the worker as independent toggles in one
+// process (internal/systemtray), each building its own *gorm.DB via
+// NewGORM. Without this guard, flipping the second toggle runs a full
+// AutoMigrate pass while the first component is already serving queries
+// off its own pool — and a connection that opened before the DDL keeps a
+// cached statement plan describing the old table shape. Postgres then
+// rejects the next query on that connection with SQLSTATE 0A000
+// ("cached plan must not change result type"), intermittently, until the
+// connection ages out of the pool.
+//
+// Keyed per database rather than a single process-wide sync.Once: the
+// guard has to skip a repeat pass over the *same* database while still
+// migrating a genuinely different one. A process-wide Once would leave
+// the second database silently unmigrated — the tests open a fresh
+// in-memory SQLite per case and would each get an empty schema.
+var (
+	migratedMu sync.Mutex
+	migrated   = map[string]bool{}
+)
+
+// Migrate brings the schema up to date. Safe to call from every component
+// that opens a handle to the same database — only the first call does work.
 func Migrate(db *gorm.DB) {
+	key := dsnKey(db)
+
+	migratedMu.Lock()
+	if migrated[key] {
+		migratedMu.Unlock()
+		return
+	}
+	migrated[key] = true
+	migratedMu.Unlock()
+
+	migrate(db)
+}
+
+// dsnKey identifies the database behind a handle, so two handles to the
+// same database share a key and distinct databases do not.
+func dsnKey(db *gorm.DB) string {
+	var dsn string
+	// The DSN is a field on the driver's embedded Config, not a method —
+	// there is no shared interface to assert against, so match the
+	// concrete dialector. SQLite is deliberately absent: see below.
+	if d, ok := db.Dialector.(gormpostgres.Dialector); ok && d.Config != nil {
+		dsn = d.DSN
+	}
+
+	// Every ":memory:" handle is a distinct database despite sharing a
+	// DSN, so those must never be deduplicated by name. Same for any
+	// dialector whose DSN we cannot read: falling back to per-handle
+	// identity keeps the guard conservative — an unrecognised handle
+	// migrates rather than being wrongly skipped.
+	if dsn == "" || strings.Contains(dsn, ":memory:") {
+		return fmt.Sprintf("%s|handle:%p", db.Dialector.Name(), db)
+	}
+	return db.Dialector.Name() + "|" + dsn
+}
+
+func migrate(db *gorm.DB) {
+	// Run the DDL on a connection of its own and hand it back closed, so
+	// no pooled connection outlives the schema it was planned against.
+	// SetMaxIdleConns(0) would only evict connections that are idle at
+	// that instant; one checked out by a concurrent query would survive
+	// and stay poisoned. Taking a dedicated conn sidesteps that entirely.
+	//
+	// Postgres only. SQLite has no plan cache to invalidate, so it gains
+	// nothing — and for ":memory:" it is actively wrong: each connection
+	// is its own empty database, so the schema would be created on a
+	// connection that is then closed and discarded.
+	//
+	// Best-effort: on failure fall through to the pooled handle rather
+	// than blocking boot, since the retry installed in NewGORM still
+	// covers the stale-plan case.
+	if _, isPG := db.Dialector.(gormpostgres.Dialector); isPG {
+		if sqlDB, err := db.DB(); err == nil {
+			if conn, err := sqlDB.Conn(context.Background()); err == nil {
+				if scoped, err := gorm.Open(db.Dialector, &gorm.Config{
+					Logger:   db.Logger,
+					ConnPool: conn,
+				}); err == nil {
+					defer conn.Close()
+					db = scoped
+				} else {
+					conn.Close()
+				}
+			}
+		}
+	}
+
 	err := db.AutoMigrate(
 		&entity.User{},
 		&entity.Session{},
