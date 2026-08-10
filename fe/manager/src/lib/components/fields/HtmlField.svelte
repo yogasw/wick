@@ -304,6 +304,29 @@
     }
     if (busyOp) return; // one action at a time
     busyOp = opName;
+
+    /* Mark the clicked element itself as busy.
+       A connector action can take a while — cloning and pushing a repository is
+       seconds, not milliseconds — and until now the only feedback was a line of
+       small text below the widget. With nothing happening on the button, the
+       natural reaction is to click again.
+
+       data-busy is set on the element that was clicked, so the connector's own CSS
+       decides what busy looks like (its markup, its styling). disabled is set too
+       when the element supports it, which stops a second submission without any
+       cooperation from the connector.
+
+       Both are cleared in the finally below. The element can be replaced by the
+       response's markup before then, which is fine: the replacement never carries
+       these attributes. */
+    const clicked = el as HTMLElement & { disabled?: boolean };
+    clicked.setAttribute("data-busy", "true");
+    const canDisable =
+      clicked instanceof HTMLButtonElement ||
+      clicked instanceof HTMLInputElement ||
+      clicked instanceof HTMLSelectElement;
+    if (canDisable) clicked.disabled = true;
+
     try {
       const input = { browser: arg, ...collectInputs() };
       const res = await runConnectorTest(connectorKey, connectorId, opName, input, "");
@@ -324,6 +347,8 @@
       toastError("Action failed", e instanceof Error ? e.message : String(e));
     } finally {
       busyOp = "";
+      clicked.removeAttribute("data-busy");
+      if (canDisable) clicked.disabled = false;
     }
   }
 
@@ -369,7 +394,10 @@
   });
 </script>
 
-<div class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3">
+<!-- html-widget scopes the busy rules at the bottom of this file: they have to be
+     :global to reach markup that came from {@html}, so they are anchored to this
+     class rather than applying page-wide. -->
+<div class="html-widget rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3">
   <!-- The {@html} container is rendered UNCONDITIONALLY and only its content
        swaps. It used to sit inside {#if loading}{:else}…{/if}, which meant every
        state change destroyed the container and rebuilt it from scratch — the
@@ -416,3 +444,51 @@
     {busyOp ? `Working… (${busyOp})` : ""}
   </p>
 </div>
+
+<style>
+  /* Busy feedback for connector-rendered actions.
+
+     Lives here rather than in each connector's markup for two reasons: a
+     connector that styles inline (no <style> block of its own) has no way to
+     express this at all, and every widget wants the same thing anyway — the
+     element you clicked should look like it is working.
+
+     onClick sets data-busy on the clicked element and clears it when the op
+     settles, so these rules need no cooperation from the connector. :global is
+     required because the elements come from {@html}, outside this component's
+     scope. */
+  .html-widget :global([data-busy]) {
+    opacity: 0.65;
+    cursor: progress;
+    pointer-events: none;
+  }
+
+  /* A spinner ahead of the label, sized in em so it tracks whatever font the
+     connector chose, and drawn in currentColor so it works on any button. */
+  .html-widget :global([data-busy])::before {
+    content: "";
+    display: inline-block;
+    width: 0.85em;
+    height: 0.85em;
+    margin-right: 0.45em;
+    vertical-align: -0.1em;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: html-widget-spin 0.7s linear infinite;
+  }
+
+  @keyframes html-widget-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* Respect the OS setting: keep the dimming and the reserved space, drop the
+     motion. */
+  @media (prefers-reduced-motion: reduce) {
+    .html-widget :global([data-busy])::before {
+      animation: none;
+    }
+  }
+</style>
