@@ -34,6 +34,95 @@ func TestTestPanelRendersEmptyForm(t *testing.T) {
 	}
 }
 
+func TestTestPanelSurvivesAReMount(t *testing.T) {
+	// The manager re-runs an html= widget's render op whenever it re-mounts the
+	// surrounding form, and the observed sequence was: test_run (200, 730ms) then
+	// test_panel twice — the second and third calls rendering a blank form over the
+	// operator's input. Nothing in the widget could prevent the re-mount, so the
+	// values are persisted as hidden config rows and the render reads them back.
+	stored := map[string]string{
+		"test_repo":   "https://github.com/org/repo.git",
+		"test_remote": "upstream",
+		"test_branch": "fix/thing",
+	}
+	out, err := doTestPanel(opCtx(stored, map[string]string{}))
+	if err != nil {
+		t.Fatalf("doTestPanel: %v", err)
+	}
+	html, _ := out.(map[string]any)["html"].(string)
+
+	for _, want := range []string{
+		`value="https://github.com/org/repo.git"`,
+		`value="upstream"`,
+		`value="fix/thing"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("a re-mount lost the operator's input: %q missing", want)
+		}
+	}
+}
+
+func TestTestPanelStartsEmptyWhenNothingWasEverEntered(t *testing.T) {
+	// A fresh instance must not show a stale target from somewhere else.
+	out, err := doTestPanel(opCtx(map[string]string{}, map[string]string{}))
+	if err != nil {
+		t.Fatalf("doTestPanel: %v", err)
+	}
+	html, _ := out.(map[string]any)["html"].(string)
+	if !strings.Contains(html, `name="repo_path" placeholder="https://github.com/org/repo.git" value=""`) {
+		t.Errorf("a fresh panel did not render an empty repo field:\n%s", html)
+	}
+}
+
+func TestTestRunPersistsTheFormValues(t *testing.T) {
+	requireGit(t)
+	out, err := doTestRun(opCtx(baseCfg(), map[string]string{
+		"repo_path": "https://github.com/org/repo.git",
+		"remote":    "upstream",
+		"branch":    "fix/thing",
+	}))
+	if err != nil {
+		t.Fatalf("doTestRun: %v", err)
+	}
+	m, _ := out.(map[string]any)
+	fields, ok := m["fields"].(map[string]string)
+	if !ok {
+		t.Fatalf("run returned no fields map, so a re-mount would render blank: %v", m["fields"])
+	}
+	want := map[string]string{
+		"test_repo":   "https://github.com/org/repo.git",
+		"test_remote": "upstream",
+		"test_branch": "fix/thing",
+	}
+	for k, v := range want {
+		if fields[k] != v {
+			t.Errorf("fields[%s] = %q, want %q", k, fields[k], v)
+		}
+	}
+}
+
+func TestTestFormFieldsAreDeclaredAndHidden(t *testing.T) {
+	// The op writes these keys through {fields}, and the core only applies keys that
+	// exist in this connector's schema — an undeclared key is silently dropped, so
+	// the input would vanish again with no error anywhere.
+	declared := map[string]entity.Config{}
+	for _, c := range entity.StructToConfigs(Config{}) {
+		declared[c.Key] = c
+	}
+	for _, key := range []string{"test_repo", "test_remote", "test_branch"} {
+		cfg, ok := declared[key]
+		if !ok {
+			t.Errorf("config key %q is written via {fields} but not declared; the write is dropped", key)
+			continue
+		}
+		// They back a widget, not an operator-facing setting, so they must not clutter
+		// the form as editable rows. "hidden" is a flag on the row, not a Type.
+		if !cfg.Hidden {
+			t.Errorf("config %q is not hidden; it would render as an editable text row", key)
+		}
+	}
+}
+
 func TestTestPanelButtonsAreTypeButton(t *testing.T) {
 	// A <button> with no type attribute defaults to type="submit", and this markup
 	// renders inside the manager's config form. Without type="button" the click

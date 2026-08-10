@@ -116,9 +116,34 @@ type testGuideInput struct {
 	Branch   string `wick:"desc=Branch name to evaluate the policy against."`
 }
 
-// doTestPanel renders the empty form.
+// doTestPanel renders the form, restoring whatever was last entered.
 func doTestPanel(c *connector.Ctx) (any, error) {
-	return map[string]any{"html": renderTestPanel(nil)}, nil
+	// Render from the stored values rather than blank. The manager re-runs this op
+	// whenever it re-mounts the widget, and returning an empty form at that moment
+	// is what silently erased the operator's input.
+	return map[string]any{"html": renderTestPanel(storedTestForm(c))}, nil
+}
+
+// storedTestForm rebuilds the form state from the hidden config rows, or nil when
+// nothing has been entered yet.
+func storedTestForm(c *connector.Ctx) *testReport {
+	repo := strings.TrimSpace(c.Cfg("test_repo"))
+	remote := strings.TrimSpace(c.Cfg("test_remote"))
+	branch := strings.TrimSpace(c.Cfg("test_branch"))
+	if repo == "" && remote == "" && branch == "" {
+		return nil
+	}
+	return &testReport{RepoPath: repo, Remote: firstNonEmpty(remote, "origin"), Branch: branch}
+}
+
+// formFields is the {fields} map that persists what was just entered. Returned
+// alongside the HTML on every run so the inputs outlive a re-mount.
+func formFields(rep *testReport) map[string]string {
+	return map[string]string{
+		"test_repo":   rep.RepoPath,
+		"test_remote": rep.Remote,
+		"test_branch": rep.Branch,
+	}
 }
 
 // testReport is one run's findings. Each check is a named step with a verdict, so
@@ -163,7 +188,7 @@ func doTestRun(c *connector.Ctx) (any, error) {
 	gitPath, err := ResolveGit()
 	if err != nil {
 		rep.add("git binary", "fail", err.Error(), "")
-		return map[string]any{"html": renderTestPanel(rep)}, nil
+		return map[string]any{"html": renderTestPanel(rep), "fields": formFields(rep)}, nil
 	}
 	rep.add("git binary", "ok", "Found on PATH.", gitPath)
 
@@ -180,7 +205,7 @@ func doTestRun(c *connector.Ctx) (any, error) {
 		if local != "" {
 			runTestPolicy(c, rep, info, local)
 		}
-		return map[string]any{"html": renderTestPanel(rep)}, nil
+		return map[string]any{"html": renderTestPanel(rep), "fields": formFields(rep)}, nil
 	}
 
 	switch local {
@@ -223,7 +248,7 @@ func doTestRun(c *connector.Ctx) (any, error) {
 	// failed, because a policy problem is worth seeing either way.
 	runTestPolicy(c, rep, info, local)
 
-	return map[string]any{"html": renderTestPanel(rep)}, nil
+	return map[string]any{"html": renderTestPanel(rep), "fields": formFields(rep)}, nil
 }
 
 // runTestLsRemote probes the remote with the configured credential.
@@ -464,14 +489,14 @@ func doTestWrite(c *connector.Ctx) (any, error) {
 
 	if _, err := ResolveGit(); err != nil {
 		rep.add("git binary", "fail", err.Error(), "")
-		return map[string]any{"html": renderTestPanel(rep)}, nil
+		return map[string]any{"html": renderTestPanel(rep), "fields": formFields(rep)}, nil
 	}
 	// Resolve up front: without a URL there is nothing to clone from or push to, and
 	// the error reads better here than mid-way through.
 	info, local, rerr := resolveTestTarget(c, rep.RepoPath, rep.Remote)
 	if rerr != nil {
 		rep.add("Repository", "fail", rerr.Error(), "")
-		return map[string]any{"html": renderTestPanel(rep)}, nil
+		return map[string]any{"html": renderTestPanel(rep), "fields": formFields(rep)}, nil
 	}
 	source := "clone URL"
 	if local != "" {
@@ -485,7 +510,7 @@ func doTestWrite(c *connector.Ctx) (any, error) {
 	if rep.Branch == "" {
 		rep.add("Branch", "fail",
 			"Enter a branch name to create. It must satisfy this connector's branch pattern.", "")
-		return map[string]any{"html": renderTestPanel(rep)}, nil
+		return map[string]any{"html": renderTestPanel(rep), "fields": formFields(rep)}, nil
 	}
 
 	// Policy first, before anything is written. A denial must stop the test, not be
@@ -493,11 +518,11 @@ func doTestWrite(c *connector.Ctx) (any, error) {
 	pol := policyFor(c, local, info.Slug)
 	if v := pol.Evaluate(Request{Op: "branch_create", Branch: rep.Branch, NewBranch: true}); !v.Allow {
 		rep.add("Policy: create branch", "fail", v.Reason, "matched rule: "+v.MatchedRule)
-		return map[string]any{"html": renderTestPanel(rep)}, nil
+		return map[string]any{"html": renderTestPanel(rep), "fields": formFields(rep)}, nil
 	}
 	if v := pol.Evaluate(Request{Op: "push", Branch: rep.Branch}); !v.Allow {
 		rep.add("Policy: push", "fail", v.Reason, "matched rule: "+v.MatchedRule)
-		return map[string]any{"html": renderTestPanel(rep)}, nil
+		return map[string]any{"html": renderTestPanel(rep), "fields": formFields(rep)}, nil
 	}
 	rep.add("Policy", "ok",
 		fmt.Sprintf("Creating and pushing %q is allowed by %s.", rep.Branch, pol.MatchedRule), "")
@@ -505,7 +530,7 @@ func doTestWrite(c *connector.Ctx) (any, error) {
 	dir, err := resetSandbox()
 	if err != nil {
 		rep.add("Sandbox", "fail", err.Error(), "")
-		return map[string]any{"html": renderTestPanel(rep)}, nil
+		return map[string]any{"html": renderTestPanel(rep), "fields": formFields(rep)}, nil
 	}
 	// Removal has to happen before the report is rendered, so the operator can see
 	// that it worked — a deferred cleanup runs after the return value is already
@@ -523,7 +548,7 @@ func doTestWrite(c *connector.Ctx) (any, error) {
 		} else {
 			rep.add("Cleanup", "ok", "Sandbox removed.", dir)
 		}
-		return map[string]any{"html": renderTestPanel(rep)}, nil
+		return map[string]any{"html": renderTestPanel(rep), "fields": formFields(rep)}, nil
 	}
 
 	work := filepath.Join(dir, "clone")

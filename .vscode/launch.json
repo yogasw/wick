@@ -16,7 +16,7 @@
         "WICK_STRICT_MCP": "1",
         "WICK_SW_ENABLED": "false",
         "WICK_PPROF": "1",
-        "WICK_DEBUG_PLUGIN":"git"
+       // "WICK_DEBUG_PLUGIN":"git"
       },
       "preLaunchTask": "debug: prep"
     },

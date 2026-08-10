@@ -44,7 +44,7 @@ type Config struct {
 	// "collapsed" is the THIRD PIPE SEGMENT of group=, not a separate semicolon
 	// flag: group=Title|Description|collapsed. Written as ";collapsed;" it is
 	// silently ignored — the group value simply ends at the semicolon.
-	SetupGuide string `wick:"html=setup_guide;group=Setting up credentials|Pick your git host to see the exact username, token type and permissions it needs.|collapsed;desc=Reference only. Nothing here is saved."`
+	SetupGuide string `wick:"html=setup_guide;group=Setting up credentials|Pick your git host to see the exact username, token type and permissions it needs|collapsed;desc=Reference only. Nothing here is saved."`
 
 	AuthorName  string `wick:"group=Identity||collapsed;desc=Name used for commits made through this connector. Example: Deploy Bot"`
 	AuthorEmail string `wick:"group=Identity;desc=Email used for commits. Example: bot@example.com"`
@@ -74,6 +74,18 @@ type Config struct {
 	// Last, in its own group: a check is the thing you do once everything above is
 	// filled in, and it needs the full width for its results.
 	TestPanel string `wick:"html=test_panel;group=Test against a repository|Point the connector at a real repository and confirm the credential, remote and policy all work.|collapsed;desc=Diagnostics only. Nothing here is saved."`
+
+	// The three inputs the test panel renders are persisted as hidden config rows.
+	//
+	// They have to be, because the widget's markup is not durable state: the
+	// manager re-mounts an html= widget whenever the surrounding form re-renders,
+	// and a re-mount re-runs the render op — which used to come back as an empty
+	// form and silently wipe whatever had been typed. Storing the values means a
+	// re-mount restores them instead of losing them, and the operator's last target
+	// is still there next time the page is opened.
+	TestRepo   string `wick:"hidden;desc=Last repository tested, kept so the diagnostics form survives a re-render."`
+	TestRemote string `wick:"hidden;desc=Last remote tested."`
+	TestBranch string `wick:"hidden;desc=Last branch tested."`
 }
 
 // Meta identifies the connector. Key must equal the folder name.
