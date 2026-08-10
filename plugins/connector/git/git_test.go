@@ -197,20 +197,40 @@ func TestBuildEnvSetsRequiredVars(t *testing.T) {
 	}
 }
 
-func TestBuildEnvOmitsAskpassWhenNoToken(t *testing.T) {
+func TestBuildEnvSetsAskpassEvenWithNoToken(t *testing.T) {
+	// GIT_ASKPASS must be set unconditionally. Left unset, git looks for a helper
+	// elsewhere — SSH_ASKPASS, or a GUI credential manager configured on the
+	// machine — and Git Credential Manager then opens a sign-in window: the
+	// operation hangs until someone clicks it, and if they do, it authenticates as
+	// the desktop user instead of with the connector's credential.
+	//
+	// With no token the helper answers empty, which git reports as an
+	// authentication failure the operator can actually read.
 	env := envMap(BuildEnv(AuthSpec{Method: "askpass"}, "/opt/wick/git-plugin"))
-	if _, ok := env["GIT_ASKPASS"]; ok {
-		t.Error("GIT_ASKPASS set with no token — git would call the helper for nothing")
+
+	if env["GIT_ASKPASS"] != "/opt/wick/git-plugin" {
+		t.Errorf("GIT_ASKPASS = %q, want the plugin binary even without a token", env["GIT_ASKPASS"])
+	}
+	if env["SSH_ASKPASS"] != "/opt/wick/git-plugin" {
+		t.Errorf("SSH_ASKPASS = %q, want the plugin binary so no other helper is consulted", env["SSH_ASKPASS"])
 	}
 	if env["GIT_TERMINAL_PROMPT"] != "0" {
 		t.Error("GIT_TERMINAL_PROMPT must be 0 even without a token, so git never blocks on a prompt")
 	}
+	// No credential should be present when there is none configured.
+	if _, ok := env[envAskpassToken]; ok {
+		t.Error("a token variable was exported when no token is set")
+	}
 }
 
 func TestAuthInjectedArgs(t *testing.T) {
-	t.Run("askpass injects nothing", func(t *testing.T) {
-		if got := AuthInjectedArgs(AuthSpec{Method: "askpass", Token: "t"}); got != nil {
-			t.Errorf("got %v, want nil — askpass works through env only", got)
+	t.Run("askpass injects only the helper reset", func(t *testing.T) {
+		// askpass carries the credential in the environment, so the only argument it
+		// needs is the one that stops the machine's credential manager from being
+		// consulted at all.
+		got := AuthInjectedArgs(AuthSpec{Method: "askpass", Token: "t"})
+		if len(got) != 2 || got[0] != "-c" || got[1] != "credential.helper=" {
+			t.Errorf("got %v, want just the credential.helper reset", got)
 		}
 	})
 
@@ -227,14 +247,22 @@ func TestAuthInjectedArgs(t *testing.T) {
 
 	t.Run("extraheader carries the token in argv by design", func(t *testing.T) {
 		got := AuthInjectedArgs(AuthSpec{Method: "extraheader", Username: "u", Token: "t"})
-		if len(got) != 2 || !strings.Contains(got[1], "Authorization: Basic ") {
+		joined := strings.Join(got, " ")
+		if !strings.Contains(joined, "Authorization: Basic ") {
 			t.Errorf("got %v, want an http.extraheader -c pair", got)
+		}
+		// The reset has to come first, or the machine's helper is still in the chain.
+		if len(got) < 2 || got[0] != "-c" || got[1] != "credential.helper=" {
+			t.Errorf("got %v, want the credential.helper reset first", got)
 		}
 	})
 
-	t.Run("no token injects nothing", func(t *testing.T) {
-		if got := AuthInjectedArgs(AuthSpec{Method: "extraheader"}); got != nil {
-			t.Errorf("got %v, want nil", got)
+	t.Run("no token still disables the machine helper", func(t *testing.T) {
+		// This is the case that produced the GUI dialog: no token configured, so the
+		// old code injected nothing and git fell through to Git Credential Manager.
+		got := AuthInjectedArgs(AuthSpec{Method: "extraheader"})
+		if len(got) != 2 || got[0] != "-c" || got[1] != "credential.helper=" {
+			t.Errorf("got %v, want the credential.helper reset", got)
 		}
 	})
 }
@@ -542,4 +570,55 @@ func initTestRepo(t *testing.T) string {
 	run("add", "README.md")
 	run("commit", "-m", "initial")
 	return dir
+}
+
+func TestRunNeverConsultsTheMachineCredentialHelper(t *testing.T) {
+	// The regression this pins: on a machine with `credential.helper manager`, git
+	// fell through to Git Credential Manager and opened a "Connect to Bitbucket"
+	// window. The operation hung until someone clicked it — and if they did, the
+	// push authenticated as the desktop user rather than with the connector's
+	// configured credential, so the credential in the audit trail was not the one
+	// actually used.
+	//
+	// Asserted at the argv level because that is where the fix lives and it needs no
+	// network: every invocation carries an empty credential.helper, which resets the
+	// chain so nothing the machine configured is consulted.
+	for _, method := range []string{"", "askpass", "credential_helper", "extraheader"} {
+		for _, token := range []string{"", "ghp_something"} {
+			args := AuthInjectedArgs(AuthSpec{Method: method, Username: "u", Token: token})
+			if len(args) < 2 || args[0] != "-c" || args[1] != "credential.helper=" {
+				t.Errorf("method=%q token=%v: argv %v does not start with the helper reset",
+					method, token != "", args)
+			}
+		}
+	}
+}
+
+func TestRunAgainstAPrivateRepoFailsInsteadOfPrompting(t *testing.T) {
+	requireGit(t)
+	dir := initTestRepo(t)
+
+	// A repository that requires auth, with no credential configured. The right
+	// outcome is a prompt-free failure git reports itself; the wrong outcome is a
+	// dialog, or a hang until the timeout.
+	start := time.Now()
+	res, err := Run(context.Background(), Cmd{
+		RepoPath:     dir,
+		InjectedArgs: AuthInjectedArgs(AuthSpec{Method: "askpass"}),
+		UserArgs: []string{"ls-remote", "--heads", "--end-of-options",
+			"https://github.com/wick-does-not-exist/private-probe.git"},
+		Network: true,
+	}, RunOpts{SelfPath: "/nonexistent-askpass", Timeout: 30 * time.Second, MaxOutput: 1 << 16})
+	elapsed := time.Since(start)
+
+	if err != nil && strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("git hung instead of failing fast (%v) — a prompt is still reachable", elapsed)
+	}
+	if err == nil && res.OK {
+		t.Skip("the probe URL resolved; cannot assert the auth failure here")
+	}
+	// Well under the timeout: it gave up rather than waiting on a human.
+	if elapsed > 25*time.Second {
+		t.Errorf("took %v — too slow to be a clean refusal", elapsed)
+	}
 }

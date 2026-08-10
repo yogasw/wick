@@ -213,8 +213,9 @@ type AuthSpec struct {
 // each of which can make git execute an arbitrary command.
 func BuildEnv(a AuthSpec, selfPath string) []string {
 	env := []string{
-		// git must never block waiting for a human, and must never fall back to
-		// the machine's credential manager.
+		// git must never block waiting for a human. This covers git's own terminal
+		// prompt; the credential-manager window is closed off separately, by
+		// GIT_ASKPASS below and the credential.helper reset in AuthInjectedArgs.
 		"GIT_TERMINAL_PROMPT=0",
 	}
 
@@ -225,35 +226,69 @@ func BuildEnv(a AuthSpec, selfPath string) []string {
 		}
 	}
 
+	/* GIT_ASKPASS always points at this binary, token or not.
+
+	   With no token the helper simply answers with an empty string, which git
+	   treats as a failed credential — an authentication error the operator can
+	   read. Leaving GIT_ASKPASS unset instead let git look elsewhere: SSH_ASKPASS,
+	   or a GUI helper configured on the machine. On this developer's box that
+	   surfaced as a Git Credential Manager window titled "Connect to Bitbucket",
+	   which both hangs the operation until someone clicks it and, if they do,
+	   authenticates as the desktop user rather than with the connector's own
+	   credential.
+
+	   GIT_TERMINAL_PROMPT=0 above does not cover it: that stops git's own terminal
+	   prompt, not a helper that opens its own window. */
+	env = append(env, "GIT_ASKPASS="+selfPath, "SSH_ASKPASS="+selfPath)
+
 	if a.Token == "" {
 		return env
 	}
-
-	env = append(env, envAskpassUser+"="+a.Username, envAskpassToken+"="+a.Token)
-	if a.Method == "" || a.Method == "askpass" {
-		env = append(env, "GIT_ASKPASS="+selfPath)
-	}
-	return env
+	return append(env, envAskpassUser+"="+a.Username, envAskpassToken+"="+a.Token)
 }
 
 // AuthInjectedArgs returns the plugin's own -c arguments for the credential
 // methods that need them. These bypass ValidateUserArgs by construction: they
 // are placed in Cmd.InjectedArgs, which is never filtered.
 func AuthInjectedArgs(a AuthSpec) []string {
+	/* Disable the machine's credential helper first, unconditionally.
+
+	   An empty credential.helper value RESETS the helper chain, so whatever the
+	   machine configured — on this developer's box, `credential.helper manager`,
+	   i.e. Git Credential Manager — is not consulted. Without this, git falls
+	   through to it and GCM opens a GUI sign-in window: the operator sees an
+	   Atlassian or GitHub login dialog, and git hangs until they answer it or the
+	   timeout fires.
+
+	   That is a correctness problem, not a cosmetic one. The connector's whole
+	   premise is that it authenticates with ITS OWN configured credential and never
+	   borrows the machine's. Letting GCM answer means a push can succeed using
+	   someone's desktop login while the connector's token is ignored — the
+	   credential in the audit trail is not the one that was used.
+
+	   GIT_TERMINAL_PROMPT=0 does not cover this: it suppresses git's own terminal
+	   prompts, not a helper that opens its own window. */
+	args := []string{"-c", "credential.helper="}
+
 	if a.Token == "" {
-		return nil
+		// No token: still no helper, so a private repository fails with a clear
+		// authentication error instead of a dialog nobody expected.
+		return args
 	}
+
 	switch a.Method {
 	case "credential_helper":
-		// The helper echoes the token from the environment, so it never appears
-		// in argv (and so never in the process list).
-		return []string{"-c", `credential.helper=!f(){ echo username=$` + envAskpassUser +
-			`; echo password=$` + envAskpassToken + `; }; f`}
+		// Appended AFTER the reset, so this is the only helper in the chain. It
+		// echoes the token from the environment, so it never appears in argv (and
+		// so never in the process list).
+		return append(args, "-c", `credential.helper=!f(){ echo username=$`+envAskpassUser+
+			`; echo password=$`+envAskpassToken+`; }; f`)
 	case "extraheader":
 		basic := basicAuthValue(a.Username, a.Token)
-		return []string{"-c", "http.extraheader=Authorization: Basic " + basic}
+		return append(args, "-c", "http.extraheader=Authorization: Basic "+basic)
 	default:
-		return nil
+		// askpass: GIT_ASKPASS in the environment supplies the credential.
+		return args
 	}
 }
 

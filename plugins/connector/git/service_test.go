@@ -661,9 +661,16 @@ func TestInjectedArgsSuppressHooksByDefault(t *testing.T) {
 		t.Errorf("allow_hooks=true must let hooks run, got %q", got)
 	}
 
-	// A read op never triggers a hook, so there is nothing to suppress.
-	if got := strings.Join(injectedArgs(testCtx(map[string]string{}), AuthSpec{}, "status"), " "); got != "" {
-		t.Errorf("injectedArgs(status) = %q, want no injections", got)
+	// A read op never triggers a hook, so there is no hooksPath to suppress — but it
+	// still carries the credential.helper reset, because a read can reach the
+	// network too (ls_remote) and the machine's credential manager must never be
+	// consulted on any operation.
+	got = strings.Join(injectedArgs(testCtx(map[string]string{}), AuthSpec{}, "status"), " ")
+	if strings.Contains(got, "core.hooksPath=") {
+		t.Errorf("injectedArgs(status) = %q, want no hook suppression on a read op", got)
+	}
+	if !strings.Contains(got, "credential.helper=") {
+		t.Errorf("injectedArgs(status) = %q, want the credential.helper reset on every op", got)
 	}
 }
 
