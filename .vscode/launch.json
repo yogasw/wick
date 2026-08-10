@@ -15,7 +15,8 @@
         "WICK_DEV_REPO_ROOT": "${workspaceFolder}",
         "WICK_STRICT_MCP": "1",
         "WICK_SW_ENABLED": "false",
-        "WICK_PPROF": "1"
+        "WICK_PPROF": "1",
+        "WICK_DEBUG_PLUGIN":"git"
       },
       "preLaunchTask": "debug: prep"
     },
@@ -85,6 +86,30 @@
       "preLaunchTask": "plugin: install debug target → lab"
     },
     {
+      // Same reattach setup for the Git CLI connector. Set WICK_DEBUG_PLUGIN=git
+      // in .env, then run the "lab + plugin debug (git)" compound.
+      //
+      // Where to breakpoint, by symptom:
+      //   policy.go   Evaluate / Resolve      — "why was my push blocked?"
+      //   remote.go   ConvertRemote           — pushed to the wrong host
+      //   git.go      Run / BuildEnv          — auth failures, timeouts
+      //   service.go  execute / injectedArgs  — wrong argv reaching git
+      //   policyui.go renderPolicyManager     — Policy Rules widget rendering
+      //
+      // This plugin shells out to the real git binary, so the debugged process
+      // needs git on PATH — the same requirement as running it for real.
+      "name": "plugin debug (git)",
+      "type": "go",
+      "request": "launch",
+      "mode": "debug",
+      "program": "${workspaceFolder}/plugins/connector/git",
+      "cwd": "${workspaceFolder}/plugins",
+      "env": {
+        "WICK_PLUGIN_REATTACH_OUT": "${workspaceFolder}/bin/plugin-git.reattach.json"
+      },
+      "preLaunchTask": "plugin: install debug target → lab"
+    },
+    {
       "name": "Run CLI (init)",
       "type": "go",
       "request": "launch",
@@ -123,6 +148,12 @@
       // Notion (unofficial). Set WICK_DEBUG_PLUGIN=notion_unofficial in .env first.
       "name": "lab + plugin debug (notion_unofficial)",
       "configurations": ["plugin debug (notion_unofficial)", "wicklab"],
+      "stopAll": true
+    },
+    {
+      // Git CLI. Set WICK_DEBUG_PLUGIN=git in .env first.
+      "name": "lab + plugin debug (git)",
+      "configurations": ["plugin debug (git)", "wicklab"],
       "stopAll": true
     }
   ],

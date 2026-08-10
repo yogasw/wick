@@ -8,6 +8,18 @@
 
 **Global Constraints:** see [impl-1-policy.md](impl-1-policy.md) § Global Constraints. All of it applies here.
 
+**Additional constraints established while building Parts 1–2** — these are settled, do not re-litigate:
+
+- **Never `os/exec` for spawning.** Use `safeexec.Command` / `safeexec.LookPath` from `github.com/yogasw/wick/pkg/safeexec`. `os/exec` remains fine for the *types* (`*exec.Cmd`, `*exec.ExitError`). Anything touching `SysProcAttr` adds fields rather than replacing the struct.
+- **`Run` validates `c.UserArgs` only** — never `c.Argv()`. The `credential_helper` method injects a `-c` that the deny-list rejects, so validating the combined argv silently breaks all authentication.
+- **`Masks` must include the base64 credential.** With `auth_method: extraheader` the token reaches argv as `Authorization: Basic <base64(user:token)>`, which decodes in one step. `runOpts` must append `basicAuthValue(username, token)` alongside the raw token, or every logged command carries a usable credential.
+- **`-u` and `-i` are NOT banned args** (verified against git 2.52: `-u` is `--update-head-ok`/`--set-upstream`, `-i` is `grep`'s case-insensitive flag). `--exec` IS banned (push's alias for `--receive-pack`). Do not "restore" the old list.
+- **`RawSubcommandOf` fails closed** — an unrecognised leading flag returns `""`, which the policy treats as denied.
+- **`--end-of-options` before every user value in a positional slot.** Established in Task 8 after finding that `pattern: "--edit-description"` on `branch --list` opens an editor and writes to config — a mutation through a read-only op. `ValidateUserArgs` is a flag deny-list and cannot defend a positional. Values emitted as `--flag=<value>` and paths after `--` are already safe. This applies with more force to Task 9's mutating ops than it did to reads.
+- **`remoteURL` passes `--` before the remote name**, so a remote called `-x` is not parsed as a flag.
+- **`envelope` runs `info.Original` through `StripCredentials`.** A remote configured as `https://user:token@abc.com/org/repo.git` would otherwise put a live credential in every network response, and `RunOpts.Masks` would not catch it — Masks carries the connector's configured token, not one baked into `.git/config`.
+- **`capEnvelopeLines`** (in `connector.go`) caps patch/log line counts post-hoc, because git has no native "stop after N patch lines" flag. `max_lines` was dead code in the plan as written.
+
 **Spec:** [plan.md](plan.md) §4 (operations), §6 (widget).
 
 **API reference — verified signatures, use exactly these:**

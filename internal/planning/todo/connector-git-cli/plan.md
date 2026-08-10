@@ -22,7 +22,7 @@ requests, issues, reviews). No merging, no overlap.
 - [ ] `service.go` — per-op input validation and argument assembly
 - [ ] `connector.go` — Meta, Config, Input structs, `Operations()`
 - [ ] `main.go` — `wickplugin.Serve(Module())` + `--askpass` mode
-- [ ] `policy_preview` config-only op + HTML simulator widget (inline styles, CSS vars)
+- [ ] `policyui.go` — `policy_manager` / `policy_simulate` / `policy_rule_save` config-only ops + widget (inline styles, CSS vars)
 - [ ] `docs/connectors/git.md`
 - [ ] Build check: `wick plugin build git`
 
@@ -117,8 +117,8 @@ type Config struct {
     AllowForcePush    bool   `wick:"bool;group=Branch Policy;desc=Allow --force / --force-with-lease. Default false."`
 
     // ── Per-repo override (layer 2) ──
-    RepoPolicies  string `wick:"kvlist=repo|branch_pattern|protected|force_push;group=Per-Repo Override;desc=Per-repo overrides. repo accepts globs. Most specific wins. Use - to clear an inherited value."`
-    PolicyPreview string `wick:"html=policy_preview;group=Per-Repo Override;desc=Test the rules before relying on them."`
+    RepoPolicies  string `wick:"hidden;desc=Per-repo policy rows, managed by the Policy Rules widget."`
+    PolicyManager string `wick:"html=policy_manager;group=Policy Rules;desc=Edit and test per-repo policy rules."`
 
     // ── Raw operation ──
     RawEnabled bool   `wick:"bool;group=Raw Operation;desc=Enable the raw operation (arbitrary git subcommands). Default false."`
@@ -173,7 +173,7 @@ Two different languages appear in one row — the most common source of mistakes
 | `repo` | glob (`*`) | both the local path **and** `host/owner/repo` |
 | `branch_pattern` | regex (Go RE2) | branch name |
 | `protected` | comma-separated globs | branch name |
-| `force_push` | `true` / `false` / empty / `-` | — |
+| `force_push` | `true` / `false` / empty or `-` (both inherit) | — |
 
 Most specific wins, measured by wildcard count: `*/org/sandbox` (1) beats `*/org/*`
 (2). Ties go to the **stricter** row, and a tie that strictness cannot break falls
@@ -192,7 +192,7 @@ generate a policy later.
 ```
 protected_branches : [{"branch": "<name or glob>"}]
 repo_policies      : [{"repo":"<glob>", "branch_pattern":"<regex or empty>",
-                       "protected":"<csv globs, or - to clear>", "force_push":"true|false|empty|-"}]
+                       "protected":"<csv globs, or - to clear>", "force_push":"true|false|empty (inherit)"}]
 raw_rules          : [{"subcommand":"<git subcommand>", "mode":"allow|deny"}]
 remote_host_map    : [{"ssh_host":"<host>", "https_host":"<host[/path]>"}]
 ```
@@ -271,6 +271,11 @@ raw_enabled = true
 The `deny` rows are redundant (unlisted is already denied) but written on purpose so
 the intent reads clearly to whoever opens this config next.
 
+**`bisect` here illustrates the shape, not a safe default.** `git bisect run <cmd>`
+takes a command by design, so allow-listing `bisect` grants code execution to anyone
+who can call the op — see "What is not contained" in §5. Allow-list it only when you
+actually want that.
+
 ### Scenario 5 — self-hosted, SSH host differs from HTTPS
 
 ```json
@@ -295,7 +300,7 @@ Frequently-used subcommands get typed operations; everything else goes through `
 
 | Key | Input | Notes |
 |---|---|---|
-| `status` | `repo_path` | porcelain v2 parsed into a typed struct |
+| `status` | `repo_path` | returns raw `--porcelain=v2 --branch` output in the standard envelope |
 | `log` | `repo_path`, `ref`, `limit` (default 20), `path`, `since` | `limit` keeps output small before the cap hits |
 | `diff` | `repo_path`, `ref_a`, `ref_b`, `path`, `stat_only`, `max_lines` | `stat_only` returns `--stat` only |
 | `branch_list` | `repo_path`, `remote`, `pattern` | |
@@ -310,7 +315,7 @@ Frequently-used subcommands get typed operations; everything else goes through `
 | `branch_create` | `repo_path`, `name`, `from_ref`, `checkout` | `branch_name_pattern`; name must not be protected |
 | `checkout` | `repo_path`, `ref`, `create` | if `create`, same as `branch_create` |
 | `add` | `repo_path`, `paths` | — |
-| `commit` | `repo_path`, `message`, `all`, `amend` | current branch must not be protected; `amend` needs `allow_force_push` |
+| `commit` | `repo_path`, `message`, `all`, `dry_run` | current branch must not be protected |
 | `stash` | `repo_path`, `action` (`push\|pop\|list`), `message` | `drop` is **not** here — see `stash_drop` below |
 | `fetch` | `repo_path`, `remote`, `prune` | network |
 | `pull` | `repo_path`, `remote`, `branch`, `rebase` | network |
@@ -333,11 +338,19 @@ Destructiveness is a property of the **operation**, not of an argument — a fla
 non-destructive op would bypass the per-instance opt-in. That is why `stash_drop` and
 `tag_delete` are separate operations rather than `action=drop` / `delete=true`.
 
+`commit --amend` is **not shipped**, for the same reason. Amending rewrites an
+existing commit, so if that commit was already pushed, publishing the fix needs a
+force push — which makes `amend` a destructive operation wearing an argument's
+clothes. If it is wanted later, it belongs as a separate `commit_amend` op declared
+`OpDestructive`, not as a bool on `commit`.
+
 ### Config-only (`OpConfigOnly`, hidden from the whole MCP surface)
 
 | Key | Purpose |
 |---|---|
-| `policy_preview` | Backs the HTML simulator widget |
+| `policy_manager` | Renders the per-repo rule editor and the simulator form |
+| `policy_simulate` | Evaluates one hypothetical operation and reports the verdict |
+| `policy_rule_save` | Replaces the per-repo rule set from the editor |
 
 `dry_run` on mutating operations evaluates the policy and assembles the command
 without running it, returning the command that *would* run. Useful for the agent to
@@ -371,19 +384,45 @@ means a push landing on the wrong host is visible immediately rather than a myst
 
 ### Credential injection — no disk, three methods
 
-`AuthMethod` picks the mechanism; the fallback order exists because environments
-differ.
+`AuthMethod` **selects exactly one** mechanism — they do not chain. The three exist
+because environments differ, not because one falls back to the next.
 
-1. **`askpass` (default)** — `GIT_ASKPASS=<plugin binary> --askpass`, token passed to
-   the child through env. No new file, token absent from argv (invisible in `ps`), no
-   `-c` needed.
+1. **`askpass` (default)** — `GIT_ASKPASS=<plugin binary>`, token passed to the child
+   through env. No new file, token absent from argv (invisible in `ps`), no `-c`
+   needed.
+
+   **`GIT_ASKPASS` must be a bare path, with no flag.** Git execs the helper
+   directly and cannot carry an argument, so it invokes `<binary> "<prompt>"`. The
+   binary therefore detects askpass mode by shape — exactly one argument that does
+   not start with `-` — not by a `--askpass` flag. Gating on a flag looks right and
+   silently breaks every authenticated operation: the invocation falls through to
+   `wickplugin.Serve`, which exits 1 with "This binary is a plugin. These are not
+   meant to be executed directly." The shape check is deliberately narrow so no
+   current or future `Serve` flag is ever mistaken for a prompt.
+
+   **An unrecognised prompt gets an empty reply, never the token.** Git uses askpass
+   for more than credentials (host-key confirmations, among others), and answering
+   those with a PAT leaks it. Match only `username`, `password`, and the exact
+   phrase `personal access token` — matching the bare word `token` is too broad and
+   would hand a GitHub PAT to a smartcard's `PIN for token:` prompt.
 2. **`credential_helper`** — `-c credential.helper='!f(){ echo password=$WICK_GIT_TOKEN; };f'`.
    Token stays in env, not argv. Needs `-c`, so it goes through `injectedArgs`.
 3. **`extraheader`** — `-c http.extraheader="Authorization: Basic <b64>"`. **The token
    is visible in the process list.** Opt-in only, and the field description says so.
 
+   The token appears **base64-encoded**, which is encoding, not protection:
+   `eC1hY2Nlc3MtdG9rZW46Z2hw…` decodes to `x-access-token:ghp_…` in one step. So the
+   masking list must contain **both** the raw token and `basicAuthValue(user, token)`.
+   Masking only the raw token would leave a fully usable credential in every logged
+   command and in `connector_runs`.
+
 The `-c` deny-list in §5.3 applies to **agent-supplied args**, never to the plugin's
 own injections. Same reason the `userArgs` / `injectedArgs` split is structural.
+
+Concretely: the runner must call `ValidateUserArgs(cmd.UserArgs)`, **never**
+`ValidateUserArgs(cmd.Argv())`. The second form compiles, passes a casual read, and
+silently breaks all authentication — `credential_helper` injects `-c`, which the
+deny-list rejects. Worth an explicit test rather than a comment.
 
 ### Remote handling — override per execution, never rewrite `.git/config`
 
@@ -434,18 +473,102 @@ shell, and `git commit` in a repo with `.git/hooks/pre-commit` runs that repo's
 script. So the guards sit on **args and env**:
 
 - **Agent args are rejected** if they contain `-c`, `--config-env`, `--exec-path`,
-  `--upload-pack`, `--receive-pack`, `-u`, or `--ext::`.
+  `--upload-pack`, `--receive-pack`, `--exec` (push's alias for `--receive-pack`),
+  `--interactive`, `--output`, or `ext::`.
+
+  `-u` and `-i` are deliberately **not** banned. Verified against git 2.52: `-u` is
+  not a short form of `--upload-pack` anywhere — in `fetch` it is
+  `--update-head-ok`, in `push` it is `--set-upstream`, and `ls-remote` has no `-u`.
+  `-i` means `--interactive` only in `add`/`rebase`; in `grep` it is
+  case-insensitive matching. Banning either blocked idiomatic git without closing
+  anything, since the dangerous long forms are banned on their own.
 - **Env is an explicit allowlist** (`PATH`, `HOME`, askpass vars,
   `GIT_TERMINAL_PROMPT=0`), not a full inherit. `GIT_CONFIG_*`, `GIT_SSH_COMMAND`,
   `GIT_PROXY_COMMAND`, `GIT_EXTERNAL_DIFF` are never forwarded from any source.
+  On Windows the list must also carry `HOMEDRIVE`/`HOMEPATH` (git resolves `~` from
+  them when `HOME` is unset), `LOCALAPPDATA`/`APPDATA`/`ProgramData` (Git for
+  Windows keeps system config and the CA bundle there), and `COMSPEC`/`PATHEXT`.
+  A missing name is an empty value, not a fallback — omissions surface as obscure
+  auth or TLS failures.
+- **Every process spawn goes through `pkg/safeexec`**, never `os/exec` directly:
+  `safeexec.Command` / `safeexec.LookPath`. Go's own `LookPath` calls
+  `faccessat2(2)`, which Android/Termux seccomp kills with SIGSYS on kernels before
+  5.8, and `safeexec` also carries the Windows `.bat`/`.cmd` quoting fix. Anything
+  setting `SysProcAttr` must **add** fields (`if nil { new }`, then assign) rather
+  than replace the struct, or it silently drops the `CmdLine` safeexec set.
 - **`core.hooksPath` is forced to an empty directory** for hook-running operations
-  (`commit`, `merge`, `push`, `checkout`) unless `allow_hooks` is true (default false).
+  (`commit`, `merge`, `push`, `checkout`, `rebase`) unless `allow_hooks` is true
+  (default false).
 - **`GIT_TERMINAL_PROMPT=0`** plus `GIT_ASKPASS` always set, so git never blocks on an
   interactive prompt and never falls back to the machine's credential manager.
 - **`repo_path` must contain `.git`** and must not be a bare `$HOME`, so operations
   cannot run in an arbitrary directory by accident.
-- **`-i` / `--interactive` are rejected** on every operation — an editor-opening git
-  process would hang until timeout.
+- **`--interactive` is rejected** on every operation — an editor-opening git process
+  would hang until the timeout. The typed `rebase` op never passes it, and in raw
+  mode `rebase` must additionally be allow-listed.
+- **Every user value placed in a positional slot is preceded by `--end-of-options`.**
+  This is not optional polish. `ValidateUserArgs` is a deny-list of known-dangerous
+  *flags*; it cannot defend a positional slot, because it has no way to know which
+  arguments are meant to be data. Without the terminator, a `ref` or `pattern` input
+  simply becomes a flag:
+
+  | Input | Becomes | Effect |
+  |---|---|---|
+  | `pattern: --edit-description` on `branch --list` | a real flag | opens an editor **and writes to config** — a mutation from a "read-only" op |
+  | `ref_a: --cached` on `diff` | a real flag | silently diffs the index instead of the working tree |
+  | `ref: --all` on `show` | a real flag | dumps the entire object graph |
+  | `ref: -n 99999` on `log` | real flags | ignores the `limit` the op advertises |
+  | `ref: --hard` on a **soft** `reset` | a real flag | **destroys the working tree, exit code 0** |
+
+  That last row is the one that matters most. Verified against git 2.52: `git reset
+  --soft --hard HEAD~1` prints `HEAD is now at …`, exits **0**, and deletes
+  uncommitted work — the later flag simply wins, with no warning. Since `mode:
+  "soft"` does not require `allow_force_push`, an unguarded `reset` let a crafted
+  `ref` destroy a working tree while the policy returned `allow`. With the
+  terminator git refuses: `fatal: option '--hard' must come before non-option
+  arguments`.
+
+  Verified against git 2.52: with `--end-of-options`, `branch --list
+  --end-of-options --edit-description` is treated as a literal glob, and `diff
+  --end-of-options --cached` is refused outright.
+
+  Two input shapes are already safe and need no terminator: values emitted as
+  `--flag=<value>` (cannot split into a new token — `--since=--all` parses as a
+  nonsense date, not a flag), and paths placed after `--` (git's pathspec
+  terminator). Numeric inputs go through `c.InputInt`, so a non-numeric value
+  becomes `0` and falls back to the default.
+
+  **Two subcommands reject the terminator** and need different handling — do not
+  "fix" these back:
+
+  - `checkout -b` consumes `--end-of-options` *as the branch name*. The terminator
+    goes at the end of argv instead; `-b` binds its own value anyway, so
+    `checkout -b --orphan` already fails with "not a valid branch name".
+  - `tag -a NAME -m MSG` with a terminator is `fatal: too many arguments`. Since
+    `-m` alone already implies an annotated tag, `-a` is dropped and the order
+    becomes `tag -m MSG --end-of-options NAME`.
+
+  Also needing no terminator because the flag binds its value: `commit -m`,
+  `stash push -m`, `clone --branch`, and `add` (paths after `--`).
+
+### What is not contained — stated plainly
+
+Two surfaces are gated but not sealed. Both follow from the deliberate "no path
+allowlist" decision, and both are worth knowing before enabling them.
+
+**`raw` cannot be fully contained.** It receives no `--end-of-options` because
+passing flags through is its entire purpose. Its defences are real — off by default,
+per-subcommand allow list where unlisted means denied, `RawSubcommandOf` failing
+closed, the flag deny-list, the env allowlist, hook suppression, destructive opt-in
+— but a deny-list is a blocklist, not a proof. An admin who allow-lists a
+subcommand that takes a command by design (`git bisect run <cmd>` is the clearest
+example) has granted code execution. `raw` is an admin escape hatch: correctly
+gated, not sandboxed.
+
+**`clone` can write anywhere the wick process can.** `dest` is an unrestricted
+absolute path, bounded only by refusing an existing directory and by the
+destructive opt-in. This follows directly from having no path allowlist; it is not
+an oversight.
 
 ### Runtime limits
 
@@ -462,8 +585,9 @@ script. So the guards sit on **args and env**:
 
 ## 6. Policy Simulator widget
 
-`PolicyPreview` renders through `html=policy_preview`, backed by
-`OpConfigOnly("policy_preview", ...)`. Because the widget forwards its own
+`PolicyManager` renders through `html=policy_manager`, backed by
+`OpConfigOnly("policy_manager", ...)` plus `policy_simulate` and
+`policy_rule_save` for its two buttons. Because the widget forwards its own
 `<input name=...>` values to the op, the simulator carries a small form.
 
 ```
@@ -535,6 +659,25 @@ Integration checks against a temp repo (`git init`, a commit, a fake remote) cov
 remote in tests.
 
 ---
+
+## 7a. Why `AllowSessionConfig` stays off
+
+`Module.AllowSessionConfig` is deliberately **not** set, and this is a security
+decision rather than an oversight.
+
+Session config cloning is all-or-nothing per module — there is no per-field
+allowlist. For this connector the config *is* the security policy:
+`allow_force_push`, `protected_branches`, `raw_enabled`, `raw_rules`,
+`repo_policies`, `allow_hooks`. `policyFor` consults nothing else, so there is no
+admin-pinned layer underneath to fall back on. Enabling session config would let
+anyone with session-config access mint an instance with force push allowed, raw
+enabled and the rule list empty — which defeats the whole policy engine.
+
+The genuine use case it would serve is per-session commit identity (attributing
+commits to the requesting human rather than one shared bot). That is better solved
+with optional `author_name` / `author_email` **operation inputs** on `commit`,
+overriding the config default through `injectedArgs`. If session config is ever
+wanted, policy config must first be split away from identity config.
 
 ## 8. Deferred
 
