@@ -6,7 +6,8 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+*   **Intermittent "cached plan must not change result type" errors on Postgres**: Running the server and worker as independent toggles in tray mode could trigger a schema migration while other components were already serving queries on the same database, leaving their connections with a stale plan. Migrations now run once per database (not just once per process) on a dedicated connection, and queries that still hit a stale plan are retried once automatically.
 
 ---
 
