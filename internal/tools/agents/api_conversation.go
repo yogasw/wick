@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	agentsconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/session"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/pkg/tool"
@@ -43,6 +44,12 @@ type SessionMetaDTO struct {
 	// ModelID is the active agent's pinned model id (currently meaningful
 	// for wick only). Empty = that provider's own default model.
 	ModelID string `json:"model_id,omitempty"`
+	// Widget is the already-resolved HTML-artifact CSP policy (global,
+	// with this session's project override applied). The SPA builds the
+	// iframe CSP from it and never resolves anything itself. Always sent,
+	// never omitted: an absent field would leave the SPA guessing, and
+	// the safe guess and the real policy are not always the same.
+	Widget agentsconfig.WidgetPolicy `json:"widget"`
 }
 
 // accessibleSessionIDs returns the subset of ids whose sessions pass the
@@ -190,6 +197,7 @@ func apiSessionMeta(c *tool.Ctx) {
 		TitleCustom: sess.Meta.TitleCustom,
 		CreatedAt:   sess.Meta.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		LastActive:  sess.Meta.LastActive.Format("2006-01-02T15:04:05Z07:00"),
+		Widget:      resolveWidgetPolicy(sess.Meta.ProjectID),
 	}
 	// Resolve provider + pinned model from the active (or first) agent
 	// entry — ActiveAgent above is the agent's own NAME ("main"), not its

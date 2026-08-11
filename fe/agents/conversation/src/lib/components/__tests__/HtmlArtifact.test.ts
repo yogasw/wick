@@ -1,6 +1,7 @@
 import { describe, test, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 import HtmlArtifact from "../HtmlArtifact.svelte";
+import { setWidgetPolicy, BLOCKED_WIDGET_POLICY } from "../../richRender.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -105,5 +106,55 @@ describe("HtmlArtifact", () => {
     expect(screen.getByRole("button", { name: "Close preview" })).toBeTruthy();
     await fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("button", { name: "Close preview" })).toBeNull());
+  });
+});
+
+/* The widget CSP arrives with session meta, which can land after artifacts
+   have already mounted. These pin that the late policy is actually picked up
+   rather than leaving the widget stuck on the blocked fallback. */
+describe("HtmlArtifact — widget CSP policy", () => {
+  afterEach(() => setWidgetPolicy(BLOCKED_WIDGET_POLICY));
+
+  const iframeOf = (c: HTMLElement) => c.querySelector("iframe") as HTMLIFrameElement;
+
+  test("sandbox is allow-scripts only under the default blocked policy", () => {
+    const { container } = render(HtmlArtifact, { props: { src: "<p>hi</p>", name: "x.html" } });
+    expect(iframeOf(container).getAttribute("sandbox")).toBe("allow-scripts");
+  });
+
+  test("sandbox gains allow-popups when the policy permits popups", () => {
+    setWidgetPolicy({ allow_popups: true });
+    const { container } = render(HtmlArtifact, { props: { src: "<p>hi</p>", name: "x.html" } });
+    expect(iframeOf(container).getAttribute("sandbox")).toBe("allow-scripts allow-popups");
+  });
+
+  test("srcdoc carries the CSP of the policy in effect at mount", () => {
+    setWidgetPolicy({ frame_src: "list", allowlist: ["https://maps.google.com"] });
+    const { container } = render(HtmlArtifact, { props: { src: "<p>hi</p>", name: "x.html" } });
+    expect(iframeOf(container).srcdoc).toContain("frame-src https://maps.google.com");
+  });
+
+  test("a policy arriving after mount rebuilds the srcdoc and remounts", async () => {
+    const { container } = render(HtmlArtifact, { props: { src: "<p>hi</p>", name: "x.html" } });
+    expect(iframeOf(container).srcdoc).toContain("frame-src 'none'");
+    const before = iframeOf(container);
+
+    setWidgetPolicy({ frame_src: "list", allow_popups: true, allowlist: ["https://maps.google.com"] });
+
+    await waitFor(() => {
+      const el = iframeOf(container);
+      expect(el.srcdoc).toContain("frame-src https://maps.google.com");
+      // remounted, so the artifact's inline scripts re-run under the new CSP
+      expect(el).not.toBe(before);
+      expect(el.getAttribute("sandbox")).toBe("allow-scripts allow-popups");
+    });
+  });
+
+  test("an identical policy does not remount the iframe", async () => {
+    const { container } = render(HtmlArtifact, { props: { src: "<p>hi</p>", name: "x.html" } });
+    const before = iframeOf(container);
+    setWidgetPolicy({ ...BLOCKED_WIDGET_POLICY });
+    await Promise.resolve();
+    expect(iframeOf(container)).toBe(before);
   });
 });

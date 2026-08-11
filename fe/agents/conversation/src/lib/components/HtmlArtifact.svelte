@@ -7,7 +7,13 @@
      Full screen / Show code / Download. Self-contained fullscreen so it works
      the same whether mounted in the Svelte tree or via mount() from richRender. */
   import { KebabMenu } from "@wick-fe/common-ui";
-  import { buildAutoHeightSrcdoc, getFileContext } from "../richRender.js";
+  import {
+    buildAutoHeightSrcdoc,
+    getFileContext,
+    artifactSandbox,
+    getWidgetPolicy,
+    onWidgetPolicyChange,
+  } from "../richRender.js";
   import { safeReadPath } from "../artifactPath.js";
 
   type Props = {
@@ -44,6 +50,13 @@
   let fsFrameEl = $state<HTMLIFrameElement | null>(null);
 
   const MAX_HEIGHT = 2400;
+
+  // The sandbox attribute and the CSP inside the srcdoc must always come from
+  // the same policy, so both are derived from this one piece of state. It
+  // starts at whatever the policy is now (usually the blocked fallback) and is
+  // updated by the subscription below when session meta lands.
+  let policy = $state(getWidgetPolicy());
+  const sandbox = $derived(artifactSandbox(policy));
 
   function applyRaw(next: string) {
     if (next === raw) return;
@@ -212,6 +225,20 @@
     return () => window.removeEventListener("message", onMsg);
   });
 
+  // Session meta carries the resolved widget CSP and can arrive after this
+  // artifact has already mounted under the blocked fallback. The policy is
+  // baked into the srcdoc, so picking up a new one means rebuilding the
+  // document and remounting the iframe — reloadKey does the latter, exactly as
+  // it does for Reload.
+  $effect(() => {
+    return onWidgetPolicyChange((next) => {
+      policy = next;
+      if (raw === null) return;
+      srcdoc = buildAutoHeightSrcdoc(raw, id, next);
+      reloadKey++;
+    });
+  });
+
   // While the inline block streams, renderLive keeps THIS mounted node and
   // rewrites the host's data-html-src each token. Observe it so the preview
   // grows with the source instead of staying at the first partial.
@@ -286,7 +313,7 @@
       <iframe
         bind:this={frameEl}
         {srcdoc}
-        sandbox="allow-scripts"
+        {sandbox}
         referrerpolicy="no-referrer"
         scrolling="no"
         title={name}
@@ -312,7 +339,7 @@
     <iframe
       bind:this={fsFrameEl}
       srcdoc={raw !== null ? buildAutoHeightSrcdoc(raw, `${id}-fs`) : ""}
-      sandbox="allow-scripts"
+      {sandbox}
       referrerpolicy="no-referrer"
       title={name}
       class="m-4 flex-1 w-full rounded-lg"

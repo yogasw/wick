@@ -54,6 +54,12 @@ type Meta struct {
 	OwnerUserID    string    `json:"owner_user_id,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
+
+	// Widget is this project's HTML-artifact CSP override. Zero value
+	// (Override false) means "inherit the global policy", which is what
+	// every meta.json written before this field decodes to — so no
+	// migration is needed. Resolve it with config.Resolve.
+	Widget config.WidgetPolicy `json:"widget,omitempty"`
 }
 
 // Project is the in-memory view: meta only (no session list — that lives
@@ -75,6 +81,7 @@ type CreateOptions struct {
 	Defaults    Defaults
 	Tags        []string
 	OwnerUserID string
+	Widget      config.WidgetPolicy
 }
 
 // Create materialises the on-disk project entry.
@@ -120,6 +127,7 @@ func Create(layout config.Layout, opt CreateOptions) (Project, error) {
 		Defaults:    opt.Defaults,
 		Tags:        opt.Tags,
 		OwnerUserID: opt.OwnerUserID,
+		Widget:      opt.Widget,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -135,6 +143,14 @@ func Create(layout config.Layout, opt CreateOptions) (Project, error) {
 		}
 	}
 	return Project{Meta: meta}, nil
+}
+
+// ResolveWidget returns the effective widget CSP policy for this
+// project: the global policy when the project does not override it,
+// otherwise the project's own modes with its allowlist appended to the
+// global one. See config.Resolve for the exact semantics.
+func (p Project) ResolveWidget(global config.GeneralConfig) config.WidgetPolicy {
+	return config.Resolve(config.GlobalWidgetPolicy(global), p.Meta.Widget)
 }
 
 // Load reads projects/<id>/meta.json.
