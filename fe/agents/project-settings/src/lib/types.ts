@@ -10,6 +10,29 @@ export interface PinnedSession {
 import type { ProviderListItem } from "@wick-fe/common-api";
 export type { ProviderListItem, ProviderModelItem } from "@wick-fe/common-api";
 
+/** Tri-state for one configurable widget CSP directive. */
+export type WidgetMode = "block" | "list" | "all";
+
+/** The preset that decides the whole posture: secure seals everything,
+    unsecure opens everything, and only custom reads the fields below. */
+export type WidgetPreset = "secure" | "unsecure" | "custom";
+
+/** A project's stored widget CSP override. `override: false` means the
+    project inherits the global policy and every other field is ignored;
+    `mode` then overrides the per-directive fields unless it is "custom". */
+export interface WidgetPolicy {
+  override?: boolean;
+  mode?: string;
+  frame_src?: string;
+  img_src?: string;
+  media_src?: string;
+  connect_src?: string;
+  /** External scripts only — the widget's own inline scripts always run. */
+  script_src?: string;
+  allow_popups?: boolean;
+  allowlist?: string[];
+}
+
 export interface ProjectSettingsData {
   id: string;
   name: string;
@@ -33,6 +56,11 @@ export interface ProjectSettingsData {
   pinned: PinnedSession[];
   meta_json: string;
   action: string;
+  /** This project's own widget CSP override (not the resolved policy). */
+  widget?: WidgetPolicy;
+  /** The global policy this project falls back to. Shown read-only so the
+      operator can see what the project's hosts are appended TO. */
+  widget_inherited?: WidgetPolicy;
 }
 
 export interface UpdateProjectRequest {
@@ -47,4 +75,18 @@ export interface UpdateProjectRequest {
       instance's registry, so the server drops it when provider is empty. */
   model: string;
   system_addon: string;
+  /** Widget CSP override. The allowlist travels as the raw textarea text so
+      the server can name the offending line back to the operator. Omitted
+      entirely leaves the stored override untouched. */
+  widget?: {
+    override: boolean;
+    mode: string;
+    frame_src: string;
+    img_src: string;
+    media_src: string;
+    connect_src: string;
+    script_src: string;
+    allow_popups: boolean;
+    allowlist: string;
+  };
 }

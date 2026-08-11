@@ -25,6 +25,34 @@ export type AskAnswer =
   | { id: string; text: string }
   | { id: string; values: Record<string, string> };
 
+/** Tri-state for one configurable widget CSP directive. Mirrors
+    config.Mode* in Go: block = 'none', list = the allowlist, all = any
+    HTTPS host. An unknown value is treated as block. */
+export type WidgetMode = "block" | "list" | "all";
+
+/** The preset that decides the whole posture. Mirrors config.Preset* in
+    Go: secure seals everything, unsecure opens everything, and only custom
+    reads the per-directive fields. */
+export type WidgetPreset = "secure" | "unsecure" | "custom";
+
+/** HTML-artifact CSP policy as resolved by the backend. Directive fields
+    are plain strings rather than WidgetMode because the wire value is
+    operator-supplied and may be anything; the renderer narrows it.
+
+    On a RESOLVED policy the preset has already been expanded, so every
+    directive field states its real mode and `mode` is informational. */
+export type WidgetPolicy = {
+  mode?: string;
+  frame_src?: string;
+  img_src?: string;
+  media_src?: string;
+  connect_src?: string;
+  /** External scripts only — the widget's own inline scripts always run. */
+  script_src?: string;
+  allow_popups?: boolean;
+  allowlist?: string[];
+};
+
 export type SessionListItem = {
   id: string;
   label: string;
@@ -51,6 +79,10 @@ export type SessionMeta = {
   provider?: string;
   /** Pinned model id on the active agent (wick only, currently). */
   model_id?: string;
+  /** Resolved HTML-artifact CSP policy (global + this session's project
+      override, already merged server-side). Absent on an older backend, in
+      which case the SPA falls back to the fully-blocked policy. */
+  widget?: WidgetPolicy;
 };
 
 export type TurnEvent = {

@@ -26,6 +26,20 @@ type GeneralConfig struct {
 	TraceEventMaxKB           int    `wick:"number;group=Tracing;desc=Hard cap in KB for a single trace event payload file. Payloads exceeding this are truncated before write. 0 = no cap. Default: 512."`
 	AdminSeeAll               bool   `wick:"bool;group=Access|Visibility scope for admins.;desc=When on, admins see every project and every session (legacy behaviour). When off (default), admins are scoped like regular users: only projects granted via tags plus their own unscoped sessions. Ownerless sessions (no creator) are hidden from everyone while off."`
 
+	// HTML-artifact widget CSP. Artifacts are model-authored, so the
+	// default posture is fully sealed. WidgetMode is the ONE knob that
+	// decides the posture; every field after it is read only when the mode
+	// is "custom". See widget.go. Projects may override the whole lot at
+	// /manager/agents/projects.
+	WidgetMode        string `wick:"dropdown=secure|unsecure|custom;group=Widget|How much HTML widgets are allowed to do. Widget HTML is written by the agent, so 'secure' is the default and the safe choice. This one setting decides everything — the fields below it apply only when you pick 'custom'.;desc=secure = sealed off: no embeds, no external images, media, scripts, or network calls, and links cannot open a tab (default). unsecure = everything allowed, including scripts loaded from any host — such a script can read whatever the widget holds and send it anywhere, so use it only for projects you trust. custom = choose each one yourself below."`
+	WidgetFrameSrc    string `wick:"dropdown=block|list|all;group=Widget;desc=CUSTOM ONLY. Nested iframes inside a widget (Google Maps, YouTube embeds). block = no embeds at all."`
+	WidgetImgSrc      string `wick:"dropdown=block|list|all;group=Widget;desc=CUSTOM ONLY. External images. Inline data: images always work regardless of this setting."`
+	WidgetMediaSrc    string `wick:"dropdown=block|list|all;group=Widget;desc=CUSTOM ONLY. External audio and video. Inline data: media always works regardless of this setting."`
+	WidgetConnectSrc  string `wick:"dropdown=block|list|all;group=Widget;desc=CUSTOM ONLY. fetch, XHR, and WebSocket from inside a widget. Anything permitted here can also send data out to that host."`
+	WidgetScriptSrc   string `wick:"dropdown=block|list|all;group=Widget;desc=CUSTOM ONLY. Scripts loaded from another host. A permitted script runs inside the widget and can read everything the widget holds, so pair it with a narrow allowlist. The widget's own inline scripts always run either way."`
+	WidgetAllowPopups bool   `wick:"bool;group=Widget;desc=CUSTOM ONLY. Let widget links open a new tab (target=_blank and window.open). A new tab is not covered by this policy, so it can reach any host regardless of the allowlist."`
+	WidgetAllowlist   string `wick:"textarea;group=Widget;desc=CUSTOM ONLY. Hosts the 'list' settings above may reach — one per line, e.g. maps.google.com or *.example.com. https:// is assumed; plaintext http:// and paths are rejected. Projects append their own hosts to this list."`
+
 	// Sub-agent governor. These are SYSTEM-WIDE CEILINGS, not per-role
 	// defaults: an agent profile can lower them but never raise them.
 	// Role-level settings (provider, model, prompt, tool tags) live on
@@ -83,6 +97,20 @@ func DefaultGeneralConfig() GeneralConfig {
 		TraceEventInlineKB: 10,
 		TraceEventMaxKB:    512,
 		AirouterEnabled:    true,
+		// Widget CSP ships sealed — identical to the hardcoded policy that
+		// preceded this config, so a fresh install and an upgraded one behave
+		// the same. Seeded explicitly (rather than left empty) so the
+		// dropdowns render with a selected value; an empty or unknown value
+		// still resolves to secure/block, so a cleared row fails closed
+		// either way. The per-directive seeds matter only if the operator
+		// later switches the mode to custom.
+		WidgetMode:        PresetSecure,
+		WidgetFrameSrc:    ModeBlock,
+		WidgetImgSrc:      ModeBlock,
+		WidgetMediaSrc:    ModeBlock,
+		WidgetConnectSrc:  ModeBlock,
+		WidgetScriptSrc:   ModeBlock,
+		WidgetAllowPopups: false,
 		// Sub-agents ship OFF: delegation spawns real processes and spends
 		// real tokens, so it is opt-in rather than something a fresh
 		// install discovers by surprise. The ceilings below apply the

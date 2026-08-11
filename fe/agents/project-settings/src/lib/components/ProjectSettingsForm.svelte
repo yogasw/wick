@@ -9,7 +9,8 @@
     unpinSession,
     getProviderOptionModels,
   } from "$lib/api.js";
-  import type { ProjectSettingsData } from "$lib/types.js";
+  import type { ProjectSettingsData, WidgetPolicy } from "$lib/types.js";
+  import WidgetPolicyEditor from "./WidgetPolicyEditor.svelte";
 
   type Props = { projectID: string; base: string };
   let { projectID, base }: Props = $props();
@@ -27,6 +28,12 @@
   let customPath = $state("");
   let preset = $state("default");
   let systemAddon = $state("");
+
+  // The widget CSP override. The allowlist is held as raw textarea text, not
+  // a parsed array: the server validates it and names the offending line
+  // back, which it can only do if the operator's own text survives the trip.
+  let widget = $state<WidgetPolicy>({});
+  let widgetAllowlistText = $state("");
 
   // Promote a bare provider type ("claude") to its canonical default
   // instance key ("claude/claude"). Mirrors normalizeProviderKey on the
@@ -84,11 +91,53 @@
       const key = normalizeProviderKey(d.default_provider);
       pickerValue = key && d.default_model ? `${key}::${d.default_model}` : key;
       systemAddon = d.system_addon;
+      widget = d.widget ?? {};
+      widgetAllowlistText = (d.widget?.allowlist ?? []).join("\n");
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
     }
+  }
+
+  /* Build the widget override for submit.
+
+     With the override switched off, everything is sent at its zero value
+     rather than at whatever was last typed. Sending stale settings alongside
+     override:false would persist permissions the operator turned off, so
+     switching the override back on later would silently restore ones they
+     believed they had abandoned.
+
+     With the override ON, the per-directive detail is sent even under the
+     secure/unsecure presets. It is inert there — the backend expands the
+     preset and ignores these fields — but persisting it is what lets a
+     Custom setup survive a trip through Secure and back. */
+  function widgetPayload() {
+    if (widget.override !== true) {
+      return {
+        override: false,
+        mode: "secure",
+        frame_src: "block",
+        img_src: "block",
+        media_src: "block",
+        connect_src: "block",
+        script_src: "block",
+        allow_popups: false,
+        allowlist: "",
+      };
+    }
+    const mode = widget.mode === "unsecure" || widget.mode === "custom" ? widget.mode : "secure";
+    return {
+      override: true,
+      mode,
+      frame_src: widget.frame_src || "block",
+      img_src: widget.img_src || "block",
+      media_src: widget.media_src || "block",
+      connect_src: widget.connect_src || "block",
+      script_src: widget.script_src || "block",
+      allow_popups: widget.allow_popups === true,
+      allowlist: widgetAllowlistText,
+    };
   }
 
   async function handleSubmit(e: SubmitEvent) {
@@ -121,6 +170,7 @@
         provider: providerKey,
         model: modelID(),
         system_addon: systemAddon,
+        widget: widgetPayload(),
       });
       toastOk("Project saved");
       await load();
@@ -324,8 +374,16 @@
           </div>
         </div>
 
-        <!-- Right: pinned + meta preview + folder semantics -->
+        <!-- Right: widget policy + pinned + meta preview + folder semantics -->
         <div class="space-y-6">
+          {#if !data.is_new}
+            <WidgetPolicyEditor
+              policy={widget}
+              inherited={data.widget_inherited}
+              allowlistText={widgetAllowlistText}
+              onChange={(next) => { widget = next.policy; widgetAllowlistText = next.allowlistText; }}
+            />
+          {/if}
           {#if !data.is_new}
             <div>
               <h4 class="font-bold text-sm mb-2 text-black-900 dark:text-white-100">📌 Pinned sessions</h4>

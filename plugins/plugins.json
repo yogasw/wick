@@ -28,6 +28,34 @@
     }
   },
   {
+    "key": "git",
+    "name": "Git CLI",
+    "description": "Run git against local repositories, with a policy that can refuse a branch name, a commit message, a push to a protected branch, or a force push. Rules DIFFER PER REPOSITORY. Call policy_show for the repository first and comply with what it returns — every other operation reports a refusal only after the fact, one rule at a time. Wraps the git binary, so it works with any host.",
+    "version": "0.1.0",
+    "default_tags": [
+      {
+        "Name": "Connector",
+        "Description": "LLM-callable connectors that wrap external APIs.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 50
+      },
+      {
+        "Name": "Development",
+        "Description": "Source hosts and developer platforms.",
+        "IsGroup": true,
+        "IsFilter": false,
+        "IsSystem": false,
+        "SortOrder": 52
+      }
+    ],
+    "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/git/v0.1.0/git-0.1.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/git/v0.1.0/git-0.1.0-linux-arm64.zip"
+    }
+  },
+  {
     "key": "github",
     "name": "GitHub",
     "description": "Comprehensive GitHub REST API connector: repos, issues, PRs (incl. diff/merge), releases, tags, forks, stars, file contents/edits, the authenticated user, and a token health check.",

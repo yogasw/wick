@@ -1,6 +1,6 @@
 <script lang="ts">
   import { renderMarkdown } from "../markdown.js";
-  import { buildArtifactSrcdoc } from "../richRender.js";
+  import { buildArtifactSrcdoc, artifactSandbox } from "../richRender.js";
 
   type Item = {
     url: string;
@@ -217,7 +217,7 @@
         {:else if docState.error}
           <div class="text-sm text-red-300">{docState.error}</div>
         {:else if item.kind === "html"}
-          <iframe srcdoc={docState.html} sandbox="allow-scripts" referrerpolicy="no-referrer" title={item.name} class="w-full h-full bg-white-100 rounded-lg" style="border:0"></iframe>
+          <iframe srcdoc={docState.html} sandbox={artifactSandbox()} referrerpolicy="no-referrer" title={item.name} class="w-full h-full bg-white-100 rounded-lg" style="border:0"></iframe>
         {:else}
           <!-- markdown / text: scrollable document panel, full height, chat-readable width -->
           <div data-lightbox-doc class="h-full w-full max-w-3xl overflow-auto rounded-lg bg-white-100 dark:bg-navy-800 p-6">

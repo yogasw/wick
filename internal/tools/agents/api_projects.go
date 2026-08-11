@@ -2,42 +2,119 @@ package agents
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
+	agentsconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
 /* ── DTOs ────────────────────────────────────────────────────────────────── */
 
+// projectWidgetReq is the widget CSP override as the editor submits it.
+// The allowlist arrives as the raw textarea text rather than a []string so
+// the operator's line breaks and typos survive round-tripping into the
+// error message.
+type projectWidgetReq struct {
+	Override bool `json:"override"`
+	// Mode is the preset — the one knob. The per-directive fields below are
+	// stored either way (so a Custom setup survives a trip through Secure)
+	// but are only READ when Mode is custom.
+	Mode        string `json:"mode"`
+	FrameSrc    string `json:"frame_src"`
+	ImgSrc      string `json:"img_src"`
+	MediaSrc    string `json:"media_src"`
+	ConnectSrc  string `json:"connect_src"`
+	ScriptSrc   string `json:"script_src"`
+	AllowPopups bool   `json:"allow_popups"`
+	Allowlist   string `json:"allowlist"`
+}
+
+// toPolicy validates the submitted override and converts it to the stored
+// shape. Every host is normalised here, at the point of entry, so an
+// operator who typed something that cannot work is told immediately rather
+// than discovering later that a widget still cannot reach the host they
+// thought they had allowed.
+//
+// A directive mode that is not one of block/list/all is rejected outright
+// rather than coerced: coercing an unrecognised value would silently
+// tighten or loosen the policy behind the operator's back.
+func (r projectWidgetReq) toPolicy() (agentsconfig.WidgetPolicy, error) {
+	out := agentsconfig.WidgetPolicy{
+		Override:    r.Override,
+		Mode:        r.Mode,
+		FrameSrc:    r.FrameSrc,
+		ImgSrc:      r.ImgSrc,
+		MediaSrc:    r.MediaSrc,
+		ConnectSrc:  r.ConnectSrc,
+		ScriptSrc:   r.ScriptSrc,
+		AllowPopups: r.AllowPopups,
+	}
+	switch r.Mode {
+	case "", agentsconfig.PresetSecure, agentsconfig.PresetUnsecure, agentsconfig.PresetCustom:
+	default:
+		return agentsconfig.WidgetPolicy{}, fmt.Errorf("mode: unknown mode %q (want %s, %s, or %s)",
+			r.Mode, agentsconfig.PresetSecure, agentsconfig.PresetUnsecure, agentsconfig.PresetCustom)
+	}
+	// The per-directive values are validated even under a preset that will
+	// ignore them: they are still persisted, and storing a value that would
+	// be rejected the moment the operator switches to Custom is worse than
+	// refusing it now.
+	for name, m := range map[string]string{
+		"frame_src": r.FrameSrc, "img_src": r.ImgSrc, "media_src": r.MediaSrc,
+		"connect_src": r.ConnectSrc, "script_src": r.ScriptSrc,
+	} {
+		switch m {
+		case "", agentsconfig.ModeBlock, agentsconfig.ModeList, agentsconfig.ModeAll:
+		default:
+			return agentsconfig.WidgetPolicy{}, fmt.Errorf("%s: unknown mode %q (want block, list, or all)", name, m)
+		}
+	}
+	hosts, err := agentsconfig.ValidateAllowlist(agentsconfig.ParseAllowlist(r.Allowlist))
+	if err != nil {
+		return agentsconfig.WidgetPolicy{}, err
+	}
+	out.Allowlist = hosts
+	return out, nil
+}
+
 // ProjectSettingsResponse is the envelope for GET /api/projects/{id}.
 type ProjectSettingsResponse struct {
-	ID              string                 `json:"id"`
-	Name            string                 `json:"name"`
-	Icon            string                 `json:"icon"`
-	Description     string                 `json:"description"`
-	CustomPath      string                 `json:"custom_path"`
-	Managed         bool                   `json:"managed"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Icon        string `json:"icon"`
+	Description string `json:"description"`
+	CustomPath  string `json:"custom_path"`
+	Managed     bool   `json:"managed"`
 	// IsProtected reports whether the project cannot be deleted — the
 	// built-in "default" project or an auto-created personal project.
 	// The SPA hides the delete control when true.
-	IsProtected     bool                   `json:"is_protected"`
-	IsNew           bool                   `json:"is_new"`
-	DefaultPreset   string                 `json:"default_preset"`
-	DefaultProvider string                 `json:"default_provider"`
+	IsProtected     bool   `json:"is_protected"`
+	IsNew           bool   `json:"is_new"`
+	DefaultPreset   string `json:"default_preset"`
+	DefaultProvider string `json:"default_provider"`
 	// DefaultModel pins which model on DefaultProvider this project runs,
 	// in that instance's own id space (for wick, down to a live-set leaf).
 	// Only meaningful alongside DefaultProvider.
 	DefaultModel string `json:"default_model"`
 	SystemAddon  string `json:"system_addon"`
-	ChatCount       int                    `json:"chat_count"`
-	CreatedAt       string                 `json:"created_at"`
-	PresetList      []string               `json:"preset_list"`
-	ProviderList    []ProviderListItem     `json:"provider_list"`
-	Pinned          []ProjectPinnedSession `json:"pinned"`
-	MetaJSON        string                 `json:"meta_json"`
-	Action          string                 `json:"action"`
+	// Widget is this project's stored HTML-artifact CSP override — the raw
+	// override, NOT the resolved policy: the editor has to show what the
+	// project itself sets, separately from what it inherits.
+	Widget agentsconfig.WidgetPolicy `json:"widget"`
+	// WidgetInherited is the global policy this project falls back to. The
+	// editor shows it read-only so the operator can see what the project's
+	// own hosts are being appended TO, instead of having to guess.
+	WidgetInherited agentsconfig.WidgetPolicy `json:"widget_inherited"`
+	ChatCount       int                       `json:"chat_count"`
+	CreatedAt       string                    `json:"created_at"`
+	PresetList      []string                  `json:"preset_list"`
+	ProviderList    []ProviderListItem        `json:"provider_list"`
+	Pinned          []ProjectPinnedSession    `json:"pinned"`
+	MetaJSON        string                    `json:"meta_json"`
+	Action          string                    `json:"action"`
 }
 
 // ProviderListItem is one selectable provider instance for the project
@@ -141,6 +218,8 @@ func apiProjectDetail(c *tool.Ctx) {
 		ProviderList:    providerList,
 		Action:          c.Base() + "/projects/" + id,
 		Pinned:          []ProjectPinnedSession{},
+		Widget:          p.Meta.Widget,
+		WidgetInherited: globalWidgetPolicy(),
 	}
 
 	// Chats, not sessions: a sub-agent runs in its leader's project but is
@@ -186,6 +265,11 @@ func apiProjectUpdate(c *tool.Ctx) {
 		Provider    string `json:"provider"`
 		Model       string `json:"model"`
 		SystemAddon string `json:"system_addon"`
+		// Widget carries the project's CSP override. A nil pointer means
+		// "leave it as it is" — distinct from a zero value, which means
+		// "stop overriding and inherit the global policy". Older clients
+		// that never send the field must not silently clear an override.
+		Widget *projectWidgetReq `json:"widget"`
 	}
 	if err := c.BindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
@@ -219,6 +303,17 @@ func apiProjectUpdate(c *tool.Ctx) {
 		customPath = ""
 	}
 	meta.CustomPath = customPath
+
+	// Rejected before anything is persisted: a half-applied security policy
+	// is worse than a refused edit.
+	if req.Widget != nil {
+		w, err := req.Widget.toPolicy()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		meta.Widget = w
+	}
 
 	if _, err := globalMgr.UpdateProject(c.Context(), id, meta); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})

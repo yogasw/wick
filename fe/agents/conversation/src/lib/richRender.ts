@@ -9,6 +9,9 @@ import { mount } from "svelte";
 import { attachToolbar } from "./blockToolbar.js";
 import { renderMarkdown, esc } from "./markdown.js";
 import HtmlArtifact from "./components/HtmlArtifact.svelte";
+import type { WidgetPolicy } from "./types/agents.js";
+
+export type { WidgetMode, WidgetPolicy } from "./types/agents.js";
 
 type MermaidModule = {
   initialize: (config: Record<string, unknown>) => void;
@@ -549,14 +552,139 @@ async function renderMath(node: HTMLElement): Promise<void> {
 
 /* Content-Security-Policy injected into every HTML-artifact iframe. The
    iframe is also sandboxed without allow-same-origin, so it runs in an opaque
-   origin (no access to the parent's cookies/storage/DOM). The CSP then blocks
-   every exfiltration channel: connect-src none (no fetch/XHR/WebSocket),
+   origin (no access to the parent's cookies/storage/DOM). By default the CSP
+   blocks every exfiltration channel: connect-src none (no fetch/XHR/WebSocket),
    form-action none (no submitting a form anywhere), img/font/media data: only
    (no external beacons), script-src inline only (no external scripts), and no
    nested frames or base override. Inline scripts still run, so the artifact
-   stays interactive — it just cannot phone home or read anything outside it. */
-const ARTIFACT_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:; connect-src 'none'; form-action 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'";
+   stays interactive — it just cannot phone home or read anything outside it.
+
+   Four of those directives are configurable per project (see the Widget group
+   in the Agents config): each can stay blocked, be narrowed to an allowlist,
+   or be opened to any HTTPS host. script-src is deliberately NOT configurable
+   — an allowlisted external script is arbitrary code execution inside the
+   widget, which would make every other directive here moot. */
+
+/* The all-blocked policy: what ships by default and what an absent or
+   malformed policy degrades to. Failing closed matters more here than
+   rendering a widget the operator never permitted. */
+export const BLOCKED_WIDGET_POLICY: WidgetPolicy = {
+  mode: "secure",
+  frame_src: "block",
+  img_src: "block",
+  media_src: "block",
+  connect_src: "block",
+  script_src: "block",
+  allow_popups: false,
+  allowlist: [],
+};
+
+/* Widget policy context. Like setFileContext above, enrich() runs as a plain
+   Svelte action with no props, so DetailView sets the resolved policy once per
+   open conversation and the artifact builders read it here. Defaults to
+   fully blocked so any path that forgets to set it stays safe.
+
+   It is also OBSERVABLE, because the policy arrives with session meta and can
+   land after the first artifacts have already mounted. An artifact bakes the
+   CSP into its srcdoc at build time, so a late policy has to tell mounted
+   artifacts to rebuild — otherwise the transcript would either render blocked
+   forever or have to block on the meta request before showing anything. */
+let widgetPolicy: WidgetPolicy = BLOCKED_WIDGET_POLICY;
+const policyListeners = new Set<(p: WidgetPolicy) => void>();
+
+export function setWidgetPolicy(p: WidgetPolicy | null | undefined): void {
+  const next = p ?? BLOCKED_WIDGET_POLICY;
+  if (JSON.stringify(next) === JSON.stringify(widgetPolicy)) return;
+  widgetPolicy = next;
+  for (const fn of policyListeners) {
+    try {
+      fn(widgetPolicy);
+    } catch {
+      /* a listener whose component is mid-teardown must not stop the rest */
+    }
+  }
+}
+
+export function getWidgetPolicy(): WidgetPolicy {
+  return widgetPolicy;
+}
+
+/** Subscribe to widget-policy changes. Returns an unsubscribe function.
+    The listener is NOT called on subscribe — callers already read the current
+    policy synchronously via getWidgetPolicy/artifactCSP. */
+export function onWidgetPolicyChange(fn: (p: WidgetPolicy) => void): () => void {
+  policyListeners.add(fn);
+  return () => policyListeners.delete(fn);
+}
+
+/* A CSP host source: optional leading *. wildcard label, dotted host (or
+   bare localhost), optional port. The backend already validated and
+   normalised the stored list, but this re-checks every entry anyway — the
+   frontend must never be the reason a `;` reaches the header and starts a
+   new directive. */
+const HOST_SOURCE = /^https:\/\/(\*\.)?([a-z0-9-]+\.)*[a-z0-9-]+(:\d{1,5})?$/i;
+
+function safeAllowlist(list: string[] | undefined): string[] {
+  if (!Array.isArray(list)) return [];
+  const out: string[] = [];
+  for (const raw of list) {
+    if (typeof raw !== "string") continue;
+    const host = raw.trim();
+    if (host && HOST_SOURCE.test(host)) out.push(host);
+  }
+  return out;
+}
+
+function mode(v: string | undefined): WidgetMode {
+  return v === "list" || v === "all" ? v : "block";
+}
+
+/* Build one directive's source list.
+   `extra` holds sources kept in EVERY mode — `data:` for img/media, so inline
+   data-URI content keeps working exactly as it did before this was
+   configurable. An empty result means the directive allows nothing. */
+function directive(name: string, m: WidgetMode, hosts: string[], extra: string[] = []): string {
+  let sources: string[];
+  if (m === "all") sources = ["https:", ...extra];
+  else if (m === "list" && hosts.length) sources = [...hosts, ...extra];
+  else sources = extra;
+  return `${name} ${sources.length ? sources.join(" ") : "'none'"}`;
+}
+
+/** Build the artifact CSP for a resolved policy.
+
+    The policy arriving here is already RESOLVED — the backend expanded the
+    secure/unsecure preset into explicit per-directive modes — so this
+    function knows nothing about presets. A resolved secure policy and a
+    hand-built all-blocked one produce the same string. */
+export function artifactCSP(policy: WidgetPolicy = widgetPolicy): string {
+  const hosts = safeAllowlist(policy?.allowlist);
+  return [
+    "default-src 'none'",
+    // 'unsafe-inline' is unconditional: the artifact's OWN inline scripts are
+    // what make it interactive, and the height reporter and the file /
+    // data-table bridges are inline scripts too. This directive only ever
+    // gains external hosts; it never loses inline.
+    directive("script-src", mode(policy?.script_src), hosts, ["'unsafe-inline'"]),
+    "style-src 'unsafe-inline'",
+    directive("img-src", mode(policy?.img_src), hosts, ["data:"]),
+    "font-src data:",
+    directive("media-src", mode(policy?.media_src), hosts, ["data:"]),
+    directive("connect-src", mode(policy?.connect_src), hosts),
+    "form-action 'none'",
+    directive("frame-src", mode(policy?.frame_src), hosts),
+    "object-src 'none'",
+    "base-uri 'none'",
+  ].join("; ");
+}
+
+/** The iframe sandbox attribute for a resolved policy.
+    allow-same-origin is never granted — the opaque origin is what every other
+    guarantee rests on. allow-popups-to-escape-sandbox is never granted either:
+    an escaping popup runs outside this CSP entirely. */
+export function artifactSandbox(policy: WidgetPolicy = widgetPolicy): string {
+  return policy?.allow_popups ? "allow-scripts allow-popups" : "allow-scripts";
+}
 
 /* Theme bridge injected into every artifact iframe so HTML the model writes
    can match the chat's light/dark theme. We expose CSS variables (which the
@@ -573,8 +701,8 @@ function artifactThemeStyle(): string {
   return `<style>:root{color-scheme:${dark ? "dark" : "light"};${vars}}</style>`;
 }
 
-export function buildArtifactSrcdoc(html: string): string {
-  const meta = `<meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}">`;
+export function buildArtifactSrcdoc(html: string, policy?: WidgetPolicy): string {
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${artifactCSP(policy ?? widgetPolicy)}">`;
   // The file bridge MUST go in <head>, before any body script: an artifact's
   // own <script> runs synchronously top-to-bottom, so if it calls
   // window.wickReadFile it has to already exist by then.
@@ -691,8 +819,8 @@ export function artifactDataTableBridge(): string {
    unlike the bridge, the artifact never calls it — it just needs to run after
    the body is laid out. Used by the inline gallery preview that auto-grows to
    content and can pull session files over the postMessage bridge. */
-export function buildAutoHeightSrcdoc(html: string, id: string): string {
-  const doc = buildArtifactSrcdoc(html);
+export function buildAutoHeightSrcdoc(html: string, id: string, policy?: WidgetPolicy): string {
+  const doc = buildArtifactSrcdoc(html, policy);
   const reporter = artifactHeightReporter(id);
   if (/<\/body>/i.test(doc)) return doc.replace(/<\/body>/i, `${reporter}</body>`);
   return doc + reporter;
