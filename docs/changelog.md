@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Agents
+#### Added
+*   **Configurable Content-Security-Policy for HTML widgets**: The CSP applied to HTML artifacts (file artifacts and inline ` ```html ` blocks) is no longer hardcoded. A `Widget` config group (global, under Agents config) sets a `secure` / `unsecure` / `custom` mode — `secure` is the default and byte-identical to the previous fixed policy; `unsecure` opens every directive to HTTPS and enables popups (trusted projects only); `custom` exposes per-directive controls for frames, images, media, network calls, and scripts, plus a popups toggle and a host allowlist. Projects can override the global policy from their settings page; a project's allowlist appends to (never narrows) the global one. See [HTML artifact Content-Security-Policy](/guide/agents#html-artifact-content-security-policy).
 
 ---
 
