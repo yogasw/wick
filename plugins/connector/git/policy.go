@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -36,10 +37,11 @@ type GlobalPolicy struct {
 // state: the pattern and list columns. ForcePush is a boolean with no third
 // state, so "-" there means the same as empty — inherit.
 type RepoRule struct {
-	Repo          string
-	BranchPattern string // regex, or "-" to clear (accept any branch name)
-	Protected     string // comma-separated globs, or "-" to clear (protect nothing)
-	ForcePush     string // "true" | "false" | "" or "-" (both inherit)
+	Repo           string
+	BranchPattern  string // regex, or "-" to clear (accept any branch name)
+	MessagePattern string // regex, or "-" to clear (accept any commit message)
+	Protected      string // comma-separated globs, or "-" to clear (protect nothing)
+	ForcePush      string // "true" | "false" | "" or "-" (both inherit)
 }
 
 // EffectivePolicy is the single compiled policy every operation is judged
@@ -79,25 +81,119 @@ func Specificity(glob string) int {
 }
 
 // MatchRepo reports whether a repo glob matches either the local path or the
-// host/owner/repo slug. Matching both means one rule can be written either way:
-// "*/org/infra" targets a remote, "d:/code/work/*" targets a checkout location.
+// repository's host/owner/name identity.
 //
-// Separators are normalised to "/" and both sides lowercased so Windows paths
-// (d:\code\Work) match a d:/code/* glob written by hand.
+// Matching both means one rule can be written either way: "*/org/infra" targets a
+// remote, "d:/code/work/*" targets a checkout location.
+//
+// The slug side is matched FIELD BY FIELD against a parsed identity, not as one
+// string. Globbing the raw slug made every spelling of the same repository a separate
+// bug: a trailing dot on the hostname ("bitbucket.org./owner/repo" — valid DNS, routes
+// and TLS-verifies normally) compared unequal to the rule, so the repository fell
+// through to the global fallback and every guard stopped applying. Case, ports, double
+// slashes and ".git" had each been fixed one at a time; the dot was simply the variant
+// nobody had thought of.
+//
+// Both sides are normalised through the same parser, so a rule written with a port or a
+// trailing dot works too — the question becomes whether the parser agrees, which has
+// one answer, instead of whether every spelling was anticipated.
 func MatchRepo(glob, repoPath, repoSlug string) bool {
 	if glob == "" {
 		return false
 	}
 	g := strings.ToLower(norm(glob))
-	for _, candidate := range []string{repoPath, repoSlug} {
-		if candidate == "" {
-			continue
-		}
-		if ok, err := path.Match(g, strings.ToLower(norm(candidate))); err == nil && ok {
+
+	// Path side: a path has no structure worth parsing, so it stays a plain glob.
+	if repoPath != "" {
+		if ok, err := path.Match(g, strings.ToLower(norm(repoPath))); err == nil && ok {
 			return true
 		}
 	}
-	return false
+	if repoSlug == "" {
+		return false
+	}
+	return matchSlug(g, repoSlug)
+}
+
+// matchSlug compares a glob against a repository identity, one field at a time.
+//
+// The glob is split on "/" and normalised the same way the slug is, so
+// "BitBucket.org.:443/Org/Repo.git" and "bitbucket.org/org/repo" are the same rule. A
+// two-segment glob matches host/owner and every repository under it, which is how
+// "*/org" is meant to read.
+func matchSlug(glob, slug string) bool {
+	gs := splitSlugPattern(glob)
+	ss := strings.Split(slug, "/")
+	if len(gs) < 2 || len(ss) < 2 {
+		return false
+	}
+	// Host and owner are single segments; a glob's "*" there must not cross a "/".
+	if !segMatch(gs[0], ss[0]) || !segMatch(gs[1], ss[1]) {
+		return false
+	}
+	// An owner-level rule covers everything under it.
+	if len(gs) == 2 {
+		return true
+	}
+	// The name can itself contain "/" (a GitLab subgroup), so the remainder of both
+	// sides is compared as a whole and "*" is allowed to cross separators there.
+	gName := strings.Join(gs[2:], "/")
+	sName := strings.Join(ss[2:], "/")
+	if strings.Contains(gName, "*") {
+		return crossMatch(gName, sName)
+	}
+	return gName == sName
+}
+
+// splitSlugPattern splits a slug-shaped glob into normalised segments. The host
+// segment goes through normHost so a rule written as "bitbucket.org.:443" matches, and
+// a trailing ".git" is dropped so a rule pasted from a clone URL works.
+func splitSlugPattern(glob string) []string {
+	glob = strings.TrimSuffix(strings.Trim(glob, "/"), ".git")
+	segs := make([]string, 0, 4)
+	for _, seg := range strings.Split(glob, "/") {
+		if seg != "" {
+			segs = append(segs, seg)
+		}
+	}
+	if len(segs) > 0 {
+		// Only when it is not itself a wildcard: normHost would strip nothing from "*"
+		// but there is no reason to run it, and a pattern like "*." must stay intact.
+		if !strings.Contains(segs[0], "*") {
+			segs[0] = normHost(segs[0])
+		}
+	}
+	return segs
+}
+
+// segMatch matches one path segment, where "*" does not cross a separator. path.Match
+// already has that property, and a segment contains no separator, so it is exact.
+func segMatch(pattern, value string) bool {
+	ok, err := path.Match(pattern, value)
+	return err == nil && ok
+}
+
+// crossMatch matches a pattern against a value where "*" MAY cross separators, for the
+// repository-name tail. path.Match refuses to let "*" span a "/", which would stop
+// "*/org/*" from covering a subgroup path like "org/team/repo".
+func crossMatch(pattern, value string) bool {
+	parts := strings.Split(pattern, "*")
+	if len(parts) == 1 {
+		return pattern == value
+	}
+	if !strings.HasPrefix(value, parts[0]) {
+		return false
+	}
+	value = value[len(parts[0]):]
+	last := parts[len(parts)-1]
+	for _, mid := range parts[1 : len(parts)-1] {
+		i := strings.Index(value, mid)
+		if i < 0 {
+			return false
+		}
+		value = value[i+len(mid):]
+	}
+	return strings.HasSuffix(value, last) || last == ""
 }
 
 // norm converts Windows separators to forward slashes so one glob syntax works
@@ -113,10 +209,11 @@ func ParseRepoRules(s string) ([]RepoRule, error) {
 	out := make([]RepoRule, 0, len(rows))
 	for _, r := range rows {
 		rule := RepoRule{
-			Repo:          strings.TrimSpace(r["repo"]),
-			BranchPattern: strings.TrimSpace(r["branch_pattern"]),
-			Protected:     strings.TrimSpace(r["protected"]),
-			ForcePush:     strings.TrimSpace(r["force_push"]),
+			Repo:           strings.TrimSpace(r["repo"]),
+			BranchPattern:  strings.TrimSpace(r["branch_pattern"]),
+			MessagePattern: strings.TrimSpace(r["message_pattern"]),
+			Protected:      strings.TrimSpace(r["protected"]),
+			ForcePush:      strings.TrimSpace(r["force_push"]),
 		}
 		if rule.Repo == "" {
 			continue // a row with no repo glob can never match; drop it
@@ -149,6 +246,13 @@ func Resolve(g GlobalPolicy, rules []RepoRule, repoPath, repoSlug string) Effect
 				p.BranchPattern = ""
 			} else {
 				p.BranchPattern = best.BranchPattern
+			}
+		}
+		if best.MessagePattern != "" {
+			if best.MessagePattern == "-" {
+				p.MessagePattern = ""
+			} else {
+				p.MessagePattern = best.MessagePattern
 			}
 		}
 		switch best.Protected {
@@ -185,6 +289,89 @@ func Resolve(g GlobalPolicy, rules []RepoRule, repoPath, repoSlug string) Effect
 		}
 	}
 	return p
+}
+
+// unevaluableStricterRules returns the globs that a missing slug makes unevaluable
+// AND that would have tightened the policy.
+//
+// Used for the warning the operations attach when a repository has no remote (see
+// scopeWarning). It does NOT block: a repository with no remote is a legitimate thing
+// to manage, and a slug-shaped rule usually has nothing to do with it — refusing on
+// that account would deny work the policy never meant to cover. What was actually
+// wrong before was the SILENCE, so this names what could not be evaluated and leaves
+// the decision to the operator.
+//
+// Three conditions, all necessary:
+//
+//  1. The rule does not match the local path. If it already matches, the missing slug
+//     costs nothing — the rule is being evaluated, just by the other candidate.
+//  2. Its shape says it was written against a slug: at least three slash-separated
+//     segments, with a dot or a wildcard in the first, because that segment is a
+//     hostname. A path glob ("d:/code/*") failing to match has nothing to do with the
+//     slug.
+//  3. It is STRICTER than the fallback. A rule that could only have LOOSENED the
+//     policy cannot make a permissive answer wrong, so warning about it would be
+//     noise that trains the reader to ignore the field.
+func unevaluableStricterRules(g GlobalPolicy, rules []RepoRule, repoPath string) []string {
+	var out []string
+	for _, r := range rules {
+		if r.Repo == "" || MatchRepo(r.Repo, repoPath, "") {
+			continue
+		}
+		segs := strings.Split(strings.Trim(norm(r.Repo), "/"), "/")
+		if len(segs) < 3 {
+			continue
+		}
+		host := segs[0]
+		if !strings.Contains(host, ".") && !strings.Contains(host, "*") {
+			continue
+		}
+		if tightensPolicy(g, r) {
+			out = append(out, r.Repo)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// tightensPolicy reports whether a rule would restrict more than the fallback does.
+// Only such a rule turns "could not evaluate" into something worth reporting.
+//
+// Each column is compared against what the fallback already permits. A rule that
+// clears a value ("-") or turns force push ON is a loosening, and is not reported.
+func tightensPolicy(g GlobalPolicy, r RepoRule) bool {
+	// A pattern where the fallback has none is new enforcement. A DIFFERENT pattern
+	// counts too: neither is a subset of the other in general, so it may refuse names
+	// the fallback accepts.
+	if p := r.BranchPattern; p != "" && p != "-" && p != g.BranchPattern {
+		return true
+	}
+	if p := r.MessagePattern; p != "" && p != "-" && p != g.MessagePattern {
+		return true
+	}
+	// A protected list is stricter when it names anything the fallback does not.
+	if r.Protected != "" && r.Protected != "-" {
+		for _, b := range splitCSV(r.Protected) {
+			if !containsFold(g.Protected, b) {
+				return true
+			}
+		}
+	}
+	// Denying force push where the fallback allows it is stricter; allowing it where
+	// the fallback denies is a loosening.
+	if r.ForcePush == "false" && g.AllowForcePush {
+		return true
+	}
+	return false
+}
+
+func containsFold(list []string, want string) bool {
+	for _, v := range list {
+		if strings.EqualFold(strings.TrimSpace(v), strings.TrimSpace(want)) {
+			return true
+		}
+	}
+	return false
 }
 
 // bestRule picks the winning layer-2 rule: fewest wildcards, then stricter.
@@ -294,7 +481,10 @@ func (p EffectivePolicy) Evaluate(r Request) Verdict {
 	// happens to carry Force would otherwise be denied as a force push.
 	if mutatingOps[r.Op] {
 		if r.Force && !p.AllowForcePush {
-			return deny("force push is not allowed by this policy (allow_force_push is off)")
+			// Name the operation being refused, not the one the config is named after.
+			// "force push is not allowed" in answer to a reset mentions a push that is not
+			// happening, which reads as the connector having misunderstood the request.
+			return deny(forceDenyReason(r.Op))
 		}
 		if IsProtected(p, r.Branch) {
 			return deny(fmt.Sprintf("branch %q is protected; direct %s is blocked", r.Branch, r.Op))
@@ -367,4 +557,47 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// forceDenyReason names the operation actually being refused.
+//
+// allow_force_push gates two different things — a force push and a hard reset — so a
+// single message written from the config's name misdescribed one of them. Answering a
+// "reset --hard" with "force push is not allowed" mentions an operation that is not
+// happening, and the natural reading is that the connector misunderstood the request
+// rather than that a policy applied.
+//
+// The config key is still named after the push, and is still cited, because that is
+// what an operator has to go and change. Renaming it to something like
+// allow_history_rewrite would describe both halves better, but the key is stored per
+// instance and a rename would silently reset every configured value to false — a
+// permissive-to-restrictive flip that would look like the connector had broken.
+func forceDenyReason(op string) string {
+	what := "force push"
+	if op == "reset" {
+		what = "hard reset"
+	}
+	return what + " is not allowed by this policy (allow_force_push is off, which gates " +
+		"both force push and hard reset)"
+}
+
+// scopeWarning describes a policy that was resolved without a repository slug, or ""
+// when there is nothing worth saying.
+//
+// This is the reportable half of the "repo with no remote" hole. Resolution falls back
+// to the global policy, which may be far more permissive than the per-repo rules an
+// operator wrote — and the original complaint was not that this happens, it is that it
+// happened silently. Every operation attaches this to its response, so a permissive
+// verdict arrives with the reason it might be wrong.
+func scopeWarning(g GlobalPolicy, rules []RepoRule, repoPath, repoSlug string) string {
+	if repoSlug != "" {
+		return ""
+	}
+	globs := unevaluableStricterRules(g, rules, repoPath)
+	if len(globs) == 0 {
+		return ""
+	}
+	return "this repository has no readable remote, so host/owner/repo is unknown and " +
+		"these stricter rules could not be evaluated: " + strings.Join(globs, ", ") +
+		". The global fallback was used instead, which may be more permissive"
 }
