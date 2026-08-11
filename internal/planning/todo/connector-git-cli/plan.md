@@ -111,14 +111,21 @@ type Config struct {
     ConvertSSHRemoteToHTTPS bool   `wick:"bool;group=Remote;desc=Rewrite SSH remotes to HTTPS for network operations. Default true."`
     RemoteHostMap           string `wick:"kvlist=ssh_host|https_host;group=Remote;desc=Map SSH hosts to HTTPS hosts for self-hosted servers. Leave empty for GitHub/GitLab/Bitbucket."`
 
-    // ── Branch policy (layer 1: global) ──
-    BranchNamePattern string `wick:"group=Branch Policy;desc=Regex a new branch name must match. Example: ^(fix|feat|chore)/[a-z0-9._-]+$"`
-    ProtectedBranches string `wick:"kvlist=branch;group=Branch Policy;desc=Protected branches. Direct push is blocked. Globs allowed: release/*"`
-    AllowForcePush    bool   `wick:"bool;group=Branch Policy;desc=Allow --force / --force-with-lease. Default false."`
+    // ── Policy ──
+    //
+    // One group, not two. Global rules and per-repo overrides are the same decision
+    // at different scopes — global is the fallback, per-repo wins — and splitting them
+    // into separate cards hid that relationship. The group is named "Policy" rather
+    // than "Branch Policy" because it already covers more than branches (commit
+    // messages) and is where any future rule belongs.
+    BranchNamePattern    string `wick:"group=Policy;desc=Regex a NEW branch name must match. Example: ^(fix|feat|chore)/[a-z0-9._-]+$"`
+    ProtectedBranches    string `wick:"kvlist=branch;group=Policy;desc=Protected branches. Direct push is blocked. Globs allowed: release/*"`
+    AllowForcePush       bool   `wick:"bool;group=Policy;desc=Allow --force / --force-with-lease. Default false."`
+    CommitMessagePattern string `wick:"group=Policy;desc=Regex a commit message must match. Empty accepts any message."`
 
-    // ── Per-repo override (layer 2) ──
-    RepoPolicies  string `wick:"hidden;desc=Per-repo policy rows, managed by the Policy Rules widget."`
-    PolicyManager string `wick:"html=policy_manager;group=Policy Rules;desc=Edit and test per-repo policy rules."`
+    // Per-repo overrides, in the same group, below the globals they override.
+    RepoPolicies  string `wick:"hidden;desc=Per-repo policy rows, managed by the Policy widget."`
+    PolicyManager string `wick:"html=policy_manager;group=Policy;desc=Edit and test per-repo policy rules."`
 
     // ── Raw operation ──
     RawEnabled bool   `wick:"bool;group=Raw Operation;desc=Enable the raw operation (arbitrary git subcommands). Default false."`
@@ -189,6 +196,20 @@ generate a policy later.
 
 ### Shape contract
 
+Every field below lives in the **Policy** group (renamed from "Branch Policy" once it
+grew past branches — it now also covers commit messages, and is the place any future
+rule belongs).
+
+Plain string fields, one value each:
+
+```
+branch_name_pattern     <regex>   a NEW branch name must match this
+commit_message_pattern  <regex>   a commit message must match this
+allow_force_push        <bool>    --force / --force-with-lease
+```
+
+List fields, stored as a JSON array of string-keyed objects:
+
 ```
 protected_branches : [{"branch": "<name or glob>"}]
 repo_policies      : [{"repo":"<glob>", "branch_pattern":"<regex or empty>",
@@ -199,11 +220,26 @@ remote_host_map    : [{"ssh_host":"<host>", "https_host":"<host[/path]>"}]
 
 Non-negotiable facts a generator must know:
 
-- `branch_pattern` is a **regex**; `repo` and `protected` are **globs**. Different
-  languages on the same row.
+- `branch_pattern` and `commit_message_pattern` are **regexes** (Go RE2, no
+  lookahead); `repo` and `protected` are **globs**. Different languages, sometimes on
+  the same row.
 - Empty column = inherit. `-` = clear the inheritance.
 - Unlisted `raw` subcommand = denied.
 - Specificity by wildcard count; ties → stricter.
+- **Which rule gates which operation** — getting this wrong produces a policy that
+  looks strict and blocks nothing, or one that blocks work nobody meant to stop:
+
+  | Rule | Applies to | Does NOT apply to |
+  |---|---|---|
+  | `branch_name_pattern` | creating a branch (`branch_create`, `checkout` with create) | pushing to a branch that already exists |
+  | `protected_branches` | `push`, `commit`, `merge`, `pull` on that branch | reading it (`log`, `diff`, `show`) |
+  | `commit_message_pattern` | `commit` only | `push` — it carries no message of its own |
+  | `allow_force_push` | `push --force`, `reset --hard` | anything non-destructive |
+
+  The branch pattern deliberately stops at creation: if it also gated pushes, nobody
+  could push to any pre-existing branch whose name predates the pattern.
+- A regex that does not compile **blocks every mutation** and leaves reads working,
+  rather than being ignored. Silence would be the dangerous reading.
 
 ### Scenario 1 — standard team: feature branches required, master/main closed
 
@@ -248,7 +284,27 @@ Elsewhere `fix/x` still passes (global). In `org/infra` only `ops/*` passes, and
 `"protected":"-"` — with `""` the sandbox row would inherit the global protected list
 and "free sandbox" would not actually be free.
 
-### Scenario 4 — raw opened for read-only subcommands
+### Scenario 4 — Conventional Commits enforced
+
+```
+commit_message_pattern = ^(feat|fix|chore|docs|refactor|test|perf)(\([a-z0-9-]+\))?!?: .{1,72}$
+```
+
+Accepts `fix: stop the login timeout`, `feat(auth): add SSO`, `chore!: drop node 18`.
+Rejects `wip`, `updates`, `Fix login` (capital F is not in the type list), and a
+subject longer than 72 characters.
+
+Two things to get right, both easy to miss:
+
+- The rule fires on `commit` only. A `push` carries no message of its own, so
+  refusing one there would reject the commit that already happened.
+- An **empty** message is left to git, which refuses it with its own clearer error.
+  The pattern is not consulted.
+
+Test it in the panel before relying on it: enter a message in *Commit message* and
+the report says accepted or names the pattern it failed.
+
+### Scenario 5 — raw opened for read-only subcommands
 
 ```
 raw_enabled = true
@@ -276,7 +332,7 @@ takes a command by design, so allow-listing `bisect` grants code execution to an
 who can call the op — see "What is not contained" in §5. Allow-list it only when you
 actually want that.
 
-### Scenario 5 — self-hosted, SSH host differs from HTTPS
+### Scenario 6 — self-hosted, SSH host differs from HTTPS
 
 ```json
 // remote_host_map
@@ -315,7 +371,7 @@ Frequently-used subcommands get typed operations; everything else goes through `
 | `branch_create` | `repo_path`, `name`, `from_ref`, `checkout` | `branch_name_pattern`; name must not be protected |
 | `checkout` | `repo_path`, `ref`, `create` | if `create`, same as `branch_create` |
 | `add` | `repo_path`, `paths` | — |
-| `commit` | `repo_path`, `message`, `all`, `dry_run` | current branch must not be protected |
+| `commit` | `repo_path`, `message`, `all`, `dry_run` | current branch must not be protected; `message` must match `commit_message_pattern` when one is set |
 | `stash` | `repo_path`, `action` (`push\|pop\|list`), `message` | `drop` is **not** here — see `stash_drop` below |
 | `fetch` | `repo_path`, `remote`, `prune` | network |
 | `pull` | `repo_path`, `remote`, `branch`, `rebase` | network |

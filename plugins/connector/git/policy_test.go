@@ -2,6 +2,7 @@ package main
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -404,4 +405,86 @@ func TestEvaluateRaw(t *testing.T) {
 			t.Error("empty subcommand allowed — must fail closed")
 		}
 	})
+}
+
+func TestEvaluateCommitMessagePattern(t *testing.T) {
+	p := EffectivePolicy{
+		MessagePattern: `^(feat|fix|chore)(\(.+\))?: .+`,
+		MessageRe:      regexp.MustCompile(`^(feat|fix|chore)(\(.+\))?: .+`),
+		MatchedRule:    "global",
+	}
+
+	t.Run("a conforming message passes", func(t *testing.T) {
+		for _, msg := range []string{"fix: stop the timeout", "feat(auth): add SSO", "chore: bump deps"} {
+			if v := p.Evaluate(Request{Op: "commit", Message: msg}); !v.Allow {
+				t.Errorf("message %q was rejected: %s", msg, v.Reason)
+			}
+		}
+	})
+
+	t.Run("a non-conforming message is refused with the pattern named", func(t *testing.T) {
+		v := p.Evaluate(Request{Op: "commit", Message: "wip"})
+		if v.Allow {
+			t.Fatal("a message violating the pattern was accepted")
+		}
+		if !strings.Contains(v.Reason, p.MessagePattern) {
+			t.Errorf("reason = %q, want it to quote the required pattern", v.Reason)
+		}
+	})
+
+	t.Run("only commit is judged on a message", func(t *testing.T) {
+		// A push carries no message of its own; judging one would refuse a push for
+		// the commit that produced it, which is already past.
+		for _, op := range []string{"push", "merge", "branch_create", "log"} {
+			if v := p.Evaluate(Request{Op: op, Message: "wip"}); !v.Allow {
+				t.Errorf("op %q was refused over a commit message: %s", op, v.Reason)
+			}
+		}
+	})
+
+	t.Run("an empty message is left to git", func(t *testing.T) {
+		// git refuses an empty message with its own error, which is clearer than a
+		// pattern mismatch would be.
+		if v := p.Evaluate(Request{Op: "commit", Message: ""}); !v.Allow {
+			t.Errorf("an empty message was refused by the policy: %s", v.Reason)
+		}
+	})
+}
+
+func TestResolveCommitMessagePatternFailsClosed(t *testing.T) {
+	// A pattern that does not compile must block mutations rather than silently
+	// accept everything — the same treatment a bad branch pattern gets.
+	p := Resolve(GlobalPolicy{MessagePattern: `^(feat: .+`}, nil, "d:/code/api", "github.com/org/api")
+
+	if p.PolicyErr == "" {
+		t.Fatal("PolicyErr empty, want the compile error recorded")
+	}
+	if !strings.Contains(p.PolicyErr, "commit message") {
+		t.Errorf("PolicyErr = %q, want it to name the commit message pattern", p.PolicyErr)
+	}
+	if p.MessageRe != nil {
+		t.Error("MessageRe must be nil when the pattern does not compile")
+	}
+	if v := p.Evaluate(Request{Op: "commit", Message: "anything"}); v.Allow {
+		t.Error("commit allowed despite a malformed policy — must fail closed")
+	}
+	if v := p.Evaluate(Request{Op: "status"}); !v.Allow {
+		t.Error("a read op was blocked by a malformed commit pattern")
+	}
+}
+
+func TestResolveCommitMessagePatternInherits(t *testing.T) {
+	// The message rule is global-only for now: per-repo rows carry no message column,
+	// so an override must not silently drop the global pattern.
+	g := GlobalPolicy{MessagePattern: `^fix: .+`}
+	rules := []RepoRule{{Repo: "*/org/api", BranchPattern: `^ops/.+$`}}
+
+	p := Resolve(g, rules, "d:/code/api", "github.com/org/api")
+	if p.MessagePattern != `^fix: .+` {
+		t.Errorf("MessagePattern = %q, want the global value preserved under a per-repo override",
+			p.MessagePattern)
+	}
+	if p.MessageRe == nil {
+		t.Error("MessageRe was not compiled")
+	}
 }

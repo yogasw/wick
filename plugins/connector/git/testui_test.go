@@ -634,3 +634,55 @@ func TestTestPanelExposesOnlyItsOwnTwoChecks(t *testing.T) {
 		}
 	}
 }
+
+func TestTestRunJudgesTheCommitMessage(t *testing.T) {
+	requireGit(t)
+	repo := initTestRepo(t)
+	bareRemote(t, repo)
+
+	cfg := baseCfg()
+	cfg["commit_message_pattern"] = `^(feat|fix|chore)(\(.+\))?: .+`
+
+	run := func(msg string) string {
+		out, err := doTestRun(opCtx(cfg, map[string]string{
+			"repo_path": repo, "remote": "origin", "branch": "fix/x", "message": msg,
+		}))
+		if err != nil {
+			t.Fatalf("doTestRun(%q): %v", msg, err)
+		}
+		html, _ := out.(map[string]any)["html"].(string)
+		return html
+	}
+
+	// This is the regression: the input was declared and rendered but never read, so
+	// every message — conforming or not — reported "no message was entered".
+	if html := run("fix: something real"); !strings.Contains(html, "Accepted") {
+		t.Errorf("a conforming message was not accepted:\n%s", html)
+	}
+	if html := run("wip"); !strings.Contains(html, "does not match the required pattern") {
+		t.Errorf("a non-conforming message was not refused:\n%s", html)
+	}
+	// No message, but a rule exists: say so rather than implying it passed.
+	if html := run(""); !strings.Contains(html, "no message was entered") {
+		t.Errorf("an unchecked rule was not flagged:\n%s", html)
+	}
+}
+
+func TestTestRunSaysNothingAboutCommitsWhenNoRuleExists(t *testing.T) {
+	requireGit(t)
+	repo := initTestRepo(t)
+	bareRemote(t, repo)
+
+	// With no rule configured, an empty message must not add a line to the report —
+	// an unused optional field should be invisible.
+	out, err := doTestRun(opCtx(baseCfg(), map[string]string{
+		"repo_path": repo, "remote": "origin", "branch": "fix/x",
+	}))
+	if err != nil {
+		t.Fatalf("doTestRun: %v", err)
+	}
+	html, _ := out.(map[string]any)["html"].(string)
+	if strings.Contains(html, "no message was entered") {
+		t.Error("reported an unchecked commit rule when none is configured")
+	}
+}

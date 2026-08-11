@@ -16,7 +16,13 @@ import (
 
 // GlobalPolicy is layer 1 — the fallback used when no per-repo rule matches.
 type GlobalPolicy struct {
-	BranchPattern  string
+	BranchPattern string
+
+	// MessagePattern is a regex a commit message must match. Empty means unchecked —
+	// most teams do not enforce one, and a default here would reject every commit on
+	// a connector nobody configured for it.
+	MessagePattern string
+
 	Protected      []string
 	AllowForcePush bool
 	RawEnabled     bool
@@ -41,6 +47,8 @@ type RepoRule struct {
 type EffectivePolicy struct {
 	BranchPattern  string
 	BranchRe       *regexp.Regexp // nil when BranchPattern is empty or invalid
+	MessagePattern string
+	MessageRe      *regexp.Regexp // nil when MessagePattern is empty or invalid
 	Protected      []string
 	AllowForcePush bool
 	RawEnabled     bool
@@ -126,6 +134,7 @@ func ParseRepoRules(s string) ([]RepoRule, error) {
 func Resolve(g GlobalPolicy, rules []RepoRule, repoPath, repoSlug string) EffectivePolicy {
 	p := EffectivePolicy{
 		BranchPattern:  g.BranchPattern,
+		MessagePattern: g.MessagePattern,
 		Protected:      append([]string(nil), g.Protected...),
 		AllowForcePush: g.AllowForcePush,
 		RawEnabled:     g.RawEnabled,
@@ -163,6 +172,16 @@ func Resolve(g GlobalPolicy, rules []RepoRule, repoPath, repoSlug string) Effect
 			p.PolicyErr = "branch pattern does not compile: " + err.Error()
 		} else {
 			p.BranchRe = re
+		}
+	}
+	if p.MessagePattern != "" {
+		re, err := regexp.Compile(p.MessagePattern)
+		if err != nil {
+			// Same fail-closed treatment as a bad branch pattern: mutations are
+			// blocked until the config is fixed, reads keep working.
+			p.PolicyErr = "commit message pattern does not compile: " + err.Error()
+		} else {
+			p.MessageRe = re
 		}
 	}
 	return p
@@ -216,6 +235,7 @@ func stricter(a, b RepoRule) bool {
 type Request struct {
 	Op            string
 	Branch        string
+	Message       string
 	Remote        string
 	Force         bool
 	NewBranch     bool
@@ -282,6 +302,13 @@ func (p EffectivePolicy) Evaluate(r Request) Verdict {
 		if r.NewBranch && p.BranchRe != nil && !p.BranchRe.MatchString(r.Branch) {
 			return deny(fmt.Sprintf("branch %q does not match the required pattern %s",
 				r.Branch, p.BranchPattern))
+		}
+		// Only a commit carries a message, so only a commit is judged on one. An
+		// empty message is left to git, which refuses it with its own error.
+		if r.Op == "commit" && r.Message != "" && p.MessageRe != nil &&
+			!p.MessageRe.MatchString(r.Message) {
+			return deny(fmt.Sprintf("commit message does not match the required pattern %s",
+				p.MessagePattern))
 		}
 	}
 	return allow()

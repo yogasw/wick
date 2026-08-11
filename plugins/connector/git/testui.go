@@ -114,6 +114,7 @@ type testGuideInput struct {
 	RepoPath string `wick:"desc=Repository to test: either a clone URL (https://host/org/repo.git) or the path of a checkout on the machine running wick."`
 	Remote   string `wick:"desc=Remote name to resolve and probe. Default: origin."`
 	Branch   string `wick:"desc=Branch name to evaluate the policy against."`
+	Message  string `wick:"desc=Commit message to evaluate. Optional — only meaningful once a commit rule exists."`
 }
 
 // doTestPanel renders the form, restoring whatever was last entered.
@@ -130,19 +131,26 @@ func storedTestForm(c *connector.Ctx) *testReport {
 	repo := strings.TrimSpace(c.Cfg("test_repo"))
 	remote := strings.TrimSpace(c.Cfg("test_remote"))
 	branch := strings.TrimSpace(c.Cfg("test_branch"))
-	if repo == "" && remote == "" && branch == "" {
+	message := strings.TrimSpace(c.Cfg("test_message"))
+	if repo == "" && remote == "" && branch == "" && message == "" {
 		return nil
 	}
-	return &testReport{RepoPath: repo, Remote: firstNonEmpty(remote, "origin"), Branch: branch}
+	return &testReport{
+		RepoPath: repo,
+		Remote:   firstNonEmpty(remote, "origin"),
+		Branch:   branch,
+		Message:  message,
+	}
 }
 
 // formFields is the {fields} map that persists what was just entered. Returned
 // alongside the HTML on every run so the inputs outlive a re-mount.
 func formFields(rep *testReport) map[string]string {
 	return map[string]string{
-		"test_repo":   rep.RepoPath,
-		"test_remote": rep.Remote,
-		"test_branch": rep.Branch,
+		"test_repo":    rep.RepoPath,
+		"test_remote":  rep.Remote,
+		"test_branch":  rep.Branch,
+		"test_message": rep.Message,
 	}
 }
 
@@ -152,7 +160,12 @@ type testReport struct {
 	RepoPath string
 	Remote   string
 	Branch   string
-	Checks   []testCheck
+
+	// Message is the commit message to judge. Optional: only a commit rule gives it
+	// meaning, and inventing one would report a verdict on something the operator
+	// never wrote.
+	Message string
+	Checks  []testCheck
 
 	// Write marks a report from the write test, so the panel can say which of the
 	// two ran — the check lists differ and a reader should not have to infer it.
@@ -182,6 +195,7 @@ func doTestRun(c *connector.Ctx) (any, error) {
 		RepoPath: strings.TrimSpace(c.Input("repo_path")),
 		Remote:   firstNonEmpty(strings.TrimSpace(c.Input("remote")), "origin"),
 		Branch:   strings.TrimSpace(c.Input("branch")),
+		Message:  strings.TrimSpace(c.Input("message")),
 	}
 
 	// 1. git present at all. Everything else is moot without it.
@@ -316,10 +330,11 @@ func runTestPolicy(c *connector.Ctx, rep *testReport, info RemoteInfo, local str
 		return
 	}
 
-	eff := "branch pattern: " + orNone(pol.BranchPattern) +
-		"\nprotected:      " + orNone(strings.Join(pol.Protected, ", ")) +
-		"\nforce push:     " + map[bool]string{true: "allowed", false: "denied"}[pol.AllowForcePush] +
-		"\nmatched rule:   " + pol.MatchedRule
+	eff := "branch pattern:  " + orNone(pol.BranchPattern) +
+		"\ncommit message:  " + orNone(pol.MessagePattern) +
+		"\nprotected:       " + orNone(strings.Join(pol.Protected, ", ")) +
+		"\nforce push:      " + map[bool]string{true: "allowed", false: "denied"}[pol.AllowForcePush] +
+		"\nmatched rule:    " + pol.MatchedRule
 	rep.add("Policy in effect", "ok", "", eff)
 
 	if rep.Branch == "" {
@@ -338,6 +353,31 @@ func runTestPolicy(c *connector.Ctx, rep *testReport, info RemoteInfo, local str
 		rep.add("Policy verdict", "fail", v.Reason, "matched rule: "+v.MatchedRule)
 	}
 
+	/* Commit verdict, when there is something to judge.
+	   Reported separately from the push verdict because the two are gated by
+	   different rules — a message can be rejected on a branch that pushes fine, and
+	   the operator needs to know which one refused. Silent unless a message was
+	   entered, so an unused field does not add a line to every report. */
+	switch {
+	case rep.Message == "":
+		if pol.MessagePattern != "" {
+			rep.add("Commit message", "warn",
+				"A commit message rule is configured but no message was entered, so it was not checked.",
+				pol.MessagePattern)
+		}
+	default:
+		v := pol.Evaluate(Request{Op: "commit", Branch: rep.Branch, Message: rep.Message})
+		if v.Allow {
+			detail := "Accepted."
+			if pol.MessagePattern == "" {
+				detail = "Accepted — no commit message rule is configured, so any message passes."
+			}
+			rep.add("Commit message", "ok", detail, rep.Message)
+		} else {
+			rep.add("Commit message", "fail", v.Reason, rep.Message)
+		}
+	}
+
 	// And the command it would run, assembled but not executed.
 	args := buildPushArgs(info.Effective, rep.Branch, false, false)
 	rep.add("Push command (not run)", "ok", "",
@@ -353,9 +393,9 @@ func runTestPolicy(c *connector.Ctx, rep *testReport, info RemoteInfo, local str
 func renderTestPanel(rep *testReport) string {
 	const p = "wgtt"
 
-	repoVal, remoteVal, branchVal := "", "origin", ""
+	repoVal, remoteVal, branchVal, messageVal := "", "origin", "", ""
 	if rep != nil {
-		repoVal, remoteVal, branchVal = rep.RepoPath, rep.Remote, rep.Branch
+		repoVal, remoteVal, branchVal, messageVal = rep.RepoPath, rep.Remote, rep.Branch, rep.Message
 	}
 
 	var b strings.Builder
@@ -390,6 +430,9 @@ func renderTestPanel(rep *testReport) string {
 	field("repo_path", "Clone URL or checkout path", "https://github.com/org/repo.git", repoVal)
 	field("remote", "Remote", "origin", remoteVal)
 	field("branch", "Branch to check", "fix/my-change", branchVal)
+	// Optional, and only meaningful once a commit rule exists — leaving it blank
+	// keeps the report from claiming a verdict on a message nobody supplied.
+	field("message", "Commit message (optional)", "fix: something", messageVal)
 	fmt.Fprintf(&b, `</div>`)
 
 	// type="button" is required, not cosmetic. A <button> with no type defaults to
@@ -484,6 +527,7 @@ func doTestWrite(c *connector.Ctx) (any, error) {
 		RepoPath: strings.TrimSpace(c.Input("repo_path")),
 		Remote:   firstNonEmpty(strings.TrimSpace(c.Input("remote")), "origin"),
 		Branch:   strings.TrimSpace(c.Input("branch")),
+		Message:  strings.TrimSpace(c.Input("message")),
 		Write:    true,
 	}
 

@@ -43,6 +43,7 @@ func loadGlobal(c *connector.Ctx) GlobalPolicy {
 	}
 	return GlobalPolicy{
 		BranchPattern:  strings.TrimSpace(c.Cfg("branch_name_pattern")),
+		MessagePattern: strings.TrimSpace(c.Cfg("commit_message_pattern")),
 		Protected:      protected,
 		AllowForcePush: c.CfgBool("allow_force_push"),
 		RawEnabled:     c.CfgBool("raw_enabled"),
