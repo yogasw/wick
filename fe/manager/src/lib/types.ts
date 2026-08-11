@@ -92,6 +92,9 @@ export interface ConfigField {
   visible_when: string;
   col_options?: Record<string, string>;
   env_override: string;
+  /** Machine-managed: never rendered, but present in the schema so an html
+      widget's {fields} write is recognised. Its value is withheld by the API. */
+  hidden?: boolean;
   /** Optional "Title" or "Title|Description" — groups simple fields into a
       titled card so shared context lives once on the group, not per field. */
   group?: string;
