@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -556,29 +555,38 @@ func containsExact(list []string, want string) bool {
 // `git remote get-url` fail and turn every case into the no-remote case.
 func realRepo(t *testing.T) string {
 	t.Helper()
-	if _, err := safeexec.LookPath("git"); err != nil {
-		t.Skip("git is not on PATH")
-	}
 	dir := t.TempDir()
-	run := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v\n%s", args, err, out)
-		}
-	}
-	run("init", "-q")
+	gitIn(t, dir, "init", "-q")
 	return dir
 }
 
 func realRepoWithRemote(t *testing.T, name, url string) string {
 	t.Helper()
 	dir := realRepo(t)
-	cmd := exec.Command("git", "remote", "add", name, url)
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git remote add: %v\n%s", err, out)
-	}
+	gitIn(t, dir, "remote", "add", name, url)
 	return dir
+}
+
+// gitIn runs git in dir, resolved through ResolveGit and spawned through safeexec.
+//
+// pkg/safeexec's scanner enforces that across the repo, tests included, and the reason
+// holds here as much as anywhere: Go's own LookPath calls faccessat2(2), which
+// Android/Termux seccomp rejects with SIGSYS on kernels before 5.8. Exempting test files
+// would also make the rule unenforceable in practice — a helper like this one is exactly
+// what the next production callsite gets copied from.
+//
+// Resolving the path first (rather than passing "git" to safeexec.Command) is what gives
+// these tests a clean skip on a machine with no git, instead of a failure inside the
+// first command.
+func gitIn(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	gitPath, err := ResolveGit()
+	if err != nil {
+		t.Skip("git is not on PATH")
+	}
+	cmd := safeexec.Command(gitPath, args...)
+	cmd.Dir = dir
+	if out, cerr := cmd.CombinedOutput(); cerr != nil {
+		t.Fatalf("git %v: %v\n%s", args, cerr, out)
+	}
 }
