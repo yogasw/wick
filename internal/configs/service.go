@@ -48,7 +48,23 @@ type Service struct {
 	// itself a config row). When nil, secret values are stored
 	// plaintext — same behaviour as before this layer existed.
 	enc Encryptor
+	// validators hold per-owner value checks, consulted by every write.
+	// The hook lives HERE rather than in a handler because a config row
+	// has three write doors — the manager SPA, the legacy form POST, and
+	// the wickmanager MCP tool — and a rule enforced at only some of them
+	// is not a rule. Keyed by owner; a nil or absent entry means "accept
+	// whatever the declaration allows", which is what every owner did
+	// before this existed.
+	validators map[string]ConfigValidator
 }
+
+// ConfigValidator rejects an invalid value for one (key, value) pair of an
+// owner's config. Returning an error aborts the write with that error
+// surfaced to the caller; the stored value is left untouched.
+//
+// It is called with the value as submitted, before secret-keeping and
+// encryption, so a validator sees exactly what the operator typed.
+type ConfigValidator func(key, value string) error
 
 // ownerKey is the composite cache key. Owner scopes the variable
 // (app, tool, job); Key is the field name within that scope.
@@ -56,11 +72,34 @@ type ownerKey struct{ Owner, Key string }
 
 func NewService(db *gorm.DB) *Service {
 	return &Service{
-		repo:      newRepo(db),
-		cache:     make(map[ownerKey]entity.Config),
-		meta:      make(map[ownerKey]entity.Config),
-		declOrder: make(map[string][]string),
+		repo:       newRepo(db),
+		cache:      make(map[ownerKey]entity.Config),
+		meta:       make(map[ownerKey]entity.Config),
+		declOrder:  make(map[string][]string),
+		validators: make(map[string]ConfigValidator),
 	}
+}
+
+// RegisterValidator installs owner's value validator, replacing any
+// previous one. Call at boot, before the HTTP surface is serving.
+func (s *Service) RegisterValidator(owner string, fn ConfigValidator) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.validators == nil {
+		s.validators = make(map[string]ConfigValidator)
+	}
+	s.validators[owner] = fn
+}
+
+// validate runs owner's validator, if one is registered.
+func (s *Service) validate(owner, key, value string) error {
+	s.mu.RLock()
+	fn := s.validators[owner]
+	s.mu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn(key, value)
 }
 
 // SetEncryptor wires the at-rest cipher. Call once at boot after the
@@ -428,6 +467,12 @@ func (s *Service) setOwned(ctx context.Context, owner, key, value string) error 
 		if ok && m.IsSecret {
 			return nil
 		}
+	}
+	// Validated after the keep-existing shortcut above (there is nothing to
+	// check when the write is a no-op) and before anything is persisted or
+	// encrypted, so a rejected value leaves the stored one exactly as it was.
+	if err := s.validate(owner, key, value); err != nil {
+		return err
 	}
 	stored := value
 	plaintext := value

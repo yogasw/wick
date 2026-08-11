@@ -115,6 +115,23 @@ Source: [`config.GeneralConfig`](https://github.com/yogasw/wick/blob/master/inte
 | `SystemPrompt` | _(embedded baseline)_ | Global interaction rules appended to every preset's `agent.md` on spawn. Adds to the preset — never replaces it. Edit and reset the default from `/tools/agents/settings`; the shipped baseline is [`internal/agents/system-prompt/default.md`](https://github.com/yogasw/wick/blob/master/internal/agents/system-prompt/default.md). |
 | `AirouterEnabled` | `true` | Master switch for the embedded AI routers. Off = every dashboard, `/airouter/<id>/v1` proxy, auto-start, and all controls are disabled. Per-router auto-start / external-API toggles live on the AI Router page. Access visibility is managed separately under **Admin → Tools**. |
 
+### Widget group - HTML artifact CSP
+
+The same config page has a **Widget** group controlling the [Content-Security-Policy applied to HTML artifacts](#html-artifact-content-security-policy) (both file artifacts and inline ` ```html ` blocks). HTML widgets are model-authored, so the default is fully sealed — this group is where you deliberately loosen it.
+
+| Field | Default | What it does |
+|---|---|---|
+| `WidgetMode` | `secure` | The one knob. `secure` = sealed off, byte-identical to the CSP wick always used before this setting existed. `unsecure` = every directive opened to `https:` and popups allowed — includes external scripts, so a script a widget loads can read whatever the widget holds and send it anywhere; only for projects you trust. `custom` = read the per-directive fields below. |
+| `WidgetFrameSrc` | `block` | _(custom only)_ Nested iframes inside a widget — e.g. embedding Google Maps or a YouTube player. `block` / `list` (allowlist only) / `all` (any HTTPS host). |
+| `WidgetImgSrc` | `block` | _(custom only)_ External images. Inline `data:` images always work regardless of this setting. |
+| `WidgetMediaSrc` | `block` | _(custom only)_ External audio/video. Inline `data:` media always works regardless of this setting. |
+| `WidgetConnectSrc` | `block` | _(custom only)_ `fetch` / `XHR` / `WebSocket` from inside a widget. Anything allowed here can also be used to send data out. |
+| `WidgetScriptSrc` | `block` | _(custom only)_ Scripts loaded from another host. A permitted script runs inside the widget and can read everything it holds, so pair it with a narrow allowlist. The widget's own inline scripts always run regardless. |
+| `WidgetAllowPopups` | `false` | _(custom only)_ Adds `allow-popups` to the iframe sandbox, which is what makes `target="_blank"` links and `window.open` work. A popup is not constrained by this CSP, so it's a full exfiltration channel to any host, independent of the allowlist. |
+| `WidgetAllowlist` | _(empty)_ | _(custom only)_ Hosts the `list`-mode directives above may reach — one per line. `https://` is assumed; wildcards (`*.example.com`) are allowed; plaintext `http://` and paths are rejected. Projects append their own hosts to this list (see [Projects](./agents/projects#widget-permissions)) — a project cannot narrow it, only add to it. |
+
+To let a widget embed Google Maps: set `WidgetFrameSrc` to `list` (under `custom`) and add `maps.google.com` to the allowlist. To let widget links open a new tab: turn on `WidgetAllowPopups`.
+
 ## Chat rendering
 
 Assistant bubbles in the **web Conversation tab** render as GitHub-flavored markdown plus a few rich formats — what the agent writes is rendered the same way [claude.ai](https://claude.ai) does. Every format degrades gracefully: on channels with no rich renderer (Slack, Telegram) the raw source still reads fine.
@@ -152,6 +169,12 @@ Files produced in a single turn are shown as a **grid** (up to 4 items) or a **c
 
 Detection rules: Write and Edit calls on any file type qualify as artifacts. Read calls qualify only for non-text files (e.g. a PNG the agent generated and then read back). Text files the agent only read — not wrote — are not shown as artifacts.
 
+### HTML artifact Content-Security-Policy
+
+Every HTML artifact renders in an `<iframe>` sandboxed **without** `allow-same-origin` — an opaque origin with no access to the parent's cookies, storage, or DOM — plus a CSP injected as a `<meta>` tag. By default (`secure`) the CSP blocks every exfiltration channel: no external images/media beyond `data:`, no fetch/XHR/WebSocket, no external scripts, no nested frames, and popups are off — so `target="_blank"` links and `window.open` do nothing. Inline scripts always run, so the artifact stays interactive; it just can't phone home.
+
+That default can be relaxed. `frame-src`, `img-src`, `media-src`, `connect-src`, and `script-src` are each independently switchable between blocked / allowlist-only / any-HTTPS-host, and popups can be turned on — set globally under the [Widget config group](#widget-group-html-artifact-csp), and overridable per [project](./agents/projects#widget-permissions) (a project's own allowlist only *adds* hosts on top of the global one; it can't narrow it). `script-src` is the one directive to treat carefully: an allowlisted external script runs inside the widget and can read anything the widget holds, so pair it with a narrow allowlist rather than opening it wide.
+
 ### HTML artifact theme bridge
 
 HTML artifacts (both file artifacts and inline ` ```html ` blocks) receive a **theme bridge** injected by the runtime before the iframe loads:
@@ -164,7 +187,7 @@ The agent system prompt tells the model to use `var(--wick-*)` by default and on
 
 ### Reading session files from an artifact
 
-A sandboxed artifact can't `fetch()` — the sandbox gives it an opaque origin and the CSP sets `connect-src 'none'`, so any `fetch`/`XHR` (to a file or an API) is refused by design. To feed data into an artifact without loosening the sandbox, the runtime injects `window.wickReadFile(path)` into every artifact: it returns a `Promise` of the file's text contents. The artifact calls it, the *parent* page (which owns the session) reads the file and answers over `postMessage` — no network request ever leaves the sandbox. `path` is session-relative — same rule as the `htmlfile` fence above — and absolute paths / `..` traversal are rejected.
+A sandboxed artifact can't `fetch()` under the default `secure` CSP — the sandbox gives it an opaque origin and `connect-src` is `'none'`, so any `fetch`/`XHR` (to a file or an API) is refused by design; this still holds even if `connect-src` is opened up, since the allowed hosts there are external ones, not the parent page. To feed data into an artifact without loosening the sandbox, the runtime injects `window.wickReadFile(path)` into every artifact: it returns a `Promise` of the file's text contents. The artifact calls it, the *parent* page (which owns the session) reads the file and answers over `postMessage` — no network request ever leaves the sandbox. `path` is session-relative — same rule as the `htmlfile` fence above — and absolute paths / `..` traversal are rejected.
 
 ### Reading/writing a Data Table from an artifact
 
