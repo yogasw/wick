@@ -20,7 +20,7 @@ All notable changes to Wick are documented here.
 *   A `wick_execute` batch entry now reports `ok: false` when the operation itself reported failure in its response envelope, instead of showing `ok: true` with the failure nested inside `result` — a policy refusal inside a batch call is no longer indistinguishable from success at a glance.
 
 ### Fixed
-*   **Intermittent "cached plan must not change result type" errors on Postgres**: Running the server and worker as independent toggles in tray mode could trigger a schema migration while other components were already serving queries on the same database, leaving their connections with a stale plan. Migrations now run once per database (not just once per process) on a dedicated connection, and queries that still hit a stale plan are retried once automatically.
+*   **Intermittent "cached plan must not change result type" errors on Postgres**: Running the server and worker as independent toggles in tray mode could trigger a schema migration while other components were already serving queries on the same database, leaving their connections with a stale plan. Migrations now run once per database (not just once per process) on a dedicated connection, and queries that still hit a stale plan are retried once automatically. The per-database guard added for this was itself keyed by a heap address that Go can reuse, which could make a freshly opened database (including on-disk SQLite) look already migrated and skip its schema; it's now keyed by handle identity instead.
 
 ---
 

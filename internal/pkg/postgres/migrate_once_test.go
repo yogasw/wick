@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"runtime"
 	"sync"
 	"testing"
 
@@ -15,14 +16,14 @@ import (
 // known state and does not leak into the next one.
 func resetMigrated(t *testing.T) {
 	t.Helper()
-	migratedMu.Lock()
-	migrated = map[string]bool{}
-	migratedMu.Unlock()
-	t.Cleanup(func() {
+	clear := func() {
 		migratedMu.Lock()
 		migrated = map[string]bool{}
+		migratedMem = map[*gorm.DB]bool{}
 		migratedMu.Unlock()
-	})
+	}
+	clear()
+	t.Cleanup(clear)
 }
 
 // Tray mode runs the server and the worker as independent toggles in one
@@ -80,8 +81,12 @@ func TestMigrateTreatsEachInMemoryHandleAsItsOwnDatabase(t *testing.T) {
 	}
 
 	first, second := open(), open()
-	if dsnKey(first) == dsnKey(second) {
-		t.Fatal("two :memory: handles are different databases and must not share a key")
+	// Both yield "" from dsnKey — there is no DSN to tell them apart — so identity is the
+	// handle, resolved through migratedMem. Asserting on the key here is what the earlier
+	// version did, and it was asserting the wrong thing: a key built from %p looked
+	// distinct while being unstable, which is the bug below.
+	if dsnKey(first) != "" || dsnKey(second) != "" {
+		t.Fatal("an in-memory handle has no DSN, so dsnKey must defer to per-handle identity")
 	}
 
 	// End to end: both actually get a schema.
@@ -125,5 +130,41 @@ func TestMigrateGuardIsConcurrencySafe(t *testing.T) {
 
 	if claimed != 1 {
 		t.Fatalf("expected exactly one caller to claim the DDL pass, got %d", claimed)
+	}
+}
+
+// TestMigrateDoesNotSkipAfterAnAddressIsReused is the regression test for a guard that
+// silently left databases unmigrated.
+//
+// The in-memory key used to be built with %p — the handle's heap address. Go reuses
+// addresses, so a fresh *gorm.DB could land where a collected one had lived, find its key
+// already marked migrated, and skip the DDL entirely. The caller then got a handle with
+// NO SCHEMA, failing later with "no such table: configs". Measured at roughly 9,000
+// reused addresses per 200,000 allocations, which is why the symptom moved between tests
+// from one run to the next and read as flakiness.
+//
+// Rather than trying to force a specific address to recur, this drives enough handles
+// through Migrate — with GC pressure between them — that address reuse is near-certain,
+// and asserts every single one came back with a working schema.
+func TestMigrateDoesNotSkipAfterAnAddressIsReused(t *testing.T) {
+	resetMigrated(t)
+
+	for i := 0; i < 60; i++ {
+		db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: NewLogLevel("silent")})
+		if err != nil {
+			t.Fatalf("open %d: %v", i, err)
+		}
+		sqlDB, _ := db.DB()
+		sqlDB.SetMaxOpenConns(1)
+
+		Migrate(db)
+
+		// The assertion that matters: a skipped migration is invisible until a query runs.
+		if err := db.Create(&entity.AgentProfile{ID: "p", Key: "k", Provider: "claude"}).Error; err != nil {
+			t.Fatalf("handle %d was left unmigrated — the guard skipped a database it had "+
+				"never actually migrated: %v", i, err)
+		}
+		sqlDB.Close()
+		runtime.GC() // free the handle so a later allocation can land on its address
 	}
 }

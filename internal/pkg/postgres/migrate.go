@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -50,9 +49,20 @@ func DropStaleProfileKeyIndex(db *gorm.DB) {
 // migrating a genuinely different one. A process-wide Once would leave
 // the second database silently unmigrated — the tests open a fresh
 // in-memory SQLite per case and would each get an empty schema.
+// The in-memory case is keyed by IDENTITY of the handle, not by its address.
+//
+// %p was the first attempt and it is unsound: Go reuses heap addresses, so a fresh
+// *gorm.DB can land where a collected one lived, find its key already marked migrated,
+// and skip the DDL — leaving a caller with an empty schema and
+// "no such table: configs". Measured at ~9k reused addresses per 200k allocations, which
+// is why the failure moved from test to test between runs and looked flaky.
+//
+// A map keyed by the pointer itself both fixes the identity (the key holds the handle
+// alive, so its address cannot be recycled while the entry exists) and needs no counter.
 var (
-	migratedMu sync.Mutex
-	migrated   = map[string]bool{}
+	migratedMu  sync.Mutex
+	migrated    = map[string]bool{}
+	migratedMem = map[*gorm.DB]bool{}
 )
 
 // Migrate brings the schema up to date. Safe to call from every component
@@ -61,6 +71,19 @@ func Migrate(db *gorm.DB) {
 	key := dsnKey(db)
 
 	migratedMu.Lock()
+	if key == "" {
+		// No readable DSN, so identity is the handle. Keyed by the pointer VALUE rather
+		// than by its formatted address: an entry in this map keeps the handle reachable,
+		// so its address cannot be reused by a later allocation.
+		if migratedMem[db] {
+			migratedMu.Unlock()
+			return
+		}
+		migratedMem[db] = true
+		migratedMu.Unlock()
+		migrate(db)
+		return
+	}
 	if migrated[key] {
 		migratedMu.Unlock()
 		return
@@ -82,13 +105,15 @@ func dsnKey(db *gorm.DB) string {
 		dsn = d.DSN
 	}
 
-	// Every ":memory:" handle is a distinct database despite sharing a
-	// DSN, so those must never be deduplicated by name. Same for any
-	// dialector whose DSN we cannot read: falling back to per-handle
-	// identity keeps the guard conservative — an unrecognised handle
-	// migrates rather than being wrongly skipped.
+	// Every ":memory:" handle is a distinct database despite sharing a DSN, so those must
+	// never be deduplicated by name. Same for any dialector whose DSN we cannot read.
+	//
+	// Returns "" to mean "identity is the handle itself", which Migrate resolves through
+	// migratedMem. This used to return a key built with %p; heap addresses are reused, so
+	// a new handle could inherit a dead one's "already migrated" mark and be left with no
+	// schema at all.
 	if dsn == "" || strings.Contains(dsn, ":memory:") {
-		return fmt.Sprintf("%s|handle:%p", db.Dialector.Name(), db)
+		return ""
 	}
 	return db.Dialector.Name() + "|" + dsn
 }
