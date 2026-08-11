@@ -14,7 +14,7 @@
   let data = $state<ToolDetail | null>(null);
   let loading = $state(true);
   let error = $state("");
-  let missingRequired = $derived((data?.fields ?? []).filter((f) => f.required && !f.has_value).length);
+  let missingRequired = $derived((data?.fields ?? []).filter((f) => f.required && !f.has_value && !f.hidden).length);
 
   async function load(silent = false): Promise<void> {
     if (!silent) loading = true;

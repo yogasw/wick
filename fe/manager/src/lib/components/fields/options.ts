@@ -73,11 +73,17 @@ export function parseGroup(raw: string | undefined): {
    each field type lands in its own slot so kvlist / picker fields render as
    sub-blocks under the simple-field grid. Ungrouped fields collapse into the
    default "Configuration" card at its first-seen position. The first non-empty
-   description seen for a group wins. Mirrors the Go view.groupRows helper. */
+   description seen for a group wins. Mirrors the Go view.groupRows helper.
+
+   Hidden fields are dropped HERE rather than by the API, which still sends them:
+   the form must not render a machine-managed value, but ConfigsForm has to know
+   the key exists or an html widget's {fields} write to it is discarded as
+   unknown. Filtering at render time satisfies both. */
 export function groupFields(fields: ConfigField[]): FieldGroup[] {
   const idx = new Map<string, number>();
   const out: FieldGroup[] = [];
   for (const f of fields) {
+    if (f.hidden) continue;
     const { title, desc, collapsed } = parseGroup(f.group);
     let i = idx.get(title);
     if (i === undefined) {

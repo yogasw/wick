@@ -39,17 +39,20 @@ type toolDetailJSON struct {
 }
 
 // ownedConfigFields projects a config owner's rows into the SPA field
-// schema, dropping hidden rows and blanking secret values (HasValue still
-// signals a stored secret). Shared by the job + tool detail endpoints,
-// mirroring apiConnectorDetail's projection so the field renderer behaves
-// identically across all three surfaces.
+// schema, flagging hidden rows and blanking their values along with secrets'
+// (HasValue still signals a stored value). Shared by the job + tool detail
+// endpoints, mirroring apiConnectorDetail's projection so the field renderer
+// behaves identically across all three surfaces.
+//
+// Hidden rows travel rather than being dropped: the form skips rendering them,
+// but an html widget writes sibling config through {fields} and ConfigsForm
+// ignores keys absent from the schema, so a dropped row made those writes
+// silent no-ops.
 func ownedConfigFields(rows []entity.Config) []configFieldJSON {
 	fields := make([]configFieldJSON, 0, len(rows))
 	for _, cfg := range rows {
-		if cfg.Hidden {
-			continue
-		}
 		f := configFieldJSON{
+			Hidden:      cfg.Hidden,
 			Key:         cfg.Key,
 			Type:        cfg.Type,
 			Value:       cfg.Value,
@@ -62,7 +65,7 @@ func ownedConfigFields(rows []entity.Config) []configFieldJSON {
 			ColOptions:  cfg.ColOptions,
 			EnvOverride: cfg.EnvOverride,
 		}
-		if cfg.IsSecret {
+		if cfg.IsSecret || cfg.Hidden {
 			f.Value = ""
 		}
 		fields = append(fields, f)

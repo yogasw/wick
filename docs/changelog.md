@@ -6,6 +6,19 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+### Connectors
+#### Added
+*   **Git CLI connector plugin** (`git`): runs the local `git` binary against repositories already on disk, so GitHub, Bitbucket, GitLab and self-hosted servers all work through the same operations. 24 agent-callable operations across Read, Branches and Commits, Network and Destructive categories, gated by a two-layer policy engine — a global fallback plus per-repo overrides matched on `host/owner/repo` or local path, covering branch name pattern, commit message pattern, protected branches, force push, and a per-subcommand allow-list for the `raw` escape hatch. Credentials never touch disk (HTTPS token via an askpass helper by default; `.git/config` is never rewritten). New `policy_show` operation reports every rule in force for a repository before an agent acts, rather than by trial and error. New `allowed_repo_roots` config field optionally bounds every `repo_path` and clone destination to a set of directories (symlinks and `..` resolved first); empty means unrestricted. See [Git CLI](/connectors/git).
+
+### Manager
+#### Fixed
+*   Hidden config fields (used internally by `html=` widgets to write sibling config through `{fields}`) are now sent to the SPA, flagged and with their value withheld, instead of being dropped from the schema — a widget's own writes to its hidden fields were previously discarded silently.
+
+### MCP
+#### Fixed
+*   Dropdown enums in tool schemas now split on `|` as documented, instead of `,` — a `dropdown=a|b|c` field was previously emitting a one-element enum. Boolean config/input widgets now declare `type: boolean` in the schema instead of `type: string`.
+*   A `wick_execute` batch entry now reports `ok: false` when the operation itself reported failure in its response envelope, instead of showing `ok: true` with the failure nested inside `result` — a policy refusal inside a batch call is no longer indistinguishable from success at a glance.
+
 ### Fixed
 *   **Intermittent "cached plan must not change result type" errors on Postgres**: Running the server and worker as independent toggles in tray mode could trigger a schema migration while other components were already serving queries on the same database, leaving their connections with a stale plan. Migrations now run once per database (not just once per process) on a dedicated connection, and queries that still hit a stale plan are retried once automatically.
 

@@ -36,7 +36,7 @@
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   let canConfigure = $derived(data?.can_configure ?? false);
-  let missingRequired = $derived((data?.fields ?? []).filter((f) => f.required && !f.has_value).length);
+  let missingRequired = $derived((data?.fields ?? []).filter((f) => f.required && !f.has_value && !f.hidden).length);
 
   function clearPoll(): void {
     if (pollTimer) {
