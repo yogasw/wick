@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"html"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/yogasw/wick/pkg/connector"
@@ -49,6 +50,7 @@ type simResult struct {
 	Repo    string
 	Op      string
 	Branch  string
+	Message string
 	V       Verdict
 	Pol     EffectivePolicy
 	Command string
@@ -78,6 +80,9 @@ func renderSimulation(s simResult) string {
 	if s.Repo != "" {
 		row("Repository", s.Repo)
 	}
+	if s.Message != "" {
+		row("Commit message", s.Message)
+	}
 	row("Matched rule", s.V.MatchedRule)
 	if s.V.Reason != "" {
 		row("Reason", s.V.Reason)
@@ -94,6 +99,11 @@ func renderSimulation(s simResult) string {
 		pattern = "(none — any branch name is accepted)"
 	}
 	row("branch pattern", pattern)
+	msgPat := s.Pol.MessagePattern
+	if msgPat == "" {
+		msgPat = "(none — any commit message is accepted)"
+	}
+	row("commit message", msgPat)
 	protected := strings.Join(s.Pol.Protected, ", ")
 	if protected == "" {
 		protected = "(none)"
@@ -191,11 +201,25 @@ func forcePushLabel(v string) string {
 // controls this op's markup renders, which the widget posts back on any data-op
 // click. A field missing here makes the matching c.Input read empty forever.
 type policyManagerInput struct {
-	Browser   string `wick:"desc=Current field value, supplied by the config UI."`
-	SimRepo   string `wick:"desc=Repository to simulate against, as a path or host/owner/repo."`
-	SimOp     string `wick:"desc=Operation to simulate. Example: push"`
-	SimBranch string `wick:"desc=Branch name to simulate."`
-	RuleJSON  string `wick:"desc=Full replacement set of per-repo rules, as a JSON array."`
+	Browser    string `wick:"desc=Current field value, supplied by the config UI."`
+	SimRepo    string `wick:"desc=Repository to simulate against, as a path or host/owner/repo."`
+	SimOp      string `wick:"desc=Operation to simulate. Example: push"`
+	SimBranch  string `wick:"desc=Branch name to simulate."`
+	RuleJSON   string `wick:"desc=Full replacement set of per-repo rules, as a JSON array."`
+	SimMessage string `wick:"desc=Commit message to simulate. Optional."`
+
+	// The fallback editor's controls. Named g_* so a reader can tell at a glance
+	// which inputs belong to the global block rather than to a per-repo row.
+	GBranch    string `wick:"desc=Fallback branch name pattern (regex)."`
+	GMessage   string `wick:"desc=Fallback commit message pattern (regex)."`
+	GProtected string `wick:"desc=Fallback protected branches, comma-separated globs."`
+	GForce     string `wick:"desc=Present when force push is allowed; absent means denied."`
+
+	// NewRepo is the sidebar's add box. The per-rule inputs are named r_*_<index>
+	// and cannot be declared here — the index is only known at render time — so they
+	// are read with c.Input directly. Declaring the prefix is not possible either;
+	// the schema is a flat list of names.
+	NewRepo string `wick:"desc=Repository glob for a new override."`
 }
 
 // doPolicyManager renders the editor plus an empty simulator.
@@ -215,6 +239,7 @@ func doPolicySimulate(c *connector.Ctx) (any, error) {
 	repo := strings.TrimSpace(c.Input("sim_repo"))
 	op := firstNonEmpty(strings.TrimSpace(c.Input("sim_op")), "push")
 	branch := strings.TrimSpace(c.Input("sim_branch"))
+	message := strings.TrimSpace(c.Input("sim_message"))
 
 	global := loadGlobal(c)
 	rules, err := ParseRepoRules(c.Cfg("repo_policies"))
@@ -228,10 +253,10 @@ func doPolicySimulate(c *connector.Ctx) (any, error) {
 	// A new branch triggers the name pattern; branch_create and checkout -b are
 	// the operations that create one.
 	newBranch := op == "branch_create"
-	v := pol.Evaluate(Request{Op: op, Branch: branch, NewBranch: newBranch})
+	v := pol.Evaluate(Request{Op: op, Branch: branch, Message: message, NewBranch: newBranch})
 
 	sim := &simResult{
-		Repo: repo, Op: op, Branch: branch, V: v, Pol: pol,
+		Repo: repo, Op: op, Branch: branch, Message: message, V: v, Pol: pol,
 		Command: fmt.Sprintf("git %s origin %s", op, branch),
 	}
 	return map[string]any{"html": renderPolicyManager(c, sim)}, nil
@@ -282,6 +307,217 @@ func doPolicyRuleSave(c *connector.Ctx) (any, error) {
 	}, nil
 }
 
+// doPolicyGlobalSave writes the fallback rules.
+//
+// Patterns are validated BEFORE anything is stored: a regex that does not compile
+// blocks every mutating operation at runtime (fail-closed), so saving one silently
+// would take the connector offline with no explanation on screen. Refusing the save
+// and naming the error keeps the working policy in force.
+func doPolicyGlobalSave(c *connector.Ctx) (any, error) {
+	branch := strings.TrimSpace(c.Input("g_branch"))
+	message := strings.TrimSpace(c.Input("g_message"))
+	protected := splitCSV(c.Input("g_protected"))
+	// An unchecked box sends nothing at all, so presence is the value.
+	force := strings.TrimSpace(c.Input("g_force")) != ""
+
+	for _, f := range []struct{ name, pat string }{
+		{"Branch name pattern", branch},
+		{"Commit message pattern", message},
+	} {
+		if f.pat == "" {
+			continue
+		}
+		if _, err := regexpCompile(f.pat); err != nil {
+			return map[string]any{
+				"html": renderPolicyManager(c, nil,
+					noticeOpt(f.name+" was not saved — "+err.Error(), false)),
+			}, nil
+		}
+	}
+
+	rows := make([]map[string]string, 0, len(protected))
+	for _, brName := range protected {
+		rows = append(rows, map[string]string{"branch": brName})
+	}
+	encoded, err := json.Marshal(rows)
+	if err != nil {
+		return map[string]any{
+			"html": renderPolicyManager(c, nil, noticeOpt("Could not save: "+err.Error(), false)),
+		}, nil
+	}
+
+	fields := map[string]string{
+		"branch_name_pattern":    branch,
+		"commit_message_pattern": message,
+		"protected_branches":     string(encoded),
+		"allow_force_push":       map[bool]string{true: "true", false: "false"}[force],
+	}
+
+	// The re-render reads the values just submitted rather than config, because the
+	// {fields} write has not committed yet — reading config here would redraw the
+	// previous state and look like the save was ignored.
+	g := GlobalPolicy{
+		BranchPattern:  branch,
+		MessagePattern: message,
+		Protected:      protected,
+		AllowForcePush: force,
+	}
+	return map[string]any{
+		"fields": fields,
+		"html": renderPolicyManager(c, nil,
+			noticeOpt("Fallback saved.", true), globalOpt(g)),
+	}, nil
+}
+
+// doPolicyRuleAdd appends an override for the glob typed in the sidebar.
+//
+// Seeding every column empty is deliberate: an empty column inherits, so a brand
+// new row changes nothing until the operator decides what it should override. A row
+// pre-filled with the fallback's values would look like it inherits while actually
+// pinning a copy that stops tracking later fallback edits.
+func doPolicyRuleAdd(c *connector.Ctx) (any, error) {
+	glob := strings.TrimSpace(c.Input("new_repo"))
+	if glob == "" {
+		return map[string]any{
+			"html": renderPolicyManager(c, nil,
+				noticeOpt("Enter a repository glob first, for example */org/infra.", false)),
+		}, nil
+	}
+
+	rules, err := ParseRepoRules(c.Cfg("repo_policies"))
+	if err != nil {
+		return map[string]any{
+			"html": renderPolicyManager(c, nil,
+				noticeOpt("Stored rules are not valid JSON — repair them below before adding: "+err.Error(), false)),
+		}, nil
+	}
+	for _, r := range rules {
+		if r.Repo == glob {
+			return map[string]any{
+				"html": renderPolicyManager(c, nil,
+					noticeOpt("There is already an override for "+glob+".", false)),
+			}, nil
+		}
+	}
+
+	rules = append(rules, RepoRule{Repo: glob})
+	return saveRules(c, rules, fmt.Sprintf("Added %s. Every column inherits until you change it.", glob),
+		fmt.Sprintf("r%d", len(rules)-1))
+}
+
+// doPolicyRuleUpdate writes one override from its panel.
+func doPolicyRuleUpdate(c *connector.Ctx) (any, error) {
+	i, rules, resp := ruleAt(c)
+	if resp != nil {
+		return resp, nil
+	}
+
+	idx := fmt.Sprintf("%d", i)
+	next := RepoRule{
+		Repo:          strings.TrimSpace(c.Input("r_repo_" + idx)),
+		BranchPattern: strings.TrimSpace(c.Input("r_branch_" + idx)),
+		Protected:     strings.TrimSpace(c.Input("r_protected_" + idx)),
+		ForcePush:     strings.TrimSpace(c.Input("r_force_" + idx)),
+	}
+	if next.Repo == "" {
+		return map[string]any{
+			"html": renderPolicyManager(c, nil,
+				noticeOpt("A rule with no glob can never match. Delete it instead.", false),
+				selectedOpt("r"+idx)),
+		}, nil
+	}
+	// Validate before storing: a regex that does not compile blocks every mutation
+	// at runtime, so saving one silently would take the connector offline.
+	if p := next.BranchPattern; p != "" && p != "-" {
+		if _, err := regexpCompile(p); err != nil {
+			return map[string]any{
+				"html": renderPolicyManager(c, nil,
+					noticeOpt("Not saved — branch pattern does not compile: "+err.Error(), false),
+					selectedOpt("r"+idx)),
+			}, nil
+		}
+	}
+
+	rules[i] = next
+	return saveRules(c, rules, "Saved "+next.Repo+".", "r"+idx)
+}
+
+// doPolicyRuleClear marks every inheritable column on one override as cleared.
+//
+// This is why the operator never has to know that "-" is the marker: the button
+// writes it. Typing it by hand is the error the widget exists to prevent, since a
+// blank cell and a "-" cell look the same and do opposite things.
+func doPolicyRuleClear(c *connector.Ctx) (any, error) {
+	i, rules, resp := ruleAt(c)
+	if resp != nil {
+		return resp, nil
+	}
+	rules[i].BranchPattern = "-"
+	rules[i].Protected = "-"
+	// ForcePush is a boolean with no cleared state, so "-" there means inherit —
+	// setting it would be a lie. Left as it is.
+	return saveRules(c, rules,
+		"Cleared "+rules[i].Repo+" — the fallback's branch pattern and protected list no longer apply there.",
+		fmt.Sprintf("r%d", i))
+}
+
+// doPolicyRuleDelete removes one override.
+func doPolicyRuleDelete(c *connector.Ctx) (any, error) {
+	i, rules, resp := ruleAt(c)
+	if resp != nil {
+		return resp, nil
+	}
+	gone := rules[i].Repo
+	rules = append(rules[:i:i], rules[i+1:]...)
+	// Deleting shifts every later index, so returning to "r<i>" would open a
+	// different rule than the one that was on screen. Fall back to the fallback.
+	return saveRules(c, rules, "Deleted "+gone+".", "fallback")
+}
+
+// ruleAt resolves the data-arg index against the stored rules. It returns a ready
+// response instead of an error when the index cannot be used, so callers stay flat.
+func ruleAt(c *connector.Ctx) (int, []RepoRule, map[string]any) {
+	rules, err := ParseRepoRules(c.Cfg("repo_policies"))
+	if err != nil {
+		return 0, nil, map[string]any{
+			"html": renderPolicyManager(c, nil,
+				noticeOpt("Stored rules are not valid JSON: "+err.Error(), false)),
+		}
+	}
+	raw := strings.TrimSpace(c.Input("browser")) // data-arg arrives as "browser"
+	i, convErr := strconv.Atoi(raw)
+	if convErr != nil || i < 0 || i >= len(rules) {
+		// Stale markup: the rules changed in another tab, or the widget was not
+		// re-rendered after a delete.
+		return 0, nil, map[string]any{
+			"html": renderPolicyManager(c, nil,
+				noticeOpt("That rule no longer exists — the list has been refreshed.", false)),
+		}
+	}
+	return i, rules, nil
+}
+
+// saveRules persists a rule set and re-renders from the values just written.
+//
+// Reading config for the re-render would show the previous state, because the
+// {fields} write has not committed when the op returns.
+func saveRules(c *connector.Ctx, rules []RepoRule, msg, scope string) (any, error) {
+	encoded, err := encodeRepoRules(rules)
+	if err != nil {
+		return map[string]any{
+			"html": renderPolicyManager(c, nil, noticeOpt("Could not save: "+err.Error(), false)),
+		}, nil
+	}
+	if warned := countWarnings(rules); warned > 0 {
+		msg += fmt.Sprintf(" %d rule(s) need attention.", warned)
+	}
+	return map[string]any{
+		"fields": map[string]string{"repo_policies": encoded},
+		"html": renderPolicyManager(c, nil,
+			noticeOpt(msg, true), rulesOpt(rules), selectedOpt(scope)),
+	}, nil
+}
+
 func countWarnings(rules []RepoRule) int {
 	var n int
 	for _, r := range rules {
@@ -312,6 +548,14 @@ type renderState struct {
 	rules    []RepoRule
 	override bool
 	samples  []string
+
+	global    GlobalPolicy
+	hasGlobal bool
+
+	// selected is the scope tab to open on this render: "fallback" or "r<N>". After
+	// a save the operator should still be looking at the row they just edited, not
+	// be thrown back to the fallback.
+	selected string
 }
 
 func noticeOpt(msg string, ok bool) renderOpt {
@@ -322,6 +566,19 @@ func noticeOpt(msg string, ok bool) renderOpt {
 // save path where the write has not committed yet.
 func rulesOpt(rules []RepoRule) renderOpt {
 	return func(s *renderState) { s.rules, s.override = rules, true }
+}
+
+// globalOpt renders the given fallback instead of reading config, for the save path
+// where the {fields} write has not committed yet. Reading config there would redraw
+// the previous values and look like the save was ignored.
+func globalOpt(g GlobalPolicy) renderOpt {
+	return func(s *renderState) { s.global, s.hasGlobal = g, true }
+}
+
+// selectedOpt opens a specific scope tab. Used after a save so the render returns
+// the operator to the row they were editing.
+func selectedOpt(scope string) renderOpt {
+	return func(s *renderState) { s.selected = scope }
 }
 
 // samplesOpt supplies the repositories a glob is tested against in the "matches"
@@ -343,6 +600,19 @@ func renderPolicyManagerWithSamples(c *connector.Ctx, sim *simResult, repos []st
 // The global block is shown first and labelled as the fallback so the
 // relationship between it and the overrides is visible in the layout rather than
 // only in documentation.
+// renderPolicyManager renders the whole policy panel: a list of scopes on the
+// left, the selected scope's rules on the right, and a simulator underneath.
+//
+// The list-and-detail shape is what makes this readable. Stacked vertically, the
+// fallback and every override competed for the same column and nothing on screen
+// said which applied where; as a list, "Fallback" is simply the first entry and an
+// override is another row you click. It also scales: ten repositories is ten rows,
+// not ten expanded forms.
+//
+// The tabs are CSS-only — a hidden radio per scope plus `#id:checked ~` rules.
+// Selectors target ids rather than positions: this widget's sibling markup has been
+// reshaped twice already, and a positional selector silently pointed at the wrong
+// element both times.
 func renderPolicyManager(c *connector.Ctx, sim *simResult, opts ...renderOpt) string {
 	st := &renderState{}
 	for _, o := range opts {
@@ -350,104 +620,330 @@ func renderPolicyManager(c *connector.Ctx, sim *simResult, opts ...renderOpt) st
 	}
 
 	global := loadGlobal(c)
+	if st.hasGlobal {
+		// A save supplied the values it just wrote; config still holds the old ones.
+		global = st.global
+	}
+
 	rules, parseErr := st.rules, error(nil)
 	if !st.override {
 		rules, parseErr = ParseRepoRules(c.Cfg("repo_policies"))
 	}
 
-	// Repos to test each glob against. The simulator's subject counts too, so a
-	// glob the operator is actively debugging shows whether it matches.
+	// Repos each glob is tested against. The simulator's subject counts too, so a
+	// glob being debugged right now shows whether it matches.
 	samples := st.samples
 	if sim != nil && strings.TrimSpace(sim.Repo) != "" {
 		samples = append(append([]string(nil), samples...), sim.Repo)
 	}
 
+	const p = "pmw" // class prefix; every rule below is namespaced under it
+
 	var b strings.Builder
-	fmt.Fprintf(&b, `<div style="font-family:inherit;color:%s">`, uiText)
+	fmt.Fprint(&b, policyStyle(p, len(rules)))
+	fmt.Fprintf(&b, `<div class="%s-w">`, p)
 
 	if st.notice != "" {
 		fmt.Fprint(&b, st.notice)
 	}
-
-	fmt.Fprint(&b, renderGlobalBlock(global))
-
 	if parseErr != nil {
-		fmt.Fprint(&b, renderNotice("repo_policies is not valid JSON: "+parseErr.Error(), false))
+		fmt.Fprint(&b, renderNotice("Stored rules are not valid JSON: "+parseErr.Error()+
+			" — use Raw JSON at the bottom to repair them.", false))
 	}
 
-	fmt.Fprintf(&b, `<div style="font-size:12px;font-weight:700;margin:10px 0 6px">PER-REPO RULES (%d) — an override wins over GLOBAL</div>`,
-		len(rules))
-	if len(rules) == 0 {
-		fmt.Fprintf(&b, `<div style="font-size:12px;opacity:.7;margin-bottom:8px">No overrides. Every repository uses the GLOBAL rules above.</div>`)
+	// Radios first: every panel and tab below is a following sibling, which is what
+	// the ~ combinator needs.
+	selected := strings.TrimSpace(st.selected)
+	if selected == "" {
+		selected = "fallback"
 	}
+	fmt.Fprintf(&b, `<input class="%[1]s-r" type="radio" name="%[1]s-scope" id="%[1]s-t-fallback"%[2]s/>`,
+		p, checkedIf(selected == "fallback"))
+	for i := range rules {
+		id := fmt.Sprintf("%s-t-r%d", p, i)
+		fmt.Fprintf(&b, `<input class="%s-r" type="radio" name="%s-scope" id="%s"%s/>`,
+			p, p, id, checkedIf(selected == fmt.Sprintf("r%d", i)))
+	}
+
+	// ── the two columns ──
+	fmt.Fprintf(&b, `<div class="%s-cols">`, p)
+
+	// Left: the scope list.
+	fmt.Fprintf(&b, `<div class="%s-list">`, p)
+	fmt.Fprintf(&b, `<label class="%[1]s-item" for="%[1]s-t-fallback">`+
+		`<span class="%[1]s-name">Fallback</span>`+
+		`<span class="%[1]s-sub">every repository</span></label>`, p)
+
 	for i, r := range rules {
-		fmt.Fprint(&b, renderRuleBlock(i+1, r, samples))
+		warn := validateRule(r)
+		badge := fmt.Sprintf("%d wildcard", Specificity(r.Repo))
+		if Specificity(r.Repo) != 1 {
+			badge += "s"
+		}
+		if warn != "" {
+			badge = "needs attention"
+		}
+		cls := ""
+		if warn != "" {
+			cls = " " + p + "-bad"
+		}
+		fmt.Fprintf(&b, `<label class="%[1]s-item%[2]s" for="%[1]s-t-r%[3]d">`+
+			`<span class="%[1]s-name">%[4]s</span>`+
+			`<span class="%[1]s-sub">%[5]s</span></label>`,
+			p, cls, i, esc(r.Repo), esc(badge))
 	}
+	fmt.Fprintf(&b, `<div class="%[1]s-add">`+
+		`<input name="new_repo" placeholder="*/org/name or d:/code/*" class="%[1]s-in"/>`+
+		`<button type="button" data-op="policy_rule_add" data-arg="" class="%[1]s-btn2">Add repository</button>`+
+		`</div>`, p)
+	fmt.Fprint(&b, `</div>`) // list
 
-	fmt.Fprint(&b, renderEditor(rules))
+	// Right: one panel per scope. All present, CSS reveals the selected one.
+	fmt.Fprintf(&b, `<div class="%s-detail">`, p)
+	fmt.Fprintf(&b, `<div class="%[1]s-panel" id="%[1]s-p-fallback">%[2]s</div>`,
+		p, renderFallbackPanel(p, global))
+	for i, r := range rules {
+		fmt.Fprintf(&b, `<div class="%[1]s-panel" id="%[1]s-p-r%[2]d">%[3]s</div>`,
+			p, i, renderRulePanel(p, i, r, samples))
+	}
+	fmt.Fprint(&b, `</div>`) // detail
+	fmt.Fprint(&b, `</div>`) // cols
+
 	fmt.Fprint(&b, renderSimulator(sim))
-
-	fmt.Fprint(&b, `</div>`)
+	fmt.Fprint(&b, rawJSONBlock(p, rules))
+	fmt.Fprint(&b, `</div>`) // w
 	return b.String()
 }
 
-// renderGlobalBlock renders the fallback layer, first and labelled as such.
-func renderGlobalBlock(g GlobalPolicy) string {
+func checkedIf(on bool) string {
+	if on {
+		return " checked"
+	}
+	return ""
+}
+
+// policyStyle is the widget's stylesheet. One block, every selector prefixed, and
+// the reveal rules written per id — see renderPolicyManager for why not positional.
+func policyStyle(p string, ruleCount int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `<div style="border:1px solid %s;border-radius:8px;padding:10px;margin-bottom:10px;background:%s">`,
-		uiBorder, uiSunken)
-	fmt.Fprintf(&b, `<div style="font-size:12px;font-weight:700;margin-bottom:6px">GLOBAL — the fallback, used when no rule below matches</div>`)
+	fmt.Fprintf(&b, `<style>
+.%[1]s-w{color:%[2]s;font-size:13px}
+.%[1]s-r{position:absolute;opacity:0;width:0;height:0;pointer-events:none}
+.%[1]s-cols{display:grid;grid-template-columns:200px 1fr;gap:12px;align-items:start}
+@media (max-width:820px){.%[1]s-cols{grid-template-columns:1fr}}
+.%[1]s-list{display:flex;flex-direction:column;gap:2px;border:1px solid %[3]s;border-radius:8px;padding:6px;background:%[4]s}
+.%[1]s-item{display:block;cursor:pointer;padding:6px 8px;border-radius:6px;border:1px solid transparent;user-select:none}
+.%[1]s-item:hover{background:%[5]s}
+.%[1]s-name{display:block;font-family:monospace;font-size:12px;word-break:break-all}
+.%[1]s-sub{display:block;font-size:11px;opacity:.55;margin-top:1px}
+.%[1]s-bad .%[1]s-sub{color:%[6]s;opacity:1}
+.%[1]s-add{margin-top:6px;padding-top:6px;border-top:1px solid %[3]s;display:flex;flex-direction:column;gap:4px}
+.%[1]s-detail{min-width:0}
+.%[1]s-panel{display:none;border:1px solid %[3]s;border-radius:8px;padding:12px;background:%[5]s}
+.%[1]s-h{font-weight:600;font-size:13px;margin-bottom:2px}
+.%[1]s-hint{font-size:11px;opacity:.6;margin-bottom:10px}
+.%[1]s-f{margin-bottom:10px}
+.%[1]s-l{display:block;font-size:11px;opacity:.65;margin-bottom:3px}
+.%[1]s-in{width:100%%;box-sizing:border-box;font-family:monospace;font-size:12px;padding:6px 7px;border:1px solid %[3]s;border-radius:6px;background:%[5]s;color:%[2]s}
+.%[1]s-help{font-size:11px;opacity:.6;margin-top:3px}
+.%[1]s-err{font-size:11px;color:%[6]s;margin-top:3px}
+.%[1]s-cb{display:flex;gap:7px;align-items:flex-start;font-size:12px;cursor:pointer;margin-bottom:10px}
+.%[1]s-actions{display:flex;gap:6px;flex-wrap:wrap;border-top:1px solid %[3]s;padding-top:10px}
+.%[1]s-btn{font-size:12px;padding:6px 11px;border-radius:6px;border:1px solid %[7]s;background:%[7]s;color:#fff;font-weight:600;cursor:pointer}
+.%[1]s-btn2{font-size:12px;padding:6px 11px;border-radius:6px;border:1px solid %[3]s;background:transparent;color:%[2]s;cursor:pointer}
+.%[1]s-btn3{font-size:12px;padding:6px 11px;border-radius:6px;border:1px solid %[6]s;background:transparent;color:%[6]s;cursor:pointer}
+.%[1]s-match{font-size:11px;opacity:.7;margin-top:3px;font-family:monospace}
+.%[1]s-raw{margin-top:12px}
+.%[1]s-raw summary{cursor:pointer;font-size:11px;opacity:.6}
+.%[1]s-ta{width:100%%;box-sizing:border-box;font-family:monospace;font-size:11px;padding:6px;margin-top:6px;border:1px solid %[3]s;border-radius:6px;background:%[5]s;color:%[2]s}
+`, p, uiText, uiBorder, uiPanel, uiSunken, uiBad, uiOK)
 
-	pat := g.BranchPattern
-	if pat == "" {
-		pat = "(none — any branch name is accepted)"
+	// Selected tab, and its panel. Ids, not positions.
+	fmt.Fprintf(&b, `
+#%[1]s-t-fallback:checked~.%[1]s-cols label[for="%[1]s-t-fallback"]{background:%[2]s1a;border-color:%[2]s;font-weight:600}
+#%[1]s-t-fallback:checked~.%[1]s-cols #%[1]s-p-fallback{display:block}
+`, p, uiOK)
+	for i := 0; i < ruleCount; i++ {
+		fmt.Fprintf(&b, `
+#%[1]s-t-r%[2]d:checked~.%[1]s-cols label[for="%[1]s-t-r%[2]d"]{background:%[3]s1a;border-color:%[3]s;font-weight:600}
+#%[1]s-t-r%[2]d:checked~.%[1]s-cols #%[1]s-p-r%[2]d{display:block}
+`, p, i, uiOK)
 	}
-	fmt.Fprint(&b, kvRow("branch pattern", pat))
-
-	prot := strings.Join(g.Protected, ", ")
-	if prot == "" {
-		prot = "(none)"
-	}
-	fmt.Fprint(&b, kvRow("protected", prot))
-
-	force := "denied"
-	if g.AllowForcePush {
-		force = "allowed"
-	}
-	fmt.Fprint(&b, kvRow("force push", force))
-
-	fmt.Fprintf(&b, `<div style="font-size:11px;opacity:.6;margin-top:6px">Edit these in the Branch Policy section above.</div>`)
-	fmt.Fprint(&b, `</div>`)
+	fmt.Fprintf(&b, `</style>`)
 	return b.String()
 }
 
-// renderRuleBlock renders one override: its wildcard count, which sample repos
-// it matches, each column in words, and any validation warning.
-func renderRuleBlock(n int, r RepoRule, samples []string) string {
-	warn := validateRule(r)
-	border := uiBorder
-	if warn != "" {
-		border = uiBad
-	}
-
+// renderFallbackPanel is the editable fallback: what applies when no override
+// matches. Each field shows the raw pattern (what is stored) and, below it, what
+// that value means — "empty" and "any name is accepted" are the same state, and
+// only the second reads as a decision.
+func renderFallbackPanel(p string, g GlobalPolicy) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, `<div style="border:1px solid %s;border-radius:8px;padding:10px;margin-bottom:8px;background:%s">`,
-		border, uiPanel)
-	fmt.Fprintf(&b, `<div style="font-size:12px;font-weight:600;margin-bottom:4px">RULE %d — <span style="font-family:monospace">%s</span> `+
-		`<span style="opacity:.6;font-weight:400">(%d wildcard(s); fewer wins)</span></div>`,
-		n, esc(r.Repo), Specificity(r.Repo))
+	fmt.Fprintf(&b, `<div class="%s-h">Fallback</div>`, p)
+	fmt.Fprintf(&b, `<div class="%s-hint">Applies to every repository. Any override on the left wins over these.</div>`, p)
 
-	if len(samples) > 0 {
-		fmt.Fprint(&b, kvRow("matches", matchSummary(r.Repo, samples)))
-	}
-	fmt.Fprint(&b, kvRow("branch pattern", inheritLabel(r.BranchPattern)))
-	fmt.Fprint(&b, kvRow("protected", inheritLabel(r.Protected)))
-	fmt.Fprint(&b, kvRow("force push", forcePushLabel(r.ForcePush)))
+	field(&b, p, "g_branch", "Branch name pattern", "^(fix|feat|chore)/[a-z0-9._-]+$",
+		g.BranchPattern, branchHelp(g.BranchPattern), patternErr(g.BranchPattern))
+	field(&b, p, "g_message", "Commit message pattern", `^(feat|fix|chore)(\(.+\))?: .+`,
+		g.MessagePattern, messageHelp(g.MessagePattern), patternErr(g.MessagePattern))
+	field(&b, p, "g_protected", "Protected branches", "main, master, release/*",
+		strings.Join(g.Protected, ", "), protectedHelp(g.Protected), "")
 
-	if warn != "" {
-		fmt.Fprint(&b, renderNotice(warn, false))
+	// A checkbox, not a text field: the browser sends nothing when it is unchecked,
+	// so the save reads presence rather than parsing a word.
+	fmt.Fprintf(&b, `<label class="%[1]s-cb"><input type="checkbox" name="g_force" value="true"%[2]s/>`+
+		`<span>Allow force push<span style="opacity:.6"> — --force-with-lease on push, and reset --hard</span></span></label>`,
+		p, checkedIf(g.AllowForcePush))
+
+	fmt.Fprintf(&b, `<div class="%[1]s-actions">`+
+		`<button type="button" data-op="policy_global_save" data-arg="" class="%[1]s-btn">Save fallback</button>`+
+		`</div>`, p)
+	return b.String()
+}
+
+// renderRulePanel is one override. Its inputs are named with the rule's index so a
+// save knows which row it edited.
+func renderRulePanel(p string, i int, r RepoRule, samples []string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `<div class="%s-h">%s</div>`, p, esc(r.Repo))
+
+	hint := fmt.Sprintf("Overrides the fallback for repositories matching this glob. %d wildcard(s) — fewer wins over more.",
+		Specificity(r.Repo))
+	fmt.Fprintf(&b, `<div class="%s-hint">%s</div>`, p, esc(hint))
+
+	if m := matchSummary(r.Repo, samples); m != "" {
+		fmt.Fprintf(&b, `<div class="%s-match">%s</div>`, p, esc(m))
 	}
-	fmt.Fprint(&b, `</div>`)
+	if warn := validateRule(r); warn != "" {
+		fmt.Fprintf(&b, `<div class="%s-err">%s</div>`, p, esc(warn))
+	}
+
+	idx := fmt.Sprintf("%d", i)
+	field(&b, p, "r_repo_"+idx, "Repository glob", "*/org/infra", r.Repo,
+		"Matched against both the local path and host/owner/repo.", "")
+	field(&b, p, "r_branch_"+idx, "Branch name pattern", "^ops/.+$", r.BranchPattern,
+		inheritHelp(r.BranchPattern, "branch pattern"), patternErr(r.BranchPattern))
+	field(&b, p, "r_protected_"+idx, "Protected branches", "master, main", r.Protected,
+		inheritHelp(r.Protected, "protected list"), "")
+
+	// force_push is a tri-state stored as text: inherit / true / false. A select
+	// says that plainly; a checkbox cannot express "inherit" at all.
+	fmt.Fprintf(&b, `<div class="%[1]s-f"><label class="%[1]s-l" for="%[1]s-r_force_%[2]s">Force push</label>`+
+		`<select id="%[1]s-r_force_%[2]s" name="r_force_%[2]s" class="%[1]s-in">`, p, idx)
+	for _, o := range []struct{ val, label string }{
+		{"", "Inherit from fallback"},
+		{"true", "Allowed"},
+		{"false", "Denied"},
+	} {
+		sel := ""
+		if normForce(r.ForcePush) == o.val {
+			sel = " selected"
+		}
+		fmt.Fprintf(&b, `<option value="%s"%s>%s</option>`, esc(o.val), sel, esc(o.label))
+	}
+	fmt.Fprintf(&b, `</select></div>`)
+
+	fmt.Fprintf(&b, `<div class="%[1]s-actions">`+
+		`<button type="button" data-op="policy_rule_update" data-arg="%[2]s" class="%[1]s-btn">Save</button>`+
+		`<button type="button" data-op="policy_rule_clear" data-arg="%[2]s" class="%[1]s-btn2">Clear inherited</button>`+
+		`<button type="button" data-op="policy_rule_delete" data-arg="%[2]s" class="%[1]s-btn3">Delete</button>`+
+		`</div>`, p, idx)
+	return b.String()
+}
+
+// field renders one labelled input with its help line and, when the value is a
+// regex that does not compile, the compiler's own message.
+func field(b *strings.Builder, p, name, label, placeholder, value, help, errMsg string) {
+	fmt.Fprintf(b, `<div class="%[1]s-f">`, p)
+	fmt.Fprintf(b, `<label class="%[1]s-l" for="%[1]s-%[2]s">%[3]s</label>`, p, esc(name), esc(label))
+	fmt.Fprintf(b, `<input id="%[1]s-%[2]s" name="%[2]s" value="%[3]s" placeholder="%[4]s" class="%[1]s-in"/>`,
+		p, esc(name), esc(value), esc(placeholder))
+	if errMsg != "" {
+		fmt.Fprintf(b, `<div class="%s-err">%s</div>`, p, esc(errMsg))
+	} else if help != "" {
+		fmt.Fprintf(b, `<div class="%s-help">%s</div>`, p, esc(help))
+	}
+	fmt.Fprint(b, `</div>`)
+}
+
+// The three help lines below turn a stored value into its consequence. An empty
+// pattern field cannot say "then anything is accepted" for itself, and that is
+// exactly the state an operator misreads.
+
+func branchHelp(pat string) string {
+	if strings.TrimSpace(pat) == "" {
+		return "Empty — any name is accepted when a branch is created."
+	}
+	return "Checked when a branch is CREATED. Pushing to an existing branch is not affected."
+}
+
+func messageHelp(pat string) string {
+	if strings.TrimSpace(pat) == "" {
+		return "Empty — any commit message is accepted."
+	}
+	return "Checked on commit only. A push carries no message of its own."
+}
+
+func protectedHelp(list []string) string {
+	if len(list) == 0 {
+		return "Empty — no branch is protected, so a direct push to main is allowed."
+	}
+	return "Direct push, commit, merge and pull are refused on these. Reads are unaffected."
+}
+
+// patternErr returns the compiler's message for a regex that does not compile, or
+// "" when the value is empty or valid. Shown in place of the help line, because a
+// broken pattern blocks every mutation at runtime and that is the more urgent fact.
+func patternErr(pat string) string {
+	pat = strings.TrimSpace(pat)
+	if pat == "" || pat == "-" {
+		return ""
+	}
+	if _, err := regexpCompile(pat); err != nil {
+		return "Does not compile: " + err.Error() + " — mutations stay blocked until this is fixed."
+	}
+	return ""
+}
+
+// inheritHelp spells out the two blanks a rule column can hold. "" and "-" look
+// identical in a text field and do opposite things.
+func inheritHelp(v, what string) string {
+	switch strings.TrimSpace(v) {
+	case "":
+		return "Empty — inherits the fallback's " + what + "."
+	case "-":
+		return "Cleared — the fallback's " + what + " does not apply here."
+	default:
+		return "Replaces the fallback's " + what + " for matching repositories."
+	}
+}
+
+// normForce maps the stored tri-state onto the three select values. "-" and "" are
+// the same thing for a boolean (see RepoRule).
+func normForce(v string) string {
+	switch strings.TrimSpace(v) {
+	case "true":
+		return "true"
+	case "false":
+		return "false"
+	default:
+		return ""
+	}
+}
+
+// rawJSONBlock is the escape hatch. The config fields are hidden, so if a button
+// here ever fails there would otherwise be no way to repair a rule set — this stays
+// collapsed and out of the way until it is needed.
+func rawJSONBlock(p string, rules []RepoRule) string {
+	encoded, _ := encodeRepoRules(rules)
+	var b strings.Builder
+	fmt.Fprintf(&b, `<details class="%s-raw">`, p)
+	fmt.Fprintf(&b, `<summary>Raw JSON — for repairing rules by hand</summary>`)
+	fmt.Fprintf(&b, `<textarea name="rule_json" rows="4" class="%s-ta">%s</textarea>`, p, esc(encoded))
+	fmt.Fprintf(&b, `<div class="%[1]s-actions" style="margin-top:6px">`+
+		`<button type="button" data-op="policy_rule_save" data-arg="" class="%[1]s-btn2">Replace all rules</button>`+
+		`</div>`, p)
+	fmt.Fprint(&b, `</details>`)
 	return b.String()
 }
 
@@ -471,58 +967,6 @@ func matchSummary(glob string, samples []string) string {
 	}
 	sort.Strings(hits)
 	return strings.Join(hits, ", ")
-}
-
-// renderEditor renders the rule editor.
-//
-// The textarea is the transport — one round-trip writes the whole set, which
-// sidesteps the sequential-write problem a per-rule field would create. The
-// buttons above it are the reason the operator never types "-": Add rule seeds a
-// well-formed row with its columns spelled out, and the two Clear buttons append
-// a row that already carries the marker.
-func renderEditor(rules []RepoRule) string {
-	current, err := encodeRepoRules(rules)
-	if err != nil {
-		current = "[]"
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, `<div style="border:1px solid %s;border-radius:8px;padding:10px;margin-bottom:10px;background:%s">`,
-		uiBorder, uiPanel)
-	fmt.Fprintf(&b, `<div style="font-size:12px;font-weight:600;margin-bottom:6px">Edit rules</div>`)
-	fmt.Fprintf(&b, `<textarea name="rule_json" rows="7" spellcheck="false" style="width:100%%;box-sizing:border-box;font-family:monospace;font-size:12px;padding:6px;border:1px solid %s;border-radius:6px;background:%s;color:%s">%s</textarea>`,
-		uiBorder, uiPanel, uiText, esc(current))
-
-	fmt.Fprintf(&b, `<div style="font-size:11px;opacity:.75;margin:6px 0">`+
-		`<div><span style="font-family:monospace">repo</span> — glob matched against the checkout path or host/owner/repo. Example: <span style="font-family:monospace">*/org/*</span></div>`+
-		`<div><span style="font-family:monospace">branch_pattern</span> — regex a new branch must match. Checked when you save.</div>`+
-		`<div><span style="font-family:monospace">protected</span> — comma-separated globs.</div>`+
-		`<div><span style="font-family:monospace">force_push</span> — <span style="font-family:monospace">true</span> or <span style="font-family:monospace">false</span>.</div>`+
-		`<div style="margin-top:4px">Leave a column <b>empty to inherit</b> the GLOBAL value, or set it to <span style="font-family:monospace">"-"</span> to <b>clear</b> it so no GLOBAL value applies. Use the buttons below rather than typing the marker.</div>`+
-		`</div>`)
-
-	// Templates. data-op="__select" is reserved by the widget for storing a
-	// value, so these carry no data-op: they are inert examples the operator
-	// copies, which keeps the whole editor inside one save round-trip.
-	fmt.Fprintf(&b, `<details style="margin-bottom:6px"><summary style="font-size:11px;cursor:pointer;opacity:.8">Row templates — copy one into the box above</summary>`)
-	tpl := func(label, row string) {
-		fmt.Fprintf(&b, `<div style="font-size:11px;margin-top:4px"><div style="opacity:.7">%s</div>`+
-			`<div style="font-family:monospace;padding:4px 6px;border:1px dashed %s;border-radius:4px;background:%s;word-break:break-all">%s</div></div>`,
-			esc(label), uiBorder, uiSunken, esc(row))
-	}
-	tpl("Inherit everything except the branch pattern",
-		`{"repo":"*/org/api","branch_pattern":"^(fix|feat)/.+$","protected":"","force_push":""}`)
-	tpl("Clear the protected list for a sandbox — no branch is protected there",
-		`{"repo":"*/org/sandbox","branch_pattern":"-","protected":"-","force_push":"true"}`)
-	tpl("Tighten one repository — protect more, deny force push",
-		`{"repo":"*/org/infra","branch_pattern":"^ops/.+$","protected":"master,main,release/*","force_push":"false"}`)
-	fmt.Fprint(&b, `</details>`)
-
-	fmt.Fprintf(&b, `<button type="button" data-op="policy_rule_save" data-arg="" style="font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid %s;background:%s;color:#fff;cursor:pointer">Save rules</button>`,
-		uiOK, uiOK)
-	fmt.Fprintf(&b, `<span style="font-size:11px;opacity:.6;margin-left:8px">Every regex is compiled on save; problems are reported above.</span>`)
-	fmt.Fprint(&b, `</div>`)
-	return b.String()
 }
 
 // renderSimulator renders the "what would happen if" form and, when a run has

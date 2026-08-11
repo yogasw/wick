@@ -172,7 +172,7 @@ func TestInheritAndClearAreLabelled(t *testing.T) {
 	if !strings.Contains(html, "inherit") {
 		t.Errorf("an empty column must be labelled as inheriting from global:\n%s", html)
 	}
-	if !strings.Contains(html, "cleared") {
+	if !strings.Contains(strings.ToLower(html), "cleared") {
 		t.Errorf(`a "-" column must be labelled as clearing the inherited value:\n%s`, html)
 	}
 	// The operator must never have to type "-" — the widget offers it.
@@ -183,7 +183,7 @@ func TestInheritAndClearAreLabelled(t *testing.T) {
 
 // TestGlobalShownFirstAsFallback asserts the layout puts GLOBAL above the
 // overrides and says what it is for, so precedence reads off the page.
-func TestGlobalShownFirstAsFallback(t *testing.T) {
+func TestFallbackIsTheFirstScopeInTheList(t *testing.T) {
 	c := testCtx(map[string]string{
 		"branch_name_pattern": `^ops/.+$`,
 		"protected_branches":  `[{"branch":"master"},{"branch":"release/*"}]`,
@@ -192,17 +192,40 @@ func TestGlobalShownFirstAsFallback(t *testing.T) {
 	})
 	html := renderPolicyManager(c, nil)
 
-	gi := strings.Index(html, "GLOBAL")
-	ri := strings.Index(html, "PER-REPO")
-	if gi < 0 || ri < 0 {
-		t.Fatalf("expected both a GLOBAL and a PER-REPO section:\n%s", html)
+	// Precedence is expressed by list order now, not by vertical stacking: Fallback
+	// is the first entry and everything below it wins over it.
+	fi := strings.Index(html, `for="pmw-t-fallback"`)
+	ri := strings.Index(html, `for="pmw-t-r0"`)
+	if fi < 0 || ri < 0 {
+		t.Fatalf("expected a Fallback entry and at least one override entry")
 	}
-	if gi > ri {
-		t.Error("GLOBAL must render before the per-repo overrides so it reads as the fallback")
+	if fi > ri {
+		t.Error("Fallback must be the first entry in the scope list")
 	}
-	for _, want := range []string{`^ops/.+$`, "release/*", "allowed"} {
+
+	// Every scope needs a panel AND a rule that reveals it. A missing pair is the
+	// failure that shipped twice before: the tab highlights, the panel stays hidden.
+	for _, want := range []string{
+		`id="pmw-p-fallback"`,
+		`id="pmw-p-r0"`,
+		`#pmw-t-fallback:checked~.pmw-cols #pmw-p-fallback{display:block}`,
+		`#pmw-t-r0:checked~.pmw-cols #pmw-p-r0{display:block}`,
+	} {
 		if !strings.Contains(html, want) {
-			t.Errorf("global summary is missing %q\n%s", want, html)
+			t.Errorf("missing %q", want)
+		}
+	}
+
+	// The stored values come back as editable inputs — this widget is their only
+	// editor now.
+	for _, want := range []string{
+		`name="g_branch" value="^ops/.+$"`,
+		`name="g_protected" value="master, release/*"`,
+		`name="g_force" value="true" checked`,
+		`data-op="policy_global_save"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("the fallback editor is missing %q", want)
 		}
 	}
 	assertNoTailwind(t, html)
@@ -508,9 +531,174 @@ func TestDestructiveOpsAreMarked(t *testing.T) {
 // assertNoTailwind fails when markup carries Tailwind utility classes. The
 // manager's Tailwind build does not scan HTML a connector returns at runtime, so
 // those classes are purged and the widget renders unstyled.
+// assertNoTailwind checks that every class the markup uses is one this widget
+// defines itself.
+//
+// The rule is not "no class attributes" — that was the old shape, when the widget
+// styled everything inline. A widget that ships its own <style> block may use class
+// names freely, as long as they are its own: what Tailwind's build purges is classes
+// it generated, and it never scans markup a connector returns at runtime. An
+// unprefixed name is the real hazard, because it would also restyle the manager's
+// own page around the widget.
 func assertNoTailwind(t *testing.T, html string) {
 	t.Helper()
-	if strings.Contains(html, `class="`) {
-		t.Errorf("connector HTML must not use class= at all; Tailwind purges it:\n%s", html)
+	for _, frag := range strings.Split(html, `class="`)[1:] {
+		i := strings.IndexByte(frag, '"')
+		if i < 0 {
+			t.Errorf("unterminated class attribute:\n%s", html)
+			continue
+		}
+		for _, cls := range strings.Fields(frag[:i]) {
+			if !strings.HasPrefix(cls, "pmw-") {
+				t.Errorf("class %q is not defined by this widget; it would leak or be purged", cls)
+			}
+		}
+	}
+}
+
+func TestPolicyGlobalSaveWritesEveryField(t *testing.T) {
+	// The config fields are hidden, so this op is the only way they get set. If it
+	// drops one, that rule becomes unreachable with no error anywhere.
+	c := testWidgetCtx(map[string]string{}, map[string]string{
+		"g_branch":    `^(fix|feat)/.+$`,
+		"g_message":   `^(feat|fix): .+`,
+		"g_protected": "main, master, release/*",
+		"g_force":     "true",
+	})
+	out, err := doPolicyGlobalSave(c)
+	if err != nil {
+		t.Fatalf("doPolicyGlobalSave: %v", err)
+	}
+	m := out.(map[string]any)
+	fields, ok := m["fields"].(map[string]string)
+	if !ok {
+		t.Fatalf("no fields map returned: %v", m["fields"])
+	}
+
+	if fields["branch_name_pattern"] != `^(fix|feat)/.+$` {
+		t.Errorf("branch_name_pattern = %q", fields["branch_name_pattern"])
+	}
+	if fields["commit_message_pattern"] != `^(feat|fix): .+` {
+		t.Errorf("commit_message_pattern = %q", fields["commit_message_pattern"])
+	}
+	if fields["allow_force_push"] != "true" {
+		t.Errorf("allow_force_push = %q, want true", fields["allow_force_push"])
+	}
+	// protected_branches is a kvlist, so it must be the JSON array shape the parser
+	// reads — not the comma-separated text the operator typed.
+	rows, perr := ParseKVList(fields["protected_branches"])
+	if perr != nil {
+		t.Fatalf("protected_branches is not valid kvlist JSON: %v", perr)
+	}
+	if len(rows) != 3 || rows[0]["branch"] != "main" || rows[2]["branch"] != "release/*" {
+		t.Errorf("protected_branches = %q, want three branch rows", fields["protected_branches"])
+	}
+
+	// The re-render must show what was just submitted; reading config here would
+	// redraw the old values and look like the save was ignored.
+	html, _ := m["html"].(string)
+	if !strings.Contains(html, `value="^(fix|feat)/.+$"`) {
+		t.Errorf("the re-render does not show the values just saved:\n%s", html)
+	}
+}
+
+func TestPolicyGlobalSaveRefusesAnUncompilableRegex(t *testing.T) {
+	// A pattern that does not compile blocks every mutating operation at runtime, so
+	// storing one would take the connector offline with nothing on screen explaining
+	// why. Refuse the save and keep the working policy in force.
+	for _, tc := range []struct{ field, value, wantName string }{
+		{"g_branch", `^(fix/.+$`, "Branch name pattern"},
+		{"g_message", `^(feat: .+`, "Commit message pattern"},
+	} {
+		in := map[string]string{"g_branch": "", "g_message": "", "g_protected": ""}
+		in[tc.field] = tc.value
+
+		out, err := doPolicyGlobalSave(testWidgetCtx(map[string]string{}, in))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.field, err)
+		}
+		m := out.(map[string]any)
+		if _, wrote := m["fields"]; wrote {
+			t.Errorf("%s: a malformed regex was stored", tc.field)
+		}
+		html, _ := m["html"].(string)
+		if !strings.Contains(html, tc.wantName+" was not saved") {
+			t.Errorf("%s: the refusal does not name the field:\n%s", tc.field, html)
+		}
+	}
+}
+
+func TestPolicyGlobalSaveTreatsAnAbsentCheckboxAsFalse(t *testing.T) {
+	// A browser sends nothing for an unchecked box, so absence has to mean denied.
+	// Reading it as "unset, keep the old value" would make force push impossible to
+	// turn back off.
+	out, err := doPolicyGlobalSave(testWidgetCtx(
+		map[string]string{"allow_force_push": "true"},
+		map[string]string{"g_branch": "", "g_message": "", "g_protected": ""}, // no g_force
+	))
+	if err != nil {
+		t.Fatalf("doPolicyGlobalSave: %v", err)
+	}
+	fields := out.(map[string]any)["fields"].(map[string]string)
+	if fields["allow_force_push"] != "false" {
+		t.Errorf("allow_force_push = %q, want false when the box is unchecked",
+			fields["allow_force_push"])
+	}
+}
+
+func TestSimulatorJudgesACommitMessage(t *testing.T) {
+	cfg := map[string]string{"commit_message_pattern": `^(feat|fix): .+`}
+
+	deny, err := doPolicySimulate(testWidgetCtx(cfg, map[string]string{
+		"sim_op": "commit", "sim_branch": "fix/x", "sim_message": "wip",
+	}))
+	if err != nil {
+		t.Fatalf("simulate: %v", err)
+	}
+	if html, _ := deny.(map[string]any)["html"].(string); !strings.Contains(html, "DENIED") {
+		t.Errorf("a message violating the pattern was allowed:\n%s", html)
+	}
+
+	allow, err := doPolicySimulate(testWidgetCtx(cfg, map[string]string{
+		"sim_op": "commit", "sim_branch": "fix/x", "sim_message": "fix: real change",
+	}))
+	if err != nil {
+		t.Fatalf("simulate: %v", err)
+	}
+	html, _ := allow.(map[string]any)["html"].(string)
+	if !strings.Contains(html, "ALLOWED") {
+		t.Errorf("a conforming message was refused:\n%s", html)
+	}
+	// The message and the pattern in force both belong in the verdict, so a denial is
+	// explainable without going back to the fields.
+	if !strings.Contains(html, "fix: real change") {
+		t.Errorf("the verdict does not echo the message judged:\n%s", html)
+	}
+	if !strings.Contains(html, `^(feat|fix): .+`) {
+		t.Errorf("the verdict does not report the pattern in force:\n%s", html)
+	}
+}
+
+func TestPolicyWidgetOwnsEveryPolicyField(t *testing.T) {
+	// The premise of the single-widget design: no policy field may render as an
+	// ordinary row, or the same value would be editable in two places with nothing
+	// saying which wins.
+	owned := map[string]bool{
+		"branch_name_pattern":    true,
+		"commit_message_pattern": true,
+		"protected_branches":     true,
+		"allow_force_push":       true,
+		"repo_policies":          true,
+	}
+	for _, cfg := range entity.StructToConfigs(Config{}) {
+		if !owned[cfg.Key] {
+			continue
+		}
+		if !cfg.Hidden {
+			t.Errorf("config %q is not hidden; the widget is meant to be its only editor", cfg.Key)
+		}
+		if cfg.Group != "" {
+			t.Errorf("config %q carries group %q; a hidden field should not claim a card", cfg.Key, cfg.Group)
+		}
 	}
 }

@@ -56,12 +56,27 @@ type Config struct {
 	ConvertSSHRemoteToHTTPS bool   `wick:"bool;default=true;group=Remote||collapsed;desc=Rewrite SSH remotes to HTTPS for network operations. The repository's .git/config is never modified."`
 	RemoteHostMap           string `wick:"kvlist=ssh_host|https_host;group=Remote;desc=Map SSH hosts to HTTPS hosts for self-hosted servers. Leave empty for GitHub, GitLab and Bitbucket."`
 
-	BranchNamePattern string `wick:"group=Branch Policy||collapsed;desc=Regular expression a new branch name must match. Example: ^(fix|feat|chore)/[a-z0-9._-]+$"`
-	ProtectedBranches string `wick:"kvlist=branch;group=Branch Policy;desc=Protected branches. Direct pushes and commits are blocked. Globs allowed, for example release/*"`
-	AllowForcePush    bool   `wick:"bool;group=Branch Policy;desc=Allow --force and --force-with-lease. Off by default."`
+	// The whole policy is edited through one widget, so every field it owns is
+	// hidden. Two reasons this beats a grid of inputs:
+	//
+	//   - A regex written blind is a guess. The widget compiles it as you save,
+	//     shows which repositories a glob actually matches, and lets you try a
+	//     repo/op/branch/message against the compiled result before anyone relies
+	//     on it.
+	//   - Global rules and per-repo overrides are one decision at two scopes. Laid
+	//     out as separate inputs, nothing on screen says which wins; stacked inside
+	//     one panel, precedence reads top-down.
+	//
+	// Hidden rows are still seeded and still readable via c.Cfg, so the runtime is
+	// unchanged — only the default Settings rendering is skipped. The widget carries
+	// a raw-JSON escape hatch for the case where its own buttons ever fail.
+	BranchNamePattern    string `wick:"hidden;desc=Regex a new branch name must match. Managed by the Policy widget."`
+	ProtectedBranches    string `wick:"kvlist=branch;hidden;desc=Protected branches. Managed by the Policy widget."`
+	AllowForcePush       bool   `wick:"bool;hidden;desc=Allow --force and --force-with-lease. Managed by the Policy widget."`
+	CommitMessagePattern string `wick:"hidden;desc=Regex a commit message must match. Managed by the Policy widget."`
+	RepoPolicies         string `wick:"hidden;desc=Per-repo policy rows. Managed by the Policy widget."`
 
-	RepoPolicies  string `wick:"hidden;desc=Per-repo policy rows, managed by the Policy Rules widget."`
-	PolicyManager string `wick:"html=policy_manager;group=Policy Rules|Per-repo overrides and a simulator to test them before relying on them.|collapsed;desc=Edit and test per-repo policy rules."`
+	PolicyManager string `wick:"html=policy_manager;group=Policy|Everything this connector refuses to do: the fallback that applies everywhere, per-repo overrides that win over it, and a simulator to check a rule before trusting it.|collapsed;desc=The only place policy is edited. Nothing outside this panel changes it."`
 
 	RawEnabled bool   `wick:"bool;group=Raw Operation||collapsed;desc=Enable the raw operation, which runs an arbitrary git subcommand. Off by default."`
 	RawRules   string `wick:"kvlist=subcommand|mode;group=Raw Operation;desc=Per-subcommand rules for raw. mode is allow or deny. A subcommand that is not listed is denied."`
@@ -83,9 +98,10 @@ type Config struct {
 	// form and silently wipe whatever had been typed. Storing the values means a
 	// re-mount restores them instead of losing them, and the operator's last target
 	// is still there next time the page is opened.
-	TestRepo   string `wick:"hidden;desc=Last repository tested, kept so the diagnostics form survives a re-render."`
-	TestRemote string `wick:"hidden;desc=Last remote tested."`
-	TestBranch string `wick:"hidden;desc=Last branch tested."`
+	TestRepo    string `wick:"hidden;desc=Last repository tested, kept so the diagnostics form survives a re-render."`
+	TestRemote  string `wick:"hidden;desc=Last remote tested."`
+	TestBranch  string `wick:"hidden;desc=Last branch tested."`
+	TestMessage string `wick:"hidden;desc=Last commit message tested."`
 }
 
 // Meta identifies the connector. Key must equal the folder name.
@@ -570,9 +586,9 @@ func doCommit(c *connector.Ctx) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return dryRun(c, "commit", repo, Request{Branch: branch}, args)
+		return dryRun(c, "commit", repo, Request{Branch: branch, Message: msg}, args)
 	}
-	return execute(c, "commit", repo, Request{Branch: branch}, build, false)
+	return execute(c, "commit", repo, Request{Branch: branch, Message: msg}, build, false)
 }
 
 func doStash(c *connector.Ctx) (any, error) {
@@ -1028,6 +1044,21 @@ func Operations() []connector.Category {
 			connector.OpConfigOnly("policy_simulate", "Simulate Policy",
 				"Evaluate a hypothetical operation against the current policy and report the verdict, the matched rule and the command that would run. Backs the simulator button.",
 				policyManagerInput{}, doPolicySimulate, wickdocs.Docs{}),
+			connector.OpConfigOnly("policy_global_save", "Save Policy Fallback",
+				"Write the fallback policy — branch pattern, commit message pattern, protected branches, force push — after checking that every regex compiles. Backs the Save fallback button in the config form; never called by an agent.",
+				policyManagerInput{}, doPolicyGlobalSave, wickdocs.Docs{}),
+			connector.OpConfigOnly("policy_rule_add", "Add Policy Override",
+				"Append a per-repo override for a repository glob, with every column inheriting the fallback until it is changed. Backs the Add repository button; never called by an agent.",
+				policyManagerInput{}, doPolicyRuleAdd, wickdocs.Docs{}),
+			connector.OpConfigOnly("policy_rule_update", "Update Policy Override",
+				"Write one per-repo override from its panel, after checking that its branch pattern compiles. Backs the Save button on an override; never called by an agent.",
+				policyManagerInput{}, doPolicyRuleUpdate, wickdocs.Docs{}),
+			connector.OpConfigOnly("policy_rule_clear", "Clear Inherited Rules",
+				"Mark one override's inheritable columns as cleared, so the fallback's branch pattern and protected list do not apply to it. Writes the clear marker so nobody has to type it. Backs the Clear inherited button; never called by an agent.",
+				policyManagerInput{}, doPolicyRuleClear, wickdocs.Docs{}),
+			connector.OpConfigOnly("policy_rule_delete", "Delete Policy Override",
+				"Remove one per-repo override, after which its repositories fall back to the global rules. Backs the Delete button; never called by an agent.",
+				policyManagerInput{}, doPolicyRuleDelete, wickdocs.Docs{}),
 			connector.OpConfigOnly("policy_rule_save", "Save Policy Rules",
 				"Replace the per-repo rule set from the editor textarea and report per-rule warnings. Backs the Save rules button.",
 				policyManagerInput{}, doPolicyRuleSave, wickdocs.Docs{}),
