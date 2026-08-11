@@ -134,10 +134,11 @@ func encodeRepoRules(rules []RepoRule) (string, error) {
 	rows := make([]map[string]string, 0, len(rules))
 	for _, r := range rules {
 		rows = append(rows, map[string]string{
-			"repo":           r.Repo,
-			"branch_pattern": r.BranchPattern,
-			"protected":      r.Protected,
-			"force_push":     r.ForcePush,
+			"repo":            r.Repo,
+			"branch_pattern":  r.BranchPattern,
+			"message_pattern": r.MessagePattern,
+			"protected":       r.Protected,
+			"force_push":      r.ForcePush,
 		})
 	}
 	b, err := json.Marshal(rows)
@@ -157,6 +158,11 @@ func validateRule(r RepoRule) string {
 	if p := strings.TrimSpace(r.BranchPattern); p != "" && p != "-" {
 		if _, err := regexpCompile(p); err != nil {
 			return "branch pattern is not a valid regex: " + err.Error()
+		}
+	}
+	if p := strings.TrimSpace(r.MessagePattern); p != "" && p != "-" {
+		if _, err := regexpCompile(p); err != nil {
+			return "commit message pattern is not a valid regex: " + err.Error()
 		}
 	}
 	switch strings.TrimSpace(r.ForcePush) {
@@ -259,7 +265,9 @@ func doPolicySimulate(c *connector.Ctx) (any, error) {
 		Repo: repo, Op: op, Branch: branch, Message: message, V: v, Pol: pol,
 		Command: fmt.Sprintf("git %s origin %s", op, branch),
 	}
-	return map[string]any{"html": renderPolicyManager(c, sim)}, nil
+	// Open the Simulator scope, not the fallback: the operator pressed Simulate and
+	// the verdict lives in that panel, so a default render would hide the answer.
+	return map[string]any{"html": renderPolicyManager(c, sim, selectedOpt("sim"))}, nil
 }
 
 // doPolicyRuleSave replaces the per-repo rule set from the editor.
@@ -414,10 +422,11 @@ func doPolicyRuleUpdate(c *connector.Ctx) (any, error) {
 
 	idx := fmt.Sprintf("%d", i)
 	next := RepoRule{
-		Repo:          strings.TrimSpace(c.Input("r_repo_" + idx)),
-		BranchPattern: strings.TrimSpace(c.Input("r_branch_" + idx)),
-		Protected:     strings.TrimSpace(c.Input("r_protected_" + idx)),
-		ForcePush:     strings.TrimSpace(c.Input("r_force_" + idx)),
+		Repo:           strings.TrimSpace(c.Input("r_repo_" + idx)),
+		BranchPattern:  strings.TrimSpace(c.Input("r_branch_" + idx)),
+		MessagePattern: strings.TrimSpace(c.Input("r_message_" + idx)),
+		Protected:      strings.TrimSpace(c.Input("r_protected_" + idx)),
+		ForcePush:      strings.TrimSpace(c.Input("r_force_" + idx)),
 	}
 	if next.Repo == "" {
 		return map[string]any{
@@ -427,12 +436,19 @@ func doPolicyRuleUpdate(c *connector.Ctx) (any, error) {
 		}, nil
 	}
 	// Validate before storing: a regex that does not compile blocks every mutation
-	// at runtime, so saving one silently would take the connector offline.
-	if p := next.BranchPattern; p != "" && p != "-" {
-		if _, err := regexpCompile(p); err != nil {
+	// at runtime, so saving one silently would take the connector offline. Both
+	// pattern columns, for the same reason — Resolve treats either as fail-closed.
+	for _, pat := range []struct{ label, value string }{
+		{"branch pattern", next.BranchPattern},
+		{"commit message pattern", next.MessagePattern},
+	} {
+		if pat.value == "" || pat.value == "-" {
+			continue
+		}
+		if _, err := regexpCompile(pat.value); err != nil {
 			return map[string]any{
 				"html": renderPolicyManager(c, nil,
-					noticeOpt("Not saved — branch pattern does not compile: "+err.Error(), false),
+					noticeOpt("Not saved — "+pat.label+" does not compile: "+err.Error(), false),
 					selectedOpt("r"+idx)),
 			}, nil
 		}
@@ -453,11 +469,12 @@ func doPolicyRuleClear(c *connector.Ctx) (any, error) {
 		return resp, nil
 	}
 	rules[i].BranchPattern = "-"
+	rules[i].MessagePattern = "-"
 	rules[i].Protected = "-"
 	// ForcePush is a boolean with no cleared state, so "-" there means inherit —
 	// setting it would be a lie. Left as it is.
 	return saveRules(c, rules,
-		"Cleared "+rules[i].Repo+" — the fallback's branch pattern and protected list no longer apply there.",
+		"Cleared "+rules[i].Repo+" — the fallback's branch pattern, commit message pattern and protected list no longer apply there.",
 		fmt.Sprintf("r%d", i))
 }
 
@@ -601,7 +618,7 @@ func renderPolicyManagerWithSamples(c *connector.Ctx, sim *simResult, repos []st
 // relationship between it and the overrides is visible in the layout rather than
 // only in documentation.
 // renderPolicyManager renders the whole policy panel: a list of scopes on the
-// left, the selected scope's rules on the right, and a simulator underneath.
+// left and the selected scope on the right — a rule editor, or the simulator.
 //
 // The list-and-detail shape is what makes this readable. Stacked vertically, the
 // fallback and every override competed for the same column and nothing on screen
@@ -664,6 +681,8 @@ func renderPolicyManager(c *connector.Ctx, sim *simResult, opts ...renderOpt) st
 		fmt.Fprintf(&b, `<input class="%s-r" type="radio" name="%s-scope" id="%s"%s/>`,
 			p, p, id, checkedIf(selected == fmt.Sprintf("r%d", i)))
 	}
+	fmt.Fprintf(&b, `<input class="%[1]s-r" type="radio" name="%[1]s-scope" id="%[1]s-t-sim"%[2]s/>`,
+		p, checkedIf(selected == "sim"))
 
 	// ── the two columns ──
 	fmt.Fprintf(&b, `<div class="%s-cols">`, p)
@@ -676,10 +695,7 @@ func renderPolicyManager(c *connector.Ctx, sim *simResult, opts ...renderOpt) st
 
 	for i, r := range rules {
 		warn := validateRule(r)
-		badge := fmt.Sprintf("%d wildcard", Specificity(r.Repo))
-		if Specificity(r.Repo) != 1 {
-			badge += "s"
-		}
+		badge := scopeBadge(r.Repo)
 		if warn != "" {
 			badge = "needs attention"
 		}
@@ -696,6 +712,11 @@ func renderPolicyManager(c *connector.Ctx, sim *simResult, opts ...renderOpt) st
 		`<input name="new_repo" placeholder="*/org/name or d:/code/*" class="%[1]s-in"/>`+
 		`<button type="button" data-op="policy_rule_add" data-arg="" class="%[1]s-btn2">Add repository</button>`+
 		`</div>`, p)
+	// The simulator is a scope too: it is the one entry that asks a question about
+	// the rules above rather than editing one, so it sits below the divider.
+	fmt.Fprintf(&b, `<div class="%[1]s-sep"><label class="%[1]s-item" for="%[1]s-t-sim">`+
+		`<span class="%[1]s-name">Simulator</span>`+
+		`<span class="%[1]s-sub">try an operation</span></label></div>`, p)
 	fmt.Fprint(&b, `</div>`) // list
 
 	// Right: one panel per scope. All present, CSS reveals the selected one.
@@ -706,10 +727,11 @@ func renderPolicyManager(c *connector.Ctx, sim *simResult, opts ...renderOpt) st
 		fmt.Fprintf(&b, `<div class="%[1]s-panel" id="%[1]s-p-r%[2]d">%[3]s</div>`,
 			p, i, renderRulePanel(p, i, r, samples))
 	}
+	fmt.Fprintf(&b, `<div class="%[1]s-panel" id="%[1]s-p-sim">%[2]s</div>`,
+		p, renderSimulator(p, sim))
 	fmt.Fprint(&b, `</div>`) // detail
 	fmt.Fprint(&b, `</div>`) // cols
 
-	fmt.Fprint(&b, renderSimulator(sim))
 	fmt.Fprint(&b, rawJSONBlock(p, rules))
 	fmt.Fprint(&b, `</div>`) // w
 	return b.String()
@@ -731,7 +753,7 @@ func policyStyle(p string, ruleCount int) string {
 .%[1]s-r{position:absolute;opacity:0;width:0;height:0;pointer-events:none}
 .%[1]s-cols{display:grid;grid-template-columns:200px 1fr;gap:12px;align-items:start}
 @media (max-width:820px){.%[1]s-cols{grid-template-columns:1fr}}
-.%[1]s-list{display:flex;flex-direction:column;gap:2px;border:1px solid %[3]s;border-radius:8px;padding:6px;background:%[4]s}
+.%[1]s-list{display:flex;flex-direction:column;gap:2px;border:1px solid %[3]s;border-radius:8px;padding:6px;background:%[5]s}
 .%[1]s-item{display:block;cursor:pointer;padding:6px 8px;border-radius:6px;border:1px solid transparent;user-select:none}
 .%[1]s-item:hover{background:%[5]s}
 .%[1]s-name{display:block;font-family:monospace;font-size:12px;word-break:break-all}
@@ -742,26 +764,35 @@ func policyStyle(p string, ruleCount int) string {
 .%[1]s-panel{display:none;border:1px solid %[3]s;border-radius:8px;padding:12px;background:%[5]s}
 .%[1]s-h{font-weight:600;font-size:13px;margin-bottom:2px}
 .%[1]s-hint{font-size:11px;opacity:.6;margin-bottom:10px}
-.%[1]s-f{margin-bottom:10px}
-.%[1]s-l{display:block;font-size:11px;opacity:.65;margin-bottom:3px}
-.%[1]s-in{width:100%%;box-sizing:border-box;font-family:monospace;font-size:12px;padding:6px 7px;border:1px solid %[3]s;border-radius:6px;background:%[5]s;color:%[2]s}
+.%[1]s-f{margin-bottom:14px}
+.%[1]s-l{display:block;font-size:12px;font-weight:600;opacity:.9;margin-bottom:4px}
+.%[1]s-in{width:100%%;box-sizing:border-box;font-family:monospace;font-size:12px;padding:7px 9px;border:1px solid %[3]s;border-radius:6px;background:%[4]s;color:%[2]s}
+.%[1]s-in:focus{outline:none;border-color:%[7]s;box-shadow:0 0 0 3px %[7]s26}
+.%[1]s-in::placeholder{opacity:.45}
 .%[1]s-help{font-size:11px;opacity:.6;margin-top:3px}
 .%[1]s-err{font-size:11px;color:%[6]s;margin-top:3px}
 .%[1]s-cb{display:flex;gap:7px;align-items:flex-start;font-size:12px;cursor:pointer;margin-bottom:10px}
 .%[1]s-actions{display:flex;gap:6px;flex-wrap:wrap;border-top:1px solid %[3]s;padding-top:10px}
-.%[1]s-btn{font-size:12px;padding:6px 11px;border-radius:6px;border:1px solid %[7]s;background:%[7]s;color:#fff;font-weight:600;cursor:pointer}
-.%[1]s-btn2{font-size:12px;padding:6px 11px;border-radius:6px;border:1px solid %[3]s;background:transparent;color:%[2]s;cursor:pointer}
-.%[1]s-btn3{font-size:12px;padding:6px 11px;border-radius:6px;border:1px solid %[6]s;background:transparent;color:%[6]s;cursor:pointer}
+.%[1]s-btn{font-size:12px;padding:7px 13px;border-radius:6px;border:1px solid %[7]s;background:%[7]s;color:#fff;font-weight:600;cursor:pointer}
+.%[1]s-btn2{font-size:12px;padding:7px 12px;border-radius:6px;border:1px solid %[3]s;background:%[4]s;color:%[2]s;cursor:pointer;font-weight:500}
+.%[1]s-btn2:hover{border-color:%[7]s}
+.%[1]s-btn3{font-size:12px;padding:7px 12px;border-radius:6px;border:1px solid %[6]s;background:%[4]s;color:%[6]s;cursor:pointer;font-weight:500}
 .%[1]s-match{font-size:11px;opacity:.7;margin-top:3px;font-family:monospace}
 .%[1]s-raw{margin-top:12px}
 .%[1]s-raw summary{cursor:pointer;font-size:11px;opacity:.6}
 .%[1]s-ta{width:100%%;box-sizing:border-box;font-family:monospace;font-size:11px;padding:6px;margin-top:6px;border:1px solid %[3]s;border-radius:6px;background:%[5]s;color:%[2]s}
+.%[1]s-sim{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+@media (max-width:820px){.%[1]s-sim{grid-template-columns:1fr}}
+.%[1]s-empty{border:1px dashed %[3]s;border-radius:8px;padding:14px;font-size:12px;opacity:.6;line-height:1.5}
+.%[1]s-sep{margin-top:6px;padding-top:6px;border-top:1px solid %[3]s}
 `, p, uiText, uiBorder, uiPanel, uiSunken, uiBad, uiOK)
 
 	// Selected tab, and its panel. Ids, not positions.
 	fmt.Fprintf(&b, `
 #%[1]s-t-fallback:checked~.%[1]s-cols label[for="%[1]s-t-fallback"]{background:%[2]s1a;border-color:%[2]s;font-weight:600}
 #%[1]s-t-fallback:checked~.%[1]s-cols #%[1]s-p-fallback{display:block}
+#%[1]s-t-sim:checked~.%[1]s-cols label[for="%[1]s-t-sim"]{background:%[2]s1a;border-color:%[2]s;font-weight:600}
+#%[1]s-t-sim:checked~.%[1]s-cols #%[1]s-p-sim{display:block}
 `, p, uiOK)
 	for i := 0; i < ruleCount; i++ {
 		fmt.Fprintf(&b, `
@@ -782,12 +813,12 @@ func renderFallbackPanel(p string, g GlobalPolicy) string {
 	fmt.Fprintf(&b, `<div class="%s-h">Fallback</div>`, p)
 	fmt.Fprintf(&b, `<div class="%s-hint">Applies to every repository. Any override on the left wins over these.</div>`, p)
 
-	field(&b, p, "g_branch", "Branch name pattern", "^(fix|feat|chore)/[a-z0-9._-]+$",
-		g.BranchPattern, branchHelp(g.BranchPattern), patternErr(g.BranchPattern))
-	field(&b, p, "g_message", "Commit message pattern", `^(feat|fix|chore)(\(.+\))?: .+`,
-		g.MessagePattern, messageHelp(g.MessagePattern), patternErr(g.MessagePattern))
-	field(&b, p, "g_protected", "Protected branches", "main, master, release/*",
-		strings.Join(g.Protected, ", "), protectedHelp(g.Protected), "")
+	// Same specs the override panel uses, so the two read identically apart from the
+	// inherit sentence only an override needs.
+	specField(&b, p, "g_branch", branchSpec, g.BranchPattern, fallbackHelp(branchSpec, g.BranchPattern))
+	specField(&b, p, "g_message", messageSpec, g.MessagePattern, fallbackHelp(messageSpec, g.MessagePattern))
+	protected := strings.Join(g.Protected, ", ")
+	specField(&b, p, "g_protected", protectedSpec, protected, fallbackHelp(protectedSpec, protected))
 
 	// A checkbox, not a text field: the browser sends nothing when it is unchecked,
 	// so the save reads presence rather than parsing a word.
@@ -807,24 +838,22 @@ func renderRulePanel(p string, i int, r RepoRule, samples []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `<div class="%s-h">%s</div>`, p, esc(r.Repo))
 
-	hint := fmt.Sprintf("Overrides the fallback for repositories matching this glob. %d wildcard(s) — fewer wins over more.",
-		Specificity(r.Repo))
-	fmt.Fprintf(&b, `<div class="%s-hint">%s</div>`, p, esc(hint))
+	fmt.Fprintf(&b, `<div class="%s-hint">%s</div>`, p, esc(scopeHint(r.Repo)))
 
-	if m := matchSummary(r.Repo, samples); m != "" {
-		fmt.Fprintf(&b, `<div class="%s-match">%s</div>`, p, esc(m))
-	}
 	if warn := validateRule(r); warn != "" {
 		fmt.Fprintf(&b, `<div class="%s-err">%s</div>`, p, esc(warn))
 	}
 
 	idx := fmt.Sprintf("%d", i)
-	field(&b, p, "r_repo_"+idx, "Repository glob", "*/org/infra", r.Repo,
-		"Matched against both the local path and host/owner/repo.", "")
-	field(&b, p, "r_branch_"+idx, "Branch name pattern", "^ops/.+$", r.BranchPattern,
-		inheritHelp(r.BranchPattern, "branch pattern"), patternErr(r.BranchPattern))
-	field(&b, p, "r_protected_"+idx, "Protected branches", "master, main", r.Protected,
-		inheritHelp(r.Protected, "protected list"), "")
+	// The match line belongs under the glob it describes, not above the panel: it
+	// answers "does this actually hit anything?" about that one field.
+	field(&b, p, "r_repo_"+idx, "Repository glob", globPlaceholder, r.Repo,
+		globHelp(r.Repo, samples), "")
+	specField(&b, p, "r_branch_"+idx, branchSpec, r.BranchPattern, overrideHelp(branchSpec, r.BranchPattern))
+	// A per-repo commit rule is the point of the override: one team's repo wants
+	// Conventional Commits, another wants a ticket id, and the fallback cannot say both.
+	specField(&b, p, "r_message_"+idx, messageSpec, r.MessagePattern, overrideHelp(messageSpec, r.MessagePattern))
+	specField(&b, p, "r_protected_"+idx, protectedSpec, r.Protected, overrideHelp(protectedSpec, r.Protected))
 
 	// force_push is a tri-state stored as text: inherit / true / false. A select
 	// says that plainly; a checkbox cannot express "inherit" at all.
@@ -851,6 +880,18 @@ func renderRulePanel(p string, i int, r RepoRule, samples []string) string {
 	return b.String()
 }
 
+// specField renders a field from its spec: label and placeholder come from the spec
+// so the two panels cannot drift apart, and the regex error is derived rather than
+// passed in — a pattern field that forgot to report a bad regex would leave the
+// connector refusing every mutation with no visible cause.
+func specField(b *strings.Builder, p, name string, sp fieldSpec, value, help string) {
+	errMsg := ""
+	if sp.syntax == reSyntax {
+		errMsg = patternErr(value)
+	}
+	field(b, p, name, sp.label, sp.placeholder, value, help, errMsg)
+}
+
 // field renders one labelled input with its help line and, when the value is a
 // regex that does not compile, the compiler's own message.
 func field(b *strings.Builder, p, name, label, placeholder, value, help, errMsg string) {
@@ -866,29 +907,148 @@ func field(b *strings.Builder, p, name, label, placeholder, value, help, errMsg 
 	fmt.Fprint(b, `</div>`)
 }
 
-// The three help lines below turn a stored value into its consequence. An empty
-// pattern field cannot say "then anything is accepted" for itself, and that is
-// exactly the state an operator misreads.
+// Placeholders. Every one is a WORKING value for its field, not a description of
+// the shape: the operator's first question is "what do I type here", and a real
+// example answers it in a way "enter a regex" never does. Shared between the
+// fallback and the overrides so the two panels teach the same syntax.
+const (
+	// Globs, not regexes — the repo and protected columns are matched with
+	// path.Match, where * is the only metacharacter.
+	globPlaceholder      = "*/org/infra   or   d:/code/work/*"
+	protectedPlaceholder = "main, master, release/*"
 
-func branchHelp(pat string) string {
-	if strings.TrimSpace(pat) == "" {
-		return "Empty — any name is accepted when a branch is created."
-	}
-	return "Checked when a branch is CREATED. Pushing to an existing branch is not affected."
+	// Regexes, RE2. Unanchored by default, which is the trap: "fix/" matches
+	// "hotfix/x" too, so both samples are anchored.
+	branchPlaceholder  = `^(fix|feat|chore)/[a-z0-9._-]+$`
+	messagePlaceholder = `^(feat|fix|chore)(\(.+\))?: .{10,}`
+)
+
+// The help lines below turn a stored value into its consequence, and name the
+// syntax the field expects. Two things an operator cannot get from the field
+// itself: an empty pattern cannot say "then anything is accepted", and a text box
+// cannot say whether it wants a regex or a glob — mixing the two up silently
+// produces a rule that matches nothing.
+
+// fieldSpec is everything a policy field says about itself: what it gates, what it
+// accepts, and what an empty value means.
+//
+// One spec per field, shared by BOTH panels, because the fallback and an override
+// edit the SAME rule — the only real difference is which layer the value lands on.
+// Building the two help lines from separate code produced two different vocabularies
+// for one field ("RE2 regex, unanchored" in the fallback, "replaces the fallback's
+// branch pattern" in the override), so the panel that actually needed the syntax
+// never stated it.
+type fieldSpec struct {
+	label       string // the form label, identical in both panels
+	placeholder string // a WORKING example, not a description of the shape
+	gates       string // which operations this value is checked on
+	syntax      string // the language it is written in
+	emptyMeans  string // the consequence of leaving it blank, in the fallback
+	noun        string // how the override refers to it ("branch pattern")
 }
 
-func messageHelp(pat string) string {
-	if strings.TrimSpace(pat) == "" {
-		return "Empty — any commit message is accepted."
+// The specs. Wording lives here and nowhere else.
+var (
+	branchSpec = fieldSpec{
+		label:       "Branch name pattern",
+		placeholder: branchPlaceholder,
+		gates:       "Checked when a branch is CREATED; pushing to a branch that already exists is not affected.",
+		syntax:      reSyntax,
+		emptyMeans:  "any name is accepted when a branch is created",
+		noun:        "branch pattern",
 	}
-	return "Checked on commit only. A push carries no message of its own."
+	messageSpec = fieldSpec{
+		label:       "Commit message pattern",
+		placeholder: messagePlaceholder,
+		gates:       "Checked on commit only, against the whole message — a push carries no message of its own.",
+		syntax:      reSyntax,
+		emptyMeans:  "any commit message is accepted",
+		noun:        "commit message pattern",
+	}
+	protectedSpec = fieldSpec{
+		label:       "Protected branches",
+		placeholder: protectedPlaceholder,
+		gates:       "Direct push, commit, merge and pull are refused on these. Reads are unaffected.",
+		syntax:      globSyntax,
+		emptyMeans:  "no branch is protected, so a direct push to main is allowed",
+		noun:        "protected list",
+	}
+)
+
+// fallbackHelp is the help line in the Fallback panel: what the field gates, in
+// which language, and — when blank — what that blankness permits.
+func fallbackHelp(sp fieldSpec, value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "Empty — " + sp.emptyMeans + ". " + sp.syntax
+	}
+	return sp.gates + " " + sp.syntax
 }
 
-func protectedHelp(list []string) string {
-	if len(list) == 0 {
-		return "Empty — no branch is protected, so a direct push to main is allowed."
+// overrideHelp is the same line for a per-repo panel, with one sentence prepended
+// for the thing only an override has: which layer wins.
+//
+// The syntax and the gating are stated here too, at every state including empty.
+// They are properties of the field, not of the fallback, and the override panel is
+// where a NEW pattern actually gets typed.
+func overrideHelp(sp fieldSpec, value string) string {
+	switch strings.TrimSpace(value) {
+	case "":
+		return "Empty — inherits the fallback's " + sp.noun + ". Type a value to override it for matching repositories. " + sp.syntax
+	case "-":
+		return "Cleared — the fallback's " + sp.noun + " does not apply here, so " + sp.emptyMeans + "."
+	default:
+		return "Overrides the fallback for matching repositories. " + sp.gates + " " + sp.syntax
 	}
-	return "Direct push, commit, merge and pull are refused on these. Reads are unaffected."
+}
+
+// reSyntax and globSyntax name the language a field is written in. Stated at every
+// state, empty included: a text box cannot say whether it wants a regex or a glob,
+// and a glob typed into a pattern column compiles as a regex and then matches almost
+// nothing. Anchoring is called out because an unanchored pattern is the mistake that
+// silently lets everything through — "fix/" alone also accepts "hotfix/nope".
+const (
+	reSyntax   = `Accepts an RE2 regex (Go's regexp) — anchor it with ^…$ or it matches anywhere in the value.`
+	globSyntax = "Accepts comma-separated globs where * is the only wildcard — not regexes."
+)
+
+// scopeBadge is the one-line description under a scope in the list. Wildcard count
+// is what the engine sorts on, but "2 wildcards" tells a reader nothing — what they
+// need is how broad the rule is and who wins.
+func scopeBadge(glob string) string {
+	switch n := Specificity(glob); n {
+	case 0:
+		return "exact match"
+	case 1:
+		return "matches a group"
+	default:
+		return "matches broadly"
+	}
+}
+
+// scopeHint expands the same idea in the panel, where there is room to say why it
+// matters.
+func scopeHint(glob string) string {
+	switch n := Specificity(glob); n {
+	case 0:
+		return "Applies to this one repository. An exact match beats any pattern."
+	case 1:
+		return "Applies to every repository matching this pattern. Beats broader patterns; an exact match beats it."
+	default:
+		return "Applies broadly. Any more specific rule wins over this one."
+	}
+}
+
+// globHelp is the glob field's help line: what it matches against, and — once some
+// repositories are known — whether it actually hits any of them.
+func globHelp(glob string, samples []string) string {
+	base := "Matched against both the local path and host/owner/repo."
+	hits := matchSummary(glob, samples)
+	if hits == "" || strings.HasPrefix(hits, "(none of") {
+		// Saying "matches nothing" would be misleading when nothing has been tested
+		// yet — the widget only knows repositories the simulator has seen.
+		return base
+	}
+	return base + " Currently matches: " + hits
 }
 
 // patternErr returns the compiler's message for a regex that does not compile, or
@@ -903,19 +1063,6 @@ func patternErr(pat string) string {
 		return "Does not compile: " + err.Error() + " — mutations stay blocked until this is fixed."
 	}
 	return ""
-}
-
-// inheritHelp spells out the two blanks a rule column can hold. "" and "-" look
-// identical in a text field and do opposite things.
-func inheritHelp(v, what string) string {
-	switch strings.TrimSpace(v) {
-	case "":
-		return "Empty — inherits the fallback's " + what + "."
-	case "-":
-		return "Cleared — the fallback's " + what + " does not apply here."
-	default:
-		return "Replaces the fallback's " + what + " for matching repositories."
-	}
 }
 
 // normForce maps the stored tri-state onto the three select values. "-" and "" are
@@ -971,45 +1118,71 @@ func matchSummary(glob string, samples []string) string {
 
 // renderSimulator renders the "what would happen if" form and, when a run has
 // happened, its verdict.
-func renderSimulator(sim *simResult) string {
-	simRepo, simOp, simBranch := "", "push", ""
+func renderSimulator(p string, sim *simResult) string {
+	simRepo, simOp, simBranch, simMessage := "", "push", "", ""
 	if sim != nil {
-		simRepo, simOp, simBranch = sim.Repo, sim.Op, sim.Branch
+		simRepo, simOp, simBranch, simMessage = sim.Repo, sim.Op, sim.Branch, sim.Message
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, `<div style="border:1px solid %s;border-radius:8px;padding:10px;background:%s">`,
-		uiBorder, uiPanel)
-	fmt.Fprintf(&b, `<div style="font-size:12px;font-weight:600;margin-bottom:2px">Policy simulator</div>`)
-	fmt.Fprintf(&b, `<div style="font-size:11px;opacity:.65;margin-bottom:6px">Runs the same policy code the operations run. Nothing is executed.</div>`)
+	fmt.Fprintf(&b, `<div class="%s-h">Simulator</div>`, p)
+	fmt.Fprintf(&b, `<div class="%s-hint">Answers what would happen, using the same policy code the operations use. Nothing is executed.</div>`, p)
 
-	field := func(name, label, placeholder, value string) {
-		fmt.Fprintf(&b, `<label style="display:block;font-size:11px;opacity:.7;margin-bottom:2px">%s</label>`, esc(label))
-		fmt.Fprintf(&b, `<input name="%s" placeholder="%s" value="%s" style="width:100%%;box-sizing:border-box;font-size:12px;padding:5px;margin-bottom:6px;border:1px solid %s;border-radius:6px;background:%s;color:%s"/>`,
-			esc(name), esc(placeholder), esc(value), uiBorder, uiPanel, uiText)
-	}
-	field("sim_repo", "Repository (path or host/owner/repo)", "abc.com/org/infra or d:/code/work/api", simRepo)
+	// Two columns: the question on the left, the answer on the right once there is
+	// one. Stacked, the verdict landed far below the inputs that produced it.
+	fmt.Fprintf(&b, `<div class="%s-sim">`, p)
 
-	fmt.Fprintf(&b, `<label style="display:block;font-size:11px;opacity:.7;margin-bottom:2px">Operation</label>`)
-	fmt.Fprintf(&b, `<select name="sim_op" style="width:100%%;box-sizing:border-box;font-size:12px;padding:5px;margin-bottom:6px;border:1px solid %s;border-radius:6px;background:%s;color:%s">`,
-		uiBorder, uiPanel, uiText)
+	fmt.Fprint(&b, `<div>`)
+	field(&b, p, "sim_repo", "Repository", "abc.com/org/infra or d:/code/work/api", simRepo,
+		"Which rule applies is decided from this.", "")
+
+	fmt.Fprintf(&b, `<div class="%[1]s-f"><label class="%[1]s-l" for="%[1]s-sim_op">Operation</label>`+
+		`<select id="%[1]s-sim_op" name="sim_op" class="%[1]s-in">`, p)
 	for _, op := range []string{"push", "commit", "branch_create", "checkout", "merge", "reset", "rebase", "tag", "pull"} {
 		sel := ""
 		if op == simOp {
-			sel = ` selected`
+			sel = " selected"
 		}
 		fmt.Fprintf(&b, `<option value="%s"%s>%s</option>`, esc(op), sel, esc(op))
 	}
-	fmt.Fprint(&b, `</select>`)
+	fmt.Fprintf(&b, `</select><div class="%s-help">%s</div></div>`, p, esc(opHelp(simOp)))
 
-	field("sim_branch", "Branch", "fix/login-bug", simBranch)
+	field(&b, p, "sim_branch", "Branch", "fix/login-bug", simBranch,
+		"The branch the operation targets.", "")
+	// Optional: only a commit is judged on a message, so an empty value means "do
+	// not ask about the message" rather than "an empty message".
+	field(&b, p, "sim_message", "Commit message", "fix: something", simMessage,
+		"Only checked when the operation is commit.", "")
 
-	fmt.Fprintf(&b, `<button type="button" data-op="policy_simulate" data-arg="" style="font-size:12px;padding:5px 10px;border-radius:6px;border:1px solid %s;background:transparent;color:%s;cursor:pointer">Simulate</button>`,
-		uiBorder, uiText)
+	fmt.Fprintf(&b, `<button type="button" data-op="policy_simulate" data-arg="" class="%s-btn">Simulate</button>`, p)
+	fmt.Fprint(&b, `</div>`)
 
+	fmt.Fprint(&b, `<div>`)
 	if sim != nil {
 		fmt.Fprint(&b, renderSimulation(*sim))
+	} else {
+		fmt.Fprintf(&b, `<div class="%s-empty">Fill in the left and press Simulate. The answer names the rule that decided and the command that would run.</div>`, p)
 	}
 	fmt.Fprint(&b, `</div>`)
+
+	fmt.Fprint(&b, `</div>`)
 	return b.String()
+}
+
+// opHelp explains which rules the chosen operation is actually subject to. This is
+// the thing most easily got wrong about the policy: a branch pattern does not gate a
+// push, and a commit message rule does not gate anything except a commit.
+func opHelp(op string) string {
+	switch op {
+	case "commit":
+		return "Judged on the protected list and the commit message pattern."
+	case "branch_create", "checkout":
+		return "Judged on the branch name pattern and the protected list."
+	case "push":
+		return "Judged on the protected list. The branch pattern does not apply to an existing branch."
+	case "reset":
+		return "A hard reset also needs force push to be allowed."
+	default:
+		return "Judged on the protected list."
+	}
 }

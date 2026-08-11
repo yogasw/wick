@@ -217,6 +217,25 @@ func BuildEnv(a AuthSpec, selfPath string) []string {
 		// prompt; the credential-manager window is closed off separately, by
 		// GIT_ASKPASS below and the credential.helper reset in AuthInjectedArgs.
 		"GIT_TERMINAL_PROMPT=0",
+
+		// An editor is the other way git waits for a human, and it is the one that
+		// actually bit: "rebase --continue" opens one and hung until the timeout killed
+		// it, leaving the repository mid-rebase. The timeout is not a fix — it stops the
+		// hang but not the damage, and the operation reports a timeout rather than the
+		// real cause.
+		//
+		// Set here rather than per-operation, because a per-operation flag only protects
+		// the operations somebody remembered: merge carried --no-edit while rebase,
+		// commit --amend, and every future subcommand that edits did not. "true" is the
+		// shell builtin that exits 0 immediately, so git takes the message it already
+		// has instead of waiting.
+		//
+		// All three variables are needed. GIT_EDITOR alone leaves a sequence edit
+		// (rebase -i) and a merge-conflict editor able to open, and git consults
+		// GIT_SEQUENCE_EDITOR for the todo list specifically.
+		"GIT_EDITOR=true",
+		"GIT_SEQUENCE_EDITOR=true",
+		"GIT_MERGE_AUTOEDIT=no",
 	}
 
 	// Carry over only what git genuinely needs to run.
@@ -387,7 +406,7 @@ func Run(ctx context.Context, c Cmd, o RunOpts) (Result, error) {
 	}
 
 	argv := c.Argv()
-	shown := mask("git "+strings.Join(argv, " "), o.Masks)
+	shown := mask(displayCommand(argv), o.Masks)
 
 	ctx, cancel := context.WithTimeout(ctx, o.Timeout)
 	defer cancel()
@@ -480,4 +499,153 @@ func mask(s string, values []string) string {
 		s = strings.ReplaceAll(s, v, "••••••••")
 	}
 	return s
+}
+
+// displayCommand renders argv as a line that can be pasted into a shell.
+//
+// Execution never goes through a shell — argv reaches the process directly — so an
+// argument containing a space or a semicolon is already safe to RUN. But the same
+// string is reported as Result.Command and stored in run history, and there it is read
+// as a shell command: "-c user.name=yoga bot" and "commit -m ai-test: side A" each look
+// like several arguments, so pasting one to reproduce a failure runs something
+// different from what actually ran.
+//
+// Only arguments that need it are quoted. A fully quoted line is equally correct and
+// much harder to scan, and this string exists to be read.
+func displayCommand(argv []string) string {
+	parts := make([]string, 0, len(argv)+1)
+	parts = append(parts, "git")
+	for _, a := range argv {
+		parts = append(parts, shellQuote(a))
+	}
+	return strings.Join(parts, " ")
+}
+
+// shellQuoteChars are the characters that make an argument need quoting: anything a
+// POSIX shell would treat as syntax rather than as text.
+const shellQuoteChars = " \t\n\"'`$&|;<>()*?[]{}!#~^\\"
+
+// shellQuote wraps an argument in single quotes when it contains shell syntax, and
+// escapes an embedded single quote the POSIX way — close the quote, emit an escaped
+// quote, reopen — because single quotes have no escape character inside them.
+func shellQuote(a string) string {
+	if a == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(a, shellQuoteChars) {
+		return a
+	}
+	return "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+}
+
+// ValidateRefName rejects a branch, tag or ref name that is not a plausible ref.
+//
+// Why this exists separately from ValidateUserArgs: that function is a deny-list over
+// ARGV TOKENS, and a value that gets embedded inside a larger token never reaches it.
+// push builds "HEAD:refs/heads/" + branch, so a branch named "--receive-pack=x" arrived
+// as one token beginning with "HEAD:" and passed every check — while the same string as
+// show's {ref} or tag's {name}, which do land in their own token, was refused. Not
+// exploitable as it stands (the value sits after --end-of-options and git reads it as a
+// ref name), but the protection depended on argument POSITION rather than on the value,
+// and a refactor that moved the position would have turned it into a real hole.
+//
+// The rules are git's own, from git-check-ref-format(1), minus the ones that only apply
+// to full refs. Enforcing the value rather than its position means it holds wherever the
+// value is used.
+func ValidateRefName(kind, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("%s is required", kind)
+	}
+	if name != strings.TrimSpace(name) {
+		return fmt.Errorf("%s %q has leading or trailing whitespace", kind, name)
+	}
+	// A leading "-" is the one that matters: it is what makes a value look like a flag
+	// in any position, including inside a refspec.
+	if strings.HasPrefix(name, "-") {
+		return fmt.Errorf("%s %q may not start with \"-\": it would be read as a command-line flag", kind, name)
+	}
+	for _, bad := range []string{"..", "@{", "//"} {
+		if strings.Contains(name, bad) {
+			return fmt.Errorf("%s %q may not contain %q (git-check-ref-format)", kind, name, bad)
+		}
+	}
+	if strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") ||
+		strings.HasSuffix(name, ".") || strings.HasSuffix(name, ".lock") {
+		return fmt.Errorf("%s %q is not a valid ref name (git-check-ref-format)", kind, name)
+	}
+	if name == "@" {
+		return fmt.Errorf("%s may not be \"@\"", kind)
+	}
+	for _, r := range name {
+		switch {
+		case r < 0x20 || r == 0x7f:
+			return fmt.Errorf("%s %q contains a control character", kind, name)
+		case strings.ContainsRune(" ~^:?*[\\", r):
+			return fmt.Errorf("%s %q contains %q, which git does not allow in a ref name", kind, name, r)
+		}
+	}
+	return nil
+}
+
+// CheckPathRoots refuses a path that falls outside every configured root.
+//
+// Opt-in by design: with no roots configured every path is allowed, which is the
+// behaviour this connector shipped with and the one that makes it useful — it exists to
+// manage repositories that already exist, wherever they are. Roots are the way an
+// operator narrows that when they want to, per instance.
+//
+// Symlinks are resolved BEFORE the comparison, and this is the whole reason the check is
+// not a string prefix test. A path can leave a root three ways — "root/../elsewhere",
+// a symlink inside the root pointing out of it, and on Windows a directory junction —
+// and only asking the filesystem where a path really lands catches all three.
+func CheckPathRoots(p string, roots []string) error {
+	if len(roots) == 0 {
+		return nil
+	}
+	target, err := resolvePath(p)
+	if err != nil {
+		return fmt.Errorf("cannot resolve %q: %w", p, err)
+	}
+	for _, root := range roots {
+		r, rerr := resolvePath(root)
+		if rerr != nil {
+			// A root that does not resolve cannot match anything. Skipped rather than
+			// fatal: one mistyped root must not disable every other one.
+			continue
+		}
+		if target == r || strings.HasPrefix(target, r+string(filepath.Separator)) {
+			return nil
+		}
+	}
+	return fmt.Errorf("path %q is outside every allowed root (%s)",
+		p, strings.Join(roots, ", "))
+}
+
+// resolvePath makes a path absolute, cleans it, and follows symlinks as far as they go.
+//
+// EvalSymlinks fails on a path that does not exist yet, which a clone destination
+// legitimately is. In that case the deepest existing ancestor is resolved and the
+// remainder appended — enough to catch a symlinked parent, which is the case that
+// matters, without refusing a directory that is about to be created.
+func resolvePath(p string) (string, error) {
+	abs, err := filepath.Abs(strings.TrimSpace(p))
+	if err != nil {
+		return "", err
+	}
+	if resolved, rerr := filepath.EvalSymlinks(abs); rerr == nil {
+		return filepath.Clean(resolved), nil
+	}
+	rest := ""
+	dir := abs
+	for {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return filepath.Clean(abs), nil // reached the volume root; nothing resolved
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+		if resolved, rerr := filepath.EvalSymlinks(dir); rerr == nil {
+			return filepath.Clean(filepath.Join(resolved, rest)), nil
+		}
+	}
 }

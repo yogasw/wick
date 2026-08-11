@@ -94,7 +94,7 @@ func resolveTestTarget(c *connector.Ctx, target, remote string) (info RemoteInfo
 	}
 
 	// Otherwise treat it as a checkout and read its remote.
-	if verr := ValidateRepoPath(target); verr != nil {
+	if verr := validateRepo(c, target); verr != nil {
 		return RemoteInfo{}, "", verr
 	}
 	raw := remoteURL(c, target, remote)
@@ -288,9 +288,13 @@ func runTestLsRemote(c *connector.Ctx, rep *testReport, info RemoteInfo, local s
 		dir = d
 	}
 
+	// The URL, deliberately, unlike the real operations which name the remote: this
+	// check has to work when the operator supplied only a URL and there is no checkout
+	// to hold a remote. Nothing here reads or writes tracking refs, so the reason the
+	// operations need a name does not apply.
 	res, err := Run(c.Context(), Cmd{
 		RepoPath:     dir,
-		InjectedArgs: injectedArgs(c, o.Auth, "ls_remote"),
+		InjectedArgs: injectedArgs(c, o.Auth, "ls_remote", info.RewriteArgs),
 		UserArgs:     []string{"ls-remote", "--heads", "--end-of-options", info.Effective},
 		Network:      true,
 	}, o)
@@ -378,8 +382,10 @@ func runTestPolicy(c *connector.Ctx, rep *testReport, info RemoteInfo, local str
 		}
 	}
 
-	// And the command it would run, assembled but not executed.
-	args := buildPushArgs(info.Effective, rep.Branch, false, false)
+	// And the command it would run, assembled but not executed. The remote NAME, to
+	// match what doPush actually emits — previewing a URL here would advertise the very
+	// shape that broke upstream tracking.
+	args := buildPushArgs(firstNonEmpty(rep.Remote, "origin"), rep.Branch, false, false)
 	rep.add("Push command (not run)", "ok", "",
 		mask("git "+strings.Join(args, " "), runOpts(c, true).Masks))
 }
@@ -628,8 +634,10 @@ func doTestWrite(c *connector.Ctx) (any, error) {
 		return finish()
 	}
 
-	// 4. Push — the step everything else exists to reach.
-	args := buildPushArgs(info.Effective, rep.Branch, false, false)
+	// 4. Push — the step everything else exists to reach. "origin" is the remote the
+	// clone in step 1 created, so this exercises the same named-remote path the real
+	// push takes rather than a URL shortcut the operations no longer use.
+	args := buildPushArgs("origin", rep.Branch, false, false)
 	if !runTestStep(c, rep, o, "Push", work, true, args...) {
 		return finish()
 	}
@@ -646,7 +654,9 @@ func runTestStep(c *connector.Ctx, rep *testReport, o RunOpts, name, dir string,
 	network bool, args ...string) bool {
 
 	res, err := Run(c.Context(), Cmd{
-		RepoPath:     dir,
+		RepoPath: dir,
+		// No rewrite: the sandbox was cloned from the already-converted, already-stripped
+		// URL in step 1, so its origin carries no credential and needs no substitution.
 		InjectedArgs: injectedArgs(c, o.Auth, "test_write"),
 		UserArgs:     args,
 		Network:      network,

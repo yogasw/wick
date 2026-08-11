@@ -622,3 +622,62 @@ func TestRunAgainstAPrivateRepoFailsInsteadOfPrompting(t *testing.T) {
 		t.Errorf("took %v — too slow to be a clean refusal", elapsed)
 	}
 }
+
+// TestBuildEnvSuppressesEveryEditor covers the failure that reached a real repo:
+// "rebase --continue" opened an editor, blocked until the timeout killed it, and
+// left the repository mid-rebase. The timeout was never a fix — it stops the hang
+// but not the damage, and it reports "timed out" instead of the real cause.
+//
+// Asserted on the env rather than on one operation's argv on purpose. merge carried
+// --no-edit and rebase did not; a per-operation flag only protects the operations
+// somebody remembered, and every subcommand that edits is a new chance to forget.
+func TestBuildEnvSuppressesEveryEditor(t *testing.T) {
+	env := BuildEnv(AuthSpec{}, `C:\wick\plugin.exe`)
+
+	want := map[string]string{
+		// git's own editor, for a commit or a conflict resolution.
+		"GIT_EDITOR": "true",
+		// The rebase todo list, which git reads through its own variable — GIT_EDITOR
+		// alone leaves an interactive rebase able to open one.
+		"GIT_SEQUENCE_EDITOR": "true",
+		// A merge commit message, which git offers to edit unless told otherwise.
+		"GIT_MERGE_AUTOEDIT": "no",
+		// The prompt, already covered but asserted alongside so the whole
+		// never-wait-for-a-human contract reads in one place.
+		"GIT_TERMINAL_PROMPT": "0",
+	}
+	for k, v := range want {
+		if !hasEnv(env, k+"="+v) {
+			t.Errorf("BuildEnv must set %s=%s so git never waits for a human; got %v", k, v, env)
+		}
+	}
+}
+
+// TestBuildEnvEditorCannotBeOverriddenByHost guards the suppression against the
+// process environment. A developer with GIT_EDITOR=vim exported would otherwise get
+// the hang back on their machine only, which is the worst shape for a bug: it passes
+// CI and fails in the one place someone is watching.
+func TestBuildEnvEditorCannotBeOverriddenByHost(t *testing.T) {
+	t.Setenv("GIT_EDITOR", "vim")
+	t.Setenv("GIT_SEQUENCE_EDITOR", "vim")
+	t.Setenv("GIT_MERGE_AUTOEDIT", "yes")
+
+	env := BuildEnv(AuthSpec{}, `C:\wick\plugin.exe`)
+	for _, bad := range []string{"GIT_EDITOR=vim", "GIT_SEQUENCE_EDITOR=vim", "GIT_MERGE_AUTOEDIT=yes"} {
+		if hasEnv(env, bad) {
+			t.Errorf("the host environment must not reintroduce an editor: found %q", bad)
+		}
+	}
+	if !hasEnv(env, "GIT_EDITOR=true") {
+		t.Error("GIT_EDITOR=true must survive a host value of its own")
+	}
+}
+
+func hasEnv(env []string, kv string) bool {
+	for _, e := range env {
+		if e == kv {
+			return true
+		}
+	}
+	return false
+}

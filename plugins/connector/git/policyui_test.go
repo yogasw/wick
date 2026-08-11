@@ -208,8 +208,11 @@ func TestFallbackIsTheFirstScopeInTheList(t *testing.T) {
 	for _, want := range []string{
 		`id="pmw-p-fallback"`,
 		`id="pmw-p-r0"`,
+		`id="pmw-p-sim"`,
 		`#pmw-t-fallback:checked~.pmw-cols #pmw-p-fallback{display:block}`,
 		`#pmw-t-r0:checked~.pmw-cols #pmw-p-r0{display:block}`,
+		// The simulator is a scope in the same list, so it needs the same pair.
+		`#pmw-t-sim:checked~.pmw-cols #pmw-p-sim{display:block}`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("missing %q", want)
@@ -231,9 +234,9 @@ func TestFallbackIsTheFirstScopeInTheList(t *testing.T) {
 	assertNoTailwind(t, html)
 }
 
-// TestRuleShowsMatchingReposAndWildcards covers requirement 2: which repos a
+// TestRuleShowsMatchingReposAndSpecificity covers requirement 2: which repos a
 // glob matches, and how specific it is, so it is obvious which rule wins.
-func TestRuleShowsMatchingReposAndWildcards(t *testing.T) {
+func TestRuleShowsMatchingReposAndSpecificity(t *testing.T) {
 	c := testCtx(map[string]string{
 		"repo_policies": `[{"repo":"*/org/*","branch_pattern":"^ops/.+$"},` +
 			`{"repo":"*/org/infra","branch_pattern":"^infra/.+$"}]`,
@@ -241,8 +244,14 @@ func TestRuleShowsMatchingReposAndWildcards(t *testing.T) {
 	html := renderPolicyManagerWithSamples(c, nil,
 		[]string{"abc.com/org/infra", "abc.com/org/api", "example.com/other/thing"})
 
-	if !strings.Contains(html, "2 wildcard") {
-		t.Errorf("expected the wildcard count of */org/* reported:\n%s", html)
+	// How specific a glob is must be on screen, but said in words rather than as a
+	// wildcard count: "2 wildcards" is the implementation of the precedence rule,
+	// not the thing the operator needs to know, which is which rule wins.
+	if !strings.Contains(html, "matches broadly") {
+		t.Errorf("expected */org/* named as the least specific scope:\n%s", html)
+	}
+	if !strings.Contains(html, "matches a group") {
+		t.Errorf("expected */org/infra named as the more specific scope:\n%s", html)
 	}
 	if !strings.Contains(html, "abc.com/org/api") {
 		t.Errorf("expected the repos a glob matches to be listed:\n%s", html)
@@ -383,6 +392,33 @@ func TestSimulatorUsesTheRealPolicyPath(t *testing.T) {
 				t.Errorf("simulator must report the deciding rule %q\n%s", want.MatchedRule, html)
 			}
 		})
+	}
+}
+
+// TestSimulateOpensTheSimulatorScope guards the one thing that breaks when the
+// simulator lives inside the scope list rather than below it: the verdict is
+// rendered into a panel that CSS hides unless its radio is checked, so a render
+// that defaulted to Fallback would return the answer and hide it at the same time.
+func TestSimulateOpensTheSimulatorScope(t *testing.T) {
+	c := testWidgetCtx(map[string]string{"branch_name_pattern": `^fix/.+$`},
+		map[string]string{"sim_repo": "abc.com/org/api", "sim_op": "push", "sim_branch": "fix/x"})
+
+	out, err := doPolicySimulate(c)
+	if err != nil {
+		t.Fatalf("doPolicySimulate: %v", err)
+	}
+	html := out.(map[string]any)["html"].(string)
+
+	if !strings.Contains(html, `id="pmw-t-sim" checked`) {
+		t.Errorf("Simulate must leave the Simulator scope selected:\n%s", html)
+	}
+	if strings.Contains(html, `id="pmw-t-fallback" checked`) {
+		t.Error("Simulate must not leave the Fallback scope selected — it hides the verdict")
+	}
+	// And the verdict has to be inside that panel, not elsewhere on the page.
+	panel := html[strings.Index(html, `id="pmw-p-sim"`):]
+	if !strings.Contains(panel, "ALLOWED") {
+		t.Errorf("the verdict must render inside the simulator panel:\n%s", panel)
 	}
 }
 
@@ -700,5 +736,238 @@ func TestPolicyWidgetOwnsEveryPolicyField(t *testing.T) {
 		if cfg.Group != "" {
 			t.Errorf("config %q carries group %q; a hidden field should not claim a card", cfg.Key, cfg.Group)
 		}
+	}
+}
+
+// TestControlsDoNotShareTheirContainersBackground is a regression guard for a bug
+// that shipped twice, in both columns: a bordered control drawn on the same
+// background as the box holding it. The border is a theme token one step from the
+// background, so at that point it visually vanishes and an input stops reading as
+// something you can type in — which is exactly how it was reported ("that doesn't
+// look like a button or a menu").
+//
+// The rule the widget follows: containers are recessed (uiSunken), controls sit on
+// top (uiPanel). Asserting it here rather than by eye because the CSS is generated
+// by index into one format string, so a token can move without any test noticing.
+func TestControlsDoNotShareTheirContainersBackground(t *testing.T) {
+	css := policyStyle("pmw", 1)
+
+	bg := func(sel string) string {
+		i := strings.Index(css, sel+"{")
+		if i < 0 {
+			t.Fatalf("selector %s missing from the stylesheet", sel)
+		}
+		rule := css[i:]
+		rule = rule[:strings.Index(rule, "}")]
+		j := strings.LastIndex(rule, "background:")
+		if j < 0 {
+			return ""
+		}
+		v := rule[j+len("background:"):]
+		if k := strings.Index(v, ";"); k >= 0 {
+			v = v[:k]
+		}
+		return v
+	}
+
+	for _, c := range []struct{ container, control string }{
+		{".pmw-list", ".pmw-in"},   // the scope rail and the new-repo input
+		{".pmw-list", ".pmw-btn2"}, // ...and the Add repository button
+		{".pmw-panel", ".pmw-in"},  // the detail panel and its fields
+	} {
+		cb, kb := bg(c.container), bg(c.control)
+		if cb == "" || kb == "" {
+			t.Errorf("%s or %s has no background; both need one to be distinguishable", c.container, c.control)
+			continue
+		}
+		if cb == kb {
+			t.Errorf("%s sits on %s but both are %s — its border melts into the box", c.control, c.container, cb)
+		}
+	}
+}
+
+// TestRulePanelEditsTheMessagePattern locks the per-repo commit rule into the
+// widget: the field renders, and a Save round-trips it into storage. Without the
+// second half the column would exist in the engine but be unreachable from the UI,
+// which is where it was when the operator asked for it.
+func TestRulePanelEditsTheMessagePattern(t *testing.T) {
+	cfg := map[string]string{
+		"repo_policies": `[{"repo":"*/org/tickets","message_pattern":"^[A-Z]+-[0-9]+ .+"}]`,
+	}
+	html := renderPolicyManager(testCtx(cfg), nil)
+
+	if !strings.Contains(html, `name="r_message_0" value="^[A-Z]+-[0-9]+ .+"`) {
+		t.Errorf("the stored per-repo message pattern must render as an editable input:\n%s", html)
+	}
+
+	out, err := doPolicyRuleUpdate(testWidgetCtx(cfg, map[string]string{
+		"browser":       "0",
+		"r_repo_0":      "*/org/tickets",
+		"r_message_0":   `^(feat|fix)\(.+\): .+`,
+		"r_branch_0":    "",
+		"r_protected_0": "",
+		"r_force_0":     "",
+	}))
+	if err != nil {
+		t.Fatalf("doPolicyRuleUpdate: %v", err)
+	}
+	stored := out.(map[string]any)["fields"].(map[string]string)["repo_policies"]
+	rules, err := ParseRepoRules(stored)
+	if err != nil {
+		t.Fatalf("ParseRepoRules: %v", err)
+	}
+	if len(rules) != 1 || rules[0].MessagePattern != `^(feat|fix)\(.+\): .+` {
+		t.Errorf("the saved rule lost its message pattern: %+v", rules)
+	}
+}
+
+// TestRuleUpdateRefusesAnUncompilableMessagePattern mirrors the branch-pattern
+// guard. Either column is fail-closed in Resolve, so storing a broken one takes
+// every mutation offline — refusing at save time is the only place it is cheap.
+func TestRuleUpdateRefusesAnUncompilableMessagePattern(t *testing.T) {
+	cfg := map[string]string{"repo_policies": `[{"repo":"*/org/x"}]`}
+	out, err := doPolicyRuleUpdate(testWidgetCtx(cfg, map[string]string{
+		"browser": "0", "r_repo_0": "*/org/x", "r_message_0": `^(fix`,
+	}))
+	if err != nil {
+		t.Fatalf("doPolicyRuleUpdate: %v", err)
+	}
+	m := out.(map[string]any)
+	if _, wrote := m["fields"]; wrote {
+		t.Error("a pattern that does not compile must not be stored")
+	}
+	if !strings.Contains(m["html"].(string), "commit message pattern does not compile") {
+		t.Errorf("the refusal must name which pattern failed:\n%s", m["html"])
+	}
+}
+
+// TestClearInheritedCoversEveryInheritableColumn guards the Clear button against
+// the drift that a new column introduces: adding one to the panel without adding it
+// here leaves it inheriting after a click that claims to have cleared everything.
+func TestClearInheritedCoversEveryInheritableColumn(t *testing.T) {
+	cfg := map[string]string{
+		"repo_policies": `[{"repo":"*/org/x","branch_pattern":"^a/.+$","message_pattern":"^b: .+","protected":"main"}]`,
+	}
+	out, err := doPolicyRuleClear(testWidgetCtx(cfg, map[string]string{"browser": "0"}))
+	if err != nil {
+		t.Fatalf("doPolicyRuleClear: %v", err)
+	}
+	rules, err := ParseRepoRules(out.(map[string]any)["fields"].(map[string]string)["repo_policies"])
+	if err != nil {
+		t.Fatalf("ParseRepoRules: %v", err)
+	}
+	r := rules[0]
+	for _, c := range []struct{ name, got string }{
+		{"branch_pattern", r.BranchPattern},
+		{"message_pattern", r.MessagePattern},
+		{"protected", r.Protected},
+	} {
+		if c.got != "-" {
+			t.Errorf("%s = %q, want the cleared marker", c.name, c.got)
+		}
+	}
+}
+
+// TestFieldsNameTheirSyntax is the "how do I fill this in" guard. A text box cannot
+// say whether it wants a regex or a glob, and getting it wrong is silent: a glob
+// typed into a regex field compiles and then matches almost nothing. Every pattern
+// field must name RE2 and every glob field must say glob, in both panels, and the
+// placeholder has to be a working example rather than a description of the shape.
+func TestFieldsNameTheirSyntax(t *testing.T) {
+	// Empty everywhere: the help lines have no value to infer the syntax from, which
+	// is exactly when the operator needs to be told.
+	html := renderPolicyManager(testCtx(map[string]string{
+		"repo_policies": `[{"repo":"*/org/x"}]`,
+	}), nil)
+
+	for _, want := range []string{
+		"RE2 regex",              // the pattern fields name their language
+		"^…$",                    // ...and warn that it is unanchored
+		"* is the only wildcard", // the glob fields distinguish themselves
+		esc(branchPlaceholder),   // real examples, not "enter a pattern"
+		esc(messagePlaceholder),
+		protectedPlaceholder,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("the widget never tells the operator %q:\n%s", want, html)
+		}
+	}
+
+	// Both panels, at EVERY state. The override's help used to state only which layer
+	// wins, so the syntax went missing in the one panel where a new pattern is
+	// actually typed — and it went missing precisely when the field was empty and the
+	// operator had nothing to infer it from.
+	for _, panel := range []struct{ name, body string }{
+		{"fallback", panelOf(t, html, "fallback")},
+		{"override", panelOf(t, html, "r0")},
+	} {
+		for _, want := range []string{
+			esc(branchSpec.label), esc(branchSpec.placeholder),
+			esc(messageSpec.label), esc(messageSpec.placeholder),
+			esc(protectedSpec.label), esc(protectedSpec.placeholder),
+			esc(reSyntax), esc(globSyntax),
+		} {
+			if !strings.Contains(panel.body, want) {
+				t.Errorf("the %s panel is missing %q:\n%s", panel.name, want, panel.body)
+			}
+		}
+	}
+}
+
+// panelOf slices out one scope's panel so an assertion can name which panel it is
+// about. Asserting against the whole widget would pass whenever ANY panel carried
+// the text, which is how the override panel's missing help went unnoticed.
+func panelOf(t *testing.T, html, scope string) string {
+	t.Helper()
+	open := `id="pmw-p-` + scope + `"`
+	i := strings.Index(html, open)
+	if i < 0 {
+		t.Fatalf("panel %s not rendered", scope)
+	}
+	rest := html[i:]
+	// Panels are siblings, so the next panel's id ends this one.
+	if j := strings.Index(rest[len(open):], `id="pmw-p-`); j >= 0 {
+		rest = rest[:len(open)+j]
+	}
+	return rest
+}
+
+// TestBothPanelsShareOneWording is the guard for the drift itself: every field is
+// described by one spec, so the label, the gating sentence and the syntax sentence
+// are the same string in both panels. Two code paths building two vocabularies for
+// one field is what produced "RE2 regex, unanchored" on one side and "replaces the
+// fallback's branch pattern" on the other.
+func TestBothPanelsShareOneWording(t *testing.T) {
+	html := renderPolicyManager(testCtx(map[string]string{
+		"branch_name_pattern":    `^fix/.+$`,
+		"commit_message_pattern": `^fix: .+`,
+		"protected_branches":     `[{"branch":"main"}]`,
+		"repo_policies":          `[{"repo":"*/org/x","branch_pattern":"^ops/.+$","message_pattern":"^ops: .+","protected":"master"}]`,
+	}), nil)
+
+	fallback := panelOf(t, html, "fallback")
+	rule := panelOf(t, html, "r0")
+
+	// With BOTH panels filled in, the gating sentence and the syntax sentence must
+	// match verbatim — only the inherit/override sentence may differ.
+	for _, sp := range []fieldSpec{branchSpec, messageSpec, protectedSpec} {
+		for _, want := range []string{esc(sp.label), esc(sp.gates), esc(sp.syntax)} {
+			if !strings.Contains(fallback, want) {
+				t.Errorf("fallback panel is missing %q", want)
+			}
+			if !strings.Contains(rule, want) {
+				t.Errorf("override panel is missing %q", want)
+			}
+		}
+	}
+
+	// And the one sentence that SHOULD differ does: only the override talks about
+	// layering. Without this the test would also pass if the two panels collapsed
+	// into one identical block, losing the thing an override has to explain.
+	if !strings.Contains(rule, "Overrides the fallback") {
+		t.Error("the override panel must say it overrides the fallback")
+	}
+	if strings.Contains(fallback, "Overrides the fallback") {
+		t.Error("the fallback panel must not claim to override anything")
 	}
 }

@@ -162,7 +162,8 @@ Rules that make this unambiguous:
    "this repo has no protected branches". Without it, a permissive per-repo row would
    look like it applies but quietly inherit the global list.
 
-   `"-"` applies to the **list and pattern** columns (`protected`, `branch_pattern`),
+   `"-"` applies to the **list and pattern** columns (`protected`, `branch_pattern`,
+   `message_pattern`),
    where "no value" is a meaningful state. On the boolean `force_push` there is no
    third state to clear to — allow and deny are the only options — so `"-"` there
    means the same as empty: inherit.
@@ -178,7 +179,8 @@ Two different languages appear in one row — the most common source of mistakes
 | Column | Language | Matched against |
 |---|---|---|
 | `repo` | glob (`*`) | both the local path **and** `host/owner/repo` |
-| `branch_pattern` | regex (Go RE2) | branch name |
+| `branch_pattern` | regex (Go RE2) | branch name, when the branch is CREATED |
+| `message_pattern` | regex (Go RE2) | the whole commit message, on `commit` only |
 | `protected` | comma-separated globs | branch name |
 | `force_push` | `true` / `false` / empty or `-` (both inherit) | — |
 
@@ -213,6 +215,7 @@ List fields, stored as a JSON array of string-keyed objects:
 ```
 protected_branches : [{"branch": "<name or glob>"}]
 repo_policies      : [{"repo":"<glob>", "branch_pattern":"<regex or empty>",
+                       "message_pattern":"<regex or empty>",
                        "protected":"<csv globs, or - to clear>", "force_push":"true|false|empty (inherit)"}]
 raw_rules          : [{"subcommand":"<git subcommand>", "mode":"allow|deny"}]
 remote_host_map    : [{"ssh_host":"<host>", "https_host":"<host[/path]>"}]
@@ -220,9 +223,14 @@ remote_host_map    : [{"ssh_host":"<host>", "https_host":"<host[/path]>"}]
 
 Non-negotiable facts a generator must know:
 
-- `branch_pattern` and `commit_message_pattern` are **regexes** (Go RE2, no
-  lookahead); `repo` and `protected` are **globs**. Different languages, sometimes on
-  the same row.
+- `branch_pattern`, `message_pattern` and the global `commit_message_pattern` are
+  **regexes** (Go RE2, no lookahead, unanchored unless you write `^…$`); `repo` and
+  `protected` are **globs** where `*` is the only metacharacter. Different languages,
+  sometimes on the same row — a glob typed into a pattern column compiles as a regex
+  and then matches almost nothing.
+- Every layer-1 pattern has a layer-2 counterpart, so one repo can demand
+  Conventional Commits while another demands a ticket id: `commit_message_pattern`
+  (global) is overridden per repo by `message_pattern`.
 - Empty column = inherit. `-` = clear the inheritance.
 - Unlisted `raw` subcommand = denied.
 - Specificity by wildcard count; ties → stricter.
@@ -234,6 +242,7 @@ Non-negotiable facts a generator must know:
   | `branch_name_pattern` | creating a branch (`branch_create`, `checkout` with create) | pushing to a branch that already exists |
   | `protected_branches` | `push`, `commit`, `merge`, `pull` on that branch | reading it (`log`, `diff`, `show`) |
   | `commit_message_pattern` | `commit` only | `push` — it carries no message of its own |
+  | `message_pattern` (per repo) | `commit` in repos the row matches | `merge`, `rebase` — those messages are git's, not the operator's |
   | `allow_force_push` | `push --force`, `reset --hard` | anything non-destructive |
 
   The branch pattern deliberately stops at creation: if it also gated pushes, nobody
@@ -303,6 +312,30 @@ Two things to get right, both easy to miss:
 
 Test it in the panel before relying on it: enter a message in *Commit message* and
 the report says accepted or names the pattern it failed.
+
+### Scenario 4b — two repos, two commit conventions
+
+The global convention is Conventional Commits, but one repo is tracked in a ticket
+system and one is a scratch repo where any message is fine:
+
+```
+commit_message_pattern = ^(feat|fix|chore)(\(.+\))?: .{10,}
+```
+```json
+// repo_policies
+[
+  {"repo":"*/org/tickets","message_pattern":"^[A-Z]+-[0-9]+ .+"},
+  {"repo":"*/org/scratch","message_pattern":"-"}
+]
+```
+
+In `org/tickets`, `ABC-12 fix the timeout` passes and `fix: the timeout` is refused —
+an override **replaces** the fallback rather than adding to it, so the global format
+stops applying where a row matches. In `org/scratch` the `-` clears the rule and `wip`
+passes. Everywhere else the global pattern still holds.
+
+The mistake to avoid: leaving `org/scratch`'s column **empty** instead of `-`. Empty
+inherits, so the scratch repo would silently keep demanding Conventional Commits.
 
 ### Scenario 5 — raw opened for read-only subcommands
 
@@ -609,8 +642,8 @@ script. So the guards sit on **args and env**:
 
 ### What is not contained — stated plainly
 
-Two surfaces are gated but not sealed. Both follow from the deliberate "no path
-allowlist" decision, and both are worth knowing before enabling them.
+Four things are deliberately not sealed. Each was reviewed and kept; they are decisions
+with reasons, not gaps, and knowing them is part of configuring the connector.
 
 **`raw` cannot be fully contained.** It receives no `--end-of-options` because
 passing flags through is its entire purpose. Its defences are real — off by default,
@@ -621,10 +654,28 @@ subcommand that takes a command by design (`git bisect run <cmd>` is the cleares
 example) has granted code execution. `raw` is an admin escape hatch: correctly
 gated, not sandboxed.
 
-**`clone` can write anywhere the wick process can.** `dest` is an unrestricted
-absolute path, bounded only by refusing an existing directory and by the
-destructive opt-in. This follows directly from having no path allowlist; it is not
-an oversight.
+**An unlisted repository gets the global fallback, which may be permissive.** A
+repository matching no `repo_policies` row is judged by layer 1 alone, and if layer 1 is
+empty that means no branch pattern, no commit pattern and nothing protected.
+
+This is the owner's call, and the reason is practical: a connector may manage dozens of
+clones and only a few of them need rules. Requiring a row per repository would mean
+either an unmaintainable list or a connector that refuses most of its own work. Fail-open
+here is a scoping decision, not an accident — the operator decides which repositories are
+worth constraining. What is NOT acceptable is failing open **silently**, which is why a
+scope that could not be resolved is reported (`policy.unresolved_scope`) and a remote
+that does not exist is an error rather than a fallback.
+
+**Paths are unrestricted unless `allowed_repo_roots` is set.** With it empty — the
+default — `repo_path` and `clone`'s `dest` accept any location the wick process can
+reach, so the connector can read and write any git repository on the machine using the
+connector's credential.
+
+That default exists because the connector's purpose is managing checkouts that already
+exist, wherever they are; a mandatory sandbox would put every one of them out of reach.
+Set `allowed_repo_roots` to narrow it per instance. The check resolves symlinks and `..`
+before comparing, so neither traversal nor a symlinked parent escapes a root — a prefix
+test would have passed both.
 
 ### Runtime limits
 

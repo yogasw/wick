@@ -488,3 +488,95 @@ func TestResolveCommitMessagePatternInherits(t *testing.T) {
 		t.Error("MessageRe was not compiled")
 	}
 }
+
+// TestRepoRuleOverridesMessagePattern covers the third state of the commit message
+// column, which behaves like the branch column and for the same reason: one team's
+// repo wants Conventional Commits while another wants a ticket id, and a single
+// fallback cannot express both.
+func TestRepoRuleOverridesMessagePattern(t *testing.T) {
+	g := GlobalPolicy{MessagePattern: `^(feat|fix): .+`}
+	rules := []RepoRule{
+		{Repo: "*/org/tickets", MessagePattern: `^[A-Z]+-[0-9]+ .+`},
+		{Repo: "*/org/free", MessagePattern: "-"},
+		{Repo: "*/org/inherits"},
+	}
+
+	cases := []struct {
+		name    string
+		repo    string
+		message string
+		allow   bool
+	}{
+		// The override replaces the fallback outright — it does not stack with it, so
+		// the fallback's own format is refused where an override applies.
+		{"override accepts its own format", "abc.com/org/tickets", "ABC-12 do the thing", true},
+		{"override refuses the fallback's format", "abc.com/org/tickets", "feat: do the thing", false},
+		// "-" clears: this repo is exempt, not held to the fallback.
+		{"cleared accepts anything", "abc.com/org/free", "wip", true},
+		// An empty column inherits, which is the state that looks identical to cleared
+		// in storage and does the opposite.
+		{"empty inherits the fallback", "abc.com/org/inherits", "wip", false},
+		{"empty inherits and accepts a valid message", "abc.com/org/inherits", "fix: it", true},
+		// No rule matches at all → the fallback applies directly.
+		{"unmatched repo falls back", "abc.com/other/thing", "wip", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pol := Resolve(g, rules, tc.repo, tc.repo)
+			if pol.PolicyErr != "" {
+				t.Fatalf("unexpected policy error: %s", pol.PolicyErr)
+			}
+			v := pol.Evaluate(Request{Op: "commit", Branch: "fix/x", Message: tc.message})
+			if v.Allow != tc.allow {
+				t.Errorf("Allow = %v, want %v (rule %s, reason %q)", v.Allow, tc.allow, pol.MatchedRule, v.Reason)
+			}
+		})
+	}
+}
+
+// TestRepoRuleMessagePatternFailsClosed asserts an uncompilable override is
+// fail-closed like every other malformed policy value: mutations blocked, reads
+// still available. Storing one is refused by the widget, but config can also be
+// written by hand through the raw JSON escape hatch.
+func TestRepoRuleMessagePatternFailsClosed(t *testing.T) {
+	pol := Resolve(GlobalPolicy{}, []RepoRule{{Repo: "*/org/x", MessagePattern: `^(fix`}},
+		"abc.com/org/x", "abc.com/org/x")
+	if pol.PolicyErr == "" {
+		t.Fatal("an uncompilable message pattern must be recorded as a policy error")
+	}
+	if v := pol.Evaluate(Request{Op: "commit", Branch: "fix/x", Message: "anything"}); v.Allow {
+		t.Error("a mutation under a malformed policy must be denied")
+	}
+	if v := pol.Evaluate(Request{Op: "status"}); !v.Allow {
+		t.Error("a read must stay available under a malformed policy")
+	}
+}
+
+// TestCookbookScenario4b executes the plan's Scenario 4b literally, so the doc and
+// the engine cannot drift. A cookbook that is merely plausible is worse than none:
+// it is what an operator — or an AI asked to generate a policy from it — copies
+// verbatim, and the interesting claim there is the counterintuitive one, that an
+// override REPLACES the fallback instead of adding to it.
+func TestCookbookScenario4b(t *testing.T) {
+	g := GlobalPolicy{MessagePattern: `^(feat|fix|chore)(\(.+\))?: .{10,}`}
+	rules := []RepoRule{
+		{Repo: "*/org/tickets", MessagePattern: `^[A-Z]+-[0-9]+ .+`},
+		{Repo: "*/org/scratch", MessagePattern: "-"},
+	}
+	for _, tc := range []struct {
+		repo, msg string
+		allow     bool
+	}{
+		{"abc.com/org/tickets", "ABC-12 fix the timeout", true},
+		{"abc.com/org/tickets", "fix: the timeout", false}, // the global format stops applying
+		{"abc.com/org/scratch", "wip", true},               // "-" clears, so anything goes
+		{"abc.com/org/other", "wip", false},                // unmatched → global still holds
+		{"abc.com/org/other", "fix: the login timeout", true},
+	} {
+		pol := Resolve(g, rules, tc.repo, tc.repo)
+		v := pol.Evaluate(Request{Op: "commit", Branch: "fix/x", Message: tc.msg})
+		if v.Allow != tc.allow {
+			t.Errorf("%s %q: Allow = %v, want %v (%s)", tc.repo, tc.msg, v.Allow, tc.allow, v.Reason)
+		}
+	}
+}

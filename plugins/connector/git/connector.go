@@ -81,7 +81,14 @@ type Config struct {
 	RawEnabled bool   `wick:"bool;group=Raw Operation||collapsed;desc=Enable the raw operation, which runs an arbitrary git subcommand. Off by default."`
 	RawRules   string `wick:"kvlist=subcommand|mode;group=Raw Operation;desc=Per-subcommand rules for raw. mode is allow or deny. A subcommand that is not listed is denied."`
 
-	AllowHooks            bool `wick:"bool;group=Runtime||collapsed;desc=Let repository hooks in .git/hooks run. Off by default, because a hook is arbitrary code from the repository."`
+	// Opt-in, and empty means unrestricted, because that is the behaviour this
+	// connector shipped with and the one that makes it useful: it manages repositories
+	// that already exist, wherever they are, and a mandatory sandbox would put every
+	// existing checkout out of reach. Configuring roots is how an operator narrows that
+	// per instance.
+	AllowedRepoRoots string `wick:"kvlist=root;group=Runtime||collapsed;desc=Directories the connector may touch. Leave EMPTY to allow any repository the process can reach. When set, every repo_path and clone destination must resolve inside one of these roots — symlinks and .. are resolved first, so neither escapes. Example: d:/code/work"`
+
+	AllowHooks            bool `wick:"bool;group=Runtime;desc=Let repository hooks in .git/hooks run. Off by default, because a hook is arbitrary code from the repository."`
 	TimeoutSeconds        int  `wick:"default=60;group=Runtime;desc=Timeout in seconds for operations that do not touch the network."`
 	NetworkTimeoutSeconds int  `wick:"default=180;group=Runtime;desc=Timeout in seconds for push, pull, fetch, clone and ls-remote."`
 	MaxOutputBytes        int  `wick:"default=262144;group=Runtime;desc=Maximum bytes of output returned. Larger output is truncated and flagged."`
@@ -107,9 +114,14 @@ type Config struct {
 // Meta identifies the connector. Key must equal the folder name.
 func Meta() connector.Meta {
 	return connector.Meta{
-		Key:         Key,
-		Name:        "Git CLI",
-		Description: "Run git against local repositories with policy guards on branch names, protected branches and force pushes. Wraps the git binary, so it works with any host.",
+		Key:  Key,
+		Name: "Git CLI",
+		// The description leads with policy_show because the alternative is discovery by
+		// refusal: Evaluate stops at the first rule that fires, so a caller that starts
+		// writing learns one rule per rejected call and never hears about a rule it has
+		// not yet broken. Rules also differ per repository, so nothing here can be
+		// stated once and assumed — it has to be asked for, per repo.
+		Description: "Run git against local repositories, with a policy that can refuse a branch name, a commit message, a push to a protected branch, or a force push. Rules DIFFER PER REPOSITORY. Call policy_show for the repository first and comply with what it returns — every other operation reports a refusal only after the fact, one rule at a time. Wraps the git binary, so it works with any host.",
 		Icon:        "🌿",
 	}
 }
@@ -179,9 +191,11 @@ func doStatus(c *connector.Ctx) (any, error) {
 func doLog(c *connector.Ctx) (any, error) {
 	repo := c.Input("repo_path")
 	return execute(c, "log", repo, Request{}, func(EffectivePolicy) ([]string, error) {
-		limit := c.InputInt("limit")
-		if limit <= 0 {
-			limit = 20
+		// Bounded at 5000: a log of every commit in a large repository is not a useful
+		// answer, and the output cap would truncate it anyway without saying why.
+		limit, err := intInput(c, "limit", 20, 5000)
+		if err != nil {
+			return nil, err
 		}
 		args := []string{"log", "--format=%H%x09%an%x09%aI%x09%s", "-n", strconv.Itoa(limit)}
 		if since := strings.TrimSpace(c.Input("since")); since != "" {
@@ -205,9 +219,9 @@ func doLog(c *connector.Ctx) (any, error) {
 func doDiff(c *connector.Ctx) (any, error) {
 	repo := c.Input("repo_path")
 	statOnly := c.InputBool("stat_only")
-	maxLines := c.InputInt("max_lines")
-	if maxLines <= 0 {
-		maxLines = 500
+	maxLines, err := intInput(c, "max_lines", 500, 100000)
+	if err != nil {
+		return nil, err
 	}
 
 	out, err := execute(c, "diff", repo, Request{}, func(EffectivePolicy) ([]string, error) {
@@ -262,8 +276,14 @@ func capEnvelopeLines(env any, max int) any {
 
 func doBranchList(c *connector.Ctx) (any, error) {
 	repo := c.Input("repo_path")
-	return execute(c, "branch_list", repo, Request{}, func(EffectivePolicy) ([]string, error) {
-		args := []string{"branch", "--format=%(refname:short)%09%(objectname:short)%09%(committerdate:iso8601)"}
+	out, err := execute(c, "branch_list", repo, Request{}, func(EffectivePolicy) ([]string, error) {
+		// %(if)%(symref) drops origin/HEAD. Listed plainly it appeared as a bare
+		// "origin" among origin/main and origin/dev, which reads as a branch called
+		// "origin" — it is the remote's default-branch pointer, not a branch, and it
+		// duplicates whichever branch it points at. git can test for it but not omit the
+		// line, so the empty rows it leaves are stripped below.
+		args := []string{"branch",
+			"--format=%(if)%(symref)%(then)%(else)%(refname:short)%09%(objectname:short)%09%(committerdate:iso8601)%(end)"}
 		if c.InputBool("remote") {
 			args = append(args, "--remotes")
 		}
@@ -274,6 +294,33 @@ func doBranchList(c *connector.Ctx) (any, error) {
 		}
 		return args, nil
 	}, false)
+	if err != nil {
+		return nil, err
+	}
+	return dropBlankLines(out), nil
+}
+
+// dropBlankLines removes empty stdout rows from a response.
+//
+// Needed because a git --format can decide to print nothing for a ref but still emits
+// the newline, so filtering inside the format leaves holes rather than removing rows.
+func dropBlankLines(out any) any {
+	m, ok := out.(map[string]any)
+	if !ok {
+		return out
+	}
+	s, ok := m["stdout"].(string)
+	if !ok || s == "" {
+		return out
+	}
+	kept := make([]string, 0, 16)
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) != "" {
+			kept = append(kept, line)
+		}
+	}
+	m["stdout"] = strings.Join(kept, "\n")
+	return m
 }
 
 func doShow(c *connector.Ctx) (any, error) {
@@ -289,7 +336,7 @@ func doShow(c *connector.Ctx) (any, error) {
 
 func doRemoteList(c *connector.Ctx) (any, error) {
 	repo := c.Input("repo_path")
-	if err := ValidateRepoPath(repo); err != nil {
+	if err := validateRepo(c, repo); err != nil {
 		return nil, err
 	}
 	res, err := Run(c.Context(),
@@ -320,7 +367,7 @@ func doRemoteList(c *connector.Ctx) (any, error) {
 func doLsRemote(c *connector.Ctx) (any, error) {
 	repo := c.Input("repo_path")
 	remote := firstNonEmpty(strings.TrimSpace(c.Input("remote")), "origin")
-	if err := ValidateRepoPath(repo); err != nil {
+	if err := validateRepo(c, repo); err != nil {
 		return nil, err
 	}
 	info, err := ConvertRemote(remoteURL(c, repo, remote),
@@ -331,8 +378,8 @@ func doLsRemote(c *connector.Ctx) (any, error) {
 	o := runOpts(c, true)
 	res, err := Run(c.Context(), Cmd{
 		RepoPath:     repo,
-		InjectedArgs: injectedArgs(c, o.Auth, "ls_remote"),
-		UserArgs:     []string{"ls-remote", "--heads", "--end-of-options", info.Effective},
+		InjectedArgs: injectedArgs(c, o.Auth, "ls_remote", info.RewriteArgs),
+		UserArgs:     []string{"ls-remote", "--heads", "--end-of-options", remote},
 		Network:      true,
 	}, o)
 	if err != nil {
@@ -508,6 +555,9 @@ func doBranchCreate(c *connector.Ctx) (any, error) {
 	return execute(c, "branch_create", repo,
 		Request{Branch: name, NewBranch: true},
 		func(EffectivePolicy) ([]string, error) {
+			if err := ValidateRefName("name", name); err != nil {
+				return nil, err
+			}
 			if name == "" {
 				return nil, errors.New("name is required")
 			}
@@ -593,6 +643,21 @@ func doCommit(c *connector.Ctx) (any, error) {
 
 func doStash(c *connector.Ctx) (any, error) {
 	repo := c.Input("repo_path")
+
+	// The gate is per ACTION, not per operation.
+	//
+	// One op covers three git commands with opposite effects: push and pop move work
+	// around, list only reads. Judged as one op, "stash list" on a protected branch was
+	// refused with "direct stash is blocked" — a read denied for writing nothing. The
+	// op name is what the policy sees, so the read action has to be routed as the read
+	// it is rather than relabelled.
+	if strings.TrimSpace(c.Input("action")) == "list" {
+		return execute(c, "stash_list", repo, Request{},
+			func(EffectivePolicy) ([]string, error) {
+				return []string{"stash", "list"}, nil
+			}, false)
+	}
+
 	return execute(c, "stash", repo,
 		Request{Branch: currentBranch(c, repo)},
 		func(EffectivePolicy) ([]string, error) {
@@ -616,22 +681,27 @@ func doStash(c *connector.Ctx) (any, error) {
 }
 
 func doFetch(c *connector.Ctx) (any, error) {
-	return networkOp(c, "fetch", func(url string) []string {
+	return networkOp(c, "fetch", func(remote string) []string {
 		args := []string{"fetch"}
 		if c.InputBool("prune") {
 			args = append(args, "--prune")
 		}
-		return append(args, "--end-of-options", url)
+		// The remote NAME, so git applies the remote's configured refspec and updates
+		// refs/remotes/<remote>/*. With a URL here it wrote FETCH_HEAD and nothing else,
+		// and a branch pushed through the connector never appeared in branch_list.
+		return append(args, "--end-of-options", remote)
 	})
 }
 
 func doPull(c *connector.Ctx) (any, error) {
-	return networkOp(c, "pull", func(url string) []string {
+	return networkOp(c, "pull", func(remote string) []string {
 		args := []string{"pull"}
 		if c.InputBool("rebase") {
 			args = append(args, "--rebase")
 		}
-		args = append(args, "--end-of-options", url)
+		// The remote NAME: an omitted {branch} is meant to fall back to the current
+		// branch's upstream, and an upstream can only resolve against a named remote.
+		args = append(args, "--end-of-options", remote)
 		if b := strings.TrimSpace(c.Input("branch")); b != "" {
 			args = append(args, b)
 		}
@@ -645,8 +715,8 @@ func doTag(c *connector.Ctx) (any, error) {
 		Request{Branch: currentBranch(c, repo)},
 		func(EffectivePolicy) ([]string, error) {
 			name := strings.TrimSpace(c.Input("name"))
-			if name == "" {
-				return nil, errors.New("name is required")
+			if err := ValidateRefName("name", name); err != nil {
+				return nil, err
 			}
 			args := []string{"tag"}
 			if m := strings.TrimSpace(c.Input("message")); m != "" {
@@ -665,13 +735,21 @@ func doTag(c *connector.Ctx) (any, error) {
 
 func doPush(c *connector.Ctx) (any, error) {
 	repo := c.Input("repo_path")
-	if err := ValidateRepoPath(repo); err != nil {
+	if err := validateRepo(c, repo); err != nil {
 		return nil, err
 	}
 	remote := firstNonEmpty(strings.TrimSpace(c.Input("remote")), "origin")
 	branch := firstNonEmpty(strings.TrimSpace(c.Input("branch")), currentBranch(c, repo))
 	if branch == "" {
 		return nil, errors.New("branch is required (HEAD is detached, so there is no current branch)")
+	}
+	// Validated as a VALUE, not by argv position. The branch is embedded in
+	// "HEAD:refs/heads/<branch>", so it arrives as one token starting with "HEAD:" and
+	// ValidateUserArgs — a deny-list over tokens — never saw it. The same string as
+	// show's {ref} was refused, which made the protection depend on where a value
+	// happened to land rather than on the value itself.
+	if err := ValidateRefName("branch", branch); err != nil {
+		return nil, err
 	}
 
 	info, err := ConvertRemote(remoteURL(c, repo, remote),
@@ -684,10 +762,10 @@ func doPush(c *connector.Ctx) (any, error) {
 	force := c.InputBool("force")
 	v := pol.Evaluate(Request{Op: "push", Branch: branch, Remote: remote, Force: force})
 	if !v.Allow {
-		return deniedEnvelope(v, "git push "+remote+" "+branch), nil
+		return deniedEnvelope(v, "git push "+remote+" "+branch, "push"), nil
 	}
 
-	userArgs := buildPushArgs(info.Effective, branch, force, c.InputBool("set_upstream"))
+	userArgs := buildPushArgs(remote, branch, force, c.InputBool("set_upstream"))
 	if err := ValidateUserArgs(userArgs); err != nil {
 		return nil, err
 	}
@@ -702,7 +780,7 @@ func doPush(c *connector.Ctx) (any, error) {
 
 	res, err := Run(c.Context(), Cmd{
 		RepoPath:     repo,
-		InjectedArgs: injectedArgs(c, o.Auth, "push"),
+		InjectedArgs: injectedArgs(c, o.Auth, "push", info.RewriteArgs),
 		UserArgs:     userArgs,
 		Network:      true,
 	}, o)
@@ -791,6 +869,13 @@ func doClone(c *connector.Ctx) (any, error) {
 	// Refuse an existing destination rather than clone into it: git would either
 	// fail confusingly or, for an empty directory, succeed and make it unclear
 	// whether the contents came from this clone.
+	// Scope-checked like every repo_path, but through CheckPathRoots directly:
+	// ValidateRepoPath requires an existing directory containing .git, and a clone
+	// destination is neither yet. resolvePath handles that — it resolves the deepest
+	// existing ancestor, which is what catches a symlinked parent.
+	if err := CheckPathRoots(dest, allowedRoots(c)); err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(dest); err == nil {
 		return nil, fmt.Errorf("dest %q already exists; clone would not be a fresh checkout", dest)
 	}
@@ -803,15 +888,24 @@ func doClone(c *connector.Ctx) (any, error) {
 	pol := policyFor(c, dest, info.Slug)
 	v := pol.Evaluate(Request{Op: "clone", Remote: info.Effective})
 	if !v.Allow {
-		return deniedEnvelope(v, "git clone "+info.Effective), nil
+		return deniedEnvelope(v, "git clone "+info.Effective, "clone"), nil
 	}
 
 	args := []string{"clone"}
 	if b := strings.TrimSpace(c.Input("branch")); b != "" {
-		// --branch binds its value, so a flag-shaped branch stays data.
+		// --branch binds its value, so a flag-shaped branch is already inert here. The
+		// name is still validated, because "already safe in this position" is exactly the
+		// reasoning that left push open.
+		if err := ValidateRefName("branch", b); err != nil {
+			return nil, err
+		}
 		args = append(args, "--branch", b)
 	}
-	if d := c.InputInt("depth"); d > 0 {
+	depth, err := intInput(c, "depth", 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	if d := depth; d > 0 {
 		args = append(args, "--depth", strconv.Itoa(d))
 	}
 	// Both the URL and the destination are positional. Verified against git 2.52:
@@ -867,11 +961,11 @@ func doTagDelete(c *connector.Ctx) (any, error) {
 	}
 
 	// Deleting a remote tag is a network mutation: push an empty ref.
-	if err := ValidateRepoPath(repo); err != nil {
+	if err := validateRepo(c, repo); err != nil {
 		return nil, err
 	}
-	if name == "" {
-		return nil, errors.New("name is required")
+	if err := ValidateRefName("name", name); err != nil {
+		return nil, err
 	}
 	info, err := ConvertRemote(remoteURL(c, repo, remote),
 		ParseHostMap(c.Cfg("remote_host_map")), c.CfgBool("convert_ssh_remote_to_https"))
@@ -881,16 +975,16 @@ func doTagDelete(c *connector.Ctx) (any, error) {
 	pol := policyFor(c, repo, info.Slug)
 	v := pol.Evaluate(Request{Op: "tag_delete", Remote: remote})
 	if !v.Allow {
-		return deniedEnvelope(v, "git push "+remote+" :refs/tags/"+name), nil
+		return deniedEnvelope(v, "git push "+remote+" :refs/tags/"+name, "tag_delete"), nil
 	}
-	userArgs := []string{"push", "--end-of-options", info.Effective, ":refs/tags/" + name}
+	userArgs := []string{"push", "--end-of-options", remote, ":refs/tags/" + name}
 	if err := ValidateUserArgs(userArgs); err != nil {
 		return nil, err
 	}
 	o := runOpts(c, true)
 	res, err := Run(c.Context(), Cmd{
 		RepoPath:     repo,
-		InjectedArgs: injectedArgs(c, o.Auth, "tag_delete"),
+		InjectedArgs: injectedArgs(c, o.Auth, "tag_delete", info.RewriteArgs),
 		UserArgs:     userArgs,
 		Network:      true,
 	}, o)
@@ -902,7 +996,7 @@ func doTagDelete(c *connector.Ctx) (any, error) {
 
 func doRaw(c *connector.Ctx) (any, error) {
 	repo := c.Input("repo_path")
-	if err := ValidateRepoPath(repo); err != nil {
+	if err := validateRepo(c, repo); err != nil {
 		return nil, err
 	}
 	args := SplitRawArgs(c.Input("args"))
@@ -918,7 +1012,7 @@ func doRaw(c *connector.Ctx) (any, error) {
 	pol := policyFor(c, repo, RepoSlug(remoteURL(c, repo, "origin")))
 	v := pol.Evaluate(Request{Op: "raw", RawSubcommand: sub})
 	if !v.Allow {
-		return deniedEnvelope(v, "git "+strings.Join(args, " ")), nil
+		return deniedEnvelope(v, "git "+strings.Join(args, " "), "raw"), nil
 	}
 	if err := ValidateUserArgs(args); err != nil {
 		return nil, err
@@ -970,10 +1064,13 @@ func Operations() []connector.Category {
 			connector.Op("ls_remote", "Probe Remote",
 				"List the branches remote {remote} advertises for {repo_path}, without fetching or changing anything. The cheapest way to verify that the credential and the remote URL both work.",
 				LsRemoteInput{}, doLsRemote, wickdocs.Docs{}),
+			connector.Op("policy_show", "Show Policy",
+				"Report every policy rule in force for {repo_path}: the branch name pattern, the commit message pattern, the protected branches, whether force push is allowed, and which rules gate which operation. Rules differ PER REPOSITORY, so call this with the repo you are about to work on. Each rule names the syntax it is written in — regex or glob — and a pattern that is set comes with an example value it accepts. Call this BEFORE creating a branch or committing: otherwise a rule is only discovered by violating it, one refusal at a time, and a rule nobody has violated yet is invisible. Spawns no git process and changes nothing.",
+				PolicyShowInput{}, doPolicyShow, wickdocs.Docs{}),
 		),
 		connector.Cat("Branches and Commits", "Create branches, stage and record changes.",
 			connector.Op("branch_create", "Create Branch",
-				"Create branch {name} at {repo_path}, optionally from {from_ref}. The name must satisfy the connector's branch pattern and must not be a protected branch — both are enforced before git runs.",
+				"Create branch {name} at {repo_path}, optionally from {from_ref}. The name must satisfy the connector's branch pattern and must not be a protected branch — both are enforced before git runs, and the pattern differs per repository. Call policy_show first to read the pattern and an example name it accepts, rather than guessing a name and being refused.",
 				BranchCreateInput{}, doBranchCreate, wickdocs.Docs{}),
 			connector.Op("checkout", "Checkout",
 				"Switch {repo_path} to {ref}. With {create} set, the branch is created first and the branch pattern applies. Fails if the working tree has conflicting changes.",
@@ -982,10 +1079,10 @@ func Operations() []connector.Category {
 				"Stage {paths} in {repo_path} for the next commit. Accepts a comma-separated list; use . to stage everything.",
 				AddInput{}, doAdd, wickdocs.Docs{}),
 			connector.Op("commit", "Commit",
-				"Record staged changes at {repo_path} with {message}. Blocked when the current branch is protected. Set {dry_run} to see the command and the policy verdict without committing.",
+				"Record staged changes at {repo_path} with {message}. Blocked when the current branch is protected, and when {message} does not match the connector's commit message pattern — call policy_show first for that pattern and an example message it accepts, since a length floor or a required scope is not obvious from the regex. Set {dry_run} to see the command and the policy verdict without committing.",
 				CommitInput{}, doCommit, wickdocs.Docs{}),
 			connector.Op("stash", "Stash",
-				"Save, restore or list work in progress at {repo_path}. push saves the working tree, pop restores the most recent entry, list shows entries. Deleting an entry is the separate stash_drop operation.",
+				"Save, restore or list work in progress at {repo_path}. push saves the working tree, pop restores the most recent entry, list shows entries. Policy is judged per ACTION: push and pop are refused on a protected branch, list is a read and is never refused. Deleting an entry is the separate stash_drop operation.",
 				StashInput{}, doStash, wickdocs.Docs{}),
 			connector.Op("tag", "Create Tag",
 				"Create tag {name} at {repo_path}, annotated when {message} is supplied. Local only — pushing tags is a push operation.",
@@ -1001,7 +1098,7 @@ func Operations() []connector.Category {
 		),
 		connector.Cat("Destructive", "Operations that publish or discard work. Each is off by default on a new instance.",
 			connector.OpDestructive("push", "Push",
-				"Publish commits from {repo_path} to {branch} on {remote}. Blocked when the target branch is protected; {force} additionally requires allow_force_push and always uses --force-with-lease. Set {dry_run} to see the command and verdict without pushing.",
+				"Publish commits from {repo_path} to {branch} on {remote}. Blocked when the target branch is protected; {force} additionally requires allow_force_push and always uses --force-with-lease. policy_show lists the protected branches for this repository. Set {dry_run} to see the command and verdict without pushing.",
 				PushInput{}, doPush, wickdocs.Docs{}),
 			connector.OpDestructive("merge", "Merge",
 				"Merge {ref} into the current branch at {repo_path}, or abort a conflicted merge with {abort}. Blocked when the current branch is protected. Never opens an editor.",

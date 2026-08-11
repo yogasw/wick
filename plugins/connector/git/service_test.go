@@ -394,7 +394,7 @@ func TestEnvelopeIncludesRemoteWhenPresent(t *testing.T) {
 
 func TestEnvelopeCarriesDenyReason(t *testing.T) {
 	m := deniedEnvelope(Verdict{Allow: false, Reason: "branch is protected", MatchedRule: "global"},
-		"git push").(map[string]any)
+		"git push", "push").(map[string]any)
 
 	if m["ok"] != false {
 		t.Errorf("ok = %v, want false for a denied operation", m["ok"])
@@ -407,6 +407,14 @@ func TestEnvelopeCarriesDenyReason(t *testing.T) {
 	// failed", and cannot know what to change to make the call succeed.
 	if pol["reason"] != "branch is protected" {
 		t.Errorf("reason = %v, want the verdict's reason", pol["reason"])
+	}
+	// The reason alone answers only "why did THIS fail". Evaluate stops at the first
+	// rule that fires, so a caller working from reasons alone pays one round trip per
+	// rule and never learns about a rule it has not yet broken. The refusal has to
+	// name the operation that answers in full.
+	next, _ := pol["next_step"].(string)
+	if !strings.Contains(next, "policy_show") {
+		t.Errorf("next_step = %q, want it to point at policy_show", next)
 	}
 }
 
@@ -957,7 +965,27 @@ func TestMutatingOpsGuardPositionalUserValues(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := envOf(t)(tc.h(opCtx(nil, tc.in)))
+			// Two independent defences, and either one is a pass.
+			//
+			// Some of these values are now refused by ValidateRefName BEFORE an argv exists
+			// — a leading "-" is rejected as a value, wherever it would have landed. That is
+			// the stronger defence, because it does not depend on the value ending up in the
+			// position somebody remembered to guard: push embedded its branch inside
+			// "HEAD:refs/heads/<branch>" and was protected by neither the deny-list nor a
+			// terminator until the value itself was checked.
+			//
+			// The terminator still matters for values that are legitimately ref-shaped but
+			// happen to collide with a flag name, so where the op DID build an argv, the
+			// guard must still be in it and ahead of the value.
+			out, err := tc.h(opCtx(nil, tc.in))
+			if err != nil {
+				if !strings.Contains(err.Error(), tc.value) {
+					t.Errorf("%s was refused, but the error does not name the value %q: %v",
+						tc.name, tc.value, err)
+				}
+				return
+			}
+			m := envOf(t)(out, nil)
 			if m["ok"] == true {
 				t.Fatalf("%s accepted a flag-shaped value: %+v", tc.name, m)
 			}
@@ -1218,7 +1246,7 @@ func TestPushToProtectedBranchIsBlockedBeforeSpawn(t *testing.T) {
 		t.Errorf("Reason = %q, want it to mention the protected branch", v.Reason)
 	}
 
-	env := deniedEnvelope(v, "git push origin main").(map[string]any)
+	env := deniedEnvelope(v, "git push origin main", "push").(map[string]any)
 	if env["ok"] != false {
 		t.Error("a denied envelope must report ok=false")
 	}
@@ -1241,10 +1269,18 @@ func TestPushDryRunNeverTouchesTheNetwork(t *testing.T) {
 		t.Fatalf("push dry run failed: %+v", m)
 	}
 	cmdStr := m["command"].(string)
-	// The explicit URL, never the remote name: that is what bypasses credentials
-	// stored in .git/config.
-	if !strings.Contains(cmdStr, "https://invalid.invalid/org/repo.git") {
-		t.Errorf("dry run must report the explicit URL, got %q", cmdStr)
+	// The remote NAME, not its URL. This used to assert the opposite, for a real
+	// reason — a credential embedded in .git/config wins over GIT_ASKPASS, so passing
+	// the stripped URL kept the connector from authenticating as whoever's password is
+	// in the file. But the URL also cost upstream tracking: --set-upstream recorded the
+	// URL string as branch.<b>.remote, so status lost ahead/behind for every branch the
+	// connector created. The credential is now neutralised by a
+	// url.<clean>.insteadOf=<dirty> injection instead, which keeps both properties.
+	if !strings.Contains(cmdStr, "--end-of-options origin ") {
+		t.Errorf("push must name the remote, or git cannot record upstream; got %q", cmdStr)
+	}
+	if strings.Contains(cmdStr, "https://invalid.invalid") {
+		t.Errorf("push must not pass the URL as the remote argument, got %q", cmdStr)
 	}
 	if !strings.Contains(cmdStr, "HEAD:refs/heads/main") {
 		t.Errorf("dry run must report a full refspec, got %q", cmdStr)
