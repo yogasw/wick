@@ -10,6 +10,30 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.38.1](https://github.com/yogasw/wick/compare/v0.38.0...v0.38.1) — Connectors
+
+_Released on 2026-08-11_
+
+### Connectors
+#### Added
+*   **Git CLI connector plugin** (`git`): Runs the local `git` binary against repositories already on disk, enabling GitHub, Bitbucket, GitLab, and self-hosted servers through the same operations. It features 24 agent-callable operations across Read, Branches and Commits, Network, and Destructive categories. Access is gated by a two-layer policy engine (global fallback plus per-repo overrides matched on `host/owner/repo` or local path), covering branch name patterns, commit message patterns, protected branches, force push, and a per-subcommand allow-list for the `raw` escape hatch. Credentials never touch disk (HTTPS token via an askpass helper by default; `.git/config` is never rewritten). A new `policy_show` operation reports every rule in force for a repository before an agent acts. A new `allowed_repo_roots` config field optionally bounds every `repo_path` and clone destination to a set of directories (symlinks and `..` resolved first); if empty, it's unrestricted. See [Git CLI](/connectors/git).
+
+### Manager
+#### Fixed
+*   Hidden config fields (used internally by `html=` widgets to write sibling config through `{fields}`) are now sent to the SPA, flagged and with their value withheld, instead of being dropped from the schema. This prevents a widget's own writes to its hidden fields from being silently discarded.
+
+### MCP
+#### Fixed
+*   Dropdown enums in tool schemas now correctly split on `|` as documented, instead of `,`. This addresses cases where `dropdown=a|b|c` fields were previously emitting a one-element enum.
+*   Boolean config/input widgets now declare `type: boolean` in the schema instead of `type: string`.
+*   A `wick_execute` batch entry now reports `ok: false` when the operation itself reported failure in its response envelope, instead of showing `ok: true` with the failure nested inside `result`. Policy refusals inside a batch call are no longer indistinguishable from success at a glance.
+
+### Fixed
+*   **Intermittent "cached plan must not change result type" errors on Postgres**: This issue, occurring when running the server and worker as independent toggles in tray mode, could trigger a schema migration while other components were already serving queries on the same database, leaving their connections with a stale plan. Migrations now run once per database (not just once per process) on a dedicated connection, and queries that still hit a stale plan are retried once automatically. The per-database guard added for this was itself keyed by a heap address that Go can reuse, which could make a freshly opened database (including on-disk SQLite) look already migrated and skip its schema; it's now keyed by handle identity instead.
+
+---
+
+
 ## [v0.38.0](https://github.com/yogasw/wick/compare/v0.37.0...v0.38.0) — Sub-agents & Approvals
 
 _Released on 2026-08-09_

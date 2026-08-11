@@ -97,6 +97,7 @@ export default withMermaid(defineConfig({
           { text: 'HTTP / REST', link: '/connectors/httprest' },
           { text: 'GitHub', link: '/connectors/github' },
           { text: 'Bitbucket', link: '/connectors/bitbucket' },
+          { text: 'Git CLI', link: '/connectors/git' },
           { text: 'Slack', link: '/connectors/slack' },
           { text: 'Google Workspace', link: '/connectors/googleworkspace' },
           { text: 'Playwright Browser', link: '/connectors/playwright_browser' },

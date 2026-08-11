@@ -10,9 +10,9 @@ import (
 // spec wants for tools/list inputSchema. Only the fields LLM clients
 // actually read are included — extra noise tends to confuse parsers.
 type jsonSchema struct {
-	Type       string                       `json:"type"`
+	Type       string                        `json:"type"`
 	Properties map[string]jsonSchemaProperty `json:"properties,omitempty"`
-	Required   []string                     `json:"required,omitempty"`
+	Required   []string                      `json:"required,omitempty"`
 }
 
 type jsonSchemaProperty struct {
@@ -35,7 +35,14 @@ func configsToJSONSchema(cfgs []entity.Config) jsonSchema {
 			Description: c.Description,
 		}
 		switch c.Type {
-		case "checkbox":
+		// Every spelling of a boolean widget, not just "checkbox".
+		//
+		// widgetFor lets an explicit tag flag win over the Go type, so a Go bool tagged
+		// `wick:"bool"` yields the widget "bool" rather than "checkbox" — and this switch
+		// only knew "checkbox", so it fell through to the default and declared the field a
+		// STRING. Parsing was unaffected (CfgBool accepts "true"/"false"), but a caller
+		// reading the schema had no way to know whether to send true, "true" or "1".
+		case "checkbox", "bool", "boolean":
 			prop.Type = "boolean"
 		case "number":
 			prop.Type = "number"
@@ -70,8 +77,19 @@ func configsToJSONSchema(cfgs []entity.Config) jsonSchema {
 // splitOptions parses a dropdown options string. Format follows the
 // `wick:"dropdown=foo,bar,baz"` convention used by entity.Config —
 // comma-separated values with whitespace tolerance.
+// splitOptions splits a dropdown's option list.
+//
+// The separator is "|", per entity.Config: "Options is pipe-separated (a|b|c)".
+// This split on "," instead, so a dropdown declared as `wick:"dropdown=push|pop|list"`
+// produced a one-element enum holding the literal "push|pop|list" — a schema that
+// rejects every value that is actually valid. wick does not validate enums, so it went
+// unnoticed here, but a strict JSON Schema validator on the caller's side would refuse
+// the only correct inputs.
+//
+// Comma is still accepted, so an option list written the wrong way keeps working
+// rather than collapsing into one bogus value.
 func splitOptions(raw string) []string {
-	parts := strings.Split(raw, ",")
+	parts := strings.FieldsFunc(raw, func(r rune) bool { return r == '|' || r == ',' })
 	out := parts[:0]
 	for _, p := range parts {
 		if v := strings.TrimSpace(p); v != "" {
@@ -80,4 +98,3 @@ func splitOptions(raw string) []string {
 	}
 	return out
 }
-

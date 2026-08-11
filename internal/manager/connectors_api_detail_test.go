@@ -107,7 +107,8 @@ func TestAPIConnectorRowsUnknownKey(t *testing.T) {
 
 func TestAPIConnectorDetail(t *testing.T) {
 	h, svc := newDetailHandler(t)
-	row, err := svc.Create(t.Context(), "slack", "Prod", map[string]string{"token": "xoxb-secret"}, "u-admin")
+	row, err := svc.Create(t.Context(), "slack", "Prod",
+		map[string]string{"token": "xoxb-secret", "internal": "machine-managed"}, "u-admin")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -136,8 +137,22 @@ func TestAPIConnectorDetail(t *testing.T) {
 	for _, f := range got.Fields {
 		byKey[f.Key] = f
 	}
-	if _, ok := byKey["internal"]; ok {
-		t.Errorf("hidden config should not be serialized: %+v", got.Fields)
+	// A hidden config travels, flagged, with its value withheld. It is in the
+	// payload because an html widget writes sibling config through {fields} and the
+	// form ignores keys missing from the schema — dropping the row made those writes
+	// silent no-ops. Rendering is the SPA's job (groupFields skips hidden).
+	hid, ok := byKey["internal"]
+	if !ok {
+		t.Fatalf("hidden config must still be serialized so {fields} writes resolve: %+v", got.Fields)
+	}
+	if !hid.Hidden {
+		t.Error("hidden config must carry hidden=true so the form knows not to render it")
+	}
+	if hid.Value != "" {
+		t.Errorf("a hidden value must be withheld like a secret's, got %q", hid.Value)
+	}
+	if !hid.HasValue {
+		t.Error("has_value must still be reported so a required-but-hidden field is not counted missing")
 	}
 	if f, ok := byKey["api_url"]; !ok || !f.Required || f.Type != "url" {
 		t.Errorf("api_url field wrong: %+v", f)

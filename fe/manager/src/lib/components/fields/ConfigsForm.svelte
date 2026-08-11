@@ -138,7 +138,12 @@
   <p class="mt-4 text-sm text-black-700 dark:text-black-600">No configuration fields.</p>
 {:else}
   {#snippet simpleFieldBlock(field: ConfigField)}
-    <div class={field.type === "textarea" ? "col-span-full" : ""}>
+    <!-- A textarea and an html widget both need the full row. A textarea because a
+         half-width one is unusable for multi-line text; an html widget because the
+         connector renders a whole panel there — the git connector's policy editor is
+         a list-and-detail layout, and squeezed into one grid column it wrapped into a
+         single cramped strip with the other half of the row left empty. -->
+    <div class={field.type === "textarea" || field.type === "html" ? "col-span-full" : ""}>
       <div class="flex items-center gap-2 mb-1.5">
         <span class="font-mono text-xs font-semibold text-black-900 dark:text-white-100">{field.key}</span>
         {#if missing(field)}

@@ -70,17 +70,17 @@ type connectorMCPAuthJSON struct {
 // connectorListJSON is the shape served at GET /manager/api/connectors/{key}:
 // the connector-type metadata plus the caller's manageable rows.
 type connectorListJSON struct {
-	Key         string             `json:"key"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	Icon        string             `json:"icon"`
-	Fixed       bool               `json:"fixed"`
-	OpCount     int                `json:"op_count"`
-	Custom      bool               `json:"custom"`
-	DefID       string             `json:"def_id,omitempty"`
-	MCP         bool               `json:"mcp"`
-	MCPStatus   string             `json:"mcp_status,omitempty"`
-	NeedsReload bool               `json:"needs_reload"`
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Icon        string `json:"icon"`
+	Fixed       bool   `json:"fixed"`
+	OpCount     int    `json:"op_count"`
+	Custom      bool   `json:"custom"`
+	DefID       string `json:"def_id,omitempty"`
+	MCP         bool   `json:"mcp"`
+	MCPStatus   string `json:"mcp_status,omitempty"`
+	NeedsReload bool   `json:"needs_reload"`
 	// DisabledType is the connector-TYPE off-switch (header kebab). When true
 	// the connector is hidden from the LLM but still manageable here.
 	DisabledType bool               `json:"disabled_type"`
@@ -105,6 +105,12 @@ type configFieldJSON struct {
 	Group       string            `json:"group,omitempty"`
 	ColOptions  map[string]string `json:"col_options,omitempty"`
 	EnvOverride string            `json:"env_override"`
+
+	// Hidden keeps the row out of the form but still in the payload, because an
+	// html widget writes sibling config through {fields} and ConfigsForm refuses
+	// keys it has never seen — dropping hidden fields entirely made those writes
+	// silently no-ops. The value is still withheld: see below.
+	Hidden bool `json:"hidden,omitempty"`
 }
 
 // connectorOpJSON is the per-operation read model for the detail page's
@@ -153,17 +159,17 @@ type connectorOAuthJSON struct {
 // GET /manager/api/connectors/{key}/{id}: the row identity, the connector
 // type metadata, the visible config fields, and the operations table.
 type connectorDetailJSON struct {
-	Key            string                  `json:"key"`
-	Name           string                  `json:"name"`
-	Icon           string                  `json:"icon"`
-	ID             string                  `json:"id"`
-	Label          string                  `json:"label"`
-	Description    string                  `json:"description"`
-	Disabled       bool                    `json:"disabled"`
-	RateLimitRPM   int                     `json:"rate_limit_rpm"`
-	HasHealthCheck bool                    `json:"has_health_check"`
-	CanConfigure   bool                    `json:"can_configure"`
-	IsAdmin        bool                    `json:"is_admin"`
+	Key            string `json:"key"`
+	Name           string `json:"name"`
+	Icon           string `json:"icon"`
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	Description    string `json:"description"`
+	Disabled       bool   `json:"disabled"`
+	RateLimitRPM   int    `json:"rate_limit_rpm"`
+	HasHealthCheck bool   `json:"has_health_check"`
+	CanConfigure   bool   `json:"can_configure"`
+	IsAdmin        bool   `json:"is_admin"`
 	// RequireAIDescription mirrors Meta.RequireAIDescription: when true the
 	// per-instance AI description is mandatory (a blank one keeps the instance
 	// needs_setup). The SPA uses it to force the AI description section on and
@@ -172,12 +178,12 @@ type connectorDetailJSON struct {
 	// CanManagePolicy is true for an admin OR the instance owner — gates the
 	// Access policy + session-config sections (more than can_configure, which
 	// also covers AllowOthersConfigure users who must NOT edit the policy).
-	CanManagePolicy bool `json:"can_manage_policy"`
-	Fields         []configFieldJSON       `json:"fields"`
-	Operations     []connectorOpJSON       `json:"operations"`
-	Categories     []connectorCategoryJSON `json:"categories"`
-	Accounts       []connectorAccountJSON  `json:"accounts"`
-	OAuth          *connectorOAuthJSON     `json:"oauth"`
+	CanManagePolicy bool                    `json:"can_manage_policy"`
+	Fields          []configFieldJSON       `json:"fields"`
+	Operations      []connectorOpJSON       `json:"operations"`
+	Categories      []connectorCategoryJSON `json:"categories"`
+	Accounts        []connectorAccountJSON  `json:"accounts"`
+	OAuth           *connectorOAuthJSON     `json:"oauth"`
 	// Access policy (admin-controlled). Surfaced so the SPA can render
 	// the toggles + decide whether the Connect button is offered.
 	EnableSSO             bool `json:"enable_sso"`
@@ -217,14 +223,14 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 	}
 	mcp, mcpStatus := h.mcpConnectorInfo(ctx, key)
 	out := connectorListJSON{
-		Key:         mod.Meta.Key,
-		Name:        mod.Meta.Name,
-		Description: mod.Meta.Description,
-		Icon:        mod.Meta.Icon,
-		Fixed:       mod.Meta.Fixed,
-		OpCount:     visibleOpCount(mod),
-		Custom:      customInfo != nil,
-		DefID:       defID,
+		Key:          mod.Meta.Key,
+		Name:         mod.Meta.Name,
+		Description:  mod.Meta.Description,
+		Icon:         mod.Meta.Icon,
+		Fixed:        mod.Meta.Fixed,
+		OpCount:      visibleOpCount(mod),
+		Custom:       customInfo != nil,
+		DefID:        defID,
 		MCP:          mcp,
 		MCPStatus:    mcpStatus,
 		NeedsReload:  h.connectorNeedsReload(ctx, key),
@@ -256,8 +262,9 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 // apiConnectorDetail serves GET /manager/api/connectors/{key}/{id}: the
 // per-row admin read model. Reuses RowConfigs (schema overlaid with stored
 // values) and OperationStatesFull, identical to connectorDetailPage. Hidden
-// configs (machine-managed OAuth tokens) are dropped, mirroring the templ
-// page, and secret values are blanked before serialization.
+// configs (machine-managed OAuth tokens, values an html widget owns) are
+// flagged rather than dropped — see configFieldJSON.Hidden — and both their
+// values and secrets' are blanked before serialization.
 func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := login.GetUser(ctx)
@@ -282,10 +289,8 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 	cfgs := h.connectors.RowConfigs(*row)
 	fields := make([]configFieldJSON, 0, len(cfgs))
 	for _, cfg := range cfgs {
-		if cfg.Hidden {
-			continue
-		}
 		f := configFieldJSON{
+			Hidden:      cfg.Hidden,
 			Key:         cfg.Key,
 			Type:        cfg.Type,
 			Value:       cfg.Value,
@@ -299,7 +304,10 @@ func (h *Handler) apiConnectorDetail(w http.ResponseWriter, r *http.Request) {
 			ColOptions:  cfg.ColOptions,
 			EnvOverride: cfg.EnvOverride,
 		}
-		if cfg.IsSecret {
+		// A hidden field's value is withheld like a secret's: nothing renders it, and
+		// the widget that owns it reads config server-side. has_value still travels,
+		// so a required-but-hidden field is not counted missing.
+		if cfg.IsSecret || cfg.Hidden {
 			f.Value = ""
 		}
 		fields = append(fields, f)
