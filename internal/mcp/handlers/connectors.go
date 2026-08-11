@@ -31,7 +31,7 @@ type connectorSummary struct {
 	Status       string `json:"status"`
 	// Kind is "connector" for a standard instance or "account" for a
 	// connected OAuth account entry. Use kind to distinguish bot vs personal.
-	Kind     string `json:"kind"`
+	Kind string `json:"kind"`
 	// ParentID is the connector row ID when Kind == "account".
 	ParentID string `json:"parent_id,omitempty"`
 }
@@ -78,11 +78,11 @@ type searchResult struct {
 }
 
 type toolDetail struct {
-	ToolID      string      `json:"tool_id"`
-	Name        string      `json:"name"`
-	Description string      `json:"description"`
-	Destructive bool        `json:"destructive"`
-	Category    string      `json:"category,omitempty"`
+	ToolID      string `json:"tool_id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Destructive bool   `json:"destructive"`
+	Category    string `json:"category,omitempty"`
 	// InputSchema is a pointer so it can be omitted in list mode
 	// (wick_get without a category). It is populated only when the caller
 	// scopes the request to a single category.
@@ -779,12 +779,79 @@ func runBatch(parent context.Context, calls []batchCall, timeout time.Duration, 
 			} else {
 				br.OK = true
 				br.Result = json.RawMessage(resJSON)
+				// A call that COMPLETED is not the same as an operation that SUCCEEDED.
+				//
+				// br.OK used to mean only "the call did not error", so an operation refused by
+				// its own connector — a git push blocked by policy — came back as
+				// {ok: true, result: {ok: false, …}}. The reader's eye lands on the outer
+				// flag and on ok_count, both of which said the batch was clean while the
+				// refusal sat nested one level down. Propagating a self-reported failure
+				// costs nothing (the detail is still in Result) and makes the summary honest.
+				if reason := selfReportedFailure(resJSON); reason != "" {
+					br.OK = false
+					br.Error = reason
+				}
 			}
 			results[idx] = br
 		}(i, calls[i])
 	}
 	wg.Wait()
 	return results
+}
+
+// selfReportedFailure returns a short reason when a connector's own response says the
+// operation failed, or "" when it did not or cannot be read.
+//
+// Deliberately narrow. It looks only at a top-level "ok": false — the envelope
+// convention connectors already follow — and never infers failure from anything else.
+// A response with no "ok" field is not a failure, and neither is a nested one: guessing
+// would turn an ordinary payload that happens to contain a false somewhere into a
+// reported error, which is worse than the under-reporting it replaces.
+//
+// The reason is assembled from the fields most likely to explain it, so a caller
+// scanning the summary learns WHY without opening the result. A refusal by policy is
+// the case that motivated this, and its reason lives under "policy".
+func selfReportedFailure(resJSON string) string {
+	var env struct {
+		OK     *bool `json:"ok"`
+		Policy struct {
+			Verdict string `json:"verdict"`
+			Reason  string `json:"reason"`
+		} `json:"policy"`
+		Error  string `json:"error"`
+		Stderr string `json:"stderr"`
+	}
+	if err := json.Unmarshal([]byte(resJSON), &env); err != nil {
+		return "" // not an object, or not JSON: nothing to conclude
+	}
+	if env.OK == nil || *env.OK {
+		return ""
+	}
+
+	switch {
+	case env.Policy.Verdict == "deny" && env.Policy.Reason != "":
+		return "refused by policy: " + env.Policy.Reason
+	case env.Error != "":
+		return env.Error
+	case strings.TrimSpace(env.Stderr) != "":
+		return firstLine(env.Stderr)
+	default:
+		return "the operation reported ok=false"
+	}
+}
+
+// firstLine trims a multi-line message down to something that fits in a summary. The
+// full text is still in Result.
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = s[:i]
+	}
+	const max = 200
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
 }
 
 // intArg reads an integer-valued JSON argument (numbers arrive as float64
