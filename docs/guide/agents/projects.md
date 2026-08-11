@@ -70,6 +70,13 @@ The settings form fields:
 | **Default Preset / Provider** | Inherited by new sessions. |
 | **System prompt addon** | Appended to the preset system prompt for every session. |
 | **Description** | UI-only metadata. |
+| **Widget permissions** | Per-project override of the [HTML artifact CSP](../agents#html-artifact-content-security-policy). See below. |
+
+## Widget permissions
+
+Each project can override the global [Widget CSP config](../agents#widget-group-html-artifact-csp) for its own HTML artifacts. A 3-way toggle — **Secure** / **Unsecure** / **Custom** — mirrors the global `widget_mode` knob; leaving the override off inherits the global policy verbatim.
+
+Under **Custom**, per-directive controls (frame/img/media/connect/script-src, popups, allowlist) work the same as the global ones. The project's own allowlist **appends** to the global allowlist rather than replacing it — the settings page shows the inherited (global) hosts read-only alongside the project's own, so it's clear what a widget here can actually reach. Because it only appends, a project can't narrow the global allowlist to be *more* restrictive — a project that needs to be stricter than global should pick **Secure** instead.
 
 ## Pin a project as your default
 
@@ -95,10 +102,15 @@ Pin/unpin from the 📌 toggle on the sidebar row or the `📌 Pin as default` b
   },
   "pinned_sessions": ["01J..."],
   "tags": [],
+  "widget": {
+    "override": false
+  },
   "created_at": "2026-06-01T...",
   "updated_at": "2026-06-01T..."
 }
 ```
+
+`widget.override: false` (the zero value, and what every `meta.json` written before this field decodes to) means "inherit the global Widget policy". Set `override: true` plus `mode` / per-directive fields to customize — see [Widget permissions](#widget-permissions) above.
 
 `custom_path` is omitted for managed projects. Atomic write (tmp file + rename) on every save; `updated_at` is bumped automatically.
 

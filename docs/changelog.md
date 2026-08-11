@@ -10,6 +10,26 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.38.2](https://github.com/yogasw/wick/compare/v0.38.1...v0.38.2) — Agents
+
+_Released on 2026-08-11_
+
+### Agents
+#### Added
+*   **Configurable Content-Security-Policy for HTML widgets**: The Content-Security-Policy (CSP) applied to HTML artifacts (file artifacts and inline ` ```html ` blocks) is no longer hardcoded.
+    *   A new `Widget` config group (global, under Agents config) now allows setting a `secure`, `unsecure`, or `custom` mode:
+        *   `secure`: This is the default mode, which is byte-identical to the previous fixed policy, blocking all directives and disabling popups.
+        *   `unsecure`: This mode opens every directive to HTTPS and enables popups, intended for trusted projects only. Per-directive fields are ignored when in this mode.
+        *   `custom`: This mode exposes granular, per-directive controls for `frame-src`, `img-src`, `media-src`, `connect-src`, and `script-src` (for external scripts only; `'unsafe-inline'` is unconditional for internal scripts), plus a popups toggle and a host allowlist.
+    *   An empty or unrecognized mode will resolve to `secure`.
+    *   Projects can override the global policy from their settings page. A project's allowlist appends to (never narrows) the global one.
+    *   Policy validation is now handled by a `ConfigValidator` hook on the shared `configs.Service` write path, ensuring validation across all config modification interfaces.
+    *   HTML artifacts dynamically react to policy changes. The `setWidgetPolicy` observable triggers a rebuild of the `srcdoc` and remounts artifacts, ensuring inline scripts re-run under the new CSP.
+    *   See [HTML artifact Content-Security-Policy](/guide/agents#html-artifact-content-security-policy) for comprehensive documentation.
+
+---
+
+
 ## [v0.38.1](https://github.com/yogasw/wick/compare/v0.38.0...v0.38.1) — Connectors
 
 _Released on 2026-08-11_

@@ -1711,6 +1711,12 @@ func NewServer() *Server {
 			break
 		}
 	}
+	// Registered on the Service, not on a handler: a widget CSP row can be
+	// written from the manager SPA, the legacy form POST, and the
+	// wickmanager MCP tool, and a rule only some of those doors enforce is
+	// not a rule.
+	configsSvc.RegisterValidator("agents", agentconfig.ValidateConfigValue)
+
 	managerHandler.RegisterConfigDecorator("agents", func(rows []pkgentity.Config) []pkgentity.Config {
 		projectIDs, _ := agentproject.List(agentsLayout)
 		// Build "label::path" options for the allowed_cmds scope column.

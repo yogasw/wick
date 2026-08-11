@@ -59,7 +59,7 @@
   import OverridePopover from "./OverridePopover.svelte";
   import { getSessionOverrides, setSessionOverride } from "../api/overrides.js";
   import type { ConfigField } from "@wick-fe/common-ui";
-  import { setFileContext } from "../richRender.js";
+  import { setFileContext, setWidgetPolicy } from "../richRender.js";
   import ProcessPanel from "./ProcessPanel.svelte";
   import WorkspacePanel from "./WorkspacePanel.svelte";
   import SchedulePanel from "./SchedulePanel.svelte";
@@ -1245,6 +1245,12 @@
         activeProvider = res.provider || res.active_agent || null;
         activeModelID = res.model_id || "";
         activeProjectId = res.project_id || null;
+        // The widget CSP arrives with meta, which can land AFTER the first
+        // artifacts have mounted under the blocked fallback. Artifacts
+        // subscribe to this policy and rebuild their srcdoc when it changes,
+        // so the transcript still renders immediately and widgets pick up the
+        // real policy as soon as it is known.
+        setWidgetPolicy(res.widget);
       })
       .catch(() => { title = sessionId; });
 
