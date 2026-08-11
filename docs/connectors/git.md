@@ -99,6 +99,7 @@ With `convert_ssh_remote_to_https = false` and an SSH remote, network operations
 
 | Field | Default | Notes |
 |---|---|---|
+| `allowed_repo_roots` | empty (unrestricted) | `kvlist` of directories the connector may touch. Empty means any repository the process can reach — this connector manages checkouts that already exist, wherever they are, so a mandatory sandbox is not the default. When set, every `repo_path` and clone `dest` must resolve inside one of these roots; symlinks and `..` are resolved first, so neither escapes it. |
 | `allow_hooks` | `false` | Whether `.git/hooks` scripts may run. A hook is arbitrary code committed to the repository. |
 | `timeout_seconds` | `60` | Timeout for non-network operations. |
 | `network_timeout_seconds` | `180` | Timeout for `push`, `pull`, `fetch`, `clone`, `ls_remote`. |
@@ -111,8 +112,8 @@ Every mutating operation is evaluated **before any process is spawned**. A denie
 There are two layers, and both compile into a single effective policy before evaluation. No operation reads raw config.
 
 ```
-layer 1  global fields      (branch_name_pattern, protected_branches, allow_force_push,
-                             raw_enabled, raw_rules)                          → base
+layer 1  global fields      (branch_name_pattern, commit_message_pattern, protected_branches,
+                             allow_force_push, raw_enabled, raw_rules)        → base
 layer 2  repo_policies      per-repo rows; win over layer 1, matching repos only
 ```
 
@@ -135,11 +136,14 @@ Two different languages appear in one row. This is the most common source of mis
 | Column | Language | Matched against |
 |---|---|---|
 | `repo` | **glob** (`*`) | both the local path **and** `host/owner/repo` |
-| `branch_pattern` | **regex** (Go RE2) | branch name |
+| `branch_pattern` | **regex** (Go RE2) | branch name being created (`branch_create`, or `checkout` with `create`) |
+| `message_pattern` | **regex** (Go RE2) | the whole commit message, on `commit` only |
 | `protected` | comma-separated **globs** | branch name (case-insensitive) |
 | `force_push` | `true` / `false` / empty or `-` (both inherit) | — |
 
 Protected-branch matching is case-insensitive on purpose: git branch names are case-sensitive on Linux but not on Windows or macOS checkouts, and treating `Master` as unprotected would be a trivial bypass.
+
+`message_pattern` follows the same empty-inherits / `"-"`-clears rule as `branch_pattern` — a per-repo row can require Conventional Commits while another requires a ticket ID, since the global fallback cannot express both.
 
 ## Policy Cookbook
 
@@ -150,6 +154,7 @@ Literal, paste-ready values. This section doubles as the contract for asking an 
 ```
 protected_branches : [{"branch": "<name or glob>"}]
 repo_policies      : [{"repo":"<glob>", "branch_pattern":"<regex or empty>",
+                       "message_pattern":"<regex or empty>",
                        "protected":"<csv globs, or - to clear>", "force_push":"true|false|empty (inherit)"}]
 raw_rules          : [{"subcommand":"<git subcommand>", "mode":"allow|deny"}]
 remote_host_map    : [{"ssh_host":"<host>", "https_host":"<host[/path]>"}]
@@ -157,10 +162,11 @@ remote_host_map    : [{"ssh_host":"<host>", "https_host":"<host[/path]>"}]
 
 Non-negotiable facts a generator must know:
 
-- `branch_pattern` is a **regex**; `repo` and `protected` are **globs**. Different languages on the same row.
+- `branch_pattern` and `message_pattern` are **regexes**; `repo` and `protected` are **globs**. Different languages on the same row.
 - Empty column = inherit. `-` = clear the inheritance (but on `force_push`, `-` still means inherit).
 - An unlisted `raw` subcommand = denied.
 - Specificity by wildcard count; ties → stricter.
+- Before generating a policy for an unfamiliar repository, call `policy_show` first rather than guessing — it reports the live rules, which language each is written in, and an example value each pattern accepts.
 
 ### Scenario 1 — standard team: feature branches required, master/main closed
 
@@ -179,7 +185,22 @@ raw_enabled         = false
 
 `push origin fix/login` ✅ · `push origin master` ❌ protected · `checkout -b hotfix/x` ✅ · `checkout -b temp` ❌ pattern.
 
-### Scenario 2 — infra repo stricter than global
+### Scenario 2 — Conventional Commits, enforced globally
+
+```
+commit_message_pattern = ^(fix|feat|chore|docs|refactor|test)(\(.+\))?: .{10,}$
+```
+
+```json
+// repo_policies
+[]
+```
+
+`commit -m "feat: add retry to the fetch client"` ✅ · `commit -m "fix: wip"` ❌ too short · `commit -m "updated stuff"` ❌ no type prefix.
+
+Checked on `commit` only — a push carries no message of its own, so the pattern cannot gate it there. Call `policy_show` for the repository to get the pattern and a worked example before generating a message, since a length floor or a required scope is not obvious from the regex alone.
+
+### Scenario 3 — infra repo stricter than global
 
 ```json
 // repo_policies
@@ -190,7 +211,7 @@ raw_enabled         = false
 
 Elsewhere `fix/x` still passes on the global pattern. In `org/infra` only `ops/*` passes, and `release/2024-01` is closed too.
 
-### Scenario 3 — free sandbox, strict everywhere else
+### Scenario 4 — free sandbox, strict everywhere else
 
 ```json
 // repo_policies
@@ -202,7 +223,7 @@ Elsewhere `fix/x` still passes on the global pattern. In `org/infra` only `ops/*
 
 `*/org/sandbox` (1 wildcard) beats `*/org/*` (2), so ordering is irrelevant. Note `"protected":"-"` — with `""` the sandbox row would inherit the global protected list and the "free sandbox" would not actually be free.
 
-### Scenario 4 — raw opened for read-only subcommands
+### Scenario 5 — raw opened for read-only subcommands
 
 ```
 raw_enabled = true
@@ -227,7 +248,7 @@ The `deny` rows are redundant — unlisted is already denied — but written on 
 
 > `bisect` is allow-listed here as an illustration of the shape, not as a safe default. `git bisect run <cmd>` takes a command by design, so allowing it grants code execution. See [What is not contained](#what-is-not-contained).
 
-### Scenario 5 — self-hosted, SSH host differs from HTTPS
+### Scenario 6 — self-hosted, SSH host differs from HTTPS
 
 ```json
 // remote_host_map
@@ -243,9 +264,9 @@ The `deny` rows are redundant — unlisted is already denied — but written on 
 
 `repo_policies` is not meant to be hand-edited as JSON. The **Policy Rules** card on the connector's config page renders an editor plus a simulator.
 
-**The editor** validates before saving, so a broken rule is rejected at edit time instead of at push time: `branch_pattern` must compile as a Go regex, `force_push` must be `true` / `false` / empty / `-`, and `repo` must be present.
+**The editor** validates before saving, so a broken rule is rejected at edit time instead of at push time: `branch_pattern` and `message_pattern` must each compile as a Go regex, `force_push` must be `true` / `false` / empty / `-`, and `repo` must be present.
 
-**The simulator** takes a repo, an op and a branch, and reports the verdict without running anything:
+**The simulator** takes a repo, an op, a branch and an optional commit message, and reports the verdict without running anything:
 
 ```
 ❌  DENIED
@@ -263,11 +284,11 @@ It also shows which layer each effective value came from, which is usually the f
 
 **The simulator calls the same evaluator the real operations use** — not a parallel implementation that could drift. If the simulator says ALLOWED, the real operation is ALLOWED.
 
-The widget is backed by three config-only operations (`policy_manager`, `policy_simulate`, `policy_rule_save`) which exist to serve the form and are **not** exposed to agents.
+The widget is backed by the config-only operations listed under [Configuration](#configuration), which exist to serve the form and are **not** exposed to agents.
 
 ## Operations
 
-26 operations in 5 categories. Destructive operations are marked ⚠️ and are **off by default on every new instance** — an admin has to enable each one per instance before an agent can call it.
+24 operations, agent-callable, across 4 categories, plus a handful of config-only operations that back the setup and policy widgets (see [Configuration](#configuration) below — those are not exposed to agents). Destructive operations are marked ⚠️ and are **off by default on every new instance** — an admin has to enable each one per instance before an agent can call it.
 
 Destructiveness is a property of the **operation**, not of an argument. That is why `stash_drop` and `tag_delete` are separate operations rather than `action=drop` / `delete=true` on `stash` / `tag`: a flag on a non-destructive op would bypass the per-instance opt-in entirely.
 
@@ -284,6 +305,7 @@ Nothing in this category changes repository state, so branch and force rules do 
 | `show` | `repo_path`\*, `ref`\* | none | One commit with its changed-file summary. |
 | `remote_list` | `repo_path`\* | none | Every remote with its configured URL (credentials stripped) **and** the URL network operations would actually use, so an SSH→HTTPS conversion is visible before anything is pushed. |
 | `ls_remote` | `repo_path`\*, `remote` | none | Branches a remote advertises, without fetching. The cheapest way to verify that the credential and the remote URL both work. Network. |
+| `policy_show` | `repo`\*, `remote` | none | Every policy rule in force for `repo`, which language each is written in (regex or glob), whether it is enforced, which operations it gates, and an example value it accepts. `repo` accepts a local path, a clone URL, or `host/owner/repo` — a URL works even before the repository is cloned. Spawns no git process. Call this first, before creating a branch or committing, rather than discovering a rule by being refused. |
 
 ### Branches and Commits
 
@@ -292,8 +314,8 @@ Nothing in this category changes repository state, so branch and force rules do 
 | `branch_create` | `repo_path`\*, `name`\*, `from_ref`, `checkout` | `name` must match `branch_name_pattern` and must not be protected. |
 | `checkout` | `repo_path`\*, `ref`\*, `create` | `ref` must not be protected. With `create`, the branch pattern also applies. |
 | `add` | `repo_path`\*, `paths`\* | Current branch must not be protected. |
-| `commit` | `repo_path`\*, `message`\*, `all`, `dry_run` | Current branch must not be protected. |
-| `stash` | `repo_path`\*, `action`\* (`push` \| `pop` \| `list`), `message` | Current branch must not be protected. Dropping is **not** here — see `stash_drop`. |
+| `commit` | `repo_path`\*, `message`\*, `all`, `dry_run` | Current branch must not be protected. `message` must match `commit_message_pattern` when one is set. |
+| `stash` | `repo_path`\*, `action`\* (`push` \| `pop` \| `list`), `message` | Gated **per action**: `push`/`pop` require the current branch to not be protected; `list` is a read and is never refused. Dropping is **not** here — see `stash_drop`. |
 | `tag` | `repo_path`\*, `name`\*, `ref`, `message` | Current branch must not be protected. Create/annotate only; deletion is `tag_delete`. |
 
 ### Network
@@ -320,7 +342,7 @@ Nothing in this category changes repository state, so branch and force rules do 
 
 ### Configuration
 
-Three config-only operations (`policy_manager`, `policy_simulate`, `policy_rule_save`) back the [Policy Rules widget](#policy-rules-widget). They are **hidden from the entire MCP surface** — an agent cannot list or call them, and they are not agent tools. They are documented here only so the count in the manager UI is not a surprise.
+Config-only operations back the setup guide, the test panel and the [Policy Rules widget](#policy-rules-widget) (`setup_guide`, `test_panel`, `test_run`, `test_write`, `policy_manager`, `policy_simulate`, `policy_global_save`, `policy_rule_add`, `policy_rule_update`, `policy_rule_clear`, `policy_rule_delete`, `policy_rule_save`). They are **hidden from the entire MCP surface** — an agent cannot list or call them, and they are not agent tools. They are documented here only so the count in the manager UI is not a surprise.
 
 ### Return shape
 
@@ -378,17 +400,17 @@ The deny-list applies to **agent-supplied arguments only**, never to the connect
 
 **Secrets are masked** in every logged command and in `stdout` / `stderr` — both the raw token and its base64 Basic encoding.
 
-**`repo_path` is validated.** It must exist, be a directory, contain a `.git` entry, and must not be the home directory itself.
+**`repo_path` is validated.** It must exist, be a directory, contain a `.git` entry, and must not be the home directory itself. When `allowed_repo_roots` is set, it must also resolve inside one of those roots — see [Runtime](#runtime).
 
 **`.git/config` is never modified.** Credentials baked into a remote URL — `https://olduser:oldtoken@github.com/org/repo.git`, which is common in older checkouts — are **ignored, not consumed**. The connector reads the remote, strips any `user:pass@`, and passes the clean URL explicitly to the network operation (`git push https://github.com/org/repo.git HEAD:refs/heads/fix/x`) with its own credential from askpass. The old credential stays where it is, unused. Nothing is written, nothing is cleaned up. Stripped URLs are also run through credential removal before they enter a response, so a token from someone else's `.git/config` never lands in a network result.
 
 ### What is not contained
 
-Two surfaces are gated but **not sealed**. Both follow from the deliberate decision to have no path allowlist — the point of the connector is to manage repositories already cloned on the machine — and both are worth knowing before you enable them.
+By default there is no path allowlist — the point of the connector is to manage repositories already cloned on the machine, wherever they are, and a mandatory sandbox would put every existing checkout out of reach. `allowed_repo_roots` (see [Runtime](#runtime)) is the opt-in way to bound `repo_path` and `clone`'s `dest` to a set of directories; it is empty, and every path unrestricted, until an operator configures it. One surface is gated but **not sealed** even with roots configured, and is worth knowing before you enable it:
 
 **`raw` is an admin escape hatch, not a sandbox.** It receives no `--end-of-options`, because passing flags through is its entire purpose. Its defences are real: off by default, per-subcommand allow list where unlisted means denied, subcommand detection that fails closed on an unrecognised leading flag, the flag deny-list, the env allowlist, hook suppression, and the destructive opt-in. But **a deny-list is a blocklist, not a proof.** An admin who allow-lists a subcommand that takes a command by design — `git bisect run <cmd>` is the clearest example — has granted code execution on the machine running wick. Treat `raw_rules` as a decision about who may run code, not as a convenience list.
 
-**`clone` can write anywhere the wick process can.** `dest` is an unrestricted absolute path, bounded only by refusing an existing directory and by the destructive opt-in. This follows directly from having no path allowlist; it is not an oversight. If that matters in your deployment, the containment belongs at the OS level — the user the wick process runs as — not in a config field.
+If `allowed_repo_roots` is left empty, `clone` can write anywhere the wick process can — `dest` is otherwise bounded only by refusing an existing directory and by the destructive opt-in. If that matters in your deployment, either configure `allowed_repo_roots` or push the containment to the OS level — the user the wick process runs as.
 
 ### Why session config is off
 
