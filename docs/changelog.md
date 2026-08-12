@@ -6,6 +6,14 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.38.4](https://github.com/yogasw/wick/compare/v0.38.3...v0.38.4) — Connectors & Manager
+
+_Released on 2026-08-12_
+
 ### Connectors
 #### Fixed
 *   **Git CLI: `checkout` argv broken on git 2.43**: `checkout` was invoked as `checkout --end-of-options <ref>`, a terminator position git 2.43 doesn't recognise — parsing fell through to pathspec matching, so the checkout silently never happened (2.44+ accepted it, which is why this passed testing on newer machines). Now emitted as `checkout <ref> --`, the portable form; since `--` doesn't stop option parsing, `checkout` validates its `ref` through the same check `branch_create` uses so a flag-shaped ref is still refused. The two `checkout -b` branch-create paths also had a misplaced terminator that guarded nothing; it's now correctly placed before an optional start-point. See [Git CLI ▶ What is guarded](/connectors/git#what-is-guarded).
@@ -15,6 +23,7 @@ All notable changes to Wick are documented here.
 *   **`html=` widget checkboxes always submitted checked**: the field collector read every named control's `.value`, but for a checkbox that's the static markup attribute, not its checked state — so an unchecked box still submitted as affirmative. Concretely, the git connector's policy editor checkbox for "Allow force push" re-enabled itself on every save regardless of whether it was ticked. Checkboxes and radios now follow HTML form semantics: unchecked contributes nothing, checked contributes its `value` (or `"on"`). See [Config tags ▶ html — server-rendered widget](/reference/config-tags#html-server-rendered-widget).
 
 ---
+
 
 ## [v0.38.3](https://github.com/yogasw/wick/compare/v0.38.2...v0.38.3) — Agents
 
