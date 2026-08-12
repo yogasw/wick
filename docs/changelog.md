@@ -10,6 +10,23 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.38.3](https://github.com/yogasw/wick/compare/v0.38.2...v0.38.3) — Agents
+
+_Released on 2026-08-12_
+
+#### Fixed
+*   **Per-channel-instance Project setting ignored on Slack**: Wick can host several bot instances of the same transport in one process (one per owning user), all sharing a single dispatch closure. Previously, that closure would re-read the project binding by channel type alone, returning an arbitrary `agent_channels` row. This meant that two Slack bots configured with different Projects could silently land in whichever project came back first.
+    *   Each channel instance now stamps its own configured project onto the dispatch context via `WithChannelProject`, reusing the mechanism REST already had for per-request overrides. This ensures the per-instance `ProjectID` setting actually takes effect.
+    *   The dispatch closure now reads the project from the context instead of querying the database, dropping a query per message.
+    *   Typed `ProjectID` fields, which were previously inert for Slack, Telegram, and REST channels, are now correctly utilized. Slack's `Hash()` function also now includes `ProjectID` to ensure hot-reload fingerprints invalidate correctly on project changes.
+    *   Configuration changes made in the UI for a channel instance (e.g., changing the project) are applied on the next message without requiring a restart, as the configuration is read under each channel's existing mutex.
+    *   Existing sessions are unaffected and retain the project they were created with; only newly created sessions pick up this fix. The session pool will backfill `Meta.ProjectID` only when it is empty.
+    *   Documentation has been updated to clarify per-instance project routing for Slack, Telegram, and REST channels.
+    *   See [Projects ▶ Slack / Telegram / REST default project](/guide/agents/projects#slack-telegram-rest-default-project).
+
+---
+
+
 ## [v0.38.2](https://github.com/yogasw/wick/compare/v0.38.1...v0.38.2) — Agents
 
 _Released on 2026-08-11_

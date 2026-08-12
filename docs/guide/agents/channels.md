@@ -219,7 +219,7 @@ Each per-user Slack instance gets its own `ConfigSource` scoped to that user's r
 
 ### Project selection
 
-When **only one project exists**, Slack uses it without asking — the operator doesn't need to set `ProjectID`. With multiple projects, the `ProjectID` config field picks one.
+When **only one project exists**, Slack uses it without asking — the operator doesn't need to set `ProjectID`. With multiple projects, the `ProjectID` config field picks one. Because each per-user Slack instance shares the same dispatch closure with every other instance of the type, each instance stamps its own `ProjectID` onto the session it creates — two Slack bots on different projects don't collide. See [Projects ▶ Slack / Telegram / REST default project](./projects#slack-telegram-rest-default-project).
 
 ### App manifest
 
