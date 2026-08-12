@@ -190,6 +190,8 @@ type Config struct {
 
 So a Download button installs then refreshes; a row click selects. No SSE — long actions are covered by the re-fetch (poll the status op yourself inside a loop if you want live progress). The markup is admin-only server content rendered in the admin Settings page, so it is `{@html}`-rendered directly; keep it to connector-authored markup, never user input.
 
+**Named inputs** — any element with a `name` inside the widget's markup is collected as `input.<name>` when an op runs, so a connector can render its own form (e.g. a textarea, a checkbox-based policy editor) and read what the user entered. Collection follows plain HTML form semantics: text/textarea/select send `.value`; a checkbox or radio sends its `value` attribute (default `"on"`) **only when checked** — unchecked contributes nothing, so a boolean setting must be read as "key present", not "value truthy".
+
 ## visible_when — conditional fields
 
 Hide a field from the admin form until another field equals a target value:

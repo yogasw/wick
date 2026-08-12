@@ -260,7 +260,20 @@
      <select> with a `name` inside the widget becomes input.<name> sent to the op,
      so a connector can render its own form (e.g. a textarea to paste a cURL) and
      read what the user typed. data-arg (static) is still passed as `browser` for
-     back-compat with the picker convention. */
+     back-compat with the picker convention.
+
+     Checkboxes and radios are the exception to reading `.value`: for those, value
+     is the STATIC attribute the connector's markup declared, not the control's
+     state. Reading it unconditionally submitted every box as ticked. The git
+     connector's policy editor renders
+
+         <input type="checkbox" name="g_force" value="true">
+
+     and its save handler treats a non-empty g_force as "allowed", so unticking
+     "Allow force push" and saving still wrote allow_force_push=true — the setting
+     switched itself back on after every save. Follow the HTML form convention
+     instead: an unchecked box contributes nothing, a checked one contributes its
+     value (defaulting to "on", as a real form submission does). */
   function collectInputs(): Record<string, string> {
     const out: Record<string, string> = {};
     if (!rootEl) return out;
@@ -268,7 +281,15 @@
       .querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("[name]")
       .forEach((f) => {
         const n = f.getAttribute("name");
-        if (n) out[n] = f.value;
+        if (!n) return;
+        const type = (f as HTMLInputElement).type;
+        if (type === "checkbox" || type === "radio") {
+          if ((f as HTMLInputElement).checked) {
+            out[n] = f.getAttribute("value") ?? "on";
+          }
+          return;
+        }
+        out[n] = f.value;
       });
     return out;
   }

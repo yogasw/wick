@@ -931,6 +931,122 @@ func TestMutatingOpsRoundTripAgainstTempRepo(t *testing.T) {
 	}
 }
 
+// A valid branch name must actually create the branch, and a valid ref must
+// actually be checked out.
+//
+// The guard tests above only ever feed flag-shaped values, which git refuses for
+// reasons of their own — so an argv that is malformed for EVERY input still passed
+// them. That is how "checkout --end-of-options <ref>" shipped: on git 2.43 the
+// terminator is not recognised there and parsing falls through to pathspec —
+//
+//	error: pathspec '--end-of-options' did not match any file(s) known to git
+//
+// — so no checkout ever happened, while the guard assertion was satisfied.
+func TestCreateBranchWithValidNameSucceeds(t *testing.T) {
+	requireGit(t)
+
+	cases := []struct {
+		name string
+		h    connector.ExecuteFunc
+		in   map[string]string
+		want string
+	}{
+		{"checkout create", doCheckout,
+			map[string]string{"ref": "ai/fix/testing", "create": "true"}, "ai/fix/testing"},
+		{"branch_create", doBranchCreate,
+			map[string]string{"name": "ai/fix/plain"}, "ai/fix/plain"},
+		{"branch_create with checkout", doBranchCreate,
+			map[string]string{"name": "ai/fix/switched", "checkout": "true"}, "ai/fix/switched"},
+		{"branch_create from ref", doBranchCreate,
+			map[string]string{"name": "ai/fix/based", "from_ref": "HEAD"}, "ai/fix/based"},
+		{"branch_create from ref with checkout", doBranchCreate,
+			map[string]string{"name": "ai/fix/based-switched", "from_ref": "HEAD", "checkout": "true"},
+			"ai/fix/based-switched"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := initTestRepo(t)
+			in := map[string]string{"repo_path": dir}
+			for k, v := range tc.in {
+				in[k] = v
+			}
+			m := envOf(t)(tc.h(opCtx(nil, in)))
+			if m["ok"] != true {
+				t.Fatalf("%s failed for a valid branch name: %+v", tc.name, m)
+			}
+			if !branchExists(t, dir, tc.want) {
+				t.Errorf("%s reported ok but branch %q does not exist", tc.name, tc.want)
+			}
+		})
+	}
+}
+
+// Switching to a branch that already exists must actually move HEAD. This is the
+// case from the field report: policy said allow, git said "pathspec
+// '--end-of-options' did not match any file(s)", and HEAD never moved.
+func TestCheckoutExistingRefSwitchesHEAD(t *testing.T) {
+	requireGit(t)
+	dir := initTestRepo(t)
+
+	// Create the branch, then go back, so the checkout under test has somewhere
+	// to switch TO and a real move to make.
+	runInRepo(t, dir, "branch", "ai/chore/test-git-cli-connector")
+
+	m := envOf(t)(doCheckout(opCtx(nil, map[string]string{
+		"repo_path": dir, "ref": "ai/chore/test-git-cli-connector",
+	})))
+	if m["ok"] != true {
+		t.Fatalf("checkout of an existing branch failed: %+v", m)
+	}
+	if got := headBranch(t, dir); got != "ai/chore/test-git-cli-connector" {
+		t.Errorf("HEAD is on %q, want the checked-out branch — the command reported ok "+
+			"but never moved HEAD: %+v", got, m)
+	}
+
+	// The behavioural assertion above cannot catch this on its own: git >= 2.44
+	// accepts the terminator here and checks the ref out anyway, so on a modern
+	// developer machine the broken argv passes. Assert the ARGV SHAPE too, which
+	// is version-independent — "checkout --end-of-options <ref>" is the form that
+	// fails on 2.43, and it must not come back.
+	cmd, _ := m["command"].(string)
+	if strings.Contains(cmd, "checkout --end-of-options") {
+		t.Errorf("checkout uses --end-of-options before the ref, which git 2.43 parses "+
+			"as a pathspec and silently skips the checkout: %s", cmd)
+	}
+	if !strings.Contains(cmd, "--") {
+		t.Errorf("checkout has no -- disambiguator, so a ref could be taken for a "+
+			"pathspec: %s", cmd)
+	}
+}
+
+// headBranch returns the branch name HEAD currently points at.
+func headBranch(t *testing.T, dir string) string {
+	t.Helper()
+	gitPath, err := ResolveGit()
+	if err != nil {
+		t.Skip("git not installed")
+	}
+	cmd := safeexec.Command(gitPath, "rev-parse", "--abbrev-ref", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD in %s: %v", dir, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// branchExists reports whether a local branch is present in the repo at dir.
+func branchExists(t *testing.T, dir, name string) bool {
+	t.Helper()
+	gitPath, err := ResolveGit()
+	if err != nil {
+		t.Skip("git not installed")
+	}
+	cmd := safeexec.Command(gitPath, "show-ref", "--verify", "--quiet", "refs/heads/"+name)
+	cmd.Dir = dir
+	return cmd.Run() == nil
+}
+
 func TestMutatingOpsGuardPositionalUserValues(t *testing.T) {
 	requireGit(t)
 	dir := initTestRepo(t)
