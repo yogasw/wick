@@ -413,13 +413,22 @@ func remoteNames(out string) []string {
 // reports "not a valid branch name" rather than acting on --orphan, and
 // "commit -m --amend" records a commit whose subject is "--amend".
 //
-// Two subcommands reject the terminator in the obvious position and are handled
-// differently, both verified against git 2.52:
+// Three subcommands reject the terminator in the obvious position and are handled
+// differently:
 //
 //	checkout -b   "checkout -b --end-of-options NAME" consumes the terminator as
-//	              the branch name. The guard is unnecessary there anyway (-b
-//	              protects its own value) so it is placed at the end of the argv,
-//	              where it still guards nothing user-supplied but stays harmless.
+//	              the branch name. The guard is unnecessary there anyway (-b binds
+//	              its own value), so it is omitted — or, when a start-point is
+//	              supplied, placed immediately before it, which is the only
+//	              positional in that argv that needs one.
+//	checkout ref  "checkout --end-of-options REF" is not portable: git 2.43 does
+//	              not recognise the terminator there and falls through to pathspec
+//	              parsing, so nothing is checked out and the error names the
+//	              terminator as a missing pathspec. 2.44+ accept it, which is why
+//	              this survived testing. The portable disambiguator is "--", and
+//	              since that does not stop option parsing, doCheckout runs the ref
+//	              through ValidateRefName instead — a leading "-" is refused before
+//	              an argv exists.
 //	tag -a        "tag -a --end-of-options NAME -m MSG" is "fatal: too many
 //	              arguments". -m alone already implies an annotated tag, so -a is
 //	              dropped and the terminator sits after -m's value.
@@ -562,14 +571,16 @@ func doBranchCreate(c *connector.Ctx) (any, error) {
 				return nil, errors.New("name is required")
 			}
 			if c.InputBool("checkout") {
-				// "checkout -b --end-of-options NAME" would consume the terminator as
-				// the branch name, so it goes last. -b already binds NAME as a value,
-				// so a flag-shaped name is rejected as an invalid branch name.
+				// -b binds NAME as a value, so a flag-shaped name is rejected as an
+				// invalid branch name and needs no terminator. The terminator cannot
+				// go after NAME either — that slot is checkout's start-point, and git
+				// reads --end-of-options there as a commit-ish ("is not a commit").
+				// It goes before from_ref, the only positional here that needs it.
 				args := []string{"checkout", "-b", name}
 				if from := strings.TrimSpace(c.Input("from_ref")); from != "" {
-					args = append(args, from)
+					args = append(args, "--end-of-options", from)
 				}
-				return append(args, "--end-of-options"), nil
+				return args, nil
 			}
 			// "branch" takes the name positionally, so the terminator must precede it.
 			args := []string{"branch", "--end-of-options", name}
@@ -590,11 +601,28 @@ func doCheckout(c *connector.Ctx) (any, error) {
 			if ref == "" {
 				return nil, errors.New("ref is required")
 			}
-			if create {
-				// See doBranchCreate: -b guards its own value; the terminator goes last.
-				return []string{"checkout", "-b", ref, "--end-of-options"}, nil
+			// checkout lost its --end-of-options guard below (not portable to 2.43),
+			// so the value check is now the defence that stops a flag-shaped ref
+			// rather than a second line behind the terminator. branch_create has
+			// always called this; checkout never did.
+			if err := ValidateRefName("ref", ref); err != nil {
+				return nil, err
 			}
-			return []string{"checkout", "--end-of-options", ref}, nil
+			if create {
+				// See doBranchCreate: -b guards its own value, and no terminator can
+				// follow the name — that slot is checkout's start-point.
+				return []string{"checkout", "-b", ref}, nil
+			}
+			// "checkout --end-of-options <ref>" is NOT portable: git 2.43 does not
+			// recognise the terminator here and falls through to pathspec parsing,
+			// so the ref never gets checked out —
+			//
+			//   error: pathspec '--end-of-options' did not match any file(s) known to git
+			//
+			// The disambiguator checkout documents is "--", which every supported
+			// version understands and which still refuses a flag-shaped ref (git
+			// parses options before it). Verified on 2.43 and 2.52.
+			return []string{"checkout", ref, "--"}, nil
 		}, false)
 }
 

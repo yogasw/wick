@@ -382,7 +382,16 @@ A free-form `repo_path` plus a `raw` operation is, without guards, arbitrary cod
 
 That last row is the motivating case. Verified against git 2.52: `git reset --soft --hard HEAD~1` prints `HEAD is now at …`, exits **0**, and deletes uncommitted work — the later flag simply wins, with no warning. Since `mode: "soft"` does not require `allow_force_push`, an unguarded `reset` would let a crafted `ref` destroy a working tree while the policy correctly returned `allow`. With the terminator, git refuses: `fatal: option '--hard' must come before non-option arguments`.
 
-Two input shapes need no terminator because they are already safe: values emitted as `--flag=<value>` (they cannot split into a new token) and paths placed after `--` (git's pathspec terminator). Two subcommands reject the terminator in the usual position and are handled differently — `checkout -b` would consume it as the branch name, and `tag -a NAME -m MSG` errors with `too many arguments` — so their argv order differs on purpose.
+Two input shapes need no terminator because they are already safe: values emitted as `--flag=<value>` (they cannot split into a new token) and paths placed after `--` (git's pathspec terminator). Three subcommands reject the terminator in the usual position and are handled differently — `checkout -b` would consume it as the branch name, `tag -a NAME -m MSG` errors with `too many arguments`, and `checkout <ref>` is covered below — so their argv order differs on purpose.
+
+**`checkout` uses `--`, not `--end-of-options`, and validates the ref instead.** The terminator is not portable in this position. On git 2.43 `checkout` does not recognise it there and parsing falls through to pathspec matching, so the checkout silently never happens:
+
+```
+$ git checkout --end-of-options ai/chore/test-git-cli-connector
+error: pathspec '--end-of-options' did not match any file(s) known to git
+```
+
+Git 2.44 and later accept it, which is why this survived review and testing on modern machines — the argv was broken for *every* input, but only on older git. The connector now emits `checkout <ref> --`, the disambiguator `checkout` documents and every supported version understands. Because `--` does not stop option parsing the way the terminator does, `checkout` validates its `ref` through the same `ValidateRefName` check `branch_create` uses — a value starting with `-` is refused before an argv exists, which is the stronger guard anyway since it does not depend on the value landing in a position somebody remembered to protect.
 
 **Flag deny-list on agent-supplied arguments.** Rejected: `-c`, `--config-env`, `--exec-path`, `--upload-pack`, `--receive-pack`, `--exec`, `--interactive`, `--output`, and anything containing `ext::`. `-u` and `-i` are deliberately **not** banned — verified against git 2.52, `-u` is never a short form of `--upload-pack` (it is `--update-head-ok` in `fetch`, `--set-upstream` in `push`), and `-i` is case-insensitive matching in `grep`. Banning either blocked idiomatic git while closing nothing, since the dangerous long forms are banned on their own.
 

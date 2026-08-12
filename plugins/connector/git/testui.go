@@ -611,9 +611,11 @@ func doTestWrite(c *connector.Ctx) (any, error) {
 		return finish()
 	}
 
-	// 2. Branch.
+	// 2. Branch. No --end-of-options: -b binds its own value, and the slot after
+	// the name is checkout's start-point, where git reads the terminator as a
+	// commit-ish and refuses.
 	if !runTestStep(c, rep, o, "Create branch", work, false,
-		"checkout", "-b", rep.Branch, "--end-of-options") {
+		"checkout", "-b", rep.Branch) {
 		return finish()
 	}
 
