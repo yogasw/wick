@@ -312,6 +312,18 @@ func NewWithOwner(cfg agentconfig.SlackChannelConfig, ownerUserID string) *Chann
 // SetSendFunc satisfies channels.SendFuncSetter.
 func (s *Channel) SetSendFunc(fn agentchannels.SendFunc) { s.sendFn = fn }
 
+// sendCtx returns a dispatch context stamped with this instance's
+// configured project. All Slack instances share one SendFunc closure, so
+// the closure cannot tell which bot a message came from — the instance
+// has to say so itself. Reads cfg under cfgMu so a concurrent Reload
+// (project changed in the UI) is picked up without a restart.
+func (s *Channel) sendCtx(ctx context.Context) context.Context {
+	s.cfgMu.Lock()
+	pid := s.cfg.ProjectID
+	s.cfgMu.Unlock()
+	return agentchannels.WithChannelProject(ctx, pid)
+}
+
 // SetOwnerFn wires a function that stamps a wick user ID on a session.
 func (s *Channel) SetOwnerFn(fn func(ctx context.Context, sessionID, userID string)) {
 	s.ownerFn = fn
@@ -1599,7 +1611,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	if isNewSession {
 		ctxText := s.buildSessionContext(ev, threadTS)
 		if ctxText != "" {
-			if err := s.sendFn(context.Background(), sessionID, "main", "slack", "system", ctxText); err != nil {
+			if err := s.sendFn(s.sendCtx(context.Background()), sessionID, "main", "slack", "system", ctxText); err != nil {
 				log.Warn().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("inject session context failed")
 			}
 		}
@@ -1608,7 +1620,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		}
 	}
 
-	if err := s.sendFn(context.Background(), sessionID, "main", "slack", "user", userText); err != nil {
+	if err := s.sendFn(s.sendCtx(context.Background()), sessionID, "main", "slack", "user", userText); err != nil {
 		log.Error().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("pool send failed")
 		s.cancelQueueTimer(sessionID, ev.Channel, ev.TimeStamp)
 		s.setReaction(reactionError, ev.Channel, ev.TimeStamp, "")

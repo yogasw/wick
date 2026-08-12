@@ -68,7 +68,8 @@ func (s *ConfigSource) Hash() string {
 		cfg.UsersMode + "|" + cfg.AllowedUsers + "|" +
 		cfg.GroupsMode + "|" + cfg.AllowedGroups + "|" +
 		cfg.ChannelsMode + "|" + cfg.AllowedChannels + "|" +
-		cfg.GateApprovers + "|" + cfg.GateApproverUsers + "|" + cfg.GateApproverGroups
+		cfg.GateApprovers + "|" + cfg.GateApproverUsers + "|" + cfg.GateApproverGroups + "|" +
+		cfg.ProjectID
 }
 
 // Reload re-reads the config and applies it to the bound channel.

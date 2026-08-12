@@ -142,6 +142,10 @@ Multiple sessions can share the same project and run in parallel. Wick does not 
 
 Each channel ([Slack](https://github.com/yogasw/wick/blob/master/internal/agents/config/slack.go), [Telegram](https://github.com/yogasw/wick/blob/master/internal/agents/config/telegram.go), [REST](https://github.com/yogasw/wick/blob/master/internal/agents/config/rest.go)) has its own `project_id` config field. When set, every session auto-created from that channel binds to it. When **only one project exists**, the channel uses it without asking.
 
+Wick can host several instances of the same transport in one process (one per owning user — see [Per-user instances](./channels#per-user-vs-app-owner-rows)). Each instance dispatches through the same pool `SendFunc`, but every instance stamps **its own** configured `project_id` onto the dispatch — so two Slack bots with different `ProjectID` settings correctly land in their own projects, and changing the project in the UI takes effect on the next message without a restart. This only affects **new** sessions; an existing session keeps the project it was created with.
+
+Precedence, highest first: a per-request override (REST body `project` field) > the originating channel instance's configured project > the sole project on the box (when exactly one exists).
+
 The REST (OpenAI-compatible) channel additionally lets a request **override** the channel default per call with a top-level `"project": "<id>"` field (or `metadata.project` / `metadata.project_id`). See the [REST channel docs](./channels).
 
 ## See also

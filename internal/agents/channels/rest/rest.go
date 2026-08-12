@@ -463,8 +463,13 @@ func (c *Channel) dispatch(ctx context.Context, sessionID, userID, userField, pr
 	agentName := "main"
 	// sendCtx is detached from the HTTP request (the pool spawns the CLI
 	// with this ctx; inheriting the request ctx would kill it on return)
-	// but still carries the per-request project override.
-	sendCtx := agentchannels.WithProjectOverride(context.Background(), projectOverride)
+	// but still carries both project signals: this instance's configured
+	// default, and the per-request override that outranks it.
+	c.cfgMu.Lock()
+	instanceProject := c.cfg.ProjectID
+	c.cfgMu.Unlock()
+	sendCtx := agentchannels.WithChannelProject(context.Background(), instanceProject)
+	sendCtx = agentchannels.WithProjectOverride(sendCtx, projectOverride)
 
 	tn := &turn{done: make(chan struct{})}
 	c.mu.Lock()

@@ -107,6 +107,18 @@ func (t *Channel) SetSendFunc(fn agentchannels.SendFunc) {
 	t.mu.Unlock()
 }
 
+// sendCtx returns a dispatch context stamped with this instance's
+// configured project. All Telegram instances share one SendFunc closure,
+// so the closure cannot tell which bot a message came from — the instance
+// has to say so itself. Reads cfg under mu so a concurrent Reload
+// (project changed in the UI) applies without a restart.
+func (t *Channel) sendCtx(ctx context.Context) context.Context {
+	t.mu.Lock()
+	pid := t.cfg.ProjectID
+	t.mu.Unlock()
+	return agentchannels.WithChannelProject(ctx, pid)
+}
+
 // SetSessionPrefix namespaces this instance's session keys so two Telegram
 // bots never share a pool session on a coincidentally-equal chat id.
 func (t *Channel) SetSessionPrefix(prefix string) {
@@ -313,10 +325,12 @@ func (t *Channel) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	}
 	t.mu.Unlock()
 
-	// agentName is the pool agent to route to; default "main". The
-	// project binding (cwd) is resolved by the pool send closure from
-	// the channel's configured project_id, not here.
+	// agentName is the pool agent to route to; default "main". The project
+	// binding (cwd) comes from this instance's configured project_id,
+	// stamped on ctx below — several Telegram bots share one SendFunc
+	// closure, so the closure can't infer which instance sent this.
 	agentName := "main"
+	ctx = t.sendCtx(ctx)
 
 	if !t.sessionOnDisk(sessionID) {
 		ctxText := t.buildSessionContext(msg, sessionID)
