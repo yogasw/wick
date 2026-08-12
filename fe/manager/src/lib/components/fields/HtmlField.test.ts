@@ -110,3 +110,115 @@ test("named inputs in the connector HTML are sent to the op", async () => {
     expect(call?.[3]).toMatchObject({ raw: "curl ..." });
   });
 });
+
+// A checkbox carries its state in `checked`, not in `value` — `value` is the
+// static attribute the connector wrote in the markup and reads "true" whether or
+// not the box is ticked. Collecting `value` therefore turned every unchecked box
+// into an affirmative submission: the git connector's policy editor renders
+// <input type="checkbox" name="g_force" value="true">, and its save handler treats
+// any non-empty g_force as "allowed", so allow_force_push re-enabled itself on
+// every save no matter what the operator did with the box.
+test("an UNCHECKED checkbox is omitted from the op input", async () => {
+  const spy = mockByOp({
+    status: {
+      html:
+        `<input type="checkbox" name="g_force" value="true"/>` +
+        `<button data-op="save">Save</button>`,
+    },
+    save: { html: `<p>saved</p>` },
+  });
+
+  const { container } = render(HtmlField, {
+    props: {
+      connectorKey: "x",
+      connectorId: "1",
+      op: "status",
+      value: "",
+      onChange: vi.fn(),
+      onSetFields: vi.fn(),
+    },
+  });
+
+  const btn = await waitFor(() => {
+    const b = container.querySelector<HTMLButtonElement>("button[data-op='save']");
+    if (!b) throw new Error("form not rendered yet");
+    return b;
+  });
+  await fireEvent.click(btn);
+
+  await waitFor(() => {
+    const call = spy.mock.calls.find((c) => c[2] === "save");
+    expect(call).toBeTruthy();
+    expect(call?.[3]).not.toHaveProperty("g_force");
+  });
+});
+
+test("a CHECKED checkbox is sent with its value attribute", async () => {
+  const spy = mockByOp({
+    status: {
+      html:
+        `<input type="checkbox" name="g_force" value="true" checked/>` +
+        `<button data-op="save">Save</button>`,
+    },
+    save: { html: `<p>saved</p>` },
+  });
+
+  const { container } = render(HtmlField, {
+    props: {
+      connectorKey: "x",
+      connectorId: "1",
+      op: "status",
+      value: "",
+      onChange: vi.fn(),
+      onSetFields: vi.fn(),
+    },
+  });
+
+  const btn = await waitFor(() => {
+    const b = container.querySelector<HTMLButtonElement>("button[data-op='save']");
+    if (!b) throw new Error("form not rendered yet");
+    return b;
+  });
+  await fireEvent.click(btn);
+
+  await waitFor(() => {
+    const call = spy.mock.calls.find((c) => c[2] === "save");
+    expect(call?.[3]).toMatchObject({ g_force: "true" });
+  });
+});
+
+// A radio group submits only the selected member, under the shared name.
+test("only the SELECTED radio in a group is sent", async () => {
+  const spy = mockByOp({
+    status: {
+      html:
+        `<input type="radio" name="mode" value="soft"/>` +
+        `<input type="radio" name="mode" value="hard" checked/>` +
+        `<button data-op="save">Save</button>`,
+    },
+    save: { html: `<p>saved</p>` },
+  });
+
+  const { container } = render(HtmlField, {
+    props: {
+      connectorKey: "x",
+      connectorId: "1",
+      op: "status",
+      value: "",
+      onChange: vi.fn(),
+      onSetFields: vi.fn(),
+    },
+  });
+
+  const btn = await waitFor(() => {
+    const b = container.querySelector<HTMLButtonElement>("button[data-op='save']");
+    if (!b) throw new Error("form not rendered yet");
+    return b;
+  });
+  await fireEvent.click(btn);
+
+  await waitFor(() => {
+    const call = spy.mock.calls.find((c) => c[2] === "save");
+    expect(call?.[3]).toMatchObject({ mode: "hard" });
+  });
+});
