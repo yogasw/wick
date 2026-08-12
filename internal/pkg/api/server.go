@@ -1027,21 +1027,23 @@ func NewServer() *Server {
 		})
 	}
 
-	// sendFnFor returns a pool-dispatch closure that re-reads the project
-	// binding from agent_channels on every send, so UI changes take effect
-	// without a restart. One closure per channel type so projects can differ.
+	// sendFnFor returns a pool-dispatch closure. The project binding is read
+	// off the dispatch ctx, which the originating channel instance stamps
+	// from its own live config — so UI changes take effect without a restart
+	// AND two bots of the same transport keep separate projects. Resolving it
+	// here by channel type would be wrong: one process hosts many instances
+	// per type (one per owning user) and they all share this one closure.
 	sendFnFor := func(channelType string) agentchannels.SendFunc {
 		raw := agentchannels.SendFunc(func(ctx context.Context, sessionID, agentName, source, role, text string) error {
 			pid := ""
 			// Per-request override (e.g. REST body `project`) wins, when it
-			// names a real project; otherwise fall back to channel config.
+			// names a real project; then the originating instance's own
+			// configured project; then the sole project on the box.
 			if ov := agentchannels.ProjectOverride(ctx); ov != "" && agentproject.Exists(agentsLayout, ov) {
 				pid = ov
 			}
 			if pid == "" {
-				if m, err := agentchannels.GetChannelConfigMap(db, channelType); err == nil {
-					pid = m["project_id"]
-				}
+				pid = agentchannels.ChannelProject(ctx)
 			}
 			if pid == "" {
 				if ids, err := agentproject.List(agentsLayout); err == nil && len(ids) == 1 {

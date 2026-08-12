@@ -8,6 +8,9 @@ All notable changes to Wick are documented here.
 
 _Nothing yet — notes for the next release go here._
 
+#### Fixed
+*   **Per-channel-instance Project setting ignored on Slack**: Wick can host several bot instances of the same transport in one process (one per owning user), all sharing a single dispatch closure. That closure used to re-read the project binding by channel type alone, returning an arbitrary `agent_channels` row — so two Slack bots configured with different Projects both silently landed in whichever project came back first. Each channel instance now stamps its own configured project onto the dispatch, so the per-instance `ProjectID` setting actually takes effect. Existing sessions are unaffected (they keep the project they were created with); only newly created sessions pick up the fix. See [Projects ▶ Slack / Telegram / REST default project](/guide/agents/projects#slack-telegram-rest-default-project).
+
 ---
 
 ## [v0.38.2](https://github.com/yogasw/wick/compare/v0.38.1...v0.38.2) — Agents

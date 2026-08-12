@@ -31,6 +31,17 @@ type SendFunc func(ctx context.Context, sessionID, agentName, source, role, text
 // body). The pool's SendFunc closure reads it via ProjectOverride.
 type projectOverrideKey struct{}
 
+// channelProjectKey carries the project id configured on the *specific
+// channel instance* that originated this dispatch. One wick process can
+// host several bots of the same transport (one per owning user), each
+// with its own project binding, but they all share a single SendFunc
+// closure — so the instance must state its own project here rather than
+// letting the closure re-query "some row of this type" from the DB.
+//
+// Precedence at dispatch: per-request override > channel instance >
+// (sole project on the box).
+type channelProjectKey struct{}
+
 // WithProjectOverride returns ctx carrying a per-request project id. The
 // pool send closure prefers this over the channel's configured project.
 func WithProjectOverride(ctx context.Context, projectID string) context.Context {
@@ -44,6 +55,25 @@ func WithProjectOverride(ctx context.Context, projectID string) context.Context 
 // WithProjectOverride, or "" when none.
 func ProjectOverride(ctx context.Context) string {
 	if v, ok := ctx.Value(projectOverrideKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// WithChannelProject returns ctx carrying the originating channel
+// instance's configured project id. Every channel stamps this on the ctx
+// it hands to sendFn; the pool send closure reads it via ChannelProject.
+func WithChannelProject(ctx context.Context, projectID string) context.Context {
+	if projectID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, channelProjectKey{}, projectID)
+}
+
+// ChannelProject returns the project id of the channel instance that
+// originated this dispatch, or "" when the instance has none configured.
+func ChannelProject(ctx context.Context) string {
+	if v, ok := ctx.Value(channelProjectKey{}).(string); ok {
 		return v
 	}
 	return ""
