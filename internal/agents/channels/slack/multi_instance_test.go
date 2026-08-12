@@ -1,9 +1,12 @@
 package slack
 
 import (
+	"context"
 	"net/http/httptest"
 	"testing"
 
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 )
 
@@ -94,5 +97,47 @@ func TestOwnsRequestRoutesToOwningInstance(t *testing.T) {
 	bare := httptest.NewRequest("POST", "/integrations/slack/send", nil)
 	if a.OwnsRequest(bare) || b.OwnsRequest(bare) {
 		t.Error("a session-less request should be claimed by no instance")
+	}
+}
+
+// TestSendCtxCarriesInstanceProject reproduces the project-routing bug:
+// every Slack instance shares ONE SendFunc closure, so the closure cannot
+// infer which bot dispatched a message. Previously it re-queried
+// agent_channels by type alone and got an arbitrary row, meaning two bots
+// with different projects both landed in whichever project came back
+// first. Each instance must therefore stamp its OWN project on the ctx it
+// hands to sendFn.
+func TestSendCtxCarriesInstanceProject(t *testing.T) {
+	a := &Channel{cfg: agentconfig.SlackChannelConfig{ProjectID: "proj-alpha"}}
+	b := &Channel{cfg: agentconfig.SlackChannelConfig{ProjectID: "proj-beta"}}
+
+	if got := agentchannels.ChannelProject(a.sendCtx(context.Background())); got != "proj-alpha" {
+		t.Errorf("instance A project = %q, want proj-alpha", got)
+	}
+	if got := agentchannels.ChannelProject(b.sendCtx(context.Background())); got != "proj-beta" {
+		t.Fatalf("instance B project = %q, want proj-beta — instances share a project (the bug)", got)
+	}
+
+	// An instance with no project configured must stamp nothing, so the
+	// dispatcher can fall through to its own default.
+	none := &Channel{}
+	if got := agentchannels.ChannelProject(none.sendCtx(context.Background())); got != "" {
+		t.Errorf("unconfigured instance project = %q, want empty", got)
+	}
+}
+
+// TestSendCtxFollowsReloadedProject proves a project change made in the UI
+// takes effect without restarting the process: Reload swaps cfg under
+// cfgMu and the next dispatch reads the new value.
+func TestSendCtxFollowsReloadedProject(t *testing.T) {
+	ch := &Channel{cfg: agentconfig.SlackChannelConfig{ProjectID: "proj-old"}}
+
+	// applyConfig is what Reload calls to swap the live config. Using it
+	// directly keeps the test off the network (Reload also restarts the
+	// socket connection).
+	ch.applyConfig(agentconfig.SlackChannelConfig{ProjectID: "proj-new"}, "")
+
+	if got := agentchannels.ChannelProject(ch.sendCtx(context.Background())); got != "proj-new" {
+		t.Fatalf("project after reload = %q, want proj-new — a restart would be needed", got)
 	}
 }
