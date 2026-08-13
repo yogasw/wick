@@ -31,7 +31,7 @@
     "key": "git",
     "name": "Git CLI",
     "description": "Run git against local repositories, with a policy that can refuse a branch name, a commit message, a push to a protected branch, or a force push. Rules DIFFER PER REPOSITORY. Call policy_show for the repository first and comply with what it returns — every other operation reports a refusal only after the fact, one rule at a time. Wraps the git binary, so it works with any host.",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "default_tags": [
       {
         "Name": "Connector",
@@ -51,8 +51,8 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/git/v0.1.0/git-0.1.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/git/v0.1.0/git-0.1.0-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/git/v0.2.0/git-0.2.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/git/v0.2.0/git-0.2.0-linux-arm64.zip"
     }
   },
   {
@@ -255,7 +255,7 @@
     "key": "playwright_browser",
     "name": "Playwright Browser",
     "description": "Drive a real browser (Chromium/Firefox/WebKit) to screenshot, scrape, render PDFs, evaluate JS, and run scripted interaction flows. Runs an isolated browser per call inside the plugin process.",
-    "version": "0.9.0",
+    "version": "0.11.0",
     "default_tags": [
       {
         "Name": "Connector",
@@ -275,8 +275,8 @@
       }
     ],
     "assets": {
-      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.9.0/playwright_browser-0.9.0-linux-amd64.zip",
-      "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.9.0/playwright_browser-0.9.0-linux-arm64.zip"
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.11.0/playwright_browser-0.11.0-linux-amd64.zip",
+      "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.11.0/playwright_browser-0.11.0-linux-arm64.zip"
     }
   }
 ]
