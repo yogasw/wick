@@ -165,7 +165,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 				<a href={ templ.SafeURL(vm.Base + "/projects/new") } title="New project" class="text-[11px] font-semibold text-green-600 dark:text-green-400 hover:text-green-500 transition-colors normal-case tracking-normal">+ New</a>
 			</div>
 			if len(vm.ProjectList) > 0 {
-				<div class="px-2 pb-1 space-y-0.5 max-h-40 overflow-y-auto">
+				<div data-project-list class="px-2 pb-1 space-y-0.5 max-h-40 overflow-y-auto">
 					for _, pid := range vm.ProjectList {
 						@sidebarProjectRow(vm.Base, vm.ProjectIcon(pid), vm.ProjectName(pid), pid, vm.ProjectCounts[pid], vm.ScopedProjectID == pid, vm.PinnedProjectID == pid)
 					}
@@ -237,6 +237,20 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 		<script type="module" src={ vm.ShellAssetURL }></script>
 	}
 	<script>
+		// Center the scoped project row inside the Projects list. The list is
+		// capped at max-h-40, so with many projects the active one can sit
+		// off-screen on load. Scroll the container only (never the page), so
+		// the offset is computed by hand instead of using scrollIntoView.
+		(function () {
+			var list = document.querySelector('[data-project-list]');
+			if (!list) return;
+			var row = list.querySelector('[data-project-active]');
+			if (!row) return;
+			if (list.scrollHeight <= list.clientHeight) return;
+			var rowTop = row.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+			var top = rowTop - (list.clientHeight - row.offsetHeight) / 2;
+			list.scrollTop = Math.max(0, Math.min(top, list.scrollHeight - list.clientHeight));
+		})();
 		(function () {
 			var shell = document.querySelector('[data-agents-shell]');
 			if (!shell) return;
@@ -301,6 +315,9 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 templ sidebarProjectRow(base, icon, name, id string, count int, active, pinned bool) {
 	<div
 		data-project-drop={ id }
+		if active {
+			data-project-active
+		}
 		class={
 			"group flex items-center gap-1 rounded-lg pr-2 text-sm transition-colors",
 			templ.KV("bg-white-300 dark:bg-navy-600", active),

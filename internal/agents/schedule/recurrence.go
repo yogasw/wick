@@ -79,17 +79,18 @@ func ParseWhen(runAt, every, cron string, now time.Time) (Spec, error) {
 }
 
 // NextFrom computes the next fire time for a recurring schedule from `from`,
-// ignoring stop conditions — used by resume to re-seed run_at. Returns zero
-// for a non-recurring / malformed schedule.
+// ignoring stop conditions — used by resume to re-seed run_at.
+//
+// It resolves against the schedule's own series (see nextInSeries), so
+// resuming lands on the next slot the schedule would have hit anyway rather
+// than restarting the cadence at the moment of resume. Resuming a
+// "every hour on the hour" schedule at 10:50 gives 11:00, not 11:50 — the
+// latter silently re-anchored the schedule for good.
 func NextFrom(m entity.ScheduledMessage, from time.Time) (time.Time, error) {
-	switch {
-	case m.IntervalMs > 0:
-		return from.Add(time.Duration(m.IntervalMs) * time.Millisecond), nil
-	case strings.TrimSpace(m.Cron) != "":
-		return nextCronAfter(m.Cron, from)
-	default:
+	if m.IntervalMs <= 0 && strings.TrimSpace(m.Cron) == "" {
 		return time.Time{}, fmt.Errorf("schedule is not recurring")
 	}
+	return nextInSeries(m, from)
 }
 
 // parseAt parses a one-shot fire time. Accepts, in order:
@@ -173,23 +174,52 @@ func advance(m entity.ScheduledMessage, from time.Time, runCountAfter int) (time
 	if m.MaxRuns > 0 && runCountAfter >= m.MaxRuns {
 		return time.Time{}, nil
 	}
-	var next time.Time
-	switch {
-	case m.IntervalMs > 0:
-		next = from.Add(time.Duration(m.IntervalMs) * time.Millisecond)
-	case strings.TrimSpace(m.Cron) != "":
-		n, err := nextCronAfter(m.Cron, from)
-		if err != nil {
-			return time.Time{}, err
-		}
-		next = n
-	default:
-		return time.Time{}, fmt.Errorf("recurring schedule has neither interval nor cron")
+	next, err := nextInSeries(m, from)
+	if err != nil {
+		return time.Time{}, err
 	}
 	if m.EndsAt != nil && next.After(*m.EndsAt) {
 		return time.Time{}, nil
 	}
 	return next, nil
+}
+
+// nextInSeries returns the first fire time in the schedule's own series that
+// is strictly after `from`.
+//
+// For an interval schedule the series is ABSOLUTE: fire N is
+// Anchor + N*interval. Stepping from the anchor — rather than adding the
+// interval to whenever the last fire happened to land — is what stops the
+// schedule drifting. A fire that runs 4 seconds late (poll granularity), a
+// pause and resume an hour later, or a manual run, all leave the series where
+// it was; previously each of those permanently shifted every future fire.
+//
+// Rows written before the anchor existed have none, so they fall back to
+// stepping from `from` — the old behavior, rather than a wrong series.
+//
+// Cron has no drift problem: the expression IS the series, so the next fire is
+// just the next matching minute after `from`.
+func nextInSeries(m entity.ScheduledMessage, from time.Time) (time.Time, error) {
+	switch {
+	case m.IntervalMs > 0:
+		interval := time.Duration(m.IntervalMs) * time.Millisecond
+		if m.Anchor == nil {
+			return from.Add(interval), nil
+		}
+		// Step whole intervals from the anchor to the first slot after `from`.
+		// Computed with division rather than a loop so a schedule left paused
+		// for a month doesn't cost a million iterations.
+		elapsed := from.Sub(*m.Anchor)
+		if elapsed < 0 {
+			return *m.Anchor, nil // anchor is still in the future
+		}
+		n := elapsed/interval + 1
+		return m.Anchor.Add(time.Duration(n) * interval), nil
+	case strings.TrimSpace(m.Cron) != "":
+		return nextCronAfter(m.Cron, from)
+	default:
+		return time.Time{}, fmt.Errorf("recurring schedule has neither interval nor cron")
+	}
 }
 
 // nextCronAfter returns the first minute strictly after `from` whose
@@ -290,4 +320,25 @@ func atoiCron(s string) int {
 		return -1
 	}
 	return n
+}
+
+// ServerZoneLabel names the timezone cron expressions are matched in — the
+// wick server's local zone, since cronMatchesMinute reads the wall clock — as
+// e.g. "Asia/Jakarta (UTC+07:00)".
+//
+// Exported and rendered from a concrete instant because both API surfaces
+// report it: getting the zone wrong puts a "9am report" hours off, so it is
+// stated in the output rather than left for the caller to probe. The instant
+// matters so the offset is the one actually in force then (DST included).
+func ServerZoneLabel(at time.Time) string {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	local := at.In(time.Local)
+	name := local.Location().String()
+	offset := local.Format("-07:00")
+	if name == "" || name == "Local" {
+		return "UTC" + offset
+	}
+	return name + " (UTC" + offset + ")"
 }

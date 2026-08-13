@@ -33,23 +33,50 @@ When something needs a later follow-up — "check the deploy in 20 minutes",
 12:40" — you do NOT stay running and you cannot sleep. Instead schedule a
 future message to THIS session with `wick_schedule_message action=create`:
 pass this session's id, a `run_at` (RFC3339 like `2026-07-09T12:40:00Z`, or
-relative like `+20m` / `+2h` / `+1d`), and the `message` you want to receive
-then (write it as an instruction to your future self, e.g. "Check whether
-the payments-api deploy finished and report status").
+relative like `+30s` / `+20m` / `+2h` / `+1d` — seconds through days all
+work), and the `message` you want to receive then (write it as an instruction
+to your future self, e.g. "Check whether the payments-api deploy finished and
+report status").
 
 For something that repeats — "per 5 menit cek Loki", "tiap Senin jam 9
 report" — create a RECURRING schedule instead of one run_at: pass `every`
-(interval like `5m` / `1h` / `1d`) or `cron` (5-field, `0 9 * * 1`) instead
-of run_at. Optionally cap it with `max_runs`.
+(interval like `30s` / `5m` / `1h` / `1d`) or `cron` (5-field, `0 9 * * 1`)
+instead of run_at. Optionally cap it with `max_runs`.
+
+A cron expression is read in the **server's** timezone, not UTC and not the
+user's — the create response tells you which zone that is. Confirm the zone
+before promising anything hour-sensitive; "9am" in the wrong zone is hours off.
+
+Two shapes, and the difference matters:
+
+- `session_id` — nudge THIS conversation. Every fire lands here, carrying all
+  the history. Right for "check back in 20m".
+- `project_id` — a standalone job in a project, where every fire opens a NEW
+  session with clean context. Right for "every Monday 9am write the weekly
+  report", which should not drag last week's run along. Add
+  `session_mode=template` + `session_template` (e.g. `daily-{date}`) when
+  fires within the same day should instead share one session.
 
 When it fires, wick delivers the message into the session as a normal user
-turn — it wakes the session if idle, or queues behind whatever is running. A
-one-shot fires once (→ done); a recurring one keeps firing until you cancel
-it. Use `action=list` to see schedules, `action=pause`/`resume` to suspend a
-recurring one, `action=reschedule` to change its timing/message, and
-`action=cancel id=<sm_…>` to stop one for good. If the target session is gone
-at fire time the schedule errors and auto-stops. You can only schedule into a
-session you own (admins: any session).
+turn — it wakes the session if idle, or queues behind whatever is running.
+Delivery is polled, so a fire lands a few seconds after its nominal time;
+don't promise second-level precision. A one-shot fires once (→ done); a
+recurring one keeps firing until you cancel it.
+
+Use `action=list` to see schedules (live ones only by default — pass
+`status=all` for history), `action=pause`/`resume` to suspend a recurring one,
+`action=reschedule` to change timing/message/target, and
+`action=cancel id=<sm_…>` to stop one for good.
+
+To TEST a schedule, use `action=run_now id=<sm_…>` instead of waiting for the
+clock: it fires immediately and does NOT count toward `max_runs` or shift the
+next fire. Pausing and resuming doesn't shift it either — a resumed schedule
+lands on the slot it would have hit anyway.
+
+A session-scoped schedule whose target session is gone at fire time errors and
+auto-stops; a project-scoped one creates its session, so it can't be orphaned.
+You can only schedule into a session you own or a project you can access
+(admins: anything).
 
 Prefer this over telling the user "I'll check back later" — you can't, on
 your own, unless you schedule it. If a real external clock matters (a CI run,

@@ -30,6 +30,9 @@ export interface WidgetPolicy {
   /** External scripts only — the widget's own inline scripts always run. */
   script_src?: string;
   allow_popups?: boolean;
+  /** Gives an opened tab a real origin instead of the sandboxed "null" one.
+      Only meaningful alongside allow_popups. */
+  allow_popup_escape?: boolean;
   allowlist?: string[];
 }
 
@@ -87,6 +90,7 @@ export interface UpdateProjectRequest {
     connect_src: string;
     script_src: string;
     allow_popups: boolean;
+    allow_popup_escape: boolean;
     allowlist: string;
   };
 }

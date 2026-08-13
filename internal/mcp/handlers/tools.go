@@ -644,38 +644,74 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"the way to make yourself 'check back later' or run something on a cadence without staying running. " +
 				"When it fires, the message is injected as a normal user turn: it wakes the session if idle, or " +
 				"queues behind an in-flight turn if busy. " +
+				"WHERE it lands (action=create) is ONE of: " +
+				"session_id — nudge a conversation that already exists (pass your own session_id to schedule yourself: 'check back at 12:40'); or " +
+				"project_id — a standalone job in a project, where every fire opens a NEW session with clean context " +
+				"('every Monday 9am write the weekly report'). Prefer project_id for recurring work that shouldn't drag " +
+				"the previous run's history along; add session_mode=template + session_template (e.g. 'daily-{date}') " +
+				"when fires within the same day/month should instead share one session. " +
 				"Timing (action=create) is ONE of: run_at (one-shot), every (recurring interval), or cron (recurring). " +
 				"Actions: " +
-				"'create' — schedule (session_id + message + one timing field). " +
-				"'list' — list schedules you may see (optional session_id filter). " +
+				"'create' — schedule (session_id or project_id, + message + one timing field). " +
+				"'list' — live schedules you may see (default status=pending,active,paused — everything that can still fire, a paused schedule included; optional session_id / target_session_id / project_id / status / limit; message is truncated in list results). " +
 				"'cancel' — permanently stop a schedule by id. " +
 				"'pause' / 'resume' — temporarily suspend/continue a recurring schedule by id. " +
-				"'reschedule' — change a live schedule's timing/message/max_runs by id. " +
-				"You can only touch schedules for a session you own (or any session if you are an admin). " +
-				"Pass the session_id from the conversation context to schedule yourself.",
+				"'reschedule' — change a live schedule's timing/message/max_runs, or its target (session_id / project_id / session_mode / session_template), by id. Moving between session and project scope is allowed and re-homes the schedule. " +
+				"'run_now' — fire a live schedule immediately by id. It does NOT count toward max_runs and does NOT shift the next fire, so use it to TEST a schedule instead of waiting for the clock. " +
+				"The response keeps reporting the schedule's own next_run_at (unchanged) and sets manual_fire_pending=true while the extra fire is in flight; the fire is tallied under manual_runs, separate from run_count. " +
+				"Each row reports next_run_at (the next fire, absent once terminal); run_at is sent only for one-shots, where it is the same thing. " +
+				"Delivery is polled every 30s, so a fire lands anywhere from ~0 to ~30s after its nominal time (whatever the distance to the next tick is) — never promise second-level precision. run_now pokes the poller, so a manual fire lands within a second or two. " +
+				"Pausing/resuming does not shift a schedule either: a resumed schedule lands on the slot it would have hit anyway. " +
+				"You can only touch schedules for a session you own or a project you can access (admins: anything).",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"action": map[string]any{
 						"type":        "string",
-						"enum":        []string{"create", "list", "cancel", "pause", "resume", "reschedule"},
-						"description": "create | list | cancel | pause | resume | reschedule.",
+						"enum":        []string{"create", "list", "cancel", "pause", "resume", "reschedule", "run_now"},
+						"description": "create | list | cancel | pause | resume | reschedule | run_now.",
+					},
+					"status": map[string]any{
+						"type":        "string",
+						"description": "action=list: comma-separated statuses to include. Default is everything that can still fire: pending, active, and paused (a paused schedule is live — it keeps its place in the cadence). Use 'all' for every status, 'paused' for only the suspended ones, or e.g. 'done,failed' to inspect history.",
+					},
+					"limit": map[string]any{
+						"type":        "integer",
+						"description": "action=list: max rows to return. Default 50, max 500.",
 					},
 					"session_id": map[string]any{
 						"type":        "string",
-						"description": "action=create: the session to deliver into (usually your own — schedule yourself). action=list: optional filter to one session.",
+						"description": "action=create: the existing session to deliver into (usually your own — schedule yourself). Mutually exclusive with project_id. " +
+							"action=list: everything RELATED to that session — schedules targeting it, project jobs created from it, project jobs of its project, and schedules whose last fire landed in it. Narrow with target_session_id if you only want the ones that deliver INTO it.",
+					},
+					"target_session_id": map[string]any{
+						"type":        "string",
+						"description": "action=list: only schedules that deliver INTO this session (session-scoped ones targeting it). Stricter than session_id, which also matches project jobs merely created from it.",
+					},
+					"project_id": map[string]any{
+						"type":        "string",
+						"description": "action=create: run in this project instead of an existing session — each fire gets its own new session (clean context). Mutually exclusive with session_id. action=list: optional filter to one project.",
+					},
+					"session_mode": map[string]any{
+						"type":        "string",
+						"enum":        []string{"existing", "new", "template"},
+						"description": "How the target session is picked at each fire. 'existing' (default with session_id) reuses that session. 'new' (default with project_id) opens a fresh session per fire. 'template' renders session_template and reuses the session when it already exists.",
+					},
+					"session_template": map[string]any{
+						"type":        "string",
+						"description": "session_mode=template: session-id pattern rendered at fire time. Placeholders: {date} 2026-08-13, {datetime} 2026-08-13-0900, {ym} 2026-08, {run} fire number, {id} schedule id. E.g. 'daily-report-{date}'. A pattern with no placeholder always reuses that one session.",
 					},
 					"run_at": map[string]any{
 						"type":        "string",
-						"description": "One-shot timing. RFC3339 (2026-07-09T12:40:00Z) or relative +<dur> (e.g. +90m, +2h, +1d). Must be in the future. Omit when using every/cron.",
+						"description": "One-shot timing. RFC3339 (2026-07-09T12:40:00Z) or a relative duration, with or without the '+' (e.g. 30s, +90m, 2h, +1d). Seconds/minutes/hours/days all work. Must be in the future. Omit when using every/cron.",
 					},
 					"every": map[string]any{
 						"type":        "string",
-						"description": "Recurring interval, e.g. 5m, 90s, 1h30m, 1d. Fires repeatedly this far apart. Mutually exclusive with run_at/cron.",
+						"description": "Recurring interval, e.g. 30s, 5m, 90s, 1h30m, 1d. Fires repeatedly this far apart. Mutually exclusive with run_at/cron.",
 					},
 					"cron": map[string]any{
 						"type":        "string",
-						"description": "Recurring 5-field cron (min hour dom mon dow), e.g. '0 9 * * 1' = every Monday 09:00. Mutually exclusive with run_at/every.",
+						"description": "Recurring 5-field cron (min hour dom mon dow), e.g. '0 9 * * 1' = every Monday 09:00. IMPORTANT: matched against the wick SERVER's local timezone, not UTC and not the user's — confirm the intended zone before scheduling anything hour-sensitive (a morning report set in the wrong zone is hours off). Mutually exclusive with run_at/every.",
 					},
 					"max_runs": map[string]any{
 						"type":        "integer",

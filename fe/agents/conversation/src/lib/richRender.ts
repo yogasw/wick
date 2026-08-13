@@ -576,6 +576,7 @@ export const BLOCKED_WIDGET_POLICY: WidgetPolicy = {
   connect_src: "block",
   script_src: "block",
   allow_popups: false,
+  allow_popup_escape: false,
   allowlist: [],
 };
 
@@ -679,11 +680,26 @@ export function artifactCSP(policy: WidgetPolicy = widgetPolicy): string {
 }
 
 /** The iframe sandbox attribute for a resolved policy.
-    allow-same-origin is never granted — the opaque origin is what every other
-    guarantee rests on. allow-popups-to-escape-sandbox is never granted either:
-    an escaping popup runs outside this CSP entirely. */
+
+    allow-same-origin is never granted, under ANY policy — not even the
+    unsecure preset. Paired with allow-scripts on a frame served from wick's
+    own origin it would let model-authored HTML reach parent.document, read
+    the session, and strip this very attribute. That is not a wider widget,
+    it is no sandbox at all, so it is not offered as a setting.
+
+    allow-popups-to-escape-sandbox IS configurable. Sandbox flags are
+    inherited by anything a frame opens, so without it a new tab carries the
+    opaque origin and the destination site sees Origin: null — enough to make
+    its own XHR fail CORS and its localStorage throw, which reads to a user as
+    a broken page. Granting it means the opened tab is outside this CSP; the
+    frame's own restrictions are unchanged either way. It implies
+    allow-popups, since escaping is moot if no tab may open. */
 export function artifactSandbox(policy: WidgetPolicy = widgetPolicy): string {
-  return policy?.allow_popups ? "allow-scripts allow-popups" : "allow-scripts";
+  const flags = ["allow-scripts"];
+  const escape = policy?.allow_popup_escape === true;
+  if (policy?.allow_popups || escape) flags.push("allow-popups");
+  if (escape) flags.push("allow-popups-to-escape-sandbox");
+  return flags.join(" ");
 }
 
 /* Theme bridge injected into every artifact iframe so HTML the model writes
