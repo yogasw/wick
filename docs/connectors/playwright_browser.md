@@ -109,11 +109,11 @@ Persistent browsers that survive across calls — and plugin restarts — until 
 | Op | Destructive | Input | What it does |
 |---|---|---|---|
 | `session_open` | yes | `profile` (optional) | Launches a persistent browser, returns its `session_id`. Respects `MaxLiveSessions` (and the CloakBrowser free-tier 1-session lock — see [CloakBrowser](#cloakbrowser)). Pass `profile` to run against a [named profile](#named-profiles) instead of a throwaway anonymous session; with `DefaultProfile` configured, omitting it uses that profile. |
-| `session_list` | no | — | Lists every live session and its open tabs (index, url, title), plus `max_tabs` (the effective `MaxTabsPerSession` cap, `0` = unlimited) so callers can tell when a session is full. Dead sessions are swept automatically. |
+| `session_list` | no | — | Lists every live session and its open tabs (index, url, title), plus `max_tabs` (the effective `MaxTabsPerSession` cap, `0` = unlimited) so callers can tell when a session is full. Each row also carries `idle_seconds` and `auto_close_in_seconds` — call this before `session_open` to reuse an existing session, or to choose between closing one now and waiting for it to expire. Dead sessions are swept automatically. |
 | `tab_new` | no | `session_id`, `url` | Opens a new tab in a live session, optionally navigating it. Rejected once the session hits `MaxTabsPerSession` — close a tab or raise the cap first. |
 | `tab_close` | yes | `session_id`, `index` | Closes the tab at `index` (from `session_list`). |
 | `session_close` | yes | `session_id` | Kills the session's browser and frees its resources. **Always close sessions you opened** — the idle timeout is a safety net, not a substitute, and an abandoned session keeps holding a slot (and its RAM) until that timeout elapses. |
-| `session_endpoints` | no | `session_id` | Returns the session's raw CDP details: `cdp_url` plus one entry per tab with `target_id` + `ws_debugger_url`. Read-only; backs the live-browser panel (below). Not meant for agent use. |
+| `session_endpoints` | no | `session_id` | Returns the session's raw CDP details: `cdp_url` plus one entry per tab with `target_id` + `ws_debugger_url`. Read-only; backs the live-browser panel (below). **Manager-only** — hidden from the MCP tool surface (see [Manager-only operations](#manager-only-operations)). |
 | `profile_list` | no | — | Lists named persistent profiles: name, created/last-used time, and whether a live session is currently using it. See [Named profiles](#named-profiles). |
 | `profile_delete` | yes | `name` | Deletes a named profile and its stored login/cookies for good. Refused while a live session is using it — close that session first. |
 | `get_request` | no | `profile` or `name` | Reads back HTTP requests recorded by an earlier `run` with `record_request=true`. See [Recording network requests](#recording-network-requests). |
@@ -249,9 +249,23 @@ Two things to know:
 - **Applies to new sessions.** Chrome loads extensions only at launch, so installing/removing affects the *next* `session_open`, not sessions already running.
 - **Forces headed.** `--load-extension` only works in a headed browser, so any installed extension makes new sessions run headed regardless of the Headless config.
 
+`extension_list` / `extension_install` / `extension_remove` are **manager-only** (see below): installing an extension changes how every later session launches, which is an admin decision rather than something an agent should reach for mid-task.
+
+### Manager-only operations
+
+Some operations exist to back the manager UI, not to be called by an agent. They are registered `ConfigOnly`, which hides them from the whole MCP surface (`wick_list`, `wick_search`, `wick_get`) while the manager still runs them through its `/test` path:
+
+| Op | Why it is hidden |
+|---|---|
+| `session_endpoints` | Raw CDP plumbing (`ws_debugger_url`) for the live-browser panel. An agent drives a session through `run` / `screenshot` instead. |
+| `extension_list`, `extension_install`, `extension_remove` | Installing an extension reconfigures *every* later session (headed, `--load-extension`) for everyone using the connector. |
+| `browser_status`, `browser_install`, `browser_update`, `browser_uninstall` | Engine management. `browser_status` returns HTML for the picker widget, and installs block on downloads that reach hundreds of megabytes. |
+
+Hiding them also keeps the agent's tool list focused: what remains is the set an agent actually drives — page tasks, scripted runs, live sessions, profiles, and recorded requests.
+
 ### Maintenance
 
-Backs the manager's browser picker. **Not meant for agent use** — seed these ops `AdminOnly` (see the [`html=` widget](/reference/config-tags#html-—-server-rendered-widget) reference) so the LLM can't call them.
+Backs the manager's browser picker. **Manager-only** — hidden from the MCP tool surface (see [Manager-only operations](#manager-only-operations)), so the LLM cannot call them.
 
 | Op | Destructive | Input | What it does |
 |---|---|---|---|

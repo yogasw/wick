@@ -320,21 +320,25 @@ func Module() connector.Module {
 				connector.OpDestructive(
 					"session_open",
 					"Open Live Session",
-					"Launch a persistent browser and return its session_id. The browser stays alive across calls until session_close (or the host reboots). Pass the session_id to run/screenshot/scrape/etc to reuse the same live browser. Destructive because it holds an OS browser process open.",
+					"Launch a persistent browser and return its session_id. Pass that id to run/screenshot/scrape/etc to reuse the same live browser. Sessions auto-close after a period with no activity, and the number alive at once is capped — call session_list first to see what is already open, how long each has been idle, and how soon it frees itself. Reuse an existing session rather than opening a second one where you can. Destructive because it holds an OS browser process open.",
 					sessionOpenInput{},
 					sessionOpen, wickdocs.Docs{},
 				),
 				connector.Op(
 					"session_list",
 					"List Live Sessions",
-					"List every live session and its open tabs (index, url, title). Dead sessions are swept automatically. Use this to see what's currently open before reusing or closing a session.",
+					"List every live session with its open tabs (index, url, title), how long it has been idle (idle_seconds), and how long until it auto-closes (auto_close_in_seconds). Dead sessions are swept automatically. Call this before session_open to reuse an existing session, or to decide between closing one now and waiting for it to expire.",
 					sessionListInput{},
 					sessionListOp, wickdocs.Docs{},
 				),
-				connector.Op(
+				// ConfigOnly: raw CDP plumbing for the manager's live-browser
+				// panel. An agent has no use for a ws_debugger_url — it drives
+				// the session through run/screenshot — so keep it off the tool
+				// surface while the panel still reaches it via the /test path.
+				connector.OpConfigOnly(
 					"session_endpoints",
 					"Live Session Endpoints",
-					"Return a live session's raw CDP connection details: cdp_url plus one entry per open tab with its target_id and ws_debugger_url. Read-only; backs the manager's live-browser panel, which proxies a DevTools screencast/input stream to these endpoints. Not meant for agent use.",
+					"Return a live session's raw CDP connection details: cdp_url plus one entry per open tab with its target_id and ws_debugger_url. Read-only; backs the manager's live-browser panel, which proxies a DevTools screencast/input stream to these endpoints.",
 					sessionEndpointsInput{},
 					sessionEndpointsOp, wickdocs.Docs{},
 				),
@@ -384,21 +388,27 @@ func Module() connector.Module {
 			connector.Cat(
 				"Extensions",
 				"Chrome extensions loaded into live sessions. Backs the manager's Extensions section; not meant for agent use. Any installed extension forces new sessions headed (--load-extension needs a headed browser).",
-				connector.Op(
+				// ConfigOnly across the board: installing extensions is an admin
+				// act performed in the manager UI, and it changes how EVERY later
+				// session launches (headed, with --load-extension). An agent that
+				// stumbled into these would silently reconfigure the connector for
+				// everyone, so they stay off the tool surface while the manager
+				// section still drives them via the /test path.
+				connector.OpConfigOnly(
 					"extension_list",
 					"List Extensions",
 					"List installed extensions (id, name, version, size). Read-only; backs the manager Extensions section.",
 					extensionListInput{},
 					extensionListOp, wickdocs.Docs{},
 				),
-				connector.OpDestructive(
+				connector.OpConfigOnly(
 					"extension_install",
 					"Install Extension",
 					"Unpack a base64 .zip/.crx into the connector's extensions dir. Applies to new sessions. Used by the manager upload / Web Store add.",
 					extensionInstallInput{},
 					extensionInstallOp, wickdocs.Docs{},
 				),
-				connector.OpDestructive(
+				connector.OpConfigOnly(
 					"extension_remove",
 					"Remove Extension",
 					"Delete an installed extension by id. Applies to new sessions.",
@@ -422,7 +432,10 @@ func Module() connector.Module {
 					browserStatusInput{},
 					browserStatusOp, wickdocs.Docs{},
 				),
-				connector.OpDestructive(
+				// ConfigOnly like its siblings: an agent has no reason to pull a
+				// browser engine, and this blocks on a download that can run to
+				// hundreds of megabytes. The manager's Download button drives it.
+				connector.OpConfigOnly(
 					"browser_install",
 					"Install Browser",
 					"Download one browser engine's binary (chromium/firefox/webkit). Blocks until the download completes. Idempotent. Used by the manager UI's Download button.",
