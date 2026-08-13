@@ -50,6 +50,9 @@ export type WidgetPolicy = {
   /** External scripts only — the widget's own inline scripts always run. */
   script_src?: string;
   allow_popups?: boolean;
+  /** Drops the sandbox flags an opened tab would inherit, so it gets a real
+      origin instead of an opaque one. Implies allow_popups when rendered. */
+  allow_popup_escape?: boolean;
   allowlist?: string[];
 };
 
