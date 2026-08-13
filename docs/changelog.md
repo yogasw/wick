@@ -6,6 +6,14 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v0.38.5](https://github.com/yogasw/wick/compare/v0.38.4...v0.38.5) — Agents & Widgets
+
+_Released on 2026-08-13_
+
 ### Agents
 #### Added
 *   **Scheduled messages can be project-scoped**: a schedule no longer has to nudge one pre-existing session. Pass `project_id` instead of `session_id` and each fire opens its own session in that project, so a recurring job starts from clean context every run — the natural shape for "every Monday 9am, write the weekly report". A new `session_mode` picks how the target is resolved per fire: `existing` (the previous behavior, still the default with `session_id`), `new` (generated session per fire, the default with `project_id`), or `template` (session named by rendering `session_template` against the fire time — `daily-{date}` — so fires within the same day share one session). Available on `wick_schedule_message`, a session's **Scheduled** tab, and the **Scheduled** page. See [Scope: where a fire lands](/guide/agents/scheduled-messages#scope-where-a-fire-lands).
@@ -13,6 +21,7 @@ All notable changes to Wick are documented here.
 *   **`run_now`: fire a schedule immediately**: new `action=run_now` on `wick_schedule_message`, and a **Run now** action on live rows in both UIs. It makes the schedule due and pokes the runner so the fire lands in seconds instead of at the next poll — the practical way to test a schedule instead of waiting for the clock. The schedule's definition is untouched: a recurring job advances from this fire exactly as from a natural one, and a paused schedule is resumed by the call. See [Testing a schedule](/guide/agents/scheduled-messages#testing-a-schedule-run-now).
 *   **`reschedule` can now move a schedule between session and project scope**: name a `project_id` to turn a nudge into a project job, or a `session_id` to pin a job to one conversation. The move is authorized against the new target and the row's owner is re-stamped to match the new scope, so it cannot be used to park work inside a project you can't reach. Changing a schedule's *kind* (one-shot ↔ recurring) is still refused.
 *   **`list` gained `status` and `limit`**: `action=list` now returns only live schedules (`pending`, `active`) by default and truncates each row's message to a `message_preview`, so asking "what is scheduled?" no longer returns every cancelled schedule from months ago with its full multi-thousand-character prompt. Pass `status=all` (or a comma-separated subset) and `limit` (default 50, max 500) to widen it.
+*   **Active project in sidebar auto-centers**: The Projects list is capped at max-h-40, so with many projects the scoped one could sit off-screen on page load. The active row is now marked and the container scrolled to center it.
 
 #### Fixed
 *   **`run_now`'s response no longer looks like it moved the schedule.** A manual run borrows `run_at` to become due, and the response was reporting that borrowed value — so `next_run_at` read as "now", exactly as though the cadence had been overwritten. It now always reports the schedule's own next fire, with a separate `manual_fire_pending` flag for the extra run in flight, and a note spelling out that nothing changed.
@@ -35,7 +44,12 @@ All notable changes to Wick are documented here.
 *   **Sub-minute cadences display correctly**: a 30-second interval rendered as "every 1m" (it was rounded to minutes before formatting); it now reads "every 30s".
 *   **Docs: `run_at` accepts seconds, and cron's timezone is stated**: relative durations always supported seconds (`+30s`), but only minutes and above were documented. Cron expressions are matched against the **server's** local wall clock — now called out explicitly, since a report set in the wrong zone is hours off.
 
+### Widgets
+#### Added
+*   **Opened tabs can escape the artifact sandbox**: Previously, a widget link opened with `allow-popups` still carried the frame's opaque origin, leading to `Origin: null` for the destination site and issues with CORS/localStorage. A new `allow_popup_escape` knob is introduced, enabling popups opened from a widget to escape the sandbox's opaque origin. This knob is off by default under secure policies, on under unsecure, and opt-in under custom policies. It implies and is gated on `allow-popups`.
+
 ---
+
 
 ## [v0.38.4](https://github.com/yogasw/wick/compare/v0.38.3...v0.38.4) — Connectors & Manager
 
