@@ -7,7 +7,13 @@ All notable changes to Wick are documented here.
 ## [Unreleased]
 
 ### Connectors
+#### Added
+*   **Playwright Browser: idle auto-close for live sessions** (`playwright_browser`): a live session now closes itself after a period with no activity instead of staying resident until an explicit `session_close` (or reboot). New `BrowserIdleTimeoutMin` config (default 1 minute; named-profile sessions get 8x that value; `-1` disables). `session_list` reports `idle_seconds` and `auto_close_in_seconds` per session, and the session-cap error on `session_open` now names the blocking session and its countdown instead of a bare count. See [Idle auto-close](/connectors/playwright_browser#idle-auto-close).
+*   **Playwright Browser: optional orphan process sweeping**: new `BrowserKillOrphans` config (off by default) also terminates browser processes under the session directory that no live session claims — children an engine forked on its own, or a re-forked PID the recorded one no longer matches. Ownership is decided by `--user-data-dir`, so a browser launched outside the connector is never touched. See [Orphan sweeping](/connectors/playwright_browser#orphan-sweeping).
+*   Eight `playwright_browser` maintenance/admin ops (`session_endpoints`, `extension_list`, `extension_install`, `extension_remove`, `browser_status`, `browser_install`, `browser_update`, `browser_uninstall`) are now `ConfigOnly` — hidden from the MCP tool surface while remaining reachable from the manager UI. See [Manager-only operations](/connectors/playwright_browser#manager-only-operations).
+
 #### Fixed
+*   **Playwright Browser: zombie processes and stale profile locks**: live-session launches weren't calling `Process.Release()`, leaking zombie processes on Unix. A browser killed without a clean exit (OOM, `kill -9`, host restart) also left Chromium's singleton lock files pointing at a dead PID, which made the next launch against that profile fail; they're now cleared automatically once the PID they name is gone.
 *   **Git CLI: `checkout` argv broken on git 2.43**: `checkout` was invoked as `checkout --end-of-options <ref>`, a terminator position git 2.43 doesn't recognise — parsing fell through to pathspec matching, so the checkout silently never happened (2.44+ accepted it, which is why this passed testing on newer machines). Now emitted as `checkout <ref> --`, the portable form; since `--` doesn't stop option parsing, `checkout` validates its `ref` through the same check `branch_create` uses so a flag-shaped ref is still refused. The two `checkout -b` branch-create paths also had a misplaced terminator that guarded nothing; it's now correctly placed before an optional start-point. See [Git CLI ▶ What is guarded](/connectors/git#what-is-guarded).
 
 ### Manager
