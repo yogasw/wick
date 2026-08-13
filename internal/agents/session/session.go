@@ -36,6 +36,10 @@ const (
 	OriginTelegram Origin = "telegram"
 	OriginREST     Origin = "rest"
 	OriginUI       Origin = "ui"
+	// OriginSchedule marks a session the schedule runner created for a
+	// project-scoped fire. Distinct so cleanup can tell disposable
+	// scheduler output from a conversation someone started.
+	OriginSchedule Origin = "schedule"
 )
 
 // Status is the high-level pool view: idle (no subprocess), queued

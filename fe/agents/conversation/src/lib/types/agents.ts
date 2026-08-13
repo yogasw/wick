@@ -384,6 +384,21 @@ export type Schedule = {
   ends_at?: string;
   last_run_at?: string;
   last_error?: string;
+
+  /* Scope. "existing" delivers into session_id; "new" / "template" run in
+     project_id and resolve the target session at each fire. */
+  session_mode: "existing" | "new" | "template";
+  project_id?: string;
+  project_name?: string;
+  session_template?: string;
+  last_session_id?: string;
+  last_session_label?: string;
+  source_session_id?: string;
+  /* Fires triggered by Run now — separate from run_count, which is what
+     max_runs caps. */
+  manual_runs?: number;
+  /* Zone a cron expression is matched in (the server's); cron rows only. */
+  cron_timezone?: string;
 };
 
 export type ProviderModelOption = {
