@@ -43,6 +43,11 @@ type sessionMeta struct {
 	Browser  string    `json:"browser"`
 	Created  time.Time `json:"created"`
 	UserData string    `json:"user_data_dir"`
+	// LastUsed is refreshed every time an op touches this session. It is what
+	// the idle reaper measures against — Created alone cannot tell a session
+	// used seconds ago from one abandoned an hour ago. Zero value (sessions
+	// written by an older plugin) is treated as Created by sessionIdleFor.
+	LastUsed time.Time `json:"last_used,omitempty"`
 	// Profile is the caller-supplied named profile this session runs against,
 	// empty for an anonymous session. A named profile's UserData dir is
 	// profile-<name> and is NOT swept on close — its login/cookies persist so a
@@ -161,6 +166,10 @@ func openSession(c *connector.Ctx) (any, error) {
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
 
+	// Reclaim abandoned browsers before counting: a session nobody has touched
+	// past its idle timeout should not hold the last slot hostage.
+	maybeReap(c)
+
 	// Enforce the live-session cap (count valid, still-running sessions).
 	// listSessions already sweeps dead ones, so a browser that crashed or was
 	// killed no longer counts against the cap. cap == 0 means unlimited.
@@ -169,7 +178,7 @@ func openSession(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	if cap := maxLiveSessions(c); cap > 0 && len(live) >= cap {
-		return nil, fmt.Errorf("live session limit reached (%d/%d): close one with session_close before opening another (or set max_live_sessions to 0 for unlimited)", len(live), cap)
+		return nil, fmt.Errorf("live session limit reached (%d/%d). %s", len(live), cap, describeBlockingSessions(c, live))
 	}
 
 	// Live sessions rely on the Chromium DevTools protocol (--remote-debugging-port
@@ -269,9 +278,20 @@ func openSession(c *connector.Ctx) (any, error) {
 			cmd.Env = append(cmd.Environ(), env...)
 		}
 	}
+	// A browser killed without cleanup (OOM, kill -9, reaper) leaves Chrome's
+	// singleton files behind pointing at a dead PID; the next launch against the
+	// same user-data dir then refuses to start. Sweep them first so a crashed
+	// session never wedges the profile permanently.
+	clearStaleProfileLocks(udd)
+
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("launch detached browser: %w", err)
 	}
+	// Release the child handle: we never Wait() it (the browser outlives this
+	// call by design), and an un-waited child becomes a <defunct> zombie when it
+	// dies while this plugin is still alive. Release hands reaping to init.
+	// This does NOT terminate Chrome — only session_close / the idle reaper do.
+	defer func() { _ = cmd.Process.Release() }()
 
 	// Chrome writes the chosen port to <udd>/DevToolsActivePort once ready.
 	port, ok := readDevToolsPort(udd, 20*time.Second)
@@ -314,6 +334,11 @@ func connectSession(c *connector.Ctx, id string) (*liveConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Every live-session op funnels through here, so this is the one place that
+	// has to record activity for the idle reaper. Done before the CDP dial: a
+	// slow or failing connect is still someone using the session, and letting a
+	// failed reconnect count as "idle" would reap a browser mid-retry.
+	touchSession(c, id)
 	// Reconnecting to an already-running browser over CDP never launches a new
 	// browser, so it only needs the node driver — never the Chromium download.
 	pw, err := ensureDriverNoInstall()
@@ -383,17 +408,31 @@ func sessionList(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	now := sessionNow(c)
 	sessions := make([]map[string]any, 0, len(metas))
 	for _, m := range metas {
 		tabs := describeTabs(c, m.ID)
-		sessions = append(sessions, map[string]any{
+		row := map[string]any{
 			"session_id": m.ID,
 			"pid":        m.PID,
 			"browser":    m.Browser,
 			"created":    m.Created,
 			"profile":    m.Profile,
 			"tabs":       tabs,
-		})
+		}
+		// Surface the idle clock so a caller can decide whether to reuse this
+		// session, close it, or simply wait for it to be reclaimed.
+		// describeTabs above already refreshed LastUsed via connectSession, so
+		// read the idle window from the pre-refresh metadata.
+		row["idle_seconds"] = int(sessionIdleFor(m, now).Seconds())
+		if t := idleTimeoutFor(c, m); t > 0 {
+			remain := t - sessionIdleFor(m, now)
+			if remain < 0 {
+				remain = 0
+			}
+			row["auto_close_in_seconds"] = int(remain.Seconds())
+		}
+		sessions = append(sessions, row)
 	}
 	// max_tabs lets the UI disable "new tab" at the cap (0 = unlimited).
 	return map[string]any{"sessions": sessions, "count": len(sessions), "max_tabs": maxTabsPerSession(c)}, nil

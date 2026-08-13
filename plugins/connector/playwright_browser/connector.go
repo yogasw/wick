@@ -78,6 +78,18 @@ type Config struct {
 	// extra tabs each hold a live page in RAM, so multi-tab is opt-in. Raise it
 	// to allow parallel tabs; 0 = unlimited. tab_new is rejected past the cap.
 	MaxTabsPerSession int `wick:"default=1;group=Live sessions;desc=Maximum tabs per live session (tab_new cap). Each open tab costs RAM, so multi-tab is opt-in — default 1. Raise to allow parallel tabs; set 0 for unlimited."`
+	// BrowserIdleTimeoutMin reclaims browsers nobody is using. A live session is
+	// detached on purpose, so without this it only ends when session_close is
+	// called — an agent that crashes or forgets leaves one resident forever.
+	// Sessions on a NAMED profile get a proportionally longer leash, since
+	// reaping those costs the user their logged-in state.
+	BrowserIdleTimeoutMin int `wick:"number;default=1;group=Live sessions;desc=Minutes a live session may sit with no activity before it is closed automatically. Any op touching the session resets the clock. Sessions using a named profile get 8x this value, since closing them ends a logged-in session. Set -1 to never auto-close. Default 1."`
+	// BrowserKillOrphans catches what the PID-based reap cannot: children an
+	// engine forked on its own (Chrome renderers) and browsers whose recorded
+	// PID no longer matches the running one (Firefox re-forks). Ownership is
+	// decided by --user-data-dir, so a browser the user launched themselves is
+	// never touched. Off by default — it enumerates every process on the host.
+	BrowserKillOrphans bool `wick:"bool;group=Live sessions;desc=Also terminate browser processes under the session directory that no live session claims — orphaned children or re-forked PIDs the normal cleanup misses. Recommended on servers. Off by default."`
 	// DefaultProfile / ForceDefaultProfile make a named profile the norm instead
 	// of an opt-in. Without them every session_open with no profile arg gets a
 	// throwaway dir that is swept on close, so a login never survives — the

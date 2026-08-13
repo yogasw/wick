@@ -46,6 +46,8 @@ Config fields are grouped into cards on the instance's Settings page. **Browser*
 | Live sessions *(collapsed)* | `SessionDir` | Where live-session metadata, browser profiles, and downloaded engines (e.g. CloakBrowser) are stored. Default: the plugin's persistent data dir under the app tree (`~/.<app>/plugins/playwright_browser`) — set this only to override that location. |
 | Live sessions | `MaxLiveSessions` | Max persistent browsers alive at once. Default `1`, `0` = unlimited. |
 | Live sessions | `MaxTabsPerSession` | Max tabs within one live session (`tab_new` cap). Each open tab keeps a live page in RAM, so multi-tab is opt-in — default `1`, `0` = unlimited. |
+| Live sessions | `BrowserIdleTimeoutMin` | Minutes a live session may sit with no activity before it is closed automatically. Any op touching the session resets the clock. Named-profile sessions get 8x this value. Default `1`, `-1` = never auto-close. See [Idle auto-close](#idle-auto-close). |
+| Live sessions | `BrowserKillOrphans` | Also terminate browser processes under the session directory that no live session claims — orphaned children or re-forked PIDs the normal cleanup misses. Recommended on servers. Default off. See [Orphan sweeping](#orphan-sweeping). |
 | Live sessions | `DefaultProfile` | Named profile used when `session_open` is called without a `profile` argument. Set this so logins persist by default instead of being swept on close. Empty = anonymous throwaway sessions (the original default). See [Named profiles](#named-profiles). |
 | Live sessions | `ForceDefaultProfile` | Always use `DefaultProfile`, ignoring any `profile` argument. Guarantees every session shares one identity. Requires `DefaultProfile` to be set. |
 | Custom binary *(collapsed)* | `ExecutablePath` | Path to a custom browser binary instead of the bundled one. |
@@ -100,7 +102,7 @@ Ephemeral: open a URL, do one thing, close the browser.
 
 ### Live session
 
-Persistent browsers that survive across calls — and plugin restarts — until closed. The browser runs as a **detached OS process** reached over CDP, so it outlives the idle-swept plugin subprocess; only `session_close` ends it.
+Persistent browsers that survive across calls — and plugin restarts — until closed. The browser runs as a **detached OS process** reached over CDP, so it outlives the idle-swept plugin subprocess. It ends either explicitly via `session_close` or automatically once it goes unused (see [Idle auto-close](#idle-auto-close)).
 
 > **Chromium-based engines only.** Live sessions require the Chromium DevTools protocol, which only `chromium` and the two cloak engines (`cloakbrowser` / `cloakbrowser-pro`, patched Chromium) expose. `session_open` errors on a `firefox` / `webkit` instance — use the ephemeral ops (`run`, `screenshot`, …) for those, or set `Browser=chromium`.
 
@@ -110,7 +112,7 @@ Persistent browsers that survive across calls — and plugin restarts — until 
 | `session_list` | no | — | Lists every live session and its open tabs (index, url, title), plus `max_tabs` (the effective `MaxTabsPerSession` cap, `0` = unlimited) so callers can tell when a session is full. Dead sessions are swept automatically. |
 | `tab_new` | no | `session_id`, `url` | Opens a new tab in a live session, optionally navigating it. Rejected once the session hits `MaxTabsPerSession` — close a tab or raise the cap first. |
 | `tab_close` | yes | `session_id`, `index` | Closes the tab at `index` (from `session_list`). |
-| `session_close` | yes | `session_id` | Kills the session's browser and frees its resources. **Always close sessions you opened** — an abandoned one holds a browser process open until closed or reboot. |
+| `session_close` | yes | `session_id` | Kills the session's browser and frees its resources. **Always close sessions you opened** — the idle timeout is a safety net, not a substitute, and an abandoned session keeps holding a slot (and its RAM) until that timeout elapses. |
 | `session_endpoints` | no | `session_id` | Returns the session's raw CDP details: `cdp_url` plus one entry per tab with `target_id` + `ws_debugger_url`. Read-only; backs the live-browser panel (below). Not meant for agent use. |
 | `profile_list` | no | — | Lists named persistent profiles: name, created/last-used time, and whether a live session is currently using it. See [Named profiles](#named-profiles). |
 | `profile_delete` | yes | `name` | Deletes a named profile and its stored login/cookies for good. Refused while a live session is using it — close that session first. |
@@ -154,6 +156,50 @@ Turning on `ForceDefaultProfile` without a `DefaultProfile` set fails at `sessio
 ::: warning Login still needs a clean shutdown
 A named profile keeps its dir, but Chromium only flushes cookies and session storage to disk on a graceful exit. `session_close` kills the browser by PID, so a login completed moments earlier can still be lost even with a profile set. Give the browser a little time after logging in before closing the session.
 :::
+
+### Idle auto-close
+
+A live session is a detached browser, so nothing ends it when the caller goes away — an agent that crashes, times out, or simply forgets `session_close` would otherwise leave a browser resident indefinitely, holding both a session slot and its memory.
+
+`BrowserIdleTimeoutMin` closes sessions nobody is using. Every operation that touches a session (`run`, `screenshot`, `tab_new`, `session_list`, …) resets its clock; once a session sits untouched past the timeout it is terminated and its metadata swept.
+
+| Session kind | Default idle window |
+|---|---|
+| Anonymous (no `profile`) | 1 minute |
+| Named profile | 8 minutes (8x the configured value) |
+
+Named profiles get the longer leash because closing one ends a logged-in browser. Set `BrowserIdleTimeoutMin` to `-1` to disable auto-close entirely and restore the old "lives until `session_close`" behavior.
+
+`session_list` reports where each session stands:
+
+```json
+{"session_id": "pw-123-456", "idle_seconds": 22, "auto_close_in_seconds": 38}
+```
+
+When the session cap blocks a `session_open`, the error names the sessions holding the slots and how long until each frees itself, so a caller can decide between closing one and waiting:
+
+```
+live session limit reached (1/1). Holding the slot: pw-123-456 (idle 22s,
+auto-closes in 38s). Either call session_close on one of them to free a slot
+now, or wait for the timeout.
+```
+
+::: tip Sweeps ride on activity
+The plugin subprocess is itself idle-killed after a few minutes, so there is no always-on timer. Sweeps run when the plugin is awake handling a browser op — an abandoned session is reclaimed the next time anything browser-related happens. On a completely idle host nothing sweeps, which costs nothing: if no work is running, nothing is competing for the memory either.
+:::
+
+### Orphan sweeping
+
+The idle reaper works from session metadata, which records **one** PID per session — but a browser is a process tree it builds itself. Chrome forks renderer, GPU and utility children that appear in no metadata; other engines may fork and let the originally-recorded PID exit, so the stored PID can even be the wrong one. Anything that escapes the recorded parent is invisible to a PID-based sweep while still holding memory.
+
+`BrowserKillOrphans` closes that gap. When enabled, each sweep also scans running processes for a `--user-data-dir` under the session directory and terminates any whose profile no live session claims.
+
+Two properties make it safe to leave on:
+
+- **Ownership is the profile directory, not the process name.** A browser you launched yourself keeps its profile elsewhere, so it can never match — the sweep cannot touch it no matter what engine it is.
+- **Active sessions are protected as a whole tree.** Protection is keyed on the user-data dir, so every child of a session still inside its idle window is spared along with its parent.
+
+Off by default because the scan enumerates every process on the host: worth it on a server where a stray browser is pure cost, needless on a developer machine.
 
 ### Recording network requests
 
@@ -245,6 +291,7 @@ Clicking a not-yet-installed row's **Download** button installs it: the free eng
 - CloakBrowser (free) installs run in the background and can take a while (~200MB download); poll `browser_status` (or watch the picker) for progress rather than expecting `browser_install` to block until done.
 - `Device` overrides `ViewportWidth` / `ViewportHeight` when set.
 - `wait_for_load_state` with `state=networkidle` is capped at 10s — sites that poll in the background never reach "0 in-flight requests", so a timeout there is treated as good enough (the step continues with a note) instead of stalling the run for minutes.
+- A browser killed without a clean exit (OOM, `kill -9`, host restart) leaves Chromium's singleton files (`SingletonLock`, `SingletonSocket`, `SingletonCookie`, `DevToolsActivePort`) pointing at a dead PID, which makes the *next* launch against that profile fail. `session_open` clears those automatically when the PID they name is gone — a lock owned by a live process is never touched.
 
 ## See also
 
