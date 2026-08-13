@@ -46,7 +46,7 @@
     listWorkspace, addWorkspace, saveWorkspaceConfig, testWorkspace,
     duplicateWorkspace, renameWorkspace, removeWorkspace,
   } from "../api/workspace.js";
-  import { listSchedules, createSchedule, cancelSchedule, pauseSchedule, resumeSchedule } from "../api/schedules.js";
+  import { listSchedules, createSchedule, cancelSchedule, pauseSchedule, resumeSchedule, rescheduleSchedule, runScheduleNow } from "../api/schedules.js";
   import BrowserPanel from "./BrowserPanel.svelte";
   import { listInstances as listBrowserInstances } from "../api/browser.js";
 
@@ -1744,6 +1744,23 @@
       {:else if railTab === "scheduled"}
         <SchedulePanel
           {schedules}
+          projects={projectOptions}
+          currentProjectId={activeProjectId ?? ""}
+          onReschedule={(id, patch) => {
+            run(rescheduleSchedule(base, sessionId, id, {
+              runAt: patch.run_at, every: patch.every, cron: patch.cron,
+              message: patch.message, maxRuns: patch.max_runs,
+              projectId: patch.project_id, sessionMode: patch.session_mode,
+              sessionTemplate: patch.session_template,
+            }).pipe(Effect.provide(WickClientLayer)))
+              .then(loadSchedules)
+              .catch((e: unknown) => toastError(`Edit: ${e instanceof Error ? e.message : String(e)}`));
+          }}
+          onRunNow={(id) => {
+            run(runScheduleNow(base, sessionId, id).pipe(Effect.provide(WickClientLayer)))
+              .then(loadSchedules)
+              .catch((e: unknown) => toastError(`Run now: ${e instanceof Error ? e.message : String(e)}`));
+          }}
           onCreate={(args) =>
             run(createSchedule(base, sessionId, args).pipe(Effect.provide(WickClientLayer)))
               .then(() => { loadSchedules(); return true; })
@@ -1882,6 +1899,23 @@
           {:else if railTab === "scheduled"}
             <SchedulePanel
               {schedules}
+              projects={projectOptions}
+              currentProjectId={activeProjectId ?? ""}
+              onReschedule={(id, patch) => {
+                run(rescheduleSchedule(base, sessionId, id, {
+                  runAt: patch.run_at, every: patch.every, cron: patch.cron,
+                  message: patch.message, maxRuns: patch.max_runs,
+                  projectId: patch.project_id, sessionMode: patch.session_mode,
+                  sessionTemplate: patch.session_template,
+                }).pipe(Effect.provide(WickClientLayer)))
+                  .then(loadSchedules)
+                  .catch((e: unknown) => toastError(`Edit: ${e instanceof Error ? e.message : String(e)}`));
+              }}
+              onRunNow={(id) => {
+                run(runScheduleNow(base, sessionId, id).pipe(Effect.provide(WickClientLayer)))
+                  .then(loadSchedules)
+                  .catch((e: unknown) => toastError(`Run now: ${e instanceof Error ? e.message : String(e)}`));
+              }}
               onCreate={(args) =>
                 run(createSchedule(base, sessionId, args).pipe(Effect.provide(WickClientLayer)))
                   .then(() => { loadSchedules(); return true; })

@@ -88,6 +88,9 @@
   const preset = $derived(normalizePreset(policy?.mode));
   const isCustom = $derived(preset === "custom");
   const inheritedHosts = $derived(inherited?.allowlist ?? []);
+  /* Escaping the sandbox only means anything if a tab may open at all, so the
+     escape control follows the popup one rather than standing alone. */
+  const popupsOn = $derived(policy?.allow_popups === true);
   /* Only the directives on "list" consult the allowlist. Naming them lets the
      hint say which ones a host would actually affect, instead of implying the
      list does something where nothing reads it. */
@@ -120,6 +123,7 @@
     if (!open.length && !p?.allow_popups) return "custom — nothing allowed";
     const parts = open.map((d) => `${d.label.toLowerCase()}: ${p?.[d.key]}`);
     if (p?.allow_popups) parts.push("popups allowed");
+    if (p?.allow_popups && p?.allow_popup_escape) parts.push("tabs unsandboxed");
     return `custom — ${parts.join(" · ")}`;
   }
 </script>
@@ -217,7 +221,37 @@
                 <span class="block text-xs text-black-600 dark:text-black-700 mt-0.5">
                   Needed for <code class="font-mono">target="_blank"</code> links. A new tab is
                   outside this policy, so it can reach any host — the allowed-hosts list does not
-                  limit it.
+                  limit it. The tab still opens sandboxed unless you also allow the setting below.
+                </span>
+              </span>
+            </label>
+
+            <label
+              class="flex items-start gap-2 text-sm {popupsOn
+                ? 'cursor-pointer'
+                : 'cursor-not-allowed opacity-60'}"
+            >
+              <input
+                type="checkbox"
+                disabled={!popupsOn}
+                checked={policy?.allow_popup_escape === true && popupsOn}
+                onchange={(e) =>
+                  emit({ allow_popup_escape: (e.currentTarget as HTMLInputElement).checked })}
+                class="mt-0.5 rounded text-green-500 focus:ring-green-500"
+              />
+              <span>
+                <span class="font-semibold text-black-900 dark:text-white-100"
+                  >Opened tabs get a real origin</span
+                >
+                <span class="block text-xs text-black-600 dark:text-black-700 mt-0.5">
+                  {#if popupsOn}
+                    Without this a new tab stays sandboxed and the site sees
+                    <code class="font-mono">Origin: null</code>, which makes many pages load broken —
+                    their own requests fail their CORS check. Turning it on lifts this policy from
+                    the opened tab entirely; the widget itself is unaffected.
+                  {:else}
+                    Available once links may open a new tab.
+                  {/if}
                 </span>
               </span>
             </label>

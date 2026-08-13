@@ -76,6 +76,34 @@ func TestPresetUnsecureIgnoresPerDirectiveFields(t *testing.T) {
 	if got.Mode != PresetUnsecure {
 		t.Errorf("Mode = %q, want %q", got.Mode, PresetUnsecure)
 	}
+	if !got.AllowPopupEscape {
+		t.Error("unsecure preset did not let popups escape the sandbox")
+	}
+}
+
+/* Popup escape is what gives an opened tab a REAL origin instead of the
+   opaque one it inherits from a sandboxed frame. Without it a link to a
+   third-party site loads with origin "null" and that site's own XHR is
+   refused by its CORS check, so the page arrives broken. It is a genuine
+   widening — the escaping tab is outside the widget CSP — hence off under
+   secure and opt-in under custom. */
+func TestPopupEscapePerPreset(t *testing.T) {
+	for _, tc := range []struct {
+		preset string
+		set    bool
+		want   bool
+	}{
+		{PresetSecure, true, false},   // preset overrides the field
+		{PresetUnsecure, false, true}, // preset overrides the field
+		{PresetCustom, true, true},
+		{PresetCustom, false, false},
+	} {
+		got := Resolve(WidgetPolicy{Mode: tc.preset, AllowPopupEscape: tc.set}, WidgetPolicy{})
+		if got.AllowPopupEscape != tc.want {
+			t.Errorf("%s preset with field=%v: AllowPopupEscape = %v, want %v",
+				tc.preset, tc.set, got.AllowPopupEscape, tc.want)
+		}
+	}
 }
 
 func TestPresetCustomReadsPerDirectiveFields(t *testing.T) {

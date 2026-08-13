@@ -29,7 +29,11 @@ type projectWidgetReq struct {
 	ConnectSrc  string `json:"connect_src"`
 	ScriptSrc   string `json:"script_src"`
 	AllowPopups bool   `json:"allow_popups"`
-	Allowlist   string `json:"allowlist"`
+	// AllowPopupEscape drops the sandbox flags an opened tab inherits, so the
+	// destination sees a real origin instead of "null". Meaningful only
+	// alongside AllowPopups; the renderer treats it as implying that flag.
+	AllowPopupEscape bool   `json:"allow_popup_escape"`
+	Allowlist        string `json:"allowlist"`
 }
 
 // toPolicy validates the submitted override and converts it to the stored
@@ -51,6 +55,9 @@ func (r projectWidgetReq) toPolicy() (agentsconfig.WidgetPolicy, error) {
 		ConnectSrc:  r.ConnectSrc,
 		ScriptSrc:   r.ScriptSrc,
 		AllowPopups: r.AllowPopups,
+		// Not stored without popups: an escape flag alone reads on the settings
+		// screen as a permission that does something when no tab can open.
+		AllowPopupEscape: r.AllowPopups && r.AllowPopupEscape,
 	}
 	switch r.Mode {
 	case "", agentsconfig.PresetSecure, agentsconfig.PresetUnsecure, agentsconfig.PresetCustom:

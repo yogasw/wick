@@ -40,9 +40,14 @@ const (
 	// This includes script-src, so a widget may load and run code from any
 	// host. Combined with an open connect-src, such a script can read
 	// whatever the widget holds — including anything handed to it over the
-	// file and data-table bridges — and send it anywhere. The opaque origin
-	// still keeps it out of the parent's cookies, storage, and DOM. Fit for
-	// trusted internal projects; PresetCustom exists for everything else.
+	// file and data-table bridges — and send it anywhere. Popups may also
+	// escape the sandbox, so a link opens with a real origin rather than an
+	// opaque one.
+	//
+	// The frame ITSELF keeps its opaque origin regardless: allow-same-origin
+	// is never granted by any preset, so even here a widget cannot reach the
+	// parent's cookies, storage, or DOM. Fit for trusted internal projects;
+	// PresetCustom exists for everything else.
 	PresetUnsecure = "unsecure"
 	// PresetCustom reads the per-directive fields as set.
 	PresetCustom = "custom"
@@ -92,6 +97,22 @@ type WidgetPolicy struct {
 	// is NOT constrained by the parent's CSP, so this is a full
 	// exfiltration channel to any host — independent of the allowlist.
 	AllowPopups bool `json:"allow_popups,omitempty"`
+
+	// AllowPopupEscape adds allow-popups-to-escape-sandbox, which drops the
+	// sandbox flags a popup would otherwise inherit. It implies AllowPopups
+	// at render time: escaping is meaningless if nothing may open a tab.
+	//
+	// Without it an opened tab keeps the frame's OPAQUE origin, so the
+	// destination site sees Origin: null — its own same-origin XHR is then
+	// refused by its CORS check and localStorage throws, which is why a
+	// perfectly good third-party page arrives visibly broken. This is the
+	// only way to hand a link a real origin.
+	//
+	// It widens things for real: the escaped tab runs outside the widget's
+	// CSP entirely, so no directive or allowlist here constrains it. What it
+	// does NOT do is grant allow-same-origin — see artifactSandbox on the
+	// frontend, which never emits that flag under any policy.
+	AllowPopupEscape bool `json:"allow_popup_escape,omitempty"`
 
 	// Allowlist holds normalised host sources (https://host[:port],
 	// optionally *.host). Consulted only by directives set to ModeList.
@@ -176,9 +197,10 @@ func WidgetDirectiveKeys() []string {
 // render time.
 func GlobalWidgetPolicy(g GeneralConfig) WidgetPolicy {
 	p := WidgetPolicy{
-		Mode:        g.WidgetMode,
-		AllowPopups: g.WidgetAllowPopups,
-		Allowlist:   ParseAllowlist(g.WidgetAllowlist),
+		Mode:             g.WidgetMode,
+		AllowPopups:      g.WidgetAllowPopups,
+		AllowPopupEscape: g.WidgetAllowPopupEscape,
+		Allowlist:        ParseAllowlist(g.WidgetAllowlist),
 	}
 	for _, d := range widgetDirectives {
 		*d.Field(&p) = d.GlobalValue(g)
@@ -275,11 +297,13 @@ func Resolve(global, project WidgetPolicy) WidgetPolicy {
 			*d.Field(&out) = ModeAll
 		}
 		out.AllowPopups = true
+		out.AllowPopupEscape = true
 	case PresetCustom:
 		for _, d := range widgetDirectives {
 			*d.Field(&out) = normalizeMode(*d.Field(&base))
 		}
 		out.AllowPopups = base.AllowPopups
+		out.AllowPopupEscape = base.AllowPopupEscape
 	default: // PresetSecure
 		// Sealed, per-directive fields ignored. The allowlist is dropped
 		// rather than carried: nothing may read it, and a resolved policy
@@ -288,6 +312,7 @@ func Resolve(global, project WidgetPolicy) WidgetPolicy {
 			*d.Field(&out) = ModeBlock
 		}
 		out.AllowPopups = false
+		out.AllowPopupEscape = false
 		out.Allowlist = nil
 	}
 	return out
