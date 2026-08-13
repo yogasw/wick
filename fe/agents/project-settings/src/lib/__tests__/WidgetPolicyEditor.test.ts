@@ -138,6 +138,23 @@ describe("WidgetPolicyEditor — custom detail", () => {
     expect(screen.getByText(/can reach any host/)).toBeTruthy();
   });
 
+  test("popup escape is offered separately and reports upward", async () => {
+    const { onChange } = setup({ ...CUSTOM, allow_popups: true });
+    await fireEvent.click(screen.getByRole("checkbox", { name: /real origin/ }));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ policy: expect.objectContaining({ allow_popup_escape: true }) }),
+    );
+  });
+
+  /* Escaping is meaningless with nothing allowed to open a tab, so the UI must
+     not offer it as an independent choice that silently does nothing. */
+  test("popup escape is unavailable until links may open a tab", () => {
+    setup({ ...CUSTOM, allow_popups: false });
+    expect((screen.getByRole("checkbox", { name: /real origin/ }) as HTMLInputElement).disabled).toBe(
+      true,
+    );
+  });
+
   test("inherited hosts are shown so the operator sees what theirs are appended to", () => {
     setup(CUSTOM, { allowlist: ["https://a.test", "https://b.test"] });
     expect(screen.getByText(/From global — always included/)).toBeTruthy();

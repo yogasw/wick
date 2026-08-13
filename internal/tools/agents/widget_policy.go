@@ -11,7 +11,7 @@ import (
 // here so the ordering rules (project override is wholesale, allowlist
 // appends) live in exactly one place — agentsconfig.Resolve.
 
-// globalWidgetPolicy reads the six Widget knobs out of the configs table.
+// globalWidgetPolicy reads the Widget knobs out of the configs table.
 //
 // Every directive fails closed: a missing row, a cleared value, or an
 // unrecognised string all resolve to "block" inside
@@ -30,8 +30,9 @@ func globalWidgetPolicy() agentsconfig.WidgetPolicy {
 		MediaSrc:    get("widget_media_src"),
 		ConnectSrc:  get("widget_connect_src"),
 		ScriptSrc:   get("widget_script_src"),
-		AllowPopups: get("widget_allow_popups") == "true",
-		Allowlist:   agentsconfig.ParseAllowlist(get("widget_allowlist")),
+		AllowPopups:      get("widget_allow_popups") == "true",
+		AllowPopupEscape: get("widget_allow_popup_escape") == "true",
+		Allowlist:        agentsconfig.ParseAllowlist(get("widget_allowlist")),
 	}
 }
 

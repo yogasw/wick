@@ -123,6 +123,7 @@
         connect_src: "block",
         script_src: "block",
         allow_popups: false,
+        allow_popup_escape: false,
         allowlist: "",
       };
     }
@@ -136,6 +137,9 @@
       connect_src: widget.connect_src || "block",
       script_src: widget.script_src || "block",
       allow_popups: widget.allow_popups === true,
+      // Never stored on its own: an escape flag with no popups permitted reads
+      // as a permission that is doing something when nothing can open a tab.
+      allow_popup_escape: widget.allow_popups === true && widget.allow_popup_escape === true,
       allowlist: widgetAllowlistText,
     };
   }

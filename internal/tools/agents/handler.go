@@ -351,6 +351,7 @@ func Register(r tool.Router) {
 	r.POST("/sessions/{id}/schedules/{sid}/pause", func(c *tool.Ctx) { sessionSchedulesMutateUI(c, "pause") })
 	r.POST("/sessions/{id}/schedules/{sid}/resume", func(c *tool.Ctx) { sessionSchedulesMutateUI(c, "resume") })
 	r.POST("/sessions/{id}/schedules/{sid}/reschedule", func(c *tool.Ctx) { sessionSchedulesMutateUI(c, "reschedule") })
+	r.POST("/sessions/{id}/schedules/{sid}/run-now", func(c *tool.Ctx) { sessionSchedulesMutateUI(c, "run_now") })
 
 	// Global cross-session scheduler monitor (the "Scheduled" sidebar page).
 	r.GET("/scheduled", scheduledPage)
@@ -358,6 +359,8 @@ func Register(r tool.Router) {
 	r.POST("/scheduled/{sid}/cancel", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "cancel") })
 	r.POST("/scheduled/{sid}/pause", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "pause") })
 	r.POST("/scheduled/{sid}/resume", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "resume") })
+	r.POST("/scheduled/{sid}/reschedule", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "reschedule") })
+	r.POST("/scheduled/{sid}/run-now", func(c *tool.Ctx) { scheduleByIDMutateUI(c, "run_now") })
 
 	// No standalone /projects list page — the sidebar Projects section is
 	// the canonical project nav. "+ New" → /projects/new (create page),

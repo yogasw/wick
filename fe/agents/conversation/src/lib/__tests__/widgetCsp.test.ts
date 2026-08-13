@@ -153,10 +153,30 @@ describe("artifactSandbox", () => {
     expect(artifactSandbox({ allow_popups: true })).toBe("allow-scripts allow-popups");
   });
 
-  test("never grants allow-same-origin or popup escape", () => {
-    const s = artifactSandbox({ allow_popups: true });
-    expect(s).not.toContain("allow-same-origin");
-    expect(s).not.toContain("escape-sandbox");
+  test("adds popup escape when enabled, implying allow-popups", () => {
+    const s = artifactSandbox({ allow_popup_escape: true });
+    expect(s).toContain("allow-popups");
+    expect(s).toContain("allow-popups-to-escape-sandbox");
+  });
+
+  test("popup escape stays off unless asked for", () => {
+    expect(artifactSandbox({ allow_popups: true })).not.toContain("escape-sandbox");
+    expect(artifactSandbox(BLOCKED_WIDGET_POLICY)).not.toContain("escape-sandbox");
+  });
+
+  /* allow-same-origin is the one flag no policy may ever grant: combined with
+     allow-scripts on a same-origin frame it lets the widget reach into
+     parent.document, read the session, and strip its own sandbox — which would
+     void the secure posture for every other project too. */
+  test("never grants allow-same-origin, whatever the policy says", () => {
+    for (const p of [
+      BLOCKED_WIDGET_POLICY,
+      { allow_popups: true },
+      { allow_popup_escape: true },
+      { allow_same_origin: true } as unknown as WidgetPolicy,
+    ]) {
+      expect(artifactSandbox(p)).not.toContain("allow-same-origin");
+    }
   });
 });
 

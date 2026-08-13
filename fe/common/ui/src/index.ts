@@ -8,6 +8,20 @@ export { default as NumberInput } from "./NumberInput.svelte";
 export { default as TextArea } from "./TextArea.svelte";
 export { default as LabeledInput } from "./LabeledInput.svelte";
 export { default as Modal } from "./Modal.svelte";
+export { default as ScheduleEditModal } from "./ScheduleEditModal.svelte";
+export type {
+  EditableSchedule,
+  SchedulePatchInput,
+  ScheduleProjectOption,
+  ScheduleSessionMode,
+} from "./schedule-edit-types.js";
+export {
+  formatScheduleTime,
+  isLegalSessionID,
+  isProjectScopedSchedule,
+  renderSessionTemplate,
+  scheduleCadence,
+} from "./schedule-edit-types.js";
 export { default as Breadcrumb } from "./Breadcrumb.svelte";
 export type { BreadcrumbItem } from "./Breadcrumb.svelte";
 export { default as KebabMenu } from "./KebabMenu.svelte";

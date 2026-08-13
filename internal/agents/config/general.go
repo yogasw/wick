@@ -38,7 +38,10 @@ type GeneralConfig struct {
 	WidgetConnectSrc  string `wick:"dropdown=block|list|all;group=Widget;desc=CUSTOM ONLY. fetch, XHR, and WebSocket from inside a widget. Anything permitted here can also send data out to that host."`
 	WidgetScriptSrc   string `wick:"dropdown=block|list|all;group=Widget;desc=CUSTOM ONLY. Scripts loaded from another host. A permitted script runs inside the widget and can read everything the widget holds, so pair it with a narrow allowlist. The widget's own inline scripts always run either way."`
 	WidgetAllowPopups bool   `wick:"bool;group=Widget;desc=CUSTOM ONLY. Let widget links open a new tab (target=_blank and window.open). A new tab is not covered by this policy, so it can reach any host regardless of the allowlist."`
-	WidgetAllowlist   string `wick:"textarea;group=Widget;desc=CUSTOM ONLY. Hosts the 'list' settings above may reach — one per line, e.g. maps.google.com or *.example.com. https:// is assumed; plaintext http:// and paths are rejected. Projects append their own hosts to this list."`
+
+	WidgetAllowPopupEscape bool `wick:"bool;group=Widget;desc=CUSTOM ONLY. Give the new tab a real origin instead of the sandboxed 'null' one it inherits by default. Without this, many sites load visibly broken in the new tab: they see Origin: null, so their own requests fail their CORS check. The trade-off is that the escaped tab runs outside this policy altogether. Implies the setting above."`
+
+	WidgetAllowlist string `wick:"textarea;group=Widget;desc=CUSTOM ONLY. Hosts the 'list' settings above may reach — one per line, e.g. maps.google.com or *.example.com. https:// is assumed; plaintext http:// and paths are rejected. Projects append their own hosts to this list."`
 
 	// Sub-agent governor. These are SYSTEM-WIDE CEILINGS, not per-role
 	// defaults: an agent profile can lower them but never raise them.
@@ -110,7 +113,8 @@ func DefaultGeneralConfig() GeneralConfig {
 		WidgetMediaSrc:    ModeBlock,
 		WidgetConnectSrc:  ModeBlock,
 		WidgetScriptSrc:   ModeBlock,
-		WidgetAllowPopups: false,
+		WidgetAllowPopups:      false,
+		WidgetAllowPopupEscape: false,
 		// Sub-agents ship OFF: delegation spawns real processes and spends
 		// real tokens, so it is opt-in rather than something a fresh
 		// install discovers by surprise. The ceilings below apply the
