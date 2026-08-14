@@ -30,6 +30,7 @@ function makeConfig(): WickConfig {
         TopP: null,
         ThinkingBudget: null,
         RawConfig: "",
+        Headers: "",
         LiveSet: false,
         DiscoveryFilter: "",
         DefaultVendorModel: "",
@@ -50,6 +51,7 @@ function makeConfig(): WickConfig {
         TopP: null,
         ThinkingBudget: null,
         RawConfig: "",
+        Headers: "User-Agent: RooCode/3.53.0",
         LiveSet: false,
         DiscoveryFilter: "",
         DefaultVendorModel: "",
@@ -238,5 +240,130 @@ describe("WickDetail", () => {
     expect(await screen.findByText("Edit custom model")).toBeTruthy();
     const nameInput = screen.getByLabelText("Display name (optional)") as HTMLInputElement;
     expect(nameInput.value).toBe("Gemini Flash");
+  });
+
+  // Advanced options, Raw model config and Custom headers are ALL collapsed
+  // on open — even when editing a model that has values stored in them. The
+  // user expands only what they came to change.
+  it("keeps Advanced options and both escape hatches collapsed on open", async () => {
+    render(WickDetail, { props: props() });
+    await screen.findByText("x-ai/grok-4.5");
+    // m_2 carries a stored header blob — it must still open collapsed.
+    const kebabBtns = screen.getAllByLabelText(/Actions for/);
+    await fireEvent.click(kebabBtns[1]);
+    await fireEvent.click(await screen.findByText("Edit"));
+    await screen.findByText("Edit custom model");
+    expect(screen.queryByLabelText(/Custom headers/)).toBeNull();
+    expect(screen.queryByLabelText(/Raw model config/)).toBeNull();
+
+    // Expanding Advanced reveals the two sub-toggles, still collapsed.
+    await fireEvent.click(screen.getByText("Advanced options"));
+    expect(screen.queryByLabelText(/Custom headers/)).toBeNull();
+    expect(screen.queryByLabelText(/Raw model config/)).toBeNull();
+    expect(screen.getByText(/Custom headers/)).toBeTruthy();
+    expect(screen.getByText(/Raw model config/)).toBeTruthy();
+  });
+
+  it("prefills stored custom headers once the section is expanded", async () => {
+    render(WickDetail, { props: props() });
+    await screen.findByText("x-ai/grok-4.5");
+    // m_2 is the second row and carries a stored header blob.
+    const kebabBtns = screen.getAllByLabelText(/Actions for/);
+    await fireEvent.click(kebabBtns[1]);
+    await fireEvent.click(await screen.findByText("Edit"));
+    await screen.findByText("Edit custom model");
+    await fireEvent.click(screen.getByText("Advanced options"));
+    await fireEvent.click(screen.getByText(/Custom headers/));
+    const headersInput = screen.getByLabelText(/Custom headers/) as HTMLTextAreaElement;
+    expect(headersInput.value).toBe("User-Agent: RooCode/3.53.0");
+  });
+
+  // Typing headers must re-run discovery the same way typing an API key or
+  // base URL does — a gateway that needs the header to serve /models can
+  // only list once it's set, and that has to work before saving the model.
+  it("re-runs model discovery when custom headers change", async () => {
+    vi.useFakeTimers();
+    try {
+      render(WickDetail, { props: props() });
+      await vi.advanceTimersByTimeAsync(0);
+      await fireEvent.click(screen.getByText("Add model"));
+      await fireEvent.input(screen.getByLabelText("API key"), { target: { value: "sk-test" } });
+      await vi.advanceTimersByTimeAsync(400);
+
+      await fireEvent.click(screen.getByText("Advanced options"));
+      await fireEvent.click(screen.getByText(/Custom headers/));
+      vi.mocked(api.apiDiscoverWickModels).mockClear();
+      await fireEvent.input(screen.getByLabelText(/Custom headers/), {
+        target: { value: "X-Org-Id: abc123" },
+      });
+      await vi.advanceTimersByTimeAsync(400);
+
+      expect(api.apiDiscoverWickModels).toHaveBeenCalledWith(
+        "/wick",
+        expect.objectContaining({ headers: "X-Org-Id: abc123", api_key: "sk-test" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Re-discovery must not blank the list: swapping the rows for a
+  // "Discovering models…" placeholder on every keystroke makes the picker
+  // flicker. Keep the previous results on screen until the new ones land.
+  it("keeps the model list visible while re-discovering", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(api.apiDiscoverWickModels).mockResolvedValue({
+        models: [{ id: "gpt-5.2", label: "GPT 5.2" }],
+        error: "",
+      });
+      render(WickDetail, { props: props() });
+      await vi.advanceTimersByTimeAsync(0);
+      await fireEvent.click(screen.getByText("Add model"));
+      await fireEvent.input(screen.getByLabelText("API key"), { target: { value: "sk-test" } });
+      await vi.advanceTimersByTimeAsync(400);
+      expect(screen.getByText("gpt-5.2")).toBeTruthy();
+
+      // Never resolves — the refetch stays in flight so we can observe the
+      // list mid-discovery.
+      vi.mocked(api.apiDiscoverWickModels).mockReturnValue(new Promise(() => {}));
+      await fireEvent.click(screen.getByText("Advanced options"));
+      await fireEvent.click(screen.getByText(/Custom headers/));
+      await fireEvent.input(screen.getByLabelText(/Custom headers/), {
+        target: { value: "X-Org-Id: abc123" },
+      });
+      await vi.advanceTimersByTimeAsync(400);
+
+      // Rows survive the in-flight refetch; only a subtle marker appears.
+      expect(screen.getByText("gpt-5.2")).toBeTruthy();
+      expect(screen.queryByText("Discovering models…")).toBeNull();
+      expect(screen.getByText("Refreshing…")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("saves custom headers, normalizing a pasted curl block", async () => {
+    render(WickDetail, { props: props() });
+    await screen.findByText("gemini-flash-latest");
+    await fireEvent.click(screen.getByText("Add model"));
+    await screen.findByText("Add custom model");
+    await fireEvent.input(screen.getByLabelText("Model ID"), { target: { value: "gpt-5.2" } });
+    // Headers live under Advanced options → Custom headers, both collapsed.
+    await fireEvent.click(screen.getByText("Advanced options"));
+    await fireEvent.click(screen.getByText(/Custom headers/));
+    await fireEvent.input(screen.getByLabelText(/Custom headers/), {
+      target: {
+        value: "--header 'X-Stainless-OS: Linux' \\\n--header 'User-Agent: RooCode/3.53.0' \\",
+      },
+    });
+    vi.mocked(api.apiSaveWickModel).mockClear();
+    // "Add model" is both the page button and the modal's submit — the
+    // modal footer is the last match once the modal is open.
+    await fireEvent.click(screen.getAllByText("Add model").at(-1)!);
+    expect(api.apiSaveWickModel).toHaveBeenCalledWith(
+      "/wick",
+      expect.objectContaining({ headers: "X-Stainless-OS: Linux\nUser-Agent: RooCode/3.53.0" }),
+    );
   });
 });

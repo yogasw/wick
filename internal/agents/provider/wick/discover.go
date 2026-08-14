@@ -87,12 +87,17 @@ const discoverTTL = 5 * time.Minute
 // anthropic | openrouter; "other" and any unknown kind returns an empty
 // list (manual model id). baseURL overrides the default endpoint.
 //
+// rawHeaders is the model's custom-header blob (see headers.go), applied
+// over the vendor auth headers — a gateway that needs a custom header to
+// serve /chat/completions generally needs the same one to serve /models.
+//
 // Results are cached in-memory for discoverTTL keyed by (kind, baseURL,
-// key fingerprint) so the picker's live filter is free after the first
-// fetch.
-func DiscoverModels(ctx context.Context, kind, apiKey, baseURL string) ([]DiscoveredModel, error) {
+// key fingerprint, headers) so the picker's live filter is free after the
+// first fetch.
+func DiscoverModels(ctx context.Context, kind, apiKey, baseURL, rawHeaders string) ([]DiscoveredModel, error) {
 	kind = strings.ToLower(strings.TrimSpace(kind))
-	cacheKey := kind + "|" + baseURL + "|" + fingerprint(apiKey)
+	custom := ParseHeaders(rawHeaders)
+	cacheKey := kind + "|" + baseURL + "|" + fingerprint(apiKey) + "|" + fingerprint(rawHeaders)
 
 	discoverMu.Lock()
 	if e, ok := discoverCache[cacheKey]; ok && time.Since(e.at) < discoverTTL {
@@ -101,7 +106,7 @@ func DiscoverModels(ctx context.Context, kind, apiKey, baseURL string) ([]Discov
 	}
 	discoverMu.Unlock()
 
-	models, err := fetchModels(ctx, kind, apiKey, baseURL)
+	models, err := fetchModels(ctx, kind, apiKey, baseURL, custom)
 	if err != nil {
 		return nil, err
 	}
@@ -113,23 +118,23 @@ func DiscoverModels(ctx context.Context, kind, apiKey, baseURL string) ([]Discov
 	return models, nil
 }
 
-func fetchModels(ctx context.Context, kind, apiKey, baseURL string) ([]DiscoveredModel, error) {
+func fetchModels(ctx context.Context, kind, apiKey, baseURL string, custom map[string]string) ([]DiscoveredModel, error) {
 	switch kind {
 	case "google", "gemini":
-		return fetchGoogleModels(ctx, apiKey, baseURL)
+		return fetchGoogleModels(ctx, apiKey, baseURL, custom)
 	case "openai":
-		return fetchOpenAIModels(ctx, apiKey, orDefault(baseURL, "https://api.openai.com/v1"))
+		return fetchOpenAIModels(ctx, apiKey, orDefault(baseURL, "https://api.openai.com/v1"), custom)
 	case "openrouter":
-		return fetchOpenAIModels(ctx, apiKey, orDefault(baseURL, "https://openrouter.ai/api/v1"))
+		return fetchOpenAIModels(ctx, apiKey, orDefault(baseURL, "https://openrouter.ai/api/v1"), custom)
 	case "anthropic", "claude":
-		return fetchAnthropicModels(ctx, apiKey, orDefault(baseURL, "https://api.anthropic.com/v1"))
+		return fetchAnthropicModels(ctx, apiKey, orDefault(baseURL, "https://api.anthropic.com/v1"), custom)
 	default:
 		// "other" and unknown kinds have no discovery — manual entry.
 		return []DiscoveredModel{}, nil
 	}
 }
 
-func fetchGoogleModels(ctx context.Context, apiKey, baseURL string) ([]DiscoveredModel, error) {
+func fetchGoogleModels(ctx context.Context, apiKey, baseURL string, custom map[string]string) ([]DiscoveredModel, error) {
 	base := orDefault(strings.TrimRight(baseURL, "/"), "https://generativelanguage.googleapis.com")
 	var resp struct {
 		Models []struct {
@@ -138,7 +143,7 @@ func fetchGoogleModels(ctx context.Context, apiKey, baseURL string) ([]Discovere
 		} `json:"models"`
 	}
 	url := base + "/v1beta/models?key=" + apiKey + "&pageSize=1000"
-	if err := getJSON(ctx, url, nil, &resp); err != nil {
+	if err := getJSON(ctx, url, custom, &resp); err != nil {
 		return nil, err
 	}
 	out := make([]DiscoveredModel, 0, len(resp.Models))
@@ -149,7 +154,7 @@ func fetchGoogleModels(ctx context.Context, apiKey, baseURL string) ([]Discovere
 	return out, nil
 }
 
-func fetchOpenAIModels(ctx context.Context, apiKey, baseURL string) ([]DiscoveredModel, error) {
+func fetchOpenAIModels(ctx context.Context, apiKey, baseURL string, custom map[string]string) ([]DiscoveredModel, error) {
 	var resp struct {
 		Data []struct {
 			ID string `json:"id"`
@@ -159,6 +164,9 @@ func fetchOpenAIModels(ctx context.Context, apiKey, baseURL string) ([]Discovere
 		} `json:"data"`
 	}
 	headers := map[string]string{"Authorization": "Bearer " + apiKey}
+	for k, v := range custom {
+		headers[k] = v
+	}
 	if err := getJSON(ctx, strings.TrimRight(baseURL, "/")+"/models", headers, &resp); err != nil {
 		return nil, err
 	}
@@ -169,7 +177,7 @@ func fetchOpenAIModels(ctx context.Context, apiKey, baseURL string) ([]Discovere
 	return out, nil
 }
 
-func fetchAnthropicModels(ctx context.Context, apiKey, baseURL string) ([]DiscoveredModel, error) {
+func fetchAnthropicModels(ctx context.Context, apiKey, baseURL string, custom map[string]string) ([]DiscoveredModel, error) {
 	var resp struct {
 		Data []struct {
 			ID          string `json:"id"`
@@ -177,6 +185,9 @@ func fetchAnthropicModels(ctx context.Context, apiKey, baseURL string) ([]Discov
 		} `json:"data"`
 	}
 	headers := map[string]string{"x-api-key": apiKey, "anthropic-version": anthropicVersion}
+	for k, v := range custom {
+		headers[k] = v
+	}
 	if err := getJSON(ctx, strings.TrimRight(baseURL, "/")+"/models?limit=1000", headers, &resp); err != nil {
 		return nil, err
 	}

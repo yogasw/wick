@@ -149,6 +149,9 @@ type WickModel struct {
 	Disabled        bool
 	GenConfig       *WickGenConfig
 	RawConfig       string
+	// Headers is per-model custom HTTP headers, one per line (see
+	// userconfig.WickModel.Headers). Parsed + applied by the wick adapters.
+	Headers string
 	// LiveSet marks a LIVE model set (see userconfig.WickModel.LiveSet).
 	// Independent of DiscoveryFilter so a live set can have an empty filter.
 	LiveSet bool
@@ -977,6 +980,7 @@ func wickModelsFromUser(in []userconfig.WickModel) []WickModel {
 			Disabled:           m.Disabled,
 			GenConfig:          wickGenFromUser(m.GenConfig),
 			RawConfig:          m.RawConfig,
+			Headers:            m.Headers,
 			LiveSet:            m.LiveSet,
 			DiscoveryFilter:    m.DiscoveryFilter,
 			DefaultVendorModel: m.DefaultVendorModel,
@@ -1011,6 +1015,7 @@ func wickModelsToUser(in []WickModel) []userconfig.WickModel {
 			Disabled:           m.Disabled,
 			GenConfig:          wickGenToUser(m.GenConfig),
 			RawConfig:          m.RawConfig,
+			Headers:            m.Headers,
 			LiveSet:            m.LiveSet,
 			DiscoveryFilter:    m.DiscoveryFilter,
 			DefaultVendorModel: m.DefaultVendorModel,
