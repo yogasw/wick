@@ -24,6 +24,9 @@ type anthropicModel struct {
 	modelID string
 	apiKey  string
 	baseURL string
+	// custom holds the model's parsed custom headers, applied over the
+	// auth + version headers on every call. See headers.go.
+	custom map[string]string
 }
 
 func newAnthropicModel(m provider.WickModel) *anthropicModel {
@@ -31,7 +34,7 @@ func newAnthropicModel(m provider.WickModel) *anthropicModel {
 	if base == "" {
 		base = defaultBaseURL(strings.ToLower(m.Kind), "anthropic_messages")
 	}
-	return &anthropicModel{modelID: m.Model, apiKey: m.APIKey, baseURL: base}
+	return &anthropicModel{modelID: m.Model, apiKey: m.APIKey, baseURL: base, custom: ParseHeaders(m.Headers)}
 }
 
 func (m *anthropicModel) Name() string { return m.modelID }
@@ -42,12 +45,8 @@ func (m *anthropicModel) GenerateContent(ctx context.Context, req *LLMRequest, s
 	}
 	return func(yield func(*LLMResponse, error) bool) {
 		body := m.buildRequest(req)
-		headers := map[string]string{
-			"x-api-key":         m.apiKey,
-			"anthropic-version": anthropicVersion,
-		}
 		var resp antResponse
-		if err := postJSON(ctx, m.baseURL+"/messages", headers, body, &resp); err != nil {
+		if err := postJSON(ctx, m.baseURL+"/messages", m.headers(), body, &resp); err != nil {
 			yield(nil, err)
 			return
 		}
@@ -55,11 +54,17 @@ func (m *anthropicModel) GenerateContent(ctx context.Context, req *LLMRequest, s
 	}
 }
 
+// headers builds the request headers: vendor auth + version first, then
+// the user's custom headers, which may override either.
 func (m *anthropicModel) headers() map[string]string {
-	return map[string]string{
+	h := map[string]string{
 		"x-api-key":         m.apiKey,
 		"anthropic-version": anthropicVersion,
 	}
+	for k, v := range m.custom {
+		h[k] = v
+	}
+	return h
 }
 
 // generateStream runs the Anthropic SSE (stream:true) path. It emits text and

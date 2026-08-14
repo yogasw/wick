@@ -473,6 +473,9 @@ type wickModelDTO struct {
 	ThinkingBudget  *int     `json:"thinking_budget,omitempty"`
 	ReasoningEffort string   `json:"reasoning_effort,omitempty"`
 	RawConfig       string   `json:"raw_config,omitempty"`
+	// Headers is the custom HTTP header blob, one per line. Accepts pasted
+	// curl `--header '...'` fragments. See userconfig.WickModel.Headers.
+	Headers string `json:"headers,omitempty"`
 	// LiveSet marks this a live model set (Model may be empty; filter is
 	// optional). See userconfig.WickModel.LiveSet.
 	LiveSet bool `json:"live_set,omitempty"`
@@ -528,6 +531,7 @@ type wickModelView struct {
 	ThinkingBudget     *int     `json:"thinking_budget,omitempty"`
 	ReasoningEffort    string   `json:"reasoning_effort,omitempty"`
 	RawConfig          string   `json:"raw_config"`
+	Headers            string   `json:"headers"`
 	LiveSet            bool     `json:"live_set,omitempty"`
 	DiscoveryFilter    string   `json:"discovery_filter,omitempty"`
 	DefaultVendorModel string   `json:"default_vendor_model,omitempty"`
@@ -560,6 +564,7 @@ func getWickConfig(c *tool.Ctx) {
 			Default:            m.Default,
 			Disabled:           m.Disabled,
 			RawConfig:          m.RawConfig,
+			Headers:            m.Headers,
 			LiveSet:            m.LiveSet,
 			DiscoveryFilter:    m.DiscoveryFilter,
 			DefaultVendorModel: m.DefaultVendorModel,
@@ -668,6 +673,7 @@ func saveWickModel(c *tool.Ctx) {
 		Default:         dto.Default && !dto.Disabled,
 		Disabled:        dto.Disabled,
 		RawConfig:       strings.TrimSpace(dto.RawConfig),
+		Headers:         strings.TrimSpace(dto.Headers),
 		LiveSet:         dto.LiveSet,
 		DiscoveryFilter: dto.DiscoveryFilter,
 	}
@@ -1078,9 +1084,13 @@ func discoverWickModels(c *tool.Ctx) {
 		return
 	}
 	var body struct {
-		Kind     string `json:"kind"`
-		APIKey   string `json:"api_key"`
-		BaseURL  string `json:"base_url"`
+		Kind    string `json:"kind"`
+		APIKey  string `json:"api_key"`
+		BaseURL string `json:"base_url"`
+		// Headers carries the custom headers currently typed into the
+		// Add/Edit form, so "list models" works against a gateway that
+		// needs them before the model row has been saved.
+		Headers  string `json:"headers"`
 		ModelRef string `json:"model_ref"`
 	}
 	if err := c.BindJSON(&body); err != nil {
@@ -1096,7 +1106,7 @@ func discoverWickModels(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "api key required to list models"})
 		return
 	}
-	models, err := wick.DiscoverModels(c.Context(), body.Kind, key, strings.TrimSpace(body.BaseURL))
+	models, err := wick.DiscoverModels(c.Context(), body.Kind, key, strings.TrimSpace(body.BaseURL), body.Headers)
 	if err != nil {
 		// Non-fatal: the UI falls back to a free-text model id.
 		log.Ctx(c.Context()).Warn().Err(err).Str("kind", body.Kind).Msg("wick model discovery failed")
@@ -1193,7 +1203,7 @@ func discoverWickModel(ctx context.Context, m *provider.WickModel) ([]wick.Disco
 	if key == "" && strings.ToLower(m.Kind) != "other" {
 		return nil, fmt.Errorf("no stored key to list models")
 	}
-	return wick.DiscoverModels(ctx, m.Kind, key, strings.TrimSpace(m.BaseURL))
+	return wick.DiscoverModels(ctx, m.Kind, key, strings.TrimSpace(m.BaseURL), m.Headers)
 }
 
 // storedWickKey returns the decrypted API key for a stored model id, or

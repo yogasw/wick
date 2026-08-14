@@ -1030,6 +1030,9 @@ export interface WickModelDTO {
   TopP: number | null;
   ThinkingBudget: number | null;
   RawConfig: string;
+  /** Custom HTTP headers sent with every call for this model, one per line
+      ("Key: Value"). Applied over the vendor defaults, auth included. */
+  Headers: string;
   /** True → a live model set: the picker expands to the vendor's models
       (optionally narrowed by DiscoveryFilter) rather than one pinned model. */
   LiveSet: boolean;
@@ -1079,6 +1082,7 @@ interface WireWickModel {
   top_p?: number | null;
   thinking_budget?: number | null;
   raw_config?: string;
+  headers?: string;
   live_set?: boolean;
   discovery_filter?: string;
   default_vendor_model?: string;
@@ -1119,6 +1123,7 @@ function mapWickModel(w: WireWickModel): WickModelDTO {
     TopP: w.top_p ?? null,
     ThinkingBudget: w.thinking_budget ?? null,
     RawConfig: w.raw_config ?? "",
+    Headers: w.headers ?? "",
     LiveSet: w.live_set ?? false,
     DiscoveryFilter: w.discovery_filter ?? "",
     DefaultVendorModel: w.default_vendor_model ?? "",
@@ -1177,6 +1182,9 @@ export type WickModelInput = {
   top_p?: number;
   thinking_budget?: number;
   raw_config?: string;
+  /** Custom HTTP headers, one per line ("Key: Value"). Pasted curl
+      `--header '...'` fragments are accepted — the BE parses them. */
+  headers?: string;
   /** Mark this a live model set; `model` may be empty and the filter optional. */
   live_set?: boolean;
   /** Optional filter narrowing a live set (empty = all vendor models). */
@@ -1264,7 +1272,10 @@ export async function apiGetWickLiveSetModels(
     .filter((m) => m.id !== "");
 }
 
-export type WickDiscoverInput = { kind: string; api_key?: string; base_url?: string; model_ref?: string };
+// headers carries the custom headers currently typed into the Add/Edit form
+// so listing works against a gateway that requires them, before the model
+// row exists server-side.
+export type WickDiscoverInput = { kind: string; api_key?: string; base_url?: string; headers?: string; model_ref?: string };
 // WickModelCaps is the shared ModelCaps type (vendor's raw "capabilities"
 // object). Re-exported from common-ui so there's ONE definition — the chips /
 // detail modal + this SPA all use the same shape (dedup rule).
