@@ -10,6 +10,25 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.38.6](https://github.com/yogasw/wick/compare/v0.38.5...v0.38.6) — Wick
+
+_Released on 2026-08-14_
+
+### Added
+*   **Per-model Custom HTTP Headers for Wick Provider:**
+    *   Introduced a new `Headers` field for Wick models, allowing users to define custom HTTP headers for their requests.
+    *   These custom headers are applied *last* over the adapter's own headers (including authentication), enabling use cases such as custom proxy authentication schemes or explicit control over client fingerprints like `User-Agent`.
+    *   The parsing is lenient, accepting formats like `curl`'s `--header 'K: V'` or simple "K: V" lines.
+    *   Model discovery now incorporates these headers, ensuring that gateways requiring specific headers for `/models` endpoints function correctly. The model picker re-fetches listings as headers are typed, allowing models to be discovered before saving.
+    *   The "Copy as cURL" feature now merges custom headers, ensuring that the generated command accurately reflects what Wick sends.
+    *   Advanced options sections, including raw config and custom headers, now open collapsed by default, with a badge indicating when a section holds a value.
+
+### Documentation
+*   Added documentation for the new Custom headers field, detailing its last-wins-over-auth semantics and its effects on model discovery and copy-as-curl.
+
+---
+
+
 ## [v0.38.5](https://github.com/yogasw/wick/compare/v0.38.4...v0.38.5) — Agents & Widgets
 
 _Released on 2026-08-13_
