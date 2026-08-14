@@ -59,6 +59,7 @@ function makeWireConfig() {
         top_p: 0.9,
         thinking_budget: 0,
         raw_config: "{}",
+        headers: "User-Agent: RooCode/3.53.0\nX-Stainless-OS: Linux",
       },
     ],
     settings: {
@@ -92,6 +93,9 @@ describe("apiGetWickConfig", () => {
     expect(cfg.settings.MaxContextTokens).toBe(128000);
     expect(cfg.settings.ThinkingBudget).toBe(2048);
     expect(cfg.settings.RawConfig).toBe("{\"x\":1}");
+    // Custom headers are per-model; a model with none maps to "".
+    expect(cfg.models[0].Headers).toBe("");
+    expect(cfg.models[1].Headers).toBe("User-Agent: RooCode/3.53.0\nX-Stainless-OS: Linux");
     const url = (vi.mocked(fetch) as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(url).toBe("/wick/providers/wick/config");
   });
@@ -150,6 +154,18 @@ describe("apiSaveWickModel", () => {
     const body = JSON.parse(init.body as string);
     expect(body.id).toBe("m_1");
     expect("api_key" in body).toBe(false);
+  });
+
+  it("sends custom headers through", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okJson({ status: "ok", id: "m_1" }));
+    vi.stubGlobal("fetch", fetchMock);
+    await apiSaveWickModel("", {
+      kind: "openai",
+      model: "gpt-5.2",
+      headers: "User-Agent: RooCode/3.53.0",
+    });
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(init.body as string).headers).toBe("User-Agent: RooCode/3.53.0");
   });
 });
 
@@ -218,6 +234,16 @@ describe("apiDiscoverWickModels", () => {
     const r = await apiDiscoverWickModels("", { kind: "anthropic", model_ref: "m_1" });
     expect(r.error).toBe("invalid key");
     expect(r.models).toEqual([]);
+  });
+
+  // A gateway that needs a custom header to serve /chat/completions generally
+  // needs it to serve /models too — so the in-progress form value rides along.
+  it("forwards custom headers so listing works before the model is saved", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okJson({ models: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    await apiDiscoverWickModels("", { kind: "openai", api_key: "sk-x", headers: "X-Org-Id: abc123" });
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(init.body as string).headers).toBe("X-Org-Id: abc123");
   });
 });
 

@@ -10,12 +10,32 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.38.6](https://github.com/yogasw/wick/compare/v0.38.5...v0.38.6) — Wick
+
+_Released on 2026-08-14_
+
+### Added
+*   **Per-model Custom HTTP Headers for Wick Provider:**
+    *   Introduced a new `Headers` field for Wick models, allowing users to define custom HTTP headers for their requests.
+    *   These custom headers are applied *last* over the adapter's own headers (including authentication), enabling use cases such as custom proxy authentication schemes or explicit control over client fingerprints like `User-Agent`.
+    *   The parsing is lenient, accepting formats like `curl`'s `--header 'K: V'` or simple "K: V" lines.
+    *   Model discovery now incorporates these headers, ensuring that gateways requiring specific headers for `/models` endpoints function correctly. The model picker re-fetches listings as headers are typed, allowing models to be discovered before saving.
+    *   The "Copy as cURL" feature now merges custom headers, ensuring that the generated command accurately reflects what Wick sends.
+    *   Advanced options sections, including raw config and custom headers, now open collapsed by default, with a badge indicating when a section holds a value.
+
+### Documentation
+*   Added documentation for the new Custom headers field, detailing its last-wins-over-auth semantics and its effects on model discovery and copy-as-curl.
+
+---
+
+
 ## [v0.38.5](https://github.com/yogasw/wick/compare/v0.38.4...v0.38.5) — Agents & Widgets
 
 _Released on 2026-08-13_
 
 ### Agents
 #### Added
+*   **Per-model custom HTTP headers on the built-in `wick` provider**: each `wick` model's Advanced options now has a **Custom headers** field — one `Key: Value` per line, or a pasted `curl --header` fragment (flags/quotes/continuations are cleaned up automatically). Headers apply last, overriding even the adapter's own auth headers (`Authorization` / `x-api-key` / `anthropic-version`), so a fronting proxy can use its own auth scheme or spoof `User-Agent`. Also honored by model discovery and the "copy as curl" reproduction. See [Custom HTTP headers](/guide/agents/providers#custom-http-headers).
 *   **Scheduled messages can be project-scoped**: a schedule no longer has to nudge one pre-existing session. Pass `project_id` instead of `session_id` and each fire opens its own session in that project, so a recurring job starts from clean context every run — the natural shape for "every Monday 9am, write the weekly report". A new `session_mode` picks how the target is resolved per fire: `existing` (the previous behavior, still the default with `session_id`), `new` (generated session per fire, the default with `project_id`), or `template` (session named by rendering `session_template` against the fire time — `daily-{date}` — so fires within the same day share one session). Available on `wick_schedule_message`, a session's **Scheduled** tab, and the **Scheduled** page. See [Scope: where a fire lands](/guide/agents/scheduled-messages#scope-where-a-fire-lands).
 *   **Scheduled page: scope filter + click-through detail/edit**: `/tools/agents/scheduled` gained a scope selector (All scopes / Project jobs / Session nudges), a **Project jobs** stat tile, and grouping by project for project-scoped rows (with a link to the session the last run landed in). Clicking any row opens a detail dialog showing status, cadence, next/last run, provenance and the last error — and, for a live schedule, editing its timing, message, max runs, and (for a project job) its project and session mode, with a live preview of the resulting session name. The same dialog is available from a session's **Scheduled** tab.
 *   **`run_now`: fire a schedule immediately**: new `action=run_now` on `wick_schedule_message`, and a **Run now** action on live rows in both UIs. It makes the schedule due and pokes the runner so the fire lands in seconds instead of at the next poll — the practical way to test a schedule instead of waiting for the clock. The schedule's definition is untouched: a recurring job advances from this fire exactly as from a natural one, and a paused schedule is resumed by the call. See [Testing a schedule](/guide/agents/scheduled-messages#testing-a-schedule-run-now).

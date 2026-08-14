@@ -267,7 +267,7 @@ func resolveLiveSetFallback(ctx context.Context, inst *provider.Instance) (provi
 		if strings.TrimSpace(entry.APIKey) == "" && strings.ToLower(strings.TrimSpace(entry.Kind)) != "other" {
 			continue
 		}
-		live, err := DiscoverModels(ctx, entry.Kind, entry.APIKey, strings.TrimSpace(entry.BaseURL))
+		live, err := DiscoverModels(ctx, entry.Kind, entry.APIKey, strings.TrimSpace(entry.BaseURL), entry.Headers)
 		if err != nil {
 			log.Debug().Err(err).Str("entry", entry.ID).
 				Msg("wick.spawn: live-set discovery failed while looking for a fallback model")

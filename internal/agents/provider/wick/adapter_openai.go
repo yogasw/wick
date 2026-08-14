@@ -20,6 +20,9 @@ type openAIModel struct {
 	modelID string
 	apiKey  string
 	baseURL string
+	// custom holds the model's parsed custom headers, applied over the
+	// auth header on every call. See headers.go.
+	custom map[string]string
 }
 
 func newOpenAIModel(m provider.WickModel) *openAIModel {
@@ -27,10 +30,20 @@ func newOpenAIModel(m provider.WickModel) *openAIModel {
 	if base == "" {
 		base = defaultBaseURL(strings.ToLower(m.Kind), "openai_chat")
 	}
-	return &openAIModel{modelID: m.Model, apiKey: m.APIKey, baseURL: base}
+	return &openAIModel{modelID: m.Model, apiKey: m.APIKey, baseURL: base, custom: ParseHeaders(m.Headers)}
 }
 
 func (m *openAIModel) Name() string { return m.modelID }
+
+// headers builds the request headers: auth first, then the user's custom
+// headers, which may override it.
+func (m *openAIModel) headers() map[string]string {
+	h := map[string]string{"Authorization": "Bearer " + m.apiKey}
+	for k, v := range m.custom {
+		h[k] = v
+	}
+	return h
+}
 
 func (m *openAIModel) GenerateContent(ctx context.Context, req *LLMRequest, stream bool) iter.Seq2[*LLMResponse, error] {
 	if stream {
@@ -39,8 +52,7 @@ func (m *openAIModel) GenerateContent(ctx context.Context, req *LLMRequest, stre
 	return func(yield func(*LLMResponse, error) bool) {
 		body := m.buildRequest(req)
 		var resp oaiResponse
-		headers := map[string]string{"Authorization": "Bearer " + m.apiKey}
-		if err := postJSON(ctx, m.baseURL+"/chat/completions", headers, body, &resp); err != nil {
+		if err := postJSON(ctx, m.baseURL+"/chat/completions", m.headers(), body, &resp); err != nil {
 			yield(nil, err)
 			return
 		}
@@ -58,11 +70,10 @@ func (m *openAIModel) generateStream(ctx context.Context, req *LLMRequest) iter.
 		body := m.buildRequest(req)
 		body.Stream = true
 		body.StreamOptions = &oaiStreamOptions{IncludeUsage: true}
-		headers := map[string]string{"Authorization": "Bearer " + m.apiKey}
 
 		agg := &oaiStreamAggregator{}
 		yieldErr := false
-		err := postSSE(ctx, m.baseURL+"/chat/completions", headers, body, func(ev sseEvent) bool {
+		err := postSSE(ctx, m.baseURL+"/chat/completions", m.headers(), body, func(ev sseEvent) bool {
 			if strings.TrimSpace(ev.Data) == "[DONE]" {
 				return false
 			}

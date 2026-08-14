@@ -225,7 +225,7 @@ describe("ProvidersList - wick built-in card", () => {
     vi.mocked(api.apiGetProviders).mockResolvedValue(withWick());
     vi.mocked(api.apiGetWickConfig).mockResolvedValue({
       models: [
-        { ID: "m_1", Kind: "google", Label: "Gemini Flash", Model: "gemini-flash-latest", KeyMasked: "••", HasKey: true, BaseURL: "", APIFormat: "gemini", MaxOutputTokens: 0, Default: true, Disabled: false, Temperature: null, TopP: null, ThinkingBudget: null, RawConfig: "", LiveSet: false, DiscoveryFilter: "", DefaultVendorModel: "" },
+        { ID: "m_1", Kind: "google", Label: "Gemini Flash", Model: "gemini-flash-latest", KeyMasked: "••", HasKey: true, BaseURL: "", APIFormat: "gemini", MaxOutputTokens: 0, Default: true, Disabled: false, Temperature: null, TopP: null, ThinkingBudget: null, RawConfig: "", Headers: "", LiveSet: false, DiscoveryFilter: "", DefaultVendorModel: "" },
       ],
       settings: { ShellToolDisabled: false, ShowCapabilities: true, EnableStreaming: true, CapabilityMode: "icon", Connectors: [], MaxContextTokens: 0, MaxTurns: 0, MaxConsecErrors: 0, MaxTurnMinutes: 0, MaxModelRetries: 0, ModelCallTimeoutSec: 0, Temperature: null, TopP: null, ThinkingBudget: null, RawConfig: "" },
     });

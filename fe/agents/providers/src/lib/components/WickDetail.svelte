@@ -90,6 +90,38 @@
     return Number.isFinite(n) ? n : undefined;
   }
 
+  // normalizeHeaders turns whatever the user pasted into the canonical
+  // "Key: Value" per line form. The common paste is a curl fragment
+  // (`--header 'X: y' \`), so the flag, quotes and trailing continuation
+  // are stripped here — the user sees the cleaned-up result in the field
+  // instead of having to hand-edit it. The BE parses the same shapes, so
+  // this is cosmetic normalization, not validation: a line without a colon
+  // is left alone rather than silently dropped, so a typo stays visible.
+  function normalizeHeaders(raw: string): string {
+    return raw
+      .split("\n")
+      .map((line) => {
+        let s = line.trim().replace(/\\$/, "").trim();
+        if (s === "" || s.startsWith("#")) return s;
+        s = s.replace(/^(--header=|--header|-H=|-H)\s*/, "");
+        s = stripQuotes(s);
+        const i = s.indexOf(":");
+        if (i < 0) return s;
+        return `${s.slice(0, i).trim()}: ${stripQuotes(s.slice(i + 1).trim())}`;
+      })
+      .filter((line, idx, all) => line !== "" || (idx > 0 && idx < all.length - 1))
+      .join("\n")
+      .trim();
+  }
+
+  function stripQuotes(s: string): string {
+    const t = s.trim();
+    if (t.length >= 2 && ((t[0] === "'" && t.at(-1) === "'") || (t[0] === '"' && t.at(-1) === '"'))) {
+      return t.slice(1, -1);
+    }
+    return t;
+  }
+
   // ── Config state ────────────────────────────────────────────────────
   let models = $state<WickModelDTO[]>([]);
   let loading = $state(true);
@@ -188,7 +220,20 @@
   let mTemp = $state("");
   let mThinking = $state("");
   let mRaw = $state("");
+  let mHeaders = $state("");
+  // Advanced options and its two escape hatches all start collapsed — even
+  // when editing a model that HAS values stored in them. They're rarely-used
+  // power knobs; opening them by default buries the common fields.
   let advOpen = $state(false);
+  let rawOpen = $state(false);
+  let headersOpen = $state(false);
+  // Count of headers currently typed, shown on the collapsed toggle so a
+  // configured section is visible without expanding it.
+  let headerCount = $derived(
+    normalizeHeaders(mHeaders)
+      .split("\n")
+      .filter((l) => l.trim() !== "" && !l.trim().startsWith("#")).length,
+  );
   let savingModel = $state(false);
 
   // Placeholders/hints that track the selected provider (example key,
@@ -214,6 +259,12 @@
   let discovering = $state(false);
   let discoverErr = $state("");
   let discoverTimer: ReturnType<typeof setTimeout> | null = null;
+  // Monotonic id of the latest discovery run; a response whose id no longer
+  // matches is stale and gets dropped (see runDiscover).
+  let discoverRun = 0;
+  // Normalized header blob the last discovery ran with. Guards the redundant
+  // refetch on blur (typing already covered the change).
+  let lastDiscoverHeaders = "";
   let searchEl = $state<HTMLInputElement | undefined>();
 
   // Multi-select has two selection modes:
@@ -303,6 +354,12 @@
     // Need either a freshly typed key or an existing model to reuse the
     // stored key from. Otherwise there is nothing to authenticate with.
     if (!hasKey && ref === "") { discovered = []; discoverErr = ""; discovering = false; return; }
+    // Stamp this run so a slow earlier response can't overwrite a newer
+    // one's results (each keystroke can start a request; they may land out
+    // of order, which shows up as the list flipping between two states).
+    const run = ++discoverRun;
+    const headers = normalizeHeaders(mHeaders);
+    lastDiscoverHeaders = headers;
     discovering = true;
     discoverErr = "";
     try {
@@ -310,15 +367,21 @@
         kind: mKind,
         api_key: hasKey ? mKey.trim() : undefined,
         base_url: mBaseURL.trim() || undefined,
+        // A gateway that needs a custom header to answer /chat/completions
+        // usually needs it to answer /models too — send what's typed so the
+        // picker works before the model row is saved.
+        headers: headers || undefined,
         model_ref: !hasKey && ref !== "" ? ref : undefined,
       });
+      if (run !== discoverRun) return; // superseded by a newer run
       if (r.error) { discoverErr = r.error; discovered = []; }
       else { discovered = r.models; }
     } catch (e) {
+      if (run !== discoverRun) return;
       discoverErr = e instanceof Error ? e.message : "Discovery failed";
       discovered = [];
     } finally {
-      discovering = false;
+      if (run === discoverRun) discovering = false;
     }
   }
 
@@ -332,6 +395,21 @@
   function onBaseURLInput(v: string) {
     mBaseURL = v;
     scheduleDiscover();
+  }
+  // Custom headers feed discovery too: a gateway that demands a header to
+  // serve /chat/completions usually demands it for /models, so the list only
+  // populates once the header is typed — before the model row is saved.
+  function onHeadersInput(v: string) {
+    mHeaders = v;
+    scheduleDiscover();
+  }
+  // Blur tidies a pasted curl block into "Key: Value" lines. Only re-discover
+  // when that actually changed the effective headers — otherwise leaving the
+  // field would fire a redundant request whose result is identical.
+  function onHeadersBlur() {
+    const before = normalizeHeaders(mHeaders);
+    mHeaders = before;
+    if (before !== lastDiscoverHeaders) scheduleDiscover();
   }
   // defaultBaseURL returns the concrete endpoint for a known provider
   // (empty for "other" — the user must supply it).
@@ -412,12 +490,12 @@
     mKey = ""; mKeyTouched = false;
     mModel = ""; mLabel = "";
     mBaseURL = defaultBaseURL("openai"); mFormat = "";
-    mMaxOut = ""; mTemp = ""; mThinking = ""; mRaw = "";
-    advOpen = false;
+    mMaxOut = ""; mTemp = ""; mThinking = ""; mRaw = ""; mHeaders = "";
+    advOpen = false; rawOpen = false; headersOpen = false;
     modelSearch = "";
     multiSelect = false; clearOverrides();
     liveDefaultVendor = "";
-    discovered = []; discoverErr = ""; discovering = false;
+    discovered = []; discoverErr = ""; discovering = false; lastDiscoverHeaders = "";
     modalOpen = true;
   }
 
@@ -433,7 +511,8 @@
     mTemp = m.Temperature != null ? String(m.Temperature) : "";
     mThinking = m.ThinkingBudget != null ? String(m.ThinkingBudget) : "";
     mRaw = m.RawConfig;
-    advOpen = !!(m.BaseURL || m.APIFormat || m.MaxOutputTokens || m.Temperature != null || m.ThinkingBudget != null || m.RawConfig);
+    mHeaders = m.Headers;
+    advOpen = false; rawOpen = false; headersOpen = false;
     clearOverrides();
     // A live set opens in Multiple + Live with its filter prefilled so editing
     // tweaks the query; a plain model opens in Single.
@@ -444,7 +523,7 @@
       multiSelect = false; selectMode = "live"; modelSearch = "";
       liveDefaultVendor = "";
     }
-    discovered = []; discoverErr = ""; discovering = false;
+    discovered = []; discoverErr = ""; discovering = false; lastDiscoverHeaders = "";
     modalOpen = true;
     // Reuse the stored key to repopulate the picker without re-entry.
     scheduleDiscover();
@@ -462,6 +541,7 @@
       temperature: floatOrUndef(mTemp),
       thinking_budget: intOrUndef(mThinking),
       raw_config: mRaw.trim() || undefined,
+      headers: normalizeHeaders(mHeaders) || undefined,
     };
   }
 
@@ -1205,8 +1285,14 @@
         {#if discoverErr}
           <p class="mt-1 text-[11px] text-amber-600 dark:text-amber-400">Discovery unavailable ({discoverErr}) — type the model id above manually.</p>
         {:else}
+          {#if discovering && discovered.length > 0}
+            <!-- A REFETCH (key/base-url/header edit) keeps the current rows on
+                 screen — swapping them for a placeholder on every keystroke
+                 made the picker flicker. Only a cold load blanks the list. -->
+            <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Refreshing…</p>
+          {/if}
           <div class="mt-2 max-h-48 overflow-y-auto rounded-lg border border-white-400 dark:border-navy-600">
-            {#if discovering}
+            {#if discovering && discovered.length === 0}
               <div class="px-4 py-3 text-xs text-black-700 dark:text-black-600">Discovering models…</div>
             {:else if !(mKeyTouched && mKey.trim() !== "") && !editing}
               <div class="px-4 py-3 text-xs text-black-700 dark:text-black-600">Enter an API key above to load available models — or just type the id.</div>
@@ -1324,16 +1410,64 @@
             />
           </div>
         </div>
+        <!-- Raw config + custom headers are the two escape hatches: rarely
+             touched, so each collapses behind its own toggle. A "set" dot
+             marks a section that holds a value while collapsed. -->
         <div>
-          <label for="m-raw" class="block text-sm font-medium text-black-900 dark:text-white-100 mb-1">Raw model config <span class="font-normal text-black-700 dark:text-black-600">(JSON, per-model, merged last)</span></label>
-          <textarea
-            id="m-raw"
-            bind:value={mRaw}
-            rows="2"
-            placeholder={'{"safetySettings": [...], "topK": 40}'}
-            class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
-          ></textarea>
-          <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Per-model override, merged over the instance settings. Same JSON shape.</p>
+          <button
+            type="button"
+            onclick={() => { rawOpen = !rawOpen; }}
+            class="flex items-center gap-2 text-sm font-medium text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="transition-transform {rawOpen ? 'rotate-90' : ''}"><path d="m9 18 6-6-6-6"/></svg>
+            Raw model config
+            {#if mRaw.trim() !== ""}
+              <span class="rounded-full bg-green-100 dark:bg-green-900 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:text-green-300">set</span>
+            {/if}
+          </button>
+          {#if rawOpen}
+            <div class="mt-2">
+              <label for="m-raw" class="block text-sm font-medium text-black-900 dark:text-white-100 mb-1">Raw model config <span class="font-normal text-black-700 dark:text-black-600">(JSON, per-model, merged last)</span></label>
+              <textarea
+                id="m-raw"
+                bind:value={mRaw}
+                rows="2"
+                placeholder={'{"safetySettings": [...], "topK": 40}'}
+                class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+              ></textarea>
+              <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">Per-model override, merged over the instance settings. Same JSON shape.</p>
+            </div>
+          {/if}
+        </div>
+        <div>
+          <button
+            type="button"
+            onclick={() => { headersOpen = !headersOpen; }}
+            class="flex items-center gap-2 text-sm font-medium text-black-800 dark:text-black-600 hover:text-black-900 dark:hover:text-white-100"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="transition-transform {headersOpen ? 'rotate-90' : ''}"><path d="m9 18 6-6-6-6"/></svg>
+            Custom headers
+            {#if headerCount > 0}
+              <span class="rounded-full bg-green-100 dark:bg-green-900 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:text-green-300">{headerCount}</span>
+            {/if}
+          </button>
+          {#if headersOpen}
+            <div class="mt-2">
+              <label for="m-headers" class="block text-sm font-medium text-black-900 dark:text-white-100 mb-1">Custom headers <span class="font-normal text-black-700 dark:text-black-600">(one per line, sent with every request)</span></label>
+              <textarea
+                id="m-headers"
+                value={mHeaders}
+                oninput={(e) => onHeadersInput((e.currentTarget as HTMLTextAreaElement).value)}
+                onblur={() => onHeadersBlur()}
+                rows="4"
+                placeholder={"X-Org-Id: abc123\nUser-Agent: MyClient/1.0"}
+                class="w-full rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-3 py-2 text-sm font-mono text-black-900 dark:text-white-100 placeholder:text-black-700 outline-none focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 transition-colors"
+              ></textarea>
+              <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">
+                Paste a curl block (<code class="font-mono">--header 'Key: Value'</code>) and it is cleaned up on blur. Applied last — a header set here overrides the built-in ones, including auth.
+              </p>
+            </div>
+          {/if}
         </div>
       </div>
     {/if}
