@@ -370,6 +370,17 @@ Unlike `claude`/`codex`/`gemini` (which allow multiple named instances), there i
 - **Disable** hides a model from the composer without deleting its config.
 - Registering more than one enabled model (or a live set, even alongside a single model) surfaces the same nested provider picker (type ▸ instance ▸ model) in the composer described above — a live model set renders as one expandable row that drills into a 4th level of matching vendor models. Both the conversation composer and the new-session composer support this drill-in.
 
+### Custom HTTP headers
+
+Each model's Add/Edit form has a collapsed **Advanced options** section with a **Custom headers** sub-section (also collapsed by default, alongside **Raw model config**). It accepts one `Key: Value` header per line — or a `curl` fragment pasted straight from a browser's "copy as cURL" or another client's debug log (`--header 'X: y' \`, `-H "X: y"`); the flag, quotes, and trailing `\` continuation are stripped automatically, on blur, into the canonical form.
+
+Custom headers are applied **last**, after everything an adapter builds for the request — including auth (`Authorization` / `x-api-key` / `anthropic-version`). This is deliberate: it lets a fronting proxy use its own auth scheme, or a header spoof a different client's `User-Agent`. A custom header with the same name as the adapter's auth header replaces it entirely.
+
+They also apply to:
+
+- **Model discovery** (the `/models` listing used by the Add/Edit form's model picker) — typed-but-unsaved headers are sent along, so a gateway that requires a header to serve `/models` works before the model row is saved.
+- **Copy as curl** (see [Session interactions log](#session-interactions-log)) — the reconstructed request reflects the actual headers wick sends, including any auth override.
+
 ### Loop guards & goal mode
 
 Unlike the CLI providers, wick's agentic loop has no subprocess to fall back on if it stalls — so it carries its own no-progress guards, configurable on the Advanced section of the provider settings card:

@@ -308,6 +308,11 @@ type WickModel struct {
 	GenConfig *WickGenConfig `json:"gen_config,omitempty"`
 	// RawConfig is per-model raw ADK config (JSON), merged last.
 	RawConfig string `json:"raw_config,omitempty"`
+	// Headers is per-model custom HTTP headers, one per line
+	// ("Key: Value", or a pasted `--header 'Key: Value'` curl fragment).
+	// Applied last over the adapter's own headers, auth included — see
+	// internal/agents/provider/wick/headers.go.
+	Headers string `json:"headers,omitempty"`
 	// LiveSet marks this entry as a LIVE model set: at picker time the
 	// vendor's model list is fetched and (optionally) filtered by
 	// DiscoveryFilter, rather than pinning one model. Set independently of

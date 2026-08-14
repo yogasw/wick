@@ -25,9 +25,9 @@ type geminiModel struct {
 
 func newGeminiModel(ctx context.Context, m provider.WickModel) (*geminiModel, error) {
 	cfg := &genai.ClientConfig{APIKey: m.APIKey}
-	if m.BaseURL != "" {
-		cfg.HTTPOptions = genai.HTTPOptions{BaseURL: m.BaseURL}
-	}
+	// One HTTPOptions carries both knobs — assigning per-knob would drop
+	// whichever was set first.
+	cfg.HTTPOptions = genai.HTTPOptions{BaseURL: m.BaseURL, Headers: customHTTPHeader(m)}
 	client, err := genai.NewClient(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("gemini client: %w", err)

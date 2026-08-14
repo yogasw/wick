@@ -64,16 +64,30 @@ func BuildRequest(recordJSON []byte, m provider.WickModel) (CurlRequest, error) 
 		baseURL = defaultBaseURL(kind, format)
 	}
 
+	var req CurlRequest
 	switch format {
 	case "openai_chat", "openai_responses":
-		return reqOpenAI(rec, m, baseURL), nil
+		req = reqOpenAI(rec, m, baseURL)
 	case "anthropic_messages":
-		return reqAnthropic(rec, m, baseURL), nil
+		req = reqAnthropic(rec, m, baseURL)
 	case "gemini":
-		return reqGemini(rec, m, baseURL), nil
+		req = reqGemini(rec, m, baseURL)
 	default:
 		return CurlRequest{}, fmt.Errorf("unsupported api format %q for curl reconstruction", format)
 	}
+	// The model's custom headers ride along so a copied curl reproduces the
+	// request wick ACTUALLY sends, not the vendor-default shape. A custom
+	// header that collides with the auth header wins here too (see
+	// headers.go), which is why AuthHeader is cleared in that case — the
+	// renderer would otherwise emit the same header twice.
+	req.Headers = applyCustomHeaders(req.Headers, m)
+	if req.AuthHeader != "" && req.Headers != nil {
+		if _, overridden := req.Headers[req.AuthHeader]; overridden {
+			req.AuthHeader = ""
+			req.AuthScheme = ""
+		}
+	}
+	return req, nil
 }
 
 // BuildRequestFromLive reconstructs the structured request for the CURRENTLY
