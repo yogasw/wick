@@ -222,6 +222,11 @@ type ProviderInstance struct {
 	// have running at once. 0 = unlimited (follows the global pool cap).
 	MaxConcurrent int `json:"max_concurrent,omitempty"`
 
+	// MemoryMaxMB caps this instance's agents in MB, counting the whole
+	// process tree they start. 0 = follow the global agent memory limit.
+	// May exceed the global value — see provider.Instance.MemoryMaxMB.
+	MemoryMaxMB int `json:"memory_max_mb,omitempty"`
+
 	// SendMode overrides how this instance delivers a user message to its
 	// CLI. Empty = the provider type's default (claude → "append", codex →
 	// "queue"). Values: "append" (persistent stdin, one process; the CLI

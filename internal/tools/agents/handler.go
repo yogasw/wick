@@ -384,6 +384,11 @@ func Register(r tool.Router) {
 	r.POST("/presets/{name}", updatePreset)
 	r.DELETE("/presets/{name}", deletePreset)
 
+	// Memory diagnostics: what agents actually use, so a limit is chosen
+	// from measurement rather than guessed.
+	r.GET("/api/memory", memoryReportHandler)
+	r.POST("/api/memory/apply-suggested", applySuggestedMemoryHandler)
+
 	r.GET("/providers", providersPage)
 	r.GET("/providers/detail/{type}/{name}", providerDetailPage)
 	r.POST("/providers/detail/{type}/{name}/save", saveProviderDetail)

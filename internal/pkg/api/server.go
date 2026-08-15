@@ -628,6 +628,42 @@ func NewServer() *Server {
 	agentsFactory.SystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt")
 	}
+	// Memory guard. Read per Build so mode and limits can change in the UI
+	// without a restart. An unset or "off" mode returns nil, which is the
+	// pre-guard behaviour: no scope, no oom_score_adj, no argv change.
+	agentsFactory.MemGuardLoader = func() *provider.MemGuard {
+		mode := configsSvc.GetOwned("agents", "memory_guard_mode")
+		if mode == "" || mode == agentconfig.MemGuardOff {
+			return nil
+		}
+		method := configsSvc.GetOwned("agents", "memory_guard_method")
+		if method == "" {
+			method = agentconfig.MethodAuto
+		}
+		atoi := func(key string) int {
+			n, _ := strconv.Atoi(configsSvc.GetOwned("agents", key))
+			return n
+		}
+		return &provider.MemGuard{
+			Mode:         mode,
+			Method:       method,
+			AgentLimitMB: atoi("agent_memory_max_mb"),
+			AggregateMB:  atoi("agents_total_memory_mb"),
+			// Defaults on: an operator who enabled enforcement wants wick
+			// to survive it. Only an explicit "false" turns it off.
+			ProtectWick: configsSvc.GetOwned("agents", "protect_wick_from_oom") != "false",
+			// Contention controls; 0 = kernel default. Enforce-mode only —
+			// sliceLimits() drops them in measure.
+			CPUWeight:   atoi("agents_cpu_weight"),
+			CPUQuotaPct: atoi("agents_cpu_quota_pct"),
+			TasksMax:    atoi("agents_tasks_max"),
+			IOWeight:    atoi("agents_io_weight"),
+		}
+	}
+	agentsFactory.ToolMemoryLoader = func() int {
+		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "tool_memory_max_mb"))
+		return v
+	}
 	agentsFactory.TraceInlineKBLoader = func() int {
 		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "trace_event_inline_kb"))
 		return v
@@ -677,6 +713,13 @@ func NewServer() *Server {
 		Layout:          agentsLayout,
 		Factory:         agentsFactory,
 		DefaultProvider: configsSvc.GetOwned("agents", "default_provider"),
+		// Queue a spawn instead of starting it while the machine is
+		// already short of memory. Read live so the floor can be changed
+		// in the UI without a restart; 0 (the default) disables it.
+		MinFreeMemoryLoader: func() int {
+			v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "min_free_memory_mb"))
+			return v
+		},
 		OnSessionCreated: func(s agentsession.Session) {
 			agentsMgr.Register(s)
 		},

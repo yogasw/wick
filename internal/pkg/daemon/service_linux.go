@@ -152,18 +152,26 @@ func enableLinger(username string) error {
 	return safeexec.Command("loginctl", "enable-linger", username).Run()
 }
 
-func installSystemd(p Paths, appName string) error {
-	target, err := systemdUnitPath(appName)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
-	}
-	unit := fmt.Sprintf(`[Unit]
+// renderUnit builds the systemd user unit for the daemon.
+//
+// StartLimit* is not incidental. Restart=on-failure with no ceiling turns
+// a single out-of-memory kill into an invisible loop: wick dies, systemd
+// restarts it 5s later, the session resumes, the agent respawns, memory
+// balloons again. Three failures in five minutes leaves the unit in
+// `failed` and keeps it there, turning a loop into a visible incident.
+//
+// Deliberately NO Delegate=: agents run in a sibling slice (agents.slice,
+// see internal/agents/provider/memscope), not in a sub-cgroup of this
+// unit. That is what keeps agent memory out of wick's own cgroup — and it
+// means existing installations get the memory guard without touching
+// their service file.
+func renderUnit(appName, exePath, logFile string) string {
+	return fmt.Sprintf(`[Unit]
 Description=%s daemon
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -175,8 +183,18 @@ StandardError=append:%s
 
 [Install]
 WantedBy=default.target
-`, appName, p.ExePath, p.LogFile, p.LogFile)
-	if err := os.WriteFile(target, []byte(unit), 0o644); err != nil {
+`, appName, exePath, logFile, logFile)
+}
+
+func installSystemd(p Paths, appName string) error {
+	target, err := systemdUnitPath(appName)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(target, []byte(renderUnit(appName, p.ExePath, p.LogFile)), 0o644); err != nil {
 		return err
 	}
 	// daemon-reload picks up the new unit. enable wires it into boot.
