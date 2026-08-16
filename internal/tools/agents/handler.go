@@ -222,6 +222,7 @@ func Register(r tool.Router) {
 	r.GET("/", newSessionCompose)
 	r.POST("/", startNewSession)
 	r.GET("/overview", overviewPage)
+	r.GET("/resources", resourcesPage)
 	r.GET("/connectors", connectorsPage)
 
 	r.GET("/sessions", sessionsPage)
@@ -387,6 +388,7 @@ func Register(r tool.Router) {
 	// Memory diagnostics: what agents actually use, so a limit is chosen
 	// from measurement rather than guessed.
 	r.GET("/api/memory", memoryReportHandler)
+	r.GET("/api/memory/series", memorySeriesHandler)
 	r.POST("/api/memory/apply-suggested", applySuggestedMemoryHandler)
 
 	r.GET("/providers", providersPage)
@@ -1208,6 +1210,23 @@ func overviewPage(c *tool.Ctx) {
 		Layout:   sidebarVM(c, "overview", ""),
 		Base:     c.Base(),
 		AssetURL: spaAssetURL("overview"),
+	}))
+}
+
+// ── Resources ─────────────────────────────────────────────────────────
+
+// resourcesPage hosts the resource-usage SPA: what each agent is actually
+// using now, and how that has moved over the retained window. It is the
+// page an operator reads BEFORE choosing a memory limit, so it works with
+// the guard switched off.
+func resourcesPage(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	c.HTML(view.ResourcesSPA(view.ResourcesSPAVM{
+		Layout:   sidebarVM(c, "resources", ""),
+		Base:     c.Base(),
+		AssetURL: spaAssetURL("resources"),
 	}))
 }
 

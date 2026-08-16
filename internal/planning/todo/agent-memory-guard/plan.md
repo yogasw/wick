@@ -10,6 +10,75 @@
 
 **Spec:** [design.md](design.md)
 
+---
+
+## STATUS — where this stands (last updated 2026-08-16)
+
+**All 15 tasks implemented and merged into branch `feat/agent-memory-guard`.**
+Everything below is done; the checkboxes in the task bodies are left as the
+original TDD steps for reference.
+
+| # | Task | State |
+|---|---|---|
+| 1 | `oomscore` — OOM victim bias | done |
+| 2 | `memscope` — slice install, `systemd-run --scope` wrap, availability probe | done |
+| 3 | `memscope` readback — `memory.peak` / `memory.events` | done |
+| 4 | `ExitOOM` exit reason + message naming peak and limit | done |
+| 5 | Config surface — global group + per-instance `MemoryMaxMB` | done |
+| 6 | Wire agent spawn (claude / codex / gemini) | done |
+| 7 | Teardown regression test | **written + compiles; NOT YET RUN** — see below |
+| 8 | wick-provider tool subprocesses (`tool_shell.go`, `tool_shell_bg.go`) | done |
+| 9 | Spawn admission on available memory | done |
+| 10 | `wick memory report [--watch]` CLI | done |
+| 11 | systemd unit restart rate-limit | done |
+| 12 | Diagnostics endpoints (`/api/memory`, `/api/memory/series`, apply-suggested) | done |
+| 13 | Contention controls — CPUWeight / CPUQuota / TasksMax / IOWeight | done |
+| 14 | Usage history — mem+CPU+IO sampling, retention + point-ceiling purge | done |
+| 15 | Resources page (`fe/agents/resources`, `/tools/agents/resources`) | done |
+
+### The one thing left, and it is a gate
+
+Task 7's integration test has never actually executed — it is `//go:build linux
+&& integration`, and development happened on Windows. It asserts that wick's
+`kill(-pgid)` session teardown still reaps the whole tree now that
+`systemd-run` sits between wick and the agent.
+
+**Run this on the Linux box before switching production to `enforce`:**
+
+```bash
+go test -tags integration ./internal/agents/provider/memscope/ -v
+```
+
+If it fails, do not enable enforcement: wick would keep its memory guard and
+lose the ability to stop a session, which is worse than the bug being fixed.
+The production `agent-isolate.sh preflight` already passes the equivalent check
+by hand, so a failure here most likely means a wiring difference, not a flaw in
+the approach.
+
+### Verified so far
+
+- Windows: full test suite for every touched package, run fresh (`-count=1`)
+- Linux: build + `go vet` (including `-tags integration`) + test binaries compile
+- macOS: our packages build and vet; the full binary hits a **pre-existing**
+  `fyne.io/systray` CGO cross-compile failure that also fails on master
+- Frontend: 15 unit tests, `tsc --noEmit`, and a production bundle build
+- Routes asserted against the registration table — an HTTP probe cannot verify
+  them, because the agents auth gate answers 403 for registered and
+  unregistered paths alike
+
+### Suggested rollout, once the gate above passes
+
+1. `wick memory report --watch 30s --for 24h` — or just open **Resources** and
+   let it record; both work with the guard `off`.
+2. Read the peaks, set the limits (or use **Apply suggested values**).
+3. `memory_guard_mode = measure`, leave it a week — exact per-agent peaks from
+   cgroup accounting, nothing killed.
+4. `memory_guard_mode = enforce`.
+
+Each step reverses by setting the mode back to `off`.
+
+---
+
 ## Global Constraints
 
 - All user-facing UI text and every `desc=` in `wick:"..."` tags in **English**.

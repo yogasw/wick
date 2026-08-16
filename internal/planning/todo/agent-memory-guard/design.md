@@ -23,8 +23,9 @@ the operator has measured their own machine.
 - [x] Task 11 — systemd unit: restart rate-limit + migration notice
 - [x] Task 12 — Diagnostics endpoint (`GET /agents/api/memory` + apply-suggested)
 - [x] Task 13 — Contention controls on the slice: CPU weight, CPU quota, TasksMax, IO weight (all configurable, enforce-only)
+- [x] Task 14 — Usage history: memory + CPU + IO sampled per agent tree, bounded by retention AND a point ceiling, purged on every sample
+- [x] Task 15 — Resources page (`/tools/agents/resources`): live table, trend charts, apply-suggested
 - [ ] Before production enforce: run `go test -tags integration ./internal/agents/provider/memscope/ -v` on the Linux box — it gates everything
-- [ ] UI page for the diagnostics endpoint (backend done; no frontend yet)
 
 Implementation verified on: Windows (full test suite, native), Linux
 (cross-compiled build + vet + test binaries compile), macOS (our packages build
@@ -331,6 +332,50 @@ the slice. The objection applied to a wick-implemented total cap, not a kernel o
 Default: `AgentsTotalMemoryMB` = the agent budget from the derivation below. Setting
 it to 0 leaves the slice unlimited, and per-scope limits alone apply.
 
+## Usage history and the Resources page
+
+A limit chosen from one snapshot is a limit chosen from luck: a browser can
+allocate and release a gigabyte between two glances. So wick samples every agent
+tree on an interval and keeps a bounded series behind
+`/tools/agents/resources`.
+
+**What is sampled** (`internal/pkg/memreport`): per agent process tree — RSS,
+CPU, block-IO read/write, and process count, all summed across descendants in one
+walk. CPU and IO arrive from `/proc` as counters cumulative since process start,
+so a rate needs two samples; the first sample of any process reports 0 rather
+than a number derived from its whole lifetime.
+
+**Retention is two independent bounds, because either alone fails:**
+
+- **Time** (`resource_retention_minutes`, default 360 = 6h) — a machine left
+  running for a month must not report a month of history.
+- **Points** (`resource_history_max_points`, default 4096) — a hard ceiling on
+  the ring, so a misconfigured short interval cannot grow the buffer without
+  limit no matter what the window allows.
+
+Purging runs on every sample, and lowering retention in the UI purges
+immediately rather than at some later tick. The buffer is in memory, never on
+disk: this is diagnostic telemetry whose whole value is recency, and persisting
+it would add a schema, a migration, and disk growth on exactly the machines this
+feature exists to protect.
+
+**Independent of the guard mode.** History runs while the guard is `off`, and
+that is the point — measuring is how an operator learns what to set. It changes
+nothing about how agents run.
+
+**The page** shows machine memory in context, a live per-agent table (tree size,
+CPU, disk rates, process count, and the heaviest descendant — naming chromium
+rather than just reporting a big total), trend charts over a selectable window,
+and suggested limits with an apply button. Applying fills in the numbers and
+**does not** switch enforcement on; conflating those would start killing agents
+on a click the operator read as "fill in the blanks".
+
+**Suggested values prefer measurement over arithmetic.** With history recorded,
+the per-agent suggestion is the observed peak plus 30% headroom, not a figure
+derived from total RAM. Headroom is not padding for its own sake: a limit set
+exactly at the observed peak kills the next run that does slightly more work,
+which is the failure that makes operators distrust the guard and turn it off.
+
 ## Calibration
 
 Enabling a limit you guessed is how agents start dying for no reason the operator
@@ -402,6 +447,10 @@ Global, in `GeneralConfig` (`internal/agents/config/general.go`), group `Memory 
 | `AgentsCPUQuotaPct` | number | `0` | Hard cap on combined agent CPU, % of one core. 0 = uncapped |
 | `AgentsTasksMax` | number | `512` | Max processes+threads across all agents (fork-bomb guard). 0 = unlimited |
 | `AgentsIOWeight` | number | `0` | Disk-IO priority under contention (kernel default 100). 0 = no preference |
+| `ResourceHistoryEnabled` | bool | `true` | Record usage samples. Runs regardless of guard mode |
+| `ResourceSampleIntervalSec` | number | `15` | Seconds between samples |
+| `ResourceRetentionMinutes` | number | `360` | Keep samples this long; older ones are purged |
+| `ResourceHistoryMaxPoints` | number | `4096` | Hard ceiling on stored samples, whatever retention says |
 
 "auto" = derived from detected RAM at first boot, not a fixed number. A 3 GB box and
 a 32 GB box must not get the same default. Derivation:

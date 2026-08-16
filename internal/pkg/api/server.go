@@ -81,9 +81,11 @@ import (
 	"github.com/yogasw/wick/internal/metrics"
 	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/pkg/config"
+	"github.com/yogasw/wick/internal/pkg/memreport"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/pkg/pwa"
 	"github.com/yogasw/wick/internal/pkg/spa"
+	"github.com/yogasw/wick/internal/pkg/sysmem"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/sso"
@@ -664,6 +666,42 @@ func NewServer() *Server {
 		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "tool_memory_max_mb"))
 		return v
 	}
+	// Resource usage history: a bounded in-memory series behind the
+	// Resources page. Independent of the guard mode — measuring is how an
+	// operator learns what to set, so it runs while the guard is off.
+	// Bounded by BOTH a retention window and a hard point ceiling, and
+	// purged on every sample, so it cannot grow without limit on the small
+	// machines this whole feature exists to protect.
+	{
+		cfgInt := func(key string, def int) int {
+			if n, err := strconv.Atoi(configsSvc.GetOwned("agents", key)); err == nil && n > 0 {
+				return n
+			}
+			return def
+		}
+		retention := time.Duration(cfgInt("resource_retention_minutes", 360)) * time.Minute
+		hist := memreport.NewHistory(retention, cfgInt("resource_history_max_points", 4096))
+		agentstool.SetResourceHistory(hist)
+
+		sampler := &memreport.Sampler{
+			History:  hist,
+			Interval: time.Duration(cfgInt("resource_sample_interval_sec", 15)) * time.Second,
+			Names:    []string{"claude", "codex", "gemini"},
+			TotalAvail: func() (uint64, uint64) {
+				total, _ := sysmem.Total()
+				avail, _ := sysmem.Available()
+				return total, avail
+			},
+			// Read live, so switching history off in the UI stops the /proc
+			// walk without a restart. An empty row means "never configured",
+			// which the default (on) covers.
+			Enabled: func() bool {
+				return configsSvc.GetOwned("agents", "resource_history_enabled") != "false"
+			},
+		}
+		go sampler.Run(context.Background())
+	}
+
 	agentsFactory.TraceInlineKBLoader = func() int {
 		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "trace_event_inline_kb"))
 		return v
