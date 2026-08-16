@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/yogasw/wick/internal/appname"
 )
 
 // Asker is the transport-agnostic ask contract. The in-process
@@ -24,8 +26,13 @@ type Asker interface {
 // and sibling processes dial. Lives next to agentctl.sock / the gate
 // dir; security comes from the 0700 parent dir, like gate.sock.
 //
-// Layout: ~/.<app>/agents/askuser.sock
+// Layout: ~/.<app>/agents/askuser.sock, or $WICK_DATA_DIR/agents/
+// askuser.sock when the operator relocated the tree — the override wins
+// over appName so the listener and its dialers stay in one tree.
 func SocketPath(appName string) string {
+	if d := appname.DataDirOverride(); d != "" {
+		return filepath.Join(d, "agents", "askuser.sock")
+	}
 	name := appName
 	if name == "" {
 		name = "wick"
