@@ -63,6 +63,38 @@ func TestOOMDetail_UnknownPeak(t *testing.T) {
 	}
 }
 
+// An agent with NO per-agent ceiling can still be OOM-killed — by the
+// aggregate slice limit, or by the machine running out. Reporting "its
+// 0 MB limit" would describe a misconfiguration that does not exist and
+// send the operator to the wrong setting.
+func TestOOMDetail_NoPerAgentLimit(t *testing.T) {
+	for _, peak := range []uint64{0, 1610612736} {
+		got := OOMDetail(peak, 0)
+		if strings.Contains(got, "0 MB") {
+			t.Fatalf("detail %q claims a 0 MB limit", got)
+		}
+		low := strings.ToLower(got)
+		if !strings.Contains(low, "combined limit") && !strings.Contains(low, "running out") {
+			t.Fatalf("detail %q does not point at the real cause", got)
+		}
+	}
+
+	// The measured peak is still worth reporting when it is known.
+	withPeak := OOMDetail(1610612736, 0)
+	if !strings.Contains(withPeak, "1.5 GB") {
+		t.Fatalf("detail %q dropped a known peak", withPeak)
+	}
+}
+
+// A negative limit is not a real configuration, but it must degrade the
+// same way rather than printing "its -1 MB limit".
+func TestOOMDetail_NegativeLimitTreatedAsNone(t *testing.T) {
+	got := OOMDetail(1024, -1)
+	if strings.Contains(got, "-1") {
+		t.Fatalf("detail %q leaked a negative limit", got)
+	}
+}
+
 // humanBytes is what the operator actually reads; check the boundaries
 // rather than one happy value.
 func TestHumanBytes(t *testing.T) {

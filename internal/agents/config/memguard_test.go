@@ -113,6 +113,47 @@ func TestDeriveMemoryDefaults_ToolLimitIsSmaller(t *testing.T) {
 	}
 }
 
+// The suggestion must never land at or below the peak it is derived
+// from — that is the whole point of headroom, and doing the arithmetic in
+// MB first silently loses it at small sizes (1.5 MB truncates to 1 MB,
+// and 1*130/100 is 1 again).
+func TestSuggestLimitMB_AlwaysAbovePeak(t *testing.T) {
+	cases := []uint64{
+		1,                 // absurdly small
+		1_500_000,         // the case integer-MB truncation got wrong
+		2_000_000,         //
+		3_000_000,         //
+		100 * 1024 * 1024, // 100 MB
+		1_610_612_736,     // 1.5 GB, a realistic browser-driving agent
+	}
+	for _, peak := range cases {
+		got := SuggestLimitMB(peak)
+		peakMB := float64(peak) / (1024 * 1024)
+		if float64(got) <= peakMB {
+			t.Fatalf("peak %d B (%.2f MB) suggested %d MB — at or below the peak",
+				peak, peakMB, got)
+		}
+	}
+}
+
+// Roughly 30% above the peak on values large enough for rounding not to
+// dominate — the headroom has to actually be there, not just be positive.
+func TestSuggestLimitMB_AppliesHeadroom(t *testing.T) {
+	const peak = 1000 * 1024 * 1024 // 1000 MB
+	got := SuggestLimitMB(peak)
+	if got < 1290 || got > 1310 {
+		t.Fatalf("1000 MB peak suggested %d MB, want ~1300 (30%% headroom)", got)
+	}
+}
+
+// No measurement must be distinguishable from a tiny one, so the caller
+// can fall back to the RAM-derived default instead of suggesting 0.
+func TestSuggestLimitMB_ZeroPeakIsZero(t *testing.T) {
+	if got := SuggestLimitMB(0); got != 0 {
+		t.Fatalf("SuggestLimitMB(0) = %d, want 0 to signal 'no measurement'", got)
+	}
+}
+
 // A zero or negative concurrency must not divide by zero or hand one
 // agent a fraction of a megabyte.
 func TestDeriveMemoryDefaults_ZeroConcurrency(t *testing.T) {

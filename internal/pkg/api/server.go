@@ -672,6 +672,7 @@ func NewServer() *Server {
 	// Bounded by BOTH a retention window and a hard point ceiling, and
 	// purged on every sample, so it cannot grow without limit on the small
 	// machines this whole feature exists to protect.
+	var resourceSampler *memreport.Sampler
 	{
 		cfgInt := func(key string, def int) int {
 			if n, err := strconv.Atoi(configsSvc.GetOwned("agents", key)); err == nil && n > 0 {
@@ -699,7 +700,12 @@ func NewServer() *Server {
 				return configsSvc.GetOwned("agents", "resource_history_enabled") != "false"
 			},
 		}
-		go sampler.Run(context.Background())
+		// Started in Run, not here: this goroutine must live exactly as long
+		// as the server, and only Run holds a context that is cancelled on
+		// shutdown. Starting it on context.Background() would leak it past
+		// every stop — a leak in the feature whose job is bounding resource
+		// use is not a defensible trade.
+		resourceSampler = sampler
 	}
 
 	agentsFactory.TraceInlineKBLoader = func() int {
@@ -2141,7 +2147,7 @@ func NewServer() *Server {
 	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
 	r.Handle("/mini-tools", http.HandlerFunc(homeHandler.Launcher))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler}
 }
 
 type Server struct {
@@ -2159,6 +2165,11 @@ type Server struct {
 	syncSessionMeta func(sessionID string)
 	channelReg      *agentchannels.Registry
 	db              *gorm.DB
+	// resourceSampler records agent memory/CPU/IO into the history buffer
+	// behind the Resources page. Built in NewServer but STARTED in Run,
+	// which owns the context cancelled at shutdown — running it on
+	// context.Background() would leak the goroutine past every stop.
+	resourceSampler *memreport.Sampler
 	// scheduleStore backs wick_schedule_message; Run starts the runner that
 	// polls it and delivers due messages through agentsPool. nil-safe: the
 	// runner is only started when both store and pool are present.
@@ -2466,6 +2477,11 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	logger := zerolog.Ctx(ctx)
 	if s.pluginReloader != nil {
 		go s.pluginReloader.Start(ctx)
+	}
+	// Resource sampling lives exactly as long as the server: ctx is
+	// cancelled on shutdown, so the goroutine exits with it.
+	if s.resourceSampler != nil {
+		go s.resourceSampler.Run(ctx)
 	}
 	// Opt-in profiling on loopback only. Set WICK_PPROF=1 to expose
 	// /debug/pprof on 127.0.0.1:6060 (heap, goroutine, profile) for

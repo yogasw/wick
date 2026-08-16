@@ -273,14 +273,12 @@ func peakDerivedAgentMB(fallbackMB int) (int, bool) {
 			worst = p.RSSBytes
 		}
 	}
-	if worst == 0 {
-		return fallbackMB, false
+	// Shared with the CLI's report so both suggest the same number, and so
+	// the byte-precision arithmetic lives in exactly one place.
+	if got := agentconfig.SuggestLimitMB(worst); got > 0 {
+		return got, true
 	}
-	withHeadroom := int(worst/(1024*1024)) * 130 / 100
-	if withHeadroom <= 0 {
-		return fallbackMB, false
-	}
-	return withHeadroom, true
+	return fallbackMB, false
 }
 
 // memGuardConfig reads one agents config value, falling back to def when

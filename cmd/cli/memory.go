@@ -189,9 +189,9 @@ func printSuggestions(cmd *cobra.Command, peaks map[int]uint64) {
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(w, "  max_concurrent\t1\n")
 	if worst > 0 {
-		withHeadroom := int(worst/(1024*1024)) * 130 / 100
+		// Shared with the Resources page so both suggest the same number.
 		fmt.Fprintf(w, "  agent_memory_max_mb\t%d\t(peak seen %s + 30%%)\n",
-			withHeadroom, humanBytes(worst))
+			agentconfig.SuggestLimitMB(worst), humanBytes(worst))
 	} else {
 		fmt.Fprintf(w, "  agent_memory_max_mb\t%d\t(no agents seen; derived from RAM)\n", d.AgentMaxMB)
 	}

@@ -86,6 +86,33 @@ func DeriveMemoryDefaults(totalRAMBytes uint64, maxConcurrent int) MemoryDefault
 	}
 }
 
+// headroomPct is added to a measured peak to get a suggested limit.
+//
+// A ceiling set exactly at the observed peak kills the next run that does
+// slightly more work — the failure that makes operators distrust the
+// guard and switch it off.
+const headroomPct = 30
+
+// SuggestLimitMB turns a measured peak into a suggested ceiling in MB.
+//
+// The arithmetic is done in BYTES and rounded up at the end. Converting
+// to MB first and scaling afterwards loses the headroom entirely at small
+// sizes: 1.5 MB truncates to 1 MB, and 1*130/100 is 1 again — a
+// "suggestion" identical to the peak it was supposed to leave room above.
+// Rounding up also guarantees the result is never below the peak itself.
+//
+// Returns 0 for a non-positive peak so callers can tell "no measurement"
+// from "measured, and small".
+func SuggestLimitMB(peakBytes uint64) int {
+	if peakBytes == 0 {
+		return 0
+	}
+	withHeadroom := peakBytes * (100 + headroomPct) / 100
+	const mb = 1024 * 1024
+	// Round up: a limit below the measured peak is never a useful answer.
+	return int((withHeadroom + mb - 1) / mb)
+}
+
 // ResolveAgentLimitMB picks the ceiling for one spawn.
 //
 // Deliberately unlike MaxConcurrent, which resolves as min(provider,
