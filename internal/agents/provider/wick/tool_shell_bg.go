@@ -95,10 +95,16 @@ func (w lockedWriter) Write(p []byte) (int, error) {
 // maxBgProcs so a runaway agent can't spawn unlimited detached processes.
 type bgRegistry struct {
 	workspace string
+	// memLimitMB bounds each background shell's process tree. 0 = no
+	// limit. Background shells matter more than foreground ones here:
+	// they have no timeout, so a leaking watcher grows unbounded for as
+	// long as the session lives.
+	memLimitMB int
 
 	mu    sync.Mutex
 	procs map[string]*bgProc
 	cmds  map[string]*exec.Cmd // for kill/release; separate so bgProc stays lock-simple
+	scope map[string]string    // bash_id -> systemd scope unit, "" when unwrapped
 }
 
 // maxBgProcs caps concurrent background shells per session. Generous
@@ -106,11 +112,13 @@ type bgRegistry struct {
 // bounding the blast radius of a loop that spawns without killing.
 const maxBgProcs = 16
 
-func newBgRegistry(workspace string) *bgRegistry {
+func newBgRegistry(workspace string, memLimitMB int) *bgRegistry {
 	return &bgRegistry{
-		workspace: workspace,
-		procs:     map[string]*bgProc{},
-		cmds:      map[string]*exec.Cmd{},
+		workspace:  workspace,
+		memLimitMB: memLimitMB,
+		procs:      map[string]*bgProc{},
+		cmds:       map[string]*exec.Cmd{},
+		scope:      map[string]string{},
 	}
 }
 
@@ -134,7 +142,8 @@ func (r *bgRegistry) start(cmdline string) (string, error) {
 	r.procs[id] = bp
 	r.mu.Unlock()
 
-	cmd := safeexec.Command(bin, "-c", cmdline)
+	execBin, execArgs, scopeUnit := wrapToolCmd(bin, []string{"-c", cmdline}, r.memLimitMB, nextToolSeq())
+	cmd := safeexec.Command(execBin, execArgs...)
 	if r.workspace != "" {
 		cmd.Dir = r.workspace
 	}
@@ -155,6 +164,7 @@ func (r *bgRegistry) start(cmdline string) (string, error) {
 
 	r.mu.Lock()
 	r.cmds[id] = cmd
+	r.scope[id] = scopeUnit
 	r.mu.Unlock()
 
 	go r.reap(id, cmd, bp)
@@ -169,9 +179,26 @@ func (r *bgRegistry) reap(id string, cmd *exec.Cmd, bp *bgProc) {
 	waitErr := cmd.Wait()
 	proctree.Release(cmd)
 
+	// Read the scope's accounting before anything reaps it: a memory kill
+	// is indistinguishable from any other SIGKILL by exit status alone,
+	// and "exit status 137" tells the model nothing it can act on.
+	oomKilled := false
+	if waitErr != nil {
+		r.mu.Lock()
+		unit := r.scope[id]
+		r.mu.Unlock()
+		oomKilled = toolOOMKilled(unit)
+	}
+
 	bp.mu.Lock()
 	if bp.status == bgKilled {
 		// Already marked killed by shell_kill; keep it.
+		bp.ended = time.Now()
+		bp.mu.Unlock()
+	} else if oomKilled {
+		bp.status = bgExited
+		bp.exitErr = toolOOMMessage(r.memLimitMB)
+		bp.exitCode = 137
 		bp.ended = time.Now()
 		bp.mu.Unlock()
 	} else if waitErr != nil {
@@ -193,6 +220,7 @@ func (r *bgRegistry) reap(id string, cmd *exec.Cmd, bp *bgProc) {
 
 	r.mu.Lock()
 	delete(r.cmds, id)
+	delete(r.scope, id)
 	r.mu.Unlock()
 	log.Debug().Str("bash_id", id).Msg("wick.shell.bg: reaped")
 }

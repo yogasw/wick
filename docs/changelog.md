@@ -10,6 +10,33 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.39.0](https://github.com/yogasw/wick/compare/v0.38.6...v0.39.0) — Agent Resources
+
+_Released on 2026-08-16_
+
+### Agents
+#### Added
+*   **Kernel-enforced memory guard for agents**: A new `memory_guard_mode` (`off` default / `measure` / `enforce`) places each agent subprocess in its own systemd scope. This ensures that runaway processes (e.g., leaked browser, bad loops) are killed by the kernel without affecting Wick or other agents. It is configurable per-agent, with total and tool-command memory ceilings, a minimum-free-memory floor that queues new spawns, and contention controls (CPU weight/quota, max tasks, IO weight) on the shared agent slice. Ships off by default—behavior is unchanged until opted in. Linux only (requires a reachable systemd user session); degrades cleanly and reports when systemd is unavailable. A provider instance can also set its own memory limit, potentially exceeding the global default. See [Memory Guard](/guide/agents/memory-guard).
+*   **Resource usage analytics + Resources page**: A new admin-only `/tools/agents/resources` page displays a live per-agent memory/CPU/disk table, trend charts, and suggested limits with an apply button. This is backed by an optional in-memory usage history (on by default) bounded by a retention window and a hard point ceiling. See [Memory Guard ▶ Usage History](/guide/agents/memory-guard#usage-history).
+*   **`wick memory report` CLI**: Reads `/proc` directly to report per-agent memory usage (including browsers/tools started by an agent) and suggest limits, with an optional `--watch`/`--for` mode to capture peaks over time. This works even when the memory guard is off. See [CLI Reference](/reference/cli#wick-memory-report).
+*   **Clearer OOM exit reason**: When the guard kills an agent for exceeding its memory limit, the exit reason surfaced in chat and the spawn log now names the measured peak and the ceiling it broke, instead of a bare "agent stopped".
+
+#### Fixed
+*   **Sampler lifetime leak**: Addressed a goroutine leak where the resource usage sampler ran on `context.Background()`, preventing its proper termination during server shutdown.
+*   **Zero-limit OOM message**: Corrected the Out-of-Memory (OOM) exit reason message for agents killed by an aggregate slice limit or machine memory exhaustion. Previously, it incorrectly reported "its 0 MB memory limit." The message now accurately names the cause and reports the measured peak when available.
+*   **Suggested limit headroom rounding**: Improved the headroom calculation for suggested memory limits. The calculation is now performed in bytes and rounded up, ensuring that even small limits receive the intended 30% headroom and are never at or below the observed peak.
+
+### Ops
+#### Changed
+*   **`wick install service`'s systemd unit now rate-limits restarts**: The systemd unit now includes `StartLimitIntervalSec=300` and `StartLimitBurst=3` to rate-limit restarts. This prevents a crash-restart-crash loop (e.g., due to repeated OOMs) from restarting invisibly forever, instead surfacing as a visible `failed` unit.
+
+### Infrastructure
+#### Added
+*   **`WICK_DATA_DIR` to relocate the entire data tree**: Introduced the `WICK_DATA_DIR` environment variable to establish a single root for all data (configuration, database, logs, agents, skills, plugins, and control sockets). This allows users to easily relocate the entire application data tree away from `~/.<app>/`. This override takes precedence over `userconfig.Dir` and the rule for `wick.yml` being next to the binary. The `gate --config` output now explicitly prints the resolved `data_dir` and its source.
+
+---
+
+
 ## [v0.38.6](https://github.com/yogasw/wick/compare/v0.38.5...v0.38.6) — Wick
 
 _Released on 2026-08-14_

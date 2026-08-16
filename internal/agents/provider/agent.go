@@ -118,6 +118,15 @@ const (
 	// keep the slot for respawn-mode (codex) agents across turn
 	// boundaries instead of treating each turn-end as agent death.
 	ExitRespawn
+	// ExitOOM is a kill by the kernel for exceeding a memory ceiling,
+	// established by reading the scope's memory.events oom_kill counter.
+	// Distinct from ExitError because the remedy is specific — raise the
+	// limit or shrink the work — and because an exit code alone cannot
+	// tell an OOM kill from any other SIGKILL.
+	//
+	// Appended, never inserted: these iota values are written into spawn
+	// logs, so renumbering would silently rewrite recorded history.
+	ExitOOM
 )
 
 // ExitDetail carries the full "why did this process end" context to the
@@ -162,6 +171,16 @@ type Options struct {
 	Spawner       Spawner
 	Store         *store.Store
 	State         *state.Machine
+
+	// MemGuard is the resolved memory policy for this agent's spawns.
+	// nil = the guard is off, which is the default and what every
+	// pre-existing caller passes. Forwarded to the spawner on each spawn
+	// and consulted on exit to tell an OOM kill from an ordinary crash.
+	MemGuard *MemGuard
+	// ToolMemoryMaxMB bounds a shell command the wick provider runs
+	// itself. 0 = unbounded. Ignored by the CLI providers, whose tools
+	// already run inside the agent's own scope.
+	ToolMemoryMaxMB int
 
 	OnEvent func(event.AgentEvent)
 	OnExit  func(reason ExitReason)
@@ -335,18 +354,21 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
-		Workspace:      a.cfg.Workspace,
-		SessionDir:     a.cfg.SessionDir,
-		SessionID:      a.cfg.SessionID,
-		ResumeID:       a.resumeID,
-		ExtraEnv:       a.cfg.ExtraEnv,
-		ExtraArgs:      a.cfg.ExtraArgs,
-		Instance:       a.cfg.Instance,
-		GateBinary:     a.cfg.GateBinary,
-		Preset:         a.cfg.Preset,
-		MaxTurns:       a.cfg.MaxTurns,
-		ThinkingTokens: a.cfg.ThinkingTokens,
-		ModelID:        a.cfg.ModelID,
+		Workspace:       a.cfg.Workspace,
+		SessionDir:      a.cfg.SessionDir,
+		SessionID:       a.cfg.SessionID,
+		ResumeID:        a.resumeID,
+		ExtraEnv:        a.cfg.ExtraEnv,
+		ExtraArgs:       a.cfg.ExtraArgs,
+		Instance:        a.cfg.Instance,
+		GateBinary:      a.cfg.GateBinary,
+		Preset:          a.cfg.Preset,
+		MaxTurns:        a.cfg.MaxTurns,
+		ThinkingTokens:  a.cfg.ThinkingTokens,
+		ModelID:         a.cfg.ModelID,
+		MemGuard:        a.cfg.MemGuard,
+		SpawnSeq:        nextSpawnSeq(),
+		ToolMemoryMaxMB: a.cfg.ToolMemoryMaxMB,
 	})
 	if err != nil {
 		cancel()
@@ -490,19 +512,22 @@ func (a *Agent) respawnWithMessage(text string) error {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
-		Workspace:      a.cfg.Workspace,
-		SessionDir:     a.cfg.SessionDir,
-		SessionID:      a.cfg.SessionID,
-		ResumeID:       resumeID,
-		ExtraEnv:       a.cfg.ExtraEnv,
-		ExtraArgs:      a.cfg.ExtraArgs,
-		Instance:       a.cfg.Instance,
-		GateBinary:     a.cfg.GateBinary,
-		Preset:         a.cfg.Preset,
-		InitialMessage: text,
-		MaxTurns:       a.cfg.MaxTurns,
-		ThinkingTokens: a.cfg.ThinkingTokens,
-		ModelID:        a.cfg.ModelID,
+		Workspace:       a.cfg.Workspace,
+		SessionDir:      a.cfg.SessionDir,
+		SessionID:       a.cfg.SessionID,
+		ResumeID:        resumeID,
+		ExtraEnv:        a.cfg.ExtraEnv,
+		ExtraArgs:       a.cfg.ExtraArgs,
+		Instance:        a.cfg.Instance,
+		GateBinary:      a.cfg.GateBinary,
+		Preset:          a.cfg.Preset,
+		InitialMessage:  text,
+		MaxTurns:        a.cfg.MaxTurns,
+		ThinkingTokens:  a.cfg.ThinkingTokens,
+		ModelID:         a.cfg.ModelID,
+		MemGuard:        a.cfg.MemGuard,
+		SpawnSeq:        nextSpawnSeq(),
+		ToolMemoryMaxMB: a.cfg.ToolMemoryMaxMB,
 	})
 	if err != nil {
 		// Spawn failed — clear turnActive so a retry isn't parked forever.
@@ -1065,6 +1090,17 @@ drained:
 	}
 	ev.Msg("agent.reader: subprocess exited")
 
+	// An OOM kill is indistinguishable from any other SIGKILL by exit code
+	// alone, so ask the scope's own accounting before settling on a reason.
+	// Only reclassifies ExitError: a clean or deliberate stop is already
+	// explained, and the kernel never OOM-kills a process that exited well.
+	oomDetail := ""
+	if reason == ExitError && a.cfg.MemGuard != nil {
+		if r, d, ok := a.cfg.MemGuard.ClassifyExit(scopeUnitOf(a.proc), a.cfg.MemGuard.AgentLimitMB); ok {
+			reason, oomDetail = r, d
+		}
+	}
+
 	// Build the reason sentence for the spawn log. A crash with stderr
 	// gets the actual error tail; a bare non-zero exit at least gets the
 	// code so the operator isn't staring at an unexplained "error".
@@ -1073,6 +1109,10 @@ drained:
 		detail.WaitErr = waitErr.Error()
 	}
 	switch {
+	case oomDetail != "":
+		// Names the measured peak and the ceiling it broke — the generic
+		// sentence would leave the operator with nothing to change.
+		detail.ReasonDetail = oomDetail
 	case reason != ExitError:
 		detail.ReasonDetail = exitReasonDetail(reason)
 	case stderrTail != "":
@@ -1103,6 +1143,8 @@ func exitReasonName(r ExitReason) string {
 		return "error"
 	case ExitRespawn:
 		return "respawn"
+	case ExitOOM:
+		return "oom"
 	}
 	return "unknown"
 }
@@ -1123,6 +1165,8 @@ func exitReasonDetail(r ExitReason) string {
 		return "subprocess exited abnormally"
 	case ExitRespawn:
 		return "killed to spawn the next turn (respawn provider)"
+	case ExitOOM:
+		return "killed by the kernel for exceeding its memory limit"
 	}
 	return "unknown"
 }

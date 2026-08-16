@@ -28,6 +28,7 @@ func Execute(tpl, designSystem, installScripts embed.FS) {
 	root.AddCommand(upgradeCmd())
 	root.AddCommand(mcpCmd())
 	root.AddCommand(doctorCmd())
+	root.AddCommand(memoryCmd())
 	root.AddCommand(workflowCmd())
 	root.AddCommand(pluginCmd())
 	root.AddCommand(versionCmd())

@@ -91,12 +91,19 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		args = append(args, "--resume", opt.ResumeID)
 	}
 
-	cmd := safeexec.CommandContext(ctx, bin, args...)
+	// Memory guard: run the agent inside its own systemd scope so a
+	// runaway tree is killed by the kernel instead of taking wick with it.
+	// bin/args stay the unwrapped pair for the spawn log.
+	execBin, execArgs, scopeUnit := opt.MemGuard.Wrap(bin, args, "gemini", opt.SpawnSeq)
+
+	cmd := safeexec.CommandContext(ctx, execBin, execArgs...)
 	cmd.Dir = opt.Workspace
 	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
 	hideConsole(cmd)
 	// Own process group: teardown must reach the descendants this CLI
 	// spawns (MCP servers, tool subprocesses), not just the leader.
+	// Kept alongside the scope: the scope bounds memory, the process
+	// group is how a session is stopped.
 	procgroup.Apply(cmd)
 
 	// Masked view of the env wick injected (instance ExtraEnv), for the log.
@@ -124,8 +131,16 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		log.Error().Err(err).Str("bin", bin).Msg("agents.spawn: gemini start failed")
 		return nil, fmt.Errorf("start gemini: %w", err)
 	}
-	log.Info().Int("pid", cmd.Process.Pid).Str("bin", bin).Msg("agents.spawn: started (gemini)")
-	return &process{cmd: cmd, stdin: stdin, stdout: stdout, env: addedEnv}, nil
+	// Prefer this agent over wick if the machine as a whole runs out.
+	// Advisory: the agent is already running, so failure is logged, never fatal.
+	opt.MemGuard.BiasChild(cmd.Process.Pid)
+
+	log.Info().Int("pid", cmd.Process.Pid).Str("bin", bin).
+		Str("scope", scopeUnit).Msg("agents.spawn: started (gemini)")
+	return &process{
+		cmd: cmd, stdin: stdin, stdout: stdout, env: addedEnv,
+		scopeUnit: scopeUnit, realBin: bin, realArgv: args,
+	}, nil
 }
 
 // applyHookConfig installs / removes the per-workspace hook config
@@ -163,7 +178,21 @@ type process struct {
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
 	env    []string // wick-injected env (masked), for the spawn log
+	// scopeUnit is the systemd scope this agent runs inside, empty when
+	// unwrapped. Read on the exit path to tell an OOM kill from any other
+	// SIGKILL.
+	scopeUnit string
+	// realBin / realArgv are gemini's own binary and arguments even when
+	// cmd holds the scope wrapper. The spawn log exists so an operator can
+	// reproduce a spawn by hand; reporting the wrapper would send them
+	// after the wrong command.
+	realBin  string
+	realArgv []string
 }
+
+// ScopeUnit implements provider.ScopedProcess. Empty when this spawn was
+// not wrapped in a memory-limited scope.
+func (p *process) ScopeUnit() string { return p.scopeUnit }
 
 func (p *process) Stdout() io.Reader     { return p.stdout }
 func (p *process) Stdin() io.WriteCloser { return p.stdin }
@@ -176,12 +205,22 @@ func (p *process) Pid() int {
 	return p.cmd.Process.Pid
 }
 func (p *process) Binary() string {
+	// The real binary, not the scope wrapper — see process.realBin.
+	if p.realBin != "" {
+		return p.realBin
+	}
 	if p.cmd == nil {
 		return ""
 	}
 	return p.cmd.Path
 }
 func (p *process) Argv() []string {
+	// The real arguments, not the scope wrapper's — see process.realArgv.
+	if p.realArgv != nil {
+		out := make([]string, len(p.realArgv))
+		copy(out, p.realArgv)
+		return out
+	}
 	if p.cmd == nil || len(p.cmd.Args) <= 1 {
 		return nil
 	}

@@ -22,6 +22,12 @@ func setTestHome(t *testing.T, dir string) {
 	} else {
 		t.Setenv("HOME", dir)
 	}
+	// Wick's own skills dir hangs off appname.DataDir(), which memoizes
+	// the home dir on first use — deliberately, so one process can't split
+	// its writes across two trees. Drop that cache on both sides of the
+	// test or the upload lands in the real home instead of dir.
+	appname.ResetDataDirForTest()
+	t.Cleanup(appname.ResetDataDirForTest)
 }
 
 type zipEntry struct {

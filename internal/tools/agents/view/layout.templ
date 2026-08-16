@@ -142,6 +142,11 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 						if user != nil {
 							@agentsNavLink(vm.Base+"/scheduled", "Scheduled", vm.ActivePage == "scheduled")
 						}
+						// Admin-only to match its API, which is admin-gated: the
+						// page reports machine-wide process usage.
+						if user != nil && user.IsAdmin() {
+							@agentsNavLink(vm.Base+"/resources", "Resources", vm.ActivePage == "resources")
+						}
 						if user != nil {
 							@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
 						}

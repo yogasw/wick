@@ -81,9 +81,11 @@ import (
 	"github.com/yogasw/wick/internal/metrics"
 	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/pkg/config"
+	"github.com/yogasw/wick/internal/pkg/memreport"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/pkg/pwa"
 	"github.com/yogasw/wick/internal/pkg/spa"
+	"github.com/yogasw/wick/internal/pkg/sysmem"
 	"github.com/yogasw/wick/internal/pkg/ui"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/sso"
@@ -628,6 +630,84 @@ func NewServer() *Server {
 	agentsFactory.SystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt")
 	}
+	// Memory guard. Read per Build so mode and limits can change in the UI
+	// without a restart. An unset or "off" mode returns nil, which is the
+	// pre-guard behaviour: no scope, no oom_score_adj, no argv change.
+	agentsFactory.MemGuardLoader = func() *provider.MemGuard {
+		mode := configsSvc.GetOwned("agents", "memory_guard_mode")
+		if mode == "" || mode == agentconfig.MemGuardOff {
+			return nil
+		}
+		method := configsSvc.GetOwned("agents", "memory_guard_method")
+		if method == "" {
+			method = agentconfig.MethodAuto
+		}
+		atoi := func(key string) int {
+			n, _ := strconv.Atoi(configsSvc.GetOwned("agents", key))
+			return n
+		}
+		return &provider.MemGuard{
+			Mode:         mode,
+			Method:       method,
+			AgentLimitMB: atoi("agent_memory_max_mb"),
+			AggregateMB:  atoi("agents_total_memory_mb"),
+			// Defaults on: an operator who enabled enforcement wants wick
+			// to survive it. Only an explicit "false" turns it off.
+			ProtectWick: configsSvc.GetOwned("agents", "protect_wick_from_oom") != "false",
+			// Contention controls; 0 = kernel default. Enforce-mode only —
+			// sliceLimits() drops them in measure.
+			CPUWeight:   atoi("agents_cpu_weight"),
+			CPUQuotaPct: atoi("agents_cpu_quota_pct"),
+			TasksMax:    atoi("agents_tasks_max"),
+			IOWeight:    atoi("agents_io_weight"),
+		}
+	}
+	agentsFactory.ToolMemoryLoader = func() int {
+		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "tool_memory_max_mb"))
+		return v
+	}
+	// Resource usage history: a bounded in-memory series behind the
+	// Resources page. Independent of the guard mode — measuring is how an
+	// operator learns what to set, so it runs while the guard is off.
+	// Bounded by BOTH a retention window and a hard point ceiling, and
+	// purged on every sample, so it cannot grow without limit on the small
+	// machines this whole feature exists to protect.
+	var resourceSampler *memreport.Sampler
+	{
+		cfgInt := func(key string, def int) int {
+			if n, err := strconv.Atoi(configsSvc.GetOwned("agents", key)); err == nil && n > 0 {
+				return n
+			}
+			return def
+		}
+		retention := time.Duration(cfgInt("resource_retention_minutes", 360)) * time.Minute
+		hist := memreport.NewHistory(retention, cfgInt("resource_history_max_points", 4096))
+		agentstool.SetResourceHistory(hist)
+
+		sampler := &memreport.Sampler{
+			History:  hist,
+			Interval: time.Duration(cfgInt("resource_sample_interval_sec", 15)) * time.Second,
+			Names:    []string{"claude", "codex", "gemini"},
+			TotalAvail: func() (uint64, uint64) {
+				total, _ := sysmem.Total()
+				avail, _ := sysmem.Available()
+				return total, avail
+			},
+			// Read live, so switching history off in the UI stops the /proc
+			// walk without a restart. An empty row means "never configured",
+			// which the default (on) covers.
+			Enabled: func() bool {
+				return configsSvc.GetOwned("agents", "resource_history_enabled") != "false"
+			},
+		}
+		// Started in Run, not here: this goroutine must live exactly as long
+		// as the server, and only Run holds a context that is cancelled on
+		// shutdown. Starting it on context.Background() would leak it past
+		// every stop — a leak in the feature whose job is bounding resource
+		// use is not a defensible trade.
+		resourceSampler = sampler
+	}
+
 	agentsFactory.TraceInlineKBLoader = func() int {
 		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "trace_event_inline_kb"))
 		return v
@@ -677,6 +757,13 @@ func NewServer() *Server {
 		Layout:          agentsLayout,
 		Factory:         agentsFactory,
 		DefaultProvider: configsSvc.GetOwned("agents", "default_provider"),
+		// Queue a spawn instead of starting it while the machine is
+		// already short of memory. Read live so the floor can be changed
+		// in the UI without a restart; 0 (the default) disables it.
+		MinFreeMemoryLoader: func() int {
+			v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "min_free_memory_mb"))
+			return v
+		},
 		OnSessionCreated: func(s agentsession.Session) {
 			agentsMgr.Register(s)
 		},
@@ -2060,7 +2147,7 @@ func NewServer() *Server {
 	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
 	r.Handle("/mini-tools", http.HandlerFunc(homeHandler.Launcher))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler}
 }
 
 type Server struct {
@@ -2078,6 +2165,11 @@ type Server struct {
 	syncSessionMeta func(sessionID string)
 	channelReg      *agentchannels.Registry
 	db              *gorm.DB
+	// resourceSampler records agent memory/CPU/IO into the history buffer
+	// behind the Resources page. Built in NewServer but STARTED in Run,
+	// which owns the context cancelled at shutdown — running it on
+	// context.Background() would leak the goroutine past every stop.
+	resourceSampler *memreport.Sampler
 	// scheduleStore backs wick_schedule_message; Run starts the runner that
 	// polls it and delivers due messages through agentsPool. nil-safe: the
 	// runner is only started when both store and pool are present.
@@ -2385,6 +2477,11 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	logger := zerolog.Ctx(ctx)
 	if s.pluginReloader != nil {
 		go s.pluginReloader.Start(ctx)
+	}
+	// Resource sampling lives exactly as long as the server: ctx is
+	// cancelled on shutdown, so the goroutine exits with it.
+	if s.resourceSampler != nil {
+		go s.resourceSampler.Run(ctx)
 	}
 	// Opt-in profiling on loopback only. Set WICK_PPROF=1 to expose
 	// /debug/pprof on 127.0.0.1:6060 (heap, goroutine, profile) for

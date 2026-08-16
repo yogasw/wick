@@ -293,4 +293,5 @@ Pool fires two callbacks the UI subscribes to:
 - [Scheduled Messages](./scheduled-messages) — another non-web caller of `Send`, via the schedule runner.
 - [Projects](./projects) — `cwd` resolution.
 - [Providers](./providers) — `FactoryOptions.ProviderType` / `ProviderName` forwarding.
+- [Memory Guard](./memory-guard) — the byte-limit axis this pool's `MaxConcurrent` doesn't cover.
 - [Command Gate](../command-gate) — gate's PreToolUse hook fires inside the spawned subprocess; pool doesn't see it.

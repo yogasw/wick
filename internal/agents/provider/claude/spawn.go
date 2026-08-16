@@ -176,12 +176,20 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		args = append(args, "--resume", opt.ResumeID)
 	}
 
-	cmd := safeexec.CommandContext(ctx, bin, args...)
+	// Memory guard: run the agent inside its own systemd scope so a
+	// runaway tree is killed by the kernel instead of taking wick with it.
+	// bin/args below stay the UNWRAPPED pair — the spawn log must keep
+	// showing the command an operator can reproduce by hand.
+	execBin, execArgs, scopeUnit := opt.MemGuard.Wrap(bin, args, "claude", opt.SpawnSeq)
+
+	cmd := safeexec.CommandContext(ctx, execBin, execArgs...)
 	cmd.Dir = opt.Workspace
 	cmd.Env = append(spawnEnv(os.Environ(), opt), routerContrib.Env...)
 	hideConsole(cmd)
 	// Own process group: teardown must reach the descendants this CLI
 	// spawns (MCP servers, tool subprocesses), not just the leader.
+	// Kept alongside the scope, not replaced by it: the scope bounds
+	// memory, the process group is how a session is stopped.
 	procgroup.Apply(cmd)
 
 	// Env wick injected on top of the inherited environment (ExtraEnv,
@@ -234,11 +242,21 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 			Msg("agents.spawn: start failed (set provider.Binary in /tools/agents/providers if claude not on PATH)")
 		return nil, fmt.Errorf("start claude: %w", err)
 	}
+	// Tell the kernel to prefer this agent over wick if the machine as a
+	// whole runs out. Advisory — the agent is already running, so a
+	// failure here is logged inside BiasChild and never fails the spawn.
+	opt.MemGuard.BiasChild(cmd.Process.Pid)
+
 	log.Info().
 		Int("pid", cmd.Process.Pid).
 		Str("bin", bin).
+		Str("scope", scopeUnit).
 		Msg("agents.spawn: started")
-	return &process{cmd: cmd, stdin: stdin, stdout: stdout, stderrB: stderrB, env: addedEnv}, nil
+	return &process{
+		cmd: cmd, stdin: stdin, stdout: stdout, stderrB: stderrB,
+		env: addedEnv, scopeUnit: scopeUnit,
+		realBin: bin, realArgv: args,
+	}, nil
 }
 
 // spawnEnv assembles the subprocess environment from base (typically
@@ -343,6 +361,16 @@ type process struct {
 	stdout  io.ReadCloser
 	stderrB *stderrTail
 	env     []string // wick-injected env (masked), for the spawn log
+	// scopeUnit is the systemd scope this agent runs inside, empty when
+	// unwrapped. Read on the exit path to tell an OOM kill from any other
+	// SIGKILL.
+	scopeUnit string
+	// realBin / realArgv are claude's own binary and arguments even when
+	// cmd holds the systemd-run wrapper. The spawn log exists so an
+	// operator can reproduce a spawn by hand; reporting the wrapper there
+	// would send them after the wrong command.
+	realBin  string
+	realArgv []string
 }
 
 func (p *process) Stdout() io.Reader     { return p.stdout }
@@ -360,12 +388,24 @@ func (p *process) Pid() int {
 	return p.cmd.Process.Pid
 }
 func (p *process) Binary() string {
+	// The real binary, not the scope wrapper — see process.realBin.
+	if p.realBin != "" {
+		return p.realBin
+	}
 	if p.cmd == nil {
 		return ""
 	}
 	return p.cmd.Path
 }
+
+// ScopeUnit implements provider.ScopedProcess. Empty when this spawn was
+// not wrapped in a memory-limited scope.
+func (p *process) ScopeUnit() string { return p.scopeUnit }
 func (p *process) Argv() []string {
+	// The real arguments, not the scope wrapper's — see process.realArgv.
+	if p.realArgv != nil {
+		return maskSensitiveArgs(p.realArgv)
+	}
 	if p.cmd == nil || len(p.cmd.Args) <= 1 {
 		return nil
 	}

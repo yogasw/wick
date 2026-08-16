@@ -35,7 +35,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		label:      "wick (built-in)",
 		// Created here (not in the engine goroutine) so Kill can read p.bg /
 		// p.jobs without racing the goroutine that would otherwise set them.
-		bg:   newBgRegistry(opt.Workspace),
+		bg:   newBgRegistry(opt.Workspace, opt.ToolMemoryMaxMB),
 		jobs: newJobManager(),
 	}
 	go p.runEngine(opt)
@@ -117,6 +117,9 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 		// Per-spawn async-job manager (created in Spawn). Shared by
 		// job_start/status/log/cancel; cancelled on Kill.
 		Jobs: p.jobs,
+		// Bounds a foreground shell command's process tree. 0 = unbounded,
+		// which is the default and the pre-guard behaviour.
+		ToolMemoryMaxMB: opt.ToolMemoryMaxMB,
 	}
 	tools := buildTools(tc)
 	history := loadHistory(opt.SessionDir, maxContextTokens(wc))

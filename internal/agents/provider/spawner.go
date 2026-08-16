@@ -58,6 +58,27 @@ type Process interface {
 	Env() []string
 }
 
+// ScopedProcess is an optional interface a Process may implement to
+// report the systemd scope it was launched inside.
+//
+// Kept off Process itself deliberately: nine types implement Process,
+// most of them test fakes with no notion of a scope, and widening the
+// interface would force an empty method onto all of them for the benefit
+// of three. Callers type-assert and treat absence as "not scoped", which
+// is exactly what an unwrapped spawn is.
+type ScopedProcess interface {
+	ScopeUnit() string
+}
+
+// scopeUnitOf returns the scope a process runs in, or "" when it is not
+// scoped or does not report one.
+func scopeUnitOf(p Process) string {
+	if sp, ok := p.(ScopedProcess); ok {
+		return sp.ScopeUnit()
+	}
+	return ""
+}
+
 // Spawner builds a Process from spawn parameters. The agent package
 // asks the spawner to start a subprocess; the spawner is responsible
 // for choosing argv, working directory, env, and any CLI-specific
@@ -147,6 +168,26 @@ type SpawnOptions struct {
 	// regular agent chat flow is byte-identical — only the workflow agent
 	// node sets it (from its thinking + max_thinking_tokens inputs).
 	ThinkingTokens string
+
+	// MemGuard is the resolved memory policy for this spawn. nil = the
+	// guard is off, or the caller is a test fake; spawners then behave
+	// exactly as they did before the guard existed.
+	MemGuard *MemGuard
+
+	// SpawnSeq names the scope unit uniquely — systemd refuses a duplicate
+	// unit name while the first is still alive, so two concurrent spawns of
+	// the same provider must not collide.
+	SpawnSeq int
+
+	// ToolMemoryMaxMB caps a shell command the wick provider runs itself
+	// (grep, curl, a script), counting its whole process tree. 0 = no
+	// limit. Separate from the agent ceiling because a tool that exceeds
+	// it fails only that call — the model reads the error and can retry
+	// with a narrower scope — so the number can be much smaller.
+	//
+	// Only the in-process wick provider reads this; CLI spawners ignore
+	// it, since their tools run inside the agent's own scope already.
+	ToolMemoryMaxMB int
 
 	// ModelID pins which model this spawn should run, scoped to whichever
 	// provider Instance is. Empty = that provider's own default-model

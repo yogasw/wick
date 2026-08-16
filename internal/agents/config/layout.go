@@ -256,15 +256,11 @@ func ResolveBaseDir(_ StorageConfig) string {
 	return defaultBaseDir()
 }
 
-// defaultBaseDir returns the platform default `~/.<app>/agents`,
-// falling back to `./.<app>/agents` when home dir lookup fails so we
-// never panic. `<app>` comes from appname.Resolve() so every wick
-// app's agents tree lives under the same per-app namespace as its DB.
+// defaultBaseDir returns the agents tree under the resolved data dir
+// (`~/.<app>/agents` by default, or `$WICK_DATA_DIR/agents` when the
+// operator relocated the tree). Sharing appname.AgentsDir() with the
+// sockets, the gate dir, and the DB keeps every artefact in one tree
+// no matter which of them is asked first.
 func defaultBaseDir() string {
-	app := appname.Resolve()
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return filepath.Join(".", "."+app, "agents")
-	}
-	return filepath.Join(home, "."+app, "agents")
+	return appname.AgentsDir()
 }
