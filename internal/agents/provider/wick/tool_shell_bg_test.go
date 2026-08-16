@@ -18,7 +18,7 @@ func newBgTC(t *testing.T) toolContext {
 		t.Skipf("bash not available on this host: %v", err)
 	}
 	ws := t.TempDir()
-	return toolContext{Workspace: ws, Bg: newBgRegistry(ws)}
+	return toolContext{Workspace: ws, Bg: newBgRegistry(ws, 0)}
 }
 
 // waitBgStatus polls shell_output until status leaves "running" or the

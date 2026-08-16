@@ -30,9 +30,12 @@ func KnownDirs() []string {
 	if err != nil {
 		return nil
 	}
-	// Wick's own dir: always present. appname.Resolve() → "wick" (prod) or the
-	// dev/build name (e.g. "wick-lab"), so dev builds stay isolated.
-	wickDir := filepath.Join(home, "."+appname.Resolve(), "skills")
+	// Wick's own dir: always present. Defaults to ~/.<app>/skills — the
+	// app name comes from appname.Resolve() ("wick" in prod, or the
+	// dev/build name like "wick-lab") so dev builds stay isolated — and
+	// follows $WICK_DATA_DIR when set. The other entries are third-party
+	// provider dirs and stay where those tools put them.
+	wickDir := appname.SkillsDir()
 	_ = os.MkdirAll(wickDir, 0o755)
 	candidates := []string{
 		filepath.Join(home, ".agents", "skills"),

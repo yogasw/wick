@@ -49,6 +49,7 @@ const WORKSPACES = {
   "agents/presets": "@wick-fe/agents-presets",
   "agents/project-settings": "@wick-fe/agents-project-settings",
   "agents/providers": "@wick-fe/agents-providers",
+  "agents/resources": "@wick-fe/agents-resources",
   "agents/airouter": "@wick-fe/agents-airouter",
   "agents/scheduled": "@wick-fe/agents-scheduled",
   "agents/scm": "@wick-fe/agents-scm",
@@ -67,18 +68,19 @@ const WORKSPACES = {
 const COMMON_CONSUMERS = {
   "common/api": [
     "agents/conversation", "agents/new-session", "agents/presets",
-    "agents/project-settings", "agents/providers", "agents/scheduled", "agents/scm",
+    "agents/project-settings", "agents/providers", "agents/resources",
+    "agents/scheduled", "agents/scm",
     "agents/skills", "agents/workflow", "manager",
   ],
   "common/stores": [
     "agents/conversation", "agents/new-session", "agents/overview",
-    "agents/presets", "agents/project-settings", "agents/providers",
+    "agents/presets", "agents/project-settings", "agents/providers", "agents/resources",
     "agents/airouter", "agents/scheduled", "agents/scm", "agents/skills", "agents/workflow",
     "manager",
   ],
   "common/ui": [
     "agents/conversation", "agents/new-session", "agents/overview",
-    "agents/presets", "agents/project-settings", "agents/providers",
+    "agents/presets", "agents/project-settings", "agents/providers", "agents/resources",
     "agents/airouter", "agents/scheduled", "agents/scm", "agents/skills", "agents/workflow",
     "manager",
   ],

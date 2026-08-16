@@ -90,6 +90,16 @@ type PoolConfig struct {
 	MaxConcurrent int
 	IdleTimeout   time.Duration
 	KillAfterIdle time.Duration
+	// MinFreeMemoryLoader returns the floor, in MB, below which a spawn is
+	// queued rather than started. 0 or a nil loader disables the check, so
+	// a pool built without it behaves exactly as it always has.
+	//
+	// A loader rather than a value because the operator changes this in
+	// the UI while wick is running — the same reason the factory's Gate
+	// and MemGuard settings are loaders. MaxConcurrent above counts
+	// PROCESSES; this counts BYTES, and a free slot says nothing about
+	// whether the machine can host what would fill it.
+	MinFreeMemoryLoader func() int
 	// PreemptIdle, when true, lets a queued send kick out the longest-idle
 	// active subprocess (Lifecycle == Idle) so the new session doesn't have
 	// to wait for the idle TTL. The preempted session keeps its CLI session
@@ -1177,6 +1187,13 @@ func (p *Pool) releaseSlot(key string) {
 // Per-provider cap comes from provider.Find(type,name).MaxConcurrent;
 // 0 = unlimited (the instance follows only the global cap).
 func (p *Pool) slotFreeLocked(pType, pName string) bool {
+	// A free slot says nothing about whether the machine can host what
+	// would fill it: the caps count processes, this counts bytes. Checked
+	// here rather than at the two call sites so a memory refusal queues
+	// through exactly the same path as a slot refusal.
+	if !p.memoryAdmitsNow() {
+		return false
+	}
 	// Remaining != 0 means free: a positive count, or -1 for unlimited.
 	if pType == "" {
 		// Provider unknown — gate on the global cap only.

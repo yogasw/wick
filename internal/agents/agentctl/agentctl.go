@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -18,13 +17,11 @@ import (
 )
 
 // SocketPath returns the platform path for the agentctl unix socket.
+// Rooted at appname.AgentsDir() so the socket follows $WICK_DATA_DIR
+// along with the sessions it controls — a daemon and a stdio process
+// that disagreed on the data dir would also fail to find each other.
 func SocketPath() string {
-	app := appname.Resolve()
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "."
-	}
-	return filepath.Join(home, "."+app, "agents", "agentctl.sock")
+	return filepath.Join(appname.AgentsDir(), "agentctl.sock")
 }
 
 // Op values for Cmd.Op.

@@ -47,6 +47,21 @@ type ClaudeFactory struct {
 	// over Gate when non-nil. This lets operators toggle gate_enabled
 	// or edit AllowedCmds in the UI without restarting the server.
 	GateLoader func() *GateConfig
+	// ToolMemoryLoader (optional) returns the ceiling for a shell command
+	// the wick provider runs itself, in MB. 0 = unbounded. Read per Build
+	// for the same reason as MemGuardLoader.
+	ToolMemoryLoader func() int
+
+	// MemGuardLoader (optional) returns the current memory-guard policy,
+	// read on every Build so an operator can change the mode or the
+	// limits in the UI without restarting the server — the same reason
+	// GateLoader exists. nil, or a nil return, means the guard is off and
+	// spawns behave exactly as they did before it existed.
+	//
+	// The per-instance ceiling is resolved here rather than by the caller,
+	// since only Build knows which instance a session ended up on.
+	MemGuardLoader func() *provider.MemGuard
+
 	// PermissionModeLoader (optional) is called on every Build to read
 	// the current GateConfig.PermissionMode value. Return "bypass" to
 	// force --permission-mode bypassPermissions on Claude (and the
@@ -364,6 +379,19 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	}
 
 	insCopy := resolvedIns
+
+	// Memory guard, resolved per instance: the global ceiling is the
+	// default, and an instance may set its own — higher OR lower. See
+	// config.ResolveAgentLimitMB for why this is not a min().
+	var memGuard *provider.MemGuard
+	if f.MemGuardLoader != nil {
+		if g := f.MemGuardLoader(); g != nil {
+			resolved := *g
+			resolved.AgentLimitMB = config.ResolveAgentLimitMB(resolvedIns.MemoryMaxMB, g.AgentLimitMB)
+			memGuard = &resolved
+		}
+	}
+
 	a := provider.New(provider.Options{
 		Workspace:     opt.Workspace,
 		SessionDir:    f.Layout.SessionDir(opt.SessionID),
@@ -392,8 +420,17 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		MaxTurns:       opt.MaxTurns,
 		ThinkingTokens: opt.ThinkingTokens,
 		ModelID:        opt.ModelID,
-		ExtraArgs:      resolvedIns.ExtraArgs,
-		ExtraEnv:       resolvedIns.Env,
+		MemGuard:       memGuard,
+		// Only applied when the guard is on: a tool ceiling without a mode
+		// would limit commands the operator never asked to limit.
+		ToolMemoryMaxMB: func() int {
+			if memGuard == nil || f.ToolMemoryLoader == nil {
+				return 0
+			}
+			return f.ToolMemoryLoader()
+		}(),
+		ExtraArgs: resolvedIns.ExtraArgs,
+		ExtraEnv:  resolvedIns.Env,
 		// claude = persistent stdin (append); codex = one-shot per turn,
 		// queue mid-turn sends so spam doesn't stack subprocesses. A
 		// per-instance override (providers UI) takes precedence over the
