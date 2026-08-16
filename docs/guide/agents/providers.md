@@ -30,6 +30,7 @@ Each instance carries:
 | `AIRouterProvider` | Which registered router to route through (`9router`, `omniroute`, …). Empty = default (`9router`). | [provider.go](https://github.com/yogasw/wick/blob/master/internal/agents/provider/provider.go) |
 | `AIRouterModels` | Per-slot model IDs (e.g. `opus → cc/claude-opus-4-6`). Slots defined by the selected router. All optional. | [airouter.go](https://github.com/yogasw/wick/blob/master/internal/agents/provider/airouter.go) |
 | `AIRouterAPIKey` | Custom router API key, stored encrypted. Empty = the router's default credential. | [airouter.go](https://github.com/yogasw/wick/blob/master/internal/agents/provider/airouter.go) |
+| `MemoryMaxMB` | Memory limit for this instance's agents, in MB, counting the whole process tree. `0` = follow the global `agent_memory_max_mb`. May exceed the global value — a memory ceiling is per-process, not a shared pool slot, so one heavy instance can be given more without making every other agent fatter. See [Memory Guard](./memory-guard#per-instance-memory-limit). | [provider.go](https://github.com/yogasw/wick/blob/master/internal/agents/provider/provider.go) |
 
 The default seed: when the instance list is empty, [`Load`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/provider.go#L89) auto-creates one default per type whose `Name` equals the type. So a fresh install always shows three cards (`claude/claude`, `codex/codex`, `gemini/gemini`).
 
@@ -436,6 +437,7 @@ Since a wick session runs in-process (no CLI to hand `--add-dir` to and let it l
 
 - [Projects](./projects) — `default_provider` field per project; how project defaults auto-migrate on rename.
 - [Pool & Sessions](./pool) — how `provider_type` / `provider_name` are forwarded to the spawner.
+- [Memory Guard](./memory-guard) — the per-instance memory limit field, and the global limits it can override.
 - [AI Router](./airouter) — routing provider spawns through an embedded AI router (9router / OmniRoute).
 - [Command Gate](../command-gate) — gate sidecar lives next to the main binary, separate from providers.
 - [Skills Manager](./skills-manager) — shared skill directories, sync, and the file browser UI.
