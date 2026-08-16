@@ -750,7 +750,7 @@ templ agentsNavLink(href, label string, active bool) {
 // (otherwise the active row would be hidden).
 func agentsMoreOpenAttr(activePage string) templ.Attributes {
 	switch activePage {
-	case "presets", "providers", "skills", "channels", "data-tables", "scheduled", "airouter", "agent-profiles":
+	case "presets", "providers", "skills", "channels", "data-tables", "scheduled", "airouter", "agent-profiles", "resources":
 		return templ.Attributes{"open": ""}
 	}
 	return templ.Attributes{}
@@ -820,6 +820,12 @@ templ agentsNavIcon(label string) {
 			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
 				<circle cx="8" cy="9" r="5.5"></circle>
 				<path d="M8 6v3l2 1.5M3 2.5L1.5 4M13 2.5 14.5 4" stroke-linecap="round" stroke-linejoin="round"></path>
+			</svg>
+		case "Resources":
+			// Rising bars: the page is a usage trend over time.
+			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
+				<path d="M2 13.5h12" stroke-linecap="round"></path>
+				<path d="M4 13.5V9M7.5 13.5V5M11 13.5v-3" stroke-linecap="round"></path>
 			</svg>
 		case "Settings":
 			<svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
