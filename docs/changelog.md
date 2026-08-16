@@ -10,6 +10,21 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.39.1](https://github.com/yogasw/wick/compare/v0.39.0...v0.39.1) — Agents
+
+_Released on 2026-08-16_
+
+### Fixed
+
+*   Corrected the serving of the "Resources" bundle for the Agents UI. The Single Page Application (SPA) asset handler was updated to use the correct base path, resolving a 404 error when the bundle attempted to load.
+*   Added a sidebar icon for the "Resources" entry within the Agents navigation.
+*   Ensured the "Resources" entry correctly triggers the auto-expansion of its parent "More" group when navigated to.
+*   Introduced new tests to verify the SPA asset serving and the proper rendering and functionality of the navigation link.
+*   Addressed a CI issue by making the "Resources" SPA test skip execution when the frontend bundle has not yet been built, ensuring compatibility with the release pipeline's test order.
+
+---
+
+
 ## [v0.39.0](https://github.com/yogasw/wick/compare/v0.38.6...v0.39.0) — Agent Resources
 
 _Released on 2026-08-16_

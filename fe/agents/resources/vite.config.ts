@@ -9,7 +9,11 @@ const WATCH = process.argv.includes("--watch") || process.argv.includes("-w");
 
 export default defineConfig({
   plugins: [svelte()],
-  base: "/tools/agents/resources/",
+  // Assets are served by the agents SPA handler, which is mounted at
+  // /workflow/ only (spa_handler.go spaPrefix). Every SPA lives under it —
+  // overview, scm, and the rest — regardless of the page route the shell
+  // is reached by. A base outside that prefix has no handler and 404s.
+  base: "/tools/agents/workflow/resources/",
   build: {
     outDir: OUT_DIR,
     emptyOutDir: !WATCH,
@@ -28,7 +32,7 @@ export default defineConfig({
         target: process.env.WICK_PROXY ?? "http://localhost:9425",
         changeOrigin: true,
         bypass: (req) => {
-          if (req.url?.startsWith("/tools/agents/resources/")) {
+          if (req.url?.startsWith("/tools/agents/workflow/resources/")) {
             return req.url;
           }
         },
