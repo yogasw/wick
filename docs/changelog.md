@@ -6,7 +6,16 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Agents
+#### Added
+*   **Kernel-enforced memory guard for agents**: a new `memory_guard_mode` (`off` default / `measure` / `enforce`) puts each agent subprocess in its own systemd scope so a runaway process tree (a leaked browser, a bad loop) is killed by the kernel instead of taking wick or other agents down with it. Configurable per-agent, total, and tool-command memory ceilings, a minimum-free-memory floor that queues new spawns instead of starting them, and contention controls (CPU weight/quota, max tasks, IO weight) on the shared agent slice. Ships off — behavior is unchanged until you opt in. Linux only (needs a reachable systemd user session); degrades cleanly and says so elsewhere. A provider instance can also set its own memory limit, which may exceed the global default. See [Memory Guard](/guide/agents/memory-guard).
+*   **Resource usage analytics + Resources page**: a new admin-only `/tools/agents/resources` page shows a live per-agent memory/CPU/disk table, trend charts, and suggested limits with an apply button — backed by an optional in-memory usage history (on by default) bounded by both a retention window and a hard point ceiling. See [Memory Guard ▶ Usage History](/guide/agents/memory-guard#usage-history).
+*   **`wick memory report` CLI**: reads `/proc` directly to report per-agent memory usage (including browsers/tools an agent started) and suggest limits, with an optional `--watch`/`--for` mode to capture peaks over time. Works with the guard off. See [CLI Reference](/reference/cli#wick-memory-report).
+*   **Clearer OOM exit reason**: when the guard kills an agent for exceeding its memory limit, the exit reason surfaced in chat and the spawn log now names the measured peak and the ceiling it broke, instead of a bare "agent stopped".
+
+### Ops
+#### Changed
+*   **`wick install service`'s systemd unit now rate-limits restarts** (`StartLimitIntervalSec=300`, `StartLimitBurst=3`), so a crash-restart-crash loop (e.g. from a repeated OOM) surfaces as a visible `failed` unit instead of restarting invisibly forever.
 
 ---
 

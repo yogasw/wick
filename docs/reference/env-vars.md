@@ -67,10 +67,49 @@ The `~/.<app>/` tree currently includes:
 | `~/.<app>/INITIAL_CREDENTIALS.txt` | Auto-generated admin passphrase (deleted on first password rotation) |
 | `~/.<app>/logs/{app,server,worker,gate}-YYYY-MM-DD.log` | Daily tail logs |
 | `~/.<app>/agents/` | [Agents](../guide/agents) subsystem state — projects, sessions, presets, gate spec/socket |
+| `~/.<app>/skills/` | Wick's own skills folder, a sync target alongside `~/.claude/skills` |
+| `~/.<app>/plugins/connectors/` | Installed connector [plugins](../guide/plugins) |
+| `~/.<app>/run/` | Plugin gRPC sockets |
 
 ```env
 APP_NAME=My Internal Tools
 ```
+
+### `WICK_DATA_DIR`
+**Default:** _(empty — falls back to `~/.<app>/`)_
+
+Absolute path to the root data directory, replacing `~/.<app>/`. Everything
+in the table above moves with it — DB, config, logs, agents, skills, plugins,
+sockets — so one variable relocates the whole tree instead of half of it.
+
+Use this when the default location doesn't work: a downloaded binary has its
+app name baked in at build time and ships without a `wick.yml`, so `APP_NAME`
+can't move its data. Common cases are putting the tree on a larger volume, or
+running two instances of the same binary side by side with separate state.
+
+```env
+# absolute
+WICK_DATA_DIR=/mnt/data/wick
+
+# ~ expands to the home dir; a relative path resolves against the cwd
+WICK_DATA_DIR=~/wick-staging
+```
+
+Notes:
+
+- **Set it before first boot, or move your existing tree yourself.** Wick
+  starts clean in the new location and does not copy or migrate the old one.
+- **`DATABASE_URL` still wins** for the database, as does `database_path` in
+  `config.json`. Both name one exact file, so neither is relocated. Same for
+  `WICK_PLUGINS_DIR` and `WICK_PLUGIN_SOCKET_DIR`.
+- **Every wick process needs the same value.** The server, the worker, the
+  MCP stdio process, and the `<app>-gate` hook each resolve this on their own.
+  The gate inherits it through the provider CLI that wick spawns, so an
+  exported shell variable or a `.env` covers the whole chain — but a systemd
+  unit or a launch agent that starts wick with a scrubbed environment needs it
+  set explicitly, or that process will read from `~/.<app>/` while the rest of
+  the install uses the override. Run `<app>-gate --config` to see the
+  `data_dir` a gate binary actually resolved.
 
 ### `APP_URL`
 **Default:** `http://localhost:9425`

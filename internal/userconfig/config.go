@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/yogasw/wick/internal/appname"
 )
 
 // Config is the on-disk shape. Add fields with `json:"...,omitempty"`
@@ -221,6 +223,11 @@ type ProviderInstance struct {
 	// MaxConcurrent caps how many parallel spawns this instance may
 	// have running at once. 0 = unlimited (follows the global pool cap).
 	MaxConcurrent int `json:"max_concurrent,omitempty"`
+
+	// MemoryMaxMB caps this instance's agents in MB, counting the whole
+	// process tree they start. 0 = follow the global agent memory limit.
+	// May exceed the global value — see provider.Instance.MemoryMaxMB.
+	MemoryMaxMB int `json:"memory_max_mb,omitempty"`
 
 	// SendMode overrides how this instance delivers a user message to its
 	// CLI. Empty = the provider type's default (claude → "append", codex →
@@ -425,7 +432,16 @@ func defaults() Config {
 
 // Dir returns the absolute per-app data directory. Empty name falls
 // back to the running binary's basename.
+//
+// $WICK_DATA_DIR overrides the whole thing, name included: the override
+// names one concrete tree, so every caller lands in it rather than in a
+// per-app subdir. That is the point of the env — a downloaded binary has
+// its app name baked in at build time and cannot be renamed, so keeping
+// the name in the path would leave the override unable to move anything.
 func Dir(name string) (string, error) {
+	if d := appname.DataDirOverride(); d != "" {
+		return d, nil
+	}
 	if name == "" {
 		name = binaryName()
 	}
@@ -520,8 +536,12 @@ func Save(name string, cfg Config) error {
 // Resolution order (first non-empty wins, never overwrites a higher priority):
 //  1. DATABASE_URL env already set (explicit env / CI override) → untouched
 //  2. cfg.DatabasePath set (user edited database_path in config.json)
-//  3. <binary_dir>/wick.db when wick.yml exists next to the binary (project mode)
-//  4. ~/.<appName>/wick.db (standalone / downloaded binary)
+//  3. $WICK_DATA_DIR/wick.db — the DB belongs in the tree the operator
+//     picked, so this outranks project mode below. Otherwise a binary
+//     sitting next to a wick.yml would keep its DB in the binary dir
+//     while every other artefact moved, splitting the data in two.
+//  4. <binary_dir>/wick.db when wick.yml exists next to the binary (project mode)
+//  5. ~/.<appName>/wick.db (standalone / downloaded binary)
 func ResolveDBPath(appName, customPath string) {
 	if os.Getenv("DATABASE_URL") != "" {
 		return
@@ -529,6 +549,12 @@ func ResolveDBPath(appName, customPath string) {
 	if customPath != "" {
 		os.Setenv("DATABASE_URL", customPath)
 		return
+	}
+	if override := appname.DataDirOverride(); override != "" {
+		if err := os.MkdirAll(override, 0o755); err == nil {
+			os.Setenv("DATABASE_URL", filepath.Join(override, "wick.db"))
+			return
+		}
 	}
 	exe, err := os.Executable()
 	if err == nil {

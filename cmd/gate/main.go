@@ -41,6 +41,7 @@ import (
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/appname"
 )
 
 // hookInput is the shape claude's PreToolUse hook sends on stdin.
@@ -303,13 +304,30 @@ func printConfig() {
 	exe, _ := os.Executable()
 	home, _ := os.UserHomeDir()
 
+	// Data dir must be derived from `app` (gate.AppName(), exe-derived for
+	// sidecars), NOT appname.DataDir() — that one keys off appname.Resolve()
+	// and would report a different tree than the one this binary actually
+	// writes to whenever the sidecar name and the ldflag disagree.
+	dataDir := filepath.Join(home, "."+app)
+	dataDirNote := "(default)"
+	// The hook inherits its env from the provider CLI, which inherits from
+	// wick. When that chain breaks the override is missing here but present
+	// in the daemon, so print which source won — that mismatch is exactly
+	// the "hook fires but data lands in the wrong tree" symptom.
+	if override := appname.DataDirOverride(); override != "" {
+		dataDir = override
+		dataDirNote = "($" + appname.DataDirEnv + ")"
+	}
+	logDir := filepath.Join(dataDir, "logs")
+
 	fmt.Printf("app_name:         %s\n", app)
 	fmt.Printf("executable:       %s\n", exe)
 	fmt.Printf("home:             %s\n", home)
+	fmt.Printf("data_dir:         %s %s\n", dataDir, dataDirNote)
 	fmt.Printf("spec:             %s\n", gate.SharedSpecPath(app))
 	fmt.Printf("socket:           %s\n", gate.SharedSocketPath(app))
 	fmt.Printf("commands_jsonl:   %s\n", gate.SharedCommandsPath(app))
-	fmt.Printf("daily_log_dir:    %s\n", filepath.Join(home, "."+app, "logs"))
+	fmt.Printf("daily_log_dir:    %s\n", logDir)
 
 	if st, err := os.Stat(gate.SharedSpecPath(app)); err == nil {
 		fmt.Printf("spec_size:        %d bytes (mtime %s)\n", st.Size(), st.ModTime().UTC().Format(time.RFC3339))

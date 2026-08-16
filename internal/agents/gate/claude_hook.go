@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -68,7 +69,19 @@ func SharedCommandsPath(appName string) string {
 // sharedGateDir returns ~/.<app>/agents/gate, falling back to
 // ./.<app>/agents/gate when the home dir lookup fails so we never
 // panic. Caller is responsible for MkdirAll.
+//
+// $WICK_DATA_DIR outranks appName: the gate binary runs as a hook
+// spawned by the provider CLI, not by wick, so it re-derives this path
+// from scratch on every invocation. It agrees with the daemon because
+// the env is inherited down the whole chain — the spawners build the
+// provider's env from os.Environ() (see claude/spawn.go spawnEnv), and
+// the provider passes its own env to the hook. Anything that starts
+// filtering that env must keep WICK_DATA_DIR, or the hook will look for
+// gate.sock in a tree the daemon never wrote to.
 func sharedGateDir(appName string) string {
+	if d := appname.DataDirOverride(); d != "" {
+		return filepath.Join(d, "agents", "gate")
+	}
 	name := appName
 	if name == "" {
 		name = "wick"

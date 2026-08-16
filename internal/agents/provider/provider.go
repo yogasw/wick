@@ -90,6 +90,15 @@ type Instance struct {
 	// MaxConcurrent caps parallel spawns for this instance. 0 = follows global pool cap.
 	MaxConcurrent int
 
+	// MemoryMaxMB caps this instance's agents in MB, counting the whole
+	// process tree. 0 = follow the global AgentMemoryMaxMB.
+	//
+	// Unlike MaxConcurrent this MAY exceed the global value: a memory
+	// ceiling is per-process, not a share of a pool, so the one instance
+	// that drives a browser can be given more without making every other
+	// agent fatter. See config.ResolveAgentLimitMB.
+	MemoryMaxMB int
+
 	// SendMode overrides the message-delivery mechanism. Empty = the type
 	// default (claude → append, codex → queue). One of "", "append",
 	// "queue", "spawn". See SendMode / SendModeFor.
@@ -848,6 +857,7 @@ func mergeWithDefaults(c userconfig.ProvidersConfig) []Instance {
 				Hooks:             hooksFromUser(raw.Hooks),
 				Storage:           storageFromUser(raw.Storage),
 				MaxConcurrent:     raw.MaxConcurrent,
+				MemoryMaxMB:       raw.MemoryMaxMB,
 				SendMode:          raw.SendMode,
 				UseAIRouter:       raw.UseAIRouter,
 				AIRouterProvider:  raw.AIRouterProvider,
@@ -910,6 +920,7 @@ func toUserInstance(ins Instance) userconfig.ProviderInstance {
 		Hooks:             hooksToUser(ins.Hooks),
 		Storage:           storageToUser(ins.Storage),
 		MaxConcurrent:     ins.MaxConcurrent,
+		MemoryMaxMB:       ins.MemoryMaxMB,
 		SendMode:          ins.SendMode,
 		UseAIRouter:       ins.UseAIRouter,
 		AIRouterProvider:  ins.AIRouterProvider,

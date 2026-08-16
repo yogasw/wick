@@ -205,6 +205,25 @@ The gate-specific checks are detailed in the [Command Gate guide](../guide/comma
 
 ---
 
+### `wick memory report`
+
+Read `/proc` and report memory usage per agent process tree — including browsers and tools an agent starts, which is where the memory usually is. Works with the [memory guard](../guide/agents/memory-guard) switched off, and on a machine that's never been configured. Linux only.
+
+```bash
+wick memory report                      # one snapshot
+wick memory report --watch 30s          # sample every 30s for the default 1h, report peaks
+wick memory report --watch 30s --for 6h # sample for a custom duration
+```
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--watch` | `0` (off) | Sample repeatedly at this interval and report the peak seen per agent, instead of one instant. |
+| `--for` | `1h` | How long to keep sampling with `--watch`. |
+
+Prints the machine's total/available memory, one row per agent tree with its heaviest descendant named (e.g. "chromium 1.2 GB"), and a **Suggested settings** block (with 30% headroom over any observed peak) for `agent_memory_max_mb`, `agents_total_memory_mb`, `tool_memory_max_mb`, and `min_free_memory_mb`. See [Memory Guard](../guide/agents/memory-guard#wick-memory-report-cli).
+
+---
+
 ### `wick upgrade`
 
 Upgrade the wick CLI binary and the `github.com/yogasw/wick` dependency in the current project's `go.mod` to the latest released version, then tidy. Prompts before each step; pass `-y` to skip all prompts.

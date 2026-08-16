@@ -143,7 +143,15 @@ func shellTool(tc toolContext) toolDef {
 			}
 
 			timeout := resolveShellTimeout(args)
-			out, timedOut, runErr := runShellForeground(ctx, tc.Workspace, cmdline, timeout)
+			out, timedOut, oomKilled, runErr := runShellForeground(
+				ctx, tc.Workspace, cmdline, timeout, tc.ToolMemoryMaxMB)
+
+			// A memory kill gets its own message: the generic exit error
+			// would just be retried unchanged, while this one tells the
+			// model to narrow the scope. The agent itself is unaffected.
+			if oomKilled {
+				return toolOOMMessage(tc.ToolMemoryMaxMB), true
+			}
 
 			body := string(out)
 			truncated := false
@@ -182,15 +190,19 @@ func shellTool(tc toolContext) toolDef {
 // CommandContext: exec's context kill targets only the direct child, which
 // is exactly the bug (bash dies, its `sleep` child lives, CombinedOutput
 // blocks on the still-open pipe). proctree.Kill reaps the group instead.
-func runShellForeground(ctx context.Context, workspace, cmdline string, timeout time.Duration) (out []byte, timedOut bool, runErr error) {
+func runShellForeground(ctx context.Context, workspace, cmdline string, timeout time.Duration, memLimitMB int) (out []byte, timedOut bool, oomKilled bool, runErr error) {
 	bin, err := resolveBash()
 	if err != nil {
-		return nil, false, fmt.Errorf("error: %w", err)
+		return nil, false, false, fmt.Errorf("error: %w", err)
 	}
 	// Single -c argument, exactly as received: no re-quoting, no escaping
 	// " -> \", no \n -> space collapsing. This is what makes heredocs,
 	// multi-line Python, and nested quotes work.
-	cmd := safeexec.Command(bin, "-c", cmdline)
+	//
+	// Memory guard wraps the pair AFTER it is assembled, so the -c body is
+	// still handed over byte-for-byte.
+	execBin, execArgs, scopeUnit := wrapToolCmd(bin, []string{"-c", cmdline}, memLimitMB, nextToolSeq())
+	cmd := safeexec.Command(execBin, execArgs...)
 	if workspace != "" {
 		cmd.Dir = workspace
 	}
@@ -200,7 +212,7 @@ func runShellForeground(ctx context.Context, workspace, cmdline string, timeout 
 
 	proctree.Apply(cmd)
 	if err := cmd.Start(); err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	proctree.Assign(cmd)
 	defer proctree.Release(cmd)
@@ -229,7 +241,11 @@ func runShellForeground(ctx context.Context, workspace, cmdline string, timeout 
 	if killed.Load() {
 		// Deadline fired: report as a timeout regardless of the wait error
 		// (a killed process reports a non-nil, non-meaningful exit).
-		return buf.Bytes(), true, nil
+		return buf.Bytes(), true, false, nil
 	}
-	return buf.Bytes(), false, waitErr
+	// A memory kill looks exactly like any other SIGKILL from here, so ask
+	// the scope's own accounting before reporting a generic exit error.
+	// Read before returning: --collect reaps the scope once the last
+	// process is gone, taking the evidence with it.
+	return buf.Bytes(), false, waitErr != nil && toolOOMKilled(scopeUnit), waitErr
 }

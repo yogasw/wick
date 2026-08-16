@@ -36,6 +36,11 @@ type toolContext struct {
 	// One manager per spawn, cancelled on teardown. nil = job tools report
 	// "not available" (tests / unwired).
 	Jobs *jobManager
+	// ToolMemoryMaxMB caps a shell command this agent runs, counting its
+	// whole process tree. 0 (the default) = no limit, exactly as before
+	// the memory guard existed. Exceeding it fails that one command and
+	// returns an error the model can act on; the agent keeps running.
+	ToolMemoryMaxMB int
 }
 
 // WickConfigResolved is the effective instance config after defaults,
