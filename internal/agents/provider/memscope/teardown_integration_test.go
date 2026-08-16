@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 // Wick tears a session down with kill(-pgid) across the whole process
@@ -43,7 +45,7 @@ func TestKillProcessGroupReapsTreeThroughScope(t *testing.T) {
 	bin, argv := WrapArgv("/bin/bash", []string{script}, Opts{
 		Unit: "wick-teardown-test", Slice: SliceName, LimitMB: 200,
 	})
-	cmd := exec.Command(bin, argv...)
+	cmd := safeexec.Command(bin, argv...)
 	// Mirrors procgroup.Apply: the agent is the root of its own group.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -130,7 +132,7 @@ func TestOOMKillIsScopedToOneAgent(t *testing.T) {
 	sibBin, sibArgv := WrapArgv("/bin/sleep", []string{"30"}, Opts{
 		Unit: "wick-sibling-test", Slice: SliceName, LimitMB: 200,
 	})
-	sib := exec.Command(sibBin, sibArgv...)
+	sib := safeexec.Command(sibBin, sibArgv...)
 	sib.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := sib.Start(); err != nil {
 		t.Fatalf("start sibling: %v", err)
@@ -140,7 +142,7 @@ func TestOOMKillIsScopedToOneAgent(t *testing.T) {
 	hogBin, hogArgv := WrapArgv("/usr/bin/python3", []string{hog}, Opts{
 		Unit: "wick-hog-test", Slice: SliceName, LimitMB: 250,
 	})
-	out, err := exec.Command(hogBin, hogArgv...).CombinedOutput()
+	out, err := safeexec.Command(hogBin, hogArgv...).CombinedOutput()
 	if err == nil {
 		t.Fatalf("hog was not killed; output: %s", out)
 	}
