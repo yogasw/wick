@@ -102,7 +102,7 @@ func processesHandler(c *tool.Ctx) {
 		needle := strings.ToLower(q)
 		filtered := groups[:0:0]
 		for _, g := range groups {
-			if strings.Contains(strings.ToLower(g.Name), needle) {
+			if groupMatches(g, needle) {
 				filtered = append(filtered, g)
 			}
 		}
@@ -157,6 +157,28 @@ func processesHandler(c *tool.Ctx) {
 		CPUCores:        runtime.NumCPU(),
 		Groups:          toGroupRows(groups[start:end]),
 	})
+}
+
+// groupMatches reports whether a search term hits this group, by name or
+// by any member's command line.
+//
+// Searching the command matters more than searching the name: the rows an
+// operator most needs to find are the ambiguous ones — several "node" or
+// "python3" processes where only the arguments say which is which.
+// Matching on name alone would return all of them or none.
+//
+// needle must already be lower-cased by the caller, so the comparison is
+// not redone per member.
+func groupMatches(g memreport.ProcGroup, needle string) bool {
+	if strings.Contains(strings.ToLower(g.Name), needle) {
+		return true
+	}
+	for _, m := range g.Members {
+		if m.Cmdline != "" && strings.Contains(strings.ToLower(m.Cmdline), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // sortGroups ranks in place, ties on name so paging is stable — a row

@@ -118,6 +118,16 @@ func fillProcessCounters(p *Proc) {
 		p.CPUTicks = total / per100ns
 	}
 
+	// Full image path stands in for a command line here. Reading the real
+	// argv on Windows means poking at another process's PEB, which needs
+	// far broader rights and breaks on 32/64-bit mismatches; the path
+	// already answers the question that matters — WHICH node.exe is this.
+	var buf [windows.MAX_LONG_PATH]uint16
+	size := uint32(len(buf))
+	if err := windows.QueryFullProcessImageName(h, 0, &buf[0], &size); err == nil {
+		p.Cmdline = windows.UTF16ToString(buf[:size])
+	}
+
 	var io ioCounters
 	if r, _, _ := procGetProcessIoCtrs.Call(uintptr(h), uintptr(unsafe.Pointer(&io))); r != 0 {
 		// Transfer counts include file-cache traffic, unlike Linux's

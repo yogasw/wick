@@ -30,6 +30,17 @@ type Proc struct {
 	// processes owned by another user.
 	IOReadBytes  uint64
 	IOWriteBytes uint64
+	// Cmdline is the full command the process was started with, argv
+	// joined by spaces.
+	//
+	// The name alone is frequently useless for identification: "node",
+	// "python3", and "MainThread" say nothing about which of several
+	// identical-looking processes is the one eating the machine. The
+	// command line is what distinguishes them.
+	//
+	// Empty when unreadable — kernel threads have none, and another
+	// user's process may refuse it. Callers fall back to Name.
+	Cmdline string
 }
 
 // clockTicksPerSec is the kernel's USER_HZ. It is 100 on every Linux

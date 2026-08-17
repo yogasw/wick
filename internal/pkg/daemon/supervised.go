@@ -40,8 +40,19 @@ func sourcePath(p Paths) string {
 // know the supervisor without re-deriving it from a different process.
 func DetectSource() Source {
 	// systemd sets INVOCATION_ID for every unit it launches (PID 1 and
-	// user manager alike). Presence ⇒ this process is a systemd unit.
-	if os.Getenv("INVOCATION_ID") != "" {
+	// user manager alike) — but it is a plain environment variable, and
+	// other supervisors set it too. Fly.io's init does, on a machine with
+	// no systemd at all, which made `status` report "running (via
+	// systemd)" on a host where systemd was not installed. That label is
+	// worse than no label: an operator reads it as evidence that scope
+	// isolation is available, and it is not.
+	//
+	// So the variable is treated as a hint that must be confirmed by
+	// something systemd actually owns. Indirected through a package var
+	// so a test can drive the genuine-systemd branch too — otherwise only
+	// the false-positive half is reachable off a systemd host, and the
+	// case that must keep working would go unverified.
+	if os.Getenv("INVOCATION_ID") != "" && systemdIsInitFn() {
 		return SourceSystemd
 	}
 	// WICK_SPAWN_SOURCE lets the tray / daemon parent stamp the origin
@@ -55,6 +66,10 @@ func DetectSource() Source {
 	}
 	return SourceCLI
 }
+
+// systemdIsInitFn is the seam DetectSource consults. Production points at
+// the real per-platform check; tests swap it to exercise both branches.
+var systemdIsInitFn = systemdIsInit
 
 // WriteSource records the spawn Source next to run.pid. Best-effort —
 // a failure here only degrades `status` reporting, never blocks boot.
