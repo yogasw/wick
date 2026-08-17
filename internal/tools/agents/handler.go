@@ -389,6 +389,7 @@ func Register(r tool.Router) {
 	// from measurement rather than guessed.
 	r.GET("/api/memory", memoryReportHandler)
 	r.GET("/api/memory/series", memorySeriesHandler)
+	r.GET("/api/processes", processesHandler)
 	r.POST("/api/memory/apply-suggested", applySuggestedMemoryHandler)
 
 	r.GET("/providers", providersPage)

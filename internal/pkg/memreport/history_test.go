@@ -45,6 +45,68 @@ func TestHistory_TurnsCountersIntoRates(t *testing.T) {
 	}
 }
 
+// The chart was blank whenever no agent was running — which is precisely
+// when someone is asking why the box is slow. Machine-wide totals are
+// recorded regardless of whether any agent exists.
+func TestHistory_RecordsMachineTotalsWithoutAgents(t *testing.T) {
+	h := NewHistory(time.Hour, 100)
+	t0 := time.Unix(1_700_000_000, 0)
+
+	procs := []Proc{
+		{PID: 100, PPID: 1, Name: "chrome", RSSBytes: 500, CPUTicks: 0},
+		{PID: 200, PPID: 1, Name: "code", RSSBytes: 300, CPUTicks: 0},
+	}
+	// No roots: nothing here is an agent.
+	h.Record(t0, procs, nil, 4000, 2000)
+
+	m := h.Machine(time.Time{})
+	if len(m) != 1 {
+		t.Fatalf("got %d machine samples, want 1", len(m))
+	}
+	if m[0].MachineUsedBytes != 800 {
+		t.Fatalf("MachineUsedBytes = %d, want 800 (500+300)", m[0].MachineUsedBytes)
+	}
+	if m[0].MachineProcs != 2 {
+		t.Fatalf("MachineProcs = %d, want 2", m[0].MachineProcs)
+	}
+	// And the agent figures stay zero — the two must not be conflated.
+	if m[0].AgentBytes != 0 {
+		t.Fatalf("AgentBytes = %d, want 0 with no agents running", m[0].AgentBytes)
+	}
+}
+
+// Machine CPU must be a rate across every process, not a lifetime total.
+func TestHistory_MachineCPUIsARate(t *testing.T) {
+	h := NewHistory(time.Hour, 100)
+	t0 := time.Unix(1_700_000_000, 0)
+
+	h.Record(t0, []Proc{{PID: 1, Name: "a", CPUTicks: 100_000}}, nil, 4000, 2000)
+	// +1000 ticks over 10s = 100% of one core.
+	h.Record(t0.Add(10*time.Second), []Proc{{PID: 1, Name: "a", CPUTicks: 101_000}}, nil, 4000, 2000)
+
+	m := h.Machine(time.Time{})
+	last := m[len(m)-1]
+	if last.MachineCPUPct < 99 || last.MachineCPUPct > 101 {
+		t.Fatalf("MachineCPUPct = %v, want ~100 — it is reporting a lifetime total", last.MachineCPUPct)
+	}
+}
+
+// Exited processes must not linger in the machine-wide tick map.
+func TestHistory_MachineTracksOnlyLiveProcesses(t *testing.T) {
+	h := NewHistory(time.Hour, 100)
+	t0 := time.Unix(1_700_000_000, 0)
+
+	h.Record(t0, []Proc{{PID: 1}, {PID: 2}, {PID: 3}}, nil, 4000, 2000)
+	if len(h.machineProcs) != 3 {
+		t.Fatalf("tracking %d processes, want 3", len(h.machineProcs))
+	}
+
+	h.Record(t0.Add(time.Second), []Proc{{PID: 1}}, nil, 4000, 2000)
+	if len(h.machineProcs) != 1 {
+		t.Fatalf("tracking %d processes after two exited, want 1", len(h.machineProcs))
+	}
+}
+
 // Retention is the point of the whole buffer: a machine left running for
 // a month must not report a month of history.
 func TestHistory_PurgesByRetention(t *testing.T) {

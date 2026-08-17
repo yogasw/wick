@@ -10,6 +10,8 @@
 // measures them.
 package memreport
 
+import "sort"
+
 // Proc is one process as sampled from /proc.
 //
 // CPUTicks and IO counters are CUMULATIVE since the process started, not
@@ -171,6 +173,103 @@ func SumSubtreeAll(procs []Proc, root int) Totals {
 	}
 	return t
 }
+
+// Subtree returns every process in root's tree, heaviest first, capped at
+// limit (0 = uncapped).
+//
+// This is the task-manager view: the aggregate in Totals answers "how much
+// is this agent using", while the list answers "which process is using
+// it" — the question an operator actually acts on. Sorted by RSS because
+// that is what a limit is set against; ties break on PID so repeated calls
+// against one snapshot render in a stable order rather than shuffling
+// between refreshes.
+//
+// The cap matters: an agent driving a browser can have dozens of renderer
+// processes, and an uncapped list would grow the API payload without
+// telling the operator anything the top entries did not.
+func Subtree(procs []Proc, root int, limit int) []Proc {
+	children := make(map[int][]Proc, len(procs))
+	self := make(map[int]Proc, len(procs))
+	for _, p := range procs {
+		children[p.PPID] = append(children[p.PPID], p)
+		self[p.PID] = p
+	}
+	if _, ok := self[root]; !ok {
+		return nil
+	}
+
+	// Same cycle guard as SumSubtree: /proc is sampled without a lock, so
+	// a reused PID can produce parent links that loop.
+	var out []Proc
+	visited := make(map[int]bool, len(procs))
+	stack := []int{root}
+	for len(stack) > 0 {
+		pid := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if visited[pid] {
+			continue
+		}
+		visited[pid] = true
+		out = append(out, self[pid])
+		for _, c := range children[pid] {
+			if !visited[c.PID] {
+				stack = append(stack, c.PID)
+			}
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RSSBytes != out[j].RSSBytes {
+			return out[i].RSSBytes > out[j].RSSBytes
+		}
+		return out[i].PID < out[j].PID
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+// TopBy ranks every process on the machine and returns the first limit.
+//
+// Machine-wide on purpose, and distinct from Subtree: an operator asking
+// "why is this box slow" needs the answer even when no agent is running,
+// and the culprit is frequently not an agent at all. Subtree attributes
+// usage to a session; this attributes it to the machine.
+//
+// key selects the dimension. Ties break on PID so repeated calls against
+// one snapshot render in a stable order rather than shuffling between
+// refreshes.
+func TopBy(procs []Proc, key func(Proc) uint64, limit int) []Proc {
+	out := make([]Proc, len(procs))
+	copy(out, procs)
+
+	sort.Slice(out, func(i, j int) bool {
+		a, b := key(out[i]), key(out[j])
+		if a != b {
+			return a > b
+		}
+		return out[i].PID < out[j].PID
+	})
+	// Drop the tail of zero-valued processes: a list padded with idle
+	// system processes at 0 B says nothing, and on a quiet machine it
+	// would fill the whole table.
+	end := len(out)
+	for end > 0 && key(out[end-1]) == 0 {
+		end--
+	}
+	out = out[:end]
+
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+// ByRSS / ByCPUTicks / ByIO are the ranking keys for TopBy.
+func ByRSS(p Proc) uint64      { return p.RSSBytes }
+func ByCPUTicks(p Proc) uint64 { return p.CPUTicks }
+func ByIO(p Proc) uint64       { return p.IOReadBytes + p.IOWriteBytes }
 
 // Roots returns processes whose name matches any of names.
 func Roots(procs []Proc, names []string) []Proc {
