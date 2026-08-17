@@ -6,10 +6,19 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Added
-*   **End a process from the Resources page**: The process explorer's row menu can now end a process, or every process sharing an executable name, from `/tools/agents/resources` (admin only). Wick itself and PID 1 (init) can never be targeted, and a group kill stops at 25 processes and reports what it skipped. Sends `SIGTERM` on unix; on Windows, which has no equivalent for an arbitrary process, it ends it outright via `TerminateProcess`.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.39.4](https://github.com/yogasw/wick/compare/v0.39.3...v0.39.4) — Process Termination
+
+_Released on 2026-08-17_
+
+### Added
+*   **End a process from the Resources page**: The process explorer's row menu can now end a process, or every process sharing an executable name, from `/tools/agents/resources` (admin only). Wick itself and PID 1 (init) can never be targeted, and a group kill stops at 25 processes and reports what it skipped. Sends `SIGTERM` on Unix; on Windows, which has no equivalent for an arbitrary process, it ends it outright via `TerminateProcess`. Protected processes (Wick itself, PID 1) are visually marked in the UI with a badge and a hover explanation, and their row menu replaces the "End" option with the reason for refusal. Refusals are logged and the API responds with a `200` status and the reason in the body, providing server-side visibility into why a process was not terminated.
+
+---
+
 
 ## [v0.39.3](https://github.com/yogasw/wick/compare/v0.39.2...v0.39.3) — Agents
 
