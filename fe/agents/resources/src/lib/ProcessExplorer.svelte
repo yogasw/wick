@@ -1,8 +1,10 @@
 <script lang="ts">
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
-  import { fetchProcessesE } from "$lib/api.js";
+  import { toastOk, toastError } from "@wick-fe/common-stores";
+  import { fetchProcessesE, killProcessE } from "$lib/api.js";
   import CommandLine from "$lib/CommandLine.svelte";
+  import RowMenu from "$lib/RowMenu.svelte";
   import { humanBytes, humanBps, humanPct } from "$lib/format.js";
   import type { ProcessListResponse } from "$lib/types.js";
 
@@ -127,6 +129,43 @@
     return trimmed === name ? "" : trimmed;
   }
 
+  // Why a given pid cannot be ended, or "" when it can.
+  //
+  // The server is still the authority — it re-checks and refuses on its
+  // own. This exists so the operator reads the rule before clicking, not
+  // after: a row that looks like every other one but declines to die is
+  // indistinguishable from a broken button.
+  function protectedReason(pid: number): string {
+    if (data && pid === data.self_pid) {
+      return "This is the wick server showing you this page. Ending it would close the dashboard.";
+    }
+    if (pid === 1) return "pid 1 is the system's init process and cannot be ended from here.";
+    return "";
+  }
+
+  // A group is protected only if EVERY member is — otherwise the group
+  // kill still has work to do, and the server drops the protected ones.
+  function groupProtectedReason(members: { pid: number }[]): string {
+    if (members.length === 0) return "";
+    const reasons = members.map((m) => protectedReason(m.pid));
+    return reasons.every((r) => r !== "") ? reasons[0] : "";
+  }
+
+  // Ending a process is the only destructive thing this page can do. The
+  // server owns the safety rules (never wick, never pid 1, capped group
+  // kill) — repeating them here would give two places to keep in sync.
+  async function kill(body: { pid?: number; name?: string }): Promise<void> {
+    try {
+      const res = await Effect.runPromise(
+        killProcessE(base, body).pipe(Effect.provide(WickClientLayer)),
+      );
+      toastOk(res.message + (res.skipped?.length ? ` (${res.skipped.join("; ")})` : ""));
+      await load();
+    } catch (e) {
+      toastError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   // Share for an individual member, against the same denominator the group
   // row uses — so an expanded row can be compared with its parent without
   // mental arithmetic. Empty when the machine's memory is unknown rather
@@ -194,10 +233,11 @@
              expanded rows line up with the group row above them. Without
              this each table sizes its own columns and the numbers stagger. -->
         <colgroup>
-          <col style="width: 38%" />
-          <col style="width: 30%" />
-          <col style="width: 16%" />
-          <col style="width: 16%" />
+          <col style="width: 34%" />
+          <col style="width: 28%" />
+          <col style="width: 15%" />
+          <col style="width: 15%" />
+          <col style="width: 8%" />
         </colgroup>
         <thead>
           <tr class="border-b border-white-300 text-left text-xs uppercase tracking-wide text-black-700 dark:border-navy-600 dark:text-black-600">
@@ -225,12 +265,20 @@
               {/if}
             </th>
             <th class="px-5 py-2 font-medium">Disk</th>
+            <th class="px-2 py-2"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
         <tbody>
           {#each data.groups as g (g.name)}
-            <tr class="border-b border-white-300 last:border-0 dark:border-navy-600">
-              <td class="px-5 py-2">
+            {@const gLocked = groupProtectedReason(g.members)}
+            <tr
+              class="border-b border-white-300 last:border-0 hover:bg-white-200/60 dark:border-navy-600 dark:hover:bg-navy-800/40"
+              title={gLocked || undefined}
+            >
+              <!-- max-w-0: see the member row below — a cell without an
+                   explicit constraint grows to its content, defeating the
+                   truncate on the command inside it. -->
+              <td class="max-w-0 px-5 py-2">
                 {#if g.count > 1}
                   <button
                     type="button"
@@ -246,6 +294,16 @@
                   {@const cmd = showCmd(g.name, g.members[0]?.cmdline)}
                   <div class="pl-4">
                     <span class="text-black-900 dark:text-white-100">{g.name}</span>
+                    {#if gLocked}
+                      <!-- Marked inline, where the eye already is. The
+                           menu explains why; this only has to say that
+                           this row is not an ordinary one. -->
+                      <span
+                        class="ml-1.5 rounded border border-white-300 px-1 py-px align-middle text-[10px] text-black-700 dark:border-navy-600 dark:text-black-600"
+                      >
+                        protected
+                      </span>
+                    {/if}
                     {#if cmd}
                       <!-- A single-process group has no expander, so its
                            command would otherwise be unreachable — and a
@@ -284,6 +342,15 @@
               <td class="px-5 py-2 text-xs tabular-nums text-black-700 dark:text-black-600">
                 {humanBps(g.io_read_bps + g.io_write_bps)}
               </td>
+              <td class="px-2 py-2">
+                <RowMenu
+                  cmd={g.members[0]?.cmdline ?? ""}
+                  label={g.name}
+                  count={g.count}
+                  protectedReason={gLocked}
+                  onKill={() => void kill(g.count > 1 ? { name: g.name } : { pid: g.members[0]?.pid })}
+                />
+              </td>
             </tr>
 
             {#if expanded.has(g.name)}
@@ -292,9 +359,28 @@
                    nested <table> would size its own columns and stagger. -->
               {#each g.members as m (m.pid)}
                 {@const mcmd = showCmd(m.name, m.cmdline)}
-                <tr class="border-b border-white-300 bg-white-200/50 text-xs dark:border-navy-600 dark:bg-navy-800/40">
-                  <td class="py-1 pl-11 pr-5">
-                    <div class="tabular-nums text-black-700 dark:text-black-600">pid {m.pid}</div>
+                {@const mLocked = protectedReason(m.pid)}
+                <tr
+                  class="border-b border-white-300 bg-white-200/50 text-xs hover:bg-white-300/60 dark:border-navy-600 dark:bg-navy-800/40 dark:hover:bg-navy-700/50"
+                  title={mLocked || undefined}
+                >
+                  <!-- max-w-0 is what makes truncate work inside a table
+                       cell: without an explicit constraint the cell grows
+                       to fit its content, so the child has no width to be
+                       clipped against and a long command overflows across
+                       the columns beside it. With table-fixed the colgroup
+                       still sets the real width. -->
+                  <td class="max-w-0 py-1 pl-11 pr-5">
+                    <div class="flex items-center gap-1.5 tabular-nums text-black-700 dark:text-black-600">
+                      <span>pid {m.pid}</span>
+                      {#if mLocked}
+                        <span
+                          class="rounded border border-white-300 px-1 py-px text-[10px] dark:border-navy-600"
+                        >
+                          protected
+                        </span>
+                      {/if}
+                    </div>
                     {#if mcmd}
                       <!-- The command is what distinguishes one node.exe
                            from another; the name alone cannot. Truncated
@@ -321,11 +407,19 @@
                   <td class="px-5 py-1 tabular-nums text-black-700 dark:text-black-600">
                     {humanBps(m.io_read_bps + m.io_write_bps)}
                   </td>
+                  <td class="px-2 py-1">
+                    <RowMenu
+                      cmd={m.cmdline ?? ""}
+                      label="{m.name} (pid {m.pid})"
+                      protectedReason={mLocked}
+                      onKill={() => void kill({ pid: m.pid })}
+                    />
+                  </td>
                 </tr>
               {/each}
               {#if g.count > g.members.length}
                 <tr class="border-b border-white-300 bg-white-200/50 dark:border-navy-600 dark:bg-navy-800/40">
-                  <td colspan="4" class="py-1 pl-11 pr-5 text-xs text-black-700 dark:text-black-600">
+                  <td colspan="5" class="py-1 pl-11 pr-5 text-xs text-black-700 dark:text-black-600">
                     Showing the {g.members.length} largest of {g.count}.
                   </td>
                 </tr>
