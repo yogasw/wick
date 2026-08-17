@@ -1,8 +1,10 @@
 package provider
 
 import (
+	"os"
 	"sync/atomic"
 
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -53,9 +55,19 @@ func (g *MemGuard) sliceLimits() memscope.SliceLimits {
 	}
 }
 
-// memscopeAvailable is a seam so tests can drive both branches without a
-// systemd user session.
-var memscopeAvailable = memscope.Available
+// memscopeBackend is a seam so tests can drive every branch without a
+// systemd user session or a real cgroup mount. Production always points
+// at memscope.DetectBackend, which ranks systemd-run above raw cgroupfs
+// and caches whichever it finds working — see memscope/backend_linux.go.
+var memscopeBackend = memscope.DetectBackend
+
+// selfExecutable resolves the path to wick's own running binary. Only the
+// cgroupfs backend needs it — memscope.WrapArgvCgroupFS re-execs wick
+// itself as the wrapper, since nothing else on a systemd-less host
+// performs "create a cgroup, join it, then exec the real binary" for us.
+// Indirected so a test can supply a path without depending on
+// os.Executable succeeding in whatever sandbox runs it.
+var selfExecutable = os.Executable
 
 // spawnSeq names scopes uniquely.
 //
@@ -80,8 +92,9 @@ func (g *MemGuard) wraps() bool {
 	if g.Method == config.MethodWrapper {
 		return false
 	}
-	// auto and scope both require the mechanism to actually exist.
-	return memscopeAvailable()
+	// auto and scope both require a mechanism to actually exist — systemd
+	// or, failing that, raw cgroupfs. See memscope.DetectBackend.
+	return memscopeBackend() != memscope.BackendNone
 }
 
 // Wrap returns the binary, argv, and scope unit name to use for a spawn.
@@ -93,25 +106,58 @@ func (g *MemGuard) Wrap(bin string, args []string, providerName string, seq int)
 	}
 	l := log.With().Str("component", "memguard").Logger()
 
+	limit := g.AgentLimitMB
+	if g.Mode == config.MemGuardMeasure {
+		// Measure records peaks and changes nothing else: the scope exists
+		// so a peak is readable, but nothing is ever killed for it.
+		limit = 0
+	}
+	unit := memscope.ScopeUnitName(providerName, seq)
+
+	if memscopeBackend() == memscope.BackendCgroupFS {
+		return g.wrapCgroupFS(l, bin, args, unit, limit)
+	}
+	return g.wrapSystemd(l, bin, args, unit, limit)
+}
+
+// wrapSystemd is the original path: a systemd-run --user --scope wrapper.
+func (g *MemGuard) wrapSystemd(l zerolog.Logger, bin string, args []string, unit string, limit int) (string, []string, string) {
 	if err := memscope.EnsureSlice(g.sliceLimits()); err != nil {
 		// A missing slice costs the aggregate ceiling, but the per-scope
 		// ceiling still applies. Degrade rather than refuse to spawn —
 		// an unguarded agent beats no agent at all.
 		l.Warn().Err(err).Msg("could not ensure agents.slice; per-scope limits still apply")
 	}
-
-	limit := g.AgentLimitMB
-	if g.Mode == config.MemGuardMeasure {
-		// Measure records peaks and changes nothing else: the scope exists
-		// so memory.peak is readable, but nothing is ever killed for it.
-		limit = 0
-	}
-
-	unit := memscope.ScopeUnitName(providerName, seq)
 	wbin, wargv := memscope.WrapArgv(bin, args, memscope.Opts{
 		Unit: unit, Slice: memscope.SliceName, LimitMB: limit,
 	})
-	l.Debug().Str("unit", unit).Int("limit_mb", limit).Msg("agent spawn wrapped in scope")
+	l.Debug().Str("unit", unit).Int("limit_mb", limit).Str("backend", "systemd").
+		Msg("agent spawn wrapped in scope")
+	return wbin, wargv, unit
+}
+
+// wrapCgroupFS is the systemd-less fallback: wick re-execs itself through
+// the hidden __agent-exec subcommand, which drives cgroup v1 directly.
+// See memscope/cgroupfs_linux.go for why this exists and what it cannot
+// report as confidently as the systemd path (no per-group OOM-kill
+// counter).
+func (g *MemGuard) wrapCgroupFS(l zerolog.Logger, bin string, args []string, unit string, limit int) (string, []string, string) {
+	if err := memscope.EnsureCgroupSlice(g.sliceLimits()); err != nil {
+		l.Warn().Err(err).Msg("could not ensure agents cgroup slice; per-scope limits still apply")
+	}
+	self, err := selfExecutable()
+	if err != nil {
+		// No self path, no wrapper to re-exec through. Degrade the same
+		// way an EnsureSlice failure does elsewhere in this file: an
+		// unguarded agent beats refusing to spawn one at all.
+		l.Warn().Err(err).Msg("could not resolve wick's own binary path; spawning unguarded")
+		return bin, args, ""
+	}
+	wbin, wargv := memscope.WrapArgvCgroupFS(self, bin, args, memscope.Opts{
+		Unit: unit, Slice: memscope.SliceName, LimitMB: limit,
+	})
+	l.Debug().Str("unit", unit).Int("limit_mb", limit).Str("backend", "cgroupfs").
+		Msg("agent spawn wrapped in raw cgroup")
 	return wbin, wargv, unit
 }
 
