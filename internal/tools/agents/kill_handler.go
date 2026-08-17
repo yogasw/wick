@@ -142,6 +142,23 @@ func selectKillTargets(procs []memreport.Proc, req killRequest, selfPID int) (ta
 			skipped = append(skipped, "skipped pid 1 (init)")
 			continue
 		}
+		// A zombie has already exited; the kernel discards signals sent to
+		// it. Only its parent calling wait() clears the entry. Sending
+		// SIGTERM would report success and change nothing, which is how a
+		// process that "cannot be killed" appears to keep coming back.
+		if p.Kind == memreport.KindZombie {
+			skipped = append(skipped,
+				"pid "+strconv.Itoa(p.PID)+" ("+p.Name+") has already exited — "+
+					"it is waiting for its parent to reap it, and signals to it do nothing")
+			continue
+		}
+		// A kernel thread has no user address space and does not accept
+		// signals the way a process does.
+		if p.Kind == memreport.KindKernel {
+			skipped = append(skipped,
+				"pid "+strconv.Itoa(p.PID)+" ("+p.Name+") is a kernel thread and cannot be ended")
+			continue
+		}
 		targets = append(targets, p.PID)
 	}
 

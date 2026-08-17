@@ -53,6 +53,14 @@ export interface TopProcessRow {
   // >1 when the row is a group of same-named processes. The summary
   // tables always group; the explorer's member rows do not.
   count?: number;
+  // Why this row reads 0 B, when it does. Absent for ordinary processes.
+  //
+  //   kernel  a kernel thread — no user address space exists to measure
+  //   zombie  already exited, waiting for its parent to reap it
+  //
+  // Neither is "using no memory": they have no memory to use, and
+  // neither can be ended by a signal.
+  kind?: "kernel" | "zombie";
 }
 
 export interface TopProcesses {
@@ -129,6 +137,10 @@ export interface ProcessGroupRow {
   io_write_bps: number;
   pct_of_machine_mem: number;
   members: TopProcessRow[];
+  // Set only when every member agrees — see groupKind on the server. A
+  // mixed group carries nothing, since the label would be untrue of half
+  // its rows.
+  kind?: "kernel" | "zombie";
 }
 
 export interface ProcessListResponse {
