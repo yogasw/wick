@@ -24,12 +24,12 @@ func globalWidgetPolicy() agentsconfig.WidgetPolicy {
 	}
 	get := func(key string) string { return globalConfigs.GetOwned("agents", key) }
 	return agentsconfig.WidgetPolicy{
-		Mode:        get("widget_mode"),
-		FrameSrc:    get("widget_frame_src"),
-		ImgSrc:      get("widget_img_src"),
-		MediaSrc:    get("widget_media_src"),
-		ConnectSrc:  get("widget_connect_src"),
-		ScriptSrc:   get("widget_script_src"),
+		Mode:             get("widget_mode"),
+		FrameSrc:         get("widget_frame_src"),
+		ImgSrc:           get("widget_img_src"),
+		MediaSrc:         get("widget_media_src"),
+		ConnectSrc:       get("widget_connect_src"),
+		ScriptSrc:        get("widget_script_src"),
 		AllowPopups:      get("widget_allow_popups") == "true",
 		AllowPopupEscape: get("widget_allow_popup_escape") == "true",
 		Allowlist:        agentsconfig.ParseAllowlist(get("widget_allowlist")),

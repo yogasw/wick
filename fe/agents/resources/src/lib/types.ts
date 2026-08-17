@@ -42,6 +42,10 @@ export interface DiskRow {
 export interface TopProcessRow {
   pid: number;
   name: string;
+  // Full command (Linux) or image path (Windows). Identifies which of
+  // several same-named processes this is. Empty for kernel threads and
+  // processes owned by another user.
+  cmdline?: string;
   rss_bytes: number;
   cpu_pct: number;
   io_read_bps: number;
