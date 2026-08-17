@@ -66,8 +66,11 @@ type Pool struct {
 	spawningKeys map[string]struct{}  // sessions mid-spawn: slot reserved, not yet in active
 	queue        []queueEntry
 	buffers      map[string]*Buffer // per-session buffer, lazily created
-	closed       bool
-	stopCh       chan struct{} // closed by Stop to unwind background loops
+	// crashes tracks recent unexplained deaths per agent so a restart
+	// budget can be enforced. Lazily created; see crashrecovery.go.
+	crashes map[string]*crashState
+	closed  bool
+	stopCh  chan struct{} // closed by Stop to unwind background loops
 
 	// wg tracks tryGrantQueue background spawns + onAgentExit work so
 	// Stop can wait for all post-exit disk writes (markStatus, queue
@@ -1802,6 +1805,87 @@ func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReaso
 		}
 	}
 	p.onAgentExit(sessionID, agentName)
+	// After the slot is released, decide whether this death deserves a
+	// restart and tell the agent what happened. Ordered after
+	// onAgentExit so the restart competes for a free slot like any other
+	// spawn rather than racing the one it just vacated.
+	p.recoverFromExit(sessionID, agentName, reason)
+}
+
+// recoverFromExit restarts an agent that died for no stated reason, and
+// leaves the session an explanation either way.
+//
+// Detection already existed; what was missing was the response. From the
+// session's point of view an unexplained death looked like the agent
+// stopping mid-sentence — no message, no continuation, and the next user
+// turn began with a fresh process that had no idea anything had gone
+// wrong.
+func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.ExitReason) {
+	key := sessionKey(sessionID, agentName)
+
+	// An explained exit clears the history: a clean stop today must not
+	// eat into the restart budget of an unrelated crash next week.
+	if reason != provider.ExitError && reason != provider.ExitOOM {
+		p.mu.Lock()
+		p.clearCrashesLocked(key)
+		p.mu.Unlock()
+		return
+	}
+
+	l := log.With().
+		Str("component", "pool").
+		Str("session", sessionID).
+		Str("agent", agentName).
+		Logger()
+
+	// A memory kill is never retried — the same work would hit the same
+	// ceiling. The agent is told instead, with the numbers, so it can
+	// propose a smaller approach.
+	if reason == provider.ExitOOM {
+		p.mu.Lock()
+		p.clearCrashesLocked(key)
+		p.mu.Unlock()
+		l.Warn().Msg("pool.recover: agent stopped for memory; not restarting")
+		// The measured peak and the ceiling live on ExitDetail, which
+		// travels a different hook (OnExitDetail → the spawn log). Rather
+		// than thread that value through a second path just for this
+		// sentence, the notice states the cause and points at where the
+		// numbers already are.
+		p.notifySession(sessionID, agentName, oomNotice(
+			"It went over the memory limit set for it; Recent Spawns has the measured figure."))
+		return
+	}
+
+	p.mu.Lock()
+	attempt := p.noteCrashLocked(key, time.Now())
+	p.mu.Unlock()
+
+	if !ShouldRespawn(reason, attempt-1) {
+		l.Error().Int("attempts", attempt).
+			Msg("pool.recover: repeated unexplained exits; giving up")
+		p.notifySession(sessionID, agentName, crashNotice("repeated unexpected exits", attempt, true))
+		return
+	}
+
+	l.Warn().Int("attempt", attempt).Msg("pool.recover: unexplained exit; restarting")
+	// Sending a system turn both delivers the explanation AND triggers the
+	// spawn: Send is the pool's one entry point for starting an agent, so
+	// the restart goes through the same slot accounting, queueing, and
+	// admission checks as any other. A separate spawn path here would be a
+	// second way to start an agent, and the two would drift.
+	p.notifySession(sessionID, agentName, crashNotice("unexpected exit", attempt, false))
+}
+
+// notifySession delivers a system turn to the session, which also brings
+// the agent back if it is not running. Best-effort: a failed notice must
+// not itself become an error path.
+func (p *Pool) notifySession(sessionID, agentName, msg string) {
+	if err := p.Send(context.Background(), sessionID, agentName, "recover", "system", msg); err != nil {
+		log.Warn().Err(err).
+			Str("component", "pool").
+			Str("session", sessionID).
+			Msg("pool.recover: could not deliver the notice")
+	}
 }
 
 // healStaleResume clears the CLI session id when a --resume spawn failed

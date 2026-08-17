@@ -35,6 +35,7 @@ import (
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	agentproject "github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
+	"github.com/yogasw/wick/internal/agents/provider/oomscore"
 	wickprovider "github.com/yogasw/wick/internal/agents/provider/wick"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
@@ -2482,6 +2483,29 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	// cancelled on shutdown, so the goroutine exits with it.
 	if s.resourceSampler != nil {
 		go s.resourceSampler.Run(ctx)
+	}
+
+	// Bias the kernel AWAY from killing wick when the machine as a whole
+	// runs out of memory.
+	//
+	// The per-agent side of this is applied at spawn (MemGuard.BiasChild),
+	// but that only pushes agents UP the victim list. Without the matching
+	// push down here, wick was still an ordinary candidate: once the
+	// agents were gone and pressure remained, the OOM killer could pick
+	// the daemon whose survival is the entire point of the feature.
+	//
+	// Applied only in enforce mode, and only when the operator asked for
+	// it — measure must not change how the machine behaves. Advisory: a
+	// failure is logged, never fatal, since the process is already running.
+	if s.configsSvc != nil &&
+		s.configsSvc.GetOwned("agents", "memory_guard_mode") == agentconfig.MemGuardEnforce &&
+		s.configsSvc.GetOwned("agents", "protect_wick_from_oom") != "false" {
+		if err := oomscore.AdjustSelf(oomscore.DaemonScore); err != nil {
+			logger.Debug().Err(err).Msg("could not lower wick's own oom score")
+		} else {
+			logger.Info().Int("oom_score_adj", oomscore.DaemonScore).
+				Msg("wick biased away from OOM selection")
+		}
 	}
 	// Opt-in profiling on loopback only. Set WICK_PPROF=1 to expose
 	// /debug/pprof on 127.0.0.1:6060 (heap, goroutine, profile) for
