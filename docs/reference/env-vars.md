@@ -68,7 +68,7 @@ The `~/.<app>/` tree currently includes:
 | `~/.<app>/logs/{app,server,worker,gate}-YYYY-MM-DD.log` | Daily tail logs |
 | `~/.<app>/agents/` | [Agents](../guide/agents) subsystem state — projects, sessions, presets, gate spec/socket |
 | `~/.<app>/skills/` | Wick's own skills folder, a sync target alongside `~/.claude/skills` |
-| `~/.<app>/plugins/connectors/` | Installed connector [plugins](../guide/plugins) |
+| `~/.<app>/plugins/connectors/` | Installed connector [plugins](../guide/connector-plugins) |
 | `~/.<app>/run/` | Plugin gRPC sockets |
 
 ```env
