@@ -224,6 +224,35 @@ $ cat .../smoke-1.scope/cgroup.procs
 Every number came from the kernel, not from wick's own bookkeeping. Cleaned
 up (`rmdir`) after confirming.
 
+## Found in review, fixed
+
+- **Scope directories leaked.** `systemd-run --collect` reaps a transient
+  scope when its last process exits; raw cgroupfs has no daemon behind it,
+  so every `RunAgentExec` left its directory behind. `ScopeUnitName`
+  carries an increasing sequence, so names never repeat — that is one new
+  permanent directory per spawn, growing without bound on a long-running
+  host. The smoke test above hid it: the `rmdir` was run by hand.
+
+  Fixed with `RemoveCgroupScopeAt` / `RemoveCgroupScope` and
+  `MemGuard.ReleaseScope`, called from `agent.go`'s exit path **after**
+  `ClassifyExit` — removing the group takes its accounting files with it.
+  Unconditional on exit reason: a clean exit leaks exactly like a crash.
+  `rmdir`, not `RemoveAll`, so a group that still holds a process refuses
+  (EBUSY) rather than being silently forgotten.
+
+- **`TestMemGuard_CgroupFSBackendReExecsSelf` failed on Windows.** It sat
+  in the untagged `memguard_test.go` but asserted Linux-only behaviour:
+  `cgroupfs_other.go`'s `WrapArgvCgroupFS` returns the command unchanged,
+  so `bin` stays the agent binary off Linux. Green on Linux, red on
+  Windows — the PR's "no regressions" claim was true only on the platform
+  it was tested on. Moved to `memguard_cgroupfs_linux_test.go`; the
+  branch-selection cases stay untagged, since that logic is
+  platform-agnostic.
+
+- **Stale doc reference.** `readv1.go` described a `ReadStatsCgroupFS`
+  that does not exist; production reaches the v1 reader through
+  `ReadStats`, which tries v2 first and falls back.
+
 ## Explicitly not done
 
 - **No PR / no push upstream.**

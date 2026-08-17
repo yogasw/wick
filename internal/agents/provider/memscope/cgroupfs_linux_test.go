@@ -148,3 +148,117 @@ func TestWrapArgvCgroupFS_ZeroLimitStillPassesTheFlag(t *testing.T) {
 		t.Fatalf("argv %v dropped the zero limit flag", argv)
 	}
 }
+
+// Nothing reaps a cgroupfs scope on its own — systemd-run's --collect has
+// no counterpart here — so a spawn that is never released leaves a
+// permanent directory behind. Scope names carry an increasing sequence
+// (ScopeUnitName), so they accumulate rather than being reused: on a
+// long-running host that is unbounded growth, not one stale entry.
+func TestRemoveCgroupScopeAt_RemovesTheScope(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "agents.slice", "claude-agent-1.scope")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RemoveCgroupScopeAt(root, "agents.slice", "claude-agent-1"); err != nil {
+		t.Fatalf("RemoveCgroupScopeAt: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("scope directory survived removal (stat err = %v)", err)
+	}
+}
+
+// Releasing twice, or releasing a spawn that was never wrapped, is
+// ordinary rather than exceptional: the exit path runs on every agent,
+// wrapped or not, and a scope may already be gone.
+func TestRemoveCgroupScopeAt_MissingScopeIsNotAnError(t *testing.T) {
+	root := t.TempDir()
+
+	if err := RemoveCgroupScopeAt(root, "agents.slice", "never-existed"); err != nil {
+		t.Fatalf("removing a missing scope returned %v, want nil", err)
+	}
+	if err := RemoveCgroupScopeAt(root, "agents.slice", ""); err != nil {
+		t.Fatalf("empty unit returned %v, want nil", err)
+	}
+}
+
+// The slice itself is shared by every agent and carries the aggregate
+// ceiling. Removing one scope must not take it, or the next spawn would
+// silently lose that ceiling.
+func TestRemoveCgroupScopeAt_LeavesTheSliceAlone(t *testing.T) {
+	root := t.TempDir()
+	slice := filepath.Join(root, "agents.slice")
+	if err := os.MkdirAll(filepath.Join(slice, "claude-agent-1.scope"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RemoveCgroupScopeAt(root, "agents.slice", "claude-agent-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(slice); err != nil {
+		t.Fatalf("the shared slice was removed along with the scope: %v", err)
+	}
+}
+
+// A group that still holds a process cannot be removed, and must not be:
+// an agent that outlived its wick is still contained by that cgroup.
+// rmdir reports EBUSY there; the caller logs it and moves on.
+//
+// A non-empty directory stands in for a populated cgroup — the kernel
+// refuses rmdir in both cases, and a test cannot put a real process in a
+// temp directory.
+func TestRemoveCgroupScopeAt_RefusesAPopulatedScope(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "agents.slice", "claude-agent-1.scope")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cgroup.procs"), []byte("123\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RemoveCgroupScopeAt(root, "agents.slice", "claude-agent-1"); err == nil {
+		t.Fatal("removed a scope that still had contents; a live agent would have been silently forgotten")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("the scope was destroyed despite the error: %v", err)
+	}
+}
+
+// RunAgentExec creates the scope; ReleaseScope is what removes it. The
+// two together are the full lifecycle, and this asserts the tree really
+// is empty afterwards rather than trusting each half separately.
+func TestCgroupScopeLifecycle_LeavesNothingBehind(t *testing.T) {
+	root := t.TempDir()
+	orig := execFn
+	execFn = func(string, []string, []string) error { return nil }
+	t.Cleanup(func() { execFn = orig })
+
+	if err := RunAgentExec(ExecOpts{
+		Root: root, Slice: "agents.slice", Unit: "claude-agent-1",
+		LimitMB: 64, Bin: "/bin/true",
+	}); err != nil {
+		t.Fatalf("RunAgentExec: %v", err)
+	}
+	// The kernel would have removed the limit file with the group; a temp
+	// tree keeps it, so clear it to model an empty cgroup.
+	if err := os.Remove(filepath.Join(root, "agents.slice", "claude-agent-1.scope", "memory.limit_in_bytes")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "agents.slice", "claude-agent-1.scope", "cgroup.procs")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RemoveCgroupScopeAt(root, "agents.slice", "claude-agent-1"); err != nil {
+		t.Fatalf("RemoveCgroupScopeAt: %v", err)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(root, "agents.slice"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("%d scope directory/directories left behind: %v", len(entries), entries)
+	}
+}
