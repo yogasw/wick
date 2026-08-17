@@ -41,6 +41,46 @@ type Proc struct {
 	// Empty when unreadable — kernel threads have none, and another
 	// user's process may refuse it. Callers fall back to Name.
 	Cmdline string
+	// Kind explains a zero RSS, which otherwise reads as a measurement
+	// bug. Several unrelated things all report 0 B:
+	//
+	//	KindNormal  a real process that genuinely holds ~no memory
+	//	KindKernel  a kernel thread — no user address space exists, so
+	//	            /proc/<pid>/status has no VmRSS line at all
+	//	KindZombie  exited, not yet reaped; its memory is already gone
+	//
+	// A kernel thread and a zombie are not "using 0 memory" — they have
+	// no memory to use. Reporting them identically to an idle daemon
+	// invites the operator to go looking for a bug that is not there.
+	Kind ProcKind
+}
+
+// ProcKind distinguishes the reasons a process can report no memory.
+type ProcKind uint8
+
+const (
+	// KindNormal is an ordinary user-space process.
+	KindNormal ProcKind = iota
+	// KindKernel is a kernel thread: kthreadd, ksoftirqd/N, kswapd0,
+	// jbd2/*, and so on. It has no user address space to measure and
+	// cannot be ended.
+	KindKernel
+	// KindZombie has exited and is waiting for its parent to reap it. It
+	// holds a process-table slot and nothing else — killing it does
+	// nothing, since it is already dead.
+	KindZombie
+)
+
+// String names the kind for the API and the UI.
+func (k ProcKind) String() string {
+	switch k {
+	case KindKernel:
+		return "kernel"
+	case KindZombie:
+		return "zombie"
+	default:
+		return "normal"
+	}
 }
 
 // clockTicksPerSec is the kernel's USER_HZ. It is 100 on every Linux

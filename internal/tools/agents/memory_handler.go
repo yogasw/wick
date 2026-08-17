@@ -179,6 +179,12 @@ type topProcessRow struct {
 	// group; the summary tables always group, so "chrome.exe × 26" is one
 	// row rather than 26 competing for the top five.
 	Count int `json:"count"`
+	// Kind is "normal", "kernel", or "zombie". It exists so the UI can
+	// explain a 0 B row: a kernel thread has no user address space and a
+	// zombie's is already gone, neither of which is the same claim as
+	// "this process is using no memory". Omitted when normal, which is
+	// almost every row.
+	Kind string `json:"kind,omitempty"`
 }
 
 // topProcesses is the machine-wide view, ranked three ways because the
@@ -197,12 +203,22 @@ type topProcesses struct {
 	ByIO      []topProcessRow `json:"by_io"`
 }
 
+// kindString renders a process kind for JSON, leaving the common case
+// empty so `omitempty` drops it from almost every row.
+func kindString(k memreport.ProcKind) string {
+	if k == memreport.KindNormal {
+		return ""
+	}
+	return k.String()
+}
+
 func toTopRows(in []memreport.ProcRate) []topProcessRow {
 	out := make([]topProcessRow, 0, len(in))
 	for _, p := range in {
 		out = append(out, topProcessRow{
 			PID: p.PID, Name: p.Name, Cmdline: p.Cmdline, RSSBytes: p.RSSBytes,
 			CPUPct: p.CPUPct, IOReadBps: p.IOReadBps, IOWriteBps: p.IOWriteBps,
+			Kind: kindString(p.Kind),
 		})
 	}
 	return out

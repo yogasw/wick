@@ -32,6 +32,7 @@ func Snapshot() ([]Proc, error) {
 			continue // exited between ReadDir and here
 		}
 		p := parseStatus(pid, string(b))
+		hasCmdline := false
 		// CPU and IO are best-effort: /proc/<pid>/io is unreadable for
 		// processes owned by another user, and either file can vanish
 		// mid-walk. A missing counter reads as 0 rather than dropping the
@@ -44,6 +45,19 @@ func Snapshot() ([]Proc, error) {
 		}
 		if cl, err := os.ReadFile(filepath.Join(procRoot, e.Name(), "cmdline")); err == nil {
 			p.Cmdline = parseCmdline(string(cl))
+			hasCmdline = p.Cmdline != ""
+		}
+		// A kernel thread is identified by having no cmdline at all, which
+		// is a property of the thing itself rather than a guess from its
+		// ancestry. The obvious rule — "child of pid 2" — is only true on
+		// a conventional boot: under WSL pid 2 is init-systemd, an
+		// ordinary user process, and that rule mislabels its children as
+		// kernel threads with megabytes of RSS.
+		//
+		// Applied here rather than in parseStatus because status alone
+		// cannot tell: the evidence lives in a different file.
+		if p.Kind == KindNormal && !hasCmdline {
+			p.Kind = KindKernel
 		}
 		out = append(out, p)
 	}
@@ -120,10 +134,16 @@ func parseIO(body string) (read, write uint64) {
 	return read, write
 }
 
-// parseStatus reads the three fields the report needs out of
-// /proc/<pid>/status. A kernel thread has no VmRSS line and reads as 0.
+// parseStatus reads the fields the report needs out of /proc/<pid>/status.
+//
+// Also classifies the process, because a zero RSS has three unrelated
+// causes and they look identical in a table. A kernel thread has no VmRSS
+// line at all — no user address space exists to measure — and a zombie's
+// address space is already torn down. Neither is an idle process holding
+// almost no memory, and neither can be usefully killed.
 func parseStatus(pid int, body string) Proc {
 	p := Proc{PID: pid}
+	var state string
 	for _, line := range strings.Split(body, "\n") {
 		f := strings.Fields(line)
 		if len(f) < 2 {
@@ -132,12 +152,21 @@ func parseStatus(pid int, body string) Proc {
 		switch f[0] {
 		case "Name:":
 			p.Name = f[1]
+		case "State:":
+			state = f[1]
 		case "PPid:":
 			p.PPID, _ = strconv.Atoi(f[1])
 		case "VmRSS:":
 			kb, _ := strconv.ParseUint(f[1], 10, 64)
 			p.RSSBytes = kb * 1024
 		}
+	}
+	// Zombie is decided here because status is where the state lives. The
+	// kernel-thread test needs /proc/<pid>/cmdline and so happens in
+	// Snapshot; a zombie found here wins, since "already exited, waiting
+	// to be reaped" is the state the operator can act on.
+	if state == "Z" {
+		p.Kind = KindZombie
 	}
 	return p
 }

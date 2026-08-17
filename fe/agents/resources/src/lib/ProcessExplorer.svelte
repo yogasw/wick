@@ -135,19 +135,42 @@
   // own. This exists so the operator reads the rule before clicking, not
   // after: a row that looks like every other one but declines to die is
   // indistinguishable from a broken button.
-  function protectedReason(pid: number): string {
+  function protectedReason(pid: number, kind?: "kernel" | "zombie"): string {
     if (data && pid === data.self_pid) {
       return "This is the wick server showing you this page. Ending it would close the dashboard.";
     }
     if (pid === 1) return "pid 1 is the system's init process and cannot be ended from here.";
+    // A zombie is the confusing one: it was killed successfully, and the
+    // row it leaves behind looks like the kill failed. Say what actually
+    // happened, because trying again does nothing.
+    if (kind === "zombie") {
+      return "Already exited. It is waiting for its parent process to collect it — that is why it still appears, shows 0 B, and does not respond to being ended again.";
+    }
+    if (kind === "kernel") {
+      return "A kernel thread. It has no user memory to report, which is why it reads 0 B, and it cannot be ended.";
+    }
     return "";
+  }
+
+  // What the badge should say. "zombie" and "kernel thread" carry more
+  // than "protected" does — they name the state, which is what the
+  // operator needs when the row reads 0 B and will not go away.
+  function badgeLabel(pid: number, kind?: "kernel" | "zombie"): string {
+    if (kind === "zombie") return "exited";
+    if (kind === "kernel") return "kernel";
+    if (data && pid === data.self_pid) return "this server";
+    if (pid === 1) return "init";
+    return "protected";
   }
 
   // A group is protected only if EVERY member is — otherwise the group
   // kill still has work to do, and the server drops the protected ones.
-  function groupProtectedReason(members: { pid: number }[]): string {
+  function groupProtectedReason(
+    members: { pid: number; kind?: "kernel" | "zombie" }[],
+    groupKind?: "kernel" | "zombie",
+  ): string {
     if (members.length === 0) return "";
-    const reasons = members.map((m) => protectedReason(m.pid));
+    const reasons = members.map((m) => protectedReason(m.pid, m.kind ?? groupKind));
     return reasons.every((r) => r !== "") ? reasons[0] : "";
   }
 
@@ -270,7 +293,7 @@
         </thead>
         <tbody>
           {#each data.groups as g (g.name)}
-            {@const gLocked = groupProtectedReason(g.members)}
+            {@const gLocked = groupProtectedReason(g.members, g.kind)}
             <tr
               class="border-b border-white-300 last:border-0 hover:bg-white-200/60 dark:border-navy-600 dark:hover:bg-navy-800/40"
               title={gLocked || undefined}
@@ -289,6 +312,16 @@
                     <span class="inline-block text-xs transition-transform {expanded.has(g.name) ? 'rotate-90' : ''}">›</span>
                     <span>{g.name}</span>
                     <span class="text-xs text-black-700 dark:text-black-600">× {g.count}</span>
+                    {#if gLocked}
+                      <!-- A multi-process group needs this as much as a
+                           single one: "gotty × 3" reading 0 B is exactly
+                           the row that looks like a broken measurement. -->
+                      <span
+                        class="rounded border border-white-300 px-1 py-px text-[10px] font-normal text-black-700 dark:border-navy-600 dark:text-black-600"
+                      >
+                        {badgeLabel(g.members[0]?.pid ?? 0, g.members[0]?.kind ?? g.kind)}
+                      </span>
+                    {/if}
                   </button>
                 {:else}
                   {@const cmd = showCmd(g.name, g.members[0]?.cmdline)}
@@ -301,7 +334,7 @@
                       <span
                         class="ml-1.5 rounded border border-white-300 px-1 py-px align-middle text-[10px] text-black-700 dark:border-navy-600 dark:text-black-600"
                       >
-                        protected
+                        {badgeLabel(g.members[0]?.pid ?? 0, g.members[0]?.kind ?? g.kind)}
                       </span>
                     {/if}
                     {#if cmd}
@@ -359,7 +392,7 @@
                    nested <table> would size its own columns and stagger. -->
               {#each g.members as m (m.pid)}
                 {@const mcmd = showCmd(m.name, m.cmdline)}
-                {@const mLocked = protectedReason(m.pid)}
+                {@const mLocked = protectedReason(m.pid, m.kind ?? g.kind)}
                 <tr
                   class="border-b border-white-300 bg-white-200/50 text-xs hover:bg-white-300/60 dark:border-navy-600 dark:bg-navy-800/40 dark:hover:bg-navy-700/50"
                   title={mLocked || undefined}
@@ -377,7 +410,7 @@
                         <span
                           class="rounded border border-white-300 px-1 py-px text-[10px] dark:border-navy-600"
                         >
-                          protected
+                          {badgeLabel(m.pid, m.kind ?? g.kind)}
                         </span>
                       {/if}
                     </div>

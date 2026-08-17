@@ -99,9 +99,20 @@ A searchable, paginated **process explorer** lists every process on the machine,
 
 - never ends wick itself: the row is marked protected up front (the list response carries `self_pid`) rather than offering a button that would silently refuse
 - never ends PID 1 (init)
+- never ends a **kernel thread** (`kthreadd`, `ksoftirqd/N`, `jbd2/*`, …) or a **zombie** — see below
 - ending every process in a name group stops at 25 and says what it skipped, since "end 40 things" is a bigger action than one click communicates
 
 Ending a process asks it to close on unix (`SIGTERM`) but ends it outright on Windows (`TerminateProcess`) — Windows has no equivalent for asking an arbitrary, uncooperative process to shut down cleanly.
+
+### Rows that read 0 B
+
+A row reading 0 B can mean three different things, and the table used to render them identically:
+
+- **kernel thread** — no user address space exists, so `/proc/<pid>/status` has no `VmRSS` line at all. Not "using no memory": it has no memory to use. Identified by the absence of a `cmdline` (not by parentage — under WSL, pid 2 is `init-systemd`, an ordinary process, so "child of pid 2" mislabels its children).
+- **zombie** — already exited, waiting for its parent to call `wait()`. Its address space is already gone.
+- a genuinely idle process.
+
+Rows carry a `kind` (`kernel` or `zombie`, omitted for a normal process) in both `GET /api/processes` and the top-process tables in `GET /api/memory`. The UI shows an `exited`/`kernel` badge with the reason on hover, and the kill handler refuses both up front instead of sending a signal that does nothing — notably, the kernel discards signals sent to a zombie, so killing one used to report success and change nothing. Only the parent reaping it, or the parent exiting so init adopts it, actually clears a zombie.
 
 ## `wick memory report` (CLI)
 

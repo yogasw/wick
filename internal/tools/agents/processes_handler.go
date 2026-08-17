@@ -38,6 +38,10 @@ type processGroupRow struct {
 	// Members are the individual processes, heaviest first, so the UI can
 	// expand a group without a second request.
 	Members []topProcessRow `json:"members"`
+	// Kind is "kernel" or "zombie" when every member is one, so the UI can
+	// say why the group reads 0 B. Empty for ordinary groups and for
+	// mixed ones — see groupKind.
+	Kind string `json:"kind,omitempty"`
 }
 
 // processListResponse is the payload behind GET /api/processes.
@@ -216,9 +220,28 @@ func toGroupRows(in []memreport.ProcGroup) []processGroupRow {
 		// Cap the expandable members: a browser with 40 renderers would
 		// otherwise carry 40 rows per group across the whole page.
 		row.Members = toTopRows(capMembers(g.Members, maxProcessRows))
+		row.Kind = groupKind(g.Members)
 		out = append(out, row)
 	}
 	return out
+}
+
+// groupKind labels a group only when every member agrees.
+//
+// A mixed group — say a live process and a zombie of the same name — is
+// left unlabelled: the group row would otherwise claim something untrue
+// of half its members, and the expanded rows already carry the detail.
+func groupKind(members []memreport.ProcRate) string {
+	if len(members) == 0 {
+		return ""
+	}
+	first := members[0].Kind
+	for _, m := range members[1:] {
+		if m.Kind != first {
+			return ""
+		}
+	}
+	return kindString(first)
 }
 
 func capMembers(in []memreport.ProcRate, limit int) []memreport.ProcRate {

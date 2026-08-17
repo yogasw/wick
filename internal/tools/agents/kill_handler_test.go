@@ -105,6 +105,59 @@ func TestSelectKillTargets_CapsAGroupKill(t *testing.T) {
 	}
 }
 
+// A zombie has already exited. The kernel discards signals sent to it,
+// so a kill would report success and change nothing — which is exactly
+// how a process appears to survive being killed, over and over.
+func TestSelectKillTargets_RefusesAZombie(t *testing.T) {
+	list := []memreport.Proc{{PID: 4334, Name: "gotty", Kind: memreport.KindZombie}}
+
+	targets, skipped := selectKillTargets(list, killRequest{PID: 4334}, 42)
+
+	if len(targets) != 0 {
+		t.Fatalf("targeted %v — a signal to a zombie does nothing", targets)
+	}
+	msg := strings.Join(skipped, " ")
+	if !strings.Contains(msg, "already exited") {
+		t.Errorf("refusal %q does not say the process is already gone", msg)
+	}
+	if !strings.Contains(msg, "parent") {
+		t.Errorf("refusal %q does not say what would actually clear it", msg)
+	}
+}
+
+// A kernel thread has no user address space and does not take signals
+// the way a process does.
+func TestSelectKillTargets_RefusesAKernelThread(t *testing.T) {
+	list := []memreport.Proc{{PID: 16, Name: "ksoftirqd/0", Kind: memreport.KindKernel}}
+
+	targets, skipped := selectKillTargets(list, killRequest{PID: 16}, 42)
+
+	if len(targets) != 0 {
+		t.Fatalf("targeted %v — kernel threads cannot be ended", targets)
+	}
+	if !strings.Contains(strings.Join(skipped, " "), "kernel thread") {
+		t.Fatalf("skipped = %v, want an explanation naming the kernel thread", skipped)
+	}
+}
+
+// A group kill must still end the live members: one zombie among them is
+// not a reason to leave the rest running.
+func TestSelectKillTargets_GroupSkipsZombiesButKillsTheRest(t *testing.T) {
+	list := []memreport.Proc{
+		{PID: 100, Name: "gotty", Kind: memreport.KindZombie},
+		{PID: 101, Name: "gotty"},
+	}
+
+	targets, skipped := selectKillTargets(list, killRequest{Name: "gotty"}, 42)
+
+	if len(targets) != 1 || targets[0] != 101 {
+		t.Fatalf("targets = %v, want only the live process", targets)
+	}
+	if len(skipped) == 0 {
+		t.Fatal("dropped the zombie without saying so")
+	}
+}
+
 // An empty request must not become "kill everything".
 func TestSelectKillTargets_EmptyRequestTargetsNothing(t *testing.T) {
 	targets, _ := selectKillTargets(procs(), killRequest{}, 42)
