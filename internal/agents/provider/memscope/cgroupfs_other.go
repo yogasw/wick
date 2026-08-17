@@ -16,3 +16,8 @@ func EnsureCgroupSlice(limits SliceLimits) error { return ErrUnsupported }
 func WrapArgvCgroupFS(selfPath, bin string, args []string, o Opts) (string, []string) {
 	return bin, args
 }
+
+// RemoveCgroupScope has nothing to remove off Linux: no scope was ever
+// created. Nil rather than ErrUnsupported because the caller runs this on
+// every agent exit and an error there would be noise, not information.
+func RemoveCgroupScope(unit string) error { return nil }

@@ -112,3 +112,48 @@ func WrapArgvCgroupFS(selfPath, bin string, args []string, o Opts) (string, []st
 	argv = append(argv, args...)
 	return selfPath, argv
 }
+
+// RemoveCgroupScopeAt removes one scope directory, rooted at an explicit
+// path so tests do not touch the host hierarchy.
+//
+// Nothing else will. systemd-run is passed --collect, which reaps a
+// transient scope the moment its last process exits; the cgroupfs backend
+// has no daemon behind it, so a scope directory created by RunAgentExec
+// survives the agent that lived in it. Scope names carry a
+// monotonically-increasing sequence (see ScopeUnitName), so every spawn
+// would otherwise leave a new permanent directory under the slice —
+// unbounded growth on a long-running host, and eventually a real ceiling:
+// the kernel caps cgroup hierarchy size, and each live group holds a
+// small amount of unreclaimable kernel memory.
+//
+// Callers must read any stats they want BEFORE calling this: removing the
+// directory takes memory.max_usage_in_bytes with it, exactly as
+// --collect takes memory.events on the systemd path.
+//
+// rmdir, not RemoveAll: a cgroup directory's controller files are kernel
+// interfaces that cannot be unlinked, so RemoveAll would fail on them
+// while a plain rmdir succeeds — the kernel removes the group and its
+// files together once it holds no processes. A group that still has
+// processes refuses to go (EBUSY), which is the correct outcome: an agent
+// that outlived its wick is still contained.
+func RemoveCgroupScopeAt(root, slice, unit string) error {
+	if unit == "" {
+		return nil
+	}
+	if slice == "" {
+		slice = SliceName
+	}
+	err := os.Remove(filepath.Join(root, slice, unit+".scope"))
+	if os.IsNotExist(err) {
+		// Already gone. Not a failure — the systemd path reaches the same
+		// state via --collect, and a spawn that never wrapped has no
+		// directory to remove.
+		return nil
+	}
+	return err
+}
+
+// RemoveCgroupScope removes a scope from the real host hierarchy.
+func RemoveCgroupScope(unit string) error {
+	return RemoveCgroupScopeAt(cgroupV1MemoryRoot, SliceName, unit)
+}

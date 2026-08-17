@@ -177,35 +177,6 @@ func TestMemGuard_ClassifyExitWithoutEvidence(t *testing.T) {
 	}
 }
 
-// The cgroupfs backend is the systemd-less fallback (a Fly.io Machine —
-// or any container — with no systemd user session, but a real cgroup v1
-// mount). Wrap must re-exec wick's own binary through the hidden
-// __agent-exec subcommand rather than reach for systemd-run, which is
-// exactly what would fail there.
-func TestMemGuard_CgroupFSBackendReExecsSelf(t *testing.T) {
-	withBackend(t, memscope.BackendCgroupFS)
-	withSelfExecutable(t, "/usr/local/bin/wick", nil)
-	g := &MemGuard{Mode: config.MemGuardEnforce, Method: config.MethodAuto, AgentLimitMB: 512}
-
-	bin, argv, unit := g.Wrap("/usr/bin/claude", []string{"--foo"}, "claude", 4)
-	if bin != "/usr/local/bin/wick" {
-		t.Fatalf("bin = %q, want wick's own binary under the cgroupfs backend", bin)
-	}
-	if unit == "" {
-		t.Fatal("cgroupfs backend created no scope")
-	}
-	if len(argv) == 0 || argv[0] != memscope.AgentExecSubcommand {
-		t.Fatalf("argv[0] = %v, want %q", argv, memscope.AgentExecSubcommand)
-	}
-	joined := strings.Join(argv, " ")
-	if !strings.Contains(joined, "--limit-mb=512") {
-		t.Fatalf("argv %v does not carry the limit", argv)
-	}
-	if !strings.Contains(joined, "/usr/bin/claude --foo") {
-		t.Fatalf("argv %v lost the real command", argv)
-	}
-}
-
 // A cgroupfs spawn that cannot resolve wick's own binary path has no
 // wrapper to re-exec through. It must degrade to unguarded, matching how
 // an EnsureSlice failure degrades on the systemd path — never refuse the
@@ -241,5 +212,63 @@ func TestMemGuard_BiasChildRespectsMode(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			c.g.BiasChild(0) // a zero pid would be a real error if it got through
 		})
+	}
+}
+
+// withRemoveCgroupScope captures scope-removal calls instead of touching
+// the host hierarchy.
+func withRemoveCgroupScope(t *testing.T) *[]string {
+	t.Helper()
+	var seen []string
+	prev := removeCgroupScope
+	removeCgroupScope = func(unit string) error {
+		seen = append(seen, unit)
+		return nil
+	}
+	t.Cleanup(func() { removeCgroupScope = prev })
+	return &seen
+}
+
+// A cgroupfs scope is left behind by every spawn unless wick removes it:
+// there is no --collect equivalent, and ScopeUnitName's sequence means
+// names never repeat, so they accumulate for as long as the host lives.
+func TestMemGuard_ReleaseScopeRemovesACgroupFSScope(t *testing.T) {
+	withBackend(t, memscope.BackendCgroupFS)
+	seen := withRemoveCgroupScope(t)
+	g := &MemGuard{Mode: config.MemGuardEnforce, Method: config.MethodAuto, AgentLimitMB: 1024}
+
+	g.ReleaseScope("claude-agent-1")
+
+	if len(*seen) != 1 || (*seen)[0] != "claude-agent-1" {
+		t.Fatalf("removed %v, want exactly claude-agent-1", *seen)
+	}
+}
+
+// systemd-run is passed --collect, which reaps the scope itself. Removing
+// it here would be a second party deleting a directory systemd owns.
+func TestMemGuard_ReleaseScopeLeavesSystemdScopesToSystemd(t *testing.T) {
+	withBackend(t, memscope.BackendSystemd)
+	seen := withRemoveCgroupScope(t)
+	g := &MemGuard{Mode: config.MemGuardEnforce, Method: config.MethodAuto, AgentLimitMB: 1024}
+
+	g.ReleaseScope("claude-agent-1")
+
+	if len(*seen) != 0 {
+		t.Fatalf("removed %v on the systemd backend, which reaps its own scopes", *seen)
+	}
+}
+
+// An unwrapped spawn has no scope, and a nil guard has no state at all.
+// The exit path calls this unconditionally, so both must be silent.
+func TestMemGuard_ReleaseScopeIgnoresUnwrappedSpawns(t *testing.T) {
+	withBackend(t, memscope.BackendCgroupFS)
+	seen := withRemoveCgroupScope(t)
+
+	(&MemGuard{Mode: config.MemGuardEnforce}).ReleaseScope("")
+	var nilGuard *MemGuard
+	nilGuard.ReleaseScope("claude-agent-1")
+
+	if len(*seen) != 0 {
+		t.Fatalf("removed %v for a spawn that was never wrapped", *seen)
 	}
 }

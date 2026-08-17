@@ -61,6 +61,11 @@ func (g *MemGuard) sliceLimits() memscope.SliceLimits {
 // and caches whichever it finds working — see memscope/backend_linux.go.
 var memscopeBackend = memscope.DetectBackend
 
+// removeCgroupScope is the same kind of seam for scope teardown: a test
+// asserting that release happens must not remove directories from the
+// real host hierarchy to prove it.
+var removeCgroupScope = memscope.RemoveCgroupScope
+
 // selfExecutable resolves the path to wick's own running binary. Only the
 // cgroupfs backend needs it — memscope.WrapArgvCgroupFS re-execs wick
 // itself as the wrapper, since nothing else on a systemd-less host
@@ -191,4 +196,33 @@ func (g *MemGuard) ClassifyExit(unit string, limitMB int) (ExitReason, string, b
 		return ExitError, "", false
 	}
 	return ExitOOM, OOMDetail(st.PeakBytes, limitMB), true
+}
+
+// ReleaseScope removes the cgroup a spawn ran inside, once nothing is
+// left to read from it.
+//
+// Only the cgroupfs backend needs this. systemd-run is passed --collect,
+// which reaps its scope the moment the last process exits; raw cgroupfs
+// has no daemon behind it, so without this every spawn leaves a permanent
+// directory behind — and scope names carry an increasing sequence, so
+// they accumulate rather than being reused.
+//
+// Separate from ClassifyExit rather than folded into it, because that
+// runs only for an exit already believed to be an error: a clean exit
+// never reaches it, and a clean exit leaks a directory just the same.
+//
+// Best-effort and never fatal. A scope that still holds a process refuses
+// to be removed (EBUSY), which is the right outcome — an agent that
+// outlived its wick stays contained.
+func (g *MemGuard) ReleaseScope(unit string) {
+	if g == nil || unit == "" {
+		return
+	}
+	if memscopeBackend() != memscope.BackendCgroupFS {
+		return
+	}
+	if err := removeCgroupScope(unit); err != nil {
+		l := log.With().Str("component", "memguard").Logger()
+		l.Debug().Err(err).Str("unit", unit).Msg("could not remove agent cgroup scope")
+	}
 }

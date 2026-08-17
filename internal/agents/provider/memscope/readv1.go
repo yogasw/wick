@@ -21,9 +21,9 @@ import (
 // Reporting a fabricated kill count would be worse than reporting none.
 
 // ReadStatsV1At reports what a cgroup v1 scope's files say, rooted at an
-// explicit directory. Production calls ReadStatsCgroupFS, which resolves
-// the real host root; tests call this against a temp tree, the same split
-// ReadStatsAt/ReadStats uses for the v2 path.
+// explicit directory. Production reaches it through ReadStats, which
+// tries the v2 path first and falls back to this one; tests call it
+// against a temp tree, the same split ReadStatsAt/ReadStats uses for v2.
 func ReadStatsV1At(root, slice, unit string) Stats {
 	dir := filepath.Join(root, slice, unit+".scope")
 	// memory.max_usage_in_bytes is v1's running peak — analogous to v2's
