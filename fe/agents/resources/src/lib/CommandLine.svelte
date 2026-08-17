@@ -7,6 +7,8 @@
   // first place. Clicking opens the full text where it can be read and
   // copied.
 
+  import { middleTruncate } from "$lib/format.js";
+
   interface Props {
     cmd: string;
   }
@@ -14,6 +16,12 @@
 
   let open = $state(false);
   let copied = $state(false);
+
+  // Shortened from the MIDDLE, not the end. Every Chrome helper shares the
+  // same long path to the same binary, and what tells a renderer from a
+  // GPU process is the --type= argument last in the line — clip the tail
+  // and every row reads identically.
+  const short = $derived(middleTruncate(cmd));
 
   async function copy(): Promise<void> {
     try {
@@ -30,12 +38,12 @@
 <div class="mt-0.5">
   <button
     type="button"
-    class="block w-full truncate text-left font-mono text-[10px] text-black-600 transition-colors hover:text-blue-600 dark:text-black-700 dark:hover:text-blue-400"
+    class="block w-full overflow-hidden whitespace-nowrap text-left font-mono text-[10px] text-black-600 transition-colors hover:text-blue-600 dark:text-black-700 dark:hover:text-blue-400"
     title={open ? "Hide full command" : cmd}
     aria-expanded={open}
     onclick={() => (open = !open)}
   >
-    {cmd}
+    {short}
   </button>
 
   {#if open}

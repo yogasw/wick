@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { humanBytes, humanBps, humanPct, humanDuration, pctOf } from "../format.js";
+import { humanBytes, humanBps, humanPct, humanDuration, pctOf, middleTruncate } from "../format.js";
 
 // These render the numbers an operator reads a limit decision off, so the
 // boundaries matter more than the happy path.
@@ -59,5 +59,45 @@ describe("pctOf", () => {
 
   it("clamps above 100", () => {
     expect(pctOf(300, 200)).toBe(100);
+  });
+});
+
+describe("middleTruncate", () => {
+  // The reason this exists rather than CSS truncate: every Chrome helper
+  // shares the same long path to the same binary, and what tells a
+  // renderer from a GPU process is the --type= argument at the very end.
+  // Clip the tail and every row reads identically.
+  it("keeps both ends so the arguments stay visible", () => {
+    const cmd =
+      "/data/data/com.termux/files/home/.wick-agent/plugins/playwright_browser/chrome --type=gpu-process";
+    const got = middleTruncate(cmd, 60);
+
+    expect(got.length).toBeLessThanOrEqual(60);
+    expect(got.startsWith("/data/data")).toBe(true);
+    expect(got.endsWith("--type=gpu-process")).toBe(true);
+    expect(got).toContain("…");
+  });
+
+  // Two commands identical except for their tail must render differently —
+  // this is the whole point.
+  it("distinguishes commands that differ only at the end", () => {
+    const base = "/very/long/path/that/repeats/for/every/helper/process/chrome";
+    const a = middleTruncate(`${base} --type=renderer`, 50);
+    const b = middleTruncate(`${base} --type=gpu-process`, 50);
+
+    expect(a).not.toBe(b);
+  });
+
+  it("leaves a short command untouched", () => {
+    expect(middleTruncate("node server.js", 90)).toBe("node server.js");
+  });
+
+  // Guard the arithmetic: the result must never exceed the budget, at any
+  // length near the boundary.
+  it("never exceeds the limit", () => {
+    for (const n of [40, 41, 60, 89, 90, 91, 200]) {
+      const got = middleTruncate("x".repeat(n), 50);
+      expect(got.length).toBeLessThanOrEqual(50);
+    }
   });
 });

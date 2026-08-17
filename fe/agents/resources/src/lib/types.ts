@@ -143,6 +143,9 @@ export interface ProcessListResponse {
   // Shown in the header because 444% reads as a bug until you know that.
   cpu_cores: number;
   groups: ProcessGroupRow[];
+  // This wick server. Its row cannot be ended — the server refuses — so
+  // the UI marks it rather than offering a button that declines.
+  self_pid: number;
 }
 
 export interface AgentSample {
