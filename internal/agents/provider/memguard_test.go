@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -10,11 +11,34 @@ import (
 
 // withScopesAvailable forces the availability probe for a test, so both
 // branches are exercised on a machine with no systemd user session.
+// "Available" here means the systemd backend specifically — existing
+// tests that only ever cared about available-or-not keep asserting
+// against the systemd argv shape (bin == "systemd-run") unchanged.
+// withBackend below drives the cgroupfs branch explicitly.
 func withScopesAvailable(t *testing.T, available bool) {
 	t.Helper()
-	prev := memscopeAvailable
-	memscopeAvailable = func() bool { return available }
-	t.Cleanup(func() { memscopeAvailable = prev })
+	backend := memscope.BackendNone
+	if available {
+		backend = memscope.BackendSystemd
+	}
+	withBackend(t, backend)
+}
+
+// withBackend forces DetectBackend's result for a test.
+func withBackend(t *testing.T, b memscope.Backend) {
+	t.Helper()
+	prev := memscopeBackend
+	memscopeBackend = func() memscope.Backend { return b }
+	t.Cleanup(func() { memscopeBackend = prev })
+}
+
+// withSelfExecutable forces selfExecutable's result for a test — the
+// cgroupfs backend's only extra input beyond what withBackend covers.
+func withSelfExecutable(t *testing.T, path string, err error) {
+	t.Helper()
+	prev := selfExecutable
+	selfExecutable = func() (string, error) { return path, err }
+	t.Cleanup(func() { selfExecutable = prev })
 }
 
 // Mode off must be indistinguishable from the feature not existing: the
@@ -150,6 +174,56 @@ func TestMemGuard_ClassifyExitWithoutEvidence(t *testing.T) {
 	}
 	if _, _, ok := g.ClassifyExit("claude-agent-does-not-exist", 1024); ok {
 		t.Fatal("classified an OOM from a scope that does not exist")
+	}
+}
+
+// The cgroupfs backend is the systemd-less fallback (a Fly.io Machine —
+// or any container — with no systemd user session, but a real cgroup v1
+// mount). Wrap must re-exec wick's own binary through the hidden
+// __agent-exec subcommand rather than reach for systemd-run, which is
+// exactly what would fail there.
+func TestMemGuard_CgroupFSBackendReExecsSelf(t *testing.T) {
+	withBackend(t, memscope.BackendCgroupFS)
+	withSelfExecutable(t, "/usr/local/bin/wick", nil)
+	g := &MemGuard{Mode: config.MemGuardEnforce, Method: config.MethodAuto, AgentLimitMB: 512}
+
+	bin, argv, unit := g.Wrap("/usr/bin/claude", []string{"--foo"}, "claude", 4)
+	if bin != "/usr/local/bin/wick" {
+		t.Fatalf("bin = %q, want wick's own binary under the cgroupfs backend", bin)
+	}
+	if unit == "" {
+		t.Fatal("cgroupfs backend created no scope")
+	}
+	if len(argv) == 0 || argv[0] != memscope.AgentExecSubcommand {
+		t.Fatalf("argv[0] = %v, want %q", argv, memscope.AgentExecSubcommand)
+	}
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "--limit-mb=512") {
+		t.Fatalf("argv %v does not carry the limit", argv)
+	}
+	if !strings.Contains(joined, "/usr/bin/claude --foo") {
+		t.Fatalf("argv %v lost the real command", argv)
+	}
+}
+
+// A cgroupfs spawn that cannot resolve wick's own binary path has no
+// wrapper to re-exec through. It must degrade to unguarded, matching how
+// an EnsureSlice failure degrades on the systemd path — never refuse the
+// spawn outright.
+func TestMemGuard_CgroupFSBackendDegradesWhenSelfPathUnresolvable(t *testing.T) {
+	withBackend(t, memscope.BackendCgroupFS)
+	withSelfExecutable(t, "", errors.New("os.Executable: not supported"))
+	g := &MemGuard{Mode: config.MemGuardEnforce, Method: config.MethodAuto, AgentLimitMB: 512}
+
+	bin, argv, unit := g.Wrap("/usr/bin/claude", []string{"--foo"}, "claude", 5)
+	if bin != "/usr/bin/claude" {
+		t.Fatalf("bin = %q, want the original binary when self-path resolution fails", bin)
+	}
+	if len(argv) != 1 || argv[0] != "--foo" {
+		t.Fatalf("argv = %v, want it untouched", argv)
+	}
+	if unit != "" {
+		t.Fatalf("unit = %q, want empty — this spawn was not wrapped", unit)
 	}
 }
 
