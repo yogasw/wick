@@ -2,6 +2,7 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { fetchProcessesE } from "$lib/api.js";
+  import CommandLine from "$lib/CommandLine.svelte";
   import { humanBytes, humanBps, humanPct } from "$lib/format.js";
   import type { ProcessListResponse } from "$lib/types.js";
 
@@ -24,15 +25,33 @@
   async function load(): Promise<void> {
     loading = true;
     try {
-      data = await Effect.runPromise(
+      const next = await Effect.runPromise(
         fetchProcessesE(base, { q: query, sort, page }).pipe(Effect.provide(WickClientLayer)),
       );
+      data = next;
       error = "";
+      pruneExpanded(next);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
     }
+  }
+
+  // Forget groups that are no longer on the machine — a program that
+  // exited, or was uninstalled. Left alone the set only grows, holding
+  // names of things that stopped existing for as long as the page is
+  // open, and re-expanding them if a same-named process ever returns.
+  //
+  // Only prunes names absent from an UNFILTERED page: with a search or
+  // pagination active, most groups are missing simply because they are
+  // not on this page, and dropping them would collapse rows the operator
+  // opened as soon as they typed.
+  function pruneExpanded(res: ProcessListResponse): void {
+    if (query.trim() !== "" || res.pages > 1) return;
+    const live = new Set(res.groups.map((g) => g.name));
+    const kept = new Set([...expanded].filter((n) => live.has(n)));
+    if (kept.size !== expanded.size) expanded = kept;
   }
 
   // Debounce typing: one request per pause, not one per keystroke.
@@ -65,16 +84,48 @@
     expanded = next;
   }
 
-  // Load once when the section is first shown.
+  // Keep in step with the summary cards above, which refresh on the same
+  // interval. Left static, the two tables disagreed on screen — the same
+  // process showing 196 MB in one and 190 MB in the other — which reads
+  // as a bug rather than as one of them being older.
+  //
+  // Paused while the tab is hidden: nobody is reading it, and each poll
+  // walks every process on the machine.
   let started = false;
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  function tick(): void {
+    if (typeof document !== "undefined" && document.hidden) return;
+    // Skip while a request is still in flight, so a slow machine does not
+    // stack overlapping walks.
+    if (loading) return;
+    void load();
+  }
+
   $effect(() => {
-    if (!started) {
-      started = true;
-      void load();
-    }
+    if (started) return;
+    started = true;
+    void load();
+    timer = setInterval(tick, 10_000);
+    return () => {
+      if (timer) clearInterval(timer);
+    };
   });
 
   const sortLabel: Record<string, string> = { mem: "Memory", cpu: "CPU", io: "Disk" };
+
+  // A command earns its line only when it says something the name does
+  // not. "chrome.exe" under a row already labelled chrome.exe is pure
+  // noise, and on a machine with hundreds of processes that noise is most
+  // of the table.
+  //
+  // Kept as a display decision rather than dropping the field server-side:
+  // search still matches on the full command even when it is not shown.
+  function showCmd(name: string, cmd?: string): string {
+    const trimmed = cmd?.trim() ?? "";
+    // Identical to the name it sits under: nothing gained, one more line.
+    return trimmed === name ? "" : trimmed;
+  }
 
   // Share for an individual member, against the same denominator the group
   // row uses — so an expanded row can be compared with its parent without
@@ -105,7 +156,7 @@
     <div class="flex flex-wrap items-center gap-2">
       <input
         type="search"
-        placeholder="Search by name…"
+        placeholder="Search name or command…"
         value={query}
         oninput={(e) => onSearch(e.currentTarget.value)}
         class="w-44 rounded-lg border border-white-300 bg-white-100 px-2.5 py-1 text-xs text-black-900 placeholder:text-black-600 focus:border-blue-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
@@ -192,7 +243,17 @@
                     <span class="text-xs text-black-700 dark:text-black-600">× {g.count}</span>
                   </button>
                 {:else}
-                  <span class="pl-4 text-black-900 dark:text-white-100">{g.name}</span>
+                  {@const cmd = showCmd(g.name, g.members[0]?.cmdline)}
+                  <div class="pl-4">
+                    <span class="text-black-900 dark:text-white-100">{g.name}</span>
+                    {#if cmd}
+                      <!-- A single-process group has no expander, so its
+                           command would otherwise be unreachable — and a
+                           bare "python3" is exactly the row an operator
+                           needs identified. -->
+                      <CommandLine {cmd} />
+                    {/if}
+                  </div>
                 {/if}
               </td>
               <!-- Bytes and share are one measurement, not two: the
@@ -230,9 +291,16 @@
                    sits under Name, memory under Memory, and so on. A
                    nested <table> would size its own columns and stagger. -->
               {#each g.members as m (m.pid)}
+                {@const mcmd = showCmd(m.name, m.cmdline)}
                 <tr class="border-b border-white-300 bg-white-200/50 text-xs dark:border-navy-600 dark:bg-navy-800/40">
-                  <td class="py-1 pl-11 pr-5 tabular-nums text-black-700 dark:text-black-600">
-                    pid {m.pid}
+                  <td class="py-1 pl-11 pr-5">
+                    <div class="tabular-nums text-black-700 dark:text-black-600">pid {m.pid}</div>
+                    {#if mcmd}
+                      <!-- The command is what distinguishes one node.exe
+                           from another; the name alone cannot. Truncated
+                           inline, expandable for the full text. -->
+                      <CommandLine cmd={mcmd} />
+                    {/if}
                   </td>
                   <td class="px-5 py-1">
                     <!-- Same bytes-plus-share shape as the group row above,

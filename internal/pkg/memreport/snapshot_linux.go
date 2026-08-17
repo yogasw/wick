@@ -42,6 +42,9 @@ func Snapshot() ([]Proc, error) {
 		if io, err := os.ReadFile(filepath.Join(procRoot, e.Name(), "io")); err == nil {
 			p.IOReadBytes, p.IOWriteBytes = parseIO(string(io))
 		}
+		if cl, err := os.ReadFile(filepath.Join(procRoot, e.Name(), "cmdline")); err == nil {
+			p.Cmdline = parseCmdline(string(cl))
+		}
 		out = append(out, p)
 	}
 	return out, nil
@@ -71,6 +74,26 @@ func parseCPUTicks(body string) uint64 {
 		return 0
 	}
 	return utime + stime
+}
+
+// parseCmdline turns /proc/<pid>/cmdline into a readable command.
+//
+// The file separates argv entries with NUL bytes and usually ends with
+// one, so a naive string conversion yields a line with embedded NULs that
+// renders as one run-together word. Splitting and rejoining with spaces
+// is what makes it match what the operator typed.
+//
+// Kernel threads have an empty cmdline; the caller falls back to the
+// process name for those.
+func parseCmdline(body string) string {
+	parts := strings.Split(body, "\x00")
+	out := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 // parseIO pulls read_bytes/write_bytes from /proc/<pid>/io.

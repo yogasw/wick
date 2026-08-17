@@ -35,18 +35,18 @@ type scheduleVM struct {
 	// name misleads an agent into reading it as a creation time — this is a
 	// private contract with our own SPAs, and they use run_at for the "next"
 	// line. Keeping both here costs nothing and avoids a churn-only rename.
-	RunAt     string `json:"run_at,omitempty"`
-	NextRunAt string `json:"next_run_at,omitempty"`
-	Status    string `json:"status"`
-	Message      string `json:"message"`
-	RunCount     int    `json:"run_count"`
-	Paused       bool   `json:"paused,omitempty"`
-	IntervalMs   int64  `json:"interval_ms,omitempty"`
-	Cron         string `json:"cron,omitempty"`
-	MaxRuns      int    `json:"max_runs,omitempty"`
-	EndsAt       string `json:"ends_at,omitempty"`
-	LastRunAt    string `json:"last_run_at,omitempty"`
-	LastError    string `json:"last_error,omitempty"`
+	RunAt      string `json:"run_at,omitempty"`
+	NextRunAt  string `json:"next_run_at,omitempty"`
+	Status     string `json:"status"`
+	Message    string `json:"message"`
+	RunCount   int    `json:"run_count"`
+	Paused     bool   `json:"paused,omitempty"`
+	IntervalMs int64  `json:"interval_ms,omitempty"`
+	Cron       string `json:"cron,omitempty"`
+	MaxRuns    int    `json:"max_runs,omitempty"`
+	EndsAt     string `json:"ends_at,omitempty"`
+	LastRunAt  string `json:"last_run_at,omitempty"`
+	LastError  string `json:"last_error,omitempty"`
 
 	// Target scope. SessionMode is always present so the UI can render the
 	// scope without inferring it; the project fields are empty for a

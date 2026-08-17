@@ -10,6 +10,23 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.39.3](https://github.com/yogasw/wick/compare/v0.39.2...v0.39.3) — Agents
+
+_Released on 2026-08-17_
+
+### Improved
+*   **Process Explorer**:
+    *   Added command lines for each process, enhancing identification of ambiguous processes (e.g., multiple "node" or "python3" instances). Command lines are read from `/proc/<pid>/cmdline` on Linux and the full image path on Windows.
+    *   Search functionality now includes process command lines.
+    *   Command lines are displayed sparingly: they are dropped if identical to the process name, truncated to one line, and expand on click for full, selectable text.
+    *   The process explorer now refreshes every 10 seconds, matching the summary cards, to ensure data consistency.
+
+### Fixed
+*   Resolved a false positive in `wick-agent status` that incorrectly reported "running (via systemd)" on hosts without systemd (e.g., Fly.io). Source detection no longer solely trusts the `INVOCATION_ID` environment variable; it now requires confirmation from systemd's own resources (`/run/systemd/system`) or falls back to checking PID 1's name. This fix affects only the informational label; the underlying enforcement path was never impacted.
+
+---
+
+
 ## [v0.39.2](https://github.com/yogasw/wick/compare/v0.39.1...v0.39.2) — Agent Resources
 
 _Released on 2026-08-17_

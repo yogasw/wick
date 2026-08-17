@@ -16,8 +16,8 @@ var errHeadlessUnsupported = errors.New(
 		"on this OS use the tray's `Auto-start app at login` toggle, " +
 		"or run `<app> all` manually under your own supervisor")
 
-func installHeadless(p Paths, appName string) error   { return errHeadlessUnsupported }
-func uninstallHeadless(appName string) error          { return errHeadlessUnsupported }
+func installHeadless(p Paths, appName string) error { return errHeadlessUnsupported }
+func uninstallHeadless(appName string) error        { return errHeadlessUnsupported }
 func statusHeadless(appName string) (ServiceState, error) {
 	return ServiceState{
 		Backend: "headless-unsupported",
