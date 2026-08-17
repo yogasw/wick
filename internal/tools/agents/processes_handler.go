@@ -2,6 +2,7 @@ package agents
 
 import (
 	"net/http"
+	"os"
 	"runtime"
 	"sort"
 	"strconv"
@@ -58,6 +59,12 @@ type processListResponse struct {
 	// 1600%, not 100%.
 	CPUCores int               `json:"cpu_cores"`
 	Groups   []processGroupRow `json:"groups"`
+
+	// SelfPID is this wick server. The kill handler refuses it, and the UI
+	// needs to know which row that is so it can say so up front — a row
+	// that looks exactly like every other one but silently declines to die
+	// reads as a broken button, not as a safety rule.
+	SelfPID int `json:"self_pid"`
 }
 
 // defaultPerPage keeps a page small enough to read. The operator paginates
@@ -156,6 +163,7 @@ func processesHandler(c *tool.Ctx) {
 		MachineMemBytes: machineMem,
 		CPUCores:        runtime.NumCPU(),
 		Groups:          toGroupRows(groups[start:end]),
+		SelfPID:         os.Getpid(),
 	})
 }
 

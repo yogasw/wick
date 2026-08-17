@@ -91,9 +91,17 @@ Independent of the guard mode — measuring is how you learn what to set, so it 
 
 ## Resources page
 
-`/tools/agents/resources` — **admin only** (nav link and its `GET /api/memory`, `GET /api/memory/series`, `POST /api/memory/apply-suggested` endpoints), since it reports machine-wide process usage.
+`/tools/agents/resources` — **admin only** (nav link and its `GET /api/memory`, `GET /api/memory/series`, `GET /api/processes`, `POST /api/memory/apply-suggested`, `POST /api/processes/kill` endpoints), since it reports machine-wide process usage and can act on it.
 
 Shows a live per-agent table (memory, CPU, disk), trend charts backed by the history buffer, and suggested limits with an **Apply** button that writes them straight into Memory Guard settings. On a machine without scope isolation available (no reachable systemd user session), the page says so plainly instead of showing numbers that imply protection that isn't there.
+
+A searchable, paginated **process explorer** lists every process on the machine, grouped by executable and ranked by current CPU/memory rate. Each row can be ended from its menu — the one destructive action on the page:
+
+- never ends wick itself: the row is marked protected up front (the list response carries `self_pid`) rather than offering a button that would silently refuse
+- never ends PID 1 (init)
+- ending every process in a name group stops at 25 and says what it skipped, since "end 40 things" is a bigger action than one click communicates
+
+Ending a process asks it to close on unix (`SIGTERM`) but ends it outright on Windows (`TerminateProcess`) — Windows has no equivalent for asking an arbitrary, uncooperative process to shut down cleanly.
 
 ## `wick memory report` (CLI)
 

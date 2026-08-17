@@ -6,7 +6,8 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **End a process from the Resources page**: The process explorer's row menu can now end a process, or every process sharing an executable name, from `/tools/agents/resources` (admin only). Wick itself and PID 1 (init) can never be targeted, and a group kill stops at 25 processes and reports what it skipped. Sends `SIGTERM` on unix; on Windows, which has no equivalent for an arbitrary process, it ends it outright via `TerminateProcess`.
 
 ---
 

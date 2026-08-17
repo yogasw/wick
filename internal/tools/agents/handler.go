@@ -390,6 +390,7 @@ func Register(r tool.Router) {
 	r.GET("/api/memory", memoryReportHandler)
 	r.GET("/api/memory/series", memorySeriesHandler)
 	r.GET("/api/processes", processesHandler)
+	r.POST("/api/processes/kill", killProcessHandler)
 	r.POST("/api/memory/apply-suggested", applySuggestedMemoryHandler)
 
 	r.GET("/providers", providersPage)
