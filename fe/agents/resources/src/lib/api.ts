@@ -18,6 +18,15 @@ export const fetchSeriesE = (base: string, minutes: number) =>
     Effect.map((r) => ({ ...r, machine: r.machine ?? [], agents: r.agents ?? [] })),
   );
 
+// Ends one process, or every process sharing a name. Destructive, so the
+// server refuses wick itself and pid 1 and caps a group kill — see
+// kill_handler.go; the UI does not re-implement those rules.
+export const killProcessE = (base: string, body: { pid?: number; name?: string }) =>
+  apiPostE<{ killed: number[]; failed: number[]; skipped?: string[]; message: string }>(
+    `${base}/api/processes/kill`,
+    body,
+  );
+
 export const applySuggestedE = (base: string) =>
   apiPostE<{ ok: boolean }>(`${base}/api/memory/apply-suggested`, {});
 

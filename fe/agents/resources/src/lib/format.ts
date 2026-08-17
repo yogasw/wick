@@ -44,6 +44,26 @@ export function clockTime(iso: string): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+// middleTruncate shortens a long command by removing its MIDDLE, keeping
+// both ends.
+//
+// Clipping the tail — what CSS truncate does — throws away exactly the
+// part that identifies the process. Every Chrome helper starts with the
+// same long path to the same binary, and what distinguishes a renderer
+// from a GPU process is the `--type=` argument at the end. Cut the end
+// and every row reads identically.
+//
+// Keeping slightly more of the tail than the head, because arguments are
+// usually more discriminating than the directory a binary sits in.
+export function middleTruncate(s: string, max = 90): string {
+  if (s.length <= max) return s;
+  const ellipsis = " … ";
+  const budget = max - ellipsis.length;
+  const tail = Math.ceil(budget * 0.55);
+  const head = budget - tail;
+  return s.slice(0, head) + ellipsis + s.slice(s.length - tail);
+}
+
 // pctOf returns a 0..100 percentage, guarding the divide-by-zero that
 // happens on a machine whose total memory could not be read.
 export function pctOf(part: number, whole: number): number {
