@@ -8,6 +8,7 @@ All notable changes to Wick are documented here.
 
 ### Added
 *   **End a process from the Resources page**: The process explorer's row menu can now end a process, or every process sharing an executable name, from `/tools/agents/resources` (admin only). Wick itself and PID 1 (init) can never be targeted, and a group kill stops at 25 processes and reports what it skipped. Sends `SIGTERM` on unix; on Windows, which has no equivalent for an arbitrary process, it ends it outright via `TerminateProcess`.
+*   **Explain processes that read 0 B**: The process explorer now labels kernel threads (`kthreadd`, `ksoftirqd/N`, `jbd2/*`, …) and zombies with a `kernel`/`exited` badge and a reason on hover, instead of showing them the same as an idle process. The kill handler refuses both up front — a zombie's signals are discarded by the kernel, so ending one used to report success and change nothing.
 
 ---
 
