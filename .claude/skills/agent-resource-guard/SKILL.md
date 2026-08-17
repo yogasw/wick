@@ -1,6 +1,6 @@
 ---
 name: agent-resource-guard
-description: Use for ANY work on agent resource limits or usage analytics — the memory guard, CPU/IO/task contention controls, OOM detection and reporting, the Resources page, usage history sampling and retention, spawn admission, or `wick memory report`. Covers internal/agents/provider/{memscope,oomscore}, internal/agents/provider/memguard.go, internal/pkg/{memreport,sysmem}, internal/agents/config/memguard.go, internal/agents/pool/admission.go, internal/tools/agents/memory_handler.go, fe/agents/resources, and the systemd unit in internal/pkg/daemon. Explains WHY memory is enforced by the kernel rather than sampled, why the slice is a SIBLING of wick's own cgroup, why MemoryHigh and swap must stay off, and why measure mode writes nothing. Read before changing a limit, a default, a mode, the sampler, the retention policy, or the OOM exit path.
+description: Use for ANY work on agent resource limits or usage analytics — the memory guard, CPU/IO/task contention controls, OOM detection and reporting, the Resources page, usage history sampling and retention, spawn admission, or `wick memory report`. Covers internal/agents/provider/{memscope,oomscore}, internal/agents/provider/memguard.go, internal/pkg/{memreport,sysmem}, internal/agents/config/memguard.go, internal/agents/pool/admission.go, internal/tools/agents/memory_handler.go, fe/agents/resources, and the systemd unit in internal/pkg/daemon. Explains WHY memory is enforced by the kernel rather than sampled, why the slice is a SIBLING of wick's own cgroup, why MemoryHigh and swap must stay off (a process past them thrashes forever instead of dying), and why measure mode applies no limits while still recording full usage data. Note that measure mode DOES record — it is enforcement that is withheld, not measurement. Read before changing a limit, a default, a mode, the sampler, the retention policy, or the OOM exit path.
 allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 paths:
   - "internal/agents/provider/memscope/**"
@@ -37,6 +37,22 @@ Every design decision below follows from that. A userspace sampler cannot win
 against a browser that allocates a gigabyte between two ticks, so wick never
 tries to kill on a sample. It asks the kernel to enforce a ceiling, then reads
 back what happened so a human gets a sentence instead of exit code 137.
+
+## Easy to read backwards
+
+These four have already been misread — twice from the skill's own description,
+before it said this. If you are answering a question about any of them, quote
+this section rather than paraphrasing:
+
+| Sounds like | Actually means |
+|---|---|
+| "measure writes nothing" | Writes no **limits**. Records usage in full — that is the mode's purpose. |
+| "swap must stay off" | Not about OOM-killer predictability. With swap, the process **never dies**; it thrashes and holds its slot forever. |
+| "the guard ships off by default" | Enforcement is off. **Usage history is on** and independent of the mode. |
+| "unavailable without systemd" | Only the *limits* are. Measurement, admission, the Resources page, and `oom_score_adj` all keep working — see the degradation table. |
+
+The shared shape: **measurement and enforcement are separate axes.** Nearly every
+misreading here comes from collapsing them into one.
 
 ## Why this exists
 
@@ -124,14 +140,27 @@ spawn request
 unit written, no `oom_score_adj`, no argv wrapping, no goroutine. If a change
 makes `off` do anything observable, the change is wrong.
 
-**`measure` writes NO slice limits at all — including the aggregate
-`MemoryMax`.** Its entire promise is "record numbers, change nothing", and
-every slice control changes behaviour. An earlier revision wrote the aggregate
-ceiling in measure mode, which could kill agents collectively while the
-operator believed nothing was enforced. `MemGuard.sliceLimits()` returns the
-zero `SliceLimits` for any mode but `enforce`, and
-`TestMemGuard_MeasureWritesNoSliceLimits` pins it. **Do not "optimise" that
-branch away.**
+### measure: applies nothing, records everything
+
+> **"Writes nothing" refers to LIMITS, never to data.** In `measure`, usage is
+> recorded in full — that is the entire point of the mode. What is withheld is
+> enforcement. Do not read "measure writes nothing" as "measure collects
+> nothing"; they are opposite claims.
+
+`measure` writes **no slice limits at all — including the aggregate
+`MemoryMax`** — while still creating the scope so `memory.peak` is readable per
+agent. Its promise is "record numbers, change nothing", and every slice control
+changes behaviour.
+
+An earlier revision wrote the aggregate ceiling in measure mode, which could
+kill agents collectively while the operator believed nothing was enforced.
+`MemGuard.sliceLimits()` returns the zero `SliceLimits` for any mode but
+`enforce`, and `TestMemGuard_MeasureWritesNoSliceLimits` pins it. **Do not
+"optimise" that branch away.**
+
+Separately: usage history (`resource_history_enabled`) is independent of the
+mode entirely and records even when the mode is `off`. Measurement never
+depends on enforcement being on.
 
 ## Methods
 
@@ -160,7 +189,15 @@ Every scope pins these, at every limit including none:
 - **`MemoryHigh` throttles instead of killing.** A process past it stalls
   indefinitely while holding its slot. This is not hypothetical: it turned one
   production incident into a **116-minute stall with no OOM kill**.
-- **Swap turns a fast clean death into slow machine-wide thrashing.**
+- **Swap has the same failure shape, more slowly.** With swap available a
+  process over its limit pages in and out instead of dying, so the ceiling stops
+  being a ceiling: nothing is killed, the slot is never released, and the whole
+  machine slows down. The problem is not that the OOM killer becomes
+  "unpredictable" — it is that it never fires at all.
+
+In both cases the intent is the same: a limit must produce a **fast, clean,
+attributable death**, not an indefinite slowdown. A stalled agent is worse than
+a killed one, because nothing reports it and nothing recovers from it.
 
 `TestWrapArgv_PinsHighAndSwap` asserts both. If you are ever tempted to set
 `MemoryHigh` to a real value "to be gentler", that is the exact bug.
@@ -352,6 +389,36 @@ still succeed — and wick must **say so**:
 
 Admission (`/proc/meminfo`) and history (`/proc`) work anywhere `/proc` exists,
 including Termux — which is why they are separate from the scope machinery.
+
+### What survives without scopes
+
+Containers (Fly, Docker without systemd), Termux, Windows, macOS. Answer
+questions about these from this table rather than assuming the whole feature is
+dead:
+
+| Capability | Needs a scope? | Without one |
+|---|---|---|
+| Per-agent memory ceiling | yes | unavailable, and reported as such |
+| Aggregate slice ceiling | yes | unavailable |
+| CPU weight / quota / TasksMax / IOWeight | yes | unavailable |
+| `ExitOOM` attribution with a measured peak | yes | falls back to the ordinary exit reason |
+| `oom_score_adj` (wick is not the victim) | **no** | works — a plain file write |
+| Spawn admission on free RAM | **no** | works — reads `/proc/meminfo` |
+| **Usage history + Resources page + `wick memory report`** | **no** | **works fully** |
+
+So on a machine without a systemd user session, `measure` is **not** pointless:
+what it cannot do is limit anything, and it never claimed to. The recording,
+the page, the peaks, and the suggestions all still function.
+
+Check availability directly rather than inferring it:
+
+```bash
+systemd-run --user --scope --quiet --collect -p MemoryMax=64M -- /bin/true; echo $?
+```
+
+Exit 0 means scopes work. Anything else means the degraded column applies — and
+the Resources page says so in its own notice, so an operator is never left
+believing they are protected.
 
 ## Teardown is a gate, not a detail
 
