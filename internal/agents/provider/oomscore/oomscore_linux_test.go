@@ -5,6 +5,7 @@ package oomscore
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -54,5 +55,30 @@ func TestAdjust_RejectsOutOfRange(t *testing.T) {
 		if err := Adjust(1, score); err == nil {
 			t.Fatalf("score %d accepted, want rejection", score)
 		}
+	}
+}
+
+// Protecting wick is half the job: biasing agents UP the victim list does
+// nothing if the daemon itself stays an ordinary candidate. Once the
+// agents are gone and pressure remains, the OOM killer would pick the
+// process whose survival is the entire point of the feature.
+func TestAdjustSelf_LowersOwnScore(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, strconv.Itoa(os.Getpid())), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	restore := setProcRoot(root)
+	defer restore()
+
+	if err := AdjustSelf(DaemonScore); err != nil {
+		t.Fatalf("AdjustSelf: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(root, strconv.Itoa(os.Getpid()), "oom_score_adj"))
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != strconv.Itoa(DaemonScore) {
+		t.Fatalf("own score = %q, want %d", got, DaemonScore)
 	}
 }

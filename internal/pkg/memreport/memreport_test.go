@@ -64,6 +64,83 @@ func TestLargestDescendant_NoChildren(t *testing.T) {
 	}
 }
 
+// The task-manager view: which processes, heaviest first. The aggregate
+// says how much an agent uses; this says what to look at.
+func TestSubtree_HeaviestFirst(t *testing.T) {
+	procs := []Proc{
+		{PID: 1, PPID: 0, Name: "init", RSSBytes: 10},
+		{PID: 100, PPID: 1, Name: "claude", RSSBytes: 150},
+		{PID: 200, PPID: 100, Name: "node", RSSBytes: 200},
+		{PID: 300, PPID: 200, Name: "chromium", RSSBytes: 900},
+	}
+
+	got := Subtree(procs, 100, 0)
+	if len(got) != 3 {
+		t.Fatalf("got %d processes, want 3 (init is not in the subtree)", len(got))
+	}
+	if got[0].Name != "chromium" || got[1].Name != "node" || got[2].Name != "claude" {
+		t.Fatalf("wrong order: %v", []string{got[0].Name, got[1].Name, got[2].Name})
+	}
+}
+
+// The cap keeps a browser's dozens of renderers from bloating the payload
+// without adding information.
+func TestSubtree_RespectsLimit(t *testing.T) {
+	procs := []Proc{{PID: 100, PPID: 1, Name: "claude", RSSBytes: 100}}
+	for i := 0; i < 30; i++ {
+		procs = append(procs, Proc{PID: 200 + i, PPID: 100, Name: "renderer", RSSBytes: uint64(i)})
+	}
+
+	got := Subtree(procs, 100, 5)
+	if len(got) != 5 {
+		t.Fatalf("got %d processes, want the limit of 5", len(got))
+	}
+	// And the cap must keep the HEAVIEST, not an arbitrary five.
+	if got[0].RSSBytes != 100 {
+		t.Fatalf("capped list dropped the heaviest process: %+v", got[0])
+	}
+}
+
+// Equal sizes must not shuffle between refreshes — a table that reorders
+// itself on every poll is unreadable.
+func TestSubtree_StableOnTies(t *testing.T) {
+	procs := []Proc{
+		{PID: 100, PPID: 1, Name: "claude", RSSBytes: 50},
+		{PID: 300, PPID: 100, Name: "a", RSSBytes: 50},
+		{PID: 200, PPID: 100, Name: "b", RSSBytes: 50},
+	}
+	first := Subtree(procs, 100, 0)
+	second := Subtree(procs, 100, 0)
+	for i := range first {
+		if first[i].PID != second[i].PID {
+			t.Fatalf("order is not stable across calls: %v vs %v", first, second)
+		}
+	}
+	if first[0].PID != 100 || first[1].PID != 200 || first[2].PID != 300 {
+		t.Fatalf("ties did not break on PID: %v", first)
+	}
+}
+
+// An unknown root is not an error, just nothing to show.
+func TestSubtree_UnknownRoot(t *testing.T) {
+	if got := Subtree([]Proc{{PID: 1}}, 999, 0); got != nil {
+		t.Fatalf("unknown root returned %v, want nil", got)
+	}
+}
+
+// A cyclic parent link (PID reuse mid-walk) must not hang the listing.
+func TestSubtree_TerminatesOnCycle(t *testing.T) {
+	procs := []Proc{
+		{PID: 1, PPID: 2, Name: "a", RSSBytes: 5},
+		{PID: 2, PPID: 1, Name: "b", RSSBytes: 5},
+	}
+	done := make(chan int, 1)
+	go func() { done <- len(Subtree(procs, 1, 0)) }()
+	if n := <-done; n != 2 {
+		t.Fatalf("cyclic subtree listed %d processes, want 2 counted once each", n)
+	}
+}
+
 // Roots finds the processes worth reporting by name.
 func TestRoots(t *testing.T) {
 	procs := []Proc{

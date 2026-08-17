@@ -13,6 +13,50 @@ export interface AgentRow {
   io_write_bps: number;
   peak_bytes?: number;
   peak_cpu_pct?: number;
+  processes?: ProcessRow[];
+}
+
+export interface ProcessRow {
+  pid: number;
+  ppid: number;
+  name: string;
+  rss_bytes: number;
+}
+
+export interface DiskRow {
+  path: string;
+  total_bytes: number;
+  free_bytes: number;
+  avail_bytes: number;
+  used_bytes: number;
+  used_pct: number;
+  // "ok" | "warn" | "full" — graded server-side on percentage AND absolute
+  // free space, so the page and the CLI cannot disagree about what counts
+  // as alarming.
+  pressure: string;
+  known: boolean;
+}
+
+// Machine-wide process rows. Not scoped to wick: when the box is slow the
+// cause is often not an agent at all.
+export interface TopProcessRow {
+  pid: number;
+  name: string;
+  rss_bytes: number;
+  cpu_pct: number;
+  io_read_bps: number;
+  io_write_bps: number;
+  // >1 when the row is a group of same-named processes. The summary
+  // tables always group; the explorer's member rows do not.
+  count?: number;
+}
+
+export interface TopProcesses {
+  available: boolean;
+  total: number;
+  by_memory: TopProcessRow[];
+  by_cpu: TopProcessRow[];
+  by_io: TopProcessRow[];
 }
 
 export interface CurrentLimits {
@@ -46,11 +90,15 @@ export interface MemoryReport {
   total_bytes?: number;
   available_bytes?: number;
   machine_known: boolean;
+  // CPU figures are percent of ONE core, so the ceiling is cores × 100.
+  cpu_cores: number;
   agents: AgentRow[];
   processes_readable: boolean;
   suggested: SuggestedLimits;
   current: CurrentLimits;
   history: HistoryStats;
+  disk: DiskRow;
+  top: TopProcesses;
 }
 
 export interface MachineSample {
@@ -60,6 +108,37 @@ export interface MachineSample {
   agent_bytes: number;
   agent_cpu_pct: number;
   agent_procs: number;
+  // Machine-wide totals, so the chart has something to show when no agent
+  // is running — which is exactly when someone asks why the box is slow.
+  machine_used_bytes: number;
+  machine_cpu_pct: number;
+  machine_procs: number;
+}
+
+// Process explorer: grouped by executable, searchable, paginated.
+export interface ProcessGroupRow {
+  name: string;
+  count: number;
+  rss_bytes: number;
+  cpu_pct: number;
+  io_read_bps: number;
+  io_write_bps: number;
+  pct_of_machine_mem: number;
+  members: TopProcessRow[];
+}
+
+export interface ProcessListResponse {
+  available: boolean;
+  total: number;
+  matched: number;
+  page: number;
+  per_page: number;
+  pages: number;
+  machine_mem_bytes: number;
+  // CPU figures are percent of ONE core, so the ceiling is cores × 100.
+  // Shown in the header because 444% reads as a bug until you know that.
+  cpu_cores: number;
+  groups: ProcessGroupRow[];
 }
 
 export interface AgentSample {

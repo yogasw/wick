@@ -36,6 +36,19 @@ original TDD steps for reference.
 | 14 | Usage history — mem+CPU+IO sampling, retention + point-ceiling purge | done |
 | 15 | Resources page (`fe/agents/resources`, `/tools/agents/resources`) | done |
 
+### Known gaps (not blocking, small to close)
+
+**macOS gets no per-process data.** `memreport.Snapshot()` falls through to the
+no-op there, and `sysmem.Total`/`Available` are unimplemented, so the Resources
+page shows disk capacity and little else. Windows had exactly these two gaps
+until `snapshot_windows.go` and `sysmem_windows.go` were added; macOS would need
+`libproc` (process listing) and `sysctl` (`hw.memsize` / vm_stat) respectively.
+
+Enforcement itself stays Linux-only by design — it needs cgroup v2 through
+systemd, and neither Windows Job Objects nor any macOS equivalent is
+implemented. See the platform table in the `agent-resource-guard` skill for what
+survives where.
+
 ### The one thing left, and it is a gate
 
 Task 7's integration test has never actually executed — it is `//go:build linux

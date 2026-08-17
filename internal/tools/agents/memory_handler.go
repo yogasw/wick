@@ -2,11 +2,14 @@ package agents
 
 import (
 	"net/http"
+	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/provider/memscope"
+	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/pkg/memreport"
 	"github.com/yogasw/wick/internal/pkg/sysmem"
 	"github.com/yogasw/wick/pkg/tool"
@@ -44,6 +47,44 @@ type memoryAgentRow struct {
 	// numbers a limit must accommodate, which a single instant misses.
 	PeakBytes  uint64  `json:"peak_bytes,omitempty"`
 	PeakCPUPct float64 `json:"peak_cpu_pct,omitempty"`
+	// Processes is the task-manager view of this tree, heaviest first and
+	// capped. The aggregate above says how much the agent uses; this says
+	// which process to look at.
+	Processes []processRow `json:"processes,omitempty"`
+}
+
+// processRow is one process inside an agent's tree.
+type processRow struct {
+	PID      int    `json:"pid"`
+	PPID     int    `json:"ppid"`
+	Name     string `json:"name"`
+	RSSBytes uint64 `json:"rss_bytes"`
+}
+
+// maxProcessRows caps the per-agent process list. A browser-driving agent
+// can hold dozens of renderers; past the top handful they are noise, and
+// an uncapped list grows the payload without informing the operator.
+const maxProcessRows = 12
+
+// diskRow reports capacity where wick writes.
+//
+// Distinct from the IO rates above, and the distinction matters: a busy
+// disk makes everything slow, a FULL disk makes writes fail outright.
+// Wick writes continuously (session transcripts, spawn logs, trace
+// events), so an operator needs the second number before the writes start
+// failing.
+type diskRow struct {
+	Path       string  `json:"path"`
+	TotalBytes uint64  `json:"total_bytes"`
+	FreeBytes  uint64  `json:"free_bytes"`
+	AvailBytes uint64  `json:"avail_bytes"`
+	UsedBytes  uint64  `json:"used_bytes"`
+	UsedPct    float64 `json:"used_pct"`
+	// Pressure is "ok" / "warn" / "full", graded on percentage AND
+	// absolute free space together. Decided here rather than in the UI so
+	// the CLI and the page cannot disagree about what counts as alarming.
+	Pressure string `json:"pressure"`
+	Known    bool   `json:"known"`
 }
 
 // memoryReport is the payload behind GET /agents/memory.
@@ -56,6 +97,10 @@ type memoryReport struct {
 	TotalBytes     uint64 `json:"total_bytes,omitempty"`
 	AvailableBytes uint64 `json:"available_bytes,omitempty"`
 	MachineKnown   bool   `json:"machine_known"`
+	// CPUCores is the ceiling for every CPU percentage on this page: the
+	// figures are percent of ONE core, so a busy machine legitimately
+	// reads past 100% and looks like a bug without this.
+	CPUCores int `json:"cpu_cores"`
 
 	Agents []memoryAgentRow `json:"agents"`
 	// ProcessesReadable is false where /proc does not exist, so the empty
@@ -68,6 +113,15 @@ type memoryReport struct {
 	// History describes the sample buffer so the UI can label its chart
 	// ("12 minutes, 48 points") instead of drawing an unbounded axis.
 	History memreport.Stats `json:"history"`
+
+	// Disk is capacity where the data tree lives — a different failure
+	// from the IO rates per agent.
+	Disk diskRow `json:"disk"`
+
+	// Top is the machine-wide process view. Deliberately not scoped to
+	// wick: when the box is slow, the cause is often not an agent, and a
+	// dashboard that can only see its own processes cannot say so.
+	Top topProcesses `json:"top"`
 }
 
 // memoryCurrentLimits echoes what is configured now, so the UI can show
@@ -91,6 +145,108 @@ var resourceHistory *memreport.History
 // SetResourceHistory installs the buffer the API reads from. Called once
 // from server startup, alongside the sampler that fills it.
 func SetResourceHistory(h *memreport.History) { resourceHistory = h }
+
+// topRates diffs consecutive machine-wide snapshots so the top-process
+// table can rank by RATE rather than lifetime totals — otherwise the
+// busiest process loses to whatever has merely been running longest.
+//
+// Package-level with a mutex because it must persist between requests: a
+// rate needs two observations, and each request supplies only one.
+var (
+	topRatesMu sync.Mutex
+	topRates   = memreport.NewRateTracker()
+)
+
+// maxTopRows caps each top table. Five is a summary; the explorer below
+// it is where an operator goes for the full list.
+const maxTopRows = 5
+
+// topProcessRow is one row of the machine-wide "what is using this box"
+// tables. Unlike the per-agent list, these are not scoped to wick at all:
+// the answer to "why is this machine slow" is frequently not an agent.
+type topProcessRow struct {
+	PID        int     `json:"pid"`
+	Name       string  `json:"name"`
+	RSSBytes   uint64  `json:"rss_bytes"`
+	CPUPct     float64 `json:"cpu_pct"`
+	IOReadBps  uint64  `json:"io_read_bps"`
+	IOWriteBps uint64  `json:"io_write_bps"`
+	// Count is how many processes share this name. >1 means the row is a
+	// group; the summary tables always group, so "chrome.exe × 26" is one
+	// row rather than 26 competing for the top five.
+	Count int `json:"count"`
+}
+
+// topProcesses is the machine-wide view, ranked three ways because the
+// three questions are different: what is holding memory, what is burning
+// CPU, and what is hammering the disk are usually different processes.
+//
+// Grouped by executable, like the explorer below it. Ungrouped, a browser
+// with 26 processes fills every slot with its own renderers and pushes out
+// everything else — and "chrome.exe 662 MB" is the wrong answer to "what
+// is using this machine" when the real figure is 3.9 GB across 26.
+type topProcesses struct {
+	Available bool            `json:"available"`
+	Total     int             `json:"total"`
+	ByMemory  []topProcessRow `json:"by_memory"`
+	ByCPU     []topProcessRow `json:"by_cpu"`
+	ByIO      []topProcessRow `json:"by_io"`
+}
+
+func toTopRows(in []memreport.ProcRate) []topProcessRow {
+	out := make([]topProcessRow, 0, len(in))
+	for _, p := range in {
+		out = append(out, topProcessRow{
+			PID: p.PID, Name: p.Name, RSSBytes: p.RSSBytes,
+			CPUPct: p.CPUPct, IOReadBps: p.IOReadBps, IOWriteBps: p.IOWriteBps,
+		})
+	}
+	return out
+}
+
+// buildTopProcesses samples the machine and ranks it, grouped by
+// executable so one browser does not occupy every slot with its own
+// renderers.
+//
+// CPU and IO read zero on the very first call after startup, because a
+// rate needs a predecessor. That is correct rather than unfortunate:
+// inventing a rate from a process's lifetime total would rank a
+// day-old browser above a compiler pegging a core right now.
+func buildTopProcesses(procs []memreport.Proc) topProcesses {
+	topRatesMu.Lock()
+	defer topRatesMu.Unlock()
+
+	rated := topRates.Update(time.Now(), procs)
+	// Machine memory is not needed here — the summary shows absolute
+	// figures, and the share column lives in the explorer below.
+	groups := memreport.GroupBy(rated, 0)
+
+	return topProcesses{
+		Available: true,
+		Total:     len(procs),
+		ByMemory:  toTopGroupRows(memreport.TopGroupsBy(groups, memreport.GroupByMem, maxTopRows)),
+		ByCPU:     toTopGroupRows(memreport.TopGroupsBy(groups, memreport.GroupByCPU, maxTopRows)),
+		ByIO:      toTopGroupRows(memreport.TopGroupsBy(groups, memreport.GroupByIO, maxTopRows)),
+	}
+}
+
+// toTopGroupRows flattens groups into summary rows. PID is left at zero:
+// a group has no single pid, and the explorer below is where an operator
+// goes to find the specific one.
+func toTopGroupRows(in []memreport.ProcGroup) []topProcessRow {
+	out := make([]topProcessRow, 0, len(in))
+	for _, g := range in {
+		out = append(out, topProcessRow{
+			Name:       g.Name,
+			Count:      g.Count,
+			RSSBytes:   g.RSSBytes,
+			CPUPct:     g.CPUPct,
+			IOReadBps:  g.IOReadBps,
+			IOWriteBps: g.IOWriteBps,
+		})
+	}
+	return out
+}
 
 // memoryReportHandler serves the diagnostics payload.
 func memoryReportHandler(c *tool.Ctx) {
@@ -123,6 +279,25 @@ func buildMemoryReport() memoryReport {
 	total, okT := sysmem.Total()
 	avail, _ := sysmem.Available()
 	rep.TotalBytes, rep.AvailableBytes, rep.MachineKnown = total, avail, okT
+	rep.CPUCores = runtime.NumCPU()
+
+	// Capacity where the data tree actually lives — AgentsDir follows
+	// WICK_DATA_DIR, so a relocated tree reports its own filesystem rather
+	// than whichever one holds the binary.
+	if du, ok := sysmem.Disk(appname.AgentsDir()); ok {
+		rep.Disk = diskRow{
+			Path:       du.Path,
+			TotalBytes: du.TotalBytes,
+			FreeBytes:  du.FreeBytes,
+			AvailBytes: du.AvailBytes,
+			UsedBytes:  du.UsedBytes(),
+			UsedPct:    du.UsedPct(),
+			Pressure:   du.Pressure(),
+			Known:      true,
+		}
+	} else {
+		rep.Disk = diskRow{Path: appname.AgentsDir()}
+	}
 
 	// Rates and peaks live only in the history buffer — a rate needs two
 	// samples, and a peak needs the whole window. The live snapshot below
@@ -142,6 +317,7 @@ func buildMemoryReport() memoryReport {
 	procs, err := memreport.Snapshot()
 	rep.ProcessesReadable = err == nil
 	if err == nil {
+		rep.Top = buildTopProcesses(procs)
 		for _, r := range memreport.Roots(procs, agentProcessNames) {
 			t := memreport.SumSubtreeAll(procs, r.PID)
 			row := memoryAgentRow{
@@ -158,6 +334,11 @@ func buildMemoryReport() memoryReport {
 			}
 			if p, ok := peaks[r.Name]; ok {
 				row.PeakBytes, row.PeakCPUPct = p.RSSBytes, p.CPUPct
+			}
+			for _, sp := range memreport.Subtree(procs, r.PID, maxProcessRows) {
+				row.Processes = append(row.Processes, processRow{
+					PID: sp.PID, PPID: sp.PPID, Name: sp.Name, RSSBytes: sp.RSSBytes,
+				})
 			}
 			rep.Agents = append(rep.Agents, row)
 		}

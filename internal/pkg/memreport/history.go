@@ -44,6 +44,15 @@ type MachineSample struct {
 	AgentBytes     uint64    `json:"agent_bytes"`
 	AgentCPUPct    float64   `json:"agent_cpu_pct"`
 	AgentProcs     int       `json:"agent_procs"`
+
+	// Machine-wide totals, recorded alongside the agent figures so the
+	// chart has something to show when no agent is running — which is
+	// most of the time on a box that is merely slow. Also gives the agent
+	// numbers a denominator: 400 MB of agents means one thing when the
+	// machine is at 2 GB and another when it is at 30.
+	MachineUsedBytes uint64  `json:"machine_used_bytes"`
+	MachineCPUPct    float64 `json:"machine_cpu_pct"`
+	MachineProcs     int     `json:"machine_procs"`
 }
 
 // prevCounters holds the cumulative readings from the previous sample so
@@ -69,6 +78,13 @@ type History struct {
 	// PIDs that stop appearing are dropped on each sample, so an agent
 	// that exits does not leak an entry for the process's lifetime.
 	prev map[int]prevCounters
+
+	// machineProcs holds the previous CPU tick count for EVERY process, so
+	// the machine-wide CPU figure is a rate rather than a lifetime total.
+	// Separate from prev, which is keyed by agent root and holds subtree
+	// sums rather than per-process counters.
+	machineProcs map[int]uint64
+	machineAt    time.Time
 }
 
 // NewHistory builds a series bounded by both a time window and a hard
@@ -83,9 +99,10 @@ func NewHistory(retention time.Duration, maxPoints int) *History {
 		maxPoints = 4096
 	}
 	return &History{
-		retention: retention,
-		maxPoints: maxPoints,
-		prev:      map[int]prevCounters{},
+		retention:    retention,
+		maxPoints:    maxPoints,
+		prev:         map[int]prevCounters{},
+		machineProcs: map[int]uint64{},
 	}
 }
 
@@ -110,9 +127,12 @@ func (h *History) Record(now time.Time, procs []Proc, roots []Proc, totalBytes, 
 	defer h.mu.Unlock()
 
 	seen := make(map[int]bool, len(roots))
-	var machineBytes uint64
-	var machineCPU float64
-	var machineProcs int
+	// Agent totals — named for what they are. An earlier version called
+	// these "machine*", which is exactly the conflation this file now has
+	// to keep straight: agents are a subset of the machine, not all of it.
+	var agentBytes uint64
+	var agentCPU float64
+	var agentProcs int
 
 	for _, r := range roots {
 		seen[r.PID] = true
@@ -141,10 +161,32 @@ func (h *History) Record(now time.Time, procs []Proc, roots []Proc, totalBytes, 
 		}
 
 		h.agents = append(h.agents, s)
-		machineBytes += t.RSSBytes
-		machineCPU += s.CPUPct
-		machineProcs += t.Procs
+		agentBytes += t.RSSBytes
+		agentCPU += s.CPUPct
+		agentProcs += t.Procs
 	}
+
+	// Machine-wide totals, summed across EVERY process — not just agents.
+	// Without these the chart is blank whenever no agent is running, which
+	// is precisely when someone is asking why the box is slow.
+	var machineUsed uint64
+	var machineCPU float64
+	for _, p := range procs {
+		machineUsed += p.RSSBytes
+		if prev, ok := h.machineProcs[p.PID]; ok {
+			if elapsed := now.Sub(h.machineAt).Seconds(); elapsed > 0 {
+				machineCPU += CPUPercent(saturatingSub(p.CPUTicks, prev), elapsed)
+			}
+		}
+	}
+	// Replace wholesale: exited processes must not linger as stale
+	// entries for the life of the server.
+	nextMachine := make(map[int]uint64, len(procs))
+	for _, p := range procs {
+		nextMachine[p.PID] = p.CPUTicks
+	}
+	h.machineProcs = nextMachine
+	h.machineAt = now
 
 	// Drop counters for PIDs that are gone, so a long-running wick does
 	// not accumulate one entry per agent it ever spawned.
@@ -158,9 +200,13 @@ func (h *History) Record(now time.Time, procs []Proc, roots []Proc, totalBytes, 
 		At:             now,
 		TotalBytes:     totalBytes,
 		AvailableBytes: availBytes,
-		AgentBytes:     machineBytes,
-		AgentCPUPct:    machineCPU,
-		AgentProcs:     machineProcs,
+		AgentBytes:     agentBytes,
+		AgentCPUPct:    agentCPU,
+		AgentProcs:     agentProcs,
+
+		MachineUsedBytes: machineUsed,
+		MachineCPUPct:    machineCPU,
+		MachineProcs:     len(procs),
 	})
 
 	h.purgeLocked(now)

@@ -43,6 +43,7 @@ func TestResourceRoutesRegistered(t *testing.T) {
 		"GET /resources",
 		"GET /api/memory",
 		"GET /api/memory/series",
+		"GET /api/processes",
 		"POST /api/memory/apply-suggested",
 	} {
 		if !rec.seen[want] {

@@ -31,3 +31,14 @@ func TestSetProcRoot_Restores(t *testing.T) {
 	restore := setProcRoot("/tmp/x")
 	restore()
 }
+
+// The two scores must sit on opposite sides of the default (0), or the
+// bias does not actually order anything.
+func TestScores_AgentAboveDaemon(t *testing.T) {
+	if !(DaemonScore < 0 && AgentScore > 0) {
+		t.Fatalf("scores do not straddle the default: agent=%d daemon=%d", AgentScore, DaemonScore)
+	}
+	if AgentScore <= DaemonScore {
+		t.Fatalf("agent %d must outrank daemon %d as a victim", AgentScore, DaemonScore)
+	}
+}

@@ -10,6 +10,33 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.39.2](https://github.com/yogasw/wick/compare/v0.39.1...v0.39.2) — Agent Resources
+
+_Released on 2026-08-17_
+
+### Agent Resource Guard Skill
+*   #### Added
+    *   Comprehensive documentation for the `agent-resource-guard` skill, detailing its design rationale, key invariants (measure writes no slice limits, MemoryHigh/swap pinned, no guessing an OOM, no min() on the per-instance limit, append-only ExitReason), and important frontend considerations.
+*   #### Improved
+    *   Clarified documentation to prevent common misinterpretations, specifically regarding "measure mode writes nothing" (it withholds limits but records usage in full) and "why swap must stay off" (prevents thrashing and ensures process termination rather than merely being unpredictable).
+    *   Added dedicated sections addressing common misreadings ("Easy to read backwards") and outlining "What survives without scopes" with a per-capability table for environments like containers and Termux.
+
+### Resource Monitoring & Management
+*   #### Added
+    *   **Per-process list for agents:** Agent resource rows now expand into a task-manager view, displaying individual processes (process, PID, parent, memory) within the agent's tree. Processes are ordered heaviest first, capped at 12, with ties breaking on PID for stable ordering.
+    *   **Disk capacity monitoring:** Reports available disk space for the `WICK_DATA_DIR` path. Displays "Available" alongside "Free" to account for filesystem reservations (e.g., ext4's slice for root) that an unprivileged `wick` cannot use. Supports Linux, macOS, and Windows.
+    *   **Chart hover readouts:** Sparklines on the Resources page now display a crosshair and a tooltip with the exact value and timestamp when hovered. The tooltip uses HTML to preserve aspect ratio.
+    *   **Machine-wide process view:** Introduced a new section displaying the top five processes by memory, CPU, and disk, alongside a searchable, paginated explorer for all processes on the machine. Processes are grouped by executable and ranked by current rate (not lifetime counters).
+    *   **Windows support** for machine-wide process listing and total machine memory readings, extending measurement capabilities beyond Linux.
+    *   **Agent crash recovery:** Agents now automatically restart on `ExitError` (up to 3 times in 10 minutes) and are notified to continue their conversation, making crashes otherwise invisible from within the session. Exits due to OOM are deliberately not restarted, prompting the agent to adopt a smaller approach.
+    *   **Wick's own OOM protection:** The `wick` daemon's `oomscore` is now lowered in enforce mode to protect it from being targeted by the kernel's OOM killer, ensuring core daemon survival.
+*   #### Improved
+    *   Disk usage bars now visually indicate pressure: yellow past 75% and red past 90% capacity.
+    *   Disk pressure is graded by considering both percentage and absolute free space, preventing false alarms on large disks with ample remaining capacity.
+
+---
+
+
 ## [v0.39.1](https://github.com/yogasw/wick/compare/v0.39.0...v0.39.1) — Agents
 
 _Released on 2026-08-16_
