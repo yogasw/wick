@@ -122,7 +122,7 @@ spawn request
 | `internal/agents/config/memguard.go` | Mode/method constants, default derivation from RAM, limit resolution, `SuggestLimitMB`. |
 | `internal/agents/pool/admission.go` | Refuses a spawn while free RAM is below a floor. Reads `/proc/meminfo`; no cgroups needed. |
 | `internal/pkg/memreport` | `/proc` sampling (mem + CPU + IO + process count per tree), the bounded history buffer, and the sampler loop. |
-| `internal/pkg/sysmem` | Machine total / available memory. |
+| `internal/pkg/sysmem` | Machine total / available memory, plus **filesystem capacity** (`Disk`). Memory is Linux-only (parses `/proc`); capacity works on Linux, macOS, and Windows. |
 | `internal/tools/agents/memory_handler.go` | `GET /api/memory`, `GET /api/memory/series`, `POST /api/memory/apply-suggested`. Admin-only. |
 | `fe/agents/resources` | The Resources SPA. |
 
@@ -354,6 +354,34 @@ past every stop; `TestSampler_StopsOnContextCancel` pins the exit path.
 History runs **regardless of guard mode** — measuring is how an operator learns
 what to set, so it must work while the guard is `off`.
 
+## What the Resources page shows, and why each thing is separate
+
+Four measurements that are easy to conflate. Keeping them apart is the
+difference between "the machine feels slow" and knowing why:
+
+| Measurement | Answers | Failure it predicts |
+|---|---|---|
+| Memory per tree (`tree_bytes`) | how much an agent holds | OOM kill |
+| **Process list** (`processes`) | *which* process holds it | points at the real culprit (chromium, not "claude") |
+| CPU % + IO Bps | how hard it is working | contention, slowness |
+| **Disk capacity** (`disk`) | how much room is left | **writes failing outright** |
+
+Disk capacity and IO rate are the pair most often confused. A busy disk is
+slow; a **full** disk fails writes. Wick writes continuously — transcripts,
+spawn logs, trace events — so capacity is its own row, reported for
+`appname.AgentsDir()` so a relocated `WICK_DATA_DIR` reports the filesystem it
+actually lives on.
+
+`DiskUsage.AvailBytes` is reported alongside `FreeBytes` because ext4 reserves a
+percentage for root: an unprivileged wick cannot use all of "free", and
+promising room that is not there is worse than reporting less. `UsedPct` is
+computed against total/free so it matches `df`.
+
+`memreport.Subtree(procs, root, limit)` builds the process list, heaviest first,
+**capped** (12 in the API). The cap is not cosmetic: a browser-driving agent
+holds dozens of renderers that add payload without adding information. Ties
+break on PID so a refresh does not reshuffle rows under the operator's cursor.
+
 ## Suggested limits
 
 `config.SuggestLimitMB(peakBytes)` — observed peak + 30% headroom.
@@ -471,6 +499,13 @@ Two traps that already bit once:
 2. **Nav icons come from a switch on the label** in `agentsNavIcon`, and the
    "More" group auto-expands from a separate list in `agentsMoreOpenAttr`. Miss
    either and the row renders bare or hides itself.
+
+`Sparkline.svelte` draws inline SVG rather than pulling a charting library — one
+series type does not justify the build weight or the theme-integration problem.
+Its hover readout keeps the **tooltip in HTML, not SVG text**, because the chart
+uses `preserveAspectRatio="none"`: the viewBox is stretched horizontally to fill
+its container, which would distort any text drawn inside it. Crosshair strokes
+use `vector-effect="non-scaling-stroke"` for the same reason.
 
 `dist/` is gitignored and built by CI, so **Go tests must skip when the bundle
 is absent** — Go tests run before `npm run build` in the release pipeline. Skip
