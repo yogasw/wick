@@ -230,6 +230,47 @@ func Subtree(procs []Proc, root int, limit int) []Proc {
 	return out
 }
 
+// TopBy ranks every process on the machine and returns the first limit.
+//
+// Machine-wide on purpose, and distinct from Subtree: an operator asking
+// "why is this box slow" needs the answer even when no agent is running,
+// and the culprit is frequently not an agent at all. Subtree attributes
+// usage to a session; this attributes it to the machine.
+//
+// key selects the dimension. Ties break on PID so repeated calls against
+// one snapshot render in a stable order rather than shuffling between
+// refreshes.
+func TopBy(procs []Proc, key func(Proc) uint64, limit int) []Proc {
+	out := make([]Proc, len(procs))
+	copy(out, procs)
+
+	sort.Slice(out, func(i, j int) bool {
+		a, b := key(out[i]), key(out[j])
+		if a != b {
+			return a > b
+		}
+		return out[i].PID < out[j].PID
+	})
+	// Drop the tail of zero-valued processes: a list padded with idle
+	// system processes at 0 B says nothing, and on a quiet machine it
+	// would fill the whole table.
+	end := len(out)
+	for end > 0 && key(out[end-1]) == 0 {
+		end--
+	}
+	out = out[:end]
+
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+// ByRSS / ByCPUTicks / ByIO are the ranking keys for TopBy.
+func ByRSS(p Proc) uint64      { return p.RSSBytes }
+func ByCPUTicks(p Proc) uint64 { return p.CPUTicks }
+func ByIO(p Proc) uint64       { return p.IOReadBytes + p.IOWriteBytes }
+
 // Roots returns processes whose name matches any of names.
 func Roots(procs []Proc, names []string) []Proc {
 	want := make(map[string]bool, len(names))

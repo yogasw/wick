@@ -6,6 +6,8 @@
   import { toastOk, toastError } from "@wick-fe/common-stores";
   import { fetchReportE, fetchSeriesE, applySuggestedE } from "$lib/api.js";
   import Sparkline from "$lib/Sparkline.svelte";
+  import TopTable from "$lib/TopTable.svelte";
+  import ProcessExplorer from "$lib/ProcessExplorer.svelte";
   import { humanBytes, humanBps, humanPct, humanDuration, clockTime, pctOf } from "$lib/format.js";
   import type { MemoryReport, SeriesResponse } from "$lib/types.js";
 
@@ -72,6 +74,39 @@
   // a spike happened rather than just its height.
   const machineTimes = $derived(series?.machine.map((m) => m.at) ?? []);
 
+  // Machine-wide series. The agent charts are blank whenever no agent is
+  // running — which is exactly when someone is asking why the box is
+  // slow — so these are recorded and drawn alongside them.
+  const boxMem = $derived(series?.machine.map((m) => m.machine_used_bytes) ?? []);
+  const boxCPU = $derived(series?.machine.map((m) => m.machine_cpu_pct) ?? []);
+  const boxProcs = $derived(series?.machine.map((m) => m.machine_procs) ?? []);
+  // Any agent activity in the window at all? Used to decide whether the
+  // agent chart is worth the vertical space on a machine that has none.
+  const hasAgentSamples = $derived(
+    (series?.machine ?? []).some((m) => m.agent_procs > 0 || m.agent_bytes > 0),
+  );
+
+  // CPU is percent of ONE core, so a busy 16-core box legitimately reads
+  // 444%. Naming the ceiling in the label stops that looking like a bug.
+  const cpuLabel = $derived(
+    (report?.cpu_cores ?? 0) > 1 ? `CPU · max ${report!.cpu_cores * 100}%` : "CPU",
+  );
+  // Same shape for memory: state the ceiling so the plotted figure has a
+  // stated denominator rather than an assumed one.
+  const memLabel = $derived(
+    (report?.total_bytes ?? 0) > 0 ? `Memory · of ${humanBytes(report!.total_bytes!)}` : "Memory",
+  );
+
+  // The window buttons look inert when the buffer holds less than the
+  // selected span — every option renders the same few minutes. Naming the
+  // span actually held makes the difference between "not working" and
+  // "nothing older recorded yet" visible.
+  const spanLabel = $derived.by(() => {
+    const st = report?.history;
+    if (!st || st.machine_points === 0) return "";
+    return humanDuration(st.span_sec);
+  });
+
   // Which agent rows have their process list expanded. Keyed by pid so a
   // refresh that reorders rows keeps the right one open.
   let expanded = $state<Set<number>>(new Set());
@@ -86,13 +121,18 @@
     expanded = next;
   }
 
-  // Disk pressure gets a colour, because "83%" and "97%" should not look
-  // the same at a glance on a page about running out of things.
+  // Graded server-side (percentage AND absolute free together), because
+  // percentage alone cries wolf: a 328 GB disk at 93% still has 22 GB
+  // free and nothing is about to fail.
   const diskTone = $derived.by(() => {
-    const pct = report?.disk?.used_pct ?? 0;
-    if (pct >= 90) return "bg-red-600";
-    if (pct >= 75) return "bg-yellow-500";
-    return "bg-blue-600";
+    switch (report?.disk?.pressure) {
+      case "full":
+        return "bg-red-600";
+      case "warn":
+        return "bg-yellow-500";
+      default:
+        return "bg-blue-600";
+    }
   });
 
   // Per-agent series keyed by pid, so each row can draw its own history.
@@ -159,11 +199,18 @@
       </span>
       <div class="flex overflow-hidden rounded-lg border border-white-300 dark:border-navy-600">
         {#each [15, 30, 120, 360] as m (m)}
+          {@const beyondBuffer = (report?.history?.span_sec ?? 0) < m * 60}
           <button
             type="button"
             class="px-2.5 py-1 text-xs transition-colors {windowMinutes === m
               ? 'bg-blue-600 text-white-100'
-              : 'bg-white-100 text-black-700 hover:bg-white-200 dark:bg-navy-700 dark:text-black-600 dark:hover:bg-navy-600'}"
+              : 'bg-white-100 text-black-700 hover:bg-white-200 dark:bg-navy-700 dark:text-black-600 dark:hover:bg-navy-600'} {beyondBuffer &&
+            windowMinutes !== m
+              ? 'opacity-50'
+              : ''}"
+            title={beyondBuffer
+              ? `Only ${spanLabel} recorded so far — this window shows everything there is`
+              : ""}
             onclick={() => void onWindowChange(m)}
           >
             {m < 60 ? `${m}m` : `${m / 60}h`}
@@ -195,10 +242,184 @@
     <div
       class="rounded-xl border border-white-300 bg-white-100 p-4 text-sm text-black-700 dark:border-navy-600 dark:bg-navy-700 dark:text-black-600"
     >
-      Per-process usage requires Linux. The limits below can still be configured, and they
-      apply wherever this wick instance runs its agents.
+      Process listing is unavailable on this platform. The limits below can still be
+      configured, and they apply wherever this wick instance runs its agents.
     </div>
   {/if}
+
+  <!-- Suggested limits -->
+  {#if report?.machine_known}
+    <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Suggested limits</h2>
+          <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
+            Derived from this machine's memory and the peaks recorded above, with headroom.
+            Applying them fills in the numbers only — it does not switch enforcement on.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white-100 transition-colors hover:bg-blue-700 disabled:opacity-50"
+          disabled={applying}
+          onclick={() => void onApply()}
+        >
+          {applying ? "Applying…" : "Apply suggested values"}
+        </button>
+      </div>
+
+      <div class="mt-4 grid gap-3 sm:grid-cols-4">
+        {#each [{ label: "Per agent", now: report.current.agent_memory_max_mb, next: report.suggested.AgentMaxMB }, { label: "All agents", now: report.current.agents_total_memory_mb, next: report.suggested.AgentsTotalMB }, { label: "Tool commands", now: report.current.tool_memory_max_mb, next: report.suggested.ToolMaxMB }, { label: "Keep free", now: report.current.min_free_memory_mb, next: report.suggested.MinFreeMB }] as row (row.label)}
+          <div class="rounded-lg border border-white-300 p-3 dark:border-navy-600">
+            <p class="text-xs text-black-700 dark:text-black-600">{row.label}</p>
+            <p class="mt-1 text-sm tabular-nums text-black-900 dark:text-white-100">
+              {row.now ? `${row.now} MB` : "none"}
+              <span class="text-black-700 dark:text-black-600">→</span>
+              <span class="font-semibold">{row.next} MB</span>
+            </p>
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
+  <!-- Per-agent table -->
+  <div class="overflow-hidden rounded-xl border border-white-300 bg-white-100 shadow-sm dark:border-navy-600 dark:bg-navy-700">
+    <div class="border-b border-white-300 px-5 py-4 dark:border-navy-600">
+      <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Running agents</h2>
+    </div>
+
+    {#if (report?.agents.length ?? 0) === 0}
+      <p class="px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">
+        No agent processes running.
+      </p>
+    {:else}
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-white-300 text-left text-xs uppercase tracking-wide text-black-700 dark:border-navy-600 dark:text-black-600">
+              <th class="px-5 py-2 font-medium">Agent</th>
+              <th class="px-5 py-2 font-medium">Memory</th>
+              <th class="px-5 py-2 font-medium">Trend</th>
+              <th class="px-5 py-2 font-medium">CPU</th>
+              <th class="px-5 py-2 font-medium">Disk</th>
+              <th class="px-5 py-2 font-medium">Heaviest child</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each report?.agents ?? [] as a (a.pid)}
+              <tr class="border-b border-white-300 last:border-0 dark:border-navy-600">
+                <td class="px-5 py-3">
+                  <div class="font-medium text-black-900 dark:text-white-100">{a.name}</div>
+                  {#if (a.processes?.length ?? 0) > 0}
+                    <button
+                      type="button"
+                      class="mt-0.5 flex items-center gap-1 text-xs text-blue-600 hover:underline dark:text-blue-400"
+                      onclick={() => toggleProcesses(a.pid)}
+                      aria-expanded={expanded.has(a.pid)}
+                    >
+                      <span class="inline-block transition-transform {expanded.has(a.pid) ? 'rotate-90' : ''}">›</span>
+                      pid {a.pid} · {a.procs} proc{a.procs === 1 ? "" : "s"}
+                    </button>
+                  {:else}
+                    <div class="text-xs text-black-700 dark:text-black-600">
+                      pid {a.pid} · {a.procs} proc{a.procs === 1 ? "" : "s"}
+                    </div>
+                  {/if}
+                </td>
+                <td class="px-5 py-3">
+                  <div class="flex items-baseline gap-2">
+                    <span class="tabular-nums text-black-900 dark:text-white-100">
+                      {humanBytes(a.tree_bytes)}
+                    </span>
+                    {#if (report?.total_bytes ?? 0) > 0}
+                      <!-- Share of the machine, same as the explorer: a
+                           byte count alone cannot say whether it is a lot. -->
+                      <span class="text-xs tabular-nums text-black-700 dark:text-black-600">
+                        {((a.tree_bytes / report!.total_bytes!) * 100).toFixed(1)}%
+                      </span>
+                    {/if}
+                  </div>
+                  {#if a.peak_bytes}
+                    <div class="text-xs text-black-700 dark:text-black-600">
+                      peak {humanBytes(a.peak_bytes)}
+                    </div>
+                  {/if}
+                </td>
+                <td class="w-40 px-5 py-3">
+                  <Sparkline
+                    points={perAgent.get(a.pid) ?? []}
+                    height={28}
+                    color="#3b82f6"
+                    format={humanBytes}
+                  />
+                </td>
+                <td class="px-5 py-3">
+                  <div class="tabular-nums text-black-900 dark:text-white-100">
+                    {humanPct(a.cpu_pct)}
+                  </div>
+                  {#if (perAgentCPU.get(a.pid)?.length ?? 0) > 1}
+                    <div class="w-24">
+                      <Sparkline
+                        points={perAgentCPU.get(a.pid) ?? []}
+                        height={20}
+                        color="#f59e0b"
+                        format={(v) => `${v.toFixed(0)}%`}
+                      />
+                    </div>
+                  {/if}
+                </td>
+                <td class="px-5 py-3 text-xs tabular-nums text-black-700 dark:text-black-600">
+                  <div>↓ {humanBps(a.io_read_bps)}</div>
+                  <div>↑ {humanBps(a.io_write_bps)}</div>
+                </td>
+                <td class="px-5 py-3 text-xs text-black-700 dark:text-black-600">
+                  {#if a.largest_name}
+                    <span class="font-medium text-black-900 dark:text-white-100">{a.largest_name}</span>
+                    {humanBytes(a.largest_bytes ?? 0)}
+                  {:else}
+                    —
+                  {/if}
+                </td>
+              </tr>
+
+              {#if expanded.has(a.pid)}
+                <!-- The task-manager view: the row above says how much this
+                     agent uses, this says which process is using it.
+                     Member rows share the parent table's columns rather
+                     than nesting a second table, so the numbers line up
+                     with the row they belong to. -->
+                {#each a.processes ?? [] as p (p.pid)}
+                  <tr class="border-b border-white-300 bg-white-200/50 text-xs dark:border-navy-600 dark:bg-navy-800/40">
+                    <td class="py-1 pl-9 pr-5">
+                      <span class="text-black-900 dark:text-white-100">{p.name}</span>
+                      <span class="ml-1 tabular-nums text-black-700 dark:text-black-600">
+                        pid {p.pid}
+                      </span>
+                    </td>
+                    <td class="px-5 py-1 tabular-nums text-black-900 dark:text-white-100">
+                      {humanBytes(p.rss_bytes)}
+                    </td>
+                    <td class="px-5 py-1"></td>
+                    <td class="px-5 py-1"></td>
+                    <td class="px-5 py-1"></td>
+                    <td class="px-5 py-1"></td>
+                  </tr>
+                {/each}
+                {#if a.procs > (a.processes?.length ?? 0)}
+                  <tr class="border-b border-white-300 bg-white-200/50 dark:border-navy-600 dark:bg-navy-800/40">
+                    <td colspan="6" class="py-1 pl-9 pr-5 text-xs text-black-700 dark:text-black-600">
+                      Showing the {a.processes?.length} largest of {a.procs} processes.
+                    </td>
+                  </tr>
+                {/if}
+              {/if}
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </div>
 
   <!-- Machine summary -->
   <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -283,7 +504,14 @@
   <!-- Trends -->
   <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
     <h2 class="mb-4 text-sm font-semibold text-black-900 dark:text-white-100">
-      All agents over time
+      Over time
+      {#if spanLabel && (report?.history?.span_sec ?? 0) < windowMinutes * 60}
+        <!-- Without this the window buttons look broken: every option
+             renders the same few minutes because that is all there is. -->
+        <span class="ml-1 text-xs font-normal text-black-700 dark:text-black-600">
+          — only {spanLabel} recorded so far
+        </span>
+      {/if}
     </h2>
     {#if series && !series.enabled}
       <p class="text-sm text-black-700 dark:text-black-600">
@@ -291,6 +519,44 @@
         <span class="font-medium">Usage History</span> in Agents settings to record trends.
       </p>
     {:else}
+      <!-- Whole machine first: this is the row that always has data, and
+           it gives the agent row below it a denominator. -->
+      <p class="mb-2 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">
+        Whole machine
+      </p>
+      <div class="grid gap-5 sm:grid-cols-3">
+        <Sparkline
+          points={boxMem}
+          times={machineTimes}
+          label={memLabel}
+          color="#3b82f6"
+          format={humanBytes}
+          max={report?.total_bytes}
+        />
+        <Sparkline
+          points={boxCPU}
+          times={machineTimes}
+          label={cpuLabel}
+          color="#f59e0b"
+          format={(v) => `${v.toFixed(0)}%`}
+        />
+        <Sparkline
+          points={boxProcs}
+          times={machineTimes}
+          label="Processes"
+          color="#10b981"
+          format={(v) => String(Math.round(v))}
+        />
+      </div>
+
+      <p class="mb-2 mt-5 text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">
+        Agents only
+        {#if !hasAgentSamples}
+          <span class="ml-1 normal-case tracking-normal text-black-600 dark:text-black-700">
+            — none ran in this window
+          </span>
+        {/if}
+      </p>
       <div class="grid gap-5 sm:grid-cols-3">
         <Sparkline
           points={machineMem}
@@ -324,172 +590,50 @@
     {/if}
   </div>
 
-  <!-- Per-agent table -->
-  <div class="overflow-hidden rounded-xl border border-white-300 bg-white-100 shadow-sm dark:border-navy-600 dark:bg-navy-700">
-    <div class="border-b border-white-300 px-5 py-4 dark:border-navy-600">
-      <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Running agents</h2>
-    </div>
-
-    {#if (report?.agents.length ?? 0) === 0}
-      <p class="px-5 py-8 text-center text-sm text-black-700 dark:text-black-600">
-        No agent processes running.
-      </p>
-    {:else}
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="border-b border-white-300 text-left text-xs uppercase tracking-wide text-black-700 dark:border-navy-600 dark:text-black-600">
-              <th class="px-5 py-2 font-medium">Agent</th>
-              <th class="px-5 py-2 font-medium">Memory</th>
-              <th class="px-5 py-2 font-medium">Trend</th>
-              <th class="px-5 py-2 font-medium">CPU</th>
-              <th class="px-5 py-2 font-medium">Disk</th>
-              <th class="px-5 py-2 font-medium">Heaviest child</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#each report?.agents ?? [] as a (a.pid)}
-              <tr class="border-b border-white-300 last:border-0 dark:border-navy-600">
-                <td class="px-5 py-3">
-                  <div class="font-medium text-black-900 dark:text-white-100">{a.name}</div>
-                  {#if (a.processes?.length ?? 0) > 0}
-                    <button
-                      type="button"
-                      class="mt-0.5 flex items-center gap-1 text-xs text-blue-600 hover:underline dark:text-blue-400"
-                      onclick={() => toggleProcesses(a.pid)}
-                      aria-expanded={expanded.has(a.pid)}
-                    >
-                      <span class="inline-block transition-transform {expanded.has(a.pid) ? 'rotate-90' : ''}">›</span>
-                      pid {a.pid} · {a.procs} proc{a.procs === 1 ? "" : "s"}
-                    </button>
-                  {:else}
-                    <div class="text-xs text-black-700 dark:text-black-600">
-                      pid {a.pid} · {a.procs} proc{a.procs === 1 ? "" : "s"}
-                    </div>
-                  {/if}
-                </td>
-                <td class="px-5 py-3">
-                  <div class="tabular-nums text-black-900 dark:text-white-100">
-                    {humanBytes(a.tree_bytes)}
-                  </div>
-                  {#if a.peak_bytes}
-                    <div class="text-xs text-black-700 dark:text-black-600">
-                      peak {humanBytes(a.peak_bytes)}
-                    </div>
-                  {/if}
-                </td>
-                <td class="w-40 px-5 py-3">
-                  <Sparkline
-                    points={perAgent.get(a.pid) ?? []}
-                    height={28}
-                    color="#3b82f6"
-                    format={humanBytes}
-                  />
-                </td>
-                <td class="px-5 py-3">
-                  <div class="tabular-nums text-black-900 dark:text-white-100">
-                    {humanPct(a.cpu_pct)}
-                  </div>
-                  {#if (perAgentCPU.get(a.pid)?.length ?? 0) > 1}
-                    <div class="w-24">
-                      <Sparkline
-                        points={perAgentCPU.get(a.pid) ?? []}
-                        height={20}
-                        color="#f59e0b"
-                        format={(v) => `${v.toFixed(0)}%`}
-                      />
-                    </div>
-                  {/if}
-                </td>
-                <td class="px-5 py-3 text-xs tabular-nums text-black-700 dark:text-black-600">
-                  <div>↓ {humanBps(a.io_read_bps)}</div>
-                  <div>↑ {humanBps(a.io_write_bps)}</div>
-                </td>
-                <td class="px-5 py-3 text-xs text-black-700 dark:text-black-600">
-                  {#if a.largest_name}
-                    <span class="font-medium text-black-900 dark:text-white-100">{a.largest_name}</span>
-                    {humanBytes(a.largest_bytes ?? 0)}
-                  {:else}
-                    —
-                  {/if}
-                </td>
-              </tr>
-
-              {#if expanded.has(a.pid)}
-                <!-- The task-manager view: the row above says how much this
-                     agent uses, this says which process is using it. -->
-                <tr class="border-b border-white-300 bg-white-200/50 dark:border-navy-600 dark:bg-navy-800/40">
-                  <td colspan="6" class="px-5 py-3">
-                    <table class="w-full text-xs">
-                      <thead>
-                        <tr class="text-left uppercase tracking-wide text-black-700 dark:text-black-600">
-                          <th class="pb-1 font-medium">Process</th>
-                          <th class="pb-1 font-medium">PID</th>
-                          <th class="pb-1 font-medium">Parent</th>
-                          <th class="pb-1 text-right font-medium">Memory</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {#each a.processes ?? [] as p (p.pid)}
-                          <tr>
-                            <td class="py-0.5 text-black-900 dark:text-white-100">{p.name}</td>
-                            <td class="py-0.5 tabular-nums text-black-700 dark:text-black-600">{p.pid}</td>
-                            <td class="py-0.5 tabular-nums text-black-700 dark:text-black-600">{p.ppid}</td>
-                            <td class="py-0.5 text-right tabular-nums text-black-900 dark:text-white-100">
-                              {humanBytes(p.rss_bytes)}
-                            </td>
-                          </tr>
-                        {/each}
-                      </tbody>
-                    </table>
-                    {#if a.procs > (a.processes?.length ?? 0)}
-                      <p class="mt-1 text-xs text-black-700 dark:text-black-600">
-                        Showing the {a.processes?.length} largest of {a.procs} processes.
-                      </p>
-                    {/if}
-                  </td>
-                </tr>
-              {/if}
-            {/each}
-          </tbody>
-        </table>
+  <!-- Machine-wide top processes. Deliberately not scoped to wick: when
+       the box is slow the cause is frequently not an agent, and a
+       dashboard that can only see its own processes cannot say so. -->
+  {#if report?.top?.available}
+    <div>
+      <div class="mb-3 flex items-baseline justify-between">
+        <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">
+          Top processes on this machine
+        </h2>
+        <span class="text-xs text-black-700 dark:text-black-600">
+          {report.top.total} processes
+        </span>
       </div>
-    {/if}
-  </div>
-
-  <!-- Suggested limits -->
-  {#if report?.machine_known}
-    <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
-      <div class="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Suggested limits</h2>
-          <p class="mt-0.5 text-xs text-black-700 dark:text-black-600">
-            Derived from this machine's memory and the peaks recorded above, with headroom.
-            Applying them fills in the numbers only — it does not switch enforcement on.
-          </p>
-        </div>
-        <button
-          type="button"
-          class="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white-100 transition-colors hover:bg-blue-700 disabled:opacity-50"
-          disabled={applying}
-          onclick={() => void onApply()}
-        >
-          {applying ? "Applying…" : "Apply suggested values"}
-        </button>
-      </div>
-
-      <div class="mt-4 grid gap-3 sm:grid-cols-4">
-        {#each [{ label: "Per agent", now: report.current.agent_memory_max_mb, next: report.suggested.AgentMaxMB }, { label: "All agents", now: report.current.agents_total_memory_mb, next: report.suggested.AgentsTotalMB }, { label: "Tool commands", now: report.current.tool_memory_max_mb, next: report.suggested.ToolMaxMB }, { label: "Keep free", now: report.current.min_free_memory_mb, next: report.suggested.MinFreeMB }] as row (row.label)}
-          <div class="rounded-lg border border-white-300 p-3 dark:border-navy-600">
-            <p class="text-xs text-black-700 dark:text-black-600">{row.label}</p>
-            <p class="mt-1 text-sm tabular-nums text-black-900 dark:text-white-100">
-              {row.now ? `${row.now} MB` : "none"}
-              <span class="text-black-700 dark:text-black-600">→</span>
-              <span class="font-semibold">{row.next} MB</span>
-            </p>
-          </div>
-        {/each}
+      <div class="grid gap-4 lg:grid-cols-3">
+        <TopTable
+          title="By memory"
+          rows={report.top.by_memory}
+          metric="memory"
+          barColor="#3b82f6"
+          machineTotal={report.total_bytes ?? 0}
+        />
+        <TopTable
+          title="By CPU"
+          rows={report.top.by_cpu}
+          metric="cpu"
+          barColor="#f59e0b"
+          emptyText="no CPU activity yet — rates need a second sample"
+        />
+        <TopTable
+          title="By disk"
+          rows={report.top.by_io}
+          metric="io"
+          barColor="#8b5cf6"
+          emptyText="no disk activity yet — rates need a second sample"
+        />
       </div>
     </div>
   {/if}
+
+  <!-- The full, searchable list. Fetched on its own, not on the 10s poll:
+       ~350 processes on every refresh would be most of the payload for a
+       table the operator is usually not reading. -->
+  {#if report?.top?.available}
+    <ProcessExplorer {base} />
+  {/if}
+
 </div>

@@ -45,3 +45,46 @@ func (d DiskUsage) UsedPct() float64 {
 	}
 	return float64(d.UsedBytes()) / float64(d.TotalBytes) * 100
 }
+
+// Pressure levels for the UI.
+const (
+	PressureOK   = "ok"
+	PressureWarn = "warn"
+	PressureFull = "full"
+)
+
+// Pressure grades how close this filesystem is to causing failures.
+//
+// Percentage ALONE is the wrong signal, and gets it wrong in both
+// directions. A 328 GB laptop disk at 93% still has 22 GB free — nothing
+// is about to fail — while a 20 GB volume at 89% has 2 GB left and very
+// nearly is. Judging by absolute free alone is equally wrong: 5 GB left
+// on a 6 TB array means something quite different from 5 GB on a 10 GB
+// volume.
+//
+// So both must agree before the UI cries wolf: a level is only reached
+// when the disk is BOTH proportionally full AND short of room in absolute
+// terms. An alarm that fires on a healthy laptop is an alarm operators
+// learn to ignore.
+func (d DiskUsage) Pressure() string {
+	if d.TotalBytes == 0 {
+		return PressureOK
+	}
+	const (
+		gb       = uint64(1) << 30
+		fullPct  = 90.0
+		warnPct  = 80.0
+		fullFree = 2 * gb
+		warnFree = 10 * gb
+	)
+	// AvailBytes, not FreeBytes: the reserved slice is not room wick can
+	// use, so counting it would understate the pressure.
+	pct := d.UsedPct()
+	switch {
+	case pct >= fullPct && d.AvailBytes < fullFree:
+		return PressureFull
+	case pct >= warnPct && d.AvailBytes < warnFree:
+		return PressureWarn
+	}
+	return PressureOK
+}

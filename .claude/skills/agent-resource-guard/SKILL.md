@@ -122,7 +122,7 @@ spawn request
 | `internal/agents/config/memguard.go` | Mode/method constants, default derivation from RAM, limit resolution, `SuggestLimitMB`. |
 | `internal/agents/pool/admission.go` | Refuses a spawn while free RAM is below a floor. Reads `/proc/meminfo`; no cgroups needed. |
 | `internal/pkg/memreport` | `/proc` sampling (mem + CPU + IO + process count per tree), the bounded history buffer, and the sampler loop. |
-| `internal/pkg/sysmem` | Machine total / available memory, plus **filesystem capacity** (`Disk`). Memory is Linux-only (parses `/proc`); capacity works on Linux, macOS, and Windows. |
+| `internal/pkg/sysmem` | Machine total / available memory, plus **filesystem capacity** (`Disk`). Memory works on Linux (`/proc/meminfo`) and Windows (`GlobalMemoryStatusEx`); capacity also covers macOS. See the platform table below for the current gaps. |
 | `internal/tools/agents/memory_handler.go` | `GET /api/memory`, `GET /api/memory/series`, `POST /api/memory/apply-suggested`. Admin-only. |
 | `fe/agents/resources` | The Resources SPA. |
 
@@ -298,6 +298,58 @@ setting.
 
 **`ExitReason` values are persisted in spawn logs — append, never insert.**
 
+## Crash recovery
+
+Death detection already existed (`onAgentExit`, `ReconcileDead`) but only
+released the slot. From the session's side an unexplained death looked like the
+agent stopping mid-sentence: no message, no continuation, and the next user turn
+started a fresh process that had no idea anything had gone wrong.
+
+`pool/crashrecovery.go` adds the response. Two decisions, deliberately separate:
+
+**Whether to restart** (`ShouldRespawn`) — only `ExitError` qualifies. Every
+other reason already has an explanation, and restarting would fight whoever
+caused it:
+
+| Reason | Restart? | Why not |
+|---|---|---|
+| `ExitError` | **yes** | no explanation; worth another try |
+| `ExitClean` | no | it finished — restarting redoes the work |
+| `ExitStopped` | no | a preempt, session change, or shutdown asked for it |
+| `ExitIdle` | no | the TTL reclaimed it on purpose |
+| `ExitRespawn` | no | a turn boundary, not a death |
+| **`ExitOOM`** | **no** | repeating the work hits the same ceiling — the loop this subsystem exists to prevent |
+
+Bounded at `maxRespawnAttempts` (3) within `respawnWindow` (10m). The cap is
+load-bearing, not cosmetic: the restart goes through `Send`, which can spawn,
+which can fail, which lands back here. A process that dies immediately on start
+will die again, so unlimited retries turn one broken config into an infinite
+loop. `TestRespawnBudget_TerminatesTheRecursion` pins that the budget bounds it
+with no off-by-one.
+
+**What the agent is told** (`crashNotice` / `oomNotice`) — the agent resumes
+with its conversation intact, so from the inside a crash is invisible: the last
+thing it did simply produced nothing. Without a notice it either goes silent or
+starts the task over. The message therefore states the cause, warns that work in
+flight may be half-finished, and says **continue rather than restart**. The OOM
+notice is different on purpose — it asks for a smaller approach, because the
+same work would hit the same limit.
+
+Restarting reuses `pool.Send` rather than calling the spawner directly: `Send`
+is the pool's one entry point for starting an agent, so the restart inherits
+slot accounting, queueing, and admission. A second spawn path would drift.
+
+## wick's own OOM protection
+
+`MemGuard.BiasChild` pushes agents **up** the victim list at spawn. That is half
+the job — without a matching push **down** for wick, the daemon stayed an
+ordinary candidate, and once the agents were gone and pressure remained the OOM
+killer could pick the process whose survival is the entire point.
+
+`Run` therefore calls `oomscore.AdjustSelf(DaemonScore)` in `enforce` mode when
+`protect_wick_from_oom` is on. `TestScores_AgentAboveDaemon` asserts the two
+scores straddle the kernel default, since equal-sided scores would order nothing.
+
 ## Tool subprocesses (wick provider only)
 
 The wick provider is in-process but spawns real shell subprocesses. A `grep -r`
@@ -408,35 +460,57 @@ still succeed — and wick must **say so**:
 
 - The probe runs once and is cached: it actually creates a throwaway scope,
   because that is the only answer that cannot be wrong.
-- `oom_score_adj` still works (a plain file write, no bus).
+- `oom_score_adj` still works **wherever the knob exists** — a plain file write,
+  no bus. That covers a Linux container and Termux, but NOT Windows or macOS,
+  which have no such file.
 - Layer 2 is unavailable, and **there is no silent substitute**. In particular,
   **do not add an RSS-sampling watchdog that kills.** A sampler cannot see a
   gigabyte allocated between two ticks; substituting one delivers the appearance
   of protection without its substance.
 - The Resources page and `wick memory report` both surface the unavailability.
 
-Admission (`/proc/meminfo`) and history (`/proc`) work anywhere `/proc` exists,
-including Termux — which is why they are separate from the scope machinery.
+Admission and history are separate from the scope machinery on purpose, so they
+survive where it does not: on Linux they read `/proc`, which is why a container
+and Termux keep them. Windows reads its own APIs for the process listing and
+machine memory; macOS currently reads neither. The table below is the
+authority — do not generalise from "not Linux" to "nothing works".
 
-### What survives without scopes
+### Platform support — answer from this table, do not infer
 
-Containers (Fly, Docker without systemd), Termux, Windows, macOS. Answer
-questions about these from this table rather than assuming the whole feature is
-dead:
+**Enforcement is Linux-only.** It needs cgroup v2 through a systemd user
+session; Windows would need Job Objects and macOS has no equivalent, and neither
+is implemented. But "cannot enforce" is not "does not work" — measurement,
+reporting, and crash recovery run everywhere, and the split is not the same on
+every non-Linux platform:
 
-| Capability | Needs a scope? | Without one |
-|---|---|---|
-| Per-agent memory ceiling | yes | unavailable, and reported as such |
-| Aggregate slice ceiling | yes | unavailable |
-| CPU weight / quota / TasksMax / IOWeight | yes | unavailable |
-| `ExitOOM` attribution with a measured peak | yes | falls back to the ordinary exit reason |
-| `oom_score_adj` (wick is not the victim) | **no** | works — a plain file write |
-| Spawn admission on free RAM | **no** | works — reads `/proc/meminfo` |
-| **Usage history + Resources page + `wick memory report`** | **no** | **works fully** |
+| Capability | Linux | Windows | macOS | Linux container w/o systemd |
+|---|---|---|---|---|
+| Per-agent memory ceiling | ✅ | ❌ | ❌ | ❌ |
+| Aggregate slice ceiling | ✅ | ❌ | ❌ | ❌ |
+| CPU weight / quota / TasksMax / IOWeight | ✅ | ❌ | ❌ | ❌ |
+| `ExitOOM` with a measured peak | ✅ | ❌ | ❌ | ❌ |
+| `oom_score_adj` (agents die before wick) | ✅ | ❌ | ❌ | ✅ |
+| Spawn admission on free RAM | ✅ | ❌¹ | ❌ | ✅ |
+| Machine memory total/available | ✅ | ✅ | ❌ | ✅ |
+| Process listing (`Snapshot`) | ✅ | ✅ | ❌ | ✅ |
+| Disk capacity (`sysmem.Disk`) | ✅ | ✅ | ✅ | ✅ |
+| Usage history + Resources page | ✅ | ✅ | ⚠️² | ✅ |
+| **Crash recovery / respawn / notices** | ✅ | ✅ | ✅ | ✅ |
 
-So on a machine without a systemd user session, `measure` is **not** pointless:
-what it cannot do is limit anything, and it never claimed to. The recording,
-the page, the peaks, and the suggestions all still function.
+¹ The reading works on Windows (`GlobalMemoryStatusEx`), but `MinFreeMemoryLoader`
+is only consulted where the rest of the guard runs.
+² Renders, but the per-process tables are empty — see the known gaps below.
+
+**Known gaps on macOS** (both would be small to close, neither is done):
+`Snapshot()` falls through to the no-op, and `sysmem.Total`/`Available` are not
+implemented, so the page shows disk capacity and little else. Windows had the
+same two gaps until `snapshot_windows.go` and `sysmem_windows.go` were added;
+macOS would need `libproc` and `sysctl` respectively.
+
+So on a machine that cannot enforce, `measure` is **not** pointless: what it
+cannot do is limit anything, and it never claimed to. On Linux the recording,
+the peaks, and the suggestions all still function; on Windows so does everything
+except the limits.
 
 Check availability directly rather than inferring it:
 
