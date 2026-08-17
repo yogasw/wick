@@ -165,8 +165,12 @@ const maxTopRows = 5
 // tables. Unlike the per-agent list, these are not scoped to wick at all:
 // the answer to "why is this machine slow" is frequently not an agent.
 type topProcessRow struct {
-	PID        int     `json:"pid"`
-	Name       string  `json:"name"`
+	PID  int    `json:"pid"`
+	Name string `json:"name"`
+	// Cmdline identifies WHICH process this is when the name cannot:
+	// "node", "python3", and "MainThread" are all ambiguous on a busy
+	// machine. Empty for kernel threads and processes another user owns.
+	Cmdline    string  `json:"cmdline,omitempty"`
 	RSSBytes   uint64  `json:"rss_bytes"`
 	CPUPct     float64 `json:"cpu_pct"`
 	IOReadBps  uint64  `json:"io_read_bps"`
@@ -197,7 +201,7 @@ func toTopRows(in []memreport.ProcRate) []topProcessRow {
 	out := make([]topProcessRow, 0, len(in))
 	for _, p := range in {
 		out = append(out, topProcessRow{
-			PID: p.PID, Name: p.Name, RSSBytes: p.RSSBytes,
+			PID: p.PID, Name: p.Name, Cmdline: p.Cmdline, RSSBytes: p.RSSBytes,
 			CPUPct: p.CPUPct, IOReadBps: p.IOReadBps, IOWriteBps: p.IOWriteBps,
 		})
 	}

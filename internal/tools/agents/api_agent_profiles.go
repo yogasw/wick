@@ -266,7 +266,7 @@ func apiAgentProfileList(c *tool.Ctx) {
 		// so the three surfaces cannot disagree about which providers are
 		// healthy or which models an instance offers.
 		"provider_list": projectProviderList(c),
-		"is_admin":  isAdmin,
+		"is_admin":      isAdmin,
 	})
 }
 
