@@ -7,6 +7,7 @@ import (
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/provider/memscope"
+	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/pkg/memreport"
 	"github.com/yogasw/wick/internal/pkg/sysmem"
 	"github.com/yogasw/wick/pkg/tool"
@@ -44,6 +45,40 @@ type memoryAgentRow struct {
 	// numbers a limit must accommodate, which a single instant misses.
 	PeakBytes  uint64  `json:"peak_bytes,omitempty"`
 	PeakCPUPct float64 `json:"peak_cpu_pct,omitempty"`
+	// Processes is the task-manager view of this tree, heaviest first and
+	// capped. The aggregate above says how much the agent uses; this says
+	// which process to look at.
+	Processes []processRow `json:"processes,omitempty"`
+}
+
+// processRow is one process inside an agent's tree.
+type processRow struct {
+	PID      int    `json:"pid"`
+	PPID     int    `json:"ppid"`
+	Name     string `json:"name"`
+	RSSBytes uint64 `json:"rss_bytes"`
+}
+
+// maxProcessRows caps the per-agent process list. A browser-driving agent
+// can hold dozens of renderers; past the top handful they are noise, and
+// an uncapped list grows the payload without informing the operator.
+const maxProcessRows = 12
+
+// diskRow reports capacity where wick writes.
+//
+// Distinct from the IO rates above, and the distinction matters: a busy
+// disk makes everything slow, a FULL disk makes writes fail outright.
+// Wick writes continuously (session transcripts, spawn logs, trace
+// events), so an operator needs the second number before the writes start
+// failing.
+type diskRow struct {
+	Path       string  `json:"path"`
+	TotalBytes uint64  `json:"total_bytes"`
+	FreeBytes  uint64  `json:"free_bytes"`
+	AvailBytes uint64  `json:"avail_bytes"`
+	UsedBytes  uint64  `json:"used_bytes"`
+	UsedPct    float64 `json:"used_pct"`
+	Known      bool    `json:"known"`
 }
 
 // memoryReport is the payload behind GET /agents/memory.
@@ -68,6 +103,10 @@ type memoryReport struct {
 	// History describes the sample buffer so the UI can label its chart
 	// ("12 minutes, 48 points") instead of drawing an unbounded axis.
 	History memreport.Stats `json:"history"`
+
+	// Disk is capacity where the data tree lives — a different failure
+	// from the IO rates per agent.
+	Disk diskRow `json:"disk"`
 }
 
 // memoryCurrentLimits echoes what is configured now, so the UI can show
@@ -124,6 +163,23 @@ func buildMemoryReport() memoryReport {
 	avail, _ := sysmem.Available()
 	rep.TotalBytes, rep.AvailableBytes, rep.MachineKnown = total, avail, okT
 
+	// Capacity where the data tree actually lives — AgentsDir follows
+	// WICK_DATA_DIR, so a relocated tree reports its own filesystem rather
+	// than whichever one holds the binary.
+	if du, ok := sysmem.Disk(appname.AgentsDir()); ok {
+		rep.Disk = diskRow{
+			Path:       du.Path,
+			TotalBytes: du.TotalBytes,
+			FreeBytes:  du.FreeBytes,
+			AvailBytes: du.AvailBytes,
+			UsedBytes:  du.UsedBytes(),
+			UsedPct:    du.UsedPct(),
+			Known:      true,
+		}
+	} else {
+		rep.Disk = diskRow{Path: appname.AgentsDir()}
+	}
+
 	// Rates and peaks live only in the history buffer — a rate needs two
 	// samples, and a peak needs the whole window. The live snapshot below
 	// supplies the instantaneous sizes either way, so the page still works
@@ -158,6 +214,11 @@ func buildMemoryReport() memoryReport {
 			}
 			if p, ok := peaks[r.Name]; ok {
 				row.PeakBytes, row.PeakCPUPct = p.RSSBytes, p.CPUPct
+			}
+			for _, sp := range memreport.Subtree(procs, r.PID, maxProcessRows) {
+				row.Processes = append(row.Processes, processRow{
+					PID: sp.PID, PPID: sp.PPID, Name: sp.Name, RSSBytes: sp.RSSBytes,
+				})
 			}
 			rep.Agents = append(rep.Agents, row)
 		}

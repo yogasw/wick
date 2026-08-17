@@ -13,6 +13,24 @@ export interface AgentRow {
   io_write_bps: number;
   peak_bytes?: number;
   peak_cpu_pct?: number;
+  processes?: ProcessRow[];
+}
+
+export interface ProcessRow {
+  pid: number;
+  ppid: number;
+  name: string;
+  rss_bytes: number;
+}
+
+export interface DiskRow {
+  path: string;
+  total_bytes: number;
+  free_bytes: number;
+  avail_bytes: number;
+  used_bytes: number;
+  used_pct: number;
+  known: boolean;
 }
 
 export interface CurrentLimits {
@@ -51,6 +69,7 @@ export interface MemoryReport {
   suggested: SuggestedLimits;
   current: CurrentLimits;
   history: HistoryStats;
+  disk: DiskRow;
 }
 
 export interface MachineSample {

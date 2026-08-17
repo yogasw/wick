@@ -68,6 +68,32 @@
   const machineMem = $derived(series?.machine.map((m) => m.agent_bytes) ?? []);
   const machineCPU = $derived(series?.machine.map((m) => m.agent_cpu_pct) ?? []);
   const machineProcs = $derived(series?.machine.map((m) => m.agent_procs) ?? []);
+  // Parallel to the series above, so the hover readout can name the moment
+  // a spike happened rather than just its height.
+  const machineTimes = $derived(series?.machine.map((m) => m.at) ?? []);
+
+  // Which agent rows have their process list expanded. Keyed by pid so a
+  // refresh that reorders rows keeps the right one open.
+  let expanded = $state<Set<number>>(new Set());
+
+  function toggleProcesses(pid: number): void {
+    const next = new Set(expanded);
+    if (next.has(pid)) {
+      next.delete(pid);
+    } else {
+      next.add(pid);
+    }
+    expanded = next;
+  }
+
+  // Disk pressure gets a colour, because "83%" and "97%" should not look
+  // the same at a glance on a page about running out of things.
+  const diskTone = $derived.by(() => {
+    const pct = report?.disk?.used_pct ?? 0;
+    if (pct >= 90) return "bg-red-600";
+    if (pct >= 75) return "bg-yellow-500";
+    return "bg-blue-600";
+  });
 
   // Per-agent series keyed by pid, so each row can draw its own history.
   const perAgent = $derived.by(() => {
@@ -175,7 +201,7 @@
   {/if}
 
   <!-- Machine summary -->
-  <div class="grid gap-4 sm:grid-cols-3">
+  <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
     <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
       <p class="text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">
         Machine memory
@@ -214,6 +240,31 @@
       </p>
     </div>
 
+    <!-- Disk capacity. Distinct from the per-agent IO rates below: a busy
+         disk is slow, a FULL disk fails writes outright, and wick writes
+         continuously (transcripts, spawn logs, trace events). -->
+    <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
+      <p class="text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">
+        Disk
+      </p>
+      {#if report?.disk?.known}
+        <p class="mt-1 text-2xl font-bold text-black-900 dark:text-white-100">
+          {humanBytes(report.disk.used_bytes)}
+          <span class="text-sm font-normal text-black-700 dark:text-black-600">
+            / {humanBytes(report.disk.total_bytes)}
+          </span>
+        </p>
+        <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-white-300 dark:bg-navy-600">
+          <div class="h-full rounded-full {diskTone}" style="width: {report.disk.used_pct}%"></div>
+        </div>
+        <p class="mt-1 truncate text-xs text-black-700 dark:text-black-600" title={report.disk.path}>
+          {humanBytes(report.disk.avail_bytes)} free · {report.disk.path}
+        </p>
+      {:else}
+        <p class="mt-1 text-sm text-black-700 dark:text-black-600">unknown on this platform</p>
+      {/if}
+    </div>
+
     <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
       <p class="text-xs font-medium uppercase tracking-wide text-black-700 dark:text-black-600">
         Per-agent limit
@@ -243,13 +294,26 @@
       <div class="grid gap-5 sm:grid-cols-3">
         <Sparkline
           points={machineMem}
+          times={machineTimes}
           label="Memory"
           color="#3b82f6"
           format={humanBytes}
           max={report?.total_bytes}
         />
-        <Sparkline points={machineCPU} label="CPU" color="#f59e0b" format={(v) => `${v.toFixed(0)}%`} />
-        <Sparkline points={machineProcs} label="Processes" color="#10b981" format={(v) => String(Math.round(v))} />
+        <Sparkline
+          points={machineCPU}
+          times={machineTimes}
+          label="CPU"
+          color="#f59e0b"
+          format={(v) => `${v.toFixed(0)}%`}
+        />
+        <Sparkline
+          points={machineProcs}
+          times={machineTimes}
+          label="Processes"
+          color="#10b981"
+          format={(v) => String(Math.round(v))}
+        />
       </div>
       {#if series && series.machine.length > 1}
         <div class="mt-2 flex justify-between text-xs text-black-700 dark:text-black-600">
@@ -288,9 +352,21 @@
               <tr class="border-b border-white-300 last:border-0 dark:border-navy-600">
                 <td class="px-5 py-3">
                   <div class="font-medium text-black-900 dark:text-white-100">{a.name}</div>
-                  <div class="text-xs text-black-700 dark:text-black-600">
-                    pid {a.pid} · {a.procs} proc{a.procs === 1 ? "" : "s"}
-                  </div>
+                  {#if (a.processes?.length ?? 0) > 0}
+                    <button
+                      type="button"
+                      class="mt-0.5 flex items-center gap-1 text-xs text-blue-600 hover:underline dark:text-blue-400"
+                      onclick={() => toggleProcesses(a.pid)}
+                      aria-expanded={expanded.has(a.pid)}
+                    >
+                      <span class="inline-block transition-transform {expanded.has(a.pid) ? 'rotate-90' : ''}">›</span>
+                      pid {a.pid} · {a.procs} proc{a.procs === 1 ? "" : "s"}
+                    </button>
+                  {:else}
+                    <div class="text-xs text-black-700 dark:text-black-600">
+                      pid {a.pid} · {a.procs} proc{a.procs === 1 ? "" : "s"}
+                    </div>
+                  {/if}
                 </td>
                 <td class="px-5 py-3">
                   <div class="tabular-nums text-black-900 dark:text-white-100">
@@ -338,6 +414,42 @@
                   {/if}
                 </td>
               </tr>
+
+              {#if expanded.has(a.pid)}
+                <!-- The task-manager view: the row above says how much this
+                     agent uses, this says which process is using it. -->
+                <tr class="border-b border-white-300 bg-white-200/50 dark:border-navy-600 dark:bg-navy-800/40">
+                  <td colspan="6" class="px-5 py-3">
+                    <table class="w-full text-xs">
+                      <thead>
+                        <tr class="text-left uppercase tracking-wide text-black-700 dark:text-black-600">
+                          <th class="pb-1 font-medium">Process</th>
+                          <th class="pb-1 font-medium">PID</th>
+                          <th class="pb-1 font-medium">Parent</th>
+                          <th class="pb-1 text-right font-medium">Memory</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {#each a.processes ?? [] as p (p.pid)}
+                          <tr>
+                            <td class="py-0.5 text-black-900 dark:text-white-100">{p.name}</td>
+                            <td class="py-0.5 tabular-nums text-black-700 dark:text-black-600">{p.pid}</td>
+                            <td class="py-0.5 tabular-nums text-black-700 dark:text-black-600">{p.ppid}</td>
+                            <td class="py-0.5 text-right tabular-nums text-black-900 dark:text-white-100">
+                              {humanBytes(p.rss_bytes)}
+                            </td>
+                          </tr>
+                        {/each}
+                      </tbody>
+                    </table>
+                    {#if a.procs > (a.processes?.length ?? 0)}
+                      <p class="mt-1 text-xs text-black-700 dark:text-black-600">
+                        Showing the {a.processes?.length} largest of {a.procs} processes.
+                      </p>
+                    {/if}
+                  </td>
+                </tr>
+              {/if}
             {/each}
           </tbody>
         </table>

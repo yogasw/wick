@@ -10,6 +10,8 @@
 // measures them.
 package memreport
 
+import "sort"
+
 // Proc is one process as sampled from /proc.
 //
 // CPUTicks and IO counters are CUMULATIVE since the process started, not
@@ -170,6 +172,62 @@ func SumSubtreeAll(procs []Proc, root int) Totals {
 		}
 	}
 	return t
+}
+
+// Subtree returns every process in root's tree, heaviest first, capped at
+// limit (0 = uncapped).
+//
+// This is the task-manager view: the aggregate in Totals answers "how much
+// is this agent using", while the list answers "which process is using
+// it" — the question an operator actually acts on. Sorted by RSS because
+// that is what a limit is set against; ties break on PID so repeated calls
+// against one snapshot render in a stable order rather than shuffling
+// between refreshes.
+//
+// The cap matters: an agent driving a browser can have dozens of renderer
+// processes, and an uncapped list would grow the API payload without
+// telling the operator anything the top entries did not.
+func Subtree(procs []Proc, root int, limit int) []Proc {
+	children := make(map[int][]Proc, len(procs))
+	self := make(map[int]Proc, len(procs))
+	for _, p := range procs {
+		children[p.PPID] = append(children[p.PPID], p)
+		self[p.PID] = p
+	}
+	if _, ok := self[root]; !ok {
+		return nil
+	}
+
+	// Same cycle guard as SumSubtree: /proc is sampled without a lock, so
+	// a reused PID can produce parent links that loop.
+	var out []Proc
+	visited := make(map[int]bool, len(procs))
+	stack := []int{root}
+	for len(stack) > 0 {
+		pid := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if visited[pid] {
+			continue
+		}
+		visited[pid] = true
+		out = append(out, self[pid])
+		for _, c := range children[pid] {
+			if !visited[c.PID] {
+				stack = append(stack, c.PID)
+			}
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].RSSBytes != out[j].RSSBytes {
+			return out[i].RSSBytes > out[j].RSSBytes
+		}
+		return out[i].PID < out[j].PID
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 // Roots returns processes whose name matches any of names.
