@@ -277,7 +277,12 @@ func buildMemoryReport() memoryReport {
 	if !rep.ScopesAvailable {
 		// Say it plainly. Degrading silently is how an operator ends up
 		// believing they are guarded when nothing is enforcing anything.
-		rep.Notice = "scope isolation unavailable — systemd user session not reachable; agents run unguarded"
+		// Names neither mechanism specifically: this branch is reached only
+		// when BOTH the systemd user session and raw cgroupfs failed, so
+		// blaming systemd alone would send an operator on a Fly.io-style
+		// host (no systemd, but a usable cgroup v1 mount) chasing the
+		// wrong thing.
+		rep.Notice = "scope isolation unavailable — no systemd user session and no writable cgroup filesystem; agents run unguarded"
 	}
 
 	total, okT := sysmem.Total()

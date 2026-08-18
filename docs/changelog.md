@@ -10,6 +10,22 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.39.5](https://github.com/yogasw/wick/compare/v0.39.4...v0.39.5) — Memory Guard
+
+_Released on 2026-08-18_
+
+### Agents
+#### Added
+*   **Memory guard works on hosts without systemd**: Enforcement previously required a reachable systemd user session, so on a host whose PID 1 isn't systemd (a Fly.io Machine, a bare container) agents ran unguarded. Wick now probes a second backend — raw cgroup v1 via a writable `/sys/fs/cgroup/memory` — and uses it when `systemd-run` isn't available. The ceiling is enforced by the same kernel mechanism and is exactly as hard; what the fallback can't do is *confirm* a kill, because cgroup v1 has no counterpart to v2's per-group OOM-kill counter, so such an exit keeps the generic reason rather than claiming a kill it can't prove. The systemd backend stays preferred, and a machine with neither still says so plainly instead of implying protection that isn't there. See [Memory Guard ▶ Linux only](/guide/agents/memory-guard#linux-only).
+
+#### Changed
+*   **`memory_guard_method` no longer offers `scope`**: It was documented as "wick always applies it", but nothing in the code ever distinguished it from `auto` — both took the identical branch, since only `wrapper` was ever tested for. The dropdown now offers `auto` and `wrapper`, the two values that actually behave differently. A config that already stores `scope` keeps working and behaves as `auto`, exactly as it always did. The `wrapper` description now also spells out what wick stops doing under it: the combined slice ceiling and the CPU/task/IO controls are never written, and an OOM kill is reported as a plain stop rather than naming the limit it broke.
+
+#### Fixed
+*   **Scope directories no longer accumulate on the cgroupfs backend**: `systemd-run` is passed `--collect`, which reaps a transient scope as soon as its last process exits; raw cgroupfs has no daemon behind it, and scope names carry an increasing sequence, so every spawn left a permanent cgroup directory behind — unbounded growth on a long-running host, each group holding a little unreclaimable kernel memory. Scopes are now released on the agent exit path, after the exit stats are read (removing the group takes its accounting files with it). A group that still holds a process refuses to be removed, which is the correct outcome: an agent that outlived its wick stays contained.
+
+---
+
 ## [v0.39.4](https://github.com/yogasw/wick/compare/v0.39.3...v0.39.4) — Process Termination
 
 _Released on 2026-08-17_
