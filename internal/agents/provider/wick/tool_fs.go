@@ -55,10 +55,12 @@ func fsResolvePathReadable(workspace, uploadsDir, path string) (string, error) {
 }
 
 // skillReadRoots returns the skill dirs read_file may reach, so a wick agent
-// can open the SKILL.md the catalog references. Cached-free (KnownDirs is
-// cheap: a few Stats); returns absolute, cleaned dirs.
+// can open the SKILL.md the catalog references. ReadDirs rather than KnownDirs
+// so wick's own built-in skills are reachable too — the catalog lists them, so
+// a read root that omitted them would advertise files the agent cannot open.
+// Cache-free (the lookup is a few Stats); returns absolute, cleaned dirs.
 func skillReadRoots() []string {
-	return skillsync.KnownDirs()
+	return skillsync.ReadDirs()
 }
 
 // fsResolvePathIn resolves path (relative → against relBase) and confirms

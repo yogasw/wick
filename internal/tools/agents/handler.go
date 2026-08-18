@@ -33,6 +33,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/schedule"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/skills"
+	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/storage"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
@@ -204,6 +205,21 @@ func GetGateStatus() GateStatus { return globalGateStatus }
 
 // Register mounts all Agents routes under /tools/agents.
 func Register(r tool.Router) {
+	// Refresh the skills that ship inside the binary. Done at boot so an
+	// upgraded binary replaces the previous version's copies before anything
+	// reads them; the dir is wick-owned, so a full rewrite is safe. Failure is
+	// logged, not fatal — stale shipped docs must not stop the app from
+	// starting.
+	l := log.With().Str("component", "agents/skills").Logger()
+	if res, err := skillsync.SyncBuiltin(); err != nil {
+		l.Warn().Err(err).Msg("builtin skills not refreshed")
+	} else if len(res.Errors) > 0 {
+		l.Warn().Strs("errors", res.Errors).Msg("builtin skills partially refreshed")
+	} else if res.SkillsCopied > 0 {
+		l.Debug().Int("skills", res.SkillsCopied).Str("dir", skillsync.BuiltinDir()).
+			Msg("builtin skills refreshed")
+	}
+
 	// Svelte SPA shell + assets for the workflow editor.
 	registerSPA(r)
 	registerSPAWorkflows(r)
