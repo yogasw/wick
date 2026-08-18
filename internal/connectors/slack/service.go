@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -518,6 +520,20 @@ var opScopes = map[string][][]string{
 	"lookup_canvas_sections": {{"canvases:read"}},
 	"set_canvas_access":      {{"canvases:write"}},
 	"upload_file":            {{"files:write"}},
+	// Lists. list_lists rides on files.list (Slack has no slackLists.list),
+	// so it needs files:read while the rest need the lists:* scopes.
+	"list_lists":       {{"files:read"}},
+	"get_list":         {{"lists:read"}},
+	"list_list_items":  {{"lists:read"}},
+	"get_list_item":    {{"lists:read"}},
+	"create_list":      {{"lists:write"}},
+	"create_list_item": {{"lists:write"}},
+	"update_list_item": {{"lists:write"}},
+	"delete_list_item": {{"lists:write"}},
+	// custom_api_call is deliberately absent: the scopes it needs depend
+	// on whichever method the caller names, so any static rule here would
+	// either system-disable a working escape hatch or vouch for scopes it
+	// does not have. Slack's own missing_scope error is the check instead.
 }
 
 // runHealthCheck makes one auth.test call, reads the granted scopes
@@ -639,4 +655,219 @@ func cursorFrom(m map[string]any) string {
 		return cur
 	}
 	return ""
+}
+
+// ── Lists shaping ────────────────────────────────────────────────────
+
+// shapeListsList trims a files.list response down to the fields that
+// identify a List, dropping the file-centric noise (mimetype, size,
+// thumbnails) that never applies to Lists.
+func shapeListsList(raw any) map[string]any {
+	out := map[string]any{"ok": true, "lists": []any{}}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return out
+	}
+	if paging, ok := m["paging"]; ok {
+		out["paging"] = paging
+	}
+	files, _ := m["files"].([]any)
+	lists := make([]any, 0, len(files))
+	for _, f := range files {
+		fm, ok := f.(map[string]any)
+		if !ok {
+			continue
+		}
+		entry := map[string]any{}
+		for _, k := range []string{"id", "name", "title", "user", "created", "permalink", "channels", "updated"} {
+			if v, ok := fm[k]; ok {
+				entry[k] = v
+			}
+		}
+		lists = append(lists, entry)
+	}
+	out["lists"] = lists
+	return out
+}
+
+// parseJSONArray decodes a caller-supplied JSON array field (schema,
+// cells, initial_fields). Slack rejects these silently or with an
+// opaque error when they arrive as an object or a bare string, so we
+// name the offending field up front.
+func parseJSONArray(raw, field string) ([]any, error) {
+	var out []any
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, fmt.Errorf("%s must be a JSON array: %w", field, err)
+	}
+	return out, nil
+}
+
+// ── Custom API gating ────────────────────────────────────────────────
+
+// normalizeAPIMethod validates a caller-supplied Slack method name.
+// Accepts the documented bare form ("conversations.members") and
+// tolerates a leading slash; rejects anything carrying a scheme, a
+// host, a query string, or path traversal so the method can never
+// steer the request off the connector's base URL.
+func normalizeAPIMethod(raw string) (string, error) {
+	method := strings.TrimSpace(raw)
+	if method == "" {
+		return "", fmt.Errorf("method is required")
+	}
+	method = strings.TrimPrefix(method, "/")
+	if strings.Contains(method, "://") || strings.ContainsAny(method, "?#") || strings.Contains(method, "..") || strings.Contains(method, "/") {
+		return "", fmt.Errorf("method must be a bare Slack API method name such as conversations.members, not a URL or path")
+	}
+	for _, r := range method {
+		isAllowed := r == '.' || r == '_' ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+		if !isAllowed {
+			return "", fmt.Errorf("method contains an unexpected character %q — Slack method names are letters, digits, dots, and underscores", r)
+		}
+	}
+	return method, nil
+}
+
+// checkMethodAllowed enforces the per-instance custom API policy.
+// Mode "all" waves everything through; the default "allowlist" mode
+// permits only the configured method names, where a trailing * matches
+// any method sharing that prefix.
+func checkMethodAllowed(c *connector.Ctx, method string) error {
+	mode := strings.TrimSpace(c.Cfg("custom_api_mode"))
+	if mode == "" {
+		mode = "allowlist"
+	}
+	if mode == "all" {
+		return nil
+	}
+	if mode != "allowlist" {
+		return fmt.Errorf("unknown custom_api_mode %q — expected allowlist or all", mode)
+	}
+
+	allowed := parseAllowlist(c.Cfg("custom_api_allowlist"))
+	if len(allowed) == 0 {
+		return fmt.Errorf("custom_api_call is in allowlist mode but the allowlist is empty — add %q to this connector's Custom API allowlist, or switch the mode to 'all'", method)
+	}
+	for _, pattern := range allowed {
+		if matchMethodPattern(pattern, method) {
+			return nil
+		}
+	}
+	return fmt.Errorf("method %q is not in this connector's Custom API allowlist (allowed: %s) — add it there, or switch the mode to 'all'", method, strings.Join(allowed, ", "))
+}
+
+// parseAllowlist reads the kvlist-backed allowlist config. The widget
+// stores a JSON array of single-key rows; a hand-edited comma or
+// newline separated string is accepted too so the value stays usable
+// when set outside the admin UI.
+func parseAllowlist(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var rows []map[string]string
+	if err := json.Unmarshal([]byte(raw), &rows); err == nil {
+		out := make([]string, 0, len(rows))
+		for _, row := range rows {
+			for _, v := range row {
+				if entry := strings.TrimSpace(v); entry != "" {
+					out = append(out, entry)
+				}
+			}
+		}
+		return out
+	}
+	var out []string
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '\n' || r == ' ' }) {
+		if entry := strings.TrimSpace(part); entry != "" {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// matchMethodPattern compares one allowlist entry against a method
+// name, case-insensitively. A trailing * makes the entry a prefix rule
+// ("admin.*" covers every admin method); everything else is exact.
+func matchMethodPattern(pattern, method string) bool {
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	method = strings.ToLower(method)
+	if pattern == "" {
+		return false
+	}
+	if pattern == "*" {
+		return true
+	}
+	if strings.HasSuffix(pattern, "*") {
+		return strings.HasPrefix(method, strings.TrimSuffix(pattern, "*"))
+	}
+	return pattern == method
+}
+
+// parseAPIParams decodes the caller's params object. Slack arguments
+// are always a flat object, so an array or scalar is a caller mistake
+// worth naming. A token key is refused outright — the connector
+// attaches its own credential and must stay the only source of auth.
+func parseAPIParams(raw string) (map[string]any, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]any{}, nil
+	}
+	var params map[string]any
+	if err := json.Unmarshal([]byte(raw), &params); err != nil {
+		return nil, fmt.Errorf("params must be a JSON object: %w", err)
+	}
+	for k := range params {
+		if strings.EqualFold(strings.TrimSpace(k), "token") {
+			return nil, fmt.Errorf("params must not contain a token — this connector's own credential is attached automatically")
+		}
+	}
+	return params, nil
+}
+
+// readShapedSuffixes are the Slack method suffixes that read state and
+// are therefore served over GET when http_method is left on auto.
+var readShapedSuffixes = []string{".list", ".info", ".history", ".replies", ".members"}
+
+// resolveHTTPVerb turns the http_method input into a concrete verb.
+// On auto, read-shaped methods go out as GET and everything else as
+// POST — the convention Slack's own docs follow.
+func resolveHTTPVerb(choice, method string) string {
+	switch strings.ToLower(strings.TrimSpace(choice)) {
+	case "get":
+		return http.MethodGet
+	case "post":
+		return http.MethodPost
+	}
+	lower := strings.ToLower(method)
+	for _, suffix := range readShapedSuffixes {
+		if strings.HasSuffix(lower, suffix) {
+			return http.MethodGet
+		}
+	}
+	return http.MethodPost
+}
+
+// stringifyParams flattens a params object into the string form the
+// GET query builder takes. Nested objects and arrays are re-encoded as
+// JSON, which is how Slack expects structured arguments on GET.
+func stringifyParams(params map[string]any) map[string]string {
+	out := make(map[string]string, len(params))
+	for k, v := range params {
+		switch t := v.(type) {
+		case nil:
+			continue
+		case string:
+			out[k] = t
+		case bool:
+			out[k] = strconv.FormatBool(t)
+		case float64:
+			out[k] = strconv.FormatFloat(t, 'f', -1, 64)
+		default:
+			if encoded, err := json.Marshal(t); err == nil {
+				out[k] = string(encoded)
+			}
+		}
+	}
+	return out
 }
