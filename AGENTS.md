@@ -63,11 +63,55 @@ CLI tooling (`cmd/cli/`, `internal/builder/`, `internal/updater/`) runs on the d
 
 ## Skills to use
 
+Two separate sets. Which one applies depends on whether you are **editing wick**
+or **using it**.
+
+### Development skills — `.claude/skills/`
+
+Read before touching the subsystem each one covers. They reference real paths in
+this repo, so they only make sense with the repo checked out.
+
 - `tool-module` — any work under `internal/tools/{tool}/` **or** `internal/jobs/{job}/`. Covers both surfaces — they share the same Config reflection, `wick:"..."` tag grammar, and bootstrap contract.
 - `connector-module` — any work under `internal/connectors/{connector}/` or anything that touches the MCP surface (`internal/mcp/`).
+- `plugin-module` — packaging a connector as an external plugin binary (the `plugins` monorepo, `wick plugin build`, catalog, signing).
+- `workflow-node-module` — any work on a workflow node executor under `internal/agents/workflow/nodes/`.
+- `agent-channel-module` — any work on an agent channel transport under `internal/agents/channels/`.
+- `agent-resource-guard` — the memory guard, CPU/IO controls, OOM reporting, usage history, and the Resources page.
+- `fe-module` — any work on the Svelte SPAs or shared FE libraries under `fe/`.
 - `design-system` — any UI styling decision (colors, spacing, typography).
 - `config-tags` — adding/editing `wick:"..."` config fields (widget types, modifiers, key derivation).
 - `encrypted-fields` — any connector that handles credentials, tokens, or sensitive values flowing through the LLM. Covers the `secret` tag (auto-mask), `c.Mask` / `c.MaskIgnoreCase` for dynamic response data, and the `wick_enc_` token contract.
+
+### Shipped skills — `internal/agents/skillsync/builtin/`
+
+These are embedded in the binary and describe how to **use** wick, for agents
+running on a machine that has no wick checkout. They are extracted to
+`~/.<app>/builtin-skills/` on boot and on every skill sync, and that directory
+is **wiped and rewritten** each time — never edit the extracted copy, edit the
+source here.
+
+`wick-agents`, `wick-connectors`, `wick-plugins`, `wick-workflows`,
+`wick-resource-limits`, `wick-rich-output`, `wick-slack-replies`.
+
+Keep them free of `internal/...` paths: a user reading one has no such files.
+
+### Keeping skills current
+
+**A change to behaviour a skill documents is not finished until that skill is
+updated in the same commit.** A stale skill is worse than a missing one — it
+sends the next agent confidently in the wrong direction, and nothing in the
+build catches it.
+
+This applies in both directions:
+
+- Changed a config default, a tag, a contract, a file layout, or a rule inside a
+  subsystem → update the matching development skill.
+- Changed something a **user** sees or does — a CLI command, a config key, a
+  page, an MCP op, a fence, a channel behaviour → update the matching shipped
+  skill, since it ships to machines that cannot read this repo.
+
+When a change spans both, update both. When you are unsure a skill covers what
+you changed, grep it for the symbol or key you touched.
 
 ## Module surfaces at a glance
 
