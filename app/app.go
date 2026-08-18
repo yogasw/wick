@@ -659,6 +659,7 @@ func Run() {
 		mcpCmd, trayCmd,
 		configCmd(), pluginCmd(), uninstallCmd(),
 		versionCmd,
+		agentExecCmd(),
 	)
 
 	if err := root.Execute(); err != nil {

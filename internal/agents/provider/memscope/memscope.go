@@ -18,8 +18,18 @@ import (
 	"strings"
 )
 
-// SliceName is the systemd slice every agent scope is placed in.
+// SliceName is the systemd slice every agent scope is placed in. The
+// cgroupfs fallback (cgroupfs_linux.go) reuses the same name as a plain
+// directory — one vocabulary for "the group agents share", whichever
+// mechanism is placing them there.
 const SliceName = "agents.slice"
+
+// AgentExecSubcommand is the hidden CLI subcommand (`wick __agent-exec`,
+// wired in app/agentexec_cmd.go) that WrapArgvCgroupFS re-execs wick
+// through. Nothing on a systemd-less host performs "create a cgroup, put
+// this process in it, then exec the real binary" for us the way
+// systemd-run does, so wick's own binary is the wrapper.
+const AgentExecSubcommand = "__agent-exec"
 
 // SliceLimits are the resource controls written onto agents.slice —
 // shared by every agent, enforced by the kernel. Zero means "leave the

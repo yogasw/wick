@@ -10,13 +10,25 @@ The memory guard adds a second axis: byte limits, enforced by the kernel, per ag
 
 ::: info Source
 Config + arithmetic: [`internal/agents/config/memguard.go`](https://github.com/yogasw/wick/blob/master/internal/agents/config/memguard.go).
-Mechanism: [`internal/agents/provider/memscope/`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/memscope) (systemd scopes), [`internal/agents/provider/memguard.go`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/memguard.go) (wiring into spawn).
+Mechanism: [`internal/agents/provider/memscope/`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/memscope) (systemd scopes and the raw-cgroupfs fallback), [`internal/agents/provider/memguard.go`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/memguard.go) (wiring into spawn).
 Measurement: [`internal/pkg/memreport/`](https://github.com/yogasw/wick/blob/master/internal/pkg/memreport) (live `/proc` reads + history buffer).
 :::
 
 ## Linux only
 
-Enforcement needs a reachable **systemd user session** (`systemd-run --user --scope`). Off Linux — Windows, macOS, Termux without linger — the guard degrades cleanly: no limit is applied, and both the CLI and the Resources page say so plainly instead of silently doing nothing.
+Enforcement needs a Linux kernel. Off Linux — Windows, macOS — the guard degrades cleanly: no limit is applied, and both the CLI and the Resources page say so plainly instead of silently doing nothing.
+
+On Linux, wick probes two mechanisms in order at first use and caches whichever works, by actually creating and tearing down a throwaway group rather than guessing from paths or permissions:
+
+| Backend | Requires | Notes |
+|---|---|---|
+| **systemd** (preferred) | a reachable systemd user session (`systemd-run --user --scope`) | Scopes are reaped automatically (`--collect`), and cgroup v2's `memory.events` gives a real per-scope OOM-kill counter. |
+| **cgroupfs** (fallback) | a writable `/sys/fs/cgroup/memory` (cgroup v1) | No systemd needed — the kernel is enough. Used on hosts whose PID 1 isn't systemd (a Fly.io Machine, a bare container, Termux without linger). |
+| none | — | Agents run unguarded; only `/proc` measurement remains. |
+
+The cgroupfs fallback enforces exactly as hard as the systemd path does — `memory.limit_in_bytes` is a real kernel ceiling. What it can't do is *report* as confidently: cgroup v1 has no counterpart to v2's `oom_kill` counter, so a scope's peak is readable but a kill can't be positively confirmed. The exit reason falls back to the generic one rather than inventing a kill it can't prove (see [What happens when an agent is killed](#what-happens-when-an-agent-is-killed)).
+
+Because nothing on a systemd-less host performs "create a cgroup, join it, then exec the agent" the way `systemd-run` does, wick re-execs its own binary through a hidden `__agent-exec` subcommand to do it. That's an internal implementation detail — never something to type by hand — but it's what you'll see in a process list on such a host.
 
 Measurement (`wick memory report`, the Resources page, Usage History) reads `/proc` directly and works everywhere the guard doesn't, including with the guard switched off.
 
@@ -27,10 +39,23 @@ Set via `memory_guard_mode` under **Agents settings → Memory Guard**:
 | Mode | What it does |
 |---|---|
 | `off` (default) | No slice, no `oom_score_adj`, no argv wrapping. Byte-identical to a build without this feature. |
-| `measure` | Each agent runs in its own systemd scope so its usage can be read, but nothing is limited. Use this first to learn real numbers on this machine. |
+| `measure` | Each agent runs in its own scope so its usage can be read, but nothing is limited. Use this first to learn real numbers on this machine. |
 | `enforce` | The kernel kills an agent that exceeds its limit. Every other agent and wick itself are untouched. |
 
-`memory_guard_method` picks who applies the limit: `auto` (wick applies it when supported — the default), `scope` (wick always applies it), or `wrapper` (something outside wick already wraps the agent binary; wick only measures/reports). Running both at once is safe — the kernel enforces the tightest ceiling in the hierarchy.
+`memory_guard_method` picks who applies the limit: `auto` (wick applies it when a backend is available — the default) or `wrapper` (something outside wick already wraps the agent binary; wick only measures and reports). Running both at once is safe — the kernel enforces the tightest ceiling in the hierarchy, so migrating from one to the other never leaves a gap.
+
+Choose `wrapper` when something *outside* wick must be limited too — a `claude` you launch by hand in a terminal is not a child of wick, so no wrapping wick does can reach it. Be aware of what wick then stops doing, since it goes beyond the per-agent ceiling:
+
+| | `auto` | `wrapper` |
+|---|---|---|
+| Per-agent ceiling | wick applies it | your wrapper applies it |
+| Combined ceiling on `agents.slice` | ✅ | ❌ never written |
+| CPU weight / quota / TasksMax / IOWeight | ✅ | ❌ never written |
+| OOM exit reason naming peak + limit | ✅ | ❌ reported as a plain stop |
+| `protect_wick_from_oom` | ✅ | ✅ |
+| Measurement, admission, Resources page | ✅ | ✅ |
+
+A third value, `scope`, was previously documented as "wick always applies it". It never behaved differently from `auto` — the code only ever branched on `wrapper` — so it is no longer offered. A config that already stores it keeps working and is treated as `auto`.
 
 ## Recommended path
 
@@ -59,6 +84,10 @@ Each provider instance ([Providers](./providers)) has its own **memory limit (MB
 
 Written onto the shared `agents.slice`. Memory is the only control that kills; these shape how agents *compete* — with wick and with each other. All default to `0` = kernel default:
 
+::: warning systemd backend only
+These are systemd unit properties. On the cgroupfs fallback only the memory controls apply — the aggregate memory ceiling is written onto the slice directly, but CPU weight/quota, tasks max, and IO weight are not.
+:::
+
 | Setting | What it does |
 |---|---|
 | `agents_cpu_weight` | CPU priority of agents vs. the rest of the system when CPU is contended (kernel default weight 100). Ships at `50` — agents yield to wick under load, full speed when idle. Never caps. |
@@ -78,6 +107,8 @@ When the kernel kills an agent's scope for exceeding its limit, the session's ex
 
 (or, with a measured peak available: "used 2.3 GB, over its 2000 MB limit. …"). This is surfaced in the chat and the spawn log, same as any other exit reason.
 
+Naming the kill needs a per-scope OOM-kill counter, which only cgroup v2 (the systemd backend) has. On the [cgroupfs fallback](#linux-only) the agent is still killed by the kernel, but the exit reason stays the generic "agent stopped" one rather than claiming a kill it can't prove. Check the Resources page or `wick memory report` for the peak in that case.
+
 ## Usage History
 
 Independent of the guard mode — measuring is how you learn what to set, so it runs with the guard `off`. Settings under **Agents settings → Usage History**:
@@ -93,7 +124,7 @@ Independent of the guard mode — measuring is how you learn what to set, so it 
 
 `/tools/agents/resources` — **admin only** (nav link and its `GET /api/memory`, `GET /api/memory/series`, `GET /api/processes`, `POST /api/memory/apply-suggested`, `POST /api/processes/kill` endpoints), since it reports machine-wide process usage and can act on it.
 
-Shows a live per-agent table (memory, CPU, disk), trend charts backed by the history buffer, and suggested limits with an **Apply** button that writes them straight into Memory Guard settings. On a machine without scope isolation available (no reachable systemd user session), the page says so plainly instead of showing numbers that imply protection that isn't there.
+Shows a live per-agent table (memory, CPU, disk), trend charts backed by the history buffer, and suggested limits with an **Apply** button that writes them straight into Memory Guard settings. On a machine where no backend works at all — neither a systemd user session nor a writable cgroup filesystem — the page says so plainly instead of showing numbers that imply protection that isn't there.
 
 A searchable, paginated **process explorer** lists every process on the machine, grouped by executable and ranked by current CPU/memory rate. Each row can be ended from its menu — the one destructive action on the page:
 
