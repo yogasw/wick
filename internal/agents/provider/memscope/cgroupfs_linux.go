@@ -45,7 +45,7 @@ func cgroupFSProbe() bool {
 	if err != nil {
 		return false
 	}
-	defer os.Remove(dir)
+	defer os.RemoveAll(dir)
 	// A real cgroup directory always has these controller files; a plain
 	// tmpfs directory (mount present, controller not attached) will not.
 	if _, err := os.Stat(filepath.Join(dir, "memory.limit_in_bytes")); err != nil {
