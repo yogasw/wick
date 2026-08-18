@@ -10,6 +10,32 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.39.6](https://github.com/yogasw/wick/compare/v0.39.5...v0.39.6) — Slack
+
+_Released on 2026-08-18_
+
+### Added
+*   **Slack Lists Operations:**
+    *   Introduced a new "Lists" category to the Slack connector, wrapping Slack's `slackLists.*` API.
+    *   Includes read operations: `list_lists`, `get_list`, `list_list_items`, `get_list_item`.
+    *   Includes destructive write operations: `create_list`, `create_list_item`, `update_list_item`, `delete_list_item`. These are `OpDestructive` and disabled by default on every instance.
+    *   Note: `list_lists` utilizes Slack's `files.list` method with `types=lists` and requires the `files:read` scope, as Slack does not provide a dedicated `slackLists.list` method. This is documented in the scope map and operation documentation.
+    *   Other Lists operations require `lists:read` or `lists:write` scopes.
+    *   Slack Lists are a paid-plan feature.
+*   **Slack Custom API Escape Hatch:**
+    *   Added a "Custom" category with a new `custom_api_call` operation.
+    *   This operation allows calling any Slack Web API method for which the connector does not have a dedicated operation.
+    *   The operation is `OpDestructive` and disabled by default on every instance.
+    *   Configurable via two new connector fields:
+        *   `CustomAPIMode`: Defaults to `allowlist`, can be set to `all`.
+        *   `CustomAPIAllowlist`: Specifies allowed method names, supporting trailing `*` for wildcards.
+    *   Calls are validated: method names are checked against URLs, slashes, traversal, and query strings to ensure requests only target Slack. A `token` key in `params` is rejected to enforce the use of instance credentials for authentication.
+    *   The `custom_api_call` operation is intentionally omitted from static `opScopes` mappings; its required scopes depend on the specific Slack API method called, and Slack's `missing_scope` error acts as the runtime check.
+    *   Blocked calls fail before any outbound request, providing an error message that names allowed methods.
+
+---
+
+
 ## [v0.39.5](https://github.com/yogasw/wick/compare/v0.39.4...v0.39.5) — Agents
 
 _Released on 2026-08-18_

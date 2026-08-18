@@ -24,10 +24,12 @@ The Slack row holds credentials for both the connector ops and the [Slack channe
 | Field | Type | Purpose |
 |---|---|---|
 | `AuthMode` | dropdown | `bot_token` (default) or `user_token` — selects which token the runtime reads when making API calls. |
-| `BotToken` | secret | `xoxb-…` token used by every connector op when `AuthMode=bot_token`. Needs `files:read` and `reactions:read` (alongside the existing scopes) to use the Files ops and `get_reactions`. |
+| `BotToken` | secret | `xoxb-…` token used by every connector op when `AuthMode=bot_token`. Needs `files:read` and `reactions:read` (alongside the existing scopes) to use the Files ops and `get_reactions`, and `lists:read` / `lists:write` for the Lists ops. |
 | `UserToken` | secret | `xoxp-…` user OAuth token, used when `AuthMode=user_token`. Set after the operator clicks **Connect Account** when `ClientID` is configured, or paste manually. |
 | `ClientID` | string | Slack OAuth App Client ID. Required to activate the **Connect Account** button for the user-token OAuth flow. Lives on this instance row, not in a shared server setting. |
 | `ClientSecret` | secret | Slack OAuth App Client Secret. Required for the token exchange step of the Connect Account flow. Lives on this instance row. |
+| `CustomAPIMode` | dropdown | Governs `custom_api_call` (see [Custom API escape hatch](#custom-api-escape-hatch)). `allowlist` (default) or `all`. |
+| `CustomAPIAllowlist` | kvlist | Method names `custom_api_call` may reach when `CustomAPIMode=allowlist`. Supports a trailing `*` wildcard, e.g. `admin.*`. |
 
 OAuth app credentials (`ClientID` / `ClientSecret`) are now per-instance — different Slack connector rows can use different Slack apps. Enable the Connect Account flow by setting both fields and enabling `EnableSSO` in the Access Policy section.
 
@@ -73,6 +75,52 @@ All three require the `files:read` scope. `read_file` downloads via `url_private
 
 Every write op is `connector.OpDestructive` — enabled by default on every new row. Admins can disable individual ops per (row, op) at `/manager/connectors/slack/{id}`. The MCP layer appends a destructive warning to these ops' descriptions so the LLM confirms before calling.
 
+## Operations (Lists)
+
+Slack Lists are the structured, spreadsheet-like records behind `slackLists.*` — **a paid-plan feature**, empty on free workspaces.
+
+| Op | Input | What it does |
+|---|---|---|
+| `list_lists` | `channel`, `user`, `limit`, `page` | Enumerate Lists visible to the token. Rides on `files.list` with `types=lists` — Slack has no `slackLists.list` method — so this needs `files:read`, not `lists:read`. Page-based pagination (`page`/`pages`). |
+| `get_list` | `list_id` | A List's metadata and column schema. Read this first — column `id`s (`Col…`) are what `create_list_item` / `update_list_item` need. Requires `lists:read`. |
+| `list_list_items` | `list_id`, `limit`, `cursor`, `archived` | Read a List's rows. Cursor-based pagination via `response_metadata.next_cursor`. `archived=true` returns archived rows *instead of* live ones. Requires `lists:read`. |
+| `get_list_item` | `list_id`, `item_id` | One row plus the parent List's schema and any subtasks. Returns the row under `record` (not `item` — that's `create_list_item`'s key). Requires `lists:read`. |
+| `create_list` (destructive) | `name`, `schema`, `todo_mode`, `copy_from`, `copy_records` | Create a new List — with an explicit JSON column `schema`, in to-do mode, or duplicated from an existing List via `copy_from`. Requires `lists:write`. |
+| `create_list_item` (destructive) | `list_id`, `initial_fields`, `parent_item_id`, `duplicate_from` | Add a row, optionally pre-filled, as a subtask, or duplicated from an existing row. `initial_fields` is keyed by `column_id`, not column name. Requires `lists:write`. |
+| `update_list_item` (destructive) | `list_id`, `cells` | Write cell values into one or more rows in one call. Each cell needs `row_id`, `column_id`, and a value key matching the column type. Requires `lists:write`. |
+| `delete_list_item` (destructive) | `list_id`, `item_id` | Permanently delete a row (and its subtasks). Requires `lists:write`. |
+
+Cells and schema columns are addressed by Slack-generated IDs (`Col…` for columns, `Rec…` for rows) — always resolve them via `get_list` / `list_list_items` before writing, never guess them.
+
+## Custom API escape hatch
+
+`custom_api_call` calls any Slack Web API method the connector has no dedicated op for (e.g. `emoji.list`, `pins.add`, `conversations.members`), using the connector's own token. It's `connector.OpDestructive`, so it's **disabled by default** on every instance — an admin must enable it at `/manager/connectors/slack/{id}` before it can run at all.
+
+| Input | Purpose |
+|---|---|
+| `method` | Bare Slack method name (no leading slash, no URL). Rejected if it contains a scheme, host, query string, `..`, or `/`. |
+| `http_method` | `auto` (default), `get`, or `post`. On auto, methods ending in `.list`/`.info`/`.history`/`.replies`/`.members` go out as GET, everything else POST. |
+| `params` | JSON object of request arguments. A `token` key is rejected outright — the connector's own credential is attached automatically. |
+
+Which methods are reachable is governed by the two Custom API config fields above:
+
+- **`allowlist` mode (default)** — only method names in `CustomAPIAllowlist` are permitted (trailing `*` wildcard supported, e.g. `admin.*`). An empty allowlist blocks every call.
+- **`all` mode** — every Slack Web API method is permitted; the token's own granted scopes are still the real limit (a missing-scope call fails with Slack's `missing_scope` error regardless of the allowlist).
+
+Prefer a dedicated op when one exists — it validates input and returns a tidied shape, while `custom_api_call` returns Slack's raw response verbatim.
+
+```yaml
+- id: pin
+  type: connector
+  module: slack
+  op: custom_api_call
+  arg_modes:
+    params: expression
+  args:
+    method: pins.add
+    params: '{"channel":"{{.Node.trigger.payload.channel_id}}","timestamp":"{{.Node.trigger.payload.ts}}"}'
+```
+
 ## Quirks worth knowing
 
 - **`session_id` on `send_message` / `update_message`** — optional field that tells wick which agent session owns this call. When set (or auto-injected via the `X-Wick-Session-Id` MCP header), the "Sent using @bot" footer names the bot that owns the session rather than falling back to the app name. Leave it empty when calling outside an agent session.
@@ -86,6 +134,8 @@ Every write op is `connector.OpDestructive` — enabled by default on every new 
 - `blocks` overrides `text` for rendering, but Slack still wants non-empty `text` for the notification preview — always set both.
 - `list_files` paginates by `page`/`pages`, not `cursor` — different scheme from the channel/user/message read ops above.
 - `ts_from` / `ts_to` on `list_files` are Unix **seconds** (e.g. `1700000000`), not Slack message ts strings.
+- Lists ops need Slack Lists to be available on the workspace's plan — free workspaces return an empty `list_lists` result rather than an error.
+- `custom_api_call` is disabled by default on every new row (it's `OpDestructive`) — enable it explicitly before it can be called, then configure `CustomAPIMode` / `CustomAPIAllowlist` on the same page.
 
 ## Workflow integration
 
