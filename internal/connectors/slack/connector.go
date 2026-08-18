@@ -15,6 +15,7 @@ package slack
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/yogasw/wick/pkg/connector"
@@ -32,10 +33,13 @@ const defaultBaseURL = "https://slack.com/api"
 // instance; they enable the "Connect Account" button on the detail page.
 type Configs struct {
 	AuthMode     string `wick:"dropdown=bot_token|user_token;default=bot_token;desc=Which Slack OAuth token type to use. Bot tokens (xoxb-) cover the standard surface; user tokens (xoxp-) act as a workspace member and are required for ops that need user identity."`
-	BotToken     string `wick:"secret;desc=Bot User OAuth Token (xoxb-...). Scopes: channels:read, groups:read, im:read, mpim:read, channels:history, groups:history, im:history, mpim:history, users:read, users:read.email, chat:write, chat:write.public, reactions:write, reactions:read, files:read, files:write, canvases:read, canvases:write."`
+	BotToken     string `wick:"secret;desc=Bot User OAuth Token (xoxb-...). Scopes: channels:read, groups:read, im:read, mpim:read, channels:history, groups:history, im:history, mpim:history, users:read, users:read.email, chat:write, chat:write.public, reactions:write, reactions:read, files:read, files:write, canvases:read, canvases:write, lists:read, lists:write."`
 	UserToken    string `wick:"secret;desc=User OAuth Token (xoxp-...). Filled automatically via the Connect Account button when ClientID is configured. Or paste manually."`
 	ClientID     string `wick:"desc=Slack OAuth App Client ID. Required to use the Connect Account button for user-token OAuth flow."`
 	ClientSecret string `wick:"secret;desc=Slack OAuth App Client Secret. Required for the OAuth token exchange when using Connect Account."`
+
+	CustomAPIMode      string `wick:"group=Custom API|Governs the custom_api_call escape hatch — reaching Slack Web API methods this connector has no dedicated operation for. The operation itself is disabled by default; enable it on this page before these settings do anything.;dropdown=allowlist|all;default=allowlist;desc=Which Slack methods custom_api_call may reach. 'allowlist' permits only the methods listed below (recommended). 'all' permits every Slack Web API method."`
+	CustomAPIAllowlist string `wick:"group=Custom API;kvlist=method;visible_when=custom_api_mode:allowlist;desc=Slack Web API method names custom_api_call may reach, one per row (e.g. emoji.list, pins.add, conversations.members). Supports a trailing * wildcard for prefixes: 'admin.*' allows every admin method. Ignored when mode is 'all'."`
 }
 
 // ── Input structs ────────────────────────────────────────────────────
@@ -177,6 +181,64 @@ type ListFilesInput struct {
 	Types     string `wick:"desc=Comma-separated file type filter: all,spaces,snippets,images,gdocs,zips,pdfs. Default: all."`
 	Limit     int    `wick:"desc=Max files per page (1-200). Default: 100."`
 	Page      int    `wick:"desc=1-based page number (files.list is page-based, not cursor-based). Default: 1."`
+}
+
+// ── Lists (slackLists.*) ─────────────────────────────────────────────
+
+type ListListsInput struct {
+	Channel string `wick:"desc=Optional channel ID (C.../G...) to only return Lists shared in that channel."`
+	User    string `wick:"desc=Optional user ID (U...) to only return Lists created by that user."`
+	Limit   int    `wick:"desc=Max Lists per page (1-200). Default: 100."`
+	Page    int    `wick:"desc=1-based page number (files.list is page-based, not cursor-based). Default: 1."`
+}
+
+type GetListInput struct {
+	ListID string `wick:"required;desc=List ID (F...). Get it from list_lists or a Slack List URL."`
+}
+
+type ListListItemsInput struct {
+	ListID   string `wick:"required;desc=List ID (F...) whose rows to read."`
+	Limit    int    `wick:"desc=Max rows per page (1-1000). Default: 100."`
+	Cursor   string `wick:"desc=Pagination cursor from a previous response."`
+	Archived bool   `wick:"desc=Return archived rows instead of live ones. Default: false."`
+}
+
+type GetListItemInput struct {
+	ListID string `wick:"required;desc=List ID (F...) containing the row."`
+	ItemID string `wick:"required;desc=Row ID (Rec...) to fetch. Get it from list_list_items."`
+}
+
+type CreateListInput struct {
+	Name        string `wick:"required;desc=Name of the new List."`
+	Schema      string `wick:"textarea;desc=Optional column definitions as a JSON array, e.g. [{\"key\":\"title\",\"name\":\"Title\",\"type\":\"text\",\"is_primary_column\":true}]. Types: text, number, select, date, user, checkbox, email, phone, channel, rating, link, message, attachment, canvas, reference, created_by, last_edited_by, created_time, last_edited_time. Omit to let Slack pick defaults."`
+	TodoMode    bool   `wick:"desc=Create the List in to-do mode, which pre-adds Completed, Assignee, and Due Date columns. Default: false."`
+	CopyFrom    string `wick:"desc=Optional List ID (F...) to duplicate the schema from instead of passing schema."`
+	CopyRecords bool   `wick:"desc=When copy_from is set, also copy that List's existing rows. Default: false."`
+}
+
+type CreateListItemInput struct {
+	ListID        string `wick:"required;desc=List ID (F...) to add the row to."`
+	InitialFields string `wick:"textarea;desc=Optional initial cell values as a JSON array, e.g. [{\"column_id\":\"Col012A3BCDE4\",\"rich_text\":[{\"type\":\"rich_text\",\"elements\":[]}]}]. Each entry needs column_id plus one value key matching the column type (rich_text, user, date, select, checkbox, number, email, phone, link, ...). Read the column IDs from get_list first."`
+	ParentItemID  string `wick:"desc=Optional parent row ID (Rec...) to create this row as a subtask of it."`
+	DuplicateFrom string `wick:"desc=Optional existing row ID (Rec...) to duplicate instead of passing initial_fields."`
+}
+
+type UpdateListItemInput struct {
+	ListID string `wick:"required;desc=List ID (F...) containing the rows to update."`
+	Cells  string `wick:"required;textarea;desc=JSON array of cells to write, e.g. [{\"row_id\":\"Rec018B8RR603\",\"column_id\":\"Col018AL7648J\",\"rich_text\":[...]}]. Each cell needs row_id, column_id, and one value key matching the column type. Read column IDs from get_list."`
+}
+
+type DeleteListItemInput struct {
+	ListID string `wick:"required;desc=List ID (F...) containing the row."`
+	ItemID string `wick:"required;desc=Row ID (Rec...) to delete. Not reversible."`
+}
+
+// ── Custom API escape hatch ──────────────────────────────────────────
+
+type CustomAPICallInput struct {
+	Method     string `wick:"required;desc=Slack Web API method name, exactly as documented, without the leading slash or base URL. Examples: emoji.list, pins.add, conversations.members, admin.users.list."`
+	HTTPMethod string `wick:"dropdown=auto|get|post;default=auto;desc=Transport to use. 'auto' picks GET for read-shaped methods (.list, .info, .history, .replies, .members) and POST for everything else, which is right for nearly every Slack method."`
+	Params     string `wick:"textarea;desc=Request arguments as a JSON object, e.g. {\"channel\":\"C12345\",\"limit\":50}. Sent as the query string on GET and as the JSON body on POST. Omit the token — the connector's own credential is attached automatically."`
 }
 
 type GetFileInfoInput struct {
@@ -602,6 +664,224 @@ func Operations() []connector.Category {
 					},
 					PairWith:    []string{"connector:slack.get_file_info", "connector:slack.list_files"},
 					InputSample: `{"file":"F0123ABCD"}`,
+				},
+			),
+		),
+		connector.Cat("Lists", "Read and write Slack Lists — the structured, spreadsheet-like records behind slackLists.*. A List is a file (F...) holding typed columns and rows.",
+			connector.Op(
+				"list_lists",
+				"List Lists",
+				"Enumerate the Slack Lists visible to the token, optionally filtered by channel or creator. Returns each List's id, title, creator, and permalink.",
+				ListListsInput{},
+				listLists,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"lists":  "Array of List objects: id (F...), name, title, user (creator), created, permalink, channels.",
+						"paging": "Page wrapper: {count, total, page, pages}. page < pages = call again with page+1.",
+					},
+					Quirks: []string{
+						"Slack has no slackLists.list method — Lists are files, so discovery goes through files.list with types=lists. That means this op needs files:read, not lists:read.",
+						"Pagination is PAGE-based (page/pages), not cursor-based like list_list_items.",
+						"Lists are a paid-plan feature. On free workspaces this returns an empty set.",
+					},
+					PairWith:     []string{"connector:slack.get_list", "connector:slack.list_list_items"},
+					InputSample:  `{"channel":"C12345","limit":50}`,
+					OutputSample: `{"ok":true,"lists":[{"id":"F1234567","name":"Sprint Board","user":"U02ABCDEF","created":1758744346}],"paging":{"count":1,"total":1,"page":1,"pages":1}}`,
+				},
+			),
+			connector.Op(
+				"get_list",
+				"Get List",
+				"Return a List's metadata and column schema. Read this first — the column IDs it returns are what create_list_item and update_list_item need.",
+				GetListInput{},
+				getList,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"list": "List object: id, title, and list_metadata.schema — an array of columns, each with id (Col...), key, name, and type.",
+					},
+					Quirks: []string{
+						"Requires lists:read scope.",
+						"Cells are addressed by the column's id (Col...), not its key or name. Always resolve IDs here before writing.",
+					},
+					PairWith:     []string{"connector:slack.list_list_items", "connector:slack.update_list_item"},
+					InputSample:  `{"list_id":"F1234567"}`,
+					OutputSample: `{"ok":true,"list":{"id":"F1234567","title":"Sprint Board","list_metadata":{"schema":[{"id":"Col018AL7648J","key":"title","name":"Title","type":"text"}]}}}`,
+				},
+			),
+			connector.Op(
+				"list_list_items",
+				"List List Items",
+				"Read the rows of a List. Returns each row's id, creator, timestamps, and field values, with a pagination cursor.",
+				ListListItemsInput{},
+				listListItems,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"items":             "Array of row objects: id (Rec...), list_id, date_created, created_by, updated_by, fields[].",
+						"response_metadata": "Pagination wrapper. response_metadata.next_cursor non-empty = call again with cursor.",
+					},
+					Quirks: []string{
+						"Requires lists:read scope.",
+						"fields[] carries column_id plus one value key named after the column type — a text column returns text, a user column returns user, and so on. There is no fixed value key.",
+						"archived=true returns archived rows INSTEAD of live ones, not in addition to them.",
+					},
+					PairWith:     []string{"connector:slack.get_list", "connector:slack.get_list_item"},
+					InputSample:  `{"list_id":"F1234567","limit":100}`,
+					OutputSample: `{"ok":true,"items":[{"id":"Rec018B8X2B3M","list_id":"F1234567","date_created":1758744346,"created_by":"W0AB1CDE2","fields":[{"key":"rich_text_notes","column_id":"Col018B8C91TM","text":"Onboard new hire"}]}],"response_metadata":{"next_cursor":""}}`,
+				},
+			),
+			connector.Op(
+				"get_list_item",
+				"Get List Item",
+				"Return one row of a List by id, along with the parent List's schema and any subtasks.",
+				GetListItemInput{},
+				getListItem,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"list":     "Parent List object including list_metadata.schema.",
+						"record":   "The requested row: id, list_id, date_created, fields[].",
+						"subtasks": "Array of child rows created with parent_item_id pointing at this row.",
+					},
+					Quirks: []string{
+						"Requires lists:read scope.",
+						"Returns the row under the key `record`, not `item` — create_list_item returns `item`. The shapes differ between the two ops.",
+					},
+					PairWith:    []string{"connector:slack.list_list_items", "connector:slack.update_list_item"},
+					InputSample: `{"list_id":"F1234567","item_id":"Rec014K005UQJ"}`,
+				},
+			),
+			connector.OpDestructive(
+				"create_list",
+				"Create List",
+				"Create a new Slack List, optionally with an explicit column schema, in to-do mode, or duplicated from an existing List.",
+				CreateListInput{},
+				createList,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"list_id":       "ID of the new List (F...).",
+						"list_metadata": "Contains schema[] — the created columns with their generated ids (Col...). Keep these to write rows.",
+					},
+					TemplateableFields: []string{"name", "schema"},
+					Quirks: []string{
+						"Requires lists:write scope, and Lists are a paid-plan feature.",
+						"schema must be a JSON ARRAY of column objects. Exactly one column should carry is_primary_column: true.",
+						"todo_mode and an explicit schema are additive — to-do mode appends Completed, Assignee, and Due Date on top of the columns given.",
+						"copy_from duplicates the source List's schema; pass copy_records to bring its rows across too.",
+					},
+					PairWith:    []string{"connector:slack.create_list_item", "connector:slack.get_list"},
+					InputSample: `{"name":"Sprint Board","schema":"[{\"key\":\"title\",\"name\":\"Title\",\"type\":\"text\",\"is_primary_column\":true},{\"key\":\"status\",\"name\":\"Status\",\"type\":\"select\"}]"}`,
+				},
+			),
+			connector.OpDestructive(
+				"create_list_item",
+				"Create List Item",
+				"Add a row to a List, optionally pre-filled with cell values, as a subtask of another row, or duplicated from an existing row.",
+				CreateListItemInput{},
+				createListItem,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"item": "The created row: id (Rec...), list_id, date_created, created_by, fields[].",
+					},
+					TemplateableFields: []string{"list_id", "initial_fields", "parent_item_id"},
+					Quirks: []string{
+						"Requires lists:write scope.",
+						"initial_fields entries are keyed by column_id (Col...), not by column name — call get_list first to resolve them.",
+						"The value key inside each entry must match the column's type: a text column takes rich_text, a user column takes user, a date column takes date.",
+						"Omitting initial_fields creates an empty row, which is valid — fill it later with update_list_item.",
+					},
+					PairWith:    []string{"connector:slack.get_list", "connector:slack.update_list_item"},
+					InputSample: `{"list_id":"F1234567","initial_fields":"[{\"column_id\":\"Col018AL7648J\",\"rich_text\":[{\"type\":\"rich_text\",\"elements\":[{\"type\":\"rich_text_section\",\"elements\":[{\"type\":\"text\",\"text\":\"Onboard new hire\"}]}]}]}]"}`,
+				},
+			),
+			connector.OpDestructive(
+				"update_list_item",
+				"Update List Item",
+				"Write cell values into one or more rows of a List. Each cell targets a row id and a column id.",
+				UpdateListItemInput{},
+				updateListItem,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"ok": "True on success. Slack returns no row payload — re-read with get_list_item to see the result.",
+					},
+					TemplateableFields: []string{"list_id", "cells"},
+					Quirks: []string{
+						"Requires lists:write scope.",
+						"cells is a JSON ARRAY and may span several rows in one call — it is not limited to a single row.",
+						"Each cell needs row_id, column_id, and one value key matching the column type. Set row_id_to_create: true to have Slack create the row instead of updating one.",
+						"The response is a bare {\"ok\":true} with no echo of what was written.",
+					},
+					PairWith:    []string{"connector:slack.get_list", "connector:slack.get_list_item"},
+					InputSample: `{"list_id":"F1234567","cells":"[{\"row_id\":\"Rec018B8RR603\",\"column_id\":\"Col018AL7648J\",\"rich_text\":[{\"type\":\"rich_text\",\"elements\":[{\"type\":\"rich_text_section\",\"elements\":[{\"type\":\"text\",\"text\":\"Done\"}]}]}]}]"}`,
+				},
+			),
+			connector.OpDestructive(
+				"delete_list_item",
+				"Delete List Item",
+				"Permanently delete a row from a List. Not reversible.",
+				DeleteListItemInput{},
+				deleteListItem,
+				wickdocs.Docs{
+					Quirks: []string{
+						"Requires lists:write scope.",
+						"Deleting a parent row also removes its subtasks.",
+					},
+					PairWith:    []string{"connector:slack.list_list_items"},
+					InputSample: `{"list_id":"F1234567","item_id":"Rec1234567"}`,
+				},
+			),
+		),
+		connector.Cat("Custom", "Escape hatch for Slack Web API methods this connector has no dedicated operation for. Disabled by default — enable it here when you need a method that is not listed above.",
+			connector.OpDestructive(
+				"custom_api_call",
+				"Custom API Call",
+				"Call any Slack Web API method by name with a JSON parameter object, using this connector's own token. Use this when the method you need has no dedicated operation above — for example emoji.list, pins.add, or conversations.members. Prefer a dedicated operation when one exists: those validate inputs and return a tidied shape, while this returns Slack's raw response. Which methods are reachable is governed by the Custom API settings on this connector's page.",
+				CustomAPICallInput{},
+				customAPICall,
+				wickdocs.Docs{
+					OutputShape: map[string]string{
+						"method":   "The Slack method that was called (echo).",
+						"http":     "Transport actually used, GET or POST, after resolving http_method=auto.",
+						"response": "Slack's raw, unshaped response body for that method. The shape is whatever Slack documents — this op does not normalise it.",
+					},
+					TemplateableFields: []string{"method", "params"},
+					Quirks: []string{
+						"Disabled by default. An admin must enable the operation on the connector page before it can run at all.",
+						"Reachable methods are governed by custom_api_mode: 'allowlist' (default) permits only the methods in custom_api_allowlist; 'all' permits every method. A blocked call fails with the reason and the allowlist contents.",
+						"Allowlist entries support a trailing * wildcard, so 'admin.*' covers every admin method.",
+						"Never pass token in params — the connector attaches its own credential, and a token key in params is rejected.",
+						"The token still bounds what is possible: a method needing a scope the token lacks fails with Slack's missing_scope error no matter what the allowlist says.",
+						"Responses are returned verbatim, so a method returning a large payload lands in the agent's context unshaped. Pass a limit in params for .list methods.",
+						"http_method=auto picks GET for .list/.info/.history/.replies/.members and POST otherwise, which matches Slack's own convention.",
+					},
+					CommonPitfalls: []string{
+						"Don't reach for this when a dedicated op exists — send_message validates and appends the footer, chat.postMessage through here does neither.",
+						"Don't pass params as a JSON array or a bare string. Slack arguments are always a JSON object.",
+					},
+					PairWith:     []string{"connector:slack.list_channels", "connector:slack.send_message"},
+					InputSample:  `{"method":"conversations.members","params":"{\"channel\":\"C12345\",\"limit\":100}"}`,
+					OutputSample: `{"method":"conversations.members","http":"GET","response":{"ok":true,"members":["U02ABCDEF"],"response_metadata":{"next_cursor":""}}}`,
+					Examples: []wickdocs.Example{
+						{
+							Name: "list_custom_emoji",
+							Body: `- id: emoji
+  type: connector
+  module: slack
+  op: custom_api_call
+  args:
+    method: emoji.list`,
+						},
+						{
+							Name: "pin_a_message",
+							Body: `- id: pin
+  type: connector
+  module: slack
+  op: custom_api_call
+  arg_modes:
+    params: expression
+  args:
+    method: pins.add
+    params: '{"channel":"{{.Node.trigger.payload.channel_id}}","timestamp":"{{.Node.trigger.payload.ts}}"}'`,
+						},
+					},
 				},
 			),
 		),
@@ -1309,4 +1589,190 @@ func uploadFile(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	return shapeUploadResult(raw)
+}
+
+// ── Lists handlers ───────────────────────────────────────────────────
+
+// listLists enumerates Slack Lists. Slack ships no slackLists.list
+// method — a List is a file — so discovery rides on files.list with
+// types=lists, and this op needs files:read rather than lists:read.
+func listLists(c *connector.Ctx) (any, error) {
+	form := map[string]string{
+		"types": "lists",
+		"count": fmt.Sprintf("%d", clampInt(c.InputInt("limit"), 1, 200, 100)),
+		"page":  fmt.Sprintf("%d", clampInt(c.InputInt("page"), 1, 1000, 1)),
+	}
+	if v := strings.TrimSpace(c.Input("channel")); v != "" {
+		form["channel"] = v
+	}
+	if v := strings.TrimSpace(c.Input("user")); v != "" {
+		form["user"] = v
+	}
+	raw, err := slackGet(c, "files.list", form)
+	if err != nil {
+		return nil, err
+	}
+	return shapeListsList(raw), nil
+}
+
+func getList(c *connector.Ctx) (any, error) {
+	listID := strings.TrimSpace(c.Input("list_id"))
+	if listID == "" {
+		return nil, fmt.Errorf("list_id is required")
+	}
+	return slackPost(c, "slackLists.info", map[string]any{"list_id": listID})
+}
+
+func listListItems(c *connector.Ctx) (any, error) {
+	listID := strings.TrimSpace(c.Input("list_id"))
+	if listID == "" {
+		return nil, fmt.Errorf("list_id is required")
+	}
+	body := map[string]any{
+		"list_id": listID,
+		"limit":   clampInt(c.InputInt("limit"), 1, 1000, 100),
+	}
+	if v := strings.TrimSpace(c.Input("cursor")); v != "" {
+		body["cursor"] = v
+	}
+	if c.InputBool("archived") {
+		body["archived"] = true
+	}
+	return slackPost(c, "slackLists.items.list", body)
+}
+
+func getListItem(c *connector.Ctx) (any, error) {
+	listID := strings.TrimSpace(c.Input("list_id"))
+	itemID := strings.TrimSpace(c.Input("item_id"))
+	if listID == "" {
+		return nil, fmt.Errorf("list_id is required")
+	}
+	if itemID == "" {
+		return nil, fmt.Errorf("item_id is required")
+	}
+	return slackPost(c, "slackLists.items.info", map[string]any{
+		"list_id": listID,
+		"id":      itemID,
+	})
+}
+
+func createList(c *connector.Ctx) (any, error) {
+	name := strings.TrimSpace(c.Input("name"))
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+	body := map[string]any{"name": name}
+	if raw := strings.TrimSpace(c.Input("schema")); raw != "" {
+		schema, err := parseJSONArray(raw, "schema")
+		if err != nil {
+			return nil, err
+		}
+		body["schema"] = schema
+	}
+	if c.InputBool("todo_mode") {
+		body["todo_mode"] = true
+	}
+	if v := strings.TrimSpace(c.Input("copy_from")); v != "" {
+		body["copy_from_list_id"] = v
+		if c.InputBool("copy_records") {
+			body["include_copied_list_records"] = true
+		}
+	}
+	return slackPost(c, "slackLists.create", body)
+}
+
+func createListItem(c *connector.Ctx) (any, error) {
+	listID := strings.TrimSpace(c.Input("list_id"))
+	if listID == "" {
+		return nil, fmt.Errorf("list_id is required")
+	}
+	body := map[string]any{"list_id": listID}
+	if raw := strings.TrimSpace(c.Input("initial_fields")); raw != "" {
+		fields, err := parseJSONArray(raw, "initial_fields")
+		if err != nil {
+			return nil, err
+		}
+		body["initial_fields"] = fields
+	}
+	if v := strings.TrimSpace(c.Input("parent_item_id")); v != "" {
+		body["parent_item_id"] = v
+	}
+	if v := strings.TrimSpace(c.Input("duplicate_from")); v != "" {
+		body["duplicated_item_id"] = v
+	}
+	return slackPost(c, "slackLists.items.create", body)
+}
+
+func updateListItem(c *connector.Ctx) (any, error) {
+	listID := strings.TrimSpace(c.Input("list_id"))
+	if listID == "" {
+		return nil, fmt.Errorf("list_id is required")
+	}
+	raw := strings.TrimSpace(c.Input("cells"))
+	if raw == "" {
+		return nil, fmt.Errorf("cells is required")
+	}
+	cells, err := parseJSONArray(raw, "cells")
+	if err != nil {
+		return nil, err
+	}
+	if len(cells) == 0 {
+		return nil, fmt.Errorf("cells must contain at least one cell")
+	}
+	return slackPost(c, "slackLists.items.update", map[string]any{
+		"list_id": listID,
+		"cells":   cells,
+	})
+}
+
+func deleteListItem(c *connector.Ctx) (any, error) {
+	listID := strings.TrimSpace(c.Input("list_id"))
+	itemID := strings.TrimSpace(c.Input("item_id"))
+	if listID == "" {
+		return nil, fmt.Errorf("list_id is required")
+	}
+	if itemID == "" {
+		return nil, fmt.Errorf("item_id is required")
+	}
+	return slackPost(c, "slackLists.items.delete", map[string]any{
+		"list_id": listID,
+		"id":      itemID,
+	})
+}
+
+// ── Custom API handler ───────────────────────────────────────────────
+
+// customAPICall reaches any Slack Web API method the connector has no
+// dedicated op for. Two gates stand in front of it: the op is
+// Destructive so it starts disabled on every new instance, and the
+// per-instance custom_api_mode / custom_api_allowlist config decides
+// which method names are reachable once it is enabled.
+func customAPICall(c *connector.Ctx) (any, error) {
+	method, err := normalizeAPIMethod(c.Input("method"))
+	if err != nil {
+		return nil, err
+	}
+	if err := checkMethodAllowed(c, method); err != nil {
+		return nil, err
+	}
+	params, err := parseAPIParams(c.Input("params"))
+	if err != nil {
+		return nil, err
+	}
+
+	verb := resolveHTTPVerb(strings.TrimSpace(c.Input("http_method")), method)
+	var raw any
+	if verb == http.MethodGet {
+		raw, err = slackGet(c, method, stringifyParams(params))
+	} else {
+		raw, err = slackPost(c, method, params)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"method":   method,
+		"http":     verb,
+		"response": raw,
+	}, nil
 }

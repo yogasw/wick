@@ -181,7 +181,7 @@ func TestParseScopeHeader(t *testing.T) {
 }
 
 func TestRunHealthCheck_AllOK(t *testing.T) {
-	srv := mockSlack(t, "channels:read,groups:read,im:read,mpim:read,channels:history,groups:history,im:history,mpim:history,users:read,users:read.email,chat:write,reactions:write,reactions:read,canvases:read,canvases:write,files:read,files:write")
+	srv := mockSlack(t, "channels:read,groups:read,im:read,mpim:read,channels:history,groups:history,im:history,mpim:history,users:read,users:read.email,chat:write,reactions:write,reactions:read,canvases:read,canvases:write,files:read,files:write,lists:read,lists:write")
 	withBaseURL(t, srv.URL)
 	c := newCtx(t, map[string]string{"auth_mode": "bot_token", "bot_token": "xoxb-test"})
 
