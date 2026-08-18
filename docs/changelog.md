@@ -10,6 +10,84 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.39.5](https://github.com/yogasw/wick/compare/v0.39.4...v0.39.5) — Agents
+
+_Released on 2026-08-18_
+
+### Added
+*   **Memory Guard Raw CgroupFS Fallback:**
+    *   Implemented raw cgroupfs as a fallback mechanism for memory guard enforcement on Linux hosts that do not run systemd as PID 1 (e.g., containers, Fly.io Machines).
+    *   The backend detection now ranks `systemd-run` first, then probes for cgroupfs.
+    *   The cgroupfs path re-execs the Wick binary (`wick __agent-exec`) to join the cgroup and then exec into the target agent process, preserving PID and PGID for teardown.
+    *   Added 30 new tests for the `memscope` and `memguard` components.
+*   **Embedded How-To Skills:**
+    *   A set of user-facing "how-to use Wick" skills (connectors, plugins, workflows, agents, rich output, Slack replies) are now embedded directly within the binary.
+    *   These skills are extracted to `~/.<app>/builtin-skills/` on boot and during skill sync.
+    *   Built-in skills are read-only, outside the normal sync rotation, and wipe their directory before extraction to ensure only current versions are present.
+    *   `SkillInfo` now includes a `Builtin` field to distinguish shipped skills from user-installed ones.
+*   **Wick Resource Limits Skill:**
+    *   Introduced a new user-facing `wick-resource-limits` skill, serving as the guide for operators on applying and understanding resource limits.
+    *   This skill clarifies `measure` mode behavior, platform-specific enforcement capabilities (Linux-only enforcement, but reporting and recovery everywhere), key resource measurements, and best practices for applying suggested limits.
+
+### Fixed
+*   **Documentation Dead Link:**
+    *   Corrected a dead link in `env-vars.md` pointing to the connector plugins guide, resolving build failures.
+*   **CgroupFS Scope Leaks:**
+    *   Resolved an issue where cgroupfs scope directories were leaked after agent exits. `MemGuard.ReleaseScope` now calls `RemoveCgroupScope` to clean up these directories.
+    *   Corrected the `readv1.go` doc comment regarding the cgroup v1 reader.
+*   **Platform-Specific Test Assertions:**
+    *   Moved a Linux-only test (`TestMemGuard_CgroupFSBackendReExecsSelf`) from the general `memguard_test.go` to `memguard_cgroupfs_linux_test.go` to prevent failures on non-Linux platforms.
+*   **Folder Skill Sync & Provider Catalog:**
+    *   Fixed a bug where skill synchronization ignored folder skills, resulting in empty skill menus for providers. `Sync()` now correctly walks folders and merges files based on recency.
+    *   Corrected the logic for matching provider types to directory labels, ensuring skills are correctly listed under the "wick" provider.
+    *   Addressed catalog truncation for the wick provider, which previously limited descriptions to 8KB, causing skills to be omitted. Descriptions are now trimmed per skill to ensure all are listed.
+    *   Fixed `skillEntrySync` to resolve file changes by individual file mtime rather than folder mtime, preventing older files from overwriting newer ones.
+    *   Invalidated skill caches after sync/upload operations to ensure UI updates reflect current skill lists immediately.
+    *   Improved skill copy reporting by adding `SkillsCopied` to the `Result` structure.
+*   **Skill Frontmatter Parsing:**
+    *   Fixed parsing of skill frontmatter to correctly handle leading HTML comments and YAML block scalars (folded and literal styles), which previously caused incorrect skill metadata (empty names, literal `>-` descriptions).
+*   **Built-in Skill `DirLabel`:**
+    *   Corrected the `DirLabel` for the built-in skills directory to "built-in" instead of the app name, preventing them from being mistakenly treated as user-installed skills.
+*   **README Listed as Skill:**
+    *   Ensured dot-prefixed README files within skill directories are correctly skipped during skill scanning, preventing them from being listed as skills.
+
+### Changed
+*   **Memory Guard Documentation:**
+    *   Updated memory guard documentation to reflect the cgroupfs fallback, clarifying enforcement capabilities on systemd-less hosts.
+    *   Replaced the Linux-only section with a table detailing requirements and reporting differences between systemd-run and cgroupfs backends.
+    *   Documented that cgroup v1 has no `oom_kill` counter, so OOM kills via this backend cannot be explicitly reported.
+    *   Clarified that systemd contention controls (CPU, task, IO) do not apply to the cgroupfs backend.
+    *   Removed the unused `scope` method from `memory_guard_method` config, as it behaved identically to `auto`.
+    *   Enhanced the `wrapper` description, noting it bypasses aggregate ceilings and affects OOM reporting.
+    *   Updated the `agent-resource-guard` development skill to reflect current capabilities.
+*   **Skill Sync Logic:**
+    *   When a skill name exists in both built-in and user-installed directories, metadata now resolves from the built-in copy, ensuring shipped skill descriptions are authoritative.
+    *   Skill catalog truncation for the wick provider now trims individual skill descriptions rather than the entire list, ensuring all skills are listed even with long descriptions.
+
+### Removed
+*   **Unused Skill Management Functions:**
+    *   Removed `Upload()` and `DeleteFromAll()` functions from skill management, as they had no callers and `Upload` did not correctly handle skill folders.
+    *   Removed the dead `SplitList` branch in `DirLabel`.
+
+---
+
+
+## [v0.39.5](https://github.com/yogasw/wick/compare/v0.39.4...v0.39.5) — Memory Guard
+
+_Released on 2026-08-18_
+
+### Agents
+#### Added
+*   **Memory guard works on hosts without systemd**: Enforcement previously required a reachable systemd user session, so on a host whose PID 1 isn't systemd (a Fly.io Machine, a bare container) agents ran unguarded. Wick now probes a second backend — raw cgroup v1 via a writable `/sys/fs/cgroup/memory` — and uses it when `systemd-run` isn't available. The ceiling is enforced by the same kernel mechanism and is exactly as hard; what the fallback can't do is *confirm* a kill, because cgroup v1 has no counterpart to v2's per-group OOM-kill counter, so such an exit keeps the generic reason rather than claiming a kill it can't prove. The systemd backend stays preferred, and a machine with neither still says so plainly instead of implying protection that isn't there. See [Memory Guard ▶ Linux only](/guide/agents/memory-guard#linux-only).
+
+#### Changed
+*   **`memory_guard_method` no longer offers `scope`**: It was documented as "wick always applies it", but nothing in the code ever distinguished it from `auto` — both took the identical branch, since only `wrapper` was ever tested for. The dropdown now offers `auto` and `wrapper`, the two values that actually behave differently. A config that already stores `scope` keeps working and behaves as `auto`, exactly as it always did. The `wrapper` description now also spells out what wick stops doing under it: the combined slice ceiling and the CPU/task/IO controls are never written, and an OOM kill is reported as a plain stop rather than naming the limit it broke.
+
+#### Fixed
+*   **Scope directories no longer accumulate on the cgroupfs backend**: `systemd-run` is passed `--collect`, which reaps a transient scope as soon as its last process exits; raw cgroupfs has no daemon behind it, and scope names carry an increasing sequence, so every spawn left a permanent cgroup directory behind — unbounded growth on a long-running host, each group holding a little unreclaimable kernel memory. Scopes are now released on the agent exit path, after the exit stats are read (removing the group takes its accounting files with it). A group that still holds a process refuses to be removed, which is the correct outcome: an agent that outlived its wick stays contained.
+
+---
+
 ## [v0.39.4](https://github.com/yogasw/wick/compare/v0.39.3...v0.39.4) — Process Termination
 
 _Released on 2026-08-17_

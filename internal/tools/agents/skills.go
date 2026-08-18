@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/login"
@@ -55,6 +54,7 @@ func skillsSync(c *tool.Ctx) {
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
 	}
+	invalidateSkillCaches()
 	c.Redirect(c.Base()+"/skills", http.StatusSeeOther)
 }
 
@@ -105,6 +105,7 @@ func skillsUpload(c *tool.Ctx) {
 	if globalSkillStore != nil && folderName != "" {
 		_ = globalSkillStore.Register(c.Context(), folderName, actorID(c), "")
 	}
+	invalidateSkillCaches()
 	c.Redirect(c.Base()+"/skills", http.StatusSeeOther)
 }
 
@@ -116,58 +117,19 @@ func skillDetail(c *tool.Ctx) {
 	}))
 }
 
-// skillEntrySync force-copies a skill entry from dirs that have it to dirs that don't.
-// For files that exist in multiple dirs, newest mtime wins.
+// skillEntrySync force-copies one skill entry to every dir that lacks it.
+// Newest mtime wins PER FILE, so a folder skill whose files were edited in
+// different dirs merges instead of one side clobbering the other.
 func skillEntrySync(c *tool.Ctx) {
 	name := c.PathValue("name")
 	if !canMutateSkill(c, name) {
 		return
 	}
-	allDirs := skillsync.KnownDirs()
-
-	// find source: first dir that has this entry
-	var srcDir string
-	var srcNewest time.Time
-	for _, d := range allDirs {
-		fi, err := os.Stat(filepath.Join(d, name))
-		if err != nil {
-			continue
-		}
-		if srcDir == "" || fi.ModTime().After(srcNewest) {
-			srcDir = d
-			srcNewest = fi.ModTime()
-		}
-	}
-	if srcDir == "" {
-		c.Redirect(c.Base()+"/skills/"+name, http.StatusSeeOther)
+	if _, err := skillsync.SyncEntry(name); err != nil {
+		c.Error(http.StatusBadRequest, err.Error())
 		return
 	}
-
-	src := filepath.Join(srcDir, name)
-	_ = filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		rel, _ := filepath.Rel(srcDir, path)
-		for _, dst := range allDirs {
-			if dst == srcDir {
-				continue
-			}
-			dstPath := filepath.Join(dst, rel)
-			if info.IsDir() {
-				_ = os.MkdirAll(dstPath, 0o755)
-				continue
-			}
-			_ = os.MkdirAll(filepath.Dir(dstPath), 0o755)
-			data, rerr := os.ReadFile(path)
-			if rerr != nil {
-				continue
-			}
-			_ = os.WriteFile(dstPath, data, 0o644)
-			_ = os.Chtimes(dstPath, info.ModTime(), info.ModTime())
-		}
-		return nil
-	})
+	invalidateSkillCaches()
 	c.Redirect(c.Base()+"/skills/"+name, http.StatusSeeOther)
 }
 
@@ -177,6 +139,7 @@ func skillDelete(c *tool.Ctx) {
 		return
 	}
 	skillsync.DeleteEntry(name)
+	invalidateSkillCaches()
 	if globalTagsSvc != nil {
 		_ = globalTagsSvc.DeleteResourceOwnerTag(c.Context(), name)
 	}
@@ -217,6 +180,7 @@ func skillDeleteFromDir(c *tool.Ctx) {
 		c.Error(http.StatusInternalServerError, err.Error())
 		return
 	}
+	invalidateSkillCaches()
 	// Redirect back to folder page if it still exists somewhere, else to list
 	_, presentIn, _ := skillsync.ListDir(name)
 	if len(presentIn) > 0 {
@@ -260,6 +224,7 @@ func skillFolderFileDelete(c *tool.Ctx) {
 		return
 	}
 	skillsync.DeleteEntry(name)
+	invalidateSkillCaches()
 	c.Redirect(c.Base()+"/skills/"+folder, http.StatusSeeOther)
 }
 
@@ -319,33 +284,11 @@ func skillProviderSync(c *tool.Ctx) {
 		return
 	}
 
-	src := filepath.Join(srcDir, cleanPath)
-	allDirs := skillsync.KnownDirs()
-
-	_ = filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		rel, _ := filepath.Rel(srcDir, path)
-		for _, dst := range allDirs {
-			if dst == srcDir {
-				continue
-			}
-			dstPath := filepath.Join(dst, rel)
-			if info.IsDir() {
-				_ = os.MkdirAll(dstPath, 0o755)
-				continue
-			}
-			_ = os.MkdirAll(filepath.Dir(dstPath), 0o755)
-			data, rerr := os.ReadFile(path)
-			if rerr != nil {
-				continue
-			}
-			_ = os.WriteFile(dstPath, data, 0o644)
-			_ = os.Chtimes(dstPath, info.ModTime(), info.ModTime())
-		}
-		return nil
-	})
+	if _, err := skillsync.PushFrom(srcDir, filepath.ToSlash(cleanPath)); err != nil {
+		c.Error(http.StatusBadRequest, err.Error())
+		return
+	}
+	invalidateSkillCaches()
 
 	c.Redirect(c.Base()+"/skills/"+provider+"/"+filepath.ToSlash(cleanPath), http.StatusSeeOther)
 }

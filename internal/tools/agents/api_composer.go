@@ -90,7 +90,7 @@ func apiComposerCommands(c *tool.Ctx) {
 		if !s.IsDir {
 			continue
 		}
-		if providerType != "" && !skillInProvider(s, providerType) {
+		if providerType != "" && !skillsync.InProvider(s, providerType) {
 			continue
 		}
 		name := s.Meta["name"]
@@ -144,17 +144,6 @@ func filterBuiltinsForProvider(cmds []ComposerCommand, providerType string) []Co
 		out = append(out, cmd)
 	}
 	return out
-}
-
-// skillInProvider reports whether a skill exists in the given provider's dir
-// (DirLabel yields the provider type, e.g. ".claude/skills" → "claude").
-func skillInProvider(s skillsync.SkillInfo, providerType string) bool {
-	for _, p := range s.InProviders {
-		if p.Label == providerType {
-			return true
-		}
-	}
-	return false
 }
 
 // truncate shortens s to at most n runes, appending "…" when cut.

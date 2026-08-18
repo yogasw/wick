@@ -101,6 +101,21 @@ var skillStatusCache struct {
 
 const skillStatusTTL = 5 * time.Second
 
+// invalidateSkillCaches drops both skill caches so the next read re-scans disk.
+// Call it after ANY mutation (sync, upload, delete) — without it a user who
+// just synced or uploaded keeps seeing the pre-mutation list until the TTL
+// lapses, and the composer's `/` menu (30s TTL, stale-while-revalidate) needs
+// two opens before a new skill shows up.
+func invalidateSkillCaches() {
+	skillStatusCache.mu.Lock()
+	skillStatusCache.valid = false
+	skillStatusCache.mu.Unlock()
+
+	skillsCache.mu.Lock()
+	skillsCache.loaded = false
+	skillsCache.mu.Unlock()
+}
+
 // cachedSkillStatus returns the (TTL-cached) skills + dirs from disk.
 func cachedSkillStatus() ([]skillsync.SkillFile, []string) {
 	skillStatusCache.mu.Lock()

@@ -5,7 +5,6 @@ package memscope
 import (
 	"os"
 	"path/filepath"
-	"sync"
 
 	"github.com/rs/zerolog/log"
 
@@ -45,27 +44,4 @@ func EnsureSlice(limits SliceLimits) error {
 		l.Warn().Err(err).Msg("daemon-reload failed; slice limits apply on next reload")
 	}
 	return nil
-}
-
-var (
-	probeOnce sync.Once
-	probeOK   bool
-)
-
-// Available reports whether this process can create a transient scope at
-// all — systemd-run on PATH plus a reachable user bus. Probed once by
-// actually creating a throwaway scope, because that is the only question
-// that matters and the only answer that cannot be wrong.
-func Available() bool {
-	probeOnce.Do(func() {
-		err := safeexec.Command("systemd-run",
-			"--user", "--scope", "--quiet", "--collect",
-			"-p", "MemoryMax=64M", "--", "/bin/true").Run()
-		probeOK = err == nil
-		if !probeOK {
-			l := log.With().Str("component", "memscope").Logger()
-			l.Info().Err(err).Msg("scope isolation unavailable; agents run unguarded")
-		}
-	})
-	return probeOK
 }

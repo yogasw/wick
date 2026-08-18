@@ -1095,10 +1095,19 @@ drained:
 	// Only reclassifies ExitError: a clean or deliberate stop is already
 	// explained, and the kernel never OOM-kills a process that exited well.
 	oomDetail := ""
-	if reason == ExitError && a.cfg.MemGuard != nil {
-		if r, d, ok := a.cfg.MemGuard.ClassifyExit(scopeUnitOf(a.proc), a.cfg.MemGuard.AgentLimitMB); ok {
-			reason, oomDetail = r, d
+	if a.cfg.MemGuard != nil {
+		unit := scopeUnitOf(a.proc)
+		if reason == ExitError {
+			if r, d, ok := a.cfg.MemGuard.ClassifyExit(unit, a.cfg.MemGuard.AgentLimitMB); ok {
+				reason, oomDetail = r, d
+			}
 		}
+		// After the stats above, never before: releasing the scope takes
+		// its accounting files with it. Unconditional on the exit reason
+		// — a clean exit leaves a cgroup directory behind exactly like a
+		// crash does, and only the cgroupfs backend needs the sweep at
+		// all (see ReleaseScope).
+		a.cfg.MemGuard.ReleaseScope(unit)
 	}
 
 	// Build the reason sentence for the spawn log. A crash with stderr

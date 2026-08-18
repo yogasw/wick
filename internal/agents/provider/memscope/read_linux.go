@@ -12,8 +12,16 @@ import (
 // cgroupRoot is the cgroup v2 mount point.
 var cgroupRoot = "/sys/fs/cgroup"
 
-// ReadStats reports what the kernel recorded for a scope.
-func ReadStats(unit string) Stats { return ReadStatsAt(scopeSearchRoot(), unit) }
+// ReadStats reports what the kernel recorded for a scope. Tries the
+// systemd (cgroup v2) path first, then the cgroupfs (v1) path — cheap to
+// try both since a given wick process only ever wrapped through one
+// backend, so exactly one of the two ever finds a real scope.
+func ReadStats(unit string) Stats {
+	if st := ReadStatsAt(scopeSearchRoot(), unit); st.Known {
+		return st
+	}
+	return ReadStatsV1At(cgroupV1MemoryRoot, SliceName, unit)
+}
 
 // scopeSearchRoot resolves the directory the agents slice sits in.
 //

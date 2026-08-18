@@ -91,13 +91,17 @@ version: 1.0.0
 		t.Fatalf("unmarshal payload: %v\ntext=%s", err, resp.Result.Content[0].Text)
 	}
 
-	if payload.Total != 1 {
-		t.Fatalf("total = %d, want 1", payload.Total)
+	// wick ships its own skills, so the listing carries those plus the one
+	// created here. Filter to the user's skills before asserting.
+	userSkills := nonBuiltin(payload.Skills)
+	if len(userSkills) != 1 {
+		t.Fatalf("user skills = %d, want 1 (total=%d)", len(userSkills), payload.Total)
 	}
 	// claude + codex are created here; wick's own dir (~/.<appname>/skills) is
-	// always ensure-created by KnownDirs, so the provider set is those three.
-	if len(payload.Providers) != 3 {
-		t.Fatalf("providers count = %d, want 3 (claude, codex, wick)", len(payload.Providers))
+	// always ensure-created by KnownDirs, and the read-only built-in dir is a
+	// fourth entry.
+	if len(payload.Providers) != 4 {
+		t.Fatalf("providers count = %d, want 4 (claude, codex, wick, built-in)", len(payload.Providers))
 	}
 
 	skill := payload.Skills[0]
@@ -129,6 +133,19 @@ version: 1.0.0
 }
 
 // hasProvider reports whether a provider label is present in the list.
+// nonBuiltin drops the skills wick ships inside the binary, leaving only the
+// ones a test created. Built-ins are always present, so an assertion about
+// "the skill under test" has to exclude them.
+func nonBuiltin(skills []skillsync.SkillInfo) []skillsync.SkillInfo {
+	out := make([]skillsync.SkillInfo, 0, len(skills))
+	for _, s := range skills {
+		if !s.Builtin {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func hasProvider(locs []skillsync.ProviderLocation, label string) bool {
 	for _, l := range locs {
 		if l.Label == label {
@@ -179,7 +196,11 @@ trigger: /wick-workflow
 		t.Fatalf("unmarshal payload: %v", err)
 	}
 
-	skill := payload.Skills[0]
+	userSkills := nonBuiltin(payload.Skills)
+	if len(userSkills) == 0 {
+		t.Fatalf("no user skill in payload: %+v", payload.Skills)
+	}
+	skill := userSkills[0]
 	// Present in claude + codex (both created here); missing from the always-
 	// present wick dir. Assert membership, not exact counts.
 	if !hasProvider(skill.InProviders, "claude") || !hasProvider(skill.InProviders, "codex") {

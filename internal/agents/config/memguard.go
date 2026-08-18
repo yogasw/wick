@@ -19,8 +19,20 @@ const (
 // on the agent binary), so wick measures but does not wrap. Double-wrapping
 // is harmless — the kernel enforces every ceiling in the hierarchy and the
 // tightest wins — so this is about who owns the setting, not safety.
+//
+// Only auto and wrapper are offered in the dropdown, because only those two
+// behave differently. MethodScope is accepted, never produced.
 const (
-	MethodAuto    = "auto"
+	MethodAuto = "auto"
+	// MethodScope is a legacy value, kept only so a config that already
+	// stores it keeps loading. It was documented as "wick always applies
+	// it", but nothing ever distinguished it from auto: MemGuard.wraps
+	// only ever tests for MethodWrapper, so scope took the identical
+	// branch. There is no honest stronger meaning available either —
+	// "always wrap" cannot be delivered on a machine with no cgroups, and
+	// forcing it would refuse spawns where every other failure in this
+	// subsystem degrades instead. Do not put it back in the dropdown, and
+	// do not add a branch for it.
 	MethodScope   = "scope"
 	MethodWrapper = "wrapper"
 )

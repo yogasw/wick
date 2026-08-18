@@ -49,7 +49,7 @@ this section rather than paraphrasing:
 | "measure writes nothing" | Writes no **limits**. Records usage in full — that is the mode's purpose. |
 | "swap must stay off" | Not about OOM-killer predictability. With swap, the process **never dies**; it thrashes and holds its slot forever. |
 | "the guard ships off by default" | Enforcement is off. **Usage history is on** and independent of the mode. |
-| "unavailable without systemd" | Only the *limits* are. Measurement, admission, the Resources page, and `oom_score_adj` all keep working — see the degradation table. |
+| "unavailable without systemd" | **Limits still apply without systemd** — the cgroupfs backend enforces them. What systemd adds is the ability to *name* an OOM kill. And measurement, admission, the Resources page, and `oom_score_adj` never needed either. See the degradation table. |
 
 The shared shape: **measurement and enforcement are separate axes.** Nearly every
 misreading here comes from collapsing them into one.
@@ -115,7 +115,7 @@ spawn request
 
 | Package | Responsibility |
 |---|---|
-| `internal/agents/provider/memscope` | Renders + installs `agents.slice`; wraps argv in `systemd-run --scope`; reads `memory.peak` / `memory.events` back. Linux-only, with `_other.go` no-ops. |
+| `internal/agents/provider/memscope` | Renders + installs `agents.slice`; wraps argv in `systemd-run --scope`, or in `wick __agent-exec` for the raw-cgroupfs fallback; reads `memory.peak` / `memory.events` (v2) or `memory.max_usage_in_bytes` (v1) back; releases v1 scopes. `DetectBackend` picks which. Linux-only, with `_other.go` no-ops. |
 | `internal/agents/provider/oomscore` | Writes `/proc/<pid>/oom_score_adj`. The only layer needing neither systemd nor cgroups — so it also works on Termux, where lmkd reads the same knob. |
 | `internal/agents/provider/memguard.go` | The single decision layer. Resolves mode/method into "wrap or not", "which limits", "was this an OOM". The three CLI spawners call it and hold no policy of their own. |
 | `internal/agents/provider/exit_oom.go` | `ExitOOM` reason + the human sentence. |
@@ -168,9 +168,23 @@ depends on enforcement being on.
 
 | Value | Wick's behaviour |
 |---|---|
-| `auto` | wraps when `systemd-run --user --scope` actually works (probed once) |
-| `scope` | same, without deferring to an external wrapper |
+| `auto` | wraps when a backend actually works (probed once — systemd, else cgroupfs) |
 | `wrapper` | does **not** wrap — something outside wick already does (a symlink wrapper on the agent binary). Wick still measures and reports. |
+| `scope` | **legacy, identical to `auto`.** Accepted, never offered — see below. |
+
+`MemGuard.wraps` tests for `MethodWrapper` and nothing else, so `auto` and
+`scope` always took the same branch — `MethodScope` is never compared anywhere
+in the tree. It was documented as "wick always applies it", which was never
+true and has no honest implementation: "always wrap" cannot be delivered where
+there are no cgroups, and forcing it would refuse spawns where every other
+failure here degrades instead. It is out of the dropdown and stays accepted for
+stored configs. **Do not add a branch for it.**
+
+`wrapper` withholds more than the per-agent ceiling, and this is the part that
+gets missed: `Wrap` returns early, so `EnsureSlice` never runs (**no aggregate
+ceiling, no CPU/tasks/IO controls**) and the unit name is `""`, which makes
+`ClassifyExit` return `ok=false` (**an OOM kill is reported as a plain
+`ExitError`**). `BiasChild` is unaffected — it never consults `wraps()`.
 
 **Double-wrapping is safe and is deliberately not detected against.** The kernel
 enforces every ceiling in the hierarchy, so the tightest wins. That property is
@@ -454,20 +468,56 @@ killing agents on a click the operator read as "fill in the blanks".
 
 ## Degradation
 
-Scope isolation needs `systemd-run` on PATH and a reachable user bus. That fails
-in a container without systemd, on Termux, and on Windows/macOS. Spawning must
-still succeed — and wick must **say so**:
+Scope isolation is a **ranked choice of two mechanisms**, not one yes/no. The
+preferred one needs `systemd-run` on PATH and a reachable user bus; where that
+fails, raw cgroup v1 through a writable `/sys/fs/cgroup/memory` still enforces.
+Both are gone on Windows/macOS. Spawning must still succeed — and wick must
+**say so**:
 
-- The probe runs once and is cached: it actually creates a throwaway scope,
-  because that is the only answer that cannot be wrong.
+- `memscope.DetectBackend` returns `BackendSystemd` / `BackendCgroupFS` /
+  `BackendNone`, probed once and cached. `Available()` is kept as
+  `DetectBackend() != BackendNone` for the callers that only ever wanted a
+  yes/no. **Read the backend, do not re-derive it from "is systemd around".**
+- Each probe actually creates and tears down a throwaway group, because that is
+  the only answer that cannot be wrong: a mount can be present but read-only,
+  or present with no memory controller attached.
+- The cgroupfs backend enforces exactly as hard — `memory.limit_in_bytes` is a
+  real kernel ceiling — but **reports less**. cgroup v1 has no counterpart to
+  v2's `memory.events` `oom_kill`, so `ReadStatsV1At` returns a real peak with
+  `OOMKills=0` always. Rule 4 then does the right thing on its own: no
+  evidence → not an OOM. Do not "improve" this by inferring a kill from the
+  peak crossing the limit; a fabricated kill count is worse than none.
+- Nothing on a systemd-less host performs "create a cgroup, join it, exec the
+  agent", so wick re-execs **its own binary** through the hidden
+  `__agent-exec` subcommand (`app/agentexec_cmd.go` → `memscope.RunAgentExec`)
+  to do it. The join must happen in the process that becomes the agent, which
+  is why a parent cannot do it. `syscall.Exec` then replaces the image, so no
+  intermediate process sits between wick and the agent — `kill(-pgid)`
+  teardown still reaches it, the same property `--scope` gives the systemd
+  path.
+- **The cgroupfs backend must release its own scopes.** `--collect` reaps a
+  systemd scope automatically; raw cgroupfs has no daemon, and
+  `ScopeUnitName` never reuses a name, so every spawn would leave a permanent
+  directory. `MemGuard.ReleaseScope` handles it from the agent exit path,
+  **after** `ClassifyExit` — removing the group takes its accounting files
+  with it, the same ordering constraint `--collect` imposes. It is
+  unconditional on exit reason (a clean exit leaks a directory just like a
+  crash), and uses `rmdir` not `RemoveAll`: controller files are kernel
+  interfaces that cannot be unlinked, and EBUSY means a process is still in
+  there and the group must stay.
 - `oom_score_adj` still works **wherever the knob exists** — a plain file write,
   no bus. That covers a Linux container and Termux, but NOT Windows or macOS,
   which have no such file.
-- Layer 2 is unavailable, and **there is no silent substitute**. In particular,
-  **do not add an RSS-sampling watchdog that kills.** A sampler cannot see a
-  gigabyte allocated between two ticks; substituting one delivers the appearance
-  of protection without its substance.
+- When `BackendNone` is the answer, **there is no silent substitute**. In
+  particular, **do not add an RSS-sampling watchdog that kills.** A sampler
+  cannot see a gigabyte allocated between two ticks; substituting one delivers
+  the appearance of protection without its substance. Adding a *third* real
+  kernel mechanism (cgroup v2 without systemd, Job Objects on Windows) is a
+  different thing and is legitimate — extend `Backend` for it.
 - The Resources page and `wick memory report` both surface the unavailability.
+  The page's notice must not blame systemd specifically: that branch is reached
+  only when **both** backends failed, so naming one sends the operator chasing
+  the wrong thing.
 
 Admission and history are separate from the scope machinery on purpose, so they
 survive where it does not: on Linux they read `/proc`, which is why a container
@@ -477,29 +527,39 @@ authority — do not generalise from "not Linux" to "nothing works".
 
 ### Platform support — answer from this table, do not infer
 
-**Enforcement is Linux-only.** It needs cgroup v2 through a systemd user
-session; Windows would need Job Objects and macOS has no equivalent, and neither
-is implemented. But "cannot enforce" is not "does not work" — measurement,
-reporting, and crash recovery run everywhere, and the split is not the same on
-every non-Linux platform:
+**Enforcement is Linux-only** — it needs a cgroup hierarchy, and Windows would
+need Job Objects while macOS has no equivalent; neither is implemented. But
+enforcement is **not systemd-only**: a container without systemd still enforces
+through the cgroupfs backend. And "cannot enforce" is not "does not work" —
+measurement, reporting, and crash recovery run everywhere, and the split is not
+the same on every non-Linux platform:
 
-| Capability | Linux | Windows | macOS | Linux container w/o systemd |
+| Capability | Linux + systemd | Linux, no systemd (cgroupfs) | Windows | macOS |
 |---|---|---|---|---|
-| Per-agent memory ceiling | ✅ | ❌ | ❌ | ❌ |
-| Aggregate slice ceiling | ✅ | ❌ | ❌ | ❌ |
-| CPU weight / quota / TasksMax / IOWeight | ✅ | ❌ | ❌ | ❌ |
-| `ExitOOM` with a measured peak | ✅ | ❌ | ❌ | ❌ |
-| `oom_score_adj` (agents die before wick) | ✅ | ❌ | ❌ | ✅ |
-| Spawn admission on free RAM | ✅ | ❌¹ | ❌ | ✅ |
-| Machine memory total/available | ✅ | ✅ | ❌ | ✅ |
-| Process listing (`Snapshot`) | ✅ | ✅ | ❌ | ✅ |
+| Per-agent memory ceiling | ✅ | ✅ | ❌ | ❌ |
+| Aggregate slice ceiling | ✅ | ✅³ | ❌ | ❌ |
+| CPU weight / quota / TasksMax / IOWeight | ✅ | ❌⁴ | ❌ | ❌ |
+| `ExitOOM` with a measured peak | ✅ | ❌⁵ | ❌ | ❌ |
+| Scope peak readable (`measure` mode) | ✅ | ✅ | ❌ | ❌ |
+| `oom_score_adj` (agents die before wick) | ✅ | ✅ | ❌ | ❌ |
+| Spawn admission on free RAM | ✅ | ✅ | ❌¹ | ❌ |
+| Machine memory total/available | ✅ | ✅ | ✅ | ❌ |
+| Process listing (`Snapshot`) | ✅ | ✅ | ✅ | ❌ |
 | Disk capacity (`sysmem.Disk`) | ✅ | ✅ | ✅ | ✅ |
-| Usage history + Resources page | ✅ | ✅ | ⚠️² | ✅ |
+| Usage history + Resources page | ✅ | ✅ | ✅ | ⚠️² |
 | **Crash recovery / respawn / notices** | ✅ | ✅ | ✅ | ✅ |
 
 ¹ The reading works on Windows (`GlobalMemoryStatusEx`), but `MinFreeMemoryLoader`
 is only consulted where the rest of the guard runs.
 ² Renders, but the per-process tables are empty — see the known gaps below.
+³ Written onto the slice directory directly, with `memory.use_hierarchy=1` so
+children share the cap. That write must land before the slice has live
+descendants or the kernel returns EBUSY, which is why it is best-effort and
+re-attempted harmlessly on later calls.
+⁴ These are systemd unit properties. Only the memory controls carry over.
+⁵ The kill still happens; it just cannot be *named*. cgroup v1 has no per-group
+OOM-kill counter, so the exit keeps its generic reason. See the Degradation
+section.
 
 **Known gaps on macOS** (both would be small to close, neither is done):
 `Snapshot()` falls through to the no-op, and `sysmem.Total`/`Available` are not
@@ -512,15 +572,22 @@ cannot do is limit anything, and it never claimed to. On Linux the recording,
 the peaks, and the suggestions all still function; on Windows so does everything
 except the limits.
 
-Check availability directly rather than inferring it:
+Check availability directly rather than inferring it, in the same order
+`DetectBackend` does:
 
 ```bash
+# 1. systemd backend (preferred)
 systemd-run --user --scope --quiet --collect -p MemoryMax=64M -- /bin/true; echo $?
+
+# 2. cgroupfs fallback — only consulted if the above is nonzero
+d=$(mktemp -d /sys/fs/cgroup/memory/wick-probe-XXXX) && \
+  test -f "$d/memory.limit_in_bytes" && : > "$d/cgroup.procs"; echo $?; rmdir "$d"
 ```
 
-Exit 0 means scopes work. Anything else means the degraded column applies — and
-the Resources page says so in its own notice, so an operator is never left
-believing they are protected.
+Exit 0 on the first means full scopes. Exit 0 on only the second means limits
+are enforced but an OOM kill cannot be named. Both nonzero means the `macOS`
+column applies to a Linux box — and the Resources page says so in its own
+notice, so an operator is never left believing they are protected.
 
 ## Teardown is a gate, not a detail
 
