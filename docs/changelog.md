@@ -6,7 +6,13 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+*   **Slack Lists Ops:**
+    *   Added a new "Lists" category to the Slack connector wrapping Slack's `slackLists.*` API: `list_lists`, `get_list`, `list_list_items`, `get_list_item` (read), and `create_list`, `create_list_item`, `update_list_item`, `delete_list_item` (destructive, disabled by default).
+    *   `list_lists` rides on `files.list` with `types=lists` (Slack has no `slackLists.list` method), so it needs `files:read`; the rest need `lists:read` / `lists:write`. Slack Lists are a paid-plan feature.
+*   **Slack Custom API Escape Hatch:**
+    *   Added a "Custom" category with one op, `custom_api_call`, to call any Slack Web API method the connector has no dedicated op for. Disabled by default on every instance.
+    *   Two new connector config fields govern it: `CustomAPIMode` (`allowlist` default, or `all`) and `CustomAPIAllowlist` (method names, trailing `*` wildcard supported). Method names are validated and a `token` key in `params` is rejected.
 
 ---
 
