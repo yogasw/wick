@@ -139,7 +139,7 @@ func (p *cliProvider) ListSkills(ctx context.Context) ([]provider.Skill, error) 
 func skillsForProvider(name string) []provider.Skill {
 	out := []provider.Skill{}
 	for _, info := range skillsync.ListSkills() {
-		if !skillInProvider(info, name) {
+		if !skillsync.InProvider(info, name) {
 			continue
 		}
 		out = append(out, provider.Skill{
@@ -149,15 +149,6 @@ func skillsForProvider(name string) []provider.Skill {
 		})
 	}
 	return out
-}
-
-func skillInProvider(info skillsync.SkillInfo, name string) bool {
-	for _, loc := range info.InProviders {
-		if loc.Label == name || loc.Label == "agents" {
-			return true
-		}
-	}
-	return false
 }
 
 // tryParseJSONObject scans the input for a `{...}` slice and decodes
