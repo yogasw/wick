@@ -20,8 +20,17 @@ type GeneralConfig struct {
 	// BYTES. One slot is an idle agent at ~150 MB or an agent driving a
 	// browser at ~2 GB, and the pool cannot tell them apart — which is how
 	// a single runaway agent takes the whole server down with it.
-	MemoryGuardMode     string `wick:"dropdown=off|measure|enforce;group=Memory Guard|Keep one runaway agent from taking the whole machine down. Start at 'measure' to learn the real numbers on this machine, then switch to 'enforce'.;desc=off = no memory management at all (default). measure = put each agent in its own group and record exactly how much it used, without limiting anything — use this first to learn safe numbers. enforce = the same recording, PLUS the kernel stops an agent that goes over its limit, leaving every other agent and the server itself untouched. Enforce never records less than measure. Enforcing needs a Linux kernel — either a systemd user session or a writable cgroup filesystem, so a container without systemd still enforces. On a machine with neither (Windows, macOS) enforce automatically behaves like measure, and the Resources page says so rather than pretending agents are protected. Both modes only cover agents wick starts itself; a claude or codex you run by hand in a terminal is outside wick and needs the 'wrapper' method below."`
-	MemoryGuardMethod   string `wick:"dropdown=auto|wrapper;group=Memory Guard;desc=Who applies the limit. auto = wick applies it when this system supports it (default). wrapper = something outside wick already does it — a wrapper script installed over the agent binary itself — so wick only measures and reports. Pick 'wrapper' when you also want limits on a claude or codex you launch by hand in a terminal: wick can only wrap the agents it starts, so anything launched outside it needs the wrapper to catch it. Note what wick then stops doing: the combined limit and the CPU/task/IO controls below are never written, and an agent the kernel kills is reported as a plain stop instead of naming the limit it broke. Running both at once is safe — the kernel applies every ceiling and the tighter one wins."`
+	MemoryGuardMode string `wick:"dropdown=off|measure|enforce;group=Memory Guard|Keep one runaway agent from taking the whole machine down. Start at 'measure' to learn the real numbers on this machine, then switch to 'enforce'.;desc=off = no memory management at all (default). measure = put each agent in its own group and record exactly how much it used, without limiting anything — use this first to learn safe numbers. enforce = the same recording, PLUS the kernel stops an agent that goes over its limit, leaving every other agent and the server itself untouched. Enforce never records less than measure. Enforcing needs a Linux kernel — either a systemd user session or a writable cgroup filesystem, so a container without systemd still enforces. On a machine with neither (Windows, macOS) enforce automatically behaves like measure, and the Resources page says so rather than pretending agents are protected. Both modes only cover agents wick starts itself; a claude or codex you run by hand in a terminal is outside wick and needs the 'wrapper' method below."`
+	// MemoryGuardMethod is the pre-2026-08 single choice, kept only so an
+	// existing config keeps loading. Migrated to the two switches below on
+	// read — see ResolveGuardScopes.
+	//
+	// Hidden rather than deleted: the row has to keep existing for the
+	// migration to read, but offering it beside the switches that
+	// replaced it would give two controls for one decision.
+	MemoryGuardMethod   string `wick:"dropdown=auto|wrapper;hidden;group=Memory Guard;desc=Replaced by the two switches below. Kept so an existing setting still applies."`
+	GuardOnSpawn        bool   `wick:"bool;group=Memory Guard;desc=Apply the limit to agents wick starts. This is the one that keeps working when nothing else does: it needs no files on disk and no root, so it survives a package update replacing the agent binary. Leave this on unless something outside wick is definitely covering the same agents."`
+	GuardOnPath         bool   `wick:"bool;group=Memory Guard;desc=Also apply the limit to agents started outside wick — a claude or codex you run by hand in a terminal, or another service on this machine. Works by putting a small script in front of the binary, installed from the Resources page (it needs one root command, which is printed for you to run). Two things it cannot do: a caller that runs the binary by its full path never passes through it, and if a package update replaces the link the coverage silently stops — which is why leaving 'on spawn' on as well is worth it. Running both is safe: the kernel applies every ceiling and the tighter one wins."`
 	AgentMemoryMaxMB    int    `wick:"number;group=Memory Guard;desc=Memory limit for one agent, in MB, counting everything it starts (browsers, tools, scripts). 0 = no limit. A provider instance can set its own value that overrides this one, higher or lower."`
 	AgentsTotalMemoryMB int    `wick:"number;group=Memory Guard;desc=Combined memory limit across all running agents, in MB. A backstop for when several well-behaved agents add up to more than the machine has. 0 = no combined limit."`
 	ToolMemoryMaxMB     int    `wick:"number;group=Memory Guard;desc=Memory limit in MB for a command an agent runs itself (grep, curl, scripts). Going over fails that one command and returns an error the agent can react to — the agent keeps running. 0 = no limit."`
@@ -134,7 +143,10 @@ func DefaultGeneralConfig() GeneralConfig {
 		// depend on the machine, so they are derived from detected RAM at
 		// first boot (DeriveMemoryDefaults) rather than guessed in a struct
 		// literal that cannot see it.
-		MemoryGuardMode:    MemGuardOff,
+		MemoryGuardMode: MemGuardOff,
+		// Both scopes default off because the guard itself ships off.
+		// Turning the mode on without a scope would enforce nothing, so
+		// DeriveMemoryDefaults switches GuardOnSpawn on at first boot.
 		MemoryGuardMethod:  MethodAuto,
 		ProtectWickFromOOM: true,
 		// Machine-independent safe values, unlike the byte limits above

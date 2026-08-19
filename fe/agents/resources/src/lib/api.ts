@@ -1,6 +1,12 @@
 import { apiGetE, apiPostE } from "@wick-fe/common-api";
 import { Effect } from "effect";
-import type { MemoryReport, SeriesResponse, ProcessListResponse } from "./types.js";
+import type {
+  MemoryReport,
+  SeriesResponse,
+  ProcessListResponse,
+  WrapperStatus,
+  WrapperAction,
+} from "./types.js";
 
 // Effect-based per the FE module contract: the caller provides the
 // HttpClient layer, which is what makes these mockable in unit tests
@@ -47,3 +53,26 @@ export const fetchProcessesE = (
     Effect.map((r) => ({ ...r, groups: r.groups ?? [] })),
   );
 };
+
+// Path-shim coverage: which agent binaries are intercepted, and which
+// running processes actually have a ceiling over them.
+export const fetchWrapperStatusE = (base: string) =>
+  apiGetE<WrapperStatus>(`${base}/api/wrapper/status`).pipe(
+    Effect.map((r) => ({ ...r, providers: r.providers ?? [], processes: r.processes ?? [] })),
+  );
+
+// Writes the shim and returns the privileged step as text. The server
+// deliberately does not run it: pointing /usr/local/bin at the shim needs
+// root, and a sudo call from an HTTP request would hang on a password
+// prompt nobody can answer.
+export const installWrapperE = (base: string, body: { providers?: string[]; limit_mb?: number }) =>
+  apiPostE<WrapperAction>(`${base}/api/wrapper/install`, body);
+
+// Two calls by design. The first returns the command that points the path
+// back at the real binary; the second (confirmed) removes the shim file.
+// Removing it while the path still points at it would break every spawn
+// in between.
+export const uninstallWrapperE = (
+  base: string,
+  body: { providers?: string[]; confirmed?: boolean },
+) => apiPostE<WrapperAction>(`${base}/api/wrapper/uninstall`, body);

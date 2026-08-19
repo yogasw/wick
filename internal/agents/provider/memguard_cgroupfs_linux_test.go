@@ -32,7 +32,7 @@ import (
 func TestMemGuard_CgroupFSBackendReExecsSelf(t *testing.T) {
 	withBackend(t, memscope.BackendCgroupFS)
 	withSelfExecutable(t, "/usr/local/bin/wick", nil)
-	g := &MemGuard{Mode: config.MemGuardEnforce, Method: config.MethodAuto, AgentLimitMB: 512}
+	g := &MemGuard{Mode: config.MemGuardEnforce, Scopes: config.GuardScopes{OnSpawn: true}, AgentLimitMB: 512}
 
 	bin, argv, unit := g.Wrap("/usr/bin/claude", []string{"--foo"}, "claude", 4)
 	if bin != "/usr/local/bin/wick" {

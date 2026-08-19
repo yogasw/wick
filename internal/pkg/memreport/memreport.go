@@ -290,9 +290,31 @@ func Roots(procs []Proc, names []string) []Proc {
 	}
 	var out []Proc
 	for _, p := range procs {
-		if want[p.Name] {
+		if want[BaseName(p.Name)] {
 			out = append(out, p)
 		}
 	}
 	return out
+}
+
+// BaseName strips a Windows executable suffix so one list of provider
+// names matches on every platform.
+//
+// Windows reports "claude.exe" where Linux reports "claude", and callers
+// name providers the way a person types them. Without this the Running
+// agents table was empty on Windows while four agents were plainly
+// running — the caller's list matched nothing and the page said "no
+// agent processes running", which reads as a broken feature rather than
+// as a naming mismatch.
+//
+// Case-insensitive on the suffix only: Windows filesystems are
+// case-insensitive, so the same binary can appear as .exe or .EXE.
+func BaseName(name string) string {
+	if len(name) < 4 {
+		return name
+	}
+	if ext := name[len(name)-4:]; ext == ".exe" || ext == ".EXE" || ext == ".Exe" {
+		return name[:len(name)-4]
+	}
+	return name
 }

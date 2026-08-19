@@ -639,17 +639,21 @@ func NewServer() *Server {
 		if mode == "" || mode == agentconfig.MemGuardOff {
 			return nil
 		}
-		method := configsSvc.GetOwned("agents", "memory_guard_method")
-		if method == "" {
-			method = agentconfig.MethodAuto
-		}
+		// Where the limit lands. Falls back to the pre-2026-08 single
+		// choice when neither switch is set, so an existing install keeps
+		// behaving exactly as it did — see config.ResolveGuardScopes.
+		scopes := agentconfig.ResolveGuardScopes(
+			configsSvc.GetOwned("agents", "guard_on_spawn") == "true",
+			configsSvc.GetOwned("agents", "guard_on_path") == "true",
+			configsSvc.GetOwned("agents", "memory_guard_method"),
+		)
 		atoi := func(key string) int {
 			n, _ := strconv.Atoi(configsSvc.GetOwned("agents", key))
 			return n
 		}
 		return &provider.MemGuard{
 			Mode:         mode,
-			Method:       method,
+			Scopes:       scopes,
 			AgentLimitMB: atoi("agent_memory_max_mb"),
 			AggregateMB:  atoi("agents_total_memory_mb"),
 			// Defaults on: an operator who enabled enforcement wants wick

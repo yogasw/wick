@@ -45,24 +45,30 @@ func ListSkills() []SkillInfo {
 		meta := resolveMetaForEntry(f.Name, dirs)
 
 		inProviders := make([]ProviderLocation, 0, len(f.Sources))
-		builtin := false
+		// Shipped skills share a directory with the user's own now, so the flag
+		// comes from the embed's entry list rather than from which dir the skill
+		// was found in.
+		builtin := IsBuiltinName(f.Name)
 		for _, d := range f.Sources {
-			if isBuiltinDir(d) {
-				builtin = true
-			}
 			inProviders = append(inProviders, ProviderLocation{
 				Label: DirLabel(d),
 				Dir:   d,
 				Path:  filepath.Join(d, f.Name),
 			})
 		}
+		// A shipped skill is absent from the other providers' dirs on purpose,
+		// so listing them as "missing" would invite a UI to offer a sync that
+		// Sync itself refuses. Nothing is missing — every provider reaches it
+		// by trusting wick's dir.
 		missingProviders := make([]ProviderLocation, 0, len(f.Missing))
-		for _, d := range f.Missing {
-			missingProviders = append(missingProviders, ProviderLocation{
-				Label: DirLabel(d),
-				Dir:   d,
-				Path:  filepath.Join(d, f.Name),
-			})
+		if !builtin {
+			for _, d := range f.Missing {
+				missingProviders = append(missingProviders, ProviderLocation{
+					Label: DirLabel(d),
+					Dir:   d,
+					Path:  filepath.Join(d, f.Name),
+				})
+			}
 		}
 
 		out = append(out, SkillInfo{
@@ -81,21 +87,19 @@ func ListSkills() []SkillInfo {
 // For folders: looks for metaFilenames inside the folder.
 // For files: reads the file directly if it's a .md/.txt.
 //
-// The built-in dir is consulted FIRST. A user skill may share a name with a
-// shipped one, and when it does the shipped copy's metadata is the truthful
-// one — it describes what wick actually ships, and it is the copy wick
-// controls. Reading the user's copy instead would advertise a shipped skill
-// under someone else's description.
+// For a skill wick ships, wick's own dir is consulted FIRST: a provider copy
+// may be a stale fork from before the skill was shipped, and the shipped
+// copy's metadata is the truthful one — it describes what wick actually
+// ships, and it is the copy wick controls.
 func resolveMetaForEntry(name string, dirs []string) map[string]string {
-	ordered := make([]string, 0, len(dirs))
-	for _, d := range dirs {
-		if isBuiltinDir(d) {
-			ordered = append(ordered, d)
-		}
-	}
-	for _, d := range dirs {
-		if !isBuiltinDir(d) {
-			ordered = append(ordered, d)
+	ordered := dirs
+	if bd := BuiltinDir(); bd != "" && IsBuiltinName(name) {
+		ordered = make([]string, 0, len(dirs))
+		ordered = append(ordered, bd)
+		for _, d := range dirs {
+			if d != bd {
+				ordered = append(ordered, d)
+			}
 		}
 	}
 	for _, d := range ordered {

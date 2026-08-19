@@ -45,7 +45,7 @@ func withSelfExecutable(t *testing.T, path string, err error) {
 // argv reaches exec untouched and no scope name is claimed.
 func TestMemGuard_OffDoesNotWrap(t *testing.T) {
 	withScopesAvailable(t, true)
-	g := &MemGuard{Mode: config.MemGuardOff, Method: config.MethodScope, AgentLimitMB: 1024}
+	g := &MemGuard{Mode: config.MemGuardOff, Scopes: config.GuardScopes{OnSpawn: true}, AgentLimitMB: 1024}
 
 	bin, argv, unit := g.Wrap("/usr/bin/claude", []string{"--foo"}, "claude", 1)
 	if bin != "/usr/bin/claude" {
@@ -74,19 +74,20 @@ func TestMemGuard_NilIsInert(t *testing.T) {
 	}
 }
 
-// Method wrapper means something outside wick already wraps. Wick must
-// not wrap again by itself here — not because double-wrapping is unsafe
-// (it is not), but because this is the operator saying who owns it.
-func TestMemGuard_WrapperMethodDefersToExternal(t *testing.T) {
+// OnSpawn off means something outside wick covers these agents — a shim
+// on the path. Wick must not wrap here, not because double-wrapping is
+// unsafe (it is not), but because this is the operator saying where the
+// limit comes from.
+func TestMemGuard_OnPathOnlyDefersToTheShim(t *testing.T) {
 	withScopesAvailable(t, true)
-	g := &MemGuard{Mode: config.MemGuardEnforce, Method: config.MethodWrapper, AgentLimitMB: 1024}
+	g := &MemGuard{Mode: config.MemGuardEnforce, Scopes: config.GuardScopes{OnPath: true}, AgentLimitMB: 1024}
 
 	bin, _, unit := g.Wrap("/usr/bin/claude", nil, "claude", 1)
 	if bin != "/usr/bin/claude" {
-		t.Fatalf("bin = %q, want the original binary under method=wrapper", bin)
+		t.Fatalf("bin = %q, want the original binary when only OnPath is set", bin)
 	}
 	if unit != "" {
-		t.Fatalf("unit = %q, want empty under method=wrapper", unit)
+		t.Fatalf("unit = %q, want empty when only OnPath is set", unit)
 	}
 }
 
@@ -94,7 +95,7 @@ func TestMemGuard_WrapperMethodDefersToExternal(t *testing.T) {
 // than refuse to spawn: a degraded agent beats no agent.
 func TestMemGuard_UnavailableScopesDoNotBlockSpawn(t *testing.T) {
 	withScopesAvailable(t, false)
-	g := &MemGuard{Mode: config.MemGuardEnforce, Method: config.MethodScope, AgentLimitMB: 1024}
+	g := &MemGuard{Mode: config.MemGuardEnforce, Scopes: config.GuardScopes{OnSpawn: true}, AgentLimitMB: 1024}
 
 	bin, _, unit := g.Wrap("/usr/bin/claude", nil, "claude", 1)
 	if bin != "/usr/bin/claude" || unit != "" {
@@ -105,7 +106,7 @@ func TestMemGuard_UnavailableScopesDoNotBlockSpawn(t *testing.T) {
 // Enforce sets the ceiling it was given.
 func TestMemGuard_EnforceAppliesLimit(t *testing.T) {
 	withScopesAvailable(t, true)
-	g := &MemGuard{Mode: config.MemGuardEnforce, Method: config.MethodScope, AgentLimitMB: 1536}
+	g := &MemGuard{Mode: config.MemGuardEnforce, Scopes: config.GuardScopes{OnSpawn: true}, AgentLimitMB: 1536}
 
 	bin, argv, unit := g.Wrap("/usr/bin/claude", nil, "claude", 2)
 	if bin != "systemd-run" {
@@ -123,7 +124,7 @@ func TestMemGuard_EnforceAppliesLimit(t *testing.T) {
 // ceiling — turning measurement on must never change what dies.
 func TestMemGuard_MeasureCreatesScopeWithoutLimit(t *testing.T) {
 	withScopesAvailable(t, true)
-	g := &MemGuard{Mode: config.MemGuardMeasure, Method: config.MethodScope, AgentLimitMB: 1024}
+	g := &MemGuard{Mode: config.MemGuardMeasure, Scopes: config.GuardScopes{OnSpawn: true}, AgentLimitMB: 1024}
 
 	_, argv, unit := g.Wrap("/usr/bin/claude", nil, "claude", 3)
 	if unit == "" {
@@ -141,7 +142,7 @@ func TestMemGuard_MeasureCreatesScopeWithoutLimit(t *testing.T) {
 // nothing was enforced. This pins the fix.
 func TestMemGuard_MeasureWritesNoSliceLimits(t *testing.T) {
 	g := &MemGuard{
-		Mode: config.MemGuardMeasure, Method: config.MethodScope,
+		Mode: config.MemGuardMeasure, Scopes: config.GuardScopes{OnSpawn: true},
 		AgentLimitMB: 1024, AggregateMB: 2048,
 		CPUWeight: 50, CPUQuotaPct: 150, TasksMax: 512, IOWeight: 80,
 	}
@@ -153,7 +154,7 @@ func TestMemGuard_MeasureWritesNoSliceLimits(t *testing.T) {
 // Enforce carries every configured control onto the slice.
 func TestMemGuard_EnforceCarriesSliceLimits(t *testing.T) {
 	g := &MemGuard{
-		Mode: config.MemGuardEnforce, Method: config.MethodScope,
+		Mode: config.MemGuardEnforce, Scopes: config.GuardScopes{OnSpawn: true},
 		AggregateMB: 2048, CPUWeight: 50, CPUQuotaPct: 150, TasksMax: 512, IOWeight: 80,
 	}
 	want := memscope.SliceLimits{
@@ -167,7 +168,7 @@ func TestMemGuard_EnforceCarriesSliceLimits(t *testing.T) {
 // An OOM verdict requires evidence. Without a readable scope the exit
 // must fall through to the ordinary classification, never guess.
 func TestMemGuard_ClassifyExitWithoutEvidence(t *testing.T) {
-	g := &MemGuard{Mode: config.MemGuardEnforce, Method: config.MethodScope, AgentLimitMB: 1024}
+	g := &MemGuard{Mode: config.MemGuardEnforce, Scopes: config.GuardScopes{OnSpawn: true}, AgentLimitMB: 1024}
 
 	if _, _, ok := g.ClassifyExit("", 1024); ok {
 		t.Fatal("classified an OOM with no scope to read")
@@ -184,7 +185,7 @@ func TestMemGuard_ClassifyExitWithoutEvidence(t *testing.T) {
 func TestMemGuard_CgroupFSBackendDegradesWhenSelfPathUnresolvable(t *testing.T) {
 	withBackend(t, memscope.BackendCgroupFS)
 	withSelfExecutable(t, "", errors.New("os.Executable: not supported"))
-	g := &MemGuard{Mode: config.MemGuardEnforce, Method: config.MethodAuto, AgentLimitMB: 512}
+	g := &MemGuard{Mode: config.MemGuardEnforce, Scopes: config.GuardScopes{OnSpawn: true}, AgentLimitMB: 512}
 
 	bin, argv, unit := g.Wrap("/usr/bin/claude", []string{"--foo"}, "claude", 5)
 	if bin != "/usr/bin/claude" {
@@ -235,7 +236,7 @@ func withRemoveCgroupScope(t *testing.T) *[]string {
 func TestMemGuard_ReleaseScopeRemovesACgroupFSScope(t *testing.T) {
 	withBackend(t, memscope.BackendCgroupFS)
 	seen := withRemoveCgroupScope(t)
-	g := &MemGuard{Mode: config.MemGuardEnforce, Method: config.MethodAuto, AgentLimitMB: 1024}
+	g := &MemGuard{Mode: config.MemGuardEnforce, Scopes: config.GuardScopes{OnSpawn: true}, AgentLimitMB: 1024}
 
 	g.ReleaseScope("claude-agent-1")
 
@@ -249,7 +250,7 @@ func TestMemGuard_ReleaseScopeRemovesACgroupFSScope(t *testing.T) {
 func TestMemGuard_ReleaseScopeLeavesSystemdScopesToSystemd(t *testing.T) {
 	withBackend(t, memscope.BackendSystemd)
 	seen := withRemoveCgroupScope(t)
-	g := &MemGuard{Mode: config.MemGuardEnforce, Method: config.MethodAuto, AgentLimitMB: 1024}
+	g := &MemGuard{Mode: config.MemGuardEnforce, Scopes: config.GuardScopes{OnSpawn: true}, AgentLimitMB: 1024}
 
 	g.ReleaseScope("claude-agent-1")
 
@@ -270,5 +271,38 @@ func TestMemGuard_ReleaseScopeIgnoresUnwrappedSpawns(t *testing.T) {
 
 	if len(*seen) != 0 {
 		t.Fatalf("removed %v for a spawn that was never wrapped", *seen)
+	}
+}
+
+// Both scopes at once is the point of splitting them, not a conflict.
+// The shim reaches callers wick cannot see; wick still covers its own
+// agents when the shim's link is replaced by a package update. The
+// kernel applies every ceiling and the tightest wins, so wick keeps
+// wrapping here rather than deferring.
+func TestMemGuard_BothScopesStillWrapsOnSpawn(t *testing.T) {
+	withScopesAvailable(t, true)
+	g := &MemGuard{
+		Mode:         config.MemGuardEnforce,
+		Scopes:       config.GuardScopes{OnSpawn: true, OnPath: true},
+		AgentLimitMB: 1024,
+	}
+
+	_, _, unit := g.Wrap("/usr/bin/claude", nil, "claude", 1)
+
+	if unit == "" {
+		t.Fatal("wick stopped wrapping because a shim is also installed; the two are additive, not exclusive")
+	}
+}
+
+// No scope at all means the mode is set but nothing is asked for. That
+// must behave as off rather than silently picking one.
+func TestMemGuard_NoScopeWrapsNothing(t *testing.T) {
+	withScopesAvailable(t, true)
+	g := &MemGuard{Mode: config.MemGuardEnforce, AgentLimitMB: 1024}
+
+	bin, _, unit := g.Wrap("/usr/bin/claude", nil, "claude", 1)
+
+	if unit != "" || bin != "/usr/bin/claude" {
+		t.Fatalf("wrapped with no scope selected: bin=%q unit=%q", bin, unit)
 	}
 }

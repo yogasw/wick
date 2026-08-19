@@ -98,13 +98,15 @@ version: 1.0.0
 		t.Fatalf("user skills = %d, want 1 (total=%d)", len(userSkills), payload.Total)
 	}
 	// claude + codex are created here; wick's own dir (~/.<appname>/skills) is
-	// always ensure-created by KnownDirs, and the read-only built-in dir is a
-	// fourth entry.
-	if len(payload.Providers) != 4 {
-		t.Fatalf("providers count = %d, want 4 (claude, codex, wick, built-in)", len(payload.Providers))
+	// always ensure-created by KnownDirs. The skills wick ships live in that
+	// same dir rather than one of their own, so there is no fourth entry.
+	if len(payload.Providers) != 3 {
+		t.Fatalf("providers count = %d, want 3 (claude, codex, wick)", len(payload.Providers))
 	}
 
-	skill := payload.Skills[0]
+	// The user's skill, not payload.Skills[0] — the listing is sorted by name
+	// and the shipped skills can sort ahead of it.
+	skill := userSkills[0]
 	if skill.Name != "example-skill" {
 		t.Fatalf("skill.name = %q, want %q", skill.Name, "example-skill")
 	}

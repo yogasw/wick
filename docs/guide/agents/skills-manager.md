@@ -28,6 +28,14 @@ Skills are plain `.md` files (or folders containing `.md` files) that the CLI lo
 
 The `wick` directory is auto-created the first time skills are listed (so it always exists, even before any skill has been added) — `wick` is a first-class skill provider alongside the CLIs, not just a sync target. Because a wick session runs in-process rather than shelling out to a CLI, it doesn't load skills the same way: it injects a compact catalog (name, description, `SKILL.md` path) into its system prompt and reads a skill's full body on demand. See [Providers → Skills](./providers#skills).
 
+`claude` and `codex` skip the hardcoded `~/.claude`/`~/.codex` path in favor of `$CLAUDE_CONFIG_DIR`/`$CODEX_HOME` when either is set, since both env vars relocate the CLI's whole config tree (skills included).
+
+### Wick's shipped skills
+
+A handful of how-to skills (connectors, plugins, workflows, agents) ship inside the wick binary and are extracted into the `wick` skills dir above on first use, alongside the user's own skills. They're marked `Builtin` in the API and carry a "MANAGED BY WICK" header — do not edit them, they're rewritten from the binary whenever they differ (compared by content hash, so unrelated files and unchanged shipped files keep their mtime and are left alone).
+
+Shipped skills never appear as sync targets and are never copied into `~/.claude/skills` or `~/.codex/skills` — there is exactly one copy, in the `wick` dir. Every provider still reaches them: `claude` and `codex` `--add-dir` the `wick` skills dir alongside their own, and a generated catalog (naming each shipped skill with its absolute `SKILL.md` path) is injected into claude's system prompt and codex's `soul.md`, so both agents know the skills exist and can read them on demand. Because every provider can read them, they show as **present** for every provider in the skill list rather than "missing from claude/codex".
+
 ## Skill list (`/skills`)
 
 The root page lists every unique skill entry found across all directories. Each row shows:

@@ -60,15 +60,6 @@ func KnownDirs() []string {
 
 // DirLabel returns a short human label for a dir path (e.g. "claude", "codex").
 func DirLabel(dir string) string {
-	// The builtin dir is checked first and labelled explicitly. It is a SIBLING
-	// of the user's skills dir (~/.<app>/builtin-skills next to ~/.<app>/skills),
-	// so the generic rule below would label it with the app name — identical to
-	// the user dir's label, which would make InProvider treat a shipped skill as
-	// one the user installed. Under a $WICK_DATA_DIR outside $HOME the same rule
-	// degrades to ".".
-	if dir == BuiltinDir() {
-		return BuiltinLabel
-	}
 	home, _ := os.UserHomeDir()
 	rel, err := filepath.Rel(home, dir)
 	if err != nil {
@@ -111,7 +102,16 @@ func DirLabelForProvider(providerType string) string {
 // InProvider reports whether a skill is present in the dir belonging to
 // providerType. The "agents" dir is shared ground: skills placed there count
 // for every provider.
+//
+// A skill wick ships counts for EVERY provider even though it sits only in
+// wick's own dir. It is deliberately never copied elsewhere, so a by-directory
+// check would report it missing for claude and codex — and hide from the `/`
+// composer a skill their agents can in fact invoke, since each provider trusts
+// wick's dir on the argv and is handed the skill's path in its system prompt.
 func InProvider(s SkillInfo, providerType string) bool {
+	if s.Builtin {
+		return true
+	}
 	want := DirLabelForProvider(providerType)
 	for _, loc := range s.InProviders {
 		if loc.Label == want || loc.Label == "agents" {
@@ -179,6 +179,14 @@ func Sync() (Result, error) {
 		return res, nil
 	}
 
+	// Shipped skills are excluded from the rotation. They live in wick's own
+	// dir, which SyncBuiltin rewrites from the binary; a copy in another
+	// provider's dir could never be cleaned up the same way, so a skill dropped
+	// in a later version would linger there forever and a user edit to the copy
+	// would win on mtime and be reverted on the next boot. Providers read them
+	// by trusting wick's dir directly instead (see each provider's skilldir.go).
+	shipped := BuiltinNames()
+
 	// Winner per RELATIVE path (slash-separated, e.g. "my-skill/SKILL.md" or
 	// "README.md"). Keyed on the relative path rather than the top-level entry
 	// so a folder is merged file-by-file instead of wholesale.
@@ -196,6 +204,9 @@ func Sync() (Result, error) {
 		for _, e := range entries {
 			if strings.HasPrefix(e.Name(), ".") {
 				continue
+			}
+			if shipped[e.Name()] {
+				continue // wick ships it; never mirror it into another provider
 			}
 			if e.IsDir() {
 				for rel, mtime := range walkSkillFolder(dir, e.Name(), &res) {
@@ -311,6 +322,11 @@ func SyncEntry(name string) (Result, error) {
 	if name == "" || strings.HasPrefix(name, ".") {
 		return res, fmt.Errorf("invalid entry name %q", name)
 	}
+	// Shipped skills are wick's to place, not the rotation's to spread. See the
+	// note in Sync — a copy outside wick's dir can never be cleaned up.
+	if IsBuiltinName(name) {
+		return res, fmt.Errorf("entry %q ships with wick and is not synced to other providers", name)
+	}
 
 	type candidate struct {
 		srcDir string
@@ -386,6 +402,12 @@ func SyncEntry(name string) (Result, error) {
 func PushFrom(srcDir, relPath string) (Result, error) {
 	dirs := KnownDirs()
 	res := Result{Dirs: dirs}
+	// A shipped skill stays put even under an explicit push: wick rewrites its
+	// dir from the binary, so a pushed copy elsewhere would be unmanaged and
+	// would outlive the version that shipped it.
+	if top, _, _ := strings.Cut(filepath.ToSlash(relPath), "/"); IsBuiltinName(top) {
+		return res, fmt.Errorf("entry %q ships with wick and is not pushed to other providers", top)
+	}
 	src := filepath.Join(srcDir, filepath.FromSlash(relPath))
 	fi, err := os.Stat(src)
 	if err != nil {
