@@ -433,6 +433,8 @@ Shell commands the wick agent runs don't block on a fixed wall-clock deadline �
 
 Since a wick session runs in-process (no CLI to hand `--add-dir` to and let it load skills itself), wick injects a compact **skill catalog** into its own system prompt: one line per skill (name, one-line description, path to its `SKILL.md`), capped so a large skill library can't blow the prompt budget. The agent reads a skill's full `SKILL.md` on demand via its file-read tool when it actually needs to follow one — the catalog itself never contains the full skill body.
 
+The skills that ship inside the wick binary get the same catalog treatment for `claude` and `codex`: since those skills are deliberately never copied into `~/.claude/skills` or `~/.codex/skills` (see [Skills Manager](./skills-manager#wick-s-shipped-skills)), the CLI's own skill loader would never see them otherwise. wick appends the catalog to claude's system prompt and codex's `soul.md`, and `--add-dir`'s wick's skills dir alongside the CLI's own so the paths named in the catalog are actually readable.
+
 ## See also
 
 - [Projects](./projects) — `default_provider` field per project; how project defaults auto-migrate on rename.
