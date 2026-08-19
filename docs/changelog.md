@@ -6,15 +6,39 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Changed
-*   **Shipped Skills Reachable from Claude and Codex:**
-    *   Wick's embedded how-to skills now live in wick's own skills dir (`~/.<app>/skills/`) instead of the private `~/.<app>/builtin-skills/` dir, alongside the user's own skills.
-    *   `claude` and `codex` now `--add-dir` wick's skills dir in addition to their own, and a generated catalog (name, description, absolute `SKILL.md` path) is injected into claude's system prompt and codex's `soul.md` — so those agents can discover and read the shipped skills, not just the built-in wick provider.
-    *   Refresh is now content-addressed (MD5 compare) instead of wipe-and-rewrite, so the shared dir's user skills are never touched and unchanged shipped files keep their mtime. Stale shipped skills are only pruned when the embed drops them and they still carry the "MANAGED BY WICK" marker.
-    *   Shipped skill names are still excluded from sync/upload/push flows — they are never copied into `~/.claude/skills` or `~/.codex/skills`.
-    *   `claude` and `codex` skill dir resolution now honours `$CLAUDE_CONFIG_DIR` / `$CODEX_HOME` when set, matching where those CLIs actually read skills from.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.39.7](https://github.com/yogasw/wick/compare/v0.39.6...v0.39.7) — Skills & Agents
+
+_Released on 2026-08-19_
+
+### Agent Memory Management
+#### Fixed
+*   Agent process detection on Windows, where `memreport.Roots` now compares via `BaseName` to accurately match executables like "claude.exe".
+#### Changed
+*   The memory limit enforcement method is now split into two independent switches: `on spawn` (for agents Wick starts) and `on path` (for any agent invoked via a shim).
+*   Existing configurations using `auto` or `scope` are now migrated to `on spawn`, and `wrapper` to `on path`, preserving current behavior without requiring config rewrites.
+*   The generated shim sets `MemoryHigh=infinity` and `MemorySwapMax=0`, ensuring throttling rather than abrupt termination.
+*   Shim creation and removal processes no longer call `sudo`; commands are returned as text for manual execution. Uninstall is a two-step process to prevent temporary breakage.
+#### Added
+*   A new "Coverage" panel on the Resources page, prominently displaying the count of uncovered processes and commands to bound them.
+*   Individual agent rows now include `limited/no-limit` chips, reflecting their actual cgroup memory status.
+*   Memory limit scans now report every matching process on the machine, not exclusively those started by Wick.
+*   An `AGENT_NO_CGROUP` escape hatch and fall-through logic for scenarios where `systemd-run` or `XDG_RUNTIME_DIR` are unavailable.
+
+### Shipped Skills Reachable from Claude and Codex
+#### Changed
+*   Wick's embedded how-to skills now reside in Wick's own skills directory (`~/.<app>/skills/`), alongside user-defined skills, instead of the private `~/.<app>/builtin-skills/` directory.
+*   `claude` and `codex` now include Wick's skills directory via `--add-dir` and receive a generated catalog (name, description, absolute `SKILL.md` path) injected into their system prompt or `soul.md` for skill discovery.
+*   Skill refresh is now content-addressed (MD5 comparison), ensuring user skills are never touched and unchanged shipped files retain their modification times. Stale shipped skills are only pruned if dropped by the embed and marked "MANAGED BY WICK".
+*   Shipped skill names are explicitly excluded from sync/upload/push flows to prevent unmanageable copies in `~/.claude/skills` or `~/.codex/skills`.
+*   `claude` and `codex` skill directory resolution now respects `$CLAUDE_CONFIG_DIR` and `$CODEX_HOME` environmental variables for accurate pathing.
+*   `InProvider` now correctly reports a shipped skill as present for all providers, and shipped skills no longer appear in `MissingProviders`.
+
+---
+
 
 ## [v0.39.6](https://github.com/yogasw/wick/compare/v0.39.5...v0.39.6) — Slack
 
