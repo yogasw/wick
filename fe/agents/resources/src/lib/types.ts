@@ -13,6 +13,11 @@ export interface AgentRow {
   io_write_bps: number;
   peak_bytes?: number;
   peak_cpu_pct?: number;
+  // Whether a memory ceiling actually applies to this agent right now,
+  // read from its cgroup rather than inferred from the configured mode.
+  // The two disagree whenever the mechanism is missing, and a row that
+  // looks the same either way is how someone believes they are covered.
+  isolated?: boolean;
   processes?: ProcessRow[];
 }
 
@@ -164,4 +169,44 @@ export interface SeriesResponse {
   stats: HistoryStats;
   machine: MachineSample[];
   agents: AgentSample[];
+}
+
+// Path-shim coverage. Mirrors internal/tools/agents/wrapper_handler.go.
+export interface WrapperProviderRow {
+  name: string;
+  real_bin: string;
+  link: string;
+  // True when the system path resolves to our shim — the only thing that
+  // makes a written shim actually take effect.
+  installed: boolean;
+  link_target?: string;
+}
+
+export interface WrapperProcRow {
+  pid: number;
+  name: string;
+  rss_bytes: number;
+  // Whether a ceiling applies. Placed by wick at spawn or by the shim —
+  // indistinguishable from outside, and equivalent in effect.
+  isolated: boolean;
+  // Whether wick started it. Not part of the tally; it decides which fix
+  // to suggest, since a process wick did not start cannot be brought in
+  // by any wick setting.
+  from_wick: boolean;
+}
+
+export interface WrapperStatus {
+  supported: boolean;
+  notice?: string;
+  providers?: WrapperProviderRow[];
+  processes?: WrapperProcRow[];
+  isolated: number;
+  unisolated: number;
+}
+
+export interface WrapperAction {
+  written?: string[];
+  // The privileged steps, in the order they must be run.
+  commands?: string[];
+  message: string;
 }

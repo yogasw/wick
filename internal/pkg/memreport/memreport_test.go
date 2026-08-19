@@ -153,3 +153,47 @@ func TestRoots(t *testing.T) {
 		t.Fatalf("found %d roots, want 2", len(got))
 	}
 }
+
+// Windows reports "claude.exe" where Linux reports "claude", and callers
+// name providers the way a person types them. Matching the raw name left
+// the Running agents table empty on Windows while four agents were
+// plainly running — which reads as a broken feature, not as a naming
+// mismatch.
+func TestRoots_MatchesWindowsExecutableNames(t *testing.T) {
+	procs := []Proc{
+		{PID: 1, Name: "claude.exe", RSSBytes: 100},
+		{PID: 2, Name: "codex.EXE", RSSBytes: 200},
+		{PID: 3, Name: "gemini", RSSBytes: 300},
+		{PID: 4, Name: "chrome.exe", RSSBytes: 400},
+	}
+
+	got := Roots(procs, []string{"claude", "codex", "gemini"})
+
+	if len(got) != 3 {
+		t.Fatalf("matched %d roots, want 3: %+v", len(got), got)
+	}
+	for _, p := range got {
+		if p.Name == "chrome.exe" {
+			t.Fatal("matched a process that was not asked for")
+		}
+	}
+}
+
+// A suffix that merely looks like an extension must not be stripped, or
+// a provider genuinely named "codex.exec" would be mistaken for "codex".
+func TestBaseName_OnlyStripsARealExeSuffix(t *testing.T) {
+	cases := map[string]string{
+		"claude.exe":  "claude",
+		"claude.EXE":  "claude",
+		"claude":      "claude",
+		"codex.exec":  "codex.exec",
+		"node.exe.sh": "node.exe.sh",
+		"a":           "a",
+		"":            "",
+	}
+	for in, want := range cases {
+		if got := BaseName(in); got != want {
+			t.Errorf("BaseName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -29,7 +29,7 @@ func memoryCmd() *cobra.Command {
 		Use:   "memory",
 		Short: "Inspect agent memory usage",
 	}
-	c.AddCommand(memoryReportCmd())
+	c.AddCommand(memoryReportCmd(), memoryWrapperCmd())
 	return c
 }
 

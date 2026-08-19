@@ -61,20 +61,105 @@ func TestSyncBuiltinWritesEverySkill(t *testing.T) {
 	}
 	// Dot-prefixed: present for a human who opens the directory, but skipped by
 	// scan() so it is never offered to the agent as a skill.
-	if _, err := os.Stat(filepath.Join(dir, ".README.md")); err != nil {
-		t.Errorf("builtin dir README (the human-facing warning) missing: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, builtinStampName)); err != nil {
+		t.Errorf("builtin stamp (the human-facing warning) missing: %v", err)
 	}
 	for _, s := range ListSkills() {
-		if s.Name == "README.md" || s.Name == ".README.md" {
-			t.Error("the builtin dir README is being listed as a skill")
+		if s.Name == builtinStampName || s.Name == "README.md" {
+			t.Error("the builtin stamp file is being listed as a skill")
 		}
 	}
 }
 
+// TestSyncBuiltinRewritesOnlyChangedFiles: the shipped skills now share a
+// directory with the user's own, so Sync resolves winners by mtime across it.
+// Rewriting an unchanged file on every boot would keep bumping those mtimes and
+// make every shipped skill perpetually "newest", so an unchanged file must be
+// left completely alone.
+func TestSyncBuiltinRewritesOnlyChangedFiles(t *testing.T) {
+	setTestHome(t, t.TempDir())
+
+	if _, err := SyncBuiltin(); err != nil {
+		t.Fatalf("first SyncBuiltin: %v", err)
+	}
+	md := filepath.Join(BuiltinDir(), "wick-connectors", "SKILL.md")
+	before, err := os.Stat(md)
+	if err != nil {
+		t.Fatalf("stat %s: %v", md, err)
+	}
+
+	res, err := SyncBuiltin()
+	if err != nil {
+		t.Fatalf("second SyncBuiltin: %v", err)
+	}
+	if res.Copied != 0 {
+		t.Errorf("second sync rewrote %d unchanged files; want 0", res.Copied)
+	}
+	after, err := os.Stat(md)
+	if err != nil {
+		t.Fatalf("stat %s: %v", md, err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) {
+		t.Errorf("unchanged file mtime moved: %v → %v", before.ModTime(), after.ModTime())
+	}
+}
+
+// TestSyncBuiltinRepairsEditedFile: the flip side of the test above. An edited
+// shipped file differs by content hash and must be restored, or the "rewritten
+// on every start" promise in its own header would be false.
+func TestSyncBuiltinRepairsEditedFile(t *testing.T) {
+	setTestHome(t, t.TempDir())
+
+	if _, err := SyncBuiltin(); err != nil {
+		t.Fatalf("first SyncBuiltin: %v", err)
+	}
+	md := filepath.Join(BuiltinDir(), "wick-connectors", "SKILL.md")
+	if err := os.WriteFile(md, []byte("tampered\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := SyncBuiltin(); err != nil {
+		t.Fatalf("second SyncBuiltin: %v", err)
+	}
+	data, err := os.ReadFile(md)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "tampered") {
+		t.Error("edited shipped file was not restored")
+	}
+	if !strings.Contains(string(data), builtinWarningMarker) {
+		t.Error("restored file lost its warning header")
+	}
+}
+
+// TestSyncBuiltinKeepsUserSkillsInSameDir: the shipped skills share wick's own
+// skills dir with the user's. A wipe-and-rewrite would be the simplest way to
+// drop stale shipped skills and would destroy the user's work, so pruning must
+// touch only what wick itself ships.
+func TestSyncBuiltinKeepsUserSkillsInSameDir(t *testing.T) {
+	setTestHome(t, t.TempDir())
+
+	if _, err := SyncBuiltin(); err != nil {
+		t.Fatalf("first SyncBuiltin: %v", err)
+	}
+	wickDir := BuiltinDir()
+	writeSkill(t, wickDir, "my-own-skill", "---\nname: my-own-skill\n---\nbody\n", time.Now(), nil)
+
+	if _, err := SyncBuiltin(); err != nil {
+		t.Fatalf("second SyncBuiltin: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wickDir, "my-own-skill", "SKILL.md")); err != nil {
+		t.Errorf("a user skill in wick's own dir was destroyed by SyncBuiltin: %v", err)
+	}
+}
+
 // TestSyncBuiltinRemovesStaleSkills: a skill dropped from a newer wick version
-// must disappear. "Overwrite everything" only rewrites what the embed still
-// has, so without an explicit wipe an obsolete skill would linger forever and
-// keep showing up in the agent's catalog.
+// must disappear. Only rewriting what the embed still has would leave an
+// obsolete skill on disk forever, still showing up in the agent's catalog.
+//
+// The marker is what makes this safe to do in a shared directory: it identifies
+// a folder wick wrote, so pruning can never reach a user's own skill.
 func TestSyncBuiltinRemovesStaleSkills(t *testing.T) {
 	setTestHome(t, t.TempDir())
 
@@ -85,7 +170,8 @@ func TestSyncBuiltinRemovesStaleSkills(t *testing.T) {
 	if err := os.MkdirAll(stale, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(stale, "SKILL.md"), []byte("old\n"), 0o644); err != nil {
+	body := builtinWarningHeader + "---\nname: removed-in-newer-version\n---\nold\n"
+	if err := os.WriteFile(filepath.Join(stale, "SKILL.md"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -97,18 +183,50 @@ func TestSyncBuiltinRemovesStaleSkills(t *testing.T) {
 	}
 }
 
-// TestSyncBuiltinIsolatedFromUserSkills is the boundary that makes read-only
-// enforceable: Sync() must never copy a builtin skill into the user's skill
-// dirs, and must never copy a user skill into the builtin dir.
+// TestSyncBuiltinKeepsAdoptedSkill: a user who takes over a shipped skill by
+// rewriting its managed header owns that copy. Pruning must leave it alone even
+// once wick stops shipping a skill by that name — deleting it would destroy
+// work wick has no claim on.
+func TestSyncBuiltinKeepsAdoptedSkill(t *testing.T) {
+	setTestHome(t, t.TempDir())
+
+	if _, err := SyncBuiltin(); err != nil {
+		t.Fatalf("first SyncBuiltin: %v", err)
+	}
+	adopted := filepath.Join(BuiltinDir(), "adopted-from-an-old-version")
+	if err := os.MkdirAll(adopted, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// No managed marker: the user rewrote the file as their own.
+	md := filepath.Join(adopted, "SKILL.md")
+	if err := os.WriteFile(md, []byte("---\nname: adopted\n---\nmine now\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := SyncBuiltin(); err != nil {
+		t.Fatalf("second SyncBuiltin: %v", err)
+	}
+	data, err := os.ReadFile(md)
+	if err != nil {
+		t.Fatalf("adopted skill was deleted: %v", err)
+	}
+	if !strings.Contains(string(data), "mine now") {
+		t.Error("adopted skill was overwritten")
+	}
+}
+
+// TestSyncBuiltinIsolatedFromUserSkills is the boundary that keeps a shipped
+// skill safe to rewrite: Sync() must never copy one into another provider's
+// dir. A copy there is unmanaged — wick could not repair it, could not remove
+// it when a later version drops the skill, and a user's edit to it would win
+// on mtime and be reverted on the next boot.
+//
+// Wick's own dir is where they live, so it is excluded from the check.
 func TestSyncBuiltinIsolatedFromUserSkills(t *testing.T) {
-	_, claudeDir, wickDir := stageHome(t)
+	_, claudeDir, _ := stageHome(t)
 
 	if _, err := SyncBuiltin(); err != nil {
 		t.Fatalf("SyncBuiltin: %v", err)
-	}
-	builtinNames, err := os.ReadDir(BuiltinDir())
-	if err != nil {
-		t.Fatalf("read builtin dir: %v", err)
 	}
 
 	writeSkill(t, claudeDir, "user-skill", "body\n", time.Now().Add(-time.Hour), nil)
@@ -116,34 +234,42 @@ func TestSyncBuiltinIsolatedFromUserSkills(t *testing.T) {
 		t.Fatalf("Sync: %v", err)
 	}
 
-	// A user skill must not leak into the builtin dir...
-	if _, err := os.Stat(filepath.Join(BuiltinDir(), "user-skill")); !os.IsNotExist(err) {
-		t.Error("Sync copied a user skill into the builtin dir")
+	for name := range BuiltinNames() {
+		if _, err := os.Stat(filepath.Join(claudeDir, name)); !os.IsNotExist(err) {
+			t.Errorf("builtin skill %q leaked into %s", name, claudeDir)
+		}
 	}
-	// ...and no builtin skill may leak into a provider dir.
-	for _, e := range builtinNames {
-		if !e.IsDir() {
-			continue
-		}
-		for _, d := range []string{claudeDir, wickDir} {
-			if _, err := os.Stat(filepath.Join(d, e.Name())); !os.IsNotExist(err) {
-				t.Errorf("builtin skill %q leaked into %s", e.Name(), d)
-			}
-		}
+	// A user skill still syncs normally — the exclusion is scoped to shipped
+	// names, not to the dir they happen to share.
+	if _, err := os.Stat(filepath.Join(BuiltinDir(), "user-skill")); err != nil {
+		t.Errorf("a normal user skill stopped syncing into wick's dir: %v", err)
 	}
 }
 
-// TestReadDirsIncludesBuiltin: read paths see the builtin dir (so the agent can
-// open a SKILL.md), while the sync rotation does not.
+// TestSyncEntryRefusesBuiltin: syncing ONE entry is a separate code path from
+// Sync, and an explicit push is a third. Both must refuse a shipped skill for
+// the same reason Sync skips it — a copy outside wick's dir is unmanageable.
+func TestSyncEntryRefusesBuiltin(t *testing.T) {
+	stageHome(t)
+	if _, err := SyncBuiltin(); err != nil {
+		t.Fatalf("SyncBuiltin: %v", err)
+	}
+	if _, err := SyncEntry("wick-connectors"); err == nil {
+		t.Error("SyncEntry mirrored a shipped skill into the provider dirs")
+	}
+	if _, err := PushFrom(BuiltinDir(), "wick-connectors"); err == nil {
+		t.Error("PushFrom pushed a shipped skill into the provider dirs")
+	}
+}
+
+// TestReadDirsIncludesBuiltin: read paths must reach the shipped skills so the
+// agent can open a SKILL.md the catalog points at.
 func TestReadDirsIncludesBuiltin(t *testing.T) {
 	setTestHome(t, t.TempDir())
 
 	read := ReadDirs()
 	if !containsDir(read, BuiltinDir()) {
 		t.Errorf("ReadDirs missing builtin dir %q; got %v", BuiltinDir(), read)
-	}
-	if containsDir(KnownDirs(), BuiltinDir()) {
-		t.Error("KnownDirs must NOT include the builtin dir — it would join the sync rotation")
 	}
 }
 
@@ -176,15 +302,6 @@ func TestListSkillsFlagsBuiltin(t *testing.T) {
 	if !sawUser {
 		t.Error("user skill missing from ListSkills")
 	}
-}
-
-func containsDir(dirs []string, want string) bool {
-	for _, d := range dirs {
-		if d == want {
-			return true
-		}
-	}
-	return false
 }
 
 // TestBuiltinFrontmatterParses: the overwrite-warning header must not hide the
@@ -227,19 +344,51 @@ func TestParseFrontmatterSkipsLeadingComment(t *testing.T) {
 	}
 }
 
-// TestDirLabelForBuiltin: the builtin dir must get a real label. It is a
-// sibling of the skills dir (~/.<app>/builtin-skills), so the generic
-// "strip the leading dot, take the first path segment" rule yields "" and the
-// fallback yields "." — neither identifies anything.
-func TestDirLabelForBuiltin(t *testing.T) {
+// TestBuiltinCatalogNamesEverySkillWithPath: the CLI providers never see the
+// shipped skills through their own loader — the skills are not copied into
+// ~/.claude/skills or ~/.codex/skills — so this block is the only thing that
+// tells the agent they exist. Every skill needs a name AND an absolute path:
+// without the path the agent has nothing to open, and the --add-dir that makes
+// the path readable would be pointing at nothing anyone was told to read.
+func TestBuiltinCatalogNamesEverySkillWithPath(t *testing.T) {
 	setTestHome(t, t.TempDir())
 
-	got := DirLabel(BuiltinDir())
-	if got == "" || got == "." {
-		t.Fatalf("DirLabel(builtin) = %q — not a usable label", got)
+	if _, err := SyncBuiltin(); err != nil {
+		t.Fatalf("SyncBuiltin: %v", err)
 	}
-	if got == OwnLabel() {
-		t.Errorf("builtin label %q collides with the user skills dir label", got)
+	cat := BuiltinCatalog()
+	if cat == "" {
+		t.Fatal("catalog is empty — the agent would never learn the shipped skills exist")
+	}
+	for name := range BuiltinNames() {
+		want := filepath.Join(BuiltinDir(), name, "SKILL.md")
+		if !strings.Contains(cat, filepath.ToSlash(want)) && !strings.Contains(cat, want) {
+			t.Errorf("catalog omits a readable path for %q", name)
+		}
+	}
+}
+
+// TestAppendBuiltinCatalogPreservesPreset: the operator's preset opens with the
+// session identity block, which the CLIs and the operator both expect at the
+// top, so the catalog must be appended rather than prepended.
+func TestAppendBuiltinCatalogPreservesPreset(t *testing.T) {
+	setTestHome(t, t.TempDir())
+
+	if _, err := SyncBuiltin(); err != nil {
+		t.Fatalf("SyncBuiltin: %v", err)
+	}
+	const preset = "session_id: abc\n\nYou are a helpful agent.\n"
+	got := AppendBuiltinCatalog(preset)
+	if !strings.HasPrefix(got, "session_id: abc") {
+		t.Errorf("preset no longer leads the prompt: %.40q", got)
+	}
+	if !strings.Contains(got, "Built-in wick skills") {
+		t.Error("catalog missing from the combined prompt")
+	}
+	// A bare agent has no preset and is exactly the one that most needs to be
+	// told the shipped skills exist.
+	if bare := AppendBuiltinCatalog(""); !strings.Contains(bare, "Built-in wick skills") {
+		t.Error("empty preset dropped the catalog")
 	}
 }
 
