@@ -19,10 +19,14 @@ import (
 // MemGuard is the resolved memory policy for one spawn. A nil *MemGuard
 // means the guard is off; every method below is safe on a zero value.
 type MemGuard struct {
-	Mode         string // config.MemGuard{Off,Measure,Enforce}
-	Method       string // config.Method{Auto,Scope,Wrapper}
-	AgentLimitMB int    // resolved per-agent ceiling; 0 = none
-	AggregateMB  int    // slice-wide ceiling; 0 = none
+	Mode string // config.MemGuard{Off,Measure,Enforce}
+	// Scopes is WHERE the limit is applied. Both can be on at once: the
+	// kernel applies every ceiling in the hierarchy and the tightest
+	// wins, and on a real host the combination covers more than either
+	// alone — see config.GuardScopes.
+	Scopes       config.GuardScopes
+	AgentLimitMB int // resolved per-agent ceiling; 0 = none
+	AggregateMB  int // slice-wide ceiling; 0 = none
 	ProtectWick  bool
 
 	// Slice-wide contention controls, enforce-mode only. Memory is the
@@ -86,19 +90,23 @@ func nextSpawnSeq() int { return int(spawnSeq.Add(1)) }
 
 // wraps reports whether wick itself should wrap this spawn.
 //
-// Under method=wrapper the operator has said an external wrapper owns
-// this. Wick honours that and only measures. Double-wrapping would be
-// harmless — the kernel applies every ceiling in the hierarchy and the
-// tightest wins — so this is about who owns the setting, not safety.
+// With OnSpawn off, the operator has said something else covers these
+// agents — a shim on the path — so wick only measures. Both scopes on at
+// once is fine and often better: the kernel applies every ceiling and the
+// tightest wins, so the shim reaches callers wick cannot see while wick
+// still covers its own agents if the shim's link is ever replaced.
 func (g *MemGuard) wraps() bool {
 	if g == nil || g.Mode == config.MemGuardOff || g.Mode == "" {
 		return false
 	}
-	if g.Method == config.MethodWrapper {
+	// OnPath is handled by a shim in front of the binary, not here.
+	// Without OnSpawn there is nothing for wick itself to do — which is
+	// not the same as nothing being applied.
+	if !g.Scopes.OnSpawn {
 		return false
 	}
-	// auto and scope both require a mechanism to actually exist — systemd
-	// or, failing that, raw cgroupfs. See memscope.DetectBackend.
+	// Wrapping needs a mechanism to actually exist — systemd or, failing
+	// that, raw cgroupfs. See memscope.DetectBackend.
 	return memscopeBackend() != memscope.BackendNone
 }
 

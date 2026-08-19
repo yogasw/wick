@@ -408,6 +408,9 @@ func Register(r tool.Router) {
 	r.GET("/api/processes", processesHandler)
 	r.POST("/api/processes/kill", killProcessHandler)
 	r.POST("/api/memory/apply-suggested", applySuggestedMemoryHandler)
+	r.GET("/api/wrapper/status", wrapperStatusHandler)
+	r.POST("/api/wrapper/install", wrapperInstallHandler)
+	r.POST("/api/wrapper/uninstall", wrapperUninstallHandler)
 
 	r.GET("/providers", providersPage)
 	r.GET("/providers/detail/{type}/{name}", providerDetailPage)

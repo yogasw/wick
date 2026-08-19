@@ -8,6 +8,7 @@
   import Sparkline from "$lib/Sparkline.svelte";
   import TopTable from "$lib/TopTable.svelte";
   import ProcessExplorer from "$lib/ProcessExplorer.svelte";
+  import WrapperPanel from "$lib/WrapperPanel.svelte";
   import { humanBytes, humanBps, humanPct, humanDuration, clockTime, pctOf } from "$lib/format.js";
   import type { MemoryReport, SeriesResponse } from "$lib/types.js";
 
@@ -247,6 +248,12 @@
     </div>
   {/if}
 
+  <!-- Coverage. Above the agent tables on purpose: the number that
+       matters is how many processes have NO ceiling, and reading that
+       after scrolling past a list of healthy rows is reading it too
+       late. -->
+  <WrapperPanel {base} suggestedMB={report?.suggested?.AgentMaxMB ?? 0} />
+
   <!-- Suggested limits -->
   {#if report?.machine_known}
     <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
@@ -310,7 +317,28 @@
             {#each report?.agents ?? [] as a (a.pid)}
               <tr class="border-b border-white-300 last:border-0 dark:border-navy-600">
                 <td class="px-5 py-3">
-                  <div class="font-medium text-black-900 dark:text-white-100">{a.name}</div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="font-medium text-black-900 dark:text-white-100">{a.name}</span>
+                    <!-- Read from the cgroup, not from the configured
+                         mode: an agent can be uncovered while the guard
+                         reads "enforce", and without this the row looks
+                         identical either way. -->
+                    {#if a.isolated}
+                      <span
+                        class="rounded border border-green-600/30 px-1 py-px text-[10px] text-green-700 dark:text-green-500"
+                        title="A memory ceiling applies to this agent."
+                      >
+                        limited
+                      </span>
+                    {:else}
+                      <span
+                        class="rounded border border-amber-600/30 px-1 py-px text-[10px] text-amber-700 dark:text-amber-500"
+                        title="No memory ceiling applies to this agent. It can take the machine down with it."
+                      >
+                        no limit
+                      </span>
+                    {/if}
+                  </div>
                   {#if (a.processes?.length ?? 0) > 0}
                     <button
                       type="button"

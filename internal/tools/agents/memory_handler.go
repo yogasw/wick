@@ -2,6 +2,7 @@ package agents
 
 import (
 	"net/http"
+	"os"
 	"runtime"
 	"strconv"
 	"sync"
@@ -9,6 +10,7 @@ import (
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/provider/memscope"
+	"github.com/yogasw/wick/internal/agents/provider/memscope/wrapper"
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/pkg/memreport"
 	"github.com/yogasw/wick/internal/pkg/sysmem"
@@ -43,6 +45,13 @@ type memoryAgentRow struct {
 	CPUPct     float64 `json:"cpu_pct"`
 	IOReadBps  uint64  `json:"io_read_bps"`
 	IOWriteBps uint64  `json:"io_write_bps"`
+	// Isolated reports whether a memory ceiling actually applies to this
+	// agent right now — read from its cgroup, not inferred from the
+	// configured mode. The two disagree more often than they should: a
+	// guard set to enforce still leaves an agent uncovered when the
+	// mechanism is missing, and a row that looks identical either way is
+	// how an operator ends up believing they are protected.
+	Isolated bool `json:"isolated"`
 	// Peak* are the highest values seen across the retained window — the
 	// numbers a limit must accommodate, which a single instant misses.
 	PeakBytes  uint64  `json:"peak_bytes,omitempty"`
@@ -175,6 +184,13 @@ type topProcessRow struct {
 	CPUPct     float64 `json:"cpu_pct"`
 	IOReadBps  uint64  `json:"io_read_bps"`
 	IOWriteBps uint64  `json:"io_write_bps"`
+	// Isolated reports whether a memory ceiling actually applies to this
+	// agent right now — read from its cgroup, not inferred from the
+	// configured mode. The two disagree more often than they should: a
+	// guard set to enforce still leaves an agent uncovered when the
+	// mechanism is missing, and a row that looks identical either way is
+	// how an operator ends up believing they are protected.
+	Isolated bool `json:"isolated"`
 	// Count is how many processes share this name. >1 means the row is a
 	// group; the summary tables always group, so "chrome.exe × 26" is one
 	// row rather than 26 competing for the top five.
@@ -326,6 +342,14 @@ func buildMemoryReport() memoryReport {
 	procs, err := memreport.Snapshot()
 	rep.ProcessesReadable = err == nil
 	if err == nil {
+		// Coverage per agent, from the same scan the Coverage panel uses,
+		// so the two cannot disagree about the same process.
+		isolatedPIDs := map[int]bool{}
+		if states, err := wrapper.Scan(wrapper.Providers, os.Getpid(), memscope.SliceName); err == nil {
+			for _, st := range states {
+				isolatedPIDs[st.PID] = st.Isolated
+			}
+		}
 		rep.Top = buildTopProcesses(procs)
 		for _, r := range memreport.Roots(procs, agentProcessNames) {
 			t := memreport.SumSubtreeAll(procs, r.PID)
@@ -344,6 +368,7 @@ func buildMemoryReport() memoryReport {
 			if p, ok := peaks[r.Name]; ok {
 				row.PeakBytes, row.PeakCPUPct = p.RSSBytes, p.CPUPct
 			}
+			row.Isolated = isolatedPIDs[r.PID]
 			for _, sp := range memreport.Subtree(procs, r.PID, maxProcessRows) {
 				row.Processes = append(row.Processes, processRow{
 					PID: sp.PID, PPID: sp.PPID, Name: sp.Name, RSSBytes: sp.RSSBytes,

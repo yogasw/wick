@@ -46,6 +46,9 @@ func TestResourceRoutesRegistered(t *testing.T) {
 		"GET /api/processes",
 		"POST /api/processes/kill",
 		"POST /api/memory/apply-suggested",
+		"GET /api/wrapper/status",
+		"POST /api/wrapper/install",
+		"POST /api/wrapper/uninstall",
 	} {
 		if !rec.seen[want] {
 			t.Fatalf("route %q was never registered", want)
