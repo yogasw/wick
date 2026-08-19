@@ -1,6 +1,8 @@
 package memscope
 
 import (
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -136,6 +138,19 @@ func TestScopeUnitName_Unique(t *testing.T) {
 	}
 	if !strings.HasPrefix(ScopeUnitName("codex", 3), "codex-agent-") {
 		t.Fatalf("name %q does not identify the provider", ScopeUnitName("codex", 3))
+	}
+}
+
+// seq restarts at 1 with the process, but the scopes it named outlive it:
+// systemd holds a scope until its last process exits, so a restarted wick
+// reusing "claude-agent-1" is refused with "was already loaded" and the
+// spawn fails outright. Crash recovery then retries into the same
+// collision, which is how one restart became a spawn loop.
+func TestScopeUnitName_UniquePerWickProcess(t *testing.T) {
+	pid := strconv.Itoa(os.Getpid())
+	got := ScopeUnitName("claude", 1)
+	if !strings.Contains(got, pid) {
+		t.Fatalf("name %q omits wick's pid, so it collides with the previous wick's scopes", got)
 	}
 }
 

@@ -52,6 +52,22 @@ type memoryAgentRow struct {
 	// mechanism is missing, and a row that looks identical either way is
 	// how an operator ends up believing they are protected.
 	Isolated bool `json:"isolated"`
+	// FromWick reports whether this wick spawned the agent. Separate from
+	// Isolated because the two answer different questions and need
+	// different fixes: an uncovered agent of wick's own is a guard or shim
+	// that is off, while an uncovered stranger runs under another service
+	// entirely and only that service's unit can bound it. Without this the
+	// rows are indistinguishable, and an operator reads every "no limit"
+	// as something the panel can fix.
+	FromWick bool `json:"from_wick"`
+	// SessionID and AgentName identify which session owns this process,
+	// so a heavy row leads somewhere instead of ending at a pid. Filled
+	// from the pool, which is the only place the mapping exists — a
+	// process listing knows pids and cgroups, never sessions. Empty for
+	// anything wick did not spawn, and empty for a wick agent the pool
+	// has already released.
+	SessionID string `json:"session_id,omitempty"`
+	AgentName string `json:"agent_name,omitempty"`
 	// Peak* are the highest values seen across the retained window — the
 	// numbers a limit must accommodate, which a single instant misses.
 	PeakBytes  uint64  `json:"peak_bytes,omitempty"`
@@ -345,9 +361,22 @@ func buildMemoryReport() memoryReport {
 		// Coverage per agent, from the same scan the Coverage panel uses,
 		// so the two cannot disagree about the same process.
 		isolatedPIDs := map[int]bool{}
+		fromWickPIDs := map[int]bool{}
+		// The pool is the only place pid -> session exists; a /proc scan
+		// knows pids and cgroups and nothing about who asked for them.
+		type sessionOwner struct{ session, agent string }
+		owners := map[int]sessionOwner{}
+		if globalPool != nil {
+			for _, e := range globalPool.ActiveSnapshot() {
+				if e.PID != 0 {
+					owners[e.PID] = sessionOwner{e.SessionID, e.AgentName}
+				}
+			}
+		}
 		if states, err := wrapper.Scan(wrapper.Providers, os.Getpid(), memscope.SliceName); err == nil {
 			for _, st := range states {
 				isolatedPIDs[st.PID] = st.Isolated
+				fromWickPIDs[st.PID] = st.FromWick
 			}
 		}
 		rep.Top = buildTopProcesses(procs)
@@ -369,6 +398,10 @@ func buildMemoryReport() memoryReport {
 				row.PeakBytes, row.PeakCPUPct = p.RSSBytes, p.CPUPct
 			}
 			row.Isolated = isolatedPIDs[r.PID]
+			row.FromWick = fromWickPIDs[r.PID]
+			if o, ok := owners[r.PID]; ok {
+				row.SessionID, row.AgentName = o.session, o.agent
+			}
 			for _, sp := range memreport.Subtree(procs, r.PID, maxProcessRows) {
 				row.Processes = append(row.Processes, processRow{
 					PID: sp.PID, PPID: sp.PPID, Name: sp.Name, RSSBytes: sp.RSSBytes,
