@@ -25,6 +25,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/capability"
 	provider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/procgroup"
+	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -92,8 +93,14 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// sessions and race on concurrent spawns, feeding codex the wrong
 	// session_id. SessionDir is empty only in legacy/test paths, where
 	// we fall back to the workspace.
+	//
+	// The shipped wick skills are named here too. They are deliberately not
+	// copied into ~/.codex/skills (see skillsync/builtin.go), so codex's own
+	// loader never sees them; this block is what makes them reachable, and the
+	// --add-dir below is what makes the paths it names readable.
 	soulPath := ""
-	if opt.Preset != "" {
+	soul := skillsync.AppendBuiltinCatalog(opt.Preset)
+	if soul != "" {
 		soulDir := opt.SessionDir
 		if soulDir == "" {
 			soulDir = opt.Workspace
@@ -102,7 +109,7 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 			codexDir := filepath.Join(soulDir, ".codex")
 			if err := os.MkdirAll(codexDir, 0o755); err == nil {
 				p := filepath.Join(codexDir, "soul.md")
-				if err := os.WriteFile(p, []byte(opt.Preset), 0o644); err == nil {
+				if err := os.WriteFile(p, []byte(soul), 0o644); err == nil {
 					soulPath = p
 				} else {
 					log.Warn().Err(err).Str("path", p).Msg("agents.spawn: write soul.md failed")
@@ -142,7 +149,10 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// resource files (they live outside the workspace, and the sandbox
 	// otherwise blocks them). Mirrors claude/spawn.go's --add-dir wiring;
 	// skillsync copies skills here but the sandbox hides them without this.
-	if home, err := homeDir(); err == nil {
+	// A home-dir lookup failure is not fatal: wick's own dir may still resolve
+	// via $WICK_DATA_DIR, and skillAddDirArgs skips whichever dir it cannot place.
+	{
+		home, _ := homeDir()
 		args = append(args, skillAddDirArgs(home, dirExists)...)
 	}
 	// When gate is active for this instance, do NOT set

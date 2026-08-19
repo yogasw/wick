@@ -207,9 +207,10 @@ func GetGateStatus() GateStatus { return globalGateStatus }
 func Register(r tool.Router) {
 	// Refresh the skills that ship inside the binary. Done at boot so an
 	// upgraded binary replaces the previous version's copies before anything
-	// reads them; the dir is wick-owned, so a full rewrite is safe. Failure is
-	// logged, not fatal — stale shipped docs must not stop the app from
-	// starting.
+	// reads them. They share a dir with the user's own skills, so the refresh
+	// is content-addressed rather than a wipe — see skillsync.SyncBuiltin.
+	// Failure is logged, not fatal: stale shipped docs must not stop the app
+	// from starting.
 	l := log.With().Str("component", "agents/skills").Logger()
 	if res, err := skillsync.SyncBuiltin(); err != nil {
 		l.Warn().Err(err).Msg("builtin skills not refreshed")

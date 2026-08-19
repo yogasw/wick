@@ -33,6 +33,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/capability"
 	provider "github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/procgroup"
+	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -132,9 +133,12 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if opt.Workspace != "" {
 		args = append(args, "--add-dir", opt.Workspace)
 	}
-	// Trust ~/.claude/skills so the agent can read a skill's bundled
-	// resource files (they live outside the workspace).
-	if home, err := os.UserHomeDir(); err == nil {
+	// Trust the skills dirs so the agent can read a skill's bundled resource
+	// files (they live outside the workspace). A home-dir lookup failure is not
+	// fatal: wick's own dir may still resolve via $WICK_DATA_DIR, and
+	// skillAddDirArgs skips whichever dir it cannot place.
+	{
+		home, _ := os.UserHomeDir()
 		args = append(args, skillAddDirArgs(home, dirExists)...)
 	}
 	// bypassPermissions and gate are mutually exclusive:
@@ -171,7 +175,11 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// Written to a file and referenced by path, not inlined: the preset
 	// alone is ~28KB and Windows caps a command line at 32767 chars. See
 	// prompt_file.go.
-	args = append(args, systemPromptArgs(opt.SessionDir, opt.Workspace, opt.Preset)...)
+	// Shipped skills are not copied into ~/.claude/skills, so claude's own
+	// loader never sees them. Naming them here is what makes them reachable;
+	// skillAddDirArgs above is what makes the paths readable.
+	args = append(args, systemPromptArgs(opt.SessionDir, opt.Workspace,
+		skillsync.AppendBuiltinCatalog(opt.Preset))...)
 	if opt.ResumeID != "" {
 		args = append(args, "--resume", opt.ResumeID)
 	}
