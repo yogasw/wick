@@ -6,7 +6,13 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Changed
+*   **Shipped Skills Reachable from Claude and Codex:**
+    *   Wick's embedded how-to skills now live in wick's own skills dir (`~/.<app>/skills/`) instead of the private `~/.<app>/builtin-skills/` dir, alongside the user's own skills.
+    *   `claude` and `codex` now `--add-dir` wick's skills dir in addition to their own, and a generated catalog (name, description, absolute `SKILL.md` path) is injected into claude's system prompt and codex's `soul.md` — so those agents can discover and read the shipped skills, not just the built-in wick provider.
+    *   Refresh is now content-addressed (MD5 compare) instead of wipe-and-rewrite, so the shared dir's user skills are never touched and unchanged shipped files keep their mtime. Stale shipped skills are only pruned when the embed drops them and they still carry the "MANAGED BY WICK" marker.
+    *   Shipped skill names are still excluded from sync/upload/push flows — they are never copied into `~/.claude/skills` or `~/.codex/skills`.
+    *   `claude` and `codex` skill dir resolution now honours `$CLAUDE_CONFIG_DIR` / `$CODEX_HOME` when set, matching where those CLIs actually read skills from.
 
 ---
 

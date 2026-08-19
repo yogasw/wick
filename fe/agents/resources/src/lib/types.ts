@@ -18,6 +18,15 @@ export interface AgentRow {
   // The two disagree whenever the mechanism is missing, and a row that
   // looks the same either way is how someone believes they are covered.
   isolated?: boolean;
+  // Whether this wick spawned the agent. Separate from isolated because
+  // the fixes differ: wick's own uncovered agent means the guard or shim
+  // is off, while an uncovered stranger belongs to another service and
+  // only that service's unit can bound it.
+  from_wick?: boolean;
+  // Which session owns this process. Only wick's own agents have one,
+  // and only while the pool still holds them.
+  session_id?: string;
+  agent_name?: string;
   processes?: ProcessRow[];
 }
 

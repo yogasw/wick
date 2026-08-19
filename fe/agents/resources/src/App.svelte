@@ -112,6 +112,13 @@
   // refresh that reorders rows keeps the right one open.
   let expanded = $state<Set<number>>(new Set());
 
+  // The session page is a server route, not part of this SPA, so the
+  // link is absolute rather than routed. Encoded because a session id is
+  // opaque to this page and nothing here guarantees it is path-safe.
+  function sessionHref(id: string): string {
+    return `/tools/agents/sessions/${encodeURIComponent(id)}`;
+  }
+
   function toggleProcesses(pid: number): void {
     const next = new Set(expanded);
     if (next.has(pid)) {
@@ -338,6 +345,27 @@
                         no limit
                       </span>
                     {/if}
+                    <!-- Origin, not coverage. An uncovered agent of
+                         wick's own is a guard or shim that is off; an
+                         uncovered stranger runs under another service
+                         and only that service's unit can bound it.
+                         Neutral rather than amber for exactly that
+                         reason: nothing on this page can fix it. -->
+                    {#if a.from_wick}
+                      <span
+                        class="rounded border border-blue-600/30 px-1 py-px text-[10px] text-blue-700 dark:text-blue-400"
+                        title="Spawned by this wick."
+                      >
+                        wick
+                      </span>
+                    {:else}
+                      <span
+                        class="rounded border border-black-400/40 px-1 py-px text-[10px] text-black-700 dark:border-navy-500 dark:text-black-600"
+                        title="Started outside wick, by another service on this machine. Wick cannot bound it — set MemoryMax on that service's unit instead."
+                      >
+                        outside wick
+                      </span>
+                    {/if}
                   </div>
                   {#if (a.processes?.length ?? 0) > 0}
                     <button
@@ -417,6 +445,23 @@
                      Member rows share the parent table's columns rather
                      than nesting a second table, so the numbers line up
                      with the row they belong to. -->
+                {#if a.session_id}
+                  <!-- A heavy row is only actionable if it leads back to
+                       the session that owns it; a pid alone ends the
+                       trail. Only wick's own agents have one, and only
+                       while the pool still holds them. -->
+                  <tr class="border-b border-white-300 bg-white-200/50 text-xs dark:border-navy-600 dark:bg-navy-800/40">
+                    <td colspan="6" class="py-1 pl-9 pr-5">
+                      <span class="text-black-700 dark:text-black-600">session</span>
+                      <a
+                        class="ml-1 text-blue-600 hover:underline dark:text-blue-400"
+                        href={sessionHref(a.session_id)}
+                      >
+                        {a.session_id}{a.agent_name ? ` · ${a.agent_name}` : ""}
+                      </a>
+                    </td>
+                  </tr>
+                {/if}
                 {#each a.processes ?? [] as p (p.pid)}
                   <tr class="border-b border-white-300 bg-white-200/50 text-xs dark:border-navy-600 dark:bg-navy-800/40">
                     <td class="py-1 pl-9 pr-5">
