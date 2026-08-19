@@ -14,6 +14,7 @@ package memscope
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -77,8 +78,18 @@ type Stats struct {
 
 // ScopeUnitName builds a per-spawn unit name that identifies the provider
 // and stays unique for as long as the scope lives.
+//
+// wick's own pid is part of the name because seq is an in-memory counter
+// that restarts at 1 with the process, while the scopes it named outlive
+// it: systemd keeps a scope until its last process exits, so a restarted
+// wick asking for "claude-agent-1" again is told the unit "was already
+// loaded" and the spawn fails. That is not hypothetical — a crash-restart
+// loop reproduces it on the first two spawns every time, and crash
+// recovery then retries into the same collision. The pid makes the name
+// unique across restarts without persisting a counter to disk: the wick
+// that owned the old scopes is gone, so its pid cannot be ours.
 func ScopeUnitName(provider string, seq int) string {
-	return provider + "-agent-" + strconv.Itoa(seq)
+	return provider + "-agent-" + strconv.Itoa(os.Getpid()) + "-" + strconv.Itoa(seq)
 }
 
 // WrapArgv returns the binary and argv that run cmd inside a new scope.

@@ -10,6 +10,28 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.39.9](https://github.com/yogasw/wick/compare/v0.39.7...v0.39.9) — Agents & Skills
+
+_Released on 2026-08-19_
+
+### Changed
+
+*   **Shipped Skills Reachable from Claude and Codex:**
+    *   Wick's embedded how-to skills are now stored in Wick's own skills directory (`~/.<app>/skills/`) alongside user skills, rather than the private `~/.<app>/builtin-skills/`.
+    *   `claude` and `codex` now utilize `--add-dir` to include Wick's skills directory. A generated catalog (containing skill name, description, and absolute `SKILL.md` path) is injected into `claude`'s system prompt and `codex`'s `soul.md`, enabling these agents to discover and access shipped skills.
+    *   Skill directory refresh is now content-addressed (MD5 comparison), preventing unnecessary rewrites and preserving `mtime` for unchanged files. User skills in the shared directory are untouched. Stale shipped skills are only pruned if dropped by the embed *and* still marked as "MANAGED BY WICK".
+    *   Shipped skill names continue to be excluded from `sync`, `upload`, and `push` operations, preventing unmanageable copies in `~/.claude/skills` or `~/.codex/skills`.
+    *   `claude` and `codex` skill directory resolution now correctly honors `$CLAUDE_CONFIG_DIR` and `$CODEX_HOME` when set.
+    *   `InProvider` now correctly reports shipped skills as present for all providers, resolving their visibility in the `/` composer. These skills are also no longer listed in `MissingProviders` to avoid inviting unfeasible sync actions.
+*   **Agent Scope Naming Uniqueness:**
+    *   Agent scope unit names now incorporate Wick's process ID (PID), ensuring uniqueness across Wick restarts (e.g., `claude-agent-<pid>-1`). This resolves "Unit already loaded" errors and prevents spawn loops that occurred when the `spawnSeq` counter reset.
+*   **Enhanced Agent Visibility and Session Management:**
+    *   The Resources page now includes a "Wick / Outside Wick" badge, clearly identifying which agents were spawned by Wick versus those from external services. This helps in understanding which uncovered agents can be managed directly through Wick's features.
+    *   Expanding an agent's row on the Resources page now displays the owning session and provides a clickable link to it, for agents actively managed by Wick's pool.
+
+---
+
+
 ## [v0.39.7](https://github.com/yogasw/wick/compare/v0.39.6...v0.39.7) — Skills & Agents
 
 _Released on 2026-08-19_
