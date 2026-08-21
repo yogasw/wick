@@ -10,6 +10,18 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.39.10](https://github.com/yogasw/wick/compare/v0.39.9...v0.39.10) — Session Management
+
+_Released on 2026-08-21_
+
+### Improved
+
+*   Enhanced session management by introducing scoped resume IDs.
+*   Improved provider switching capabilities.
+
+---
+
+
 ## [v0.39.9](https://github.com/yogasw/wick/compare/v0.39.7...v0.39.9) — Agents & Skills
 
 _Released on 2026-08-19_
