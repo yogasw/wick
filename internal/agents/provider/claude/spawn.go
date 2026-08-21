@@ -28,6 +28,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/agents/capability"
@@ -36,6 +37,18 @@ import (
 	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
+
+// isUUID reports whether id is a well-formed uuid, which is what claude
+// demands of --session-id. Guards the flag rather than the id: wick
+// session ids are a looser alphabet, and sub-agent ids embed their
+// ancestry, so some sessions can never name themselves to claude.
+func isUUID(id string) bool {
+	if id == "" {
+		return false
+	}
+	_, err := uuid.Parse(id)
+	return err == nil
+}
 
 // Spawner spawns the real `claude` CLI binary with stream-json output
 // and the resume flag when a CLI session ID is available.
@@ -75,7 +88,7 @@ type Spawner struct {
 //	       --input-format stream-json
 //	       --output-format stream-json
 //	       [--permission-mode bypassPermissions]
-//	       [--resume <id>]
+//	       [--session-id <id> | --resume <id>]
 //
 // `-p` plus `stream-json` keeps the process alive in a long-lived
 // streaming mode: stdin accepts one user envelope per turn, stdout
@@ -180,8 +193,24 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	// skillAddDirArgs above is what makes the paths readable.
 	args = append(args, systemPromptArgs(opt.SessionDir, opt.Workspace,
 		skillsync.AppendBuiltinCatalog(opt.Preset))...)
-	if opt.ResumeID != "" {
+	// One id per conversation, chosen by wick rather than claude: the
+	// first spawn NAMES the session with --session-id (the wick session
+	// id), later spawns RESUME that same name. Otherwise claude mints its
+	// own uuid and wick must bookkeep a second identity for what is one
+	// conversation.
+	//
+	// The flags never combine. claude refuses a --session-id it has
+	// already seen ("Session ID <x> is already in use"), so naming is a
+	// once-per-conversation act; ResumeID being recorded is what says the
+	// naming already happened. A non-uuid session id gets neither flag —
+	// claude demands a valid uuid and exits otherwise. Sub-agent ids are
+	// the live case: they carry ancestry as "<parent>--sub-<seg>", so
+	// those sessions keep claude's own minted id, captured as before.
+	switch {
+	case opt.ResumeID != "":
 		args = append(args, "--resume", opt.ResumeID)
+	case isUUID(opt.SessionID):
+		args = append(args, "--session-id", opt.SessionID)
 	}
 
 	// Memory guard: run the agent inside its own systemd scope so a

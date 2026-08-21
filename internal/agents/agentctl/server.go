@@ -11,7 +11,6 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	"github.com/yogasw/wick/internal/agents/provider"
-	"github.com/yogasw/wick/internal/agents/session"
 )
 
 // Server listens on the agentctl unix socket and dispatches commands
@@ -131,40 +130,20 @@ func (s *Server) switchProvider(cmd Cmd) Reply {
 		return Reply{Error: err.Error()}
 	}
 
-	// Update agents.json first (sync).
-	sess, err := session.Load(s.layout, sessionID)
-	if err != nil {
-		return Reply{Error: "load session: " + err.Error()}
+	// One implementation of the switch, shared with the UI and channels.
+	// This used to carry its own copy, which drifted: it keyed resume ids
+	// by the raw Provider field, so an id parked under "claude" was looked
+	// up as "claude/claude" and never found again. provider.Switch also
+	// kills the running agent, so no separate teardown is needed here.
+	tag := provType
+	if provName != provType {
+		tag = provType + "/" + provName
 	}
-	updated := false
-	for i, a := range sess.Agents {
-		if a.Name == agentName {
-			newKey := provType + "/" + provName
-			if a.CLISessionID != "" {
-				if sess.Agents[i].ProviderSessions == nil {
-					sess.Agents[i].ProviderSessions = map[string]string{}
-				}
-				sess.Agents[i].ProviderSessions[a.Provider] = a.CLISessionID
-			}
-			sess.Agents[i].Provider = newKey
-			sess.Agents[i].CLISessionID = sess.Agents[i].ProviderSessions[newKey]
-			updated = true
-			break
-		}
+	if err := provider.Switch(s.layout, s.pool, sessionID, agentName, tag, provider.SwitchOptions{
+		Source: "agentctl",
+	}); err != nil {
+		return Reply{Error: err.Error()}
 	}
-	if !updated {
-		return Reply{Error: fmt.Sprintf("agent %q not found in session %q", agentName, sessionID)}
-	}
-	if err := session.SaveAgents(s.layout, sessionID, sess.Agents); err != nil {
-		return Reply{Error: "save agents: " + err.Error()}
-	}
-
-	// Kill async — file already updated.
-	go func() {
-		if err := s.pool.Kill(sessionID, agentName); err != nil {
-			log.Warn().Str("session", sessionID).Err(err).Msg("agentctl: async kill failed")
-		}
-	}()
 
 	return Reply{
 		OK:           true,
