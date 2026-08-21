@@ -196,3 +196,96 @@ func readConv(t *testing.T, path string) []store.ConversationTurn {
 	}
 	return turns
 }
+
+// TestSwitchResumeScope pins how resume ids travel across switches: shared
+// within one provider type, isolated across types, and legacy key shapes
+// still readable. Getting this wrong is not cosmetic — a wrong id is a
+// spawn that dies with "No conversation found", and a blanked id abandons
+// a conversation still on disk.
+func TestSwitchResumeScope(t *testing.T) {
+	isolateConfig(t)
+	saveSeed(t, Instance{Type: TypeClaude, Name: "claude"})
+	saveSeed(t, Instance{Type: TypeClaude, Name: "work"})
+	saveSeed(t, Instance{Type: TypeCodex, Name: "codex"})
+	saveSeed(t, Instance{Type: TypeWick, Name: "wick"})
+	layout := config.NewLayout(t.TempDir())
+
+	setCLIID := func(t *testing.T, sid, id string) {
+		t.Helper()
+		if err := session.SetCLISessionID(layout, sid, "main", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	agent := func(t *testing.T, sid string) session.AgentEntry {
+		t.Helper()
+		loaded, err := session.Load(layout, sid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return loaded.Agents[0]
+	}
+
+	t.Run("same type keeps the id across instances", func(t *testing.T) {
+		seedSession(t, layout, "sc-same", "main", "claude/claude")
+		setCLIID(t, "sc-same", "id-A")
+		if err := Switch(layout, nopPool{}, "sc-same", "main", "claude/work", SwitchOptions{}); err != nil {
+			t.Fatalf("switch: %v", err)
+		}
+		if a := agent(t, "sc-same"); a.CLISessionID != "id-A" {
+			t.Errorf("CLISessionID = %q, want id-A — instances of one type share the transcript store", a.CLISessionID)
+		}
+	})
+
+	t.Run("cross type starts fresh and parks the old id", func(t *testing.T) {
+		seedSession(t, layout, "sc-cross", "main", "claude/claude")
+		setCLIID(t, "sc-cross", "id-A")
+		if err := Switch(layout, nopPool{}, "sc-cross", "main", "codex", SwitchOptions{}); err != nil {
+			t.Fatalf("switch: %v", err)
+		}
+		a := agent(t, "sc-cross")
+		if a.CLISessionID != "" {
+			t.Errorf("CLISessionID = %q, want empty — codex cannot read claude's store", a.CLISessionID)
+		}
+		if a.ProviderSessions["claude"] != "id-A" {
+			t.Errorf("ProviderSessions[claude] = %q, want id-A — the id must survive the switch", a.ProviderSessions["claude"])
+		}
+	})
+
+	t.Run("switching back restores the parked id", func(t *testing.T) {
+		seedSession(t, layout, "sc-back", "main", "claude/claude")
+		setCLIID(t, "sc-back", "id-A")
+		if err := Switch(layout, nopPool{}, "sc-back", "main", "codex", SwitchOptions{}); err != nil {
+			t.Fatalf("switch to codex: %v", err)
+		}
+		setCLIID(t, "sc-back", "id-C") // codex ran and recorded its own
+		if err := Switch(layout, nopPool{}, "sc-back", "main", "claude/claude", SwitchOptions{}); err != nil {
+			t.Fatalf("switch back: %v", err)
+		}
+		a := agent(t, "sc-back")
+		if a.CLISessionID != "id-A" {
+			t.Errorf("CLISessionID = %q, want id-A — claude must resume its own conversation", a.CLISessionID)
+		}
+		if a.ProviderSessions["codex"] != "id-C" {
+			t.Errorf("ProviderSessions[codex] = %q, want id-C", a.ProviderSessions["codex"])
+		}
+	})
+
+	t.Run("legacy instance-shaped keys are still found", func(t *testing.T) {
+		seedSession(t, layout, "sc-legacy", "main", "codex/codex")
+		loaded, err := session.Load(layout, "sc-legacy")
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A file written before ids were scoped by type.
+		loaded.Agents[0].ProviderSessions = map[string]string{"claude/claude_default": "id-old"}
+		if err := session.SaveAgents(layout, "sc-legacy", loaded.Agents); err != nil {
+			t.Fatal(err)
+		}
+		if err := Switch(layout, nopPool{}, "sc-legacy", "main", "claude/claude", SwitchOptions{}); err != nil {
+			t.Fatalf("switch: %v", err)
+		}
+		if a := agent(t, "sc-legacy"); a.CLISessionID != "id-old" {
+			t.Errorf("CLISessionID = %q, want id-old — pre-scope keys must stay readable", a.CLISessionID)
+		}
+	})
+}

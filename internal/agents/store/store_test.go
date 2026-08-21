@@ -457,3 +457,97 @@ func TestConversationTurnArtifactsJSON(t *testing.T) {
 		t.Fatalf("empty turn must omit artifacts: %s", b2)
 	}
 }
+
+// TestSessionStartAfterSwitchDoesNotHijackResumeID is the regression test
+// for the switch race. A provider switch saves agents.json first and kills
+// the old agent ASYNC, so an init event from the dying provider can arrive
+// after the entry already points at the new one. That event's id must be
+// filed under the OLD provider's type — never onto CLISessionID — or the
+// new provider's next spawn resumes a conversation it never had and dies
+// with "No conversation found with session ID: <id>".
+func TestSessionStartAfterSwitchDoesNotHijackResumeID(t *testing.T) {
+	layout := config.NewLayout(t.TempDir())
+	if err := layout.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Create(context.Background(), layout, session.CreateOptions{
+		ID: "S1", Origin: session.OriginUI,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.AddAgent(layout, "S1", "main", "wick/wick"); err != nil {
+		t.Fatal(err)
+	}
+
+	// The store belongs to the WICK spawn...
+	st := New(Options{
+		Layout: layout, SessionID: "S1", AgentName: "main",
+		Provider: "wick/wick",
+	})
+
+	// ...but before its init event lands, the user has switched to claude.
+	sess, err := session.Load(layout, "S1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Agents[0].Provider = "claude/claude_default"
+	sess.Agents[0].CLISessionID = ""
+	if err := session.SaveAgents(layout, "S1", sess.Agents); err != nil {
+		t.Fatal(err)
+	}
+
+	// The straggler event from the dying wick engine arrives now.
+	if _, err := st.Apply(event.AgentEvent{Type: event.SessionStart, SessionID: "wick-id-123"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := session.Load(layout, "S1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := got.Agents[0]
+	if a.CLISessionID != "" {
+		t.Errorf("CLISessionID = %q — the dying provider's id was filed as the NEW provider's; "+
+			"claude's next spawn will --resume a conversation it never had", a.CLISessionID)
+	}
+	if a.ProviderSessions["wick"] != "wick-id-123" {
+		t.Errorf("ProviderSessions[wick] = %q, want wick-id-123 — the id belongs to the type that minted it",
+			a.ProviderSessions["wick"])
+	}
+}
+
+// TestSessionStartMatchingProviderStillPersists: the guard must not break
+// the normal path — an event from the provider the entry points at keeps
+// writing CLISessionID exactly as before.
+func TestSessionStartMatchingProviderStillPersists(t *testing.T) {
+	layout := config.NewLayout(t.TempDir())
+	if err := layout.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Create(context.Background(), layout, session.CreateOptions{
+		ID: "S1", Origin: session.OriginUI,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.AddAgent(layout, "S1", "main", "claude/claude_default"); err != nil {
+		t.Fatal(err)
+	}
+	st := New(Options{
+		Layout: layout, SessionID: "S1", AgentName: "main",
+		Provider: "claude/other_instance", // same TYPE, different instance
+	})
+	if _, err := st.Apply(event.AgentEvent{Type: event.SessionStart, SessionID: "id-42"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := session.Load(layout, "S1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := got.Agents[0]
+	if a.CLISessionID != "id-42" {
+		t.Errorf("CLISessionID = %q, want id-42 — same-type events must keep persisting", a.CLISessionID)
+	}
+	if a.ProviderSessions["claude"] != "id-42" {
+		t.Errorf("ProviderSessions[claude] = %q, want id-42", a.ProviderSessions["claude"])
+	}
+}

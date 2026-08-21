@@ -225,9 +225,19 @@ func (e *engine) setContextBudget(tokens int) { e.contextBudget = tokens }
 
 // start emits the session-init line so the parser fires SessionStart and
 // the store/resume plumbing has a session id.
+//
+// The wick session id is adopted as-is when there is one: wick has no
+// foreign transcript store to satisfy — resume is a store rebuild — so a
+// separate uuid only gave one conversation a second identity for
+// agents.json to track. The random fallback covers engine-only paths
+// (tests, spawns with no session) where there is nothing to adopt.
 func (e *engine) start() {
 	if e.sessionID == "" {
-		e.sessionID = uuid.NewString()
+		if e.wickSessionID != "" {
+			e.sessionID = e.wickSessionID
+		} else {
+			e.sessionID = uuid.NewString() // engine-only paths: tests, no session
+		}
 	}
 	e.emit(initLine(e.sessionID))
 }

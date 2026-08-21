@@ -282,7 +282,12 @@ func TestEngineGate_UsesWickSessionIDNotStreamSessionID(t *testing.T) {
 		return false, ""
 	}
 	eng.setWickSessionID("wick-http-session-abc")
-	eng.start() // sets e.sessionID to a fresh random UUID — must NOT leak into gate
+	// start() now adopts the wick session id, so the two are normally the
+	// same string and passing the wrong one would go unnoticed. Pin the
+	// stream id to something else BEFORE start() — which leaves a set id
+	// alone — so this test can still tell them apart.
+	eng.sessionID = "stream-json-session-xyz"
+	eng.start() // must NOT leak the stream id into gate
 
 	if eng.sessionID == "wick-http-session-abc" {
 		t.Fatal("test setup invalid: stream sessionID collided with wickSessionID")

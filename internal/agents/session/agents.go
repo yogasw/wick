@@ -3,6 +3,8 @@ package session
 import (
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -14,9 +16,13 @@ import (
 // emitted by the CLI and persists it so subsequent spawns can pass
 // `--resume <id>`. See agents-design.md §5.2.
 //
-// ProviderSessions maps "type/name" provider keys to their last-known
-// CLI session ID. When switching providers, the outgoing resume ID is
-// saved here so switching back can resume the old conversation.
+// ProviderSessions maps a provider TYPE ("claude", "codex") to that
+// type's last-known CLI session ID. Each type mints and owns its own
+// ids — the transcript stores are not interchangeable — so the outgoing
+// id is parked here on every switch and read back when the session
+// returns to that type. Keyed by type, not instance: two claude
+// instances read the same transcript store, so switching between them
+// must keep the id. See ProviderScope / ResumeIDForScope.
 type AgentEntry struct {
 	Name             string            `json:"name"`
 	Provider         string            `json:"provider"`
@@ -40,6 +46,49 @@ type AgentEntry struct {
 	// it. Cleared on switching to a provider type that doesn't recognize
 	// it, so a later switch back doesn't resurrect a stale/foreign pin.
 	ModelID string `json:"model_id,omitempty"`
+}
+
+// ProviderScope returns the provider type of a provider key
+// ("claude/work" → "claude").
+//
+// Every instance of one provider type resumes from the same transcript
+// store — the same CLI binary reading the same on-disk history — so a
+// resume id captured under one instance is valid under any other of that
+// type, and never valid under a different type. ProviderSessions is
+// keyed by this.
+//
+// Lives here rather than in the provider package because the switcher
+// AND the store both write ProviderSessions and must agree on the key;
+// provider imports store, so store cannot import provider, and session
+// is the package both already depend on.
+func ProviderScope(key string) string {
+	if i := strings.IndexByte(key, '/'); i >= 0 {
+		return key[:i]
+	}
+	return key
+}
+
+// ResumeIDForScope finds the resume id recorded for a provider type,
+// tolerating every key shape written before ids were scoped: the bare
+// scope, the normalized "type/type", and any "type/<instance>". Keys are
+// sorted so a file holding several legacy instance keys of one type
+// resolves the same id on every call — Go randomizes map iteration, and
+// an id that changes per lookup is a resume that works only sometimes.
+func ResumeIDForScope(m map[string]string, scope string) string {
+	if id := m[scope]; id != "" {
+		return id
+	}
+	keys := make([]string, 0, len(m))
+	for k, v := range m {
+		if v != "" && ProviderScope(k) == scope {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	return m[keys[0]]
 }
 
 // SaveAgents atomically rewrites sessions/<id>/agents.json. nil
