@@ -102,6 +102,9 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 	// session (has a stored resume id), so the notice can say whether it will
 	// pick up its own past turns or start cold.
 	targetHasHistory := false
+	// sameScope reports whether the switch stays inside one provider type,
+	// where the transcript store is shared and the conversation carries over.
+	sameScope := false
 	fromKey := "" // provider active before this switch — recorded in the turn extras
 	for i, a := range loaded.Agents {
 		if a.Name == agentName {
@@ -117,22 +120,33 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 				}
 				return fmt.Errorf("already using %s", short)
 			}
+			fromScope := session.ProviderScope(a.Provider)
+			toScope := session.ProviderScope(newKey)
+			sameScope = fromScope == toScope
 			if a.CLISessionID != "" {
 				if loaded.Agents[i].ProviderSessions == nil {
 					loaded.Agents[i].ProviderSessions = map[string]string{}
 				}
-				// Always store under normalized "type/name" key.
-				normalizedCurrent := normalizeProviderKey(a.Provider)
-				loaded.Agents[i].ProviderSessions[normalizedCurrent] = a.CLISessionID
+				// Park the outgoing id under its provider TYPE: any instance
+				// of that type reads the same transcript store, so any of
+				// them can resume it later.
+				loaded.Agents[i].ProviderSessions[fromScope] = a.CLISessionID
 			}
 			loaded.Agents[i].Provider = newKey
-			// Lookup resume ID: prefer exact "type/name", fall back to bare "type".
-			resumeID := loaded.Agents[i].ProviderSessions[newKey]
-			if resumeID == "" {
-				resumeID = loaded.Agents[i].ProviderSessions[tag]
-			}
+			resumeID := session.ResumeIDForScope(loaded.Agents[i].ProviderSessions, toScope)
 			targetHasHistory = resumeID != ""
-			loaded.Agents[i].CLISessionID = resumeID
+			// Within one type the id carries over — the conversation
+			// continues. Across types it becomes whatever the target type
+			// recorded before, or empty for a fresh start: handing codex an
+			// id claude minted only buys a failed spawn, since neither can
+			// read the other's store. Never blanked on a same-scope miss —
+			// an empty CLISessionID drops --resume from the next spawn and
+			// abandons a conversation still on disk.
+			if resumeID != "" {
+				loaded.Agents[i].CLISessionID = resumeID
+			} else if !sameScope {
+				loaded.Agents[i].CLISessionID = ""
+			}
 			// Pin the requested model. All provider types now honor a model
 			// pin: wick maps it to a WickModel.ID, the CLI providers pass it
 			// to their binary via --model. Empty clears any stale pin (so a
@@ -172,12 +186,15 @@ func Switch(layout config.Layout, pool Pool, sessionID, agentName, tag string, o
 		)
 	}
 
-	// Each provider keeps its own conversation context — a CLI only sees the
-	// turns from its own runs. Tell the user the new provider won't read the
-	// turns produced by other providers, unless it has run here before (then
-	// --resume restores its own history).
+	// Context carries over between instances of one provider type (shared
+	// transcript store, same resume id) but not across types. Say which of
+	// the three cases this switch is, so the user knows what the next turn
+	// will remember.
 	contextNote := "Note: " + tag + " won't see earlier turns from other providers in this session — each provider keeps its own context."
-	if targetHasHistory {
+	switch {
+	case sameScope && targetHasHistory:
+		contextNote = "Note: continuing the same conversation — " + tag + " resumes this session's transcript."
+	case targetHasHistory:
 		contextNote = "Note: resuming " + tag + "'s own earlier turns; it still won't see turns from other providers."
 	}
 

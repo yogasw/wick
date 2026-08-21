@@ -137,6 +137,57 @@ func TestSpawnerArgv(t *testing.T) {
 			},
 		},
 		{
+			// First spawn of a uuid session: wick names the conversation, so
+			// claude's transcript is keyed by the same id wick uses.
+			name:    "session-id names a fresh uuid session",
+			spawner: Spawner{},
+			opt: provider.SpawnOptions{
+				Workspace: t.TempDir(),
+				SessionID: "39141fdf-48df-4fd1-93d3-76256f29dad5",
+			},
+			wantArgs: []string{
+				"-p", "--verbose",
+				"--input-format", "stream-json",
+				"--output-format", "stream-json",
+				"--session-id", "39141fdf-48df-4fd1-93d3-76256f29dad5",
+			},
+		},
+		{
+			// A recorded resume id wins — claude refuses to re-claim a name
+			// it has already seen, so naming only happens once.
+			name:    "resume beats session-id",
+			spawner: Spawner{},
+			opt: provider.SpawnOptions{
+				Workspace: t.TempDir(),
+				SessionID: "39141fdf-48df-4fd1-93d3-76256f29dad5",
+				ResumeID:  "39141fdf-48df-4fd1-93d3-76256f29dad5",
+			},
+			wantArgs: []string{
+				"-p", "--verbose",
+				"--input-format", "stream-json",
+				"--output-format", "stream-json",
+				"--resume", "39141fdf-48df-4fd1-93d3-76256f29dad5",
+			},
+			wantNoFlag: "--session-id",
+		},
+		{
+			// Sub-agent ids ("<parent>--sub-<seg>") are not uuids; claude
+			// demands one, so it mints its own instead of being handed a
+			// flag it would exit on.
+			name:    "non-uuid session id gets neither flag",
+			spawner: Spawner{},
+			opt: provider.SpawnOptions{
+				Workspace: t.TempDir(),
+				SessionID: "parent--sub-a1b2c3d4e5f6",
+			},
+			wantArgs: []string{
+				"-p", "--verbose",
+				"--input-format", "stream-json",
+				"--output-format", "stream-json",
+			},
+			wantNoFlag: "--session-id",
+		},
+		{
 			name:    "opt.ExtraArgs before resume",
 			spawner: Spawner{},
 			opt: provider.SpawnOptions{

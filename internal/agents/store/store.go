@@ -735,26 +735,48 @@ func RecoverInflight(layout config.Layout, sessionID, agentName, provider string
 // matching entry of sessions/<id>/agents.json. The store reads, edits,
 // writes — no concurrent writer because store + agent lifecycle share
 // one goroutine.
+//
+// Everything is attributed to s.provider — the provider that produced
+// this event — never to the entry's CURRENT Provider field. The two can
+// disagree: a provider switch saves agents.json first and kills the old
+// agent asynchronously, so an init event from the dying process can land
+// after the entry already points at the new provider. Writing under the
+// entry's field then files the old provider's id as the NEW provider's,
+// and the new provider's next spawn resumes a conversation it never had
+// ("No conversation found with session ID: ..."). A stale event still
+// parks its id under its OWN type — that is where it belongs — but it
+// must not touch CLISessionID once the entry has moved to another type.
 func (s *Store) persistCLISessionID(id string) error {
 	sess, err := session.Load(s.layout, s.sessionID)
 	if err != nil {
 		return err
 	}
+	scope := session.ProviderScope(s.provider)
 	updated := false
 	for i := range sess.Agents {
 		if sess.Agents[i].Name != s.agentName {
 			continue
 		}
-		if sess.Agents[i].CLISessionID == id {
+		// A store built without a provider (legacy/test paths) cannot tell
+		// stale from current; fall back to attributing the id to whatever
+		// the entry currently points at, as it always did.
+		if scope == "" {
+			scope = session.ProviderScope(sess.Agents[i].Provider)
+		}
+		sameScope := session.ProviderScope(sess.Agents[i].Provider) == scope
+		if sess.Agents[i].ProviderSessions[scope] == id &&
+			(!sameScope || sess.Agents[i].CLISessionID == id) {
 			return nil // already up to date
 		}
-		sess.Agents[i].CLISessionID = id
-		sess.Agents[i].LastActive = s.now().UTC()
-		// Keep ProviderSessions in sync so switch-back can resume.
 		if sess.Agents[i].ProviderSessions == nil {
 			sess.Agents[i].ProviderSessions = map[string]string{}
 		}
-		sess.Agents[i].ProviderSessions[sess.Agents[i].Provider] = id
+		// Keyed by type: any instance of this type can resume it later.
+		sess.Agents[i].ProviderSessions[scope] = id
+		if sameScope {
+			sess.Agents[i].CLISessionID = id
+			sess.Agents[i].LastActive = s.now().UTC()
+		}
 		updated = true
 		break
 	}
