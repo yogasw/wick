@@ -149,6 +149,7 @@ type settingsSetInput struct {
 	AutoResolveAfterDays string `wick:"desc=Close a ticket untouched this long, in days. 0 turns it off. Omit to leave unchanged."`
 	FollowupPrompt       string `wick:"textarea;desc=Instruction sent to the agent when a ticket goes stale. Omit to leave unchanged."`
 	AutoCreate           string `wick:"textarea;desc=JSON array of auto-create rules. Pass [] to remove them all. Omit to leave unchanged."`
+	Statuses             string `wick:"textarea;desc=JSON array of board statuses, in column order: [{\"key\":\"triage\",\"label\":\"Triage\"},{\"key\":\"shipped\",\"label\":\"Shipped\",\"terminal\":true}]. Keys are lowercase a-z0-9_ and are what tickets store; labels are display only. EXACTLY ONE must have terminal:true — that is the stage auto-resolve moves finished work to. Pass [] to return to the built-in set. Omit to leave unchanged."`
 }
 
 type attachInput struct {

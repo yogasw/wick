@@ -1766,6 +1766,7 @@
           {sessionId}
           projectId={activeProjectId ?? undefined}
           ticket={notesInfo?.ticket ?? null}
+          statuses={notesInfo?.statuses}
           noteCount={(notesInfo?.notes ?? []).length}
           onOpenTicket={(id) => { window.location.href = `${base}/sessions?project=${encodeURIComponent(activeProjectId ?? "")}&ticket=${encodeURIComponent(id)}`; }}
           onOpenNotes={() => { railTab = "notes"; }}

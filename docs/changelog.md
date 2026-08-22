@@ -10,6 +10,27 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v0.40.1](https://github.com/yogasw/wick/compare/v0.40.0...v0.40.1) — Board Columns
+
+_Released on 2026-08-22_
+
+### Added
+
+*   **Custom board columns:** Ticket statuses are now defined per project as an ordered list of custom stages, allowing teams to name their own workflow stages (e.g., `triage → coding → shipped`).
+    *   Exactly one column must be marked as the *finished* (`terminal`) stage. This is crucial for auto-resolve to move completed work and for the stale-followup timer to correctly identify work that should no longer be nagged. Board configurations missing a terminal column will be refused.
+    *   Renaming a column's display label is free.
+    *   Removing a column that still holds tickets is refused, preventing tickets from being stranded.
+    *   Leaving the column list untouched preserves the built-in `open`, `in_progress`, `waiting`, and `done` set.
+    *   The default status for new tickets (`ticket.Create`) is now taken from the project board's first column, rather than defaulting to "open".
+    *   The board, ticket page, and conversation rail dynamically draw their columns from the project configuration, with column accents following board order and the terminal stage always indicating completion.
+
+### Changed
+
+*   **Documentation:** Updated stale references to fixed ticket statuses within the `tickets` connector, `stale-followup` settings, and the `wick-tickets` skill to correctly reflect the new per-project board columns and terminal status logic. Specifically, `ticket_update` and `ticket_create` now point to project-defined columns, `stale-followup` uses the project's terminal column, and `wick-tickets` no longer lists only the four built-in statuses as valid.
+
+---
+
+
 ## [v0.40.0](https://github.com/yogasw/wick/compare/v0.39.10...v0.40.0) — Tickets & Notes
 
 _Released on 2026-08-22_

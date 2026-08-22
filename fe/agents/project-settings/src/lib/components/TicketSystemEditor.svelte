@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AutoCreateRule, TicketConfig, TicketField } from "$lib/types.js";
+  import type { AutoCreateRule, TicketConfig, TicketField, TicketStatus } from "$lib/types.js";
 
   type Props = {
     cfg: TicketConfig;
@@ -38,6 +38,79 @@
       options: raw.split(",").map((s) => s.trim()).filter((s) => s !== ""),
     });
   }
+
+  /* ── board statuses ──
+     Per project, because a team names its own stages. Two rules are
+     structural rather than cosmetic and are enforced here as well as on the
+     server: a board needs at least one column, and exactly one status must
+     be the finished stage — auto-resolve has to know where to move work
+     that is done. */
+  const BUILTIN_STATUSES: TicketStatus[] = [
+    { key: "open", label: "Open" },
+    { key: "in_progress", label: "In Progress" },
+    { key: "waiting", label: "Waiting" },
+    { key: "done", label: "Done", terminal: true },
+  ];
+
+  /* An unconfigured project shows the built-in set, so the editor starts
+     from what the board actually draws rather than an empty list. */
+  const statuses = $derived(
+    cfg.statuses && cfg.statuses.length > 0 ? cfg.statuses : BUILTIN_STATUSES,
+  );
+
+  function patchStatuses(next: TicketStatus[]) {
+    patch({ statuses: next });
+  }
+
+  function patchStatus(i: number, p: Partial<TicketStatus>) {
+    patchStatuses(statuses.map((s, idx) => (idx === i ? { ...s, ...p } : s)));
+  }
+
+  function addStatus() {
+    patchStatuses([...statuses, { key: "", label: "" }]);
+  }
+
+  function removeStatus(i: number) {
+    if (statuses.length <= 1) return; // a board needs a column
+    const next = statuses.filter((_, idx) => idx !== i);
+    // Removing the finished stage would leave auto-resolve nowhere to move
+    // work, so the last column inherits the mark.
+    if (!next.some((s) => s.terminal)) next[next.length - 1] = { ...next[next.length - 1], terminal: true };
+    patchStatuses(next);
+  }
+
+  /* Order is the column order, so moving one moves the board. */
+  function moveStatus(i: number, delta: number) {
+    const j = i + delta;
+    if (j < 0 || j >= statuses.length) return;
+    const next = [...statuses];
+    [next[i], next[j]] = [next[j], next[i]];
+    patchStatuses(next);
+  }
+
+  /* Terminal is exclusive: marking one unmarks the rest. */
+  function setTerminal(i: number) {
+    patchStatuses(statuses.map((s, idx) => ({ ...s, terminal: idx === i })));
+  }
+
+  /* Keys are stored on every ticket and typed into MCP calls, so they stay
+     slug-shaped; the wording lives in the label. */
+  function normaliseKey(raw: string): string {
+    return raw.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+  }
+
+  function statusError(s: TicketStatus, i: number): string {
+    const key = (s.key ?? "").trim();
+    if (key === "") return "key is required";
+    if (statuses.some((o, idx) => idx !== i && (o.key ?? "").trim() === key)) return "duplicate key";
+    return "";
+  }
+
+  const statusesValid = $derived(
+    statuses.length > 0 &&
+      statuses.every((s, i) => statusError(s, i) === "") &&
+      statuses.filter((s) => s.terminal).length === 1,
+  );
 
   /* ── auto-create rules ── */
   const rules = $derived(cfg.auto_create ?? []);
@@ -151,6 +224,128 @@
   </div>
 
   {#if enabled}
+    <!-- Board statuses. These are the board's columns, in order, so the
+         list IS the board layout — moving a row moves a column. -->
+    <div class="space-y-2">
+      <div>
+        <p class="text-xs font-medium text-black-800 dark:text-black-600">Board columns</p>
+        <p class="mt-1 text-[11px] leading-relaxed text-black-700 dark:text-black-600">
+          Name your own stages — the order here is the order on the board. The
+          <strong>key</strong> is what tickets store and what agents pass over MCP; the label is
+          display only. Exactly one column must be marked <strong>finished</strong>, because
+          auto-resolve needs somewhere to move work that is done.
+        </p>
+      </div>
+
+      {#each statuses as s, i (i)}
+        {@const err = statusError(s, i)}
+        <div class="rounded-lg border border-white-300 bg-white-200 p-2.5 dark:border-navy-600 dark:bg-navy-800">
+          <div class="flex items-center gap-2">
+            <span class="w-4 shrink-0 text-center text-[10px] text-black-600 dark:text-black-700">{i + 1}</span>
+            <div class="grid min-w-0 flex-1 gap-2 sm:grid-cols-[1fr_1fr]">
+              <label class="block">
+                <span class="mb-1 block text-[10px] font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Key</span>
+                <input
+                  value={s.key}
+                  placeholder="in_review"
+                  aria-label="Status key"
+                  oninput={(e) => patchStatus(i, { key: normaliseKey((e.target as HTMLInputElement).value) })}
+                  class={[
+                    "w-full rounded-lg border bg-white-100 px-2 py-1.5 font-mono text-xs text-black-900 outline-none dark:bg-navy-700 dark:text-white-100",
+                    err ? "border-neg-400 focus:border-neg-400" : "border-white-400 focus:border-green-500 dark:border-navy-600",
+                  ].join(" ")}
+                />
+              </label>
+              <label class="block">
+                <span class="mb-1 block text-[10px] font-medium uppercase tracking-wide text-black-700 dark:text-black-600">Label</span>
+                <input
+                  value={s.label ?? ""}
+                  placeholder="In review"
+                  aria-label="Status label"
+                  oninput={(e) => patchStatus(i, { label: (e.target as HTMLInputElement).value })}
+                  class="w-full rounded-lg border border-white-400 bg-white-100 px-2 py-1.5 text-xs text-black-900 outline-none focus:border-green-500 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100"
+                />
+              </label>
+            </div>
+
+            <div class="mt-5 flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                aria-label={"Move " + (s.label || s.key || "status") + " left"}
+                title="Earlier column"
+                disabled={i === 0}
+                onclick={() => moveStatus(i, -1)}
+                class="flex h-7 w-7 items-center justify-center rounded-lg text-black-700 transition-colors hover:bg-white-300 disabled:opacity-30 dark:text-black-600 dark:hover:bg-navy-600"
+              >
+                <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M4 10l4-4 4 4" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+              </button>
+              <button
+                type="button"
+                aria-label={"Move " + (s.label || s.key || "status") + " right"}
+                disabled={i === statuses.length - 1}
+                onclick={() => moveStatus(i, 1)}
+                class="flex h-7 w-7 items-center justify-center rounded-lg text-black-700 transition-colors hover:bg-white-300 disabled:opacity-30 dark:text-black-600 dark:hover:bg-navy-600"
+              >
+                <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M4 6l4 4 4-4" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+              </button>
+              <button
+                type="button"
+                aria-label={"Remove " + (s.label || s.key || "status")}
+                disabled={statuses.length <= 1}
+                title={statuses.length <= 1 ? "A board needs at least one column" : "Remove column"}
+                onclick={() => removeStatus(i)}
+                class="flex h-7 w-7 items-center justify-center rounded-lg text-black-700 transition-colors hover:bg-neg-100 hover:text-neg-400 disabled:opacity-30 dark:text-black-600"
+              >
+                <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="mt-2 flex flex-wrap items-center gap-3">
+            <label class="flex cursor-pointer items-center gap-1.5 text-[11px] text-black-800 dark:text-black-600">
+              <input
+                type="radio"
+                name="ticket-terminal-status"
+                checked={s.terminal === true}
+                aria-label={"Mark " + (s.label || s.key || "status") + " as the finished stage"}
+                onchange={() => setTerminal(i)}
+                class="h-3.5 w-3.5 text-green-600 focus:ring-green-500"
+              />
+              Finished stage
+            </label>
+            {#if err}
+              <span class="text-[11px] text-neg-400">{err}</span>
+            {/if}
+          </div>
+        </div>
+      {/each}
+
+      <div class="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onclick={addStatus}
+          class="rounded-lg border border-green-500 px-3 py-1.5 text-xs font-medium text-green-600 transition-colors hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-900/20"
+        >+ Add column</button>
+        {#if !statusesValid}
+          <span class="text-[11px] text-neg-400">
+            Fix the columns above before saving — every key must be filled and unique, and exactly
+            one column must be the finished stage.
+          </span>
+        {/if}
+      </div>
+
+      <p class="text-[11px] leading-relaxed text-black-700 dark:text-black-600">
+        Renaming a label is safe. Removing a column that still holds tickets is refused on save —
+        move those tickets first, so none of them drops out of sight.
+      </p>
+    </div>
+
     <!-- Field schema.
 
          Each field is its own bordered row rather than a cell in one wide

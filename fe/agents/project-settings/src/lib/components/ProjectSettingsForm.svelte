@@ -265,7 +265,11 @@
      page still answers "is this on?" without anything being expanded. */
   const ticketSummary = $derived.by(() => {
     if (ticketCfg.enabled !== true) return "Off — sessions here are plain chats.";
-    const parts = [`${(ticketCfg.fields ?? []).length} custom field(s)`];
+    const cols = (ticketCfg.statuses ?? []).length;
+    const parts = [
+      cols === 0 ? "default columns" : `${cols} columns`,
+      `${(ticketCfg.fields ?? []).length} custom field(s)`,
+    ];
     parts.push(
       ticketCfg.followup_after_sec
         ? `follow up after ${Math.round(ticketCfg.followup_after_sec / 60)}m`
