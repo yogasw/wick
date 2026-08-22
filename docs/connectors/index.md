@@ -30,6 +30,8 @@ A built-in is just a regular connector that calls `connectors.Register(...)` (or
 | [Wick Manager](./wickmanager) | `wickmanager` | Read and edit wick's own apps / jobs / tools / connectors / tray lifecycle. For asking the LLM to inspect or tweak wick itself, not third-party APIs. | runtime |
 | [Workflow](./workflow) | `workflow` | Create, edit, test, simulate, and run workflows over MCP — the LLM-facing surface for the [Workflows](/workflow/) feature. | runtime |
 | [Notifications](./notifications) | `notifications` | Send a browser push notification to a subscribed user by opaque PN ID. Pairs with the per-session subscribe bell on the agents UI. | runtime |
+| [Tickets](./tickets) | `tickets` | Read and manage wick tickets — the unit of work a project's sessions hang off, one ticket holding several sessions. Board CRUD, session attach/detach, and per-project ticket settings including auto-create rules. | runtime |
+| [Notes](./notes) | `notes` | Read and write notes attached to a ticket or a session — a running record that survives the conversation that produced it. Kept separate from `tickets` so it can be granted without board access. | runtime |
 | [HTTPBin](./httpbin) | `httpbin` | Sample plugin connector hitting httpbin.org — GET, POST, and status-code echo. No credentials; the smallest complete connector, useful as a plugin template. | plugin (sample) |
 | [CRUD CRUD](./crudcrud) | `crudcrud` | Demo connector wrapping the public crudcrud.com sandbox. Ships with [`cmd/lab`](https://github.com/yogasw/wick/tree/master/cmd/lab) only — useful as a copy-paste starting point. | lab sample |
 

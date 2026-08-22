@@ -32,6 +32,7 @@ import (
 	agentevent "github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
 	agentgate "github.com/yogasw/wick/internal/agents/gate"
+	agentnotes "github.com/yogasw/wick/internal/agents/notes"
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	agentproject "github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
@@ -45,6 +46,8 @@ import (
 	agentskills "github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/agents/ticket"
+	"github.com/yogasw/wick/internal/agents/ticketprompt"
 	// systemprompt "github.com/yogasw/wick/internal/agents/system-prompt" // disabled: ConnectorCatalog injection (see ConnectorCatalogLoader below)
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
@@ -60,9 +63,11 @@ import (
 	customconn "github.com/yogasw/wick/internal/connectors/custom"
 	customconnector "github.com/yogasw/wick/internal/connectors/customconnector"
 	dtconn "github.com/yogasw/wick/internal/connectors/datatables"
+	notesconn "github.com/yogasw/wick/internal/connectors/notes"
 	"github.com/yogasw/wick/internal/connectors/notifications"
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	subagents "github.com/yogasw/wick/internal/connectors/sub-agents"
+	ticketconn "github.com/yogasw/wick/internal/connectors/tickets"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
@@ -631,6 +636,13 @@ func NewServer() *Server {
 	agentsFactory.SystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt")
 	}
+	// Ticket / notes pointer: names the session's ticket and COUNTS its
+	// notes so the agent knows to read them through the notes connector.
+	// Read per Build, so a ticket attached (or a note added) mid-session
+	// shows up on the next spawn without a restart.
+	agentsFactory.TicketPointerLoader = func(sessionID string) string {
+		return ticketprompt.Pointer(agentsLayout, sessionID)
+	}
 	// Memory guard. Read per Build so mode and limits can change in the UI
 	// without a restart. An unset or "off" mode returns nil, which is the
 	// pre-guard behaviour: no scope, no oom_score_adj, no argv change.
@@ -776,6 +788,47 @@ func NewServer() *Server {
 			_ = agentsMgr.RefreshSession(sessionID)
 		},
 		OnSessionMeta: syncSessionMeta,
+		// Ticket auto-create: the project's rules can key off the opening
+		// text, which is only knowable here — not when the session was
+		// created. A project with no rules costs one meta read.
+		OnFirstUserMessage: func(sessionID, text string) {
+			sess, err := agentsession.Load(agentsLayout, sessionID)
+			if err != nil || sess.Meta.ProjectID == "" {
+				return
+			}
+			tk, made := ticket.EvaluateAutoCreate(ticket.AutoCreateDeps{
+				Layout: agentsLayout,
+				LoadRules: func(projectID string) ([]agentproject.AutoCreateRule, error) {
+					p, lerr := agentproject.Load(agentsLayout, projectID)
+					if lerr != nil {
+						return nil, lerr
+					}
+					if !p.Meta.Ticket.Enabled {
+						return nil, nil // ticket mode off: nothing to do
+					}
+					return p.Meta.Ticket.AutoCreate, nil
+				},
+				WriteBackPointer: func(sid, ticketID string) {
+					s, lerr := agentsession.Load(agentsLayout, sid)
+					if lerr != nil {
+						return
+					}
+					s.Meta.TicketID = ticketID
+					if serr := agentsession.SaveMeta(agentsLayout, sid, s.Meta); serr == nil {
+						syncSessionMeta(sid)
+					}
+				},
+			}, sess.Meta.ProjectID, sessionID, ticket.AutoCreateInput{
+				Origin:       string(sess.Meta.Origin),
+				ChannelKind:  channelKindOf(sess.Meta),
+				FirstMessage: text,
+				IsSubAgent:   sess.Meta.ParentSessionID != "",
+			})
+			if made {
+				log.Info().Str("session", sessionID).Str("ticket", tk.ID).
+					Msg("ticket auto-created from project rules")
+			}
+		},
 		OnLifecycle: func(ev agentpool.LifecycleEvent) {
 			log.Ctx(ev.Ctx).Debug().
 				Str("component", "lifecycle").
@@ -863,6 +916,25 @@ func NewServer() *Server {
 	// the pool + reap-notify) so the boot scan can notify too. The reaper
 	// self-terminates when no instances remain and respawns on the next add.
 	sessionworkspace.StartSweeper(agentsLayout)
+
+	// Ticket sweeper: wakes a stale ticket's agent with the project's
+	// follow-up prompt (role "user" + source "ticket" so the send SPAWNS,
+	// unlike the buffered reap-notify above — the prompt tells the agent to
+	// act now), and closes tickets idle past the project's window.
+	go ticket.Start(context.Background(), ticket.Deps{
+		Layout: agentsLayout,
+		ListProjects: func() ([]agentproject.Project, error) {
+			m := agentsMgr.Registry().Projects()
+			out := make([]agentproject.Project, 0, len(m))
+			for _, p := range m {
+				out = append(out, p)
+			}
+			return out, nil
+		},
+		SendFollowup: func(sessionID, text string) error {
+			return agentsPool.Send(context.Background(), sessionID, "", "ticket", "user", text)
+		},
+	})
 
 	// Wire the hook writer so Manager injects .claude/settings.local.json
 	// into every workspace on create or switch. The loader re-reads gate config
@@ -1304,6 +1376,17 @@ func NewServer() *Server {
 		// the workflow authoring surface.
 		connectors.Register(dtconn.Module(wfMgr.MCP))
 	}
+
+	// Tickets and notes are two connectors, not one: notes work on a
+	// session that belongs to no ticket, so note-taking has to be
+	// grantable without any access to the ticket board.
+	connectors.Register(ticketconn.Module(agentsLayout))
+	connectors.Register(notesconn.Module(agentsLayout))
+
+	// Notes follow their session when it changes ticket. Wired as a hook
+	// because internal/agents/notes already imports internal/agents/ticket
+	// to resolve a scope, so the ticket package cannot call it directly.
+	ticket.SetNotesMover(agentnotes.MoveForSession)
 
 	// wickmanager is a built-in single-instance connector that exposes
 	// wick's own management plane (apps, jobs, tools, connectors,
@@ -2941,4 +3024,35 @@ func toSchemaMap(v any) map[string]any {
 		return map[string]any{"type": "object"}
 	}
 	return m
+}
+
+// channelKindOf classifies a session's channel for ticket auto-create
+// rules: "dm", "channel", or "" when the session did not come from a
+// channel at all.
+//
+// Derived from the channel id rather than stored on the session, because
+// the id already carries the fact: Slack ids start with D for a direct
+// message and C/G for a channel, and a Telegram chat id is negative for a
+// group. That keeps "auto-ticket everything except DMs" expressible without
+// adding a field every transport would have to remember to set.
+func channelKindOf(m agentsession.Meta) string {
+	id := strings.TrimSpace(m.ChannelID)
+	if id == "" {
+		return ""
+	}
+	switch m.Origin {
+	case agentsession.OriginSlack:
+		switch id[0] {
+		case 'D':
+			return agentproject.ChannelKindDM
+		case 'C', 'G':
+			return agentproject.ChannelKindChannel
+		}
+	case agentsession.OriginTelegram:
+		if strings.HasPrefix(id, "-") {
+			return agentproject.ChannelKindChannel
+		}
+		return agentproject.ChannelKindDM
+	}
+	return agentproject.ChannelKindChannel
 }

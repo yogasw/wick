@@ -116,6 +116,38 @@ func (l Layout) ProjectManagedPath(id string) string {
 	return filepath.Join(l.ProjectDir(id), "files")
 }
 
+// ProjectTicketsDir holds a project's tickets
+// (`projects/<id>/tickets/`). Tickets are their own entities, not a
+// field on a session: one ticket can hold many sessions.
+func (l Layout) ProjectTicketsDir(projectID string) string {
+	return filepath.Join(l.ProjectDir(projectID), "tickets")
+}
+
+// TicketDir is one ticket's folder (`projects/<id>/tickets/<ticketID>/`).
+func (l Layout) TicketDir(projectID, ticketID string) string {
+	return filepath.Join(l.ProjectTicketsDir(projectID), ticketID)
+}
+
+// TicketFile is a ticket's own metadata.
+func (l Layout) TicketFile(projectID, ticketID string) string {
+	return filepath.Join(l.TicketDir(projectID, ticketID), "ticket.json")
+}
+
+// TicketNotesDir holds a ticket's notes, one JSON file per note. A
+// directory rather than an array inside ticket.json: notes are edited
+// concurrently by agents, and per-note files mean two writers touching
+// different notes cannot clobber each other.
+func (l Layout) TicketNotesDir(projectID, ticketID string) string {
+	return filepath.Join(l.TicketDir(projectID, ticketID), "notes")
+}
+
+// SessionNotesDir holds the notes of a session that belongs to no
+// ticket (`sessions/<id>/notes/`). A session inside a ticket resolves to
+// the ticket's notes instead — see notes.Resolve.
+func (l Layout) SessionNotesDir(sessionID string) string {
+	return filepath.Join(l.SessionDir(sessionID), "notes")
+}
+
 // SubSessionSep separates a parent session ID from a sub-agent child's
 // own segment. A child's ID carries its whole ancestry, which is what
 // lets SessionDir stay a pure function of the ID — no database lookup,

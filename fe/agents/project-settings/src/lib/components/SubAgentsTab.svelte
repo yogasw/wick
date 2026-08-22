@@ -24,6 +24,7 @@
   } from "@wick-fe/common-ui";
   import { toastError, toastOk } from "@wick-fe/common-stores";
   import { getProviderOptionModels } from "$lib/api.js";
+  import SettingsSection from "./SettingsSection.svelte";
 
   type Props = { projectID: string; base: string };
   let { projectID, base }: Props = $props();
@@ -150,25 +151,18 @@
 </script>
 
 {#if loading}
-  <p class="text-sm text-black-800 dark:text-black-600">Loading…</p>
+  <p class="py-16 text-center text-sm text-black-700 dark:text-black-600">Loading…</p>
 {:else if loadError}
-  <p class="text-sm text-rose-600 dark:text-rose-400">{loadError}</p>
+  <div class="rounded-xl border border-neg-400/40 bg-neg-100 px-4 py-3 text-sm text-neg-400">{loadError}</div>
 {:else if editing}
-  <div
-    class="flex flex-col gap-4 rounded-xl border border-white-300 bg-white-100 p-6 shadow-sm dark:border-navy-600 dark:bg-navy-700"
-  >
-    <div class="flex items-center gap-2">
-      <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">
-        {editing.id ? `Edit ${editing.key}` : "New agent"}
-      </h2>
-      {#if !editing.id && inherited.some((p) => p.key === editing?.key)}
-        <span
-          class="rounded px-1.5 py-0.5 text-[10px] font-medium text-cau-400 ring-1 ring-cau-400/40"
-        >
+  <SettingsSection title={editing.id ? `Edit ${editing.key}` : "New agent"}>
+    {#snippet action()}
+      {#if !editing?.id && inherited.some((p) => p.key === editing?.key)}
+        <span class="rounded px-1.5 py-0.5 text-[10px] font-medium text-cau-400 ring-1 ring-cau-400/40">
           shadows global
         </span>
       {/if}
-    </div>
+    {/snippet}
     <AgentProfileEditor
       profile={editing}
       {tags}
@@ -179,26 +173,32 @@
       oncancel={() => (editing = null)}
       ondelete={(p) => (pendingDelete = p)}
     />
-  </div>
+  </SettingsSection>
 {:else}
-  <div class="flex flex-col gap-6">
-    <!-- Panelled to match the General tab: these sections used to float on the
-         page background, which read as unfinished next to the settings form. -->
-    <section
-      class="rounded-xl border border-white-300 bg-white-100 p-6 shadow-sm dark:border-navy-600 dark:bg-navy-700"
+  <!-- Same card wrapper as the General tab, so switching tabs no longer
+       changes the width, padding, or heading weight of what you are reading. -->
+  <div class="flex flex-col gap-4">
+    <SettingsSection
+      title="This project"
+      subtitle="Roles only sessions in this project can delegate to. Click a role to edit it; use ⋮ for its other actions."
     >
-      <div class="mb-1 flex items-center justify-between gap-3">
-        <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">This project</h2>
+      {#snippet action()}
         <Button variant="secondary" size="sm" onclick={startNew}>+ New agent</Button>
-      </div>
-      <p class="mb-4 text-xs text-black-700 dark:text-black-600">
-        Roles only sessions in this project can delegate to. Click a role to edit it; use
-        ⋮ for its other actions.
-      </p>
+      {/snippet}
+
       {#if owned.length === 0}
-        <p class="text-xs text-black-700 dark:text-black-600">
-          No roles of its own yet.
-        </p>
+        <div class="flex flex-col items-center gap-3 rounded-lg border border-dashed border-white-400 py-8 text-center dark:border-navy-600">
+          <svg viewBox="0 0 16 16" class="h-8 w-8 text-black-600 dark:text-black-700" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <circle cx="8" cy="4" r="2.5"></circle>
+            <circle cx="3.5" cy="12" r="2"></circle>
+            <circle cx="12.5" cy="12" r="2"></circle>
+            <path d="M8 6.5v2M8 8.5H4.5a1 1 0 00-1 1v.5M8 8.5h3.5a1 1 0 011 1v.5" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+          <p class="text-xs text-black-700 dark:text-black-600">
+            No project-specific roles yet.<br />Add one, or override a global role below.
+          </p>
+          <Button variant="secondary" size="sm" onclick={startNew}>+ New agent</Button>
+        </div>
       {:else}
         <ul class="flex flex-col gap-2">
           {#each owned as p (p.id)}
@@ -218,18 +218,12 @@
           {/each}
         </ul>
       {/if}
-    </section>
+    </SettingsSection>
 
-    <section
-      class="rounded-xl border border-white-300 bg-white-100 p-6 shadow-sm dark:border-navy-600 dark:bg-navy-700"
+    <SettingsSection
+      title="Inherited from global"
+      subtitle="Available here but owned globally. Override one to keep a project-specific copy — the global role stays untouched everywhere else."
     >
-      <h2 class="mb-1 text-sm font-semibold text-black-900 dark:text-white-100">
-        Inherited from global
-      </h2>
-      <p class="mb-4 text-xs text-black-700 dark:text-black-600">
-        Available here but owned globally. Override one to keep a project-specific copy —
-        the global role stays untouched everywhere else.
-      </p>
       {#if availableToOverride.length === 0}
         <p class="text-xs text-black-700 dark:text-black-600">
           {inherited.length === 0
@@ -241,7 +235,7 @@
           {#each availableToOverride as p (p.id)}
             <li>
               <div
-                class="flex items-center gap-3 rounded-lg border border-white-300 bg-white-100 px-4 py-3 dark:border-navy-600 dark:bg-navy-800"
+                class="flex items-center gap-3 rounded-lg border border-white-300 bg-white-100 px-4 py-3 transition-colors hover:border-white-400 dark:border-navy-600 dark:bg-navy-800 dark:hover:border-navy-500"
               >
                 <span class="min-w-0 flex-1">
                   <span class="block truncate text-sm font-medium text-black-900 dark:text-white-100">
@@ -266,7 +260,7 @@
           {/each}
         </ul>
       {/if}
-    </section>
+    </SettingsSection>
   </div>
 {/if}
 

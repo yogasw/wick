@@ -1,0 +1,94 @@
+// Package ticketprompt builds the short prompt block that tells an agent
+// which ticket its session is on and how many notes are waiting.
+//
+// Its own package because it reads BOTH stores: internal/agents/notes
+// already imports internal/agents/ticket (to resolve a session's scope), so
+// putting this in either one would close an import cycle.
+package ticketprompt
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/notes"
+	"github.com/yogasw/wick/internal/agents/session"
+	"github.com/yogasw/wick/internal/agents/ticket"
+)
+
+// Pointer returns the short system-prompt block telling a session which
+// ticket it is working on and how many notes are waiting — a count and an
+// id, never the note bodies.
+//
+// That distinction is the whole point. A ticket collects notes for as long
+// as the work lasts; inlining them would charge that growing cost on every
+// turn, forever. A pointer costs the same whether there is one note or
+// fifty, and the agent reads the ones that matter through the notes
+// connector.
+//
+// Returns "" when there is nothing worth saying: no ticket and no notes.
+func Pointer(layout config.Layout, sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	sess, err := session.Load(layout, sessionID)
+	if err != nil {
+		return ""
+	}
+
+	var tk ticket.Ticket
+	hasTicket := false
+	if sess.Meta.ProjectID != "" {
+		// FindBySession, not the session's TicketID: the ticket's own
+		// session list is the record, and a stale back-pointer must not
+		// make us announce a ticket this session is not on.
+		if found, ok := ticket.FindBySession(layout, sess.Meta.ProjectID, sessionID); ok {
+			tk, hasTicket = found, true
+		}
+	}
+
+	scope := notes.Scope{SessionID: sessionID}
+	if hasTicket {
+		scope = notes.Scope{ProjectID: tk.ProjectID, TicketID: tk.ID}
+	}
+	count, cerr := notes.Counts(layout, scope)
+	if cerr != nil {
+		count = notes.Count{}
+	}
+	if !hasTicket && count.Visible == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("## Ticket and notes\n\n")
+	if hasTicket {
+		fmt.Fprintf(&b, "This session is working on ticket %s", tk.ID)
+		if tk.Title != "" {
+			fmt.Fprintf(&b, " — %q", tk.Title)
+		}
+		fmt.Fprintf(&b, " (status: %s", tk.Status)
+		if n := len(tk.Sessions); n > 1 {
+			fmt.Fprintf(&b, ", %d sessions", n)
+		}
+		b.WriteString(").\n")
+	}
+	switch {
+	case count.Visible == 0:
+		b.WriteString("It has no notes yet. ")
+	case count.OpenTasks > 0:
+		fmt.Fprintf(&b, "It carries %d note(s), %d of them unchecked. ", count.Visible, count.OpenTasks)
+	default:
+		fmt.Fprintf(&b, "It carries %d note(s). ", count.Visible)
+	}
+	b.WriteString("Notes are what earlier sessions left behind: findings, decisions, dead ends.\n\n")
+	if count.Visible > 0 {
+		b.WriteString("Read them with the notes connector (notes_list) before continuing work here — ")
+		b.WriteString("they are not in this prompt.\n")
+	}
+	b.WriteString("Write one (notes_add) whenever you learn something a later session would otherwise rediscover. ")
+	b.WriteString("See the wick-notes skill.")
+	if hasTicket {
+		b.WriteString(" Keep the ticket's status current through the tickets connector (wick-tickets skill).")
+	}
+	return b.String()
+}

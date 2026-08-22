@@ -64,6 +64,43 @@ export interface ProjectSettingsData {
   /** The global policy this project falls back to. Shown read-only so the
       operator can see what the project's hosts are appended TO. */
   widget_inherited?: WidgetPolicy;
+  /** Ticket-mode configuration ("Ticket system" section). */
+  ticket?: TicketConfig;
+}
+
+/** One custom field in the project's ticket schema. */
+export interface TicketField {
+  key: string;
+  label: string;
+  type: "text" | "select";
+  options?: string[];
+  required?: boolean;
+}
+
+/** One rule deciding when a new session is given a ticket with nobody
+    asking. Rules are tried in order and the FIRST match wins, so a
+    disabled narrow rule above a broad one carves an exception out of it —
+    that is how "everything from Slack except DMs" is written. */
+export interface AutoCreateRule {
+  /** "ui" | "slack" | "telegram" | "rest" | "*" */
+  origin: string;
+  /** "" (any) | "dm" | "channel" | "thread" — channel origins only. */
+  channel_kind?: string;
+  /** "" | "contains:<text>" | "regex:<expr>", tested against the first message. */
+  match?: string;
+  /** Title template; "{message}" and "{origin}" are substituted. */
+  title?: string;
+  enabled: boolean;
+}
+
+/** A project's ticket-mode configuration. Zero value = feature off. */
+export interface TicketConfig {
+  enabled?: boolean;
+  fields?: TicketField[];
+  followup_after_sec?: number;
+  followup_prompt?: string;
+  auto_resolve_after_sec?: number;
+  auto_create?: AutoCreateRule[];
 }
 
 export interface UpdateProjectRequest {

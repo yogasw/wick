@@ -19,8 +19,10 @@ import (
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	dtconn "github.com/yogasw/wick/internal/connectors/datatables"
+	notesconn "github.com/yogasw/wick/internal/connectors/notes"
 	"github.com/yogasw/wick/internal/connectors/notifications"
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
+	ticketconn "github.com/yogasw/wick/internal/connectors/tickets"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
 	"github.com/yogasw/wick/internal/enc"
@@ -31,8 +33,8 @@ import (
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/pkg/pwa"
-	"github.com/yogasw/wick/pkg/safeexec"
 	"github.com/yogasw/wick/internal/userconfig"
+	"github.com/yogasw/wick/pkg/safeexec"
 
 	"github.com/rs/zerolog/log"
 )
@@ -145,6 +147,10 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 		connectors.Register(wfconn.ModuleWithRunner(stdioWfMgr.MCP, stdioRunner))
 		connectors.Register(dtconn.Module(stdioWfMgr.MCP))
 	}
+
+	// Same pair as the HTTP server: stdio clients get tickets and notes too.
+	connectors.Register(ticketconn.Module(stdioWfLayout))
+	connectors.Register(notesconn.Module(stdioWfLayout))
 
 	connectors.RegisterProfile(configsSvc.Profile())
 

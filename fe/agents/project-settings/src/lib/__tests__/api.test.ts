@@ -173,7 +173,8 @@ describe("getProviderOptionModels", () => {
     const models = await getProviderOptionModels("wick", "x", { entry: "set1" });
     const [url] = mockFetch.mock.calls[0] as [string];
     expect(url).toBe(`${BASE}/providers/options/wick/x/models?entry=set1`);
-    expect(models).toEqual([{ id: "gemini-3-pro", label: "Gemini 3 Pro" }]);
+    // `default` is filled in for every row so one shape satisfies both pickers.
+    expect(models).toEqual([{ id: "gemini-3-pro", label: "Gemini 3 Pro", default: false }]);
   });
 
   // A provider whose vendor is unreachable must not break the settings form;

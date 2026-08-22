@@ -47,6 +47,21 @@
     duplicateWorkspace, renameWorkspace, removeWorkspace,
   } from "../api/workspace.js";
   import { listSchedules, createSchedule, cancelSchedule, pauseSchedule, resumeSchedule, rescheduleSchedule, runScheduleNow } from "../api/schedules.js";
+  import { listNotes } from "../api/tickets.js";
+  import type { NotesResponse } from "../types/agents.js";
+  import TicketPanel from "./TicketPanel.svelte";
+  import NotesRail from "./NotesRail.svelte";
+  import RailMore from "./RailMore.svelte";
+  import { getRailPrefs, saveRailPrefs } from "../api/tickets.js";
+  import {
+    clampVisible,
+    emptyRailPrefs,
+    moveInOrder,
+    orderTabs,
+    parseRailPrefs,
+    splitRail,
+    type RailPrefs,
+  } from "../railPrefs.js";
   import BrowserPanel from "./BrowserPanel.svelte";
   import { listInstances as listBrowserInstances } from "../api/browser.js";
 
@@ -159,7 +174,7 @@
   let sseStatus = $state<SSEStatus>("connecting");
 
   /* ── vertical rail tabs ────────────────────────────────────────── */
-  type RailTab = "context" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents";
+  type RailTab = "context" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents" | "ticket" | "notes";
   let railTab = $state<RailTab | null>(null);
 
   /* ── thread scroll ref ─────────────────────────────────────────── */
@@ -724,6 +739,17 @@
       .catch((e: unknown) => toastError(`Schedules: ${e instanceof Error ? e.message : String(e)}`));
   }
 
+  /* Notes rail data. A session that belongs to a ticket resolves to the
+     TICKET's notes server-side, so this one call answers both "which
+     ticket is this?" and "what has been learned". A failed load (older
+     server) just leaves the tab hidden. */
+  let notesInfo = $state<NotesResponse | null>(null);
+  function loadTicket() {
+    run(listNotes(base, { sessionId }).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { notesInfo = res; })
+      .catch(() => { notesInfo = null; });
+  }
+
   /* Rehydrate a question that arrived while the tab was closed; never
    * clobber an ask already shown by a live SSE event. */
   function loadPendingAsk() {
@@ -1273,6 +1299,7 @@
     loadAgentRoles();
     loadWorkspace();
     loadSchedules();
+    loadTicket();
     loadProviderOptions();
     loadProjectOptions();
     loadPendingAsk();
@@ -1325,6 +1352,19 @@
       icon: '<circle cx="8" cy="4" r="2.5"></circle><circle cx="3.5" cy="12" r="2"></circle><circle cx="12.5" cy="12" r="2"></circle><path d="M8 6.5v2M8 8.5H4.5a1 1 0 00-1 1v.5M8 8.5h3.5a1 1 0 011 1v.5" stroke-linecap="round" stroke-linejoin="round"></path>',
     },
     {
+      id: "ticket",
+      label: "Ticket",
+      icon: '<path d="M2 6a1 1 0 011-1h10a1 1 0 011 1v1.5a1.5 1.5 0 000 3V12a1 1 0 01-1 1H3a1 1 0 01-1-1v-1.5a1.5 1.5 0 000-3V6z" stroke-linejoin="round"></path><path d="M9.5 5v1.2M9.5 7.7v1.2M9.5 10.4V12" stroke-linecap="round"></path>',
+    },
+    {
+      // Notes are their OWN rail, not part of the ticket one: they work on a
+      // chat with no ticket at all. A ticket only decides whose notes these
+      // are, which the Notes panel states in a line.
+      id: "notes",
+      label: "Notes",
+      icon: '<path d="M4 2.5h8v11H4z" stroke-linejoin="round"></path><path d="M6 5.5h4M6 8h4M6 10.5h2.5" stroke-linecap="round"></path>',
+    },
+    {
       id: "context",
       label: "Context",
       icon: '<path d="M2 4a1 1 0 011-1h3l2 2h5a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke-linejoin="round"></path>',
@@ -1364,9 +1404,68 @@
     railTabsAll.filter(
       (t) =>
         (t.id !== "browser" || hasBrowserInstance) &&
-        (t.id !== "subagents" || subAgents.length > 0),
+        (t.id !== "subagents" || subAgents.length > 0) &&
+        // Notes need nothing but a reachable scope; the Ticket tab needs a
+        // project, since a chat outside one cannot hold a ticket.
+        (t.id !== "notes" || notesInfo !== null) &&
+        (t.id !== "ticket" || (notesInfo !== null && activeProjectId !== null)),
     ),
   );
+
+  /* ── rail layout: order, how many in the strip, the rest under More ──
+     The rail has outgrown a fixed strip, so the arrangement is the user's
+     and is saved to their profile. Loaded once; saved (debounced) on every
+     change so reordering does not fire a request per click. */
+  let railPrefs = $state<RailPrefs>(emptyRailPrefs);
+  $effect(() => {
+    run(getRailPrefs(base).pipe(Effect.provide(WickClientLayer)))
+      .then((p) => { railPrefs = parseRailPrefs(p); })
+      .catch(() => { /* defaults are fine — an older server has no endpoint */ });
+  });
+
+  let railSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  function persistRail() {
+    clearTimeout(railSaveTimer);
+    railSaveTimer = setTimeout(() => {
+      run(saveRailPrefs(base, { order: railPrefs.order, visible: railPrefs.visible })
+        .pipe(Effect.provide(WickClientLayer)))
+        .catch(() => { /* a layout preference is not worth interrupting for */ });
+    }, 500);
+  }
+
+  /* Reordering acts on the full list, so a first-time drag has something to
+     reorder: seed the saved order from what is on screen. */
+  function moveRailTab(id: string, delta: number) {
+    const base = railPrefs.order.length > 0 ? railPrefs.order : railOrdered.map((t) => t.id);
+    railPrefs = { ...railPrefs, order: moveInOrder(base, id, delta) };
+    persistRail();
+  }
+
+  function setRailVisible(n: number) {
+    railPrefs = { ...railPrefs, visible: clampVisible(n) };
+    persistRail();
+  }
+
+  const railOrdered = $derived(orderTabs(railTabs, railPrefs.order));
+
+  /* "Loud" = carries a badge or is working. Those are promoted into the
+     strip: a count nobody can see is worse than a shifted position. */
+  const railSplit = $derived(
+    splitRail(
+      railOrdered,
+      railPrefs.visible,
+      (id) => railCount(id as RailTab) > 0 || railBusy(id as RailTab),
+      railTab,
+    ),
+  );
+  const hiddenCount = $derived(
+    railSplit.overflow.reduce((sum, t) => sum + railCount(t.id as RailTab), 0),
+  );
+  const hiddenBusy = $derived(railSplit.overflow.some((t) => railBusy(t.id as RailTab)));
+  // Close the Notes panel if notes stop being reachable.
+  $effect(() => {
+    if ((railTab === "ticket" || railTab === "notes") && notesInfo === null) railTab = null;
+  });
   // If the Browser panel is open but its tab just disappeared, close the panel.
   $effect(() => {
     if (railTab === "browser" && !hasBrowserInstance) railTab = null;
@@ -1661,6 +1760,25 @@
           class="absolute left-0 top-0 z-10 h-full w-1.5 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-green-500/40 focus-visible:bg-green-500/40 transition-colors"
         ></button>
         <div class="flex-1 overflow-hidden dark:bg-navy-700" data-scm-host bind:this={scmHostEl}></div>
+      {:else if railTab === "ticket" && notesInfo}
+        <TicketPanel
+          {base}
+          {sessionId}
+          projectId={activeProjectId ?? undefined}
+          ticket={notesInfo?.ticket ?? null}
+          noteCount={(notesInfo?.notes ?? []).length}
+          onOpenTicket={(id) => { window.location.href = `${base}/sessions?project=${encodeURIComponent(activeProjectId ?? "")}&ticket=${encodeURIComponent(id)}`; }}
+          onOpenNotes={() => { railTab = "notes"; }}
+          onChanged={loadTicket}
+        />
+      {:else if railTab === "notes" && notesInfo}
+        <NotesRail
+          {base}
+          {sessionId}
+          ticket={notesInfo?.ticket ?? null}
+          info={notesInfo}
+          onChanged={loadTicket}
+        />
       {:else if railTab === "context"}
         <ContextPanel
           cwd={cwdVal}
@@ -1816,6 +1934,25 @@
         <div class="flex-1 overflow-hidden flex flex-col">
           {#if railTab === "source"}
             <div class="flex-1 overflow-hidden dark:bg-navy-700" data-scm-host-mobile bind:this={scmHostMobileEl}></div>
+          {:else if railTab === "ticket" && notesInfo}
+            <TicketPanel
+              {base}
+              {sessionId}
+              projectId={activeProjectId ?? undefined}
+              ticket={notesInfo?.ticket ?? null}
+              noteCount={(notesInfo?.notes ?? []).length}
+              onOpenTicket={(id) => { window.location.href = `${base}/sessions?project=${encodeURIComponent(activeProjectId ?? "")}&ticket=${encodeURIComponent(id)}`; }}
+              onOpenNotes={() => { railTab = "notes"; }}
+              onChanged={loadTicket}
+            />
+          {:else if railTab === "notes" && notesInfo}
+            <NotesRail
+              {base}
+              {sessionId}
+              ticket={notesInfo?.ticket ?? null}
+              info={notesInfo}
+              onChanged={loadTicket}
+            />
           {:else if railTab === "context"}
             <ContextPanel
               cwd={cwdVal}
@@ -1949,7 +2086,7 @@
   <div
     class="fixed top-1/2 right-0 z-20 -translate-y-1/2 flex flex-col rounded-l-xl border border-r-0 border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md overflow-hidden"
   >
-    {#each railTabs as tab, i}
+    {#each railSplit.shown as tab, i}
       <button
         type="button"
         title={tab.label}
@@ -2038,6 +2175,24 @@
         >{tab.label}</span>
       </button>
     {/each}
+
+    <!-- Overflow. Rendered whenever anything is hidden, or when there are
+         enough tabs to be worth arranging — otherwise the control would be
+         unreachable on a short list. -->
+    {#if railSplit.overflow.length > 0 || railOrdered.length > 2}
+      <RailMore
+        overflow={railSplit.overflow}
+        all={railOrdered}
+        visible={clampVisible(railPrefs.visible)}
+        {hiddenCount}
+        {hiddenBusy}
+        activeId={railTab}
+        countFor={(id) => railCount(id as RailTab)}
+        onSelect={(id) => toggleRail(id as RailTab)}
+        onMove={moveRailTab}
+        onVisible={setRailVisible}
+      />
+    {/if}
   </div>
 </div>
 

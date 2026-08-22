@@ -52,16 +52,25 @@ export async function getProviderOptionModels(
   type: string,
   name: string,
   opts?: { entry?: string },
-): Promise<ProviderModelOption[]> {
+): Promise<ProviderModelOptionResolved[]> {
   const base = getBase();
   const q = opts?.entry ? `?entry=${encodeURIComponent(opts.entry)}` : "";
   const path = `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${q}`;
   try {
     const r = await get<{ models?: ProviderModelOption[] | null }>(path);
-    return r.models ?? [];
+    // `default` is omitted by the server for non-default models, but the
+    // pickers that consume this list require the flag to be present — fill
+    // it here so one shape satisfies both.
+    return (r.models ?? []).map((m) => ({ ...m, default: m.default === true }));
   } catch {
     return [];
   }
+}
+
+/** getProviderOptionModels' return shape: every field the pickers require,
+    with `default` resolved to a concrete boolean. */
+export interface ProviderModelOptionResolved extends ProviderModelOption {
+  default: boolean;
 }
 
 export async function updateProject(id: string, req: UpdateProjectRequest): Promise<void> {
@@ -108,6 +117,25 @@ export async function createProject(req: UpdateProjectRequest): Promise<string> 
     throw new ApiError(resp.status, body || `HTTP ${resp.status}`);
   }
   return `${base}/sessions`;
+}
+
+/** Saves the project's ticket-mode configuration (the "Ticket system"
+    section) — its own endpoint, separate from the general meta update. */
+export async function saveTicketConfig(
+  id: string,
+  cfg: import("./types.js").TicketConfig,
+): Promise<void> {
+  const base = getBase();
+  const resp = await fetch(`${base}/api/projects/${encodeURIComponent(id)}/ticket-config`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    body: JSON.stringify(cfg),
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new ApiError(resp.status, body || `HTTP ${resp.status}`);
+  }
 }
 
 export async function deleteProject(id: string): Promise<void> {

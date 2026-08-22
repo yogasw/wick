@@ -131,6 +131,13 @@ type PoolConfig struct {
 	// new title broadcasts over SSE — otherwise the sidebar/list would
 	// only catch up on the next page load. Optional; nil = no callback.
 	OnSessionMeta func(sessionID string)
+	// OnFirstUserMessage fires once per session, right after the first
+	// user message has been persisted and the auto-label derived. Wired
+	// to the ticket auto-create evaluator: its rules can key off the
+	// message text, which is only knowable at this point — not when the
+	// session was created. Runs in the caller's goroutine, so keep it
+	// cheap; failures are the callback's own to log. Optional.
+	OnFirstUserMessage func(sessionID, text string)
 	// OnLifecycle fires when the pool transitions a session+agent's
 	// lifecycle (Spawning, Killed). Idle/Working transitions are
 	// implicit from event flow and are NOT routed here — UIs that
@@ -1433,6 +1440,12 @@ func (p *Pool) setLabelIfEmpty(sessionID, text string) {
 	// sidebars/lists pick it up live instead of on next page load.
 	if p.cfg.OnSessionMeta != nil {
 		p.cfg.OnSessionMeta(sessionID)
+	}
+	// This branch IS "the session just got its first user message" — the
+	// label was empty until now — so it is where ticket auto-create gets
+	// its one chance to read the opening text.
+	if p.cfg.OnFirstUserMessage != nil {
+		p.cfg.OnFirstUserMessage(sessionID, text)
 	}
 }
 

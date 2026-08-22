@@ -115,8 +115,12 @@ type ProjectSettingsResponse struct {
 	// editor shows it read-only so the operator can see what the project's
 	// own hosts are being appended TO, instead of having to guess.
 	WidgetInherited agentsconfig.WidgetPolicy `json:"widget_inherited"`
-	ChatCount       int                       `json:"chat_count"`
-	CreatedAt       string                    `json:"created_at"`
+	// Ticket is this project's ticket-mode configuration, edited in the
+	// settings SPA's "Ticket system" section and saved via the separate
+	// PUT /api/projects/{id}/ticket-config endpoint.
+	Ticket    project.TicketConfig `json:"ticket"`
+	ChatCount int                  `json:"chat_count"`
+	CreatedAt string               `json:"created_at"`
 	PresetList      []string                  `json:"preset_list"`
 	ProviderList    []ProviderListItem        `json:"provider_list"`
 	Pinned          []ProjectPinnedSession    `json:"pinned"`
@@ -227,6 +231,7 @@ func apiProjectDetail(c *tool.Ctx) {
 		Pinned:          []ProjectPinnedSession{},
 		Widget:          p.Meta.Widget,
 		WidgetInherited: globalWidgetPolicy(),
+		Ticket:          p.Meta.Ticket,
 	}
 
 	// Chats, not sessions: a sub-agent runs in its leader's project but is
