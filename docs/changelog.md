@@ -6,17 +6,29 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Added
-
-*   **Tickets as entities, with notes and a project-settings revamp:**
-    *   Tickets are now their own on-disk entities (`projects/<id>/tickets/<T-XXXX>/`) holding zero or more sessions, rather than a field on the session itself — a fresh session can now continue an existing ticket's status, assignee, fields, and notes.
-    *   A kanban board on the project page shows tickets as cards, with an Untracked rail for chats on no ticket; drag a ticket between columns to change status, drag a chat onto a card to attach it, or onto a column to make it a new ticket.
-    *   Notes: a separate markdown note subsystem, scoped to a ticket (shared by every session on it) or to a standalone session, each with an `audience` (ai/human/both) and an optional `hidden` flag. Note bodies are never injected into the system prompt — sessions get a pointer naming the ticket and note count instead.
-    *   Two new MCP connectors, [`tickets`](/connectors/tickets) and [`notes`](/connectors/notes) (kept separate so note-taking can be granted without board access), plus the `wick-tickets` and `wick-notes` built-in skills. The earlier `wick_ticket_get`/`wick_ticket_set` meta-tools are removed in favor of the `tickets` connector.
-    *   Per-project [auto-create rules](/guide/agents/projects#auto-create-rules) that give a new session a ticket automatically based on origin, channel kind, and a contains/regex match on its first message.
-    *   Project settings revamped: single-column sections, collapsible editors, and background auto-save with no Save button.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v0.40.0](https://github.com/yogasw/wick/compare/v0.39.10...v0.40.0) — Tickets & Notes
+
+_Released on 2026-08-22_
+
+### Added
+
+*   **Tickets as entities, with notes, and a project settings revamp:**
+    *   Tickets are now their own on-disk entities (`projects/<id>/tickets/<T-XXXX>/`) holding zero or more sessions, rather than a field on the session itself. This allows a fresh session to continue an existing ticket's status, assignee, fields, and notes.
+    *   A kanban board on the project page shows tickets as cards, including an Untracked rail for chats not associated with a ticket. Tickets can be dragged between columns to change status, chats can be dragged onto a card to attach them, or onto a column to create a new ticket. Board filters (statuses, assignee, view mode) are saved per user per project in UserMetadata, preserving individual views. The board is optimized to only render visible items, showing totals without holding all data.
+    *   Tickets support automated lifecycle management: stale tickets past a follow-up window will wake the session's agent with the project's follow-up prompt, while idle tickets past an auto-resolve window will close.
+    *   For enabled projects, sessions initially without a ticket are automatically adopted as open, making the feature retroactive. Ticket mode is per project and off by default, ensuring no changes to existing projects.
+    *   Notes are a separate markdown subsystem, scoped either to a ticket (shared by every session on it) or to a standalone session. Each note has an `audience` (ai/human/both) and an optional `hidden` flag. Note bodies are never injected into the system prompt; sessions receive a fixed-size pointer naming the ticket and note count, with agents reading necessary details via MCP. Notes travel with a session when attached, moved, or detached.
+    *   Two new MCP connectors, [`tickets`](/connectors/tickets) and [`notes`](/connectors/notes), have been added. They are kept separate to allow granular control over permissions (e.g., granting note-taking without full board access). The `wick-tickets` and `wick-notes` built-in skills are also included. The earlier `wick_ticket_get`/`wick_ticket_set` meta-tools are removed in favor of the `tickets` connector.
+    *   Per-project [auto-create rules](/guide/agents/projects#auto-create-rules) allow new sessions to automatically receive a ticket based on origin, channel kind, and a contains/regex match on their first message. Rules are tried in order, with the first match winning, enabling disabled narrow rules to carve exceptions out of broader ones.
+    *   When deleting a ticket, the system now asks what should happen to its associated chats, providing a count. Moving the last chat off a ticket offers to remove the ticket's husk, but actions that destroy conversations always require confirmation.
+    *   Project settings have been revamped with single-column sections, collapsible editors displaying their setting in the subtitle, and background auto-save without a dedicated Save button. A delayed save indicator ensures fast saves do not paint a spinner.
+
+---
+
 
 ## [v0.39.10](https://github.com/yogasw/wick/compare/v0.39.9...v0.39.10) — Session Management
 
