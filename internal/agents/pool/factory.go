@@ -95,6 +95,15 @@ type ClaudeFactory struct {
 	// the preset body so the catalog can't override either layer.
 	ConnectorCatalogLoader func() string
 
+	// TicketPointerLoader (optional) returns a short block naming the
+	// ticket this session belongs to and how many notes it carries — a
+	// COUNT, never the note bodies. It exists so the agent knows the
+	// notes are there and reads them through the notes connector when
+	// they matter, instead of the prompt growing with every note ever
+	// written on a long-lived ticket. Empty string = nothing to point at
+	// (no ticket, no notes) and nothing is appended.
+	TicketPointerLoader func(sessionID string) string
+
 	// SpawnLogger (optional) writes one jsonl per spawn under
 	// `<base>/backends/spawns/`. Each spawn emits `start` on Build +
 	// `exit` from the OnExit hook so the Backends UI can list spawn
@@ -219,6 +228,17 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	// only on the first turn where channels inject a one-time context
 	// message.
 	presetContent += "\n\n" + sessionIdentityBlock(opt.SessionID, opt.Origin, opt.Title, opt.TitleCustom)
+
+	// Ticket / notes pointer — a COUNT and an id, never the note bodies.
+	// A ticket accumulates notes for as long as the work lasts, so
+	// inlining them would charge that growing cost on every turn forever;
+	// the agent reads what it needs through the notes connector instead.
+	// Fixed size, and omitted entirely when there is nothing to point at.
+	if f.TicketPointerLoader != nil {
+		if line := strings.TrimSpace(f.TicketPointerLoader(opt.SessionID)); line != "" {
+			presetContent += "\n\n" + line
+		}
+	}
 
 	bypassPerms := false
 	if f.PermissionModeLoader != nil {

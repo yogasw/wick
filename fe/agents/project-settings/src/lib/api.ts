@@ -52,16 +52,25 @@ export async function getProviderOptionModels(
   type: string,
   name: string,
   opts?: { entry?: string },
-): Promise<ProviderModelOption[]> {
+): Promise<ProviderModelOptionResolved[]> {
   const base = getBase();
   const q = opts?.entry ? `?entry=${encodeURIComponent(opts.entry)}` : "";
   const path = `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${q}`;
   try {
     const r = await get<{ models?: ProviderModelOption[] | null }>(path);
-    return r.models ?? [];
+    // `default` is omitted by the server for non-default models, but the
+    // pickers that consume this list require the flag to be present — fill
+    // it here so one shape satisfies both.
+    return (r.models ?? []).map((m) => ({ ...m, default: m.default === true }));
   } catch {
     return [];
   }
+}
+
+/** getProviderOptionModels' return shape: every field the pickers require,
+    with `default` resolved to a concrete boolean. */
+export interface ProviderModelOptionResolved extends ProviderModelOption {
+  default: boolean;
 }
 
 export async function updateProject(id: string, req: UpdateProjectRequest): Promise<void> {

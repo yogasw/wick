@@ -451,6 +451,21 @@ export type TicketField = {
   required?: boolean;
 };
 
+/** One rule deciding when a new session gets a ticket on its own. Rules
+    are tried in order and the FIRST match wins, so a disabled narrow rule
+    above a broad one carves an exception out of it. */
+export type AutoCreateRule = {
+  /** "ui" | "slack" | "telegram" | "rest" | "*" */
+  origin: string;
+  /** "" (any) | "dm" | "channel" | "thread" — channel origins only. */
+  channel_kind?: string;
+  /** "" | "contains:<text>" | "regex:<expr>", tested against the first message. */
+  match?: string;
+  /** Title template; "{message}" and "{origin}" are substituted. */
+  title?: string;
+  enabled: boolean;
+};
+
 /** A project's ticket-mode configuration (zero value = feature off). */
 export type TicketConfig = {
   enabled?: boolean;
@@ -458,29 +473,91 @@ export type TicketConfig = {
   followup_after_sec?: number;
   followup_prompt?: string;
   auto_resolve_after_sec?: number;
+  auto_create?: AutoCreateRule[];
 };
 
-/** One card on the project ticket board. */
-export type TicketItem = {
-  session_id: string;
+/** One card on the project ticket board. A card is a TICKET, not a
+    session: a ticket holds the work, and several sessions can hang off it. */
+export type TicketCard = {
+  id: string; // short quotable code, e.g. "T-4F2A"
   title: string;
   status: string;
   assignee?: string;
   fields?: Record<string, string>;
-  updated_at?: string;
-  last_active: string;
+  /** The ticket's sessions, listed on the card so one can be dragged to
+      another ticket without opening anything. */
+  session_rows?: TicketSessionRow[];
+  sessions: number;
+  notes: number;
+  open_tasks: number;
+  updated_at: string;
+  created_at: string;
   stale: boolean;
-  owner_id?: string;
-  lifecycle?: string;
 };
 
 /** GET /api/projects/{id}/tickets response. */
 export type TicketBoard = {
   config: TicketConfig;
-  tickets: TicketItem[];
+  tickets: TicketCard[];
+  /** Chats in this project that belong to no ticket — the board's left
+      rail, and the drag source for attaching one. One page at a time, or
+      empty when the rail is collapsed: these are payload caps, not display
+      filters, so a big project stays cheap to poll. */
+  untracked: TicketSessionRow[];
+  /** How many untracked chats exist, however few were sent. */
+  untracked_total?: number;
+  statuses: string[];
   users?: Record<string, string>;
   me?: string;
+};
+
+/** One session listed inside a ticket's detail view. */
+export type TicketSessionRow = {
+  id: string;
+  label: string;
+  status?: string;
+  lifecycle?: string;
+  last_active?: string;
+};
+
+/** The full ticket, as stored. */
+export type Ticket = {
+  id: string;
+  project_id: string;
+  title: string;
+  status: string;
+  assignee?: string;
+  fields?: Record<string, string>;
+  sessions?: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+/** GET /api/tickets/{ticketID} response. */
+export type TicketDetail = {
+  ticket: Ticket;
+  config: TicketConfig;
+  sessions: TicketSessionRow[];
+  notes: Note[];
   statuses: string[];
+  users?: Record<string, string>;
+  me?: string;
+};
+
+/** One markdown note on a ticket or a session. */
+export type Note = {
+  id: string;
+  body: string;
+  /** Who the note was written for — a label, not an access rule. The agent
+      reads every audience; `hidden` is what keeps one away from it. */
+  audience: "ai" | "human" | "both";
+  checkable?: boolean;
+  done?: boolean;
+  /** Hidden notes never reach the agent. Still listed here, blurred. */
+  hidden?: boolean;
+  author?: string;
+  created_at: string;
+  updated_at: string;
 };
 
 /** Per-user saved board filter for one project. */
@@ -488,6 +565,19 @@ export type TicketFilter = {
   statuses?: string[];
   assignee?: string; // "" = all, "me", or a user id
   view_mode?: string; // "list" | "card"
+  /** Collapses the untracked rail — and stops the server sending that list
+      at all, which is what keeps a project with hundreds of loose chats
+      cheap to poll. */
+  hide_untracked?: boolean;
+};
+
+/** GET /api/notes response. `ticket` is present when the scope resolved to
+    a ticket, so the caller can name it without a second fetch. */
+export type NotesResponse = {
+  notes: Note[];
+  users?: Record<string, string>;
+  me?: string;
+  ticket?: { id: string; title: string; status: string };
 };
 
 /** One message between two agents inside a delegation tree. */

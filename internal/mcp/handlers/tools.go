@@ -639,66 +639,6 @@ func MetaToolDescriptors() []ToolDescriptor {
 			},
 		},
 		{
-			Name: "wick_ticket_get",
-			Description: "Read this session's ticket (projects with ticket mode treat each session as a ticket card on a kanban board). " +
-				"Returns: status (open/in_progress/waiting/done), assignee (user id), fields (the project's custom field values), " +
-				"updated_at (last ticket edit — the stale timer runs from this), ticket_enabled, and schema (the project's field definitions, " +
-				"which tells you exactly which field keys wick_ticket_set accepts). " +
-				"Call this before wick_ticket_set so you patch real fields instead of inventing keys.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"session_id": map[string]any{
-						"type":        "string",
-						"description": "ID of the active wick agent session.",
-					},
-				},
-				"required": []string{"session_id"},
-			},
-			Annotations: &ToolAnnotation{
-				Title:        "Read session ticket",
-				ReadOnlyHint: PtrBool(true),
-			},
-		},
-		{
-			Name: "wick_ticket_set",
-			Description: "Update this session's ticket: status, assignee, and/or custom field values. Partial update — only the keys you pass change. " +
-				"Every successful update bumps the ticket's updated_at, which resets the project's stale-followup and auto-resolve timers, " +
-				"so ALWAYS call this after acting on a ticket followup. " +
-				"status must be one of open, in_progress, waiting, done. fields keys should come from the schema returned by wick_ticket_get; " +
-				"pass an empty string as a field value to clear that field. " +
-				"Typical moves: mark in_progress when you start working, waiting when blocked on a human, done when resolved.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"session_id": map[string]any{
-						"type":        "string",
-						"description": "ID of the active wick agent session.",
-					},
-					"status": map[string]any{
-						"type":        "string",
-						"enum":        []string{"open", "in_progress", "waiting", "done"},
-						"description": "New ticket status.",
-					},
-					"assignee": map[string]any{
-						"type":        "string",
-						"description": "User ID to assign the ticket to. Empty string unassigns.",
-					},
-					"fields": map[string]any{
-						"type":        "object",
-						"description": "Custom field values keyed by the project schema's field keys. String values; empty string clears a field.",
-					},
-				},
-				"required": []string{"session_id"},
-			},
-			Annotations: &ToolAnnotation{
-				Title:           "Update session ticket",
-				ReadOnlyHint:    PtrBool(false),
-				DestructiveHint: PtrBool(false),
-				IdempotentHint:  PtrBool(true),
-			},
-		},
-		{
 			Name: "wick_schedule_message",
 			Description: "Schedule a message to be delivered into an agent session, once or repeatedly — " +
 				"the way to make yourself 'check back later' or run something on a cadence without staying running. " +

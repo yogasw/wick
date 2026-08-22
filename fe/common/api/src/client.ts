@@ -78,6 +78,19 @@ export const apiPostE = <T>(
         ),
   );
 
+export const apiPatchE = <T>(
+  path: string,
+  body?: unknown,
+): Effect.Effect<T, APIError, HttpClient.HttpClient> =>
+  send<T>((client) =>
+    body === undefined
+      ? client.patch(path)
+      : HttpClientRequest.patch(path).pipe(
+          HttpClientRequest.bodyJson(body),
+          Effect.flatMap((req) => client.execute(req)),
+        ),
+  );
+
 export const apiPutE = <T>(
   path: string,
   body?: unknown,

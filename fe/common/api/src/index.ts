@@ -4,6 +4,7 @@ export {
   apiGetE,
   apiPostE,
   apiPutE,
+  apiPatchE,
   apiDeleteE,
   apiGet,
   apiPost,

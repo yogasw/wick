@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ConfirmDialog, ProviderPicker, buildProviderOptions } from "@wick-fe/common-ui";
-  import { toastOk, toastError } from "@wick-fe/common-stores";
+  import { toastError } from "@wick-fe/common-stores";
   import {
     getProjectSettings,
     updateProject,
@@ -11,16 +11,24 @@
     saveTicketConfig,
   } from "$lib/api.js";
   import type { ProjectSettingsData, WidgetPolicy, TicketConfig } from "$lib/types.js";
+  import { createAutosave, type SaveStatus } from "$lib/autosave.js";
   import WidgetPolicyEditor from "./WidgetPolicyEditor.svelte";
   import TicketSystemEditor from "./TicketSystemEditor.svelte";
+  import SettingsSection from "./SettingsSection.svelte";
 
-  type Props = { projectID: string; base: string };
-  let { projectID, base }: Props = $props();
+  type Props = {
+    projectID: string;
+    base: string;
+    /* The shell renders the save indicator next to the tab strip, so the
+       form reports status upward instead of drawing its own. */
+    onStatus?: (s: SaveStatus, retry: () => void) => void;
+  };
+  let { projectID, base, onStatus }: Props = $props();
 
   let data = $state<ProjectSettingsData | null>(null);
   let loading = $state(true);
   let error = $state("");
-  let saving = $state(false);
+  let creating = $state(false);
   let showDeleteConfirm = $state(false);
 
   let name = $state("");
@@ -37,7 +45,7 @@
   let widget = $state<WidgetPolicy>({});
   let widgetAllowlistText = $state("");
 
-  // Ticket-mode config, saved through its own endpoint on submit.
+  // Ticket-mode config, persisted through its own endpoint.
   let ticketCfg = $state<TicketConfig>({});
 
   // Promote a bare provider type ("claude") to its canonical default
@@ -51,11 +59,11 @@
 
   // Provider and model are two stored fields but ONE choice, so the picker
   // owns them as its packed "type/name::modelID" value and they are split
-  // apart only on submit. Holding them separately here would let a save
-  // pair a provider with a model belonging to a different instance.
+  // apart only on save. Holding them separately here would let a save pair
+  // a provider with a model belonging to a different instance.
   let pickerValue = $state("");
   const providerKey = $derived(pickerValue.split("::")[0] ?? "");
-  const modelID = $derived(() => {
+  const modelID = $derived.by(() => {
     const i = pickerValue.indexOf("::");
     return i < 0 ? "" : pickerValue.slice(i + 2);
   });
@@ -74,9 +82,55 @@
     return getProviderOptionModels(type, name, opts);
   }
 
+  /* ── auto-save ────────────────────────────────────────────────────────
+     There is no Save button. Text edits save on a debounce, committing
+     interactions (select, toggle, radio, blur) flush immediately, and the
+     shell shows a quiet status line.
+
+     Autosave starts suspended so seeding the fields in load() does not
+     immediately write them back, and stays suspended for an unsaved new
+     project — that one still goes through explicit "Create project",
+     because there is no project id to PATCH until it exists. */
+  const autosave = createAutosave({
+    save: persist,
+    suspended: true,
+    onStatus: (s) => onStatus?.(s, autosave.retry),
+  });
+
+  async function persist() {
+    if (!data || data.is_new) return;
+    // Folder mode moves the agent cwd, and the server rejects an empty
+    // custom path. Holding the request back until the path is filled keeps
+    // a half-typed path from failing on every keystroke.
+    const path = folderMode === "managed" ? "" : customPath.trim();
+    if (folderMode === "custom" && path === "") return;
+
+    await updateProject(projectID, {
+      name: name.trim(),
+      icon: icon.trim(),
+      description,
+      folder_mode: folderMode,
+      custom_path: path,
+      preset,
+      provider: providerKey,
+      model: modelID,
+      system_addon: systemAddon,
+      widget: widgetPayload(),
+    });
+    // Second endpoint, same save cycle: the status only reports success
+    // once both have landed, so "Saved" never overstates what was stored.
+    await saveTicketConfig(projectID, ticketCfg);
+  }
+
+  /* Bound to text inputs — waits for a pause in typing. */
+  const edit = () => autosave.schedule();
+  /* Bound to selects, toggles, radios, and blur — saves at once. */
+  const commit = () => autosave.flush();
+
   async function load() {
     loading = true;
     error = "";
+    autosave.setSuspended(true);
     try {
       const d = await getProjectSettings(projectID);
       data = d;
@@ -103,6 +157,9 @@
       error = e instanceof Error ? e.message : String(e);
     } finally {
       loading = false;
+      // An existing project auto-saves from here on; a new one waits for
+      // the explicit create.
+      autosave.setSuspended(data?.is_new !== false);
     }
   }
 
@@ -137,11 +194,11 @@
     return {
       override: true,
       mode,
-      frame_src: widget.frame_src || "block",
-      img_src: widget.img_src || "block",
-      media_src: widget.media_src || "block",
-      connect_src: widget.connect_src || "block",
-      script_src: widget.script_src || "block",
+      frame_src: widget.frame_src ?? "block",
+      img_src: widget.img_src ?? "block",
+      media_src: widget.media_src ?? "block",
+      connect_src: widget.connect_src ?? "block",
+      script_src: widget.script_src ?? "block",
       allow_popups: widget.allow_popups === true,
       // Never stored on its own: an escape flag with no popups permitted reads
       // as a permission that is doing something when nothing can open a tab.
@@ -150,27 +207,12 @@
     };
   }
 
-  async function handleSubmit(e: SubmitEvent) {
+  async function handleCreate(e: SubmitEvent) {
     e.preventDefault();
     if (!data) return;
-    saving = true;
+    creating = true;
     try {
-      if (data.is_new) {
-        const redirectURL = await createProject({
-          name: name.trim(),
-          icon: icon.trim(),
-          description,
-          folder_mode: folderMode,
-          custom_path: folderMode === "managed" ? "" : customPath.trim(),
-          preset,
-          provider: providerKey,
-          model: modelID(),
-          system_addon: systemAddon,
-        });
-        window.location.href = redirectURL;
-        return;
-      }
-      await updateProject(projectID, {
+      const redirectURL = await createProject({
         name: name.trim(),
         icon: icon.trim(),
         description,
@@ -178,20 +220,13 @@
         custom_path: folderMode === "managed" ? "" : customPath.trim(),
         preset,
         provider: providerKey,
-        model: modelID(),
+        model: modelID,
         system_addon: systemAddon,
-        widget: widgetPayload(),
       });
-      // Its own endpoint: the payload is validated as a schema (dup keys,
-      // select without options) and a refused ticket config must not block
-      // the rest of the form — so it is sent second, after the meta saved.
-      await saveTicketConfig(projectID, ticketCfg);
-      toastOk("Project saved");
-      await load();
+      window.location.href = redirectURL;
     } catch (err) {
-      toastError("Save failed", err instanceof Error ? err.message : String(err));
-    } finally {
-      saving = false;
+      toastError("Create failed", err instanceof Error ? err.message : String(err));
+      creating = false;
     }
   }
 
@@ -199,7 +234,6 @@
     showDeleteConfirm = false;
     try {
       await deleteProject(projectID);
-      toastOk("Project deleted");
       window.location.href = `${base}/sessions`;
     } catch (err) {
       toastError("Delete failed", err instanceof Error ? err.message : String(err));
@@ -210,7 +244,6 @@
     if (!data) return;
     try {
       await unpinSession(projectID, sessionID);
-      toastOk("Unpinned");
       await load();
     } catch (err) {
       toastError("Unpin failed", err instanceof Error ? err.message : String(err));
@@ -224,7 +257,43 @@
     return `${base}/sessions`;
   }
 
+  /* Snippets are compiled outside the `{:else if data}` block, so the
+     narrowing there does not reach them — these read the flags instead. */
+  const canDelete = $derived(data !== null && !data.is_new && !data.is_protected);
+
+  /* Folded sections state their current setting in the subtitle, so the
+     page still answers "is this on?" without anything being expanded. */
+  const ticketSummary = $derived.by(() => {
+    if (ticketCfg.enabled !== true) return "Off — sessions here are plain chats.";
+    const parts = [`${(ticketCfg.fields ?? []).length} custom field(s)`];
+    parts.push(
+      ticketCfg.followup_after_sec
+        ? `follow up after ${Math.round(ticketCfg.followup_after_sec / 60)}m`
+        : "no follow-up",
+    );
+    parts.push(
+      ticketCfg.auto_resolve_after_sec
+        ? `auto-resolve after ${Math.round(ticketCfg.auto_resolve_after_sec / 86400)}d`
+        : "no auto-resolve",
+    );
+    const rules = (ticketCfg.auto_create ?? []).length;
+    parts.push(rules === 0 ? "no auto-create" : `${rules} auto-create rule(s)`);
+    return `On — ${parts.join(" · ")}.`;
+  });
+
+  const widgetSummary = $derived(
+    widget.override === true
+      ? `This project overrides the global policy — ${widget.mode ?? "secure"} mode.`
+      : "Following the global policy.",
+  );
+
+  const folderModeClass = (active: boolean) =>
+    active
+      ? "flex-1 rounded-lg bg-green-500 px-4 py-2 text-xs font-semibold text-white-100 transition-colors"
+      : "flex-1 rounded-lg px-4 py-2 text-xs font-medium text-black-800 transition-colors hover:bg-white-300 dark:text-black-600 dark:hover:bg-navy-600";
+
   $effect(() => { load(); });
+  $effect(() => () => autosave.dispose());
 </script>
 
 <ConfirmDialog
@@ -238,229 +307,261 @@
 />
 
 {#if loading}
-  <div class="px-5 py-12 text-center text-sm text-black-700 dark:text-black-600">Loading…</div>
+  <div class="py-16 text-center text-sm text-black-700 dark:text-black-600">Loading…</div>
 {:else if error}
-  <div class="rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-sm text-red-700 dark:text-red-400">{error}</div>
+  <div class="rounded-xl border border-neg-400/40 bg-neg-100 px-4 py-3 text-sm text-neg-400">{error}</div>
 {:else if data}
-  <div class="max-w-5xl mx-auto space-y-5">
-    <a href={backHref()} class="text-xs text-black-600 dark:text-black-700 hover:text-black-900 dark:hover:text-white-100 transition-colors">← Back</a>
-
-    <form onsubmit={handleSubmit} class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm p-6 space-y-6">
-      <!-- Header: icon + name + meta + delete -->
-      <div class="flex items-center gap-3 pb-4 border-b border-white-300 dark:border-navy-600">
-        <input
-          type="text"
-          maxlength="2"
-          bind:value={icon}
-          class="w-12 h-12 rounded-xl bg-white-200 dark:bg-navy-800 text-center text-2xl outline-none border border-transparent focus:border-green-400"
-        />
-        <div class="min-w-0">
-          <input
-            type="text"
-            required
-            bind:value={name}
-            placeholder="Project name"
-            class="text-2xl font-bold bg-transparent text-black-900 dark:text-white-100 outline-none border-b border-transparent focus:border-green-400 w-full"
-          />
-          {#if !data.is_new}
-            <p class="text-xs text-black-600 dark:text-black-700">{data.chat_count} chats · created {data.created_at}</p>
-          {/if}
-        </div>
-        {#if !data.is_new && !data.is_protected}
+  <form onsubmit={handleCreate} class="flex flex-col gap-4">
+    <!-- Identity. An icon + name pair reads as the page's subject, so it
+         sits in its own card above the settings rather than inside them. -->
+    <SettingsSection
+      title="Project"
+      subtitle={data.is_new
+        ? "Name it and pick where its sessions run."
+        : `${data.chat_count} chats · created ${data.created_at} · ${data.managed ? "managed" : "custom"} folder`}
+    >
+      {#snippet action()}
+        {#if canDelete}
           <button
             type="button"
             onclick={() => { showDeleteConfirm = true; }}
-            class="ml-auto text-xs px-3 py-1.5 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-md border border-red-200 dark:border-red-800 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors"
+            class="rounded-lg border border-neg-400/40 px-3 py-1.5 text-xs font-medium text-neg-400 transition-colors hover:bg-neg-100"
           >Delete project</button>
         {/if}
+      {/snippet}
+
+      <div class="flex items-center gap-4">
+        <input
+          type="text"
+          maxlength="2"
+          aria-label="Project icon"
+          bind:value={icon}
+          oninput={edit}
+          onblur={commit}
+          class="h-14 w-14 shrink-0 rounded-xl border border-white-300 bg-white-200 text-center text-2xl outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-800"
+        />
+        <div class="min-w-0 flex-1">
+          <label class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600" for="ps-name">Name</label>
+          <input
+            id="ps-name"
+            type="text"
+            required
+            bind:value={name}
+            oninput={edit}
+            onblur={commit}
+            placeholder="Project name"
+            class="w-full rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm font-medium text-black-900 outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+          />
+        </div>
+      </div>
+      <div class="mt-4">
+        <label class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600" for="ps-description">Description</label>
+        <input
+          id="ps-description"
+          type="text"
+          bind:value={description}
+          oninput={edit}
+          onblur={commit}
+          placeholder="What this project is for"
+          class="w-full rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm text-black-900 outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+        />
+      </div>
+    </SettingsSection>
+
+    <!-- Folder: two mutually exclusive modes, so a segmented control rather
+         than radios — it shows the active choice without reading labels. -->
+    <SettingsSection
+      title="Folder"
+      subtitle="Where agent subprocesses run. Changing it shifts the cwd at the next spawn; a running subprocess is unaffected until it restarts."
+    >
+      <div class="flex gap-1 rounded-xl bg-white-200 p-1 dark:bg-navy-800">
+        <button
+          type="button"
+          aria-pressed={folderMode === "managed"}
+          onclick={() => { folderMode = "managed"; commit(); }}
+          class={folderModeClass(folderMode === "managed")}
+        >Managed</button>
+        <button
+          type="button"
+          aria-pressed={folderMode === "custom"}
+          onclick={() => { folderMode = "custom"; commit(); }}
+          class={folderModeClass(folderMode === "custom")}
+        >Custom path</button>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <!-- Left: folder + defaults -->
-        <div class="space-y-6">
-          <div>
-            <h4 class="font-bold text-sm mb-2 text-black-900 dark:text-white-100">Folder</h4>
-            <div class="border border-white-300 dark:border-navy-600 rounded-lg p-3 space-y-2">
-              <label class="flex items-center gap-2 text-sm cursor-pointer">
-                <input
-                  type="radio"
-                  name="folder_mode"
-                  value="custom"
-                  checked={folderMode === "custom"}
-                  onchange={() => { folderMode = "custom"; }}
-                  class="text-green-500 focus:ring-green-500"
-                />
-                <span class="font-semibold text-black-900 dark:text-white-100">Custom path</span>
-                <span class="rounded bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 px-1.5 py-0.5 text-[10px] font-bold uppercase">custom</span>
-              </label>
-              {#if folderMode === "custom"}
-                <div>
-                  <div class="flex gap-2">
-                    <input
-                      type="text"
-                      bind:value={customPath}
-                      placeholder="D:/code/work/wick"
-                      class="flex-1 rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1.5 text-xs font-mono text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"
-                    />
-                    <label class="rounded-md border border-white-400 dark:border-navy-600 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 cursor-pointer transition-colors whitespace-nowrap">
-                      Choose…
-                      <input
-                        type="file"
-                        class="hidden"
-                        onchange={(e) => {
-                          const f = (e.currentTarget as HTMLInputElement).files?.[0];
-                          if (f) customPath = f.name;
-                        }}
-                      />
-                    </label>
-                  </div>
-                  <p class="text-xs text-black-600 dark:text-black-700 mt-1">Absolute path to an existing folder. Wick uses this as the agent cwd. Browsers hide absolute paths — the picker fills only the folder name, prefix the parent manually.</p>
-                </div>
-              {/if}
-              <label class="flex items-center gap-2 text-sm cursor-pointer mt-3 pt-3 border-t border-white-300 dark:border-navy-600">
-                <input
-                  type="radio"
-                  name="folder_mode"
-                  value="managed"
-                  checked={folderMode === "managed"}
-                  onchange={() => { folderMode = "managed"; }}
-                  class="text-green-500 focus:ring-green-500"
-                />
-                <span class="font-semibold text-black-900 dark:text-white-100">Managed</span>
-                <span class="rounded bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 text-[10px] font-bold uppercase">managed</span>
-              </label>
-              <p class="text-xs text-black-600 dark:text-black-700">Wick creates and owns the folder at <code class="font-mono">projects/&lt;id&gt;/files/</code>. Useful for scratch sessions.</p>
-            </div>
-          </div>
-
-          <div>
-            <h4 class="font-bold text-sm mb-2 text-black-900 dark:text-white-100">Defaults</h4>
-            <div class="space-y-3">
-              <div>
-                <label for="ps-provider" class="block text-black-600 dark:text-black-700 text-xs mb-0.5">Provider</label>
-                <ProviderPicker
-                  id="ps-provider"
-                  options={providerOptions}
-                  value={pickerValue}
-                  onChange={(v) => (pickerValue = v)}
-                  loadModels={loadProviderModels}
-                  placeholder="Select provider"
-                />
-                <p class="mt-1 text-xs text-black-600 dark:text-black-700">
-                  New sessions in this project start here. Pick a model too where the provider offers a
-                  choice — sub-agents inherit it.
-                </p>
-              </div>
-              <div>
-                <label for="ps-preset" class="block text-black-600 dark:text-black-700 text-xs mb-0.5">Preset</label>
-                <select
-                  id="ps-preset"
-                  bind:value={preset}
-                  class="w-full rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1.5 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"
-                >
-                  <option value="default">default</option>
-                  {#each (data.preset_list ?? []).filter(p => p !== "default") as p (p)}
-                    <option value={p}>{p}</option>
-                  {/each}
-                </select>
-              </div>
-              <div>
-                <label for="ps-system-addon" class="block text-black-600 dark:text-black-700 text-xs mb-0.5">System prompt addon</label>
-                <textarea
-                  id="ps-system-addon"
-                  bind:value={systemAddon}
-                  rows={3}
-                  placeholder="Appended to preset system prompt for every session..."
-                  class="w-full rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 p-2 text-xs text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none resize-none"
-                ></textarea>
-              </div>
-              <div>
-                <label for="ps-description" class="block text-black-600 dark:text-black-700 text-xs mb-0.5">Description</label>
-                <input
-                  id="ps-description"
-                  type="text"
-                  bind:value={description}
-                  placeholder="Short description"
-                  class="w-full rounded-md border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2 py-1.5 text-sm text-black-900 dark:text-white-100 focus:border-green-500 focus:outline-none"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Right: widget policy + pinned + meta preview + folder semantics -->
-        <div class="space-y-6">
-          {#if !data.is_new}
-            <WidgetPolicyEditor
-              policy={widget}
-              inherited={data.widget_inherited}
-              allowlistText={widgetAllowlistText}
-              onChange={(next) => { widget = next.policy; widgetAllowlistText = next.allowlistText; }}
+      {#if folderMode === "managed"}
+        <p class="mt-3 text-xs leading-relaxed text-black-700 dark:text-black-600">
+          Wick creates and owns <code class="rounded bg-white-200 px-1 font-mono dark:bg-navy-800">projects/&lt;id&gt;/files/</code>.
+          Good for scratch sessions. Switching away from managed leaves that folder on disk as an orphaned backup.
+        </p>
+      {:else}
+        <div class="mt-3">
+          <div class="flex gap-2">
+            <input
+              type="text"
+              aria-label="Custom folder path"
+              bind:value={customPath}
+              oninput={edit}
+              onblur={commit}
+              placeholder="D:/code/work/my-project"
+              class="min-w-0 flex-1 rounded-lg border border-white-400 bg-white-100 px-3 py-2 font-mono text-xs text-black-900 outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
             />
-          {/if}
-          {#if !data.is_new}
-            <div class="rounded-lg border border-white-300 dark:border-navy-600 p-4">
-              <TicketSystemEditor cfg={ticketCfg} onChange={(c) => { ticketCfg = c; }} />
-            </div>
-          {/if}
-          {#if !data.is_new}
-            <div>
-              <h4 class="font-bold text-sm mb-2 text-black-900 dark:text-white-100">📌 Pinned sessions</h4>
-              <div class="space-y-1">
-                {#if data.pinned.length === 0}
-                  <p class="text-xs text-black-600 dark:text-black-700 italic px-2 py-1">No pinned sessions. Pin one from a chat's menu.</p>
-                {:else}
-                  {#each data.pinned as pin (pin.id)}
-                    <div class="flex items-center gap-2 rounded-md border border-white-300 dark:border-navy-600 px-3 py-2 text-sm text-black-900 dark:text-white-100">
-                      <span class="flex-1 min-w-0 truncate">{pin.label}</span>
-                      <button
-                        type="button"
-                        onclick={() => handleUnpin(pin.id)}
-                        class="text-black-500 dark:text-black-600 hover:text-red-500 transition-colors"
-                        title="Unpin"
-                      >✕</button>
-                    </div>
-                  {/each}
-                {/if}
-              </div>
-            </div>
-
-            <div>
-              <h4 class="font-bold text-sm mb-2 text-black-900 dark:text-white-100">Project meta preview</h4>
-              <pre class="text-xs bg-white-200 dark:bg-navy-800 border border-white-300 dark:border-navy-600 rounded-md p-3 overflow-x-auto text-black-800 dark:text-black-600">{data.meta_json}</pre>
-            </div>
-          {/if}
-
-          <div>
-            <h4 class="font-bold text-sm mb-2 text-black-900 dark:text-white-100">Folder change semantics</h4>
-            <ul class="list-disc pl-5 text-xs text-black-600 dark:text-black-700 space-y-1">
-              <li>Managed → custom: managed <code class="font-mono">files/</code> kept on disk (orphaned backup; delete manually)</li>
-              <li>Custom → managed: new managed dir created; custom path untouched</li>
-              <li>Live sessions: cwd shifts at next spawn; running subprocess unaffected until restart</li>
-            </ul>
+            <label class="shrink-0 cursor-pointer rounded-lg border border-white-400 px-3 py-2 text-xs font-medium text-black-800 transition-colors hover:bg-white-200 dark:border-navy-600 dark:text-black-600 dark:hover:bg-navy-800">
+              Choose…
+              <input
+                type="file"
+                class="hidden"
+                onchange={(e) => {
+                  const f = (e.currentTarget as HTMLInputElement).files?.[0];
+                  if (f) { customPath = f.name; commit(); }
+                }}
+              />
+            </label>
           </div>
+          <p class="mt-2 text-xs leading-relaxed text-black-700 dark:text-black-600">
+            Absolute path to a folder that already exists. Browsers hide absolute paths, so the
+            picker fills only the folder name — prefix the parent yourself. Saved once the path is filled.
+          </p>
+        </div>
+      {/if}
+    </SettingsSection>
+
+    <SettingsSection
+      title="Defaults"
+      subtitle="Where new sessions in this project start. Sub-agents inherit the provider and model."
+    >
+      <div class="flex flex-col gap-4">
+        <div>
+          <label for="ps-provider" class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600">Provider</label>
+          <ProviderPicker
+            id="ps-provider"
+            options={providerOptions}
+            value={pickerValue}
+            onChange={(v) => { pickerValue = v; commit(); }}
+            loadModels={loadProviderModels}
+            placeholder="Select provider"
+          />
+        </div>
+        <div>
+          <label for="ps-preset" class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600">Preset</label>
+          <select
+            id="ps-preset"
+            bind:value={preset}
+            onchange={commit}
+            class="w-full rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm text-black-900 outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+          >
+            {#each data.preset_list as p (p)}
+              <option value={p}>{p}</option>
+            {/each}
+          </select>
+        </div>
+        <div>
+          <label for="ps-addon" class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600">System prompt addon</label>
+          <textarea
+            id="ps-addon"
+            rows="3"
+            bind:value={systemAddon}
+            oninput={edit}
+            onblur={commit}
+            placeholder="Appended to the preset system prompt for every session in this project"
+            class="w-full rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm text-black-900 outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+          ></textarea>
         </div>
       </div>
+    </SettingsSection>
 
-      <div class="flex justify-end gap-3 pt-2 border-t border-white-300 dark:border-navy-600">
+    {#if !data.is_new}
+      <!-- Both of these are long editors that most visits do not touch, so
+           they stay folded with their current state in the subtitle. -->
+      <div onchange={commit} role="none">
+        <SettingsSection
+          title="Ticket system"
+          subtitle={ticketSummary}
+          collapsible
+          open={ticketCfg.enabled === true}
+        >
+          <TicketSystemEditor cfg={ticketCfg} onChange={(c) => { ticketCfg = c; edit(); }} />
+        </SettingsSection>
+      </div>
+
+      <div onchange={commit} role="none">
+        <SettingsSection
+          title="Widget permissions"
+          subtitle={widgetSummary}
+          collapsible
+        >
+          <p class="mb-3 text-xs leading-relaxed text-black-700 dark:text-black-600">
+            Widget HTML is written by the agent, so it runs sealed off by default. Pick a mode —
+            individual permissions only matter under Custom.
+          </p>
+          <WidgetPolicyEditor
+            policy={widget}
+            inherited={data.widget_inherited}
+            allowlistText={widgetAllowlistText}
+            onChange={(next) => { widget = next.policy; widgetAllowlistText = next.allowlistText; edit(); }}
+          />
+        </SettingsSection>
+      </div>
+
+      <SettingsSection
+        title="Pinned sessions"
+        subtitle="Chats kept at the top of this project. Pin one from a chat's menu."
+      >
+        {#if data.pinned.length === 0}
+          <p class="text-xs text-black-700 dark:text-black-600">Nothing pinned yet.</p>
+        {:else}
+          <ul class="flex flex-col gap-2">
+            {#each data.pinned as pin (pin.id)}
+              <li class="flex items-center gap-3 rounded-lg border border-white-300 bg-white-100 px-4 py-2.5 dark:border-navy-600 dark:bg-navy-800">
+                <span class="min-w-0 flex-1 truncate text-sm text-black-900 dark:text-white-100">{pin.label}</span>
+                <button
+                  type="button"
+                  aria-label="Unpin session"
+                  onclick={() => handleUnpin(pin.id)}
+                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-black-700 transition-colors hover:bg-neg-100 hover:text-neg-400 dark:text-black-600"
+                >
+                  <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                    <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"></path>
+                  </svg>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </SettingsSection>
+
+      <!-- Collapsed by default: worth having when something looks wrong,
+           not worth the vertical space the rest of the time. -->
+      <SettingsSection
+        title="Advanced"
+        subtitle="Raw project meta and folder-change semantics."
+        collapsible
+      >
+        <h3 class="mb-2 text-xs font-semibold text-black-800 dark:text-black-600">Project meta</h3>
+        <pre class="overflow-x-auto rounded-lg border border-white-300 bg-white-200 p-3 text-xs text-black-800 dark:border-navy-600 dark:bg-navy-800 dark:text-black-600">{data.meta_json}</pre>
+        <h3 class="mb-2 mt-4 text-xs font-semibold text-black-800 dark:text-black-600">Folder change semantics</h3>
+        <ul class="list-disc space-y-1 pl-5 text-xs leading-relaxed text-black-700 dark:text-black-600">
+          <li>Managed → custom: the managed <code class="font-mono">files/</code> stays on disk as an orphaned backup; delete it manually.</li>
+          <li>Custom → managed: a new managed folder is created; the custom path is left untouched.</li>
+          <li>Live sessions: the cwd shifts at the next spawn; a running subprocess is unaffected until it restarts.</li>
+        </ul>
+      </SettingsSection>
+    {/if}
+
+    <!-- A project that does not exist yet cannot be auto-saved: there is no
+         id to write to until it is created. -->
+    {#if data.is_new}
+      <div class="flex items-center justify-end gap-3 pb-2">
         <a
           href={backHref()}
-          class="rounded-lg border border-white-400 dark:border-navy-600 px-4 py-2 text-sm text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
+          class="rounded-lg border border-white-400 px-4 py-2 text-sm text-black-800 transition-colors hover:bg-white-200 dark:border-navy-600 dark:text-black-600 dark:hover:bg-navy-800"
         >Cancel</a>
-        {#if data.is_new}
-          <button
-            type="submit"
-            disabled={saving}
-            class="rounded-lg bg-green-500 px-5 py-2 text-sm font-medium text-white-100 hover:bg-green-600 transition-colors disabled:opacity-50"
-          >{saving ? "Creating…" : "Create project"}</button>
-        {:else}
-          <button
-            type="submit"
-            disabled={saving}
-            class="rounded-lg bg-green-500 px-5 py-2 text-sm font-medium text-white-100 hover:bg-green-600 transition-colors disabled:opacity-50"
-          >{saving ? "Saving…" : "Save"}</button>
-        {/if}
+        <button
+          type="submit"
+          disabled={creating}
+          class="rounded-lg bg-green-600 px-5 py-2 text-sm font-semibold text-white-100 transition-colors hover:bg-green-700 active:bg-green-800 disabled:opacity-40"
+        >{creating ? "Creating…" : "Create project"}</button>
       </div>
-    </form>
-  </div>
+    {/if}
+  </form>
 {/if}

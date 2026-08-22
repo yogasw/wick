@@ -2,9 +2,16 @@ package agents
 
 import (
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
+	agentsconfig "github.com/yogasw/wick/internal/agents/config"
+
+	"github.com/yogasw/wick/internal/agents/notes"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/ticket"
@@ -13,44 +20,174 @@ import (
 	"github.com/yogasw/wick/pkg/tool"
 )
 
+/* ── payload caps ────────────────────────────────────────────────────────── */
+
+// The board is polled, so its size is a running cost, not a one-off. These
+// caps keep a project with hundreds of chats as cheap to draw as a small
+// one: the client asks for what it will actually render, and the server
+// sends no more. A count always travels even when the rows do not, so the
+// UI can say "3 of 41" without holding 41 of anything.
+const (
+	// defaultRowsPerCard is how many session rows a card carries. Three
+	// fits the card without scrolling; the rest live in the ticket's page.
+	defaultRowsPerCard = 3
+	maxRowsPerCard     = 25
+
+	// defaultUntrackedLimit is one page of the untracked rail.
+	defaultUntrackedLimit = 25
+	maxUntrackedLimit     = 200
+)
+
+// queryInt reads a bounded integer query param, falling back to def when it
+// is absent or unparseable. Out-of-range values are clamped rather than
+// refused: a board that renders slightly differently beats one that 400s.
+func queryInt(c *tool.Ctx, key string, def, min, max int) int {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return def
+	}
+	if n < min {
+		return min
+	}
+	if n > max {
+		return max
+	}
+	return n
+}
+
 /* ── DTOs ────────────────────────────────────────────────────────────────── */
 
-// TicketItem is one card on the project ticket board. Sessions whose
-// Ticket is still nil (created moments ago, sweeper hasn't adopted them
-// yet) are surfaced as virtual "open" tickets so the board never hides a
-// chat.
-type TicketItem struct {
-	SessionID  string            `json:"session_id"`
-	Title      string            `json:"title"`
-	Status     string            `json:"status"`
-	Assignee   string            `json:"assignee,omitempty"`
-	Fields     map[string]string `json:"fields,omitempty"`
-	UpdatedAt  string            `json:"updated_at,omitempty"`
-	LastActive string            `json:"last_active"`
-	Stale      bool              `json:"stale"`
-	OwnerID    string            `json:"owner_id,omitempty"`
-	Lifecycle  string            `json:"lifecycle,omitempty"`
+// TicketCard is one card on the project board. A card is a TICKET, not a
+// session: a ticket can hold several sessions, and the board shows the work
+// rather than each conversation about it.
+type TicketCard struct {
+	ID       string            `json:"id"`
+	Title    string            `json:"title"`
+	Status   string            `json:"status"`
+	Assignee string            `json:"assignee,omitempty"`
+	Fields   map[string]string `json:"fields,omitempty"`
+	// SessionRows are the ticket's sessions, listed on the card so one can
+	// be dragged to another ticket without opening anything.
+	SessionRows []ticketSessionRow `json:"session_rows,omitempty"`
+	Sessions    int                `json:"sessions"`
+	Notes       int                `json:"notes"`
+	OpenTasks   int                `json:"open_tasks"`
+	UpdatedAt   string             `json:"updated_at"`
+	CreatedAt   string             `json:"created_at"`
+	Stale       bool               `json:"stale"`
 }
 
 // ticketBoardResponse is the envelope for GET /api/projects/{id}/tickets.
 type ticketBoardResponse struct {
 	Config  project.TicketConfig `json:"config"`
-	Tickets []TicketItem         `json:"tickets"`
-	// Users maps every user ID appearing in Tickets (owners+assignees)
-	// to a display name, so the board renders names without a second
-	// round-trip. Best effort — unknown IDs are simply absent.
-	Users map[string]string `json:"users,omitempty"`
-	// Me is the caller's user ID, for the "Assignee: Me" filter and the
-	// "Assign to me" button.
-	Me string `json:"me,omitempty"`
-	// Statuses is the fixed board column order.
-	Statuses []string `json:"statuses"`
+	Tickets []TicketCard         `json:"tickets"`
+	// Untracked are this project's chats that belong to no ticket — the
+	// board's left rail, and the drag source for attaching one. Sent one
+	// page at a time (see the caps above), or not at all when the client
+	// has the rail collapsed.
+	Untracked []ticketSessionRow `json:"untracked"`
+	// UntrackedTotal is how many exist, however few were sent, so the rail
+	// can say "25 of 142" instead of implying it has them all.
+	UntrackedTotal int               `json:"untracked_total"`
+	Statuses       []string          `json:"statuses"`
+	Users          map[string]string `json:"users,omitempty"`
+	Me             string            `json:"me,omitempty"`
 }
 
-/* ── handlers ────────────────────────────────────────────────────────────── */
+// ticketSessionRow is one session inside a ticket's detail view.
+type ticketSessionRow struct {
+	ID         string `json:"id"`
+	Label      string `json:"label"`
+	Status     string `json:"status"`
+	Lifecycle  string `json:"lifecycle,omitempty"`
+	LastActive string `json:"last_active"`
+}
 
-// apiProjectTickets handles GET /api/projects/{id}/tickets — the ticket
-// board payload. Access enforced by projectAccessMW.
+// ticketDetailResponse is the envelope for GET /api/tickets/{ticketID}.
+type ticketDetailResponse struct {
+	Ticket   ticket.Ticket        `json:"ticket"`
+	Config   project.TicketConfig `json:"config"`
+	Sessions []ticketSessionRow   `json:"sessions"`
+	Notes    []notes.Note         `json:"notes"`
+	Statuses []string             `json:"statuses"`
+	Users    map[string]string    `json:"users,omitempty"`
+	Me       string               `json:"me,omitempty"`
+}
+
+/* ── helpers ─────────────────────────────────────────────────────────────── */
+
+// resolveTicketProject finds which project owns a ticket. Ticket ids are
+// unique per project, and the URL carries only the ticket, so this scans the
+// projects the caller may see — which also enforces access without a second
+// check.
+func resolveTicketProject(c *tool.Ctx, ticketID string) (string, bool) {
+	access := callerProjectAccess(c)
+	for id := range globalMgr.Registry().Projects() {
+		if !access.allowProject(id) {
+			continue
+		}
+		if ticket.Exists(globalLayout, id, ticketID) {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+// userNames resolves display names for a set of user ids, best effort.
+func userNames(c *tool.Ctx, ids map[string]bool) map[string]string {
+	out := map[string]string{}
+	if globalAuth == nil {
+		return out
+	}
+	for id := range ids {
+		if id == "" {
+			continue
+		}
+		if u, err := globalAuth.GetUserByID(c.Context(), id); err == nil && u != nil {
+			out[id] = u.Name
+		}
+	}
+	return out
+}
+
+// sessionRow renders one session for the board or a ticket's detail, and
+// records its owner so names can be resolved in one pass.
+func sessionRow(
+	sid string,
+	live map[string]session.Session,
+	lc map[string]string,
+	ids map[string]bool,
+) ticketSessionRow {
+	row := ticketSessionRow{ID: sid, Label: loadFirstUserMessage(globalLayout, sid, 60), Lifecycle: lc[sid]}
+	if s, ok := live[sid]; ok {
+		row.Status = string(s.Meta.Status)
+		row.LastActive = s.Meta.LastActive.Format(time.RFC3339)
+		if ids != nil {
+			ids[s.Meta.UserID] = true
+		}
+	}
+	return row
+}
+
+func lifecycleBySession() map[string]string {
+	out := map[string]string{}
+	if globalPool == nil {
+		return out
+	}
+	for _, e := range globalPool.ActiveSnapshot() {
+		out[e.SessionID] = e.Lifecycle
+	}
+	return out
+}
+
+/* ── board + ticket CRUD ─────────────────────────────────────────────────── */
+
+// apiProjectTickets handles GET /api/projects/{id}/tickets — the board.
+// Access enforced by projectAccessMW.
 func apiProjectTickets(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -63,70 +200,583 @@ func apiProjectTickets(c *tool.Ctx) {
 	}
 	cfg := p.Meta.Ticket
 
-	lifecycle := map[string]string{}
-	if globalPool != nil {
-		for _, e := range globalPool.ActiveSnapshot() {
-			lifecycle[e.SessionID] = e.Lifecycle
+	tickets, err := ticket.List(globalLayout, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	now := time.Now()
+	ids := map[string]bool{}
+	lc := lifecycleBySession()
+	live := globalMgr.Registry().Sessions()
+	ticketed := map[string]bool{}
+
+	// The board pays only for what it draws. A project with hundreds of
+	// chats would otherwise send every one of them on every poll, and the
+	// client would throw most away — so the caps are enforced HERE, not by
+	// a filter in the UI.
+	//
+	//   ?rows=N      session rows per card (0 = none, just the count)
+	//   ?untracked=0 skip the untracked list entirely (it is collapsible)
+	//   ?untracked_limit=N
+	rowsPerCard := queryInt(c, "rows", defaultRowsPerCard, 0, maxRowsPerCard)
+	wantUntracked := c.Query("untracked") != "0"
+	untrackedLimit := queryInt(c, "untracked_limit", defaultUntrackedLimit, 1, maxUntrackedLimit)
+
+	cards := make([]TicketCard, 0, len(tickets))
+	for _, t := range tickets {
+		count, _ := notes.Counts(globalLayout, notes.Scope{ProjectID: id, TicketID: t.ID})
+		// Every session is marked as ticketed even when its row is not
+		// sent: the untracked list is "has no ticket", and truncating the
+		// rows must not make a tracked chat look loose.
+		for _, sid := range t.Sessions {
+			ticketed[sid] = true
 		}
+		shown := t.Sessions
+		if rowsPerCard < len(shown) {
+			shown = shown[:rowsPerCard]
+		}
+		rows := make([]ticketSessionRow, 0, len(shown))
+		for _, sid := range shown {
+			rows = append(rows, sessionRow(sid, live, lc, ids))
+		}
+		cards = append(cards, TicketCard{
+			ID:          t.ID,
+			Title:       t.Title,
+			Status:      t.Status,
+			Assignee:    t.Assignee,
+			Fields:      t.Fields,
+			SessionRows: rows,
+			Sessions:    len(t.Sessions),
+			Notes:       count.Visible,
+			OpenTasks:   count.OpenTasks,
+			UpdatedAt:   t.UpdatedAt.Format(time.RFC3339),
+			CreatedAt:   t.CreatedAt.Format(time.RFC3339),
+			Stale:       ticket.NeedsFollowup(cfg, t, now),
+		})
+		ids[t.Assignee] = true
 	}
 
-	now := time.Now()
-	items := []TicketItem{}
-	userIDs := map[string]bool{}
-	for sid, s := range globalMgr.Registry().Sessions() {
-		if s.Meta.ProjectID != id || s.Meta.ParentSessionID != "" {
-			continue
-		}
-		item := TicketItem{
-			SessionID:  sid,
-			Title:      loadFirstUserMessage(globalLayout, sid, 60),
-			Status:     session.TicketOpen,
-			LastActive: s.Meta.LastActive.Format(time.RFC3339),
-			OwnerID:    s.Meta.UserID,
-			Lifecycle:  lifecycle[sid],
-		}
-		if t := s.Meta.Ticket; t != nil {
-			item.Status = t.Status
-			item.Assignee = t.Assignee
-			item.Fields = t.Fields
-			if !t.UpdatedAt.IsZero() {
-				item.UpdatedAt = t.UpdatedAt.Format(time.RFC3339)
+	// Untracked: this project's chats with no ticket. Sub-agent sessions
+	// are working contexts, not chats, so they never appear.
+	//
+	// Counted in full but sent in part: the header needs the total ("142
+	// untracked") while the rail only draws the first page.
+	untracked := []ticketSessionRow{}
+	untrackedTotal := 0
+	if wantUntracked {
+		loose := make([]session.Session, 0, 32)
+		looseIDs := make([]string, 0, 32)
+		for sid, s := range live {
+			if s.Meta.ProjectID != id || s.Meta.ParentSessionID != "" || ticketed[sid] {
+				continue
 			}
-			item.Stale = ticket.NeedsFollowup(cfg, t, now)
+			loose = append(loose, s)
+			looseIDs = append(looseIDs, sid)
 		}
-		if item.OwnerID != "" {
-			userIDs[item.OwnerID] = true
+		untrackedTotal = len(looseIDs)
+		// Newest first, so the page that IS sent is the useful one.
+		sort.Slice(looseIDs, func(i, j int) bool {
+			return loose[i].Meta.LastActive.After(loose[j].Meta.LastActive)
+		})
+		if untrackedLimit < len(looseIDs) {
+			looseIDs = looseIDs[:untrackedLimit]
 		}
-		if item.Assignee != "" {
-			userIDs[item.Assignee] = true
+		for _, sid := range looseIDs {
+			untracked = append(untracked, sessionRow(sid, live, lc, ids))
 		}
-		items = append(items, item)
 	}
 
 	resp := ticketBoardResponse{
-		Config:   cfg,
-		Tickets:  items,
-		Statuses: session.TicketStatuses,
-		Users:    map[string]string{},
+		Config:         cfg,
+		Tickets:        cards,
+		Untracked:      untracked,
+		UntrackedTotal: untrackedTotal,
+		Statuses:       ticket.Statuses,
 	}
 	if u := login.GetUser(c.Context()); u != nil {
 		resp.Me = u.ID
-		userIDs[u.ID] = true
+		ids[u.ID] = true
 	}
-	if globalAuth != nil {
-		for uid := range userIDs {
-			if usr, err := globalAuth.GetUserByID(c.Context(), uid); err == nil && usr != nil {
-				resp.Users[uid] = usr.Name
-			}
-		}
-	}
+	resp.Users = userNames(c, ids)
 	c.JSON(http.StatusOK, resp)
 }
 
+// apiTicketCreate handles POST /api/projects/{id}/tickets.
+func apiTicketCreate(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	projectID := c.PathValue("id")
+	var req struct {
+		Title  string `json:"title"`
+		Status string `json:"status"`
+		// Assignee is a pointer so "not sent" stays distinct from "sent
+		// empty": omitting it means "whoever is creating this", while an
+		// explicit "" is a deliberate no-assignee.
+		Assignee *string           `json:"assignee"`
+		Fields   map[string]string `json:"fields"`
+		// SessionID optionally attaches an existing conversation, which is
+		// how "turn this chat into a ticket" works.
+		SessionID string `json:"session_id"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if req.Status != "" && !ticket.ValidStatus(req.Status) {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid status: " + req.Status})
+		return
+	}
+	var seed []string
+	if s := strings.TrimSpace(req.SessionID); s != "" {
+		seed = []string{s}
+	}
+	// Whoever creates a ticket is presumed to be taking it on — dragging a
+	// chat onto a column is someone saying "I am working on this", and
+	// landing an "unassigned" card in front of them says the opposite.
+	// An explicit empty assignee still means unassigned.
+	assignee := ""
+	if req.Assignee != nil {
+		assignee = strings.TrimSpace(*req.Assignee)
+	} else if u := login.GetUser(c.Context()); u != nil {
+		assignee = u.ID
+	}
+	tk, err := ticket.Create(globalLayout, ticket.CreateOptions{
+		ProjectID: projectID,
+		Title:     req.Title,
+		Status:    req.Status,
+		Assignee:  assignee,
+		Fields:    req.Fields,
+		Sessions:  seed,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	for _, sid := range seed {
+		writeSessionTicketPointer(sid, tk.ID)
+	}
+	c.JSON(http.StatusOK, tk)
+}
+
+// apiTicketDetail handles GET /api/tickets/{ticketID}.
+func apiTicketDetail(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	ticketID := c.PathValue("ticketID")
+	projectID, ok := resolveTicketProject(c, ticketID)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
+		return
+	}
+	tk, err := ticket.Load(globalLayout, projectID, ticketID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
+		return
+	}
+	resp := ticketDetailResponse{Ticket: tk, Statuses: ticket.Statuses}
+	if p, pok := globalMgr.Registry().Project(projectID); pok {
+		resp.Config = p.Meta.Ticket
+	}
+
+	lc := lifecycleBySession()
+	live := globalMgr.Registry().Sessions()
+	ids := map[string]bool{tk.Assignee: true}
+	resp.Sessions = make([]ticketSessionRow, 0, len(tk.Sessions))
+	for _, sid := range tk.Sessions {
+		resp.Sessions = append(resp.Sessions, sessionRow(sid, live, lc, ids))
+	}
+
+	// The UI view includes hidden notes (rendered blurred); only the MCP
+	// surface filters them out.
+	list, _ := notes.List(globalLayout, notes.Scope{ProjectID: projectID, TicketID: ticketID})
+	resp.Notes = list
+	for _, n := range list {
+		ids[n.Author] = true
+	}
+	if u := login.GetUser(c.Context()); u != nil {
+		resp.Me = u.ID
+		ids[u.ID] = true
+	}
+	resp.Users = userNames(c, ids)
+	c.JSON(http.StatusOK, resp)
+}
+
+// apiTicketUpdate handles PATCH /api/tickets/{ticketID} — partial update.
+// Any edit bumps UpdatedAt, which is what the stale and auto-resolve timers
+// key on.
+func apiTicketUpdate(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	ticketID := c.PathValue("ticketID")
+	projectID, ok := resolveTicketProject(c, ticketID)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
+		return
+	}
+	var req struct {
+		Title    *string           `json:"title"`
+		Status   *string           `json:"status"`
+		Assignee *string           `json:"assignee"`
+		Fields   map[string]string `json:"fields"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	tk, err := ticket.Load(globalLayout, projectID, ticketID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
+		return
+	}
+	if req.Status != nil {
+		if !ticket.ValidStatus(*req.Status) {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid status: " + *req.Status})
+			return
+		}
+		tk.Status = *req.Status
+	}
+	if req.Title != nil {
+		title := strings.TrimSpace(*req.Title)
+		if title == "" {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": "title cannot be empty"})
+			return
+		}
+		tk.Title = title
+	}
+	if req.Assignee != nil {
+		tk.Assignee = strings.TrimSpace(*req.Assignee)
+	}
+	if req.Fields != nil {
+		if tk.Fields == nil {
+			tk.Fields = map[string]string{}
+		}
+		for k, v := range req.Fields {
+			if strings.TrimSpace(v) == "" {
+				delete(tk.Fields, k)
+				continue
+			}
+			tk.Fields[k] = v
+		}
+	}
+	if err := ticket.Save(globalLayout, tk); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, tk)
+}
+
+// apiTicketDelete handles DELETE /api/tickets/{ticketID}.
+//
+// Two shapes, and the difference is the whole point:
+//
+//	?sessions=keep    (default) the chats survive as untracked
+//	?sessions=delete  the chats are deleted with the ticket
+//
+// The destructive shape has to be asked for by name. A ticket is cheap to
+// recreate; the conversations under it are not, and deleting them takes the
+// notes and working history with them. The client names the count in its
+// confirmation, and the response reports what actually went.
+func apiTicketDelete(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	ticketID := c.PathValue("ticketID")
+	projectID, ok := resolveTicketProject(c, ticketID)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
+		return
+	}
+	mode := strings.TrimSpace(c.Query("sessions"))
+	if mode != "" && mode != "keep" && mode != "delete" {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": `sessions must be "keep" or "delete"`})
+		return
+	}
+	cascade := mode == "delete"
+
+	tk, err := ticket.Load(globalLayout, projectID, ticketID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
+		return
+	}
+
+	deleted := 0
+	for _, sid := range tk.Sessions {
+		if !cascade {
+			// Kept: the chat lives on, just without a ticket.
+			writeSessionTicketPointer(sid, "")
+			continue
+		}
+		// Deleting the session takes its notes with it, so the ticket's
+		// notes are not separately rescued — they described work that is
+		// being thrown away on purpose.
+		if derr := globalMgr.DeleteSession(c.Context(), sid); derr != nil {
+			log.Ctx(c.Context()).Error().Str("session", sid).Err(derr).
+				Msg("ticket delete: session delete failed")
+			continue
+		}
+		deleted++
+	}
+
+	if err := ticket.Delete(globalLayout, projectID, ticketID); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{
+		"status":           "ok",
+		"sessions_deleted": deleted,
+		"sessions_kept":    len(tk.Sessions) - deleted,
+	})
+}
+
+/* ── ticket ↔ session ────────────────────────────────────────────────────── */
+
+// writeSessionTicketPointer keeps session.Meta.TicketID in step with the
+// ticket's own list. Best effort by design: the ticket is the record, so a
+// failure here degrades a shortcut, never correctness.
+func writeSessionTicketPointer(sessionID, ticketID string) {
+	sess, err := session.Load(globalLayout, sessionID)
+	if err != nil {
+		return
+	}
+	if sess.Meta.TicketID == ticketID {
+		return
+	}
+	sess.Meta.TicketID = ticketID
+	if err := session.SaveMeta(globalLayout, sessionID, sess.Meta); err != nil {
+		return
+	}
+	_ = globalMgr.RefreshSession(sessionID)
+}
+
+// apiTicketAttachSession handles PUT /api/tickets/{ticketID}/sessions/{sid}.
+func apiTicketAttachSession(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	ticketID := c.PathValue("ticketID")
+	sid := c.PathValue("sid")
+	projectID, ok := resolveTicketProject(c, ticketID)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
+		return
+	}
+	// Which ticket this chat is leaving, so the response can tell the board
+	// that one just emptied — a ticket with no sessions has nothing left to
+	// track, and the user is offered its removal rather than left with a
+	// husk on the board.
+	from, hadFrom := ticket.FindBySession(globalLayout, projectID, sid)
+
+	if err := ticket.AttachSession(globalLayout, projectID, ticketID, sid); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeSessionTicketPointer(sid, ticketID)
+	c.JSON(http.StatusOK, emptiedResponse(globalLayout, projectID, from, hadFrom))
+}
+
+// emptiedResponse reports whether the ticket a chat just left is now empty,
+// so the client can offer to delete it. Reported, never acted on here:
+// deleting something the user did not ask about is not the server's call.
+func emptiedResponse(layout agentsconfig.Layout, projectID string, from ticket.Ticket, had bool) map[string]any {
+	out := map[string]any{"status": "ok"}
+	if !had {
+		return out
+	}
+	now, err := ticket.Load(layout, projectID, from.ID)
+	if err != nil || len(now.Sessions) > 0 {
+		return out
+	}
+	out["emptied_ticket"] = map[string]string{"id": now.ID, "title": now.Title}
+	return out
+}
+
+// apiTicketDetachSession handles DELETE /api/tickets/{ticketID}/sessions/{sid}.
+func apiTicketDetachSession(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	ticketID := c.PathValue("ticketID")
+	sid := c.PathValue("sid")
+	projectID, ok := resolveTicketProject(c, ticketID)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
+		return
+	}
+	from, hadFrom := ticket.Load(globalLayout, projectID, ticketID)
+	if err := ticket.DetachSession(globalLayout, projectID, ticketID, sid); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeSessionTicketPointer(sid, "")
+	c.JSON(http.StatusOK, emptiedResponse(globalLayout, projectID, from, hadFrom == nil))
+}
+
+/* ── notes ───────────────────────────────────────────────────────────────── */
+
+// notesScopeFromQuery builds a scope from ?ticket_id= or ?session_id=. A
+// session id resolves through notes.Resolve, so a session that belongs to a
+// ticket reads the TICKET's notes — that sharing is what lets a fresh
+// session pick up where a previous one left off.
+func notesScopeFromQuery(c *tool.Ctx) (notes.Scope, bool) {
+	if tid := strings.TrimSpace(c.Query("ticket_id")); tid != "" {
+		projectID, ok := resolveTicketProject(c, tid)
+		if !ok {
+			return notes.Scope{}, false
+		}
+		return notes.Scope{ProjectID: projectID, TicketID: tid}, true
+	}
+	sid := strings.TrimSpace(c.Query("session_id"))
+	if sid == "" {
+		return notes.Scope{}, false
+	}
+	sess, ok := globalMgr.Registry().Session(sid)
+	if !ok || !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID) {
+		return notes.Scope{}, false
+	}
+	sc, err := notes.Resolve(globalLayout, sid)
+	if err != nil {
+		return notes.Scope{}, false
+	}
+	return sc, true
+}
+
+// apiNotesList handles GET /api/notes?ticket_id=…|session_id=…
+func apiNotesList(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	sc, ok := notesScopeFromQuery(c)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "scope not found"})
+		return
+	}
+	list, err := notes.List(globalLayout, sc)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	ids := map[string]bool{}
+	for _, n := range list {
+		ids[n.Author] = true
+	}
+	out := map[string]any{"notes": list, "users": userNames(c, ids)}
+	if u := login.GetUser(c.Context()); u != nil {
+		out["me"] = u.ID
+	}
+	// When the scope resolved to a ticket, name it: the conversation rail
+	// shows which ticket the notes belong to, and without this it would
+	// have to guess from the session or fetch again.
+	if sc.TicketID != "" {
+		if tk, err := ticket.Load(globalLayout, sc.ProjectID, sc.TicketID); err == nil {
+			out["ticket"] = map[string]string{"id": tk.ID, "title": tk.Title, "status": tk.Status}
+		}
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// apiNotesAdd handles POST /api/notes?ticket_id=…|session_id=…
+func apiNotesAdd(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	sc, ok := notesScopeFromQuery(c)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "scope not found"})
+		return
+	}
+	var req struct {
+		Body      string `json:"body"`
+		Checkable bool   `json:"checkable"`
+		Audience  string `json:"audience"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	author := ""
+	if u := login.GetUser(c.Context()); u != nil {
+		author = u.ID
+	}
+	n, err := notes.Add(globalLayout, sc, notes.AddOptions{
+		Body: req.Body, Checkable: req.Checkable, Audience: req.Audience, Author: author,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, n)
+}
+
+// apiNotesUpdate handles PATCH /api/notes/{noteID}?ticket_id=…|session_id=…
+// Hidden is part of this: hiding a note takes it out of the agent's reach
+// without deleting it.
+func apiNotesUpdate(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	sc, ok := notesScopeFromQuery(c)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "scope not found"})
+		return
+	}
+	var req struct {
+		Body      *string `json:"body"`
+		Checkable *bool   `json:"checkable"`
+		Audience  *string `json:"audience"`
+		Hidden    *bool   `json:"hidden"`
+		Done      *bool   `json:"done"`
+	}
+	if err := c.BindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	noteID := c.PathValue("noteID")
+	if req.Done != nil {
+		n, err := notes.Check(globalLayout, sc, noteID, *req.Done)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		// A done-only request is the checkbox click; nothing else to apply.
+		if req.Body == nil && req.Checkable == nil && req.Audience == nil && req.Hidden == nil {
+			c.JSON(http.StatusOK, n)
+			return
+		}
+	}
+	n, err := notes.Update(globalLayout, sc, noteID, notes.UpdateOptions{
+		Body: req.Body, Checkable: req.Checkable, Audience: req.Audience, Hidden: req.Hidden,
+	})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, n)
+}
+
+// apiNotesDelete handles DELETE /api/notes/{noteID}?ticket_id=…|session_id=…
+func apiNotesDelete(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	sc, ok := notesScopeFromQuery(c)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "scope not found"})
+		return
+	}
+	if err := notes.Delete(globalLayout, sc, c.PathValue("noteID")); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+
+/* ── project ticket config + saved board filter ──────────────────────────── */
+
 // apiProjectTicketConfig handles PUT /api/projects/{id}/ticket-config.
-// Saves the project's ticket-mode configuration. Access enforced by
-// projectAccessMW; field schema is validated here so a broken schema is
-// refused rather than stored.
 func apiProjectTicketConfig(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -166,8 +816,8 @@ func apiProjectTicketConfig(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "durations must be >= 0"})
 		return
 	}
-	// First enable with an empty schema gets the seed fields, so the
-	// board is useful before anyone visits the field editor.
+	// First enable with an empty schema gets the seed fields, so the board
+	// is useful before anyone visits the field editor.
 	if req.Enabled && len(req.Fields) == 0 {
 		req.Fields = project.DefaultTicketFields()
 	}
@@ -186,120 +836,78 @@ func apiProjectTicketConfig(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// apiSessionTicketUpdate handles PUT /api/sessions/{id}/ticket — partial
-// update of one session's ticket (status, assignee, fields). Access
-// enforced by sessionAccessMW. Any edit bumps UpdatedAt, which is what
-// the stale/auto-resolve timers key on.
-func apiSessionTicketUpdate(c *tool.Ctx) {
-	if notReady(c) {
+// apiTicketPrefsGet handles GET /api/me/ticket-prefs — the standing answers
+// this user has given to ticket prompts.
+func apiTicketPrefsGet(c *tool.Ctx) {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusOK, map[string]string{"auto_delete_empty": ""})
 		return
 	}
-	id := c.PathValue("id")
+	c.JSON(http.StatusOK, map[string]string{
+		"auto_delete_empty": u.Metadata.AutoDeleteEmptyTickets,
+	})
+}
+
+// apiTicketPrefsSave handles PUT /api/me/ticket-prefs.
+func apiTicketPrefsSave(c *tool.Ctx) {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "login required"})
+		return
+	}
 	var req struct {
-		Status   *string           `json:"status"`
-		Assignee *string           `json:"assignee"`
-		Fields   map[string]string `json:"fields"`
+		AutoDeleteEmpty string `json:"auto_delete_empty"`
 	}
 	if err := c.BindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
-	if req.Status != nil && !session.ValidTicketStatus(*req.Status) {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid status: " + *req.Status})
+	if globalAuth == nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": "auth service unavailable"})
 		return
 	}
+	if err := globalAuth.SetAutoDeleteEmptyTickets(c.Context(), u.ID, req.AutoDeleteEmpty); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
 
-	sess, err := session.Load(globalLayout, id)
-	if err != nil {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+// apiRailPrefsGet handles GET /api/me/rail — the caller's rail layout.
+func apiRailPrefsGet(c *tool.Ctx) {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusOK, entity.RailPrefs{})
 		return
 	}
-	t := sess.Meta.Ticket
-	if t == nil {
-		t = &session.Ticket{Status: session.TicketOpen}
+	c.JSON(http.StatusOK, u.Metadata.Rail)
+}
+
+// apiRailPrefsSave handles PUT /api/me/rail.
+func apiRailPrefsSave(c *tool.Ctx) {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "login required"})
+		return
 	}
-	if req.Status != nil {
-		t.Status = *req.Status
+	var p entity.RailPrefs
+	if err := c.BindJSON(&p); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
 	}
-	if req.Assignee != nil {
-		t.Assignee = strings.TrimSpace(*req.Assignee)
+	if globalAuth == nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": "auth service unavailable"})
+		return
 	}
-	if req.Fields != nil {
-		if t.Fields == nil {
-			t.Fields = map[string]string{}
-		}
-		for k, v := range req.Fields {
-			if strings.TrimSpace(v) == "" {
-				delete(t.Fields, k)
-				continue
-			}
-			t.Fields[k] = v
-		}
-	}
-	t.UpdatedAt = time.Now().UTC()
-	sess.Meta.Ticket = t
-	if err := session.SaveMeta(globalLayout, id, sess.Meta); err != nil {
+	if err := globalAuth.SetRailPrefs(c.Context(), u.ID, p); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	_ = globalMgr.RefreshSession(id)
-	c.JSON(http.StatusOK, map[string]any{"status": "ok", "ticket": t})
+	c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// sessionTicketResponse is the envelope for GET /api/sessions/{id}/ticket —
-// everything the conversation rail's Ticket panel needs in one call.
-type sessionTicketResponse struct {
-	Config   project.TicketConfig `json:"config"`
-	Ticket   *session.Ticket      `json:"ticket"`
-	Statuses []string             `json:"statuses"`
-	Users    map[string]string    `json:"users,omitempty"`
-	Me       string               `json:"me,omitempty"`
-}
-
-// apiSessionTicketGet handles GET /api/sessions/{id}/ticket. Access
-// enforced by sessionAccessMW. A session outside any ticket-enabled
-// project answers with config.enabled=false — the panel hides itself.
-func apiSessionTicketGet(c *tool.Ctx) {
-	if notReady(c) {
-		return
-	}
-	id := c.PathValue("id")
-	sess, ok := globalMgr.Registry().Session(id)
-	if !ok {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
-		return
-	}
-	resp := sessionTicketResponse{
-		Ticket:   sess.Meta.Ticket,
-		Statuses: session.TicketStatuses,
-		Users:    map[string]string{},
-	}
-	if p, pok := globalMgr.Registry().Project(sess.Meta.ProjectID); pok {
-		resp.Config = p.Meta.Ticket
-	}
-	ids := map[string]bool{}
-	if sess.Meta.UserID != "" {
-		ids[sess.Meta.UserID] = true
-	}
-	if sess.Meta.Ticket != nil && sess.Meta.Ticket.Assignee != "" {
-		ids[sess.Meta.Ticket.Assignee] = true
-	}
-	if u := login.GetUser(c.Context()); u != nil {
-		resp.Me = u.ID
-		ids[u.ID] = true
-	}
-	if globalAuth != nil {
-		for uid := range ids {
-			if usr, err := globalAuth.GetUserByID(c.Context(), uid); err == nil && usr != nil {
-				resp.Users[uid] = usr.Name
-			}
-		}
-	}
-	c.JSON(http.StatusOK, resp)
-}
-
-// apiTicketFilterGet handles GET /api/me/ticket-filters/{projectID} —
-// the caller's saved board filter for one project.
+// apiTicketFilterGet handles GET /api/me/ticket-filters/{projectID}.
 func apiTicketFilterGet(c *tool.Ctx) {
 	u := login.GetUser(c.Context())
 	if u == nil {

@@ -390,10 +390,9 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 		handlers.WickSessionInfo(w, r, hreq, rsp, h.layout, args)
 	case "wick_set_title":
 		handlers.WickSetTitle(w, r, hreq, rsp, h.layout, h.refreshSession, args)
-	case "wick_ticket_get":
-		handlers.WickTicketGet(w, r, hreq, rsp, h.layout, args)
-	case "wick_ticket_set":
-		handlers.WickTicketSet(w, r, hreq, rsp, h.layout, h.refreshSession, args)
+	// Tickets and notes are connectors (internal/connectors/tickets,
+	// internal/connectors/notes), not meta-tools: a connector is taggable
+	// and auditable per user, which a hard-coded tool is not.
 	case "wick_schedule_message":
 		handlers.WickScheduleMessage(w, r, hreq, rsp, h.schedule, h.layout, args, user)
 	default:

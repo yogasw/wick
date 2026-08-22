@@ -6,12 +6,22 @@
   import { createSessionInProject, getPresetOptions, getProviderOptionModels } from "../api/options.js";
   import { searchProjectFiles } from "../api/files.js";
   import { listComposerCommands } from "../api/composer.js";
-  import { getProjectTickets, getTicketFilter, saveTicketFilter } from "../api/tickets.js";
+  import {
+    attachSession,
+    deleteTicket,
+    getProjectTickets,
+    getTicketFilter,
+    getTicketPrefs,
+    saveTicketFilter,
+    saveTicketPrefs,
+    type EmptiedTicket,
+  } from "../api/tickets.js";
   import type { TicketBoard, TicketFilter } from "../types/agents.js";
   import { Composer } from "@wick-fe/common-ui";
   import { NOTIFY_KEY } from "../notify-pref.js";
   import SessionList from "./SessionList.svelte";
   import KanbanBoard from "./KanbanBoard.svelte";
+  import TicketDetail from "./TicketDetail.svelte";
 
   type Props = {
     base: string;
@@ -128,8 +138,22 @@
   /* ── ticket board (only when the project has ticket mode enabled) ── */
   let board = $state<TicketBoard | null>(null);
   let ticketFilter = $state<TicketFilter>({});
+
+  /* Whether the untracked rail is open — remembered per user with the rest
+     of the filter, and load-bearing: with it shut the board stops asking
+     the server for that list, so a project with hundreds of loose chats
+     costs nothing extra to poll. */
+  const showUntracked = $derived(ticketFilter.hide_untracked !== true);
+
+  /* Only what the board actually draws is requested. */
+  function boardOptions() {
+    return { rows: 3, untracked: showUntracked, untrackedLimit: 25 };
+  }
+
   $effect(() => {
-    Effect.runPromise(getProjectTickets(base, project.id).pipe(Effect.provide(WickClientLayer)))
+    Effect.runPromise(
+      getProjectTickets(base, project.id, boardOptions()).pipe(Effect.provide(WickClientLayer)),
+    )
       .then((b) => { board = b; })
       .catch(() => { board = null; /* board optional — old servers */ });
     Effect.runPromise(getTicketFilter(base, project.id).pipe(Effect.provide(WickClientLayer)))
@@ -139,6 +163,78 @@
 
   const ticketEnabled = $derived(board?.config?.enabled === true);
   const viewMode = $derived(ticketEnabled && ticketFilter.view_mode === "card" ? "card" : "list");
+
+  /* Which ticket's detail is open, if any. Read from ?ticket= on load so a
+     link out of the conversation rail lands here. */
+  let openTicketId = $state<string | null>(
+    new URLSearchParams(window.location.search).get("ticket"),
+  );
+
+  function reloadBoard() {
+    Effect.runPromise(
+      getProjectTickets(base, project.id, boardOptions()).pipe(Effect.provide(WickClientLayer)),
+    )
+      .then((b) => { board = b; })
+      .catch(() => { /* keep the previous board on a transient failure */ });
+  }
+
+  /* ── a ticket that just lost its last chat ──
+     A ticket with no sessions tracks nothing, so removal is offered. The
+     answer can be made standing ("don't ask again"), which is safe here
+     precisely because deleting an EMPTY ticket destroys no conversation —
+     unlike deleting one that still holds chats, which always asks. */
+  let emptied = $state<EmptiedTicket | null>(null);
+  let dontAskEmpty = $state(false);
+  let autoDeleteEmpty = $state<"" | "always" | "never">("");
+
+  $effect(() => {
+    Effect.runPromise(getTicketPrefs(base).pipe(Effect.provide(WickClientLayer)))
+      .then((p) => { autoDeleteEmpty = p.auto_delete_empty ?? ""; })
+      .catch(() => { /* asking is the safe default */ });
+  });
+
+  function handleEmptied(t: EmptiedTicket) {
+    if (autoDeleteEmpty === "never") return;
+    if (autoDeleteEmpty === "always") {
+      removeEmptyTicket(t.id);
+      return;
+    }
+    emptied = t;
+    dontAskEmpty = false;
+  }
+
+  function removeEmptyTicket(ticketId: string) {
+    // "keep": an empty ticket has no chats to take with it, so this is only
+    // ever the ticket record.
+    Effect.runPromise(deleteTicket(base, ticketId, "keep").pipe(Effect.provide(WickClientLayer)))
+      .then(reloadBoard)
+      .catch((e: unknown) => toastError(e instanceof Error ? e.message : "Failed to delete the ticket"));
+  }
+
+  function answerEmptied(remove: boolean) {
+    const t = emptied;
+    emptied = null;
+    if (dontAskEmpty) {
+      const choice = remove ? "always" : "never";
+      autoDeleteEmpty = choice;
+      Effect.runPromise(
+        saveTicketPrefs(base, { auto_delete_empty: choice }).pipe(Effect.provide(WickClientLayer)),
+      ).catch(() => { /* the prompt will simply appear again */ });
+    }
+    if (remove && t) removeEmptyTicket(t.id);
+    else reloadBoard();
+  }
+
+  /* Starting a session on a ticket is a two-step: create it in this
+     project, then attach. The composer owns creation, so the ticket id is
+     stashed and applied once the new session exists. */
+  function newSessionInTicket(ticketId: string) {
+    pendingTicketId = ticketId;
+    openTicketId = null;
+    composerHint = "New session on " + ticketId;
+  }
+  let pendingTicketId = $state<string | null>(null);
+  let composerHint = $state("");
 
   let filterSaveTimer: ReturnType<typeof setTimeout> | undefined;
   function applyFilter(f: TicketFilter) {
@@ -162,6 +258,18 @@
         project.id,
         selectedPreset,
       );
+      // Attach before navigating: the new session must already belong to
+      // the ticket when it opens, or its first spawn would miss the
+      // ticket pointer and its notes.
+      if (pendingTicketId) {
+        const sessionId = url.split("/").pop()?.split("?")[0] ?? "";
+        if (sessionId) {
+          await Effect.runPromise(
+            attachSession(base, pendingTicketId, sessionId).pipe(Effect.provide(WickClientLayer)),
+          ).catch(() => { /* the session is still usable unattached */ });
+        }
+        pendingTicketId = null;
+      }
       window.location.href = url;
     } catch (err) {
       toastError(err instanceof Error ? err.message : "Failed to create session");
@@ -236,6 +344,11 @@
     onSearchFiles={searchMentionFiles}
     commands={composerCommands}
   />
+  {#if composerHint}
+    <p class="text-center text-xs font-medium text-green-600 dark:text-green-400">
+      {composerHint} — type the first message below.
+    </p>
+  {/if}
   <p class="text-center text-xs text-black-600 dark:text-black-700">
     New session in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span>{#if project.defaultProvider} · defaults to <span class="font-mono">{project.defaultProvider}</span>{/if}. Pick provider / model / preset above to override for this session.
   </p>
@@ -266,13 +379,32 @@
       </div>
     {/if}
 
-    {#if ticketEnabled && viewMode === "card" && board}
+    {#if ticketEnabled && openTicketId}
+      <TicketDetail
+        {base}
+        ticketId={openTicketId}
+        onBack={() => { openTicketId = null; reloadBoard(); }}
+        onOpenSession={onSelectSession}
+        onNewSession={newSessionInTicket}
+      />
+    {:else if ticketEnabled && viewMode === "card" && board}
       <KanbanBoard
         {base}
+        projectId={project.id}
         {board}
         filter={ticketFilter}
         onFilter={applyFilter}
-        onSelect={onSelectSession}
+        onOpen={(id) => { openTicketId = id; }}
+        onOpenSession={onSelectSession}
+        onReload={reloadBoard}
+        onEmptied={handleEmptied}
+        {showUntracked}
+        onToggleUntracked={(show) => {
+          // Saved with the filter, then re-fetched: collapsing the rail is
+          // what stops the server sending that list at all.
+          applyFilter({ ...ticketFilter, hide_untracked: !show });
+          reloadBoard();
+        }}
       />
     {:else}
       <SessionList
@@ -284,3 +416,48 @@
     {/if}
   </div>
 </div>
+
+<!-- The last chat left a ticket, so the ticket now tracks nothing. Offering
+     removal here (rather than doing it silently) keeps a deliberately-empty
+     ticket — one just created, not yet used — from disappearing. -->
+{#if emptied}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-navy-900/40 p-4">
+    <div class="w-full max-w-sm rounded-xl border border-white-300 bg-white-100 p-5 shadow-xl dark:border-navy-600 dark:bg-navy-700">
+      <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">
+        Delete the empty ticket?
+      </h2>
+      <p class="mt-2 text-xs leading-relaxed text-black-700 dark:text-black-600">
+        <span class="rounded bg-white-200 px-1 font-mono text-[10px] dark:bg-navy-800">{emptied.id}</span>
+        “{emptied.title}” has no chats left. Nothing else is deleted — the chat you moved is
+        safe on its new ticket.
+      </p>
+
+      <label class="mt-4 flex cursor-pointer items-start gap-2 text-xs text-black-800 dark:text-black-600">
+        <input
+          type="checkbox"
+          bind:checked={dontAskEmpty}
+          class="mt-0.5 h-3.5 w-3.5 rounded border-white-400 text-green-600 focus:ring-green-500 dark:border-navy-600"
+        />
+        <span>
+          Don’t ask again — remember my answer.
+          <span class="mt-0.5 block text-[11px] text-black-700 dark:text-black-600">
+            Only for empty tickets. Deleting a ticket that still holds chats always asks.
+          </span>
+        </span>
+      </label>
+
+      <div class="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          onclick={() => answerEmptied(false)}
+          class="rounded-lg border border-white-400 px-3 py-1.5 text-xs text-black-800 transition-colors hover:bg-white-200 dark:border-navy-600 dark:text-black-600 dark:hover:bg-navy-800"
+        >Keep it</button>
+        <button
+          type="button"
+          onclick={() => answerEmptied(true)}
+          class="rounded-lg bg-neg-400 px-3 py-1.5 text-xs font-semibold text-white-100 transition-colors hover:bg-neg-500"
+        >Delete ticket</button>
+      </div>
+    </div>
+  </div>
+{/if}

@@ -28,6 +28,47 @@ type TicketConfig struct {
 	// AutoResolveAfterSec: a non-done ticket untouched for this long is
 	// closed — status set to done by the sweeper, no agent spawn.
 	AutoResolveAfterSec int64 `json:"auto_resolve_after_sec,omitempty"`
+
+	// AutoCreate decides when a new session gets a ticket of its own with
+	// nobody asking for one. Empty = off, which is what every project
+	// starts as. Rules are tried in order and the FIRST match wins, so a
+	// narrow exception belongs above the broad rule it carves out of.
+	AutoCreate []AutoCreateRule `json:"auto_create,omitempty"`
+}
+
+// Channel kinds an AutoCreateRule can be narrowed to. A DM is somebody's
+// private conversation, so "track everything from Slack except DMs" has to
+// be expressible as one rule rather than a list of channels.
+const (
+	ChannelKindAny     = ""
+	ChannelKindDM      = "dm"
+	ChannelKindChannel = "channel"
+	ChannelKindThread  = "thread"
+)
+
+// AutoCreateRule is one condition under which a session is given a ticket.
+type AutoCreateRule struct {
+	// Origin scopes the rule to where the session came from: "ui",
+	// "slack", "telegram", "rest", … or "*" for any.
+	Origin string `json:"origin"`
+	// ChannelKind narrows a channel-origin rule to dm / channel / thread.
+	// Empty means any. Ignored for non-channel origins.
+	ChannelKind string `json:"channel_kind,omitempty"`
+	// Match is an optional text condition on the session's first message:
+	//
+	//	""              — origin alone decides
+	//	contains:<text> — case-insensitive substring
+	//	regex:<expr>    — Go regular expression
+	//
+	// A regex that does not compile is refused when the config is saved,
+	// rather than silently never matching.
+	Match string `json:"match,omitempty"`
+	// Enabled lets a rule be parked without losing how it was written.
+	Enabled bool `json:"enabled"`
+	// Title optionally templates the new ticket's title. "{message}" is
+	// replaced with the first message (truncated), "{origin}" with the
+	// origin. Empty falls back to the message itself.
+	Title string `json:"title,omitempty"`
 }
 
 // DefaultTicketFields returns the schema seeded when a project enables

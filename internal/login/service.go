@@ -126,6 +126,46 @@ func (s *Service) SetTicketFilter(ctx context.Context, userID, projectID string,
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 
+// SetRailPrefs saves the user's conversation-rail layout. Order is stored
+// as given — the client owns which ids exist — but Visible is clamped so a
+// bad value cannot hide the rail or stretch it past the tabs that exist.
+func (s *Service) SetRailPrefs(ctx context.Context, userID string, p entity.RailPrefs) error {
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if p.Visible != 0 {
+		if p.Visible < 2 {
+			p.Visible = 2
+		}
+		if p.Visible > 8 {
+			p.Visible = 8
+		}
+	}
+	meta := u.Metadata
+	meta.Rail = p
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
+// SetAutoDeleteEmptyTickets records the user's standing answer to "delete
+// this ticket now that its last chat left?". Only the empty case: deleting a
+// ticket that still holds chats always asks, because that one takes
+// conversations with it.
+func (s *Service) SetAutoDeleteEmptyTickets(ctx context.Context, userID, choice string) error {
+	switch choice {
+	case entity.AutoDeleteEmptyAsk, entity.AutoDeleteEmptyAlways, entity.AutoDeleteEmptyNever:
+	default:
+		return errors.New(`choice must be "", "always", or "never"`)
+	}
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	meta := u.Metadata
+	meta.AutoDeleteEmptyTickets = choice
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
 // SetPinnedAgentProject sets (or clears, when projectID is empty) the
 // user's pinned agents Project — their personal default. One per user.
 func (s *Service) SetPinnedAgentProject(ctx context.Context, userID, projectID string) error {

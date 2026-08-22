@@ -15,7 +15,7 @@ const CUSTOM = { override: true, mode: "custom" };
 describe("WidgetPolicyEditor — inheriting", () => {
   test("no mode toggle at all while inheriting", () => {
     setup({}, { mode: "unsecure" });
-    expect(screen.getByText("inherited from global")).toBeTruthy();
+    expect(screen.getByText("inherited")).toBeTruthy();
     expect(screen.queryByRole("radiogroup", { name: "Widget mode" })).toBeNull();
   });
 
