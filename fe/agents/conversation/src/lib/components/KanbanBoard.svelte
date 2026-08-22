@@ -70,20 +70,30 @@
      say "25/142" rather than implying it holds them all. */
   const untrackedTotal = $derived(board.untracked_total ?? untracked.length);
 
-  const statusLabels: Record<string, string> = {
-    open: "Open",
-    in_progress: "In Progress",
-    waiting: "Waiting",
-    done: "Done",
-  };
+  /* Columns come from the project — a team names its own stages — so keys
+     and labels both arrive on the board payload. */
+  const statusKeys = $derived(board.statuses.map((s) => s.key));
+  const labelOf = (key: string) =>
+    board.statuses.find((s) => s.key === key)?.label || key;
+  const terminalKey = $derived(
+    board.statuses.find((s) => s.terminal)?.key ??
+      board.statuses[board.statuses.length - 1]?.key ??
+      "",
+  );
 
-  /* Column accents come from the status ramps — green stays the accent. */
-  const columnPill: Record<string, string> = {
-    open: "bg-prog-100 text-prog-400",
-    in_progress: "bg-cau-100 text-cau-400",
-    waiting: "bg-white-300 dark:bg-navy-600 text-black-800 dark:text-black-600",
-    done: "bg-pos-100 text-pos-400",
-  };
+  /* Column accents: a fixed ramp walked in board order, with the terminal
+     stage always reading as "finished". Keying off names would leave a
+     renamed board grey. */
+  const accents = [
+    "bg-prog-100 text-prog-400",
+    "bg-cau-100 text-cau-400",
+    "bg-white-300 dark:bg-navy-600 text-black-800 dark:text-black-600",
+    "bg-link-100 text-link-400",
+  ];
+  function pillFor(key: string, index: number): string {
+    if (key === terminalKey) return "bg-pos-100 text-pos-400";
+    return accents[index % accents.length];
+  }
 
   /* Static class map so Tailwind's scanner sees every variant. */
   const lgCols: Record<number, string> = {
@@ -94,7 +104,7 @@
   };
 
   const activeStatuses = $derived(
-    filter.statuses && filter.statuses.length > 0 ? filter.statuses : board.statuses,
+    filter.statuses && filter.statuses.length > 0 ? filter.statuses : statusKeys,
   );
 
   function matchesAssignee(t: TicketCardType): boolean {
@@ -107,7 +117,7 @@
 
   const visible = $derived(items.filter(matchesAssignee));
   const columns = $derived(
-    board.statuses
+    statusKeys
       .filter((s) => activeStatuses.includes(s))
       .map((s) => ({
         status: s,
@@ -132,8 +142,8 @@
     } else {
       cur.add(s);
     }
-    const all = board.statuses.every((x) => cur.has(x));
-    onFilter({ ...filter, statuses: all ? [] : board.statuses.filter((x) => cur.has(x)) });
+    const all = statusKeys.every((x) => cur.has(x));
+    onFilter({ ...filter, statuses: all ? [] : statusKeys.filter((x) => cur.has(x)) });
   }
 
   /* ── new ticket ── */
@@ -268,7 +278,7 @@
 <div class="flex flex-col gap-4">
   <!-- Filter bar -->
   <div class="flex flex-wrap items-center gap-2">
-    {#each board.statuses as s (s)}
+    {#each statusKeys as s (s)}
       {@const on = activeStatuses.includes(s)}
       <button
         type="button"
@@ -281,7 +291,7 @@
             : "border-white-400 bg-white-100 text-black-700 hover:bg-white-200 dark:border-navy-600 dark:bg-navy-700 dark:text-black-600 dark:hover:bg-navy-600",
         ].join(" ")}
       >
-        {statusLabels[s] ?? s}
+        {labelOf(s)}
       </button>
     {/each}
 
@@ -413,10 +423,10 @@
 
     <!-- Columns -->
     <div class={"grid min-w-0 flex-1 grid-cols-1 gap-3 sm:grid-cols-2 " + (lgCols[columns.length] ?? "lg:grid-cols-4")}>
-      {#each columns as col (col.status)}
+      {#each columns as col, i (col.status)}
         <div
           role="list"
-          aria-label={statusLabels[col.status] ?? col.status}
+          aria-label={labelOf(col.status)}
           ondragover={(e) => {
             // A ticket lands here to change status; a session lands here to
             // BECOME a ticket at that status. A card intercepts the session
@@ -433,14 +443,14 @@
         >
           <div class="flex items-center justify-between px-2 pb-2 pt-1">
             <span class="text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">
-              {statusLabels[col.status] ?? col.status}
+              {labelOf(col.status)}
             </span>
-            <span class={"rounded-full px-2 py-0.5 text-[10px] font-semibold " + (columnPill[col.status] ?? "bg-white-300 text-black-800")}>
+            <span class={"rounded-full px-2 py-0.5 text-[10px] font-semibold " + pillFor(col.status, i)}>
               {col.tickets.length}
             </span>
           </div>
           {#each col.tickets as t (t.id)}
-            <div class={t.status === "done" ? "opacity-70" : ""}>
+            <div class={t.status === terminalKey ? "opacity-70" : ""}>
               <TicketCard
                 ticket={t}
                 schema={board.config.fields}

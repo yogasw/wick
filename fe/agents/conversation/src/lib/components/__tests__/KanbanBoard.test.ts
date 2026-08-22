@@ -44,7 +44,12 @@ const board: TicketBoard = {
     enabled: true,
     fields: [{ key: "priority", label: "Priority", type: "select", options: ["low", "high"] }],
   },
-  statuses: ["open", "in_progress", "waiting", "done"],
+  statuses: [
+    { key: "open", label: "Open" },
+    { key: "in_progress", label: "In Progress" },
+    { key: "waiting", label: "Waiting" },
+    { key: "done", label: "Done", terminal: true },
+  ],
   me: "u-me",
   users: { "u-me": "Me Myself", "u-2": "Other Person" },
   untracked: [
@@ -284,6 +289,38 @@ describe("KanbanBoard", () => {
     renderBoard({ filter: { assignee: "me" } });
     expect(screen.getByText("Fix the webhook")).toBeTruthy();
     expect(screen.queryByText("Old finished thing")).toBeNull();
+  });
+
+  // Statuses are per project, so a renamed board must draw ITS columns —
+  // not the built-in four with the new names ignored.
+  test("columns come from the project's own statuses", () => {
+    renderBoard({
+      board: {
+        ...board,
+        statuses: [
+          { key: "triage", label: "Triage" },
+          { key: "coding", label: "Coding" },
+          { key: "shipped", label: "Shipped", terminal: true },
+        ],
+        tickets: [{ ...board.tickets[0], status: "triage" }],
+      },
+      filter: {},
+    });
+    expect(screen.getAllByText("Triage").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Shipped").length).toBeGreaterThan(0);
+    expect(screen.queryByText("In Progress")).toBeNull();
+    expect(screen.getByText("Fix the webhook")).toBeTruthy();
+  });
+
+  test("a status with no label falls back to its key", () => {
+    renderBoard({
+      board: {
+        ...board,
+        statuses: [{ key: "wip" }, { key: "shipped", terminal: true }],
+        tickets: [],
+      },
+    });
+    expect(screen.getAllByText("wip").length).toBeGreaterThan(0);
   });
 
   test("the new-ticket form opens and closes", async () => {

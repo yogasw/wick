@@ -361,3 +361,60 @@ func TestCreateHonoursAnExplicitAssignee(t *testing.T) {
 		t.Fatalf("assignee = %q, want nobody", got)
 	}
 }
+
+// A board names its own stages, and the settings op is where that is set.
+func TestSettingsSetStatuses(t *testing.T) {
+	h, l := newTestHandlers(t)
+	got := mustDispatch(t, h.settingsSet, ctxFor("", map[string]string{
+		"project_id": "p1",
+		"enabled":    "true",
+		"statuses":   `[{"key":"triage","label":"Triage"},{"key":"shipped","label":"Shipped","terminal":true}]`,
+	})).(settingsView)
+	if len(got.Statuses) != 2 || got.Statuses[0].Key != "triage" {
+		t.Fatalf("statuses = %+v", got.Statuses)
+	}
+	p, err := project.Load(l, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Meta.Ticket.TerminalStatus() != "shipped" {
+		t.Fatalf("terminal = %q, want shipped", p.Meta.Ticket.TerminalStatus())
+	}
+	// A ticket created afterwards lands in the board's first column.
+	tk, err := ticket.Create(l, ticket.CreateOptions{ProjectID: "p1", Title: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Status != "triage" {
+		t.Fatalf("new ticket status = %q, want triage", tk.Status)
+	}
+}
+
+// Without a finished stage, auto-resolve would have nowhere to move work —
+// so the list is refused rather than stored.
+func TestSettingsSetRejectsStatusesWithoutTerminal(t *testing.T) {
+	h, _ := newTestHandlers(t)
+	_, err := h.settingsSet(ctxFor("", map[string]string{
+		"project_id": "p1", "statuses": `[{"key":"a"},{"key":"b"}]`,
+	}))
+	if err == nil || !strings.Contains(err.Error(), "exactly one status") {
+		t.Fatalf("want a terminal-stage error, got: %v", err)
+	}
+}
+
+// Dropping a column that still holds tickets would lose sight of them.
+func TestSettingsSetRefusesToStrandTickets(t *testing.T) {
+	h, l := newTestHandlers(t)
+	if _, err := ticket.Create(l, ticket.CreateOptions{
+		ProjectID: "p1", Title: "x", Status: ticket.StatusWaiting,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := h.settingsSet(ctxFor("", map[string]string{
+		"project_id": "p1",
+		"statuses":   `[{"key":"open"},{"key":"done","terminal":true}]`,
+	}))
+	if err == nil || !strings.Contains(err.Error(), "waiting") {
+		t.Fatalf("want an error naming the stranded status, got: %v", err)
+	}
+}

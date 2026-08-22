@@ -92,10 +92,10 @@ type ticketBoardResponse struct {
 	Untracked []ticketSessionRow `json:"untracked"`
 	// UntrackedTotal is how many exist, however few were sent, so the rail
 	// can say "25 of 142" instead of implying it has them all.
-	UntrackedTotal int               `json:"untracked_total"`
-	Statuses       []string          `json:"statuses"`
-	Users          map[string]string `json:"users,omitempty"`
-	Me             string            `json:"me,omitempty"`
+	UntrackedTotal int                    `json:"untracked_total"`
+	Statuses       []project.TicketStatus `json:"statuses"`
+	Users          map[string]string      `json:"users,omitempty"`
+	Me             string                 `json:"me,omitempty"`
 }
 
 // ticketSessionRow is one session inside a ticket's detail view.
@@ -109,13 +109,13 @@ type ticketSessionRow struct {
 
 // ticketDetailResponse is the envelope for GET /api/tickets/{ticketID}.
 type ticketDetailResponse struct {
-	Ticket   ticket.Ticket        `json:"ticket"`
-	Config   project.TicketConfig `json:"config"`
-	Sessions []ticketSessionRow   `json:"sessions"`
-	Notes    []notes.Note         `json:"notes"`
-	Statuses []string             `json:"statuses"`
-	Users    map[string]string    `json:"users,omitempty"`
-	Me       string               `json:"me,omitempty"`
+	Ticket   ticket.Ticket          `json:"ticket"`
+	Config   project.TicketConfig   `json:"config"`
+	Sessions []ticketSessionRow     `json:"sessions"`
+	Notes    []notes.Note           `json:"notes"`
+	Statuses []project.TicketStatus `json:"statuses"`
+	Users    map[string]string      `json:"users,omitempty"`
+	Me       string                 `json:"me,omitempty"`
 }
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -292,7 +292,8 @@ func apiProjectTickets(c *tool.Ctx) {
 		Tickets:        cards,
 		Untracked:      untracked,
 		UntrackedTotal: untrackedTotal,
-		Statuses:       ticket.Statuses,
+		// Board columns come from the project: a team names its own stages.
+		Statuses: cfg.StatusList(),
 	}
 	if u := login.GetUser(c.Context()); u != nil {
 		resp.Me = u.ID
@@ -324,8 +325,16 @@ func apiTicketCreate(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
-	if req.Status != "" && !ticket.ValidStatus(req.Status) {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid status: " + req.Status})
+	// Statuses are the project's own, so a board that renamed its stages
+	// accepts its own keys and rejects the built-in ones.
+	cfg := project.TicketConfig{}
+	if p, pok := globalMgr.Registry().Project(projectID); pok {
+		cfg = p.Meta.Ticket
+	}
+	if req.Status != "" && !ticket.ValidStatus(cfg, req.Status) {
+		c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid status " + req.Status + " (want " + strings.Join(cfg.StatusKeys(), ", ") + ")",
+		})
 		return
 	}
 	var seed []string
@@ -376,10 +385,11 @@ func apiTicketDetail(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
 		return
 	}
-	resp := ticketDetailResponse{Ticket: tk, Statuses: ticket.Statuses}
+	resp := ticketDetailResponse{Ticket: tk}
 	if p, pok := globalMgr.Registry().Project(projectID); pok {
 		resp.Config = p.Meta.Ticket
 	}
+	resp.Statuses = resp.Config.StatusList()
 
 	lc := lifecycleBySession()
 	live := globalMgr.Registry().Sessions()
@@ -433,7 +443,11 @@ func apiTicketUpdate(c *tool.Ctx) {
 		return
 	}
 	if req.Status != nil {
-		if !ticket.ValidStatus(*req.Status) {
+		cfg := project.TicketConfig{}
+		if p, pok := globalMgr.Registry().Project(projectID); pok {
+			cfg = p.Meta.Ticket
+		}
+		if !ticket.ValidStatus(cfg, *req.Status) {
 			c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid status: " + *req.Status})
 			return
 		}
@@ -673,6 +687,12 @@ func apiNotesList(c *tool.Ctx) {
 	if sc.TicketID != "" {
 		if tk, err := ticket.Load(globalLayout, sc.ProjectID, sc.TicketID); err == nil {
 			out["ticket"] = map[string]string{"id": tk.ID, "title": tk.Title, "status": tk.Status}
+			// The rail's status select offers the project's own columns, so
+			// a board that renamed its stages does not present the built-in
+			// four as if they were valid.
+			if p, pok := globalMgr.Registry().Project(sc.ProjectID); pok {
+				out["statuses"] = p.Meta.Ticket.StatusList()
+			}
 		}
 	}
 	c.JSON(http.StatusOK, out)
@@ -786,6 +806,26 @@ func apiProjectTicketConfig(c *tool.Ctx) {
 	if err := c.BindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
+	}
+	// Statuses first: a board with no terminal stage would leave
+	// auto-resolve nowhere to move finished work, and dropping a status
+	// that still holds tickets would lose sight of them.
+	if err := ticket.ValidateStatuses(req.Statuses); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if orphans := ticket.OrphanedStatuses(globalLayout, id, req.Statuses); len(orphans) > 0 {
+		c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "these statuses still hold tickets: " + strings.Join(orphans, ", ") +
+				" — move or delete those tickets first",
+		})
+		return
+	}
+	for i, s := range req.Statuses {
+		req.Statuses[i].Key = strings.TrimSpace(s.Key)
+		if strings.TrimSpace(s.Label) == "" {
+			req.Statuses[i].Label = req.Statuses[i].Key
+		}
 	}
 	seen := map[string]bool{}
 	for i, f := range req.Fields {

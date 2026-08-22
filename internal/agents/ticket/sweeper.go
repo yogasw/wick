@@ -35,7 +35,10 @@ type Deps struct {
 // a full window, and the previous follow-up (if any) at least a window
 // ago — so a stuck ticket is nudged once per window, not once per tick.
 func NeedsFollowup(cfg project.TicketConfig, t Ticket, now time.Time) bool {
-	if !cfg.Enabled || cfg.FollowupAfterSec <= 0 || t.Status == StatusDone {
+	// The project decides which stage means finished, so "done" is read
+	// from its config rather than assumed — a board may have renamed or
+	// replaced every built-in status.
+	if !cfg.Enabled || cfg.FollowupAfterSec <= 0 || t.Status == cfg.TerminalStatus() {
 		return false
 	}
 	window := time.Duration(cfg.FollowupAfterSec) * time.Second
@@ -48,7 +51,7 @@ func NeedsFollowup(cfg project.TicketConfig, t Ticket, now time.Time) bool {
 // NeedsAutoResolve reports whether a ticket has been idle long enough to
 // close on its own.
 func NeedsAutoResolve(cfg project.TicketConfig, t Ticket, now time.Time) bool {
-	if !cfg.Enabled || cfg.AutoResolveAfterSec <= 0 || t.Status == StatusDone {
+	if !cfg.Enabled || cfg.AutoResolveAfterSec <= 0 || t.Status == cfg.TerminalStatus() {
 		return false
 	}
 	return now.Sub(t.UpdatedAt) > time.Duration(cfg.AutoResolveAfterSec)*time.Second
@@ -135,7 +138,7 @@ func sweepOnce(ctx context.Context, d Deps, now time.Time) {
 			}
 			switch {
 			case NeedsAutoResolve(cfg, t, now):
-				t.Status = StatusDone
+				t.Status = cfg.TerminalStatus()
 				t.UpdatedAt = now
 				if serr := SaveKeepingTimestamp(d.Layout, t); serr != nil {
 					l.Warn().Err(serr).Str("ticket", t.ID).Msg("auto-resolve save failed")

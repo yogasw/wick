@@ -115,9 +115,13 @@ func (h *handlers) list(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list tickets: %w", err)
 	}
+	cfg, err := h.ticketConfig(projectID)
+	if err != nil {
+		return nil, err
+	}
 	filter := strings.TrimSpace(c.Input("status"))
-	if filter != "" && !ticket.ValidStatus(filter) {
-		return nil, fmt.Errorf("invalid status %q (want %s)", filter, strings.Join(ticket.Statuses, ", "))
+	if filter != "" && !ticket.ValidStatus(cfg, filter) {
+		return nil, fmt.Errorf("invalid status %q (want %s)", filter, strings.Join(cfg.StatusKeys(), ", "))
 	}
 	out := make([]ticketView, 0, len(all))
 	for _, tk := range all {
@@ -192,8 +196,12 @@ func (h *handlers) update(c *connector.Ctx) (any, error) {
 		return nil, err
 	}
 	if s := strings.TrimSpace(c.Input("status")); s != "" {
-		if !ticket.ValidStatus(s) {
-			return nil, fmt.Errorf("invalid status %q (want %s)", s, strings.Join(ticket.Statuses, ", "))
+		cfg, cerr := h.ticketConfig(projectID)
+		if cerr != nil {
+			return nil, cerr
+		}
+		if !ticket.ValidStatus(cfg, s) {
+			return nil, fmt.Errorf("invalid status %q (want %s)", s, strings.Join(cfg.StatusKeys(), ", "))
 		}
 		tk.Status = s
 	}
@@ -300,7 +308,9 @@ type settingsView struct {
 	AutoResolveAfterDays float64                  `json:"auto_resolve_after_days"`
 	FollowupPrompt       string                   `json:"followup_prompt,omitempty"`
 	AutoCreate           []project.AutoCreateRule `json:"auto_create,omitempty"`
-	Statuses             []string                 `json:"statuses"`
+	// Statuses are the project's own board columns, keys and labels both:
+	// an agent setting a status has to know which keys this board accepts.
+	Statuses []project.TicketStatus `json:"statuses"`
 }
 
 func viewSettings(projectID string, cfg project.TicketConfig) settingsView {
@@ -312,7 +322,7 @@ func viewSettings(projectID string, cfg project.TicketConfig) settingsView {
 		AutoResolveAfterDays: float64(cfg.AutoResolveAfterSec) / 86400,
 		FollowupPrompt:       cfg.FollowupPrompt,
 		AutoCreate:           cfg.AutoCreate,
-		Statuses:             ticket.Statuses,
+		Statuses:             cfg.StatusList(),
 	}
 }
 
@@ -374,6 +384,27 @@ func (h *handlers) settingsSet(c *connector.Ctx) (any, error) {
 			touched = true
 		}
 	}
+	if v := strings.TrimSpace(c.Input("statuses")); v != "" {
+		var list []project.TicketStatus
+		if jerr := json.Unmarshal([]byte(v), &list); jerr != nil {
+			return nil, fmt.Errorf("statuses must be a JSON array of {key,label,terminal}: %w", jerr)
+		}
+		// Refused rather than stored: a board with no terminal stage would
+		// leave auto-resolve nowhere to move finished work.
+		if verr := ticket.ValidateStatuses(list); verr != nil {
+			return nil, verr
+		}
+		// Tickets on a status that no longer exists are reported, not
+		// silently rewritten — the caller decides what to do with them.
+		if orphans := ticket.OrphanedStatuses(h.layout, projectID, list); len(orphans) > 0 {
+			return nil, fmt.Errorf(
+				"these statuses still hold tickets: %s — move or delete those tickets first",
+				strings.Join(orphans, ", "),
+			)
+		}
+		cfg.Statuses = list
+		touched = true
+	}
 	if v := strings.TrimSpace(c.Input("auto_create")); v != "" {
 		var rules []project.AutoCreateRule
 		if jerr := json.Unmarshal([]byte(v), &rules); jerr != nil {
@@ -403,4 +434,15 @@ func (h *handlers) settingsSet(c *connector.Ctx) (any, error) {
 		return nil, serr
 	}
 	return viewSettings(projectID, cfg), nil
+}
+
+// ticketConfig reads a project's ticket settings. Statuses live there, so
+// anything validating or listing them goes through here rather than
+// assuming the built-in set.
+func (h *handlers) ticketConfig(projectID string) (project.TicketConfig, error) {
+	p, err := project.Load(h.layout, projectID)
+	if err != nil {
+		return project.TicketConfig{}, fmt.Errorf("load project %q: %w", projectID, err)
+	}
+	return p.Meta.Ticket, nil
 }

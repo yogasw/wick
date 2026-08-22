@@ -42,18 +42,26 @@
     load();
   });
 
-  const statusLabels: Record<string, string> = {
-    open: "Open",
-    in_progress: "In Progress",
-    waiting: "Waiting",
-    done: "Done",
-  };
-  const statusPill: Record<string, string> = {
-    open: "bg-prog-100 text-prog-400",
-    in_progress: "bg-cau-100 text-cau-400",
-    waiting: "bg-white-300 dark:bg-navy-600 text-black-800 dark:text-black-600",
-    done: "bg-pos-100 text-pos-400",
-  };
+  /* Statuses are the project's own, so labels come from the payload rather
+     than a table here. */
+  const labelOf = (key: string) =>
+    data?.statuses.find((s) => s.key === key)?.label || key;
+  const terminalKey = $derived(
+    data?.statuses.find((s) => s.terminal)?.key ??
+      data?.statuses[(data?.statuses.length ?? 0) - 1]?.key ??
+      "",
+  );
+  const accents = [
+    "bg-prog-100 text-prog-400",
+    "bg-cau-100 text-cau-400",
+    "bg-white-300 dark:bg-navy-600 text-black-800 dark:text-black-600",
+    "bg-link-100 text-link-400",
+  ];
+  function pillFor(key: string): string {
+    if (key === terminalKey) return "bg-pos-100 text-pos-400";
+    const i = data?.statuses.findIndex((s) => s.key === key) ?? -1;
+    return i < 0 ? "bg-white-300 text-black-800" : accents[i % accents.length];
+  }
 
   function patch(body: Parameters<typeof updateTicket>[2]) {
     Effect.runPromise(updateTicket(base, ticketId, body).pipe(Effect.provide(WickClientLayer)))
@@ -147,8 +155,8 @@
             updated {timeAgo(t.updated_at)} · created {timeAgo(t.created_at)}
           </p>
         </div>
-        <span class={"shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold " + (statusPill[t.status] ?? "")}>
-          {statusLabels[t.status] ?? t.status}
+        <span class={"shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold " + pillFor(t.status)}>
+          {labelOf(t.status)}
         </span>
         <button
           type="button"
@@ -166,8 +174,8 @@
             onchange={(e) => patch({ status: (e.target as HTMLSelectElement).value })}
             class="w-full rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
           >
-            {#each data.statuses as s (s)}
-              <option value={s}>{statusLabels[s] ?? s}</option>
+            {#each data.statuses as s (s.key)}
+              <option value={s.key}>{s.label || s.key}</option>
             {/each}
           </select>
         </div>
