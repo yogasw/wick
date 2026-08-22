@@ -102,6 +102,70 @@ func (s *Service) SetHomeView(ctx context.Context, userID, view string) error {
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 
+// SetTicketFilter saves the user's ticket-board filter for one project.
+// A zero-value filter removes the entry so the metadata bag doesn't
+// accumulate empty objects for every project ever visited.
+func (s *Service) SetTicketFilter(ctx context.Context, userID, projectID string, f entity.TicketFilter) error {
+	if projectID == "" {
+		return errors.New("project id is required")
+	}
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	meta := u.Metadata
+	empty := len(f.Statuses) == 0 && f.Assignee == "" && f.ViewMode == ""
+	if empty {
+		delete(meta.TicketFilters, projectID)
+	} else {
+		if meta.TicketFilters == nil {
+			meta.TicketFilters = map[string]entity.TicketFilter{}
+		}
+		meta.TicketFilters[projectID] = f
+	}
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
+// SetRailPrefs saves the user's conversation-rail layout. Order is stored
+// as given — the client owns which ids exist — but Visible is clamped so a
+// bad value cannot hide the rail or stretch it past the tabs that exist.
+func (s *Service) SetRailPrefs(ctx context.Context, userID string, p entity.RailPrefs) error {
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if p.Visible != 0 {
+		if p.Visible < 2 {
+			p.Visible = 2
+		}
+		if p.Visible > 8 {
+			p.Visible = 8
+		}
+	}
+	meta := u.Metadata
+	meta.Rail = p
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
+// SetAutoDeleteEmptyTickets records the user's standing answer to "delete
+// this ticket now that its last chat left?". Only the empty case: deleting a
+// ticket that still holds chats always asks, because that one takes
+// conversations with it.
+func (s *Service) SetAutoDeleteEmptyTickets(ctx context.Context, userID, choice string) error {
+	switch choice {
+	case entity.AutoDeleteEmptyAsk, entity.AutoDeleteEmptyAlways, entity.AutoDeleteEmptyNever:
+	default:
+		return errors.New(`choice must be "", "always", or "never"`)
+	}
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	meta := u.Metadata
+	meta.AutoDeleteEmptyTickets = choice
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
 // SetPinnedAgentProject sets (or clears, when projectID is empty) the
 // user's pinned agents Project — their personal default. One per user.
 func (s *Service) SetPinnedAgentProject(ctx context.Context, userID, projectID string) error {

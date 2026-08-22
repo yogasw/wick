@@ -332,6 +332,39 @@ func Register(r tool.Router) {
 	r.GET("/api/projects/{id}/files/search", projectFileSearch)
 	r.POST("/api/projects/{id}", apiProjectUpdate)
 
+	// JSON API — tickets. A ticket is its own entity holding many
+	// sessions, so the board and creation sit under a project (covered by
+	// projectAccessMW) while a single ticket is addressed by its own id;
+	// those handlers resolve the owning project through the caller's
+	// visible projects, which enforces access on the way.
+	r.GET("/api/projects/{id}/tickets", apiProjectTickets)
+	r.POST("/api/projects/{id}/tickets", apiTicketCreate)
+	r.PUT("/api/projects/{id}/ticket-config", apiProjectTicketConfig)
+	r.GET("/api/tickets/{ticketID}", apiTicketDetail)
+	r.PATCH("/api/tickets/{ticketID}", apiTicketUpdate)
+	r.DELETE("/api/tickets/{ticketID}", apiTicketDelete)
+	r.PUT("/api/tickets/{ticketID}/sessions/{sid}", apiTicketAttachSession)
+	r.DELETE("/api/tickets/{ticketID}/sessions/{sid}", apiTicketDetachSession)
+
+	// JSON API — notes. Scoped by ?ticket_id= or ?session_id=; a session
+	// that belongs to a ticket resolves to the ticket's notes.
+	r.GET("/api/notes", apiNotesList)
+	r.POST("/api/notes", apiNotesAdd)
+	r.PATCH("/api/notes/{noteID}", apiNotesUpdate)
+	r.DELETE("/api/notes/{noteID}", apiNotesDelete)
+
+	r.GET("/api/me/ticket-filters/{projectID}", apiTicketFilterGet)
+	r.PUT("/api/me/ticket-filters/{projectID}", apiTicketFilterSave)
+
+	// Conversation rail layout — which side tabs are visible, in what
+	// order, and how many before "More".
+	r.GET("/api/me/rail", apiRailPrefsGet)
+	r.PUT("/api/me/rail", apiRailPrefsSave)
+
+	// Standing answers to ticket prompts ("don't ask again").
+	r.GET("/api/me/ticket-prefs", apiTicketPrefsGet)
+	r.PUT("/api/me/ticket-prefs", apiTicketPrefsSave)
+
 	// JSON API — providers SPA endpoints (mirrors templ providers handlers).
 	r.GET("/api/providers", apiProvidersList)
 	r.GET("/api/providers/storage", apiProvidersStorage)

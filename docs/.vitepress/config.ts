@@ -108,6 +108,8 @@ export default withMermaid(defineConfig({
           { text: 'Wick Manager', link: '/connectors/wickmanager' },
           { text: 'Workflow', link: '/connectors/workflow' },
           { text: 'Notifications', link: '/connectors/notifications' },
+          { text: 'Tickets', link: '/connectors/tickets' },
+          { text: 'Notes', link: '/connectors/notes' },
           { text: 'HTTPBin (sample)', link: '/connectors/httpbin' },
           { text: 'CRUD CRUD (lab)', link: '/connectors/crudcrud' },
         ],

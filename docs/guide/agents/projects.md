@@ -148,8 +148,56 @@ Precedence, highest first: a per-request override (REST body `project` field) > 
 
 The REST (OpenAI-compatible) channel additionally lets a request **override** the channel default per call with a top-level `"project": "<id>"` field (or `metadata.project` / `metadata.project_id`). See the [REST channel docs](./channels).
 
+## Tickets
+
+A project can turn its sessions into a **ticket board**. Off by default — enabling it changes nothing about how sessions work, it just adds tracking on top.
+
+::: info Source
+Code: [`internal/agents/ticket/`](https://github.com/yogasw/wick/blob/master/internal/agents/ticket) (entity, sweeper, auto-create rules), [`internal/agents/project/ticket.go`](https://github.com/yogasw/wick/blob/master/internal/agents/project/ticket.go) (per-project config). MCP surface: [Tickets connector](/connectors/tickets) and [Notes connector](/connectors/notes).
+:::
+
+A **ticket** is the unit of work; a **session** is one conversation about it, and a ticket can hold several. Tickets live at `projects/<id>/tickets/<T-XXXX>/ticket.json` with a short, quotable id (`T-4F2A`) rather than a UUID — it appears on board cards and gets typed into chat. A ticket carries a title, status (`open` / `in_progress` / `waiting` / `done`), assignee, project-defined custom fields, and its session list.
+
+### The board
+
+The project landing page shows a kanban board — one column per status, cards are **tickets**, not sessions. An **Untracked** rail on the side holds chats that belong to no ticket. Dragging:
+
+- a ticket card between columns changes its status;
+- a chat from the Untracked rail onto a ticket card attaches it to that ticket;
+- a chat onto a column turns it into a new ticket of its own.
+
+Deleting a ticket asks whether its chats survive as untracked or are deleted with it.
+
+### Per-project settings
+
+Configured from the project settings page (or via `ticket_settings_get` / `ticket_settings_set` on the [Tickets connector](/connectors/tickets#operations)):
+
+| Setting | Effect |
+|---|---|
+| **Enabled** | Turns the board and automation on for this project. Off by default. |
+| **Custom fields** | A schema of `{key, label, type, options, required}` fields shown on every ticket card and edit form. |
+| **Stale-followup window** | A non-done ticket untouched for this long gets a follow-up turn sent to its most recently attached session's agent, using the project's follow-up prompt. The agent decides what to do (update the ticket, ping someone, close it) rather than wick messaging anyone. Repeats once per window while still stale. |
+| **Auto-resolve window** | A non-done ticket untouched for this long is closed automatically (status set to `done`), no agent spawn. Auto-resolve wins over follow-up when both are due. |
+
+Any ticket update (status, title, assignee, or fields) resets both timers — that is what makes "the agent acted, so stop nagging" work.
+
+### Auto-create rules
+
+A project can auto-create a ticket for new sessions without anyone asking, via a list of rules: `{origin, channel_kind, match, title, enabled}`.
+
+- `origin` — `ui` / `slack` / `telegram` / `rest` / `*` (any).
+- `channel_kind` — narrows a channel origin to `dm` / `channel` / `thread`.
+- `match` — empty (origin alone decides), `contains:<text>`, or `regex:<expr>`, tested against the session's first message.
+
+Rules are tried **in order and the first match wins**, so a disabled narrow rule placed above a broad one carves an exception out of it — that is how "everything from Slack except DMs" gets expressed as two rules. Evaluated on the session's first user message; a session already on a ticket is always left alone.
+
+### Notes
+
+Notes are a separate subsystem from tickets, not a ticket-only feature — a session with no ticket still has its own notes. See the [Notes connector](/connectors/notes) for the full model (audience, hidden notes, and how notes travel when a session is attached, moved, or detached).
+
 ## See also
 
 - [Pool & Sessions](./pool) — how the cwd is actually wired into `exec.Cmd`.
 - [Providers](./providers) — the `provider` default on project meta.
 - [Channels](./channels) — per-channel default project config.
+- [Tickets connector](/connectors/tickets) / [Notes connector](/connectors/notes) — the MCP surface for both.
