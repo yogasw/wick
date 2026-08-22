@@ -60,6 +60,10 @@ type Meta struct {
 	// every meta.json written before this field decodes to — so no
 	// migration is needed. Resolve it with config.Resolve.
 	Widget config.WidgetPolicy `json:"widget,omitempty"`
+
+	// Ticket is this project's ticket-mode configuration. Zero value =
+	// off (see TicketConfig) — sessions stay plain chat sessions.
+	Ticket TicketConfig `json:"ticket,omitempty"`
 }
 
 // Project is the in-memory view: meta only (no session list — that lives

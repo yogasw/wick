@@ -121,6 +121,27 @@ type Meta struct {
 	// session created before sub-agents existed, which reads correctly
 	// as "not a child".
 	ParentSessionID string `json:"parent_session_id,omitempty"`
+	// Ticket turns this session into a ticket card when its project has
+	// ticket mode enabled (project.Meta.Ticket). nil = plain session:
+	// projects with ticket mode off, and every session created before
+	// the feature existed, decode to nil with zero behavior change.
+	Ticket *Ticket `json:"ticket,omitempty"`
+}
+
+// Ticket is the per-session ticket state: status + assignee + the values
+// for the project-defined custom fields. UpdatedAt tracks the last ticket
+// EDIT (manual, HTTP, or MCP) — not chat activity — and is the basis for
+// the stale/followup and auto-resolve timers in internal/agents/ticket.
+type Ticket struct {
+	Status   string `json:"status"`
+	Assignee string `json:"assignee,omitempty"` // wick user ID
+	// Fields holds values keyed by project.TicketField.Key.
+	Fields    map[string]string `json:"fields,omitempty"`
+	UpdatedAt time.Time         `json:"updated_at"`
+	// LastFollowupAt guards the sweeper against re-sending a followup
+	// every tick: the next followup fires only after another full
+	// FollowupAfter window has passed since this stamp.
+	LastFollowupAt time.Time `json:"last_followup_at,omitempty"`
 }
 
 // IsSubscribed returns true when userID has opted in to receive

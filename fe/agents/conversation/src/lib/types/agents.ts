@@ -442,6 +442,54 @@ export type ProjectOption = {
   defaultModel?: string;
 };
 
+/** One custom field definition in a project's ticket schema. */
+export type TicketField = {
+  key: string;
+  label: string;
+  type: "text" | "select";
+  options?: string[];
+  required?: boolean;
+};
+
+/** A project's ticket-mode configuration (zero value = feature off). */
+export type TicketConfig = {
+  enabled?: boolean;
+  fields?: TicketField[];
+  followup_after_sec?: number;
+  followup_prompt?: string;
+  auto_resolve_after_sec?: number;
+};
+
+/** One card on the project ticket board. */
+export type TicketItem = {
+  session_id: string;
+  title: string;
+  status: string;
+  assignee?: string;
+  fields?: Record<string, string>;
+  updated_at?: string;
+  last_active: string;
+  stale: boolean;
+  owner_id?: string;
+  lifecycle?: string;
+};
+
+/** GET /api/projects/{id}/tickets response. */
+export type TicketBoard = {
+  config: TicketConfig;
+  tickets: TicketItem[];
+  users?: Record<string, string>;
+  me?: string;
+  statuses: string[];
+};
+
+/** Per-user saved board filter for one project. */
+export type TicketFilter = {
+  statuses?: string[];
+  assignee?: string; // "" = all, "me", or a user id
+  view_mode?: string; // "list" | "card"
+};
+
 /** One message between two agents inside a delegation tree. */
 export type AgentMessageItem = {
   id: string;

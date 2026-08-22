@@ -390,6 +390,10 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 		handlers.WickSessionInfo(w, r, hreq, rsp, h.layout, args)
 	case "wick_set_title":
 		handlers.WickSetTitle(w, r, hreq, rsp, h.layout, h.refreshSession, args)
+	case "wick_ticket_get":
+		handlers.WickTicketGet(w, r, hreq, rsp, h.layout, args)
+	case "wick_ticket_set":
+		handlers.WickTicketSet(w, r, hreq, rsp, h.layout, h.refreshSession, args)
 	case "wick_schedule_message":
 		handlers.WickScheduleMessage(w, r, hreq, rsp, h.schedule, h.layout, args, user)
 	default:

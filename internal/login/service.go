@@ -102,6 +102,30 @@ func (s *Service) SetHomeView(ctx context.Context, userID, view string) error {
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 
+// SetTicketFilter saves the user's ticket-board filter for one project.
+// A zero-value filter removes the entry so the metadata bag doesn't
+// accumulate empty objects for every project ever visited.
+func (s *Service) SetTicketFilter(ctx context.Context, userID, projectID string, f entity.TicketFilter) error {
+	if projectID == "" {
+		return errors.New("project id is required")
+	}
+	u, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	meta := u.Metadata
+	empty := len(f.Statuses) == 0 && f.Assignee == "" && f.ViewMode == ""
+	if empty {
+		delete(meta.TicketFilters, projectID)
+	} else {
+		if meta.TicketFilters == nil {
+			meta.TicketFilters = map[string]entity.TicketFilter{}
+		}
+		meta.TicketFilters[projectID] = f
+	}
+	return s.repo.SetMetadata(ctx, userID, meta)
+}
+
 // SetPinnedAgentProject sets (or clears, when projectID is empty) the
 // user's pinned agents Project — their personal default. One per user.
 func (s *Service) SetPinnedAgentProject(ctx context.Context, userID, projectID string) error {

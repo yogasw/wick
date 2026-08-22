@@ -8,9 +8,11 @@
     deleteProject,
     unpinSession,
     getProviderOptionModels,
+    saveTicketConfig,
   } from "$lib/api.js";
-  import type { ProjectSettingsData, WidgetPolicy } from "$lib/types.js";
+  import type { ProjectSettingsData, WidgetPolicy, TicketConfig } from "$lib/types.js";
   import WidgetPolicyEditor from "./WidgetPolicyEditor.svelte";
+  import TicketSystemEditor from "./TicketSystemEditor.svelte";
 
   type Props = { projectID: string; base: string };
   let { projectID, base }: Props = $props();
@@ -34,6 +36,9 @@
   // back, which it can only do if the operator's own text survives the trip.
   let widget = $state<WidgetPolicy>({});
   let widgetAllowlistText = $state("");
+
+  // Ticket-mode config, saved through its own endpoint on submit.
+  let ticketCfg = $state<TicketConfig>({});
 
   // Promote a bare provider type ("claude") to its canonical default
   // instance key ("claude/claude"). Mirrors normalizeProviderKey on the
@@ -93,6 +98,7 @@
       systemAddon = d.system_addon;
       widget = d.widget ?? {};
       widgetAllowlistText = (d.widget?.allowlist ?? []).join("\n");
+      ticketCfg = d.ticket ?? {};
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -176,6 +182,10 @@
         system_addon: systemAddon,
         widget: widgetPayload(),
       });
+      // Its own endpoint: the payload is validated as a schema (dup keys,
+      // select without options) and a refused ticket config must not block
+      // the rest of the form — so it is sent second, after the meta saved.
+      await saveTicketConfig(projectID, ticketCfg);
       toastOk("Project saved");
       await load();
     } catch (err) {
@@ -387,6 +397,11 @@
               allowlistText={widgetAllowlistText}
               onChange={(next) => { widget = next.policy; widgetAllowlistText = next.allowlistText; }}
             />
+          {/if}
+          {#if !data.is_new}
+            <div class="rounded-lg border border-white-300 dark:border-navy-600 p-4">
+              <TicketSystemEditor cfg={ticketCfg} onChange={(c) => { ticketCfg = c; }} />
+            </div>
           {/if}
           {#if !data.is_new}
             <div>

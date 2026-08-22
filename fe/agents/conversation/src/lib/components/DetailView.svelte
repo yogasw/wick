@@ -47,6 +47,8 @@
     duplicateWorkspace, renameWorkspace, removeWorkspace,
   } from "../api/workspace.js";
   import { listSchedules, createSchedule, cancelSchedule, pauseSchedule, resumeSchedule, rescheduleSchedule, runScheduleNow } from "../api/schedules.js";
+  import { getSessionTicket, type SessionTicket } from "../api/tickets.js";
+  import TicketPanel from "./TicketPanel.svelte";
   import BrowserPanel from "./BrowserPanel.svelte";
   import { listInstances as listBrowserInstances } from "../api/browser.js";
 
@@ -159,7 +161,7 @@
   let sseStatus = $state<SSEStatus>("connecting");
 
   /* ── vertical rail tabs ────────────────────────────────────────── */
-  type RailTab = "context" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents";
+  type RailTab = "context" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents" | "ticket";
   let railTab = $state<RailTab | null>(null);
 
   /* ── thread scroll ref ─────────────────────────────────────────── */
@@ -724,6 +726,15 @@
       .catch((e: unknown) => toastError(`Schedules: ${e instanceof Error ? e.message : String(e)}`));
   }
 
+  /* Ticket panel data. config.enabled=false (or a failed load on an old
+     server) keeps the rail tab hidden — nothing else to clean up. */
+  let ticketInfo = $state<SessionTicket | null>(null);
+  function loadTicket() {
+    run(getSessionTicket(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => { ticketInfo = res; })
+      .catch(() => { ticketInfo = null; });
+  }
+
   /* Rehydrate a question that arrived while the tab was closed; never
    * clobber an ask already shown by a live SSE event. */
   function loadPendingAsk() {
@@ -1273,6 +1284,7 @@
     loadAgentRoles();
     loadWorkspace();
     loadSchedules();
+    loadTicket();
     loadProviderOptions();
     loadProjectOptions();
     loadPendingAsk();
@@ -1325,6 +1337,11 @@
       icon: '<circle cx="8" cy="4" r="2.5"></circle><circle cx="3.5" cy="12" r="2"></circle><circle cx="12.5" cy="12" r="2"></circle><path d="M8 6.5v2M8 8.5H4.5a1 1 0 00-1 1v.5M8 8.5h3.5a1 1 0 011 1v.5" stroke-linecap="round" stroke-linejoin="round"></path>',
     },
     {
+      id: "ticket",
+      label: "Ticket",
+      icon: '<path d="M2 6a1 1 0 011-1h10a1 1 0 011 1v1.5a1.5 1.5 0 000 3V12a1 1 0 01-1 1H3a1 1 0 01-1-1v-1.5a1.5 1.5 0 000-3V6z" stroke-linejoin="round"></path><path d="M9.5 5v1.2M9.5 7.7v1.2M9.5 10.4V12" stroke-linecap="round"></path>',
+    },
+    {
       id: "context",
       label: "Context",
       icon: '<path d="M2 4a1 1 0 011-1h3l2 2h5a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke-linejoin="round"></path>',
@@ -1364,9 +1381,14 @@
     railTabsAll.filter(
       (t) =>
         (t.id !== "browser" || hasBrowserInstance) &&
-        (t.id !== "subagents" || subAgents.length > 0),
+        (t.id !== "subagents" || subAgents.length > 0) &&
+        (t.id !== "ticket" || ticketInfo?.config?.enabled === true),
     ),
   );
+  // Close the Ticket panel if the project turns ticket mode off mid-session.
+  $effect(() => {
+    if (railTab === "ticket" && ticketInfo?.config?.enabled !== true) railTab = null;
+  });
   // If the Browser panel is open but its tab just disappeared, close the panel.
   $effect(() => {
     if (railTab === "browser" && !hasBrowserInstance) railTab = null;
@@ -1661,6 +1683,8 @@
           class="absolute left-0 top-0 z-10 h-full w-1.5 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-green-500/40 focus-visible:bg-green-500/40 transition-colors"
         ></button>
         <div class="flex-1 overflow-hidden dark:bg-navy-700" data-scm-host bind:this={scmHostEl}></div>
+      {:else if railTab === "ticket" && ticketInfo}
+        <TicketPanel {base} {sessionId} info={ticketInfo} onSaved={loadTicket} />
       {:else if railTab === "context"}
         <ContextPanel
           cwd={cwdVal}
@@ -1816,6 +1840,8 @@
         <div class="flex-1 overflow-hidden flex flex-col">
           {#if railTab === "source"}
             <div class="flex-1 overflow-hidden dark:bg-navy-700" data-scm-host-mobile bind:this={scmHostMobileEl}></div>
+          {:else if railTab === "ticket" && ticketInfo}
+            <TicketPanel {base} {sessionId} info={ticketInfo} onSaved={loadTicket} />
           {:else if railTab === "context"}
             <ContextPanel
               cwd={cwdVal}

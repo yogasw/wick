@@ -42,6 +42,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/schedule"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/sessionworkspace"
+	"github.com/yogasw/wick/internal/agents/ticket"
 	agentskills "github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
@@ -863,6 +864,50 @@ func NewServer() *Server {
 	// the pool + reap-notify) so the boot scan can notify too. The reaper
 	// self-terminates when no instances remain and respawns on the next add.
 	sessionworkspace.StartSweeper(agentsLayout)
+
+	// Ticket sweeper: in ticket-enabled projects it adopts plain sessions
+	// as open tickets, wakes a session's agent when its ticket goes stale
+	// (role "user" + source "ticket" so the send SPAWNS, unlike the
+	// buffered reap-notify above — the followup prompt tells the agent to
+	// act now), and auto-resolves tickets idle past the project's window.
+	go ticket.Start(context.Background(), ticket.Deps{
+		ListProjects: func() ([]agentproject.Project, error) {
+			m := agentsMgr.Registry().Projects()
+			out := make([]agentproject.Project, 0, len(m))
+			for _, p := range m {
+				out = append(out, p)
+			}
+			return out, nil
+		},
+		ListSessions: func(projectID string) ([]string, error) {
+			var ids []string
+			for sid, s := range agentsMgr.Registry().Sessions() {
+				// Sub-agent sessions are working contexts, not chats —
+				// they never appear on the board and never get tickets.
+				if s.Meta.ProjectID == projectID && s.Meta.ParentSessionID == "" {
+					ids = append(ids, sid)
+				}
+			}
+			return ids, nil
+		},
+		LoadSession: func(id string) (agentsession.Session, error) {
+			return agentsession.Load(agentsLayout, id)
+		},
+		SaveTicket: func(sessionID string, t *agentsession.Ticket) error {
+			sess, err := agentsession.Load(agentsLayout, sessionID)
+			if err != nil {
+				return err
+			}
+			sess.Meta.Ticket = t
+			if err := agentsession.SaveMeta(agentsLayout, sessionID, sess.Meta); err != nil {
+				return err
+			}
+			return agentsMgr.RefreshSession(sessionID)
+		},
+		SendFollowup: func(sessionID, text string) error {
+			return agentsPool.Send(context.Background(), sessionID, "", "ticket", "user", text)
+		},
+	})
 
 	// Wire the hook writer so Manager injects .claude/settings.local.json
 	// into every workspace on create or switch. The loader re-reads gate config

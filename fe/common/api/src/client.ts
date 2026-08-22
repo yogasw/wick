@@ -78,6 +78,19 @@ export const apiPostE = <T>(
         ),
   );
 
+export const apiPutE = <T>(
+  path: string,
+  body?: unknown,
+): Effect.Effect<T, APIError, HttpClient.HttpClient> =>
+  send<T>((client) =>
+    body === undefined
+      ? client.put(path)
+      : HttpClientRequest.put(path).pipe(
+          HttpClientRequest.bodyJson(body),
+          Effect.flatMap((req) => client.execute(req)),
+        ),
+  );
+
 export function runPromiseUnwrapped<T>(
   effect: Effect.Effect<T, APIError, never>,
   options?: { readonly signal?: AbortSignal },

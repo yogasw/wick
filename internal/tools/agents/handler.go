@@ -332,6 +332,16 @@ func Register(r tool.Router) {
 	r.GET("/api/projects/{id}/files/search", projectFileSearch)
 	r.POST("/api/projects/{id}", apiProjectUpdate)
 
+	// JSON API — ticket board (sessions-as-tickets). Board + config sit
+	// under /api/projects/{id} so projectAccessMW covers them; the
+	// per-session update sits under /api/sessions/{id} for sessionAccessMW.
+	r.GET("/api/projects/{id}/tickets", apiProjectTickets)
+	r.PUT("/api/projects/{id}/ticket-config", apiProjectTicketConfig)
+	r.GET("/api/sessions/{id}/ticket", apiSessionTicketGet)
+	r.PUT("/api/sessions/{id}/ticket", apiSessionTicketUpdate)
+	r.GET("/api/me/ticket-filters/{projectID}", apiTicketFilterGet)
+	r.PUT("/api/me/ticket-filters/{projectID}", apiTicketFilterSave)
+
 	// JSON API — providers SPA endpoints (mirrors templ providers handlers).
 	r.GET("/api/providers", apiProvidersList)
 	r.GET("/api/providers/storage", apiProvidersStorage)

@@ -6,9 +6,12 @@
   import { createSessionInProject, getPresetOptions, getProviderOptionModels } from "../api/options.js";
   import { searchProjectFiles } from "../api/files.js";
   import { listComposerCommands } from "../api/composer.js";
+  import { getProjectTickets, getTicketFilter, saveTicketFilter } from "../api/tickets.js";
+  import type { TicketBoard, TicketFilter } from "../types/agents.js";
   import { Composer } from "@wick-fe/common-ui";
   import { NOTIFY_KEY } from "../notify-pref.js";
   import SessionList from "./SessionList.svelte";
+  import KanbanBoard from "./KanbanBoard.svelte";
 
   type Props = {
     base: string;
@@ -122,6 +125,33 @@
 
   const chatCount = $derived(sessions.length);
 
+  /* ── ticket board (only when the project has ticket mode enabled) ── */
+  let board = $state<TicketBoard | null>(null);
+  let ticketFilter = $state<TicketFilter>({});
+  $effect(() => {
+    Effect.runPromise(getProjectTickets(base, project.id).pipe(Effect.provide(WickClientLayer)))
+      .then((b) => { board = b; })
+      .catch(() => { board = null; /* board optional — old servers */ });
+    Effect.runPromise(getTicketFilter(base, project.id).pipe(Effect.provide(WickClientLayer)))
+      .then((f) => { ticketFilter = f ?? {}; })
+      .catch(() => { /* filter optional */ });
+  });
+
+  const ticketEnabled = $derived(board?.config?.enabled === true);
+  const viewMode = $derived(ticketEnabled && ticketFilter.view_mode === "card" ? "card" : "list");
+
+  let filterSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  function applyFilter(f: TicketFilter) {
+    ticketFilter = f;
+    clearTimeout(filterSaveTimer);
+    filterSaveTimer = setTimeout(() => {
+      Effect.runPromise(
+        saveTicketFilter(base, project.id, ticketFilter).pipe(Effect.provide(WickClientLayer)),
+      ).catch(() => { /* saving the preference is best-effort */ });
+    }, 400);
+  }
+  const setViewMode = (mode: "list" | "card") => applyFilter({ ...ticketFilter, view_mode: mode });
+
   async function handleSend({ text, files }: { text: string; files: File[] }) {
     try {
       const url = await createSessionInProject(
@@ -210,13 +240,47 @@
     New session in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span>{#if project.defaultProvider} · defaults to <span class="font-mono">{project.defaultProvider}</span>{/if}. Pick provider / model / preset above to override for this session.
   </p>
 
-  <!-- Session list — reuses SessionList for status badge, kebab/delete, pagination, search -->
+  <!-- Session list / ticket board. The List|Card toggle appears only when
+       this project has ticket mode enabled; the choice is saved per user. -->
   <div class="flex flex-col gap-3 flex-1 min-h-0">
-    <SessionList
-      {sessions}
-      {search}
-      onSearch={(s) => { search = s; }}
-      onSelect={onSelectSession}
-    />
+    {#if ticketEnabled}
+      <div class="flex items-center justify-between">
+        <div class="inline-flex overflow-hidden rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
+          <button
+            type="button"
+            aria-pressed={viewMode === "list"}
+            onclick={() => setViewMode("list")}
+            class={"px-4 py-1.5 text-xs font-medium transition-colors " + (viewMode === "list"
+              ? "bg-green-500 text-white-100"
+              : "text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600")}
+          >List</button>
+          <button
+            type="button"
+            aria-pressed={viewMode === "card"}
+            onclick={() => setViewMode("card")}
+            class={"px-4 py-1.5 text-xs font-medium transition-colors " + (viewMode === "card"
+              ? "bg-green-500 text-white-100"
+              : "text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600")}
+          >Card</button>
+        </div>
+      </div>
+    {/if}
+
+    {#if ticketEnabled && viewMode === "card" && board}
+      <KanbanBoard
+        {base}
+        {board}
+        filter={ticketFilter}
+        onFilter={applyFilter}
+        onSelect={onSelectSession}
+      />
+    {:else}
+      <SessionList
+        {sessions}
+        {search}
+        onSearch={(s) => { search = s; }}
+        onSelect={onSelectSession}
+      />
+    {/if}
   </div>
 </div>

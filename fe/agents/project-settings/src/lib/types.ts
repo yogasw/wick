@@ -64,6 +64,26 @@ export interface ProjectSettingsData {
   /** The global policy this project falls back to. Shown read-only so the
       operator can see what the project's hosts are appended TO. */
   widget_inherited?: WidgetPolicy;
+  /** Ticket-mode configuration ("Ticket system" section). */
+  ticket?: TicketConfig;
+}
+
+/** One custom field in the project's ticket schema. */
+export interface TicketField {
+  key: string;
+  label: string;
+  type: "text" | "select";
+  options?: string[];
+  required?: boolean;
+}
+
+/** A project's ticket-mode configuration. Zero value = feature off. */
+export interface TicketConfig {
+  enabled?: boolean;
+  fields?: TicketField[];
+  followup_after_sec?: number;
+  followup_prompt?: string;
+  auto_resolve_after_sec?: number;
 }
 
 export interface UpdateProjectRequest {

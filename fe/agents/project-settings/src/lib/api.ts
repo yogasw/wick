@@ -110,6 +110,25 @@ export async function createProject(req: UpdateProjectRequest): Promise<string> 
   return `${base}/sessions`;
 }
 
+/** Saves the project's ticket-mode configuration (the "Ticket system"
+    section) — its own endpoint, separate from the general meta update. */
+export async function saveTicketConfig(
+  id: string,
+  cfg: import("./types.js").TicketConfig,
+): Promise<void> {
+  const base = getBase();
+  const resp = await fetch(`${base}/api/projects/${encodeURIComponent(id)}/ticket-config`, {
+    method: "PUT",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "Accept": "application/json" },
+    body: JSON.stringify(cfg),
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new ApiError(resp.status, body || `HTTP ${resp.status}`);
+  }
+}
+
 export async function deleteProject(id: string): Promise<void> {
   const base = getBase();
   const resp = await fetch(`${base}/projects/${encodeURIComponent(id)}`, {

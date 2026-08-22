@@ -39,6 +39,20 @@ type UserMetadata struct {
 	// state reported by the browser prompt ("granted" or "denied").
 	PushPermission   string     `json:"push_permission,omitempty"`
 	PushPermissionAt *time.Time `json:"push_permission_at,omitempty"`
+
+	// TicketFilters stores this user's saved ticket-board filter per
+	// project, keyed by project ID. The backend treats the value as
+	// opaque preference data — validation lives in the board UI.
+	TicketFilters map[string]TicketFilter `json:"ticket_filters,omitempty"`
+}
+
+// TicketFilter is one saved ticket-board filter: which statuses to show,
+// whose tickets ("" = everyone, "me", or a user ID), and the last view
+// mode ("list" | "card") the user picked on that project page.
+type TicketFilter struct {
+	Statuses []string `json:"statuses,omitempty"`
+	Assignee string   `json:"assignee,omitempty"`
+	ViewMode string   `json:"view_mode,omitempty"`
 }
 
 const (
