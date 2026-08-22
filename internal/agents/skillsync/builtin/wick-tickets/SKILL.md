@@ -40,7 +40,9 @@ ticket_update status=waiting         # blocked on a human or something external
 ticket_update status=done            # finished
 ```
 
-Valid statuses are `open`, `in_progress`, `waiting`, `done` — nothing else.
+Those are the built-in defaults — a project can rename or replace its columns
+entirely. Call `ticket_settings_get` or `ticket_list` if you are unsure what
+this board's statuses are; `ticket_update` only accepts this project's own.
 
 Every update also resets the project's stale-follow-up timer. **If a follow-up
 message woke you, update the ticket before you finish**, or you will be woken
