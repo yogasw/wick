@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Custom board columns:** ticket statuses are now per project — name your own stages (`triage → coding → shipped`), one marked as the finished stage, which is where auto-resolve moves completed work. Renaming a column's label is free; removing one that still holds tickets is refused rather than stranding them. Leaving the list untouched keeps the built-in `open` / `in_progress` / `waiting` / `done` set.
 
 ---
 
