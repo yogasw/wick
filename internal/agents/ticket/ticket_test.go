@@ -125,15 +125,68 @@ func TestUpdateBumpsUpdatedAt(t *testing.T) {
 }
 
 func TestValidStatus(t *testing.T) {
+	// An unconfigured project uses the built-in set.
+	builtin := project.TicketConfig{}
 	for _, ok := range []string{StatusOpen, StatusInProgress, StatusWaiting, StatusDone} {
-		if !ValidStatus(ok) {
+		if !ValidStatus(builtin, ok) {
 			t.Errorf("ValidStatus(%q) = false", ok)
 		}
 	}
 	for _, bad := range []string{"", "closed", "OPEN", "in-progress"} {
-		if ValidStatus(bad) {
+		if ValidStatus(builtin, bad) {
 			t.Errorf("ValidStatus(%q) = true", bad)
 		}
+	}
+
+	// A board that renamed its stages accepts its own and refuses the
+	// built-in ones — otherwise "custom" would be decoration.
+	custom := project.TicketConfig{Statuses: []project.TicketStatus{
+		{Key: "triage"}, {Key: "shipped", Terminal: true},
+	}}
+	if !ValidStatus(custom, "triage") {
+		t.Error("a configured status must be valid")
+	}
+	if ValidStatus(custom, StatusOpen) {
+		t.Error("a status this board dropped must not be valid")
+	}
+}
+
+func TestConfigStatusHelpers(t *testing.T) {
+	builtin := project.TicketConfig{}
+	if got := builtin.FirstStatus(); got != StatusOpen {
+		t.Errorf("FirstStatus = %q, want open", got)
+	}
+	if got := builtin.TerminalStatus(); got != StatusDone {
+		t.Errorf("TerminalStatus = %q, want done", got)
+	}
+	if got := builtin.StatusLabel(StatusInProgress); got != "In Progress" {
+		t.Errorf("StatusLabel = %q, want In Progress", got)
+	}
+
+	custom := project.TicketConfig{Statuses: []project.TicketStatus{
+		{Key: "triage", Label: "Triage"},
+		{Key: "shipped", Label: "Shipped", Terminal: true},
+	}}
+	if got := custom.FirstStatus(); got != "triage" {
+		t.Errorf("FirstStatus = %q, want triage", got)
+	}
+	if got := custom.TerminalStatus(); got != "shipped" {
+		t.Errorf("TerminalStatus = %q, want shipped", got)
+	}
+
+	// Nothing marked terminal: the last column is the least surprising
+	// reading of a board's final stage.
+	unmarked := project.TicketConfig{Statuses: []project.TicketStatus{
+		{Key: "a"}, {Key: "b"},
+	}}
+	if got := unmarked.TerminalStatus(); got != "b" {
+		t.Errorf("TerminalStatus = %q, want the last column", got)
+	}
+
+	// A key with no label still draws as something.
+	bare := project.TicketConfig{Statuses: []project.TicketStatus{{Key: "wip", Terminal: true}}}
+	if got := bare.StatusLabel("wip"); got != "wip" {
+		t.Errorf("StatusLabel = %q, want the key as a fallback", got)
 	}
 }
 
@@ -197,5 +250,137 @@ func TestDelete(t *testing.T) {
 	}
 	if _, err := Load(l, "p1", tk.ID); err == nil {
 		t.Fatal("ticket still loadable after delete")
+	}
+}
+
+func TestValidateStatuses(t *testing.T) {
+	ok := []project.TicketStatus{
+		{Key: "triage", Label: "Triage"},
+		{Key: "shipped", Label: "Shipped", Terminal: true},
+	}
+	if err := ValidateStatuses(ok); err != nil {
+		t.Fatalf("a renamed board should be valid: %v", err)
+	}
+	// Empty means "use the built-in set", not "no columns".
+	if err := ValidateStatuses(nil); err != nil {
+		t.Fatalf("empty must be allowed: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		list []project.TicketStatus
+		want string
+	}{
+		{
+			"no terminal stage",
+			[]project.TicketStatus{{Key: "a"}, {Key: "b"}},
+			"exactly one status",
+		},
+		{
+			"two terminal stages",
+			[]project.TicketStatus{{Key: "a", Terminal: true}, {Key: "b", Terminal: true}},
+			"exactly one status",
+		},
+		{
+			"empty key",
+			[]project.TicketStatus{{Key: "  ", Terminal: true}},
+			"key is required",
+		},
+		{
+			"duplicate key",
+			[]project.TicketStatus{{Key: "a"}, {Key: "a", Terminal: true}},
+			"duplicate",
+		},
+		{
+			// Keys are stored on tickets and typed into MCP calls, so they
+			// stay slug-shaped; the wording lives in Label.
+			"key with spaces",
+			[]project.TicketStatus{{Key: "in review", Terminal: true}},
+			"lowercase",
+		},
+		{
+			"key with capitals",
+			[]project.TicketStatus{{Key: "InReview", Terminal: true}},
+			"lowercase",
+		},
+	}
+	for _, c := range cases {
+		err := ValidateStatuses(c.list)
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: error = %v, want it to mention %q", c.name, err, c.want)
+		}
+	}
+
+	// One column is enough for a board.
+	if err := ValidateStatuses([]project.TicketStatus{{Key: "only", Terminal: true}}); err != nil {
+		t.Fatalf("a single terminal status should be valid: %v", err)
+	}
+}
+
+// Dropping a status that still holds tickets would lose sight of them, so
+// the caller is told which ones rather than having the data rewritten.
+func TestOrphanedStatuses(t *testing.T) {
+	l := newLayout(t)
+	if _, err := Create(l, CreateOptions{ProjectID: "p1", Title: "a", Status: StatusOpen}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Create(l, CreateOptions{ProjectID: "p1", Title: "b", Status: StatusWaiting}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Keeping "open" but dropping "waiting" strands the second ticket.
+	next := []project.TicketStatus{{Key: StatusOpen}, {Key: "shipped", Terminal: true}}
+	got := OrphanedStatuses(l, "p1", next)
+	if len(got) != 1 || got[0] != StatusWaiting {
+		t.Fatalf("orphans = %v, want [waiting]", got)
+	}
+
+	// A list that covers every status in use strands nothing.
+	full := []project.TicketStatus{
+		{Key: StatusOpen}, {Key: StatusWaiting}, {Key: "shipped", Terminal: true},
+	}
+	if got := OrphanedStatuses(l, "p1", full); len(got) != 0 {
+		t.Fatalf("nothing should be stranded, got %v", got)
+	}
+
+	// Returning to the built-in set is always safe.
+	if got := OrphanedStatuses(l, "p1", nil); len(got) != 0 {
+		t.Fatalf("the built-in set strands nothing, got %v", got)
+	}
+}
+
+// A project that renamed its stages accepts its own keys and refuses the
+// built-in ones — that is what "custom" has to mean.
+func TestCreateUsesTheProjectsOwnStatuses(t *testing.T) {
+	l := newLayout(t)
+	p, err := project.Load(l, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Meta.Ticket = project.TicketConfig{
+		Enabled: true,
+		Statuses: []project.TicketStatus{
+			{Key: "triage", Label: "Triage"},
+			{Key: "shipped", Label: "Shipped", Terminal: true},
+		},
+	}
+	if err := project.SaveMeta(l, "p1", p.Meta); err != nil {
+		t.Fatal(err)
+	}
+
+	// No status given: the board's FIRST column, not "open".
+	tk, err := Create(l, CreateOptions{ProjectID: "p1", Title: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Status != "triage" {
+		t.Fatalf("status = %q, want triage (the first column)", tk.Status)
+	}
+
+	if _, err := Create(l, CreateOptions{ProjectID: "p1", Title: "y", Status: "shipped"}); err != nil {
+		t.Fatalf("a configured status must be accepted: %v", err)
+	}
+	if _, err := Create(l, CreateOptions{ProjectID: "p1", Title: "z", Status: StatusOpen}); err == nil {
+		t.Fatal("a status this board does not have must be refused")
 	}
 }

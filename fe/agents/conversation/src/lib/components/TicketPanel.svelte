@@ -8,7 +8,7 @@
        moved to a different ticket or taken off tickets entirely.
      - On nothing: offers to create a ticket from this chat, or attach it to
        an existing one. */
-  import type { TicketCard } from "../types/agents.js";
+  import type { TicketCard, TicketStatus } from "../types/agents.js";
   import {
     attachSession,
     createTicket,
@@ -27,6 +27,9 @@
     projectId?: string;
     /* Ticket this session is attached to, when any. */
     ticket?: { id: string; title: string; status: string } | null;
+    /* The project's board columns, so the rail offers the same choices as
+       the board rather than the built-in four. */
+    statuses?: TicketStatus[];
     /* How many notes the resolved scope holds — shown as a pointer to the
        Notes tab rather than duplicating the list here. */
     noteCount?: number;
@@ -42,24 +45,38 @@
     sessionId,
     projectId,
     ticket,
+    statuses,
     noteCount = 0,
     onOpenTicket,
     onOpenNotes,
     onChanged,
   }: Props = $props();
 
-  const statusLabels: Record<string, string> = {
-    open: "Open",
-    in_progress: "In Progress",
-    waiting: "Waiting",
-    done: "Done",
-  };
-  const statusPill: Record<string, string> = {
-    open: "bg-prog-100 text-prog-400",
-    in_progress: "bg-cau-100 text-cau-400",
-    waiting: "bg-white-300 dark:bg-navy-600 text-black-800 dark:text-black-600",
-    done: "bg-pos-100 text-pos-400",
-  };
+  /* The rail does not fetch the board, so its status choices arrive with
+     the ticket. Falling back to the built-in set keeps the select usable
+     against an older server that sends none. */
+  const BUILTIN: TicketStatus[] = [
+    { key: "open", label: "Open" },
+    { key: "in_progress", label: "In Progress" },
+    { key: "waiting", label: "Waiting" },
+    { key: "done", label: "Done", terminal: true },
+  ];
+  const statusList = $derived(statuses && statuses.length > 0 ? statuses : BUILTIN);
+  const labelOf = (key: string) => statusList.find((s) => s.key === key)?.label || key;
+  const terminalKey = $derived(
+    statusList.find((s) => s.terminal)?.key ?? statusList[statusList.length - 1]?.key ?? "",
+  );
+  const accents = [
+    "bg-prog-100 text-prog-400",
+    "bg-cau-100 text-cau-400",
+    "bg-white-300 dark:bg-navy-600 text-black-800 dark:text-black-600",
+    "bg-link-100 text-link-400",
+  ];
+  function pillFor(key: string): string {
+    if (key === terminalKey) return "bg-pos-100 text-pos-400";
+    const i = statusList.findIndex((s) => s.key === key);
+    return i < 0 ? "bg-white-300 text-black-800" : accents[i % accents.length];
+  }
 
   let busy = $state(false);
 
@@ -181,8 +198,8 @@
           title="Open this ticket's page"
           class="rounded bg-white-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-black-800 transition-colors hover:text-green-600 dark:bg-navy-700 dark:text-black-600 dark:hover:text-green-400"
         >{ticket.id}</button>
-        <span class={"ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold " + (statusPill[ticket.status] ?? "")}>
-          {statusLabels[ticket.status] ?? ticket.status}
+        <span class={"ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold " + pillFor(ticket.status)}>
+          {labelOf(ticket.status)}
         </span>
       </div>
 
@@ -212,8 +229,8 @@
         onchange={(e) => setStatus((e.target as HTMLSelectElement).value)}
         class="mt-1 w-full rounded-lg border border-white-400 bg-white-100 px-2 py-1.5 text-xs text-black-900 outline-none focus:border-green-500 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100"
       >
-        {#each Object.keys(statusLabels) as s (s)}
-          <option value={s}>{statusLabels[s]}</option>
+        {#each statusList as s (s.key)}
+          <option value={s.key}>{s.label || s.key}</option>
         {/each}
       </select>
 

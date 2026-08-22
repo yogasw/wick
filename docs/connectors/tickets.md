@@ -28,7 +28,7 @@ All ops accept an implicit `project_id` (defaults to the calling session's proje
 
 ### `ticket_list` — List Tickets
 
-List a project's tickets, newest first: id, title, status, assignee, fields, and session count. Optional `status` filter (`open` / `in_progress` / `waiting` / `done`).
+List a project's tickets, newest first: id, title, status, assignee, fields, and session count. Optional `status` filter — the accepted keys are that project's own (see [Board columns](#board-columns)).
 
 ### `ticket_get` — Get Ticket
 
@@ -41,7 +41,7 @@ Create a ticket in a project. Status defaults to `open`.
 | Input | Notes |
 |---|---|
 | `title` | Required. |
-| `status` | `open` / `in_progress` / `waiting` / `done`. Defaults to `open`. |
+| `status` | One of the project's status keys. Defaults to its first column. |
 | `assignee` | Optional wick user id. |
 | `fields` | Optional JSON object of project-defined field values. |
 | `attach_current_session` | Attaches the calling session to the new ticket — how an ad-hoc chat becomes tracked work. |
@@ -59,6 +59,28 @@ Attach or detach a session from a ticket. Attaching is idempotent and moves the 
 Read or change a project's ticket configuration: whether ticket mode is on, the custom field schema, the stale-followup and auto-resolve windows, and the [auto-create rules](/guide/agents/projects#auto-create-rules).
 
 `ticket_settings_set` takes `auto_create` as a JSON array of `{origin, channel_kind, match, title, enabled}` rules. Rules are tried in order and the **first match wins** — a disabled narrow rule placed above a broad one carves an exception out of it (e.g. "everything from Slack except DMs"). A regex `match` that does not compile is refused rather than stored inert.
+
+It also takes `statuses`, a JSON array of the project's board columns — see below.
+
+## Board columns
+
+Statuses are **per project**: a team names its own stages. `ticket_settings_get` returns the list, and `ticket_settings_set` replaces it:
+
+```json
+[
+  { "key": "triage",  "label": "Triage" },
+  { "key": "coding",  "label": "Coding" },
+  { "key": "shipped", "label": "Shipped", "terminal": true }
+]
+```
+
+- **`key`** is what a ticket stores and what `ticket_create` / `ticket_update` accept. Lowercase `a-z0-9_`, because it gets typed and quoted.
+- **`label`** is display only, and safe to reword at any time.
+- **`terminal`** marks the stage that means the work is finished. **Exactly one** status must carry it: auto-resolve moves finished tickets there, and the stale-followup timer treats it as "leave this alone". A list without it is refused.
+
+The order is the board's column order. Passing `[]` returns the project to the built-in set (`open`, `in_progress`, `waiting`, `done`), which is what an unconfigured project uses.
+
+A status that still holds tickets cannot be dropped — the call is refused and names the statuses in question, so those tickets are moved deliberately rather than losing their column behind your back.
 
 ::: warning No delete op
 Deleting a ticket (with the choice to keep or delete its chats) is a UI/admin action only — there is no `ticket_delete` op on this connector.

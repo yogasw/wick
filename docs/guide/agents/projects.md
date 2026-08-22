@@ -156,7 +156,7 @@ A project can turn its sessions into a **ticket board**. Off by default — enab
 Code: [`internal/agents/ticket/`](https://github.com/yogasw/wick/blob/master/internal/agents/ticket) (entity, sweeper, auto-create rules), [`internal/agents/project/ticket.go`](https://github.com/yogasw/wick/blob/master/internal/agents/project/ticket.go) (per-project config). MCP surface: [Tickets connector](/connectors/tickets) and [Notes connector](/connectors/notes).
 :::
 
-A **ticket** is the unit of work; a **session** is one conversation about it, and a ticket can hold several. Tickets live at `projects/<id>/tickets/<T-XXXX>/ticket.json` with a short, quotable id (`T-4F2A`) rather than a UUID — it appears on board cards and gets typed into chat. A ticket carries a title, status (`open` / `in_progress` / `waiting` / `done`), assignee, project-defined custom fields, and its session list.
+A **ticket** is the unit of work; a **session** is one conversation about it, and a ticket can hold several. Tickets live at `projects/<id>/tickets/<T-XXXX>/ticket.json` with a short, quotable id (`T-4F2A`) rather than a UUID — it appears on board cards and gets typed into chat. A ticket carries a title, a status drawn from the project's own board columns, an assignee, project-defined custom fields, and its session list.
 
 ### The board
 
@@ -175,11 +175,22 @@ Configured from the project settings page (or via `ticket_settings_get` / `ticke
 | Setting | Effect |
 |---|---|
 | **Enabled** | Turns the board and automation on for this project. Off by default. |
+| **Board columns** | The statuses this board uses, in order — see [Board columns](#board-columns). |
 | **Custom fields** | A schema of `{key, label, type, options, required}` fields shown on every ticket card and edit form. |
 | **Stale-followup window** | A non-done ticket untouched for this long gets a follow-up turn sent to its most recently attached session's agent, using the project's follow-up prompt. The agent decides what to do (update the ticket, ping someone, close it) rather than wick messaging anyone. Repeats once per window while still stale. |
-| **Auto-resolve window** | A non-done ticket untouched for this long is closed automatically (status set to `done`), no agent spawn. Auto-resolve wins over follow-up when both are due. |
+| **Auto-resolve window** | A ticket untouched for this long is moved to the board's finished column automatically, no agent spawn. Auto-resolve wins over follow-up when both are due. |
 
 Any ticket update (status, title, assignee, or fields) resets both timers — that is what makes "the agent acted, so stop nagging" work.
+
+### Board columns
+
+Statuses are per project, so a team names its own stages — `triage → coding → review → shipped` is as valid as the defaults. Each column has a **key** (what tickets store, and what agents pass over MCP: lowercase `a-z0-9_`), a **label** (display only, safe to reword), and one column is marked the **finished stage**.
+
+That last part is structural, not decoration: auto-resolve moves finished work to that column, and the stale-followup timer treats it as "leave this alone". A list without exactly one finished stage is refused on save.
+
+The list order is the column order. Leaving it untouched uses the built-in set — `open`, `in_progress`, `waiting`, `done` — which is what every project starts with.
+
+Renaming a label is free. **Removing a column that still holds tickets is refused**, and the error names the columns in question: those tickets get moved deliberately, rather than a rename quietly leaving them without a place on the board.
 
 ### Auto-create rules
 

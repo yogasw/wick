@@ -77,6 +77,15 @@ export interface TicketField {
   required?: boolean;
 }
 
+/** One column on the project's board. `key` is what tickets store and what
+    MCP accepts; `label` is display only. Exactly one status is `terminal` —
+    the stage auto-resolve moves finished work to. */
+export interface TicketStatus {
+  key: string;
+  label?: string;
+  terminal?: boolean;
+}
+
 /** One rule deciding when a new session is given a ticket with nobody
     asking. Rules are tried in order and the FIRST match wins, so a
     disabled narrow rule above a broad one carves an exception out of it —
@@ -101,6 +110,8 @@ export interface TicketConfig {
   followup_prompt?: string;
   auto_resolve_after_sec?: number;
   auto_create?: AutoCreateRule[];
+  /** Board columns, in order. Empty means the built-in set. */
+  statuses?: TicketStatus[];
 }
 
 export interface UpdateProjectRequest {

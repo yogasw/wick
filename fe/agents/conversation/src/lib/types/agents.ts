@@ -442,6 +442,16 @@ export type ProjectOption = {
   defaultModel?: string;
 };
 
+/** One column on a project's board. Statuses are per project: a team names
+    its own stages. `key` is what a ticket stores and what MCP accepts;
+    `label` is display only. Exactly one status is `terminal` — the stage
+    auto-resolve moves finished work to. */
+export type TicketStatus = {
+  key: string;
+  label?: string;
+  terminal?: boolean;
+};
+
 /** One custom field definition in a project's ticket schema. */
 export type TicketField = {
   key: string;
@@ -474,6 +484,8 @@ export type TicketConfig = {
   followup_prompt?: string;
   auto_resolve_after_sec?: number;
   auto_create?: AutoCreateRule[];
+  /** Board columns, in order. Empty means the built-in set. */
+  statuses?: TicketStatus[];
 };
 
 /** One card on the project ticket board. A card is a TICKET, not a
@@ -506,7 +518,7 @@ export type TicketBoard = {
   untracked: TicketSessionRow[];
   /** How many untracked chats exist, however few were sent. */
   untracked_total?: number;
-  statuses: string[];
+  statuses: TicketStatus[];
   users?: Record<string, string>;
   me?: string;
 };
@@ -539,7 +551,7 @@ export type TicketDetail = {
   config: TicketConfig;
   sessions: TicketSessionRow[];
   notes: Note[];
-  statuses: string[];
+  statuses: TicketStatus[];
   users?: Record<string, string>;
   me?: string;
 };
@@ -578,6 +590,9 @@ export type NotesResponse = {
   users?: Record<string, string>;
   me?: string;
   ticket?: { id: string; title: string; status: string };
+  /** The ticket's project board columns, so the rail's status select offers
+      the same choices as the board. */
+  statuses?: TicketStatus[];
 };
 
 /** One message between two agents inside a delegation tree. */

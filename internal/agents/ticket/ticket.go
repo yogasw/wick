@@ -27,26 +27,89 @@ import (
 	"github.com/yogasw/wick/internal/agents/storage"
 )
 
-// Statuses. Fixed set: the board renders one column per status, in this
-// order.
+// Status keys are per PROJECT — a team names its own stages. These
+// constants are the built-in set every project starts with, re-exported
+// from the project package so callers that only import this one can still
+// name them.
 const (
-	StatusOpen       = "open"
-	StatusInProgress = "in_progress"
-	StatusWaiting    = "waiting"
-	StatusDone       = "done"
+	StatusOpen       = project.StatusOpen
+	StatusInProgress = project.StatusInProgress
+	StatusWaiting    = project.StatusWaiting
+	StatusDone       = project.StatusDone
 )
 
-// Statuses lists every valid status in board column order.
-var Statuses = []string{StatusOpen, StatusInProgress, StatusWaiting, StatusDone}
+// DefaultStatuses is the built-in board order, for callers with no project
+// config to hand (a test fixture, a fallback path). Anything acting on a
+// real project reads cfg.StatusKeys() instead — a project may have renamed
+// or replaced every one of these.
+func DefaultStatuses() []string {
+	cfg := project.TicketConfig{}
+	return cfg.StatusKeys()
+}
 
-// ValidStatus reports whether s is one of the fixed statuses.
-func ValidStatus(s string) bool {
-	for _, v := range Statuses {
-		if s == v {
-			return true
+// ValidStatus reports whether s is one of the project's statuses.
+func ValidStatus(cfg project.TicketConfig, s string) bool {
+	return cfg.HasStatus(s)
+}
+
+// statusMinCount is the floor: a board needs at least one column to put a
+// ticket in.
+const statusMinCount = 1
+
+// ValidateStatuses checks a status list before it is stored.
+//
+// Two rules, both structural. A board needs at least one column, and
+// exactly one status must be terminal: without it auto-resolve has nowhere
+// to move a finished ticket and the followup timer would nag work that is
+// already done.
+func ValidateStatuses(list []project.TicketStatus) error {
+	if len(list) == 0 {
+		return nil // empty means "use the built-in set"
+	}
+	if len(list) < statusMinCount {
+		return fmt.Errorf("a board needs at least one status")
+	}
+	seen := map[string]bool{}
+	terminals := 0
+	for i, s := range list {
+		where := fmt.Sprintf("status %d", i+1)
+		key := strings.TrimSpace(s.Key)
+		if key == "" {
+			return fmt.Errorf("%s: key is required", where)
+		}
+		if !statusKeyOK(key) {
+			return fmt.Errorf("%s: key %q must be lowercase letters, digits, or underscores", where, key)
+		}
+		if seen[key] {
+			return fmt.Errorf("%s: duplicate key %q", where, key)
+		}
+		seen[key] = true
+		if s.Terminal {
+			terminals++
 		}
 	}
-	return false
+	if terminals != 1 {
+		return fmt.Errorf(
+			"exactly one status must be marked as the finished stage (found %d) — "+
+				"auto-resolve and the follow-up timer need to know which one means done",
+			terminals,
+		)
+	}
+	return nil
+}
+
+// statusKeyOK holds keys to a slug shape. A key is stored on every ticket
+// and accepted by the MCP surface, so it has to survive being typed and
+// quoted; the human-facing wording lives in Label.
+func statusKeyOK(key string) bool {
+	for _, r := range key {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Ticket is the persisted shape of one ticket.
@@ -113,12 +176,19 @@ func Create(layout config.Layout, opt CreateOptions) (Ticket, error) {
 	if title == "" {
 		return Ticket{}, fmt.Errorf("ticket title is required")
 	}
-	status := opt.Status
-	if status == "" {
-		status = StatusOpen
+	// Statuses belong to the project, so they are read from it rather than
+	// assumed: a project may have replaced every built-in one.
+	p, perr := project.Load(layout, opt.ProjectID)
+	if perr != nil {
+		return Ticket{}, fmt.Errorf("load project %q: %w", opt.ProjectID, perr)
 	}
-	if !ValidStatus(status) {
-		return Ticket{}, fmt.Errorf("invalid status %q", status)
+	cfg := p.Meta.Ticket
+	status := strings.TrimSpace(opt.Status)
+	if status == "" {
+		status = cfg.FirstStatus()
+	}
+	if !ValidStatus(cfg, status) {
+		return Ticket{}, fmt.Errorf("invalid status %q (want %s)", status, strings.Join(cfg.StatusKeys(), ", "))
 	}
 
 	now := time.Now().UTC()
@@ -330,4 +400,37 @@ func Delete(layout config.Layout, projectID, ticketID string) error {
 		return fmt.Errorf("ticket %q not found", ticketID)
 	}
 	return os.RemoveAll(layout.TicketDir(projectID, ticketID))
+}
+
+// OrphanedStatuses returns the status keys that would be left holding
+// tickets if a project's statuses were replaced by next.
+//
+// Renaming a stage is cheap; losing sight of the tickets in it is not. So a
+// status still in use cannot simply be dropped: the caller is told which
+// ones, and moves those tickets first. Silently rewriting them would change
+// data nobody looked at, and there is no "unassigned status" to park them
+// in — a ticket always sits in a column.
+func OrphanedStatuses(layout config.Layout, projectID string, next []project.TicketStatus) []string {
+	if len(next) == 0 {
+		return nil // back to the built-in set; nothing to strand
+	}
+	keep := make(map[string]bool, len(next))
+	for _, s := range next {
+		keep[strings.TrimSpace(s.Key)] = true
+	}
+	tickets, err := List(layout, projectID)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, t := range tickets {
+		if keep[t.Status] || seen[t.Status] {
+			continue
+		}
+		seen[t.Status] = true
+		out = append(out, t.Status)
+	}
+	sort.Strings(out)
+	return out
 }
