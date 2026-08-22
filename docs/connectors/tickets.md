@@ -36,7 +36,7 @@ Return one ticket in full, including its session list. Omit `ticket_id` to get t
 
 ### `ticket_create` — Create Ticket
 
-Create a ticket in a project. Status defaults to `open`.
+Create a ticket in a project. Status defaults to the board's first column.
 
 | Input | Notes |
 |---|---|
@@ -48,7 +48,7 @@ Create a ticket in a project. Status defaults to `open`.
 
 ### `ticket_update` — Update Ticket
 
-Update title, status, assignee, or fields. Partial update — only what you pass changes. Status must be one of the four fixed values. **Every update resets the project's stale-followup and auto-resolve timers**, so an agent acting on a followup should call this afterward.
+Update title, status, assignee, or fields. Partial update — only what you pass changes. Status must be one of the project's own [board columns](#board-columns). **Every update resets the project's stale-followup and auto-resolve timers**, so an agent acting on a followup should call this afterward.
 
 ### `ticket_attach_session` / `ticket_detach_session` — Attach / Detach Session
 
