@@ -3,6 +3,8 @@ export {
   WickClientLayer,
   apiGetE,
   apiPostE,
+  apiPutE,
+  apiPatchE,
   apiDeleteE,
   apiGet,
   apiPost,

@@ -6,7 +6,15 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Tickets as entities, with notes and a project-settings revamp:**
+    *   Tickets are now their own on-disk entities (`projects/<id>/tickets/<T-XXXX>/`) holding zero or more sessions, rather than a field on the session itself — a fresh session can now continue an existing ticket's status, assignee, fields, and notes.
+    *   A kanban board on the project page shows tickets as cards, with an Untracked rail for chats on no ticket; drag a ticket between columns to change status, drag a chat onto a card to attach it, or onto a column to make it a new ticket.
+    *   Notes: a separate markdown note subsystem, scoped to a ticket (shared by every session on it) or to a standalone session, each with an `audience` (ai/human/both) and an optional `hidden` flag. Note bodies are never injected into the system prompt — sessions get a pointer naming the ticket and note count instead.
+    *   Two new MCP connectors, [`tickets`](/connectors/tickets) and [`notes`](/connectors/notes) (kept separate so note-taking can be granted without board access), plus the `wick-tickets` and `wick-notes` built-in skills. The earlier `wick_ticket_get`/`wick_ticket_set` meta-tools are removed in favor of the `tickets` connector.
+    *   Per-project [auto-create rules](/guide/agents/projects#auto-create-rules) that give a new session a ticket automatically based on origin, channel kind, and a contains/regex match on its first message.
+    *   Project settings revamped: single-column sections, collapsible editors, and background auto-save with no Save button.
 
 ---
 

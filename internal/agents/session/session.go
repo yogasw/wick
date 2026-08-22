@@ -121,6 +121,15 @@ type Meta struct {
 	// session created before sub-agents existed, which reads correctly
 	// as "not a child".
 	ParentSessionID string `json:"parent_session_id,omitempty"`
+	// TicketID is a denormalised back-pointer to the ticket this session
+	// belongs to (tickets live in internal/agents/ticket, one per folder
+	// under the project). It exists so the sidebar and the pool can answer
+	// "which ticket is this?" without scanning every ticket.
+	//
+	// NOT authoritative: the ticket's own Sessions list is the record. A
+	// back-pointer the ticket does not confirm is treated as stale and
+	// ignored — see notes.Resolve.
+	TicketID string `json:"ticket_id,omitempty"`
 }
 
 // IsSubscribed returns true when userID has opted in to receive

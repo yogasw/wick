@@ -128,15 +128,11 @@
   }
 </script>
 
+<!-- No heading or outer border here: the enclosing settings section owns
+     the title, description, and card chrome. -->
 <div>
-  <h4 class="font-bold text-sm mb-2 text-black-900 dark:text-white-100">Widget permissions</h4>
-  <div class="border border-white-300 dark:border-navy-600 rounded-lg p-3 space-y-3">
-    <p class="text-xs text-black-600 dark:text-black-700">
-      Widget HTML is written by the agent, so it runs sealed off by default. Pick a mode — you only
-      need to set individual permissions if you choose Custom.
-    </p>
-
-    <label class="flex items-start gap-2 text-sm cursor-pointer">
+  <div class="space-y-3">
+    <label class="flex cursor-pointer items-start gap-2 rounded-lg border border-white-300 bg-white-200 px-4 py-3 text-sm dark:border-navy-600 dark:bg-navy-800">
       <input
         type="checkbox"
         checked={override}
@@ -144,14 +140,14 @@
         class="mt-0.5 rounded text-green-500 focus:ring-green-500"
       />
       <span>
-        <span class="font-semibold text-black-900 dark:text-white-100">Override for this project</span>
+        <span class="font-medium text-black-900 dark:text-white-100">Override for this project</span>
         {#if !override}
           <span
-            class="ml-1 rounded bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 text-[10px] font-bold uppercase"
-            >inherited from global</span
+            class="ml-1 rounded bg-white-300 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-black-800 dark:bg-navy-700 dark:text-black-600"
+            >inherited</span
           >
         {/if}
-        <span class="block text-xs text-black-600 dark:text-black-700 mt-0.5">
+        <span class="mt-0.5 block text-xs leading-relaxed text-black-700 dark:text-black-600">
           {#if override}
             This project uses its own mode. Global no longer applies to it, apart from the allowed
             hosts, which are added to yours under Custom.

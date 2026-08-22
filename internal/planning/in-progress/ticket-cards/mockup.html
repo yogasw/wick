@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ticket Cards — Mockup</title>
+<style>
+  :root{
+    --green:#12a89d; --green-dark:#0e8a81; --navy:#1b2a4a;
+    --bg:#f6f7f9; --card:#ffffff; --border:#e5e7eb; --text:#111827;
+    --muted:#6b7280; --soft:#9ca3af;
+    --open:#2563eb; --prog:#d97706; --wait:#7c3aed; --done:#059669;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Inter,system-ui,sans-serif;background:var(--bg);color:var(--text);padding:32px;font-size:14px}
+  h1{font-size:18px;margin-bottom:4px}
+  h2{font-size:15px;margin:40px 0 12px}
+  .hint{color:var(--muted);font-size:12px;margin-bottom:24px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .pill{border-radius:999px;padding:2px 10px;font-size:11px;font-weight:600}
+  .pill.open{background:#dbeafe;color:var(--open)} .pill.in_progress{background:#fef3c7;color:var(--prog)}
+  .pill.waiting{background:#ede9fe;color:var(--wait)} .pill.done{background:#d1fae5;color:var(--done)}
+  .chip{border:1px solid var(--border);background:var(--card);border-radius:999px;padding:4px 12px;font-size:12px;cursor:pointer;color:var(--muted)}
+  .chip.on{border-color:var(--green);color:var(--green);background:#e6f7f6;font-weight:600}
+  .seg{display:inline-flex;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--card)}
+  .seg button{border:0;background:transparent;padding:6px 14px;font-size:12px;cursor:pointer;color:var(--muted)}
+  .seg button.on{background:var(--green);color:#fff;font-weight:600}
+  select,input,textarea{border:1px solid var(--border);border-radius:10px;padding:6px 10px;font-size:12px;background:var(--card);font-family:inherit}
+  .board{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}
+  .col{background:#eef0f3;border-radius:14px;padding:10px;min-height:220px}
+  .col h3{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);display:flex;justify-content:space-between;padding:4px 6px 10px}
+  .col h3 .n{background:var(--card);border-radius:999px;padding:0 8px;font-size:11px}
+  .tcard{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:8px;box-shadow:0 1px 2px rgba(0,0,0,.04);cursor:grab}
+  .tcard .title{font-weight:600;font-size:13px;margin-bottom:6px}
+  .tcard .meta{font-size:11px;color:var(--soft);display:flex;gap:8px;margin-top:8px;align-items:center}
+  .tcard .fields{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+  .tag{background:#f3f4f6;border-radius:6px;padding:1px 6px;font-size:10px;color:var(--muted)}
+  .stale{background:#fee2e2;color:#dc2626;border-radius:6px;padding:1px 6px;font-size:10px;font-weight:600}
+  .assg{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--muted)}
+  .avatar{width:16px;height:16px;border-radius:50%;background:var(--green);color:#fff;font-size:9px;display:inline-flex;align-items:center;justify-content:center;font-weight:700}
+  .panel{max-width:320px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px}
+  .panel label{display:block;font-size:11px;color:var(--muted);margin:12px 0 4px;font-weight:600}
+  .panel .full{width:100%}
+  .btn{background:var(--green);color:#fff;border:0;border-radius:10px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer}
+  .btn.ghost{background:var(--card);color:var(--green);border:1px solid var(--green)}
+  .settings{max-width:560px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px}
+  .frow{display:grid;grid-template-columns:1fr 1fr 90px 1fr 60px 24px;gap:8px;margin-bottom:8px;align-items:center;font-size:12px}
+  .frow.head{color:var(--muted);font-size:10px;text-transform:uppercase}
+  .switch{width:36px;height:20px;border-radius:999px;background:var(--green);position:relative;display:inline-block}
+  .switch::after{content:"";position:absolute;right:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff}
+  .note{font-size:11px;color:var(--muted);margin-top:6px;line-height:1.5}
+</style>
+</head>
+<body>
+
+<h1>Ticket Cards — kanban board (project landing, ticket mode ON)</h1>
+<p class="hint">Toggle List | Card muncul cuma kalau project ticket mode enabled. Drag card antar kolom = ganti status (PUT /api/sessions/{id}/ticket, optimistic). Filter status + assignee tersimpan per user di UserMetadata.TicketFilters. Session tanpa ticket di project ticket-mode di-adopt jadi <b>open</b> oleh sweeper.</p>
+
+<div class="row">
+  <div class="seg"><button>List</button><button class="on">Card</button></div>
+  <span style="width:12px"></span>
+  <span class="chip on">Open</span>
+  <span class="chip on">In Progress</span>
+  <span class="chip">Waiting</span>
+  <span class="chip">Done</span>
+  <span style="width:12px"></span>
+  <select><option>Assignee: All</option><option selected>Assignee: Me</option></select>
+</div>
+
+<div class="board">
+  <div class="col"><h3>Open <span class="n">2</span></h3>
+    <div class="tcard">
+      <div class="title">Set variable v1 to 1</div>
+      <span class="pill open">open</span>
+      <div class="fields"><span class="tag">type: bug</span><span class="tag">priority: high</span></div>
+      <div class="meta"><span class="assg"><span class="avatar">Y</span>yoga</span><span>#a1b2c3</span><span>5m ago</span><span class="stale">stale 2h</span></div>
+    </div>
+    <div class="tcard">
+      <div class="title">Ingat nilai v1 = 11</div>
+      <span class="pill open">open</span>
+      <div class="fields"><span class="tag">type: task</span></div>
+      <div class="meta"><span class="assg">unassigned</span><span>#d4e5f6</span><span>7m ago</span></div>
+    </div>
+  </div>
+  <div class="col"><h3>In Progress <span class="n">1</span></h3>
+    <div class="tcard" style="outline:2px dashed var(--green)">
+      <div class="title">Debug issue ops flow</div>
+      <span class="pill in_progress">in progress</span>
+      <div class="fields"><span class="tag">type: incident</span><span class="tag">priority: urgent</span></div>
+      <div class="meta"><span class="assg"><span class="avatar">Y</span>yoga</span><span>#9f8e7d</span><span>1h ago</span></div>
+    </div>
+  </div>
+  <div class="col"><h3>Waiting <span class="n">0</span></h3></div>
+  <div class="col"><h3>Done <span class="n">1</span></h3>
+    <div class="tcard" style="opacity:.65">
+      <div class="title">Provider switch check</div>
+      <span class="pill done">done</span>
+      <div class="meta"><span>#77aa88</span><span>auto-resolved 7d</span></div>
+    </div>
+  </div>
+</div>
+
+<h2>Right rail — Ticket panel (conversation view, manual edit)</h2>
+<div class="panel">
+  <div class="row" style="justify-content:space-between">
+    <strong style="font-size:13px">Ticket</strong>
+    <span class="pill in_progress">in progress</span>
+  </div>
+  <label>Status</label>
+  <select class="full"><option>open</option><option selected>in_progress</option><option>waiting</option><option>done</option></select>
+  <label>Assignee</label>
+  <div class="row"><input style="flex:1" value="yoga"><button class="btn ghost">Assign to me</button></div>
+  <label>Type</label>
+  <select class="full"><option>bug</option><option selected>incident</option><option>task</option></select>
+  <label>Priority</label>
+  <select class="full"><option>low</option><option>normal</option><option>high</option><option selected>urgent</option></select>
+  <p class="note">Last updated 1h ago · session #9f8e7d<br>Agent can also update this via <code>wick_ticket_set</code>.</p>
+  <div style="margin-top:14px"><button class="btn">Save</button></div>
+</div>
+
+<h2>Project settings — Ticket system section</h2>
+<div class="settings">
+  <div class="row" style="justify-content:space-between;margin-bottom:6px">
+    <strong>Ticket system</strong> <span class="switch"></span>
+  </div>
+  <p class="note">Sessions in this project become ticket cards with status, assignee, and the fields below. Enables the Card board on the project page.</p>
+
+  <div class="frow head" style="margin-top:16px"><span>Key</span><span>Label</span><span>Type</span><span>Options</span><span>Req</span><span></span></div>
+  <div class="frow"><input value="type"><input value="Type"><select><option selected>select</option><option>text</option></select><input value="bug, incident, task"><input type="checkbox"><span>✕</span></div>
+  <div class="frow"><input value="priority"><input value="Priority"><select><option selected>select</option><option>text</option></select><input value="low, normal, high, urgent"><input type="checkbox" checked><span>✕</span></div>
+  <button class="btn ghost" style="margin-top:4px">+ Add field</button>
+
+  <label style="display:block;font-size:11px;color:var(--muted);margin:18px 0 4px;font-weight:600">Follow up when stale (minutes, 0 = off)</label>
+  <input value="60" style="width:110px">
+  <label style="display:block;font-size:11px;color:var(--muted);margin:12px 0 4px;font-weight:600">Follow-up prompt (sent to the agent, it decides the action)</label>
+  <textarea class="full" rows="3" style="width:100%">This ticket has not been updated for a while. Check the latest state, then post a short status update to the ops channel and update the ticket status accordingly.</textarea>
+  <label style="display:block;font-size:11px;color:var(--muted);margin:12px 0 4px;font-weight:600">Auto-resolve when idle (days, 0 = off)</label>
+  <input value="7" style="width:110px">
+  <p class="note">Stale ticket → agent is woken with the prompt above (system turn, no user message). Idle past the window → status set to done automatically.</p>
+</div>
+
+</body>
+</html>

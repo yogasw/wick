@@ -314,6 +314,14 @@ func (h *Handler) updatePreferences(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to save preferences", http.StatusInternalServerError)
 		return
 	}
+	// Clearing a "don't ask again" lives on the same form, so a remembered
+	// answer stays reversible from the place it is displayed.
+	if r.FormValue("reset_ticket_prompts") != "" {
+		if err := h.svc.SetAutoDeleteEmptyTickets(r.Context(), user.ID, entity.AutoDeleteEmptyAsk); err != nil {
+			http.Error(w, "failed to save preferences", http.StatusInternalServerError)
+			return
+		}
+	}
 	http.Redirect(w, r, "/profile?prefs=1", http.StatusFound)
 }
 
