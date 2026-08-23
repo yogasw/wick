@@ -335,7 +335,15 @@ func TestPreemptIdleGrantsQueuedSession(t *testing.T) {
 	if err := p.Send(context.Background(), "B", "default", "ui", "user", "second"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, func() bool { return sp.callsSnapshot() >= 2 }, 1*time.Second)
+	// The preempt loop ticks once a second, so the whole chain — notice the
+	// queued send, kick the idle victim, free the slot, grant B, spawn — can
+	// only start on the next tick. Waiting exactly one tick made this a
+	// coin flip: a tick landing just before B was queued pushed the work
+	// into the following second and the test failed on a correct pool.
+	//
+	// Its negative twin below still proves the slot is NOT taken early —
+	// that one sleeps 800ms, comfortably inside a single tick.
+	waitFor(t, func() bool { return sp.callsSnapshot() >= 2 }, 5*time.Second)
 }
 
 func TestPreemptDisabledRespectsIdleTTL(t *testing.T) {
