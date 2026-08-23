@@ -118,6 +118,15 @@ func (m *Middleware) Session(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), contextKeyUser, user)
 		ctx = context.WithValue(ctx, contextKeyUserTagIDs, tagIDs)
 		ctx = ui.WithTheme(ctx, ui.EffectiveTheme(user.Metadata.Theme))
+		// Surface an active "view as" session so every page can warn about it.
+		// An admin who forgets they switched misreads every permission and
+		// every empty list they see, so the banner is not optional decoration.
+		if c, cerr := r.Cookie(impersonatorCookieName); cerr == nil && c.Value != "" {
+			ctx = ui.WithImpersonation(ctx, ui.ImpersonationInfo{
+				Active:   true,
+				ActingAs: displayNameOf(user),
+			})
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -306,4 +315,26 @@ func encodeGuestThemeCookie(g ui.GuestTheme) string {
 		v.Set("d", g.Dark)
 	}
 	return v.Encode()
+}
+
+// impersonatorCookieName mirrors the admin package's cookie name. Duplicated as
+// a constant because internal/admin imports this package, so importing back
+// would be a cycle; a test pins the two together.
+const impersonatorCookieName = "wick_impersonator"
+
+// ImpersonatorCookieNameForTest exposes the local copy so internal/admin can pin
+// it against its own constant (that package imports this one, so the check
+// cannot live on the other side).
+func ImpersonatorCookieNameForTest() string { return impersonatorCookieName }
+
+// displayNameOf prefers a real name, falling back to the email so the banner
+// always identifies who the session currently is.
+func displayNameOf(u *entity.User) string {
+	if u == nil {
+		return ""
+	}
+	if u.Name != "" {
+		return u.Name
+	}
+	return u.Email
 }

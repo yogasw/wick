@@ -96,6 +96,55 @@ Both are implemented in [`slack/slack.go`](https://github.com/yogasw/wick/blob/m
 
 Slack threads = wick sessions. The first message in a thread auto-creates a session keyed by `thread_ts`. Replies to the same thread reuse it. New top-level message in a channel = new thread = new session.
 
+### Sender identity
+
+A Slack thread becomes a session **owned by the wick user behind the sender** — the same identity they would get by opening that session in the web UI. This matters beyond attribution: the session owner decides which MCP credential the spawned agent carries, so it is what scopes the connectors the agent can reach.
+
+The join key is the sender's **email**, because it is the only field Slack and wick both understand. Slack user IDs are workspace-local and mean nothing to wick.
+
+Requires the `users:read.email` scope on the Slack app. Without it `users.info` returns a blank email **with no error**, so senders cannot be matched and every message is refused with `email is required`.
+
+| Sender | Result |
+|---|---|
+| Email matches an approved user with Agents access | Session owned by that user; agent runs with their connector access |
+| Email matches a user **pending approval** | Refused — told to wait for an admin to approve them |
+| Email matches an approved user **without Agents access** | Refused — told to ask an admin for the grant |
+| Email has no wick user, `AutoRegister` **off** | Refused — told to ask an admin for an invite |
+| Email has no wick user, `AutoRegister` **on** | Account created, then refused as pending approval |
+| No readable email (missing scope, or a bot/app sender) | Refused with `email is required` |
+| Slack **guest** (single-channel, multi-channel, Slack Connect) | Always refused |
+
+The check runs **before** the agent spawns. Refusing afterwards would already have run a turn under the wrong identity, which is the thing this prevents.
+
+#### Permission is the same as the dashboard
+
+Slack is a second door onto the **Agents tool**, not a way around its permissions. Once the sender is identified, wick asks the same question the dashboard asks — `CanAccessTool` against `/tools/agents` — so a user who cannot open Agents in the web UI cannot get one by messaging the bot.
+
+Two gates, in this order:
+
+1. **Approval.** An unapproved account is refused, whatever else it carries.
+2. **Agents access.** An approved account still needs the tool to be enabled for it (and to carry a required filter tag, if the Agents tool has any).
+
+The order is what the sender is told about, and it matters: "pending approval" and "no access to Agents" need different fixes, and a sender told the wrong one chases the wrong admin request.
+
+Registering an identity is **not** granting access. With `AutoRegister` on, an unknown sender gets a wick account so an admin has a row to approve — but that account is pending, so the very next thing they see is the pending-approval refusal.
+
+::: tip Grant checklist
+Approve the user under **Admin → Users**, then confirm they can reach the Agents tool. If the Agents tool carries no filter tags, approval alone is enough — every approved user can reach it. Add a filter tag to the tool if you need Agents restricted to a subset of approved users.
+:::
+
+#### Auto-register
+
+`AutoRegister` (**Identity** group, default **off**) creates a wick account for a sender whose email has none. The account arrives inert:
+
+- **Unapproved.** Slack vouches that the address is on the workspace; it does not prove this sender controls it. An admin approving the row under **Admin → Users** is what turns one claim into the other.
+- **Never admin**, even when the email appears in the admin list. Admin has to come from a path that proves control of the address.
+- **No password**, so it cannot be signed into directly — the admin's invite flow issues credentials.
+
+Approve the user, then grant connector access with tags as usual. Until then the sender is refused with a message naming the exact step that is missing.
+
+Guests are refused even on workspaces that have none today: guest access is a workspace-level setting an admin can enable later without touching wick, and at that point an outside party could DM the bot.
+
 ### Reaction lifecycle
 
 The agent's progress is mirrored on the user's message ([slack.go:34-39](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go#L34)):

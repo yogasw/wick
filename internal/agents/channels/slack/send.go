@@ -50,6 +50,15 @@ func (s *Channel) SetConnectorTokenFn(fn ConnectorTokenFn) {
 	s.cfgMu.Unlock()
 }
 
+// SetUserResolver wires email-based Slack→wick identity resolution, used to
+// decide which user a Slack-started session belongs to. Without it a session
+// falls back to the channel owner, so every sender shares one identity.
+func (s *Channel) SetUserResolver(u UserResolver) {
+	s.cfgMu.Lock()
+	s.users = u
+	s.cfgMu.Unlock()
+}
+
 // SetWickUserIDFn wires a Slack→wick user mapping function for session ownership.
 func (s *Channel) SetWickUserIDFn(fn WickUserIDFn) {
 	s.cfgMu.Lock()
