@@ -161,6 +161,13 @@ type Service struct {
 	// real owner.
 	sessionOwnerUser func(sessionID string) (userID string, ok bool)
 
+	// userName resolves a wick user id to a display name. Wired at boot via
+	// SetUserNameResolver where the login service is in scope; nil leaves
+	// Ctx.UserName empty and connectors fall back to the raw id (or omit it).
+	// Lets an op report "written by Yoga" to the model instead of a uuid it
+	// can neither read nor use.
+	userName func(userID string) (name string, ok bool)
+
 	// runObserver, when set, is notified as a run enters "running" and again when
 	// it reaches a terminal status, so the agent conversation UI can surface a
 	// per-tool-call Cancel button (it needs the connector run id, which is created
@@ -210,6 +217,14 @@ func (s *Service) SetSessionOwnerBotResolver(fn func(sessionID string) (string, 
 // shared internal agent principal.
 func (s *Service) SetSessionOwnerUserResolver(fn func(sessionID string) (string, bool)) {
 	s.sessionOwnerUser = fn
+}
+
+// SetUserNameResolver wires the hook that maps a wick user id to a display
+// name. Called once at boot from the API server where the login service is
+// available. Connectors use it to name people to the model rather than
+// handing it a uuid — see Ctx.UserName.
+func (s *Service) SetUserNameResolver(fn func(userID string) (string, bool)) {
+	s.userName = fn
 }
 
 // RunEvent is emitted to the runObserver as a run starts and finishes, so the
@@ -1550,6 +1565,11 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 	}
 	cctx.SetCallerUserID(callerUID)
+	// Names, so an op can tell the model who wrote something instead of
+	// quoting a uuid at it.
+	if s.userName != nil {
+		cctx.SetUserNameResolver(s.userName)
+	}
 	// Ops that act ON the calling conversation rather than on an external
 	// API need to know which session that is — sub-agent delegation keys
 	// the parent, the tree, and the project scope off it.

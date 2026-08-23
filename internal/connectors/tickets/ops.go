@@ -84,23 +84,29 @@ func parseFields(raw string) (map[string]string, error) {
 // because "how much work is on this" is the first thing worth knowing, and
 // fetching it separately would cost another round-trip.
 type ticketView struct {
-	ID        string            `json:"id"`
-	ProjectID string            `json:"project_id"`
-	Title     string            `json:"title"`
-	Status    string            `json:"status"`
-	Assignee  string            `json:"assignee,omitempty"`
-	Fields    map[string]string `json:"fields,omitempty"`
-	Sessions  []string          `json:"sessions,omitempty"`
-	Notes     int               `json:"notes"`
-	OpenTasks int               `json:"open_tasks"`
-	UpdatedAt string            `json:"updated_at"`
+	ID        string `json:"id"`
+	ProjectID string `json:"project_id"`
+	Title     string `json:"title"`
+	Status    string `json:"status"`
+	// Assignee is the user id, because it is also what the model SETS and
+	// filters on. AssigneeName is the readable half, resolved per call — a
+	// uuid alone told the model who owned a ticket only in the sense that two
+	// tickets had different owners.
+	Assignee     string            `json:"assignee,omitempty"`
+	AssigneeName string            `json:"assignee_name,omitempty"`
+	Fields       map[string]string `json:"fields,omitempty"`
+	Sessions     []string          `json:"sessions,omitempty"`
+	Notes        int               `json:"notes"`
+	OpenTasks    int               `json:"open_tasks"`
+	UpdatedAt    string            `json:"updated_at"`
 }
 
-func (h *handlers) view(tk ticket.Ticket) ticketView {
+func (h *handlers) view(c *connector.Ctx, tk ticket.Ticket) ticketView {
 	count, _ := notes.Counts(h.layout, notes.Scope{ProjectID: tk.ProjectID, TicketID: tk.ID})
 	return ticketView{
 		ID: tk.ID, ProjectID: tk.ProjectID, Title: tk.Title, Status: tk.Status,
-		Assignee: tk.Assignee, Fields: tk.Fields, Sessions: tk.Sessions,
+		Assignee: tk.Assignee, AssigneeName: c.UserName(tk.Assignee),
+		Fields: tk.Fields, Sessions: tk.Sessions,
 		Notes: count.Visible, OpenTasks: count.OpenTasks,
 		UpdatedAt: tk.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 	}
@@ -148,7 +154,7 @@ func (h *handlers) listFiltered(c *connector.Ctx, assignee string) (any, error) 
 		if filter != "" && tk.Status != filter {
 			continue
 		}
-		out = append(out, h.view(tk))
+		out = append(out, h.view(c, tk))
 	}
 
 	res := map[string]any{
@@ -178,7 +184,7 @@ func (h *handlers) get(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return h.view(tk), nil
+	return h.view(c, tk), nil
 }
 
 func (h *handlers) create(c *connector.Ctx) (any, error) {
@@ -219,7 +225,7 @@ func (h *handlers) create(c *connector.Ctx) (any, error) {
 	for _, sid := range seed {
 		writeBackPointer(h.layout, sid, tk.ID)
 	}
-	return h.view(tk), nil
+	return h.view(c, tk), nil
 }
 
 func (h *handlers) update(c *connector.Ctx) (any, error) {
@@ -270,7 +276,7 @@ func (h *handlers) update(c *connector.Ctx) (any, error) {
 	if err := ticket.Save(h.layout, tk); err != nil {
 		return nil, err
 	}
-	return h.view(tk), nil
+	return h.view(c, tk), nil
 }
 
 func (h *handlers) attach(c *connector.Ctx) (any, error) {
@@ -294,7 +300,7 @@ func (h *handlers) attach(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return h.view(tk), nil
+	return h.view(c, tk), nil
 }
 
 func (h *handlers) detach(c *connector.Ctx) (any, error) {
@@ -318,7 +324,7 @@ func (h *handlers) detach(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return h.view(tk), nil
+	return h.view(c, tk), nil
 }
 
 // writeBackPointer keeps session.Meta.TicketID in step with the ticket's
