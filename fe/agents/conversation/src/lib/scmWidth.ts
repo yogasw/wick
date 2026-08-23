@@ -10,6 +10,20 @@ export const SCM_MAX_W = 1100;
 export const SCM_DEFAULT_W = 384;
 export const SCM_WIDTH_KEY = "wick.scm.width";
 
+/* Fallback gutter for the rail, used only until the rail has been measured
+   (and in tests, where it is never laid out).
+ *
+ * The rail sits `fixed` ON TOP of the panel rather than beside it, so the
+ * panel has to end where the rail begins. That is applied as a MARGIN, not
+ * padding: padding kept the panel full-width and pushed its contents inward,
+ * which put the scrollbar mid-gutter with an empty band to its right — the
+ * panel read as too wide while its text sat in a narrow column.
+ *
+ * The real number comes from the DOM, because the rail's width is
+ * content-driven and any constant here was either too small (content under
+ * the tabs) or too large (a visible strip of dead space). */
+export const RAIL_GUTTER_PX = 30;
+
 /* The ceiling is also relative to the window: 1100px of panel on a 1280px
    screen would leave the conversation a gutter. Two thirds keeps the thread
    readable no matter how far the handle is dragged. */

@@ -89,12 +89,24 @@ describe("NotesPanel", () => {
     expect(container.querySelector(".blur-\\[3px\\]")).not.toBeNull();
   });
 
-  test("the eye toggle PATCHes hidden", async () => {
+  // Hiding says what it does in words now. As a bare eye beside a pencil it
+  // was guesswork — keeping a note away from the agent while leaving it in the
+  // list is not something an icon conveys.
+  test("hiding from the agent PATCHes hidden", async () => {
     renderPanel([note()]);
-    await fireEvent.click(screen.getByLabelText("Hide from agent"));
+    await fireEvent.click(screen.getByTestId("note-more-n1"));
+    await fireEvent.click(screen.getByTestId("note-hide-n1"));
     const patch = calls.find((c) => c.method === "PATCH");
     expect(patch?.url).toContain("/api/notes/n1?ticket_id=T-4F2A");
     expect(patch?.body).toEqual({ hidden: true });
+  });
+
+  test("a hidden note offers to be shown again", async () => {
+    renderPanel([note({ hidden: true })]);
+    await fireEvent.click(screen.getByTestId("note-more-n1"));
+    expect(screen.getByText("Show to agent")).toBeTruthy();
+    await fireEvent.click(screen.getByTestId("note-hide-n1"));
+    expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ hidden: false });
   });
 
   test("checking a checkable note PATCHes done", async () => {
@@ -142,11 +154,14 @@ describe("NotesPanel", () => {
 
   // Nothing destructive is one click away on the row itself: only the
   // hide/show toggle, whose effect is reversible.
-  test("the row exposes no delete of its own", () => {
+  // The card carries ONE control, in its corner. Two icons in the row took
+  // width from the first line of every note and truncated it.
+  test("the card exposes one actions button and nothing else", () => {
     renderPanel([note()]);
-    expect(screen.queryByLabelText("Delete note")).toBeNull();
-    expect(screen.getByLabelText("Hide from agent")).toBeTruthy();
     expect(screen.getByTestId("note-more-n1")).toBeTruthy();
+    expect(screen.queryByLabelText("Delete note")).toBeNull();
+    expect(screen.queryByLabelText("Hide from agent")).toBeNull();
+    expect(screen.queryByLabelText("Edit note")).toBeNull();
   });
 
   test("backing out of the confirmation leaves the note alone", async () => {

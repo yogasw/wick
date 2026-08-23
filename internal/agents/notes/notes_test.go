@@ -65,19 +65,33 @@ func TestAddRejectsAmbiguousScope(t *testing.T) {
 	}
 }
 
-func TestListNewestLast(t *testing.T) {
+// The two views are ordered opposite ways on purpose, so they are asserted
+// together — changing one without the other is the mistake worth catching.
+func TestListOrderDiffersByAudience(t *testing.T) {
 	l := newLayout(t)
 	sc := ticketScope()
 	a, _ := Add(l, sc, AddOptions{Body: "first"})
 	b, _ := Add(l, sc, AddOptions{Body: "second"})
 
+	// The panel leads with the newest: someone opening a ticket is looking
+	// for what just happened, not for the start of the history.
 	got, _ := List(l, sc)
 	if len(got) != 2 {
 		t.Fatalf("want 2 notes, got %d", len(got))
 	}
-	// Reading order is chronological: notes are a running log.
-	if got[0].ID != a.ID || got[1].ID != b.ID {
-		t.Fatalf("order = [%s %s], want [%s %s]", got[0].ID, got[1].ID, a.ID, b.ID)
+	if got[0].ID != b.ID || got[1].ID != a.ID {
+		t.Fatalf("List order = [%s %s], want newest first [%s %s]",
+			got[0].ID, got[1].ID, b.ID, a.ID)
+	}
+
+	// The agent reads them as a running record, which reads forwards.
+	forAgent, _ := ListForAgent(l, sc)
+	if len(forAgent) != 2 {
+		t.Fatalf("want 2 notes for the agent, got %d", len(forAgent))
+	}
+	if forAgent[0].ID != a.ID || forAgent[1].ID != b.ID {
+		t.Fatalf("ListForAgent order = [%s %s], want oldest first [%s %s]",
+			forAgent[0].ID, forAgent[1].ID, a.ID, b.ID)
 	}
 }
 
