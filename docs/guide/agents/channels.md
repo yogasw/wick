@@ -109,8 +109,8 @@ Requires the `users:read.email` scope on the Slack app. Without it `users.info` 
 | Email matches an approved user with Agents access | Session owned by that user; agent runs with their connector access |
 | Email matches a user **pending approval** | Refused — told to wait for an admin to approve them |
 | Email matches an approved user **without Agents access** | Refused — told to ask an admin for the grant |
-| Email has no wick user, `AutoRegister` **off** | Refused — told to ask an admin for an invite |
-| Email has no wick user, `AutoRegister` **on** | Account created, then refused as pending approval |
+| Email has no wick user, auto-register **off** | Refused — told to ask an admin for an invite |
+| Email has no wick user, auto-register **on** | Account created, then refused as pending approval |
 | No readable email (missing scope, or a bot/app sender) | Refused with `email is required` |
 | Slack **guest** (single-channel, multi-channel, Slack Connect) | Always refused |
 
@@ -127,15 +127,19 @@ Two gates, in this order:
 
 The order is what the sender is told about, and it matters: "pending approval" and "no access to Agents" need different fixes, and a sender told the wrong one chases the wrong admin request.
 
-Registering an identity is **not** granting access. With `AutoRegister` on, an unknown sender gets a wick account so an admin has a row to approve — but that account is pending, so the very next thing they see is the pending-approval refusal.
+Registering an identity is **not** granting access. With auto-register on, an unknown sender gets a wick account so an admin has a row to approve — but that account is pending, so the very next thing they see is the pending-approval refusal.
 
 ::: tip Grant checklist
 Approve the user under **Admin → Users**, then confirm they can reach the Agents tool. If the Agents tool carries no filter tags, approval alone is enough — every approved user can reach it. Add a filter tag to the tool if you need Agents restricted to a subset of approved users.
 :::
 
+::: warning Why this is not a per-channel setting
+Channel config rows are **per-owner** — any user who can add their own Slack bot owns that row. If auto-register lived there, that user could switch it on for their own bot and mint pending wick accounts. It is an install-level switch in the Agents settings so only an admin can allow it.
+:::
+
 #### Auto-register
 
-`AutoRegister` (**Identity** group, default **off**) creates a wick account for a sender whose email has none. The account arrives inert:
+**Agents settings → Session Identity → `channel_auto_register`** (default **off**) creates a wick account for a channel sender whose email has none. The account arrives inert:
 
 - **Unapproved.** Slack vouches that the address is on the workspace; it does not prove this sender controls it. An admin approving the row under **Admin → Users** is what turns one claim into the other.
 - **Never admin**, even when the email appears in the admin list. Admin has to come from a path that proves control of the address.

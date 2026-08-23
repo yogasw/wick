@@ -20,11 +20,15 @@ type fakeUsers struct {
 	recorded map[string]string
 	// byExternal is the existing channel-identity links: external id -> user id.
 	byExternal map[string]string
+	// autoRegister mirrors the install-level switch.
+	autoRegister bool
 }
 
 func (f *fakeUsers) IsApproved(_ context.Context, id string) bool {
 	return !f.pending[id]
 }
+
+func (f *fakeUsers) AutoRegisterEnabled(context.Context) bool { return f.autoRegister }
 
 func (f *fakeUsers) FindByChannelIdentity(_ context.Context, _, _, externalUserID string) (string, bool) {
 	id, ok := f.byExternal[externalUserID]

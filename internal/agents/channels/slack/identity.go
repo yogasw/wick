@@ -80,6 +80,14 @@ type UserResolver interface {
 	// before CanUseAgents so a pending account is told to wait rather than told
 	// it lacks a permission an admin never had the chance to grant.
 	IsApproved(ctx context.Context, wickUserID string) bool
+	// AutoRegisterEnabled reports whether wick may create an account for an
+	// unmatched sender.
+	//
+	// Asked of the host, not read from this channel's own config: channel rows
+	// are per-owner, so a per-channel switch would let any user who adds their
+	// own bot mint pending wick accounts. The decision belongs to whoever
+	// administers the install.
+	AutoRegisterEnabled(ctx context.Context) bool
 	// RecordIdentity remembers this channel account belongs to that wick user,
 	// so a later notification has a destination. Called on every resolved
 	// message, not only the first, so it must be an upsert on the host side.
@@ -227,10 +235,11 @@ func (s *Channel) resolveSessionOwner(slackUserID string) (string, bool) {
 	s.cfgMu.Lock()
 	users := s.users
 	byOAuth := s.wickUserIDFn
-	autoRegister := s.cfg.AutoRegister
 	api := s.api
 	instanceKey := s.sessionPrefix
 	s.cfgMu.Unlock()
+
+	autoRegister := users != nil && users.AutoRegisterEnabled(context.Background())
 
 	if users != nil && api != nil {
 		u, err := api.GetUserInfo(slackUserID)
@@ -268,10 +277,11 @@ func (s *Channel) resolveSessionOwner(slackUserID string) (string, bool) {
 func (s *Channel) checkSenderIdentity(slackUserID string) string {
 	s.cfgMu.Lock()
 	users := s.users
-	autoRegister := s.cfg.AutoRegister
 	api := s.api
 	instanceKey := s.sessionPrefix
 	s.cfgMu.Unlock()
+
+	autoRegister := users != nil && users.AutoRegisterEnabled(context.Background())
 
 	if users == nil || api == nil {
 		return "" // identity mapping not wired: keep legacy behaviour

@@ -17,6 +17,11 @@ import (
 // channel depends on the two calls it needs, not on the whole auth surface.
 type slackUserResolver struct {
 	users *login.Service
+	// autoRegister reads the INSTALL-level switch (Agents settings), not this
+	// channel's own row. Channel rows are per-owner, so a per-channel switch
+	// would let any user who adds their own bot create wick accounts. Read live
+	// so toggling it takes effect without a restart.
+	autoRegister func() bool
 	// identities records which Slack account belongs to which wick user, so a
 	// notification later has somewhere to go. Without it the mapping is
 	// recomputed per message and forgotten again.
@@ -151,4 +156,11 @@ func (c channelAccountCreator) CreateForChannel(ctx context.Context, email, name
 		return "", nil
 	}
 	return c.users.RegisterChannelUser(ctx, email, name, source)
+}
+
+// AutoRegisterEnabled reports whether an unmatched sender may get an account.
+// Defaults to false when unwired: creating accounts is the permissive choice, so
+// a missing dependency must fall to the safe side.
+func (r slackUserResolver) AutoRegisterEnabled(context.Context) bool {
+	return r.autoRegister != nil && r.autoRegister()
 }

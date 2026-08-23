@@ -1562,6 +1562,12 @@ func NewServer() *Server {
 				users:      authSvc,
 				identities: channelIdentities,
 				notifier:   channelNotifier,
+				// Install-level switch, read live. Deliberately NOT the channel's
+				// own config: channel rows are per-owner, so a per-channel toggle
+				// would let any user with their own bot mint pending accounts.
+				autoRegister: func() bool {
+					return configsSvc.GetOwned("agents", "channel_auto_register") == "true"
+				},
 				// Which bot this resolver serves. A recorded identity must be
 				// messaged back through the SAME instance: a Slack user id only
 				// means something inside its own workspace.

@@ -33,12 +33,6 @@ type SlackChannelConfig struct {
 	GateApproverUsers  string `wick:"picker=slack.users;hidden;key=gate_approver_users;visible_when=gate_approvers:custom;group=Approval Gates;desc=Custom approver users."`
 	GateApproverGroups string `wick:"picker=slack.usergroups;hidden;key=gate_approver_groups;visible_when=gate_approvers:custom;group=Approval Gates;desc=Custom approver user groups."`
 
-	// Identity. A Slack-started session belongs to the wick user behind the
-	// sender, exactly as if they had opened it in the web UI — that owner
-	// decides which connectors the agent may reach. The join key is the
-	// sender's email, so the Slack app needs the users:read.email scope.
-	AutoRegister bool `wick:"bool;hidden;key=auto_register;group=Identity|How a Slack sender is matched to a wick account. The matched user owns the session and the agent runs with THAT user's connector access, so an unmatched sender is refused rather than silently given someone else's.;desc=Create a wick account automatically for a Slack sender whose email has none. The account is created PENDING APPROVAL — an admin approves it under Admin → Users before the sender can do anything. Off = an unmatched sender is told to ask for an invite. Guests, bots, and senders with no readable email are always refused."`
-
 	ProjectID string `wick:"dropdown;hidden;key=project_id;group=Routing;desc=Project to use for sessions from this Slack channel. Leave empty to use the global default."`
 	PublicURL string `wick:"hidden;key=public_url;group=Routing;desc=Public URL for Slack HTTP mode webhooks."`
 }
