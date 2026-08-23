@@ -7,32 +7,36 @@ import (
 	"testing"
 )
 
-// TestCodexHasNoMCPWiring pins a GAP, not a feature.
+// TestCodexMCPIsPerUser replaces an earlier guard that asserted codex had NO
+// MCP wiring at all. That guard existed to make sure whoever added it built it
+// per-user from the start, and it fired when this wiring landed.
 //
-// Per-user MCP identity was wired for claude (per-session bearer in
-// --mcp-config) and for the in-process wick provider (principal passed
-// directly). codex has NO MCP wiring at all: it never receives an MCP token,
-// so there is nothing here to scope per user yet.
-//
-// The codex CLI itself does support a streamable-HTTP MCP server with a
-// bearer read from an env var (`codex mcp add --url ... --bearer-token-env-var`,
-// or -c mcp_servers.<name>.{url,bearer_token_env_var}), so per-user identity is
-// reachable the same way once the spawner is wired: mint the per-session token
-// and export it as that env var. Verified against codex-cli 0.133.0.
-//
-// This test fails the day someone adds MCP wiring here, as a reminder to make
-// it per-user from the start rather than reintroducing a shared admin token.
-func TestCodexHasNoMCPWiring(t *testing.T) {
+// What it pins now is the thing that would silently break identity: the spawn
+// must take a per-spawn credential and must NOT fall back to the shared
+// internal admin token, which is what every wick agent used to authenticate as.
+func TestCodexMCPIsPerUser(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join(".", "spawn.go"))
 	if err != nil {
 		t.Fatalf("read spawn.go: %v", err)
 	}
 	body := string(src)
-	for _, marker := range []string{"MCPToken", "--mcp-config", "mcp_servers"} {
-		if strings.Contains(body, marker) {
-			t.Fatalf("codex spawn.go now references %q — wire it PER-USER "+
-				"(mint a per-session token; do not reuse the shared internal "+
-				"admin token) and update this test", marker)
+
+	if !strings.Contains(body, "MCPToken") {
+		t.Fatal("codex spawn no longer carries a per-spawn MCP credential; " +
+			"without it a codex agent has no wick tools at all")
+	}
+	// The credential must be read from the Spawner (minted per session), not
+	// from an env var the whole server shares.
+	if !strings.Contains(body, "s.MCPToken") {
+		t.Error("MCPToken is not read from the Spawner; a shared value cannot " +
+			"express a per-user identity")
+	}
+	// Guard the specific regression: reaching for the process-wide internal
+	// token here would make every codex spawn the synthetic admin again.
+	for _, banned := range []string{"WICK_MCP_INTERNAL", "internalToken"} {
+		if strings.Contains(body, banned) {
+			t.Errorf("codex spawn references %q — the per-boot internal token maps "+
+				"to a synthetic ADMIN and must never be handed to a spawn", banned)
 		}
 	}
 }

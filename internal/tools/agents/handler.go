@@ -1325,7 +1325,24 @@ func sessionsPage(c *tool.Ctx) {
 		AssetURL:      spaAssetURL("conversation"),
 		ScmAsset:      spaAssetURL("scm"),
 		IdleTimeoutMs: idleTimeoutMs(),
+		RailPrefs:     railPrefsJSON(c),
 	}))
+}
+
+// railPrefsJSON is the caller's saved rail layout, inlined into the SPA shell
+// so the strip is right on the first paint rather than snapping into place
+// once a fetch returns. Same record the API serves — this only gets it there
+// sooner. An empty string means "no opinion", and the SPA fetches as before.
+func railPrefsJSON(c *tool.Ctx) string {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		return ""
+	}
+	b, err := json.Marshal(u.Metadata.Rail)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 func createSession(c *tool.Ctx) {
@@ -1392,6 +1409,7 @@ func sessionDetail(c *tool.Ctx) {
 		ScmAsset:       spaAssetURL("scm"),
 		InitialSession: id,
 		IdleTimeoutMs:  idleTimeoutMs(),
+		RailPrefs:      railPrefsJSON(c),
 	}))
 }
 

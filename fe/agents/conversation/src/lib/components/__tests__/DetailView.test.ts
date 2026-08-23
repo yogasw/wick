@@ -191,6 +191,7 @@ import { getAsks } from "../../api/asks.js";
 import { getApprovals } from "../../api/approvals.js";
 import { getConversation } from "../../api/sessions.js";
 import { getSubAgentPanel } from "../../api/subagents.js";
+import { SCM_DEFAULT_W, RAIL_GUTTER_PX } from "../../scmWidth.js";
 import { Effect } from "effect";
 
 const DEFAULT_PROPS = {
@@ -407,7 +408,14 @@ describe("DetailView — resizable + persisted Source sidebar width (#34)", () =
     await fireEvent.click(sourceBtn);
 
     const sidePanel = container.querySelector<HTMLElement>(".lg\\:flex.flex-col");
-    expect(sidePanel?.getAttribute("style")).toContain("width: 384px");
+    // Read from the module rather than pinned: the default is a design call
+    // that has already moved once (the rail floats over the panel's right
+    // edge, so the usable width is this minus the gutter it reserves).
+    expect(sidePanel?.getAttribute("style")).toContain(`width: ${SCM_DEFAULT_W}px`);
+    // A margin, not padding: the panel has to END before the rail rather
+    // than stay full-width with its contents pushed in, which left the
+    // scrollbar mid-gutter and an empty band beside it.
+    expect(sidePanel?.getAttribute("style")).toContain(`margin-right: ${RAIL_GUTTER_PX}px`);
   });
 
   test("desktop Source sidebar exposes a resize drag handle", async () => {

@@ -53,13 +53,16 @@ type AgentProfile struct {
 	// StrictMCP is intended to drop the host's own MCP servers
 	// (~/.claude.json) from the child spawn.
 	//
-	// NOT WIRED, and it is NOT a security boundary today. Whether a spawn
-	// passes --strict-mcp-config is decided globally by the
-	// WICK_STRICT_MCP environment variable (see
-	// internal/agents/provider/claude/spawn.go), identically for leaders
-	// and sub-agents. This field is read by nobody, so a sub-agent
-	// inherits whatever MCP servers the host CLI has configured
-	// regardless of what a profile says.
+	// NOT WIRED, and it is NOT a security boundary. No spawn passes
+	// --strict-mcp-config any more: wick INJECTS its own server per spawn via
+	// --mcp-config (carrying that caller's token), so isolation would only
+	// affect the user's OTHER servers, and the env switch that used to control
+	// it globally was removed once each spawn gained its own credential.
+	//
+	// This field is read by nobody, so a sub-agent inherits whatever MCP
+	// servers the host CLI has configured regardless of what a profile says.
+	// Restricting what a role may REACH is enforced server-side by tags and
+	// per-op access, not here.
 	StrictMCP bool `gorm:"not null;default:true" json:"strict_mcp"`
 
 	DefaultMaxTurns int `gorm:"not null;default:12" json:"default_max_turns"`
