@@ -6,17 +6,49 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Changed
-
-*   **Notes and tickets stop handing the model raw user ids.** `notes_list`/`notes_add`/etc. resolve `author` to a display name instead of a uuid, and ticket ops now return `assignee_name` alongside the existing `assignee` id. A `pkg/connector` addition, `Ctx.UserName(id)`, is available to any connector that needs to name a person instead of quoting their id at the model.
-
-*   **The board's ticket list is now filtered server-side.** `GET /api/projects/{id}/tickets` accepts `?statuses=a,b` (omitted = every column, `?statuses=` = none) and `?assignee=<id>|me`, so a filtered board fetches only the cards it will draw instead of fetching everything and hiding the rest client-side.
-
-    The **Untracked** rail flips from opt-out to opt-in: it used to be sent by default and skippable with `?untracked=0`; it now requires `?untracked=1` to be sent at all, while its count is still always returned so the board can show "Untracked (N)" as something to switch on. In the kanban UI, Untracked moves from a rail with a collapse chevron to a filter-bar chip, off by default. `TicketFilter.HideUntracked` / `hide_untracked` is renamed to `ShowUntracked` / `show_untracked` to match.
-
-*   **Note actions moved behind a "more" menu.** Edit and delete used to sit as bare icons next to the everyday hide/show toggle, where the delete icon read as "close" and could discard a note by mistake. Both now live behind a menu button, and deleting asks for confirmation first. Note bodies render as Markdown instead of plain text, and the Notes rail tab now shows a count badge (hidden notes counted separately). The side panel's resize handle now works on every rail tab, not just the source diff, with a higher max width.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v1.1.0](https://github.com/yogasw/wick/compare/v1.0.0...v1.1.0) — Identity & Ticket Management
+
+_Released on 2026-08-23_
+
+### Changed
+
+*   **User Identity Handling for Agents**
+    *   Fixed an issue where agent sessions started from Slack were incorrectly running as a synthetic administrator due to the session owner not reaching the token minter. Session ownership is now recorded on every message, backfilling older threads.
+    *   Wired Codex to the MCP server, enabling `wick_list`, `connectors`, and `wick_me` for Codex agents using per-session credentials.
+    *   Removed `WICK_STRICT_MCP`, as per-user identity makes it obsolete.
+    *   `notes_list`/`notes_add`/etc. now resolve the `author` to a display name instead of a UUID.
+    *   Ticket operations return `assignee_name` alongside the existing `assignee` ID.
+    *   A new `Ctx.UserName(id)` helper is available for connectors to resolve user IDs to display names.
+    *   Unresolvable or system IDs (like legacy "agent") now display as "unknown user" for clarity.
+
+*   **Server-Side Ticket Filtering and Untracked Sessions**
+    *   The board's ticket list is now filtered server-side. `GET /api/projects/{id}/tickets` accepts `?statuses=a,b` (for specific columns) and `?assignee=<id>|me`. This reduces client-side processing by fetching only relevant cards.
+    *   The **Untracked** rail is now opt-in, requiring `?untracked=1` to be sent, while its count is always returned. In the Kanban UI, **Untracked** moves from a rail with a collapse chevron to a filter-bar chip, off by default. `TicketFilter.HideUntracked` / `hide_untracked` is renamed to `ShowUntracked` / `show_untracked` to match.
+    *   New dedicated agent operations: `ticket_mine` lists the caller's own tickets (resolved server-side), and `session_untracked` lists conversations not attached to any ticket. These operations refuse to widen their scope if no signed-in caller is present.
+    *   Fixed an untracked sort bug that caused the "newest first" page to desynchronize.
+
+*   **Enhanced Notes Management and UI**
+    *   Note actions (Edit and Delete) are now consolidated behind a "more" menu button. Deleting a note requires confirmation.
+    *   Note bodies now render as Markdown, using a tighter style. The edit box provides a monospaced, roomy view, with Ctrl+Enter to save and Esc to abandon.
+    *   The Notes rail tab now displays a count badge, with hidden notes counted separately.
+    *   When editing a note, the entire row is dedicated to the input field, temporarily hiding other controls (checkbox, hide toggle, "more" menu, author line) to prevent accidental clicks and maximize typing space.
+    *   Notes in the panel now list newest-first (agents still receive them oldest-first for chronological context).
+    *   Fixed rendering issues where prose lines became separate paragraphs, ordered lists restarted incorrectly, quotes leaked markers, and custom CSS conflicted with Markdown renderer styles.
+    *   The side panel's resize handle now works on all rail tabs (not just source diff) and allows widening up to two-thirds of the window.
+
+*   **Improved Rail Layout and Side Panel UI**
+    *   Conversation rail panels are now folded by name (instead of count), ensuring consistent visibility. Hidden panels are explicitly named.
+    *   Panel visibility is now persisted correctly, distinguishing between an unconfigured state and an empty (all unfolded) state.
+    *   The "More" button badge now correctly counts hidden panels, and the list within "More" only shows hidden panels. The "Arrange mode" is removed.
+    *   Panels can be dragged between the main strip and the "More" menu. The "More" panel now opens upward.
+    *   The side panel's content now respects the rail's fixed position, using margins instead of padding to prevent scrollbar misalignment and dead space.
+
+---
+
 
 ## [v1.1.0](https://github.com/yogasw/wick/compare/v1.0.0...v1.1.0) — Caller Identity Everywhere
 
