@@ -59,6 +59,35 @@ func queryInt(c *tool.Ctx, key string, def, min, max int) int {
 	return n
 }
 
+// isTrueish reads an opt-in flag from a query param. Anything a client might
+// reasonably send for "yes" counts; absent and anything else are no, so the
+// expensive thing behind the flag stays off unless it was actually asked for.
+func isTrueish(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// queryCSV reads a comma-separated set query param. A MISSING param and an
+// EMPTY one mean different things here: absent is "no opinion, send the
+// default", while `?statuses=` is an explicit empty set — the caller drew no
+// columns and wants no cards. Returning (set, present) keeps the two apart.
+func queryCSV(c *tool.Ctx, key string) (map[string]bool, bool) {
+	q := c.R.URL.Query()
+	if !q.Has(key) {
+		return nil, false
+	}
+	set := map[string]bool{}
+	for _, part := range strings.Split(q.Get(key), ",") {
+		if v := strings.TrimSpace(part); v != "" {
+			set[v] = true
+		}
+	}
+	return set, true
+}
+
 /* ── DTOs ────────────────────────────────────────────────────────────────── */
 
 // TicketCard is one card on the project board. A card is a TICKET, not a
@@ -213,25 +242,54 @@ func apiProjectTickets(c *tool.Ctx) {
 
 	// The board pays only for what it draws. A project with hundreds of
 	// chats would otherwise send every one of them on every poll, and the
-	// client would throw most away — so the caps are enforced HERE, not by
-	// a filter in the UI.
+	// client would throw most away — so what to send is decided HERE, from
+	// what the caller says it will render, not by a filter in the UI.
 	//
-	//   ?rows=N      session rows per card (0 = none, just the count)
-	//   ?untracked=0 skip the untracked list entirely (it is collapsible)
+	//   ?rows=N          session rows per card (0 = none, just the count)
+	//   ?statuses=a,b    only these columns; absent = all, `?statuses=` = none
+	//   ?assignee=ID|me  only this person's tickets; absent/empty = everyone
+	//   ?untracked=1     ask for the untracked list at all (default: no)
 	//   ?untracked_limit=N
 	rowsPerCard := queryInt(c, "rows", defaultRowsPerCard, 0, maxRowsPerCard)
-	wantUntracked := c.Query("untracked") != "0"
+	// The untracked list is the board's most expensive part and the one
+	// least often looked at, so it is opt-in: a caller that never asks
+	// never pays. "0" stays honoured for callers written against the old
+	// opt-out spelling.
+	wantUntracked := isTrueish(c.Query("untracked"))
 	untrackedLimit := queryInt(c, "untracked_limit", defaultUntrackedLimit, 1, maxUntrackedLimit)
+
+	wantStatus, statusFiltered := queryCSV(c, "statuses")
+	// "me" resolves against the caller, so the client can save a filter that
+	// keeps meaning the right person.
+	wantAssignee := strings.TrimSpace(c.Query("assignee"))
+	if wantAssignee == "me" {
+		if u := login.GetUser(c.Context()); u != nil {
+			wantAssignee = u.ID
+		} else {
+			wantAssignee = ""
+		}
+	}
 
 	cards := make([]TicketCard, 0, len(tickets))
 	for _, t := range tickets {
-		count, _ := notes.Counts(globalLayout, notes.Scope{ProjectID: id, TicketID: t.ID})
-		// Every session is marked as ticketed even when its row is not
-		// sent: the untracked list is "has no ticket", and truncating the
-		// rows must not make a tracked chat look loose.
+		// Every session is marked as ticketed even when its card is not
+		// sent: the untracked list is "has no ticket", and neither
+		// truncating the rows nor hiding a whole column may make a tracked
+		// chat look loose. So this runs BEFORE the filters below.
 		for _, sid := range t.Sessions {
 			ticketed[sid] = true
 		}
+		// Cards the caller will not draw are not built. The assignee is
+		// still collected for name resolution, so the filter dropdown can
+		// list people whose tickets are currently filtered out.
+		ids[t.Assignee] = true
+		if statusFiltered && !wantStatus[t.Status] {
+			continue
+		}
+		if wantAssignee != "" && t.Assignee != wantAssignee {
+			continue
+		}
+		count, _ := notes.Counts(globalLayout, notes.Scope{ProjectID: id, TicketID: t.ID})
 		shown := t.Sessions
 		if rowsPerCard < len(shown) {
 			shown = shown[:rowsPerCard]
@@ -254,7 +312,6 @@ func apiProjectTickets(c *tool.Ctx) {
 			CreatedAt:   t.CreatedAt.Format(time.RFC3339),
 			Stale:       ticket.NeedsFollowup(cfg, t, now),
 		})
-		ids[t.Assignee] = true
 	}
 
 	// Untracked: this project's chats with no ticket. Sub-agent sessions
@@ -262,28 +319,36 @@ func apiProjectTickets(c *tool.Ctx) {
 	//
 	// Counted in full but sent in part: the header needs the total ("142
 	// untracked") while the rail only draws the first page.
+	// The COUNT is always computed and the rows never are unless asked: the
+	// number is a walk over sessions already in memory, while a row reads
+	// the session's first message off disk. That split is what lets the
+	// board offer "Untracked (89)" as something to switch on without having
+	// paid to draw it.
 	untracked := []ticketSessionRow{}
-	untrackedTotal := 0
+	// Id and session travel together: sorting two parallel slices by one of
+	// them desynchronises the pair on the first swap.
+	type looseSession struct {
+		id   string
+		last time.Time
+	}
+	loose := make([]looseSession, 0, 32)
+	for sid, s := range live {
+		if s.Meta.ProjectID != id || s.Meta.ParentSessionID != "" || ticketed[sid] {
+			continue
+		}
+		loose = append(loose, looseSession{id: sid, last: s.Meta.LastActive})
+	}
+	untrackedTotal := len(loose)
 	if wantUntracked {
-		loose := make([]session.Session, 0, 32)
-		looseIDs := make([]string, 0, 32)
-		for sid, s := range live {
-			if s.Meta.ProjectID != id || s.Meta.ParentSessionID != "" || ticketed[sid] {
-				continue
-			}
-			loose = append(loose, s)
-			looseIDs = append(looseIDs, sid)
-		}
-		untrackedTotal = len(looseIDs)
 		// Newest first, so the page that IS sent is the useful one.
-		sort.Slice(looseIDs, func(i, j int) bool {
-			return loose[i].Meta.LastActive.After(loose[j].Meta.LastActive)
+		sort.Slice(loose, func(i, j int) bool {
+			return loose[i].last.After(loose[j].last)
 		})
-		if untrackedLimit < len(looseIDs) {
-			looseIDs = looseIDs[:untrackedLimit]
+		if untrackedLimit < len(loose) {
+			loose = loose[:untrackedLimit]
 		}
-		for _, sid := range looseIDs {
-			untracked = append(untracked, sessionRow(sid, live, lc, ids))
+		for _, ls := range loose {
+			untracked = append(untracked, sessionRow(ls.id, live, lc, ids))
 		}
 	}
 

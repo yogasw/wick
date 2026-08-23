@@ -86,10 +86,13 @@ type TicketFilter struct {
 	Statuses []string `json:"statuses,omitempty"`
 	Assignee string   `json:"assignee,omitempty"`
 	ViewMode string   `json:"view_mode,omitempty"`
-	// HideUntracked collapses the board's untracked rail. Load-bearing, not
-	// cosmetic: with it set the client stops asking for that list, so a
-	// project with hundreds of loose chats costs nothing extra to poll.
-	HideUntracked bool `json:"hide_untracked,omitempty"`
+	// ShowUntracked adds the board's untracked chats to what is fetched.
+	// Load-bearing, not cosmetic: without it the client never asks for that
+	// list, so a project with hundreds of loose chats costs nothing extra to
+	// poll. Off by default — a board is about tickets, and the pool of loose
+	// chats is something one opts into looking at. The zero value being
+	// "don't fetch" is why this is spelled Show rather than Hide.
+	ShowUntracked bool `json:"show_untracked,omitempty"`
 }
 
 const (

@@ -1747,18 +1747,21 @@
     <div
       bind:this={scmSideEl}
       tabindex="-1"
-      class={`relative hidden lg:flex flex-col outline-none ${railTab === "source" ? "" : "w-80"} shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden`}
-      style={railTab === "source" ? `width:${scmWidth}px` : ""}
+      class="relative hidden lg:flex flex-col outline-none shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden"
+      style={`width:${scmWidth}px`}
     >
+      <!-- One handle for the whole panel, whichever tab is in it. A diff and
+           a long note both want to be widened, and a width that only the
+           source tab could change made the others feel fixed. -->
+      <button
+        type="button"
+        aria-label="Resize side panel"
+        title="Drag to resize"
+        data-scm-resize
+        onpointerdown={startScmResize}
+        class="absolute left-0 top-0 z-10 h-full w-1.5 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-green-500/40 focus-visible:bg-green-500/40 transition-colors"
+      ></button>
       {#if railTab === "source"}
-        <button
-          type="button"
-          aria-label="Resize source panel"
-          title="Drag to resize"
-          data-scm-resize
-          onpointerdown={startScmResize}
-          class="absolute left-0 top-0 z-10 h-full w-1.5 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-green-500/40 focus-visible:bg-green-500/40 transition-colors"
-        ></button>
         <div class="flex-1 overflow-hidden dark:bg-navy-700" data-scm-host bind:this={scmHostEl}></div>
       {:else if railTab === "ticket" && notesInfo}
         <TicketPanel

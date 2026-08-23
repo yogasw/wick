@@ -139,26 +139,50 @@
   let board = $state<TicketBoard | null>(null);
   let ticketFilter = $state<TicketFilter>({});
 
-  /* Whether the untracked rail is open — remembered per user with the rest
-     of the filter, and load-bearing: with it shut the board stops asking
-     the server for that list, so a project with hundreds of loose chats
-     costs nothing extra to poll. */
-  const showUntracked = $derived(ticketFilter.hide_untracked !== true);
+  /* The filter IS the request: statuses, assignee and the untracked rail all
+     decide what the server builds, so a switched-off column costs nothing to
+     poll instead of arriving and being discarded. */
+  /* Derived, not a plain function, so the fetch below re-runs on the three
+     fields that change the REQUEST and not on view_mode, which only changes
+     how the same data is drawn. */
+  const boardOptions = $derived.by(() => {
+    const saved = ticketFilter.statuses;
+    /* An empty saved list means "all statuses" — the request omits the param
+       so a project that later adds a stage shows it. The board spells "every
+       chip off" with a single sentinel entry, which becomes an explicit empty
+       set: no columns drawn, no cards fetched. */
+    const statuses =
+      !saved || saved.length === 0 ? undefined : saved[0] === " none" ? [] : saved;
+    return {
+      rows: 3,
+      statuses,
+      assignee: ticketFilter.assignee || undefined,
+      untracked: ticketFilter.show_untracked === true,
+      untrackedLimit: 25,
+    };
+  });
 
-  /* Only what the board actually draws is requested. */
-  function boardOptions() {
-    return { rows: 3, untracked: showUntracked, untrackedLimit: 25 };
-  }
-
+  /* The saved filter arrives first, then the board it describes: fetching
+     the board before knowing the filter would request the wrong thing and
+     immediately request it again. */
+  let filterLoaded = $state(false);
   $effect(() => {
-    Effect.runPromise(
-      getProjectTickets(base, project.id, boardOptions()).pipe(Effect.provide(WickClientLayer)),
-    )
-      .then((b) => { board = b; })
-      .catch(() => { board = null; /* board optional — old servers */ });
     Effect.runPromise(getTicketFilter(base, project.id).pipe(Effect.provide(WickClientLayer)))
       .then((f) => { ticketFilter = f ?? {}; })
-      .catch(() => { /* filter optional */ });
+      .catch(() => { /* filter optional — the defaults are a fine board */ })
+      .finally(() => { filterLoaded = true; });
+  });
+
+  /* The fetch keys off this string rather than off boardOptions itself:
+     every filter edit rebuilds that object, so an object dependency would
+     re-fetch an identical board whenever the user merely switched
+     list/card. */
+  const boardRequestKey = $derived(project.id + "|" + JSON.stringify(boardOptions));
+
+  $effect(() => {
+    if (!filterLoaded) return;
+    boardRequestKey; // the sole dependency: re-fetch when the request changes
+    reloadBoard();
   });
 
   const ticketEnabled = $derived(board?.config?.enabled === true);
@@ -172,7 +196,7 @@
 
   function reloadBoard() {
     Effect.runPromise(
-      getProjectTickets(base, project.id, boardOptions()).pipe(Effect.provide(WickClientLayer)),
+      getProjectTickets(base, project.id, boardOptions).pipe(Effect.provide(WickClientLayer)),
     )
       .then((b) => { board = b; })
       .catch(() => { /* keep the previous board on a transient failure */ });
@@ -398,13 +422,6 @@
         onOpenSession={onSelectSession}
         onReload={reloadBoard}
         onEmptied={handleEmptied}
-        {showUntracked}
-        onToggleUntracked={(show) => {
-          // Saved with the filter, then re-fetched: collapsing the rail is
-          // what stops the server sending that list at all.
-          applyFilter({ ...ticketFilter, hide_untracked: !show });
-          reloadBoard();
-        }}
       />
     {:else}
       <SessionList
