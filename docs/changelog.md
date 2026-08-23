@@ -6,7 +6,13 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Changed
+
+*   **The board's ticket list is now filtered server-side.** `GET /api/projects/{id}/tickets` accepts `?statuses=a,b` (omitted = every column, `?statuses=` = none) and `?assignee=<id>|me`, so a filtered board fetches only the cards it will draw instead of fetching everything and hiding the rest client-side.
+
+    The **Untracked** rail flips from opt-out to opt-in: it used to be sent by default and skippable with `?untracked=0`; it now requires `?untracked=1` to be sent at all, while its count is still always returned so the board can show "Untracked (N)" as something to switch on. In the kanban UI, Untracked moves from a rail with a collapse chevron to a filter-bar chip, off by default. `TicketFilter.HideUntracked` / `hide_untracked` is renamed to `ShowUntracked` / `show_untracked` to match.
+
+*   **Note actions moved behind a "more" menu.** Edit and delete used to sit as bare icons next to the everyday hide/show toggle, where the delete icon read as "close" and could discard a note by mistake. Both now live behind a menu button, and deleting asks for confirmation first. Note bodies render as Markdown instead of plain text, and the Notes rail tab now shows a count badge (hidden notes counted separately). The side panel's resize handle now works on every rail tab, not just the source diff, with a higher max width.
 
 ---
 
