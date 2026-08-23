@@ -52,3 +52,68 @@ func TestAuthorUnknown_IsNotAUserID(t *testing.T) {
 		t.Fatalf("sentinel %q is uuid-length; it could shadow a real user id", authorUnknown)
 	}
 }
+
+// The wire value the MODEL reads is a name, not the stored id. An agent given
+// "author: fd8dfab2-08c6-…" learns only that two notes have different authors:
+// it cannot read the id, cannot mention the person, and cannot match them to
+// anyone it has been told about. The web UI resolves these ids for the same
+// reason; this is the agent's half of that.
+func TestAuthorName_ResolvesTheStoredID(t *testing.T) {
+	c := &connector.Ctx{}
+	c.SetUserNameResolver(func(id string) (string, bool) {
+		if id == "user-ada" {
+			return "Ada Lovelace", true
+		}
+		return "", false
+	})
+
+	if got := authorName(c, "user-ada"); got != "Ada Lovelace" {
+		t.Fatalf("author = %q, want the resolved name", got)
+	}
+}
+
+// The two sentinels are not ids and must never be looked up. Both read as
+// "unknown user": naming an actor we cannot identify is worse than admitting
+// we cannot, and a reader could not tell a fabricated one from a real name.
+func TestAuthorName_SentinelsAreNotLookedUp(t *testing.T) {
+	c := &connector.Ctx{}
+	c.SetUserNameResolver(func(string) (string, bool) {
+		t.Fatal("a sentinel must not reach the resolver")
+		return "", false
+	})
+
+	for _, stored := range []string{authorUnknown, "agent"} {
+		if got := authorName(c, stored); got != "unknown user" {
+			t.Errorf("authorName(%q) = %q, want %q", stored, got, "unknown user")
+		}
+	}
+}
+
+// An id that resolves to nothing — a deleted user, or no resolver wired at all
+// — reports the same way rather than leaking the uuid, which the reader cannot
+// use for anything either way.
+func TestAuthorName_UnresolvableIDIsNotLeaked(t *testing.T) {
+	withResolver := &connector.Ctx{}
+	withResolver.SetUserNameResolver(func(string) (string, bool) { return "", false })
+
+	for name, c := range map[string]*connector.Ctx{
+		"resolver misses": withResolver,
+		"no resolver":     {},
+	} {
+		got := authorName(c, "user-gone")
+		if got != "unknown user" {
+			t.Errorf("%s: authorName = %q, want %q", name, got, "unknown user")
+		}
+		if got == "user-gone" {
+			t.Errorf("%s: leaked the raw id", name)
+		}
+	}
+}
+
+// No author stored at all stays empty, so the field is omitted rather than
+// asserting an unknown human where there was none recorded.
+func TestAuthorName_EmptyStaysEmpty(t *testing.T) {
+	if got := authorName(&connector.Ctx{}, ""); got != "" {
+		t.Fatalf("authorName(\"\") = %q, want empty", got)
+	}
+}

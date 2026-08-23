@@ -8,6 +8,8 @@ All notable changes to Wick are documented here.
 
 ### Changed
 
+*   **Notes and tickets stop handing the model raw user ids.** `notes_list`/`notes_add`/etc. resolve `author` to a display name instead of a uuid, and ticket ops now return `assignee_name` alongside the existing `assignee` id. A `pkg/connector` addition, `Ctx.UserName(id)`, is available to any connector that needs to name a person instead of quoting their id at the model.
+
 *   **The board's ticket list is now filtered server-side.** `GET /api/projects/{id}/tickets` accepts `?statuses=a,b` (omitted = every column, `?statuses=` = none) and `?assignee=<id>|me`, so a filtered board fetches only the cards it will draw instead of fetching everything and hiding the rest client-side.
 
     The **Untracked** rail flips from opt-out to opt-in: it used to be sent by default and skippable with `?untracked=0`; it now requires `?untracked=1` to be sent at all, while its count is still always returned so the board can show "Untracked (N)" as something to switch on. In the kanban UI, Untracked moves from a rail with a collapse chevron to a filter-bar chip, off by default. `TicketFilter.HideUntracked` / `hide_untracked` is renamed to `ShowUntracked` / `show_untracked` to match.

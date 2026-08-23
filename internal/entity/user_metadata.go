@@ -46,9 +46,9 @@ type UserMetadata struct {
 	TicketFilters map[string]TicketFilter `json:"ticket_filters,omitempty"`
 
 	// Rail is the conversation rail's layout: which side tabs sit in the
-	// visible strip, in what order, and how many before the rest fold into
-	// "More". The rail has outgrown a fixed strip, so the arrangement is
-	// the user's and travels with them.
+	// strip, which are folded behind "More", and in what order. The rail has
+	// outgrown a fixed strip, so the arrangement is the user's and travels
+	// with them.
 	Rail RailPrefs `json:"rail,omitempty"`
 
 	// AutoDeleteEmptyTickets answers "delete this ticket now that its last
@@ -74,9 +74,25 @@ type RailPrefs struct {
 	// keep their built-in position behind the ones listed, so a tab added
 	// by a later release appears rather than vanishing.
 	Order []string `json:"order,omitempty"`
-	// Visible is how many tabs the strip shows before "More". 0 means the
-	// client's default.
-	Visible int `json:"visible,omitempty"`
+
+	// Hidden names the tabs folded behind "More". Everything not listed is
+	// in the strip, so a tab added by a later release shows up instead of
+	// hiding.
+	//
+	// nil and empty are DIFFERENT and must stay so on the wire — hence no
+	// omitempty. nil is "never arranged", which the client resolves to its
+	// own default (fold everything past the first few, so a fresh rail
+	// arrives short). An empty LIST is someone having deliberately unfolded
+	// every tab; dropping it would re-fold them all on the next load, as
+	// though the choice had never been made.
+	//
+	// This replaced a `visible: N` count, which could not express the
+	// choice anyone was actually making: hiding one panel says nothing
+	// about how many you want, and a count folded away whichever tabs
+	// happened to sit past position N — so reordering silently changed
+	// what was hidden. A leftover count is migrated by the client, which
+	// reads it as "the first N stay, name the rest as hidden".
+	Hidden []string `json:"hidden"`
 }
 
 // TicketFilter is one saved ticket-board filter: which statuses to show,

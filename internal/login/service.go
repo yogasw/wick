@@ -126,21 +126,14 @@ func (s *Service) SetTicketFilter(ctx context.Context, userID, projectID string,
 	return s.repo.SetMetadata(ctx, userID, meta)
 }
 
-// SetRailPrefs saves the user's conversation-rail layout. Order is stored
-// as given — the client owns which ids exist — but Visible is clamped so a
-// bad value cannot hide the rail or stretch it past the tabs that exist.
+// SetRailPrefs saves the user's conversation-rail layout. Stored as given:
+// both lists are tab ids, and the client owns which ids exist — a server that
+// filtered them would drop a tab added by a newer client and silently undo
+// the layout that client had just saved.
 func (s *Service) SetRailPrefs(ctx context.Context, userID string, p entity.RailPrefs) error {
 	u, err := s.repo.GetUserByID(ctx, userID)
 	if err != nil {
 		return err
-	}
-	if p.Visible != 0 {
-		if p.Visible < 2 {
-			p.Visible = 2
-		}
-		if p.Visible > 8 {
-			p.Visible = 8
-		}
 	}
 	meta := u.Metadata
 	meta.Rail = p

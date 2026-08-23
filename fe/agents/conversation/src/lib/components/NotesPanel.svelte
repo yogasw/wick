@@ -1,8 +1,11 @@
 <script lang="ts">
   /* Notes on a ticket or a session.
 
-     Notes are the running record of what has been learned, so the list is
-     chronological and edits are inline — the point is to lower the cost of
+     Notes are the running record of what has been learned. The list leads
+     with the NEWEST — someone opening a ticket is looking for what just
+     happened, and on a long-running one the useful note was at the bottom of
+     a scroll. (The agent gets them oldest-first: a record reads forwards.)
+     Edits are inline — the point is to lower the cost of
      writing one down, not to build a document editor.
 
      Two controls carry meaning that is easy to get wrong:
@@ -95,7 +98,10 @@
       }).pipe(Effect.provide(WickClientLayer)),
     )
       .then((n) => {
-        items = [...items, n];
+        // Newest first, matching the order the server returns — appending
+        // would drop a just-written note to the bottom and then move it on
+        // the next fetch.
+        items = [n, ...items];
         draft = "";
         draftCheckable = false;
         onChanged?.();
@@ -238,7 +244,11 @@
         <li
           data-testid={"note-" + n.id}
           class={[
-            "rounded-lg border p-3 transition-colors",
+            // `relative` so the actions button can pin to this corner. No
+            // reserved gutter: the text runs the full width, and the button
+            // overlays it — a note is normally several lines, and the one that
+            // is not still reads fine under a 28px button in the corner.
+            "relative rounded-lg border p-3 transition-colors",
             n.hidden
               ? "border-dashed border-white-400 bg-white-200 dark:border-navy-600 dark:bg-navy-800"
               : "border-white-300 bg-white-100 dark:border-navy-600 dark:bg-navy-700",
@@ -315,113 +325,116 @@
               {/if}
             </div>
 
+            <!-- One floating control, pinned to the card's top-right corner.
+                 The eye and the menu used to sit in the row itself, which took
+                 width from the first line of every note and truncated it. Now
+                 nothing is reserved: the text runs the full width and the menu
+                 overlays the corner, where a card's actions are expected. -->
             {#if editingId !== n.id}
-            <div class="flex shrink-0 items-center gap-1">
+            <div class="absolute right-2 top-2">
               <button
                 type="button"
-                aria-label={n.hidden ? "Show to agent" : "Hide from agent"}
-                title={n.hidden ? "Show to agent" : "Hide from agent"}
-                onclick={() => patch(n, { hidden: !n.hidden })}
+                aria-label="Note actions"
+                aria-haspopup="menu"
+                aria-expanded={menuId === n.id}
+                title="Actions — hide, edit or delete"
+                data-testid={"note-more-" + n.id}
+                onclick={() => { confirmId = null; menuId = menuId === n.id ? null : n.id; }}
                 class="flex h-7 w-7 items-center justify-center rounded-lg text-black-700 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-800"
               >
-                {#if n.hidden}
-                  <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                    <path d="M2 8s2.5-4 6-4 6 4 6 4-2.5 4-6 4-6-4-6-4z" stroke-linejoin="round"></path>
-                    <path d="M3 3l10 10" stroke-linecap="round"></path>
-                  </svg>
-                {:else}
-                  <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                    <path d="M2 8s2.5-4 6-4 6 4 6 4-2.5 4-6 4-6-4-6-4z" stroke-linejoin="round"></path>
-                    <circle cx="8" cy="8" r="1.5"></circle>
-                  </svg>
-                {/if}
+                <svg viewBox="0 0 16 16" class="h-4 w-4" fill="currentColor" aria-hidden="true">
+                  <circle cx="8" cy="3.5" r="1.25"></circle>
+                  <circle cx="8" cy="8" r="1.25"></circle>
+                  <circle cx="8" cy="12.5" r="1.25"></circle>
+                </svg>
               </button>
-              <!-- Everything destructive or rare is behind "More". A bare ×
-                   beside an edit pencil reads as "close this", which is the
-                   one thing it did not do. -->
-              <div class="relative">
+
+              {#if menuId === n.id}
+                <!-- Click-away, so the menu never strands the row in a
+                     half-open state the next click has to undo. -->
                 <button
                   type="button"
-                  aria-label="More actions"
-                  aria-haspopup="menu"
-                  aria-expanded={menuId === n.id}
-                  title="More — edit or delete"
-                  data-testid={"note-more-" + n.id}
-                  onclick={() => { confirmId = null; menuId = menuId === n.id ? null : n.id; }}
-                  class="flex h-7 w-7 items-center justify-center rounded-lg text-black-700 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-800"
+                  tabindex="-1"
+                  aria-label="Close menu"
+                  onclick={closeMenus}
+                  class="fixed inset-0 z-20 cursor-default"
+                ></button>
+                <div
+                  role="menu"
+                  class="absolute right-0 top-8 z-30 w-48 overflow-hidden rounded-lg border border-white-300 bg-white-100 py-1 shadow-lg dark:border-navy-600 dark:bg-navy-800"
                 >
-                  <svg viewBox="0 0 16 16" class="h-4 w-4" fill="currentColor" aria-hidden="true">
-                    <circle cx="8" cy="3.5" r="1.25"></circle>
-                    <circle cx="8" cy="8" r="1.25"></circle>
-                    <circle cx="8" cy="12.5" r="1.25"></circle>
-                  </svg>
-                </button>
-
-                {#if menuId === n.id}
-                  <!-- Click-away, so the menu never strands the row in a
-                       half-open state the next click has to undo. -->
+                  <!-- HIDE is the permission, and it now says so in words. As
+                       a bare eye icon beside a pencil it was guesswork: the
+                       thing it does — keep a note away from the agent while
+                       leaving it here — is not something an icon conveys. -->
                   <button
                     type="button"
-                    tabindex="-1"
-                    aria-label="Close menu"
-                    onclick={closeMenus}
-                    class="fixed inset-0 z-20 cursor-default"
-                  ></button>
-                  <div
-                    role="menu"
-                    class="absolute right-0 top-8 z-30 w-44 overflow-hidden rounded-lg border border-white-300 bg-white-100 py-1 shadow-lg dark:border-navy-600 dark:bg-navy-800"
+                    role="menuitem"
+                    data-testid={"note-hide-" + n.id}
+                    onclick={() => { menuId = null; patch(n, { hidden: !n.hidden }); }}
+                    class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-black-800 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
                   >
+                    <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                      <path d="M2 8s2.5-4 6-4 6 4 6 4-2.5 4-6 4-6-4-6-4z" stroke-linejoin="round"></path>
+                      {#if n.hidden}
+                        <circle cx="8" cy="8" r="1.5"></circle>
+                      {:else}
+                        <path d="M3 3l10 10" stroke-linecap="round"></path>
+                      {/if}
+                    </svg>
+                    {n.hidden ? "Show to agent" : "Hide from agent"}
+                  </button>
+
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onclick={() => startEdit(n)}
+                    class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-black-800 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
+                  >
+                    <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                      <path d="M11 2.5l2.5 2.5L6 12.5H3.5V10L11 2.5z" stroke-linejoin="round"></path>
+                    </svg>
+                    Edit note
+                  </button>
+
+                  {#if confirmId === n.id}
+                    <!-- The second step is the whole point: a note is a
+                         written record, and one stray click should not end
+                         it. It names what goes, and says so in words. -->
+                    <div class="border-t border-white-300 px-3 py-2 dark:border-navy-600">
+                      <p class="text-[11px] leading-relaxed text-black-800 dark:text-black-600">
+                        Delete this note? It cannot be undone.
+                      </p>
+                      <div class="mt-1.5 flex items-center gap-2">
+                        <button
+                          type="button"
+                          data-testid={"note-delete-confirm-" + n.id}
+                          onclick={() => remove(n)}
+                          class="rounded-lg bg-neg-400 px-2 py-1 text-[11px] font-semibold text-white-100 transition-colors hover:opacity-90"
+                        >Delete</button>
+                        <button
+                          type="button"
+                          onclick={() => { confirmId = null; }}
+                          class="rounded-lg px-2 py-1 text-[11px] text-black-700 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
+                        >Keep</button>
+                      </div>
+                    </div>
+                  {:else}
                     <button
                       type="button"
                       role="menuitem"
-                      onclick={() => startEdit(n)}
-                      class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-black-800 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
+                      data-testid={"note-delete-" + n.id}
+                      onclick={() => { confirmId = n.id; }}
+                      class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-neg-400 transition-colors hover:bg-neg-100"
                     >
                       <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                        <path d="M11 2.5l2.5 2.5L6 12.5H3.5V10L11 2.5z" stroke-linejoin="round"></path>
+                        <path d="M3 5h10M6.5 5V3.5h3V5M5 5l.5 8h5L11 5" stroke-linecap="round" stroke-linejoin="round"></path>
                       </svg>
-                      Edit note
+                      Delete note
                     </button>
-
-                    {#if confirmId === n.id}
-                      <!-- The second step is the whole point: a note is a
-                           written record, and one stray click should not end
-                           it. It names what goes, and says so in words. -->
-                      <div class="border-t border-white-300 px-3 py-2 dark:border-navy-600">
-                        <p class="text-[11px] leading-relaxed text-black-800 dark:text-black-600">
-                          Delete this note? It cannot be undone.
-                        </p>
-                        <div class="mt-1.5 flex items-center gap-2">
-                          <button
-                            type="button"
-                            data-testid={"note-delete-confirm-" + n.id}
-                            onclick={() => remove(n)}
-                            class="rounded-lg bg-neg-400 px-2 py-1 text-[11px] font-semibold text-white-100 transition-colors hover:opacity-90"
-                          >Delete</button>
-                          <button
-                            type="button"
-                            onclick={() => { confirmId = null; }}
-                            class="rounded-lg px-2 py-1 text-[11px] text-black-700 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
-                          >Keep</button>
-                        </div>
-                      </div>
-                    {:else}
-                      <button
-                        type="button"
-                        role="menuitem"
-                        data-testid={"note-delete-" + n.id}
-                        onclick={() => { confirmId = n.id; }}
-                        class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-neg-400 transition-colors hover:bg-neg-100"
-                      >
-                        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                          <path d="M3 5h10M6.5 5V3.5h3V5M5 5l.5 8h5L11 5" stroke-linecap="round" stroke-linejoin="round"></path>
-                        </svg>
-                        Delete note
-                      </button>
-                    {/if}
-                  </div>
-                {/if}
-              </div>
+                  {/if}
+                </div>
+              {/if}
             </div>
             {/if}
           </div>

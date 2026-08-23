@@ -210,4 +210,111 @@ describe("renderMarkdown — rich blocks", () => {
     const html = renderMarkdown("~~gone~~");
     expect(html).toContain("<del>gone</del>");
   });
+
+  /* ── lists broken up by other blocks ── */
+
+  // A "loose" list — blank lines between items, or a code block under one —
+  // is flushed and reopened per item, because a blank line ends the run. Each
+  // reopened <ol> restarted at 1, so a three-step list read "1. 1. 1.".
+  test("an ordered list keeps counting across blank lines", () => {
+    const html = renderMarkdown("1. first\n\n1. second\n\n1. third");
+    expect(html).toContain('start="2"');
+    expect(html).toContain('start="3"');
+  });
+
+  test("an ordered list keeps counting across a code block under an item", () => {
+    const html = renderMarkdown("1. write it\n\n   ```text\n   body=\"x\"\n   ```\n\n1. verify it");
+    expect(html).toContain('start="2"');
+  });
+
+  // Two lists with a heading between them are two lists, so the second starts
+  // over. Carrying the count there would be worse than restarting.
+  test("a heading between lists restarts the numbering", () => {
+    const html = renderMarkdown("1. one\n\n## Next\n\n1. one again");
+    expect(html).not.toContain("start=");
+  });
+
+  test("a rule between lists restarts the numbering", () => {
+    const html = renderMarkdown("1. one\n\n---\n\n1. one again");
+    expect(html).not.toContain("start=");
+  });
+
+  test("prose between two lists restarts the numbering", () => {
+    const html = renderMarkdown("1. one\n\nsome prose\n\n1. one again");
+    expect(html).not.toContain("start=");
+  });
+
+  test("a bullet run does not inherit an ordered count", () => {
+    const html = renderMarkdown("1. one\n\n- bullet\n\n1. one again");
+    expect(html).toContain("<ul");
+    expect(html).not.toContain("start=");
+  });
+
+  // A list that genuinely starts at five says so.
+  test("an ordered list honours its own first number", () => {
+    expect(renderMarkdown("5. five\n6. six")).toContain('start="5"');
+  });
+
+  /* ── blocks nested under a list item ── */
+
+  // Both of these anchored to column 0, so written under a list item — where
+  // markdown requires an indent — they fell through to the paragraph branch
+  // and printed their own backticks and angle brackets.
+  test("a code fence indented under a list item still renders as code", () => {
+    const html = renderMarkdown("1. step\n\n   ```text\n   hello\n   ```");
+    expect(html).toContain("<pre");
+    expect(html).not.toContain("```");
+  });
+
+  test("an indented fence's contents are un-indented", () => {
+    const html = renderMarkdown("1. step\n\n   ```text\n   hello\n   ```");
+    expect(html).toContain(">hello");
+  });
+
+  test("a quote indented under a list item still renders as a quote", () => {
+    const html = renderMarkdown("1. verify\n\n   > it has happened before");
+    expect(html).toContain("<blockquote");
+    expect(html).not.toContain("&gt; it has happened");
+  });
+
+  /* ── paragraphs ── */
+
+  // Every prose line used to become its own <p>, so a paragraph wrapped in
+  // the author's editor rendered as a stack of short blocks — each ending
+  // wherever the source happened to wrap, which read as text refusing to fill
+  // its column.
+  test("consecutive lines join into one paragraph", () => {
+    const html = renderMarkdown("Note uji render markdown. Semua\nelemen umum ada di sini.");
+    expect(html.match(/<p /g)).toHaveLength(1);
+    expect(html).toContain("Semua elemen umum");
+  });
+
+  test("a blank line still separates paragraphs", () => {
+    const html = renderMarkdown("first para\n\nsecond para");
+    expect(html.match(/<p /g)).toHaveLength(2);
+  });
+
+  // Two trailing spaces are markdown's hard break. The tag has to survive
+  // escaping, or it shows up as literal &lt;br/&gt;.
+  test("two trailing spaces become a line break inside the paragraph", () => {
+    const html = renderMarkdown("Baris ini pakai  \nhard break.");
+    expect(html).toContain("<br/>");
+    expect(html).not.toContain("&lt;br");
+    expect(html.match(/<p /g)).toHaveLength(1);
+  });
+
+  /* ── nested quotes ── */
+
+  // A second `>` is a quote inside a quote; rendering it as text left a stray
+  // ">" at the start of the line.
+  test("a nested quote nests instead of leaking its marker", () => {
+    const html = renderMarkdown(">> deeper");
+    expect(html.match(/<blockquote/g)).toHaveLength(2);
+    expect(html).not.toContain("&gt; deeper");
+  });
+
+  test("a single quote stays one level", () => {
+    const html = renderMarkdown("> just one");
+    expect(html.match(/<blockquote/g)).toHaveLength(1);
+  });
 });

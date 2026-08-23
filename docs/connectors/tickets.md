@@ -34,6 +34,8 @@ List a project's tickets, newest first: id, title, status, assignee, fields, and
 
 Return one ticket in full, including its session list. Omit `ticket_id` to get the ticket the calling session belongs to.
 
+Alongside `assignee` (the wick user id — what `ticket_create`/`ticket_update` accept and what filters match on), every ticket in the response also carries `assignee_name`: the assignee's display name, resolved per call. It is omitted when the ticket has no assignee or the id cannot be resolved.
+
 ### `ticket_create` — Create Ticket
 
 Create a ticket in a project. Status defaults to the board's first column.
