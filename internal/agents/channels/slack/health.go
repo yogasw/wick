@@ -49,6 +49,7 @@ func (s *Channel) HealthCheck() []agentchannels.HealthCheck {
 		probeAuth,
 		probeTeamInfo,
 		probeUsersList,
+		probeUserEmail,
 		probeUserGroups,
 		probeConversationsList,
 		probeChatWrite,
@@ -183,6 +184,94 @@ func probeUsersList(api *slackgo.Client) agentchannels.HealthCheck {
 		Name:   "users.list",
 		OK:     true,
 		Detail: fmt.Sprintf("%d users", len(users)),
+	}
+}
+
+// probeUserEmail checks the one scope identity resolution depends on:
+// users:read.email.
+//
+// This needs its own probe because its failure is SILENT. Without the scope,
+// users.info still succeeds — it just returns a blank email — so users.list
+// passing tells you nothing about it. Every sender would then be refused with
+// "email is required" and the operator would have no idea which scope to add.
+//
+// Reads real members rather than a synthetic id: the email field is only
+// populated for actual humans, so probing a made-up user would look identical
+// to a missing scope.
+func probeUserEmail(api *slackgo.Client) agentchannels.HealthCheck {
+	const name = "users.info (email)"
+	const need = "needs scope: users:read.email — without it wick cannot match a Slack sender to a wick account"
+
+	ctx, cancel := withTimeout(6 * time.Second)
+	defer cancel()
+	users, err := api.GetUsersContext(ctx)
+	if err != nil {
+		// users.list already reports its own failure; don't double-report the
+		// same cause as an email problem.
+		return agentchannels.HealthCheck{
+			Name:   name,
+			OK:     true,
+			Detail: "skipped: users.list unavailable",
+		}
+	}
+
+	humans, withEmail := countMemberEmails(users)
+	return emailScopeVerdict(name, need, humans, withEmail)
+}
+
+// countMemberEmails tallies real people and how many of them carry an email.
+//
+// Bots, apps and deleted accounts legitimately have no email, so counting them
+// would make a healthy workspace look like a missing scope.
+func countMemberEmails(users []slackgo.User) (humans, withEmail int) {
+	for _, u := range users {
+		if u.IsBot || u.Deleted || u.ID == "USLACKBOT" {
+			continue
+		}
+		humans++
+		if strings.TrimSpace(u.Profile.Email) != "" {
+			withEmail++
+		}
+	}
+	return humans, withEmail
+}
+
+// emailScopeVerdict turns the tally into a health result.
+//
+// The distinction that matters: NOBODY having an email means the scope is
+// missing, while SOME members lacking one is normal — real workspaces have
+// members with no address on file. Reporting the second as a failure would
+// train operators to ignore this check.
+func emailScopeVerdict(name, need string, humans, withEmail int) agentchannels.HealthCheck {
+	switch {
+	case humans == 0:
+		// Nothing to judge from. Report OK rather than inventing a failure the
+		// operator cannot act on.
+		return agentchannels.HealthCheck{
+			Name:   name,
+			OK:     true,
+			Detail: "no human members visible to check",
+		}
+	case withEmail == 0:
+		return agentchannels.HealthCheck{
+			Name:   name,
+			OK:     false,
+			Error:  "no member emails returned",
+			Detail: need,
+		}
+	case withEmail < humans:
+		return agentchannels.HealthCheck{
+			Name: name,
+			OK:   true,
+			Detail: fmt.Sprintf("%d of %d members have an email; the rest cannot be matched to a wick account",
+				withEmail, humans),
+		}
+	default:
+		return agentchannels.HealthCheck{
+			Name:   name,
+			OK:     true,
+			Detail: fmt.Sprintf("%d members have an email", withEmail),
+		}
 	}
 }
 

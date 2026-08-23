@@ -256,6 +256,7 @@ Probes:
 - `auth.test`
 - `team.info` (scope: `team:read`)
 - `users.list` (scope: `users:read`)
+- `users.info (email)` (scope: `users:read.email`) — checked separately because its failure is **silent**: without the scope `users.info` still succeeds and simply returns a blank email, so `users.list` passing says nothing about it. Every sender would then be refused with `email is required`. Fails only when *no* member has an email; some members lacking one is normal and reported as a note instead.
 - `usergroups.list` (scope: `usergroups:read`)
 - `conversations.list` (scopes: `channels:read`, `groups:read`)
 - `chat.postMessage` _(dry-run against an invalid channel ID — distinguishes `missing_scope` from `channel_not_found`)_

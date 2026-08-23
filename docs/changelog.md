@@ -25,6 +25,8 @@ All notable changes to Wick are documented here.
 *   **Connector list is a catalogue, not an inventory:** Every registered connector type is now listed for every user, even with no instance configured. Previously non-admins only saw a connector once an admin had created an instance, so on a fresh install the list was empty for them with no way to discover a connector or ask for one. Cards carry only name, description and operation count — instance-level tag scoping is unchanged. System connectors and admin-disabled types stay hidden.
 *   Per-session MCP credentials are now revoked when their subprocess exits, rather than remaining valid until their TTL.
 
+*   **Slack health check covers the email scope:** Test Integration now probes `users:read.email` explicitly. That scope fails silently — `users.info` still succeeds without it and just returns a blank email — so nothing else in the check could reveal it, and every sender would be refused with `email is required` while the operator had no idea which scope was missing. It fails only when no member has an email; partial coverage is reported as a note, since real workspaces have members with no address on file.
+
 ### Fixed
 
 *   **Duplicate accounts from a renamed channel email:** a Slack sender was matched to a wick user by email only, so editing their Slack email and messaging again registered a *second* wick account for the same person. Identity is now resolved from the channel account id first — which never changes — and falls back to email only when no link exists yet. An existing link also wins over a conflicting email, so changing a Slack email to someone else's address cannot take over their account.
