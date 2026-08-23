@@ -11,7 +11,7 @@ import (
 // authenticate a spawned SUB-AGENT to the loopback MCP server as the
 // human who triggered it, with an explicitly narrowed tag set.
 //
-// Why this exists
+// # Why this exists
 //
 // Normal agent spawns authenticate with the per-boot internal token,
 // which maps to a synthetic ADMIN principal. Admin bypasses tag
@@ -40,6 +40,13 @@ type scopedGrant struct {
 	userID  string
 	tagIDs  []string
 	expires time.Time
+	// stripAdmin forces the resolved principal down to RoleUser. True for
+	// sub-agents, where the profile's narrowing list is the whole point and
+	// an admin parent must not hand its role to a child. False for a
+	// top-level session token, where the principal IS the human who is
+	// chatting — stripping there would take an admin's own tools away from
+	// them for no security gain.
+	stripAdmin bool
 }
 
 // ScopedTokenPrefix marks tokens minted here. Distinct from the PAT
@@ -55,12 +62,19 @@ func NewScopedTokens() *ScopedTokens {
 	return &ScopedTokens{m: map[string]scopedGrant{}, now: time.Now}
 }
 
-// Issue mints a token bound to userID with exactly tagIDs.
+// Issue mints a sub-agent token bound to userID with exactly tagIDs. The
+// principal is demoted to RoleUser (see IssueFor for the top-level case).
 //
 // The caller is responsible for having already intersected tagIDs down
 // to what the user may reach — this type stores what it is given and
 // never widens it, but it also cannot verify the intersection for you.
 func (s *ScopedTokens) Issue(userID string, tagIDs []string) (string, error) {
+	return s.IssueFor(userID, tagIDs, true)
+}
+
+// IssueFor mints a token and says explicitly whether the principal should
+// be demoted to RoleUser on every request. See scopedGrant.stripAdmin.
+func (s *ScopedTokens) IssueFor(userID string, tagIDs []string, stripAdmin bool) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
@@ -74,26 +88,33 @@ func (s *ScopedTokens) Issue(userID string, tagIDs []string) (string, error) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.m[tok] = scopedGrant{userID: userID, tagIDs: cp, expires: s.now().Add(scopedTokenTTL)}
+	s.m[tok] = scopedGrant{userID: userID, tagIDs: cp, expires: s.now().Add(scopedTokenTTL), stripAdmin: stripAdmin}
 	return tok, nil
 }
 
 // Lookup resolves a token to its principal. ok is false for unknown or
 // expired tokens.
 func (s *ScopedTokens) Lookup(token string) (userID string, tagIDs []string, ok bool) {
+	userID, tagIDs, _, ok = s.LookupGrant(token)
+	return userID, tagIDs, ok
+}
+
+// LookupGrant resolves a token and also reports whether the principal must
+// be demoted to RoleUser.
+func (s *ScopedTokens) LookupGrant(token string) (userID string, tagIDs []string, stripAdmin bool, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g, found := s.m[token]
 	if !found {
-		return "", nil, false
+		return "", nil, false, false
 	}
 	if s.now().After(g.expires) {
 		delete(s.m, token)
-		return "", nil, false
+		return "", nil, false, false
 	}
 	cp := make([]string, len(g.tagIDs))
 	copy(cp, g.tagIDs)
-	return g.userID, cp, true
+	return g.userID, cp, g.stripAdmin, true
 }
 
 // Revoke drops a token. Called when a delegation reaches a terminal

@@ -39,6 +39,7 @@ Wick does **not** advertise N×M static tools (one entry per connector × operat
 | `wick_get` | `readOnlyHint` | Drill into a connector one level at a time via an optional `selector` argument. Pass only `id` to list the connector's categories; add `selector=<category title>` to list that category's operations (no schemas yet); add `selector=<op key>` to get that one op's `input_schema`. Flat connectors with no named categories skip straight to listing ops. For session-workspace connectors (`sw_…` id), also pass `session_id` as a separate argument. |
 | `wick_execute` | `destructiveHint` | Run an operation by `tool_id` + `params`, or run a **batch** of operations in one call by passing a `calls` array. See [Batch execution](#batch-execution). Composite tool IDs (`conn:…/op@accountID`) inject the account token automatically. |
 | `wick_info` | `readOnlyHint` | Return server version and build info |
+| `wick_me` | `readOnlyHint` | Who is this connection authenticated as: `user_id`, `name`, `email`, `role`, `is_admin`, `is_owner`, `approved`, `filter_tag_ids`, plus `is_system` / `is_local_cli`. Resolved server-side from the caller's credential. See [Caller identity](#caller-identity). |
 | `wick_encrypt` | `readOnlyHint` | Redirect to the in-app encrypt UI — no crypto over MCP. See [Encrypted credentials](#encrypted-credentials) |
 | `wick_decrypt` | `readOnlyHint` | Redirect to the in-app decrypt UI — no crypto over MCP |
 | `wick_session_info` | `readOnlyHint` | Read the active session's metadata: `session_id`, `title`, `title_custom`, `origin`, `status`, `project_id`. Used by the agent to decide whether to set a title. |
@@ -543,6 +544,34 @@ Response:
 ## Session title tools
 
 The wick-agent server exposes two tools that let the agent manage the session's sidebar title without touching the admin UI.
+
+### Caller identity
+
+`wick_me` answers "which user am I acting for". The answer is resolved **server-side** from the credential the caller presented, so it is authoritative — an agent should use it rather than inferring the user from conversation text, which goes wrong after a handover or in a session someone else opened.
+
+```json
+{
+  "authenticated": true,
+  "user_id": "…", "name": "Ada", "email": "ada@example.com",
+  "role": "user", "is_admin": false, "is_owner": false, "approved": true,
+  "filter_tag_ids": ["…"],
+  "is_system": false, "is_local_cli": false, "identity_source": "token"
+}
+```
+
+`filter_tag_ids` is included because those tags drive connector visibility: if a connector you expected is missing from `wick_list`, this is why — the agent can say so instead of insisting it should be there.
+
+Three fields describe *what kind* of principal is on the other end:
+
+| Field | Meaning |
+|---|---|
+| `authenticated: false` | The transport carries no identity at all (local stdio with no principal). |
+| `is_system: true` | wick's synthetic principal — a cron run or system job, with no human attached. Do not report it as a person. |
+| `is_local_cli: true` | `wick mcp serve` (stdio), which binds to the first admin on the machine. See below. |
+
+**Agent spawns carry a per-session credential.** Each spawn authenticates as the wick user who owns its session, so connector access and tag filtering apply to the human behind the conversation. A session with no owner (cron, system jobs, sessions predating ownership tracking) falls back to the synthetic admin principal.
+
+**stdio is admin by design.** `wick mcp serve` has no request and no bearer token, so it binds to the first admin account on the box. This is deliberate: `wick_enc_` tokens are keyed `HKDF(masterKey, salt=user.ID)`, so a synthetic identity would mint tokens nobody can decrypt. `is_local_cli` marks it so an agent does not report a machine-local fallback as a verified human.
 
 ### `wick_session_info`
 

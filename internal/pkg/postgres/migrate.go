@@ -169,6 +169,7 @@ func migrate(db *gorm.DB) {
 		&entity.CustomConnectorMCPServer{},
 		&entity.PersonalAccessToken{},
 		&entity.PushSubscription{},
+		&entity.UserChannelIdentity{},
 		&entity.OAuthClient{},
 		&entity.OAuthAuthorizationCode{},
 		&entity.OAuthToken{},

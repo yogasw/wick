@@ -11,6 +11,21 @@ import (
 type UserRow struct {
 	User   *entity.User
 	TagIDs []string
+	// NeedsMerge marks an account created by a channel that reports no email
+	// (Telegram), which wick therefore could not match to a person. Such a row
+	// is not meant to be approved on its own — approving it would leave that
+	// person with two accounts — so the UI offers a merge instead.
+	NeedsMerge bool
+	// MergeTargets lists the accounts this one may be folded into. Only
+	// approved non-channel accounts, since merging into a pending or synthetic
+	// account just moves the problem.
+	MergeTargets []MergeTarget
+}
+
+// MergeTarget is one selectable destination account.
+type MergeTarget struct {
+	ID    string
+	Label string
 }
 
 // UserCreateResult carries the one-time outcome of an admin "Add user"
@@ -98,4 +113,3 @@ type ConnectionRow struct {
 	LastUsedAt *time.Time
 	TokenCount int
 }
-
