@@ -117,7 +117,17 @@ func (h *handlers) add(c *connector.Ctx) (any, error) {
 		Body:      c.Input("body"),
 		Checkable: c.InputBool("checkable"),
 		Audience:  strings.TrimSpace(c.Input("audience")),
-		Author:    "agent",
+		// The human the agent is acting for, not the literal "agent".
+		//
+		// A note written through an agent is still that person's note, and
+		// labelling every one of them "agent" made the panel unreadable the
+		// moment two people used the same conversation — a note from the web UI
+		// showed a name while the identical note via an agent showed a role.
+		//
+		// Stores the USER ID: the UI resolves it to a current name, so a rename
+		// is reflected on old notes instead of freezing whatever the name was
+		// when the note was written.
+		Author: noteAuthor(c),
 	})
 	if err != nil {
 		return nil, err
@@ -195,3 +205,24 @@ func (h *handlers) del(c *connector.Ctx) (any, error) {
 	}
 	return map[string]any{"scope": scopeLabel(sc), "deleted": noteID}, nil
 }
+
+// noteAuthor resolves who a note should be attributed to.
+//
+// CallerUserID is the wick user the call runs on behalf of — resolved by the
+// framework from the session owner, so it names the human even though the agent
+// is the one making the call.
+//
+// Empty means there is genuinely no human attached: a cron run, a system job, a
+// session predating ownership tracking. authorUnknown is used there rather than
+// "agent", which claimed an identity that does not exist and read as if some
+// specific actor wrote it.
+func noteAuthor(c *connector.Ctx) string {
+	if uid := strings.TrimSpace(c.CallerUserID()); uid != "" {
+		return uid
+	}
+	return authorUnknown
+}
+
+// authorUnknown marks a note with no human behind it. Distinct from a user id so
+// the UI can render it plainly instead of failing to look it up.
+const authorUnknown = "unknown"

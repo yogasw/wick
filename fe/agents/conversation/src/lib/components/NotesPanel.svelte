@@ -117,9 +117,16 @@
     patch(note, { body });
   }
 
+  // Notes store a USER ID so a rename shows up on old notes. Two sentinels are
+  // not ids and must not be looked up:
+  //   "unknown" — no human behind the call (cron, system job, legacy session)
+  //   "agent"   — legacy value written before notes recorded the real caller
+  // Both render as "unknown user": claiming an actor we cannot name is worse
+  // than saying we cannot name one.
   function authorName(n: Note): string {
-    if (n.author === "agent") return "agent";
-    return n.author ? (users?.[n.author] ?? "someone") : "";
+    if (!n.author) return "";
+    if (n.author === "unknown" || n.author === "agent") return "unknown user";
+    return users?.[n.author] ?? "unknown user";
   }
 </script>
 

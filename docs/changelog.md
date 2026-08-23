@@ -10,6 +10,41 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.1.0](https://github.com/yogasw/wick/compare/v1.0.0...v1.1.0) — Caller Identity Everywhere
+
+### Added
+
+*   **Codex agents reach wick's tools as the real user.** A codex spawn previously had no MCP wiring at all — no `wick_list`, no connectors, no `wick_me` — so an agent on that provider had none of wick's surface. It now receives the same per-session credential claude gets, authenticating as the human behind the session.
+
+    The shape differs from claude by necessity: codex has no `--mcp-config` equivalent, so the server is registered with TOML config overrides and the bearer is read from an environment variable named in that config. A useful side effect is that the token never enters `argv`, which is world-readable in process listings.
+
+*   **My tickets, and untracked sessions.** `ticket_list` gains `mine` / `assignee` filters, plus two named ops for the questions people actually ask: `ticket_mine` (the caller's own tickets) and `session_untracked` (conversations attached to no ticket at all).
+
+    `mine` resolves the user **server-side** from the credential, so no user id is passed or accepted — a model cannot read someone else's queue by supplying an id. Tickets nobody owns stay on `ticket_list` with `assignee=unassigned`; that is a different question from an untracked session, and the op descriptions say so rather than leaving a model to guess.
+
+    Untracked-ness is checked against the ticket's own session list, not the denormalised `session.Meta.TicketID` back-pointer — a pointer left behind by a deleted ticket would otherwise hide a session that *is* untracked, which is exactly what the op is asked to find.
+
+### Fixed
+
+*   **Notes were attributed to "agent" instead of the person who wrote them.** One conversation could show `Admin` for a note added in the web UI and `agent` for the identical act through an agent, and once two people shared a conversation their notes were indistinguishable. Notes now record the caller's user id, which the UI resolves to a current name, so a rename is reflected on old notes. Calls with genuinely nobody behind them (cron, system jobs) record `unknown` and render as "unknown user" — the old value named an actor that does not exist.
+
+*   **`wick_me` reported `wick-agent-internal` instead of the real user.** Sessions started from Slack ran as the synthetic admin — full connector visibility, no tag filtering — and retrying never helped. Two causes, both fixed:
+
+    *   The session owner was written to disk but the **in-memory registry was never refreshed**, while the per-spawn credential is minted from that registry. So the owner was recorded correctly and every later spawn still fell back to the shared internal token. Only a server restart could clear it, which is why the symptom looked permanent.
+    *   The owner was only stamped on a session's **first** message, so any thread created before per-user identity shipped never got one. It is now stamped on every message — idempotent, and it backfills those older threads on their next reply.
+
+### Removed
+
+*   **`WICK_STRICT_MCP`.** The flag decided whether a spawn passed `--strict-mcp-config`, as one process-wide value applied to every spawn. That stopped making sense once each spawn carries its own per-user credential: a single global switch cannot express a per-user decision.
+
+    It was also never a security boundary. wick injects its own MCP server per spawn, so isolation only ever dropped the user's *other* MCP servers — it never restricted wick's own tools, which are enforced server-side by tags and per-op access. wick now always merges; use [`WICK_DISABLE_SHARED_MCP`](./reference/env-vars#wick-disable-shared-mcp) to turn the loopback injection off entirely.
+
+### Notes
+
+*   `gemini` still has no MCP wiring. Its CLI's support is unverified, and the existing spawn code documents its own argv as best-effort, so it was left alone rather than built on an assumption.
+
+---
+
 ## [v1.0.0](https://github.com/yogasw/wick/compare/v0.40.1...v1.0.0) — User Identity & Channels
 
 _Released on 2026-08-23_

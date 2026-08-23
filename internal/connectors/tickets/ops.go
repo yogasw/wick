@@ -107,6 +107,17 @@ func (h *handlers) view(tk ticket.Ticket) ticketView {
 }
 
 func (h *handlers) list(c *connector.Ctx) (any, error) {
+	assignee, err := resolveAssigneeFilter(c)
+	if err != nil {
+		return nil, err
+	}
+	return h.listFiltered(c, assignee)
+}
+
+// listFiltered is the shared body of ticket_list and ticket_mine. assignee is
+// already resolved: "" for no filter, unassignedFilter for orphans, else a user
+// id. Keeping one implementation means the two ops cannot drift.
+func (h *handlers) listFiltered(c *connector.Ctx, assignee string) (any, error) {
 	projectID, err := resolveProject(h.layout, c, c.Input("project_id"))
 	if err != nil {
 		return nil, err
@@ -123,14 +134,39 @@ func (h *handlers) list(c *connector.Ctx) (any, error) {
 	if filter != "" && !ticket.ValidStatus(cfg, filter) {
 		return nil, fmt.Errorf("invalid status %q (want %s)", filter, strings.Join(cfg.StatusKeys(), ", "))
 	}
+
+	// Counts are taken over the ASSIGNEE-filtered set but before the status
+	// filter, so "3 of my tickets are in_progress" stays answerable from a
+	// mine=true + status=in_progress call without a second round trip.
+	counts := map[string]int{}
 	out := make([]ticketView, 0, len(all))
 	for _, tk := range all {
+		if !matchesAssignee(tk, assignee) {
+			continue
+		}
+		counts[tk.Status]++
 		if filter != "" && tk.Status != filter {
 			continue
 		}
 		out = append(out, h.view(tk))
 	}
-	return map[string]any{"project_id": projectID, "tickets": out, "total": len(out)}, nil
+
+	res := map[string]any{
+		"project_id":      projectID,
+		"tickets":         out,
+		"total":           len(out),
+		"count_by_status": counts,
+	}
+	// Echo what was actually applied. When mine=true the model never learns
+	// the id it filtered on, so saying so is the only way the answer is
+	// self-explanatory.
+	if assignee != "" {
+		res["assignee_filter"] = assignee
+	}
+	if filter != "" {
+		res["status_filter"] = filter
+	}
+	return res, nil
 }
 
 func (h *handlers) get(c *connector.Ctx) (any, error) {
@@ -445,4 +481,149 @@ func (h *handlers) ticketConfig(projectID string) (project.TicketConfig, error) 
 		return project.TicketConfig{}, fmt.Errorf("load project %q: %w", projectID, err)
 	}
 	return p.Meta.Ticket, nil
+}
+
+// unassignedFilter selects tickets with nobody on them. A sentinel rather than
+// an empty string, because empty already means "no assignee filter at all" and
+// the two must not collapse.
+const unassignedFilter = "unassigned"
+
+// resolveAssigneeFilter turns the mine / assignee inputs into one value.
+//
+// mine=true resolves to the CALLER, server-side. That matters: the model never
+// supplies the id, so it cannot ask for another person's queue by guessing one,
+// and "my tickets" needs no id in the prompt at all.
+//
+// Returns "" for no filter.
+func resolveAssigneeFilter(c *connector.Ctx) (string, error) {
+	explicit := strings.TrimSpace(c.Input("assignee"))
+	if c.InputBool("mine") {
+		caller := strings.TrimSpace(c.CallerUserID())
+		if caller == "" {
+			// No human behind the call (cron, system job). Silently listing
+			// everything would answer a different question than the one asked.
+			return "", fmt.Errorf("mine=true needs a signed-in user, but this call has none " +
+				"(system or scheduled run); pass assignee=<user id> instead")
+		}
+		if explicit != "" && explicit != caller {
+			// Both given and disagreeing: refusing beats picking one, since
+			// either choice silently answers the wrong question.
+			return "", fmt.Errorf("mine=true conflicts with assignee=%q; pass one or the other", explicit)
+		}
+		return caller, nil
+	}
+	return explicit, nil
+}
+
+// matchesAssignee reports whether a ticket passes the assignee filter.
+func matchesAssignee(tk ticket.Ticket, filter string) bool {
+	switch filter {
+	case "":
+		return true
+	case unassignedFilter:
+		return strings.TrimSpace(tk.Assignee) == ""
+	default:
+		return tk.Assignee == filter
+	}
+}
+
+// mine lists the caller's own tickets.
+//
+// A named op rather than a flag on ticket_list because a model picks tools by
+// name far more reliably than it finds one boolean among several, and "my
+// tickets" is the single most common ask. It delegates to the same handler, so
+// there is one implementation of the filtering.
+func (h *handlers) mine(c *connector.Ctx) (any, error) {
+	if strings.TrimSpace(c.CallerUserID()) == "" {
+		// No human behind the call. Listing the project's tickets instead would
+		// answer a different question, so say what is missing.
+		return nil, fmt.Errorf("ticket_mine needs a signed-in user, but this call has none " +
+			"(system or scheduled run); use ticket_list with assignee=<user id>")
+	}
+	return h.listFiltered(c, c.CallerUserID())
+}
+
+// untracked lists a project's sessions that belong to no ticket.
+//
+// This is about SESSIONS, not tickets: an unassigned ticket exists but has
+// nobody on it, whereas these have no ticket at all. Conflating the two would
+// answer "what work is unowned" with "what work is unfiled".
+func (h *handlers) untracked(c *connector.Ctx) (any, error) {
+	projectID, err := resolveProject(h.layout, c, c.Input("project_id"))
+	if err != nil {
+		return nil, err
+	}
+	ids, err := session.List(h.layout)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+
+	limit := c.InputInt("limit")
+	if limit <= 0 {
+		limit = 50
+	}
+	onlyMine := c.InputBool("mine")
+	caller := strings.TrimSpace(c.CallerUserID())
+	if onlyMine && caller == "" {
+		return nil, fmt.Errorf("mine=true needs a signed-in user, but this call has none " +
+			"(system or scheduled run); omit it to scan the whole project")
+	}
+
+	type sessionView struct {
+		SessionID string `json:"session_id"`
+		Title     string `json:"title,omitempty"`
+		Status    string `json:"status,omitempty"`
+		Origin    string `json:"origin,omitempty"`
+		OwnerID   string `json:"owner_user_id,omitempty"`
+	}
+	out := make([]sessionView, 0, limit)
+	scanned, truncated := 0, false
+	for _, sid := range ids {
+		sess, err := session.Load(h.layout, sid)
+		if err != nil {
+			continue // a session mid-write or half-deleted is not worth failing the whole answer
+		}
+		if sess.Meta.ProjectID != projectID {
+			continue
+		}
+		// The back-pointer is denormalised, so confirm against the ticket
+		// itself: a stale pointer would hide a session that is in fact
+		// untracked, which is the exact thing being asked for.
+		if strings.TrimSpace(sess.Meta.TicketID) != "" {
+			if _, ok := ticket.FindBySession(h.layout, projectID, sid); ok {
+				continue
+			}
+		}
+		if onlyMine && sess.Meta.UserID != caller {
+			continue
+		}
+		scanned++
+		if len(out) >= limit {
+			truncated = true
+			continue
+		}
+		out = append(out, sessionView{
+			SessionID: sess.ID,
+			Title:     sess.Meta.Label,
+			Status:    string(sess.Meta.Status),
+			Origin:    string(sess.Meta.Origin),
+			OwnerID:   sess.Meta.UserID,
+		})
+	}
+
+	res := map[string]any{
+		"project_id": projectID,
+		"sessions":   out,
+		"total":      scanned,
+	}
+	// Say so when the list was cut: a silent truncation reads as "that is all
+	// of them".
+	if truncated {
+		res["truncated"] = true
+		res["limit"] = limit
+	}
+	if onlyMine {
+		res["scope"] = "caller"
+	}
+	return res, nil
 }

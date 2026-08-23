@@ -471,6 +471,50 @@ Admin-built connectors (`internal/connectors/custom/`, stored as `entity.CustomC
 
 The builder FE (`fe/manager/src/lib/components/custom/`) renders section blocks with add/remove section, drag-drop ops, and a nested Jump panel.
 
+## Caller identity — who is this call for
+
+An op that writes attributable data, or that scopes data per person, must ask
+the framework who the caller is. Never label it after the mechanism.
+
+```go
+func (h *handlers) addNote(c *connector.Ctx) (any, error) {
+    author := c.CallerUserID()   // wick user id, or "" for no human
+    if author == "" {
+        author = "unknown"       // cron / system job / pre-ownership session
+    }
+    ...
+}
+```
+
+| Method | Returns |
+|---|---|
+| `c.CallerUserID()` | wick user id the call runs on behalf of; `""` when there is no human |
+| `c.SessionID()` | the agent session the call was made within; `""` outside one |
+| `c.OwnerBotID()` | the channel bot that owns the session, when channel-backed |
+
+**`CallerUserID` names the human, not the agent.** The framework resolves it
+from the session's owner, so an op called by an agent still sees the person
+that agent is acting for. Spawns carry a per-user credential, so this is the
+same identity the web UI would report for that user.
+
+**Store the id, not the name.** A stored name freezes at write time and goes
+stale on a rename; an id is resolved for display, so old rows follow the
+current name. Wick's own UI already resolves note/ticket authors this way.
+
+**Empty means nobody, and must be said plainly.** A cron run, a system job, or a
+session created before ownership tracking has no human behind it. Render that as
+`unknown` — a placeholder like `"agent"` or `"system"` names an actor that does
+not exist, and a reader cannot tell it apart from a real one. `notes` shipped
+with `Author: "agent"` hardcoded and it made the panel unreadable the moment two
+people used one conversation: identical acts showed a person's name from the web
+UI and a role from an agent.
+
+**Do not gate access on caller-supplied input.** `CallerUserID` and `SessionID`
+are stamped by the framework — `SessionID` comes from the per-spawn
+`X-Wick-Session-Id` header in preference to any `session_id` the model passed.
+An op keying authorization off a value the LLM can set is not gated at all. See
+`datatables` for per-owner gating done correctly.
+
 ## MCP surface — what to know when editing
 
 The MCP layer (`internal/mcp/`) exposes a fixed **meta-tool** set: `wick_list`, `wick_search`, `wick_get`, `wick_execute`. Connector instances are not advertised as N×M static tools. That choice is deliberate (see `connectors-design.md` § 7.3) — adding or removing a connector row never invalidates the LLM client's cached tool list.
