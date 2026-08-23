@@ -10,6 +10,13 @@ import "strconv"
 // to that session on load via the #app data-initial-session attribute.
 // IdleTimeoutMs is the agents idle_timeout_sec × 1000, used by the SPA
 // idle lifecycle badge for the "kill in Ns" countdown.
+//
+// RailPrefs is the caller's saved rail layout as JSON, inlined so the strip
+// is drawn correctly on the FIRST paint. Fetching it left the rail rendering
+// its default and then collapsing a request later, which read as the saved
+// layout not having stuck. This is the same profile record the API serves,
+// delivered earlier — not a second source: the SPA still writes through the
+// API, and a page it did not render falls back to fetching.
 type ConversationVM struct {
 	Layout         AgentsLayoutVM
 	Base           string
@@ -17,6 +24,7 @@ type ConversationVM struct {
 	ScmAsset       string
 	InitialSession string
 	IdleTimeoutMs  int
+	RailPrefs      string
 }
 
 // Conversation renders the conversation SPA shell inside the agents chrome.
@@ -37,6 +45,7 @@ templ Conversation(vm ConversationVM) {
 				data-scm-asset={ vm.ScmAsset }
 				data-initial-session={ vm.InitialSession }
 				data-idle-timeout-ms={ strconv.Itoa(vm.IdleTimeoutMs) }
+				data-rail-prefs={ vm.RailPrefs }
 				class="h-full"
 			></div>
 			<script type="module" src={ vm.AssetURL }></script>

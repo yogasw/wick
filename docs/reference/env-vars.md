@@ -185,17 +185,6 @@ servers the user's own config (`~/.claude.json`, `.mcp.json`) provides.
 WICK_DISABLE_SHARED_MCP=1
 ```
 
-### `WICK_STRICT_MCP`
-**Default:** unset (merge mode)
-
-By default the injected wick MCP server is **merged** with the user's
-existing MCP servers (no `--strict-mcp-config`), so their own connectors
-keep working. Set this to pass `--strict-mcp-config`, isolating the agent
-to **only** the wick MCP server.
-
-```env
-WICK_STRICT_MCP=1
-```
 
 ### `WICK_PROVIDERSYNC_DISABLE`
 **Default:** unset (sync enabled when the job is enabled)

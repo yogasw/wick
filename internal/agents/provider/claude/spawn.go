@@ -128,15 +128,20 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 		// caused by a stale --resume ID, not this flag.
 		"--include-partial-messages",
 	}
-	// Add the live wick MCP HTTP server when wired + supported. By
-	// default it MERGES with the user's existing MCP servers (no
-	// --strict-mcp-config) so their own connectors keep working; set
-	// WICK_STRICT_MCP to isolate to just the wick server.
+	// Add the live wick MCP HTTP server when wired + supported. It MERGES
+	// with the user's own MCP servers so their existing connectors keep
+	// working.
+	//
+	// Isolation (--strict-mcp-config) used to be selectable via
+	// WICK_STRICT_MCP. That flag is gone: it was one process-wide value
+	// applied to every spawn, which stopped making sense once each spawn
+	// carries its own per-user credential — a single switch cannot express a
+	// per-user decision, and it was never a security boundary anyway (it
+	// drops the user's OTHER servers; it does not restrict wick's own tools).
 	if s.MCPToken != "" && os.Getenv("WICK_DISABLE_SHARED_MCP") == "" {
 		if endpoint := mcpEndpointFromEnv(); endpoint != "" && mcpConfigSupported(bin) {
-			strict := os.Getenv("WICK_STRICT_MCP") != "" && strictMCPConfigSupported(bin)
 			args = append(args, mcpConfigArgs(endpoint, s.MCPToken,
-				mcpSessionID(opt.SessionID, opt.SessionDir), strict)...)
+				mcpSessionID(opt.SessionID, opt.SessionDir))...)
 		}
 	}
 	// Trust the workspace explicitly so claude doesn't refuse to run

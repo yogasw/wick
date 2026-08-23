@@ -202,18 +202,29 @@ func List(layout config.Layout, sc Scope) ([]Note, error) {
 		}
 		out = append(out, n)
 	}
+	// NEWEST FIRST. This is the panel's view, and what someone opening a
+	// ticket wants is what just happened — on a long-running ticket the
+	// useful note was at the bottom of a scroll. The agent's view below
+	// re-sorts, because a running log reads forwards.
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].ID < out[j].ID
+			// Ids break the tie so the order is stable rather than however
+			// ReadDir happened to return two notes written in the same tick.
+			return out[i].ID > out[j].ID
 		}
-		return out[i].CreatedAt.Before(out[j].CreatedAt)
+		return out[i].CreatedAt.After(out[j].CreatedAt)
 	})
 	return out, nil
 }
 
-// ListForAgent is the MCP view: every audience, minus hidden notes. The
-// filter lives here rather than in the connector handlers so no future op
-// can forget to apply it.
+// ListForAgent is the MCP view: every audience, minus hidden notes, OLDEST
+// first. The filter lives here rather than in the connector handlers so no
+// future op can forget to apply it.
+//
+// The order is deliberately the opposite of List's. These are read as a
+// running record of what has been learned, and a record reads forwards —
+// "then we found X, so we tried Y". The panel leads with the newest instead,
+// because a person opening a ticket is looking for what just happened.
 func ListForAgent(layout config.Layout, sc Scope) ([]Note, error) {
 	all, err := List(layout, sc)
 	if err != nil {
@@ -224,6 +235,10 @@ func ListForAgent(layout config.Layout, sc Scope) ([]Note, error) {
 		if !n.Hidden {
 			out = append(out, n)
 		}
+	}
+	// List hands back newest-first; reverse in place to read forwards.
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
 	}
 	return out, nil
 }

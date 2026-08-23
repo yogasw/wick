@@ -64,6 +64,9 @@ type noteView struct {
 	Audience  string `json:"audience"`
 	Checkable bool   `json:"checkable,omitempty"`
 	Done      bool   `json:"done,omitempty"`
+	// Author is a NAME, resolved per call. The store keeps the user id (so a
+	// rename shows up on old notes), and this is the display side of that —
+	// same as the web UI. A uuid told the model nothing it could use.
 	Author    string `json:"author,omitempty"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
@@ -71,13 +74,36 @@ type noteView struct {
 
 const rfc3339 = "2006-01-02T15:04:05Z07:00"
 
-func view(n notestore.Note) noteView {
+func view(c *connector.Ctx, n notestore.Note) noteView {
 	return noteView{
 		ID: n.ID, Body: n.Body, Audience: n.Audience,
-		Checkable: n.Checkable, Done: n.Done, Author: n.Author,
+		Checkable: n.Checkable, Done: n.Done, Author: authorName(c, n.Author),
 		CreatedAt: n.CreatedAt.UTC().Format(rfc3339),
 		UpdatedAt: n.UpdatedAt.UTC().Format(rfc3339),
 	}
+}
+
+// authorName turns a stored author into something a reader can use.
+//
+// Two stored values are NOT ids and must not be looked up:
+//
+//	authorUnknown ("unknown") — no human behind the call (cron, system job)
+//	"agent"                   — legacy, written before notes recorded the caller
+//
+// Both surface as "unknown user": naming an actor we cannot identify is worse
+// than admitting we cannot. An id that resolves to nothing does the same,
+// rather than leaking the uuid the caller cannot read anyway.
+func authorName(c *connector.Ctx, stored string) string {
+	switch stored {
+	case "":
+		return ""
+	case authorUnknown, "agent":
+		return "unknown user"
+	}
+	if name := c.UserName(stored); name != "" {
+		return name
+	}
+	return "unknown user"
 }
 
 // scopeLabel describes where the notes came from, so a reply makes it
@@ -103,7 +129,7 @@ func (h *handlers) list(c *connector.Ctx) (any, error) {
 	}
 	out := make([]noteView, 0, len(all))
 	for _, n := range all {
-		out = append(out, view(n))
+		out = append(out, view(c, n))
 	}
 	return map[string]any{"scope": scopeLabel(sc), "notes": out, "total": len(out)}, nil
 }
@@ -117,12 +143,22 @@ func (h *handlers) add(c *connector.Ctx) (any, error) {
 		Body:      c.Input("body"),
 		Checkable: c.InputBool("checkable"),
 		Audience:  strings.TrimSpace(c.Input("audience")),
-		Author:    "agent",
+		// The human the agent is acting for, not the literal "agent".
+		//
+		// A note written through an agent is still that person's note, and
+		// labelling every one of them "agent" made the panel unreadable the
+		// moment two people used the same conversation — a note from the web UI
+		// showed a name while the identical note via an agent showed a role.
+		//
+		// Stores the USER ID: the UI resolves it to a current name, so a rename
+		// is reflected on old notes instead of freezing whatever the name was
+		// when the note was written.
+		Author: noteAuthor(c),
 	})
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"scope": scopeLabel(sc), "note": view(n)}, nil
+	return map[string]any{"scope": scopeLabel(sc), "note": view(c, n)}, nil
 }
 
 func (h *handlers) update(c *connector.Ctx) (any, error) {
@@ -162,7 +198,7 @@ func (h *handlers) update(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"scope": scopeLabel(sc), "note": view(n)}, nil
+	return map[string]any{"scope": scopeLabel(sc), "note": view(c, n)}, nil
 }
 
 func (h *handlers) check(c *connector.Ctx) (any, error) {
@@ -178,7 +214,7 @@ func (h *handlers) check(c *connector.Ctx) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"scope": scopeLabel(sc), "note": view(n)}, nil
+	return map[string]any{"scope": scopeLabel(sc), "note": view(c, n)}, nil
 }
 
 func (h *handlers) del(c *connector.Ctx) (any, error) {
@@ -195,3 +231,24 @@ func (h *handlers) del(c *connector.Ctx) (any, error) {
 	}
 	return map[string]any{"scope": scopeLabel(sc), "deleted": noteID}, nil
 }
+
+// noteAuthor resolves who a note should be attributed to.
+//
+// CallerUserID is the wick user the call runs on behalf of — resolved by the
+// framework from the session owner, so it names the human even though the agent
+// is the one making the call.
+//
+// Empty means there is genuinely no human attached: a cron run, a system job, a
+// session predating ownership tracking. authorUnknown is used there rather than
+// "agent", which claimed an identity that does not exist and read as if some
+// specific actor wrote it.
+func noteAuthor(c *connector.Ctx) string {
+	if uid := strings.TrimSpace(c.CallerUserID()); uid != "" {
+		return uid
+	}
+	return authorUnknown
+}
+
+// authorUnknown marks a note with no human behind it. Distinct from a user id so
+// the UI can render it plainly instead of failing to look it up.
+const authorUnknown = "unknown"

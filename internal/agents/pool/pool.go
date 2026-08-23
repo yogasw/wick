@@ -1455,6 +1455,15 @@ func (p *Pool) EnsureSession(ctx context.Context, sessionID, source, projectID s
 // EnsureSessionOwner stamps UserID on an existing session when the session
 // currently has no owner. No-op when the session does not exist or already
 // has an owner.
+//
+// The OnSessionMeta callback at the end is load-bearing, not cosmetic. This
+// writes to DISK, but the per-spawn MCP credential is minted from the IN-MEMORY
+// registry (see SessionMCPToken). Without the refresh the registry keeps
+// serving a session with no owner, so every later spawn falls back to the
+// shared internal token and the agent runs as the synthetic admin — even though
+// the owner was recorded correctly. That was the "wick_me says
+// wick-agent-internal" bug, and it survived retries precisely because the disk
+// was right and only the cache was wrong.
 func (p *Pool) EnsureSessionOwner(ctx context.Context, sessionID, userID string) {
 	if sessionID == "" || userID == "" {
 		return
@@ -1464,7 +1473,16 @@ func (p *Pool) EnsureSessionOwner(ctx context.Context, sessionID, userID string)
 		return
 	}
 	sess.Meta.UserID = userID
-	_ = session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta)
+	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
+		log.Warn().Err(err).
+			Str("session", sessionID).
+			Str("user_id", userID).
+			Msg("pool: failed to persist session owner")
+		return
+	}
+	if p.cfg.OnSessionMeta != nil {
+		p.cfg.OnSessionMeta(sessionID)
+	}
 }
 
 func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID string) error {

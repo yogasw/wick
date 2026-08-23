@@ -466,7 +466,7 @@ When a workflow `agent` node (or a chat agent) spawns Claude as a subprocess, wi
 
 - wick mints a random **per-boot internal token** (in-memory) and injects it into the spawned agent's MCP config as the `Authorization: Bearer …` header.
 - The agent connects over the full MCP **Streamable HTTP** transport: `POST /mcp` (JSON-RPC), `GET /mcp` (the server→client SSE channel), `DELETE /mcp` (teardown).
-- By default the wick server **merges** with the user's own MCP servers (`~/.claude.json`, `.mcp.json`) — set [`WICK_STRICT_MCP`](../reference/env-vars#wick-strict-mcp) to isolate, or [`WICK_DISABLE_SHARED_MCP`](../reference/env-vars#wick-disable-shared-mcp) to turn the loopback injection off entirely (falling back to the user's stdio config).
+- The wick server **merges** with the user's own MCP servers (`~/.claude.json`, `.mcp.json`). Isolation is not selectable: wick injects its own server per spawn carrying that caller's token, so `--strict-mcp-config` would only drop the user's *other* servers, never restrict wick's tools. Set [`WICK_DISABLE_SHARED_MCP`](../reference/env-vars#wick-disable-shared-mcp) to turn the loopback injection off entirely (falling back to the user's stdio config).
 
 If a spawned agent reports `MCP servers are still connecting: wick` and the `wick_*` tools never register, the loopback handshake isn't completing — confirm the server build is current and that `GET /mcp` returns `200` (a streaming `text/event-stream`), not `404`/`500`.
 

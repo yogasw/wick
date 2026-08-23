@@ -6,20 +6,6 @@ import (
 	"testing"
 )
 
-func TestHelpHasStrictMCP(t *testing.T) {
-	both := "  --mcp-config <configs...>  Load MCP servers\n  --strict-mcp-config  Only use --mcp-config"
-	if !helpHasStrictMCP(both) {
-		t.Fatal("expected true when both flags present")
-	}
-	missingStrict := "  --mcp-config <configs...>  Load MCP servers"
-	if helpHasStrictMCP(missingStrict) {
-		t.Fatal("expected false when --strict-mcp-config absent")
-	}
-	if helpHasStrictMCP("") {
-		t.Fatal("expected false for empty help")
-	}
-}
-
 func TestHelpHasMCPConfig(t *testing.T) {
 	if !helpHasMCPConfig("  --mcp-config <configs...>  Load MCP servers") {
 		t.Fatal("expected true when --mcp-config present")
@@ -44,20 +30,24 @@ func argValue(args []string, flag string) (string, bool) {
 func TestMCPConfigArgs(t *testing.T) {
 	ep, tok := "http://127.0.0.1:9425/mcp", "secret123"
 
-	// Default (non-strict): --mcp-config keeps the user's servers, plus
+	// --mcp-config injects wick's server and keeps the user's own, plus
 	// --allowedTools pre-approves wick's tools for the headless agent.
-	def := mcpConfigArgs(ep, tok, "", false)
+	def := mcpConfigArgs(ep, tok, "")
 	if _, ok := argValue(def, "--mcp-config"); !ok {
-		t.Fatalf("default args missing --mcp-config: %v", def)
+		t.Fatalf("args missing --mcp-config: %v", def)
 	}
+	// Isolation is no longer selectable. wick injects its own server per spawn
+	// with that caller's token, so --strict-mcp-config would only drop the
+	// user's OTHER servers — never wick's own tools — and the global env switch
+	// that used to toggle it could not express a per-user decision.
 	for _, a := range def {
 		if a == "--strict-mcp-config" {
-			t.Fatal("default path must NOT include --strict-mcp-config")
+			t.Fatal("argv isolates MCP; wick merges with the user's own servers")
 		}
 	}
 	allowed, ok := argValue(def, "--allowedTools")
 	if !ok {
-		t.Fatalf("default args missing --allowedTools: %v", def)
+		t.Fatalf("args missing --allowedTools: %v", def)
 	}
 	// Server-level allow covers every wick tool (meta + wick_manager_*)
 	// dynamically, so new tools never need a static allowlist edit.
@@ -65,17 +55,7 @@ func TestMCPConfigArgs(t *testing.T) {
 		t.Errorf("--allowedTools = %q, want server-level %q", allowed, "mcp__wick")
 	}
 
-	// Opt-in strict isolation still carries both --strict-mcp-config and
-	// the pre-approved wick tools.
-	strict := mcpConfigArgs(ep, tok, "", true)
-	if strict[0] != "--strict-mcp-config" {
-		t.Fatalf("strict args = %v, want leading --strict-mcp-config", strict)
-	}
-	if _, ok := argValue(strict, "--allowedTools"); !ok {
-		t.Fatalf("strict args missing --allowedTools: %v", strict)
-	}
-
-	if mcpConfigArgs("", tok, "", false) != nil || mcpConfigArgs(ep, "", "", false) != nil {
+	if mcpConfigArgs("", tok, "") != nil || mcpConfigArgs(ep, "", "") != nil {
 		t.Fatal("empty endpoint or token must yield nil args")
 	}
 }

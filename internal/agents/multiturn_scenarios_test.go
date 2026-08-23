@@ -162,7 +162,7 @@ func TestScenario_B_MultiTurnExplicitStop(t *testing.T) {
 // TestScenario_ConcurrentSessionsQueueDrains is the headliner: three
 // sessions A, B, C with pool max=2.
 //
-//	A: 3 turns → eventually idle, slot frees
+//	A: 3 turns → killed, slot frees
 //	B: 4 turns → keeps slot occupied longer
 //	C: arrives while pool is full → status=queued, message buffered
 //	   When A's slot frees, C is granted, spawns, drains buffer.
@@ -172,10 +172,16 @@ func TestScenario_B_MultiTurnExplicitStop(t *testing.T) {
 //   - C's pending_input is drained (cleared after spawn)
 //   - All three sessions end up with their full conversation logs
 //   - Total spawn count matches expectations (1 per session here,
-//     because none idle-kill within the test window)
+//     because nothing is reaped within the test window)
+//
+// The slot is freed by an explicit Kill rather than by the idle timeout. With
+// the usual 200ms timeout this test raced itself: the scripted spawner
+// finishes a turn in microseconds, so A could be reaped between filling the
+// pool and C's send — and C then spawned straight away instead of queueing,
+// which is the one thing the test exists to check.
 func TestScenario_ConcurrentSessionsQueueDrains(t *testing.T) {
 	sp := newMultiTurnSpawner()
-	p, layout := newE2EPool(t, 2, sp)
+	p, layout := newE2EPoolIdle(t, 2, sp, time.Minute)
 	for _, id := range []string{"A", "B", "C"} {
 		setupSess(t, layout, id)
 	}
@@ -224,12 +230,16 @@ func TestScenario_ConcurrentSessionsQueueDrains(t *testing.T) {
 		t.Fatalf("C spawned while pool was full: %v", cSpawns)
 	}
 
-	// Drive A through its 3 turns; afterwards A's idle TTL kicks in
-	// (200ms in newE2EPool), the slot frees, and C should be granted.
+	// Drive A through its 3 turns, then free its slot explicitly so C is
+	// granted at a moment the test controls.
 	for _, msg := range []string{"a-msg-2", "a-msg-3"} {
 		if err := p.Send(ctx, "A", "default", "ui", "user", msg); err != nil {
 			t.Fatalf("A %q: %v", msg, err)
 		}
+	}
+	waitForTurns(t, layout, "A", 6)
+	if err := p.Kill("A", "default"); err != nil {
+		t.Fatalf("kill A: %v", err)
 	}
 	// Drive B through 4 turns.
 	for _, msg := range []string{"b-msg-2", "b-msg-3", "b-msg-4"} {
@@ -238,14 +248,26 @@ func TestScenario_ConcurrentSessionsQueueDrains(t *testing.T) {
 		}
 	}
 
-	// Wait for C to be granted a slot, spawn, complete its 1 turn,
-	// and idle-kill. The full chain takes a few hundred ms.
+	// Wait for C to be granted the freed slot, spawn, and drain the message
+	// it buffered while queued.
+	//
+	// Asserted on "running with an empty buffer", not on idle: idle means no
+	// subprocess, which for C only happens once it is reaped — and nothing is
+	// reaped here on purpose. The buffer emptying is the part that matters,
+	// since a granted session that never drained would look identical from
+	// the queue's side.
 	waitFor(t, func() bool {
 		s, _ := session.Load(layout, "C")
-		return s.Meta.Status == session.StatusIdle && len(s.Meta.PendingInput) == 0
+		return s.Meta.Status == session.StatusRunning && len(s.Meta.PendingInput) == 0
 	}, 5*time.Second)
+	waitForTurns(t, layout, "C", 2)
 
-	waitFor(t, func() bool { return p.Active() == 0 && p.QueueLen() == 0 }, 5*time.Second)
+	// The queue is empty because C was granted, while B still holds its own
+	// slot — that is the point: C waited for A's slot, not for the pool.
+	if q := p.QueueLen(); q != 0 {
+		t.Fatalf("queue len after C was granted: got %d, want 0", q)
+	}
+	waitForTurns(t, layout, "B", 8)
 
 	// Each session should have spawned exactly once (no respawn within
 	// this short test) — except possibly A or B if the test was slow.

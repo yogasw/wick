@@ -471,6 +471,78 @@ Admin-built connectors (`internal/connectors/custom/`, stored as `entity.CustomC
 
 The builder FE (`fe/manager/src/lib/components/custom/`) renders section blocks with add/remove section, drag-drop ops, and a nested Jump panel.
 
+## Caller identity — who is this call for
+
+An op that writes attributable data, or that scopes data per person, must ask
+the framework who the caller is. Never label it after the mechanism.
+
+```go
+func (h *handlers) addNote(c *connector.Ctx) (any, error) {
+    author := c.CallerUserID()   // wick user id, or "" for no human
+    if author == "" {
+        author = "unknown"       // cron / system job / pre-ownership session
+    }
+    ...
+}
+```
+
+| Method | Returns |
+|---|---|
+| `c.CallerUserID()` | wick user id the call runs on behalf of; `""` when there is no human |
+| `c.SessionID()` | the agent session the call was made within; `""` outside one |
+| `c.OwnerBotID()` | the channel bot that owns the session, when channel-backed |
+| `c.UserName(id)` | display name for a wick user id; `""` when it cannot be named |
+
+**`CallerUserID` names the human, not the agent.** The framework resolves it
+from the session's owner, so an op called by an agent still sees the person
+that agent is acting for. Spawns carry a per-user credential, so this is the
+same identity the web UI would report for that user.
+
+**Store the id, not the name.** A stored name freezes at write time and goes
+stale on a rename; an id is resolved for display, so old rows follow the
+current name. Wick's own UI already resolves note/ticket authors this way.
+
+**But do not put a raw id ON THE WIRE either.** The model is a reader too, and
+a uuid tells it nothing it can use: it cannot read the id, cannot mention the
+person in a reply, and cannot match them to anyone it has been told about.
+Resolve for display with `c.UserName(id)` — the same treatment the web UI
+gives — so the id stays the stored value and the name is what the response
+carries.
+
+```go
+func view(c *connector.Ctx, n notestore.Note) noteView {
+    return noteView{
+        ID: n.ID, Body: n.Body,
+        Author: authorName(c, n.Author), // a name, resolved per call
+    }
+}
+```
+
+Where the model must also SET or FILTER on the value, send both — the id
+because that is the input it echoes back, and a `*_name` field beside it for
+reading. `tickets` does this with `assignee` + `assignee_name`.
+
+An id that resolves to nothing (a deleted user, no resolver wired) reports the
+same as no human at all. Do not fall back to printing the uuid: the reader
+could not use it either way, and it reads as data when it is an absence.
+
+**Empty means nobody, and must be said plainly.** A cron run, a system job, or a
+session created before ownership tracking has no human behind it. Store that as
+`unknown` and render it as `unknown user` — a placeholder like `"agent"` or
+`"system"` names an actor that does not exist, and a reader cannot tell it apart
+from a real one. `notes` shipped with `Author: "agent"` hardcoded and it made the
+panel unreadable the moment two people used one conversation: identical acts
+showed a person's name from the web UI and a role from an agent.
+
+The sentinels are not ids and must never reach the resolver — `unknown` and the
+legacy `"agent"` are checked before any lookup.
+
+**Do not gate access on caller-supplied input.** `CallerUserID` and `SessionID`
+are stamped by the framework — `SessionID` comes from the per-spawn
+`X-Wick-Session-Id` header in preference to any `session_id` the model passed.
+An op keying authorization off a value the LLM can set is not gated at all. See
+`datatables` for per-owner gating done correctly.
+
 ## MCP surface — what to know when editing
 
 The MCP layer (`internal/mcp/`) exposes a fixed **meta-tool** set: `wick_list`, `wick_search`, `wick_get`, `wick_execute`. Connector instances are not advertised as N×M static tools. That choice is deliberate (see `connectors-design.md` § 7.3) — adding or removing a connector row never invalidates the LLM client's cached tool list.

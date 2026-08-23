@@ -86,7 +86,7 @@ type delegateInput struct {
 	// model's choice between spawning and following up, and spelling out
 	// a second mode here is what makes it pick the wrong one.
 	ContinueID string `wick:"desc=Set this to a delegation id to CONTINUE that sub-agent in its existing session instead of spawning a new one. See the continue op, which is the same thing said plainly."`
-	Context string `wick:"textarea;desc=Optional background the sub-agent needs. Not this conversation's transcript."`
+	Context    string `wick:"textarea;desc=Optional background the sub-agent needs. Not this conversation's transcript."`
 	// Turn and token caps are clamped to the system ceiling, never raised.
 	MaxTurns     int    `wick:"desc=Optional cap on the sub-agent's turns. Clamped to the system ceiling."`
 	MaxTokens    int    `wick:"desc=Optional cap on tokens this sub-agent may spend. Clamped to the system ceiling."`
@@ -137,20 +137,20 @@ type collectInput struct {
 }
 
 type reportResultInput struct {
-	Summary  string `wick:"required;textarea;desc=Your finished answer in a few sentences. This is what the agent that delegated to you acts on."`
-	Findings string `wick:"textarea;desc=One finding per line. A finding is a conclusion you are prepared to defend."`
-	Evidence string `wick:"textarea;desc=JSON array of {kind, source, excerpt}. kind is log | code | doc | data | observation. Quote real material: a claim with no excerpt is a guess."`
+	Summary              string `wick:"required;textarea;desc=Your finished answer in a few sentences. This is what the agent that delegated to you acts on."`
+	Findings             string `wick:"textarea;desc=One finding per line. A finding is a conclusion you are prepared to defend."`
+	Evidence             string `wick:"textarea;desc=JSON array of {kind, source, excerpt}. kind is log | code | doc | data | observation. Quote real material: a claim with no excerpt is a guess."`
 	Confidence           string `wick:"desc=low, medium, or high — how sure you are of the summary overall. Anything else is recorded as unknown."`
 	NeedsFollowup        bool   `wick:"desc=True when the task is not fully answered and someone should continue it."`
 	RecommendedNextTasks string `wick:"textarea;desc=JSON array of {role, task, reason} for work you recommend dispatching next."`
 }
 
 type incidentInput struct {
-	Action    string `wick:"required;desc=get | update | close."`
-	Title     string `wick:"desc=Short incident title, for update."`
-	UserIssue string `wick:"textarea;desc=The problem as the user reported it, for update."`
-	Summary   string `wick:"textarea;desc=Current best understanding, for update."`
-	Status    string `wick:"desc=investigating | confirmed | escalated, for update. Use action=close to close."`
+	Action          string `wick:"required;desc=get | update | close."`
+	Title           string `wick:"desc=Short incident title, for update."`
+	UserIssue       string `wick:"textarea;desc=The problem as the user reported it, for update."`
+	Summary         string `wick:"textarea;desc=Current best understanding, for update."`
+	Status          string `wick:"desc=investigating | confirmed | escalated, for update. Use action=close to close."`
 	Hypotheses      string `wick:"textarea;desc=JSON array of strings REPLACING the hypothesis list, for update. Omit to leave it unchanged."`
 	MissingEvidence string `wick:"textarea;desc=JSON array of strings REPLACING the missing-evidence list, for update. Omit to leave it unchanged."`
 	NextActions     string `wick:"textarea;desc=JSON array of strings REPLACING the next-actions list, for update. Omit to leave it unchanged."`
@@ -160,8 +160,8 @@ type incidentInput struct {
 }
 
 type createAgentInput struct {
-	Key         string `wick:"required;desc=Stable handle other calls use, lowercase-kebab (e.g. code-reviewer)."`
-	Description string `wick:"required;textarea;desc=What this role is for. Read by the delegating agent to decide when to pick it — a vague description makes the role unusable."`
+	Key          string `wick:"required;desc=Stable handle other calls use, lowercase-kebab (e.g. code-reviewer)."`
+	Description  string `wick:"required;textarea;desc=What this role is for. Read by the delegating agent to decide when to pick it — a vague description makes the role unusable."`
 	SystemPrompt string `wick:"required;textarea;desc=The role's instructions. This becomes the sub-agent's system prompt."`
 	Name         string `wick:"desc=Display name. Defaults to the key."`
 	Icon         string `wick:"desc=A single emoji shown beside this role in lists. Optional."`
@@ -176,7 +176,7 @@ type createAgentInput struct {
 	// Stored, returned, and read by nothing. Said plainly because an inert
 	// field the model believes in is worse than an absent one.
 	AllowedNativeTools string `wick:"desc=Comma-separated provider-native tool names (e.g. Read, Grep, WebSearch). NOT ENFORCED today: the value is stored but nothing forwards it to the spawn, so it does not restrict what this role can call."`
-	StrictMCP          bool   `wick:"desc=Drop the host's own MCP servers from this role's spawn. NOT ENFORCED today: whether a spawn gets --strict-mcp-config is decided globally by the WICK_STRICT_MCP environment variable, identically for every role."`
+	StrictMCP          bool   `wick:"desc=Drop the host's own MCP servers from this role's spawn. NOT ENFORCED: no spawn passes --strict-mcp-config any more. wick injects its own MCP server per spawn with that caller's own token, so this would only affect the user's other servers. What a role may reach is enforced server-side by tags and per-op access instead."`
 	CanDelegate        bool   `wick:"desc=Let this role delegate and define roles of its own. Off by default: most roles should do their own work."`
 	AllowTakeOver      bool   `wick:"desc=Let a human send messages into this role mid-run. Its answers are then flagged as human-steered."`
 	Mode               string `wick:"desc=background (default) runs this role detached and delivers its result later. foreground makes the caller block until it answers — pick it only for roles that answer in seconds."`

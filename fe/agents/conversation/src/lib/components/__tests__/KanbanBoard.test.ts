@@ -112,6 +112,12 @@ function renderBoard(overrides: Record<string, unknown> = {}) {
   return { ...utils, onFilter, onOpen, onOpenSession, onReload };
 }
 
+/* The rail is opt-in, so anything testing it has to ask for it — the same
+   filter flag that makes the server send those rows in the first place. */
+function renderWithRail(overrides: Record<string, unknown> = {}) {
+  return renderBoard({ filter: { show_untracked: true }, ...overrides });
+}
+
 /* A DataTransfer stand-in: jsdom does not implement it. */
 function dt() {
   const store: Record<string, string> = {};
@@ -161,14 +167,14 @@ describe("KanbanBoard", () => {
 
   // The left rail: chats with no ticket, which is where you drag FROM.
   test("shows untracked chats with a per-chat create button", () => {
-    renderBoard();
+    renderWithRail();
     expect(screen.getByTestId("untracked-loose-1")).toBeTruthy();
     expect(screen.getByText("Quick question about exports")).toBeTruthy();
     expect(screen.getByTitle("Create a ticket from this chat")).toBeTruthy();
   });
 
   test("creating from an untracked chat prefills its title", async () => {
-    renderBoard();
+    renderWithRail();
     await fireEvent.click(screen.getByTitle("Create a ticket from this chat"));
     const input = screen.getByLabelText("New ticket title") as HTMLInputElement;
     expect(input.value).toBe("Quick question about exports");
@@ -178,7 +184,7 @@ describe("KanbanBoard", () => {
   // Dropping an untracked chat on a card attaches it — one PUT, then the
   // board reloads because the server also moved its notes.
   test("dropping an untracked session on a card attaches it", async () => {
-    const { onReload } = renderBoard();
+    const { onReload } = renderWithRail();
     const src = screen.getByTestId("untracked-loose-1");
     const card = screen.getByTestId("ticket-card-T-4F2A");
     const transfer = dt();
@@ -224,7 +230,7 @@ describe("KanbanBoard", () => {
   // stage" — so it becomes its own ticket there rather than being refused
   // for not having one yet.
   test("dropping a session on a column creates a ticket at that status", async () => {
-    const { onReload } = renderBoard();
+    const { onReload } = renderWithRail();
     const src = screen.getByTestId("untracked-loose-1");
     const column = screen.getByRole("list", { name: "Waiting" });
     const transfer = dt();
@@ -245,24 +251,36 @@ describe("KanbanBoard", () => {
     await vi.waitFor(() => expect(onReload).toHaveBeenCalled());
   });
 
-  // The rail's collapse is load-bearing: it is what stops the server
-  // sending the list at all.
-  test("collapsing the untracked rail reports it upward", async () => {
-    const onToggleUntracked = vi.fn();
-    renderBoard({ onToggleUntracked });
-    await fireEvent.click(screen.getByRole("button", { expanded: true }));
-    expect(onToggleUntracked).toHaveBeenCalledWith(false);
+  // The untracked chip is load-bearing: it is what makes the server send
+  // that list at all, so it belongs with the other filters rather than
+  // being a collapse on the rail itself.
+  test("the untracked chip is off by default and asks for the rail", async () => {
+    const { onFilter } = renderBoard();
+    const chip = screen.getByTestId("chip-untracked");
+    expect(chip.getAttribute("aria-pressed")).toBe("false");
+    await fireEvent.click(chip);
+    expect(onFilter).toHaveBeenCalledWith({ show_untracked: true });
   });
 
-  test("a collapsed rail draws no chats", () => {
-    renderBoard({ showUntracked: false });
+  // The count travels even when the rows do not, so the chip can say what
+  // switching it on would fetch.
+  test("the untracked chip names the count without drawing the rail", () => {
+    renderBoard();
+    expect(screen.getByTestId("chip-untracked").textContent).toContain("42");
     expect(screen.queryByTestId("untracked-loose-1")).toBeNull();
+  });
+
+  test("switching the chip off gives the rail back", async () => {
+    const { onFilter } = renderWithRail();
+    expect(screen.getByTestId("untracked-loose-1")).toBeTruthy();
+    await fireEvent.click(screen.getByTestId("chip-untracked"));
+    expect(onFilter).toHaveBeenCalledWith({ show_untracked: false });
   });
 
   // One page was sent out of a bigger set, and the rail says so instead of
   // implying it holds them all.
   test("the rail shows page-of-total when the server truncated", () => {
-    renderBoard();
+    renderWithRail();
     expect(screen.getByText("1/42")).toBeTruthy();
   });
 
@@ -285,10 +303,45 @@ describe("KanbanBoard", () => {
     expect(onFilter).toHaveBeenCalledWith({ statuses: ["open", "in_progress", "waiting"] });
   });
 
-  test("assignee 'me' filter hides other people's tickets", () => {
-    renderBoard({ filter: { assignee: "me" } });
-    expect(screen.getByText("Fix the webhook")).toBeTruthy();
-    expect(screen.queryByText("Old finished thing")).toBeNull();
+  // Turning the last column off is a legitimate request — no cards at all —
+  // and has to be distinguishable from the empty list that means "all".
+  test("turning every status off asks for no cards, not all of them", async () => {
+    const { onFilter } = renderBoard({ filter: { statuses: ["done"] } });
+    const done = screen
+      .getAllByRole("button", { pressed: true })
+      .find((c) => c.textContent?.trim() === "Done")!;
+    await fireEvent.click(done);
+    // A sentinel entry, not [] — an empty list is the saved shape for "all
+    // statuses", so the two have to be spelled differently.
+    const arg = onFilter.mock.calls[0][0] as { statuses: string[] };
+    expect(arg.statuses).toHaveLength(1);
+    expect(arg.statuses[0]).not.toBe("done");
+  });
+
+  test("a status filter with every chip off draws no columns", () => {
+    renderBoard({ filter: { statuses: [" none"] } });
+    expect(screen.queryByText("Fix the webhook")).toBeNull();
+    expect(screen.getByText(/No columns selected/)).toBeTruthy();
+  });
+
+  // The assignee filter is part of the request, so the board draws what
+  // arrived rather than filtering it again — a second filter here would
+  // hide nothing and would mask a request that asked for the wrong person.
+  test("picking an assignee emits it for the next request", async () => {
+    const { onFilter } = renderBoard();
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    await fireEvent.change(select, { target: { value: "me" } });
+    expect(onFilter).toHaveBeenCalledWith({ assignee: "me" });
+  });
+
+  // Everyone the project names stays listed even while their cards are
+  // filtered out — otherwise the dropdown could not be reset from itself.
+  test("the assignee list survives a filter that excluded those people", () => {
+    renderBoard({
+      filter: { assignee: "u-me" },
+      board: { ...board, tickets: [board.tickets[0]] },
+    });
+    expect(screen.getByRole("option", { name: "Assignee: Other Person" })).toBeTruthy();
   });
 
   // Statuses are per project, so a renamed board must draw ITS columns —

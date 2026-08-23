@@ -1326,6 +1326,20 @@ func NewServer() *Server {
 		return "", false
 	})
 
+	// Name people to the model instead of handing it a uuid. The id stays the
+	// stored value (a name freezes at write time and goes stale on a rename);
+	// this resolves it per call, the same way the web UI does.
+	connectorsSvc.SetUserNameResolver(func(userID string) (string, bool) {
+		if userID == "" {
+			return "", false
+		}
+		u, err := authSvc.GetUserByID(context.Background(), userID)
+		if err != nil || u == nil || u.Name == "" {
+			return "", false
+		}
+		return u.Name, true
+	})
+
 	// Surface connector run start/finish to the conversation SSE stream so a
 	// running tool call can show a per-run Cancel button (the FE needs the run
 	// id, which only exists inside connectors.Service).

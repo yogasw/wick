@@ -67,6 +67,10 @@ type Ctx struct {
 	// token-derived bot so a send names the session owner's bot, not the
 	// sending connector's. Read via OwnerBotID().
 	ownerBotID string
+	// userName resolves a wick user id to a display name, stamped by the
+	// framework. Nil for internal callers with no user service wired.
+	userName func(userID string) (string, bool)
+
 	// callerUserID is the wick user id this call runs on behalf of, stamped
 	// from the execute params (empty for internal/system calls). Read via
 	// CallerUserID() by connectors that scope data per owner.
@@ -333,6 +337,29 @@ func (c *Ctx) SetCallerUserID(userID string) { c.callerUserID = userID }
 // CallerUserID returns the user id set by SetCallerUserID, or "" when the call
 // has no associated user (internal/system context).
 func (c *Ctx) CallerUserID() string { return c.callerUserID }
+
+// SetUserNameResolver wires the lookup from a wick user id to a display
+// name. Framework-only.
+func (c *Ctx) SetUserNameResolver(fn func(userID string) (string, bool)) { c.userName = fn }
+
+// UserName resolves a wick user id to a display name, or "" when it cannot be
+// named — no resolver, no such user, or an id that is not one.
+//
+// Exists so a connector can hand the MODEL a name instead of a uuid. An
+// agent reading "author: fd8dfab2-08c6-…" learns nothing and cannot mention
+// the person in a reply; the web UI resolves these ids for exactly the same
+// reason. Resolved per call rather than stored on the record, so a rename
+// shows up on old rows.
+func (c *Ctx) UserName(userID string) string {
+	if c.userName == nil || userID == "" {
+		return ""
+	}
+	name, ok := c.userName(userID)
+	if !ok {
+		return ""
+	}
+	return name
+}
 
 // SetSessionID stamps the calling agent session. Framework-only.
 func (c *Ctx) SetSessionID(sessionID string) { c.sessionID = sessionID }

@@ -20,10 +20,33 @@
   };
 
   let { base, sessionId, ticket, info, onChanged }: Props = $props();
+
+  /* Matches the rail tab's badge: notes the agent can see. A hidden note is
+     still in the list below, so the two numbers differ on purpose — the
+     heading counts the record, not the rows. */
+  const visibleCount = $derived((info?.notes ?? []).filter((n) => !n.hidden).length);
+  const hiddenCount = $derived((info?.notes ?? []).filter((n) => n.hidden).length);
 </script>
 
 <div class="flex h-full flex-col overflow-y-auto p-4">
-  <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Notes</h3>
+  <div class="flex items-center gap-2">
+    <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Notes</h3>
+    {#if visibleCount > 0}
+      <span
+        data-testid="notes-count"
+        class="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-green-500 px-1 text-[10px] font-semibold text-white-100"
+      >{visibleCount > 99 ? "99+" : visibleCount}</span>
+    {/if}
+    {#if hiddenCount > 0}
+      <!-- Named separately, because these are the ones the agent will not
+           read — folding them into the count above would say the opposite. -->
+      <span
+        data-testid="notes-hidden-count"
+        title={`${hiddenCount} hidden from the agent`}
+        class="inline-flex h-4 items-center justify-center rounded-full bg-white-300 px-1.5 text-[10px] font-medium text-black-800 dark:bg-navy-600 dark:text-black-600"
+      >{hiddenCount} hidden</span>
+    {/if}
+  </div>
 
   <!-- One line on scope, because it decides who else will read this. -->
   {#if ticket}

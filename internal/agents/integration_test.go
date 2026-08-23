@@ -118,6 +118,18 @@ func TestPipeline_ParserErrorSurfacedAsErrorEvent(t *testing.T) {
 // helpers ---------------------------------------------------------
 
 func newE2EPool(t *testing.T, max int, sp provider.Spawner) (*pool.Pool, config.Layout) {
+	return newE2EPoolIdle(t, max, sp, 200*time.Millisecond)
+}
+
+// newE2EPoolIdle is newE2EPool with the idle timeout spelled out.
+//
+// The 200ms default is short so a test can watch an idle agent get reaped
+// without waiting. That makes it the wrong default for a test that needs an
+// agent to STAY alive while something else is set up — the scripted spawner
+// finishes a turn in well under a millisecond, so the reap can land before
+// the next line of the test runs. Those tests take a long timeout and free
+// the slot themselves.
+func newE2EPoolIdle(t *testing.T, max int, sp provider.Spawner, idle time.Duration) (*pool.Pool, config.Layout) {
 	t.Helper()
 	layout := config.NewLayout(t.TempDir())
 	if err := layout.EnsureLayout(); err != nil {
@@ -126,7 +138,7 @@ func newE2EPool(t *testing.T, max int, sp provider.Spawner) (*pool.Pool, config.
 	factory := &pool.ClaudeFactory{Layout: layout, Spawner: sp}
 	p := pool.New(pool.PoolConfig{
 		MaxConcurrent: max,
-		IdleTimeout:   200 * time.Millisecond,
+		IdleTimeout:   idle,
 		Layout:        layout,
 		Factory:       factory,
 	})

@@ -304,7 +304,16 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			Msg("agents.spawn: resolve provider")
 		switch pType {
 		case provider.TypeCodex:
-			spawner = codexpkg.Spawner{Binary: bin}
+			// Same per-session credential claude gets, so a codex spawn also
+			// reaches wick's tools as the human behind the session rather than
+			// having no wick surface at all.
+			tok := f.mcpTokenFor(opt.SessionID)
+			if tok != f.MCPToken {
+				// Per-session credential: revocable when the process dies. The
+				// shared per-boot token is not, so it stays unreported.
+				claudeMCPToken = tok
+			}
+			spawner = codexpkg.Spawner{Binary: bin, MCPToken: tok}
 		case provider.TypeGemini:
 			spawner = geminipkg.Spawner{Binary: bin, YoloMode: bypassPerms}
 		case provider.TypeWick:

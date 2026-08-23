@@ -63,8 +63,30 @@ func Operations(layout agentconfig.Layout) []connector.Category {
 		"Inspect and manage tickets. A ticket carries status, assignee, project-defined fields, and the sessions working on it.",
 		connector.Op("ticket_list", "List Tickets",
 			"List a project's tickets, newest first: id, title, status, assignee, fields, and how many sessions each holds. "+
-				"Omit project_id to use the project of the calling session. Optionally filter by status.",
+				"Omit project_id to use the project of the calling session. "+
+				"Filter by status, and by who a ticket is assigned to: pass mine=true for \"my tickets\" / \"what am I assigned\" "+
+				"(the caller is resolved from the credential — do NOT pass a user id for this), "+
+				"assignee=<user id> for a named person's queue, or assignee=unassigned for tickets nobody owns. "+
+				"Combine with status, e.g. mine=true + status=in_progress for \"what am I working on\". "+
+				"The response echoes the filters applied plus counts per status, so a follow-up question needs no second call.",
 			listInput{}, h.list, wickdocs.Docs{}),
+		connector.Op("ticket_mine", "My Tickets",
+			"List tickets assigned to the CALLER — use this for \"my tickets\", \"what am I assigned\", "+
+				"\"what am I working on\". The user is resolved from the credential, so no user id is needed "+
+				"or accepted; you cannot read someone else's queue with this. "+
+				"Optionally filter by status (e.g. status=in_progress for work in flight). "+
+				"Returns count_by_status alongside the list, so \"how many of mine are open\" needs no second call. "+
+				"For another person's queue use ticket_list with assignee=<user id>; "+
+				"for tickets nobody owns use ticket_list with assignee=unassigned.",
+			mineInput{}, h.mine, wickdocs.Docs{}),
+		connector.Op("session_untracked", "Untracked Sessions",
+			"List conversations in a project that are NOT attached to any ticket — work in progress that was never "+
+				"turned into tracked work. Distinct from an unassigned TICKET (a ticket with no assignee): "+
+				"these have no ticket at all. "+
+				"Use it to answer \"what have I not filed yet\" or to find chats worth promoting with "+
+				"ticket_create(attach_current_session=true) or ticket_attach_session. "+
+				"Pass mine=true to see only the caller's own sessions.",
+			untrackedInput{}, h.untracked, wickdocs.Docs{}),
 		connector.Op("ticket_get", "Get Ticket",
 			"Return one ticket in full, including its session list. "+
 				"Omit ticket_id to get the ticket the calling session belongs to — the usual way to answer \"what am I working on?\".",
@@ -108,6 +130,27 @@ func Operations(layout agentconfig.Layout) []connector.Category {
 type listInput struct {
 	ProjectID string `wick:"desc=Project whose tickets to list. Defaults to the calling session's project."`
 	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=Optional status filter."`
+	// Mine answers "my tickets" without the model having to know, or guess, a
+	// user id. It resolves to the caller server-side, so the model cannot ask
+	// for somebody else's list by passing an id it made up.
+	Mine bool `wick:"desc=Only tickets assigned to the caller. Use this for \"my tickets\" — the user is resolved from the credential, so no id is needed."`
+	// Assignee is for looking at a NAMED person's queue, which is a different
+	// question from "mine" and needs an explicit id.
+	Assignee string `wick:"desc=Only tickets assigned to this wick user id. Leave empty for everyone; prefer mine=true for the caller's own tickets. Pass 'unassigned' for tickets with nobody on them."`
+}
+
+type mineInput struct {
+	ProjectID string `wick:"desc=Project whose tickets to list. Defaults to the calling session's project."`
+	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=Optional status filter."`
+}
+
+type untrackedInput struct {
+	ProjectID string `wick:"desc=Project whose sessions to scan. Defaults to the calling session's project."`
+	// Owner-scoping is opt-in rather than automatic: an operator asking "what is
+	// untracked in this project" wants the whole project, and silently hiding
+	// other people's sessions would answer a narrower question than was asked.
+	Mine  bool `wick:"desc=Only sessions owned by the caller. Off = every untracked session in the project."`
+	Limit int  `wick:"desc=Max sessions to return, newest first. Default 50."`
 }
 
 type getInput struct {

@@ -30,7 +30,9 @@ Every op takes the same three optional scope fields: `ticket_id`, `session_id`, 
 
 ### `notes_list` — List Notes
 
-List the scope's notes, oldest first. Each carries id, `body` (markdown), `audience` (`ai` / `human` / `both`), `checkable`/done, author, and timestamps. Notes hidden by a user are never returned.
+List the scope's notes, oldest first. Each carries id, `body` (markdown), `audience` (`ai` / `human` / `both`), `checkable`/done, `author`, and timestamps. Notes hidden by a user are never returned.
+
+`author` is a display name, resolved per call from the id the note was actually written with — so a rename shows up on old notes. Notes with no human behind them (cron, system jobs, or notes written before author tracking) report `"unknown user"` rather than a placeholder like `"agent"`.
 
 ### `notes_add` — Add Note
 

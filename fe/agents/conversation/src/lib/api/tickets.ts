@@ -14,13 +14,21 @@ const DEFAULT_STATUSES = ["open", "in_progress", "waiting", "done"];
 
 /* ── board + tickets ─────────────────────────────────────────────────── */
 
-/** Board options. These are payload caps, not display filters: the server
-    sends only what the caller says it will draw, so a project with hundreds
-    of chats costs the same to poll as a small one. */
+/** Board options. These are not display filters — they are what the request
+    asks for. The board's filter bar sets them, so switching a column off
+    stops the server building those cards rather than making the client throw
+    them away: a project with hundreds of chats costs the same to poll as a
+    small one. */
 export type BoardOptions = {
   /** Session rows per card. 0 = counts only. */
   rows?: number;
-  /** Skip the untracked rail entirely (it is collapsible). */
+  /** Only these statuses. Omitted = every column; `[]` = no cards at all. */
+  statuses?: string[];
+  /** Only this person's tickets. "" = everyone, "me" resolves server-side. */
+  assignee?: string;
+  /** Ask for the untracked rows. Off unless switched on — the rail is the
+      board's most expensive part and stays unbuilt until wanted. Its COUNT
+      arrives either way, so it can be offered without being drawn. */
   untracked?: boolean;
   /** One page of the untracked rail. */
   untrackedLimit?: number;
@@ -29,7 +37,11 @@ export type BoardOptions = {
 export const getProjectTickets = (base: string, projectId: string, opt: BoardOptions = {}) => {
   const q = new URLSearchParams();
   if (opt.rows !== undefined) q.set("rows", String(opt.rows));
-  if (opt.untracked === false) q.set("untracked", "0");
+  // Set even when empty: "?statuses=" is an explicit "no columns", which is
+  // not the same request as omitting it.
+  if (opt.statuses !== undefined) q.set("statuses", opt.statuses.join(","));
+  if (opt.assignee) q.set("assignee", opt.assignee);
+  if (opt.untracked) q.set("untracked", "1");
   if (opt.untrackedLimit !== undefined) q.set("untracked_limit", String(opt.untrackedLimit));
   const qs = q.toString();
   return apiGetE<TicketBoard>(

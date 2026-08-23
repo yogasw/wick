@@ -577,10 +577,11 @@ export type TicketFilter = {
   statuses?: string[];
   assignee?: string; // "" = all, "me", or a user id
   view_mode?: string; // "list" | "card"
-  /** Collapses the untracked rail — and stops the server sending that list
-      at all, which is what keeps a project with hundreds of loose chats
-      cheap to poll. */
-  hide_untracked?: boolean;
+  /** Adds the untracked chats to the board — and only then does the server
+      send that list, which is what keeps a project with hundreds of loose
+      chats cheap to poll. Off by default; its count arrives regardless, so
+      the switch can name what turning it on would cost. */
+  show_untracked?: boolean;
 };
 
 /** GET /api/notes response. `ticket` is present when the scope resolved to

@@ -1662,11 +1662,15 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 			Str("thread_ts", threadTS).Str("session", sessionID).
 			Msg("auto-reply armed on new thread (🤖 marker posted)")
 	}
-	// Stamp the session owner once, on the first message that creates the
-	// session. wickUserIDFn hits the DB, so skipping it on every follow-up
-	// reply (where the owner is already set) avoids needless per-message
-	// queries. EnsureSessionOwner is a no-op if an owner already exists.
-	if isNewSession && s.ownerFn != nil {
+	// Stamp the session owner on EVERY message, not just the first.
+	//
+	// It used to run only when isNewSession, to save a DB lookup per reply. But
+	// that left every thread created before per-user identity shipped without an
+	// owner forever, and an ownerless session spawns as the synthetic admin — so
+	// the saving was paid for with the wrong identity on the connector calls.
+	// EnsureSessionOwner already no-ops once an owner exists, so the repeat is
+	// idempotent and this also backfills those older threads on their next reply.
+	if s.ownerFn != nil {
 		if wickUserID, ok := s.resolveSessionOwner(ev.User); ok {
 			s.ownerFn(context.Background(), sessionID, wickUserID)
 		} else if s.ownerUserID != "" {

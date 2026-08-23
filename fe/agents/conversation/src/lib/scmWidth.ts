@@ -1,11 +1,40 @@
+/* Width of the conversation's side panel — source diffs, notes, context.
+   One width for all of them, because the handle is on the panel and not on
+   whatever happens to be inside it.
+
+   The ceiling is generous: a long note or a wide diff is worth reading at
+   full width, and the conversation beside it stays usable because the
+   minimum is a fraction of any screen this layout appears on. */
 export const SCM_MIN_W = 280;
-export const SCM_MAX_W = 720;
+export const SCM_MAX_W = 1100;
 export const SCM_DEFAULT_W = 384;
 export const SCM_WIDTH_KEY = "wick.scm.width";
 
+/* Fallback gutter for the rail, used only until the rail has been measured
+   (and in tests, where it is never laid out).
+ *
+ * The rail sits `fixed` ON TOP of the panel rather than beside it, so the
+ * panel has to end where the rail begins. That is applied as a MARGIN, not
+ * padding: padding kept the panel full-width and pushed its contents inward,
+ * which put the scrollbar mid-gutter with an empty band to its right — the
+ * panel read as too wide while its text sat in a narrow column.
+ *
+ * The real number comes from the DOM, because the rail's width is
+ * content-driven and any constant here was either too small (content under
+ * the tabs) or too large (a visible strip of dead space). */
+export const RAIL_GUTTER_PX = 30;
+
+/* The ceiling is also relative to the window: 1100px of panel on a 1280px
+   screen would leave the conversation a gutter. Two thirds keeps the thread
+   readable no matter how far the handle is dragged. */
+export function maxScmWidth(): number {
+  if (typeof window === "undefined" || !window.innerWidth) return SCM_MAX_W;
+  return Math.max(SCM_MIN_W, Math.min(SCM_MAX_W, Math.round(window.innerWidth * 0.66)));
+}
+
 export function clampScmWidth(n: number): number {
   if (Number.isNaN(n)) return SCM_DEFAULT_W;
-  return Math.min(SCM_MAX_W, Math.max(SCM_MIN_W, Math.round(n)));
+  return Math.min(maxScmWidth(), Math.max(SCM_MIN_W, Math.round(n)));
 }
 
 export function readScmWidth(): number {

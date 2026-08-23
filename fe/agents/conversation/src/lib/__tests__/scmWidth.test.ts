@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach } from "vitest";
 import {
-  clampScmWidth, readScmWidth, writeScmWidth,
+  clampScmWidth, maxScmWidth, readScmWidth, writeScmWidth,
   SCM_MIN_W, SCM_MAX_W, SCM_DEFAULT_W, SCM_WIDTH_KEY,
 } from "../scmWidth.js";
 
@@ -12,14 +12,22 @@ describe("clampScmWidth", () => {
     expect(clampScmWidth(100)).toBe(SCM_MIN_W);
   });
   test("clamps above max to max", () => {
-    expect(clampScmWidth(9999)).toBe(SCM_MAX_W);
+    expect(clampScmWidth(9999)).toBe(maxScmWidth());
+  });
+
+  // The ceiling follows the window, so the conversation beside the panel
+  // never becomes a gutter on a narrow screen.
+  test("the ceiling is two thirds of the window, never the whole cap", () => {
+    expect(maxScmWidth()).toBe(Math.round(window.innerWidth * 0.66));
+    expect(maxScmWidth()).toBeLessThan(window.innerWidth);
+    expect(maxScmWidth()).toBeLessThanOrEqual(SCM_MAX_W);
   });
   test("rounds fractional input", () => {
     expect(clampScmWidth(400.6)).toBe(401);
   });
   test("falls back to default for non-finite input", () => {
     expect(clampScmWidth(NaN)).toBe(SCM_DEFAULT_W);
-    expect(clampScmWidth(Infinity)).toBe(SCM_MAX_W);
+    expect(clampScmWidth(Infinity)).toBe(maxScmWidth());
   });
 });
 
@@ -35,7 +43,7 @@ describe("readScmWidth / writeScmWidth", () => {
   });
   test("read clamps out-of-range persisted value", () => {
     localStorage.setItem(SCM_WIDTH_KEY, "5000");
-    expect(readScmWidth()).toBe(SCM_MAX_W);
+    expect(readScmWidth()).toBe(maxScmWidth());
   });
   test("read falls back to default for garbage value", () => {
     localStorage.setItem(SCM_WIDTH_KEY, "not-a-number");

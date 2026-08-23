@@ -196,7 +196,7 @@ Besides the basics, `create_agent` also takes:
 | `disabled` | Keeps the role on record but hides it from every roster. A disabled role cannot be delegated to. |
 | `locked` | Freezes the role — see [Locking a role](#locking-a-role). One-way from MCP: an agent can lock, never unlock. |
 | `allowed_native_tools` | Comma-separated provider-native tool names. **Stored but not enforced today** — nothing forwards it to the spawn, so it does not restrict what the role can call. |
-| `strict_mcp` | Meant to drop the host's own MCP servers from the spawn. **Stored but not enforced today** — `WICK_STRICT_MCP` decides this globally, identically for every role. |
+| `strict_mcp` | Meant to drop the host's own MCP servers from the spawn. **Stored but not enforced** — no spawn passes `--strict-mcp-config` any more. wick injects its own server per spawn with that caller's token, so this would only affect the user's other servers. What a role may reach is enforced server-side by tags and per-op access. |
 
 Every field the web form has is reachable here, so an agent can define a
 role that is actually right rather than one it has to ask a human to
@@ -309,8 +309,9 @@ Under the hood a sub-agent authenticates to wick's MCP server with a **scoped, s
 ::: warning Strict MCP is not a per-role control yet
 A profile's **Strict MCP** and **Allowed native tools** fields are stored
 but not read at spawn. Whether a sub-agent sees the host CLI's own MCP
-servers is decided globally by the `WICK_STRICT_MCP` environment
-variable, the same way for every agent.
+servers is no longer selectable at all: wick injects its own MCP server
+per spawn with that caller's own credential, so isolation would only drop
+the user's other servers rather than restrict what the role may reach.
 
 Two consequences. A role cannot currently be given — or denied — the
 host's MCP servers on its own; and if those servers are configured, every

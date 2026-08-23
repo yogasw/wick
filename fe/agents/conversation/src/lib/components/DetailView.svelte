@@ -18,7 +18,7 @@
   import { notify } from "../notify.js";
   import { push } from "../router.js";
   import { bareToolName } from "../todoGroups.js";
-  import { readScmWidth, writeScmWidth, clampScmWidth } from "../scmWidth.js";
+  import { readScmWidth, writeScmWidth, clampScmWidth, RAIL_GUTTER_PX } from "../scmWidth.js";
   import { isValidFileName } from "../fileName.js";
 
   import { getConversation, getSessionMeta, deleteSession, getTurnTrace, cancelRun } from "../api/sessions.js";
@@ -54,11 +54,14 @@
   import RailMore from "./RailMore.svelte";
   import { getRailPrefs, saveRailPrefs } from "../api/tickets.js";
   import {
-    clampVisible,
     emptyRailPrefs,
     moveInOrder,
     orderTabs,
     parseRailPrefs,
+    railPrefsFromPage,
+    reorderTo,
+    resolveHidden,
+    toggleHidden,
     splitRail,
     type RailPrefs,
   } from "../railPrefs.js";
@@ -387,6 +390,24 @@
 
   /* ── SCM sidebar resizable width (desktop only, persisted) ────── */
   let scmWidth = $state(readScmWidth());
+  /* The rail floats over the panel, so the panel has to end where the rail
+     begins. Its width is content-driven (icon + rotated label + padding), and
+     a hardcoded guess left a visible band of dead space to the right of every
+     panel. So it is measured: bound below, read after mount, and re-read when
+     the window resizes in case a font or zoom change moves it. */
+  let railEl: HTMLElement | undefined = $state(undefined);
+  let railWidth = $state(0);
+  $effect(() => {
+    if (!railEl) return;
+    const measure = () => { railWidth = railEl?.getBoundingClientRect().width ?? 0; };
+    measure();
+    /* A window resize is the only thing that moves this in practice (zoom, or
+       a font swap reflowing the rotated labels). Watching the element itself
+       would need a ResizeObserver, which is more machinery than one number
+       is worth — and is absent in jsdom. */
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  });
   let scmSideEl: HTMLElement | undefined = $state(undefined);
 
   function startScmResize(e: PointerEvent) {
@@ -1416,8 +1437,14 @@
      The rail has outgrown a fixed strip, so the arrangement is the user's
      and is saved to their profile. Loaded once; saved (debounced) on every
      change so reordering does not fire a request per click. */
-  let railPrefs = $state<RailPrefs>(emptyRailPrefs);
+  /* The saved layout comes with the page, so the strip is right on the first
+     frame instead of painting the default and collapsing once a fetch lands.
+     One record, one owner — the profile: the shell inlines it, writes go
+     through the API, and a shell that did not carry it falls back to asking. */
+  const inlinedRailPrefs = railPrefsFromPage(document.getElementById("app"));
+  let railPrefs = $state<RailPrefs>(inlinedRailPrefs ?? emptyRailPrefs);
   $effect(() => {
+    if (inlinedRailPrefs !== null) return;
     run(getRailPrefs(base).pipe(Effect.provide(WickClientLayer)))
       .then((p) => { railPrefs = parseRailPrefs(p); })
       .catch(() => { /* defaults are fine — an older server has no endpoint */ });
@@ -1427,33 +1454,84 @@
   function persistRail() {
     clearTimeout(railSaveTimer);
     railSaveTimer = setTimeout(() => {
-      run(saveRailPrefs(base, { order: railPrefs.order, visible: railPrefs.visible })
+      run(saveRailPrefs(base, { order: railPrefs.order, hidden: railPrefs.hidden })
         .pipe(Effect.provide(WickClientLayer)))
         .catch(() => { /* a layout preference is not worth interrupting for */ });
     }, 500);
   }
 
-  /* Reordering acts on the full list, so a first-time drag has something to
-     reorder: seed the saved order from what is on screen. */
   function moveRailTab(id: string, delta: number) {
-    const base = railPrefs.order.length > 0 ? railPrefs.order : railOrdered.map((t) => t.id);
-    railPrefs = { ...railPrefs, order: moveInOrder(base, id, delta) };
+    railPrefs = { ...railPrefs, order: moveInOrder(railOrderBase(), id, delta) };
     persistRail();
   }
 
-  function setRailVisible(n: number) {
-    railPrefs = { ...railPrefs, visible: clampVisible(n) };
+  /* A drag lands at an absolute position rather than swapping its way there.
+     Order only — whether a tab is folded is its own choice now, so dragging
+     one past another no longer hides it as a side effect. */
+  function reorderRailTab(id: string, to: number) {
+    railPrefs = { ...railPrefs, order: reorderTo(railOrderBase(), id, to) };
     persistRail();
+  }
+
+  /* Reordering acts on the full list, so a first-time drag has something to
+     reorder: seed the saved order from what is on screen. */
+  function railOrderBase(): string[] {
+    return railPrefs.order.length > 0 ? railPrefs.order : railOrdered.map((t) => t.id);
+  }
+
+  /* Dragging in the strip itself, so rearranging the rail does not require
+     finding the arrange panel first. A tab dropped on another takes that
+     one's place in the FULL order — the strip shows a promoted subset, so
+     acting on strip indices would move tabs somewhere they were not aimed. */
+  let railDragId = $state<string | null>(null);
+  function startRailDrag(e: DragEvent, id: string) {
+    railDragId = id;
+    e.dataTransfer?.setData("text/plain", "railtab:" + id);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  }
+  /* A tab dropped on a strip tab takes that one's place. When it came from
+     "More" the same drop also unfolds it: the gesture said "put it here",
+     and leaving it hidden would make the drop look like it failed. */
+  function dropRailOn(targetId: string) {
+    const id = railDragId;
+    railDragId = null;
+    if (id === null || id === targetId) return;
+    const order = railOrderBase();
+    const to = order.indexOf(targetId);
+    if (to < 0) return;
+    setRailHidden(id, false);
+    reorderRailTab(id, to);
+  }
+
+  /* Folding is per tab: hiding Browser says nothing about how many tabs you
+     want, and a count moved whichever tab happened to sit at that position.
+
+     The first edit writes out the resolved default, turning "never arranged"
+     into an explicit list — otherwise toggling one tab would also re-fold
+     whatever the default happened to cover, which is not what was clicked. */
+  function toggleRailHidden(id: string) {
+    railPrefs = { ...railPrefs, hidden: toggleHidden(railHidden, id) };
+    persistRail();
+  }
+
+  function setRailHidden(id: string, hidden: boolean) {
+    if (railHidden.includes(id) === hidden) return;
+    toggleRailHidden(id);
   }
 
   const railOrdered = $derived(orderTabs(railTabs, railPrefs.order));
+  /* An unarranged rail folds everything past the first few, so it arrives
+     short instead of running the height of the window and asking to be
+     tidied. Resolved against the tabs present now, not stored, so a tab
+     added since the last visit folds rather than appearing unbidden. */
+  const railHidden = $derived(resolveHidden(railPrefs, railOrdered));
 
   /* "Loud" = carries a badge or is working. Those are promoted into the
      strip: a count nobody can see is worse than a shifted position. */
   const railSplit = $derived(
     splitRail(
       railOrdered,
-      railPrefs.visible,
+      railHidden,
       (id) => railCount(id as RailTab) > 0 || railBusy(id as RailTab),
       railTab,
     ),
@@ -1492,6 +1570,11 @@
   // badge stuck at "3" after everything finished; the tab itself stays
   // visible on the total so results remain readable.
   const subAgentCount = $derived(liveSubAgents(subAgents).length);
+  /* Notes the agent can actually see. Hidden ones are excluded: the badge
+     answers "how much is on this chat's record", and a note deliberately
+     kept from the agent is not part of that answer — nor should hiding one
+     leave the count unchanged, which would make the control look inert. */
+  const noteCount = $derived((notesInfo?.notes ?? []).filter((n) => !n.hidden).length);
 
   /* Whether a rail has work running behind a closed panel.
 
@@ -1511,6 +1594,7 @@
   }
 
   function railCount(id: RailTab): number {
+    if (id === "notes") return noteCount;
     if (id === "context") return contextCount;
     if (id === "process") return processCount;
     if (id === "workspace") return workspaceCount;
@@ -1747,18 +1831,21 @@
     <div
       bind:this={scmSideEl}
       tabindex="-1"
-      class={`relative hidden lg:flex flex-col outline-none ${railTab === "source" ? "" : "w-80"} shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden`}
-      style={railTab === "source" ? `width:${scmWidth}px` : ""}
+      class="relative hidden lg:flex flex-col outline-none shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden"
+      style={`width:${scmWidth}px; margin-right:${railWidth || RAIL_GUTTER_PX}px`}
     >
+      <!-- One handle for the whole panel, whichever tab is in it. A diff and
+           a long note both want to be widened, and a width that only the
+           source tab could change made the others feel fixed. -->
+      <button
+        type="button"
+        aria-label="Resize side panel"
+        title="Drag to resize"
+        data-scm-resize
+        onpointerdown={startScmResize}
+        class="absolute left-0 top-0 z-10 h-full w-1.5 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-green-500/40 focus-visible:bg-green-500/40 transition-colors"
+      ></button>
       {#if railTab === "source"}
-        <button
-          type="button"
-          aria-label="Resize source panel"
-          title="Drag to resize"
-          data-scm-resize
-          onpointerdown={startScmResize}
-          class="absolute left-0 top-0 z-10 h-full w-1.5 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-green-500/40 focus-visible:bg-green-500/40 transition-colors"
-        ></button>
         <div class="flex-1 overflow-hidden dark:bg-navy-700" data-scm-host bind:this={scmHostEl}></div>
       {:else if railTab === "ticket" && notesInfo}
         <TicketPanel
@@ -1916,8 +2003,11 @@
         class="absolute inset-0 bg-black/40 backdrop-blur-sm"
         onclick={() => { railTab = null; }}
       ></button>
+      <!-- Same gutter as the docked panel: the rail is fixed on top of this
+           too, and without it the close button sits under the tabs. -->
       <div
         class="relative ml-auto flex flex-col w-full sm:w-[420px] bg-white-100 dark:bg-navy-700 border-l border-white-300 dark:border-navy-600 shadow-xl overflow-hidden"
+        style={`margin-right:${railWidth || RAIL_GUTTER_PX}px`}
       >
         <div class="flex items-center justify-between px-4 py-3 border-b border-white-300 dark:border-navy-600 shrink-0">
           <h2 class="text-sm font-semibold text-black-900 dark:text-white-100 capitalize">{railTab}</h2>
@@ -2083,19 +2173,34 @@
     </div>
   {/if}
 
-  <!-- Vertical rail strip — fixed on right edge -->
+  <!-- Vertical rail strip — fixed on right edge.
+       NOT overflow-hidden: the More panel opens leftward out of this box, and
+       clipping it here left the button doing nothing visible. The rounded
+       corner is clipped per-child instead (first/last:rounded-l-xl). -->
   <div
-    class="fixed top-1/2 right-0 z-20 -translate-y-1/2 flex flex-col rounded-l-xl border border-r-0 border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md overflow-hidden"
+    bind:this={railEl}
+    class="fixed top-1/2 right-0 z-20 -translate-y-1/2 flex flex-col rounded-l-xl border border-r-0 border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-md"
   >
     {#each railSplit.shown as tab, i}
       <button
         type="button"
         title={tab.label}
         aria-label={tab.label}
+        draggable="true"
+        data-testid={"rail-tab-" + tab.id}
         onclick={() => toggleRail(tab.id)}
+        ondragstart={(e) => startRailDrag(e, tab.id)}
+        ondragover={(e) => { if (railDragId !== null) e.preventDefault(); }}
+        ondrop={(e) => { e.preventDefault(); dropRailOn(tab.id); }}
+        ondragend={() => { railDragId = null; }}
         class={[
           "group inline-flex flex-col items-center justify-center gap-1 px-1.5 py-2.5 transition-colors",
-          i > 0 ? "border-t border-white-300 dark:border-navy-600" : "",
+          // The strip no longer clips its children, so the top tab carries
+          // the rounded corner itself — otherwise its hover fill squares off
+          // the rail's edge.
+          i === 0 ? "rounded-tl-xl" : "border-t border-white-300 dark:border-navy-600",
+          railDragId === tab.id ? "opacity-40" : "",
+          railDragId !== null && railDragId !== tab.id ? "hover:ring-2 hover:ring-inset hover:ring-green-500" : "",
           railTab === tab.id
             ? "bg-green-50 dark:bg-green-900/20"
             : "hover:bg-white-200 dark:hover:bg-navy-800",
@@ -2184,14 +2289,21 @@
       <RailMore
         overflow={railSplit.overflow}
         all={railOrdered}
-        visible={clampVisible(railPrefs.visible)}
         {hiddenCount}
         {hiddenBusy}
         activeId={railTab}
         countFor={(id) => railCount(id as RailTab)}
         onSelect={(id) => toggleRail(id as RailTab)}
         onMove={moveRailTab}
-        onVisible={setRailVisible}
+        onReorder={reorderRailTab}
+        onToggleHidden={toggleRailHidden}
+        dragging={railDragId !== null}
+        onDropHere={(id) => {
+          // Dropped on More: fold that tab, leaving its position alone.
+          railDragId = null;
+          setRailHidden(id, true);
+        }}
+        onDragOut={(id) => { railDragId = id; }}
       />
     {/if}
   </div>

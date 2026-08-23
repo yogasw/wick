@@ -46,16 +46,57 @@ function inlineMarkdown(s: string): string {
   return s;
 }
 
+/* Matches up to `n` leading spaces (or a tab counted as one), for stripping a
+   fenced block's indentation back to column 0. Anything less indented than the
+   fence keeps what it has rather than losing real content. */
+function indentRe(n: number): RegExp {
+  return new RegExp(`^[ \t]{0,${n}}`);
+}
+
 export function renderMarkdown(text: string): string {
   if (!text) return "";
   const lines = text.split("\n");
   const out: string[] = [];
   let inCode = false, codeLang = "", codeLines: string[] = [];
+  /* How far the open fence was indented, so its contents can be shifted back
+     to column 0 rather than carrying the list item's padding into the code. */
+  let codeIndent = 0;
   let inMath = false, mathLines: string[] = [];
   let inSvg = false, svgLines: string[] = [];
   let inList = false, listOl = false;
   let inTable = false, tableHeader = false;
   let listItems: string[] = [];
+  /* Prose lines waiting to be joined into one paragraph. */
+  let paraLines: string[] = [];
+
+  function flushPara() {
+    if (paraLines.length === 0) return;
+    /* Consecutive lines are ONE paragraph — joined with a space, not stacked
+       as separate blocks. Two or more trailing spaces are markdown's hard
+       break, which becomes a <br>.
+
+       The break is carried through as a sentinel because inlineMarkdown
+       escapes its input: inserting the tag here would arrive as visible
+       &lt;br/&gt;. */
+    const BR = "\x01";
+    const joined = paraLines
+      .map((l, i) => (i < paraLines.length - 1 && /\s{2,}$/.test(l) ? l.trimEnd() + BR : l.trimEnd()))
+      .join(" ");
+    paraLines = [];
+    const html = inlineMarkdown(joined).split(BR + " ").join("<br/>").split(BR).join("<br/>");
+    out.push(`<p class="text-sm text-black-900 dark:text-white-100 leading-relaxed">${html}</p>`);
+  }
+  /* Where the ordered list currently being built starts, and the number the
+     last one reached.
+
+     A "loose" list — items separated by blank lines, or with a code block or
+     quote under an item — is flushed and reopened per item, because a blank
+     line ends the run. Each reopened <ol> then restarted at 1, so a
+     three-step list rendered as "1. 1. 1.". Carrying the count across the
+     break fixes that without merging genuinely separate lists: the counter is
+     reset by any content that is not part of a list. */
+  let olStart = 1;
+  let olNext = 1;
 
   function flushList() {
     if (!inList) return;
@@ -63,8 +104,17 @@ export function renderMarkdown(text: string): string {
     const cls = listOl
       ? 'class="list-decimal list-inside space-y-0.5 my-1"'
       : 'class="list-disc list-inside space-y-0.5 my-1"';
-    out.push(`<${tag} ${cls}>${listItems.join("")}</${tag}>`);
+    const start = listOl && olStart !== 1 ? ` start="${olStart}"` : "";
+    out.push(`<${tag}${start} ${cls}>${listItems.join("")}</${tag}>`);
     inList = false; listOl = false; listItems = [];
+  }
+
+  /* Anything that is not a list item or a blank line ends the numbering run:
+     two lists with a paragraph between them are two lists, and the second
+     starts at 1 again. */
+  function resetOl() {
+    olStart = 1;
+    olNext = 1;
   }
 
   function flushTable() {
@@ -175,25 +225,34 @@ export function renderMarkdown(text: string): string {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    const fenceMatch = line.match(/^```(\w*)$/);
+    /* Leading spaces allowed: a fence under a list item is indented, and
+       anchoring to column 0 left it as literal backticks in a paragraph. The
+       indent is captured so the block's own lines can be un-indented by the
+       same amount — otherwise every line arrives with the item's padding
+       baked into the code. */
+    const fenceMatch = line.match(/^(\s*)```(\w*)\s*$/);
     if (fenceMatch) {
       if (!inCode) {
-        flushList();
-        inCode = true; codeLang = fenceMatch[1]; codeLines = [];
+        flushPara(); flushList();
+        inCode = true; codeLang = fenceMatch[2]; codeLines = [];
+        codeIndent = fenceMatch[1].length;
       } else {
         emitCodeBlock(codeLang, codeLines.join("\n"));
-        inCode = false; codeLang = ""; codeLines = [];
+        inCode = false; codeLang = ""; codeLines = []; codeIndent = 0;
       }
       continue;
     }
-    if (inCode) { codeLines.push(line); continue; }
+    if (inCode) {
+      codeLines.push(codeIndent > 0 ? line.replace(indentRe(codeIndent), "") : line);
+      continue;
+    }
 
     /* Raw inline SVG (no ```svg``` fence): the model often emits a bare
        <svg>…</svg>. Treat it like an svg block so it renders as an image
        instead of escaped source. Collect from the opening <svg until the
        closing </svg> (may span many lines, or be all on one). */
     if (!inSvg && /^\s*<svg[\s>]/i.test(line)) {
-      flushList(); flushTable();
+      flushPara(); flushList(); flushTable();
       inSvg = true; svgLines = [];
     }
     if (inSvg) {
@@ -208,7 +267,7 @@ export function renderMarkdown(text: string): string {
     /* Display-math fence: a line that is exactly "$$" opens/closes a block. */
     if (line.trim() === "$$") {
       if (!inMath) {
-        flushList(); flushTable();
+        flushPara(); flushList(); flushTable();
         inMath = true; mathLines = [];
       } else {
         emitMathBlock(mathLines.join("\n"));
@@ -222,16 +281,16 @@ export function renderMarkdown(text: string): string {
        as a centered block rather than an inline span inside a paragraph. */
     const dispMath = line.match(/^\s*\$\$(.+)\$\$\s*$/);
     if (dispMath && !dispMath[1].includes("$$")) {
-      flushList(); flushTable();
+      flushPara(); flushList(); flushTable();
       emitMathBlock(dispMath[1].trim());
       continue;
     }
 
-    if (line.trim() === "") { flushList(); flushTable(); out.push('<div class="h-2"></div>'); continue; }
+    if (line.trim() === "") { flushPara(); flushList(); flushTable(); out.push('<div class="h-2"></div>'); continue; }
 
     const h = line.match(/^(#{1,3})\s+(.+)$/);
     if (h) {
-      flushList();
+      flushPara(); flushList(); resetOl();
       const lvl = h[1].length;
       const cls = lvl === 1
         ? "text-base font-semibold text-black-900 dark:text-white-100 mt-3 mb-1"
@@ -242,26 +301,44 @@ export function renderMarkdown(text: string): string {
       continue;
     }
 
-    const bq = line.match(/^>\s?(.*)$/);
+    /* Quotes. Indented under a list item is still a quote, and a second `>`
+       is a quote INSIDE one — rendering that as text left a stray ">" in the
+       output. Depth is counted, and each level adds a rule. */
+    const bq = line.match(/^\s*(>+)\s?(.*)$/);
     if (bq) {
-      flushList();
-      out.push(`<blockquote class="border-l-2 border-green-400 dark:border-green-700 pl-3 my-1 text-black-700 dark:text-black-600 italic">${inlineMarkdown(bq[1])}</blockquote>`);
+      flushPara(); flushList();
+      const depth = Math.min(bq[1].length, 4);
+      const open = `<blockquote class="border-l-2 border-green-400 dark:border-green-700 pl-3 my-1 text-black-700 dark:text-black-600 italic">`;
+      out.push(open.repeat(depth) + inlineMarkdown(bq[2]) + "</blockquote>".repeat(depth));
       continue;
     }
 
     const ul = line.match(/^[-*+]\s+(.+)$/);
     if (ul) {
+      flushPara();
+      /* A bullet run is its own list, so it ends any ordered count — whether
+         or not an <ol> is still open at this point (a blank line will have
+         closed it already). */
       if (inList && listOl) flushList();
+      resetOl();
       inList = true; listOl = false;
       listItems.push(`<li class="text-sm text-black-900 dark:text-white-100">${inlineMarkdown(ul[1])}</li>`);
       continue;
     }
 
-    const ol = line.match(/^\d+\.\s+(.+)$/);
+    const ol = line.match(/^(\d+)\.\s+(.+)$/);
     if (ol) {
+      flushPara();
       if (inList && !listOl) flushList();
+      if (!inList) {
+        /* Reopening after a break continues the count. A list that opens
+           fresh takes its number from the source, so "5." starts at five. */
+        olStart = olNext > 1 ? olNext : Number(ol[1]) || 1;
+        olNext = olStart;
+      }
       inList = true; listOl = true;
-      listItems.push(`<li class="text-sm text-black-900 dark:text-white-100">${inlineMarkdown(ol[1])}</li>`);
+      olNext++;
+      listItems.push(`<li class="text-sm text-black-900 dark:text-white-100">${inlineMarkdown(ol[2])}</li>`);
       continue;
     }
 
@@ -273,7 +350,7 @@ export function renderMarkdown(text: string): string {
       }
       const cells = trimmed.replace(/^\||\|$/g, "").split("|");
       if (!inTable) {
-        flushList();
+        flushPara(); flushList(); resetOl();
         out.push('<div class="overflow-x-auto my-2"><table class="w-full text-xs border-collapse">');
         out.push("<thead><tr>" + cells.map((c) => `<th class="border border-white-300 dark:border-navy-600 px-3 py-1.5 text-left font-semibold text-black-900 dark:text-white-100 bg-white-300 dark:bg-navy-700">${inlineMarkdown(c.trim())}</th>`).join("") + "</tr>");
         inTable = true; tableHeader = false;
@@ -286,8 +363,10 @@ export function renderMarkdown(text: string): string {
     /* Thematic break: a line of only ---, ***, or ___ (3+). Render an
        <hr> instead of leaking the dashes/asterisks into a paragraph. */
     if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
+      flushPara();
       flushList();
       flushTable();
+      resetOl();
       out.push('<hr class="my-3 border-0 border-t border-white-300 dark:border-navy-600"/>');
       continue;
     }
@@ -300,8 +379,15 @@ export function renderMarkdown(text: string): string {
 
     flushTable();
     flushList();
-    out.push(`<p class="text-sm text-black-900 dark:text-white-100 leading-relaxed">${inlineMarkdown(line)}</p>`);
+    /* Prose between two lists makes them two lists: the second starts over.
+       An indented continuation line belongs to its item and reaches here too,
+       but by then the blank line above it has already closed the <ol>, and a
+       list resumed after prose is not the same list. */
+    resetOl();
+    paraLines.push(line);
   }
+
+  flushPara();
 
   flushTable();
   flushList();

@@ -1,11 +1,14 @@
 package agents
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	agentsconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/ticket"
+	"github.com/yogasw/wick/pkg/tool"
 )
 
 func ticketLayout(t *testing.T) agentsconfig.Layout {
@@ -76,5 +79,62 @@ func TestEmptiedResponseSilentWhenTheTicketIsGone(t *testing.T) {
 	got := emptiedResponse(l, "p1", tk, true)
 	if _, present := got["emptied_ticket"]; present {
 		t.Fatalf("an already-deleted ticket must not be offered: %#v", got)
+	}
+}
+
+/* ── board request params ────────────────────────────────────────────────── */
+
+// A missing param and an empty one are different requests: absent means "no
+// opinion, send the default", while `?statuses=` is the caller saying it drew
+// no columns and wants no cards. Collapsing the two would make an all-off
+// board silently show everything.
+func TestQueryCSVSeparatesAbsentFromExplicitlyEmpty(t *testing.T) {
+	cases := []struct {
+		name    string
+		url     string
+		present bool
+		want    map[string]bool
+	}{
+		{name: "absent", url: "/x", present: false},
+		{name: "explicitly empty", url: "/x?statuses=", present: true, want: map[string]bool{}},
+		{name: "one", url: "/x?statuses=open", present: true, want: map[string]bool{"open": true}},
+		{
+			name:    "several, with padding",
+			url:     "/x?statuses=open,%20waiting%20,,done",
+			present: true,
+			want:    map[string]bool{"open": true, "waiting": true, "done": true},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &tool.Ctx{R: httptest.NewRequest(http.MethodGet, tc.url, nil)}
+			got, present := queryCSV(c, "statuses")
+			if present != tc.present {
+				t.Fatalf("present = %v, want %v", present, tc.present)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("set = %v, want %v", got, tc.want)
+			}
+			for k := range tc.want {
+				if !got[k] {
+					t.Errorf("set is missing %q: %v", k, got)
+				}
+			}
+		})
+	}
+}
+
+// The untracked list is the board's most expensive part, so it is opt-in:
+// anything that is not a plain yes leaves it unbuilt.
+func TestIsTrueishOnlyAcceptsAnActualYes(t *testing.T) {
+	for _, yes := range []string{"1", "true", "TRUE", "yes", "on", " 1 "} {
+		if !isTrueish(yes) {
+			t.Errorf("isTrueish(%q) = false, want true", yes)
+		}
+	}
+	for _, no := range []string{"", "0", "false", "no", "off", "2", "maybe"} {
+		if isTrueish(no) {
+			t.Errorf("isTrueish(%q) = true, want false", no)
+		}
 	}
 }

@@ -22,10 +22,6 @@ func maxTurnsArgs(n int) []string {
 	return []string{"--max-turns", strconv.Itoa(n)}
 }
 
-func helpHasStrictMCP(help string) bool {
-	return strings.Contains(help, "--mcp-config") && strings.Contains(help, "--strict-mcp-config")
-}
-
 func helpHasMCPConfig(help string) bool {
 	return strings.Contains(help, "--mcp-config")
 }
@@ -63,22 +59,21 @@ func mcpSessionID(sessionID, sessionDir string) string {
 }
 
 // mcpConfigArgs builds the claude argv for the wick MCP HTTP server.
-// strict=true isolates to only wick; always pre-approves wick's tools.
+// Always pre-approves wick's tools, and always MERGES with the user's own MCP
+// servers — isolation is no longer selectable, see spawn.go.
+//
 // sessionID, when non-empty, is sent as the X-Wick-Session-Id header on
 // every MCP call so the server knows which session a connector call belongs
 // to WITHOUT relying on the LLM to pass a session_id argument — used e.g. to
 // resolve the session-owning Slack bot for the "Sent using @bot" footer.
-func mcpConfigArgs(endpoint, token, sessionID string, strict bool) []string {
+func mcpConfigArgs(endpoint, token, sessionID string) []string {
 	if endpoint == "" || token == "" {
 		return nil
 	}
-	cfg := mcpConfigArg(endpoint, token, sessionID)
-	args := []string{}
-	if strict {
-		args = append(args, "--strict-mcp-config")
+	return []string{
+		"--mcp-config", mcpConfigArg(endpoint, token, sessionID),
+		"--allowedTools", wickMCPAllowedTools,
 	}
-	args = append(args, "--mcp-config", cfg, "--allowedTools", wickMCPAllowedTools)
-	return args
 }
 
 // mcpEndpointFromEnv derives the loopback MCP URL from WICK_PORT (set
@@ -112,20 +107,6 @@ func mcpConfigArg(endpoint, token, sessionID string) string {
 		return ""
 	}
 	return string(b)
-}
-
-var mcpHelpCache sync.Map
-
-func strictMCPConfigSupported(bin string) bool {
-	if v, ok := mcpHelpCache.Load(bin); ok {
-		return v.(bool)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	out, _ := safeexec.CommandContext(ctx, bin, "--help").CombinedOutput()
-	ok := helpHasStrictMCP(string(out))
-	mcpHelpCache.Store(bin, ok)
-	return ok
 }
 
 var mcpConfigHelpCache sync.Map

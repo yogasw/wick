@@ -160,11 +160,13 @@ A **ticket** is the unit of work; a **session** is one conversation about it, an
 
 ### The board
 
-The project landing page shows a kanban board — one column per status, cards are **tickets**, not sessions. An **Untracked** rail on the side holds chats that belong to no ticket. Dragging:
+The project landing page shows a kanban board — one column per status, cards are **tickets**, not sessions. The filter bar's **Untracked** chip (off by default) adds a rail of chats that belong to no ticket alongside the columns; its count is always shown even while off. Dragging:
 
 - a ticket card between columns changes its status;
 - a chat from the Untracked rail onto a ticket card attaches it to that ticket;
 - a chat onto a column turns it into a new ticket of its own.
+
+Filters — statuses, assignee, and the Untracked chip — decide what the board asks the server for, not just what it draws: switching a column or the Untracked rail off stops the server building those cards at all, so a project with hundreds of chats costs the same to poll as a small one.
 
 Deleting a ticket asks whether its chats survive as untracked or are deleted with it.
 
