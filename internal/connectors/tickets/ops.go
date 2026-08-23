@@ -123,14 +123,44 @@ func (h *handlers) list(c *connector.Ctx) (any, error) {
 	if filter != "" && !ticket.ValidStatus(cfg, filter) {
 		return nil, fmt.Errorf("invalid status %q (want %s)", filter, strings.Join(cfg.StatusKeys(), ", "))
 	}
+
+	assignee, err := resolveAssigneeFilter(c)
+	if err != nil {
+		return nil, err
+	}
+
+	// Counts are taken over the ASSIGNEE-filtered set but before the status
+	// filter, so "3 of my tickets are in_progress" stays answerable from a
+	// mine=true + status=in_progress call without a second round trip.
+	counts := map[string]int{}
 	out := make([]ticketView, 0, len(all))
 	for _, tk := range all {
+		if !matchesAssignee(tk, assignee) {
+			continue
+		}
+		counts[tk.Status]++
 		if filter != "" && tk.Status != filter {
 			continue
 		}
 		out = append(out, h.view(tk))
 	}
-	return map[string]any{"project_id": projectID, "tickets": out, "total": len(out)}, nil
+
+	res := map[string]any{
+		"project_id":      projectID,
+		"tickets":         out,
+		"total":           len(out),
+		"count_by_status": counts,
+	}
+	// Echo what was actually applied. When mine=true the model never learns
+	// the id it filtered on, so saying so is the only way the answer is
+	// self-explanatory.
+	if assignee != "" {
+		res["assignee_filter"] = assignee
+	}
+	if filter != "" {
+		res["status_filter"] = filter
+	}
+	return res, nil
 }
 
 func (h *handlers) get(c *connector.Ctx) (any, error) {
@@ -445,4 +475,48 @@ func (h *handlers) ticketConfig(projectID string) (project.TicketConfig, error) 
 		return project.TicketConfig{}, fmt.Errorf("load project %q: %w", projectID, err)
 	}
 	return p.Meta.Ticket, nil
+}
+
+// unassignedFilter selects tickets with nobody on them. A sentinel rather than
+// an empty string, because empty already means "no assignee filter at all" and
+// the two must not collapse.
+const unassignedFilter = "unassigned"
+
+// resolveAssigneeFilter turns the mine / assignee inputs into one value.
+//
+// mine=true resolves to the CALLER, server-side. That matters: the model never
+// supplies the id, so it cannot ask for another person's queue by guessing one,
+// and "my tickets" needs no id in the prompt at all.
+//
+// Returns "" for no filter.
+func resolveAssigneeFilter(c *connector.Ctx) (string, error) {
+	explicit := strings.TrimSpace(c.Input("assignee"))
+	if c.InputBool("mine") {
+		caller := strings.TrimSpace(c.CallerUserID())
+		if caller == "" {
+			// No human behind the call (cron, system job). Silently listing
+			// everything would answer a different question than the one asked.
+			return "", fmt.Errorf("mine=true needs a signed-in user, but this call has none " +
+				"(system or scheduled run); pass assignee=<user id> instead")
+		}
+		if explicit != "" && explicit != caller {
+			// Both given and disagreeing: refusing beats picking one, since
+			// either choice silently answers the wrong question.
+			return "", fmt.Errorf("mine=true conflicts with assignee=%q; pass one or the other", explicit)
+		}
+		return caller, nil
+	}
+	return explicit, nil
+}
+
+// matchesAssignee reports whether a ticket passes the assignee filter.
+func matchesAssignee(tk ticket.Ticket, filter string) bool {
+	switch filter {
+	case "":
+		return true
+	case unassignedFilter:
+		return strings.TrimSpace(tk.Assignee) == ""
+	default:
+		return tk.Assignee == filter
+	}
 }

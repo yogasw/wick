@@ -63,7 +63,12 @@ func Operations(layout agentconfig.Layout) []connector.Category {
 		"Inspect and manage tickets. A ticket carries status, assignee, project-defined fields, and the sessions working on it.",
 		connector.Op("ticket_list", "List Tickets",
 			"List a project's tickets, newest first: id, title, status, assignee, fields, and how many sessions each holds. "+
-				"Omit project_id to use the project of the calling session. Optionally filter by status.",
+				"Omit project_id to use the project of the calling session. "+
+				"Filter by status, and by who a ticket is assigned to: pass mine=true for \"my tickets\" / \"what am I assigned\" "+
+				"(the caller is resolved from the credential — do NOT pass a user id for this), "+
+				"assignee=<user id> for a named person's queue, or assignee=unassigned for tickets nobody owns. "+
+				"Combine with status, e.g. mine=true + status=in_progress for \"what am I working on\". "+
+				"The response echoes the filters applied plus counts per status, so a follow-up question needs no second call.",
 			listInput{}, h.list, wickdocs.Docs{}),
 		connector.Op("ticket_get", "Get Ticket",
 			"Return one ticket in full, including its session list. "+
@@ -108,6 +113,13 @@ func Operations(layout agentconfig.Layout) []connector.Category {
 type listInput struct {
 	ProjectID string `wick:"desc=Project whose tickets to list. Defaults to the calling session's project."`
 	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=Optional status filter."`
+	// Mine answers "my tickets" without the model having to know, or guess, a
+	// user id. It resolves to the caller server-side, so the model cannot ask
+	// for somebody else's list by passing an id it made up.
+	Mine bool `wick:"desc=Only tickets assigned to the caller. Use this for \"my tickets\" — the user is resolved from the credential, so no id is needed."`
+	// Assignee is for looking at a NAMED person's queue, which is a different
+	// question from "mine" and needs an explicit id.
+	Assignee string `wick:"desc=Only tickets assigned to this wick user id. Leave empty for everyone; prefer mine=true for the caller's own tickets. Pass 'unassigned' for tickets with nobody on them."`
 }
 
 type getInput struct {
