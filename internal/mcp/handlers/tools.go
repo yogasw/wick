@@ -40,6 +40,23 @@ func PtrBool(b bool) *bool { return &b }
 func MetaToolDescriptors() []ToolDescriptor {
 	return []ToolDescriptor{
 		{
+			Name: "wick_me",
+			Description: "Who am I? Returns the wick user this MCP connection is " +
+				"authenticated as: user_id, name, email, role, is_admin, is_owner, " +
+				"approved, and filter_tag_ids. " +
+				"The answer is resolved SERVER-SIDE from the caller's credential, so it is " +
+				"authoritative — use it instead of inferring the user from the conversation, " +
+				"which goes wrong after a handover or in a session someone else opened. " +
+				"filter_tag_ids drive connector visibility: if a connector you expected is " +
+				"missing from wick_list, this is why. " +
+				"is_system=true means there is no human attached (cron / system job); " +
+				"authenticated=false means the transport carries no identity at all (local stdio).",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
 			Name: "wick_list",
 			Description: "List available connectors and connected accounts. " +
 				"Each entry has: id, connector (label), description, total_tools, status, kind, parent_id. " +

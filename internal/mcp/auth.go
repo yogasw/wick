@@ -107,7 +107,7 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 		// set already intersected down to what that human may reach, so
 		// downstream tag filtering applies normally.
 		if m.scoped != nil && strings.HasPrefix(token, ScopedTokenPrefix) {
-			userID, tagIDs, ok := m.scoped.Lookup(token)
+			userID, tagIDs, stripAdmin, ok := m.scoped.LookupGrant(token)
 			if !ok {
 				m.reject(w, "invalid_token")
 				return
@@ -117,11 +117,18 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 				m.reject(w, "invalid_token")
 				return
 			}
-			// Strip admin: a sub-agent must be filtered by tags even when
-			// the human who triggered it is an administrator, because the
-			// profile's narrowing list is the whole point of the scope.
+			// Strip admin for a SUB-AGENT: it must be filtered by tags even
+			// when the human who triggered it is an administrator, because
+			// the profile's narrowing list is the whole point of the scope.
+			//
+			// A top-level session token is minted with stripAdmin=false: the
+			// principal there is the human who is chatting, so demoting them
+			// would remove their own admin-only tools while granting no
+			// isolation — nothing is being narrowed on their behalf.
 			scopedUser := *user
-			scopedUser.Role = entity.RoleUser
+			if stripAdmin {
+				scopedUser.Role = entity.RoleUser
+			}
 			ctx := login.WithUser(r.Context(), &scopedUser, tagIDs)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
