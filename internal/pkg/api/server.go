@@ -765,15 +765,35 @@ func NewServer() *Server {
 			DefaultScope: agentsLayout.ProjectsDir(),
 		}
 	}
+	// Scoped MCP tokens: per-session credentials for top-level spawns and
+	// per-child credentials for sub-agents. Declared here because the pool
+	// (which revokes them on exit) is built before the delegation service
+	// (which issues the sub-agent ones) — one issuer, shared by both.
+	mcpScopedTokens := mcp.NewScopedTokens()
+
 	preemptIdle := configsSvc.GetOwned("agents", "preempt_idle") != "false"
 	agentsPool = agentpool.New(agentpool.PoolConfig{
-		MaxConcurrent:   maxConc,
-		IdleTimeout:     time.Duration(idleSec) * time.Second,
-		KillAfterIdle:   time.Duration(killAfterIdleSec) * time.Second,
-		PreemptIdle:     preemptIdle,
-		Layout:          agentsLayout,
-		Factory:         agentsFactory,
-		DefaultProvider: configsSvc.GetOwned("agents", "default_provider"),
+		MaxConcurrent: maxConc,
+		IdleTimeout:   time.Duration(idleSec) * time.Second,
+		KillAfterIdle: time.Duration(killAfterIdleSec) * time.Second,
+		PreemptIdle:   preemptIdle,
+		// Per-user identity plumbing. A subprocess carries the MCP credential
+		// of whoever spawned it (baked into its argv), so the pool needs to
+		// know who each message is from to decide whether that process can be
+		// reused, and needs to invalidate the credential once it dies.
+		CallerUserID: func(ctx context.Context) string {
+			if u := login.GetUser(ctx); u != nil {
+				return u.ID
+			}
+			return ""
+		},
+		RevokeMCPToken: func(token string) { mcpScopedTokens.Revoke(token) },
+		// Read live so the switch takes effect without a restart, matching
+		// how the other agents settings behave.
+		RespawnOnCallerChange: configsSvc.GetOwned("agents", "respawn_on_caller_change") == "true",
+		Layout:                agentsLayout,
+		Factory:               agentsFactory,
+		DefaultProvider:       configsSvc.GetOwned("agents", "default_provider"),
 		// Queue a spawn instead of starting it while the machine is
 		// already short of memory. Read live so the floor can be changed
 		// in the UI without a restart; 0 (the default) disables it.
@@ -1556,7 +1576,35 @@ func NewServer() *Server {
 	// with mcpInternalToken — that one maps to a synthetic admin and
 	// would bypass tag filtering entirely, making a profile's tool
 	// restrictions decorative.
-	mcpScopedTokens := mcp.NewScopedTokens()
+	// Per-user MCP identity for top-level spawns. Without this every web
+	// chat reaches the MCP server as the SAME synthetic admin, so connector
+	// access control and tag filtering never apply — user A and user B are
+	// indistinguishable. Minting per session makes the spawn authenticate
+	// as the human who owns it.
+	//
+	// stripAdmin=false, unlike a sub-agent token: the principal here IS the
+	// chatting human, so demoting them would remove their own admin-only
+	// tools while narrowing nothing on their behalf.
+	//
+	// ok=false (no owner: legacy rows, cron, system jobs) makes the factory
+	// fall back to the internal token rather than lose MCP access.
+	agentsFactory.SessionMCPToken = func(sessionID string) (string, bool) {
+		sess, found := agentsMgr.Registry().Session(sessionID)
+		if !found || sess.Meta.UserID == "" {
+			return "", false
+		}
+		tok, err := mcpScopedTokens.IssueFor(
+			sess.Meta.UserID,
+			authSvc.GetUserFilterTagIDs(context.Background(), sess.Meta.UserID),
+			false,
+		)
+		if err != nil {
+			log.Warn().Err(err).Str("session", sessionID).
+				Msg("mcp: per-user token mint failed; falling back to internal token")
+			return "", false
+		}
+		return tok, true
+	}
 	delegationSvc = &delegation.Service{
 		Repo:   delegation.NewRepo(db),
 		Runner: delegation.NewPoolRunner(agentsPool, agentsLayout, agentsMgr.Register),
@@ -1708,7 +1756,13 @@ func NewServer() *Server {
 	// over loopback — no new auth surface. nil provider = only shell/todo.
 	wickprovider.SetToolProvider(func(scope wickprovider.ToolScope) []wickprovider.ExternalTool {
 		ctx := context.Background()
-		descs := mcpHandler.AgentToolDescriptors(ctx)
+		// Run as the human who owns the session, so an in-process agent sees
+		// exactly the tools that user may reach. The CLI providers get this
+		// from their per-session scoped token; the in-process path has no
+		// bearer to carry, so the principal is resolved here and passed
+		// directly. Ownerless session → zero identity → synthetic admin.
+		id := agentToolIdentity(ctx, agentsMgr, authSvc, scope.SessionID)
+		descs := mcpHandler.AgentToolDescriptorsAs(ctx, id)
 		out := make([]wickprovider.ExternalTool, 0, len(descs))
 		for _, d := range descs {
 			name := d.Name
@@ -1717,7 +1771,7 @@ func NewServer() *Server {
 				Description: d.Description,
 				Params:      toSchemaMap(d.InputSchema),
 				Handler: func(hctx context.Context, args map[string]any) (string, bool) {
-					text, isErr := mcpHandler.CallAgentTool(hctx, name, args, scope.SessionID)
+					text, isErr := mcpHandler.CallAgentToolAs(hctx, name, args, scope.SessionID, id)
 					return text, isErr
 				},
 			})
