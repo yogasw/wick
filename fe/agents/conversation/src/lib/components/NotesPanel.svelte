@@ -244,8 +244,12 @@
               : "border-white-300 bg-white-100 dark:border-navy-600 dark:bg-navy-700",
           ].join(" ")}
         >
+          <!-- While editing, the row's own controls step aside and the box
+               gets the full width: a checkbox and a menu sitting beside a
+               textarea invite clicks that would throw the edit away, and the
+               thing being typed is the only thing that matters here. -->
           <div class="flex items-start gap-2">
-            {#if n.checkable}
+            {#if n.checkable && editingId !== n.id}
               <input
                 type="checkbox"
                 checked={n.done === true}
@@ -295,6 +299,9 @@
                 >{@html renderMarkdown(n.body)}</div>
               {/if}
 
+              <!-- Audience, author and time describe a note that exists; an
+                   edit in progress is about the text, so they wait. -->
+              {#if editingId !== n.id}
               <div class="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-black-700 dark:text-black-600">
                 <span class="rounded bg-white-200 px-1.5 py-0.5 dark:bg-navy-800">
                   {audienceLabel[n.audience] ?? n.audience}
@@ -305,8 +312,10 @@
                 {#if authorName(n)}<span>{authorName(n)}</span>{/if}
                 <span>{timeAgo(n.updated_at)}</span>
               </div>
+              {/if}
             </div>
 
+            {#if editingId !== n.id}
             <div class="flex shrink-0 items-center gap-1">
               <button
                 type="button"
@@ -414,6 +423,7 @@
                 {/if}
               </div>
             </div>
+            {/if}
           </div>
         </li>
       {/each}

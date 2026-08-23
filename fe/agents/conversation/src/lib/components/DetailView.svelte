@@ -1492,6 +1492,11 @@
   // badge stuck at "3" after everything finished; the tab itself stays
   // visible on the total so results remain readable.
   const subAgentCount = $derived(liveSubAgents(subAgents).length);
+  /* Notes the agent can actually see. Hidden ones are excluded: the badge
+     answers "how much is on this chat's record", and a note deliberately
+     kept from the agent is not part of that answer — nor should hiding one
+     leave the count unchanged, which would make the control look inert. */
+  const noteCount = $derived((notesInfo?.notes ?? []).filter((n) => !n.hidden).length);
 
   /* Whether a rail has work running behind a closed panel.
 
@@ -1511,6 +1516,7 @@
   }
 
   function railCount(id: RailTab): number {
+    if (id === "notes") return noteCount;
     if (id === "context") return contextCount;
     if (id === "process") return processCount;
     if (id === "workspace") return workspaceCount;

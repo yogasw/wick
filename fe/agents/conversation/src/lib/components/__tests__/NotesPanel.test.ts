@@ -204,6 +204,32 @@ describe("NotesPanel", () => {
     await vi.waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
   });
 
+  /* ── edit mode gives the box the whole row ── */
+
+  // A checkbox and a "more" menu beside a textarea are two clicks that throw
+  // the edit away. While editing, neither is there.
+  test("editing hides the row's own controls", async () => {
+    renderPanel([note({ checkable: true })]);
+    expect(screen.getByLabelText("Mark note done")).toBeTruthy();
+
+    await fireEvent.click(screen.getByTestId("note-more-n1"));
+    await fireEvent.click(screen.getByText("Edit note"));
+
+    expect(screen.queryByTestId("note-more-n1")).toBeNull();
+    expect(screen.queryByLabelText("Mark note done")).toBeNull();
+    expect(screen.queryByLabelText("Hide from agent")).toBeNull();
+    expect(screen.getByLabelText("Edit note")).toBeTruthy();
+  });
+
+  test("the controls come back once the edit ends", async () => {
+    renderPanel([note({ checkable: true })]);
+    await fireEvent.click(screen.getByTestId("note-more-n1"));
+    await fireEvent.click(screen.getByText("Edit note"));
+    await fireEvent.click(screen.getByText("Cancel"));
+    expect(screen.getByTestId("note-more-n1")).toBeTruthy();
+    expect(screen.getByLabelText("Mark note done")).toBeTruthy();
+  });
+
   test("escape abandons an edit without writing", async () => {
     renderPanel([note()]);
     await fireEvent.click(screen.getByTestId("note-more-n1"));
