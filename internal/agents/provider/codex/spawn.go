@@ -48,6 +48,15 @@ type Spawner struct {
 	// ExtraArgs is appended after the canonical headless flags, before
 	// any caller-supplied ResumeID. Useful for tests / debugging.
 	ExtraArgs []string
+	// MCPToken points this spawn at wick's own MCP server, authenticating as
+	// the user the credential was minted for. Empty = no wick tools at all,
+	// which is what codex spawns had before this existed.
+	//
+	// Unlike claude — which takes a whole JSON config on the command line —
+	// codex reads the bearer from an environment variable named in its config.
+	// So the token travels in the env and the argv only names the variable.
+	// Keeping it out of argv also keeps it out of process listings.
+	MCPToken string
 }
 
 // Spawn starts the subprocess.
@@ -162,6 +171,14 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	if !gateActive && s.AskForApproval != "" {
 		args = append(args, "--ask-for-approval", s.AskForApproval)
 	}
+	// Register wick's MCP server for this spawn. Skipped when no endpoint is
+	// known (WICK_PORT unset) rather than pointing codex at a dead address,
+	// which would make every tool call fail at runtime.
+	if s.MCPToken != "" {
+		if endpoint := mcpEndpointFromEnv(); endpoint != "" {
+			args = append(args, mcpConfigArgs(endpoint, s.MCPToken)...)
+		}
+	}
 	args = append(args, s.ExtraArgs...)
 	args = append(args, opt.ExtraArgs...)
 	// Pinned model (per-instance model picker) → --model. No-op when
@@ -206,6 +223,9 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 	cmd.Dir = opt.Workspace
 	cmd.Env = append(os.Environ(), opt.ExtraEnv...)
 	cmd.Env = append(cmd.Env, routerContrib.Env...)
+	// The MCP bearer, named by the -c override above. Per-spawn, so two users'
+	// processes never see each other's credential.
+	cmd.Env = append(cmd.Env, mcpEnv(s.MCPToken)...)
 	hideConsole(cmd)
 	// Own process group: teardown must reach the descendants this CLI
 	// spawns (MCP servers, tool subprocesses), not just the leader.
@@ -215,7 +235,8 @@ func (s Spawner) Spawn(ctx context.Context, opt provider.SpawnOptions) (provider
 
 	// Track only the env wick injected (instance env + AI-router), masked,
 	// for the spawn log. The full OS environ is noise and must not be logged.
-	addedEnv := provider.MaskSpawnEnv(append(append([]string{}, opt.ExtraEnv...), routerContrib.Env...))
+	addedEnv := provider.MaskSpawnEnv(append(append(append([]string{}, opt.ExtraEnv...),
+		routerContrib.Env...), mcpEnv(s.MCPToken)...))
 
 	// Codex reads its prompt from argv (positional [PROMPT]), never from
 	// stdin. We must give the child an already-closed stdin so codex sees
