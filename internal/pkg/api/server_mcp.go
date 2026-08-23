@@ -30,6 +30,7 @@ import (
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/mcp"
+	"github.com/yogasw/wick/internal/mcp/handlers"
 	"github.com/yogasw/wick/internal/pkg/config"
 	"github.com/yogasw/wick/internal/pkg/postgres"
 	"github.com/yogasw/wick/internal/pkg/pwa"
@@ -179,6 +180,11 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 	if u, err := authSvc.FirstAdmin(context.Background()); err == nil && u != nil {
 		localAdmin = u
 	}
+	// Mark this process as the stdio transport so wick_me reports the
+	// principal as a machine-local fallback rather than an authenticated
+	// user. Without it, an agent on stdio is told it IS that admin, and any
+	// "who am I acting for" answer it gives downstream is misleading.
+	handlers.SetLocalCLIPrincipal(localAdmin.ID)
 	ctx := login.WithUser(context.Background(), localAdmin, nil)
 
 	root, _ := os.Getwd()

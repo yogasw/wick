@@ -198,7 +198,26 @@ templ ProfilePage(user *entity.User, errMsg string, success bool, prefsSaved boo
 						</div>
 					</div>
 				</div>
+				<!-- Channel connections -->
+				<div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-6 shadow-sm lg:col-span-2">
+					<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+						<div>
+							<h2 class="text-base font-semibold text-black-900 dark:text-white-100">Channel connections</h2>
+							<p class="mt-1 text-sm text-black-800 dark:text-black-600">Chat accounts linked to this wick account. Notifications can reach you on any of them.</p>
+							<p class="mt-1 text-xs text-black-700 dark:text-black-600">A connection is created the first time you message wick from that account. The web dashboard is always available and is not listed here. Pause a connection to stop notifications going to it.</p>
+						</div>
+						<div id="channel-conn-status" class="inline-flex w-fit items-center rounded-full border border-white-400 dark:border-navy-600 bg-white-200 dark:bg-navy-800 px-3 py-1 text-xs font-medium text-black-800 dark:text-black-600">
+							Loading...
+						</div>
+					</div>
+					<div id="channel-conn-list" class="mt-5 overflow-hidden rounded-lg border border-white-300 dark:border-navy-600">
+						<div class="flex flex-col gap-2 bg-white-200 dark:bg-navy-800 px-4 py-5 text-sm text-black-800 dark:text-black-600">
+							<span class="font-medium text-black-900 dark:text-white-100">Loading connections...</span>
+						</div>
+					</div>
+				</div>
 			</div>
 		</main>
+		<script src="/public/js/channels.js"></script>
 	}
 }

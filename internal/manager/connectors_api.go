@@ -4,8 +4,10 @@ import (
 	"net/http"
 	"sort"
 
+	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tags"
+	"github.com/yogasw/wick/pkg/connector"
 )
 
 // connectorDef is the JSON shape served at GET /manager/api/connectors.
@@ -41,6 +43,30 @@ type connectorDef struct {
 // admin-only, and non-admins only see defs they manage at least one row
 // of. The result is sorted by category sort order then name for a stable
 // render order.
+// isConnectorVisibleTo reports whether a connector TYPE may be shown to a
+// caller. Both exclusions are deliberate and narrow:
+//
+//   - system: wick's own maintenance connectors (wickmanager, sub-agents,
+//     custom-connector plumbing). These are not things a user connects to.
+//   - type-disabled: an admin has switched the whole type off, i.e. declared
+//     it unavailable on this install.
+//
+// Everything else is visible to everyone, instances or not — the catalogue
+// lists what wick CAN connect to, so a user can discover a connector and ask
+// for it. Instance-level tag scoping is enforced separately, on the rows.
+//
+// Shared by the listing and the per-key detail endpoint so a card that is
+// hidden is also unreachable by guessing its key.
+func isConnectorVisibleTo(m connector.Module, user *entity.User, disabledTypes map[string]bool) bool {
+	if user != nil && user.IsAdmin() {
+		return true
+	}
+	if hasDefaultTag(m.Meta.DefaultTags, tags.System.Name) {
+		return false
+	}
+	return !disabledTypes[m.Meta.Key]
+}
+
 func (h *Handler) apiConnectors(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := login.GetUser(ctx)
@@ -70,26 +96,6 @@ func (h *Handler) apiConnectors(w http.ResponseWriter, r *http.Request) {
 		countByKey[row.Key] = c
 	}
 
-	// Whether a connector TYPE has ANY instance at all, ignoring per-instance tag
-	// filtering. Tags scope *instances*, not the connector type — so a non-admin
-	// should still SEE a connector in the list once it has instances (they can
-	// then create/use their own account), even if every existing instance is
-	// tag-restricted from them. Only the instances themselves stay hidden (in the
-	// per-key rows endpoint), not the connector card. Best-effort: on error we
-	// fall back to the managed count, preserving the old behavior.
-	hasAnyInstance := map[string]bool{}
-	if !isAdmin {
-		if all, err := h.connectors.List(ctx); err == nil {
-			for _, row := range all {
-				hasAnyInstance[row.Key] = true
-			}
-		} else {
-			for k := range countByKey {
-				hasAnyInstance[k] = true
-			}
-		}
-	}
-
 	disabledTypes := h.connectors.DisabledTypeKeys()
 
 	type defWithSort struct {
@@ -99,16 +105,25 @@ func (h *Handler) apiConnectors(w http.ResponseWriter, r *http.Request) {
 	out := make([]defWithSort, 0, len(rows))
 	for _, m := range h.connectors.Modules() {
 		system := hasDefaultTag(m.Meta.DefaultTags, tags.System.Name)
-		if system && !isAdmin {
+		if !isConnectorVisibleTo(m, user, disabledTypes) {
 			continue
 		}
 		cnt := countByKey[m.Meta.Key]
-		// Hide from non-admins only when the connector TYPE has no instance at
-		// all. If instances exist (even ones tag-restricted from this user), the
-		// connector stays listed so they can add/use their own account.
-		if !isAdmin && !hasAnyInstance[m.Meta.Key] {
-			continue
-		}
+		// Every connector TYPE is listed for every user — the list is a
+		// catalogue of what wick can connect to, not an inventory of what is
+		// already configured. A type with zero instances used to be hidden from
+		// non-admins, which made the catalogue vanish for them and left no way
+		// to discover a connector or ask an admin to enable it.
+		//
+		// Tags scope INSTANCES, not types: the per-key rows endpoint still
+		// filters which instances a user may see, so listing the type here
+		// reveals only its name, description and op count — never a credential.
+		// System connectors remain hidden above, since those are wick's own
+		// maintenance surface rather than something a user can connect to.
+		//
+		// A TYPE-DISABLED connector is the one exception: an admin switching the
+		// type off is saying "this is not available here", so it drops out of
+		// the catalogue for users. Admins still see it, greyed, to switch back on.
 		cat, catSort, catDesc := connectorCategory(m.Meta.DefaultTags, system)
 		def := connectorDef{
 			Key:             m.Meta.Key,

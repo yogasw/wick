@@ -15,10 +15,10 @@ import (
 //
 // The wick package can't import internal/mcp (layering + cycle risk), so
 // the server wires a provider here at boot. The provider reuses the real
-// MCP handlers in-process, acting as the same synthetic admin principal
-// the CLI providers' loopback MCP calls use (internal/mcp/auth.go
-// internalSystemUser) — identical identity + visibility, zero new
-// security surface.
+// MCP handlers in-process, running as the human who owns the session
+// (ToolScope.UserID) so tool visibility matches what that user may reach —
+// the same answer the HTTP MCP path gives. An ownerless session falls back
+// to the synthetic admin principal (internal/mcp/auth.go internalSystemUser).
 
 // ExternalTool is one tool contributed by the host (the MCP surface).
 // Params is a JSON-Schema object (as the MCP tool descriptor carries it);

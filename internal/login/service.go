@@ -290,6 +290,56 @@ func (s *Service) AdminCreateUser(ctx context.Context, email, name string) (*ent
 	return u, password, nil
 }
 
+// ListApprovedAdmins returns the admins who may be notified about account
+// events. Both filters matter: unapproved accounts must not receive notices
+// about a pending registration (they have not been vetted themselves), and
+// non-admins cannot act on one.
+//
+// IsOwner counts as admin, matching entity.User.IsAdmin.
+func (s *Service) ListApprovedAdmins(ctx context.Context) ([]*entity.User, error) {
+	return s.repo.ListApprovedAdmins(ctx)
+}
+
+// FindUserIDByEmail resolves an email to a wick user id. Used by chat
+// channels to decide whose identity a channel-started session runs as.
+func (s *Service) FindUserIDByEmail(ctx context.Context, email string) (string, bool) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" {
+		return "", false
+	}
+	u, err := s.repo.GetUserByEmail(ctx, email)
+	if err != nil || u == nil {
+		return "", false
+	}
+	return u.ID, true
+}
+
+// RegisterChannelUser creates an unapproved account for an identity that
+// arrived over a chat channel, and returns its id.
+//
+// The account cannot act until an admin approves it. A channel reports an
+// email address; it does not prove the sender controls it, so approval is
+// where that judgement is made. See repo.CreateChannelUser for why this never
+// grants admin.
+func (s *Service) RegisterChannelUser(ctx context.Context, email, name, source string) (string, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" || !strings.Contains(email, "@") {
+		return "", errors.New("a valid email is required")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = email
+		if i := strings.Index(email, "@"); i > 0 {
+			name = email[:i]
+		}
+	}
+	u, err := s.repo.CreateChannelUser(ctx, email, name, source)
+	if err != nil {
+		return "", err
+	}
+	return u.ID, nil
+}
+
 // SetEmail updates the user's email address. Used by the first-login
 // setup flow so admins can rename the seed account (admin@admin.com)
 // to a real address. Returns ErrEmailTaken when the new email already

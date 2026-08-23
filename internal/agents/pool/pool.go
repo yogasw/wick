@@ -103,6 +103,28 @@ type PoolConfig struct {
 	// PROCESSES; this counts BYTES, and a free slot says nothing about
 	// whether the machine can host what would fill it.
 	MinFreeMemoryLoader func() int
+	// CallerUserID resolves the wick user behind a Send from its context.
+	// The pool stays decoupled from the auth packages: the server injects
+	// this. nil (or empty result) = no resolved caller, which disables
+	// caller-change respawn for that message.
+	CallerUserID func(ctx context.Context) string
+
+	// RevokeMCPToken invalidates a per-session MCP credential once its
+	// subprocess is gone, so a leaked token stops working at process death
+	// instead of at its TTL. nil = no revocation (tokens simply expire).
+	RevokeMCPToken func(token string)
+
+	// RespawnOnCallerChange makes a session whose incoming message comes
+	// from a DIFFERENT user than the running subprocess kill and respawn
+	// that subprocess, so the new user's turn runs under their own MCP
+	// identity rather than inheriting the previous caller's.
+	//
+	// Off by default: it costs the process's context (conversation history
+	// is reloaded, but in-memory state is lost), which is the wrong trade
+	// for the common single-user session. Turn it on for shared sessions
+	// where per-user attribution matters more than continuity.
+	RespawnOnCallerChange bool
+
 	// PreemptIdle, when true, lets a queued send kick out the longest-idle
 	// active subprocess (Lifecycle == Idle) so the new session doesn't have
 	// to wait for the idle TTL. The preempted session keeps its CLI session
@@ -226,6 +248,11 @@ type BuildResult struct {
 	State     *state.Machine
 	Store     *store.Store
 	OnStarted func(meta SpawnStartMeta)
+	// MCPToken is the per-session credential baked into this spawn's argv,
+	// reported back so the pool can revoke it when the subprocess dies
+	// rather than leaving it valid until its TTL. Empty when the spawn used
+	// the shared internal token, which is per-boot and must NOT be revoked.
+	MCPToken string
 }
 
 // SpawnStartMeta is the post-Start snapshot the pool feeds back to
@@ -248,6 +275,9 @@ type SpawnStartMeta struct {
 // are forwarded to the spawn logger so /tools/agents/providers can
 // surface per-provider history without re-parsing files.
 type FactoryOptions struct {
+	// CallerUserID is the wick user whose message triggered this spawn.
+	// Empty = no resolved caller (cron, system job, legacy session).
+	CallerUserID  string
 	SessionID     string
 	AgentName     string
 	ProviderType  string
@@ -314,6 +344,21 @@ type runEntry struct {
 	// global one. Set at spawn time from the session's agents.json.
 	provType string
 	provName string
+	// callerUserID is the wick user whose message caused this subprocess to
+	// spawn. Its MCP credential is minted for that human, and the credential
+	// is baked into the spawn argv — so it cannot change while the process
+	// lives. When a DIFFERENT user sends into the same session, the process
+	// must be replaced or the second user would act with the first user's
+	// MCP identity. See Pool.callerChanged.
+	//
+	// Empty = spawned with no resolved caller (cron, system job, legacy
+	// session); such a run is never recycled on caller grounds.
+	callerUserID string
+	// mcpToken is the per-session MCP credential handed to this spawn, kept
+	// so it can be revoked the moment the subprocess dies instead of idling
+	// until its TTL. Empty for spawns using the shared internal token, which
+	// must never be revoked — it is per-boot and shared.
+	mcpToken string
 	// ctx is the spawn-time context (HTTP Send → pool.spawn). It
 	// carries the zerolog logger the middleware attached, so async
 	// post-spawn callbacks (onAgentExit, OnLifecycle) recover the
@@ -524,6 +569,21 @@ func (p *Pool) resolveAgentName(sessionID, agentName string) string {
 	return sess.Agents[0].Name
 }
 
+// callerChanged reports whether this message comes from a different user
+// than the one the running subprocess was spawned for.
+//
+// Returns false whenever either side is unknown: a spawn with no recorded
+// caller (cron, system job, legacy session) has no identity to conflict with,
+// and a message with no resolved caller gives nothing to compare — recycling
+// on a blank would kill a healthy process for no benefit.
+func (p *Pool) callerChanged(ctx context.Context, entry *runEntry) bool {
+	if entry == nil || entry.callerUserID == "" || p.cfg.CallerUserID == nil {
+		return false
+	}
+	now := p.cfg.CallerUserID(ctx)
+	return now != "" && now != entry.callerUserID
+}
+
 func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, text, projectID string, atts []store.Attachment) error {
 	// An empty agent name means "whoever this session is talking to" — the
 	// same thing a person typing in the composer means. Resolved to the
@@ -544,6 +604,39 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	key := sessionKey(sessionID, agentName)
 	entry, alive := p.active[key]
 	p.mu.Unlock()
+
+	// A live subprocess speaks with the MCP identity of whoever spawned it —
+	// the credential sits in its argv and cannot be swapped in place. So when
+	// a DIFFERENT user sends into the same session, reusing that process would
+	// run their turn under the previous caller's identity. Recycle instead:
+	// kill it here and let the spawn below mint a credential for this caller.
+	//
+	// Only when explicitly enabled, and only for role "user": a system or
+	// sub-agent message is not a human taking over the conversation.
+	if alive && p.cfg.RespawnOnCallerChange && role == "user" && p.callerChanged(ctx, entry) {
+		log.Ctx(ctx).Info().
+			Str("component", "pool").
+			Str("session", sessionID).
+			Str("agent", agentName).
+			Msg("pool.send: caller changed — respawning so the turn runs as the new user")
+		// Kill synchronously so the slot is free before the spawn below;
+		// onAgentExit revokes the outgoing caller's MCP token.
+		//
+		// If the kill fails the old process is still attached, and sending
+		// into it would run this user's turn under the previous caller's MCP
+		// identity — exactly what the recycle exists to prevent. Refuse the
+		// message instead of silently misattributing it.
+		if err := p.Kill(sessionID, agentName); err != nil {
+			log.Ctx(ctx).Error().Err(err).
+				Str("component", "pool").
+				Str("session", sessionID).
+				Str("agent", agentName).
+				Msg("pool.send: caller-change respawn failed to stop the old process")
+			return fmt.Errorf("session is running as another user and could not be recycled: %w", err)
+		}
+		alive = false
+		entry = nil
+	}
 
 	turnPersisted := false
 	userMsgNotified := false
@@ -773,6 +866,13 @@ func composeSystemAddon(layout config.Layout, sess session.Session) string {
 }
 
 func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) error {
+	// Whose turn caused this process to exist. Baked into the MCP credential
+	// below, and remembered on the entry so a later message from someone else
+	// can be told apart.
+	var callerUserID string
+	if p.cfg.CallerUserID != nil {
+		callerUserID = p.cfg.CallerUserID(ctx)
+	}
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -898,6 +998,7 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 	}
 
 	br, err := p.cfg.Factory.Build(FactoryOptions{
+		CallerUserID:   callerUserID,
 		SessionID:      sessionID,
 		AgentName:      agentName,
 		ProviderType:   pType,
@@ -932,6 +1033,12 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 		ctx:      ctx,
 		provType: pType,
 		provName: pName,
+		// Remember who this process speaks for, and with which credential,
+		// so a later message from a DIFFERENT user can be detected (the MCP
+		// identity is fixed in the argv) and so the credential dies with the
+		// process instead of idling until its TTL.
+		callerUserID: callerUserID,
+		mcpToken:     br.MCPToken,
 	}
 	// Spawn-local logger derived from the same ctx — consumers in the
 	// rest of this function reuse it without redoing the With() chain.
@@ -1135,6 +1242,15 @@ func (p *Pool) onAgentExit(sessionID, agentName string) {
 		Str("agent", agentName).
 		Logger()
 	l.Debug().Msg("pool.exit: subprocess exited — releasing slot")
+	// Revoke the dead spawn's per-session MCP credential now rather than
+	// letting it stay valid until its TTL: the process that held it is gone,
+	// so nothing legitimate still needs it. Only per-session tokens are set
+	// here — the shared per-boot token is never reported to the entry, so it
+	// can't be revoked out from under other spawns.
+	if ok && entry != nil && entry.mcpToken != "" && p.cfg.RevokeMCPToken != nil {
+		p.cfg.RevokeMCPToken(entry.mcpToken)
+		l.Debug().Msg("pool.exit: revoked per-session MCP token")
+	}
 	_ = p.markStatus(sessionID, session.StatusIdle)
 	p.releaseSlot(key)
 	p.tryGrantQueue()

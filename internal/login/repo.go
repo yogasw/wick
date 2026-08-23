@@ -56,7 +56,6 @@ func (r *repo) UpsertUser(ctx context.Context, email, name, avatar string, admin
 	return &u, nil
 }
 
-
 // ErrEmailExists is returned by CreateUserWithPassword when a user with
 // the requested email already exists. Admin-initiated creation must fail
 // loudly on a duplicate rather than silently overwrite the existing row
@@ -93,6 +92,54 @@ func (r *repo) CreateUserWithPassword(ctx context.Context, email, name, password
 	}
 	r.markOwnerIfFirst(ctx, u.ID)
 	return &u, nil
+}
+
+// CreateChannelUser creates an UNAPPROVED account for an identity that
+// arrived over a chat channel (Slack, …).
+//
+// Deliberately not CreateUserWithPassword:
+//
+//   - Approved is false. The channel reported an email; it did not prove the
+//     sender owns it, and workspace membership is not the same claim as a
+//     wick registration. An admin approving the row is what makes it one.
+//   - The role is ALWAYS RoleUser, even when the email appears in
+//     adminEmails. Admin has to come from a path that proves control of the
+//     address, otherwise anyone who can post as that email in a workspace
+//     inherits it.
+//   - No password is set, so the account cannot be signed into directly; the
+//     admin's invite / reset flow issues credentials.
+//
+// source names the channel that vouched for the identity. It is logged rather
+// than stored: entity.User has no provenance column, and adding one for a log
+// line would mean a migration this does not need.
+func (r *repo) CreateChannelUser(ctx context.Context, email, name, source string) (*entity.User, error) {
+	var existing entity.User
+	err := r.db.WithContext(ctx).Where("email = ?", email).First(&existing).Error
+	if err == nil {
+		return &existing, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	u := entity.User{
+		Email:    email,
+		Name:     name,
+		Role:     entity.RoleUser,
+		Approved: false,
+	}
+	if err := r.db.WithContext(ctx).Create(&u).Error; err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (r *repo) ListApprovedAdmins(ctx context.Context) ([]*entity.User, error) {
+	var users []*entity.User
+	err := r.db.WithContext(ctx).
+		Where("approved = ? AND (role = ? OR is_owner = ?)", true, entity.RoleAdmin, true).
+		Order("created_at asc").
+		Find(&users).Error
+	return users, err
 }
 
 func (r *repo) GetUserByEmail(ctx context.Context, email string) (*entity.User, error) {

@@ -208,6 +208,15 @@ func (h *Handler) apiConnectorRows(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown connector"})
 		return
 	}
+	// Same gate the catalogue applies: system connectors are wick's own
+	// maintenance surface, and a type-disabled one is declared unavailable.
+	// Enforced here too, not just in the listing — a key is guessable, so a
+	// hidden card must not mean a reachable endpoint. Reported as "not found"
+	// so the response doesn't confirm the key exists.
+	if !isConnectorVisibleTo(mod, user, h.connectors.DisabledTypeKeys()) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown connector"})
+		return
+	}
 
 	rows, err := h.visibleRowsForKey(r, user, key)
 	if err != nil {

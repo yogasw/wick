@@ -86,6 +86,14 @@ func filterOwnerTagsForIDs(tags []*entity.Tag, ids map[string]struct{}) []*entit
 }
 
 type Handler struct {
+	// onUserApproved, when set, is called after an account is approved so the
+	// user can be told — on whatever channel they registered from, which is
+	// usually where they are waiting. Optional: nil simply sends nothing.
+	onUserApproved func(ctx context.Context, userID string)
+	// midd is stored at Register time so the impersonation handlers can swap
+	// the session cookie.
+	midd *login.Middleware
+
 	repo       *repo
 	tools      []tool.Tool
 	configs    *configs.Service
@@ -181,6 +189,9 @@ func NewHandler(
 func (h *Handler) SetDataTables(l DataTableLister) { h.dataTables = l }
 
 func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
+	// Kept for the impersonation routes, which have to rewrite the session
+	// cookie rather than only read it.
+	h.midd = sessionMidd
 	admin := func(next http.HandlerFunc) http.Handler {
 		return sessionMidd.RequireAuth(sessionMidd.RequireAdmin(next))
 	}
@@ -234,6 +245,12 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 
 	// User actions
 	mux.Handle("POST /admin/users/create", admin(h.createUser))
+	// Impersonation: "view as" a user, and switch back. Admin-only; the
+	// handler additionally refuses admin targets.
+	mux.Handle("POST /admin/users/{id}/impersonate", admin(h.startImpersonation))
+	// Stop is NOT admin-gated: while impersonating, the session IS the target
+	// user, so an admin-only route would trap them with no way back.
+	mux.Handle("POST /admin/impersonate/stop", sessionMidd.RequireAuth(http.HandlerFunc(h.stopImpersonation)))
 	mux.Handle("POST /admin/users/{id}/approve", admin(h.approveUser))
 	mux.Handle("POST /admin/users/{id}/unapprove", admin(h.unapproveUser))
 	mux.Handle("POST /admin/users/{id}/role", admin(h.setRole))
@@ -473,10 +490,37 @@ func (h *Handler) renderUsers(w http.ResponseWriter, r *http.Request, created vi
 		pickerTags = append(pickerTags, t)
 	}
 	adminCount, _ := h.repo.CountAdmins(r.Context())
+	// Accounts a channel created but could not identify (no email reported, so
+	// nothing to match on) are offered a merge instead of a plain approval:
+	// approving one on its own would leave that person holding two accounts.
+	//
+	// The target list is built once and shared by every such row — every
+	// candidate has the same set of possible destinations.
+	mergeTargets := make([]view.MergeTarget, 0, len(users))
+	for _, u := range users {
+		// Only approved, real accounts can receive a merge. A pending or
+		// synthetic destination would just move the problem.
+		if !u.Approved || isChannelPlaceholderEmail(u.Email) {
+			continue
+		}
+		label := u.Name
+		if label == "" {
+			label = u.Email
+		} else {
+			label = label + " (" + u.Email + ")"
+		}
+		mergeTargets = append(mergeTargets, view.MergeTarget{ID: u.ID, Label: label})
+	}
+
 	items := make([]view.UserRow, len(users))
 	for i, u := range users {
 		ids, _ := h.repo.GetUserTagIDs(r.Context(), u.ID)
-		items[i] = view.UserRow{User: u, TagIDs: ids}
+		needsMerge := !u.Approved && isChannelPlaceholderEmail(u.Email)
+		row := view.UserRow{User: u, TagIDs: ids, NeedsMerge: needsMerge}
+		if needsMerge {
+			row.MergeTargets = mergeTargets
+		}
+		items[i] = row
 	}
 	view.UsersPage(items, pickerTags, currentUser, int(adminCount), created).Render(r.Context(), w)
 }
@@ -543,7 +587,18 @@ func (h *Handler) approveUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Announce the approval. Fired after the write succeeds and deliberately
+	// not allowed to fail the request: the account IS approved either way, and
+	// a failed notice must not look to the admin like a failed approval.
+	if h.onUserApproved != nil {
+		h.onUserApproved(r.Context(), id)
+	}
 	http.Redirect(w, r, "/admin/users", http.StatusFound)
+}
+
+// SetOnUserApproved wires the post-approval notice hook. Called once at boot.
+func (h *Handler) SetOnUserApproved(fn func(ctx context.Context, userID string)) {
+	h.onUserApproved = fn
 }
 
 func (h *Handler) unapproveUser(w http.ResponseWriter, r *http.Request) {
@@ -805,4 +860,15 @@ func tagToMap(t *entity.Tag) map[string]any {
 		"is_filter":   t.IsFilter,
 		"sort_order":  t.SortOrder,
 	}
+}
+
+// channelPlaceholderDomain marks the synthetic address given to an account from
+// a channel that reports no email (Telegram). Mirrors
+// channelidentity.PlaceholderEmail; pinned equal by a test.
+const channelPlaceholderDomain = "@channel.local"
+
+// isChannelPlaceholderEmail reports whether an address is one wick invented for
+// an unidentifiable channel sender, rather than a real contact address.
+func isChannelPlaceholderEmail(email string) bool {
+	return strings.HasSuffix(email, channelPlaceholderDomain)
 }

@@ -86,6 +86,7 @@ templ Layout(title string) {
 			</style>
 		</head>
 		<body>
+			@impersonationBanner(ImpersonationFromContext(ctx))
 			{ children... }
 			@Palette()
 			@Dialog()
@@ -117,4 +118,25 @@ func htmlThemeClasses(t Theme) string {
 		return t.ClassName + " dark"
 	}
 	return t.ClassName
+}
+
+// impersonationBanner warns an admin that the session they are looking at is
+// someone else's, and gives them the way back.
+//
+// Rendered above everything on every page: an admin who forgets they switched
+// reads every permission and every empty list wrong. cau-* (caution), not
+// neg-*, because nothing is broken — the state is just easy to misread.
+templ impersonationBanner(info ImpersonationInfo) {
+	if info.Active {
+		<div class="flex flex-col gap-3 border-b border-cau-400 bg-cau-100 px-6 py-3 text-sm text-cau-400 sm:flex-row sm:items-center sm:justify-between">
+			<span class="font-medium">
+				Viewing as { info.ActingAs } — actions you take are recorded as this user.
+			</span>
+			<form action="/admin/impersonate/stop" method="POST" class="shrink-0">
+				<button type="submit" class="inline-flex items-center justify-center rounded-lg border border-cau-400 bg-white-100 px-3 py-2 text-xs font-medium text-cau-400 transition-colors hover:bg-white-200 dark:bg-navy-700">
+					Back to my account
+				</button>
+			</form>
+		</div>
+	}
 }

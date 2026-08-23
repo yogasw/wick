@@ -10,6 +10,44 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.0.0](https://github.com/yogasw/wick/compare/v0.40.1...v1.0.0) — User Identity & Channels
+
+_Released on 2026-08-23_
+
+### Added
+
+*   **Per-user MCP identity:** An agent's MCP calls now run as the wick user behind the conversation instead of one shared admin principal. Each spawn carries a credential minted for its session owner, so connector access control and tag filtering finally apply to a normal chat. Previously, every user's spawn authenticated as the same synthetic admin and was indistinguishable from every other. Sessions with no owner (cron, system jobs, rows predating ownership tracking) keep working on the old fallback.
+*   **`wick_me` tool:** Reports who the current MCP connection is authenticated as — `user_id`, `name`, `email`, `role`, `is_admin`, `is_owner`, `approved` — resolved server-side from the caller's credential. It also returns `filter_tag_ids`, so an agent can explain why a connector is missing from `wick_list` rather than insisting it should be there. `is_system` and `is_local_cli` distinguish non-human principals (cron jobs, and `wick mcp serve`, which binds to the first admin by design). See [MCP ▶ Caller identity](./guide/mcp#caller-identity).
+*   **Slack sender identity:** A Slack thread now becomes a session owned by the wick user behind the sender — the same identity they would get by opening it in the web UI — so the agent runs with that person's connector access. The join key is the sender's email, which requires the `users:read.email` scope on the Slack app; without it, senders cannot be matched and messages are refused with `email is required`. Guests, bots, and senders with no readable email are always refused, and the check runs before the agent spawns. See [Channels ▶ Sender identity](./guide/agents/channels#sender-identity).
+*   **Channel auto-register** (Agents settings → Session Identity, `channel_auto_register`, default off): Creates a wick account for a Slack sender whose email has none. The account arrives **unapproved**, never admin, and with no password — Slack vouches that the address is on the workspace, not that the sender controls it, so an admin approving it under **Admin → Users** is what turns one claim into the other. The switch is install-level rather than per-channel on purpose: channel config rows are per-owner, so a per-channel toggle would let any user who adds their own bot create pending wick accounts.
+*   **Merge channel accounts:** Channels that report no email (Telegram) cannot be matched to an existing wick user, so a sender there necessarily arrives as a separate account with a synthetic `…@channel.local` address. Admin → Users now flags such rows and offers **Merge accounts** to fold one into the person's real account, moving its channel connections across and deleting the source. Merging is a human decision on purpose — the only other signal is a display name, and merging two people who share one is worse than leaving them apart. Merging away an admin or owner is refused, since a merge deletes the source account.
+*   **Approval notices reach admins too:** When a user is approved, the other approved admins are notified alongside the user. Approval is the moment an account gains access, so this serves as an audit trail.
+*   **Channel connections:** Wick now records which chat account belongs to which user — channel, workspace instance, account id — so it knows where a person can be reached. The account page gets a **Channel connections** panel listing each linked chat account with a **Pause** switch; pausing is enforced when a notification is sent, not merely shown in the UI. The web dashboard is not listed, since every user can always be reached there.
+*   **Account notifications:** Approved admins are notified when someone registers through a channel and needs approval, and the user is notified when their account is approved. Both go out over browser push and every un-paused chat connection, so the notice reaches the channel the person is actually watching. Delivery is best-effort — a failed Slack DM never fails the approval or the registration.
+*   **View as user (impersonation):** Admins can switch into an approved non-admin account from **Admin → Users** to see wick exactly as that user does, with a persistent banner and a one-click way back. Impersonating another admin or the owner is refused, so no single admin account becomes a route to the others, and both directions are logged with both user IDs.
+*   **Slack honours the Agents tool permission:** After identifying the sender, the Slack path applies the same `CanAccessTool` check on `/tools/agents` that the dashboard applies, so a user who cannot open Agents in the web UI can no longer get one by messaging the bot. Approval is checked first, then Agents access, and each refusal names its own fix — a pending account is told to wait for approval, an approved-but-ungranted one is told to ask for the grant.
+*   **Caller-change recycle** (`agents.respawn_on_caller_change`, default off): When a second user sends into a session already running for someone else, the subprocess is restarted so the new turn runs under that user's own identity. A live subprocess carries the credential of whoever spawned it — it sits in the process argv and cannot be swapped in place. Off by default because recycling costs the process's in-memory context.
+
+### Changed
+
+*   **Connector list is a catalogue, not an inventory:** Every registered connector type is now listed for every user, even with no instance configured. Previously, non-admins only saw a connector once an admin had created an instance, so on a fresh install the list was empty for them with no way to discover a connector or ask for one. Cards carry only name, description, and operation count — instance-level tag scoping is unchanged. System connectors and admin-disabled types stay hidden.
+*   Per-session MCP credentials are now revoked when their subprocess exits, rather than remaining valid until their TTL.
+*   **Slack health check covers the email scope:** Test Integration now probes `users:read.email` explicitly. That scope fails silently — `users.info` still succeeds without it and just returns a blank email — so nothing else in the check could reveal it, and every sender would be refused with `email is required` while the operator had no idea which scope was missing. It fails only when no member has an email; partial coverage is reported as a note, since real workspaces have members with no address on file.
+
+### Fixed
+
+*   **Duplicate accounts from a renamed channel email:** A Slack sender was matched to a wick user by email only, so editing their Slack email and messaging again registered a second wick account for the same person. Identity is now resolved from the channel account ID first — which never changes — and falls back to email only when no link exists yet. An existing link also wins over a conflicting email, so changing a Slack email to someone else's address cannot take over their account.
+*   **Sign out doing nothing:** The logout button could silently fail — no navigation, no request, nothing in the console. The form is intercepted to unsubscribe push notifications first, and that path awaited `navigator.serviceWorker.ready`, a promise that never rejects. When the service worker failed to activate, it hung forever and the re-submit was never reached. The unsubscribe is now raced against a short timeout, and signing out no longer depends on push cleanup succeeding.
+*   The per-connector detail endpoint had no system or disabled check, so a guessed key returned metadata for a connector hidden from that user. It now answers `unknown connector` without confirming the key exists.
+
+### Notes
+
+*   Non-admin users lose the admin-only MCP tools (`wick_skill_*`, `wickmanager` operations) they previously received for free while every agent spawn authenticated as an admin. This is the intended effect of per-user identity, but it is a visible change.
+*   `codex` and `gemini` have no MCP wiring at all, so per-user identity does not apply to them yet. Guard tests now fail if MCP is added there, as a reminder to build it per-user from the start.
+
+---
+
+
 ## [v0.40.1](https://github.com/yogasw/wick/compare/v0.40.0...v0.40.1) — Board Columns
 
 _Released on 2026-08-22_

@@ -880,19 +880,45 @@
     }
   });
 
-  document.addEventListener('submit', async function (e) {
+  // Unsubscribe this device's push endpoint before logging out, so a shared
+  // machine stops receiving the previous user's notifications.
+  //
+  // This cancels the native submit and re-submits after the unsubscribe, which
+  // makes the re-submit MANDATORY: if it is ever skipped, the button silently
+  // does nothing and the user cannot sign out. That happened —
+  // navigator.serviceWorker.ready (inside currentSubscription) never rejects,
+  // so when the service worker fails to activate it hangs forever, the awaits
+  // never settle, and the re-submit in `finally` is never reached.
+  //
+  // So the unsubscribe is raced against a short timeout and the re-submit runs
+  // on its own, outside the awaited work. Signing out must never depend on push
+  // cleanup succeeding: a missed unsubscribe costs a stale notification, a
+  // missed submit costs the user their ability to log out.
+  document.addEventListener('submit', function (e) {
     var form = e.target;
     if (!form || form.getAttribute('action') !== '/auth/logout' || form.dataset.pushLogoutDone === '1') return;
     if (!supportsPush()) return;
     e.preventDefault();
-    try {
-      var sub = await currentSubscription();
-      if (sub) await unsubscribeEndpoint(sub.endpoint, sub);
-    } catch (_) {
-    } finally {
-      form.dataset.pushLogoutDone = '1';
+    form.dataset.pushLogoutDone = '1';
+
+    var submitted = false;
+    function go() {
+      if (submitted) return;
+      submitted = true;
       form.submit();
     }
+
+    // Hard ceiling: logout proceeds even if the unsubscribe stalls.
+    setTimeout(go, 1500);
+
+    (async function () {
+      try {
+        var sub = await currentSubscription();
+        if (sub) await unsubscribeEndpoint(sub.endpoint, sub);
+      } catch (_) {
+        // Best effort — a failed unsubscribe must not block signing out.
+      }
+    })().then(go, go);
   });
 
   window.addEventListener('load', function () {

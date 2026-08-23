@@ -112,7 +112,21 @@ type ClaudeFactory struct {
 
 	// MCPToken is the per-boot internal MCP secret forwarded to the
 	// claude spawner so agents reach the live MCP server over loopback.
+	// It maps to a synthetic ADMIN principal, so it is only a FALLBACK:
+	// used when SessionMCPToken is unset, or when it declines to mint
+	// (a session with no owner — legacy rows, cron, system jobs).
 	MCPToken string
+
+	// SessionMCPToken mints a per-SESSION MCP credential that authenticates
+	// as the human who owns the session, instead of the shared admin
+	// principal MCPToken grants. Without it, every user's spawn reaches the
+	// MCP server as the same synthetic admin, so connector access control
+	// and tag filtering never apply to a web chat.
+	//
+	// Returning ok=false means "no real owner" and the caller falls back to
+	// MCPToken — an ownerless session must keep working rather than lose
+	// MCP entirely. nil = per-user identity disabled (fallback for all).
+	SessionMCPToken func(sessionID string) (token string, ok bool)
 
 	// InstanceOverride pins a specific Instance for every Build call,
 	// bypassing the provider.Find registry lookup. Tests use this to
@@ -274,6 +288,10 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		gateBin = activeGate.GateBinary
 	}
 
+	// claudeMCPToken is the per-session MCP credential handed to a claude
+	// spawn, reported via BuildResult so the pool can revoke it on exit.
+	// Empty when the spawn used the shared per-boot token (not revocable).
+	var claudeMCPToken string
 	spawner := f.Spawner
 	if spawner == nil {
 		bin, src := resolveProviderBinary(opt.ProviderType, opt.ProviderName)
@@ -295,7 +313,15 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			// under the wick label.
 			spawner = wickpkg.Spawner{}
 		default:
-			spawner = claude.Spawner{Binary: bin, BypassPermissions: bypassPerms, MCPToken: f.MCPToken}
+			// Mint ONCE: calling mcpTokenFor twice would issue two tokens
+			// and leak the one not handed to the spawner.
+			tok := f.mcpTokenFor(opt.SessionID)
+			if tok != f.MCPToken {
+				// Per-session credential: revocable when the process dies.
+				// The shared per-boot token is not, so it stays unreported.
+				claudeMCPToken = tok
+			}
+			spawner = claude.Spawner{Binary: bin, BypassPermissions: bypassPerms, MCPToken: tok}
 		}
 	}
 
@@ -457,7 +483,7 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		// type default.
 		SendMode: sendModeFor(pType, resolvedIns.SendMode),
 	})
-	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted}, nil
+	return BuildResult{Agent: a, State: st, Store: sto, OnStarted: onStarted, MCPToken: claudeMCPToken}, nil
 }
 
 // sendModeFor resolves an instance's Send behaviour. A non-empty
@@ -496,6 +522,23 @@ func sessionIdentityBlock(sessionID, channel, title string, titleCustom bool) st
 		b.WriteString("false")
 	}
 	return b.String()
+}
+
+// mcpTokenFor picks the MCP credential for one spawn: a per-session token
+// naming the owning human when one can be minted, else the shared internal
+// token (synthetic admin).
+//
+// The fallback is deliberate, not lazy. Sessions predating ownership
+// tracking carry no UserID, and cron / system spawns have no human at all;
+// refusing to spawn them, or spawning them with no MCP access, would break
+// working setups to enforce an attribution nobody asked for there.
+func (f *ClaudeFactory) mcpTokenFor(sessionID string) string {
+	if f.SessionMCPToken != nil && sessionID != "" {
+		if tok, ok := f.SessionMCPToken(sessionID); ok && tok != "" {
+			return tok
+		}
+	}
+	return f.MCPToken
 }
 
 func sendModeFor(pType provider.Type, override string) provider.SendMode {

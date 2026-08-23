@@ -15,6 +15,18 @@ type GeneralConfig struct {
 	KillAfterIdleSec int    `wick:"number;group=Concurrency & Lifecycle;desc=Extra seconds after idle timeout before the subprocess is killed. 0 = kill immediately at idle timeout. Default: 0."`
 	PreemptIdle      bool   `wick:"bool;group=Concurrency & Lifecycle;desc=When the pool is full and a new session is queued, preempt the longest-idle active subprocess to free its slot. Killed sessions resume via --resume on their next message."`
 	AutoRescan       bool   `wick:"bool;group=Concurrency & Lifecycle;desc=Auto re-probe provider binaries when cached version is older than 24h. Off = refresh only via Rescan button."`
+	// Per-user identity for shared sessions. A running subprocess carries the
+	// MCP credential of whoever spawned it (it sits in the process argv and
+	// cannot be swapped in place), so a second user sending into the same
+	// session would otherwise act with the first user's connector access.
+	// Creating a wick account is an INSTALL-level decision, not a per-channel
+	// one. Channel rows are per-owner: any user who can add their own Slack bot
+	// would otherwise be able to turn auto-registration on for it, and thereby
+	// mint pending wick accounts. Keeping the switch here means only an admin
+	// editing the Agents settings can allow that.
+	ChannelAutoRegister bool `wick:"bool;key=channel_auto_register;group=Session Identity;desc=When someone messages an agent from a chat channel and their email has no wick account, create one automatically. The account is created PENDING APPROVAL — an admin approves it under Admin → Users before that person can do anything, so this only saves the invite step, it never grants access. Off = an unmatched sender is told to ask an admin for an invite. Guests, bots, and senders with no readable email are always refused either way."`
+
+	RespawnOnCallerChange bool `wick:"bool;key=respawn_on_caller_change;group=Session Identity|How a session behaves when more than one person talks to it.;desc=When another user sends a message into a session already running for someone else, restart the subprocess so the new turn runs under that user's own identity and connector access. Off = the running process is reused and the turn inherits the original user's access. Costs the process's in-memory context on each handover (conversation history is reloaded)."`
 
 	// Memory guard. MaxConcurrent above counts PROCESSES; these count
 	// BYTES. One slot is an idle agent at ~150 MB or an agent driving a
@@ -130,13 +142,20 @@ func DefaultGeneralConfig() GeneralConfig {
 		// DefaultProvider is a picker (JSON [{id,name}]); empty = fall back
 		// to claude at spawn. Not seeded with a value so a fresh install
 		// doesn't pin a provider the operator never chose.
-		AutoRescan:         true,
-		PreemptIdle:        true,
-		SystemPrompt:       systemprompt.DefaultSystemPrompt(),
-		WorkflowGuardMode:  "off",
-		TraceEventInlineKB: 10,
-		TraceEventMaxKB:    512,
-		AirouterEnabled:    true,
+		AutoRescan:  true,
+		PreemptIdle: true,
+		// Ships OFF: recycling the subprocess costs its in-memory context,
+		// which is the wrong trade for the common single-user session. Opt in
+		// where a session is genuinely shared and attribution matters.
+		RespawnOnCallerChange: false,
+		// Off by default: an inbound message should not be able to create an
+		// account until an operator decides that is wanted.
+		ChannelAutoRegister: false,
+		SystemPrompt:        systemprompt.DefaultSystemPrompt(),
+		WorkflowGuardMode:   "off",
+		TraceEventInlineKB:  10,
+		TraceEventMaxKB:     512,
+		AirouterEnabled:     true,
 		// Memory guard ships OFF: an install that never opts in must behave
 		// byte-identically to one built before the feature existed. The four
 		// numeric limits stay zero here on purpose — their correct values

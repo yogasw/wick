@@ -87,10 +87,13 @@ func TestAPIConnectors(t *testing.T) {
 			wantKeys: []string{"slack", "github", "maint"},
 		},
 		{
-			name:       "non-admin without rows sees nothing",
+			// The list is a CATALOGUE of what wick can connect to, not an
+			// inventory of what is already configured, so a connector with no
+			// instances is still listed. Only the system one stays hidden.
+			name:       "non-admin sees every non-system def even with no rows",
 			user:       normal,
-			wantKeys:   []string{},
-			wantAbsent: []string{"slack", "github", "maint"},
+			wantKeys:   []string{"slack", "github"},
+			wantAbsent: []string{"maint"},
 		},
 	}
 

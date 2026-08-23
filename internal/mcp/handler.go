@@ -386,6 +386,8 @@ func (h *Handler) dispatchTool(w http.ResponseWriter, r *http.Request, hreq hand
 		handlers.WickSkillList(w, hreq, rsp)
 	case "wick_skill_sync":
 		handlers.WickSkillSync(w, r, hreq, rsp)
+	case "wick_me":
+		handlers.WickMe(w, r, hreq, rsp)
 	case "wick_session_info":
 		handlers.WickSessionInfo(w, r, hreq, rsp, h.layout, args)
 	case "wick_set_title":

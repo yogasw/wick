@@ -58,6 +58,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/workflow/wftest"
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/internal/bookmark"
+	"github.com/yogasw/wick/internal/channelidentity"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
 	customconn "github.com/yogasw/wick/internal/connectors/custom"
@@ -396,6 +397,18 @@ func NewServer() *Server {
 		log.Warn().Err(err).Msg("notification config bootstrap failed")
 	}
 	pushSvc := pwa.NewPushService(db, configsSvc)
+
+	// Channel identities: which chat account belongs to which wick user, so an
+	// account notice can be delivered where that person actually is. The
+	// notifier fans out over browser push AND every un-paused chat connection;
+	// Channels is attached below, once the registry exists.
+	channelIdentities := channelidentity.NewStore(db)
+	channelNotifier := &channelidentity.Notifier{
+		Store:  channelIdentities,
+		Push:   pushSvc,
+		Admins: authSvc,
+		AppURL: configsSvc.AppURL,
+	}
 	// The encfields tool resolves its cipher through a package
 	// singleton — built-in tools register from cmd/lab before the DB
 	// or enc service exist, so a static Register signature is the
@@ -765,15 +778,35 @@ func NewServer() *Server {
 			DefaultScope: agentsLayout.ProjectsDir(),
 		}
 	}
+	// Scoped MCP tokens: per-session credentials for top-level spawns and
+	// per-child credentials for sub-agents. Declared here because the pool
+	// (which revokes them on exit) is built before the delegation service
+	// (which issues the sub-agent ones) — one issuer, shared by both.
+	mcpScopedTokens := mcp.NewScopedTokens()
+
 	preemptIdle := configsSvc.GetOwned("agents", "preempt_idle") != "false"
 	agentsPool = agentpool.New(agentpool.PoolConfig{
-		MaxConcurrent:   maxConc,
-		IdleTimeout:     time.Duration(idleSec) * time.Second,
-		KillAfterIdle:   time.Duration(killAfterIdleSec) * time.Second,
-		PreemptIdle:     preemptIdle,
-		Layout:          agentsLayout,
-		Factory:         agentsFactory,
-		DefaultProvider: configsSvc.GetOwned("agents", "default_provider"),
+		MaxConcurrent: maxConc,
+		IdleTimeout:   time.Duration(idleSec) * time.Second,
+		KillAfterIdle: time.Duration(killAfterIdleSec) * time.Second,
+		PreemptIdle:   preemptIdle,
+		// Per-user identity plumbing. A subprocess carries the MCP credential
+		// of whoever spawned it (baked into its argv), so the pool needs to
+		// know who each message is from to decide whether that process can be
+		// reused, and needs to invalidate the credential once it dies.
+		CallerUserID: func(ctx context.Context) string {
+			if u := login.GetUser(ctx); u != nil {
+				return u.ID
+			}
+			return ""
+		},
+		RevokeMCPToken: func(token string) { mcpScopedTokens.Revoke(token) },
+		// Read live so the switch takes effect without a restart, matching
+		// how the other agents settings behave.
+		RespawnOnCallerChange: configsSvc.GetOwned("agents", "respawn_on_caller_change") == "true",
+		Layout:                agentsLayout,
+		Factory:               agentsFactory,
+		DefaultProvider:       configsSvc.GetOwned("agents", "default_provider"),
 		// Queue a spawn instead of starting it while the machine is
 		// already short of memory. Read live so the floor can be changed
 		// in the UI without a restart; 0 (the default) disables it.
@@ -1465,6 +1498,11 @@ func NewServer() *Server {
 		log.Fatal().Msgf("connectors bootstrap: %s", err.Error())
 	}
 
+	// Give the notifier a way onto the chat channels. Done here rather than at
+	// construction because the registry does not exist yet when the notifier is
+	// built, and the notifier needs the registry to pick the right instance.
+	channelNotifier.Channels = channelSenderFunc(channelReg.SendDirect)
+
 	// Wire Slack user-token lookup via the connectors service.
 	// SetTokenRefreshFn + RefreshTokenMap seeds the initial userID→token cache
 	// by calling auth.test once per Slack connector row configured in
@@ -1515,6 +1553,27 @@ func NewServer() *Server {
 				return "", false
 			})
 
+			// Email-based identity: a Slack-started session belongs to the
+			// wick user behind the sender, so the agent runs with THAT
+			// user's connector access — the same identity they would get by
+			// opening the session in the web UI. Email is the join key
+			// because it is the only field both sides agree on.
+			slackCh.SetUserResolver(slackUserResolver{
+				users:      authSvc,
+				identities: channelIdentities,
+				notifier:   channelNotifier,
+				// Install-level switch, read live. Deliberately NOT the channel's
+				// own config: channel rows are per-owner, so a per-channel toggle
+				// would let any user with their own bot mint pending accounts.
+				autoRegister: func() bool {
+					return configsSvc.GetOwned("agents", "channel_auto_register") == "true"
+				},
+				// Which bot this resolver serves. A recorded identity must be
+				// messaged back through the SAME instance: a Slack user id only
+				// means something inside its own workspace.
+				instanceKey: channelReg.InstanceKeyOf(ch),
+			})
+
 			// OwnerFn stamps the resolved wick user ID on the session.
 			if agentsPool != nil {
 				slackCh.SetOwnerFn(func(ctx context.Context, sessionID, userID string) {
@@ -1556,7 +1615,35 @@ func NewServer() *Server {
 	// with mcpInternalToken — that one maps to a synthetic admin and
 	// would bypass tag filtering entirely, making a profile's tool
 	// restrictions decorative.
-	mcpScopedTokens := mcp.NewScopedTokens()
+	// Per-user MCP identity for top-level spawns. Without this every web
+	// chat reaches the MCP server as the SAME synthetic admin, so connector
+	// access control and tag filtering never apply — user A and user B are
+	// indistinguishable. Minting per session makes the spawn authenticate
+	// as the human who owns it.
+	//
+	// stripAdmin=false, unlike a sub-agent token: the principal here IS the
+	// chatting human, so demoting them would remove their own admin-only
+	// tools while narrowing nothing on their behalf.
+	//
+	// ok=false (no owner: legacy rows, cron, system jobs) makes the factory
+	// fall back to the internal token rather than lose MCP access.
+	agentsFactory.SessionMCPToken = func(sessionID string) (string, bool) {
+		sess, found := agentsMgr.Registry().Session(sessionID)
+		if !found || sess.Meta.UserID == "" {
+			return "", false
+		}
+		tok, err := mcpScopedTokens.IssueFor(
+			sess.Meta.UserID,
+			authSvc.GetUserFilterTagIDs(context.Background(), sess.Meta.UserID),
+			false,
+		)
+		if err != nil {
+			log.Warn().Err(err).Str("session", sessionID).
+				Msg("mcp: per-user token mint failed; falling back to internal token")
+			return "", false
+		}
+		return tok, true
+	}
 	delegationSvc = &delegation.Service{
 		Repo:   delegation.NewRepo(db),
 		Runner: delegation.NewPoolRunner(agentsPool, agentsLayout, agentsMgr.Register),
@@ -1708,7 +1795,13 @@ func NewServer() *Server {
 	// over loopback — no new auth surface. nil provider = only shell/todo.
 	wickprovider.SetToolProvider(func(scope wickprovider.ToolScope) []wickprovider.ExternalTool {
 		ctx := context.Background()
-		descs := mcpHandler.AgentToolDescriptors(ctx)
+		// Run as the human who owns the session, so an in-process agent sees
+		// exactly the tools that user may reach. The CLI providers get this
+		// from their per-session scoped token; the in-process path has no
+		// bearer to carry, so the principal is resolved here and passed
+		// directly. Ownerless session → zero identity → synthetic admin.
+		id := agentToolIdentity(ctx, agentsMgr, authSvc, scope.SessionID)
+		descs := mcpHandler.AgentToolDescriptorsAs(ctx, id)
 		out := make([]wickprovider.ExternalTool, 0, len(descs))
 		for _, d := range descs {
 			name := d.Name
@@ -1717,7 +1810,7 @@ func NewServer() *Server {
 				Description: d.Description,
 				Params:      toSchemaMap(d.InputSchema),
 				Handler: func(hctx context.Context, args map[string]any) (string, bool) {
-					text, isErr := mcpHandler.CallAgentTool(hctx, name, args, scope.SessionID)
+					text, isErr := mcpHandler.CallAgentToolAs(hctx, name, args, scope.SessionID, id)
 					return text, isErr
 				},
 			})
@@ -2129,6 +2222,16 @@ func NewServer() *Server {
 	authHandler.Register(r, authMidd)
 
 	// Admin routes: /admin, /admin/tools, /admin/configs, /admin/configs/sso, ...
+	// Tell a user their account was approved, on every door they have. The
+	// channel they registered from is usually where they are waiting, so a
+	// web-only notice would be the one place they are not looking.
+	adminHandler.SetOnUserApproved(func(ctx context.Context, userID string) {
+		u, err := authSvc.GetUserByID(ctx, userID)
+		if err != nil || u == nil {
+			return
+		}
+		channelNotifier.NotifyUserApproved(ctx, u)
+	})
 	adminHandler.Register(r, authMidd)
 
 	// Bookmark API (auth-gated inside)
@@ -2136,6 +2239,9 @@ func NewServer() *Server {
 
 	// Notification API (auth-gated inside)
 	pushHandler.Register(r, authMidd)
+	// Channel connections panel on the account page: which chat accounts this
+	// user is reachable on, and a pause switch per connection.
+	channelidentity.NewHandler(channelIdentities).Register(r, authMidd)
 
 	// Personal access tokens + MCP install — /profile/tokens, /profile/mcp.
 	tokensHandler.Register(r, authMidd)
