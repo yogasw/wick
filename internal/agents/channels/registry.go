@@ -19,6 +19,7 @@ package channels
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"net/http"
 	"strings"
@@ -79,10 +80,10 @@ const silentDecideMin = len(SilentMarker)
 // events (Thinking/ToolUse/ToolResult) are held too so they don't leak a
 // silent turn's activity to channels before the marker is seen.
 type turnState struct {
-	buf      strings.Builder     // accumulated reply text, pre-decision
-	pending  []event.AgentEvent  // events held until the silent decision
-	decided  bool
-	silent   bool
+	buf     strings.Builder    // accumulated reply text, pre-decision
+	pending []event.AgentEvent // events held until the silent decision
+	decided bool
+	silent  bool
 }
 
 // NewRegistry returns an empty registry. Use the With* methods to attach
@@ -250,6 +251,72 @@ func (r *Registry) AddKeyed(instanceKey string, c Channel, src ConfigSource) {
 		r.sources[instanceKey] = src
 	}
 	r.mu.Unlock()
+}
+
+// InstanceKeyOf returns the key a channel was registered under, so callers
+// iterating Channels() can record WHICH instance an identity belongs to.
+// Falls back to the channel name for an unkeyed registration.
+func (r *Registry) InstanceKeyOf(c Channel) string {
+	if c == nil {
+		return ""
+	}
+	r.mu.Lock()
+	key, ok := r.instanceKeys[c]
+	r.mu.Unlock()
+	if ok && key != "" {
+		return key
+	}
+	return c.Name()
+}
+
+// DirectSender is a channel that can send an unsolicited DM to one of its
+// users. Implemented by transports where that is meaningful (Slack); a channel
+// without a DM concept simply does not implement it.
+type DirectSender interface {
+	SendDirect(ctx context.Context, externalUserID, text string) error
+}
+
+// SendDirect delivers a direct message through ONE specific channel instance.
+//
+// instanceKey is required rather than "first channel of this type": with
+// several Slack bots wired (per-owner, possibly different workspaces), a user
+// id only means something inside the workspace it came from. Picking the wrong
+// instance would either fail or, worse, message a different person who happens
+// to share that id elsewhere.
+//
+// Returns an error when no such instance exists or it cannot send directly, so
+// the caller can log a real cause instead of assuming delivery.
+func (r *Registry) SendDirect(ctx context.Context, channelType, instanceKey, externalUserID, text string) error {
+	r.mu.Lock()
+	var target Channel
+	for _, c := range r.channels {
+		if c.Name() != channelType {
+			continue
+		}
+		// An unkeyed channel is registered under its plain name, so accept
+		// either form — callers store whichever key was in effect at link time.
+		if key, ok := r.instanceKeys[c]; ok {
+			if key == instanceKey {
+				target = c
+				break
+			}
+			continue
+		}
+		if instanceKey == "" || instanceKey == channelType || instanceKey == "default" {
+			target = c
+			break
+		}
+	}
+	r.mu.Unlock()
+
+	if target == nil {
+		return fmt.Errorf("no %s channel instance %q", channelType, instanceKey)
+	}
+	sender, ok := target.(DirectSender)
+	if !ok {
+		return fmt.Errorf("%s channel cannot send direct messages", channelType)
+	}
+	return sender.SendDirect(ctx, externalUserID, text)
 }
 
 // RemoveKeyed stops and removes the channel registered under instanceKey.
@@ -447,6 +514,7 @@ func (r *Registry) StopAll() {
 // event is forwarded. Once decided:
 //   - not silent → flush every held event to channels, then pass through live.
 //   - silent     → drop everything; nothing reaches any channel this turn.
+//
 // The web-UI/SSE path is separate (the pool's OnEvent → broadcaster) and is
 // never gated here, so the reply still shows in the conversation view. The
 // turn's silent verdict is recorded (silentLast) so the idle push alert can be

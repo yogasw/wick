@@ -198,15 +198,48 @@ templ UserRowFragment(row UserRow, tagsJSON string, adminCount int) {
 			}
 		</td>
 		<td class="px-4 py-3">
-			if row.User.Approved {
-				<form action={ templ.SafeURL("/admin/users/" + row.User.ID + "/unapprove") } method="POST">
-					<button type="submit" class="text-xs font-medium text-neg-400 hover:underline transition-colors">Revoke</button>
-				</form>
-			} else {
-				<form action={ templ.SafeURL("/admin/users/" + row.User.ID + "/approve") } method="POST">
-					<button type="submit" class="text-xs font-medium text-green-600 hover:underline transition-colors">Approve</button>
-				</form>
-			}
+			<div class="flex flex-col items-start gap-2">
+				if row.User.Approved {
+					<form action={ templ.SafeURL("/admin/users/" + row.User.ID + "/unapprove") } method="POST">
+						<button type="submit" class="text-xs font-medium text-neg-400 hover:underline transition-colors">Revoke</button>
+					</form>
+				} else {
+					<form action={ templ.SafeURL("/admin/users/" + row.User.ID + "/approve") } method="POST">
+						<button type="submit" class="text-xs font-medium text-green-600 hover:underline transition-colors">Approve</button>
+					</form>
+				}
+				<!--
+					View as: switch the session to this user to see wick exactly as
+					they do. Offered only for approved non-admins — the handler
+					refuses admin targets so one admin account can never become a
+					route to another, and an unapproved account can do nothing to
+					look at anyway.
+				-->
+				if row.User.Approved && !row.User.IsAdmin() {
+					<form action={ templ.SafeURL("/admin/users/" + row.User.ID + "/impersonate") } method="POST">
+						<button type="submit" class="text-xs font-medium text-link-400 hover:underline transition-colors">View as</button>
+					</form>
+				}
+				<!--
+					Merge: for an account created by a channel that reports no email
+					(Telegram). wick cannot tell which person it is, so an admin
+					names the target. Offered only for non-admin sources — a merge
+					deletes the source, so allowing an admin there would make this a
+					way to remove another administrator.
+				-->
+				if row.NeedsMerge && !row.User.IsAdmin() {
+					<form action={ templ.SafeURL("/admin/users/" + row.User.ID + "/merge-into") } method="POST" class="flex flex-col gap-2">
+						<label class="text-xs font-medium text-cau-400">Link to existing user</label>
+						<select name="target_user_id" required class="w-40 rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-xs text-black-900 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100">
+							<option value="">Select user...</option>
+							for _, cand := range row.MergeTargets {
+								<option value={ cand.ID }>{ cand.Label }</option>
+							}
+						</select>
+						<button type="submit" class="text-xs font-medium text-cau-400 hover:underline transition-colors">Merge accounts</button>
+					</form>
+				}
+			</div>
 		</td>
 	</tr>
 }

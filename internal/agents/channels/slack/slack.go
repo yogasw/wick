@@ -232,6 +232,12 @@ type Channel struct {
 	teamDomain     string           // Workspace subdomain extracted from resp.URL
 	connectorToken ConnectorTokenFn // optional; nil = no user-token DM support
 	wickUserIDFn   WickUserIDFn     // optional; resolves Slack user ID → wick user ID
+	// users resolves a Slack sender's EMAIL to a wick user, and creates one
+	// when auto-register is on. Email is the only field both sides agree on,
+	// so it is the join key; wickUserIDFn above only covers senders who
+	// already completed an OAuth connect. nil = identity mapping disabled,
+	// which falls back to the channel-owner behaviour.
+	users UserResolver
 
 	mu    sync.Mutex
 	turns map[string]*turn
@@ -1528,6 +1534,21 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		Str("channel_type", ev.ChannelType).
 		Msg("access allowed")
 
+	// Identity gate. A Slack-started session belongs to the wick user behind
+	// the sender, and that owner decides which connectors the agent may
+	// reach — so a sender we cannot map has to be refused BEFORE a spawn,
+	// not after. Running the turn anyway would execute it under the channel
+	// owner's access, which is exactly the confusion this prevents.
+	if msg := s.checkSenderIdentity(ev.User); msg != "" {
+		log.Warn().Str("channel", "slack").
+			Str("user", ev.User).
+			Str("slack_channel", ev.Channel).
+			Msg("identity unresolved, refusing message")
+		s.setReaction(reactionBlocked, ev.Channel, ev.TimeStamp, "")
+		s.postReply(ev.Channel, threadTS, msg)
+		return
+	}
+
 	meta := agentchannels.ParseMeta(ev.Text)
 	if meta.IsMeta {
 		s.handleMetaCmd(ctx, meta, ev.Channel, threadTS)
@@ -1646,12 +1667,9 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	// reply (where the owner is already set) avoids needless per-message
 	// queries. EnsureSessionOwner is a no-op if an owner already exists.
 	if isNewSession && s.ownerFn != nil {
-		if s.wickUserIDFn != nil {
-			if wickUserID, ok := s.wickUserIDFn(context.Background(), ev.User); ok {
-				s.ownerFn(context.Background(), sessionID, wickUserID)
-			}
-		}
-		if s.ownerUserID != "" {
+		if wickUserID, ok := s.resolveSessionOwner(ev.User); ok {
+			s.ownerFn(context.Background(), sessionID, wickUserID)
+		} else if s.ownerUserID != "" {
 			s.ownerFn(context.Background(), sessionID, s.ownerUserID)
 		}
 	}
