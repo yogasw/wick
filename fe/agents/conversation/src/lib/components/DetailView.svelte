@@ -1492,6 +1492,11 @@
   // badge stuck at "3" after everything finished; the tab itself stays
   // visible on the total so results remain readable.
   const subAgentCount = $derived(liveSubAgents(subAgents).length);
+  /* Notes the agent can actually see. Hidden ones are excluded: the badge
+     answers "how much is on this chat's record", and a note deliberately
+     kept from the agent is not part of that answer — nor should hiding one
+     leave the count unchanged, which would make the control look inert. */
+  const noteCount = $derived((notesInfo?.notes ?? []).filter((n) => !n.hidden).length);
 
   /* Whether a rail has work running behind a closed panel.
 
@@ -1511,6 +1516,7 @@
   }
 
   function railCount(id: RailTab): number {
+    if (id === "notes") return noteCount;
     if (id === "context") return contextCount;
     if (id === "process") return processCount;
     if (id === "workspace") return workspaceCount;
@@ -1747,18 +1753,21 @@
     <div
       bind:this={scmSideEl}
       tabindex="-1"
-      class={`relative hidden lg:flex flex-col outline-none ${railTab === "source" ? "" : "w-80"} shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden`}
-      style={railTab === "source" ? `width:${scmWidth}px` : ""}
+      class="relative hidden lg:flex flex-col outline-none shrink-0 border-l border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden"
+      style={`width:${scmWidth}px`}
     >
+      <!-- One handle for the whole panel, whichever tab is in it. A diff and
+           a long note both want to be widened, and a width that only the
+           source tab could change made the others feel fixed. -->
+      <button
+        type="button"
+        aria-label="Resize side panel"
+        title="Drag to resize"
+        data-scm-resize
+        onpointerdown={startScmResize}
+        class="absolute left-0 top-0 z-10 h-full w-1.5 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-green-500/40 focus-visible:bg-green-500/40 transition-colors"
+      ></button>
       {#if railTab === "source"}
-        <button
-          type="button"
-          aria-label="Resize source panel"
-          title="Drag to resize"
-          data-scm-resize
-          onpointerdown={startScmResize}
-          class="absolute left-0 top-0 z-10 h-full w-1.5 -translate-x-1/2 cursor-col-resize bg-transparent hover:bg-green-500/40 focus-visible:bg-green-500/40 transition-colors"
-        ></button>
         <div class="flex-1 overflow-hidden dark:bg-navy-700" data-scm-host bind:this={scmHostEl}></div>
       {:else if railTab === "ticket" && notesInfo}
         <TicketPanel
