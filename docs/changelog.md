@@ -10,7 +10,7 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
-## [v1.1.0](https://github.com/yogasw/wick/compare/v1.0.0...v1.1.0) — Per-user Identity for Codex
+## [v1.1.0](https://github.com/yogasw/wick/compare/v1.0.0...v1.1.0) — Caller Identity Everywhere
 
 ### Added
 
@@ -18,7 +18,15 @@ _Nothing yet — notes for the next release go here._
 
     The shape differs from claude by necessity: codex has no `--mcp-config` equivalent, so the server is registered with TOML config overrides and the bearer is read from an environment variable named in that config. A useful side effect is that the token never enters `argv`, which is world-readable in process listings.
 
+*   **My tickets, and untracked sessions.** `ticket_list` gains `mine` / `assignee` filters, plus two named ops for the questions people actually ask: `ticket_mine` (the caller's own tickets) and `session_untracked` (conversations attached to no ticket at all).
+
+    `mine` resolves the user **server-side** from the credential, so no user id is passed or accepted — a model cannot read someone else's queue by supplying an id. Tickets nobody owns stay on `ticket_list` with `assignee=unassigned`; that is a different question from an untracked session, and the op descriptions say so rather than leaving a model to guess.
+
+    Untracked-ness is checked against the ticket's own session list, not the denormalised `session.Meta.TicketID` back-pointer — a pointer left behind by a deleted ticket would otherwise hide a session that *is* untracked, which is exactly what the op is asked to find.
+
 ### Fixed
+
+*   **Notes were attributed to "agent" instead of the person who wrote them.** One conversation could show `Admin` for a note added in the web UI and `agent` for the identical act through an agent, and once two people shared a conversation their notes were indistinguishable. Notes now record the caller's user id, which the UI resolves to a current name, so a rename is reflected on old notes. Calls with genuinely nobody behind them (cron, system jobs) record `unknown` and render as "unknown user" — the old value named an actor that does not exist.
 
 *   **`wick_me` reported `wick-agent-internal` instead of the real user.** Sessions started from Slack ran as the synthetic admin — full connector visibility, no tag filtering — and retrying never helped. Two causes, both fixed:
 
