@@ -273,6 +273,13 @@
   const activeTicketLabel = $derived(
     activeTicket ? activeTicket.title || activeTicket.id : (activeTicketId ?? ""),
   );
+  /* The placeholder sits on ONE line that cannot wrap, so a long ticket
+     title would run past the input's right edge and hide the "/ commands"
+     hint after it. The footer below states the title in full and wraps, so
+     nothing is lost by clipping it here. */
+  const activeTicketShort = $derived(
+    activeTicketLabel.length > 32 ? activeTicketLabel.slice(0, 32).trimEnd() + "…" : activeTicketLabel,
+  );
 
   let filterSaveTimer: ReturnType<typeof setTimeout> | undefined;
   function applyFilter(f: TicketFilter) {
@@ -377,7 +384,7 @@
   <Composer
     onSend={handleSend}
     placeholder={activeTicketId
-      ? `Ask anything on ${activeTicketLabel}…   / commands · @ files`
+      ? `Ask anything on ${activeTicketShort}…   / commands · @ files`
       : "Ask anything…   / commands · @ files"}
     notifyKey={NOTIFY_KEY}
     provider={providerSelect}
