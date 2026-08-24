@@ -249,6 +249,39 @@ func (i Instance) Bin() string {
 	return string(i.Type)
 }
 
+// ResolveBin turns an instance into an executable path, trying every place a
+// CLI runtime is actually installed:
+//
+//  1. the configured Binary override, when set;
+//  2. PATH;
+//  3. the per-OS install locations scanKnownLocations knows about.
+//
+// Step 3 is the one that matters in practice. The npm and curl installers drop
+// these CLIs outside PATH (claude lands in ~/.local/bin), and a server started
+// from a tray icon or a service manager inherits a PATH that never had the
+// user's shell additions. A caller that stops at step 2 therefore works from a
+// terminal and fails in production on the same machine — which is exactly how
+// the AI paste parser came to report `exec: "claude": not found` while agent
+// spawns, which already scanned, kept working.
+//
+// Deliberately does NOT run --version: this is on the call path, and liveness
+// is the caller's problem. Probe covers that.
+func ResolveBin(ins Instance) (string, error) {
+	if ins.Binary != "" {
+		return safeexec.ResolveBin(ins.Binary)
+	}
+	name := string(ins.Type)
+	if p, err := safeexec.LookPath(name); err == nil {
+		return p, nil
+	}
+	if p, ok := scanKnownLocations(ins.Type); ok {
+		return p, nil
+	}
+	// Report the PATH error, not a scan error: PATH is what the operator can
+	// fix, and naming the binary keeps the message actionable.
+	return safeexec.LookPath(name)
+}
+
 // Status is the live health of one instance, as shown in the UI.
 //
 // Hooks is per-hook-event capability info, keyed by event name

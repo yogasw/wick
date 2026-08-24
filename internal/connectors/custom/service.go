@@ -670,6 +670,19 @@ func (s *Service) Delete(ctx context.Context, defID string) error {
 	delete(s.loadedAt, defID)
 	delete(s.keyToID, def.Key)
 	s.mu.Unlock()
+	// Drop the live module too, not just the bookkeeping — and from BOTH
+	// stores, mirroring how registration always pairs connectors.Register
+	// with conns.UpsertModule.
+	//
+	// Without this the deleted connector kept being served for the rest of the
+	// process: its detail page still rendered name, description and operation
+	// count while every row was gone, and because keyToID no longer claimed
+	// the key, the UI classified the leftover as a BUILT-IN — which has no
+	// Delete action, so the ghost card could not be removed at all. Only a
+	// restart cleared it, since boot rebuilds from the definitions still in
+	// the database.
+	connectors.Unregister(def.Key)
+	s.conns.RemoveModule(def.Key)
 	return nil
 }
 
