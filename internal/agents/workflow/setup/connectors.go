@@ -28,4 +28,8 @@ func RegisterLiveConnectors(reg *connector.Registry) {
 			HealthCheck: m.HealthCheck,
 		})
 	})
+	// Deleting a custom connector removes it from the core registry, so the
+	// mirror has to drop it too — otherwise the palette keeps offering a node
+	// type backed by a module nobody can execute.
+	connectors.OnUnregister(reg.Unregister)
 }

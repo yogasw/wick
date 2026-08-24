@@ -109,6 +109,17 @@ func (r *Registry) Register(m pkgconnector.Module) {
 	r.modules[m.Meta.Key] = m
 }
 
+// Unregister drops the module stored under key. No-op when absent.
+//
+// Mirrors the core registry so a deleted custom connector stops appearing
+// in the workflow palette immediately, instead of lingering as a node type
+// whose module no longer exists.
+func (r *Registry) Unregister(key string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.modules, key)
+}
+
 // Module returns a module by key.
 func (r *Registry) Module(key string) (pkgconnector.Module, bool) {
 	r.mu.RLock()

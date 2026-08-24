@@ -113,8 +113,11 @@ Requires the `users:read.email` scope on the Slack app. Without it `users.info` 
 | Email has no wick user, auto-register **on** | Account created, then refused as pending approval |
 | No readable email (missing scope, or a bot/app sender) | Refused with `email is required` |
 | Slack **guest** (single-channel, multi-channel, Slack Connect) | Always refused |
+| Sender cannot be resolved at all, and the channel instance has no owner to fall back on (the App Owner's own row) | Refused: *"I could not work out which wick account to act as..."* |
 
 The check runs **before** the agent spawns. Refusing afterwards would already have run a turn under the wrong identity, which is the thing this prevents.
+
+The owner is stamped on the session **before** the first `sendFn` call, not after. A spawn mints its MCP credential from the session's owner at the moment it starts, so stamping later would race the first spawn of a new thread: if the spawn won that race, it fell back to the shared internal token — a synthetic admin with no tag filter — and kept that identity in its process argv for the life of the thread. Fixing the owner on disk afterwards couldn't undo it. This is also why a channel dispatch carries its resolved caller through `context.Context` (`WithCallerUserID`/`CallerUserID`) instead of leaving it to be read off disk later: the pool needs it at dispatch time to decide whether a running subprocess can be reused, since reusing a process spawned for a different sender would keep serving that sender's credential.
 
 #### Permission is the same as the dashboard
 

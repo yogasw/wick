@@ -1,7 +1,6 @@
 package pool
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -617,8 +616,11 @@ func resolveProviderBinary(providerType, providerName string) (bin, source strin
 	if p, err := safeexec.LookPath(string(t)); err == nil {
 		return p, "path"
 	}
-	if st := provider.Probe(context.Background(), provider.Instance{Type: t, Name: providerName}); st.PathFound {
-		return st.Path, "scan"
+	// provider.ResolveBin covers PATH plus the per-OS install locations, which
+	// is what finds a CLI installed via npm/curl outside PATH. Kept as its own
+	// step so the "scan" source label stays meaningful in the spawn log.
+	if p, err := provider.ResolveBin(provider.Instance{Type: t, Name: providerName}); err == nil {
+		return p, "scan"
 	}
 	return "", "unconfigured"
 }

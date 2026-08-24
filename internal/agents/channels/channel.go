@@ -79,6 +79,36 @@ func ChannelProject(ctx context.Context) string {
 	return ""
 }
 
+// callerUserIDKey carries the wick user a channel message came from.
+type callerUserIDKey struct{}
+
+// WithCallerUserID returns ctx carrying the wick user id the inbound
+// channel message was resolved to.
+//
+// The pool needs this to decide whether a RUNNING subprocess can be
+// reused for this message: a spawn bakes its MCP credential into its
+// argv, so a process started for one user must not serve another's
+// message (Pool.callerChanged). A channel that leaves this unset makes
+// every message look like it has no caller, which reads as "nothing to
+// compare" and silently reuses whatever process is already there —
+// including one that was spawned before the session had an owner and so
+// carries the synthetic-admin token.
+func WithCallerUserID(ctx context.Context, userID string) context.Context {
+	if userID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, callerUserIDKey{}, userID)
+}
+
+// CallerUserID returns the wick user id behind this dispatch, or "" when
+// the channel could not resolve one.
+func CallerUserID(ctx context.Context) string {
+	if v, ok := ctx.Value(callerUserIDKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
 // ApproveFn resolves a gate approval request originating from a channel.
 // sessionID is the wick session, requestID is the gate request UUID,
 // decision is one of the gate.Decision* constants. channelName is the
