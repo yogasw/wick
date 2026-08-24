@@ -5,10 +5,52 @@ export function esc(s: string): string {
 }
 
 export function linkifyText(s: string): string {
+  const slackLinks: { url: string; label: string }[] = [];
+  s = slackLinkCapture(s, slackLinks);
   s = esc(s);
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" class="underline break-all" target="_blank" rel="noopener">$1</a>');
   s = s.replace(/(^|[\s(])((https?:\/\/)[^\s<>"']+)/g, '$1<a href="$2" class="underline break-all" target="_blank" rel="noopener">$2</a>');
-  return s;
+  return slackLinkExpand(s, slackLinks, "underline break-all");
+}
+
+/* Slack sends links as mrkdwn: `<url|label>` (or bare `<url>`), not as
+   markdown `[label](url)`. Agents relay Slack text verbatim, so without this
+   the raw angle-bracket form reaches the reader — and once esc() has run it is
+   `&lt;url|label&gt;`, past rescuing.
+
+   Captured to a sentinel BEFORE escaping, then expanded to an anchor after the
+   inline passes have run. Rewriting to markdown `[label](url)` instead would
+   truncate any URL containing ")", because the markdown link pattern stops at
+   the first one — and parens in URLs are ordinary (wiki links, generated
+   paths).
+
+   Only http(s) is accepted: `<javascript:...|click>` must stay inert text, and
+   Slack's own non-link forms (`<@U123>`, `<#C123|name>`, `<!here>`) are left
+   alone because they are mentions, not URLs — they render as plain text rather
+   than as a broken link. */
+const SLACK_LINK_RE = /<(https?:\/\/[^\s<>|]+)(?:\|([^<>]*))?>/g;
+
+/* Park each Slack link behind a \x00L<i>\x00 sentinel, which survives esc()
+   and the inline passes because it holds no markdown-significant characters. */
+function slackLinkCapture(s: string, into: { url: string; label: string }[]): string {
+  return s.replace(SLACK_LINK_RE, (_m, url, label) => {
+    const text = String(label ?? "").trim();
+    return `\x00L${into.push({ url, label: text || url }) - 1}\x00`;
+  });
+}
+
+/* Expand the sentinels into anchors. Both url and label are escaped here:
+   they bypassed esc() while parked in the sentinel. */
+function slackLinkExpand(s: string, links: { url: string; label: string }[], cls: string): string {
+  return s.replace(/\x00L(\d+)\x00/g, (m, i) => {
+    /* Unknown index: leave the text alone rather than dereference. The marker
+       uses NUL so a real Slack payload cannot carry one, but a message can
+       still contain it literally, and throwing here would fail the render of
+       the whole message. */
+    const link = links[+i];
+    if (!link) return m;
+    return `<a href="${esc(link.url)}" class="${cls}" target="_blank" rel="noopener">${esc(link.label)}</a>`;
+  });
 }
 
 /* Wrap a TeX fragment in a placeholder the SPA upgrades to rendered math
@@ -21,6 +63,8 @@ function mathSpan(tex: string, display: boolean): string {
 }
 
 function inlineMarkdown(s: string): string {
+  const slackLinks: { url: string; label: string }[] = [];
+  s = slackLinkCapture(s, slackLinks);
   /* Protect math before escaping: capture the raw TeX (which may contain
      <, >, & that esc would mangle) behind a sentinel, then reinsert as a
      placeholder span after the inline markdown passes. */
@@ -43,7 +87,7 @@ function inlineMarkdown(s: string): string {
   s = s.replace(/(^|[\s(])((https?:\/\/)[^\s<>"']+)/g, '$1<a href="$2" class="text-green-600 dark:text-green-400 underline break-all" target="_blank" rel="noopener">$2</a>');
 
   s = s.replace(/\x00M(\d+)\x00/g, (_m, i) => mathSpan(math[+i].tex, math[+i].display));
-  return s;
+  return slackLinkExpand(s, slackLinks, "text-green-600 dark:text-green-400 underline break-all");
 }
 
 /* Matches up to `n` leading spaces (or a tab counted as one), for stripping a
