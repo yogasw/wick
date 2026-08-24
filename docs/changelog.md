@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+*   **Slack agents could still start as the synthetic admin.** The session owner was stamped after the first send, so the first spawn of a new thread could race the stamp and fall back to the shared internal MCP token — which stays baked into that process for its whole life. The owner is now stamped before any send. Slack dispatches also carry the resolved sender through the request context, so the agent pool can tell a message apart from one sent by someone else instead of treating every channel message as callerless. A Slack message whose sender cannot be resolved to a wick account, with no channel owner to fall back on, is now refused with a warning instead of running as the synthetic admin.
 
 ---
 
