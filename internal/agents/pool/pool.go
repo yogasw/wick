@@ -821,13 +821,19 @@ func (p *Pool) preemptIdleSlot() bool {
 			oldest = t
 		}
 	}
+	// Register the Stop goroutine while still holding the lock that guards
+	// p.closed. Adding after the unlock leaves a window for Stop() to close
+	// the pool and reach wg.Wait() in between, and sync.WaitGroup forbids an
+	// Add racing a Wait already blocked at zero.
+	if victim != nil {
+		p.wg.Add(1)
+	}
 	p.mu.Unlock()
 	if victim == nil {
 		return false
 	}
 	log.Debug().Str("session", victim.sessID).Str("agent", victim.agentNm).
 		Msg("pool: preempting idle slot for queued session")
-	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
 		_ = victim.agent.Stop()
@@ -1215,10 +1221,20 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 // The whole body runs under p.wg so Stop() can wait for any tail
 // work to finish before tearing down.
 func (p *Pool) onAgentExit(sessionID, agentName string) {
-	p.wg.Add(1)
-	defer p.wg.Done()
 	key := sessionKey(sessionID, agentName)
 	p.mu.Lock()
+	// Join p.wg only while the pool is open. An exit can fire at any moment,
+	// including after Stop() has begun waiting, and sync.WaitGroup forbids an
+	// Add that races a Wait already blocked at zero. Reading p.closed under
+	// the same lock Stop() sets it under makes the two mutually exclusive:
+	// either we register before Stop() looks, or we see it closed and stay
+	// out. Staying out loses nothing — the body below still runs to release
+	// the slot, and Stop() waits for that through its p.active poll rather
+	// than through wg.
+	if !p.closed {
+		p.wg.Add(1)
+		defer p.wg.Done()
+	}
 	entry, ok := p.active[key]
 	if ok && entry.state != nil {
 		// MarkKilled flips the state machine → its lifecycle hook
