@@ -69,7 +69,7 @@ func (p *cliProvider) StructuredCall(ctx context.Context, req provider.Structure
 	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	bin, err := safeexec.ResolveBin(p.ins.Bin())
+	bin, err := agentprovider.ResolveBin(p.ins)
 	if err != nil {
 		return provider.StructuredResult{OK: false, Error: err.Error()}, nil
 	}
@@ -117,7 +117,7 @@ func (p *cliProvider) AgentCall(ctx context.Context, req provider.AgentRequest) 
 	case <-ctx.Done():
 		return provider.AgentResult{}, ctx.Err()
 	}
-	bin, err := safeexec.ResolveBin(p.ins.Bin())
+	bin, err := agentprovider.ResolveBin(p.ins)
 	if err != nil {
 		return provider.AgentResult{}, fmt.Errorf("%s: %w", p.ins.Name, err)
 	}
