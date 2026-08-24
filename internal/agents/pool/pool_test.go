@@ -694,3 +694,49 @@ func TestSpawnFailureSurfacesSystemErrorAndUnsticksLifecycle(t *testing.T) {
 		t.Fatalf("conversation missing persisted system error turn:\n%s", conv)
 	}
 }
+
+// TestExitDuringStopDoesNotRaceWaitGroup drives the interleaving CI caught:
+// an agent exit landing while Stop() is already blocked in wg.Wait().
+// sync.WaitGroup forbids an Add that races a Wait already waiting at zero, so
+// onAgentExit must decide whether to join p.wg under the same lock Stop()
+// closes the pool under. It stays out once closed — the body still releases
+// the slot, and Stop() waits for that through its p.active poll.
+//
+// Run with -race: without the guard this reports a WaitGroup misuse race
+// rather than failing an assertion.
+func TestExitDuringStopDoesNotRaceWaitGroup(t *testing.T) {
+	// Repeated because the window is narrow — a single pass would pass even
+	// on the broken ordering.
+	for i := 0; i < 200; i++ {
+		p := &Pool{
+			active:       map[string]*runEntry{},
+			spawningKeys: map[string]struct{}{},
+			buffers:      map[string]*Buffer{},
+			stopCh:       make(chan struct{}),
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); p.Stop() }()
+		go func() { defer wg.Done(); p.onAgentExit("S", "default") }()
+		wg.Wait()
+	}
+}
+
+// TestPreemptDuringStopDoesNotRaceWaitGroup covers the same hazard on the
+// preempt path: it checked p.closed under the lock but called wg.Add after
+// unlocking, leaving room for Stop() to close and reach wg.Wait() in between.
+func TestPreemptDuringStopDoesNotRaceWaitGroup(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		p := &Pool{
+			active:       map[string]*runEntry{},
+			spawningKeys: map[string]struct{}{},
+			buffers:      map[string]*Buffer{},
+			stopCh:       make(chan struct{}),
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); p.Stop() }()
+		go func() { defer wg.Done(); p.preemptIdleSlot() }()
+		wg.Wait()
+	}
+}
