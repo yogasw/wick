@@ -128,7 +128,60 @@ func containsDir(dirs []string, d string) bool {
 	return false
 }
 
-// SyncBuiltin writes the embedded skills into wick's skills dir.
+// builtinMirrorDirs are the provider skill dirs the shipped skills are mirrored
+// into, on top of wick's own dir.
+//
+// The CLI providers resolve a SLASH COMMAND from their own skills dir only.
+// Trusting wick's dir on the argv (see each provider's skilldir.go) is enough
+// for the agent to READ a shipped SKILL.md, but it never registers
+// /wick-notes & co. as commands — typing one yields "Unknown command". A
+// mirror in each provider's dir is what makes them invocable.
+//
+// The copies are deliberately rewritten from the binary on every sync, exactly
+// like the canonical dir: a shipped skill is wick's to own wherever it lands.
+// pruneStaleBuiltins runs against each mirror too, so a skill dropped in a
+// later wick version is deleted rather than left behind — and its managed-marker
+// guard still spares any folder a user has taken over.
+//
+// They stay out of Sync's rotation (see the note in Sync): the mirror is
+// one-directional, so a copy never wins the mtime race against the binary and
+// never shows up as a second entry in the skills UI.
+func builtinMirrorDirs() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	return []string{
+		filepath.Join(home, ".claude", "skills"),
+		filepath.Join(home, ".codex", "skills"),
+	}
+}
+
+// SyncBuiltin writes the embedded skills into wick's skills dir and mirrors
+// them into each provider's skills dir.
+//
+// Errors from a mirror are collected rather than returned: a missing or
+// read-only provider dir must not stop wick's own dir from being repaired.
+func SyncBuiltin() (Result, error) {
+	res, err := syncBuiltinTo(BuiltinDir())
+	if err != nil {
+		return res, err
+	}
+	for _, dir := range builtinMirrorDirs() {
+		mres, merr := syncBuiltinTo(dir)
+		if merr != nil {
+			res.Errors = append(res.Errors, fmt.Sprintf("mirror %s: %v", dir, merr))
+			continue
+		}
+		res.Dirs = append(res.Dirs, mres.Dirs...)
+		res.Copied += mres.Copied
+		res.Skipped += mres.Skipped
+		res.Errors = append(res.Errors, mres.Errors...)
+	}
+	return res, nil
+}
+
+// syncBuiltinTo writes the embedded skills into dir.
 //
 // Content-addressed rather than wipe-and-rewrite: the dir is shared with the
 // user's own skills now, so deleting it would destroy their work. Each shipped
@@ -143,7 +196,7 @@ func containsDir(dirs []string, d string) bool {
 // An empty embed is treated as "not built" rather than "no skills": nothing on
 // disk is touched and no error is returned, mirroring how a missing embedded
 // gate binary degrades instead of destroying state.
-func SyncBuiltin() (Result, error) {
+func syncBuiltinTo(dir string) (Result, error) {
 	res := Result{}
 
 	entries, err := fs.ReadDir(builtinFS, builtinRoot)
@@ -154,7 +207,6 @@ func SyncBuiltin() (Result, error) {
 		return res, nil
 	}
 
-	dir := BuiltinDir()
 	if dir == "" {
 		return res, nil
 	}
@@ -219,8 +271,10 @@ func SyncBuiltin() (Result, error) {
 
 	pruneStaleBuiltins(dir, shipped, live, &res)
 
-	if werr := os.WriteFile(filepath.Join(dir, builtinStampName), []byte(builtinReadme), 0o644); werr != nil {
-		res.Errors = append(res.Errors, fmt.Sprintf("write stamp: %v", werr))
+	if dir == BuiltinDir() {
+		if werr := os.WriteFile(filepath.Join(dir, builtinStampName), []byte(builtinReadme), 0o644); werr != nil {
+			res.Errors = append(res.Errors, fmt.Sprintf("write stamp: %v", werr))
+		}
 	}
 	res.SkillsCopied = len(skills)
 	return res, nil

@@ -215,34 +215,112 @@ func TestSyncBuiltinKeepsAdoptedSkill(t *testing.T) {
 	}
 }
 
-// TestSyncBuiltinIsolatedFromUserSkills is the boundary that keeps a shipped
-// skill safe to rewrite: Sync() must never copy one into another provider's
-// dir. A copy there is unmanaged — wick could not repair it, could not remove
-// it when a later version drops the skill, and a user's edit to it would win
-// on mtime and be reverted on the next boot.
+// TestSyncBuiltinMirroredToProviders: shipped skills are mirrored INTO each
+// provider's skills dir, because a CLI provider resolves a slash command from
+// its own dir only — without the copy, `/wick-notes` is "Unknown command".
 //
-// Wick's own dir is where they live, so it is excluded from the check.
-func TestSyncBuiltinIsolatedFromUserSkills(t *testing.T) {
-	_, claudeDir, _ := stageHome(t)
+// The copy is wick's to own wherever it lands: it carries the managed marker so
+// the next sync can rewrite it and a later prune can remove it.
+func TestSyncBuiltinMirroredToProviders(t *testing.T) {
+	home, claudeDir, wickDir := stageHome(t)
+	codexDir := filepath.Join(home, ".codex", "skills")
 
 	if _, err := SyncBuiltin(); err != nil {
 		t.Fatalf("SyncBuiltin: %v", err)
 	}
+
+	names := BuiltinNames()
+	if len(names) == 0 {
+		t.Skip("no shipped skills in this build")
+	}
+	for name := range names {
+		for _, dir := range []string{claudeDir, codexDir} {
+			md := filepath.Join(dir, name, "SKILL.md")
+			data, err := os.ReadFile(md)
+			if err != nil {
+				t.Errorf("builtin %q not mirrored into %s: %v", name, dir, err)
+				continue
+			}
+			if !strings.Contains(string(data), builtinWarningMarker) {
+				t.Errorf("mirrored %q in %s lacks the managed marker, so it could never be rewritten or pruned", name, dir)
+			}
+		}
+	}
+
+	// Only wick's own dir is the canonical home: it carries the stamp/readme,
+	// and a provider mirror must not claim to be one.
+	if _, err := os.Stat(filepath.Join(wickDir, builtinStampName)); err != nil {
+		t.Errorf("wick's own dir lost the builtin stamp: %v", err)
+	}
+	for _, dir := range []string{claudeDir, codexDir} {
+		if _, err := os.Stat(filepath.Join(dir, builtinStampName)); err == nil {
+			t.Errorf("mirror dir %s should not carry the builtin stamp", dir)
+		}
+	}
+}
+
+// TestSyncBuiltinMirrorPrunesDroppedSkill: the objection the mirror had to
+// answer. A skill wick no longer ships must be deleted from the provider dirs
+// too, or a stale copy would keep answering a slash command forever.
+func TestSyncBuiltinMirrorPrunesDroppedSkill(t *testing.T) {
+	_, claudeDir, _ := stageHome(t)
+
+	// A folder that looks like a skill wick shipped in an older version:
+	// managed marker present, but absent from the current embed.
+	dropped := filepath.Join(claudeDir, "wick-dropped-in-an-old-version")
+	if err := os.MkdirAll(dropped, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dropped, "SKILL.md"),
+		[]byte(builtinWarningHeader+"---\nname: dropped\n---\nold\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A user's own skill in the same dir, with no marker.
+	mine := filepath.Join(claudeDir, "my-own-skill")
+	if err := os.MkdirAll(mine, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mine, "SKILL.md"),
+		[]byte("---\nname: mine\n---\nmine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := SyncBuiltin(); err != nil {
+		t.Fatalf("SyncBuiltin: %v", err)
+	}
+
+	if _, err := os.Stat(dropped); !os.IsNotExist(err) {
+		t.Error("a dropped builtin was left behind in the mirror dir")
+	}
+	if _, err := os.Stat(filepath.Join(mine, "SKILL.md")); err != nil {
+		t.Errorf("a user's own skill was pruned from the mirror dir: %v", err)
+	}
+}
+
+// TestSyncKeepsBuiltinsOutOfTheRotation: mirroring is one-directional. Sync()
+// must still refuse to treat a shipped skill as a rotation member, so a
+// provider copy never wins the mtime race against the binary (which would
+// silently revert on the next boot) and never appears twice in the skills UI.
+func TestSyncKeepsBuiltinsOutOfTheRotation(t *testing.T) {
+	_, claudeDir, _ := stageHome(t)
 
 	writeSkill(t, claudeDir, "user-skill", "body\n", time.Now().Add(-time.Hour), nil)
 	if _, err := Sync(); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
-	for name := range BuiltinNames() {
-		if _, err := os.Stat(filepath.Join(claudeDir, name)); !os.IsNotExist(err) {
-			t.Errorf("builtin skill %q leaked into %s", name, claudeDir)
-		}
-	}
 	// A user skill still syncs normally — the exclusion is scoped to shipped
 	// names, not to the dir they happen to share.
 	if _, err := os.Stat(filepath.Join(BuiltinDir(), "user-skill")); err != nil {
 		t.Errorf("a normal user skill stopped syncing into wick's dir: %v", err)
+	}
+	// And a shipped name is still rejected by the single-entry path.
+	for name := range BuiltinNames() {
+		if _, err := SyncEntry(name); err == nil {
+			t.Errorf("SyncEntry(%q) should refuse a shipped skill", name)
+		}
+		break
 	}
 }
 
