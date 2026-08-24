@@ -324,10 +324,21 @@ func (s *Channel) SetSendFunc(fn agentchannels.SendFunc) { s.sendFn = fn }
 // has to say so itself. Reads cfg under cfgMu so a concurrent Reload
 // (project changed in the UI) is picked up without a restart.
 func (s *Channel) sendCtx(ctx context.Context) context.Context {
+	return s.sendCtxAs(ctx, "")
+}
+
+// sendCtxAs is sendCtx plus the wick user this dispatch is on behalf of.
+//
+// The pool compares that id against the one baked into a running
+// subprocess to decide reuse-vs-respawn. Passing "" keeps the old
+// behaviour (callerless dispatch, always reuse), so only paths that have
+// actually resolved a sender should supply one.
+func (s *Channel) sendCtxAs(ctx context.Context, callerUserID string) context.Context {
 	s.cfgMu.Lock()
 	pid := s.cfg.ProjectID
 	s.cfgMu.Unlock()
-	return agentchannels.WithChannelProject(ctx, pid)
+	ctx = agentchannels.WithChannelProject(ctx, pid)
+	return agentchannels.WithCallerUserID(ctx, callerUserID)
 }
 
 // SetOwnerFn wires a function that stamps a wick user ID on a session.
@@ -1628,11 +1639,50 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	// (images, PDFs, …) and has a permalink to fetch each one — the bytes
 	// themselves aren't downloaded here. Empty when the message had no files.
 	userText += formatAttachments(files)
+	// Resolve + stamp the session owner BEFORE any sendFn, not after.
+	//
+	// sendFn is what triggers a spawn, and a spawn mints its MCP credential
+	// from the session's UserID at that moment (ClaudeFactory.mcpTokenFor).
+	// Stamping afterwards means the FIRST spawn of a new thread races the
+	// stamp: when the spawn wins, it falls back to the shared internal token
+	// — a synthetic ADMIN with no tag filter — and because the token is baked
+	// into the process argv it keeps that identity for the whole life of the
+	// agent. Disk and registry being correct moments later cannot fix it.
+	// That race is why the wrong identity looked intermittent: consistent
+	// within a thread, different between threads.
+	//
+	// Runs on EVERY message, not just the first: EnsureSessionOwner no-ops
+	// once an owner exists, so the repeat is idempotent and it also backfills
+	// threads created before per-user identity shipped.
+	callerUserID := ""
+	if wickUserID, ok := s.resolveSessionOwner(ev.User); ok {
+		callerUserID = wickUserID
+	} else if s.ownerUserID != "" {
+		callerUserID = s.ownerUserID
+	}
+	if callerUserID == "" {
+		// Nothing resolved the sender and there is no channel owner to fall
+		// back on (the App Owner instance carries an empty ownerUserID).
+		// Spawning now would run the turn as the synthetic admin with MORE
+		// access than the sender has — identity failing open. Refuse instead.
+		log.Warn().Str("channel", "slack").
+			Str("user", ev.User).
+			Str("session", sessionID).
+			Msg("no session owner resolved, refusing message")
+		s.cancelQueueTimer(sessionID, ev.Channel, ev.TimeStamp)
+		s.setReaction(reactionBlocked, ev.Channel, ev.TimeStamp, "")
+		s.postReply(ev.Channel, threadTS,
+			":warning: I could not work out which wick account to act as, so I did not run this. Try again in a moment; if it keeps happening, ask an admin to check the Slack app's `users:read.email` scope.")
+		return
+	}
+	if s.ownerFn != nil {
+		s.ownerFn(context.Background(), sessionID, callerUserID)
+	}
 	isNewSession := !s.sessionOnDisk(sessionID)
 	if isNewSession {
 		ctxText := s.buildSessionContext(ev, threadTS)
 		if ctxText != "" {
-			if err := s.sendFn(s.sendCtx(context.Background()), sessionID, "main", "slack", "system", ctxText); err != nil {
+			if err := s.sendFn(s.sendCtxAs(context.Background(), callerUserID), sessionID, "main", "slack", "system", ctxText); err != nil {
 				log.Warn().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("inject session context failed")
 			}
 		}
@@ -1641,7 +1691,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		}
 	}
 
-	if err := s.sendFn(s.sendCtx(context.Background()), sessionID, "main", "slack", "user", userText); err != nil {
+	if err := s.sendFn(s.sendCtxAs(context.Background(), callerUserID), sessionID, "main", "slack", "user", userText); err != nil {
 		log.Error().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("pool send failed")
 		s.cancelQueueTimer(sessionID, ev.Channel, ev.TimeStamp)
 		s.setReaction(reactionError, ev.Channel, ev.TimeStamp, "")
@@ -1661,21 +1711,6 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		log.Info().Str("channel", "slack").Str("slack_channel", ev.Channel).
 			Str("thread_ts", threadTS).Str("session", sessionID).
 			Msg("auto-reply armed on new thread (🤖 marker posted)")
-	}
-	// Stamp the session owner on EVERY message, not just the first.
-	//
-	// It used to run only when isNewSession, to save a DB lookup per reply. But
-	// that left every thread created before per-user identity shipped without an
-	// owner forever, and an ownerless session spawns as the synthetic admin — so
-	// the saving was paid for with the wrong identity on the connector calls.
-	// EnsureSessionOwner already no-ops once an owner exists, so the repeat is
-	// idempotent and this also backfills those older threads on their next reply.
-	if s.ownerFn != nil {
-		if wickUserID, ok := s.resolveSessionOwner(ev.User); ok {
-			s.ownerFn(context.Background(), sessionID, wickUserID)
-		} else if s.ownerUserID != "" {
-			s.ownerFn(context.Background(), sessionID, s.ownerUserID)
-		}
 	}
 	// Message accepted by the pool: cancel pending queue timer (and remove
 	// ⏳ if it had already fired), then surface the "thinking" banner so
