@@ -6,11 +6,34 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Fixed
-
-*   **Slack agents could still start as the synthetic admin.** The session owner was stamped after the first send, so the first spawn of a new thread could race the stamp and fall back to the shared internal MCP token — which stays baked into that process for its whole life. The owner is now stamped before any send. Slack dispatches also carry the resolved sender through the request context, so the agent pool can tell a message apart from one sent by someone else instead of treating every channel message as callerless. A Slack message whose sender cannot be resolved to a wick account, with no channel owner to fall back on, is now refused with a warning instead of running as the synthetic admin.
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v1.2.0](https://github.com/yogasw/wick/compare/v1.1.0...v1.2.0) — Agents, UI, Connectors
+
+_Released on 2026-08-24_
+
+### Added
+
+*   **Custom Connector Building Skill**: A new built-in skill has been added to guide agents through the lifecycle of creating custom connectors. This skill assists with decision-making (e.g., when to choose a Go connector over a custom one), explains critical workflow steps (like the plan-then-confirm process), clarifies access considerations (non-admin owners and initial tag access), and identifies scenarios that still require manual intervention via the dashboard (e.g., OAuth-scheme MCP servers, user credential handling).
+
+### Fixed
+
+*   **Slack Agent Identity Handling**:
+    *   Resolved an issue where Slack-started agents could intermittently run as the synthetic admin instead of the sender. The session owner is now stamped *before* any `sendFn` is triggered, preventing a race condition where the first spawn of a new thread might fall back to the shared internal MCP token and maintain admin identity for its lifetime.
+    *   Slack dispatches now thread the resolved Wick user through the request context (via `WithCallerUserID`), allowing the agent pool to differentiate messages by sender. This ensures that processes spawned for a specific principal are correctly recycled and reused, rather than reusing processes holding incorrect identities for different users.
+    *   A Slack message whose sender cannot be resolved to a Wick account, and for which no channel owner can be identified as a fallback, is now explicitly refused with a warning. This prevents unintended privilege escalation by running such messages as the synthetic admin, which has broader access than intended.
+*   **UI Rendering for Slack Content**:
+    *   The conversation view now correctly renders Slack mrkdwn links (e.g., `<https://example.com|label>`) as clickable anchor tags, instead of displaying the raw angle-bracket string. This improves readability and usability for relayed Slack text.
+    *   Improved the conversation view to render Slack-style emoji shortcodes (e.g., `:mag:`) as their corresponding glyphs from a small fixed table, while preserving unrecognized codes or timestamps (like `11:52:09`).
+    *   The conversation view now also correctly displays bullet-dot lists (using "•" or other ASCII markers) that might have lost newlines during transport, by treating lines with two or more " • " separators as flattened bullet lists and reconstructing them for proper rendering.
+*   **CLI Binary Resolution**: The AI paste parser for custom connectors no longer fails with `exec: "<binary>": executable file not found in $PATH` when CLIs (e.g., `claude`) are installed outside the system's `PATH`. The `provider.ResolveBin` function now includes scanning known OS-specific install locations as fallbacks after checking for binary overrides and `PATH`. This ensures CLIs installed via npm or curl (e.g., in `~/.local/bin`) are correctly found.
+*   **Built-in Skills Registration**: Built-in skills (e.g., `/wick-notes`, `/wick-tickets`) are now correctly mirrored into the CLI providers' skills directories (`~/.claude/skills`, `~/.codex/skills`) on every sync. This ensures that these skills are registered as slash commands and are discoverable by the CLI providers, and are correctly pruned when dropped in later versions.
+*   **Custom Connector Deletion**: Fixed an issue where deleting a custom connector left a "ghost card" in the dashboard and prevented the re-creation of a connector under the same key. Deleting a custom connector now correctly unregisters the live module from both the workflow and core registries, ensuring all traces are removed and the connector key is freed for future use.
+
+---
+
 
 ## [v1.1.0](https://github.com/yogasw/wick/compare/v1.0.0...v1.1.0) — Identity & Ticket Management
 
