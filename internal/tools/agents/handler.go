@@ -2106,6 +2106,10 @@ func projectOptionsJSON(c *tool.Ctx) {
 		// one instance's registry and is meaningless beside another.
 		DefaultModel  string `json:"default_model"`
 		DefaultPreset string `json:"default_preset"`
+		// TicketEnabled lets the UI offer ticket affordances (the board jump
+		// in a chat's menu) only where a board exists. Without it the client
+		// would have to fetch each project's ticket config to find out.
+		TicketEnabled bool `json:"ticket_enabled"`
 	}
 	access := callerProjectAccess(c)
 	pinned := pinnedProjectID(c)
@@ -2129,6 +2133,7 @@ func projectOptionsJSON(c *tool.Ctx) {
 			DefaultProvider: p.Meta.Defaults.Provider,
 			DefaultModel:    p.Meta.Defaults.Model,
 			DefaultPreset:   p.Meta.Defaults.Preset,
+			TicketEnabled:   p.Meta.Ticket.Enabled,
 		})
 	}
 	c.JSON(http.StatusOK, opts)

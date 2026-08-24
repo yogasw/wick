@@ -463,6 +463,25 @@ func apiTicketDetail(c *tool.Ctx) {
 	for _, sid := range tk.Sessions {
 		resp.Sessions = append(resp.Sessions, sessionRow(sid, live, lc, ids))
 	}
+	// MOST RECENTLY ACTIVE FIRST. tk.Sessions is attach order, so the chat
+	// someone was just in sat wherever it happened to be added — a ticket
+	// with a long history buried it. Each row prints its own last-active
+	// time, so the order has to follow that clock. Rows with no live
+	// session carry no timestamp; they sink to the bottom rather than
+	// jumping the queue on an empty string.
+	sort.SliceStable(resp.Sessions, func(i, j int) bool {
+		a, b := resp.Sessions[i].LastActive, resp.Sessions[j].LastActive
+		if a == b {
+			return false
+		}
+		if a == "" {
+			return false
+		}
+		if b == "" {
+			return true
+		}
+		return a > b // RFC3339 is lexicographically ordered
+	})
 
 	// The UI view includes hidden notes (rendered blurred); only the MCP
 	// surface filters them out.
@@ -919,6 +938,13 @@ func apiProjectTicketConfig(c *tool.Ctx) {
 	}
 	if req.FollowupAfterSec < 0 || req.AutoResolveAfterSec < 0 {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "durations must be >= 0"})
+		return
+	}
+	// Auto-create rules carry a regex an operator typed. Refusing it here is
+	// the only place it can be reported: by the time a rule is judged, the
+	// session that would have been tracked is already past.
+	if err := ticket.ValidateAutoCreate(req.AutoCreate); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	// First enable with an empty schema gets the seed fields, so the board

@@ -26,6 +26,12 @@
         readable. 0 hides it. */
     subAgentsBusy?: number;
     activeView?: ActiveView;
+    /* Where the ticket jump goes, when this chat's project has ticket mode
+       on. A chat already on a ticket opens that ticket; one that is not
+       opens the board, which is where it would be put on one. Undefined
+       means ticket mode is off — the entry is then absent entirely rather
+       than present and inert. */
+    ticketJump?: { label: string; onJump: () => void };
     onKill: () => void;
     onDelete: () => void;
     onTabChange?: (view: ActiveView) => void;
@@ -39,6 +45,7 @@
     idleTimeoutMs = 120_000,
     subAgentsBusy = 0,
     activeView = "conversation",
+    ticketJump,
     onKill,
     onDelete,
     onTabChange,
@@ -308,5 +315,21 @@
         {TAB_LABELS[tab]}
       </button>
     {/each}
+    <!-- Ticket jump. Below a divider because it LEAVES this chat, while
+         everything above only switches what the chat shows — same menu,
+         two different kinds of action. -->
+    {#if ticketJump}
+      <div class="my-1 border-t border-white-300 dark:border-navy-600"></div>
+      <button
+        type="button"
+        onclick={() => { tabMenuOpen = false; ticketJump?.onJump(); }}
+        class="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs text-black-900 transition-colors hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-800"
+      >
+        <span class="truncate">{ticketJump.label}</span>
+        <svg viewBox="0 0 12 12" class="h-3 w-3 shrink-0 opacity-60" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+          <path d="M4 2.5L7.5 6L4 9.5" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+      </button>
+    {/if}
   </div>
 {/if}
