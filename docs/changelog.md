@@ -6,7 +6,15 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Jump to ticket from a chat**: The conversation header's view menu now offers a jump straight to a chat's ticket (or to the board, if the chat isn't on one). Only shown on projects with ticket mode enabled.
+
+### Fixed
+
+*   **Custom MCP-proxy connectors**: Object and array arguments are now forwarded to the upstream MCP server in their original JSON type instead of being stringified, fixing calls that were rejected with "expected object, received string" when such a parameter landed on a text/textarea widget.
+*   **Notes panel ordering**: Notes are now ordered by last activity (edited or created, whichever is newer) instead of creation time, so an edited note no longer sits below notes it postdates.
+*   **Ticket sessions and chat scoping**: A ticket's session list is now ordered by last activity instead of attach order. Selecting a ticket on the board (not only pressing "+ New session") now scopes the next chat to it, and the project-landing composer names the selected ticket with an option to back out. Auto-create rules are now validated when saved from the ticket-config API, so an uncompilable regex is rejected instead of silently never matching.
 
 ---
 
