@@ -255,10 +255,17 @@
   function newSessionInTicket(ticketId: string) {
     pendingTicketId = ticketId;
     openTicketId = null;
-    composerHint = "New session on " + ticketId;
   }
   let pendingTicketId = $state<string | null>(null);
-  let composerHint = $state("");
+  /* The ticket the next message will land on, resolved to its card so the
+     composer can name it. A ticket picked before the board finished
+     loading still has its id to fall back on. */
+  const pendingTicket = $derived(
+    pendingTicketId ? (board?.tickets.find((t) => t.id === pendingTicketId) ?? null) : null,
+  );
+  const pendingTicketLabel = $derived(
+    pendingTicket ? pendingTicket.title || pendingTicket.id : (pendingTicketId ?? ""),
+  );
 
   let filterSaveTimer: ReturnType<typeof setTimeout> | undefined;
   function applyFilter(f: TicketFilter) {
@@ -368,14 +375,29 @@
     onSearchFiles={searchMentionFiles}
     commands={composerCommands}
   />
-  {#if composerHint}
-    <p class="text-center text-xs font-medium text-green-600 dark:text-green-400">
-      {composerHint} — type the first message below.
+  <!-- With a ticket selected the composer says so by NAME, and offers the
+       way out: picking a ticket is a mode, and a mode you cannot see or
+       leave is a trap. Without one the line stays the plain project
+       default. -->
+  {#if pendingTicketId}
+    <p class="text-center text-xs text-black-600 dark:text-black-700">
+      New session on <span class="font-medium text-green-600 dark:text-green-400"
+        >{pendingTicketLabel}</span
+      >
+      in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span> — this
+      chat joins the ticket and reads its notes.
+      <button
+        type="button"
+        onclick={() => { pendingTicketId = null; }}
+        class="underline transition-colors hover:text-black-800 dark:hover:text-black-500"
+        >Start without a ticket</button
+      >
+    </p>
+  {:else}
+    <p class="text-center text-xs text-black-600 dark:text-black-700">
+      New session in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span>{#if project.defaultProvider} · defaults to <span class="font-mono">{project.defaultProvider}</span>{/if}. Pick provider / model / preset above to override for this session.
     </p>
   {/if}
-  <p class="text-center text-xs text-black-600 dark:text-black-700">
-    New session in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span>{#if project.defaultProvider} · defaults to <span class="font-mono">{project.defaultProvider}</span>{/if}. Pick provider / model / preset above to override for this session.
-  </p>
 
   <!-- Session list / ticket board. The List|Card toggle appears only when
        this project has ticket mode enabled; the choice is saved per user. -->
