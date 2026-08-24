@@ -440,6 +440,10 @@ export type ProjectOption = {
       wick, "<entryID>@<vendorModelID>"). Only meaningful together with
       defaultProvider — a model id does not resolve on its own. */
   defaultModel?: string;
+  /** Whether this project has a ticket board. Ticket affordances outside
+      the board itself (a chat's jump-to-ticket entry) key off this, so a
+      project without one shows none of them. */
+  ticketEnabled?: boolean;
 };
 
 /** One column on a project's board. Statuses are per project: a team names
