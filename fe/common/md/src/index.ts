@@ -10,6 +10,7 @@ export function linkifyText(s: string): string {
   s = esc(s);
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" class="underline break-all" target="_blank" rel="noopener">$1</a>');
   s = s.replace(/(^|[\s(])((https?:\/\/)[^\s<>"']+)/g, '$1<a href="$2" class="underline break-all" target="_blank" rel="noopener">$2</a>');
+  s = emojiShortcodes(s);
   return slackLinkExpand(s, slackLinks, "underline break-all");
 }
 
@@ -53,6 +54,50 @@ function slackLinkExpand(s: string, links: { url: string; label: string }[], cls
   });
 }
 
+/* Slack renders `:mag:` as an emoji; every other surface shows the colon
+   form verbatim. Agents relaying Slack text carry those through, so a report
+   opens with a literal ":mag:" and status lines read ":white_check_mark:"
+   instead of a tick.
+
+   Deliberately a small fixed table, not a full emoji dependency: the set
+   agents actually reach for is short, and an unknown code must stay as typed
+   — ":30:" in a timestamp, or colons around ordinary words, must never turn
+   into a glyph. Names follow Slack's, which mostly match GitHub's. */
+const EMOJI: Record<string, string> = {
+  mag: "🔍", mag_right: "🔎", white_check_mark: "✅", heavy_check_mark: "✔️",
+  x: "❌", warning: "⚠️", bulb: "💡", fire: "🔥", rocket: "🚀", tada: "🎉",
+  eyes: "👀", pray: "🙏", thinking_face: "🤔", bug: "🐛", wrench: "🔧",
+  hammer: "🔨", lock: "🔒", unlock: "🔓", key: "🔑", memo: "📝",
+  clipboard: "📋", calendar: "📅", hourglass: "⏳", zap: "⚡", boom: "💥",
+  sparkles: "✨", question: "❓", exclamation: "❗", no_entry: "⛔",
+  no_entry_sign: "🚫", construction: "🚧", package: "📦", gear: "⚙️",
+  link: "🔗", pushpin: "📌", label: "🏷️", thumbsup: "👍", thumbsdown: "👎",
+  ok_hand: "👌", raised_hands: "🙌", muscle: "💪", point_right: "👉",
+  point_left: "👈", point_up: "👆", point_down: "👇", arrow_right: "➡️",
+  arrow_left: "⬅️", arrow_up: "⬆️", arrow_down: "⬇️", recycle: "♻️",
+  repeat: "🔁", smile: "😄", smiley: "😃", grin: "😁", joy: "😂",
+  sweat_smile: "😅", slightly_smiling_face: "🙂", neutral_face: "😐",
+  confused: "😕", disappointed: "😞", sob: "😭", scream: "😱",
+  sunglasses: "😎", robot_face: "🤖", ghost: "👻", skull: "💀",
+  green_circle: "🟢", red_circle: "🔴", yellow_circle: "🟡",
+  large_blue_circle: "🔵", white_circle: "⚪", black_circle: "⚫",
+  siren: "🚨", bell: "🔔", mega: "📣", loudspeaker: "📢",
+  speech_balloon: "💬", envelope: "✉️", inbox_tray: "📥", outbox_tray: "📤",
+  floppy_disk: "💾", computer: "💻", iphone: "📱", battery: "🔋",
+  chart_with_upwards_trend: "📈", chart_with_downwards_trend: "📉",
+  moneybag: "💰", credit_card: "💳", scroll: "📜", books: "📚", book: "📖",
+  bookmark: "🔖", paperclip: "📎", scissors: "✂️", coffee: "☕",
+  star: "⭐", star2: "🌟", cloud: "☁️", snowflake: "❄️", rainbow: "🌈",
+  snail: "🐌", turtle: "🐢", test_tube: "🧪", microscope: "🔬",
+  telescope: "🔭", brain: "🧠", compass: "🧭", magnet: "🧲",
+};
+
+/* Replace `:name:` with its glyph. Runs on already-escaped text, so it can
+   only ever produce a plain character — never markup. */
+function emojiShortcodes(s: string): string {
+  return s.replace(/:([a-z0-9_+-]+):/gi, (m, name) => EMOJI[String(name).toLowerCase()] ?? m);
+}
+
 /* Wrap a TeX fragment in a placeholder the SPA upgrades to rendered math
    (KaTeX). The raw TeX rides in data-math-src (attribute-escaped, decoded
    back by the browser); the visible body is the raw `$…$` so it degrades
@@ -87,6 +132,7 @@ function inlineMarkdown(s: string): string {
   s = s.replace(/(^|[\s(])((https?:\/\/)[^\s<>"']+)/g, '$1<a href="$2" class="text-green-600 dark:text-green-400 underline break-all" target="_blank" rel="noopener">$2</a>');
 
   s = s.replace(/\x00M(\d+)\x00/g, (_m, i) => mathSpan(math[+i].tex, math[+i].display));
+  s = emojiShortcodes(s);
   return slackLinkExpand(s, slackLinks, "text-green-600 dark:text-green-400 underline break-all");
 }
 
@@ -357,7 +403,41 @@ export function renderMarkdown(text: string): string {
       continue;
     }
 
-    const ul = line.match(/^[-*+]\s+(.+)$/);
+    /* A line carrying several " • " separators is a bullet list that lost its
+       newlines — the shape you get when chat text is relayed through a
+       transport that flattens them, or pasted from a rendered bubble. Left
+       alone it renders as one dense paragraph with literal dots, which is
+       exactly the content whose structure mattered.
+
+       Split only with 2+ separators, so an ordinary sentence using "•" once
+       as punctuation is left as prose. Any leading text before the first
+       bullet stays a paragraph of its own: it is usually the lead-in
+       ("Investigasi:"), not an item. Requiring surrounding whitespace keeps
+       "A•B" (no spaces) out of it.
+
+       The pieces are pushed back onto the queue rather than handled here, so
+       each one goes through the normal bullet path below and nests, inline
+       formatting, and list flushing all behave identically. */
+    if (
+      !inList && !inTable && !line.trim().startsWith("|") &&
+      / •\s/.test(line) && (line.match(/(?:^|\s)•\s/g) || []).length >= 2
+    ) {
+      const parts = line.split(/\s*(?:^|\s)•\s+/).filter((p) => p.trim() !== "");
+      const lead = /^\s*•/.test(line) ? "" : parts.shift() ?? "";
+      if (parts.length >= 2) {
+        flushPara();
+        if (lead.trim()) out.push(`<p class="text-sm text-black-900 dark:text-white-100 leading-relaxed">${inlineMarkdown(lead.trim())}</p>`);
+        lines.splice(i + 1, 0, ...parts.map((p) => `• ${p.trim()}`));
+        continue;
+      }
+    }
+
+    /* "•" counts as a bullet marker alongside the ASCII ones. Agents relaying text
+       from Slack (and people pasting from chat) write bullets that way, and
+       without this the whole run collapsed into one long paragraph with
+       literal dots in it — the least readable possible outcome for exactly
+       the content that needed the structure most. */
+    const ul = line.match(/^[-*+•]\s+(.+)$/);
     if (ul) {
       flushPara();
       /* A bullet run is its own list, so it ends any ordered count — whether
