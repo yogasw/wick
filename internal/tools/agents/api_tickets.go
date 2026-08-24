@@ -940,6 +940,13 @@ func apiProjectTicketConfig(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "durations must be >= 0"})
 		return
 	}
+	// Auto-create rules carry a regex an operator typed. Refusing it here is
+	// the only place it can be reported: by the time a rule is judged, the
+	// session that would have been tracked is already past.
+	if err := ticket.ValidateAutoCreate(req.AutoCreate); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	// First enable with an empty schema gets the seed fields, so the board
 	// is useful before anyone visits the field editor.
 	if req.Enabled && len(req.Fields) == 0 {
