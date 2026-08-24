@@ -798,7 +798,13 @@ func NewServer() *Server {
 			if u := login.GetUser(ctx); u != nil {
 				return u.ID
 			}
-			return ""
+			// Channel dispatches carry no login session — they are built from
+			// context.Background() — so the originating channel stamps the
+			// resolved wick user itself. Without this branch every Slack
+			// message looks callerless, which reads as "nothing to compare"
+			// and reuses whatever process is already running, even one holding
+			// another principal's credential.
+			return agentchannels.CallerUserID(ctx)
 		},
 		RevokeMCPToken: func(token string) { mcpScopedTokens.Revoke(token) },
 		// Read live so the switch takes effect without a restart, matching

@@ -79,6 +79,50 @@ func Register(m connector.Module) {
 	notify(m)
 }
 
+// Unregister removes the module registered under key and notifies the
+// unregister listeners. No-op when the key was never registered.
+//
+// This exists because a CUSTOM connector's definition can be deleted at
+// runtime. Register is the only way in, so without a way out the module
+// stayed in `extra` for the life of the process: the connector's detail
+// page kept rendering (name, description, operation count) from the
+// registry while its rows were already gone, and — because the UI asks
+// custom.Service.DefIDForKey whether a key is custom, and that map entry
+// HAD been dropped — the leftover card presented itself as a BUILT-IN.
+// A built-in has no Delete action, so the ghost could not be removed from
+// the UI at all. Only a restart cleared it, since boot rebuilds the
+// registry from the definitions still in the database.
+//
+// Callers must hold no registry lock; like Register, this runs on the
+// caller's goroutine and notifies synchronously.
+func Unregister(key string) {
+	for i, existing := range extra {
+		if existing.Meta.Key != key {
+			continue
+		}
+		extra = append(extra[:i], extra[i+1:]...)
+		for _, fn := range unregisterListeners {
+			fn(key)
+		}
+		return
+	}
+}
+
+// unregisterListeners mirror `listeners` for removal, so a downstream
+// registry that shadowed a module (the workflow one) drops it at the same
+// moment the core registry does. Kept separate from `listeners` rather
+// than widening that callback: most subscribers only care about
+// additions, and a nil-check-per-call signature would be easy to get
+// wrong at the call site.
+var unregisterListeners []func(key string)
+
+// OnUnregister installs a listener fired for every Unregister call. There
+// is no catch-up pass — a module that is already gone has nothing to
+// replay. Not removable, same as OnRegister.
+func OnUnregister(fn func(key string)) {
+	unregisterListeners = append(unregisterListeners, fn)
+}
+
 // OnRegister installs a listener that fires for every connector module
 // in the registry — once per module already present at the time of the
 // call (catch-up), then once per future Register call (catch future).
