@@ -10,6 +10,16 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.4.1](https://github.com/yogasw/wick/compare/v1.4.0...v1.4.1) — Chime Hang Fix
+
+_Released on 2026-08-25_
+
+### Fixed
+
+*   **First click after navigation could freeze for several seconds**: The lifecycle notification chime primed a `AudioContext` on the page's first click/keydown/touchstart, and constructing one blocks the main thread while the OS wakes the audio output — multi-second hangs were observed on macOS with Bluetooth output. The chime is now a pre-rendered WAV played through an `HTMLAudioElement` instead, removing the blocking construction. Same sound, same autoplay-unlock gesture gating — no other behavior change.
+
+---
+
 ## [v1.4.0](https://github.com/yogasw/wick/compare/v1.3.0...v1.4.0) — Agents
 
 _Released on 2026-08-25_
