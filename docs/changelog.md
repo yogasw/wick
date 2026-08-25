@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Tickets can adopt an external id**: `POST /api/projects/{projectID}/tickets` and the `ticket_create` MCP op now accept an optional `id`, so a ticket mirroring a record elsewhere can carry that record's identity instead of a minted `T-XXXX` code — the source system addresses the ticket by the id it already holds, with no mapping to store. An id must fit `[A-Za-z0-9._-]` within 64 characters and is kept verbatim; `..`, path separators, leading dots, and the reserved `T-XXXX` form are refused before it is ever used as a directory name. A uuid is folded to its dashless lowercase form, so the two shapes Notion hands out for one page cannot become two tickets, and a second create from the same page is refused rather than duplicated. Lookup by an adopted id stays a direct file read — nothing scans the board. Omitting `id` is unchanged. See [Ticket Integrations ▶ Adopting an external id](/guide/agents/ticket-integrations#adopting-an-external-id).
 
 ---
 
