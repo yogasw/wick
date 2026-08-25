@@ -30,8 +30,12 @@ func (r *recordingRouter) DELETE(p string, _ tool.HandlerFunc)                  
 func (r *recordingRouter) PATCH(p string, _ tool.HandlerFunc)                     { r.mark("PATCH", p) }
 func (r *recordingRouter) Use(string, tool.Middleware)                            {}
 func (r *recordingRouter) HandleRaw(string, func(tool.ConfigReader) http.Handler) {}
-func (r *recordingRouter) Static(string, fs.FS)                                   {}
-func (r *recordingRouter) Meta() tool.Tool                                        { return tool.Tool{} }
+
+// WebhookGroup returns a discarding group: this tool declares no webhook
+// routes, and a nil return would panic if it ever started to.
+func (r *recordingRouter) WebhookGroup(string) tool.WebhookRouter { return discardHooks{} }
+func (r *recordingRouter) Static(string, fs.FS)                   {}
+func (r *recordingRouter) Meta() tool.Tool                        { return tool.Tool{} }
 
 // The Resources page and its APIs must actually be registered — a missing
 // route only shows up as a 404 in production, long after this change.
@@ -55,3 +59,13 @@ func TestResourceRoutesRegistered(t *testing.T) {
 		}
 	}
 }
+
+// discardHooks satisfies tool.WebhookRouter for routers under test that do
+// not care about webhook declarations.
+type discardHooks struct{}
+
+func (discardHooks) GET(string, tool.WebhookHandlerFunc)    {}
+func (discardHooks) POST(string, tool.WebhookHandlerFunc)   {}
+func (discardHooks) PUT(string, tool.WebhookHandlerFunc)    {}
+func (discardHooks) DELETE(string, tool.WebhookHandlerFunc) {}
+func (discardHooks) PATCH(string, tool.WebhookHandlerFunc)  {}

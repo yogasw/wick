@@ -124,6 +124,45 @@ Don't pass `struct{}{}` — the No-Config variants make intent explicit.
 9. **No `@ui.Layout` / `@ui.Navbar` / page title in your templ.** The framework wraps every tool page in Layout + Navbar + setup banner + a shared ToolHeader (icon, `Meta.Name`, `Meta.Description`, admin-only Settings link). Your templ starts at `<main>` with no `<h1>` — the title comes from `Meta.Name`. Look at `tools/convert-text/view.templ`.
 10. **No `*http.ServeMux`, no hardcoded `/tools/...`** — use `r.GET/POST/...` + `r.Static("/static/", StaticFS)`, paths relative to the instance mount.
 11. **Reverse-proxy / sub-router tools:** when a tool wraps an external handler that owns its own sub-routing (WebSocket proxy, embedded HTTP server), use `r.HandleRaw(prefix, fn)`. `prefix` is relative to the tool base and must end with `/`. `fn` receives a `tool.ConfigReader` for runtime config gating. Use sparingly — prefer `r.GET`/`r.POST` for normal endpoints.
+12. **Webhook / API endpoints:** when an external system must POST into the tool, use `r.WebhookGroup(prefix)`. Routes declared on it bypass wick's per-tool access check — a webhook sender has no session cookie and cannot follow the 302 to `/auth/login`. The rest of the tool stays gated.
+
+    ```go
+    func Register(r tool.Router) {
+        r.GET("/", index)                 // private page, HTML
+
+        wh := r.WebhookGroup("/webhook")  // unauthenticated, JSON-only
+        wh.POST("/receive", receive)      // POST /tools/{Key}/webhook/receive
+    }
+
+    func receive(c *tool.WebhookCtx) {
+        secret := c.Cfg("secret")
+        if secret == "" {                 // fail closed: an empty key
+            c.Error(http.StatusServiceUnavailable, "not configured")
+            return                        // makes every signature verify
+        }
+        raw, err := c.Body()              // raw bytes BEFORE decoding —
+        if err != nil {                   // the signature covers them exactly
+            c.Error(http.StatusBadRequest, "cannot read body")
+            return
+        }
+        if !hmac.Equal(sign(raw, secret), got) {  // hmac.Equal, never ==
+            c.Error(http.StatusUnauthorized, "bad signature")
+            return
+        }
+        c.JSON(http.StatusOK, map[string]string{"status": "accepted"})
+    }
+    ```
+
+    - Handlers take `*tool.WebhookCtx` — no `HTML`/`Redirect`/`NotFound`; it has `Body`, `BindJSON`, `Header`, `Query`, `PathValue`, the `Cfg` family, `Missing`, and `JSON`/`Status`/`Error`.
+    - **The handler owns authentication.** Verify a signature against `c.Cfg(...)` and fail closed when the secret is unset.
+    - Compare signatures with `hmac.Equal`, never `==` — a string compare leaks timing.
+    - Store the secret as `wick:"secret;required"` so an admin rotates it from `/manager/tools/{Key}`, never hardcoded.
+    - `WebhookGroup("/")` fails the boot; so does a webhook route colliding with an ordinary one.
+    - Declared endpoints are listed on `/manager/tools/{Key}` and logged at boot.
+
+    Reference: `tools/convert-text/webhook.go` — a batch endpoint on an existing UI tool, gated by a `webhook_enabled` toggle that ships **off** and a non-required secret the handler enforces. Copy that shape: an unauthenticated endpoint should be switched on deliberately, not arrive open.
+
+    Ask before opening a webhook group on an existing tool — it adds an unauthenticated endpoint to something that was fully gated. Confirm sender + verification scheme first.
 
 ## Tools
 

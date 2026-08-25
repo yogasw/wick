@@ -28,6 +28,11 @@ type Handler struct {
 	tags       *tags.Service
 	users      *login.Service
 	tools      []tool.Tool
+	// webhooks are the unauthenticated endpoints declared by tools via
+	// Router.WebhookGroup, injected at boot by server.go. Surfaced on each
+	// tool's settings page so an operator can see what answers without a
+	// login without having to read the module source.
+	webhooks []tool.WebhookRoute
 	// custom is the custom-connector service (nil until SetCustomConnectors
 	// runs at boot). Owns the /manager/connectors/custom/* builder flows.
 	custom *customconn.Service
@@ -75,6 +80,14 @@ func NewHandler(svc *Service, configsSvc *configs.Service, connectorsSvc *connec
 		configDecorators: make(map[string]func([]entity.Config) []entity.Config),
 		oauthSecret:      secret,
 	}
+}
+
+// WithWebhookRoutes records the webhook endpoints tools declared at boot.
+// Called once from server.go after the tool router has collected them;
+// returns h so it can be chained onto NewHandler.
+func (h *Handler) WithWebhookRoutes(routes []tool.WebhookRoute) *Handler {
+	h.webhooks = routes
+	return h
 }
 
 // Register wires /manager/* to mux. All pages require auth; admin-only

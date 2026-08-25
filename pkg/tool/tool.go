@@ -113,6 +113,30 @@ type Router interface {
 	// (e.g. a reverse-proxy that serves many paths under one mount).
 	// fn receives the ConfigReader so callers can gate on runtime config.
 	HandleRaw(prefix string, fn func(cfg ConfigReader) http.Handler)
+	// WebhookGroup opens an unauthenticated, JSON-only subtree at prefix
+	// (relative to the tool's /tools/{Key} base, same as route paths) and
+	// returns a router for declaring routes inside it.
+	//
+	// Routes declared on the returned WebhookRouter bypass wick's per-tool
+	// access check entirely: the tool's Public/Private visibility and any
+	// filter tags do not apply to them. This exists because webhook senders
+	// are programs — they carry no session cookie and cannot follow the 302
+	// to /auth/login that the access check would otherwise issue. The trade
+	// is that the handler owns authentication; verify a signature or shared
+	// secret against WebhookCtx.Cfg before trusting a payload.
+	//
+	// The rest of the tool is unaffected — a Private tool stays private
+	// everywhere except the prefixes it opens here:
+	//
+	//	func Register(r tool.Router) {
+	//	    r.GET("/", index)                 // private, HTML, login-gated
+	//	    wh := r.WebhookGroup("/webhook")  // public, JSON
+	//	    wh.POST("/hook", receive)         // POST /tools/{Key}/webhook/hook
+	//	}
+	//
+	// Declared prefixes are surfaced on the tool's admin settings page so an
+	// operator can see which URLs are reachable without login.
+	WebhookGroup(prefix string) WebhookRouter
 	Meta() Tool
 }
 
