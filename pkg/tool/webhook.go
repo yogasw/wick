@@ -4,9 +4,22 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 )
+
+// DefaultMaxBodyBytes caps how much of a webhook request body wick will
+// read. A webhook endpoint answers without a login, so an unbounded read
+// lets any caller hand the process a multi-gigabyte body — and the read
+// necessarily happens *before* a signature can be checked, since the
+// signature covers the bytes being read. The cap is what keeps that from
+// being a memory-exhaustion vector.
+//
+// 1 MiB matches the limit wick's other unauthenticated JSON surfaces use
+// (see the MCP endpoint). Raise it per route with WebhookCtx.SetMaxBody
+// when a sender legitimately posts more.
+const DefaultMaxBodyBytes int64 = 1 << 20
 
 // WebhookHandlerFunc is the handler signature for routes declared on a
 // WebhookRouter. It receives a *WebhookCtx rather than a *Ctx: the
@@ -66,12 +79,25 @@ type WebhookCtx struct {
 	// cfg resolves runtime-editable config values. nil when the module
 	// declared no Configs — Cfg/Missing then return zero values.
 	cfg ConfigReader
+	// maxBody caps Body/BindJSON reads. Seeded to DefaultMaxBodyBytes at
+	// mount; a handler may raise or lower it via SetMaxBody before reading.
+	maxBody int64
 }
 
 // NewWebhookCtx is used by wick when mounting webhook handlers. Modules
 // never call it directly — they receive a *WebhookCtx ready to use.
 func NewWebhookCtx(w http.ResponseWriter, r *http.Request, meta Tool, cfg ConfigReader) *WebhookCtx {
-	return &WebhookCtx{W: w, R: r, meta: meta, cfg: cfg}
+	return &WebhookCtx{W: w, R: r, meta: meta, cfg: cfg, maxBody: DefaultMaxBodyBytes}
+}
+
+// SetMaxBody overrides the body-size cap for this request. Call it before
+// Body or BindJSON. A non-positive value restores DefaultMaxBodyBytes —
+// there is deliberately no way to ask for an unlimited read.
+func (c *WebhookCtx) SetMaxBody(n int64) {
+	if n <= 0 {
+		n = DefaultMaxBodyBytes
+	}
+	c.maxBody = n
 }
 
 // ── Request helpers ──────────────────────────────────────────────────
@@ -102,15 +128,31 @@ func (c *WebhookCtx) Method() string { return c.R.Method }
 //	if !validSig(raw, c.Header("X-Hook-Sig"), c.Cfg("secret")) { ... }
 //	json.Unmarshal(raw, &payload)
 func (c *WebhookCtx) BindJSON(v any) error {
-	return json.NewDecoder(c.R.Body).Decode(v)
+	return json.NewDecoder(c.limited()).Decode(v)
 }
 
-// Body reads and returns the whole request body. Prefer it over
-// BindJSON when the payload must be verified before it is trusted:
-// signature schemes sign the exact bytes, so they have to be read
-// before any decoding.
+// Body reads and returns the whole request body, up to the size cap (see
+// DefaultMaxBodyBytes / SetMaxBody). Prefer it over BindJSON when the
+// payload must be verified before it is trusted: signature schemes sign
+// the exact bytes, so they have to be read before any decoding.
+//
+// An over-cap body returns an error; treat it as a rejected request
+// rather than retrying, and do not fall back to reading c.R directly.
 func (c *WebhookCtx) Body() ([]byte, error) {
-	return io.ReadAll(c.R.Body)
+	return io.ReadAll(c.limited())
+}
+
+// limited wraps the request body in the size cap. http.MaxBytesReader is
+// used rather than io.LimitReader because it reports the overrun as an
+// error instead of silently truncating — a truncated body would fail
+// signature verification with a misleading "bad signature" rather than
+// the size error that actually occurred.
+func (c *WebhookCtx) limited() io.Reader {
+	n := c.maxBody
+	if n <= 0 {
+		n = DefaultMaxBodyBytes
+	}
+	return http.MaxBytesReader(c.W, c.R.Body, n)
 }
 
 // Context is a shortcut for c.R.Context(); use it for cancellation-
@@ -153,8 +195,14 @@ func (c *WebhookCtx) CfgInt(key string) int {
 	return n
 }
 
-// CfgBool returns c.Cfg(key) parsed as bool. "true"/"1"/"yes"/"on"
-// (case-insensitive) count as true; anything else is false.
+// CfgBool returns c.Cfg(key) parsed as bool via strconv.ParseBool, so
+// "1", "t", "T", "TRUE", "true", "True" count as true. Anything else —
+// including "yes" and "on", which ParseBool rejects — is false.
+//
+// The widgets that write these rows store "true"/"false", so the narrow
+// set is what config values actually hold; the parser is deliberately not
+// widened, since doing so would flip existing rows that read as false
+// today.
 func (c *WebhookCtx) CfgBool(key string) bool {
 	b, err := strconv.ParseBool(c.Cfg(key))
 	return err == nil && b
@@ -179,10 +227,23 @@ func (c *WebhookCtx) Missing() []string {
 // ── Response helpers ─────────────────────────────────────────────────
 
 // JSON writes v as application/json with the given status code.
+//
+// An encode failure is logged, not returned: the status line is already
+// on the wire by then, so there is no second response to send and no way
+// to turn the failure into an error status. Logging is what keeps a
+// truncated reply — a broken connection mid-write, or a value with an
+// unmarshalable field — from vanishing silently.
 func (c *WebhookCtx) JSON(status int, v any) {
 	c.W.Header().Set("Content-Type", "application/json")
 	c.W.WriteHeader(status)
-	_ = json.NewEncoder(c.W).Encode(v)
+	if err := json.NewEncoder(c.W).Encode(v); err != nil {
+		// stdlib log, not zerolog: pkg/tool is compiled into every
+		// connector plugin binary, so its dependency set is kept to the
+		// standard library. wick points stdlib log at the same sink as
+		// zerolog at boot (see internal/pkg/logfiles), so this lands in
+		// the normal log stream.
+		log.Printf("tool %q: webhook response encode failed: %s", c.meta.Key, err.Error())
+	}
 }
 
 // Status writes a bare status code with no body. Use for the "received,

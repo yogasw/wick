@@ -139,8 +139,14 @@ func (c *Ctx) CfgInt(key string) int {
 	return n
 }
 
-// CfgBool returns c.Cfg(key) parsed as bool. "true"/"1"/"yes"/"on"
-// (case-insensitive) count as true; anything else is false.
+// CfgBool returns c.Cfg(key) parsed as bool via strconv.ParseBool, so
+// "1", "t", "T", "TRUE", "true", "True" count as true. Anything else —
+// including "yes" and "on", which ParseBool rejects — is false.
+//
+// The widgets that write these rows store "true"/"false", so the narrow
+// set is what config values actually hold; the parser is deliberately not
+// widened, since doing so would flip existing rows that read as false
+// today.
 func (c *Ctx) CfgBool(key string) bool {
 	b, err := strconv.ParseBool(c.Cfg(key))
 	return err == nil && b

@@ -156,6 +156,7 @@ Don't pass `struct{}{}` — the No-Config variants make intent explicit.
     - Handlers take `*tool.WebhookCtx` — no `HTML`/`Redirect`/`NotFound`; it has `Body`, `BindJSON`, `Header`, `Query`, `PathValue`, the `Cfg` family, `Missing`, and `JSON`/`Status`/`Error`.
     - **The handler owns authentication.** Verify a signature against `c.Cfg(...)` and fail closed when the secret is unset.
     - Compare signatures with `hmac.Equal`, never `==` — a string compare leaks timing.
+    - `Body`/`BindJSON` are capped at 1 MiB (`tool.DefaultMaxBodyBytes`); raise per request with `c.SetMaxBody(n)`. The read precedes signature verification, so the cap is what stops a huge body from exhausting memory.
     - Store the secret as `wick:"secret;required"` so an admin rotates it from `/manager/tools/{Key}`, never hardcoded.
     - `WebhookGroup("/")` fails the boot; so does a webhook route colliding with an ordinary one.
     - Declared endpoints are listed on `/manager/tools/{Key}` and logged at boot.
