@@ -57,6 +57,19 @@ func HostOOMDetail(peakBytes uint64) string {
 		humanBytes(peakBytes), remedy)
 }
 
+// SliceOOMDetail builds the sentence for a kill by the AGGREGATE slice
+// ceiling (agents_total_memory_mb): all agents together crossed the shared
+// limit and the kernel picked this one. Its own limit was not hit, so —
+// like HostOOMDetail — no per-agent setting is named.
+func SliceOOMDetail(peakBytes uint64) string {
+	const remedy = "Raise the combined agent limit, or run fewer agents at once."
+	if peakBytes == 0 {
+		return "killed when the combined memory of all agents went over the shared limit — its own limit was not hit. " + remedy
+	}
+	return fmt.Sprintf("used %s when the combined memory of all agents went over the shared limit — its own limit was not hit. %s",
+		humanBytes(peakBytes), remedy)
+}
+
 // humanBytes renders a byte count the way an operator reads it.
 func humanBytes(b uint64) string {
 	const unit = 1024

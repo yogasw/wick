@@ -306,11 +306,16 @@ killer — the global one included. `classifyStats` (the pure decision behind
 
 - `oom_kill > 0 && oom > 0` → the agent broke its own ceiling → `ExitOOM`,
   `OOMDetail`, never retried.
-- `oom_kill > 0 && oom == 0` → the MACHINE ran out and the global OOM killer
-  picked this agent (its `oom_score_adj` bias makes that likely) → stays a
-  retryable `ExitError`, with `HostOOMDetail` naming host-level remedies.
-  Blaming the per-agent limit here was a real production misread: a 1.2 GB
-  peak reported as "over its 1285 MB limit".
+- `oom_kill > 0 && oom == 0` → the kill came from OUTSIDE this agent's own
+  ceiling → stays a retryable `ExitError`. Which outside cause is decided by
+  the slice's own `oom` counter — `memory.events` propagates upward only, so
+  a kill by the aggregate ceiling counts its event at the slice, never at the
+  victim's scope. The Agent snapshots `MemGuard.SliceOOMCount()` at each
+  spawn; a positive delta at exit → `SliceOOMDetail` (the combined limit),
+  otherwise `HostOOMDetail` (the machine ran out; the agent's
+  `oom_score_adj` bias makes it the likely victim). Blaming the per-agent
+  limit here was a real production misread: a 1.2 GB peak reported as "over
+  its 1285 MB limit".
 
 `OOMDetail` names whatever numbers it actually has, and invents none:
 

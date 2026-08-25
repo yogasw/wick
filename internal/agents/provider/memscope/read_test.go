@@ -79,6 +79,27 @@ func TestReadStatsAt_SeparatesOOMEventsFromKills(t *testing.T) {
 	}
 }
 
+// The slice's own memory.events tells an aggregate-ceiling kill from a
+// host OOM: a scope killed by agents_total_memory_mb has oom==0 locally
+// (the event is counted at the slice whose limit was hit), so without
+// this reading it is indistinguishable from the machine running out.
+func TestReadSliceOOMAt(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, SliceName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "memory.events"), []byte("low 0\nmax 2\noom 4\noom_kill 4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadSliceOOMAt(root); got != 4 {
+		t.Fatalf("ReadSliceOOMAt = %d, want 4", got)
+	}
+	if got := ReadSliceOOMAt(t.TempDir()); got != 0 {
+		t.Fatalf("missing slice: ReadSliceOOMAt = %d, want 0", got)
+	}
+}
+
 // --collect reaps a scope as soon as its last process exits, so the read
 // races the reap. A missing scope must read as "unknown", never as a
 // confident "not OOM" and never as a false OOM.

@@ -71,6 +71,13 @@ type Agent struct {
 	// when both the idle goroutine and the reader-exit path race.
 	exitReasonSet bool
 
+	// sliceOOMAtSpawn snapshots the agents slice's oom counter when this
+	// spawn started. ClassifyExit diffs it against the counter at exit to
+	// attribute a kill to the aggregate slice ceiling — the slice counter
+	// is cumulative across every agent and spawn, so only the delta says
+	// anything about THIS process's death.
+	sliceOOMAtSpawn int
+
 	// pendingQueue holds messages that arrived while a RespawnOnSend
 	// (codex) turn was in flight, in FIFO order. Codex is one-shot per
 	// spawn, so we can't respawn mid-turn (it would orphan the running
@@ -389,6 +396,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	a.cancel = cancel
 	a.running = true
 	a.done = make(chan struct{})
+	a.sliceOOMAtSpawn = a.cfg.MemGuard.SliceOOMCount()
 	a.mu.Unlock()
 
 	go a.run(subCtx)
@@ -551,6 +559,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 	a.cancel = cancel
 	a.running = true
 	a.done = make(chan struct{})
+	a.sliceOOMAtSpawn = a.cfg.MemGuard.SliceOOMCount()
 	a.mu.Unlock()
 
 	// Respawn = a brand-new subprocess from the FE's perspective; flip
@@ -1109,7 +1118,10 @@ drained:
 	if a.cfg.MemGuard != nil {
 		unit := scopeUnitOf(a.proc)
 		if reason == ExitError {
-			if r, d, ok := a.cfg.MemGuard.ClassifyExit(unit, a.cfg.MemGuard.AgentLimitMB); ok {
+			a.mu.Lock()
+			sliceOOMAtSpawn := a.sliceOOMAtSpawn
+			a.mu.Unlock()
+			if r, d, ok := a.cfg.MemGuard.ClassifyExit(unit, a.cfg.MemGuard.AgentLimitMB, sliceOOMAtSpawn); ok {
 				reason, oomDetail = r, d
 			}
 		}

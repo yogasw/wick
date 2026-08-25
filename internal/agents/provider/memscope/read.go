@@ -32,6 +32,20 @@ func ReadStatsAt(root, unit string) Stats {
 	return st
 }
 
+// ReadSliceOOMAt reports the `oom` counter of the agents slice itself,
+// rooted at an explicit directory. A kill by the aggregate slice ceiling
+// counts its oom event at the slice, not at the victim's scope — so the
+// scope alone cannot tell "the combined limit was hit" from "the machine
+// ran out". Callers snapshot this at spawn and diff at exit; 0 on any
+// read failure, which safely reads as "no slice event".
+func ReadSliceOOMAt(root string) int {
+	ev, err := os.ReadFile(filepath.Join(root, SliceName, "memory.events"))
+	if err != nil {
+		return 0
+	}
+	return parseEventCount(string(ev), "oom")
+}
+
 // parseEventCount pulls one counter out of a flat "key value" file,
 // tolerating unknown keys, short lines, and non-numeric values — kernel
 // files gain fields between versions and must never panic a reader.
