@@ -161,7 +161,7 @@ type getInput struct {
 type createInput struct {
 	Title     string `wick:"required;desc=Short description of the work. Example: Payment webhook returns 401"`
 	ProjectID string `wick:"desc=Project to create the ticket in. Defaults to the calling session's project."`
-	ID        string `wick:"desc=Optional external id to adopt instead of a generated one: a Notion page id, 32 hex characters with dashes optional. Creating twice from the same page is refused rather than duplicated."`
+	ID        string `wick:"desc=Optional external id to adopt instead of a generated one, so a ticket mirroring a record elsewhere carries that record's id: [A-Za-z0-9._-] up to 64 chars, kept verbatim. A uuid is folded to dashless lowercase, so both shapes of a Notion page id land on one ticket and a second create from it is refused."`
 	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=Initial status. Defaults to open."`
 	Assignee  string `wick:"desc=Optional wick user id to assign it to."`
 	Fields    string `wick:"textarea;desc=Optional project-defined field values as JSON. Example: {\"priority\":\"high\",\"type\":\"incident\"}"`
