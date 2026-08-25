@@ -17,6 +17,10 @@ func Register(r tool.Router) {
 	r.GET("/", index)
 	r.POST("/", convert)
 	r.Static("/static/", StaticFS)
+	// Unauthenticated JSON endpoint for external callers — see webhook.go.
+	// Gated by the webhook_enabled config, which is off until an admin
+	// turns it on.
+	registerWebhook(r)
 }
 
 func index(c *tool.Ctx) {

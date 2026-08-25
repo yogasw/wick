@@ -2024,6 +2024,14 @@ func NewServer() *Server {
 		log.Fatal().Msgf("%s", err.Error())
 	}
 	tr.mount(toolsMux)
+	// Log the unauthenticated surface at boot. A webhook group answers
+	// without a login, so which prefixes are open should be visible in the
+	// startup log rather than discoverable only by reading module source.
+	if prefixes := tr.WebhookPrefixes(); len(prefixes) > 0 {
+		log.Info().
+			Strs("prefixes", prefixes).
+			Msg("tools: webhook groups mounted without authentication — handlers own request verification")
+	}
 
 	// Auto-start each embedded AI router at boot when the admin enabled it for
 	// that router. MUST run after tr.mount — that's when the agents tool's
@@ -2067,7 +2075,8 @@ func NewServer() *Server {
 		bootGate.SetPhase("connecting-mcp")
 		customConnSvc.ResyncMCPAtBoot(context.Background())
 	}()
-	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, authSvc, allItems)
+	managerHandler := manager.NewHandler(jobsSvc, configsSvc, connectorsSvc, tagsSvc, authSvc, allItems).
+		WithWebhookRoutes(tr.WebhookRoutes())
 	managerHandler.SetCustomConnectors(customConnSvc)
 	if pluginMgr != nil {
 		managerHandler.SetPluginResolver(pluginMgr)
@@ -2417,7 +2426,17 @@ func NewServer() *Server {
 	// on the ticket endpoints has to be resolved into a user before it gets
 	// there. It ignores every other path, so the rest of /tools/ stays
 	// cookie-only.
-	r.Handle("/tools/", agentstool.TicketAPIAuthMW(authMidd.RequireToolAccess(toolMetas)(toolsMux)))
+	// Webhook groups declared via Router.WebhookGroup are exempt: a webhook
+	// sender is a program with no session cookie, so RequireToolAccess would
+	// 302 it to /auth/login, which it cannot follow. webhookBypass routes
+	// those prefixes straight to toolsMux and leaves every other path on the
+	// gated chain. Authentication for an exempt route is the module's job —
+	// see tool.WebhookGroup's contract.
+	r.Handle("/tools/", webhookBypass(
+		tr.WebhookPrefixes(),
+		toolsMux,
+		agentstool.TicketAPIAuthMW(authMidd.RequireToolAccess(toolMetas)(toolsMux)),
+	))
 
 	// AI-router dashboards + OpenAI-compatible API proxies, mounted at the wick
 	// root (not under the tool) so each embedded Next.js app's root-absolute

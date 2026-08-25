@@ -443,6 +443,18 @@ export interface ToolDetail {
   icon: string;
   can_configure: boolean;
   fields: ConfigField[] | null;
+  /** Endpoints this tool serves without authentication, declared via
+   *  Router.WebhookGroup. Absent when the tool declares none. */
+  webhooks?: WebhookRoute[];
+}
+
+/** One unauthenticated endpoint on a tool. Surfaced so an operator can see
+ *  what answers without a login without reading the module source. */
+export interface WebhookRoute {
+  method: string;
+  path: string;
+  /** Absolute URL, ready to paste into a sender. Empty when no app URL is configured. */
+  url?: string;
 }
 
 export interface AuditRun {

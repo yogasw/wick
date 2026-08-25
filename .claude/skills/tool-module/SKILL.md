@@ -184,6 +184,70 @@ Strict call direction: **handler → service → repo**. Never skip a layer, nev
 
    Use sparingly — only when the sub-handler genuinely owns its own routing. For normal tool endpoints, prefer `r.GET` / `r.POST`.
 
+   **Webhook / API endpoints (unauthenticated, JSON-only):** when an external system must POST into the tool, use `r.WebhookGroup(prefix)`. Routes declared on the returned router bypass wick's per-tool access check — a webhook sender carries no session cookie and cannot follow the 302 to `/auth/login` that the check would otherwise issue. The rest of the tool is unaffected: a Private tool stays private everywhere except the prefixes it opens here.
+
+   ```go
+   func Register(r tool.Router) {
+       r.GET("/", index)                 // private page, HTML, login-gated
+
+       wh := r.WebhookGroup("/webhook")  // unauthenticated, JSON-only
+       wh.POST("/receive", receive)      // POST /tools/{Key}/webhook/receive
+       wh.GET("/health", health)
+   }
+
+   func receive(c *tool.WebhookCtx) {
+       secret := c.Cfg("secret")
+       if secret == "" {
+           c.Error(http.StatusServiceUnavailable, "endpoint not configured")
+           return
+       }
+       raw, err := c.Body()              // read raw bytes BEFORE decoding —
+       if err != nil {                   // the signature covers these exact bytes
+           c.Error(http.StatusBadRequest, "cannot read body")
+           return
+       }
+       if !validSig(raw, c.Header("X-Hook-Signature"), secret) {
+           c.Error(http.StatusUnauthorized, "bad signature")
+           return
+       }
+       var payload map[string]any
+       if err := json.Unmarshal(raw, &payload); err != nil {
+           c.Error(http.StatusBadRequest, "body is not valid JSON")
+           return
+       }
+       c.JSON(http.StatusOK, map[string]string{"status": "accepted"})
+   }
+   ```
+
+   Rules for webhook groups:
+
+   - **Handlers receive `*tool.WebhookCtx`, not `*tool.Ctx`.** It has no `HTML` / `Redirect` / `NotFound` — the caller is a program, so the render shell is absent from the type, not merely discouraged. It carries `Body`, `BindJSON`, `Header`, `Query`, `PathValue`, `Method`, the full `Cfg` family, `Missing`, plus `JSON` / `Status` / `Error` (JSON-shaped).
+   - **The handler owns authentication.** Nothing upstream authenticated the request. Verify a signature or shared secret against `c.Cfg(...)` before trusting the payload, and **fail closed when the secret is unset** — an empty key makes every signature verify.
+   - **Compare signatures with `hmac.Equal`, never `==`.** A byte-wise string compare leaks timing that recovers a valid signature one byte at a time.
+   - **Read `c.Body()` before decoding** when a signature covers the payload; the body can only be consumed once. Both `Body` and `BindJSON` are capped at `tool.DefaultMaxBodyBytes` (1 MiB) — the read necessarily happens *before* a signature can be checked, so an uncapped read would be a memory-exhaustion vector. Raise it per request with `c.SetMaxBody(n)` when a sender legitimately posts more; there is no unlimited option.
+   - **Store the secret as a config row** (`wick:"secret;required"`) so an admin can set and rotate it from `/manager/tools/{Key}` without a redeploy — never hardcode it.
+   - **Pick a real sub-path.** `WebhookGroup("/")` fails the boot: it would strip authentication from the entire tool.
+   - **A webhook route may not collide with an ordinary route** at the same `METHOD PATH` — that would silently remove the access check from the gated route, so it fails the boot.
+   - Declared endpoints are listed on `/manager/tools/{Key}` (with copy-ready URLs) and logged once at boot, so the unauthenticated surface is visible without reading module source.
+
+   Reference implementation: [template/tools/convert-text/webhook.go](../../../template/tools/convert-text/webhook.go) — a webhook bolted onto an existing UI tool, gated by a config toggle that ships **off**.
+
+   **Ship the toggle off.** An endpoint that answers without a login should be switched on deliberately by an admin who knows it is exposed, not arrive open because a tool happened to be installed. The route itself is always mounted — Go's route table is fixed at boot — so gate it per request:
+
+   ```go
+   func webhookConvert(c *tool.WebhookCtx) {
+       if !c.CfgBool("webhook_enabled") {
+           c.Error(http.StatusNotFound, "not found")  // 404, not 403 —
+           return                                     // don't confirm it exists
+       }
+       ...
+   }
+   ```
+
+   Pair the toggle with a **non-required** secret row: the tool still works with the webhook off, and a required-but-empty row would show a permanent "setup required" banner on an instance that never wanted one. The handler enforces it instead.
+
+   **Choosing between this and a workflow webhook trigger:** if the payload just needs to kick off steps an operator can wire up (call an API, run an agent, write a row), prefer a workflow webhook trigger (`/webhook/{wf_id}/{slug}`) — no Go code at all. Reach for `WebhookGroup` when the receiver needs real Go logic, a custom response body, or lives alongside a tool's existing UI and config.
+
 8. **`js/mytool.js`** — wrap in an IIFE, wait for `DOMContentLoaded`. Compute on `input` / `change` events.
 
 9. **Register** in `internal/tools/registry.go` (core wick lab) or in the downstream `main.go`:
@@ -404,5 +468,6 @@ Manual confirmation:
 - New external API or credential — confirm endpoint and secret storage approach.
 - **Removing an existing tool/job** — confirm, since visibility overrides and scheduled runs may exist in DB.
 - Changing `ui.Tool` shape, `ui.Layout`, `ui.Navbar`, `ui.Palette`, or the Router/Ctx contracts — cross-cutting; pause and confirm scope.
+- **Opening a new `WebhookGroup` on an existing tool** — it adds an unauthenticated endpoint to something that was fully gated. Confirm the sender and the verification scheme first (see "Gather connector contract first").
 - Adding a new **default tag** that doesn't exist yet — propose the name first.
 - Adding an **`IsFilter`** tag — never on your own initiative.
