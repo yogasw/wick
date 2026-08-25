@@ -138,6 +138,59 @@ export async function saveTicketConfig(
   }
 }
 
+/** The webhook event catalogue, served from the Go constants so the picker
+    can never offer an event that does not fire. */
+export async function getTicketEvents(): Promise<string[]> {
+  const base = getBase();
+  try {
+    const r = await get<{ events?: string[] | null }>(`${base}/api/ticket-events`);
+    return r.events ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Recent delivery attempts for one webhook, newest first. Empty on failure:
+    a missing log must not break the settings page. */
+export async function getWebhookDeliveries(
+  projectID: string,
+  webhookID: string,
+): Promise<import("./types.js").TicketDelivery[]> {
+  const base = getBase();
+  const path =
+    `${base}/api/projects/${encodeURIComponent(projectID)}` +
+    `/ticket-webhooks/${encodeURIComponent(webhookID)}/deliveries`;
+  try {
+    const r = await get<{ deliveries?: import("./types.js").TicketDelivery[] | null }>(path);
+    return r.deliveries ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Fires a synthetic event at one configured webhook and reports what
+    happened, so an endpoint can be proven before a real ticket needs it.
+    The webhook must already be saved — the server sends to the STORED row. */
+export async function testWebhook(
+  projectID: string,
+  webhookID: string,
+): Promise<import("./types.js").TicketDelivery> {
+  const base = getBase();
+  const path =
+    `${base}/api/projects/${encodeURIComponent(projectID)}` +
+    `/ticket-webhooks/${encodeURIComponent(webhookID)}/test`;
+  const resp = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Accept": "application/json" },
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new ApiError(resp.status, body || `HTTP ${resp.status}`);
+  }
+  return resp.json() as Promise<import("./types.js").TicketDelivery>;
+}
+
 export async function deleteProject(id: string): Promise<void> {
   const base = getBase();
   const resp = await fetch(`${base}/projects/${encodeURIComponent(id)}`, {

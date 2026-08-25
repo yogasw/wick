@@ -1,12 +1,31 @@
 <script lang="ts">
   import type { AutoCreateRule, TicketConfig, TicketField, TicketStatus } from "$lib/types.js";
+  import TicketIntegrationsEditor from "./TicketIntegrationsEditor.svelte";
 
   type Props = {
     cfg: TicketConfig;
     onChange: (cfg: TicketConfig) => void;
+    /** Needed by the integrations half, which calls project-scoped endpoints
+        (test delivery, delivery log) rather than only editing config. */
+    projectID: string;
+    base: string;
   };
 
-  let { cfg, onChange }: Props = $props();
+  let { cfg, onChange, projectID, base }: Props = $props();
+
+  let showIntegrations = $state(false);
+
+  /* One-line read of the integrations state, so the collapsed header says
+     whether anything is actually wired up. */
+  const integrationsSummary = $derived.by(() => {
+    const hooks = (cfg.integrations?.webhooks ?? []).filter((w) => w.enabled).length;
+    const api = cfg.integrations?.api_enabled === true;
+    if (!api && hooks === 0) return "No webhooks · REST API off";
+    const parts: string[] = [];
+    parts.push(hooks === 0 ? "No webhooks" : `${hooks} webhook${hooks === 1 ? "" : "s"}`);
+    parts.push(api ? "REST API on" : "REST API off");
+    return parts.join(" · ");
+  });
 
   const enabled = $derived(cfg.enabled === true);
   const fields = $derived(cfg.fields ?? []);
@@ -642,6 +661,42 @@
         onclick={addRule}
         class="rounded-lg border border-green-500 px-3 py-1.5 text-xs font-medium text-green-600 transition-colors hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-900/20"
       >+ Add rule</button>
+    </div>
+
+    <!-- Integrations. Collapsed by default: a team may run the board entirely
+         from the UI and never need either half of this. -->
+    <div class="border-t border-white-300 pt-4 dark:border-navy-600">
+      <button
+        type="button"
+        aria-expanded={showIntegrations}
+        onclick={() => (showIntegrations = !showIntegrations)}
+        class="flex w-full items-center gap-2 text-left"
+      >
+        <svg
+          viewBox="0 0 16 16"
+          class={"h-4 w-4 shrink-0 text-black-700 transition-transform dark:text-black-600 " + (showIntegrations ? "rotate-90" : "")}
+          fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"
+        >
+          <path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+        <span class="min-w-0 flex-1">
+          <span class="block text-xs font-medium text-black-800 dark:text-black-600">Integrations</span>
+          <span class="mt-0.5 block text-[11px] text-black-700 dark:text-black-600">
+            {integrationsSummary}
+          </span>
+        </span>
+      </button>
+
+      {#if showIntegrations}
+        <div class="mt-4">
+          <TicketIntegrationsEditor
+            {projectID}
+            {base}
+            cfg={cfg.integrations ?? {}}
+            onChange={(next) => patch({ integrations: next })}
+          />
+        </div>
+      {/if}
     </div>
   {/if}
 </div>

@@ -216,9 +216,14 @@ Rules are tried **in order and the first match wins**, so a disabled narrow rule
 
 Notes are a separate subsystem from tickets, not a ticket-only feature — a session with no ticket still has its own notes. See the [Notes connector](/connectors/notes) for the full model (audience, hidden notes, and how notes travel when a session is attached, moved, or detached).
 
+### Integrations
+
+A project's board can also be wired to the outside world: outbound webhooks that fire on ticket events, and a Personal Access Token-authed REST API for another system to create and move tickets. Both are off by default and configured under **Ticket system → Integrations**. See [Ticket Integrations](./ticket-integrations) for setup, the full endpoint reference, and the webhook event catalogue.
+
 ## See also
 
 - [Pool & Sessions](./pool) — how the cwd is actually wired into `exec.Cmd`.
 - [Providers](./providers) — the `provider` default on project meta.
 - [Channels](./channels) — per-channel default project config.
 - [Tickets connector](/connectors/tickets) / [Notes connector](/connectors/notes) — the MCP surface for both.
+- [Ticket Integrations](./ticket-integrations) — outbound webhooks and the token-authed REST API.

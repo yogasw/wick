@@ -138,12 +138,17 @@ func sweepOnce(ctx context.Context, d Deps, now time.Time) {
 			}
 			switch {
 			case NeedsAutoResolve(cfg, t, now):
+				was := t.Status
 				t.Status = cfg.TerminalStatus()
 				t.UpdatedAt = now
 				if serr := SaveKeepingTimestamp(d.Layout, t); serr != nil {
 					l.Warn().Err(serr).Str("ticket", t.ID).Msg("auto-resolve save failed")
 					continue
 				}
+				// A dedicated event, not a plain status change: a receiver
+				// wants to tell "the team finished this" from "wick gave up
+				// waiting and closed it".
+				EmitAutoResolved(t, was)
 				l.Info().Str("ticket", t.ID).Str("project", p.Meta.ID).Msg("ticket auto-resolved (idle past window)")
 
 			case NeedsFollowup(cfg, t, now):
@@ -164,6 +169,7 @@ func sweepOnce(ctx context.Context, d Deps, now time.Time) {
 					l.Warn().Err(serr).Str("ticket", t.ID).Msg("followup stamp save failed")
 					continue
 				}
+				EmitFollowup(t)
 				l.Info().Str("ticket", t.ID).Str("session", target).Msg("ticket followup sent to agent")
 			}
 		}
