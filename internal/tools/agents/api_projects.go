@@ -231,7 +231,7 @@ func apiProjectDetail(c *tool.Ctx) {
 		Pinned:          []ProjectPinnedSession{},
 		Widget:          p.Meta.Widget,
 		WidgetInherited: globalWidgetPolicy(),
-		Ticket:          p.Meta.Ticket,
+		Ticket:          redactTicketConfig(p.Meta.Ticket),
 	}
 
 	// Chats, not sessions: a sub-agent runs in its leader's project but is

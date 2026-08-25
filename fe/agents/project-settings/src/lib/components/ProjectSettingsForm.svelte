@@ -282,6 +282,12 @@
     );
     const rules = (ticketCfg.auto_create ?? []).length;
     parts.push(rules === 0 ? "no auto-create" : `${rules} auto-create rule(s)`);
+    // Integrations are worth surfacing in the collapsed header: an endpoint
+    // receiving events, or an open API, is not something to discover by
+    // expanding a sub-section.
+    const hooks = (ticketCfg.integrations?.webhooks ?? []).filter((w) => w.enabled).length;
+    if (hooks > 0) parts.push(`${hooks} webhook(s)`);
+    if (ticketCfg.integrations?.api_enabled === true) parts.push("REST API on");
     return `On — ${parts.join(" · ")}.`;
   });
 
@@ -323,6 +329,8 @@
       subtitle={data.is_new
         ? "Name it and pick where its sessions run."
         : `${data.chat_count} chats · created ${data.created_at} · ${data.managed ? "managed" : "custom"} folder`}
+      collapsible={!data.is_new}
+      open={data.is_new}
     >
       {#snippet action()}
         {#if canDelete}
@@ -377,6 +385,8 @@
     <SettingsSection
       title="Folder"
       subtitle="Where agent subprocesses run. Changing it shifts the cwd at the next spawn; a running subprocess is unaffected until it restarts."
+      collapsible={!data.is_new}
+      open={data.is_new}
     >
       <div class="flex gap-1 rounded-xl bg-white-200 p-1 dark:bg-navy-800">
         <button
@@ -433,6 +443,8 @@
     <SettingsSection
       title="Defaults"
       subtitle="Where new sessions in this project start. Sub-agents inherit the provider and model."
+      collapsible={!data.is_new}
+      open={data.is_new}
     >
       <div class="flex flex-col gap-4">
         <div>
@@ -482,9 +494,13 @@
           title="Ticket system"
           subtitle={ticketSummary}
           collapsible
-          open={ticketCfg.enabled === true}
         >
-          <TicketSystemEditor cfg={ticketCfg} onChange={(c) => { ticketCfg = c; edit(); }} />
+          <TicketSystemEditor
+            {projectID}
+            {base}
+            cfg={ticketCfg}
+            onChange={(c) => { ticketCfg = c; edit(); }}
+          />
         </SettingsSection>
       </div>
 
@@ -509,7 +525,10 @@
 
       <SettingsSection
         title="Pinned sessions"
-        subtitle="Chats kept at the top of this project. Pin one from a chat's menu."
+        subtitle={data.pinned.length === 0
+          ? "Nothing pinned yet. Pin a chat from its menu."
+          : `${data.pinned.length} pinned chat${data.pinned.length === 1 ? "" : "s"}.`}
+        collapsible
       >
         {#if data.pinned.length === 0}
           <p class="text-xs text-black-700 dark:text-black-600">Nothing pinned yet.</p>

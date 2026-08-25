@@ -1040,6 +1040,22 @@ func NewServer() *Server {
 	agentstool.SetChannelRegistry(channelReg)
 	agentstool.SetSyncManager(syncMgr)
 
+	// ── Ticket integrations ──────────────────────────────────────
+	// Outbound webhooks: the dispatcher reads each project's webhook list
+	// through the registry and is installed as the ticket package's event
+	// emitter, so every ticket mutation fans out from one place. Deliveries
+	// run in their own goroutines — a ticket write never waits on somebody
+	// else's endpoint.
+	ticketWebhooks := ticket.NewDispatcher(func(projectID string) (agentproject.TicketConfig, bool) {
+		p, ok := agentsMgr.Registry().Project(projectID)
+		if !ok {
+			return agentproject.TicketConfig{}, false
+		}
+		return p.Meta.Ticket, true
+	})
+	ticket.SetEmitter(ticketWebhooks)
+	agentstool.SetTicketDispatcher(ticketWebhooks)
+
 	// ask_user Manager: blocks the calling agent over MCP until the
 	// user clicks an option / types an answer in the web UI. SSE
 	// fan-out goes through the broadcaster (one event per request +
@@ -1307,6 +1323,12 @@ func NewServer() *Server {
 	// Instantiated here so channelsetup.All can pass it in; the handler
 	// further below reuses the same instance.
 	tokensSvc := accesstoken.NewServiceFromDB(db)
+
+	// Ticket REST surface: a PAT may stand in for the session cookie on the
+	// ticket endpoints, for projects that switched the API on. Wired here
+	// rather than beside the dispatcher because tokensSvc lives at this
+	// point in boot.
+	agentstool.SetTicketAPIAuth(tokensSvc, authSvc)
 
 	// One call wires every built-in channel: setup.All handles EnsureChannel,
 	// config load, NewChannel, setters, and registry.Add per transport.
@@ -2390,7 +2412,12 @@ func NewServer() *Server {
 	for _, t := range allItems {
 		toolMetas = append(toolMetas, login.ToolMeta{Path: t.Path, DefaultVisibility: t.DefaultVisibility})
 	}
-	r.Handle("/tools/", authMidd.RequireToolAccess(toolMetas)(toolsMux))
+	// TicketAPIAuthMW sits in FRONT of RequireToolAccess: that middleware
+	// turns away a request with no user in context, so a bearer-only caller
+	// on the ticket endpoints has to be resolved into a user before it gets
+	// there. It ignores every other path, so the rest of /tools/ stays
+	// cookie-only.
+	r.Handle("/tools/", agentstool.TicketAPIAuthMW(authMidd.RequireToolAccess(toolMetas)(toolsMux)))
 
 	// AI-router dashboards + OpenAI-compatible API proxies, mounted at the wick
 	// root (not under the tool) so each embedded Next.js app's root-absolute

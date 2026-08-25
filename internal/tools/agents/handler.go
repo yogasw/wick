@@ -347,6 +347,13 @@ func Register(r tool.Router) {
 	r.PUT("/api/tickets/{ticketID}/sessions/{sid}", apiTicketAttachSession)
 	r.DELETE("/api/tickets/{ticketID}/sessions/{sid}", apiTicketDetachSession)
 
+	// JSON API — ticket integrations. The event catalogue is served from the
+	// code so the settings UI and the docs cannot drift from what actually
+	// fires; the webhook rows themselves are saved through ticket-config.
+	r.GET("/api/ticket-events", apiTicketEvents)
+	r.GET("/api/projects/{id}/ticket-webhooks/{webhookID}/deliveries", apiTicketWebhookDeliveries)
+	r.POST("/api/projects/{id}/ticket-webhooks/{webhookID}/test", apiTicketWebhookTest)
+
 	// JSON API — notes. Scoped by ?ticket_id= or ?session_id=; a session
 	// that belongs to a ticket resolves to the ticket's notes.
 	r.GET("/api/notes", apiNotesList)
