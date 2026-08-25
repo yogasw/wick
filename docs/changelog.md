@@ -10,6 +10,17 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.4.1](https://github.com/yogasw/wick/compare/v1.4.0...v1.4.1) — Web UI
+
+_Released on 2026-08-25_
+
+### Fixed
+
+*   Resolved an issue causing a "first-click hang" on macOS (especially with Bluetooth headsets) when navigating pages. This was due to `new AudioContext()` synchronously blocking the main thread while waking the audio output device. The two-tone chime is now played using a pre-rendered WAV via `HTMLAudioElement`, which initializes asynchronously, eliminating UI jank while maintaining the same notes, envelope, and gesture-gated autoplay unlock.
+
+---
+
+
 ## [v1.4.1](https://github.com/yogasw/wick/compare/v1.4.0...v1.4.1) — Chime Hang Fix
 
 _Released on 2026-08-25_
