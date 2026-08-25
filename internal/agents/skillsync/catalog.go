@@ -25,8 +25,11 @@ import (
 // are read on demand, so a growing library costs the prompt a line apiece.
 
 // builtinCatalogMaxBytes bounds the injected block so a large shipped library
-// cannot crowd out the operator's own preset.
-const builtinCatalogMaxBytes = 4 * 1024
+// cannot crowd out the operator's own preset. Sized for the current library
+// with headroom (~330 bytes per skill: name + capped description + absolute
+// path) — when a new skill trips TestBuiltinCatalogNamesEverySkillWithPath,
+// raising this is the intended fix.
+const builtinCatalogMaxBytes = 8 * 1024
 
 // builtinDescMaxRunes caps each description. Trimmed PER SKILL rather than by
 // dropping skills off the end: a skill the model cannot see is unusable, while
