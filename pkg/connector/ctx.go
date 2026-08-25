@@ -75,9 +75,6 @@ type Ctx struct {
 	// from the execute params (empty for internal/system calls). Read via
 	// CallerUserID() by connectors that scope data per owner.
 	callerUserID string
-	// accountID is the ConnectorAccount the framework resolved for this
-	// call (explicit @accountId on the tool id), "" when none.
-	accountID string
 	// sessionID is the agent session this call was made within, stamped
 	// by the framework from ExecuteParams. Read via SessionID() by ops
 	// that act ON the calling session rather than on an external API —
@@ -341,16 +338,6 @@ func (c *Ctx) SetCallerUserID(userID string) { c.callerUserID = userID }
 // has no associated user (internal/system context).
 func (c *Ctx) CallerUserID() string { return c.callerUserID }
 
-// SetAccountID stamps the connected account the framework resolved for this
-// call. Connectors that manage their own token lifecycle per account (the
-// OAuth MCP proxy refreshes and persists per account) need the id, not just
-// the injected user_token.
-func (c *Ctx) SetAccountID(accountID string) { c.accountID = accountID }
-
-// AccountID returns the account set by SetAccountID, or "" when the call
-// named no account.
-func (c *Ctx) AccountID() string { return c.accountID }
-
 // SetUserNameResolver wires the lookup from a wick user id to a display
 // name. Framework-only.
 func (c *Ctx) SetUserNameResolver(fn func(userID string) (string, bool)) { c.userName = fn }
@@ -380,8 +367,7 @@ func (c *Ctx) SetSessionID(sessionID string) { c.sessionID = sessionID }
 // SessionID returns the agent session this call was made within, or "".
 //
 // Trustworthy for authorization only because the MCP layer resolves it
-// from the CALL itself — the per-spawn credential names the session, and
-// that wins over both the wire header and any session_id the model
-// supplied (see internal/mcp/auth.go and executeOneCtx). An op that keys
+// from the per-spawn X-Wick-Session-Id header in preference to any
+// session_id the model supplied — see executeOneCtx. An op that keys
 // access off this value must not fall back to caller-supplied input.
 func (c *Ctx) SessionID() string { return c.sessionID }

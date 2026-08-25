@@ -9,7 +9,6 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/capability"
 	"github.com/yogasw/wick/internal/agents/gate"
-	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -98,7 +97,6 @@ func (prober) SendSentinel(ctx context.Context, workspace, sentinelPath string) 
 		prompt,
 	)
 	cmd.Dir = workspace
-	cmd.Env = envscrub.ScrubOSEnv()
 	// Stream-json prompts read from stdin in headless mode; the
 	// positional prompt arg above feeds Claude the request directly,
 	// so stdin can stay closed.

@@ -53,24 +53,8 @@ type ScheduledMessage struct {
 	// session's Meta.UserID at create time (empty for legacy/unowned
 	// sessions). Access control and the dashboard scope on this.
 	OwnerUserID string `gorm:"type:varchar(36);index"`
-	// RunAsUserID overrides WHOSE identity a fire runs as. Empty — the
-	// normal case — means the fire runs as OwnerUserID, so a scheduled run
-	// behaves exactly like the creator running it by hand. That parity is
-	// the point: the creator tested it with their own access, and a fire
-	// that silently ran as somebody else would make that test meaningless.
-	//
-	// Admin-only, because it is an identity switch: a schedule that could
-	// name its own run-as user would let its owner borrow anyone's access.
-	// Set it when a job legitimately needs somebody else's reach. It is the
-	// ONLY way to widen a schedule, and deliberately so: whatever a fire can
-	// touch is always exactly some real user's access, nothing assembled out
-	// of loose grants. A job that needs A's and B's reach at once is asking
-	// for a user that legitimately holds both — grant the tag to that user in
-	// Access Control, where it is visible and auditable.
-	RunAsUserID string `gorm:"type:varchar(36);index"`
 	// CreatedBy records how the schedule was made: "ai" (agent scheduled
-	// itself), "user" (dashboard), or "api" (external caller). It is the
-	// HOW, never the WHO — OwnerUserID and SourceSessionID answer that.
+	// itself), "user" (dashboard), or "api" (external caller).
 	CreatedBy string `gorm:"type:varchar(16)"`
 	// SourceSessionID is the session the schedule was requested from. Usually
 	// equals SessionID, but kept explicit so provenance is preserved when a
@@ -102,10 +86,6 @@ type ScheduledMessage struct {
 	// Paused, when true on a recurring schedule, suspends firing without
 	// deleting the row. Resume clears it and recomputes RunAt.
 	Paused bool `gorm:"default:false"`
-	// HeldByAgent marks a pause wick made, not the user: the Team agent the
-	// schedule fires into was disabled. Enabling the agent resumes exactly
-	// these rows, so a schedule the user paused by hand stays paused.
-	HeldByAgent bool `gorm:"default:false"`
 	// MaxRuns > 0 caps the number of fires for a recurring schedule; after
 	// the RunCount reaches it the schedule finishes (status=done). 0 = no cap.
 	MaxRuns int `gorm:"default:0"`
@@ -260,19 +240,6 @@ func (s *ScheduledMessage) Mode() string {
 		return ScheduledSessionExisting
 	}
 	return s.SessionMode
-}
-
-// EffectiveRunAsUser is the user a fire runs as: the admin override when one
-// is set, otherwise the owner. Empty means nobody is attached — the fire then
-// falls back to the synthetic internal principal, which carries no access
-// tags, so a schedule in that state silently reaches far less than its
-// creator would. Callers that surface schedules should show this, not
-// CreatedBy: "ai"/"user" says how the row was made, never as whom it runs.
-func (s *ScheduledMessage) EffectiveRunAsUser() string {
-	if s.RunAsUserID != "" {
-		return s.RunAsUserID
-	}
-	return s.OwnerUserID
 }
 
 // IsProjectScoped reports whether the target session is resolved per fire

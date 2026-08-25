@@ -2,8 +2,6 @@ package provider
 
 import (
 	"os"
-	"path/filepath"
-	"strings"
 	"sync/atomic"
 
 	"github.com/rs/zerolog"
@@ -61,23 +59,6 @@ func (g *MemGuard) sliceLimits() memscope.SliceLimits {
 	}
 }
 
-// SyncSlice rewrites agents.slice's unit (or raw cgroup) with this
-// guard's limits now, instead of at the next spawn. The resource guard
-// writes the live cgroup when a limit changes; without this the unit
-// file kept the old value and the next daemon-reload put it back.
-func (g *MemGuard) SyncSlice() error {
-	if g == nil || g.Mode != config.MemGuardEnforce {
-		return nil
-	}
-	switch memscopeBackend() {
-	case memscope.BackendCgroupFS:
-		return memscope.EnsureCgroupSlice(g.sliceLimits())
-	case memscope.BackendNone:
-		return nil
-	}
-	return memscope.EnsureSlice(g.sliceLimits())
-}
-
 // memscopeBackend is a seam so tests can drive every branch without a
 // systemd user session or a real cgroup mount. Production always points
 // at memscope.DetectBackend, which ranks systemd-run above raw cgroupfs
@@ -129,27 +110,11 @@ func (g *MemGuard) wraps() bool {
 	return memscopeBackend() != memscope.BackendNone
 }
 
-// wrapsManaged covers the gap OnPath-only leaves for wick-managed
-// binaries: the PATH shim sits in front of a name looked up on PATH, but a
-// managed binary is spawned by absolute path under <data dir>/providers/bin
-// and would bypass it. So when the guard is on and applies on the path,
-// wick wraps managed binaries itself.
-func (g *MemGuard) wrapsManaged(bin string) bool {
-	if g == nil || g.Mode == config.MemGuardOff || g.Mode == "" || !g.Scopes.OnPath {
-		return false
-	}
-	root := ManagedBinRoot()
-	if root == "" || !strings.HasPrefix(filepath.Clean(bin), filepath.Clean(root)+string(filepath.Separator)) {
-		return false
-	}
-	return memscopeBackend() != memscope.BackendNone
-}
-
 // Wrap returns the binary, argv, and scope unit name to use for a spawn.
 // An empty unit name means the spawn was not wrapped, and the caller must
 // exec exactly what it passed in.
 func (g *MemGuard) Wrap(bin string, args []string, providerName string, seq int) (string, []string, string) {
-	if !g.wraps() && !g.wrapsManaged(bin) {
+	if !g.wraps() {
 		return bin, args, ""
 	}
 	l := log.With().Str("component", "memguard").Logger()
@@ -230,49 +195,15 @@ func (g *MemGuard) BiasChild(pid int) {
 // cannot distinguish an OOM kill from any other SIGKILL, and --collect
 // reaps a scope as soon as its last process exits, so a guess here would
 // mislabel the very failure this exists to explain.
-// sliceOOMAtSpawn is the slice's oom counter snapshotted when this spawn
-// started (Agent captures it via SliceOOMCount); the delta since then
-// attributes a kill to the aggregate slice ceiling.
-func (g *MemGuard) ClassifyExit(unit string, limitMB, sliceOOMAtSpawn int) (ExitReason, string, bool) {
+func (g *MemGuard) ClassifyExit(unit string, limitMB int) (ExitReason, string, bool) {
 	if g == nil || unit == "" {
 		return ExitError, "", false
 	}
-	delta := memscope.ReadSliceOOM() - sliceOOMAtSpawn
-	return classifyStats(memscope.ReadStats(unit), limitMB, delta)
-}
-
-// SliceOOMCount reads the agents slice's current oom counter, for the
-// spawn-time snapshot ClassifyExit diffs against. Nil-safe; 0 wherever
-// the slice (or the platform's cgroup v2) is absent.
-func (g *MemGuard) SliceOOMCount() int {
-	if g == nil {
-		return 0
-	}
-	return memscope.ReadSliceOOM()
-}
-
-// classifyStats is the pure decision behind ClassifyExit, split out so the
-// discrimination is testable on every platform (ReadStats is Linux-only).
-func classifyStats(st memscope.Stats, limitMB, sliceOOMDelta int) (ExitReason, string, bool) {
+	st := memscope.ReadStats(unit)
 	if !st.Known || st.OOMKills == 0 {
 		return ExitError, "", false
 	}
-	// oom_kill counts kills by ANY OOM killer; oom counts OOM conditions
-	// raised by this cgroup hitting its OWN limit — that is the most
-	// specific evidence, so it wins outright.
-	if st.OOMEvents > 0 {
-		return ExitOOM, OOMDetail(st.PeakBytes, limitMB), true
-	}
-	// No own-limit event. memory.events propagates upward only, so a kill
-	// by the AGGREGATE slice ceiling counts its oom at the slice, not at
-	// the victim's scope. A slice event since this spawn started names the
-	// shared limit; otherwise the machine itself ran out. Both stay a
-	// retryable ExitError — neither is this agent exceeding its ceiling —
-	// but the detail must point at the right knob.
-	if sliceOOMDelta > 0 {
-		return ExitError, SliceOOMDetail(st.PeakBytes), true
-	}
-	return ExitError, HostOOMDetail(st.PeakBytes), true
+	return ExitOOM, OOMDetail(st.PeakBytes, limitMB), true
 }
 
 // ReleaseScope removes the cgroup a spawn ran inside, once nothing is

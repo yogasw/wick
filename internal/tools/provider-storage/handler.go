@@ -603,17 +603,6 @@ func knownProviderPaths(providerType, home string) []detectedPath {
 		return []detectedPath{
 			{Label: "Gemini config folder", SyncPath: filepath.Join(home, ".gemini"), Mode: "folder"},
 		}
-	case "omp":
-		// Profiles (one per omp instance) live under ~/.omp/profiles.
-		return []detectedPath{
-			{Label: "OMP config folder", SyncPath: filepath.Join(home, ".omp"), Mode: "folder"},
-		}
-	case "opencode":
-		// Credentials live in each instance's own data dir (accounts.go),
-		// not here; this is the shared user config.
-		return []detectedPath{
-			{Label: "opencode config folder", SyncPath: filepath.Join(home, ".config", "opencode"), Mode: "folder"},
-		}
 	case "wick":
 		agentsBase := agentconfig.ResolveBaseDir(agentconfig.StorageConfig{})
 		return []detectedPath{
@@ -627,7 +616,7 @@ func knownProviderPaths(providerType, home string) []detectedPath {
 func listPresets(c *tool.Ctx) {
 	home, _ := os.UserHomeDir()
 	pt := c.Query("provider_type")
-	providers := []string{"claude", "codex", "gemini", "omp", "opencode"}
+	providers := []string{"claude", "codex", "gemini"}
 	if pt != "" {
 		providers = []string{pt}
 	}

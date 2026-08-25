@@ -43,14 +43,8 @@ import (
 // navigates to `drills[drillKey]` and renders the same item shape.
 
 type paletteItem struct {
-	Kind  string `json:"kind"` // "drag" | "drill"
-	Label string `json:"label"`
-	// Meta and Owner are secondary, muted text under Label — for a
-	// channel: which bot this instance runs as, and whose channel row it
-	// is. Kept out of Label so a long bot or person name wraps on its own
-	// line instead of squeezing the row's primary text.
-	Meta        string         `json:"meta,omitempty"`
-	Owner       string         `json:"owner,omitempty"`
+	Kind        string         `json:"kind"` // "drag" | "drill"
+	Label       string         `json:"label"`
 	Badge       string         `json:"badge,omitempty"`
 	Description string         `json:"description,omitempty"`
 	Drag        map[string]any `json:"drag,omitempty"`
@@ -83,7 +77,7 @@ func spaWorkflowPalette(c *tool.Ctx) {
 		return
 	}
 
-	resp := buildPalette(gatherConnectorData(c), currentUserIDForChannel(c))
+	resp := buildPalette(gatherConnectorData(c))
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -124,7 +118,7 @@ func gatherConnectorData(c *tool.Ctx) map[string][]connectorInstance {
 	if globalAuth != nil {
 		tagIDs = globalAuth.GetUserFilterTagIDs(c.Context(), user.ID)
 	}
-	rows, err := globalConnectors.ListForManager(c.Context(), user.ID, tagIDs, user.IsAdmin())
+	rows, err := globalConnectors.ListForManager(c.Context(), tagIDs, user.IsAdmin())
 	if err != nil {
 		return out
 	}
@@ -136,15 +130,7 @@ func gatherConnectorData(c *tool.Ctx) map[string][]connectorInstance {
 		inst := connectorInstance{Row: row}
 		inst.OpEnabled, _ = globalConnectors.OperationStates(c.Context(), row.ID, row.Key)
 		if row.EnableSSO {
-			// Only the accounts this user may run as: private-by-default
-			// accounts belong to whoever connected them, so the palette must
-			// not offer somebody else's identity as a droppable node.
-			caller := connectors.AccountAccess{
-				UserID:     user.ID,
-				TagIDs:     tagIDs,
-				Privileged: connectors.OwnsConnector(row, user.ID) || (user.IsAdmin() && globalConnectors.AdminSeesAllConnectors()),
-			}
-			inst.Accounts, _ = globalConnectors.ListAccountsVisibleTo(c.Context(), row, caller)
+			inst.Accounts, _ = globalConnectors.ListAccounts(c.Context(), row.ID)
 		}
 		out[row.Key] = append(out[row.Key], inst)
 	}
@@ -156,15 +142,11 @@ func gatherConnectorData(c *tool.Ctx) map[string][]connectorInstance {
 // the connector registry. Separated from the handler so tests can
 // exercise the shape without HTTP plumbing.
 //
-// me is the caller's wick user id ("" = App Owner) — channel rows are
-// collapsed to that user's own instance, so a picker never shows five
-// identical "slack" entries nobody can tell apart.
-//
 // instancesByKey maps connector key → the caller's accessible instances
 // (already access-filtered, with readiness + usable SSO accounts resolved
 // by gatherConnectorData). A connector with no accessible instance is
 // omitted from the palette.
-func buildPalette(instancesByKey map[string][]connectorInstance, me string) paletteResponse {
+func buildPalette(instancesByKey map[string][]connectorInstance) paletteResponse {
 	resp := paletteResponse{
 		Categories: []paletteCategory{},
 		Drills:     map[string][]paletteItem{},
@@ -191,12 +173,7 @@ func buildPalette(instancesByKey map[string][]connectorInstance, me string) pale
 		}
 	}
 	// Channel-as-trigger drill rows — one per channel that exposes events.
-	// ChannelsList returns one row per registered INSTANCE (Slack runs one
-	// bot per owning user), so collapse to the row this user should see:
-	// theirs when they have one, labelled "Slack - <bot> - <owner>".
-	ownerNames := channelOwnerNames()
-	chRows := visibleChannelInstances(globalWorkflowMgr.MCP.ChannelsList(), me)
-	for _, ch := range chRows {
+	for _, ch := range globalWorkflowMgr.MCP.ChannelsList() {
 		evs := globalWorkflowMgr.Integration.EventsByChannel(ch.Name)
 		if len(evs) == 0 {
 			continue
@@ -209,19 +186,16 @@ func buildPalette(instancesByKey map[string][]connectorInstance, me string) pale
 				Label:       ev.Name,
 				Description: ev.Description,
 				Drag: map[string]any{
-					"type":             "channel-trigger",
-					"channel":          ch.Name,
-					"channel_instance": ch.InstanceKey,
-					"event":            ev.Event,
+					"type":    "channel-trigger",
+					"channel": ch.Name,
+					"event":   ev.Event,
 				},
 			})
 		}
 		resp.Drills[key] = events
 		triggers = append(triggers, paletteItem{
 			Kind:     "drill",
-			Label:    channelPickerLabel(ch.Name),
-			Meta:     ch.BotName,
-			Owner:    channelOwnerLabel(ownerNames, ch.OwnerUserID),
+			Label:    titleizeSlug(ch.Name),
 			Badge:    "trigger",
 			DrillKey: key,
 		})
@@ -278,7 +252,7 @@ func buildPalette(instancesByKey map[string][]connectorInstance, me string) pale
 	// Per-channel action drills — one drill per channel that exposes
 	// at least one action. Same source the existing /workflows/api/registry
 	// endpoint uses, so the palette stays consistent with the inspector.
-	for _, ch := range chRows {
+	for _, ch := range globalWorkflowMgr.MCP.ChannelsList() {
 		if len(ch.Actions) == 0 {
 			continue
 		}
@@ -290,20 +264,17 @@ func buildPalette(instancesByKey map[string][]connectorInstance, me string) pale
 				Label:       titleizeSlug(a.ID),
 				Description: a.Description,
 				Drag: map[string]any{
-					"type":             "node",
-					"node_type":        "channel",
-					"channel":          ch.Name,
-					"channel_instance": ch.InstanceKey,
-					"op":               a.ID,
+					"type":      "node",
+					"node_type": "channel",
+					"channel":   ch.Name,
+					"op":        a.ID,
 				},
 			})
 		}
 		resp.Drills[key] = ops
 		byCat[string(engine.CategoryAction)] = append(byCat[string(engine.CategoryAction)], paletteItem{
 			Kind:     "drill",
-			Label:    channelPickerLabel(ch.Name),
-			Meta:     ch.BotName,
-			Owner:    channelOwnerLabel(ownerNames, ch.OwnerUserID),
+			Label:    titleizeSlug(ch.Name),
 			Badge:    "channel",
 			DrillKey: key,
 		})
@@ -398,21 +369,7 @@ func buildPalette(instancesByKey map[string][]connectorInstance, me string) pale
 			// Skip an account with no runnable op left.
 			for _, acc := range inst.Accounts {
 				accCopy := acc
-				// An account's overrides move in both directions now, so
-				// "disabled for this account" is no longer just the opt-out
-				// list: an op the instance has off can be forced on here, and
-				// the palette must offer exactly what would actually run.
-				overrides := connectors.AccountOpOverrides(&accCopy)
-				accDisabled := make(map[string]bool, len(inst.OpEnabled))
-				for opKey, instanceOn := range inst.OpEnabled {
-					effective := instanceOn
-					if forced, ok := overrides[opKey]; ok {
-						effective = forced
-					}
-					if !effective {
-						accDisabled[opKey] = true
-					}
-				}
+				accDisabled := connectors.AccountDisabledOps(&accCopy)
 				accOps := opsFor(inst.Row.ID, acc.ID, inst.OpEnabled, accDisabled)
 				if len(accOps) == 0 {
 					continue

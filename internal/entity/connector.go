@@ -73,15 +73,6 @@ type Connector struct {
 	// Only meaningful when the connector's OAuthMeta is non-nil.
 	// Default false — only admins can initiate the OAuth flow.
 	AllowOthersConnectSSO bool `gorm:"default:false"`
-	// AllowOthersSeeAccounts controls whether the OAuth accounts connected
-	// to this instance are visible to users OTHER than the account's own
-	// owner. Default false — every connected account is private to the wick
-	// user who connected it (plus admins and the instance owner), so a
-	// multi-account instance lists one connector + that caller's own account
-	// instead of everybody's. Turn it on to go back to a shared pool where
-	// any user with tag access can see — and run as — every connected
-	// account. Only meaningful when EnableSSO=true.
-	AllowOthersSeeAccounts bool `gorm:"default:false"`
 	// EnableSSO controls whether this instance participates in the OAuth
 	// flow at all. When false (default) the instance uses manually-entered
 	// credentials (bot token, API key, service account). When true the
@@ -126,12 +117,6 @@ const (
 	// ConnectorRunSourceRetry marks runs that replay the request payload
 	// of a previous run, identified by ConnectorRun.ParentRunID.
 	ConnectorRunSourceRetry ConnectorRunSource = "retry"
-	// ConnectorRunSourceApp marks runs a wick surface made on a human's
-	// behalf — today the Source panel borrowing a Git CLI connector to
-	// push or pull. Distinct from "test": nobody is poking at the
-	// connector here, the app is using it to do the user's work, and the
-	// history should say which.
-	ConnectorRunSourceApp ConnectorRunSource = "app"
 )
 
 // ConnectorRunStatus describes the outcome of a ConnectorRun.
@@ -200,13 +185,6 @@ type ConnectorRun struct {
 	// every in-flight run bound to the session, and so a stale-run reaper /
 	// audit can attribute a run to its session. Indexed for the by-session lookup.
 	SessionID string `gorm:"type:text;index:idx_run_session"`
-	// AccountID is the ConnectorAccount whose token this call used, empty
-	// when it ran on the row's own configured credentials. Persisted
-	// because "which identity did this go out as" is not answerable from
-	// UserID: a person can drive several connected accounts, and an agent
-	// or MCP client has no UserID at all while still choosing one. Indexed
-	// for the History page's Credential filter.
-	AccountID string `gorm:"type:text;index:idx_run_account"`
 	Source       ConnectorRunSource `gorm:"type:text;not null"`
 	RequestJSON  string             `gorm:"type:text"`
 	ResponseJSON string             `gorm:"type:text"`
@@ -243,26 +221,9 @@ type ConnectorAccount struct {
 	ExternalUserID string    `gorm:"type:varchar(255);index"`
 	DisplayName    string    `gorm:"type:varchar(255);not null"`
 	AccessToken    string    `gorm:"type:text;not null"`
-	// RefreshToken and ExpiresAt are only written by flows that refresh —
-	// today the OAuth MCP per-user connect (custom connectors). Built-in
-	// OAuth connectors leave them empty. RefreshToken is stored encrypted
-	// (wick_enc_) when an encryption key is configured.
-	RefreshToken string     `gorm:"type:text;default:''"`
-	ExpiresAt    *time.Time
-	// DisabledOps is the LEGACY per-account opt-out: a JSON array of
-	// operation keys disabled for this account. Superseded by OpOverrides
-	// and read only when that is empty, so existing rows keep working
-	// without a data migration. New writes go to OpOverrides.
-	DisabledOps string `gorm:"type:text;default:''"`
-	// OpOverrides is the per-account operation state as a JSON object of
-	// opKey → bool: true forces the operation ON for this account, false
-	// forces it OFF, and an ABSENT key means inherit whatever the instance
-	// says. Three states, because two cannot express what this is for —
-	// "not in the disabled list" could not distinguish "inherit" from
-	// "on anyway" once the instance itself turned the operation off.
-	//
-	// Example: {"send_message":false,"get_channel_history":true}
-	OpOverrides string    `gorm:"type:text;default:''"`
+	// DisabledOps is a JSON array of operation keys disabled for this
+	// account. Empty = all ops allowed. Example: ["send_message","delete_message"]
+	DisabledOps string    `gorm:"type:text;default:''"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

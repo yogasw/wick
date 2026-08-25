@@ -17,10 +17,8 @@ func (h *Handler) projectsAdminPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allProjects := h.projects.Projects()
-	allTags, _, tagsOK := h.tagPageData(w, r, nil)
-	if !tagsOK {
-		return
-	}
+	allTags, _ := h.repo.ListTags(ctx)
+	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
 	projectIDs := make(map[string]struct{}, len(allProjects))
 	for id := range allProjects {
 		projectIDs[id] = struct{}{}
@@ -31,11 +29,7 @@ func (h *Handler) projectsAdminPage(w http.ResponseWriter, r *http.Request) {
 	for id := range allProjects {
 		paths = append(paths, "/projects/"+id)
 	}
-	perms, err := h.repo.ListToolPerms(ctx, paths)
-	if err != nil {
-		http.Error(w, "cannot load tag assignments: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+	perms, _ := h.repo.ListToolPerms(ctx, paths)
 
 	permByPath := make(map[string][]string, len(perms))
 	for i, path := range paths {
@@ -55,22 +49,18 @@ func (h *Handler) projectsAdminPage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	owner := adminview.ResourceOwnerEdit{Enabled: true, Users: h.userOptions(ctx)}
-	adminview.ResourcesAdminPage("Projects", "/admin/projects", h.decorateResourceRows(ctx, rows, allTags), allTags, owner, user).Render(ctx, w)
+	adminview.ResourcesAdminPage("Projects", "/admin/projects", rows, allTags, user).Render(ctx, w)
 }
 
 func (h *Handler) setProjectTags(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	ids, ok := tagIDsFromForm(r)
-	if !ok {
-		refuseUnreadableTagForm(w)
-		return
-	}
+	r.ParseForm()
+	ids := dedupNonEmpty(r.Form["tag_ids[]"])
 	if err := h.repo.SetToolTags(r.Context(), "/projects/"+id, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	redirectOrNoContent(w, r, "/admin/projects")
+	http.Redirect(w, r, "/admin/projects", http.StatusFound)
 }
 
 // ── Workflows ─────────────────────────────────────────────────────────────────
@@ -87,10 +77,8 @@ func (h *Handler) workflowsAdminPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	allTags, _, tagsOK := h.tagPageData(w, r, nil)
-	if !tagsOK {
-		return
-	}
+	allTags, _ := h.repo.ListTags(ctx)
+	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
 	workflowIDs := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		workflowIDs[id] = struct{}{}
@@ -101,11 +89,7 @@ func (h *Handler) workflowsAdminPage(w http.ResponseWriter, r *http.Request) {
 	for i, id := range ids {
 		paths[i] = "/workflows/" + id
 	}
-	perms, err := h.repo.ListToolPerms(ctx, paths)
-	if err != nil {
-		http.Error(w, "cannot load tag assignments: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+	perms, _ := h.repo.ListToolPerms(ctx, paths)
 
 	rows := make([]adminview.ResourceAdminRow, len(ids))
 	for i, id := range ids {
@@ -124,27 +108,18 @@ func (h *Handler) workflowsAdminPage(w http.ResponseWriter, r *http.Request) {
 		rows[i] = row
 	}
 
-	// The Owner column becomes a picker only when something can persist the
-	// change; a file-backed install has no row to re-stamp.
-	owner := adminview.ResourceOwnerEdit{}
-	if h.workflowOwner != nil {
-		owner = adminview.ResourceOwnerEdit{Enabled: true, Users: h.userOptions(ctx)}
-	}
-	adminview.ResourcesAdminPage("Workflows", "/admin/workflows", h.decorateResourceRows(ctx, rows, allTags), allTags, owner, user).Render(ctx, w)
+	adminview.ResourcesAdminPage("Workflows", "/admin/workflows", rows, allTags, user).Render(ctx, w)
 }
 
 func (h *Handler) setWorkflowTags(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	ids, ok := tagIDsFromForm(r)
-	if !ok {
-		refuseUnreadableTagForm(w)
-		return
-	}
+	r.ParseForm()
+	ids := dedupNonEmpty(r.Form["tag_ids[]"])
 	if err := h.repo.SetToolTags(r.Context(), "/workflows/"+id, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	redirectOrNoContent(w, r, "/admin/workflows")
+	http.Redirect(w, r, "/admin/workflows", http.StatusFound)
 }
 
 // ── Skills ────────────────────────────────────────────────────────────────────
@@ -161,10 +136,8 @@ func (h *Handler) skillsAdminPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	allTags, _, tagsOK := h.tagPageData(w, r, nil)
-	if !tagsOK {
-		return
-	}
+	allTags, _ := h.repo.ListTags(ctx)
+	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
 	skillIDs := make(map[string]struct{}, len(skills))
 	for _, sk := range skills {
 		skillIDs[sk.Name] = struct{}{}
@@ -175,11 +148,7 @@ func (h *Handler) skillsAdminPage(w http.ResponseWriter, r *http.Request) {
 	for i, sk := range skills {
 		paths[i] = "/skills/" + sk.Name
 	}
-	perms, err := h.repo.ListToolPerms(ctx, paths)
-	if err != nil {
-		http.Error(w, "cannot load tag assignments: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+	perms, _ := h.repo.ListToolPerms(ctx, paths)
 
 	rows := make([]adminview.ResourceAdminRow, len(skills))
 	for i, sk := range skills {
@@ -196,21 +165,18 @@ func (h *Handler) skillsAdminPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	adminview.ResourcesAdminPage("Skills", "/admin/skills", h.decorateResourceRows(ctx, rows, allTags), allTags, adminview.ResourceOwnerEdit{}, user).Render(ctx, w)
+	adminview.ResourcesAdminPage("Skills", "/admin/skills", rows, allTags, user).Render(ctx, w)
 }
 
 func (h *Handler) setSkillTags(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	ids, ok := tagIDsFromForm(r)
-	if !ok {
-		refuseUnreadableTagForm(w)
-		return
-	}
+	r.ParseForm()
+	ids := dedupNonEmpty(r.Form["tag_ids[]"])
 	if err := h.repo.SetToolTags(r.Context(), "/skills/"+name, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	redirectOrNoContent(w, r, "/admin/skills")
+	http.Redirect(w, r, "/admin/skills", http.StatusFound)
 }
 
 // ── Data Tables ───────────────────────────────────────────────────────────────
@@ -223,10 +189,8 @@ func (h *Handler) dataTablesAdminPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slugs := h.dataTables.ListTables()
-	allTags, _, tagsOK := h.tagPageData(w, r, nil)
-	if !tagsOK {
-		return
-	}
+	allTags, _ := h.repo.ListTags(ctx)
+	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
 	tableIDs := make(map[string]struct{}, len(slugs))
 	for _, s := range slugs {
 		tableIDs[s] = struct{}{}
@@ -237,11 +201,7 @@ func (h *Handler) dataTablesAdminPage(w http.ResponseWriter, r *http.Request) {
 	for i, s := range slugs {
 		paths[i] = "/data-tables/" + s
 	}
-	perms, err := h.repo.ListToolPerms(ctx, paths)
-	if err != nil {
-		http.Error(w, "cannot load tag assignments: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+	perms, _ := h.repo.ListToolPerms(ctx, paths)
 
 	rows := make([]adminview.ResourceAdminRow, len(slugs))
 	for i, slug := range slugs {
@@ -260,19 +220,16 @@ func (h *Handler) dataTablesAdminPage(w http.ResponseWriter, r *http.Request) {
 		rows[i] = row
 	}
 
-	adminview.ResourcesAdminPage("Data Tables", "/admin/data-tables", h.decorateResourceRows(ctx, rows, allTags), allTags, adminview.ResourceOwnerEdit{}, user).Render(ctx, w)
+	adminview.ResourcesAdminPage("Data Tables", "/admin/data-tables", rows, allTags, user).Render(ctx, w)
 }
 
 func (h *Handler) setDataTableTags(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
-	ids, ok := tagIDsFromForm(r)
-	if !ok {
-		refuseUnreadableTagForm(w)
-		return
-	}
+	r.ParseForm()
+	ids := dedupNonEmpty(r.Form["tag_ids[]"])
 	if err := h.repo.SetToolTags(r.Context(), "/data-tables/"+slug, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	redirectOrNoContent(w, r, "/admin/data-tables")
+	http.Redirect(w, r, "/admin/data-tables", http.StatusFound)
 }

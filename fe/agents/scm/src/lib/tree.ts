@@ -10,10 +10,6 @@ export type TreeNode = {
   // Full path from repo root (folders end without trailing slash).
   path: string;
   isDir: boolean;
-  // A leaf that IS a directory: git reported the whole folder as one
-  // change (a nested repo it will not descend into). It carries a change
-  // like a file, but there is nothing inside it to open or diff.
-  dirEntry?: boolean;
   // Dirs: child nodes. Files: the underlying change.
   children?: TreeNode[];
   change?: FileChange;
@@ -23,7 +19,7 @@ type RawDir = {
   name: string;
   path: string;
   dirs: Map<string, RawDir>;
-  files: { name: string; change: FileChange; dirEntry: boolean }[];
+  files: { name: string; change: FileChange }[];
 };
 
 function newDir(name: string, path: string): RawDir {
@@ -34,12 +30,7 @@ function newDir(name: string, path: string): RawDir {
 export function buildTree(changes: FileChange[]): TreeNode[] {
   const root = newDir("", "");
   for (const ch of changes) {
-    // A folder-scoped entry may still arrive with the trailing slash git
-    // prints. Splitting that as-is ends in an empty segment, which used
-    // to render as a nameless blank row under the folder.
-    const dirEntry = ch.dir === true || ch.path.endsWith("/");
-    const segs = ch.path.replace(/\/+$/, "").split("/");
-    if (segs.length === 0 || segs[segs.length - 1] === "") continue;
+    const segs = ch.path.split("/");
     let cur = root;
     for (let i = 0; i < segs.length - 1; i++) {
       const seg = segs[i];
@@ -51,23 +42,19 @@ export function buildTree(changes: FileChange[]): TreeNode[] {
       }
       cur = next;
     }
-    cur.files.push({ name: segs[segs.length - 1], change: ch, dirEntry });
+    cur.files.push({ name: segs[segs.length - 1], change: ch });
   }
-  return finalize(root, true).children ?? [];
+  return finalize(root).children ?? [];
 }
 
 // finalize converts a RawDir into TreeNodes, collapsing single-child dir
-// chains and sorting (dirs first, then alpha). The root is never collapsed:
-// it is the list itself, not a row. Collapsing it folded a shared prefix
-// ("internal/agents") into a node buildTree then threw away, leaving
-// "event", "pool", "provider" at the top with no sign of where they live.
-function finalize(dir: RawDir, isRoot = false): TreeNode {
-  const childDirs = [...dir.dirs.values()].map((d) => finalize(d));
+// chains and sorting (dirs first, then alpha).
+function finalize(dir: RawDir): TreeNode {
+  const childDirs = [...dir.dirs.values()].map(finalize);
   const childFiles: TreeNode[] = dir.files.map((f) => ({
     name: f.name,
-    path: f.change.path.replace(/\/+$/, ""),
+    path: f.change.path,
     isDir: false,
-    dirEntry: f.dirEntry,
     change: f.change,
   }));
 
@@ -83,7 +70,7 @@ function finalize(dir: RawDir, isRoot = false): TreeNode {
 
   // Collapse: a dir with exactly one child dir and no files becomes
   // "parent/child" (VSCode compact folders).
-  if (!isRoot && node.children!.length === 1 && node.children![0].isDir && childFiles.length === 0) {
+  if (node.children!.length === 1 && node.children![0].isDir && childFiles.length === 0) {
     const only = node.children![0];
     return {
       name: node.name ? node.name + "/" + only.name : only.name,
@@ -110,19 +97,4 @@ export function allChanges(node: TreeNode): FileChange[] {
   const out: FileChange[] = [];
   for (const c of node.children ?? []) out.push(...allChanges(c));
   return out;
-}
-
-/** splitPath cuts a repo-relative path into the two things a file row shows:
- *  the NAME you are looking for, and the folder that tells two files with the
- *  same name apart. Mirrors what an editor's Changes list does — the name is
- *  never the part that gets truncated, because the name is the point.
- *
- *  "internal/agents/store/store.go" → { name: "store.go", dir: "internal/agents/store" }
- *  "store.go"                       → { name: "store.go", dir: "" }
- */
-export function splitPath(path: string): { name: string; dir: string } {
-  const clean = path.replace(/\/+$/, "");
-  const i = clean.lastIndexOf("/");
-  if (i < 0) return { name: clean, dir: "" };
-  return { name: clean.slice(i + 1), dir: clean.slice(0, i) };
 }

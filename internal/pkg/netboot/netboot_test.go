@@ -1,35 +1,16 @@
 package netboot
 
 import (
-	"net"
 	"reflect"
-	"runtime"
 	"testing"
 )
 
 func TestSetupIdempotent(t *testing.T) {
-	t.Setenv("TERMUX_VERSION", "test")
 	Setup()
 	Setup()
 	Setup()
 	if setupCount != 1 {
 		t.Fatalf("Setup ran %d times, want exactly 1 (must be idempotent across all entry points)", setupCount)
-	}
-}
-
-// TestSetupDNSLeavesWindowsResolverAlone: /etc/resolv.conf is a unix
-// concept — on Windows it never exists, but the OS resolver works fine
-// (Go uses the Windows DNS APIs). Overriding it with a public-UDP
-// fallback breaks every outbound call on networks that block UDP 53
-// to public resolvers. setupDNS must be a no-op on Windows.
-func TestSetupDNSLeavesWindowsResolverAlone(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("windows-only guard")
-	}
-	before := net.DefaultResolver
-	setupDNS()
-	if net.DefaultResolver != before {
-		t.Fatal("setupDNS replaced net.DefaultResolver on Windows")
 	}
 }
 

@@ -466,7 +466,6 @@ func TestStore_ListFiltered_ProjectJobIsCrossSession(t *testing.T) {
 type fakeSender struct {
 	calls     []string
 	ensured   []string
-	owners    []string
 	failErr   error
 	ensureErr error
 	layout    agentconfig.Layout
@@ -493,21 +492,6 @@ func (f *fakeSender) EnsureSession(ctx context.Context, sessionID, source, proje
 		Origin: session.Origin(source),
 	})
 	return err
-}
-
-// EnsureSessionOwner mirrors the pool: first-writer-wins on UserID, so a
-// schedule pointed at somebody else's session cannot take it over.
-func (f *fakeSender) EnsureSessionOwner(_ context.Context, sessionID, userID string) {
-	if sessionID == "" || userID == "" {
-		return
-	}
-	f.owners = append(f.owners, sessionID+"|"+userID)
-	sess, err := session.Load(f.layout, sessionID)
-	if err != nil || sess.Meta.UserID != "" {
-		return
-	}
-	sess.Meta.UserID = userID
-	_ = session.SaveMeta(f.layout, sessionID, sess.Meta)
 }
 
 func newRunnerLayout(t *testing.T) (agentconfig.Layout, string) {
@@ -743,41 +727,5 @@ func TestRunner_ExistingModeStampsLastSession(t *testing.T) {
 	got, _ := s.Get(ctx, m.ID)
 	if got.LastSessionID != sid {
 		t.Fatalf("last_session_id = %q, want %q", got.LastSessionID, sid)
-	}
-}
-
-func TestStore_CancelTargeting(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	mk := func(m entity.ScheduledMessage) string {
-		m.OwnerUserID, m.Message, m.RunAt = "u1", "x", time.Now().Add(time.Hour)
-		got, err := s.Create(ctx, &m)
-		if err != nil {
-			t.Fatalf("create: %v", err)
-		}
-		return got.ID
-	}
-	byProject := mk(entity.ScheduledMessage{ProjectID: "p1", SessionMode: entity.ScheduledSessionNew})
-	bySession := mk(entity.ScheduledMessage{SessionID: "s1"})
-	fromOnly := mk(entity.ScheduledMessage{SessionID: "elsewhere", SourceSessionID: "s1"})
-	other := mk(entity.ScheduledMessage{ProjectID: "p2", SessionID: "s2"})
-
-	n, err := s.CancelTargeting(ctx, "p1", []string{"s1"})
-	if err != nil || n != 2 {
-		t.Fatalf("CancelTargeting = %d, %v; want 2", n, err)
-	}
-	for id, want := range map[string]string{
-		byProject: entity.ScheduledStatusCancelled,
-		bySession: entity.ScheduledStatusCancelled,
-		fromOnly:  entity.ScheduledStatusPending,
-		other:     entity.ScheduledStatusPending,
-	} {
-		got, _ := s.Get(ctx, id)
-		if got.Status != want {
-			t.Fatalf("%s status = %q, want %q", id, got.Status, want)
-		}
-	}
-	if n, _ := s.CancelTargeting(ctx, "", nil); n != 0 {
-		t.Fatalf("empty target cancelled %d rows", n)
 	}
 }

@@ -6,16 +6,6 @@ import * as router from "$lib/router.js";
 import * as stores from "@wick-fe/common-stores";
 import type { AuditResult } from "$lib/types.js";
 
-/* pickOption drives the themed <Select> (common-ui): open its trigger,
-   click the option carrying `value`. The listbox is portalled to body. */
-async function pickOption(trigger: HTMLElement, value: string): Promise<void> {
-  await fireEvent.click(trigger);
-  const opt = document.body.querySelector<HTMLElement>(`[role="option"][data-value="${value}"]`);
-  if (!opt) throw new Error(`no option ${value}`);
-  await fireEvent.click(opt);
-}
-
-
 vi.mock("$lib/api.js");
 vi.mock("$lib/router.js", () => ({ push: vi.fn() }));
 vi.mock("@wick-fe/common-stores", () => ({ toastError: vi.fn() }));
@@ -74,8 +64,8 @@ describe("AuditLog", () => {
   it("re-fetches and syncs ?source= when the source filter changes", async () => {
     render(AuditLog);
     await screen.findByText("Prod Slack");
-    const sourceSelect = screen.getAllByTestId("wick-select-trigger")[0];
-    await pickOption(sourceSelect, "mcp");
+    const sourceSelect = screen.getAllByRole("combobox")[0];
+    await fireEvent.change(sourceSelect, { target: { value: "mcp" } });
     await waitFor(() => expect(window.location.search).toBe("?source=mcp"));
     expect(api.getAuditRuns).toHaveBeenLastCalledWith(expect.objectContaining({ source: "mcp", page: 1 }));
   });
@@ -105,8 +95,8 @@ describe("AuditLog", () => {
   it("does not flash the Loading screen on a filter-change refresh", async () => {
     render(AuditLog);
     await screen.findByText("Prod Slack");
-    const sourceSelect = screen.getAllByTestId("wick-select-trigger")[0];
-    await pickOption(sourceSelect, "mcp");
+    const sourceSelect = screen.getAllByRole("combobox")[0];
+    await fireEvent.change(sourceSelect, { target: { value: "mcp" } });
     expect(screen.queryByText("Loading…")).toBeNull();
     expect(screen.getByText("Prod Slack")).toBeTruthy();
     await waitFor(() => expect(api.getAuditRuns).toHaveBeenLastCalledWith(expect.objectContaining({ source: "mcp" })));
@@ -126,8 +116,8 @@ describe("AuditLog", () => {
     vi.mocked(api.getAuditRuns).mockResolvedValueOnce(makeResult()).mockRejectedValueOnce(new Error("refresh boom"));
     render(AuditLog);
     await screen.findByText("Prod Slack");
-    const sourceSelect = screen.getAllByTestId("wick-select-trigger")[0];
-    await pickOption(sourceSelect, "mcp");
+    const sourceSelect = screen.getAllByRole("combobox")[0];
+    await fireEvent.change(sourceSelect, { target: { value: "error" } });
     await waitFor(() => expect(stores.toastError).toHaveBeenCalledWith("Refresh failed", "refresh boom"));
     expect(screen.queryByText("refresh boom")).toBeNull();
     expect(screen.getByText("Prod Slack")).toBeTruthy();

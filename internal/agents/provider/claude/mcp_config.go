@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -120,9 +119,7 @@ func mcpConfigSupported(bin string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, bin, "--help")
-	cmd.Env = envscrub.ScrubOSEnv()
-	out, _ := cmd.CombinedOutput()
+	out, _ := safeexec.CommandContext(ctx, bin, "--help").CombinedOutput()
 	ok := helpHasMCPConfig(string(out))
 	mcpConfigHelpCache.Store(bin, ok)
 	return ok

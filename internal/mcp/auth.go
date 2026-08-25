@@ -10,7 +10,6 @@ import (
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
-	"github.com/yogasw/wick/internal/mcp/handlers"
 )
 
 // userResolver loads a user record by id. login.Service satisfies it
@@ -126,43 +125,18 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 			// principal there is the human who is chatting, so demoting them
 			// would remove their own admin-only tools while granting no
 			// isolation — nothing is being narrowed on their behalf.
-			// The credential decides which session this call belongs to.
-			// A token that names one WINS over the X-Wick-Session-Id
-			// header: the header is sent by the agent process and can be
-			// retyped by anything holding the token (a shell inside the
-			// workspace, say), while the grant was written by the minter
-			// at spawn and never leaves this process.
-			//
-			// Nothing legitimate disagrees here. A token is minted per
-			// spawn for exactly one session — including a sub-agent's,
-			// which names its own CHILD session, not its parent's — so
-			// the header a provider sends carries the same id anyway. A
-			// grant that names no session leaves the header in place, and
-			// PAT / OAuth / internal callers have no grant at all, so
-			// their header and session_id argument are untouched.
-			grantSession, _ := m.scoped.LookupSession(token)
-
 			scopedUser := *user
-			ctx := r.Context()
-			if grantSession != "" {
-				ctx = handlers.WithSessionID(ctx, grantSession)
-			}
 			if stripAdmin {
 				scopedUser.Role = entity.RoleUser
-				// Mark the principal as already-narrowed so ownership does
-				// not become a second way in behind the profile's back: a
-				// sub-agent must not inherit every row its parent created.
-				ctx = login.WithScopedUser(ctx, &scopedUser, tagIDs)
-			} else {
-				ctx = login.WithUser(ctx, &scopedUser, tagIDs)
 			}
-			serveWithSession(next, w, r, ctx)
+			ctx := login.WithUser(r.Context(), &scopedUser, tagIDs)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
 		if m.internalToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(m.internalToken)) == 1 {
 			ctx := login.WithUser(r.Context(), internalSystemUser(), nil)
-			serveWithSession(next, w, r, ctx)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
@@ -182,24 +156,8 @@ func (m *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 		}
 		tagIDs := m.users.GetUserFilterTagIDs(r.Context(), user.ID)
 		ctx := login.WithUser(r.Context(), user, tagIDs)
-		serveWithSession(next, w, r, ctx)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
-}
-
-// serveWithSession dispatches with the session stamped on the context.
-// A grant that named one has already put it there; otherwise the wire
-// header is used, which is how a provider that predates per-session
-// tokens (and the stdio transport) still resolves its session.
-func serveWithSession(next http.Handler, w http.ResponseWriter, r *http.Request, ctx context.Context) {
-	if handlers.SessionIDFrom(ctx) == "" {
-		ctx = handlers.WithSessionID(ctx, r.Header.Get(handlers.SessionHeader))
-	}
-	// A session that belongs to an Agents-app agent reaches only that
-	// agent's checklist. Trusting the header here is safe: a scope can only
-	// take away, so naming someone else's agent session narrows the caller
-	// and never widens it.
-	ctx = withAgentScope(ctx, handlers.SessionIDFrom(ctx))
-	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
 // resolveToken dispatches by token shape. PAT prefix → accesstoken

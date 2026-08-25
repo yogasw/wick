@@ -126,20 +126,6 @@ describe("ProviderPicker live sets", () => {
     expect(await screen.findByRole("button", { name: /Grok 4\.5/ })).toBeTruthy();
   });
 
-  // An instance whose loader returns nothing (no models activated, vendor
-  // unreachable) must still be selectable: without an escape row the drill
-  // shows "No models available" and the provider can never be chosen at all.
-  test("an empty model list still lets the instance be picked without a pin", async () => {
-    const onChange = vi.fn();
-    const loadModels = vi.fn().mockResolvedValue([]);
-    render(ProviderPicker, { options: [WICK], value: "", onChange, loadModels });
-
-    await openAndDrill();
-    await fireEvent.click(await screen.findByText(/use default model/i));
-
-    expect(onChange).toHaveBeenCalledWith("wick/x");
-  });
-
   // A live-set pin matches no entry in the static list, so showing the bare
   // instance name would read as "no model chosen" for a project that pinned
   // a specific leaf.
@@ -150,24 +136,5 @@ describe("ProviderPicker live sets", () => {
       onChange: vi.fn(),
     });
     expect(screen.getByRole("button", { name: /gemini-3-pro/ })).toBeTruthy();
-  });
-});
-
-describe("ProviderPicker inside a transformed container", () => {
-  // A transformed ancestor (the agents app's centred modal) is the containing
-  // block of a fixed child, so an un-portaled menu landed inside the dialog
-  // and was clipped by its overflow-hidden: the trigger looked dead.
-  test("portals the open menu to <body>", async () => {
-    const host = document.createElement("div");
-    host.style.transform = "translate(-50%, -50%)";
-    host.style.overflow = "hidden";
-    document.body.appendChild(host);
-    render(ProviderPicker, { target: host, props: { options: [WICK], value: "", onChange: vi.fn() } });
-
-    await fireEvent.click(screen.getByRole("button", { name: /select provider/i }));
-    const row = screen.getByRole("button", { name: /wick\/x/i });
-    expect(host.contains(row)).toBe(false);
-    expect(document.body.contains(row)).toBe(true);
-    host.remove();
   });
 });

@@ -137,43 +137,6 @@ func WithCallerUserID(ctx context.Context, userID string) context.Context {
 	return context.WithValue(ctx, callerUserIDKey{}, userID)
 }
 
-// callerTokenKey carries the credential a channel message authenticated
-// with, when the channel has one to name.
-type callerTokenKey struct{}
-
-// CallerToken identifies the credential behind a dispatch: a Personal
-// Access Token, for channels that authenticate with one. Slack and
-// Telegram have no equivalent — the person IS the envelope — so they
-// leave it unset.
-//
-// It exists because "which account" is not a complete answer for a
-// machine caller. A PAT can be shared with a script, a CI job or an
-// integration, and when one of them starts behaving oddly the useful
-// question is which token did it, not just whose name is on it.
-type CallerToken struct {
-	ID   string // PAT row id
-	Name string // the human label its owner gave it
-}
-
-// WithCallerToken returns ctx carrying the credential this message
-// authenticated with. A zero id is ignored: a session is better with no
-// token recorded than with an empty one that looks like a lookup failure.
-func WithCallerToken(ctx context.Context, t CallerToken) context.Context {
-	if t.ID == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, callerTokenKey{}, t)
-}
-
-// CallerTokenFrom returns the credential stamped by WithCallerToken, or
-// the zero value when this dispatch had none.
-func CallerTokenFrom(ctx context.Context) CallerToken {
-	if v, ok := ctx.Value(callerTokenKey{}).(CallerToken); ok {
-		return v
-	}
-	return CallerToken{}
-}
-
 // CallerUserID returns the wick user id behind this dispatch, or "" when
 // the channel could not resolve one.
 func CallerUserID(ctx context.Context) string {
@@ -217,25 +180,6 @@ type SessionChecker interface {
 	// SetAutoReply persists the auto-reply flag on the session's meta.json.
 	// No-op (nil error swallowed by caller) when the session doesn't exist.
 	SetAutoReply(sessionID string, on bool)
-	// ThreadBinding reports the chat thread a session belongs to, as last
-	// persisted by the owning channel. ok=false when the session has none
-	// (every non-chat session) or cannot be read.
-	//
-	// This is what lets a channel deliver an answer for a turn it did not
-	// receive — a reply typed in the web UI, or a session a workflow
-	// created — after its in-memory turn map is gone.
-	ThreadBinding(sessionID string) (ThreadBinding, bool)
-	// SetThreadBinding persists the binding. Idempotent: writing the same
-	// values again does not touch the file.
-	SetThreadBinding(sessionID string, b ThreadBinding)
-}
-
-// ThreadBinding is the chat location a session's replies belong to.
-type ThreadBinding struct {
-	Channel  string // adapter name: "slack", "telegram"
-	ChatID   string // channel / room id inside that adapter
-	ThreadID string // thread within the chat (Slack thread_ts)
-	Instance string // which configured bot owns it
 }
 
 // SessionStartHook fires once when a channel sees a brand-new session
@@ -261,37 +205,6 @@ type Channel interface {
 
 // SendFuncSetter receives the pool dispatch closure.
 type SendFuncSetter interface{ SetSendFunc(SendFunc) }
-
-// BotNamer reports the display name of the bot an instance runs as
-// ("Ygsw Bot", "@wick_bot"). Empty when the instance has no bot concept
-// or has not resolved one yet.
-//
-// Implement it and every channel picker in the UI labels this instance
-// as "<Channel> - <bot name> - <owner>" instead of the bare channel type
-// — which is unusable once one channel type runs several instances.
-type BotNamer interface{ BotUserName() string }
-
-// IdentityCache is the seam that keeps a bot identity across restarts.
-// Resolving it costs a provider round trip (Slack auth.test, Telegram
-// getMe) and the answer changes about never, so wick stores it on the
-// instance's own agent_channels row and hands it back at boot.
-//
-// A channel implements the three methods; the setup composer wires the
-// persistence generically, so a NEW transport gets caching (and named
-// picker rows) without touching setup, the workflow catalog, or the
-// palette:
-//
-//   - BotIdentity   — what the instance knows right now.
-//   - SeedIdentity  — hand it the cached values before it connects.
-//   - SetIdentitySink — callback fired whenever it resolves fresh ones.
-//
-// workspace is the provider's account/team/workspace name where that
-// exists (Slack team), empty otherwise.
-type IdentityCache interface {
-	BotIdentity() (botUserID, botName, workspace string)
-	SeedIdentity(botUserID, botName, workspace string)
-	SetIdentitySink(fn func(botUserID, botName, workspace string))
-}
 
 // SessionCheckerSetter receives the session-exists probe.
 type SessionCheckerSetter interface{ SetSessionChecker(SessionChecker) }
@@ -346,32 +259,6 @@ type DetachedSurvivor struct {
 // list means nothing is left running.
 type DetachedNoticeReceiver interface {
 	OnDetachedSurvivors(sessionID string, survivors []DetachedSurvivor)
-}
-
-// BackgroundWorkReceiver is told about a session's background (async)
-// sub-agents, so a channel whose thread would otherwise go quiet once the
-// leader's turn ends can show that work is still going.
-//
-// OnBackgroundStart fires once per background delegation as it is accepted
-// (queued = waiting for a slot). OnBackgroundAgents carries the full current
-// set still queued or running each time it changes — the same rows the web
-// UI's sub-agent rail spins on — and an empty list means nothing is left.
-// Agents reuse DetachedSurvivor: same two names, same reason to keep the
-// channel layer free of the delegation package.
-type BackgroundWorkReceiver interface {
-	OnBackgroundStart(sessionID string, agent DetachedSurvivor, task string, queued bool)
-	OnBackgroundAgents(sessionID string, active []DetachedSurvivor)
-}
-
-// BackgroundRecheckFn re-reads the background sub-agents still live under
-// sessionID, dropping any whose process has gone. A channel calls it when its
-// banner has seen no progress for a while, so a child that died without
-// closing its row cannot hold the banner forever. ok=false = could not tell.
-type BackgroundRecheckFn func(ctx context.Context, sessionID string) (active []DetachedSurvivor, ok bool)
-
-// BackgroundRecheckSetter receives the re-check probe.
-type BackgroundRecheckSetter interface {
-	SetBackgroundRecheck(BackgroundRecheckFn)
 }
 
 // ApprovalReceiver is fanned-out for gate approval lifecycle.

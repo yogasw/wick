@@ -7,7 +7,7 @@ const tab = (id: string, label: string) => ({ id, label, icon: "<path d='M0 0h16
 const all = [
   tab("ticket", "Ticket"),
   tab("notes", "Notes"),
-  tab("files", "Files"),
+  tab("context", "Context"),
   tab("process", "Process"),
   tab("browser", "Browser"),
 ];

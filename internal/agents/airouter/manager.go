@@ -22,7 +22,6 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
-	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -130,9 +129,7 @@ func newManager(d Descriptor) *Manager {
 		},
 	}
 
-	// No log here: newManager runs from the routers' init() via Register, so
-	// any line would print on every CLI command that imports this package.
-	// Init (server boot) logs the configured managers instead.
+	logger.Info().Int("pref_port", d.PrefPort).Str("prefix", m.prefix).Msg("airouter: manager configured")
 	return m
 }
 
@@ -271,10 +268,9 @@ func (m *Manager) start() error {
 	cmd := safeexec.Command(exe, cmdArgs...)
 	cmd.Stdout = m.logs
 	cmd.Stderr = m.logs
-	// Always set cmd.Env, even with no extraEnv: leaving it nil makes
-	// os/exec hand the child the parent's environment verbatim, which is
-	// the inheritance this scrub exists to stop.
-	cmd.Env = append(envscrub.ScrubOSEnv(), extraEnv...)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 
 	m.log.Info().Str("exe", exe).Str("bin", bin).Int("port", port).Msg("airouter: spawning")
 	if err := cmd.Start(); err != nil {

@@ -8,16 +8,13 @@ import systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
 // Gate settings live in GateConfig; channel settings in SlackChannelConfig.
 type GeneralConfig struct {
 	Enabled          bool   `wick:"bool;group=General|Top-level Agents switches and defaults.;desc=Enable the Agents feature."`
-	DefaultProvider  string `wick:"dropdown;key=default_provider;group=General;desc=Default provider instance for new sessions when none is picked (channels, API, quick-create). Options are your configured provider instances (type or type/name), empty falls back to claude."`
+	DefaultProvider  string `wick:"dropdown;key=default_provider;group=General;desc=Default provider instance for new sessions when none is picked (channels, API, quick-create). Options are your configured provider instances (type or type/name); empty falls back to claude."`
 	PublicURL        string `wick:"url;group=General;desc=Public base URL of this wick instance. Used for the dashboard meta-command."`
 	MaxConcurrent    int    `wick:"number;group=Concurrency & Lifecycle|How many agent subprocesses run at once and when idle ones are reclaimed.;desc=Max concurrent agent subprocesses across all providers. 0 = unlimited. Default: 2."`
 	IdleTimeoutSec   int    `wick:"number;group=Concurrency & Lifecycle;desc=Seconds of inactivity before subprocess is killed. Default: 120."`
 	KillAfterIdleSec int    `wick:"number;group=Concurrency & Lifecycle;desc=Extra seconds after idle timeout before the subprocess is killed. 0 = kill immediately at idle timeout. Default: 0."`
 	PreemptIdle      bool   `wick:"bool;group=Concurrency & Lifecycle;desc=When the pool is full and a new session is queued, preempt the longest-idle active subprocess to free its slot. Killed sessions resume via --resume on their next message."`
 	AutoRescan       bool   `wick:"bool;group=Concurrency & Lifecycle;desc=Auto re-probe provider binaries when cached version is older than 24h. Off = refresh only via Rescan button."`
-	// A2ARemoteAllowedHosts limits which hosts an A2A remote agent may be
-	// connected to (package a2aremote). Empty = any public host.
-	A2ARemoteAllowedHosts string `wick:"textarea;key=a2a_remote_allowed_hosts;group=A2A Remote Agents|Agents of other systems that people add to their Team over A2A.;desc=Hosts an A2A remote agent may be connected to, separated by commas or new lines, *.example.com matches every subdomain. Empty = any public host, while loopback, link-local and cloud metadata addresses are always refused. A host listed here is allowed even when it resolves to one of those, for an agent running beside wick."`
 	// Per-user identity for shared sessions. A running subprocess carries the
 	// MCP credential of whoever spawned it (it sits in the process argv and
 	// cannot be swapped in place), so a second user sending into the same
@@ -45,7 +42,7 @@ type GeneralConfig struct {
 	// BYTES. One slot is an idle agent at ~150 MB or an agent driving a
 	// browser at ~2 GB, and the pool cannot tell them apart — which is how
 	// a single runaway agent takes the whole server down with it.
-	MemoryGuardMode string `wick:"dropdown=off|measure|enforce;group=Resource Guard|Keep runaway agents from hanging the machine. Kernel limits cap each agent; the watchdog kills agent child processes when CPU or memory nears a hang, until both are back under the safe line. Start at 'measure' to see what it would kill, then switch to 'enforce'.;desc=off = no resource management at all (default). measure = put each agent in its own group and record exactly how much it used, and have the watchdog record what it WOULD stop, without limiting or stopping anything — use this first to learn safe numbers. enforce = the same recording, PLUS the kernel stops an agent that goes over its limit and the watchdog stops agent child processes when the machine nears a hang, leaving every other agent and the server itself untouched. Enforce never records less than measure. Enforcing needs a Linux kernel — either a systemd user session or a writable cgroup filesystem, so a container without systemd still enforces. On a machine with neither (Windows, macOS) enforce automatically behaves like measure, and the Resources page says so rather than pretending agents are protected. Both modes only cover agents wick starts itself, a claude or codex you run by hand in a terminal is outside wick and needs the 'wrapper' method below."`
+	MemoryGuardMode string `wick:"dropdown=off|measure|enforce;group=Memory Guard|Keep one runaway agent from taking the whole machine down. Start at 'measure' to learn the real numbers on this machine, then switch to 'enforce'.;desc=off = no memory management at all (default). measure = put each agent in its own group and record exactly how much it used, without limiting anything — use this first to learn safe numbers. enforce = the same recording, PLUS the kernel stops an agent that goes over its limit, leaving every other agent and the server itself untouched. Enforce never records less than measure. Enforcing needs a Linux kernel — either a systemd user session or a writable cgroup filesystem, so a container without systemd still enforces. On a machine with neither (Windows, macOS) enforce automatically behaves like measure, and the Resources page says so rather than pretending agents are protected. Both modes only cover agents wick starts itself; a claude or codex you run by hand in a terminal is outside wick and needs the 'wrapper' method below."`
 	// MemoryGuardMethod is the pre-2026-08 single choice, kept only so an
 	// existing config keeps loading. Migrated to the two switches below on
 	// read — see ResolveGuardScopes.
@@ -53,57 +50,40 @@ type GeneralConfig struct {
 	// Hidden rather than deleted: the row has to keep existing for the
 	// migration to read, but offering it beside the switches that
 	// replaced it would give two controls for one decision.
-	MemoryGuardMethod   string `wick:"dropdown=auto|wrapper;hidden;group=Resource Guard;desc=Replaced by the two switches below. Kept so an existing setting still applies."`
-	GuardOnSpawn        bool   `wick:"bool;group=Resource Guard;desc=Apply the limit to agents wick starts. This is the one that keeps working when nothing else does: it needs no files on disk and no root, so it survives a package update replacing the agent binary. Leave this on unless something outside wick is definitely covering the same agents."`
-	GuardOnPath         bool   `wick:"bool;group=Resource Guard;desc=Also apply the limit to agents started outside wick — a claude or codex you run by hand in a terminal, or another service on this machine. Works by putting a small script in front of the binary, installed from the Resources page (it needs one root command, which is printed for you to run). Two things it cannot do: a caller that runs the binary by its full path never passes through it, and if a package update replaces the link the coverage silently stops — which is why leaving 'on spawn' on as well is worth it. Running both is safe: the kernel applies every ceiling and the tighter one wins."`
-	AgentMemoryMaxMB    int    `wick:"number;group=Resource Guard;desc=Memory limit for one agent, in MB, counting everything it starts (browsers, tools, scripts). 0 = no limit. A provider instance can set its own value that overrides this one, higher or lower."`
-	AgentsTotalMemoryMB int    `wick:"number;group=Resource Guard;desc=Combined memory limit across all running agents, in MB. A backstop for when several well-behaved agents add up to more than the machine has. 0 = no combined limit."`
-	ToolMemoryMaxMB     int    `wick:"number;group=Resource Guard;desc=Memory limit in MB for a command an agent runs itself (grep, curl, scripts). Going over fails that one command and returns an error the agent can react to — the agent keeps running. 0 = no limit."`
-	MinFreeMemoryMB     int    `wick:"number;group=Resource Guard;desc=Queue a new agent instead of starting it while free memory is below this many MB. Prevents the start that pushes the machine over the edge. 0 = start regardless."`
-	ProtectWickFromOOM  bool   `wick:"bool;group=Resource Guard;desc=When memory runs out system-wide, tell the kernel to stop an agent rather than wick itself. Only applies in 'enforce' mode. Recommended: on."`
+	MemoryGuardMethod   string `wick:"dropdown=auto|wrapper;hidden;group=Memory Guard;desc=Replaced by the two switches below. Kept so an existing setting still applies."`
+	GuardOnSpawn        bool   `wick:"bool;group=Memory Guard;desc=Apply the limit to agents wick starts. This is the one that keeps working when nothing else does: it needs no files on disk and no root, so it survives a package update replacing the agent binary. Leave this on unless something outside wick is definitely covering the same agents."`
+	GuardOnPath         bool   `wick:"bool;group=Memory Guard;desc=Also apply the limit to agents started outside wick — a claude or codex you run by hand in a terminal, or another service on this machine. Works by putting a small script in front of the binary, installed from the Resources page (it needs one root command, which is printed for you to run). Two things it cannot do: a caller that runs the binary by its full path never passes through it, and if a package update replaces the link the coverage silently stops — which is why leaving 'on spawn' on as well is worth it. Running both is safe: the kernel applies every ceiling and the tighter one wins."`
+	AgentMemoryMaxMB    int    `wick:"number;group=Memory Guard;desc=Memory limit for one agent, in MB, counting everything it starts (browsers, tools, scripts). 0 = no limit. A provider instance can set its own value that overrides this one, higher or lower."`
+	AgentsTotalMemoryMB int    `wick:"number;group=Memory Guard;desc=Combined memory limit across all running agents, in MB. A backstop for when several well-behaved agents add up to more than the machine has. 0 = no combined limit."`
+	ToolMemoryMaxMB     int    `wick:"number;group=Memory Guard;desc=Memory limit in MB for a command an agent runs itself (grep, curl, scripts). Going over fails that one command and returns an error the agent can react to — the agent keeps running. 0 = no limit."`
+	MinFreeMemoryMB     int    `wick:"number;group=Memory Guard;desc=Queue a new agent instead of starting it while free memory is below this many MB. Prevents the start that pushes the machine over the edge. 0 = start regardless."`
+	ProtectWickFromOOM  bool   `wick:"bool;group=Memory Guard;desc=When memory runs out system-wide, tell the kernel to stop an agent rather than wick itself. Only applies in 'enforce' mode. Recommended: on."`
 
 	// Contention controls, written onto the shared agents.slice in enforce
 	// mode. Memory is the only control that kills; these shape how agents
 	// COMPETE — with wick and with each other. All default to 0 = leave
 	// the kernel default.
-	AgentsCPUWeight   int `wick:"number;group=Resource Guard;desc=CPU priority of agents when the CPU is busy, relative to the rest of the system (default weight is 100). Set below 100 (e.g. 50) so wick and the OS stay responsive while agents work, agents still use all idle CPU. 0 = no preference. Only applies in 'enforce' mode."`
-	AgentsCPUQuotaPct int `wick:"number;group=Resource Guard;desc=Hard cap on combined CPU of all agents, as a percentage of the whole machine, 0 to 100 (wick multiplies it by the number of cores, so 80 on 2 cores = 1.6 cores). Applied live. Empty = 80, 0 = no cap. A value above 100 was saved as percent of one core and is divided by the number of cores (140 on 2 cores = 70). Only applies in 'enforce' mode."`
-	AgentsTasksMax    int `wick:"number;group=Resource Guard;desc=Maximum number of processes and threads all agents may have at once. Stops a runaway script that keeps starting processes — thousands of tiny ones can freeze a machine while staying under every memory limit. 512 is a generous ceiling. 0 = no limit. Only applies in 'enforce' mode."`
-	AgentsIOWeight    int `wick:"number;group=Resource Guard;desc=Disk-access priority of agents when the disk is busy, relative to the rest of the system (default weight is 100). Set below 100 so heavy agent file work does not starve wick. 0 = no preference. Only applies in 'enforce' mode."`
-
-	// Fast watchdog (internal/agents/resourceguard). Enforce mode only:
-	// it acts on the trend, before the slice limits and the kernel OOM
-	// killer act at the cliff edge.
-	ResourceGuardSafePct           int    `wick:"number;group=Resource Guard;desc=The safe line, in percent of this machine. When CPU or memory nears a hang (memory 90% used or about to run out, or CPU fully busy with tasks queueing for 10s), the watchdog stops agent child processes one at a time — the biggest memory user, or the biggest CPU user — re-measuring in between, until host CPU AND memory are both below this. 80 is the default."`
-	ResourceGuardIntervalMS        int    `wick:"number;group=Resource Guard;desc=How often the fast watchdog samples memory and CPU, in milliseconds. 1000 suits a small machine. Only runs in 'enforce' mode on Linux."`
-	ResourceGuardExhaustHorizonSec int    `wick:"number;group=Resource Guard;desc=Treat memory as near a hang when, at its current rate of fall, it would run out within this many seconds while already above the safe line. New agents are held back while the projection is within twice this. 20 is the default."`
-	ResourceGuardCpuPsiMax         int    `wick:"number;group=Resource Guard;desc=CPU pressure (percent of time tasks waited for a CPU, 10-second average) above which a fully busy CPU counts as near a hang. A CPU that is busy with nothing waiting is a build using idle time and is left alone. 90 is the default."`
-	ResourceGuardAction            string `wick:"dropdown=off|log|pause|kill;group=Resource Guard;desc=How far the watchdog may go in 'enforce' mode ('measure' always only records). off = no watchdog. log = record what it would do. pause = pause processes and freeze agents instead of killing, they resume after 30s calm. kill (default) = kill agent child processes one at a time (builds, test runners, browsers, scripts — never the agent itself or wick), and only when none is left, stop the heaviest agent, its conversation resumes on the next message."`
+	AgentsCPUWeight   int `wick:"number;group=Memory Guard;desc=CPU priority of agents when the CPU is busy, relative to the rest of the system (default weight is 100). Set below 100 (e.g. 50) so wick and the OS stay responsive while agents work; agents still use all idle CPU. 0 = no preference. Only applies in 'enforce' mode."`
+	AgentsCPUQuotaPct int `wick:"number;group=Memory Guard;desc=Hard cap on combined CPU of all agents, as a percentage of one core (100 = one full core, 200 = two). Slows heavy work down even when the machine is idle, so most setups should leave this at 0 = no cap and rely on the priority setting above. Only applies in 'enforce' mode."`
+	AgentsTasksMax    int `wick:"number;group=Memory Guard;desc=Maximum number of processes and threads all agents may have at once. Stops a runaway script that keeps starting processes — thousands of tiny ones can freeze a machine while staying under every memory limit. 512 is a generous ceiling. 0 = no limit. Only applies in 'enforce' mode."`
+	AgentsIOWeight    int `wick:"number;group=Memory Guard;desc=Disk-access priority of agents when the disk is busy, relative to the rest of the system (default weight is 100). Set below 100 so heavy agent file work does not starve wick. 0 = no preference. Only applies in 'enforce' mode."`
 
 	// Usage history. Independent of the guard mode: measuring is how an
 	// operator learns what to set, so it must work while the guard is off.
-	ResourceHistoryEnabled    bool   `wick:"bool;group=Usage History|Record memory, CPU, and disk use per agent over time so the Resources page can show trends instead of a single instant. Works with the resource guard switched off — this is how you learn what to set.;desc=Record usage samples. Off = no sampling and the Resources page shows only a live snapshot."`
-	ResourceSampleIntervalSec int    `wick:"number;group=Usage History;desc=Seconds between samples. Shorter shows brief spikes (a browser opening) but stores more points, 15 is a good balance. Default: 15."`
+	ResourceHistoryEnabled    bool   `wick:"bool;group=Usage History|Record memory, CPU, and disk use per agent over time so the Resources page can show trends instead of a single instant. Works with the memory guard switched off — this is how you learn what to set.;desc=Record usage samples. Off = no sampling and the Resources page shows only a live snapshot."`
+	ResourceSampleIntervalSec int    `wick:"number;group=Usage History;desc=Seconds between samples. Shorter shows brief spikes (a browser opening) but stores more points; 15 is a good balance. Default: 15."`
 	ResourceRetentionMinutes  int    `wick:"number;group=Usage History;desc=How long to keep samples, in minutes. Anything older is discarded automatically. 360 = 6 hours (default), 1440 = one day. Lowering this frees memory immediately."`
 	ResourceHistoryMaxPoints  int    `wick:"number;group=Usage History;desc=Hard ceiling on stored samples, whatever the retention window says. Protects against a very short interval filling memory. Default: 4096."`
 	SystemPrompt              string `wick:"textarea;desc=Global interaction rules appended to every preset's system prompt on spawn. Cannot replace the preset — only adds to it. Use for org-wide guardrails, prompt-injection defenses, or shared conventions every agent must follow."`
-	SystemPromptTeam          string `wick:"textarea;desc=Team agents system prompt — replaces system_prompt for Team agent sessions, leave empty for none"`
 	WorkflowGuardMode         string `wick:"dropdown=off|warn|block;group=Workflow|Workflow guard policy, parallelism, and run-event export.;desc=Workflow guard policy. off = skip guard entirely (default). warn = log violations, allow run. block = reject Publish/Run on violations."`
-	WorkflowMaxParallelGlobal int    `wick:"number;group=Workflow;desc=Global parallel cap. 0 = parallel disabled, all workflows serial (default). N > 0 = parallel enabled, at most N runs execute simultaneously across all workflows. Per-workflow concurrency.max is honoured as an inner cap."`
-	WorkflowRunKeepMax        int    `wick:"number;group=Workflow;desc=Finished runs kept per workflow, newest first. Older ones are deleted (runs still in progress are never touched). 0 = default 50."`
-	WorkflowRunRetentionDays  int    `wick:"number;group=Workflow;desc=Days a finished run is kept, even inside the keep-max count. 0 = default 7."`
+	WorkflowMaxParallelGlobal int    `wick:"number;group=Workflow;desc=Global parallel cap. 0 = parallel disabled, all workflows serial (default). N > 0 = parallel enabled; at most N runs execute simultaneously across all workflows. Per-workflow concurrency.max is honoured as an inner cap."`
 	WorkflowLokiURL           string `wick:"url;group=Workflow;desc=Loki push endpoint for workflow run events (e.g. http://loki:3100). Empty = disabled."`
 	WorkflowLokiLabels        string `wick:"text;group=Workflow;desc=Extra Loki stream labels as comma-separated key=value pairs (e.g. env=prod,team=eng)."`
 	MCPUninstalledClients     string `wick:"hidden;desc=Comma-separated MCP client IDs the user has manually uninstalled. Managed by the UI — do not edit by hand."`
 	AirouterEnabled           bool   `wick:"bool;group=AI Router|Embedded AI-router lifecycle (9router, OmniRoute, …). Access is managed at /admin/tools; per-router autostart + external-API toggles live on the AI Router page.;desc=Master switch for the embedded AI routers. Off = every dashboard, the /airouter/<id>/v1 API proxies, autostart, and all controls are disabled."`
 	TraceEventInlineKB        int    `wick:"number;group=Tracing|Limits on how trace-event payloads are stored on disk.;desc=Max KB for a trace event payload stored inline in the turn index. Events larger than this are written to a separate file and loaded on demand. Default: 10."`
 	TraceEventMaxKB           int    `wick:"number;group=Tracing;desc=Hard cap in KB for a single trace event payload file. Payloads exceeding this are truncated before write. 0 = no cap. Default: 512."`
-	TraceBlobMaxMB            int    `wick:"number;group=Tracing;desc=Max MB for one binary trace payload (image/pdf/audio/video a tool returned). Binaries are never truncated: up to this size they are kept whole as a separate blob the trace can open, above it the trace keeps only the type and size. 0 = default 10."`
-	// The two Access knobs below are read through internal/pkg/adminscope,
-	// which every surface shares so "how far does an admin see" has exactly
-	// one answer per question. Field name = config key.
-	AdminSeeAllSessions   bool `wick:"bool;group=Access|What the admin role alone is allowed to see. One switch per surface: reading everyone's sessions and using everyone's connected accounts are different decisions.;desc=Sessions and projects (also data tables and the scheduled-message monitor). On: an admin sees every project and every session. Off (default): an admin is scoped like a regular user — projects granted by tag, plus their own sessions. Sessions with no recorded creator are hidden from everyone. Does not affect connectors."`
-	AdminSeeAllConnectors bool `wick:"bool;default=true;group=Access;desc=Connector instances and the accounts connected to them, in the dashboard and in wick_list. On (default): an admin sees every instance and every connected account. Off: an admin is scoped like a regular user — instances their tags reach, and only accounts they connected themselves or that were shared with them (a tag on the account, or the instance's 'Others can see connected accounts'). Owning an instance always shows its accounts. /admin/connectors lists everything either way."`
+	AdminSeeAll               bool   `wick:"bool;group=Access|Visibility scope for admins.;desc=When on, admins see every project and every session (legacy behaviour). When off (default), admins are scoped like regular users: only projects granted via tags plus their own unscoped sessions. Ownerless sessions (no creator) are hidden from everyone while off."`
 
 	// HTML-artifact widget CSP. Artifacts are model-authored, so the
 	// default posture is fully sealed. WidgetMode is the ONE knob that
@@ -120,7 +100,7 @@ type GeneralConfig struct {
 
 	WidgetAllowPopupEscape bool `wick:"bool;group=Widget;desc=CUSTOM ONLY. Give the new tab a real origin instead of the sandboxed 'null' one it inherits by default. Without this, many sites load visibly broken in the new tab: they see Origin: null, so their own requests fail their CORS check. The trade-off is that the escaped tab runs outside this policy altogether. Implies the setting above."`
 
-	WidgetAllowlist string `wick:"textarea;group=Widget;desc=CUSTOM ONLY. Hosts the 'list' settings above may reach — one per line, e.g. maps.google.com or *.example.com. https:// is assumed, plaintext http:// and paths are rejected. Projects append their own hosts to this list."`
+	WidgetAllowlist string `wick:"textarea;group=Widget;desc=CUSTOM ONLY. Hosts the 'list' settings above may reach — one per line, e.g. maps.google.com or *.example.com. https:// is assumed; plaintext http:// and paths are rejected. Projects append their own hosts to this list."`
 
 	// Sub-agent governor. These are SYSTEM-WIDE CEILINGS, not per-role
 	// defaults: an agent profile can lower them but never raise them.
@@ -129,7 +109,7 @@ type GeneralConfig struct {
 	SubAgentsEnabled     bool `wick:"bool;group=Sub-agents|System-wide ceilings for sub-agent delegation. Individual roles are configured under Agent Profiles; these values cap every role and cannot be raised by one.;desc=Master switch for sub-agent delegation. Off = the wick_delegate and wick_agents tools disappear entirely and no sub-agent can be spawned. Use as an emergency stop or for a staged rollout."`
 	SubAgentsMaxDepth    int  `wick:"number;group=Sub-agents;desc=How many levels deep delegation may nest (a sub-agent delegating again). Guards against runaway recursion. Default: 3."`
 	SubAgentsRootBudget  int  `wick:"number;group=Sub-agents;desc=Total agentic turns one delegation tree may consume across every sub-agent in it. When exhausted, running sub-agents finish but no new ones start. Default: 40."`
-	SubAgentsMaxParallel int  `wick:"number;group=Sub-agents;desc=Max sub-agents running concurrently within one conversation. 1 (default) runs them one at a time in a visible queue, raise it for parallel throughput at the cost of interleaved output and faster budget burn."`
+	SubAgentsMaxParallel int  `wick:"number;group=Sub-agents;desc=Max sub-agents running concurrently within one conversation. 1 (default) runs them one at a time in a visible queue; raise it for parallel throughput at the cost of interleaved output and faster budget burn."`
 	SubAgentsMaxTurns    int  `wick:"number;group=Sub-agents;desc=Hard ceiling on turns for any single sub-agent. Both the profile default and a caller's request are clamped to this. Default: 50."`
 	// Token ceilings. Turn limits bound how MANY times a sub-agent runs;
 	// they do not bound what each run costs — one turn that reads a large
@@ -141,7 +121,7 @@ type GeneralConfig struct {
 	// Agent-to-agent messaging. Turn and token budgets bound a tree's
 	// total work; none of them bounds two agents trading short messages,
 	// which is cheap per message and unbounded in count.
-	SubAgentsMaxHops       int `wick:"number;group=Sub-agents;desc=How many messages agents may exchange with each other between human turns. Guards against two agents talking in a loop. Reset whenever a person sends a message, agents cannot reset it themselves. Default: 10."`
+	SubAgentsMaxHops       int `wick:"number;group=Sub-agents;desc=How many messages agents may exchange with each other between human turns. Guards against two agents talking in a loop. Reset whenever a person sends a message; agents cannot reset it themselves. Default: 10."`
 	SubAgentsAskTimeoutMin int `wick:"number;group=Sub-agents;desc=Minutes an agent waits for an answer to a blocking ask before giving up. The question stays in the recipient's inbox either way. Default: 10."`
 	SubAgentsInboxCap      int `wick:"number;group=Sub-agents;desc=How many undelivered messages one agent may have waiting before senders are refused. Stops a fast agent from burying a slow one under work it will never read. Default: 20."`
 
@@ -185,15 +165,12 @@ func DefaultGeneralConfig() GeneralConfig {
 		// a shared thread, without repeating a platform user ID into every
 		// turn on installs that have no use for one. The dashboard shows the
 		// full sender either way.
-		SenderVisibility:         "name",
-		SystemPrompt:             systemprompt.DefaultSystemPrompt(),
-		WorkflowGuardMode:        "off",
-		WorkflowRunKeepMax:       50,
-		WorkflowRunRetentionDays: 7,
-		TraceEventInlineKB:       10,
-		TraceEventMaxKB:          512,
-		TraceBlobMaxMB:           10,
-		AirouterEnabled:          true,
+		SenderVisibility: "name",
+		SystemPrompt:        systemprompt.DefaultSystemPrompt(),
+		WorkflowGuardMode:   "off",
+		TraceEventInlineKB:  10,
+		TraceEventMaxKB:     512,
+		AirouterEnabled:     true,
 		// Memory guard ships OFF: an install that never opts in must behave
 		// byte-identically to one built before the feature existed. The four
 		// numeric limits stay zero here on purpose — their correct values
@@ -209,18 +186,10 @@ func DefaultGeneralConfig() GeneralConfig {
 		// Machine-independent safe values, unlike the byte limits above
 		// which must be derived from RAM. Weight 50 = agents yield to wick
 		// under load, full speed when idle; 512 tasks is generous for real
-		// work while stopping a fork bomb. Quota 80% of the machine keeps
-		// some CPU for wick and the OS whatever the core count. IO stays 0.
-		AgentsCPUWeight:   50,
-		AgentsCPUQuotaPct: DefaultCPUQuotaPct,
-		AgentsTasksMax:    512,
-		// Watchdog defaults are machine-independent and safe on a small
-		// host; it only runs once the guard mode is enforce.
-		ResourceGuardIntervalMS:        1000,
-		ResourceGuardExhaustHorizonSec: 20,
-		ResourceGuardCpuPsiMax:         90,
-		ResourceGuardSafePct:           80,
-		ResourceGuardAction:            "kill",
+		// work while stopping a fork bomb. Quota and IO stay 0 (off):
+		// a CPU cap slows legitimate work even on an idle machine.
+		AgentsCPUWeight: 50,
+		AgentsTasksMax:  512,
 		// History defaults ON: it changes nothing about how agents run,
 		// costs one /proc walk every 15s, and is the only way an operator
 		// can pick limits from measurement instead of guesswork. Bounded

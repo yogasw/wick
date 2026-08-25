@@ -42,7 +42,7 @@ func NeedsFollowup(cfg project.TicketConfig, t Ticket, now time.Time) bool {
 		return false
 	}
 	window := time.Duration(cfg.FollowupAfterSec) * time.Second
-	if now.Sub(idleSince(t)) <= window {
+	if now.Sub(t.UpdatedAt) <= window {
 		return false
 	}
 	return t.LastFollowupAt.IsZero() || now.Sub(t.LastFollowupAt) > window
@@ -54,26 +54,7 @@ func NeedsAutoResolve(cfg project.TicketConfig, t Ticket, now time.Time) bool {
 	if !cfg.Enabled || cfg.AutoResolveAfterSec <= 0 || t.Status == cfg.TerminalStatus() {
 		return false
 	}
-	return now.Sub(idleSince(t)) > time.Duration(cfg.AutoResolveAfterSec)*time.Second
-}
-
-// idleSince is the clock the timers run on: when wick last wrote this
-// ticket, NOT the timestamp it displays.
-//
-// The two differ only for a mirror, and there the difference is everything.
-// A ticket imported from a page last edited in June arrives with June on
-// its face and "just now" as the moment wick first saw it; reading the
-// former would close it before anybody could look at it, which is exactly
-// what happened here (130 tickets auto-resolved on arrival).
-//
-// Falls back to UpdatedAt for tickets written before TouchedAt existed, so
-// the sweeper keeps working on an old board rather than treating every one
-// of its tickets as brand new.
-func idleSince(t Ticket) time.Time {
-	if t.TouchedAt.IsZero() {
-		return t.UpdatedAt
-	}
-	return t.TouchedAt
+	return now.Sub(t.UpdatedAt) > time.Duration(cfg.AutoResolveAfterSec)*time.Second
 }
 
 // FollowupMessage renders the turn sent to a ticket's agent when the
@@ -89,8 +70,8 @@ func FollowupMessage(t Ticket, cfg project.TicketConfig) string {
 		fmt.Fprintf(&b, "- title: %s\n", t.Title)
 	}
 	fmt.Fprintf(&b, "- status: %s\n", t.Status)
-	if list := t.AssigneeList(); len(list) > 0 {
-		fmt.Fprintf(&b, "- assignee: %s\n", strings.Join(list, ", "))
+	if t.Assignee != "" {
+		fmt.Fprintf(&b, "- assignee: %s\n", t.Assignee)
 	}
 	keys := make([]string, 0, len(t.Fields))
 	for k := range t.Fields {
@@ -160,10 +141,6 @@ func sweepOnce(ctx context.Context, d Deps, now time.Time) {
 				was := t.Status
 				t.Status = cfg.TerminalStatus()
 				t.UpdatedAt = now
-				t.TouchedAt = now
-				// Say who closed it. A mirror must never push a status
-				// wick's own timer produced into the system of record.
-				t.AutoResolvedAt = now
 				if serr := SaveKeepingTimestamp(d.Layout, t); serr != nil {
 					l.Warn().Err(serr).Str("ticket", t.ID).Msg("auto-resolve save failed")
 					continue

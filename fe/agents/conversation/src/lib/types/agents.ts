@@ -1,4 +1,3 @@
-import type { TraceDisplay } from "@wick-fe/common-ui";
 export type AskOption = { label: string; value: string; description?: string };
 
 export type AskField = {
@@ -67,9 +66,6 @@ export type SessionListItem = {
   last_active: string;
   lifecycle: string;
   pid?: number;
-  /** How many people have spoken in this session. >1 = a shared thread
-      (several Slack users replied into it), which the row marks. */
-  participants?: number;
 };
 
 export type SessionMeta = {
@@ -93,8 +89,6 @@ export type SessionMeta = {
 };
 
 export type TurnEvent = {
-  /** Index id ("e0", "e1", …) — the key for fetching a spilled payload. */
-  event_id?: string;
   type: string;
   tool_name?: string;
   tool_input?: string;
@@ -105,28 +99,6 @@ export type TurnEvent = {
       finished (tool_result's end_at). Absent on older recorded traces. */
   at?: string;
   end_at?: string;
-  /** true when the payload was too big for the trace index and lives in
-      thinking/<turn_id>/<event_id>.json instead — text/tool_input are
-      absent here and must be fetched on demand (store.TurnEventIndex). */
-  large?: boolean;
-  /** Payload size in bytes; set only alongside large. */
-  size?: number;
-  /** Render hint (event.Display). On a large row it is header-only — the
-      body arrives with the payload. Absent on traces recorded before it. */
-  display?: TraceDisplay;
-};
-
-/** thinking/<turn_id>/<event_id>.json — the spilled payload of one large
-    trace event, served by GET /sessions/{id}/turns/{turn_id}/events/{event_id}
-    (store.TurnEventPayload). */
-export type TurnEventPayload = {
-  event_id: string;
-  type: string;
-  text?: string;
-  tool_input?: string;
-  /** true when the stored payload was capped by traceEventMaxBytes. */
-  truncated?: boolean;
-  display?: TraceDisplay;
 };
 
 export type Attachment = {
@@ -156,21 +128,6 @@ export type Sender = {
   // "slack" | "telegram" | "rest" | "ui"
   channel: string;
   wick_user_id?: string;
-  /** Opens the original message on its platform (Slack). Absent on turns
-      saved before it was recorded. */
-  permalink?: string;
-};
-
-/** Whether an assistant reply reached the channel thread it answers.
-    Mirrors agentstore.Delivery. */
-export type Delivery = {
-  channel: string;
-  status: "sending" | "sent" | "failed";
-  /** The posted reply (its first message when split). */
-  permalink?: string;
-  /** Slack's short reason: channel_not_found, rate_limited, timeout, … */
-  error?: string;
-  at?: string;
 };
 
 export type ConversationTurn = {
@@ -196,11 +153,6 @@ export type ConversationTurn = {
   timestamp: number;
   truncated: boolean;
   interrupted: boolean;
-  /** Who cut the turn short: "user" | "agent" | "wick" | "unknown" (mid-turn stop
-      nothing claimed — an external kill, a crash, the host out of memory). */
-  interrupted_by?: string;
-  /** One sentence naming who, and what they did. Absent when unknown. */
-  interrupted_note?: string;
   has_trace: boolean;
   events: TurnEvent[];
   attachments: Attachment[];
@@ -208,43 +160,6 @@ export type ConversationTurn = {
   artifacts?: Artifact[];
   // system turn only — a provider/runtime error, rendered as a failure.
   is_error?: boolean;
-  /** assistant turn of a remote agent — how it ended: "ended without
-      marker", "follow-up", "late reply" (remote.Note*). */
-  remote_note?: string;
-  /** the turn this one stands in for — a remote's late reply replacing
-      its timeout (store.ConversationTurn.Replaces). */
-  replaces?: string;
-  /** client-side only (foldReplaced): how long after the replaced turn
-      this reply was kept, in ms. */
-  late_ms?: number;
-  /** assistant turn — its reply's delivery to Slack, when posted there. */
-  delivery?: Delivery;
-  /** system turn only — "provider_switch", "interrupted", "compaction", …
-      Tags a structured notice so it renders as itself instead of a plain
-      grey line. */
-  kind?: string;
-  /** system turn only — the numbers behind `kind`, kept as data rather
-      than baked into the text (compaction: trigger, pre/post tokens). */
-  extras?: Record<string, string>;
-  /** assistant turn of a Team agent's session — who spoke, set by the
-      server. via "mention" = answering a teammate's message. */
-  speaker?: TurnSpeaker;
-  /** user turn made by clicking an actioncard button — set ONLY by the
-      server's postback endpoint, never parsed out of text. */
-  postback?: CardPostback;
-};
-
-export type TurnSpeaker = { agent_id: string; handle: string; via: "direct" | "mention" | "group" | string };
-
-export type CardPostback = { card_id: string; value: string; label: string };
-
-/** Server-computed state of one actioncard id across the whole thread. */
-export type CardState = {
-  /** The assistant turn holding the card's newest version. */
-  turn_id: string;
-  locked?: boolean;
-  postback?: CardPostback;
-  postback_turn_id?: string;
 };
 
 export type ApprovalRequest = {
@@ -282,9 +197,13 @@ export type ApprovalsResponse = {
   always_approved: ApprovedItem[];
 };
 
-/* Both shapes now live with the shared file browser that consumes them —
-   re-exported here so the shell's many call sites keep their import. */
-export type { SessionFileEntry } from "@wick-fe/common-ui";
+export type ContextFileEntry = {
+  path: string;
+  name: string;
+  size: number;
+  isDir: boolean;
+  mtime: number;
+};
 
 /* Mirror of @wick-fe/common-ui's ComposerCommand (kept local to avoid a
    type-only import through the common-ui barrel). Structurally identical, so a
@@ -337,14 +256,6 @@ export type SubAgentItem = {
   handle?: string;
   // label is the delegated task, truncated server-side.
   label: string;
-  /** The first leg's task (truncated). A continue reframes `label` with a
-      resume preamble; this keeps what the sub-agent was asked to do.
-      Absent on rows from before it existed. */
-  title?: string;
-  /** How many times the row was continued. */
-  resumes?: number;
-  /** turns_used when the current leg started. */
-  leg_base_turns?: number;
   status: SubAgentStatus;
   // lifecycle comes from the live pool snapshot; "" when the sub-agent
   // has no running process (queued, or already finished).
@@ -352,16 +263,6 @@ export type SubAgentItem = {
   depth: number;
   turns_used: number;
   max_turns: number;
-  /** What this run put on the wire, as the delegation recorded it. 0
-      means the provider never reported usage — never "free", which is
-      why the inspector says "not reported" instead of showing a zero. */
-  input_tokens?: number;
-  output_tokens?: number;
-  tokens_used?: number;
-  /** This delegation's own token cap; 0 = uncapped by the delegation
-      (the per-tree budget still applies), so the panel shows a bare
-      count rather than a ratio. */
-  max_tokens?: number;
   result?: string;
   started_at?: string;
   /** Set once the delegation reaches a terminal status; absent while it
@@ -403,7 +304,14 @@ export type SubAgentEnvelope = {
   structured: boolean;
 };
 
-export type { FileContent } from "@wick-fe/common-ui";
+export type FileContent = {
+  path: string;
+  size: number;
+  binary: boolean;
+  content?: string;
+  tooBig?: boolean;
+  mtime?: number;
+};
 
 export type AgentEvent = {
   session_id?: string;
@@ -418,52 +326,20 @@ export type AgentEvent = {
   lifecycle?: string;
   at?: number;
   end_at?: number;
-  /** How full the context window was for the request this event came
-      from — a MID-TURN reading, so the meter can move while a long turn
-      runs. Absent means this event said nothing about the window (most
-      do), never that the window is empty. Only providers that report it
-      per request send it; codex reads its level once per turn and sends
-      none. */
-  context_used?: number;
 };
 
 export type SSEStatus = "connecting" | "connected" | "error";
 
 export type ThreadBlock =
   | { kind: "thinking"; text: string }
-  /* Narration the model streamed BEFORE a tool call — shown in position
-     between tool cards. The full reply (all segments) is still the turn
-     body; these are positional context only. */
-  | { kind: "text"; text: string }
   | { kind: "raw"; text: string }
   | {
       kind: "tool";
       toolUseId: string;
       toolName: string;
       toolInput: string;
-      // The tool_use's own arguments were spilled (TurnEvent.large on the
-      // tool_use row): toolInput is empty until the sidecar payload —
-      // keyed by the tool_use's OWN event_id — is fetched on expand.
-      toolInputLarge?: boolean;
-      toolInputSize?: number;
-      toolInputEventId?: string;
       result?: string;
-      // Whether a tool_result EVENT was paired to this call. This — not the
-      // presence of result text — is what says the call finished: a large
-      // (spilled) result has hasResult:true with result undefined until its
-      // payload is fetched on demand. Absent on live-built blocks, where
-      // result-text presence remains the signal.
-      hasResult?: boolean;
-      // The paired result was spilled to a sidecar file (TurnEvent.large):
-      // fetch it lazily via resultEventId when the user expands the card.
-      resultLarge?: boolean;
-      resultSize?: number;
-      resultEventId?: string;
       isError?: boolean;
-      // event.Display of the call input / the result, when the trace has
-      // one; ToolCard classifies the raw text itself otherwise.
-      inputDisplay?: TraceDisplay;
-      resultDisplay?: TraceDisplay;
       startedAt?: number;
       endedAt?: number;
       // Set from a `connector_run` SSE event while the underlying connector run
@@ -516,17 +392,6 @@ export type Schedule = {
   id: string;
   session_id: string;
   created_by: string;
-  /* Identity — whose access the fires actually use. created_by only says HOW
-     the row was made ("ai"/"user"), never as whom it runs. effective_run_as
-     empty means the fire is attached to nobody and falls back to wick's
-     internal principal, which carries no access tags.
-
-     The API also returns owner_user_id; it is left out here until something
-     reads it, so the type stays a description of what this SPA uses rather
-     than a copy of the payload. */
-  run_as_user_id?: string;
-  effective_run_as?: string;
-  effective_run_as_name?: string;
   kind: string; // once | recurring
   run_at: string; // RFC3339 — next fire
   status: string; // pending | active | done | cancelled | failed
@@ -596,9 +461,6 @@ export type ProjectOption = {
       the board itself (a chat's jump-to-ticket entry) key off this, so a
       project without one shows none of them. */
   ticketEnabled?: boolean;
-  /** Someone else owns it; the caller sees it through a tag or sharing. */
-  shared?: boolean;
-  owner_name?: string;
 };
 
 /** One column on a project's board. Statuses are per project: a team names
@@ -618,21 +480,6 @@ export type TicketField = {
   type: "text" | "select";
   options?: string[];
   required?: boolean;
-  /** Show this field's value on the board card. Off by default — the full
-      set is always on the ticket's own page. */
-  show_on_card?: boolean;
-};
-
-/** One custom action button. On a ticket's page a click POSTs that ticket
-    to `url` (a ticket.action event, e.g. "Sync to Notion"); in the ticket
-    list's toolbar it POSTs the list's filter and the tickets it selects (a
-    ticket.board_action event, e.g. "Pull my tickets from Notion"). */
-export type TicketButton = {
-  id?: string; // minted server-side on first save
-  label: string;
-  url: string;
-  /** Where it is drawn. Absent = "ticket". */
-  placement?: "ticket" | "board";
 };
 
 /** One rule deciding when a new session gets a ticket on its own. Rules
@@ -660,9 +507,6 @@ export type TicketConfig = {
   auto_create?: AutoCreateRule[];
   /** Board columns, in order. Empty means the built-in set. */
   statuses?: TicketStatus[];
-  /** The integrations half, of which this SPA only reads the buttons —
-      webhook rows and the API toggle are edited in project settings. */
-  integrations?: { buttons?: TicketButton[] };
 };
 
 /** One card on the project ticket board. A card is a TICKET, not a
@@ -671,11 +515,7 @@ export type TicketCard = {
   id: string; // short quotable code, e.g. "T-4F2A"
   title: string;
   status: string;
-  /** The first of `assignees` — what a card has room to draw. */
   assignee?: string;
-  /** Everyone the ticket is on. Absent on an older server, where `assignee`
-      is the whole answer. */
-  assignees?: string[];
   fields?: Record<string, string>;
   /** The ticket's sessions, listed on the card so one can be dragged to
       another ticket without opening anything. */
@@ -699,9 +539,6 @@ export type TicketBoard = {
   untracked: TicketSessionRow[];
   /** How many untracked chats exist, however few were sent. */
   untracked_total?: number;
-  /** Cursor for the page after `untracked`, absent when nothing follows.
-      Opaque — handed back as `untrackedAfter`, never built client-side. */
-  untracked_next?: string;
   statuses: TicketStatus[];
   users?: Record<string, string>;
   me?: string;
@@ -721,12 +558,8 @@ export type Ticket = {
   id: string;
   project_id: string;
   title: string;
-  /** Markdown description. */
-  body?: string;
   status: string;
-  /** The first of `assignees`. */
   assignee?: string;
-  assignees?: string[];
   fields?: Record<string, string>;
   sessions?: string[];
   created_at: string;
@@ -778,19 +611,7 @@ export type NotesResponse = {
   notes: Note[];
   users?: Record<string, string>;
   me?: string;
-  /** `body` is the ticket's description — the request the notes answer. */
-  ticket?: { id: string; title: string; status: string; body?: string; fields?: Record<string, string> | null };
-  /** The project's ticket field definitions — labels, types and options for
-      the values in `ticket.fields`, so the rail can show and edit them. */
-  ticket_fields?: TicketField[];
-  /** The project's custom buttons placed on a ticket ("Sync from Notion").
-      Id and label only — the click goes through /actions/{id}, which looks
-      the URL up server-side. */
-  ticket_buttons?: { id: string; label: string }[];
-  /** Whether the project runs tickets at all. Absent on an older server,
-      which is why it is optional rather than defaulted to false: the rail
-      hides its Ticket tab on an explicit `false` and shows it otherwise. */
-  ticket_enabled?: boolean;
+  ticket?: { id: string; title: string; status: string };
   /** The ticket's project board columns, so the rail's status select offers
       the same choices as the board. */
   statuses?: TicketStatus[];
@@ -806,20 +627,4 @@ export type AgentMessageItem = {
   /** Set when wick promoted a closing turn into an answer nobody wrote. */
   auto_reply?: boolean;
   created_at: string;
-};
-
-/** One A2A task this session sent to a Team agent (GET
-    /api/sessions/{id}/team-tasks). */
-export type TeamTaskItem = {
-  task_id: string;
-  context_id: string;
-  to_agent_id: string;
-  to_handle: string;
-  to_name: string;
-  title: string;
-  state: string;
-  turns: number;
-  max_turns: number;
-  started_at: string;
-  updated_at: string;
 };

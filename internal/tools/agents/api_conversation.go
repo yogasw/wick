@@ -3,14 +3,10 @@ package agents
 import (
 	"fmt"
 	"net/http"
-	"strconv"
-	"strings"
 
 	agentsconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/session"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
-	"github.com/yogasw/wick/internal/agents/ticket"
-	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -29,12 +25,6 @@ type SessionListItem struct {
 	LastActive  string `json:"last_active"`
 	Lifecycle   string `json:"lifecycle"`
 	PID         int    `json:"pid,omitempty"`
-	// Participants is how many people have spoken in the session. 0/1 =
-	// a single-person chat; >1 is what the list renders as shared. A
-	// count, not the ids: the list only needs to draw a marker, and
-	// shipping the ids would expose who talks to whom to anyone who can
-	// see the row.
-	Participants int `json:"participants,omitempty"`
 }
 
 // SessionMetaDTO is the JSON shape returned by /api/sessions/{id}/meta.
@@ -60,10 +50,6 @@ type SessionMetaDTO struct {
 	// never omitted: an absent field would leave the SPA guessing, and
 	// the safe guess and the real policy are not always the same.
 	Widget agentsconfig.WidgetPolicy `json:"widget"`
-	// Speaker is the Team agent this session belongs to (via "direct"),
-	// so a live assistant turn can be named before the thread is
-	// reloaded. Absent for an ordinary session.
-	Speaker *agentstore.Speaker `json:"speaker,omitempty"`
 }
 
 // accessibleSessionIDs returns the subset of ids whose sessions pass the
@@ -93,7 +79,7 @@ func accessibleSessionIDs(ids []string, sessions map[string]session.Session, acc
 		if scoped != "" && s.Meta.ProjectID != scoped {
 			continue
 		}
-		if !access.allowSession(s.Meta.ProjectID, s.Meta.UserID, s.Meta.Participants) {
+		if !access.allowSession(s.Meta.ProjectID, s.Meta.UserID) {
 			continue
 		}
 		out = append(out, id)
@@ -101,80 +87,8 @@ func accessibleSessionIDs(ids []string, sessions map[string]session.Session, acc
 	return out
 }
 
-// ticketAssignedSessions returns the session ids attached to tickets
-// assigned to userID in projectID, or nil when the project has ticket mode
-// off (or there is nothing to resolve). This is what makes the "your
-// sessions" tab honest under ticket mode: a chat someone else started on a
-// ticket assigned to you IS your work, even though you don't own it.
-func ticketAssignedSessions(projectID, userID string) map[string]bool {
-	if projectID == "" || userID == "" {
-		return nil
-	}
-	p, ok := globalMgr.Registry().Project(projectID)
-	if !ok || !p.Meta.Ticket.Enabled {
-		return nil
-	}
-	tickets, err := ticket.List(globalLayout, projectID)
-	if err != nil {
-		return nil
-	}
-	var out map[string]bool
-	for _, t := range tickets {
-		// Anyone on the ticket, not just the first: a session shared with a
-		// colleague is still this person's work.
-		if !t.HasAssignee(userID) {
-			continue
-		}
-		if out == nil {
-			out = map[string]bool{}
-		}
-		for _, sid := range t.Sessions {
-			out[sid] = true
-		}
-	}
-	return out
-}
-
-// ownedSessionIDs narrows ids to the caller's own sessions — plus, when the
-// scoped project runs ticket mode, sessions on tickets assigned to them.
-// This is the "your sessions" scope, shared by the JSON list and the templ
-// sidebar so the two never disagree about what "yours" means. A nil user
-// (internal/MCP caller) gets ids back unfiltered.
-//
-// "Own" means a session you took part in, not only one you started. Slack
-// threads are multi-user by nature: someone who replied into a thread did
-// that work too, so it belongs in their list even though the session's
-// owner (and its spawn identity) stays with the person who opened it.
-func ownedSessionIDs(c *tool.Ctx, ids []string, sessions map[string]session.Session, scoped string) []string {
-	u := login.GetUser(c.Context())
-	if u == nil {
-		return ids
-	}
-	assigned := ticketAssignedSessions(scoped, u.ID)
-	out := ids[:0:0]
-	for _, id := range ids {
-		meta := sessions[id].Meta
-		if meta.IsParticipant(u.ID) || assigned[id] {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
 // apiSessionList handles GET /api/sessions and returns a JSON list of
 // sessions the caller is allowed to see.
-//
-//	?project=ID   scope to one project
-//	?owner=me     only the caller's sessions — plus, when the scoped project
-//	              runs ticket mode, sessions on tickets assigned to the
-//	              caller (their work, whoever started the chat). Absent or
-//	              anything else = everyone's (the historical behaviour).
-//	?offset=N     skip the first N matches — the "Load more" cursor. Each
-//	              response is one page of at most sessionListCap rows.
-//
-// The response carries `total` — how many sessions matched BEFORE the page
-// window — and `has_more`, so the UI can print a real count and offer the
-// next page without ever shipping every row.
 func apiSessionList(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -188,18 +102,7 @@ func apiSessionList(c *tool.Ctx) {
 	access := callerProjectAccess(c)
 	allSessions := globalMgr.Registry().Sessions()
 	ids := accessibleSessionIDs(globalMgr.Registry().SessionIDs(), allSessions, access, scoped)
-	if strings.EqualFold(strings.TrimSpace(c.Query("owner")), "me") {
-		ids = ownedSessionIDs(c, ids, allSessions, scoped)
-	}
-	total := len(ids)
-	if off, err := strconv.Atoi(c.Query("offset")); err == nil && off > 0 {
-		if off > len(ids) {
-			off = len(ids)
-		}
-		ids = ids[off:]
-	}
-	hasMore := len(ids) > sessionListCap
-	if hasMore {
+	if len(ids) > sessionListCap {
 		ids = ids[:sessionListCap]
 	}
 
@@ -231,54 +134,14 @@ func apiSessionList(c *tool.Ctx) {
 			LastActive:  s.Meta.LastActive.Format("2006-01-02T15:04:05Z07:00"),
 			Lifecycle:   lc.Lifecycle,
 			PID:         lc.PID,
-
-			Participants: s.Meta.PeopleCount(),
 		})
 	}
 
-	c.JSON(http.StatusOK, map[string]any{"sessions": items, "total": total, "has_more": hasMore})
-}
-
-// backfillTurnIDs assigns a synthetic, position-stable id to every turn that
-// was persisted without one (user turns, and anything written before turn_id
-// existed). The conversation file is append-only, so the index is stable
-// across loads — which is all the pagination cursor and the SPA's dedup need.
-// Real ids are numeric timestamps, so the "turn-" prefix can't collide.
-func backfillTurnIDs(turns []agentstore.ConversationTurn) {
-	for i := range turns {
-		if turns[i].TurnID == "" {
-			turns[i].TurnID = fmt.Sprintf("turn-%d", i)
-		}
-	}
-}
-
-// pageTurns returns the window of turns ending just before the turn with id
-// `before` (empty = end of history), holding at most `limit` entries (0 = no
-// cap). hasMore reports whether older turns remain before the window. An
-// unknown `before` falls back to the latest window rather than erroring — the
-// turn may have been pruned (e.g. collapsed provider-switch turns) between
-// the client's fetches.
-func pageTurns(turns []agentstore.ConversationTurn, before string, limit int) ([]agentstore.ConversationTurn, bool) {
-	end := len(turns)
-	if before != "" {
-		for i, t := range turns {
-			if t.TurnID == before {
-				end = i
-				break
-			}
-		}
-	}
-	start := 0
-	if limit > 0 && end-limit > 0 {
-		start = end - limit
-	}
-	return turns[start:end], start > 0
+	c.JSON(http.StatusOK, map[string][]SessionListItem{"sessions": items})
 }
 
 // apiSessionConversation handles GET /api/sessions/{id}/conversation and
-// returns the session's ConversationTurn entries. With no query params it
-// returns the full history; `?limit=N` returns only the latest N turns and
-// `&before=<turn_id>` walks back one window at a time (infinite scroll up).
+// returns all ConversationTurn entries for the session.
 func apiSessionConversation(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -289,7 +152,7 @@ func apiSessionConversation(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	if !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants) {
+	if !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -301,21 +164,11 @@ func apiSessionConversation(c *tool.Ctx) {
 	if turns == nil {
 		turns = []agentstore.ConversationTurn{}
 	}
-	// Label derives from the FIRST user message, so it must see the full
-	// history — page after it, not before.
 	resolveLabelFromTurns(globalLayout, id, turns)
-	backfillTurnIDs(turns)
-	stampSpeakers(turns, sessionSpeaker(c, id))
-	agentstore.StampDeliveries(turns, agentstore.LoadDeliveries(globalLayout, id))
-	cards := actionCardStates(turns)
-	limit, _ := strconv.Atoi(c.Query("limit"))
-	page, hasMore := pageTurns(turns, c.Query("before"), limit)
 	if cwd, err := resolveSessionCwd(sess); err == nil {
-		attachArtifactsToTurns(globalLayout, id, c.Base(), cwd, page)
+		attachArtifactsToTurns(globalLayout, id, c.Base(), cwd, turns)
 	}
-	// Card state needs the whole thread (a click may sit pages after its
-	// card), so it is worked out before paging trims anything.
-	c.JSON(http.StatusOK, map[string]any{"turns": page, "has_more": hasMore, "cards": cards})
+	c.JSON(http.StatusOK, map[string][]agentstore.ConversationTurn{"turns": turns})
 }
 
 // apiSessionMeta handles GET /api/sessions/{id}/meta and returns the
@@ -330,7 +183,7 @@ func apiSessionMeta(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	if !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants) {
+	if !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -345,7 +198,6 @@ func apiSessionMeta(c *tool.Ctx) {
 		CreatedAt:   sess.Meta.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		LastActive:  sess.Meta.LastActive.Format("2006-01-02T15:04:05Z07:00"),
 		Widget:      resolveWidgetPolicy(sess.Meta.ProjectID),
-		Speaker:     sessionSpeaker(c, id),
 	}
 	// Resolve provider + pinned model from the active (or first) agent
 	// entry — ActiveAgent above is the agent's own NAME ("main"), not its
@@ -362,46 +214,4 @@ func apiSessionMeta(c *tool.Ctx) {
 		}
 	}
 	c.JSON(http.StatusOK, dto)
-}
-
-// sessionSpeaker is the Team agent behind sessionID's assistant turns, or
-// nil for a session that belongs to no agent.
-func sessionSpeaker(c *tool.Ctx, sessionID string) *agentstore.Speaker {
-	if globalTeam == nil {
-		return nil
-	}
-	// Only the agent's own conversations: a sub-agent working for it
-	// resolves to the agent too, but its turns are not the agent speaking.
-	if sess, ok := globalMgr.Registry().Session(sessionID); !ok || sess.Meta.AgentID == "" {
-		return nil
-	}
-	p := globalTeam.AgentFor(c.Context(), sessionID)
-	if p == nil {
-		return nil
-	}
-	return &agentstore.Speaker{AgentID: p.ID, Handle: p.Handle, Via: agentstore.ViaDirect}
-}
-
-// stampSpeakers names who said each assistant turn. The speaker comes
-// from the session, never from the text. A turn answering a message
-// another agent handed over (the user turn before it came in over the
-// Team link) is via "mention"; anything else is "direct".
-func stampSpeakers(turns []agentstore.ConversationTurn, base *agentstore.Speaker) {
-	if base == nil {
-		return
-	}
-	via := agentstore.ViaDirect
-	for i := range turns {
-		switch turns[i].Role {
-		case "user":
-			via = agentstore.ViaDirect
-			if turns[i].Source == sourceTeam {
-				via = agentstore.ViaMention
-			}
-		case "assistant":
-			sp := *base
-			sp.Via = via
-			turns[i].Speaker = &sp
-		}
-	}
 }

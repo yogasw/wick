@@ -45,35 +45,16 @@ const (
 	// consumers treat it as end-of-turn.
 	Error
 	// Warning is a NON-fatal error the CLI reported mid-stream (e.g. a
-	// malformed skill/agent-role definition it chose to ignore), or a
-	// stdout line wick itself could not parse (provider/agent.go). It is
+	// malformed skill/agent-role definition it chose to ignore). It is
 	// recorded to history like an error but does NOT end the turn — the
 	// subprocess keeps running. ErrorMsg carries the detail.
 	Warning
-	// Compaction fires when the CLI compacted the conversation to free
-	// context — automatically at the window limit, or because someone ran
-	// /compact. Not an error and not end-of-turn: the session id stays
-	// the same and the run continues with a summary standing in for the
-	// dropped messages. Carrying it as its own type is what lets the UI
-	// mark the boundary instead of silently losing the history.
-	Compaction
 	// Trace is an event the parser doesn't map to a first-class type but
 	// that is worth keeping visible — recorded into the turn's trace
 	// (expandable in the UI) rather than the main thread. Raw carries the
 	// verbatim line. Non-fatal; never ends the turn. Pure control frames
 	// (started/ping/snapshots) stay Unknown and are skipped.
 	Trace
-	// TextReplace swaps the whole reply streamed so far this turn for
-	// .Text: a remote agent edited a message it had already sent.
-	// Consumers that only append may ignore it and keep the old text.
-	TextReplace
-	// RemoteQueue reports where a message sent to a busy remote agent
-	// stands: queued behind the running turn, sent, cancelled, or
-	// forwarded into the running turn. .Queue carries it. Not end-of-turn.
-	RemoteQueue
-	// RemoteLink carries the remote's own page for the running turn
-	// (.Text = URL), where it can be followed or stopped. Not end-of-turn.
-	RemoteLink
 )
 
 // String makes log lines readable. Not used for serialization.
@@ -95,16 +76,8 @@ func (t EventType) String() string {
 		return "error"
 	case Warning:
 		return "warning"
-	case Compaction:
-		return "compaction"
 	case Trace:
 		return "trace"
-	case TextReplace:
-		return "text_replace"
-	case RemoteQueue:
-		return "remote_queue"
-	case RemoteLink:
-		return "remote_link"
 	default:
 		return "unknown"
 	}
@@ -126,18 +99,6 @@ type AgentEvent struct {
 	SessionID string // SessionStart: CLI session ID (or first event for Claude)
 	ErrorMsg  string // Error: short reason
 	Raw       string // verbatim source line
-	// RemoteNote labels how a remote agent's turn ended (Done only):
-	// "ended without marker", "follow-up", "late reply".
-	RemoteNote string
-
-	// ExitCode is the process exit status of a ToolResult, set only when
-	// the provider reports one (codex shell calls).
-	ExitCode *int
-
-	// Display is how a ToolUse input or ToolResult body should render —
-	// see display.go. Set by the parser on the FULL payload; nil for every
-	// other event type.
-	Display *Display
 
 	// SubAgent names the sub-agent an event was RELAYED from, and is set
 	// only on that relay — never by a parser. A leader's own events leave
@@ -150,95 +111,4 @@ type AgentEvent struct {
 	// conversation through the delegation result, so relaying its text too
 	// would post the same answer twice.
 	SubAgent string
-
-	// Usage is the turn's token accounting. Set on Done, and only when
-	// the CLI reported it — nil otherwise, which is not an error (a
-	// provider may simply not say).
-	Usage *TokenUsage
-
-	// Compaction is set only on Compaction events.
-	Compaction *CompactionInfo
-
-	// Queue is set only on RemoteQueue events.
-	Queue *QueueInfo
-
-	// ContextUsed is how full the window was for the request THIS frame
-	// came out of — a mid-turn reading, set on whatever event the frame
-	// produced rather than on a type of its own.
-	//
-	// It exists because everything else here is end-of-turn. Usage lands
-	// on Done, so a turn that runs for four minutes leaves every meter
-	// frozen on the previous turn's numbers for as long as it is the one
-	// thing anybody is watching. Claude reports the level on every
-	// `assistant` frame, so the answer is already in hand well before the
-	// turn ends; carrying it costs one int.
-	//
-	// It CANNOT disagree with the final reading: the end-of-turn level is
-	// the last frame's level (see ClaudeParser.lastLevel, which overrides
-	// what the result frame carries), so the last value seen here is the
-	// value Done reports. Providers that report nothing mid-turn (codex —
-	// its level comes from a rollout file read once per turn) simply
-	// leave this zero, and zero means "this frame said nothing about the
-	// window", never "the window is empty".
-	ContextUsed int
-}
-
-// QueueInfo is one remote_queue line: message ID's State (queued, sent,
-// cancelled, forwarded) and its Text.
-type QueueInfo struct {
-	ID    string
-	State string
-	Text  string
-}
-
-// CompactionInfo is one compaction boundary as the CLI reported it.
-// PreTokens is the context size that triggered it, PostTokens what
-// survived — the pair is the whole story, and neither means much alone.
-type CompactionInfo struct {
-	// Trigger is "auto" (window limit) or "manual" (/compact).
-	Trigger       string `json:"trigger,omitempty"`
-	PreTokens     int    `json:"pre_tokens,omitempty"`
-	PostTokens    int    `json:"post_tokens,omitempty"`
-	DroppedTokens int    `json:"dropped_tokens,omitempty"`
-	DurationMS    int    `json:"duration_ms,omitempty"`
-}
-
-// TokenUsage is one turn's token accounting, normalized across CLIs so
-// the same arithmetic works whether the turn ran on claude, codex, or
-// wick's own engine.
-//
-// Two different questions live here, and conflating them is the easy
-// mistake. The four counters (Input/CacheRead/CacheWrite/Output) are
-// FLOW — what this turn spent, which is what a cost report sums over
-// time. ContextUsed is a LEVEL — how full the window was when the turn
-// ended, which only makes sense as the latest reading and must never be
-// added up. Window puts that level on a scale.
-//
-// Every counter is what the vendor reported, never our own estimate.
-// Fields a given CLI does not report stay zero rather than being guessed:
-// codex, for one, says nothing about the window size.
-type TokenUsage struct {
-	// Input is fresh input tokens — the part that missed the cache.
-	Input int `json:"input,omitempty"`
-	// CacheRead is input served from the prompt cache (cheap).
-	CacheRead int `json:"cache_read,omitempty"`
-	// CacheWrite is input written INTO the cache this turn.
-	CacheWrite int `json:"cache_write,omitempty"`
-	// Output is tokens the model generated, reasoning included.
-	Output int `json:"output,omitempty"`
-
-	// ContextUsed is everything the model saw as input for the last
-	// message of the turn: fresh + both cache halves. A level, not a
-	// flow — summing it across turns is meaningless.
-	ContextUsed int `json:"context_used,omitempty"`
-	// Window is the model's context limit, 0 when unreported.
-	Window int `json:"window,omitempty"`
-	// AutoCompact is whether the provider compacts the window by itself,
-	// nil when it did not say.
-	AutoCompact *bool `json:"auto_compact,omitempty"`
-	// Model is the id the vendor billed, for per-model breakdowns.
-	Model string `json:"model,omitempty"`
-	// CostUSD is the vendor's own figure for the turn, 0 when it gives
-	// none. Never computed here — a price table would go stale silently.
-	CostUSD float64 `json:"cost_usd,omitempty"`
 }

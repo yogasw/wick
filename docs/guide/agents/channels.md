@@ -218,7 +218,7 @@ Rather than waiting until the full response is ready, wick posts an empty placeh
 
 ### Chunked reply
 
-Slack hard-limits messages to 4000 chars. Wick chunks at **3800** ([slack.go:32](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go#L32)). Each chunk is a separate threaded reply, posted plain with no continuation marker.
+Slack hard-limits messages to 4000 chars. Wick chunks at **3800** to leave 200 chars headroom for continuation markers ([slack.go:32](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go#L32)). Each chunk is a separate threaded reply.
 
 ### Approval prompt cleanup
 
@@ -261,13 +261,9 @@ The `picker` widget is a generic typeahead bound to a channel-specific lookup so
 |---|---|---|
 | `slack.users` | [`assistant.search.context`](https://api.slack.com/methods/assistant.search.context) (messages → de-dupe by author) | `users.list` |
 | `slack.usergroups` | `usergroups.list` | — |
-| `slack.channels` | [`users.conversations`](https://api.slack.com/methods/users.conversations) (channels the bot is a MEMBER of) | — |
+| `slack.channels` | `assistant.search.context` (channels → parse permalink for ID) | `conversations.list` |
 
-`slack.channels` deliberately does **not** use `conversations.list` or `assistant.search.context`: both return every channel in the workspace, including the ones the bot was never invited to. Picking one of those yields a trigger that can never fire and a send that fails with `not_in_channel`, so the source is scoped to actual membership.
-
-The picker stores the chips as JSON `[{id,name},...]`, identical in shape to the kvlist widget, so the same access-control parser reads either. Lookups are cached 60s per `(instance, source, query)` — the instance is part of the key because each per-user bot has its own token and its own memberships.
-
-In the **workflow editor** the lookup fans out over every registered Slack instance and merges the results de-duped by ID; when more than one bot is connected each entry is suffixed with the bot that can reach it (`#support — @ygsw-bot`). A bot whose call fails (missing scope, not yet authed) is skipped rather than blanking the dropdown. The channel **config** page stays scoped to the signed-in user's own bot.
+The picker stores the chips as JSON `[{id,name},...]`, identical in shape to the kvlist widget, so the same access-control parser reads either. Lookups are cached 60s per `(source, query)` to avoid hammering Slack's rate limits while the operator types.
 
 ### Integration health check
 
@@ -283,7 +279,7 @@ Probes:
 - `conversations.list` (scopes: `channels:read`, `groups:read`)
 - `chat.postMessage` _(dry-run against an invalid channel ID — distinguishes `missing_scope` from `channel_not_found`)_
 - `reactions.add` _(dry-run against an invalid timestamp)_
-- `assistant.search.context` (scope: `assistant:write` — optional, used by the `slack.users` picker only)
+- `assistant.search.context` (scope: `assistant:write` — optional, falls back to list APIs)
 
 When all probes pass the panel shows a single "✓ All checks passed" line.
 
@@ -541,19 +537,11 @@ Not supported. `"stream": true` returns `400` immediately — clients should lea
 
 Gate prompts are **auto-blocked** ([`rest.go OnApprovalRequest`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/rest/rest.go)). REST clients cannot deliver an interactive decision, so any approval request resolves to `block` and the resulting error surfaces as a `403`. Use the web UI to approve sensitive commands.
 
-### Background mode
-
-Add `"background": true` (or `metadata.background: "true"` for SDKs that only expose the standard OpenAI `metadata` map) to either endpoint to return immediately with `"status": "queued"` instead of waiting for the agent:
-
-```json
-{ "id": "wick-…", "object": "chat.completion", "status": "queued", "choices": [...] }
-```
-
-The message is queued on the session exactly like a chat message — the reply is not returned in that response, it lands in the session history. Pair `background` with `conversation` and read the result back with a normal follow-up request on the same conversation; without `conversation` the request is fire-and-forget and the reply is unreachable. Useful behind aggressive HTTP timeouts (proxies, serverless gateways) where the caller can't wait out a long-running turn.
-
 ### Concurrency
 
-1. **Per-session turn queue**: concurrent requests on the same `conversation` no longer conflict — a request that arrives while an earlier one is still in flight queues FIFO behind it, same as chat channel messages, and each request gets the reply to its own message (never mixed up, even if an earlier caller gave up and disconnected).
+Two safeguards:
+
+1. **Per-session REST lock**: a second request on the same `conversation` while the first is still in flight gets `409 session busy`. Prevents two REST clients racing the same wick session.
 2. **Pool queue**: dispatch always goes through `sendFn → pool.Send`, which FIFO-queues when slots are full and preempts idle slots when configured. REST has no direct spawn path. See [Pool & Sessions](./pool).
 
 ### Configured response shape (chat completions)

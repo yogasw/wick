@@ -6,9 +6,7 @@ package plugin
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"sync"
 	"time"
 
@@ -16,9 +14,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 
-	wickenv "github.com/yogasw/wick/internal/pkg/env"
-	"github.com/yogasw/wick/internal/pkg/envscrub"
-	"github.com/yogasw/wick/internal/pkg/upgrade"
 	wickplugin "github.com/yogasw/wick/pkg/plugin"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
@@ -43,7 +38,6 @@ type Manager struct {
 	spawnFn      func(key string) (*entry, error)
 	killFn       func(key string)
 	now          func() time.Time
-	dnsServers   func() string
 	stop         chan struct{}
 	cond         *sync.Cond
 	breakers     map[string]*breaker
@@ -51,19 +45,6 @@ type Manager struct {
 }
 
 // NewManager builds a Manager and starts the idle sweeper.
-// InflightCount sums the in-flight calls across every plugin subprocess.
-// KillAll ignores this on a hard stop by design; the graceful path uses it to
-// avoid killing a plugin mid-request.
-func (m *Manager) InflightCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	n := 0
-	for _, e := range m.entries {
-		n += e.inflight
-	}
-	return n
-}
-
 func NewManager(binaries map[string]string, idleTimeout time.Duration) *Manager {
 	m := &Manager{
 		entries:      map[string]*entry{},
@@ -77,7 +58,6 @@ func NewManager(binaries map[string]string, idleTimeout time.Duration) *Manager 
 		breakers:     map[string]*breaker{},
 		socketDir:    RunDir(),
 	}
-	upgrade.Register("plugin calls", m.InflightCount)
 	m.cond = sync.NewCond(&m.mu)
 	m.spawnFn = m.spawn
 	m.killFn = m.kill
@@ -165,16 +145,14 @@ func (m *Manager) WarmUp() {
 	}
 }
 
-// clientConfig is the go-plugin client config every plugin kind shares: gRPC
-// only, AutoMTLS, the pinned socket dir, and raised message limits. plugins is
-// the kind's versioned plugin set (connector, job, ...).
-func clientConfig(socketDir string, plugins map[int]goplugin.PluginSet) *goplugin.ClientConfig {
-	return &goplugin.ClientConfig{
+func (m *Manager) spawn(key string) (*entry, error) {
+	// caller (Client) holds m.mu.
+	clientCfg := &goplugin.ClientConfig{
 		HandshakeConfig:  wickplugin.Handshake,
-		VersionedPlugins: plugins,
+		VersionedPlugins: wickplugin.VersionedPlugins,
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		AutoMTLS:         true,
-		UnixSocketConfig: &goplugin.UnixSocketConfig{TempDir: socketDir},
+		UnixSocketConfig: &goplugin.UnixSocketConfig{TempDir: m.socketDir},
 		// Raise gRPC message limits to match the server (wickplugin) so ops that
 		// carry file payloads (e.g. extension_install, base64 of a browser
 		// extension) aren't rejected with ResourceExhausted at 4 MiB default.
@@ -185,52 +163,6 @@ func clientConfig(socketDir string, plugins map[int]goplugin.PluginSet) *goplugi
 			),
 		},
 	}
-}
-
-// SpawnSpec describes one plugin subprocess of any kind.
-type SpawnSpec struct {
-	Binary    string
-	Plugins   map[int]goplugin.PluginSet // the kind's versioned plugin set
-	Dispense  string                     // plugin name to dispense (wickplugin.PluginName, wickplugin.JobPluginName, ...)
-	SocketDir string                     // "" = RunDir()
-	Env       []string                   // extra env on top of the scrubbed OS env
-	Stderr    io.Writer                  // nil = go-plugin's default (logged)
-}
-
-// Spawn starts a plugin subprocess (env scrubbed, same transport as connector
-// plugins) and dispenses its client. The caller owns the returned client and
-// must Kill it. Used by kinds whose lifecycle is not the connector pool, e.g.
-// a job plugin that lives for exactly one Run.
-func Spawn(spec SpawnSpec) (*goplugin.Client, any, error) {
-	dir := spec.SocketDir
-	if dir == "" {
-		dir = RunDir()
-	}
-	_ = os.MkdirAll(dir, 0o700)
-	cfg := clientConfig(dir, spec.Plugins)
-	cmd := safeexec.Command(spec.Binary)
-	cmd.Env = append(envscrub.ScrubOSEnv(), spec.Env...)
-	cfg.Cmd = cmd
-	if spec.Stderr != nil {
-		cfg.Stderr = spec.Stderr
-	}
-	client := goplugin.NewClient(cfg)
-	rpc, err := client.Client()
-	if err != nil {
-		client.Kill()
-		return nil, nil, fmt.Errorf("plugin handshake %s: %w", spec.Binary, err)
-	}
-	raw, err := rpc.Dispense(spec.Dispense)
-	if err != nil {
-		client.Kill()
-		return nil, nil, fmt.Errorf("dispense %s: %w", spec.Dispense, err)
-	}
-	return client, raw, nil
-}
-
-func (m *Manager) spawn(key string) (*entry, error) {
-	// caller (Client) holds m.mu.
-	clientCfg := clientConfig(m.socketDir, wickplugin.VersionedPlugins)
 	// Debug: attach to a debugger-run plugin instead of spawning our own child,
 	// but ONLY when ReadReattachConfig confirms it's reachable (it dials the
 	// addr). A stale file from a stopped/relaunched dlv fails the dial and we
@@ -259,7 +191,7 @@ func (m *Manager) spawn(key string) (*entry, error) {
 		if !ok {
 			return nil, fmt.Errorf("no plugin binary registered for %q", key)
 		}
-		clientCfg.Cmd = m.pluginCommand(bin)
+		clientCfg.Cmd = safeexec.Command(bin)
 	}
 	client := goplugin.NewClient(clientCfg)
 	rpc, err := client.Client()
@@ -279,22 +211,6 @@ func (m *Manager) spawn(key string) (*entry, error) {
 	}
 	return &entry{client: client, conn: conn, lastUsed: m.now(), reattached: reattached}, nil
 }
-
-// pluginCommand passes the runtime DNS choice to connector plugins. The plugin
-// SDK configures its own Go resolver and Termux CA bundle, so plugins stay
-// native processes and do not require proot or filesystem bind mounts.
-func (m *Manager) pluginCommand(bin string) *exec.Cmd {
-	cmd := safeexec.Command(bin)
-	// Plugins can be third-party binaries; none of them reads the daemon's DSN.
-	cmd.Env = envscrub.ScrubOSEnv()
-	if wickenv.IsTermux() && m.dnsServers != nil {
-		cmd.Env = append(cmd.Env, "WICK_DNS_SERVERS="+m.dnsServers())
-	}
-	return cmd
-}
-
-// SetDNSServersLoader supplies the runtime-editable Termux DNS override.
-func (m *Manager) SetDNSServersLoader(fn func() string) { m.dnsServers = fn }
 
 // IsPlugin reports whether key is served by a plugin subprocess.
 func (m *Manager) IsPlugin(key string) bool {

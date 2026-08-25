@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { humanBytes, humanBps, humanPct, cpuShare, humanCores } from "$lib/format.js";
+  import { humanBytes, humanBps, humanPct } from "$lib/format.js";
   import type { TopProcessRow } from "$lib/types.js";
 
   interface Props {
@@ -15,12 +15,10 @@
     barColor: string;
     emptyText?: string;
     // machineTotal turns an absolute figure into a share. Memory gets the
-    // machine's RAM. Zero means unknown, and the share is then omitted
-    // rather than rendered as a fabricated 0%.
+    // machine's RAM; CPU is already a percentage of one core and needs
+    // none. Zero means unknown, and the share is then omitted rather than
+    // rendered as a fabricated 0%.
     machineTotal?: number;
-    // cores turns CPU (per-core units) into a share of all cores, the
-    // scale the rest of the page uses. Zero means unknown.
-    cores?: number;
   }
 
   let {
@@ -30,7 +28,6 @@
     barColor,
     emptyText = "nothing measurable",
     machineTotal = 0,
-    cores = 0,
   }: Props = $props();
 
   function value(r: TopProcessRow): number {
@@ -41,7 +38,7 @@
 
   function label(r: TopProcessRow): string {
     if (metric === "memory") return humanBytes(r.rss_bytes);
-    if (metric === "cpu") return humanPct(cpuShare(r.cpu_pct, cores));
+    if (metric === "cpu") return humanPct(r.cpu_pct);
     return humanBps(r.io_read_bps + r.io_write_bps);
   }
 
@@ -86,7 +83,7 @@
               {/if}
             </span>
             <span class="shrink-0 text-xs tabular-nums">
-              <span class="font-medium text-black-900 dark:text-white-100" title={metric === "cpu" ? humanCores(r.cpu_pct) : undefined}>{label(r)}</span>
+              <span class="font-medium text-black-900 dark:text-white-100">{label(r)}</span>
               {#if share(r)}
                 <span class="ml-1 text-black-700 dark:text-black-600">{share(r)}</span>
               {/if}

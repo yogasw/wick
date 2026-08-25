@@ -199,11 +199,9 @@ func pickModel(inst *provider.Instance, modelID string) (provider.WickModel, boo
 		// A live-set pick is "<entryID>@<vendorModelID>": resolve the entry for
 		// its key/kind/base, then override the concrete model id with the
 		// vendor model the user chose from the expanded list.
-		// The grammar is the generic provider pin (escaped path, first '@');
-		// a wick pin is its one-segment form, so old pins decode unchanged.
 		entryID, vendorID := modelID, ""
-		if path, model, ok := provider.DecodePin(modelID); ok {
-			entryID, vendorID = strings.Join(path, "/"), model
+		if at := strings.IndexByte(modelID, '@'); at >= 0 {
+			entryID, vendorID = modelID[:at], modelID[at+1:]
 		}
 		for _, m := range inst.WickModels {
 			if m.ID != entryID || m.Disabled {

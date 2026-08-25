@@ -10,7 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
-	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/proctree"
 	"github.com/yogasw/wick/pkg/safeexec"
 	"google.golang.org/genai"
@@ -145,7 +144,6 @@ func (r *bgRegistry) start(cmdline string) (string, error) {
 
 	execBin, execArgs, scopeUnit := wrapToolCmd(bin, []string{"-c", cmdline}, r.memLimitMB, nextToolSeq())
 	cmd := safeexec.Command(execBin, execArgs...)
-	cmd.Env = envscrub.ScrubOSEnv()
 	if r.workspace != "" {
 		cmd.Dir = r.workspace
 	}

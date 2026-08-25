@@ -1,4 +1,3 @@
-import { withModelListMeta, optionModelsWithMeta } from "@wick-fe/common-ui";
 import { Effect } from "effect";
 import { apiGetE } from "@wick-fe/common-api";
 import type { ModelCaps } from "@wick-fe/common-ui";
@@ -46,7 +45,7 @@ export type ProjectOption = {
 export const getProviderOptions = (base: string) =>
   apiGetE<(ProviderOption & { uses_airouter?: boolean })[] | null>(`${base}/providers/options`).pipe(
     Effect.map((r) =>
-      (r ?? []).map((p) => ({ ...p, usesAIRouter: p.usesAIRouter ?? p.uses_airouter ?? false, models: optionModelsWithMeta(p) })),
+      (r ?? []).map((p) => ({ ...p, usesAIRouter: p.usesAIRouter ?? p.uses_airouter ?? false })),
     ),
   );
 
@@ -63,15 +62,12 @@ export const getProviderOptionModels = (
   base: string,
   type: string,
   name: string,
-  opts?: { entry?: string; refresh?: boolean },
+  opts?: { entry?: string },
 ) => {
-  const q = new URLSearchParams();
-  if (opts?.entry) q.set("entry", opts.entry);
-  if (opts?.refresh) q.set("refresh", "1"); // the picker's Refresh (omp/opencode CLI, once)
-  const qs = q.toString() ? `?${q.toString()}` : "";
-  return apiGetE<{ models?: ProviderModelOption[] | null; fetched_at?: string; source?: string; can_refresh?: boolean }>(
-    `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${qs}`,
-  ).pipe(Effect.map((r) => withModelListMeta(r.models ?? [], r)));
+  const q = opts?.entry ? `?entry=${encodeURIComponent(opts.entry)}` : "";
+  return apiGetE<{ models?: ProviderModelOption[] | null }>(
+    `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models${q}`,
+  ).pipe(Effect.map((r) => r.models ?? []));
 };
 
 export const getPresetOptions = (base: string) =>
@@ -94,9 +90,9 @@ export const getProjectOptions = (base: string) =>
 
 /* Project-scoped @-mention file search — the session cwd IS the project folder,
    so the new-session composer can browse it before the session exists. */
-export const searchProjectMentionPaths = (base: string, projectId: string, q: string, limit = 30) =>
+export const searchProjectFiles = (base: string, projectId: string, q: string, limit = 30) =>
   apiGetE<{ files: string[] }>(
-    `${base}/api/projects/${projectId}/files/mentions?q=${encodeURIComponent(q)}&limit=${limit}`,
+    `${base}/api/projects/${projectId}/files/search?q=${encodeURIComponent(q)}&limit=${limit}`,
   ).pipe(Effect.map((r) => r.files ?? []));
 
 export type ComposerApiCommand = {

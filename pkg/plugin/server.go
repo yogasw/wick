@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 
 	"github.com/yogasw/wick/pkg/connector"
 	pb "github.com/yogasw/wick/pkg/plugin/proto"
@@ -42,74 +41,47 @@ func (s *grpcServer) Schema(_ context.Context, _ *pb.SchemaRequest) (*pb.SchemaR
 }
 
 func (s *grpcServer) Execute(ctx context.Context, req *pb.ExecuteRequest) (*pb.ExecuteResponse, error) {
-	result, masks, opErr := s.runOp(ctx, req)
+	result, opErr := s.runOp(ctx, req)
 	if opErr != nil {
-		return &pb.ExecuteResponse{Error: opErr, Mask: masks.exact, MaskIgnoreCase: masks.folded}, nil
+		return &pb.ExecuteResponse{Error: opErr}, nil
 	}
-	return &pb.ExecuteResponse{ResultJson: result, Mask: masks.exact, MaskIgnoreCase: masks.folded}, nil
+	return &pb.ExecuteResponse{ResultJson: result}, nil
 }
 
 // runOp executes one operation and returns the marshalled result, or a
 // proto Error. Shared by Execute and ExecuteStream so the two cannot drift.
-func (s *grpcServer) runOp(ctx context.Context, req *pb.ExecuteRequest) ([]byte, *maskRecorder, *pb.Error) {
-	masks := &maskRecorder{}
+func (s *grpcServer) runOp(ctx context.Context, req *pb.ExecuteRequest) ([]byte, *pb.Error) {
 	op, ok := s.ops[req.Operation]
 	if !ok {
-		return nil, masks, &pb.Error{Code: "unknown_operation", Message: req.Operation}
+		return nil, &pb.Error{Code: "unknown_operation", Message: req.Operation}
 	}
 	if op.Execute == nil {
-		return nil, masks, &pb.Error{Code: "no_handler", Message: req.Operation}
+		return nil, &pb.Error{Code: "no_handler", Message: req.Operation}
 	}
 	var input map[string]string
 	if len(req.ArgsJson) > 0 {
 		if err := json.Unmarshal(req.ArgsJson, &input); err != nil {
-			return nil, masks, &pb.Error{Code: "bad_args", Message: err.Error()}
+			return nil, &pb.Error{Code: "bad_args", Message: err.Error()}
 		}
 	}
-	cctx := connector.NewCtx(ctx, "", req.Creds, input, nil, nil, masks)
+	cctx := connector.NewPluginCtx(ctx, req.Creds, input)
 	value, execErr := op.Execute(cctx)
 	if execErr != nil {
-		return nil, masks, &pb.Error{Code: "exec_error", Message: execErr.Error()}
+		return nil, &pb.Error{Code: "exec_error", Message: execErr.Error()}
 	}
 	b, err := json.Marshal(value)
 	if err != nil {
-		return nil, masks, &pb.Error{Code: "marshal_error", Message: err.Error()}
+		return nil, &pb.Error{Code: "marshal_error", Message: err.Error()}
 	}
-	return b, masks, nil
-}
-
-// maskRecorder is the plugin-side Masker. The plugin holds no encryption
-// key, so c.Mask / c.MaskIgnoreCase cannot tokenize here: the recorder
-// keeps the values, leaves the data as it is, and the values travel back
-// with the result for the host to mask before anything leaves wick.
-type maskRecorder struct {
-	mu     sync.Mutex
-	exact  []string
-	folded []string
-}
-
-func (m *maskRecorder) Mask(data string, values []string, caseInsensitive bool) string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, v := range values {
-		if v == "" {
-			continue
-		}
-		if caseInsensitive {
-			m.folded = append(m.folded, v)
-		} else {
-			m.exact = append(m.exact, v)
-		}
-	}
-	return data
+	return b, nil
 }
 
 // ExecuteStream runs the operation and streams the result in bounded chunks,
 // then a final Eof chunk. Op errors are delivered as a single Chunk{Error}.
 func (s *grpcServer) ExecuteStream(req *pb.ExecuteRequest, stream pb.Connector_ExecuteStreamServer) error {
-	result, masks, opErr := s.runOp(stream.Context(), req)
+	result, opErr := s.runOp(stream.Context(), req)
 	if opErr != nil {
-		return stream.Send(&pb.Chunk{Error: opErr, Mask: masks.exact, MaskIgnoreCase: masks.folded})
+		return stream.Send(&pb.Chunk{Error: opErr})
 	}
 	for off := 0; off < len(result); off += streamChunkSize {
 		end := off + streamChunkSize
@@ -120,7 +92,7 @@ func (s *grpcServer) ExecuteStream(req *pb.ExecuteRequest, stream pb.Connector_E
 			return err
 		}
 	}
-	return stream.Send(&pb.Chunk{Eof: true, Mask: masks.exact, MaskIgnoreCase: masks.folded})
+	return stream.Send(&pb.Chunk{Eof: true})
 }
 
 // ResolveIdentity resolves which provider user an OAuth access token belongs

@@ -3,8 +3,6 @@
   // inspector components fill in `body` with their form fields.
   import type { Snippet } from "svelte";
   import type { Node, NodeType } from "$lib/types/workflow";
-  import { updateNode } from "$lib/stores/editor";
-  import MarkdownField from "../MarkdownField.svelte";
 
   type Props = {
     node: Node;
@@ -39,17 +37,8 @@
   </nav>
 
   <div class="flex-1 overflow-y-auto p-4 space-y-3 text-xs">
-    {#if activeTab === "params"}
-      <!-- Description is required for every node type (sticky_note:
-           its content), so it leads the params tab regardless of body. -->
-      <div class="mb-3">
-        {#if node.type === "sticky_note"}
-          <MarkdownField label="Content" required value={node.content ?? ""} oncommit={(v) => updateNode(node.id, { content: v })} />
-        {:else}
-          <MarkdownField required value={node.description ?? ""} oncommit={(v) => updateNode(node.id, { description: v })} />
-        {/if}
-      </div>
-      {#if body}{@render body()}{/if}
+    {#if activeTab === "params" && body}
+      {@render body()}
     {:else if activeTab === "advanced"}
       {#if advanced}
         {@render advanced()}
@@ -57,7 +46,14 @@
         <p class="text-black-500 dark:text-white-100-700 italic">No advanced settings for {node.type}.</p>
       {/if}
     {:else if activeTab === "notes"}
-      <MarkdownField required value={node.description ?? ""} oncommit={(v) => updateNode(node.id, { description: v })} />
+      <label class="flex flex-col gap-1">
+        <span class="font-medium">Description</span>
+        <textarea
+          class="rounded border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-2 min-h-[120px]"
+          value={node.description ?? ""}
+          placeholder="Free-form notes — not consumed by the executor."
+        ></textarea>
+      </label>
     {/if}
   </div>
 

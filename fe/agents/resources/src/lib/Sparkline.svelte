@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { clock24 } from "@wick-fe/common-ui";
   // A small time-series chart drawn as inline SVG, with a hover readout.
   //
   // Inline SVG rather than a charting library: the whole page ships one
@@ -101,7 +100,10 @@
   );
   const hoverTime = $derived.by(() => {
     if (hoverIndex === null || !times[hoverIndex]) return "";
-    return clock24(times[hoverIndex], true);
+    const d = new Date(times[hoverIndex]);
+    return Number.isNaN(d.getTime())
+      ? ""
+      : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   });
 </script>
 

@@ -2,7 +2,6 @@ package plugin
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -35,7 +34,6 @@ type Reloader struct {
 	interval time.Duration
 	seen     map[string]string // key -> sha256
 	stop     chan struct{}
-	stopOnce sync.Once
 	store    enabledChecker
 }
 
@@ -74,10 +72,8 @@ func (r *Reloader) Start(ctx context.Context) {
 // Reload triggers an immediate reconcile (for in-process callers, e.g. CLI install).
 func (r *Reloader) Reload(ctx context.Context) { r.reconcile(ctx) }
 
-// Stop ends the poll loop. Idempotent: shutdown paths overlap (a graceful
-// drain stops the reloader, then the process-exit handler runs too), and a
-// second close of the channel used to panic and take the daemon down with it.
-func (r *Reloader) Stop() { r.stopOnce.Do(func() { close(r.stop) }) }
+// Stop ends the poll loop.
+func (r *Reloader) Stop() { close(r.stop) }
 
 func (r *Reloader) reconcile(ctx context.Context) {
 	found, err := Scan(r.dir)

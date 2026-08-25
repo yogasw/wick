@@ -17,17 +17,10 @@ import (
 // bannerEntry is non-nil when the job still has Required configs
 // empty; the ScopedSetupBanner nudges the admin to finish setup before
 // runs can succeed.
-//
-// Inside an <iframe> (ui.EmbeddedFromContext) the navbar and the setup
-// banner are dropped so the job's own title strip and Run Now button
-// sit flush in the frame — those stay, they are the page.
 templ JobPage(j *entity.Job, runs []entity.JobRun, user *entity.User, errMsg string, bannerEntry *ui.MissingEntry) {
-	{{ embedded := ui.EmbeddedFromContext(ctx) }}
 	@ui.Layout(j.Name) {
-		if !embedded {
-			@ui.Navbar(user)
-			@ui.ScopedSetupBanner(bannerEntry, user != nil && user.IsAdmin())
-		}
+		@ui.Navbar(user)
+		@ui.ScopedSetupBanner(bannerEntry, user != nil && user.IsAdmin())
 		<main class="mx-auto w-full max-w-container px-6 py-8">
 			<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
 				<div class="flex items-center gap-3">
@@ -50,14 +43,6 @@ templ JobPage(j *entity.Job, runs []entity.JobRun, user *entity.User, errMsg str
 							href={ templ.SafeURL("/manager/jobs/" + j.Key) }
 							class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-2 text-sm font-medium text-black-900 dark:text-white-100 hover:border-green-400 hover:text-green-600 transition-colors"
 						>Settings</a>
-					}
-					if j.LastStatus == entity.JobStatusRunning {
-						<form method="POST" action={ templ.SafeURL("/jobs/" + j.Key + "/cancel") }>
-							<button
-								type="submit"
-								class="rounded-lg border border-neg-300 bg-white-100 dark:bg-navy-700 px-4 py-2 text-sm font-medium text-neg-400 hover:bg-neg-100 transition-colors"
-							>Cancel</button>
-						</form>
 					}
 					<form method="POST" action={ templ.SafeURL("/jobs/" + j.Key + "/run") }>
 						<button
@@ -158,8 +143,6 @@ templ runStatusBadge(status entity.RunStatus) {
 		<span class="rounded-full bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400">Running</span>
 	} else if status == entity.RunStatusSuccess {
 		<span class="rounded-full bg-pos-100 px-2 py-0.5 text-[10px] font-medium text-pos-400">Success</span>
-	} else if status == entity.RunStatusCancelled {
-		<span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-800 dark:text-black-500">Cancelled</span>
 	} else {
 		<span class="rounded-full bg-neg-100 px-2 py-0.5 text-[10px] font-medium text-neg-400">Error</span>
 	}

@@ -3,7 +3,6 @@ package connectors
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -135,18 +134,6 @@ func (r *Repo) ListAccessibleForManager(ctx context.Context, userTagIDs []string
 	return out, err
 }
 
-// ListOwnedBy returns every Connector the given user created, newest
-// first. Ownership is independent of tags, so the manager listing can
-// union these in and a creator never loses sight of their own instance.
-func (r *Repo) ListOwnedBy(ctx context.Context, userID string) ([]entity.Connector, error) {
-	if userID == "" {
-		return nil, nil
-	}
-	var out []entity.Connector
-	err := r.db.WithContext(ctx).Where("created_by = ?", userID).Order("created_at DESC").Find(&out).Error
-	return out, err
-}
-
 // IsAccessibleForManager mirrors IsAccessibleTo but ignores the disabled
 // flag. Used by manager handlers so admins who disabled a row can still
 // open its detail page to re-enable.
@@ -239,20 +226,6 @@ func (r *Repo) Update(ctx context.Context, c *entity.Connector) error {
 		}).Error
 }
 
-// SetCreatedBy re-stamps which wick user owns the instance. CreatedBy is
-// documented as an identity field Update never touches, and that is still
-// right for an edit — but ownership has to be transferable: the owner is who
-// may configure the row and who sees every account connected to it, so an
-// instance whose owner has left the company would otherwise be stuck with an
-// administrator nobody can reach. Empty clears it, leaving the row admin-only.
-func (r *Repo) SetCreatedBy(ctx context.Context, id, userID string) error {
-	return r.db.WithContext(ctx).Model(&entity.Connector{}).Where("id = ?", id).
-		Updates(map[string]any{
-			"created_by": userID,
-			"updated_at": time.Now(),
-		}).Error
-}
-
 // SetDisabled flips the Disabled flag without touching anything else.
 // Used by the admin manager toggle.
 func (r *Repo) SetDisabled(ctx context.Context, id string, disabled bool) error {
@@ -285,15 +258,14 @@ func (r *Repo) SetRateLimit(ctx context.Context, id string, rpm int) error {
 }
 
 // SetAccessPolicy updates the access policy fields for a connector instance.
-func (r *Repo) SetAccessPolicy(ctx context.Context, id string, p AccessPolicy) error {
+func (r *Repo) SetAccessPolicy(ctx context.Context, id string, allowConfigure, allowSSO, enableSSO, multiAccount bool) error {
 	return r.db.WithContext(ctx).Model(&entity.Connector{}).Where("id = ?", id).
 		Updates(map[string]any{
-			"allow_others_configure":    p.AllowOthersConfigure,
-			"allow_others_connect_sso":  p.AllowOthersConnectSSO,
-			"enable_sso":                p.EnableSSO,
-			"multi_account":             p.MultiAccount,
-			"allow_others_see_accounts": p.AllowOthersSeeAccounts,
-			"updated_at":                time.Now(),
+			"allow_others_configure":   allowConfigure,
+			"allow_others_connect_sso": allowSSO,
+			"enable_sso":               enableSSO,
+			"multi_account":            multiAccount,
+			"updated_at":               time.Now(),
 		}).Error
 }
 
@@ -334,65 +306,6 @@ func (r *Repo) ListAccounts(ctx context.Context, connectorID string) ([]entity.C
 	return rows, err
 }
 
-// ListAccountsFor returns the connected accounts of MANY instances in one
-// query, keyed by connector id. The admin connectors page lists every
-// instance on the install, and asking per row was one round trip each — 46
-// rows on a database 30ms away is over a second spent on a listing.
-func (r *Repo) ListAccountsFor(ctx context.Context, connectorIDs []string) (map[string][]entity.ConnectorAccount, error) {
-	out := map[string][]entity.ConnectorAccount{}
-	if len(connectorIDs) == 0 {
-		return out, nil
-	}
-	var rows []entity.ConnectorAccount
-	if err := r.db.WithContext(ctx).
-		Where("connector_id IN ?", connectorIDs).
-		Order("connector_id asc, created_at asc").
-		Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	for _, acc := range rows {
-		out[acc.ConnectorID] = append(out[acc.ConnectorID], acc)
-	}
-	return out, nil
-}
-
-// AccountFilterTagIDs returns the FILTER tag ids attached to each of the given
-// connected accounts, keyed by account id. Accounts are tagged through the
-// same tool_tags table every other taggable thing uses, on the path
-// AccountTagPath(accountID) — so the admin tag picker, the tag-filter rules
-// and the audit story are the ones wick already has.
-//
-// Only is_filter tags are returned: a non-filter tag is a label, not a grant.
-func (r *Repo) AccountFilterTagIDs(ctx context.Context, accountIDs []string) (map[string][]string, error) {
-	out := make(map[string][]string, len(accountIDs))
-	if len(accountIDs) == 0 {
-		return out, nil
-	}
-	paths := make([]string, 0, len(accountIDs))
-	for _, id := range accountIDs {
-		paths = append(paths, AccountTagPath(id))
-	}
-	var rows []struct {
-		ToolPath string
-		TagID    string
-	}
-	err := r.db.WithContext(ctx).
-		Table("tool_tags tt").
-		Select("tt.tool_path as tool_path, tt.tag_id as tag_id").
-		Joins("JOIN tags t ON t.id = tt.tag_id").
-		Where("tt.tool_path IN ?", paths).
-		Where("t.is_filter = ?", true).
-		Scan(&rows).Error
-	if err != nil {
-		return nil, err
-	}
-	for _, row := range rows {
-		id := strings.TrimPrefix(row.ToolPath, accountTagPathPrefix)
-		out[id] = append(out[id], row.TagID)
-	}
-	return out, nil
-}
-
 // UpsertAccount saves a connected account.
 //
 //   - MultiAccount=false: replace any existing account for this connector (1 slot).
@@ -417,44 +330,18 @@ func (r *Repo) UpsertAccount(ctx context.Context, acc *entity.ConnectorAccount, 
 		if err == nil {
 			// Update token + display name on existing row.
 			return r.db.WithContext(ctx).Model(&existing).Updates(map[string]any{
-				"access_token":  acc.AccessToken,
-				"refresh_token": acc.RefreshToken,
-				"expires_at":    acc.ExpiresAt,
-				"display_name":  acc.DisplayName,
-				"updated_at":    acc.UpdatedAt,
+				"access_token": acc.AccessToken,
+				"display_name": acc.DisplayName,
+				"updated_at":   acc.UpdatedAt,
 			}).Error
 		}
 	}
 	return r.db.WithContext(ctx).Create(acc).Error
 }
 
-// UpdateAccountTokens rewrites one account's token set after a refresh.
-// refresh "" keeps the stored refresh token (servers may omit it).
-func (r *Repo) UpdateAccountTokens(ctx context.Context, accountID, access, refresh string, expiresAt *time.Time) error {
-	updates := map[string]any{
-		"access_token": access,
-		"expires_at":   expiresAt,
-		"updated_at":   time.Now(),
-	}
-	if refresh != "" {
-		updates["refresh_token"] = refresh
-	}
-	return r.db.WithContext(ctx).Model(&entity.ConnectorAccount{}).
-		Where("id = ?", accountID).Updates(updates).Error
-}
-
 // DeleteAccount removes one connected account by ID.
 func (r *Repo) DeleteAccount(ctx context.Context, accountID string) error {
 	return r.db.WithContext(ctx).Where("id = ?", accountID).Delete(&entity.ConnectorAccount{}).Error
-}
-
-// SetAccountOpOverrides persists the JSON-encoded per-operation override
-// map for an account (opKey → forced bool). Writing "" clears every
-// override, putting the account back to inheriting the instance.
-func (r *Repo) SetAccountOpOverrides(ctx context.Context, accountID, overridesJSON string) error {
-	return r.db.WithContext(ctx).Model(&entity.ConnectorAccount{}).
-		Where("id = ?", accountID).
-		Update("op_overrides", overridesJSON).Error
 }
 
 // SetAccountDisabledOps persists the JSON-encoded disabled ops list for an account.
@@ -486,24 +373,6 @@ func (r *Repo) ListOperations(ctx context.Context, connectorID string) ([]entity
 	var out []entity.ConnectorOperation
 	err := r.db.WithContext(ctx).Where("connector_id = ?", connectorID).Find(&out).Error
 	return out, err
-}
-
-// ListOperationsFor is ListOperations for MANY connectors in one query,
-// keyed by connector id. The agent catalog reads every instance the caller
-// reaches, and one round trip per row made it seconds on a remote database.
-func (r *Repo) ListOperationsFor(ctx context.Context, connectorIDs []string) (map[string][]entity.ConnectorOperation, error) {
-	out := map[string][]entity.ConnectorOperation{}
-	if len(connectorIDs) == 0 {
-		return out, nil
-	}
-	var rows []entity.ConnectorOperation
-	if err := r.db.WithContext(ctx).Where("connector_id IN ?", connectorIDs).Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	for _, op := range rows {
-		out[op.ConnectorID] = append(out[op.ConnectorID], op)
-	}
-	return out, nil
 }
 
 // SetOperation upserts the toggle for a single (connector, op) pair.
@@ -641,16 +510,7 @@ type RunFilter struct {
 	Source       string
 	Status       string
 	UserID       string
-	// AccountID narrows to one connected account. RunFilterAccountDefault
-	// asks the opposite question — the calls that went out on the row's own
-	// credentials — because the zero value is already spoken for ("any").
-	AccountID string
 }
-
-// RunFilterAccountDefault is the AccountID sentinel for "the row's own
-// configured credentials, no connected account". It is not an account id and
-// cannot collide with one.
-const RunFilterAccountDefault = "default"
 
 // AuditFilter narrows cross-connector audit queries. All fields are
 // optional — omit to get all runs across every connector instance.
@@ -791,13 +651,6 @@ func (r *Repo) runFilterQuery(ctx context.Context, connectorID string, f RunFilt
 	}
 	if f.UserID != "" {
 		q = q.Where("user_id = ?", f.UserID)
-	}
-	switch f.AccountID {
-	case "":
-	case RunFilterAccountDefault:
-		q = q.Where("account_id = ''")
-	default:
-		q = q.Where("account_id = ?", f.AccountID)
 	}
 	return q
 }

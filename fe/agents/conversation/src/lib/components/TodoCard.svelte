@@ -1,5 +1,4 @@
 <script lang="ts">
-  import TraceNote from "./TraceNote.svelte";
   import type { TodoItemWithSteps, TodoGoal, TodoSubstep } from "../todoGroups.js";
   import { todoProgress, itemLabel } from "../todoGroups.js";
   import ToolCard from "./ToolCard.svelte";
@@ -236,8 +235,10 @@
                   </ul>
                 {/if}
                 {#each s.relatedBlocks as block}
-                  {#if block.kind === "thinking" || block.kind === "text"}
-                    <TraceNote kind={block.kind} text={block.text} />
+                  {#if block.kind === "thinking"}
+                    <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700 whitespace-pre-wrap break-words">
+                      {block.text}
+                    </div>
                   {:else if block.kind === "raw"}
                     <details class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs">
                       <summary class="cursor-pointer px-3 py-2 text-black-600 dark:text-black-700 select-none">Raw event</summary>

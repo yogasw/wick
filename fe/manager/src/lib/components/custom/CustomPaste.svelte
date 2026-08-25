@@ -3,15 +3,11 @@
      AI), one paste box, a Parse button, and an error box. Parse posts the
      box to the parse endpoint; on success the returned draft is stashed in
      sessionStorage and the SPA navigates to the review route. Mirrors
-     custom_paste.templ + custom_paste.js. The AI tab does not parse in
-     the request: it submits a queued "connector-parse" generate job (same
-     prompt, same draft) through AIGenerateButton, so it waits for a free
-     agent slot instead of forking a CLI beside a full pool. */
-  import { AIGenerateButton, Button, TextArea, Select } from "@wick-fe/common-ui";
+     custom_paste.templ + custom_paste.js. */
+  import { Button, TextArea, Select } from "@wick-fe/common-ui";
   import { push } from "$lib/router.js";
   import { getCustomMeta, parseCustomPaste } from "$lib/api.js";
   import { DRAFT_STORAGE_KEY } from "./storage.js";
-  import type { Draft } from "$lib/types.js";
 
   let parser = $state<"curl" | "ai">("curl");
   let provider = $state("");
@@ -35,25 +31,18 @@
     error = "";
   }
 
-  function openReview(draft: Draft) {
-    sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
-    push("/custom/review");
-  }
-
-  function checkPaste(): string {
-    error = "";
-    return paste.trim() ? "" : "Paste something first.";
-  }
-
   async function parse() {
-    const refuse = checkPaste();
-    if (refuse) {
-      error = refuse;
+    const value = paste.trim();
+    if (!value) {
+      error = "Paste something first.";
       return;
     }
+    error = "";
     busy = true;
     try {
-      openReview(await parseCustomPaste(parser, "", paste.trim()));
+      const draft = await parseCustomPaste(parser, parser === "ai" ? provider : "", value);
+      sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+      push("/custom/review");
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -120,24 +109,9 @@
 
     <div class="mt-6 flex items-center justify-between">
       <Button variant="secondary" size="lg" onclick={() => push("/")}>← Cancel</Button>
-      {#if parser === "ai"}
-        <AIGenerateButton
-          kind="connector-parse"
-          label="Parse →"
-          variant="primary"
-          size="lg"
-          autoUse
-          input={() => ({ text: paste.trim(), provider })}
-          validate={checkPaste}
-          onUse={(draft: Draft) => openReview(draft)}
-          onError={(msg) => (error = msg)}
-          testid="cc-ai-parse"
-        />
-      {:else}
-        <Button variant="primary" size="lg" disabled={busy} onclick={parse}>
-          {#if busy}Parsing…{:else}Parse →{/if}
-        </Button>
-      {/if}
+      <Button variant="primary" size="lg" disabled={busy} onclick={parse}>
+        {#if busy}{parser === "ai" ? "Extracting…" : "Parsing…"}{:else}Parse →{/if}
+      </Button>
     </div>
   </section>
 </div>

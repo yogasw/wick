@@ -63,16 +63,15 @@ describe("listSessions", () => {
         ),
       ),
     );
-    expect(out.sessions).toHaveLength(1);
-    expect(out.sessions[0].session_id).toBe("s1");
+    expect(out).toHaveLength(1);
+    expect(out[0].session_id).toBe("s1");
   });
 
   test("missing sessions → empty list", async () => {
     const out = await Effect.runPromise(
       listSessions("c1").pipe(Effect.provide(mockLayer(200, {}))),
     );
-    expect(out.sessions).toEqual([]);
-    expect(out.maxTabs).toBe(0);
+    expect(out).toEqual([]);
   });
 });
 

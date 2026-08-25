@@ -86,7 +86,6 @@ func (s *Service) Interrupt(ctx context.Context, delegationID, actorID string, i
 		// one), but it does change who is at the head of the line — the
 		// next item must be started rather than waiting for a sweep.
 		s.pokeSlot(d.RootID)
-		s.backgroundEnded(ctx, d)
 		return OutcomeDequeued, nil
 	}
 
@@ -166,7 +165,6 @@ func (s *Service) Interrupt(ctx context.Context, delegationID, actorID string, i
 	// A stopped sub-agent frees its slot; the queue must move immediately
 	// rather than idling until the next sweep.
 	s.pokeSlot(d.RootID)
-	s.backgroundEnded(ctx, d)
 	return OutcomeKilled, nil
 }
 

@@ -12,8 +12,6 @@
     type?: "button" | "submit";
     disabled?: boolean;
     title?: string;
-    /* data-testid on the <button> (bundle markers + tests). */
-    testid?: string;
     class?: string;
     onclick?: (e: MouseEvent) => void;
     children: Snippet;
@@ -25,7 +23,6 @@
     type = "button",
     disabled = false,
     title,
-    testid,
     class: extraClass = "",
     onclick,
     children,
@@ -49,7 +46,6 @@
 <button
   {type}
   {title}
-  data-testid={testid}
   {disabled}
   class="{base} {variants[variant]} {sizes[size]} {extraClass}"
   onclick={(e) => { if (!disabled) onclick?.(e); }}

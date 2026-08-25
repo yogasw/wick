@@ -127,17 +127,6 @@ export type ChannelOpDescriptor = {
 
 export type ChannelDescriptor = {
   name: string;
-  // Display row: "Slack - <bot name> - <owner>". The backend collapses
-  // the per-owner instances of a channel type to the caller's own, so
-  // this names WHICH bot the picker entry refers to. `name` stays the
-  // value a node stores.
-  label?: string;
-  instance_key?: string;
-  owner_user_id?: string;
-  owner_name?: string;
-  bot_name?: string;
-  mine?: boolean;
-  configured?: boolean;
   supports_session: boolean;
   ops?: ChannelOpDescriptor[];
   events?: ChannelEventDescriptor[];
@@ -163,9 +152,7 @@ export type CatalogResponse = {
   trigger_types: { type: string; label: string; description: string }[];
   channels: ChannelDescriptor[];
   connectors: ConnectorDescriptor[];
-  // Only the instances the caller may choose (provider access tags);
-  // `type` + `name` form the "type/name" key the provider picker uses.
-  providers: { name: string; type?: string; is_default: boolean }[];
+  providers: { name: string; is_default: boolean }[];
   // Base URL for webhook triggers: "<origin>/hooks". Empty when PublicURL
   // is not configured in Settings → Agents; the UI falls back to a
   // relative path display in that case.
@@ -176,17 +163,13 @@ export type CatalogResponse = {
 // single source of truth for category + label + badge + drill structure;
 // the FE just iterates and renders.
 export type PaletteDrag =
-  | { type: "node"; node_type: string; channel?: string; channel_instance?: string; module?: string; op?: string; row_id?: string; account_id?: string }
+  | { type: "node"; node_type: string; channel?: string; module?: string; op?: string; row_id?: string; account_id?: string }
   | { type: "trigger"; trigger_type: string }
-  | { type: "channel-trigger"; channel: string; channel_instance?: string; event: string };
+  | { type: "channel-trigger"; channel: string; event: string };
 
 export type PaletteItem = {
   kind: "drag" | "drill";
   label: string;
-  // Secondary, muted line under the label. For a channel row: which bot
-  // the instance runs as (meta) and whose channel row it is (owner).
-  meta?: string;
-  owner?: string;
   badge?: string;
   description?: string;
   drag?: PaletteDrag;
@@ -450,19 +433,13 @@ export const workflowAPI = {
   // event match schemas / config forms. Module is the channel name
   // (e.g. "slack"), source is the registry key the channel's
   // LookupProvider understands. Returns `[{id, name}, ...]`.
-  // `instance` pins the search to the bot the trigger/node already
-  // selected (trigger.channel_instance) — otherwise the dropdown lists
-  // every bot's channels and picking a foreign one yields a trigger
-  // that can never fire.
   lookup: (
     module: string,
     source: string,
     q: string,
-    instance = "",
   ): Promise<{ id: string; name: string }[]> =>
     apiGet(
-      `${BASE}/workflows/api/lookup?module=${encodeURIComponent(module)}&source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}` +
-        (instance ? `&instance=${encodeURIComponent(instance)}` : ""),
+      `${BASE}/workflows/api/lookup?module=${encodeURIComponent(module)}&source=${encodeURIComponent(source)}&q=${encodeURIComponent(q)}`,
     ),
 
   // Data table directory — workspace-level. Used by the datatable
@@ -473,36 +450,8 @@ export const workflowAPI = {
     slug: string,
   ): Promise<{ name: string; type: string }[]> =>
     apiGet(`${BASE}/api/data-tables/${encodeURIComponent(slug)}/columns`),
-  // include names projects that must come back even when the caller cannot
-  // reach them — a workflow's saved workspace, so the picker shows what is
-  // actually configured instead of silently falling back to "(use run
-  // workspace)". Those come flagged no_access.
-  projectOptions: (
-    include: string[] = [],
-  ): Promise<{ id: string; name: string; path: string; no_access?: boolean }[]> =>
-    apiGet(
-      `${BASE}/projects/options` +
-        (include.length ? `?include=${encodeURIComponent(include.join(","))}` : ""),
-    ),
-
-  // Whose access a run borrows, and whether that identity (and you) can
-  // reach the chosen workspace. See spa_workflow_run_identity.go.
-  runIdentity: (
-    id: string,
-    project: string,
-  ): Promise<{
-    owner_id: string;
-    owner_label: string;
-    owner_known: boolean;
-    project_id: string;
-    project_name: string;
-    project_exists: boolean;
-    owner_access: boolean;
-    viewer_access: boolean;
-  }> =>
-    apiGet(
-      `${BASE}/api/workflows/run-identity/${encodeURIComponent(id)}?project=${encodeURIComponent(project)}`,
-    ),
+  projectOptions: (): Promise<{ id: string; name: string; path: string }[]> =>
+    apiGet(`${BASE}/projects/options`),
 
   // Workflow env (Settings tab) — schema from draft body, values from
   // env_values column. Secret fields come back as wick_enc_ tokens.
@@ -548,13 +497,6 @@ export const workflowAPI = {
 
   deleteRun: (id: string, runID: string): Promise<{ ok: boolean }> =>
     apiPost(`${BASE}/api/workflows/runs/${encodeURIComponent(id)}/${encodeURIComponent(runID)}/delete`, {}),
-
-  // Clear the whole run history for a workflow. Returns how many run
-  // folders went away, so the caller can report "Deleted 412 runs"
-  // instead of a bare success. Ignores the panel's list filters by
-  // design — see spaWorkflowRunsDeleteAll.
-  deleteAllRuns: (id: string): Promise<{ ok: boolean; deleted: number }> =>
-    apiPost(`${BASE}/api/workflows/runs/${encodeURIComponent(id)}/delete-all`, {}),
 
   // Re-run a past run: re-fires the current draft with that run's original
   // trigger event (same input). Returns {ok}; caller refreshes the runs list.

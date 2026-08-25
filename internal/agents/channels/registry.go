@@ -43,12 +43,6 @@ type Registry struct {
 	approveFn      RegistryApproveFn
 	publicURL      string
 
-	// bgRecheck is the background sub-agent re-check probe. Set after the
-	// registry is built (the delegation service that answers it is wired
-	// later), so it is pushed to channels already added and to every one
-	// added afterwards. Guarded by mu.
-	bgRecheck BackgroundRecheckFn
-
 	mu           sync.Mutex
 	channels     []Channel
 	sources      map[string]ConfigSource // by Channel.Name()
@@ -207,9 +201,6 @@ func (r *Registry) Add(c Channel, src ConfigSource) {
 	}
 
 	r.mu.Lock()
-	if x, ok := c.(BackgroundRecheckSetter); ok && r.bgRecheck != nil {
-		x.SetBackgroundRecheck(r.bgRecheck)
-	}
 	r.channels = append(r.channels, c)
 	if src != nil {
 		r.sources[c.Name()] = src
@@ -254,9 +245,6 @@ func (r *Registry) AddKeyed(instanceKey string, c Channel, src ConfigSource) {
 	}
 
 	r.mu.Lock()
-	if x, ok := c.(BackgroundRecheckSetter); ok && r.bgRecheck != nil {
-		x.SetBackgroundRecheck(r.bgRecheck)
-	}
 	r.channels = append(r.channels, c)
 	r.instanceKeys[c] = instanceKey
 	if src != nil {
@@ -396,12 +384,7 @@ func (r *Registry) ChannelByKey(instanceKey string) Channel {
 }
 
 // SendFuncFor returns the registry's shared sendFn (used when dynamically adding channels).
-// Nil means boot never called WithSendFunc; the channel handed it will
-// refuse messages instead of reaching the pool, so it is logged loudly.
-func (r *Registry) SendFuncFor(channelType string) SendFunc {
-	if r.sendFn == nil {
-		log.Error().Str("channel", channelType).Msg("channels: no pool dispatch wired; channel added at runtime cannot send")
-	}
+func (r *Registry) SendFuncFor(_ string) SendFunc {
 	return r.sendFn
 }
 
@@ -505,7 +488,6 @@ func (r *Registry) StartAll(ctx context.Context) {
 		}
 		ch := c // capture
 		go func() {
-			defer RecoverPanic(ch.Name(), "start")
 			if err := ch.Start(ctx); err != nil {
 				log.Error().Str("channel", ch.Name()).Err(err).Msg("channel stopped")
 			}
@@ -631,40 +613,6 @@ func (r *Registry) DispatchDetachedSurvivors(sessionID string, survivors []Detac
 	for _, c := range r.Channels() {
 		if x, ok := c.(DetachedNoticeReceiver); ok {
 			x.OnDetachedSurvivors(sessionID, survivors)
-		}
-	}
-}
-
-// SetBackgroundRecheck installs the background sub-agent re-check probe on
-// every channel that takes one, now and for channels added later.
-func (r *Registry) SetBackgroundRecheck(fn BackgroundRecheckFn) {
-	r.mu.Lock()
-	r.bgRecheck = fn
-	chs := append([]Channel(nil), r.channels...)
-	r.mu.Unlock()
-	for _, c := range chs {
-		if x, ok := c.(BackgroundRecheckSetter); ok {
-			x.SetBackgroundRecheck(fn)
-		}
-	}
-}
-
-// DispatchBackgroundStart tells every interested channel that a background
-// sub-agent was just fired from sessionID.
-func (r *Registry) DispatchBackgroundStart(sessionID string, agent DetachedSurvivor, task string, queued bool) {
-	for _, c := range r.Channels() {
-		if x, ok := c.(BackgroundWorkReceiver); ok {
-			x.OnBackgroundStart(sessionID, agent, task, queued)
-		}
-	}
-}
-
-// DispatchBackgroundAgents hands every interested channel the current set of
-// background sub-agents still working under sessionID.
-func (r *Registry) DispatchBackgroundAgents(sessionID string, active []DetachedSurvivor) {
-	for _, c := range r.Channels() {
-		if x, ok := c.(BackgroundWorkReceiver); ok {
-			x.OnBackgroundAgents(sessionID, active)
 		}
 	}
 }

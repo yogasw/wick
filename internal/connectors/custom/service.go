@@ -14,7 +14,6 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/yogasw/wick/internal/connectors"
 	"github.com/yogasw/wick/internal/entity"
-	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/tool"
@@ -731,15 +730,12 @@ func serverIDOf(d *Draft) string {
 
 // ── paste parsing ────────────────────────────────────────────────────
 
-// maxPasteBytes caps one paste; one endpoint never needs more.
-const maxPasteBytes = 8 * 1024
-
 // ParsePaste runs the requested parser over the paste box content and
 // returns the review-form draft. parser is "curl" (deterministic,
 // default) or "ai" (LLM extraction; requires a configured provider).
 func (s *Service) ParsePaste(ctx context.Context, parser, provider, paste string) (*Draft, error) {
-	if err := CheckPasteSize(paste); err != nil {
-		return nil, err
+	if len(paste) > 8*1024 {
+		return nil, fmt.Errorf("paste is larger than 8 KB — trim it down to a single endpoint")
 	}
 	switch parser {
 	case "", "curl":
@@ -789,15 +785,6 @@ type ServerForm struct {
 	// OAuthLoginID references a completed in-flight browser login —
 	// the test/save endpoints resolve it to the session's tokens.
 	OAuthLoginID string `json:"oauth_login_id"`
-	// OAuthPerUser (oauth scheme) = "users connect their own account
-	// (SSO)": save needs no Test/login — discovery + dynamic registration
-	// run server-side — and the instance turns Enable SSO + Allow others
-	// to connect via SSO on, so each wick user connects their own
-	// ConnectorAccount to the one instance.
-	OAuthPerUser bool `json:"oauth_per_user"`
-	// OAuthRedirectURI is the callback the dynamic registration names —
-	// set by the handler, never by the client.
-	OAuthRedirectURI string `json:"-"`
 }
 
 // OAuthFormExtra is the optional client override for the oauth scheme.
@@ -874,8 +861,7 @@ func (s *Service) SaveServer(ctx context.Context, f *ServerForm, testedOK bool, 
 	if err := f.validate(); err != nil {
 		return nil, "", "", err
 	}
-	perUser := f.AuthScheme == "oauth" && f.OAuthPerUser
-	if !testedOK && !perUser {
+	if !testedOK {
 		return nil, "", "", fmt.Errorf("test the connection successfully before saving")
 	}
 
@@ -959,13 +945,6 @@ func (s *Service) SaveServer(ctx context.Context, f *ServerForm, testedOK bool, 
 			_ = s.store.DeleteServer(ctx, row.ID)
 			return nil, "", "", err
 		}
-		if perUser {
-			instanceID, err = s.seedPerUserInstance(ctx, def, instanceID, f.OAuthLoginID, createdBy)
-			if err != nil {
-				return nil, "", "", err
-			}
-			return row, def.Key, instanceID, nil
-		}
 		// The oauth register flow already holds a logged-in account —
 		// land it as the first instance so save means "connector +
 		// connected account" in one step.
@@ -1024,85 +1003,7 @@ func (s *Service) SaveServer(ctx context.Context, f *ServerForm, testedOK bool, 
 	if err != nil {
 		return nil, "", "", err
 	}
-	if perUser {
-		// Opting an existing server into per-user mode turns SSO on for
-		// every instance; turning it back off is the Access policy card's
-		// job, per instance.
-		rows, _ := s.conns.ListByKey(ctx, def.Key)
-		for _, r := range rows {
-			if err := s.enablePerUserPolicy(ctx, r); err != nil {
-				return nil, "", "", err
-			}
-		}
-	}
 	return row, def.Key, instanceID, nil
-}
-
-// seedPerUserInstance makes sure a fresh per-user (SSO) connector has its
-// first instance with Enable SSO + Allow others to connect via SSO on.
-// A Test login that rode the register form is NOT the instance
-// credential in this mode — it becomes the admin's own ConnectorAccount.
-func (s *Service) seedPerUserInstance(ctx context.Context, def *entity.CustomConnector, instanceID, loginID, createdBy string) (string, error) {
-	if instanceID == "" {
-		inst, err := s.conns.Create(ctx, def.Key, def.Name, map[string]string{}, createdBy)
-		if err != nil {
-			return "", fmt.Errorf("create first instance: %w", err)
-		}
-		s.ensureTagsForDef(ctx, def)
-		instanceID = inst.ID
-	}
-	row, err := s.conns.Get(ctx, instanceID)
-	if err != nil {
-		return "", err
-	}
-	if err := s.enablePerUserPolicy(ctx, *row); err != nil {
-		return "", err
-	}
-	if login, ok := s.logins.get(loginID); ok && login.Tokens != nil && createdBy != "" {
-		label := login.Account
-		if label == "" {
-			label = createdBy
-		}
-		if err := s.saveAccountTokens(ctx, instanceID, createdBy, label, login.Tokens); err != nil {
-			log.Warn().Err(err).Msg("attach test login as the admin's account")
-		} else if _, err := s.registerAndSeedFor(ctx, def, instanceID); err != nil {
-			log.Warn().Err(err).Msg("sync ops after attaching the admin's account")
-		}
-	}
-	return instanceID, nil
-}
-
-// enablePerUserPolicy turns the SSO switches per-user mode needs on,
-// keeping the row's other policy bits. MultiAccount goes on too: with it
-// off the account slot is single, so a second user connecting would
-// replace the first user's account.
-func (s *Service) enablePerUserPolicy(ctx context.Context, row entity.Connector) error {
-	if err := s.markPerUser(ctx, row.ID); err != nil {
-		return err
-	}
-	if row.EnableSSO && row.AllowOthersConnectSSO && row.MultiAccount {
-		return nil
-	}
-	return s.conns.SetAccessPolicy(ctx, row.ID, connectors.AccessPolicy{
-		AllowOthersConfigure:   row.AllowOthersConfigure,
-		AllowOthersConnectSSO:  true,
-		EnableSSO:              true,
-		MultiAccount:           true,
-		AllowOthersSeeAccounts: row.AllowOthersSeeAccounts,
-	})
-}
-
-// OAuthPerUser reports whether a connector's oauth MCP instances run in
-// per-user (SSO) mode — any instance InstancePerUser. The edit form
-// prefills its checkbox from it.
-func (s *Service) OAuthPerUser(ctx context.Context, key string) bool {
-	rows, _ := s.conns.ListByKey(ctx, key)
-	for _, r := range rows {
-		if s.InstancePerUser(r) {
-			return true
-		}
-	}
-	return false
 }
 
 // ensureDefForServer creates the connector definition backing a fresh
@@ -1178,14 +1079,6 @@ func (s *Service) ProbeStored(ctx context.Context, serverID string, caller *SSOC
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	if row.AuthScheme == "oauth" {
-		if def := s.defForServer(ctx, row.ID); def != nil && s.OAuthPerUser(ctx, def.Key) {
-			// Per-user (SSO) server: there is no server-wide credential, so
-			// a tokenless tools/list could only fail — and would flip the
-			// connector to Disconnected for everyone. Skip it.
-			return ProbeResult{OK: false, NeedsLogin: true, Error: "per-user login — operations sync when an account connects"}, nil
-		}
-	}
 	res := s.mcp(nil).Probe(ctx, srv, caller)
 	now := time.Now()
 	row.LastTestAt = &now
@@ -1228,24 +1121,6 @@ func (s *Service) ProbeInstance(ctx context.Context, instanceID string, caller *
 	srv, err := resolveServerConfig(srvRow.URL, srvRow.AuthScheme, srvRow.AuthSecret, srvRow.AuthHeaders, srvRow.AuthExtra, srvRow.Headers)
 	if err != nil {
 		return ProbeResult{}, err
-	}
-	if srvRow.AuthScheme == "oauth" && s.InstancePerUser(*row) {
-		// Per-user (SSO) instance: test the viewer's own account.
-		meta := parseOAuthMeta(srvRow.AuthExtra)
-		var uid string
-		if u := login.GetUser(ctx); u != nil {
-			uid = u.ID
-		}
-		acc, aerr := s.callerAccount(ctx, *row, "", uid)
-		if aerr != nil {
-			return ProbeResult{OK: false, Error: "you have not connected your own account — use Connect my account"}, nil
-		}
-		tok, terr := s.accountAccessToken(ctx, &meta, acc)
-		if terr != nil {
-			return ProbeResult{OK: false, Error: terr.Error()}, nil
-		}
-		srv.AccessToken = tok
-		return s.mcp(nil).Probe(ctx, srv, caller), nil
 	}
 	if srvRow.AuthScheme == "oauth" {
 		meta := parseOAuthMeta(srvRow.AuthExtra)
@@ -1308,7 +1183,7 @@ func mapInputSchema(schema map[string]any) []DefField {
 			f.Widget = "number"
 		case typ == "boolean":
 			f.Widget = "checkbox"
-		case typ == "object" || typ == "array" || schemaTakesStructured(spec, 0):
+		case typ == "object" || typ == "array":
 			f.Widget = "textarea"
 			if f.Desc != "" {
 				f.Desc += " "
@@ -1328,63 +1203,6 @@ func mapInputSchema(schema map[string]any) []DefField {
 		out = append(out, f)
 	}
 	return out
-}
-
-// schemaTakesStructured reports whether an MCP property schema can carry
-// an object or array value even though its top-level "type" is not the
-// plain string "object"/"array".
-//
-// A server may express that three other ways: a type UNION
-// ("type": ["object","null"]), a COMBINATOR (anyOf/oneOf/allOf holding
-// object branches), or a bare shape with "properties"/"items" and no
-// "type" at all. mapInputSchema only looked at "type" as a string, so
-// such a field fell through to the default "text" widget — wick then
-// advertised an object parameter as a plain string, and coerceArgs left
-// a caller's JSON stringified, which the server's own validator rejects
-// ("expected object, received string"). n8n's execute_workflow is the
-// live case: its "inputs" is an anyOf of three object shapes.
-//
-// depth bounds the combinator walk so a self-referential schema cannot
-// spin here.
-func schemaTakesStructured(spec map[string]any, depth int) bool {
-	if spec == nil || depth > 3 {
-		return false
-	}
-	switch t := spec["type"].(type) {
-	case string:
-		if t == "object" || t == "array" {
-			return true
-		}
-	case []any:
-		for _, v := range t {
-			if s, ok := v.(string); ok && (s == "object" || s == "array") {
-				return true
-			}
-		}
-	}
-	// A shape declared only by its members, with the type left implicit.
-	if _, ok := spec["properties"].(map[string]any); ok {
-		return true
-	}
-	if _, ok := spec["items"]; ok {
-		return true
-	}
-	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
-		branches, ok := spec[key].([]any)
-		if !ok {
-			continue
-		}
-		for _, b := range branches {
-			sub, ok := b.(map[string]any)
-			if !ok {
-				continue
-			}
-			if schemaTakesStructured(sub, depth+1) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func hostOf(raw string) string {

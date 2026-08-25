@@ -77,27 +77,14 @@ func NewProviderAIParser(p wfprovider.Provider) AIParser {
 }
 
 func (p *providerAIParser) Parse(ctx context.Context, paste string) (*ParsedRequest, error) {
-	req := AIParseRequest(paste)
-	res, err := p.prov.StructuredCall(ctx, req)
+	prompt := strings.ReplaceAll(aiPromptTemplate, "{{PASTE}}", paste)
+	res, err := p.prov.StructuredCall(ctx, wfprovider.StructuredRequest{
+		Prompt: prompt,
+		Schema: parsedRequestSchema,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("AI parser: %w", err)
 	}
-	return ParsedFromAIResult(res)
-}
-
-// AIParseRequest is the one structured call the AI tab makes for a
-// paste. Shared by the synchronous parser above and the queued
-// "connector-parse" generate job, so both send the same prompt.
-func AIParseRequest(paste string) wfprovider.StructuredRequest {
-	return wfprovider.StructuredRequest{
-		Prompt: strings.ReplaceAll(aiPromptTemplate, "{{PASTE}}", paste),
-		Schema: parsedRequestSchema,
-	}
-}
-
-// ParsedFromAIResult validates and normalizes the provider's answer to
-// an AIParseRequest.
-func ParsedFromAIResult(res wfprovider.StructuredResult) (*ParsedRequest, error) {
 	if !res.OK || res.Parsed == nil {
 		msg := res.Error
 		if msg == "" {
@@ -122,23 +109,4 @@ func ParsedFromAIResult(res wfprovider.StructuredResult) (*ParsedRequest, error)
 		parsed.ContentType = "application/json"
 	}
 	return &parsed, nil
-}
-
-// DraftFromAIResult is ParsedFromAIResult followed by the same Extract
-// step ParsePaste runs — the review-form draft the AI tab lands on.
-func DraftFromAIResult(res wfprovider.StructuredResult) (*Draft, error) {
-	parsed, err := ParsedFromAIResult(res)
-	if err != nil {
-		return nil, err
-	}
-	return Extract(parsed)
-}
-
-// CheckPasteSize is the size rule ParsePaste applies, exposed so the
-// queued path rejects an oversized paste with the same message.
-func CheckPasteSize(paste string) error {
-	if len(paste) > maxPasteBytes {
-		return fmt.Errorf("paste is larger than 8 KB — trim it down to a single endpoint")
-	}
-	return nil
 }

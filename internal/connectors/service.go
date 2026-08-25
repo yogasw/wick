@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"net/http"
 	"strings"
 	"sync"
@@ -17,10 +16,7 @@ import (
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/enc"
 	"github.com/yogasw/wick/internal/entity"
-	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/metrics"
-	"github.com/yogasw/wick/internal/pkg/adminscope"
-	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/pkg/connector"
 	"github.com/yogasw/wick/pkg/tool"
 )
@@ -187,7 +183,7 @@ type Service struct {
 	// set of runIDs) so CancelSession can abort every op bound to a live session
 	// at once. Both guarded by inflightMu.
 	inflightMu sync.Mutex
-	inflight   map[string]context.CancelFunc  // runID -> cancel
+	inflight   map[string]context.CancelFunc // runID -> cancel
 	bySession  map[string]map[string]struct{} // sessionID -> set of runIDs
 }
 
@@ -196,22 +192,6 @@ type Service struct {
 // trivial.
 type tagSeeder interface {
 	EnsureToolDefaultTags(ctx context.Context, toolPath string, defaults []tool.DefaultTag) error
-}
-
-// tagSwapper is the optional half of a tagSeeder that re-tags rows seeded
-// before their connector's DefaultTags changed.
-type tagSwapper interface {
-	SwapToolTag(ctx context.Context, toolPath, from string, to tool.DefaultTag) error
-}
-
-// retiredTags lists, per connector key, a tag an older build seeded that
-// DefaultTags has since replaced. EnsureToolDefaultTags never touches a
-// row that already has links, so without this the old tag would stick.
-var retiredTags = map[string]struct {
-	from string
-	to   tool.DefaultTag
-}{
-	"notifications": {from: tags.Communication.Name, to: tags.Platform},
 }
 
 // SetTags wires the tags service used to attach Meta.DefaultTags onto
@@ -312,17 +292,8 @@ func (s *Service) SetConfigs(c *configs.Service) {
 // HTTP client. The HTTP client is the one Ctx.HTTP exposes to every
 // ExecuteFunc — replace with a custom client at construction time when
 // tests need a transport hook.
-// InflightCount is how many connector operations are executing right now. A
-// single op can legitimately take minutes (a big Metabase query, a slow
-// third-party API), which is exactly why a restart must not cut it off.
-func (s *Service) InflightCount() int {
-	s.inflightMu.Lock()
-	defer s.inflightMu.Unlock()
-	return len(s.inflight)
-}
-
 func NewService(r *Repo) *Service {
-	svc := &Service{
+	return &Service{
 		repo:       r,
 		httpClient: connector.NewHTTPClient(),
 		modules:    make(map[string]connector.Module),
@@ -331,8 +302,6 @@ func NewService(r *Repo) *Service {
 		inflight:   make(map[string]context.CancelFunc),
 		bySession:  make(map[string]map[string]struct{}),
 	}
-	upgrade.Register("connector ops", svc.InflightCount)
-	return svc
 }
 
 // SetMetrics wires a telemetry recorder into the service. Call once at
@@ -555,14 +524,13 @@ func (s *Service) seedModuleRows(ctx context.Context, m connector.Module) error 
 	}
 	if n == 0 && m.Meta.Fixed {
 		row := &entity.Connector{
-			Key:                    m.Meta.Key,
-			Label:                  m.Meta.Name,
-			AllowSessionConfig:     m.AllowSessionConfig,
-			EnableSSO:              m.DefaultAccess.EnableSSO,
-			AllowOthersConnectSSO:  m.DefaultAccess.AllowOthersConnectSSO,
-			MultiAccount:           m.DefaultAccess.MultiAccount,
-			AllowOthersConfigure:   m.DefaultAccess.AllowOthersConfigure,
-			AllowOthersSeeAccounts: m.DefaultAccess.AllowOthersSeeAccounts,
+			Key:                   m.Meta.Key,
+			Label:                 m.Meta.Name,
+			AllowSessionConfig:    m.AllowSessionConfig,
+			EnableSSO:             m.DefaultAccess.EnableSSO,
+			AllowOthersConnectSSO: m.DefaultAccess.AllowOthersConnectSSO,
+			MultiAccount:          m.DefaultAccess.MultiAccount,
+			AllowOthersConfigure:  m.DefaultAccess.AllowOthersConfigure,
 		}
 		if err := s.repo.Create(ctx, row); err != nil {
 			return fmt.Errorf("seed initial row for %q: %w", m.Meta.Key, err)
@@ -589,13 +557,6 @@ func (s *Service) seedModuleRows(ctx context.Context, m connector.Module) error 
 			path := "/connectors/" + row.ID
 			if err := s.tags.EnsureToolDefaultTags(ctx, path, m.Meta.DefaultTags); err != nil {
 				return fmt.Errorf("ensure tags for %q: %w", row.ID, err)
-			}
-			if r, ok := retiredTags[m.Meta.Key]; ok {
-				if sw, ok := s.tags.(tagSwapper); ok {
-					if err := sw.SwapToolTag(ctx, path, r.from, r.to); err != nil {
-						return fmt.Errorf("swap tag for %q: %w", row.ID, err)
-					}
-				}
 			}
 		}
 	}
@@ -689,15 +650,14 @@ func (s *Service) Create(ctx context.Context, key, label string, configs map[str
 		}
 	}
 	c := &entity.Connector{
-		Key:                    key,
-		Label:                  label,
-		CreatedBy:              createdBy,
-		AllowSessionConfig:     mod.AllowSessionConfig,
-		EnableSSO:              mod.DefaultAccess.EnableSSO,
-		AllowOthersConnectSSO:  mod.DefaultAccess.AllowOthersConnectSSO,
-		MultiAccount:           mod.DefaultAccess.MultiAccount,
-		AllowOthersConfigure:   mod.DefaultAccess.AllowOthersConfigure,
-		AllowOthersSeeAccounts: mod.DefaultAccess.AllowOthersSeeAccounts,
+		Key:                   key,
+		Label:                 label,
+		CreatedBy:             createdBy,
+		AllowSessionConfig:    mod.AllowSessionConfig,
+		EnableSSO:             mod.DefaultAccess.EnableSSO,
+		AllowOthersConnectSSO: mod.DefaultAccess.AllowOthersConnectSSO,
+		MultiAccount:          mod.DefaultAccess.MultiAccount,
+		AllowOthersConfigure:  mod.DefaultAccess.AllowOthersConfigure,
 	}
 	if err := s.repo.Create(ctx, c); err != nil {
 		return nil, err
@@ -733,29 +693,13 @@ func (s *Service) List(ctx context.Context) ([]entity.Connector, error) {
 
 // ListVisibleTo returns the not-disabled connector rows the caller
 // can access, applying the same tag-filter rule as Tools (see
-// Repo.ListAccessibleTo). Pass isAdmin=true to bypass tag filtering —
-// admins see every row whether or not they carry the row's tags, unless
-// the admin_see_all_connectors knob is off (see AdminSeesAllConnectors).
+// Repo.ListAccessibleTo). Pass isAdmin=true to bypass tag filtering
+// — admins see every row whether or not they carry the row's tags.
 //
 // Use this from MCP tools/list and any user-facing surface that
 // enumerates connectors; only the admin manager should call List.
-//
-// Rows the caller CREATED are included regardless of tags, the same rule
-// ListForManager applies — otherwise a creator can administer a row from
-// the dashboard while their own agent session cannot see it, which is how
-// an admin-created custom connector ended up present in /admin/connectors
-// and absent from wick_list. See ownershipReaches for when this applies.
-func (s *Service) ListVisibleTo(ctx context.Context, userID string, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
-	rows, err := s.listVisibleTo(ctx, userID, userTagIDs, isAdmin)
-	if err != nil {
-		return nil, err
-	}
-	// An agent session sees only its checklist, whatever its owner reaches.
-	return filterRowsByScope(ctx, rows), nil
-}
-
-func (s *Service) listVisibleTo(ctx context.Context, userID string, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
-	if s.adminBypass(isAdmin) {
+func (s *Service) ListVisibleTo(ctx context.Context, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
+	if isAdmin {
 		rows, err := s.repo.List(ctx)
 		if err != nil {
 			return nil, err
@@ -770,67 +714,7 @@ func (s *Service) listVisibleTo(ctx context.Context, userID string, userTagIDs [
 		}
 		return filtered, nil
 	}
-	rows, err := s.repo.ListAccessibleTo(ctx, userTagIDs)
-	if err != nil {
-		return nil, err
-	}
-	if !s.ownershipReaches(ctx, userID) {
-		return rows, nil
-	}
-	owned, err := s.repo.ListOwnedBy(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	seen := make(map[string]struct{}, len(rows))
-	for _, r := range rows {
-		seen[r.ID] = struct{}{}
-	}
-	for _, r := range owned {
-		// Disabled rows stay out of every MCP/test surface, owned or not —
-		// the tag query already excludes them and an owner is no exception.
-		if r.Disabled {
-			continue
-		}
-		if _, dup := seen[r.ID]; dup {
-			continue
-		}
-		seen[r.ID] = struct{}{}
-		rows = append(rows, r)
-	}
-	return rows, nil
-}
-
-// ownershipReaches reports whether ownership may widen what this caller
-// sees. False for an anonymous caller — CreatedBy "" must never match
-// userID "", which would hand every ownerless row to an unauthenticated
-// request — and false for an already-narrowed principal, where a
-// sub-agent would otherwise inherit its parent's rows past the profile's
-// allow list (see login.WithScopedUser).
-func (s *Service) ownershipReaches(ctx context.Context, userID string) bool {
-	return userID != "" && !login.IsScopedPrincipal(ctx)
-}
-
-// AdminSeesAllConnectors reports whether an admin bypasses tag filtering on
-// connector instances and account visibility — the admin_see_all_connectors
-// knob, which is deliberately NOT the same switch as the sessions/projects
-// one: answering both with one switch is how an admin who wanted to see a
-// project ends up able to post as somebody else's Slack account.
-//
-// Missing/blank config reads as ON — the behaviour every install had before
-// the knob existed. Only an explicit "false" scopes admins like regular
-// users. The /admin/connectors panel is NOT affected: it is the
-// administration surface and always lists everything.
-func (s *Service) AdminSeesAllConnectors() bool {
-	if s.cfgs == nil {
-		return true
-	}
-	return adminscope.AdminSeeAllConnectors(s.cfgs)
-}
-
-// adminBypass reports whether this caller's admin role currently bypasses
-// tag filtering — isAdmin AND the knob.
-func (s *Service) adminBypass(isAdmin bool) bool {
-	return isAdmin && s.AdminSeesAllConnectors()
+	return s.repo.ListAccessibleTo(ctx, userTagIDs)
 }
 
 // FilterBotSlot removes non-SSO instance rows from a row set when at least
@@ -873,87 +757,36 @@ func (s *Service) FilterBotSlot(rows []entity.Connector) []entity.Connector {
 // IsVisibleTo reports whether a single connector row is accessible to
 // the caller. Used by tools/call to re-check authorization at dispatch
 // time so a stale tools/list snapshot can't be replayed for access.
-//
-// Must agree with ListVisibleTo, ownership included: a row the caller can
-// see but not dispatch is a listing that lies.
-func (s *Service) IsVisibleTo(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (bool, error) {
-	if scope := AgentScopeFrom(ctx); scope != nil && !scope.AllowConnector(connectorID) {
-		return false, nil
-	}
-	if fs, ok := AgentScopeFrom(ctx).(AgentFeatureScope); ok {
-		row, err := s.repo.Get(ctx, connectorID)
-		if err != nil {
-			return false, err
-		}
-		if !fs.AllowKey(row.Key) {
-			return false, nil
-		}
-	}
-	if s.adminBypass(isAdmin) {
+func (s *Service) IsVisibleTo(ctx context.Context, connectorID string, userTagIDs []string, isAdmin bool) (bool, error) {
+	if isAdmin {
 		c, err := s.repo.Get(ctx, connectorID)
 		if err != nil {
 			return false, err
 		}
 		return !c.Disabled, nil
 	}
-	if s.ownershipReaches(ctx, userID) {
-		row, err := s.repo.Get(ctx, connectorID)
-		if err == nil && !row.Disabled && OwnsConnector(*row, userID) {
-			return true, nil
-		}
-	}
 	return s.repo.IsAccessibleTo(ctx, connectorID, userTagIDs)
 }
 
 // ListForManager returns rows the caller can see in the admin manager.
 // Unlike ListVisibleTo, disabled rows are included so users can re-
-// enable or delete them. Admins see every row while
-// admin_see_all_connectors is on.
-//
-// Rows the caller CREATED are always included, regardless of tags. A new
-// instance inherits the connector type's default tags, which are usually
-// filter tags the creator does not carry — so without this the person who
-// just made an instance could not see it, and with
-// admin_see_all_connectors off not even being an admin helped. Creating
-// something and immediately losing it is not an access policy.
-func (s *Service) ListForManager(ctx context.Context, userID string, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
-	if s.adminBypass(isAdmin) {
+// enable or delete them. Admins see every row.
+func (s *Service) ListForManager(ctx context.Context, userTagIDs []string, isAdmin bool) ([]entity.Connector, error) {
+	if isAdmin {
 		return s.repo.List(ctx)
 	}
-	rows, err := s.repo.ListAccessibleForManager(ctx, userTagIDs)
-	if err != nil {
-		return nil, err
-	}
-	owned, err := s.repo.ListOwnedBy(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	seen := make(map[string]struct{}, len(rows))
-	for _, r := range rows {
-		seen[r.ID] = struct{}{}
-	}
-	for _, r := range owned {
-		if _, dup := seen[r.ID]; !dup {
-			rows = append(rows, r)
-		}
-	}
-	return rows, nil
+	return s.repo.ListAccessibleForManager(ctx, userTagIDs)
 }
 
 // IsManageableBy reports whether the caller may operate on a row from
 // the manager UI. Disabled rows are still manageable — the caller may
 // be re-enabling them.
-//
-// Three ways in, and ownership is one of them: admin while
-// admin_see_all_connectors is on, the row's creator, or a tag the row
-// carries. Ownership used to be missing, which is how a freshly created
-// instance answered "connector not found" to the person who created it.
-func (s *Service) IsManageableBy(ctx context.Context, connectorID, userID string, userTagIDs []string, isAdmin bool) (bool, error) {
-	row, err := s.repo.Get(ctx, connectorID)
-	if err != nil {
-		return false, err
-	}
-	if s.adminBypass(isAdmin) || OwnsConnector(*row, userID) {
+func (s *Service) IsManageableBy(ctx context.Context, connectorID string, userTagIDs []string, isAdmin bool) (bool, error) {
+	if isAdmin {
+		_, err := s.repo.Get(ctx, connectorID)
+		if err != nil {
+			return false, err
+		}
 		return true, nil
 	}
 	return s.repo.IsAccessibleForManager(ctx, connectorID, userTagIDs)
@@ -994,14 +827,6 @@ func (s *Service) SetDisabled(ctx context.Context, id string, disabled bool) err
 	return s.repo.SetDisabled(ctx, id, disabled)
 }
 
-// SetOwner re-stamps the instance's owner — the user OwnsConnector reads.
-// Admin-only by construction: the only caller is the admin connectors page,
-// because an owner who could hand ownership on would also be handing on the
-// right to see every account connected to the row.
-func (s *Service) SetOwner(ctx context.Context, id, userID string) error {
-	return s.repo.SetCreatedBy(ctx, id, userID)
-}
-
 // SetDescription updates the per-instance AI-facing description (empty clears).
 func (s *Service) SetDescription(ctx context.Context, id, description string) error {
 	return s.repo.SetDescription(ctx, id, description)
@@ -1016,16 +841,14 @@ func (s *Service) SetRateLimit(ctx context.Context, id string, rpm int) error {
 // ── ConnectorAccount ─────────────────────────────────────────────────
 
 // ListAccounts returns all connected OAuth accounts for a connector instance.
-// ListAccountsFor is ListAccounts for many instances at once — one query
-// instead of one per row. See Repo.ListAccountsFor.
-func (s *Service) ListAccountsFor(ctx context.Context, connectorIDs []string) (map[string][]entity.ConnectorAccount, error) {
-	return s.repo.ListAccountsFor(ctx, connectorIDs)
-}
-
 func (s *Service) ListAccounts(ctx context.Context, connectorID string) ([]entity.ConnectorAccount, error) {
 	return s.repo.ListAccounts(ctx, connectorID)
 }
 
+// SaveAccount persists a connected OAuth account. Respects MultiAccount
+// from the connector row: false = replace existing, true = add new.
+// wickUserID is the wick platform user who initiated the OAuth flow.
+// externalUserID is the provider-side user ID from GetUserIdentity.
 func (s *Service) SaveAccount(ctx context.Context, connectorID, wickUserID, externalUserID, displayName, accessToken string) error {
 	row, err := s.repo.Get(ctx, connectorID)
 	if err != nil {
@@ -1041,125 +864,25 @@ func (s *Service) SaveAccount(ctx context.Context, connectorID, wickUserID, exte
 	return s.repo.UpsertAccount(ctx, acc, row.MultiAccount)
 }
 
-// SaveAccountTokens is SaveAccount for flows that also carry a refresh
-// token and expiry (OAuth MCP per-user connect). Same MultiAccount upsert
-// rules as SaveAccount.
-func (s *Service) SaveAccountTokens(ctx context.Context, connectorID, wickUserID, externalUserID, displayName, accessToken, refreshToken string, expiresAt *time.Time) error {
-	row, err := s.repo.Get(ctx, connectorID)
-	if err != nil {
-		return err
-	}
-	acc := &entity.ConnectorAccount{
-		ConnectorID:    connectorID,
-		WickUserID:     wickUserID,
-		ExternalUserID: externalUserID,
-		DisplayName:    displayName,
-		AccessToken:    accessToken,
-		RefreshToken:   refreshToken,
-		ExpiresAt:      expiresAt,
-		UpdatedAt:      time.Now(),
-	}
-	return s.repo.UpsertAccount(ctx, acc, row.MultiAccount)
-}
-
-// UpdateAccountTokens persists a refreshed token set onto one account.
-func (s *Service) UpdateAccountTokens(ctx context.Context, accountID, accessToken, refreshToken string, expiresAt *time.Time) error {
-	return s.repo.UpdateAccountTokens(ctx, accountID, accessToken, refreshToken, expiresAt)
-}
-
 // DeleteAccount removes one connected account by ID.
 func (s *Service) DeleteAccount(ctx context.Context, accountID string) error {
 	return s.repo.DeleteAccount(ctx, accountID)
 }
 
-// AccountOpState values accepted by SetAccountOpOverride.
-const (
-	// AccountOpInherit drops the override so the account follows the instance.
-	AccountOpInherit = "inherit"
-	// AccountOpOn forces the operation on for this account even when the
-	// instance has it off.
-	AccountOpOn = "on"
-	// AccountOpOff forces it off even when the instance has it on.
-	AccountOpOff = "off"
-)
-
-// SetAccountOpOverride sets one operation's state for one account.
-//
-// "inherit" DELETES the key rather than storing a value: an override that
-// happens to agree with the instance today would silently stop agreeing the
-// moment the instance changed, which is exactly the surprise inheritance is
-// supposed to prevent.
-func (s *Service) SetAccountOpOverride(ctx context.Context, accountID, opKey, state string) error {
-	acc, err := s.repo.GetAccountByID(ctx, accountID)
-	if err != nil {
-		return err
-	}
-	overrides := AccountOpOverrides(acc)
-	if overrides == nil {
-		overrides = map[string]bool{}
-	}
-	switch state {
-	case AccountOpInherit:
-		delete(overrides, opKey)
-	case AccountOpOn:
-		overrides[opKey] = true
-	case AccountOpOff:
-		overrides[opKey] = false
-	default:
-		return fmt.Errorf("unknown account op state %q (want inherit, on or off)", state)
-	}
-	if len(overrides) == 0 {
-		// Store "" rather than "{}" so "has no overrides" is one value, not
-		// two that the reader has to treat alike.
-		return s.repo.SetAccountOpOverrides(ctx, accountID, "")
-	}
-	b, err := json.Marshal(overrides)
-	if err != nil {
-		return err
-	}
-	return s.repo.SetAccountOpOverrides(ctx, accountID, string(b))
-}
-
 // SetAccountDisabledOps updates which operations are disabled for an account.
 // opKeys is the list of op keys to disable — empty slice clears all.
-// Every listed key becomes a forced OFF override and everything else goes
-// back to inheriting, which is what the binary editor this backs means by
-// "unchecked". It writes the override map, not the legacy array, so the two
-// representations can never drift apart.
 func (s *Service) SetAccountDisabledOps(ctx context.Context, accountID string, opKeys []string) error {
-	if len(opKeys) == 0 {
-		return s.repo.SetAccountOpOverrides(ctx, accountID, "")
-	}
-	overrides := make(map[string]bool, len(opKeys))
-	for _, k := range opKeys {
-		overrides[k] = false
-	}
-	b, err := json.Marshal(overrides)
+	b, err := json.Marshal(opKeys)
 	if err != nil {
 		return err
 	}
-	return s.repo.SetAccountOpOverrides(ctx, accountID, string(b))
+	return s.repo.SetAccountDisabledOps(ctx, accountID, string(b))
 }
 
-// AccountOpOverrides parses an account's per-operation overrides into
-// opKey → forced state. A present key means this account overrides the
-// instance; an absent key means it inherits. nil is a perfectly good
-// "inherits everything".
-//
-// Falls back to the legacy DisabledOps array when OpOverrides is empty, so
-// accounts configured before the three-state model keep the behaviour they
-// were given — every key in that array reads as a forced OFF.
-func AccountOpOverrides(acc *entity.ConnectorAccount) map[string]bool {
-	if acc == nil {
-		return nil
-	}
-	if acc.OpOverrides != "" {
-		var m map[string]bool
-		if err := json.Unmarshal([]byte(acc.OpOverrides), &m); err == nil && len(m) > 0 {
-			return m
-		}
-	}
-	if acc.DisabledOps == "" {
+// AccountDisabledOps parses the DisabledOps JSON and returns the set of
+// disabled op keys for fast lookup.
+func AccountDisabledOps(acc *entity.ConnectorAccount) map[string]bool {
+	if acc == nil || acc.DisabledOps == "" {
 		return nil
 	}
 	var keys []string
@@ -1168,71 +891,9 @@ func AccountOpOverrides(acc *entity.ConnectorAccount) map[string]bool {
 	}
 	out := make(map[string]bool, len(keys))
 	for _, k := range keys {
-		out[k] = false
+		out[k] = true
 	}
 	return out
-}
-
-// AccountOpState is one operation's state for one account, resolved: what
-// actually applies, whether that came from an override or from the instance,
-// and what the instance says — so the UI can show "inherited (off)" and
-// "overridden on" as different things rather than one checkbox.
-type AccountOpState struct {
-	Key string
-	// Enabled is what applies to this account right now.
-	Enabled bool
-	// Overridden is true when this account states its own answer; false
-	// means it follows the instance.
-	Overridden bool
-	// Inherited is what the instance says, shown as the value the account
-	// would fall back to when the override is cleared.
-	Inherited bool
-	// SystemDisabled is the health-check lock on the instance. It is a
-	// ceiling, not a default: an override cannot switch an operation back
-	// on when the credential genuinely lacks the upstream permission, so
-	// forcing it would only buy an error from the provider.
-	SystemDisabled bool
-	Reason         string
-}
-
-// ResolveAccountOps resolves every operation in opKeys for one account
-// against the instance's own operation state.
-//
-// Precedence, tightest first: SystemDisabled wins over everything, then the
-// account's own override, then the instance's Enabled flag.
-func ResolveAccountOps(acc *entity.ConnectorAccount, instance map[string]OpState, opKeys []string) []AccountOpState {
-	overrides := AccountOpOverrides(acc)
-	out := make([]AccountOpState, 0, len(opKeys))
-	for _, key := range opKeys {
-		st := instance[key]
-		inherited := st.Enabled && !st.SystemDisabled
-		forced, overridden := overrides[key]
-		enabled := inherited
-		if overridden {
-			enabled = forced && !st.SystemDisabled
-		}
-		out = append(out, AccountOpState{
-			Key:            key,
-			Enabled:        enabled,
-			Overridden:     overridden,
-			Inherited:      inherited,
-			SystemDisabled: st.SystemDisabled,
-			Reason:         st.SystemDisabledReason,
-		})
-	}
-	return out
-}
-
-// AccountOpEnabled answers the single question Execute needs: may this
-// account run this operation? Same precedence as ResolveAccountOps.
-func AccountOpEnabled(acc *entity.ConnectorAccount, opKey string, st OpState) bool {
-	if st.SystemDisabled {
-		return false
-	}
-	if forced, ok := AccountOpOverrides(acc)[opKey]; ok {
-		return forced
-	}
-	return st.Enabled
 }
 
 // GetAccount returns one ConnectorAccount by ID.
@@ -1246,158 +907,13 @@ func (s *Service) ClearSystemDisabled(ctx context.Context, connectorID, opKey st
 	return s.repo.ClearSystemDisabled(ctx, connectorID, opKey)
 }
 
-// AccessPolicy is the per-instance access policy, written as one unit by
-// the Access policy form (SPA POST or the legacy form-post). Grouped into a
-// struct rather than positional bools so adding a flag does not silently
-// re-order every call site.
-type AccessPolicy struct {
-	// AllowOthersConfigure: non-admin users with tag access may edit credentials.
-	AllowOthersConfigure bool
-	// AllowOthersConnectSSO: non-admin users may connect their OAuth account.
-	AllowOthersConnectSSO bool
-	// EnableSSO: the OAuth flow is active on this instance.
-	EnableSSO bool
-	// MultiAccount: each OAuth connect adds an account (true) or replaces the
-	// existing one (false).
-	MultiAccount bool
-	// AllowOthersSeeAccounts: connected accounts are a shared pool visible to
-	// every user with tag access (true), or private to whoever connected them
-	// (false, the default).
-	AllowOthersSeeAccounts bool
-}
-
-// SetAccessPolicy updates the access policy for a connector instance.
-func (s *Service) SetAccessPolicy(ctx context.Context, id string, p AccessPolicy) error {
-	return s.repo.SetAccessPolicy(ctx, id, p)
-}
-
-// accountTagPathPrefix is the tool_tags path namespace for connected
-// accounts. Kept next to AccountTagPath so the prefix and the builder cannot
-// drift apart.
-const accountTagPathPrefix = "/connector-accounts/"
-
-// AccountTagPath is the tool_tags path an account's access tags live on —
-// the account-level sibling of "/connectors/{id}". Admin tags an account
-// here to share it with a team without opening the whole pool.
-func AccountTagPath(accountID string) string { return accountTagPathPrefix + accountID }
-
-// AccountAccess is who is asking, for account-visibility decisions.
-//
-// Privileged means "administers this instance" — an admin or the instance
-// owner. TagIDs are the caller's filter tags, matched against the tags an
-// admin put on the account itself.
-type AccountAccess struct {
-	UserID     string
-	TagIDs     []string
-	Privileged bool
-}
-
-// AccountAccessFor builds the caller identity that decides which connected
-// accounts a person may SEE and may RUN AS.
-//
-// One function, used by both the listing and the execute gate, because the
-// bug it exists to prevent is the two drifting: a dropdown that offers an
-// account Execute then refuses. The offer is a promise, and a promise the
-// next click breaks is worse than not offering it — the person cannot tell
-// whether they lack access or the thing is broken.
-//
-// Privileged means "administers this instance": its creator, or an admin
-// while admin_see_all_connectors is on. With that knob off an admin is
-// scoped like anybody else, which is the point of the knob.
-func (s *Service) AccountAccessFor(row entity.Connector, userID string, isAdmin bool, tagIDs []string) AccountAccess {
-	return AccountAccess{
-		UserID:     userID,
-		TagIDs:     tagIDs,
-		Privileged: OwnsConnector(row, userID) || s.adminBypass(isAdmin),
-	}
-}
-
-// AccountVisibleTo reports whether a connected account may be seen — and run
-// as — by the caller. accountTagIDs are the account's own filter tags (see
-// AccountTagPath); pass nil when it has none.
-//
-// Visible when ANY of these holds:
-//   - the caller administers the instance (admin or owner);
-//   - the row opted into AllowOthersSeeAccounts (the shared pool);
-//   - the caller connected the account themselves;
-//   - the account carries a filter tag the caller also carries — the
-//     per-account share, for handing one account to a team without opening
-//     every other account on the row;
-//   - the account has no owner recorded (legacy/system connect), so an
-//     existing install does not lose the account it has been running on.
-func AccountVisibleTo(row entity.Connector, acc entity.ConnectorAccount, accountTagIDs []string, caller AccountAccess) bool {
-	if caller.Privileged || row.AllowOthersSeeAccounts || acc.WickUserID == "" {
-		return true
-	}
-	if caller.UserID != "" && acc.WickUserID == caller.UserID {
-		return true
-	}
-	return tagIDsIntersect(accountTagIDs, caller.TagIDs)
-}
-
-// tagIDsIntersect reports whether the two tag-id sets share a member. Both
-// are short (a handful of tags), so the nested loop beats building a map.
-func tagIDsIntersect(a, b []string) bool {
-	for _, x := range a {
-		if x == "" {
-			continue
-		}
-		for _, y := range b {
-			if x == y {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// AccountsVisibleTo filters a row's connected accounts down to the ones the
-// caller may see. accountTagIDs maps account id → its filter tags.
-// See AccountVisibleTo for the rule.
-func AccountsVisibleTo(row entity.Connector, accs []entity.ConnectorAccount, accountTagIDs map[string][]string, caller AccountAccess) []entity.ConnectorAccount {
-	out := make([]entity.ConnectorAccount, 0, len(accs))
-	for _, acc := range accs {
-		if AccountVisibleTo(row, acc, accountTagIDs[acc.ID], caller) {
-			out = append(out, acc)
-		}
-	}
-	return out
-}
-
-// ListAccountsVisibleTo lists the connected accounts of a row that the given
-// caller may see — the account-level twin of ListVisibleTo.
-func (s *Service) ListAccountsVisibleTo(ctx context.Context, row entity.Connector, caller AccountAccess) ([]entity.ConnectorAccount, error) {
-	accs, err := s.repo.ListAccounts(ctx, row.ID)
-	if err != nil {
-		return nil, err
-	}
-	accs = filterAccountsByScope(ctx, row.ID, accs)
-	// Skip the tag lookup entirely when the answer cannot depend on it.
-	if caller.Privileged || row.AllowOthersSeeAccounts {
-		return accs, nil
-	}
-	tagIDs, err := s.AccountTagIDs(ctx, accs)
-	if err != nil {
-		return nil, err
-	}
-	return AccountsVisibleTo(row, accs, tagIDs, caller), nil
-}
-
-// AccountTagIDs resolves the filter tags attached to each of the given
-// accounts, keyed by account id.
-func (s *Service) AccountTagIDs(ctx context.Context, accs []entity.ConnectorAccount) (map[string][]string, error) {
-	ids := make([]string, 0, len(accs))
-	for _, acc := range accs {
-		ids = append(ids, acc.ID)
-	}
-	return s.repo.AccountFilterTagIDs(ctx, ids)
-}
-
-// OwnsConnector reports whether the user created the instance. The owner is
-// the non-admin counterpart of admin for instance-level decisions (managing
-// the access policy, seeing every connected account).
-func OwnsConnector(row entity.Connector, userID string) bool {
-	return userID != "" && row.CreatedBy == userID
+// SetAccessPolicy updates the access policy for a connector instance:
+//   - allowConfigure: non-admin users with tag access may edit credentials
+//   - allowSSO: non-admin users may connect their OAuth account
+//   - enableSSO: OAuth flow is active on this instance
+//   - multiAccount: each OAuth connect creates a new row (true) or replaces token (false)
+func (s *Service) SetAccessPolicy(ctx context.Context, id string, allowConfigure, allowSSO, enableSSO, multiAccount bool) error {
+	return s.repo.SetAccessPolicy(ctx, id, allowConfigure, allowSSO, enableSSO, multiAccount)
 }
 
 // SetSessionConfigAllowed flips the per-instance opt-in for per-session
@@ -1483,12 +999,6 @@ func (s *Service) OperationStates(ctx context.Context, connectorID, key string) 
 	if err != nil {
 		return nil, err
 	}
-	return s.liveOpStates(ctx, connectorID, key, full), nil
-}
-
-// liveOpStates collapses full states into the enabled map the MCP catalog
-// reads (see OperationStates).
-func (s *Service) liveOpStates(ctx context.Context, connectorID, key string, full map[string]OpState) map[string]bool {
 	out := make(map[string]bool, len(full))
 	for k, st := range full {
 		// SystemDisabled is advisory — admin override via Enabled takes precedence.
@@ -1498,18 +1008,7 @@ func (s *Service) liveOpStates(ctx context.Context, connectorID, key string, ful
 		// where Enabled is untouched.
 		out[k] = st.Enabled && !st.ConfigOnly
 	}
-	// An agent's checklist can switch ops off for the catalog the LLM
-	// reads; Execute re-checks the same rule at dispatch.
-	if scope := AgentScopeFrom(ctx); scope != nil {
-		if mod, ok := s.Module(key); ok {
-			for _, op := range mod.AllOps() {
-				if out[op.Key] && !scope.AllowOp(connectorID, op.Key, op.Destructive) {
-					out[op.Key] = false
-				}
-			}
-		}
-	}
-	return out
+	return out, nil
 }
 
 // OpState bundles the effective state of one operation on one connector
@@ -1544,12 +1043,6 @@ func (s *Service) OperationStatesFull(ctx context.Context, connectorID, key stri
 	if err != nil {
 		return nil, err
 	}
-	return foldOpStates(mod, rows), nil
-}
-
-// foldOpStates folds a connector's stored toggle rows over its module's
-// ops (see OperationStatesFull).
-func foldOpStates(mod connector.Module, rows []entity.ConnectorOperation) map[string]OpState {
 	stored := make(map[string]entity.ConnectorOperation, len(rows))
 	for _, r := range rows {
 		stored[r.OperationKey] = r
@@ -1566,7 +1059,7 @@ func foldOpStates(mod connector.Module, rows []entity.ConnectorOperation) map[st
 		}
 		out[op.Key] = st
 	}
-	return out
+	return out, nil
 }
 
 // HealthCheckResult bundles the outcome of a health-check run for one
@@ -1735,10 +1228,6 @@ type ExecuteParams struct {
 	// operations marked AdminOnly in the connector_operations table are
 	// blocked before execution starts.
 	IsAdmin bool
-	// TagIDs are the caller's filter tags. Used to honour per-account share
-	// tags when the call names an AccountID — an account shared with a tag
-	// the caller carries is theirs to run as.
-	TagIDs []string
 	// ParentRunID is set when this call replays an earlier run.
 	// Intended for use with Source == ConnectorRunSourceRetry.
 	ParentRunID *string
@@ -1781,22 +1270,6 @@ type ExecuteResult struct {
 	ResponseJSON string
 	ErrorMessage string
 	LatencyMs    int
-}
-
-// baseAllowsOp reports whether scope permits op on any row of the base
-// connector key a session-workspace instance clones. Grants name rows,
-// not keys, so the instance inherits the widest grant among them.
-func (s *Service) baseAllowsOp(ctx context.Context, scope AgentScope, key string, op *connector.Operation) (bool, error) {
-	rows, err := s.repo.ListByKey(ctx, key)
-	if err != nil {
-		return false, fmt.Errorf("resolve base connector: %w", err)
-	}
-	for _, r := range rows {
-		if scope.AllowConnector(r.ID) && scope.AllowOp(r.ID, op.Key, op.Destructive) {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // Execute runs one operation against one connector row, logging a
@@ -1875,67 +1348,6 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		return nil, fmt.Errorf("operation %q is a config-only helper and cannot be called as a tool", p.OperationKey)
 	}
 
-	// Resolve the named account BEFORE the per-row op gate, not after. The
-	// gate used to reject an operation the instance had turned off and
-	// return before any account was loaded — which made a per-account
-	// "force on" override unreachable by construction. The account is also
-	// the thing the ownership check and the token injection below need, so
-	// it is loaded once here and reused.
-	var acct *entity.ConnectorAccount
-	if !virtual && p.AccountID != "" {
-		if acc, err := s.repo.GetAccountByID(ctx, p.AccountID); err == nil && acc.ConnectorID == c.ID {
-			// Ownership gate: an account the caller cannot see is an account
-			// the caller cannot run as. Without this, a tool_id carrying
-			// someone else's @accountID would still execute under their
-			// identity even though the account never appeared in wick_list.
-			caller := s.AccountAccessFor(*c, p.UserID, p.IsAdmin, p.TagIDs)
-			accTags, tagErr := s.repo.AccountFilterTagIDs(ctx, []string{acc.ID})
-			if tagErr != nil {
-				return nil, fmt.Errorf("resolve account tags: %w", tagErr)
-			}
-			if !AccountVisibleTo(*c, *acc, accTags[acc.ID], caller) {
-				return nil, fmt.Errorf("account %q is not accessible: it belongs to another user and this connector keeps connected accounts private", p.AccountID)
-			}
-			acct = acc
-		}
-	}
-
-	// An agent feature switched off takes every instance of its connector
-	// type with it, session instances included.
-	if !KeyAllowed(ctx, c.Key) {
-		return nil, fmt.Errorf("connector %q is switched off for this agent", c.Key)
-	}
-
-	// Agent checklist: the instance, the identity it runs as, and the op
-	// must all be on it. A session-workspace instance is no checklist
-	// entry of its own; it runs with what the checklist grants the base
-	// connector it clones, so a session instance is no way around a
-	// "read only" grant.
-	if scope := AgentScopeFrom(ctx); scope != nil && virtual {
-		ok, err := s.baseAllowsOp(ctx, scope, c.Key, op)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			return nil, fmt.Errorf("operation %q is not allowed for this agent on a %q session instance", op.Key, c.Key)
-		}
-	}
-	if scope := AgentScopeFrom(ctx); scope != nil && !virtual {
-		if !scope.AllowConnector(c.ID) {
-			return nil, fmt.Errorf("connector %q is not in this agent's access list", c.ID)
-		}
-		accountID := ""
-		if acct != nil {
-			accountID = acct.ID
-		}
-		if !scope.AllowAccount(c.ID, accountID) {
-			return nil, fmt.Errorf("this agent may not run connector %q as that account", c.ID)
-		}
-		if !scope.AllowOp(c.ID, op.Key, op.Destructive) {
-			return nil, fmt.Errorf("operation %q is not allowed for this agent", op.Key)
-		}
-	}
-
 	// Per-row state checks (op enable/disable, admin-only) only apply to
 	// real DB rows; a session-workspace instance has no such backing
 	// rows — every base op is available.
@@ -1945,15 +1357,7 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 			return nil, fmt.Errorf("load op states: %w", err)
 		}
 		if st, ok := states[p.OperationKey]; ok {
-			// With an account in play the answer is the account's, which may
-			// differ from the instance's in EITHER direction: an override can
-			// switch an operation off that the instance allows, or on that the
-			// instance has turned off. SystemDisabled still wins over both.
-			if acct != nil {
-				if !AccountOpEnabled(acct, p.OperationKey, st) {
-					return nil, fmt.Errorf("operation %q is disabled for account @%s", p.OperationKey, acct.DisplayName)
-				}
-			} else if !st.Enabled {
+			if !st.Enabled {
 				return nil, fmt.Errorf("operation %q is disabled on this connector", p.OperationKey)
 			}
 			// SystemDisabled is a warning, not a hard block — admin can override by
@@ -1985,11 +1389,17 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		configs = s.LoadConfigs(*c)
 	}
 
-	// Inject the selected account's token. Ownership and per-account op
-	// state were settled above, when the account was resolved.
-	if acct != nil {
-		configs["user_token"] = acct.AccessToken
-		configs["auth_mode"] = "user_token"
+	// AccountID override: inject the selected account's token and check
+	// per-account disabled ops. Real rows only.
+	if !virtual && p.AccountID != "" {
+		if acc, err := s.repo.GetAccountByID(ctx, p.AccountID); err == nil && acc.ConnectorID == c.ID {
+			disabled := AccountDisabledOps(acc)
+			if disabled[p.OperationKey] {
+				return nil, fmt.Errorf("operation %q is disabled for account @%s", p.OperationKey, acc.DisplayName)
+			}
+			configs["user_token"] = acc.AccessToken
+			configs["auth_mode"] = "user_token"
+		}
 	}
 
 	// Session-workspace instance secrets are stored as MASTER (wick_cenc_)
@@ -2066,7 +1476,6 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		OperationKey: op.Key,
 		UserID:       p.UserID,
 		SessionID:    sessionID,
-		AccountID:    p.AccountID,
 		Source:       p.Source,
 		RequestJSON:  string(reqBytes),
 		Status:       entity.ConnectorRunStatusRunning,
@@ -2156,9 +1565,6 @@ func (s *Service) Execute(ctx context.Context, p ExecuteParams) (*ExecuteResult,
 		}
 	}
 	cctx.SetCallerUserID(callerUID)
-	if acct != nil {
-		cctx.SetAccountID(acct.ID)
-	}
 	// Names, so an op can tell the model who wrote something instead of
 	// quoting a uuid at it.
 	if s.userName != nil {

@@ -60,15 +60,13 @@ func (h *Handler) AgentToolDescriptorsAs(ctx context.Context, id AgentIdentity) 
 	tools := handlers.MetaToolDescriptors()
 	tools = append(tools, handlers.WickManagerToolDescriptors(ctx, h.connectors, tagIDs, user.IsAdmin())...)
 	tools = append(tools, handlers.SubAgentsToolDescriptors(ctx, h.connectors, tagIDs, user.IsAdmin())...)
-	tools = append(tools, handlers.TeamToolDescriptors(ctx, h.connectors, tagIDs, user.IsAdmin())...)
-	return featureAllowedTools(ctx, tools)
+	return tools
 }
 
 // CallAgentTool dispatches one tool call in-process and returns the tool
 // result text + isError, reusing dispatchTool (identical routing to the
-// HTTP transport). sessionID is stamped on the context so session-aware
-// tools (ask_user, wick_session_*) resolve correctly — the same carrier
-// the HTTP middleware uses, so neither path needs a header here.
+// HTTP transport). sessionID is threaded via the X-Wick-Session-Id header
+// so session-aware tools (ask_user, wick_session_*) resolve correctly.
 func (h *Handler) CallAgentTool(ctx context.Context, name string, args map[string]any, sessionID string) (string, bool) {
 	return h.CallAgentToolAs(ctx, name, args, sessionID, AgentIdentity{})
 }
@@ -80,11 +78,10 @@ func (h *Handler) CallAgentToolAs(ctx context.Context, name string, args map[str
 	user, tagIDs := id.resolve()
 	ctx = login.WithUser(ctx, user, tagIDs)
 
-	ctx = handlers.WithSessionID(ctx, sessionID)
-	// Same narrowing the HTTP transport applies in serveWithSession.
-	ctx = withAgentScope(ctx, sessionID)
-
 	r, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/mcp", nil)
+	if sessionID != "" {
+		r.Header.Set("X-Wick-Session-Id", sessionID)
+	}
 
 	var captured string
 	var isErr bool

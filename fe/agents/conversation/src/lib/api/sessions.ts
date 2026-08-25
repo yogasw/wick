@@ -1,56 +1,26 @@
 import { Effect } from "effect";
 import { apiGetE, apiDeleteE, apiPostE } from "@wick-fe/common-api";
-import type { SessionListItem, SessionMeta, ConversationTurn, TurnEvent, TurnEventPayload, CardState, CardPostback } from "../types/agents.js";
+import type { SessionListItem, SessionMeta, ConversationTurn, TurnEvent } from "../types/agents.js";
 
-/** owner: "me" = only the caller's sessions (plus, under ticket mode,
-    sessions on tickets assigned to them); omitted = everyone's. The server
-    sends one page at a time — `offset` is the "Load more" cursor, `total`
-    is the match count before the page window, `hasMore` says whether
-    another page exists. */
-export const listSessions = (
-  base: string,
-  projectId?: string,
-  owner?: "me" | "all",
-  offset?: number,
-) => {
-  const q = new URLSearchParams();
-  if (projectId) q.set("project", projectId);
-  if (owner === "me") q.set("owner", "me");
-  if (offset) q.set("offset", String(offset));
-  const qs = q.toString();
-  return apiGetE<{ sessions: SessionListItem[]; total?: number; has_more?: boolean }>(
-    `${base}/api/sessions${qs ? `?${qs}` : ""}`,
-  ).pipe(
-    Effect.map((r) => ({
-      sessions: r.sessions ?? [],
-      total: r.total ?? (r.sessions ?? []).length,
-      hasMore: r.has_more === true,
-      cards: r.cards ?? {},
-    })),
+export const listSessions = (base: string, projectId?: string) => {
+  const url = projectId
+    ? `${base}/api/sessions?project=${encodeURIComponent(projectId)}`
+    : `${base}/api/sessions`;
+  return apiGetE<{ sessions: SessionListItem[] }>(url).pipe(
+    Effect.map((r) => ({ sessions: r.sessions ?? [] })),
   );
 };
 
-export const getConversation = (
-  base: string,
-  id: string,
-  opts?: { limit?: number; before?: string },
-) => {
-  const params = new URLSearchParams();
-  if (opts?.limit) params.set("limit", String(opts.limit));
-  if (opts?.before) params.set("before", opts.before);
-  const qs = params.toString();
-  const url = `${base}/api/sessions/${id}/conversation${qs ? `?${qs}` : ""}`;
-  return apiGetE<{ turns: ConversationTurn[]; has_more?: boolean; cards?: Record<string, CardState> }>(url).pipe(
+export const getConversation = (base: string, id: string) =>
+  apiGetE<{ turns: ConversationTurn[] }>(`${base}/api/sessions/${id}/conversation`).pipe(
     Effect.map((r) => ({
       turns: (r.turns ?? []).map((t) => ({
         ...t,
         events: t.events ?? [],
         attachments: t.attachments ?? [],
       })),
-      hasMore: r.has_more === true,
     })),
   );
-};
 
 export const getSessionMeta = (base: string, id: string) =>
   apiGetE<SessionMeta>(`${base}/api/sessions/${id}/meta`);
@@ -78,33 +48,3 @@ export const getTurnTrace = (base: string, id: string, turnId: string) =>
   apiGetE<unknown>(`${base}/sessions/${id}/turns/${turnId}`).pipe(
     Effect.map(normalizeTurnEvents),
   );
-
-// getTurnEvent fetches the spilled payload of one large trace event — an
-// index row with large:true carries no text; its content lives in
-// thinking/<turn_id>/<event_id>.json behind this endpoint.
-export const getTurnEvent = (base: string, id: string, turnId: string, eventId: string) =>
-  apiGetE<TurnEventPayload>(`${base}/sessions/${id}/turns/${turnId}/events/${eventId}`);
-
-// getTurnBlob fetches a binary a trace event stored as a blob (an image a
-// tool returned) — only when its chip is clicked. Plain fetch: the body is
-// bytes, not JSON. The server answers 404 for a session the caller cannot
-// see, so a failure here reads as "failed to load", never as data.
-export async function getTurnBlob(base: string, id: string, turnId: string, ref: string): Promise<Blob> {
-  const res = await fetch(`${base}/sessions/${id}/turns/${turnId}/blobs/${encodeURIComponent(ref)}`, { credentials: "same-origin" });
-  if (!res.ok) throw new Error(`blob ${ref}: ${res.status}`);
-  return res.blob();
-}
-
-// sendPostback records an actioncard click: the server checks the value is
-// one of the card's buttons and that the card is not locked (409 if it is).
-export const sendPostback = (base: string, id: string, body: { card_id: string; value: string }) =>
-  apiPostE<{ status: string; postback: CardPostback; text: string }>(`${base}/api/sessions/${id}/postback`, body);
-
-// decideApprovalCard settles a server-made approval_request card through the
-// same gate the approval modal uses (410 = no longer pending here).
-export const decideApprovalCard = (
-  base: string,
-  id: string,
-  approvalId: string,
-  body: { decision: "accept" | "accept_for_session" | "decline"; reason?: string },
-) => apiPostE<{ status: string; decision: string }>(`${base}/api/sessions/${id}/approvals/${encodeURIComponent(approvalId)}`, body);

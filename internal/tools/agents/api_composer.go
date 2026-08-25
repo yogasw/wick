@@ -42,10 +42,7 @@ var builtinComposerCommands = []ComposerCommand{
 	{ID: "processes", Label: "/processes", Hint: "running · kill", Category: "Panels", Action: "panel:process"},
 	{ID: "workspace", Label: "/workspace", Hint: "connectors", Category: "Panels", Action: "panel:workspace"},
 	{ID: "source", Label: "/source", Hint: "git changes", Category: "Panels", Action: "panel:source"},
-	// Named /files, not /context: it opens the session folder. "/context" is
-	// reserved for the context-window panel, which is what a user typing it
-	// after Claude Code expects — a different question entirely.
-	{ID: "files", Label: "/files", Hint: "session folder", Category: "Panels", Action: "panel:files"},
+	{ID: "context", Label: "/context", Hint: "files", Category: "Panels", Action: "panel:context"},
 	{ID: "commands", Label: "/commands", Hint: "gate log", Category: "Views", Action: "view:commands"},
 	{ID: "approvals", Label: "/approvals", Hint: "pending", Category: "Views", Action: "view:approvals"},
 	{ID: "raw", Label: "/raw", Hint: "transcript", Category: "Views", Action: "view:raw"},
@@ -53,12 +50,6 @@ var builtinComposerCommands = []ComposerCommand{
 	// Claude Code's /compact. It's a "send" action: the FE sends "/compact"
 	// as the message. The wick engine intercepts it and runs compaction
 	// in-process; the CLI providers pass it through to their own /compact.
-	// /context opens wick's own panel rather than sending anything: the
-	// numbers already sit in the session's token ledger, so there is no
-	// call to make, and the CLI's own answer would arrive as a wall of
-	// markdown in the transcript. The panel also carries the manual
-	// Compact action.
-	{ID: "context", Label: "/context", Hint: "context window · compact", Category: "Session", Action: "panel:context"},
 	{ID: "compact", Label: "/compact", Hint: "summarize history to free context", Category: "Session", Action: "send:/compact"},
 	// /thinking opens a small popover to toggle the model's reasoning on/off
 	// and pick the effort for the rest of the session — it does NOT send a
@@ -67,11 +58,6 @@ var builtinComposerCommands = []ComposerCommand{
 	// low|medium|high" as a message still works as a fallback: the wick engine
 	// intercepts it in-process.
 	{ID: "thinking", Label: "/thinking", Hint: "toggle reasoning on/off · set effort", Category: "Session", Action: "panel:thinking"},
-	// /usage shows how much of THIS session's provider account is spent.
-	// It opens a popover rather than sending a message, and reads the
-	// shared usage cache — a provider type with no usage API says so
-	// instead of showing empty bars.
-	{ID: "usage", Label: "/usage", Hint: "provider limits · session + weekly", Category: "Session", Action: "panel:usage"},
 }
 
 // apiComposerCommands handles GET /api/composer/commands — the `/` command menu:
@@ -100,12 +86,6 @@ func apiComposerCommands(c *tool.Ctx) {
 	// A skill is a FOLDER holding a SKILL.md (loose files like CHANGELOG.md /
 	// install_skills.sh that happen to sit in the skills dir are not skills).
 	// The invokable name + description come from the SKILL.md frontmatter.
-	// One skill is mirrored into EVERY provider's skills dir, so without a
-	// provider filter the same skill came back 4-5 times; and two folders can
-	// declare the same frontmatter name (a copied folder that kept the
-	// original's name). Either way the menu listed duplicates, which the
-	// composer keys on — de-dupe by the invokable name and keep the first.
-	seenSkill := make(map[string]bool, len(cachedSkills()))
 	for _, s := range cachedSkills() {
 		if !s.IsDir {
 			continue
@@ -117,10 +97,6 @@ func apiComposerCommands(c *tool.Ctx) {
 		if name == "" {
 			name = s.Name // fall back to the folder name if no frontmatter name
 		}
-		if seenSkill[name] {
-			continue
-		}
-		seenSkill[name] = true
 		hint := truncate(s.Meta["description"], 60)
 		if hint == "" {
 			hint = "skill"

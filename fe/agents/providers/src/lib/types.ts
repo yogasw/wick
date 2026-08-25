@@ -27,37 +27,18 @@ export interface ProviderInstanceDTO {
   Disabled: boolean;
   MaxConcurrent: number;
   SendMode: string;
-  /* IdleCompact is the enabled compact-when-idle policy; null when off. */
-  IdleCompact?: IdleCompactDTO | null;
-}
-
-export interface IdleCompactDTO {
-  Seconds: number;
-  Trigger: string;
-  /* Threshold is a percentage or a token count, by Trigger. */
-  Threshold: number;
-  /* Scope is skip, whitelist or all; Match is its pattern lines. */
-  Scope: string;
-  Match: string[];
 }
 
 export interface ProviderStatusDTO {
   Instance: ProviderInstanceDTO;
   Path: string;
   PathFound: boolean;
-  /* Where Path came from: "managed" (wick-managed version), "registry"
-     (manual Binary path), "path", "scan", "miss". */
-  Source?: string;
   Version: string;
   VersionErr: string;
   Probing: boolean;
   Hooks: Record<string, HookCapabilityDTO>;
   Cap: ProviderCapDTO;
   HookEnabled: Record<string, boolean>;
-  /* CanManage: may this caller reconnect the instance and force a usage
-     re-check? Admins always; everyone else by manage tag. Never implies
-     permission to edit configuration. */
-  CanManage: boolean;
 }
 
 export interface SpawnLogFileDTO {
@@ -180,13 +161,6 @@ export interface SpawnDetailResponse {
   Repro: Record<string, string>;
   /** True when the spawn had a resume id — the Keep/Fresh toggle is meaningful. */
   HasResume: boolean;
-  /** True when this provider takes the prompt on stdin (claude/gemini), so the
-      Prompt control is meaningful. False for codex: its argv already ends with
-      the message. */
-  PromptSupported: boolean;
-  /** The message wick sent on this spawn, read from conversation.jsonl — the
-      "Wick" option of Prompt. */
-  WickPrompt: string;
   Logs: SpawnLogsDTO;
 }
 
@@ -207,7 +181,7 @@ export interface MCPStatusDTO {
 export interface GateStatusDTO {
   Enabled: boolean;
   Binary: string;
-  Source?: string;
+  Source: string;
   Reason: string;
   Note: string;
   PermissionMode: string;
@@ -215,10 +189,6 @@ export interface GateStatusDTO {
 }
 
 export interface ProvidersListResponse {
-  /* IsAdmin decides which chrome renders at all. Provider configuration
-     is admin-only however the access tags are set, so a non-admin gets
-     the read-only page rather than buttons that come back 403. */
-  IsAdmin: boolean;
   Providers: ProviderStatusDTO[];
   Gate: GateStatusDTO;
   MCPClients: MCPStatusDTO;
@@ -260,19 +230,9 @@ export interface StorageResponse {
 }
 
 export interface ProviderDetailResponse {
-  /* ReadOnly: the caller may look at this instance but not edit it.
-     CanManage is separate — reconnecting is not editing. SecretsHidden
-     says the resolved-config previews were withheld because they carry
-     live tokens. */
-  ReadOnly: boolean;
-  CanManage: boolean;
-  SecretsHidden: boolean;
   Instance: ProviderInstanceDTO;
   Path: string;
   PathFound: boolean;
-  /* Where Path came from: "managed" (wick-managed version), "registry"
-     (manual Binary path), "path", "scan", "miss". */
-  Source?: string;
   Version: string;
   VersionErr: string;
   Probing: boolean;
@@ -296,38 +256,4 @@ export interface AIRouterDetailDTO {
   KeySet: boolean;
   RawConfig: string;
   Preview: string;
-}
-
-/* ProviderConnection is one instance's account + usage, from
-   GET /api/providers/connections. Keyed by {type, name} so the list can
-   join it onto cards it already rendered. */
-export interface ProviderConnection {
-  type: string;
-  name: string;
-  connected: boolean;
-  /* accountUnknown: the login could not be read this time (the CLI probe
-     failed or timed out). Not a logout — shown as "checking". */
-  accountUnknown: boolean;
-  email: string;
-  plan: string;
-  org: string;
-  authMethod: string;
-  /* usageSupported is false for provider types with no usage API
-     (codex/gemini today) — distinct from a fetch that failed. */
-  usageSupported: boolean;
-  usageErr: string;
-  /* usagePending is true while the first reading for this account is
-     still being fetched. The probe is paced to stay under the
-     endpoint's rate limit, so a cold page shows this before numbers. */
-  usagePending: boolean;
-  /* usageChecking is true while a probe for this account is in flight,
-     so the card can show it is working instead of looking frozen. */
-  usageChecking: boolean;
-  /* Provenance of the reading: when it was taken (RFC3339), its age in
-     seconds, and how long until the next probe is allowed. Readings are
-     cached per account, so the card shows how old the numbers are. */
-  usageFetchedAt: string;
-  usageAgeS: number;
-  usageNextS: number;
-  windows: { key: string; utilization: number; resetsAt: string }[];
 }

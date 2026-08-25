@@ -15,26 +15,13 @@
       "bot": [
         "app_mentions:read",
         "chat:write",
-        "chat:write.customize",
         "reactions:write",
         "reactions:read",
         "usergroups:read",
         "channels:history",
         "groups:history",
         "im:history",
-        "mpim:history",
-        "assistant:write",
-        "canvases:read",
-        "canvases:write",
-        "files:read",
-        "files:write",
-        "im:read",
-        "im:write",
-        "lists:read",
-        "lists:write",
-        "mpim:read",
-        "users:read",
-        "users:read.email"
+        "mpim:history"
       ]
     },
     "pkce_enabled": false
@@ -47,9 +34,7 @@
         "message.mpim",
         "message.channels",
         "reaction_added",
-        "reaction_removed",
-        "assistant_thread_started",
-        "message.groups"
+        "reaction_removed"
       ]
     },
     "interactivity": {

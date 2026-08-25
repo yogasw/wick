@@ -63,7 +63,6 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"kind='connector' = standard instance (bot/API key); kind='account' = personal OAuth account connected to the parent connector. " +
 				"parent_id is the connector id when kind='account'. " +
 				"Use kind to decide which identity to run as: kind='connector' for shared/bot credentials, kind='account' for personal identity. " +
-				"Accounts are per-user: unless the instance shares them, you only ever see the account the current user connected, so a listing of one connector + one account is the normal, complete answer — not a partial one. " +
 				"status is 'ready' (all required configs filled) or 'needs_setup' (missing config — do NOT call wick_execute; tell the user to open the admin dashboard to complete setup). " +
 				"WORKFLOW: (1) wick_list to see what connectors and accounts exist, " +
 				"(2) wick_get with the id to see its categories, then with a category to list its ops, then with an op key to get that op's input_schema, " +
@@ -270,7 +269,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"type": "object",
 				"properties": map[string]any{
 					"items": map[string]any{
-						"type": "array",
+						"type":        "array",
 						"description": "The full task list, in order. Required unless this call only touches the " +
 							"goal latch (goal / goal_done / goal_abandon), which needs no checklist.",
 						"items": map[string]any{
@@ -298,28 +297,6 @@ func MetaToolDescriptors() []ToolDescriptor {
 										"callers; if 'title' is absent this text is used as the checklist label.",
 								},
 								"status": map[string]any{"type": "string", "enum": []string{"pending", "in_progress", "completed"}, "description": "Current status of the task."},
-								"progress": map[string]any{
-									"type": "object",
-									"description": "Optional counter for a step that is long rather than just unfinished " +
-										"(packages tested, files migrated, MB uploaded). Drawn as a bar on the item.",
-									"properties": map[string]any{
-										"done":  map[string]any{"type": "integer", "description": "Units finished so far."},
-										"total": map[string]any{"type": "integer", "description": "Units in total."},
-										"label": map[string]any{"type": "string", "description": "What the numbers count, e.g. \"packages\"."},
-									},
-								},
-								"detail": map[string]any{
-									"type": "object",
-									"description": "Optional payload to show under the item — a log tail, a JSON result, " +
-										"a small table. Put long output HERE rather than in the reply: the panel keeps it " +
-										"across a reload and it does not flood the conversation. Clamped to 8000 characters " +
-										"(the tail is kept).",
-									"properties": map[string]any{
-										"format": map[string]any{"type": "string", "enum": []string{"text", "markdown", "json", "html", "xml"}, "description": "How to render the body. Defaults to text."},
-										"body":   map[string]any{"type": "string", "description": "The payload itself."},
-									},
-									"required": []string{"body"},
-								},
 								"substeps": map[string]any{
 									"type":        "array",
 									"description": "Optional concrete actions under this task, in order. Omit for a simple task with no breakdown.",
@@ -350,16 +327,6 @@ func MetaToolDescriptors() []ToolDescriptor {
 						"type":        "boolean",
 						"description": "Set true to give up on the open goal — also releases the latch.",
 					},
-					"stop": map[string]any{
-						"type": "boolean",
-						"description": "Mark the live checklist as stopped — the work died or was cancelled. Items " +
-							"left in_progress become 'stopped', so a half-ticked list stops reading as still running. " +
-							"Use 'note' for the reason.",
-					},
-					"clear_history": map[string]any{
-						"type":        "boolean",
-						"description": "Delete the finished checklists from the panel. The live one stays.",
-					},
 					"note": map[string]any{
 						"type":        "string",
 						"description": "Optional note stored with goal open/done/abandon.",
@@ -387,8 +354,8 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"two libraries, confirming a destructive change). The user sees an inline card with optional " +
 				"choices and an optional freeform field; their answer is returned as JSON {\"value\":\"...\",\"text\":\"...\"}. " +
 				"Default timeout is 5 minutes; on timeout the tool returns an error and you should choose a sensible " +
-				"default rather than retrying immediately. session_id is optional — the question is delivered to the " +
-				"session the call came from, which wick resolves for you. " +
+				"default rather than retrying immediately. session_id is required and must match the active wick agent " +
+				"session — pass the value the user mentioned or that you saw in the conversation context. " +
 				"This tool may also return an error 'blocked by gate policy' when the operator disabled ask_user " +
 				"for the current channel (e.g. Slack/HTTP runs where no human can answer); on that error, pick a " +
 				"sensible default and proceed without retrying.",
@@ -397,7 +364,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"properties": map[string]any{
 					"session_id": map[string]any{
 						"type":        "string",
-						"description": "Optional and normally omitted — the question always goes to the session the call came from.",
+						"description": "ID of the active wick agent session this question belongs to.",
 					},
 					"agent_name": map[string]any{
 						"type":        "string",
@@ -473,9 +440,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 						},
 					},
 				},
-				// No "required": the session comes from the call itself (header,
-				// or the bearer's own grant). An explicit session_id is ignored
-				// here anyway — the question must land in THIS conversation.
+				"required": []string{"session_id"},
 			},
 			Annotations: &ToolAnnotation{
 				Title:        "Ask the human operator",
@@ -491,7 +456,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Normally you NEVER see config values: you create a blank instance and the USER fills it in a modal (secrets are encrypted server-side); " +
 				"only the key names ever come back to you. Actions: " +
 				"'list' shows this session's instances (id, status, missing keys) and available_bases (connectors you may add). " +
-				"'add' creates an instance from a base_key. Pass values to fill it in the same call when you already hold them; pass prompt:true to have the user fill it in a modal instead. It opens no modal otherwise. " +
+				"'add' creates a blank instance from a base_key; by default it pops a fill modal for the user right away. " +
 				"'duplicate' copies an existing session instance (config and all) into a new one. " +
 				"'configure' reopens the fill modal so the user edits an instance's config; blocks until submit, like ask_user. Needs a UI transport — not available from Slack/channel automations. " +
 				"'set_config' writes config values directly WITHOUT a modal, for UI-less transports (Slack) and automations. Pass values as a map; for secret fields pass an enc token (wick_cenc_/wick_enc_) so the plaintext never passes through you — only master-encrypt a raw secret if you truly have no token. " +
@@ -508,7 +473,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"session_id": map[string]any{
 						"type":        "string",
-						"description": "Optional. The session is resolved from the call itself inside a wick agent; pass this only from an external client that has no session.",
+						"description": "ID of the active wick agent session the instance is scoped to. Required for every action.",
 					},
 					"base_key": map[string]any{
 						"type":        "string",
@@ -520,7 +485,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"values": map[string]any{
 						"type":        "object",
-						"description": "action=set_config, or action=add to fill the new instance in the same call: map of config key → value to write. Unknown keys are rejected; empty values are skipped (leave as-is). For secret fields pass a wick_cenc_/wick_enc_ token; a raw plaintext secret is master-encrypted server-side.",
+						"description": "action=set_config: map of config key → value to write. Unknown keys are rejected; empty values are skipped (leave as-is). For secret fields pass a wick_cenc_/wick_enc_ token; a raw plaintext secret is master-encrypted server-side.",
 					},
 					"label": map[string]any{
 						"type":        "string",
@@ -528,7 +493,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 					},
 					"prompt": map[string]any{
 						"type":        "boolean",
-						"description": "action=add: open the fill modal so the user supplies the config (default false). It blocks until they answer, so only ask when the values are the user's to give, never when you are about to write them with values/set_config.",
+						"description": "action=add: open the fill modal immediately (default true). Set false to create blank and let the user fill it later in the Config tab.",
 					},
 					"keys": map[string]any{
 						"type":        "array",
@@ -548,9 +513,7 @@ func MetaToolDescriptors() []ToolDescriptor {
 						"description": "action=add/configure: short text shown to the user explaining what the connector is for.",
 					},
 				},
-				// session_id is NOT required: a session workspace belongs to the
-				// calling session, which the call already carries.
-				"required": []string{"action"},
+				"required": []string{"action", "session_id"},
 			},
 			Annotations: &ToolAnnotation{
 				Title:        "Session workspace",
@@ -642,16 +605,17 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"Call this at the start of a conversation to decide whether to set a " +
 				"title: if title_custom is false, derive a short title from the user's " +
 				"request and call wick_set_title; if it is already true, leave it alone. " +
-				"session_id is optional: inside a wick agent the session is resolved " +
-				"from the call itself. Pass it only to read ANOTHER session you own.",
+				"session_id must match the active wick agent session — pass the value " +
+				"you saw in the conversation context.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"session_id": map[string]any{
 						"type":        "string",
-						"description": "Optional. Another session to read (you must own it, or be an admin). Omit for the current one.",
+						"description": "ID of the active wick agent session.",
 					},
 				},
+				"required": []string{"session_id"},
 			},
 			Annotations: &ToolAnnotation{
 				Title:        "Read session info",
@@ -668,147 +632,27 @@ func MetaToolDescriptors() []ToolDescriptor {
 				"title_custom is already true. " +
 				"Keep titles short (a few words, max 60 chars), summarising what the " +
 				"conversation is about (e.g. 'Fix Slack webhook 401', 'Weekly product sync'). " +
-				"session_id is optional: inside a wick agent the session is resolved " +
-				"from the call itself. Pass it only to retitle ANOTHER session you own.",
+				"session_id must match the active wick agent session — pass the value you " +
+				"saw in the conversation context.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"session_id": map[string]any{
 						"type":        "string",
-						"description": "Optional. Another session to retitle (you must own it, or be an admin). Omit for the current one.",
+						"description": "ID of the active wick agent session.",
 					},
 					"title": map[string]any{
 						"type":        "string",
 						"description": "Short human-readable title. Truncated to 60 runes.",
 					},
 				},
-				"required": []string{"title"},
+				"required": []string{"session_id", "title"},
 			},
 			Annotations: &ToolAnnotation{
 				Title:           "Set session title",
 				ReadOnlyHint:    PtrBool(false),
 				DestructiveHint: PtrBool(false),
 				IdempotentHint:  PtrBool(true),
-			},
-		},
-		{
-			Name: "wick_context",
-			Description: "How full the model's context window is RIGHT NOW in this conversation — " +
-				"the reading a compaction decision is made from. Returns the active provider " +
-				"(the one that answered most recently, not the one merely configured), its model, " +
-				"used/window tokens and pct, a recent per-turn trend, the session's turn count and " +
-				"token totals, a row per provider the session has used, and can_compact. " +
-				"window is 0 when the CLI never reported a limit — then pct is 0 too and you must " +
-				"NOT invent a denominator. Needs no session_id: it reads the session the call came " +
-				"from; pass one only to inspect another session you own.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"session_id": map[string]any{
-						"type":        "string",
-						"description": "Optional. Another session to read (you must own it, or be an admin). Omit for the current one.",
-					},
-				},
-			},
-			Annotations: &ToolAnnotation{
-				Title:        "Session context window",
-				ReadOnlyHint: PtrBool(true),
-			},
-		},
-		{
-			Name: "wick_usage",
-			Description: "Usage in both senses. (1) What this conversation has SPENT: input / output / " +
-				"cache-read / cache-write tokens, cost in USD when the provider reports it, turn count, " +
-				"and the same broken down per provider. (2) `account`: what the provider ACCOUNT has " +
-				"left — the same rate-limit windows the Usage panel shows (Session 5hr, Weekly, and " +
-				"whatever else that provider publishes), with how long until each resets, how old the " +
-				"reading is, and the plan / org / auth method behind it. It is the panel's reading in " +
-				"full, so you can answer a follow-up without guessing — and a failed probe arrives as " +
-				"its own error (a 401 says 401), never as an account with no windows left. The second " +
-				"is the one that decides whether the next turn runs at all; the first only says what " +
-				"the last ones cost. Reading it is free — it serves a cached, paced probe, so asking " +
-				"cannot contribute to the limit. Distinct from wick_context on purpose — spend is a " +
-				"flow (additive, historical), a context window is a level (neither). Needs no " +
-				"session_id; pass one only to inspect another session you own.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"session_id": map[string]any{
-						"type":        "string",
-						"description": "Optional. Another session to read (you must own it, or be an admin). Omit for the current one.",
-					},
-				},
-			},
-			Annotations: &ToolAnnotation{
-				Title:        "Session token usage",
-				ReadOnlyHint: PtrBool(true),
-			},
-		},
-		{
-			Name: "wick_compact",
-			Description: "Ask a session to fold its history into a summary, freeing context. " +
-				"It does NOT compact inside this call and returns status 'queued': /compact is " +
-				"delivered as an ordinary message, so it runs after the current turn finishes, or " +
-				"wakes an idle session to do it. Compacting the conversation you are mid-turn in " +
-				"cannot affect THIS turn anyway — its context reached the model before you called. " +
-				"Check wick_context first; a provider that cannot act on /compact is refused here " +
-				"rather than sent a command it would answer as prose. Needs no session_id; pass one " +
-				"only to compact another session you own.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"session_id": map[string]any{
-						"type":        "string",
-						"description": "Optional. Another session to compact (you must own it, or be an admin). Omit for the current one.",
-					},
-					"agent_name": map[string]any{
-						"type":        "string",
-						"description": "Optional. Which agent in that session; defaults to whichever it is talking to.",
-					},
-				},
-			},
-			Annotations: &ToolAnnotation{
-				Title:           "Compact session context",
-				ReadOnlyHint:    PtrBool(false),
-				DestructiveHint: PtrBool(false),
-				IdempotentHint:  PtrBool(false),
-			},
-		},
-		{
-			Name: "wick_cli_token",
-			Description: "Mint a short-lived token a SHELL can use to talk back into THIS session — " +
-				"the way to hand off long work (a build, a deploy, a migration) and be told how it went " +
-				"instead of guessing when to check.\n\n" +
-				"Pattern: mint a token, run the work detached with the token in its environment, end your " +
-				"turn. When the work finishes it runs `support-tools agent send --text \"…\"` and this " +
-				"session wakes on that message like any other. Failure reports itself the same way, so a " +
-				"build that dies at 3am is a message, not a silence you discover later.\n\n" +
-				"The token is bound to this session and cannot be pointed anywhere else: the endpoints take " +
-				"no session id at all. It expires (30 minutes by default, 2 hours at most), lives in memory " +
-				"so a daemon restart voids it, and carries your identity so everything the script sends is " +
-				"attributed to you.\n\n" +
-				"It survives a wick restart because it is signed rather than remembered, which is what " +
-				"makes it usable for deploying wick itself. It cannot be revoked: let it expire, or " +
-				"rotate the app's session secret to void every outstanding token at once.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"ttl": map[string]any{
-						"type": "string",
-						"description": "How long the token lives, as a Go duration (30m, 90m, 2h). " +
-							"Default 30m, capped at 2h — ask for the build's length, not for comfort.",
-					},
-					"note": map[string]any{
-						"type":        "string",
-						"description": "What this token is for ('build 0.1.261'). Travels in the token and comes back from whoami.",
-					},
-				},
-			},
-			Annotations: &ToolAnnotation{
-				Title:           "Mint a CLI token for this session",
-				ReadOnlyHint:    PtrBool(false),
-				DestructiveHint: PtrBool(false),
-				IdempotentHint:  PtrBool(false),
 			},
 		},
 		{
@@ -853,8 +697,8 @@ func MetaToolDescriptors() []ToolDescriptor {
 						"description": "action=list: max rows to return. Default 50, max 500.",
 					},
 					"session_id": map[string]any{
-						"type": "string",
-						"description": "action=create: the existing session to deliver into. OMIT IT to schedule THIS conversation — that is the default. Pass it only for another session; mutually exclusive with project_id. " +
+						"type":        "string",
+						"description": "action=create: the existing session to deliver into (usually your own — schedule yourself). Mutually exclusive with project_id. " +
 							"action=list: everything RELATED to that session — schedules targeting it, project jobs created from it, project jobs of its project, and schedules whose last fire landed in it. Narrow with target_session_id if you only want the ones that deliver INTO it.",
 					},
 					"target_session_id": map[string]any{
@@ -897,10 +741,6 @@ func MetaToolDescriptors() []ToolDescriptor {
 					"agent_name": map[string]any{
 						"type":        "string",
 						"description": "action=create: optional pool agent to route to. Default 'main'.",
-					},
-					"run_as_user_id": map[string]any{
-						"type":        "string",
-						"description": "action=create/reschedule, ADMIN ONLY: run every fire as this user instead of the schedule's owner. Leave it unset in normal use — a fire already runs as the owner, which is what makes a scheduled run behave like the creator running it by hand. Set it only when a job legitimately needs somebody else's access; pass \"\" to clear it. A fire whose run-as user is later removed or un-approved FAILS rather than falling back, so a disabled account stops its jobs instead of quietly running them as something else.",
 					},
 					"id": map[string]any{
 						"type":        "string",

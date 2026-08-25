@@ -32,12 +32,6 @@ export type BoardOptions = {
   untracked?: boolean;
   /** One page of the untracked rail. */
   untrackedLimit?: number;
-  /** The rail's next page: rows after this cursor (a previous response's
-      `untracked_next`). Omitted = the first page. */
-  untrackedAfter?: string;
-  /** Untracked scope: "me" = only the caller's loose chats (count included),
-      "all"/omitted = everyone's. */
-  untrackedOwner?: string;
 };
 
 export const getProjectTickets = (base: string, projectId: string, opt: BoardOptions = {}) => {
@@ -49,8 +43,6 @@ export const getProjectTickets = (base: string, projectId: string, opt: BoardOpt
   if (opt.assignee) q.set("assignee", opt.assignee);
   if (opt.untracked) q.set("untracked", "1");
   if (opt.untrackedLimit !== undefined) q.set("untracked_limit", String(opt.untrackedLimit));
-  if (opt.untrackedAfter) q.set("untracked_after", opt.untrackedAfter);
-  if (opt.untrackedOwner === "me") q.set("untracked_owner", "me");
   const qs = q.toString();
   return apiGetE<TicketBoard>(
     `${base}/api/projects/${encodeURIComponent(projectId)}/tickets${qs ? "?" + qs : ""}`,
@@ -66,18 +58,6 @@ export const getProjectTickets = (base: string, projectId: string, opt: BoardOpt
   );
 };
 
-/** One person a ticket can be put on. */
-export type AssigneeOption = { id: string; name: string };
-
-/** Who this project's tickets may be assigned to, by name.
-
-    Its own request rather than a field on the board: the list changes when
-    somebody joins wick, not when a ticket moves, and the board is polled. */
-export const listAssignees = (base: string, projectId: string) =>
-  apiGetE<{ assignees?: AssigneeOption[] }>(
-    `${base}/api/projects/${encodeURIComponent(projectId)}/assignees`,
-  ).pipe(Effect.map((r) => r.assignees ?? []));
-
 export const createTicket = (
   base: string,
   projectId: string,
@@ -85,8 +65,6 @@ export const createTicket = (
     title: string;
     status?: string;
     assignee?: string;
-    /** Several people at once; merged with `assignee` server-side. */
-    assignees?: string[];
     fields?: Record<string, string>;
     session_id?: string;
   },
@@ -108,87 +86,11 @@ export const updateTicket = (
   ticketId: string,
   patch: {
     title?: string;
-    /** Markdown description. An explicit "" clears it. */
-    body?: string;
     status?: string;
     assignee?: string;
-    /** The full list, replacing whoever is on the ticket. `[]` unassigns
-        everyone. Wins over `assignee` when both are sent. */
-    assignees?: string[];
     fields?: Record<string, string>;
   },
 ) => apiPatchE<TicketCard>(`${base}/api/tickets/${encodeURIComponent(ticketId)}`, patch);
-
-/** The receiver's own JSON reply, passed through by the server. Every field
-    is optional — a receiver that answers `{}` is still a working receiver —
-    but these are the ones the result panel knows how to draw. */
-export type ActionPayload = {
-  /** "running" | "done" | "error" | "ignored" | "busy" | anything else. */
-  status?: string;
-  message?: string;
-  /** Live counters for a job that is still going. */
-  progress?: { done?: number; total?: number };
-  /** Free-form tallies, rendered as chips in the order given. */
-  counts?: Record<string, number | string>;
-  /** Where to watch the run. Must be on the button's own origin — the
-      server refuses anything else. */
-  poll_url?: string;
-  /** The receiver's own HTML, folded behind a Details toggle and rendered
-      in a bare sandboxed frame (no scripts, no network). */
-  html?: string;
-  /** How wide the card should be — a CSS length the receiver picks because
-      only it knows what it is about to render. Clamped to 16–44rem; absent
-      means the compact default. */
-  width?: string;
-  /** How tall the html frame should be, same idea. Clamped to 80–600px. */
-  html_height?: string;
-};
-
-/** What a custom button's click reports back. `message` is the receiver's
-    own answer, when it gave a short one — for a button whose work outlives
-    the request ("sync started, 42 tickets"), that sentence IS the result. */
-export type ActionResult = {
-  ok: boolean;
-  status?: number;
-  error?: string;
-  attempts?: number;
-  message?: string;
-  /** Board actions only: how many tickets the filter matched. */
-  tickets?: number;
-  /** The receiver's parsed JSON body, when it sent an object. */
-  result?: ActionPayload;
-};
-
-/** One custom-button click: the server POSTs the ticket to the button's URL
-    and reports how that went — the user is waiting to see their "Sync" land. */
-export const runTicketAction = (base: string, ticketId: string, buttonId: string) =>
-  apiPostE<ActionResult>(
-    `${base}/api/tickets/${encodeURIComponent(ticketId)}/actions/${encodeURIComponent(buttonId)}`,
-  );
-
-/** The list-toolbar twin of runTicketAction: the server POSTs the board's
-    CURRENT filter — who it is narrowed to, which columns — plus the tickets
-    that match, so the receiver acts on the same set the clicker is looking
-    at. "me" is resolved server-side against the clicker. */
-/** Follow a run a board action started. The URL comes from the receiver's
-    own `poll_url`; the server only fetches it when it is on the same origin
-    as the button, so a receiver cannot redirect this at the intranet. */
-export const pollBoardAction = (base: string, projectId: string, buttonId: string, url: string) =>
-  apiPostE<ActionResult>(
-    `${base}/api/projects/${encodeURIComponent(projectId)}/board-actions/${encodeURIComponent(buttonId)}/poll`,
-    { url },
-  );
-
-export const runBoardAction = (
-  base: string,
-  projectId: string,
-  buttonId: string,
-  filter: { assignee?: string; statuses?: string[] },
-) =>
-  apiPostE<ActionResult>(
-    `${base}/api/projects/${encodeURIComponent(projectId)}/board-actions/${encodeURIComponent(buttonId)}`,
-    { assignee: filter.assignee ?? "", statuses: filter.statuses ?? [] },
-  );
 
 /** Deleting a ticket either keeps its chats (they become untracked) or
     deletes them with it. The destructive shape has to be named: a ticket is

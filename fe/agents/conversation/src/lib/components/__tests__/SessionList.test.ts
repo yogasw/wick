@@ -163,7 +163,7 @@ describe("SessionList", () => {
     expect(onDelete).toHaveBeenCalledWith("sess-a");
   });
 
-  test("no scroll sentinel when everything already shows", () => {
+  test("pager is hidden when sessions <= pageSize", () => {
     render(SessionList, {
       props: {
         sessions: [SESSION_A, SESSION_B],
@@ -173,10 +173,10 @@ describe("SessionList", () => {
         onSelect: vi.fn(),
       },
     });
-    expect(screen.queryByTestId("scroll-sentinel")).toBeNull();
+    expect(screen.queryByText(/page 1/i)).toBeNull();
   });
 
-  test("shows only the first chunk when sessions exceed pageSize", () => {
+  test("shows only pageSize rows when sessions exceed it", () => {
     const sessions = [SESSION_A, SESSION_B, SESSION_C];
     render(SessionList, {
       props: {
@@ -192,7 +192,7 @@ describe("SessionList", () => {
     expect(screen.queryByText("Gamma chat")).toBeNull();
   });
 
-  test("sentinel present when more rows wait beyond the window", () => {
+  test("pager appears when sessions exceed pageSize", () => {
     const sessions = [SESSION_A, SESSION_B, SESSION_C];
     render(SessionList, {
       props: {
@@ -203,12 +203,10 @@ describe("SessionList", () => {
         onSelect: vi.fn(),
       },
     });
-    expect(screen.getByTestId("scroll-sentinel")).toBeDefined();
+    expect(screen.getByText(/page 1 \/ 2/i)).toBeDefined();
   });
 
-  test("advancing reveals the next chunk APPENDED, not swapped", async () => {
-    // jsdom has no IntersectionObserver, so the fallback "Show more"
-    // button drives the same showMore() step scrolling would.
+  test("clicking next pager shows next page", async () => {
     const sessions = [SESSION_A, SESSION_B, SESSION_C];
     render(SessionList, {
       props: {
@@ -219,26 +217,10 @@ describe("SessionList", () => {
         onSelect: vi.fn(),
       },
     });
-    await fireEvent.click(screen.getByRole("button", { name: /show more/i }));
+    const nextBtn = screen.getByRole("button", { name: /next/i });
+    await fireEvent.click(nextBtn);
     expect(screen.getByText("Gamma chat")).toBeDefined();
-    expect(screen.getByText("Alpha chat")).toBeDefined();
-  });
-
-  test("at the end of loaded rows with hasMore, advancing asks the server", async () => {
-    const onLoadMore = vi.fn();
-    render(SessionList, {
-      props: {
-        sessions: [SESSION_A, SESSION_B],
-        search: "",
-        pageSize: 2,
-        hasMore: true,
-        onLoadMore,
-        onSearch: vi.fn(),
-        onSelect: vi.fn(),
-      },
-    });
-    await fireEvent.click(screen.getByRole("button", { name: /show more/i }));
-    expect(onLoadMore).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Alpha chat")).toBeNull();
   });
 
   test("renders New chat link with correct href when newChatHref is provided", () => {

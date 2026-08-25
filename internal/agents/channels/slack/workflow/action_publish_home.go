@@ -6,6 +6,7 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
+	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
@@ -24,7 +25,7 @@ type PublishHomeOutput struct {
 	ViewHash string `json:"view_hash"`
 }
 
-func registerActionPublishHome(reg *integration.Registry, pick ChannelPicker) {
+func registerActionPublishHome(reg *integration.Registry, ch *slack.Channel) {
 	reg.RegisterAction(integration.ActionDescriptor{
 		Channel:     Channel,
 		Action:      "publish_home",
@@ -42,7 +43,7 @@ func registerActionPublishHome(reg *integration.Registry, pick ChannelPicker) {
 				"Top-level view JSON MUST have type: \"home\" — not \"modal\".",
 				"hash is optional but recommended when multiple workflows can publish to the same user concurrently; without it the later publish always wins.",
 			},
-			PairWith:     []string{"channel:slack.app_home_opened"},
+			PairWith: []string{"channel:slack.app_home_opened"},
 			OutputSample: `{"view_id":"VH0123ABCDE","view_hash":"1700001234.abcdef00"}`,
 			Examples: []wickdocs.Example{
 				{
@@ -61,10 +62,6 @@ func registerActionPublishHome(reg *integration.Registry, pick ChannelPicker) {
 			},
 		},
 		Execute: func(ctx context.Context, args map[string]any) (any, error) {
-			ch := pick(ctx)
-			if ch == nil {
-				return nil, fmt.Errorf("slack channel not configured")
-			}
 			api := ch.API()
 			if api == nil {
 				return nil, fmt.Errorf("slack channel not configured")

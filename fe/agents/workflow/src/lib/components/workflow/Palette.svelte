@@ -85,7 +85,7 @@
     } else if (d.type === "channel-trigger") {
       e.dataTransfer?.setData(
         "application/x-wick-channel-event",
-        JSON.stringify({ channel: d.channel, channel_instance: d.channel_instance, event: d.event }),
+        JSON.stringify({ channel: d.channel, event: d.event }),
       );
     } else if (d.type === "node") {
       // For plain node drops (no channel/module/op) the legacy
@@ -98,7 +98,6 @@
           JSON.stringify({
             type: d.node_type,
             channel: d.channel,
-            channel_instance: d.channel_instance,
             module: d.module,
             op: d.op,
             row_id: d.row_id,
@@ -146,7 +145,7 @@
     {:else}
       <span class="text-sm font-semibold">Add node</span>
     {/if}
-    <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:hover:text-white-100" onclick={close} aria-label="Close">✕</button>
+    <button class="text-black-700 dark:text-black-500 hover:text-black-800 dark:text-white-100" onclick={close} aria-label="Close">✕</button>
   </header>
 
   <div class="px-3 py-2 border-b border-white-300 dark:border-navy-600">
@@ -169,18 +168,10 @@
           {#if item.kind === "drill"}
             <!-- Nested drill (e.g. connector → instance → ops). -->
             <button
-              class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 focus-visible:outline-none focus-visible:bg-white-300 dark:focus-visible:bg-navy-600 focus-visible:ring-1 focus-visible:ring-emerald-500 transition-colors"
+              class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
               onclick={() => enterDrill(item)}
             >
-              <span class="min-w-0 flex flex-col">
-                <span class="text-sm font-medium truncate">{item.label}</span>
-                {#if item.meta || item.owner}
-                  <span class="text-[10px] leading-snug truncate text-black-700 dark:text-black-500">
-                    {#if item.meta}<span>{item.meta}</span>{/if}
-                    {#if item.owner}<span class="opacity-70">{item.meta ? " · " : ""}{item.owner}</span>{/if}
-                  </span>
-                {/if}
-              </span>
+              <span class="text-sm font-medium truncate">{item.label}</span>
               <span class="flex items-center gap-1.5 text-[10px] text-black-700 dark:text-black-500 shrink-0">
                 {#if item.badge}<span>{item.badge}</span>{/if}
                 <span aria-hidden="true">›</span>
@@ -191,7 +182,7 @@
               draggable="true"
               ondragstart={(e) => ondragstart(e, item)}
               onclick={() => tapAdd(item)}
-              class="w-full flex flex-col items-start gap-0.5 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 focus-visible:outline-none focus-visible:bg-white-300 dark:focus-visible:bg-navy-600 focus-visible:ring-1 focus-visible:ring-emerald-500 cursor-grab transition-colors"
+              class="w-full flex flex-col items-start gap-0.5 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 cursor-grab transition-colors"
               title={item.description}
             >
               <div class="w-full flex items-center justify-between gap-2">
@@ -219,18 +210,10 @@
           {#each group.items as item}
             {#if item.kind === "drill"}
               <button
-                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 focus-visible:outline-none focus-visible:bg-white-300 dark:focus-visible:bg-navy-600 focus-visible:ring-1 focus-visible:ring-emerald-500 transition-colors"
+                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:bg-navy-600 transition-colors"
                 onclick={() => enterDrill(item)}
               >
-                <span class="min-w-0 flex flex-col">
-                  <span class="text-sm font-medium truncate">{item.label}</span>
-                  {#if item.meta || item.owner}
-                    <span class="text-[10px] leading-snug truncate text-black-700 dark:text-black-500">
-                      {#if item.meta}<span>{item.meta}</span>{/if}
-                      {#if item.owner}<span class="opacity-70">{item.meta ? " · " : ""}{item.owner}</span>{/if}
-                    </span>
-                  {/if}
-                </span>
+                <span class="text-sm font-medium truncate">{item.label}</span>
                 <span class="flex items-center gap-1.5 text-[10px] text-black-700 dark:text-black-500 shrink-0">
                   {#if item.badge}<span>{item.badge}</span>{/if}
                   <span aria-hidden="true">›</span>
@@ -241,7 +224,7 @@
                 draggable="true"
                 ondragstart={(e) => ondragstart(e, item)}
                 onclick={() => tapAdd(item)}
-                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 focus-visible:outline-none focus-visible:bg-white-300 dark:focus-visible:bg-navy-600 focus-visible:ring-1 focus-visible:ring-emerald-500 cursor-grab transition-colors"
+                class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:bg-navy-600 cursor-grab transition-colors"
                 title={item.description}
               >
                 <span class="text-sm font-medium truncate">{item.label}</span>

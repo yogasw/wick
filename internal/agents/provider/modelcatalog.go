@@ -181,7 +181,7 @@ func buildMerged() map[Type][]ModelSeed {
 	overlay := loadDiskCatalog()
 
 	out := map[Type][]ModelSeed{}
-	for _, t := range []Type{TypeClaude, TypeCodex, TypeGemini, TypeOMP, TypeOpencode} {
+	for _, t := range []Type{TypeClaude, TypeCodex, TypeGemini} {
 		key := string(t)
 		merged := mergeEntries(base.Providers[key], overlay.Providers[key])
 		seeds := make([]ModelSeed, 0, len(merged))

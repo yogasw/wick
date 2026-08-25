@@ -4,7 +4,7 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { createSessionInProject, getPresetOptions, getProviderOptionModels } from "../api/options.js";
-  import { searchProjectMentionPaths } from "../api/files.js";
+  import { searchProjectFiles } from "../api/files.js";
   import { listComposerCommands } from "../api/composer.js";
   import {
     attachSession,
@@ -16,48 +16,23 @@
     saveTicketPrefs,
     type EmptiedTicket,
   } from "../api/tickets.js";
-  import type { TicketBoard, TicketFilter, TicketSessionRow } from "../types/agents.js";
+  import type { TicketBoard, TicketFilter } from "../types/agents.js";
   import { Composer } from "@wick-fe/common-ui";
   import { NOTIFY_KEY } from "../notify-pref.js";
   import SessionList from "./SessionList.svelte";
   import KanbanBoard from "./KanbanBoard.svelte";
-  import { mergeRail, keepPushedOff } from "../railPaging.js";
   import TicketDetail from "./TicketDetail.svelte";
-  import { connectSessionsStream } from "../stores/sessionsStream.js";
-  import OwnerTabs from "./OwnerTabs.svelte";
-  import ProjectMenu from "./ProjectMenu.svelte";
 
   type Props = {
     base: string;
     project: ProjectOption;
     providers: ProviderOption[];
     sessions: SessionListItem[];
-    /* Server-side match count for the current scope — the list's number and
-       the breadcrumb's, both printed only once the list itself arrived. */
-    sessionTotal?: number;
-    ownerTab: "me" | "all";
-    listLoading?: boolean;
-    hasMore?: boolean;
-    onLoadMore?: () => void;
-    onOwnerTab: (v: "me" | "all") => void;
     onPin: () => void;
     onSelectSession: (id: string) => void;
   };
 
-  let {
-    base,
-    project,
-    providers,
-    sessions,
-    sessionTotal,
-    ownerTab,
-    listLoading = false,
-    hasMore = false,
-    onLoadMore,
-    onOwnerTab,
-    onPin,
-    onSelectSession,
-  }: Props = $props();
+  let { base, project, providers, sessions, onPin, onSelectSession }: Props = $props();
 
   let search = $state("");
   let selectedProvider = $state<string>("");
@@ -97,7 +72,7 @@
   // Live model loader — same contract as the conversation composer: split the
   // "type/name" value and fetch that instance's current vendor models, falling
   // back (composer-side) to the static list on error.
-  function loadProviderModels(optionValue: string, opts?: { entry?: string; refresh?: boolean }) {
+  function loadProviderModels(optionValue: string, opts?: { entry?: string }) {
     const slash = optionValue.indexOf("/");
     const type = slash < 0 ? optionValue : optionValue.slice(0, slash);
     const name = slash < 0 ? optionValue : optionValue.slice(slash + 1);
@@ -143,7 +118,7 @@
 
   // `@` searches THIS project's folder; `/` shows skills only (pre-session).
   function searchMentionFiles(query: string): Promise<string[]> {
-    return Effect.runPromise(searchProjectMentionPaths(base, project.id, query).pipe(Effect.provide(WickClientLayer)))
+    return Effect.runPromise(searchProjectFiles(base, project.id, query).pipe(Effect.provide(WickClientLayer)))
       .catch(() => [] as string[]);
   }
   let composerCommands = $state<ComposerCommand[]>([]);
@@ -151,43 +126,18 @@
     const providerType = selectedProvider ? selectedProvider.split("/")[0] : "";
     Effect.runPromise(listComposerCommands(base, "new", providerType).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
-        // key: c.id — `value` is the skill's frontmatter name, which repeats
-        // across providers' skills dirs and would abort the keyed each block.
-        // This page is the worst case for it: with no provider selected yet
-        // providerType is "", so the server returns every provider's copy.
         composerCommands = (res.commands ?? []).map((c) => ({
-          key: c.id, value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category,
+          value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category,
         }));
       })
       .catch(() => { /* commands optional */ });
   });
 
-  const chatCount = $derived(sessionTotal ?? sessions.length);
+  const chatCount = $derived(sessions.length);
 
   /* ── ticket board (only when the project has ticket mode enabled) ── */
   let board = $state<TicketBoard | null>(null);
   let ticketFilter = $state<TicketFilter>({});
-  /* The untracked rail's scope. Deliberately NOT part of the saved filter:
-     every visit to a project board starts back at "yours" — widening to
-     everyone's loose chats is a per-look choice, not a standing one. */
-  let untrackedOwner = $state<"me" | "all">("me");
-  /* The poll asks for the rail's FIRST page only. Older pages are fetched
-     once each, on scroll, and kept here — so a rail scrolled back through a
-     few hundred chats does not re-send all of them every 30 seconds. */
-  const UNTRACKED_PAGE = 25;
-  const UNTRACKED_MORE_PAGE = 50;
-  let untrackedMore = $state<TicketSessionRow[]>([]);
-  /* Where the kept pages end: the cursor the last of them came back with,
-     "" when nothing follows. Meaningless while untrackedMore is empty — the
-     first page's own untracked_next continues the rail then. */
-  let untrackedMoreNext = $state("");
-  let loadingMoreUntracked = false;
-  /* The request the current board answered, so a poll can tell "the same
-     list moved" from "a different list". */
-  let boardKeyLoaded = "";
-  /* Chats this page just put on a ticket. They leave the rail for the rest
-     of the request even if a page loaded earlier still carries them. */
-  let trackedHere = $state(new Set<string>());
 
   /* The filter IS the request: statuses, assignee and the untracked rail all
      decide what the server builds, so a switched-off column costs nothing to
@@ -208,11 +158,7 @@
       statuses,
       assignee: ticketFilter.assignee || undefined,
       untracked: ticketFilter.show_untracked === true,
-      untrackedLimit: UNTRACKED_PAGE,
-      /* Your own loose chats by default — "all" is an explicit choice, and
-         the count follows the scope so the rail's number and its rows always
-         describe the same set. */
-      untrackedOwner,
+      untrackedLimit: 25,
     };
   });
 
@@ -236,11 +182,6 @@
   $effect(() => {
     if (!filterLoaded) return;
     boardRequestKey; // the sole dependency: re-fetch when the request changes
-    // A different request (scope, filter, project) is a different list:
-    // the pages loaded under the old one no longer continue it.
-    untrackedMore = [];
-    untrackedMoreNext = "";
-    trackedHere = new Set();
     reloadBoard();
   });
 
@@ -253,167 +194,13 @@
     new URLSearchParams(window.location.search).get("ticket"),
   );
 
-  /* Ticket navigation writes the URL, so back/forward walk board ↔ ticket
-     like pages and a ticket's URL can be shared. Every place that opens or
-     closes a ticket goes through here; popstate feeds the same state back. */
-  function gotoTicket(id: string | null) {
-    openTicketId = id;
-    const url = new URL(window.location.href);
-    if (id) url.searchParams.set("ticket", id);
-    else url.searchParams.delete("ticket");
-    if (url.toString() !== window.location.href) history.pushState({}, "", url);
-  }
-
-  $effect(() => {
-    const onPop = () => {
-      openTicketId = new URLSearchParams(window.location.search).get("ticket");
-    };
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  });
-
-  /* Next page of the untracked rail, appended — see railPaging.ts for why
-     it is asked for by cursor and not by the drawn row count. */
-  function loadMoreUntracked() {
-    if (loadingMoreUntracked || !boardView?.untracked_next) return;
-    loadingMoreUntracked = true;
-    const key = boardRequestKey;
-    const after = boardView.untracked_next;
-    Effect.runPromise(
-      getProjectTickets(base, project.id, {
-        rows: 0,
-        statuses: [], // rows only — no cards
-        untracked: true,
-        untrackedLimit: UNTRACKED_MORE_PAGE,
-        untrackedAfter: after,
-        untrackedOwner,
-      }).pipe(Effect.provide(WickClientLayer)),
-    )
-      .then((b) => {
-        if (key !== boardRequestKey) return; // the request changed meanwhile
-        const have = new Set([...(board?.untracked ?? []), ...untrackedMore].map((r) => r.id));
-        untrackedMore = [...untrackedMore, ...b.untracked.filter((r) => !have.has(r.id))];
-        untrackedMoreNext = b.untracked_next ?? "";
-      })
-      .catch(() => { /* the sentinel offers it again on the next scroll */ })
-      .finally(() => { loadingMoreUntracked = false; });
-  }
-
-  /* The board as drawn: the polled first page, then the pages loaded on
-     scroll, minus any row the fresh first page now holds itself. Once pages
-     are kept, the rail continues from where THEY end. */
-  const boardView = $derived.by(() => {
-    if (!board || untrackedMore.length === 0) return board;
-    return {
-      ...board,
-      untracked: mergeRail(board.untracked, untrackedMore, trackedHere),
-      untracked_next: untrackedMoreNext || undefined,
-    };
-  });
-
-  /* A chat the board just attached or turned into a ticket: off the rail. */
-  function sessionTracked(id: string) {
-    trackedHere = new Set(trackedHere).add(id);
-    untrackedMore = untrackedMore.filter((r) => r.id !== id);
-  }
-
   function reloadBoard() {
-    const key = boardRequestKey;
     Effect.runPromise(
       getProjectTickets(base, project.id, boardOptions).pipe(Effect.provide(WickClientLayer)),
     )
-      .then((b) => {
-        if (key !== boardRequestKey) return; // superseded by a newer request
-        // Same list, moved: a chat pushed off page one stays on the rail.
-        if (board && boardKeyLoaded === key) {
-          untrackedMore = keepPushedOff(board.untracked, b.untracked, untrackedMore, trackedHere, UNTRACKED_PAGE);
-          if (untrackedMore.length === 0) untrackedMoreNext = "";
-        }
-        board = b;
-        boardKeyLoaded = key;
-      })
+      .then((b) => { board = b; })
       .catch(() => { /* keep the previous board on a transient failure */ });
   }
-
-  /* ── keeping the board honest about time ──
-
-     A ticket does not only change from this page. A sync writes one, an
-     agent moves one, somebody else drags one — and until now the board only
-     re-fetched when the FILTER changed, so it sat on whatever it was handed
-     at open. "Updated 5h ago" stayed 5h ago for the rest of the day, and the
-     column order with it, because the order IS the timestamp.
-
-     So it listens: every ticket write sends a `ticket` signal on the shared
-     /stream/sessions connection (stream_ticket.go, filtered to projects the
-     caller may open), and a signal for this project refetches. A hidden
-     tab only marks itself stale and refetches on return. Polling is the
-     fallback while that stream is down, and a reconnect refetches once —
-     signals sent during the gap are gone. Card ages ("5h ago") tick on
-     their own clock (TicketCard), so time alone needs no fetch. */
-  const BOARD_POLL_MS = 60_000;
-
-  /* A drag pauses it. The board applies a move optimistically and confirms
-     it with a PATCH; a poll landing in that gap would hand back the
-     pre-move board and the card would visibly jump home and back. */
-  let dragging = $state(false);
-  $effect(() => {
-    const on = () => { dragging = true; };
-    const off = () => { dragging = false; };
-    window.addEventListener("dragstart", on);
-    window.addEventListener("dragend", off);
-    window.addEventListener("drop", off);
-    return () => {
-      window.removeEventListener("dragstart", on);
-      window.removeEventListener("dragend", off);
-      window.removeEventListener("drop", off);
-    };
-  });
-
-  $effect(() => {
-    if (!filterLoaded) return;
-    const pid = project.id;
-    let streamUp = false;
-    let dropped = false;
-    let stale = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const due = () => {
-      if (dragging || (typeof document !== "undefined" && document.hidden)) {
-        stale = true;
-        return;
-      }
-      stale = false;
-      reloadBoard();
-    };
-    /* A burst (a sync touching many tickets) costs one fetch. */
-    const soon = () => {
-      if (timer !== null) clearTimeout(timer);
-      timer = setTimeout(() => { timer = null; due(); }, 300);
-    };
-    const leave = connectSessionsStream(base, {
-      onTicket: (t) => { if (t.project_id === pid) soon(); },
-      onStatus: (st) => {
-        streamUp = st === "connected";
-        if (!streamUp) dropped = true;
-        else if (dropped) { dropped = false; soon(); }
-      },
-    });
-    const id = setInterval(() => { if (!streamUp) due(); }, BOARD_POLL_MS);
-    const onVisible = () => { if (!document.hidden && (stale || !streamUp)) due(); };
-    document.addEventListener("visibilitychange", onVisible);
-    /* A drop ends a drag; a signal that arrived mid-drag is applied now. */
-    const onDragEnd = () => { if (stale) soon(); };
-    window.addEventListener("dragend", onDragEnd);
-    window.addEventListener("drop", onDragEnd);
-    return () => {
-      leave();
-      if (timer !== null) clearTimeout(timer);
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("dragend", onDragEnd);
-      window.removeEventListener("drop", onDragEnd);
-    };
-  });
-
 
   /* ── a ticket that just lost its last chat ──
      A ticket with no sessions tracks nothing, so removal is offered. The
@@ -467,7 +254,7 @@
      stashed and applied once the new session exists. */
   function newSessionInTicket(ticketId: string) {
     pendingTicketId = ticketId;
-    gotoTicket(null);
+    openTicketId = null;
   }
   let pendingTicketId = $state<string | null>(null);
   /* The ticket the next message lands on. SELECTING one is enough — having
@@ -488,16 +275,10 @@
   );
   /* The placeholder sits on ONE line that cannot wrap, so a long ticket
      title would run past the input's right edge and hide the "/ commands"
-     hint after it. The footer below carries a longer cut and the full title
-     on hover, so nothing is lost by clipping it here. */
+     hint after it. The footer below states the title in full and wraps, so
+     nothing is lost by clipping it here. */
   const activeTicketShort = $derived(
     activeTicketLabel.length > 32 ? activeTicketLabel.slice(0, 32).trimEnd() + "…" : activeTicketLabel,
-  );
-  /* The footer line gets the same treatment with more room: a run-on title
-     (or a pasted id) must not stretch the banner to three lines. The full
-     title sits on the hover. */
-  const activeTicketBanner = $derived(
-    activeTicketLabel.length > 60 ? activeTicketLabel.slice(0, 60).trimEnd() + "…" : activeTicketLabel,
   );
 
   let filterSaveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -542,26 +323,103 @@
   }
 </script>
 
-<!-- The page is full-bleed, but only the board and a ticket's page USE that
-     width — they are work surfaces, like any ticketing tool. The back link,
-     header, and composer stay a centered column no matter the view, so
-     typing a message never happens in a viewport-wide input. -->
-<div class="flex flex-col h-full p-6 mx-auto w-full gap-4">
-  <!-- Session list / ticket board. The List|Card toggle appears only when
-       this project has ticket mode enabled; the choice is saved per user.
-       Width follows the job: the plain list stays the composer's column, the
-       board gets room for four columns, a ticket's page sits in between —
-       wide enough for a main column plus its properties rail, never
-       edge-to-edge. -->
-  <div
-    class={"flex flex-col gap-3 flex-1 min-h-0 " +
-      (ticketEnabled && openTicketId
-        ? "mx-auto w-full max-w-7xl"
-        : ticketEnabled && viewMode === "card"
-          ? "w-full max-w-none"
-          : "page-col")}
+<div class="flex flex-col h-full p-6 max-w-4xl mx-auto w-full gap-6">
+
+  <!-- Back link -->
+  <a
+    href={`${base}/sessions`}
+    class="inline-flex items-center gap-1.5 text-xs text-black-700 dark:text-black-600 hover:text-green-600 dark:hover:text-green-400 transition-colors w-fit"
   >
-    {#if ticketEnabled && !openTicketId}
+    <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+      <path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+    All chats
+  </a>
+
+  <!-- Project header -->
+  <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <div class="flex items-center gap-3 min-w-0">
+      <div class="shrink-0 flex items-center justify-center w-10 h-10 rounded-xl bg-white-200 dark:bg-navy-700 border border-white-300 dark:border-navy-600">
+        <svg viewBox="0 0 16 16" class="h-5 w-5 text-black-800 dark:text-white-100" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M2 4a1 1 0 011-1h3l2 2h5a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+      </div>
+      <div class="min-w-0">
+        <h1 class="text-lg font-semibold text-black-900 dark:text-white-100 truncate">{project.name}</h1>
+        <p class="text-xs text-black-700 dark:text-black-600 mt-0.5">
+          {chatCount} chats · {project.managed ? "managed" : "custom"}
+        </p>
+        {#if project.path}
+          <p class="text-[11px] font-mono text-black-600 dark:text-black-700 mt-0.5 truncate">{project.path}</p>
+        {/if}
+      </div>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onclick={onPin}
+        aria-pressed={project.pinned}
+        class="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors {project.pinned
+          ? 'border-green-500 bg-green-500 text-white-100 hover:bg-green-600'
+          : 'border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-black-800 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-600'}"
+      >
+        <span class="text-[11px] leading-none {project.pinned ? '' : 'grayscale'}">📌</span>
+        {project.pinned ? "Pinned as default" : "Pin as default"}
+      </button>
+      <a
+        href={`${base}/projects/${project.id}`}
+        class="inline-flex items-center gap-1.5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-600 transition-colors"
+      >
+        <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="8" cy="8" r="6"></circle>
+          <path d="M8 5v3l2 2" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
+        Settings
+      </a>
+    </div>
+  </div>
+
+  <!-- Compose box: shared Composer (project is fixed here, shown in the header). -->
+  <Composer
+    onSend={handleSend}
+    placeholder={activeTicketId
+      ? `Ask anything on ${activeTicketShort}…   / commands · @ files`
+      : "Ask anything…   / commands · @ files"}
+    notifyKey={NOTIFY_KEY}
+    provider={providerSelect}
+    preset={presetSelect}
+    onSearchFiles={searchMentionFiles}
+    commands={composerCommands}
+  />
+  <!-- With a ticket selected the composer says so by NAME, and offers the
+       way out: picking a ticket is a mode, and a mode you cannot see or
+       leave is a trap. Without one the line stays the plain project
+       default. -->
+  {#if activeTicketId}
+    <p class="text-center text-xs text-black-600 dark:text-black-700">
+      New session on <span class="font-medium text-green-600 dark:text-green-400"
+        >{activeTicketLabel}</span
+      >
+      in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span> — this
+      chat joins the ticket and reads its notes.
+      <button
+        type="button"
+        onclick={() => { pendingTicketId = null; openTicketId = null; }}
+        class="underline transition-colors hover:text-black-800 dark:hover:text-black-500"
+        >Start without a ticket</button
+      >
+    </p>
+  {:else}
+    <p class="text-center text-xs text-black-600 dark:text-black-700">
+      New session in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span>{#if project.defaultProvider} · defaults to <span class="font-mono">{project.defaultProvider}</span>{/if}. Pick provider / model / preset above to override for this session.
+    </p>
+  {/if}
+
+  <!-- Session list / ticket board. The List|Card toggle appears only when
+       this project has ticket mode enabled; the choice is saved per user. -->
+  <div class="flex flex-col gap-3 flex-1 min-h-0">
+    {#if ticketEnabled}
       <div class="flex items-center justify-between">
         <div class="inline-flex overflow-hidden rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
           <button
@@ -581,52 +439,25 @@
               : "text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600")}
           >Card</button>
         </div>
-        <div class="ml-auto flex items-center gap-2">
-          {#if viewMode === "list"}
-            <OwnerTabs value={ownerTab} onChange={onOwnerTab} />
-          {/if}
-          <ProjectMenu {base} {project} {chatCount} {onPin} />
-        </div>
-      </div>
-    {:else if !ticketEnabled && !openTicketId}
-      <!-- No board here, but the same scope choice: your chats first, the
-           whole project's on request. -->
-      <div class="flex items-center justify-end gap-2">
-        <OwnerTabs value={ownerTab} onChange={onOwnerTab} />
-        <ProjectMenu {base} {project} {chatCount} {onPin} />
-      </div>
-    {:else if ticketEnabled && openTicketId}
-      <!-- A ticket's page has its own Back; only the project's actions need
-           somewhere to live. -->
-      <div class="flex items-center justify-end">
-        <ProjectMenu {base} {project} {chatCount} {onPin} />
       </div>
     {/if}
 
     {#if ticketEnabled && openTicketId}
-      <!-- The page height is locked (each panel scrolls itself), so the
-           ticket's long page scrolls in its own container. -->
-      <div class="min-h-0 flex-1 overflow-y-auto">
-        <TicketDetail
-          {base}
-          ticketId={openTicketId}
-          onBack={() => { gotoTicket(null); reloadBoard(); }}
-          onOpenSession={onSelectSession}
-          onNewSession={newSessionInTicket}
-        />
-      </div>
-    {:else if ticketEnabled && viewMode === "card" && boardView}
+      <TicketDetail
+        {base}
+        ticketId={openTicketId}
+        onBack={() => { openTicketId = null; reloadBoard(); }}
+        onOpenSession={onSelectSession}
+        onNewSession={newSessionInTicket}
+      />
+    {:else if ticketEnabled && viewMode === "card" && board}
       <KanbanBoard
         {base}
         projectId={project.id}
-        board={boardView}
+        {board}
         filter={ticketFilter}
-        {untrackedOwner}
-        onUntrackedOwner={(v) => { untrackedOwner = v; }}
-        onUntrackedMore={loadMoreUntracked}
-        onSessionTracked={sessionTracked}
         onFilter={applyFilter}
-        onOpen={(id) => { gotoTicket(id); }}
+        onOpen={(id) => { openTicketId = id; }}
         onOpenSession={onSelectSession}
         onReload={reloadBoard}
         onEmptied={handleEmptied}
@@ -634,52 +465,11 @@
     {:else}
       <SessionList
         {sessions}
-        total={sessionTotal}
-        loading={listLoading}
-        {hasMore}
-        {onLoadMore}
         {search}
         onSearch={(s) => { search = s; }}
         onSelect={onSelectSession}
       />
     {/if}
-  </div>
-
-  <!-- The floating composer: every view's reply box, bottom-centre like a
-       helpdesk's. Starting a chat from a ticket page joins that ticket; from
-       the list or board it is a plain new session in the project. Sticky, so
-       a long page never scrolls it away. -->
-  <div class="sticky bottom-0 z-10 mx-auto w-full max-w-3xl pb-1">
-    <div class="rounded-xl border border-white-300 bg-white-100 p-3 shadow-lg dark:border-navy-600 dark:bg-navy-700">
-      <Composer
-        onSend={handleSend}
-        placeholder={activeTicketId
-          ? `Ask anything on ${activeTicketShort}…   / commands · @ files`
-          : "Ask anything…   / commands · @ files"}
-        notifyKey={NOTIFY_KEY}
-        provider={providerSelect}
-        preset={presetSelect}
-        onSearchFiles={searchMentionFiles}
-        commands={composerCommands}
-      />
-      <p class="mt-2 text-center text-[11px] text-black-600 dark:text-black-700">
-        {#if activeTicketId}
-          New session on <span
-            class="font-medium text-green-600 dark:text-green-400"
-            title={activeTicketLabel}
-            >{activeTicketBanner}</span
-          > — this chat joins the ticket and reads its notes.
-          <button
-            type="button"
-            onclick={() => { pendingTicketId = null; gotoTicket(null); }}
-            class="underline transition-colors hover:text-black-800 dark:hover:text-black-500"
-            >Start without a ticket</button
-          >
-        {:else}
-          New session in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span>{#if project.defaultProvider} · defaults to <span class="font-mono">{project.defaultProvider}</span>{/if}. Pick provider / model / preset above to override.
-        {/if}
-      </p>
-    </div>
   </div>
 </div>
 

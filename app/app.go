@@ -19,7 +19,6 @@ package app
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -42,7 +41,6 @@ import (
 	"github.com/yogasw/wick/internal/pkg/daemon"
 	"github.com/yogasw/wick/internal/pkg/env"
 	"github.com/yogasw/wick/internal/pkg/logfiles"
-	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"github.com/yogasw/wick/internal/pkg/worker"
 	"github.com/yogasw/wick/internal/systemtray"
 	"github.com/yogasw/wick/internal/tools"
@@ -554,9 +552,6 @@ func Run() {
 				defer cleanup()
 				serverLogger = ls.Server
 				workerLogger = ls.Worker
-				// A graceful upgrade forks a successor; it must inherit the
-				// real stdio, not the log pipes we just installed.
-				upgrade.SpawnWrapper = logfiles.WithOriginalStdio
 			}
 			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
@@ -650,37 +645,24 @@ func Run() {
 	startCmd := daemonStartCmd()
 	stopCmd := daemonStopCmd()
 	restartCmd := daemonRestartCmd()
-	reloadCmd := daemonReloadCmd()
 	statusCmd := daemonStatusCmd()
 	svcCmd := serviceCmd()
 	startCmd.GroupID = "daemon"
 	stopCmd.GroupID = "daemon"
 	restartCmd.GroupID = "daemon"
-	reloadCmd.GroupID = "daemon"
 	statusCmd.GroupID = "daemon"
 	svcCmd.GroupID = "daemon"
 
 	root.AddCommand(
 		serverCmd, workerCmd, allCmd,
-		startCmd, stopCmd, restartCmd, reloadCmd, statusCmd, svcCmd,
+		startCmd, stopCmd, restartCmd, statusCmd, svcCmd,
 		mcpCmd, trayCmd,
 		configCmd(), pluginCmd(), uninstallCmd(),
 		versionCmd,
 		agentExecCmd(),
-		agentChannelCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
-		// A command may name the exit code it wants. Scripts branch on
-		// those — "the token expired" and "wick is unreachable" are
-		// different problems and a single exit 1 makes a build script guess
-		// between them — and they print plainly rather than as a log line
-		// nobody pipes anywhere.
-		var coded interface{ ExitCode() int }
-		if errors.As(err, &coded) {
-			fmt.Fprintln(os.Stderr, "error: "+err.Error())
-			os.Exit(coded.ExitCode())
-		}
 		log.Fatal().Msgf("failed run app: %s", err.Error())
 	}
 }

@@ -5,16 +5,6 @@ import * as api from "$lib/api.js";
 import * as router from "$lib/router.js";
 import type { HistoryResult, HistoryRun } from "$lib/types.js";
 
-/* pickOption drives the themed <Select> (common-ui): open its trigger,
-   click the option carrying `value`. The listbox is portalled to body. */
-async function pickOption(trigger: HTMLElement, value: string): Promise<void> {
-  await fireEvent.click(trigger);
-  const opt = document.body.querySelector<HTMLElement>(`[role="option"][data-value="${value}"]`);
-  if (!opt) throw new Error(`no option ${value}`);
-  await fireEvent.click(opt);
-}
-
-
 vi.mock("$lib/api.js");
 vi.mock("$lib/router.js", () => ({ push: vi.fn() }));
 
@@ -26,8 +16,6 @@ function makeRun(over: Partial<HistoryRun> = {}): HistoryRun {
     status: "success",
     user_id: "u-1",
     user_name: "Alice",
-    account_id: "",
-    account_name: "",
     error_msg: "",
     latency_ms: 12,
     http_status: 200,
@@ -49,10 +37,6 @@ function makeResult(over: Partial<HistoryResult> = {}): HistoryResult {
     runs: [makeRun()],
     ops: [{ key: "send", name: "Send" }],
     users: [{ id: "u-1", name: "Alice" }],
-    credentials: [
-      { id: "default", name: "Default credentials" },
-      { id: "acc-1", name: "@yoga.setiawan" },
-    ],
     page: 1,
     total_pages: 1,
     total: 1,
@@ -92,8 +76,8 @@ describe("ConnectorHistory", () => {
     await screen.findByText("Run history");
     vi.mocked(api.getConnectorHistory).mockClear();
     /* Filter selects render in order: op, source, status, user. */
-    const sourceSelect = screen.getAllByTestId("wick-select-trigger")[1];
-    await pickOption(sourceSelect, "mcp");
+    const sourceSelect = screen.getAllByRole("combobox")[1];
+    await fireEvent.change(sourceSelect, { target: { value: "mcp" } });
     expect(api.getConnectorHistory).toHaveBeenCalledWith(
       "slack",
       "row-a",
@@ -176,50 +160,5 @@ describe("ConnectorHistory", () => {
     await screen.findByText("Run history");
     await fireEvent.click(screen.getByText("send"));
     expect(screen.queryByRole("button", { name: "Retry in test panel" })).toBeNull();
-  });
-});
-
-/* Credential is a second, independent axis: User says who asked, Credential
-   says which identity it went out as. A run with no account used the row's
-   own configured credentials. */
-describe("ConnectorHistory credential filter", () => {
-  it("labels a run with no account as the row's own credentials", async () => {
-    vi.mocked(api.getConnectorHistory).mockResolvedValue(makeResult({ runs: [makeRun({ account_id: "" })] }));
-    render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
-    /* Scope to the table: the same label is also a dropdown option. */
-    const table = await screen.findByRole("table");
-    expect(within(table).getByText("Default credentials")).toBeTruthy();
-  });
-
-  it("names the connected account a run ran as", async () => {
-    vi.mocked(api.getConnectorHistory).mockResolvedValue(
-      makeResult({ runs: [makeRun({ account_id: "acc-1", account_name: "yoga.setiawan" })] }),
-    );
-    render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
-    const table = await screen.findByRole("table");
-    expect(within(table).getByText("@yoga.setiawan")).toBeTruthy();
-  });
-
-  it("falls back to the id when the account has since been disconnected", async () => {
-    vi.mocked(api.getConnectorHistory).mockResolvedValue(
-      makeResult({ runs: [makeRun({ account_id: "acc-gone", account_name: "" })] }),
-    );
-    render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
-    /* An empty cell would read as "default credentials", which is the one
-       thing it is not. */
-    expect(await screen.findByText("acc-gone")).toBeTruthy();
-  });
-
-  it("passes the picked credential to the API", async () => {
-    vi.mocked(api.getConnectorHistory).mockResolvedValue(makeResult());
-    render(ConnectorHistory, { connectorKey: "slack", connectorId: "row-a" });
-    await screen.findByText("send");
-    const selects = screen.getAllByTestId("wick-select-trigger");
-    await pickOption(selects[selects.length - 1], "default");
-    expect(api.getConnectorHistory).toHaveBeenLastCalledWith(
-      "slack",
-      "row-a",
-      expect.objectContaining({ credential: "default" }),
-    );
   });
 });

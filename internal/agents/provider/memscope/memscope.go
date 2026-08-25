@@ -72,13 +72,7 @@ type Opts struct {
 // package exists to explain.
 type Stats struct {
 	PeakBytes uint64
-	// OOMKills mirrors memory.events `oom_kill`: processes in this cgroup
-	// killed by ANY OOM killer — the cgroup's own limit or the global one.
-	OOMKills int
-	// OOMEvents mirrors memory.events `oom`: OOM conditions raised by THIS
-	// cgroup hitting its own limit. Kills with OOMEvents==0 came from the
-	// machine running out, not from the agent exceeding its ceiling.
-	OOMEvents int
+	OOMKills  int
 	Known     bool
 }
 

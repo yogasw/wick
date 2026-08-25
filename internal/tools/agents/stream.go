@@ -55,13 +55,6 @@ type Event struct {
 	// so the UI can show "started HH:MM:SS, took Ns".
 	At    int64 `json:"at,omitempty"`
 	EndAt int64 `json:"end_at,omitempty"`
-	// ContextUsed is how full the window was for the request this frame
-	// came from — a mid-turn reading, so the meter beside the composer
-	// moves while a long turn is running instead of after it. Carried on
-	// whatever event happened to be the one that knew (see
-	// event.AgentEvent.ContextUsed); 0 means this event said nothing
-	// about the window.
-	ContextUsed int `json:"context_used,omitempty"`
 }
 
 func (e Event) JSON() string {
@@ -79,24 +72,11 @@ func (e Event) JSON() string {
 type Broadcaster struct {
 	mu   sync.RWMutex
 	subs map[string][]chan Event
-	// lastGit keeps the most recent git_status payload per session so a
-	// subscriber that joins later can be told the current state.
-	//
-	// git_status is the only event the FE treats as authoritative STATE
-	// rather than an increment: the Source rail badge is rendered purely
-	// from it, with no REST fallback. And because the SharedWorker keeps
-	// ONE stream alive across page loads, a reload does not re-open the
-	// stream — so without a replay the reloaded page waited for the next
-	// filesystem change and showed no counter at all until then.
-	lastGit map[string]string
-	// parentOf resolves a session's direct parent for the sub_agent signal
-	// (see subAgentSignal). Defaults to the registry; tests inject one.
-	parentOf func(string) (string, bool)
 }
 
 // NewBroadcaster returns a ready Broadcaster.
 func NewBroadcaster() *Broadcaster {
-	return &Broadcaster{subs: make(map[string][]chan Event), lastGit: make(map[string]string), parentOf: sessionParentOf}
+	return &Broadcaster{subs: make(map[string][]chan Event)}
 }
 
 // Subscribe registers a listener for a specific session (or "" for all).
@@ -143,12 +123,11 @@ func (b *Broadcaster) HasSubscribers(sessionID string) bool {
 // Non-blocking: a full channel's event is dropped rather than blocking.
 func (b *Broadcaster) Publish(sessionID, agentName string, ev event.AgentEvent) {
 	payload := Event{
-		SessionID:   sessionID,
-		AgentName:   agentName,
-		Type:        ev.Type.String(),
-		Data:        ev.Text,
-		Raw:         ev.Raw,
-		ContextUsed: ev.ContextUsed,
+		SessionID: sessionID,
+		AgentName: agentName,
+		Type:      ev.Type.String(),
+		Data:      ev.Text,
+		Raw:       ev.Raw,
 	}
 	now := time.Now().UnixMilli()
 	switch ev.Type {
@@ -252,42 +231,11 @@ func (b *Broadcaster) PublishConnectorRun(sessionID, runID, connectorID, opKey, 
 // no follow-up fetch, hence no polling. The marshalling lives in the
 // caller (scm_watch.go) to avoid an import cycle on the scm types.
 func (b *Broadcaster) PublishGitStatusJSON(sessionID, jsonPayload string) {
-	if sessionID != "" {
-		b.mu.Lock()
-		if b.lastGit == nil {
-			b.lastGit = make(map[string]string)
-		}
-		b.lastGit[sessionID] = jsonPayload
-		b.mu.Unlock()
-	}
 	b.fanout(sessionID, Event{
 		SessionID: sessionID,
 		Type:      "git_status",
 		Data:      jsonPayload,
 	})
-}
-
-// ForgetGitStatus drops a session's cached payload — called when its
-// watcher stops, so the cache tracks live sessions only.
-func (b *Broadcaster) ForgetGitStatus(sessionID string) {
-	if sessionID == "" {
-		return
-	}
-	b.mu.Lock()
-	delete(b.lastGit, sessionID)
-	b.mu.Unlock()
-}
-
-// LastGitStatus returns the most recent git_status payload for a session,
-// for replaying state to a subscriber that joined after it was published.
-func (b *Broadcaster) LastGitStatus(sessionID string) (string, bool) {
-	if sessionID == "" {
-		return "", false
-	}
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	v, ok := b.lastGit[sessionID]
-	return v, ok
 }
 
 // PublishApprovalRequest fires when the gate binary dials the daemon socket
@@ -447,34 +395,20 @@ func (b *Broadcaster) PublishSystemTurn(sessionID, agentName, text string, steps
 }
 
 func (b *Broadcaster) fanout(sessionID string, payload Event) {
-	// Resolved before taking the lock: it reads the session registry.
-	parentID, signal, hasSignal := b.subAgentSignal(sessionID, payload)
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	if hasSignal {
-		b.sendTo(parentID, signal)
-	}
-	b.sendTo("", payload)
-	// A global-only publish (sessionID "") must not reach the global
-	// subscribers twice.
-	if sessionID != "" {
-		b.sendTo(sessionID, payload)
-	}
-}
-
-// sendTo delivers payload to the subscribers of one key without blocking.
-// The caller holds b.mu.
-func (b *Broadcaster) sendTo(key string, payload Event) {
-	for _, ch := range b.subs[key] {
-		select {
-		case ch <- payload:
-		default:
-			log.Warn().
-				Str("session_id", payload.SessionID).
-				Str("agent", payload.AgentName).
-				Str("event_type", payload.Type).
-				Int("buffer", subBuffer).
-				Msg("sse: subscriber buffer full, dropping event")
+	for _, key := range []string{sessionID, ""} {
+		for _, ch := range b.subs[key] {
+			select {
+			case ch <- payload:
+			default:
+				log.Warn().
+					Str("session_id", payload.SessionID).
+					Str("agent", payload.AgentName).
+					Str("event_type", payload.Type).
+					Int("buffer", subBuffer).
+					Msg("sse: subscriber buffer full, dropping event")
+			}
 		}
 	}
 }

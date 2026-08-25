@@ -119,9 +119,6 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 	// need a stricter auth gate (per-job access / admin) than base auth.
 	mux.Handle("GET /manager", auth(http.HandlerFunc(h.serveSPAShell)))
 	mux.Handle("GET /manager/{path...}", auth(http.HandlerFunc(h.serveSPAShell)))
-	// The Plugins page moved under /admin (it is admin scope); old
-	// bookmarks land there with their query string intact.
-	registerPluginsRedirect(mux, auth)
 
 	// Jobs — view/run gated by per-job access; admin mutations gate by RequireAdmin only
 	// (admins must be able to manage disabled jobs, so settings routes skip RequireJobAccess).
@@ -138,7 +135,6 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 	// behaviour on the /manager/api surface so the SPA stays consistent.
 	mux.Handle("GET /manager/api/jobs/{key}", authJob(h.apiJobDetail))
 	mux.Handle("POST /manager/api/jobs/{key}/run", authJob(h.apiRunJob))
-	mux.Handle("POST /manager/api/jobs/{key}/cancel", authJob(h.apiCancelJob))
 	mux.Handle("GET /manager/api/jobs/{key}/runs/{runID}", authJob(h.apiJobRun))
 	mux.Handle("POST /manager/api/jobs/{key}/settings", adminOnly(h.apiUpdateJobSettings))
 	mux.Handle("POST /manager/api/jobs/{key}/configs/{configKey}", adminOnly(h.apiSetJobConfig))

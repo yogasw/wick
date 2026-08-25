@@ -10,7 +10,6 @@ paths:
   - "pkg/plugin/**"
   - "internal/connectors/plugin/**"
   - "internal/manager/plugins_api.go"
-  - "internal/plugins/replace/**"
   - "app/plugin_cmd.go"
   - ".github/workflows/release-plugins.yml"
   - ".vscode/tasks.json"
@@ -129,17 +128,9 @@ wick plugin build --kind tool <key>
 wick plugin build <key> --all --sign-key key.ed25519 --cosign-key cosign.key
 ```
 
-CI builds plugins for the os/arch set in the `BUILD_TARGETS_PLUGINS` Actions
-variable — a SEPARATE knob from `BUILD_TARGETS` (the wick binary set), because
-plugin releases usually want a wider set (users can build wick themselves, but
-self-building plugins is a chore). Falls back to `BUILD_TARGETS` when unset, then
-to the default `darwin/amd64,darwin/arm64,windows/amd64`; `all` = every target.
-
-To backfill a new os/arch across ALL already-released plugins (after widening
-`BUILD_TARGETS_PLUGINS`): run `release-plugins.yml` via workflow_dispatch with
-name empty/`all` + `force=true` — every plugin rebuilds at its current VERSION and
-the zips replace/extend the assets on the existing `<name>/v<ver>` release (no
-VERSION bumps, tags stay put, catalog regenerates after).
+CI builds plugins for the os/arch set in the `BUILD_TARGETS` Actions variable — the
+SAME knob the wick binary release uses (default `darwin/amd64,darwin/arm64,windows/amd64`;
+`all` = every target). One variable controls both binary and plugin targets.
 
 Each zip = `{<key>[.exe], plugin.json}`. `plugin.json` is generated FROM the binary
 (`--dump-manifest`) so it can never drift. sha256 + signature live INSIDE plugin.json.
@@ -220,7 +211,7 @@ You do steps 1–3; CI does 4–8. See `plugins/RELEASE.md` for the full flow.
 4. detect     rebuild EVERY plugin (the build's tag-exists check is idempotent, so
               only plugins whose VERSION changed actually cut a release)
 5. test       go test pkg/plugin + internal/connectors/plugin + cmd/cli  (hard gate)
-6. build      wick plugin build <key> --target <BUILD_TARGETS_PLUGINS> → gh release "<key>/v<ver>"
+6. build      wick plugin build <key> --target <BUILD_TARGETS> → gh release "<key>/v<ver>"
               with make_latest:false (so a plugin never steals "Latest" from core)
               (skipped if that tag already exists — bump VERSION for a new one)
 7. update-catalog  `wick plugin catalog` regenerates plugins.json + commits to master
@@ -231,39 +222,6 @@ plugin pipeline is reached ONLY via `repository_dispatch`, so the two never run 
 same time on one PR. `release-plugins.yml` uses its own concurrency group
 (`wick-release-plugins`, cancel-in-progress: true) so a re-dispatched run supersedes
 the in-flight one.
-
-## Replacing a built-in: `Replaces`
-
-A tool/job plugin extracted from a built-in gets a new key (`-` is illegal in
-plugin keys, so `notion-ticket-sync` → `notion_ticket_sync`). Declare the old key
-so wick treats the plugin as the **same item**, not a new empty one:
-
-```go
-// job plugin — pkg/job.Meta
-job.Meta{Key: "notion_ticket_sync", Replaces: []string{"notion-ticket-sync"}}
-// tool plugin — pkg/tool.Tool (copied into ToolMeta.Replaces)
-tool.Tool{Key: "text_counter", Replaces: []string{"text-counter"}}
-```
-
-`--dump-manifest` carries it (`job.meta.Replaces`, `tool.meta.replaces`), so it
-needs no plugin.json hand edit. Host side (`internal/plugins/replace`):
-
-- `Prepare` (web + worker boot, after all registrations, before validation and
-  the configs/jobs bootstrap) unregisters the old key and marks it replaced;
-  `manager.Service.SetHidden(replace.IsReplaced)` drops the old job row from
-  every listing and from the scheduler.
-- `ApplyAll` (web boot only) migrates once per pair, marker row
-  `plugin_replacements(old_key,new_key)` + `plugin_audits` action `replace.migrate`:
-  config fields the new module declares (stored value copied as-is — secrets stay
-  ciphertext; filled only when the new value is empty or a non-secret still at its
-  declared default; secret-flag mismatch skipped), job schedule/enabled/max_runs/
-  max_timeout_min while the new row is pristine, tags/visibility/bookmarks of
-  `/jobs|/tools/<old>` merged in. The old job row is disabled on every boot. Run
-  history stays on the old row (the report counts it); old rows are never deleted.
-- Admin: `GET /manager/api/plugins/{key}/replace` = dry run (secrets `set`/`empty`),
-  `POST` = apply (`?force=1` re-runs a migrated pair; manual values still win).
-
-Connector plugins don't support `Replaces` yet (connector data is per-instance rows).
 
 ## Constraints / gotchas
 

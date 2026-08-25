@@ -155,38 +155,6 @@ type Grant struct {
 	TokenCount int        // active access + refresh tokens
 }
 
-// lastUsedJoin is a LEFT JOIN onto the most recent use of a
-// (user, client) grant, computed over EVERY token row it ever had —
-// expired and revoked included.
-//
-// It has to be a join rather than MAX(t.last_used_at) over the rows
-// the grant query already selects, because those rows are filtered to
-// the *active* tokens. Only an access token is ever stamped as used,
-// it lives an hour, and it is not revoked when it is rotated — so the
-// row carrying the usage timestamp drops out of the active set 60
-// minutes after it was minted, leaving a long-lived refresh token
-// whose last_used_at is NULL. Aggregating over the active set alone
-// therefore reported "never" for every grant older than an hour, no
-// matter how heavily it was used.
-//
-// The subquery returns exactly one row per (user_id, client_id), so
-// joining it cannot fan out the grant rows and COUNT(*) stays a count
-// of active tokens.
-//
-// Note this is per (user, client), not per grant chain: if a user
-// disconnects an app and authorizes it again, the new grant inherits
-// the older one's last-use timestamp. The statement it renders — when
-// this user last used this app — stays true, and the alternative
-// (walking parent_token_id with a recursive CTE) buys nothing for how
-// the value is read.
-const lastUsedJoin = `LEFT JOIN (
-	         SELECT user_id AS lu_user_id,
-	                client_id AS lu_client_id,
-	                MAX(last_used_at) AS lu_last_used
-	           FROM oauth_tokens
-	          GROUP BY user_id, client_id
-	       ) lu ON lu.lu_user_id = t.user_id AND lu.lu_client_id = t.client_id`
-
 // ListGrantsByUser returns one Grant per app the user has currently
 // authorized. "Currently" = at least one non-revoked, non-expired
 // token row of either kind (refresh keeps the grant alive even after
@@ -197,7 +165,7 @@ const lastUsedJoin = `LEFT JOIN (
 // Implementation notes: SQLite returns MIN/MAX of TIMESTAMP columns
 // as raw strings (the driver only auto-parses real columns, not
 // aggregate expressions), so we scan those into strings and parse
-// them in Go. ParseAggregateTime accepts both SQLite's "YYYY-MM-DD
+// them in Go. parseAggregateTime accepts both SQLite's "YYYY-MM-DD
 // HH:MM:SS[.fff]" and Postgres's RFC3339 — the same code works on
 // either backend without runtime feature detection.
 func (r *Repo) ListGrantsByUser(ctx context.Context, userID string) ([]Grant, error) {
@@ -214,10 +182,9 @@ func (r *Repo) ListGrantsByUser(ctx context.Context, userID string) ([]Grant, er
 		Select(`t.client_id            AS client_id,
 		         c.name                AS client_name,
 		         MIN(t.created_at)     AS granted_at,
-		         MAX(lu.lu_last_used)  AS last_used_at,
+		         MAX(t.last_used_at)   AS last_used_at,
 		         COUNT(*)              AS token_count`).
 		Joins("JOIN oauth_clients c ON c.client_id = t.client_id").
-		Joins(lastUsedJoin).
 		Where("t.user_id = ? AND t.revoked_at IS NULL AND t.expires_at > ?", userID, time.Now()).
 		Group("t.client_id, c.name").
 		Order("MIN(t.created_at) DESC").
@@ -227,10 +194,10 @@ func (r *Repo) ListGrantsByUser(ctx context.Context, userID string) ([]Grant, er
 	}
 	out := make([]Grant, len(rows))
 	for i, x := range rows {
-		grantedAt, _ := ParseAggregateTime(x.GrantedAt)
+		grantedAt, _ := parseAggregateTime(x.GrantedAt)
 		var lastUsed *time.Time
 		if x.LastUsedAt != nil {
-			if t, ok := ParseAggregateTime(*x.LastUsedAt); ok {
+			if t, ok := parseAggregateTime(*x.LastUsedAt); ok {
 				lastUsed = &t
 			}
 		}
@@ -245,11 +212,11 @@ func (r *Repo) ListGrantsByUser(ctx context.Context, userID string) ([]Grant, er
 	return out, nil
 }
 
-// ParseAggregateTime tries the layouts SQLite and Postgres use when
+// parseAggregateTime tries the layouts SQLite and Postgres use when
 // returning aggregate timestamp expressions. Returns the zero time
 // + false when none match — the caller treats that as "unknown" and
 // renders accordingly.
-func ParseAggregateTime(s string) (time.Time, bool) {
+func parseAggregateTime(s string) (time.Time, bool) {
 	if s == "" {
 		return time.Time{}, false
 	}
@@ -310,10 +277,9 @@ func (r *Repo) ListAllGrants(ctx context.Context) ([]AdminGrant, error) {
 		         t.client_id            AS client_id,
 		         c.name                 AS client_name,
 		         MIN(t.created_at)      AS granted_at,
-		         MAX(lu.lu_last_used)   AS last_used_at,
+		         MAX(t.last_used_at)    AS last_used_at,
 		         COUNT(*)               AS token_count`).
 		Joins("JOIN oauth_clients c ON c.client_id = t.client_id").
-		Joins(lastUsedJoin).
 		Where("t.revoked_at IS NULL AND t.expires_at > ?", time.Now()).
 		Group("t.user_id, t.client_id, c.name").
 		Order("MIN(t.created_at) DESC").
@@ -323,10 +289,10 @@ func (r *Repo) ListAllGrants(ctx context.Context) ([]AdminGrant, error) {
 	}
 	out := make([]AdminGrant, len(rows))
 	for i, x := range rows {
-		grantedAt, _ := ParseAggregateTime(x.GrantedAt)
+		grantedAt, _ := parseAggregateTime(x.GrantedAt)
 		var lastUsed *time.Time
 		if x.LastUsedAt != nil {
-			if t, ok := ParseAggregateTime(*x.LastUsedAt); ok {
+			if t, ok := parseAggregateTime(*x.LastUsedAt); ok {
 				lastUsed = &t
 			}
 		}

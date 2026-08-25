@@ -25,17 +25,17 @@ func TestGroupMatches_FindsByCommand(t *testing.T) {
 		"node /srv/api/server.js --port 8080",
 		"node /srv/worker/queue.js")
 
-	if !groupMatches(g, "queue.js", nil) {
+	if !groupMatches(g, "queue.js") {
 		t.Fatal("a term that appears only in a member's command did not match")
 	}
-	if !groupMatches(g, "8080", nil) {
+	if !groupMatches(g, "8080") {
 		t.Fatal("an argument value did not match")
 	}
 }
 
 // Name matching must keep working — it is the common case.
 func TestGroupMatches_StillFindsByName(t *testing.T) {
-	if !groupMatches(groupWith("chrome.exe", ""), "chrome", nil) {
+	if !groupMatches(groupWith("chrome.exe", ""), "chrome") {
 		t.Fatal("a name substring did not match")
 	}
 }
@@ -43,7 +43,7 @@ func TestGroupMatches_StillFindsByName(t *testing.T) {
 // A term in neither place must not match, or search returns everything.
 func TestGroupMatches_RejectsNonMatches(t *testing.T) {
 	g := groupWith("node", "node server.js")
-	if groupMatches(g, "postgres", nil) {
+	if groupMatches(g, "postgres") {
 		t.Fatal("an unrelated term matched")
 	}
 }
@@ -53,10 +53,10 @@ func TestGroupMatches_RejectsNonMatches(t *testing.T) {
 func TestGroupMatches_IsCaseInsensitive(t *testing.T) {
 	g := groupWith("Code.exe", `C:\Program Files\Microsoft VS Code\Code.exe`)
 
-	if !groupMatches(g, "program files", nil) {
+	if !groupMatches(g, "program files") {
 		t.Fatal("a lower-cased term did not match a capitalised command")
 	}
-	if !groupMatches(g, "code.exe", nil) {
+	if !groupMatches(g, "code.exe") {
 		t.Fatal("a lower-cased term did not match a capitalised name")
 	}
 }
@@ -66,7 +66,7 @@ func TestGroupMatches_IsCaseInsensitive(t *testing.T) {
 // everything.
 func TestGroupMatches_EmptyCommandIsNotAWildcard(t *testing.T) {
 	g := groupWith("kthreadd", "")
-	if groupMatches(g, "anything", nil) {
+	if groupMatches(g, "anything") {
 		t.Fatal("a group with no command matched an unrelated term")
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -60,21 +59,6 @@ type Delivery struct {
 	Err       string    `json:"error,omitempty"`
 	Attempts  int       `json:"attempts"`
 	OK        bool      `json:"ok"`
-	// Message is what the receiver said, when it said anything short and
-	// readable: the "status"/"message"/"reason" key of a JSON reply, or a
-	// one-line plain-text body. A custom button is a request somebody is
-	// watching, and "HTTP 200" alone does not tell them whether the sync
-	// they asked for actually started. Capped and never HTML — see
-	// replyMessage.
-	Message string `json:"message,omitempty"`
-	// Reply is the receiver's raw body, capped at maxReplyBody. It is what
-	// lets a button render a real result — progress counters, a run id to
-	// poll, its own HTML — instead of one line of text.
-	//
-	// Deliberately NOT part of the stored delivery log (see record): the log
-	// keeps the last 20 attempts per endpoint for the settings page, and
-	// 20 × 16 KB of somebody's HTML is not what that page is for.
-	Reply string `json:"-"`
 }
 
 // Dispatcher delivers ticket events to a project's configured webhooks.
@@ -160,23 +144,6 @@ func (d *Dispatcher) SendTest(w project.TicketWebhook, projectID string) Deliver
 	return d.deliver(w, ev)
 }
 
-// Deliver sends one event to one endpoint synchronously and reports the
-// outcome. The custom ticket buttons come through here: the user clicked
-// and is waiting for the answer, so unlike Emit there is no goroutine
-// between them and the result. The URL passes the same SSRF guard every
-// configured webhook does.
-func (d *Dispatcher) Deliver(w project.TicketWebhook, ev Event) Delivery {
-	if ev.ID == "" {
-		if id, err := newID(); err == nil {
-			ev.ID = "evt_" + strings.TrimPrefix(id, "T-")
-		}
-	}
-	if ev.DeliveredAt.IsZero() {
-		ev.DeliveredAt = time.Now().UTC()
-	}
-	return d.deliver(w, ev)
-}
-
 // deliver POSTs the event, retrying on failure, and records the outcome.
 func (d *Dispatcher) deliver(w project.TicketWebhook, ev Event) Delivery {
 	rec := Delivery{WebhookID: w.ID, Event: ev.Event, At: time.Now().UTC()}
@@ -203,8 +170,8 @@ func (d *Dispatcher) deliver(w project.TicketWebhook, ev Event) Delivery {
 			time.Sleep(retryBackoff[attempt-1])
 		}
 		rec.Attempts = attempt + 1
-		status, msg, reply, derr := d.attempt(client, w, ev, body)
-		rec.Status, rec.Err, rec.Message, rec.Reply = status, "", msg, reply
+		status, derr := d.attempt(client, w, ev, body)
+		rec.Status, rec.Err = status, ""
 		if derr != nil {
 			rec.Err = derr.Error()
 		}
@@ -234,14 +201,14 @@ func (d *Dispatcher) deliver(w project.TicketWebhook, ev Event) Delivery {
 	return rec
 }
 
-// attempt makes one HTTP POST, and reports what the receiver replied.
-func (d *Dispatcher) attempt(client *http.Client, w project.TicketWebhook, ev Event, body []byte) (int, string, string, error) {
+// attempt makes one HTTP POST.
+func (d *Dispatcher) attempt(client *http.Client, w project.TicketWebhook, ev Event, body []byte) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, w.URL, bytes.NewReader(body))
 	if err != nil {
-		return 0, "", "", err
+		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "wick-tickets/1")
@@ -262,109 +229,10 @@ func (d *Dispatcher) attempt(client *http.Client, w project.TicketWebhook, ev Ev
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, "", "", err
+		return 0, err
 	}
 	defer resp.Body.Close()
-	raw := readReply(resp)
-	return resp.StatusCode, replyMessage(raw), string(raw), nil
-}
-
-// Get fetches url and returns the same shape a delivery does, for a button
-// whose work outlives its POST and handed back somewhere to watch it.
-//
-// Same client, same timeout and — the part that matters — the same SSRF
-// guard: a poll URL is no more trustworthy than a webhook URL just because
-// a receiver chose it rather than an operator. The caller is responsible
-// for deciding WHICH urls may be polled at all (see apiBoardActionPoll,
-// which only allows the button's own origin).
-func (d *Dispatcher) Get(url string) Delivery {
-	rec := Delivery{Event: "poll", At: time.Now().UTC(), Attempts: 1}
-	if err := d.checkURL(url); err != nil {
-		rec.Err = err.Error()
-		return rec
-	}
-	client := d.Client
-	if client == nil {
-		client = &http.Client{Timeout: attemptTimeout}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		rec.Err = err.Error()
-		return rec
-	}
-	req.Header.Set("User-Agent", "wick-tickets/1")
-	resp, err := client.Do(req)
-	if err != nil {
-		rec.Err = err.Error()
-		return rec
-	}
-	defer resp.Body.Close()
-	raw := readReply(resp)
-	rec.Status = resp.StatusCode
-	rec.Reply = string(raw)
-	rec.Message = replyMessage(raw)
-	rec.OK = resp.StatusCode >= 200 && resp.StatusCode < 300
-	return rec
-}
-
-// readReply reads at most maxReplyBody of a response.
-func readReply(resp *http.Response) []byte {
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxReplyBody))
-	if err != nil {
-		return nil
-	}
-	return raw
-}
-
-// maxReplyBody is how much of a receiver's answer is read for Message. A
-// webhook reply is an acknowledgement, not a payload; anything longer is a
-// page nobody wants in a toast.
-const maxReplyBody = 4 << 10
-
-// replyMessage distils a receiver's response into one short line, or "".
-//
-// JSON first, because that is what a wick receiver answers with, and the
-// keys are tried in the order a human would read them: an explicit message
-// beats a reason, which beats a bare status word. Plain text is passed
-// through as-is when it is short and clearly not a web page — an HTML error
-// page carries no sentence worth showing and would just fill the toast with
-// markup.
-func replyMessage(raw []byte) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var obj map[string]any
-	if json.Unmarshal(raw, &obj) == nil {
-		var parts []string
-		for _, k := range []string{"message", "reason", "error", "status"} {
-			if v, ok := obj[k].(string); ok && strings.TrimSpace(v) != "" {
-				parts = append(parts, strings.TrimSpace(v))
-			}
-		}
-		if len(parts) > 0 {
-			return clip(strings.Join(parts, " — "), 200)
-		}
-		return ""
-	}
-	txt := strings.TrimSpace(string(raw))
-	if txt == "" || len(txt) > 200 || strings.HasPrefix(txt, "<") {
-		return ""
-	}
-	if i := strings.IndexAny(txt, "\r\n"); i >= 0 {
-		txt = strings.TrimSpace(txt[:i])
-	}
-	return clip(txt, 200)
-}
-
-// clip shortens s to n runes, marking that it was cut.
-func clip(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
+	return resp.StatusCode, nil
 }
 
 // Sign returns the X-Wick-Signature value for a raw body.
@@ -434,9 +302,6 @@ func isPrivateIP(ip net.IP) bool {
 
 // record appends to the per-webhook ring buffer.
 func (d *Dispatcher) record(rec Delivery) {
-	// The body goes to the caller, not into the log: 20 attempts per
-	// endpoint × a receiver's HTML is memory the settings page never reads.
-	rec.Reply = ""
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.log == nil {

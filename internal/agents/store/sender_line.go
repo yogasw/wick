@@ -40,37 +40,6 @@ func NormalizeSenderVisibility(v string) string {
 	}
 }
 
-// IsBareSlashCommand reports whether text is nothing but a slash command —
-// one line, a leading "/", and no arguments (`/compact`, `/context`).
-//
-// Such a message is not addressed to the model at all: it is an instruction
-// to the CLI, which only recognizes it when the line STARTS with the slash.
-// Prepending `[from: …]` pushes it to line two and silently downgrades the
-// command to prose — the CLI answers it as a question instead of running it,
-// and nothing says the command was lost. So callers skip the sender line for
-// exactly this shape, where there is no sender question to answer anyway:
-// nobody needs to know who asked for a context reading.
-//
-// Deliberately narrow. A command WITH arguments ("/thinking on", a skill
-// invocation with a request behind it) still carries intent that the agent
-// may need attributed, so it keeps its sender line; those are handled
-// in-process by wick rather than by the CLI's own parser.
-func IsBareSlashCommand(text string) bool {
-	t := strings.TrimSpace(text)
-	if len(t) < 2 || t[0] != '/' {
-		return false
-	}
-	for _, r := range t[1:] {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '-', r == '_', r == ':':
-		default:
-			return false
-		}
-	}
-	return true
-}
-
 // PrependSenderLine returns text with a single leading `[from: …]` line
 // naming who sent it. Returns text unchanged when s is nil or level is
 // SenderOff.
@@ -155,27 +124,6 @@ func SenderLine(s *Sender, level string) string {
 
 	b.WriteString("]")
 	return b.String()
-}
-
-// StripSenderLines removes every whole `[from: …]` line from text — the
-// inverse of PrependSenderLine for a recipient that is not a model. A remote
-// agent (a service plugin such as Jules) reads the text as its prompt, where
-// the line is noise: it lands in task titles and in the conversation the
-// remote shows its own users. Buffered messages are joined before they are
-// sent, so the line can appear at the start of any line, not only the first.
-func StripSenderLines(text string) string {
-	if !strings.Contains(text, "[from: ") {
-		return text
-	}
-	lines := strings.Split(text, "\n")
-	kept := lines[:0]
-	for _, l := range lines {
-		if strings.HasPrefix(l, "[from: ") && strings.HasSuffix(strings.TrimRight(l, "\r"), "]") {
-			continue
-		}
-		kept = append(kept, l)
-	}
-	return strings.Join(kept, "\n")
 }
 
 // quoteSenderField renders one field of the sender line. Ordinary values pass

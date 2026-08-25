@@ -36,8 +36,8 @@ const sessionWorkspaceToolName = "wick_session_workspace"
 //
 // Actions:
 //   - list:      session instances + the base connectors available to add
-//   - add:       create an instance from a base connector key, filled from
-//                values, or by the user in the fill modal when prompt:true
+//   - add:       create a blank instance from a base connector key
+//                (optionally pop the fill modal for the user right away)
 //   - duplicate: copy an existing session instance (config and all)
 //   - configure:  open the fill modal so the user edits an instance's config
 //   - set_config: write config values directly (no modal) — for transports
@@ -64,12 +64,9 @@ func WickSessionWorkspace(
 	tagIDs []string,
 ) {
 	action := strings.TrimSpace(argString(args, "action"))
-	// A workspace connector lives INSIDE one session and holds that
-	// session's own credentials, so the call's own session wins over any
-	// id the model typed — see ResolveCallSession.
-	sessionID := ResolveCallSession(SessionOf(r), argString(args, "session_id"))
+	sessionID := strings.TrimSpace(argString(args, "session_id"))
 	if sessionID == "" {
-		rsp.ToolError(w, req.ID, "session_id is required (no session on the call)", sessionWorkspaceToolName)
+		rsp.ToolError(w, req.ID, "session_id is required", sessionWorkspaceToolName)
 		return
 	}
 	// Validate the session id refers to a real session (and reject
@@ -111,7 +108,7 @@ type baseConnector struct {
 // add as session instances: module capability AllowSessionConfig AND a
 // visible connector row with the per-instance toggle on.
 func sessionWorkspaceBases(r *http.Request, svc *connectors.Service, tagIDs []string, isAdmin bool) []baseConnector {
-	rows, err := svc.ListVisibleTo(r.Context(), callerIDFromCtx(r.Context()), tagIDs, isAdmin)
+	rows, err := svc.ListVisibleTo(r.Context(), tagIDs, isAdmin)
 	if err != nil {
 		return nil
 	}
@@ -208,20 +205,6 @@ func sessionWorkspaceAdd(w http.ResponseWriter, r *http.Request, req RPCRequest,
 		return
 	}
 	mod, _ := svc.Module(baseKey)
-	specByKey := make(map[string]entity.Config, len(mod.Configs))
-	for _, sp := range mod.Configs {
-		specByKey[sp.Key] = sp
-	}
-	var vals map[string]string
-	if raw, ok := args["values"].(map[string]any); ok && len(raw) > 0 {
-		vals = StringifyArgs(raw)
-		for k := range vals {
-			if _, known := specByKey[k]; !known {
-				rsp.ToolError(w, req.ID, "unknown config key: "+k, sessionWorkspaceToolName)
-				return
-			}
-		}
-	}
 	label := strings.TrimSpace(argString(args, "label"))
 	if label == "" {
 		label = mod.Meta.Name + " (session)"
@@ -236,24 +219,14 @@ func sessionWorkspaceAdd(w http.ResponseWriter, r *http.Request, req RPCRequest,
 		return
 	}
 
-	applied := []string{}
-	// Values the agent already holds are written straight away: a modal
-	// asking the user for config the agent is about to overwrite is only
-	// a form to click through.
-	if len(vals) > 0 {
-		keys, err := storeSessionConfig(svc, layout, sessionID, inst.ID, specByKey, vals)
-		if err != nil {
-			rsp.ToolError(w, req.ID, err.Error(), sessionWorkspaceToolName)
-			return
-		}
-		applied = keys
+	// prompt defaults to true: pop the fill modal so the user supplies the
+	// config right away. The agent stays blind to the values.
+	prompt := true
+	if v, ok := args["prompt"].(bool); ok {
+		prompt = v
 	}
-	// The fill modal opens only when asked for (prompt:true). It blocks
-	// this call until the user answers, so popping it by default stalled
-	// every add that was followed by set_config, and put a form in front
-	// of whoever opened the session meanwhile.
-	prompt, _ := args["prompt"].(bool)
-	if prompt && len(applied) == 0 && asks != nil {
+	applied := []string{}
+	if prompt && asks != nil {
 		if ok, _ := askAllowedOK(askAllowed, sessionID); ok {
 			applied, _ = openConfigModal(r, svc, layout, asks, sessionID, inst, args)
 		}
@@ -263,7 +236,7 @@ func sessionWorkspaceAdd(w http.ResponseWriter, r *http.Request, req RPCRequest,
 		"session_id":  sessionID,
 		"instance":    sessionWorkspaceVM(svc, reloaded),
 		"applied":     applied,
-		"note":        "Session instance created. It now appears in wick_list (pass this session_id). If config is still missing, write it with action=set_config when you hold the values, or call action=configure to let the user fill it in a modal.",
+		"note":        "Session instance created. It now appears in wick_list (pass this session_id). Tell the user it was added and that they can edit its config in the session Config tab; you can also call action=configure to reopen the fill modal.",
 	})
 }
 

@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@wick-fe/common-api": "*",
-    "@wick-fe/common-avatar": "*",
     "@wick-fe/common-md": "*",
     "@wick-fe/common-sse-worker": "*",
     "@wick-fe/common-stores": "*",

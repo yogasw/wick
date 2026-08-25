@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/proctree"
 	"github.com/yogasw/wick/pkg/safeexec"
 	"google.golang.org/genai"
@@ -31,7 +30,6 @@ func shellJobRunner(workspace, cmdline string) jobRunner {
 			return -1, err
 		}
 		cmd := safeexec.Command(bin, "-c", cmdline)
-		cmd.Env = envscrub.ScrubOSEnv()
 		if workspace != "" {
 			cmd.Dir = workspace
 		}

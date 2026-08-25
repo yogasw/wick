@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -47,17 +46,6 @@ type WorkflowLister interface {
 	List() ([]string, error)
 	LoadInfo(id string) (WorkflowInfo, error)
 }
-
-// WorkflowOwnerWriter re-stamps a workflow's owner. Optional, like
-// ProjectWriter: nil leaves the Owner column a label instead of a picker,
-// which is the right answer for a file-backed install where there is no row
-// to re-stamp.
-type WorkflowOwnerWriter interface {
-	SetOwner(id, userID string) error
-}
-
-// SetWorkflowOwnerWriter wires the writer behind the workflows Owner picker.
-func (h *Handler) SetWorkflowOwnerWriter(w WorkflowOwnerWriter) { h.workflowOwner = w }
 
 // SkillLister lists all skills from the DB.
 type SkillLister interface {
@@ -117,22 +105,8 @@ type Handler struct {
 	auth       *login.Service
 	projects   ProjectLister
 	workflows  WorkflowLister
-	// workflowOwner persists an owner change from the workflows admin page.
-	// Nil when unwired — the picker stays hidden and the endpoint refuses.
-	workflowOwner WorkflowOwnerWriter
-	skillsDB      SkillLister
-	dataTables    DataTableLister // optional; wired post-construction via SetDataTables
-	// schedules + projectNames back /admin/schedule, where the identity a
-	// scheduled fire runs as is inspected and changed. Optional: nil renders
-	// the page as "scheduling is not configured".
-	schedules    ScheduleLister
-	projectNames ProjectNamer
-	// projectWriter backs the projects Owner picker. Optional and wired
-	// post-construction (SetProjectWriter): the page lists projects through
-	// ProjectLister, and only this one endpoint needs to write one back.
-	projectWriter ProjectWriter
-	// teamAgents backs /admin/team-agents (SetTeamAgents); nil = 503.
-	teamAgents TeamAgentLister
+	skillsDB   SkillLister
+	dataTables DataTableLister // optional; wired post-construction via SetDataTables
 
 	// sys bundles everything the System config page needs: the update
 	// coordinator (nil-safe — page shows "not configured" when absent),
@@ -151,16 +125,9 @@ type SystemConfig struct {
 	// cached changelog from it instead of doing a live request on load.
 	VersionCache *updater.VersionCache
 	AppName      string
-	// DataDir is wick's data directory — where a draining predecessor leaves
-	// the record of what it is still finishing.
-	DataDir string
-	// AppVersion is the version THIS process is running — compared against
-	// the binary on disk to spot a build that is installed but not yet
-	// swapped in.
-	AppVersion  string
-	WickVersion string
-	Commit      string
-	BuildTime   string
+	WickVersion  string
+	Commit       string
+	BuildTime    string
 }
 
 // dbInfo mirrors the MCP wick_info db probe: returns (type, status)
@@ -254,27 +221,12 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 		redirect("/manager/jobs/"+r.PathValue("key"))(w, r)
 	}))
 
-	// Plugins: sources, install/upload, updates, enable/disable for every
-	// plugin kind. The page hosts the manager SPA's plugins view; its JSON
-	// API stays at /manager/api/plugins (admin-gated per action there).
-	mux.Handle("GET /admin/plugins", admin(h.pluginsPage))
-
 	// Job actions
 	mux.Handle("POST /admin/jobs/{path}/disabled", admin(h.setJobDisabled))
 	mux.Handle("POST /admin/jobs/{path}/tags", admin(h.setJobTags))
 
-	// People & usage: who still logs in, through which channel, on what.
-	// Admin-only — it names every account and what they touched.
-	mux.Handle("GET /admin/analytics", admin(h.analyticsPage))
-	mux.Handle("GET /admin/analytics/users.json", admin(h.analyticsUsersJSON))
-	// The token ledger, same report the providers page reads.
-	mux.Handle("GET /admin/analytics/ledger/", admin(h.analyticsLedgerJSON))
-	mux.Handle("GET "+spaAssetBase, admin(h.spaAssetHandler))
-
 	mux.Handle("GET /admin/tags", admin(h.tagsPage))
 	mux.Handle("GET /admin/advanced", admin(h.configsHubPage))
-	mux.Handle("GET /admin/advanced/network", admin(h.networkPage))
-	mux.Handle("POST /admin/advanced/network", admin(h.updateNetwork))
 	mux.Handle("GET /admin/advanced/sso", admin(h.ssoPage))
 	mux.Handle("POST /admin/advanced/sso/{provider}", admin(h.updateSSO))
 
@@ -283,9 +235,6 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/advanced/software-update/status", admin(h.systemUpdateStatus))
 	mux.Handle("POST /admin/advanced/software-update/check", admin(h.systemUpdateCheck))
 	mux.Handle("POST /admin/advanced/software-update/apply", admin(h.systemUpdateApply))
-	mux.Handle("GET /admin/advanced/software-update/serving", admin(h.systemServingInfo))
-	mux.Handle("GET /admin/advanced/software-update/serving/stream", admin(h.systemServingStream))
-	mux.Handle("POST /admin/advanced/software-update/swap", admin(h.systemSwapNow))
 	mux.Handle("POST /admin/advanced/software-update/auto-update", admin(h.systemSetAutoUpdate))
 
 	// Variables (app-level configs)
@@ -314,47 +263,26 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 
 	// Tag CRUD
 	mux.Handle("GET /admin/tags.json", admin(h.listTagsJSON))
-	// Access reach: who can actually see one tag-gated item, and what one tag
-	// opens. Read-only JSON behind the badge / "i" button on every listing.
-	mux.Handle("GET /admin/access/users", admin(h.accessUsersPage))
-	mux.Handle("GET /admin/tags/{id}/usage", admin(h.tagUsagePage))
 	mux.Handle("POST /admin/tags", admin(h.createTag))
 	mux.Handle("POST /admin/tags/{id}/update", admin(h.updateTag))
 	mux.Handle("POST /admin/tags/{id}/delete", admin(h.deleteTag))
 
 	// Connector instance management (cross-definition list).
 	mux.Handle("GET /admin/connectors", admin(h.connectorsAdminPage))
+	mux.Handle("POST /admin/connectors/{id}/disabled", admin(h.setConnectorDisabledAdmin))
 	mux.Handle("POST /admin/connectors/{id}/tags", admin(h.setConnectorTagsAdmin))
-	mux.Handle("POST /admin/connectors/{id}/owner", admin(h.setConnectorOwner))
-	mux.Handle("POST /admin/connectors/{id}/accounts/{accountID}/tags", admin(h.setConnectorAccountTagsAdmin))
 
 	// Projects, Workflows, Skills — ownership/access tag management.
 	mux.Handle("GET /admin/projects", admin(h.projectsAdminPage))
-
-	// Schedules: which user each scheduled fire runs as. Admin-only, because
-	// run-as decides whose access a job borrows.
-	mux.Handle("GET /admin/schedule", admin(h.schedulesAdminPage))
-	mux.Handle("POST /admin/schedule/{id}/run-as", admin(h.setScheduleRunAs))
-	mux.Handle("POST /admin/schedule/{id}/owner", admin(h.setScheduleOwner))
 	mux.Handle("POST /admin/projects/{id}/tags", admin(h.setProjectTags))
-	mux.Handle("POST /admin/projects/{id}/owner", admin(h.setProjectOwner))
 
 	mux.Handle("GET /admin/workflows", admin(h.workflowsAdminPage))
 	mux.Handle("POST /admin/workflows/{id}/tags", admin(h.setWorkflowTags))
-	mux.Handle("POST /admin/workflows/{id}/owner", admin(h.setWorkflowOwner))
 
 	mux.Handle("GET /admin/skills", admin(h.skillsAdminPage))
 	mux.Handle("POST /admin/skills/{name}/tags", admin(h.setSkillTags))
 
-	// Provider sharing: who may SEE an instance (access tags, empty =
-	// everyone) and who may RECONNECT it (manage tags, empty = admins).
-	mux.Handle("GET /admin/providers", admin(h.providersAdminPage))
-	mux.Handle("POST /admin/providers/{type}/{name}/access-tags", admin(h.setProviderAccessTags))
-	mux.Handle("POST /admin/providers/{type}/{name}/manage-tags", admin(h.setProviderManageTags))
-
 	mux.Handle("GET /admin/data-tables", admin(h.dataTablesAdminPage))
-	mux.Handle("GET /admin/team-agents", admin(h.teamAgentsAdminPage))
-	mux.Handle("POST /admin/team-agents/{id}/tags", admin(h.setTeamAgentTags))
 	mux.Handle("POST /admin/data-tables/{slug}/tags", admin(h.setDataTableTags))
 
 	// Personal access tokens (admin override view). PATs authenticate
@@ -523,51 +451,6 @@ func (h *Handler) setVariable(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/variables", http.StatusFound)
 }
 
-func (h *Handler) networkPage(w http.ResponseWriter, r *http.Request) {
-	if !isTermuxHost() {
-		http.NotFound(w, r)
-		return
-	}
-	view.NetworkPage(h.configs.Get(configs.KeyDNSServers), login.GetUser(r.Context())).Render(r.Context(), w)
-}
-
-func (h *Handler) updateNetwork(w http.ResponseWriter, r *http.Request) {
-	if !isTermuxHost() {
-		http.NotFound(w, r)
-		return
-	}
-	var dnsServers string
-	switch r.FormValue("dns_provider") {
-	case "google":
-		dnsServers = "8.8.8.8,8.8.4.4"
-	case "cloudflare":
-		dnsServers = "1.1.1.1,1.0.0.1"
-	case "custom":
-		servers := strings.FieldsFunc(r.FormValue("dns_custom"), func(r rune) bool {
-			return r == ',' || r == ' ' || r == '\t' || r == '\n'
-		})
-		if len(servers) == 0 || len(servers) > 4 {
-			http.Error(w, "custom DNS requires 1 to 4 IP addresses", http.StatusBadRequest)
-			return
-		}
-		for _, server := range servers {
-			if net.ParseIP(server) == nil {
-				http.Error(w, "custom DNS contains an invalid IP address", http.StatusBadRequest)
-				return
-			}
-		}
-		dnsServers = strings.Join(servers, ",")
-	default:
-		http.Error(w, "invalid DNS provider", http.StatusBadRequest)
-		return
-	}
-	if err := h.configs.Set(r.Context(), configs.KeyDNSServers, dnsServers); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	http.Redirect(w, r, "/admin/advanced/network?saved=1", http.StatusFound)
-}
-
 func (h *Handler) regenerateVariable(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if err := h.configs.Regenerate(r.Context(), key); err != nil {
@@ -633,12 +516,7 @@ func (h *Handler) renderUsers(w http.ResponseWriter, r *http.Request, created vi
 	for i, u := range users {
 		ids, _ := h.repo.GetUserTagIDs(r.Context(), u.ID)
 		needsMerge := !u.Approved && isChannelPlaceholderEmail(u.Email)
-		row := view.UserRow{
-			User:       u,
-			TagIDs:     ids,
-			NeedsMerge: needsMerge,
-			Self:       currentUser != nil && currentUser.ID == u.ID,
-		}
+		row := view.UserRow{User: u, TagIDs: ids, NeedsMerge: needsMerge}
 		if needsMerge {
 			row.MergeTargets = mergeTargets
 		}
@@ -687,15 +565,6 @@ func (h *Handler) toolsPage(w http.ResponseWriter, r *http.Request) {
 			ConfigCount: len(h.configs.ListOwned(t.Key)),
 		}
 	}
-	// Reach badge: a tool set to public visibility is reachable without a
-	// login at all, which outranks whatever its tags say.
-	access := h.accessSummaries(r.Context(), paths)
-	for i := range items {
-		sum := access[items[i].Tool.Path]
-		sum.Anyone = items[i].Visibility == entity.VisibilityPublic
-		items[i].Access = sum
-		items[i].TagNames = view.TagNames(allTags, items[i].TagIDs)
-	}
 	view.ToolsPage(items, allTags, currentUser).Render(r.Context(), w)
 }
 
@@ -707,16 +576,7 @@ func (h *Handler) tagsPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	editID := r.URL.Query().Get("edit")
-	// Per-tag counters: how many people carry it, how many things it opens.
-	// A failed lookup renders as zeroes rather than failing the page — the
-	// counters are decoration on a page whose real job is renaming tags.
-	usage := map[string]view.TagCounts{}
-	if counts, err := h.repo.TagUsageCounts(r.Context()); err == nil {
-		for id, u := range counts {
-			usage[id] = view.TagCounts{Users: u.UserCount, Items: u.ItemCount}
-		}
-	}
-	view.TagsPage(filterOutOwnerTags(tags), currentUser, editID, usage).Render(r.Context(), w)
+	view.TagsPage(filterOutOwnerTags(tags), currentUser, editID).Render(r.Context(), w)
 }
 
 // ── User action handlers ───────────────────────────────────────
@@ -733,7 +593,7 @@ func (h *Handler) approveUser(w http.ResponseWriter, r *http.Request) {
 	if h.onUserApproved != nil {
 		h.onUserApproved(r.Context(), id)
 	}
-	redirectOrNoContent(w, r, "/admin/users")
+	http.Redirect(w, r, "/admin/users", http.StatusFound)
 }
 
 // SetOnUserApproved wires the post-approval notice hook. Called once at boot.
@@ -747,7 +607,7 @@ func (h *Handler) unapproveUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	redirectOrNoContent(w, r, "/admin/users")
+	http.Redirect(w, r, "/admin/users", http.StatusFound)
 }
 
 func (h *Handler) setRole(w http.ResponseWriter, r *http.Request) {
@@ -765,16 +625,13 @@ func (h *Handler) setRole(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	redirectOrNoContent(w, r, "/admin/users")
+	http.Redirect(w, r, "/admin/users", http.StatusFound)
 }
 
 func (h *Handler) setUserTags(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	ids, ok := tagIDsFromForm(r)
-	if !ok {
-		refuseUnreadableTagForm(w)
-		return
-	}
+	r.ParseForm()
+	ids := dedupNonEmpty(r.Form["tag_ids[]"])
 	if err := h.repo.SetUserTags(r.Context(), id, ids); err != nil {
 		if errors.Is(err, ErrUserNotApproved) || errors.Is(err, ErrSystemTagAssignment) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -783,7 +640,7 @@ func (h *Handler) setUserTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	redirectOrNoContent(w, r, "/admin/users")
+	http.Redirect(w, r, "/admin/users", http.StatusFound)
 }
 
 // ── Job page handler ──────────────────────────────────────────
@@ -801,15 +658,9 @@ func (h *Handler) adminJobsPage(w http.ResponseWriter, r *http.Request) {
 	for i, j := range jobs {
 		paths[i] = "/jobs/" + j.Key
 	}
-	perms, err := h.repo.ListToolPerms(ctx, paths)
-	if err != nil {
-		http.Error(w, "cannot load tag assignments: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	allTags, _, tagsOK := h.tagPageData(w, r, nil)
-	if !tagsOK {
-		return
-	}
+	perms, _ := h.repo.ListToolPerms(ctx, paths)
+	allTags, _ := h.repo.ListTags(ctx)
+	h.repo.ResolveOwnerDisplayNames(ctx, allTags)
 	allTags = filterOutOwnerTags(allTags)
 
 	systemTagIDs := make(map[string]bool)
@@ -836,11 +687,6 @@ func (h *Handler) adminJobsPage(w http.ResponseWriter, r *http.Request) {
 			ConfigCount: len(h.configs.ListOwned(j.Key)),
 		}
 	}
-	access := h.accessSummaries(ctx, paths)
-	for i := range rows {
-		rows[i].Access = access["/jobs/"+rows[i].Job.Key]
-		rows[i].TagNames = view.TagNames(allTags, rows[i].TagIDs)
-	}
 	view.AdminJobsPage(rows, allTags, user).Render(ctx, w)
 }
 
@@ -866,11 +712,8 @@ func (h *Handler) setJobTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, ErrSystemEntityImmutable.Error(), http.StatusBadRequest)
 		return
 	}
-	ids, ok := tagIDsFromForm(r)
-	if !ok {
-		refuseUnreadableTagForm(w)
-		return
-	}
+	r.ParseForm()
+	ids := dedupNonEmpty(r.Form["tag_ids[]"])
 	if err := h.repo.SetToolTags(r.Context(), path, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -891,7 +734,7 @@ func (h *Handler) setToolVisibility(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	redirectOrNoContent(w, r, "/admin/tools")
+	http.Redirect(w, r, "/admin/tools", http.StatusFound)
 }
 
 func (h *Handler) setToolDisabled(w http.ResponseWriter, r *http.Request) {
@@ -901,21 +744,18 @@ func (h *Handler) setToolDisabled(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	redirectOrNoContent(w, r, "/admin/tools")
+	http.Redirect(w, r, "/admin/tools", http.StatusFound)
 }
 
 func (h *Handler) setToolTags(w http.ResponseWriter, r *http.Request) {
 	path := "/tools/" + r.PathValue("path")
-	ids, ok := tagIDsFromForm(r)
-	if !ok {
-		refuseUnreadableTagForm(w)
-		return
-	}
+	r.ParseForm()
+	ids := dedupNonEmpty(r.Form["tag_ids[]"])
 	if err := h.repo.SetToolTags(r.Context(), path, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	redirectOrNoContent(w, r, "/admin/tools")
+	http.Redirect(w, r, "/admin/tools", http.StatusFound)
 }
 
 // ── Tag CRUD handlers ──────────────────────────────────────────

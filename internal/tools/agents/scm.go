@@ -2,13 +2,10 @@ package agents
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/yogasw/wick/internal/agents/scm"
-	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -18,37 +15,23 @@ import (
 // handle DiscoverRepos produced — never a raw path.
 func registerSCM(r tool.Router) {
 	r.GET("/api/sessions/{id}/git/repos", gitRepos)
-	r.GET("/api/sessions/{id}/git/active", gitActiveRepo)
-	r.POST("/api/sessions/{id}/git/active", gitSetActiveRepo)
-	r.GET("/api/sessions/{id}/git/connectors", gitConnectors)
-	r.POST("/api/sessions/{id}/git/connectors", setGitConnector)
 	r.GET("/api/sessions/{id}/git/status", gitStatus)
 	r.GET("/api/sessions/{id}/git/diff", gitDiff)
 	r.GET("/api/sessions/{id}/git/file", gitReadFile)
 	r.GET("/api/sessions/{id}/git/branches", gitBranches)
 	r.GET("/api/sessions/{id}/git/blob", gitBlob)
 	r.GET("/api/sessions/{id}/git/compare", gitCompare)
-	r.GET("/api/sessions/{id}/git/compare-refs", gitCompareRefs)
-	r.GET("/api/sessions/{id}/git/ref-compare", gitRefCompare)
 	r.GET("/api/sessions/{id}/git/log", gitLog)
-	r.GET("/api/sessions/{id}/git/refs", gitHistoryRefs)
 	r.GET("/api/sessions/{id}/git/commit", gitCommitInfo)
 	r.GET("/api/sessions/{id}/git/commit-diff", gitCommitDiff)
 	r.POST("/api/sessions/{id}/git/stage", gitStage)
 	r.POST("/api/sessions/{id}/git/unstage", gitUnstage)
 	r.POST("/api/sessions/{id}/git/discard", gitDiscard)
-	r.POST("/api/sessions/{id}/git/exclude", gitExclude)
 	r.POST("/api/sessions/{id}/git/commit", gitCommit)
 	r.POST("/api/sessions/{id}/git/branch/switch", gitBranchSwitch)
 	r.POST("/api/sessions/{id}/git/branch/create", gitBranchCreate)
-	r.POST("/api/sessions/{id}/git/branch/rename", gitBranchRename)
-	r.POST("/api/sessions/{id}/git/branch/delete", gitBranchDelete)
-	r.POST("/api/sessions/{id}/git/restore", gitRestore)
-	r.POST("/api/sessions/{id}/git/revert", gitRevert)
-	r.POST("/api/sessions/{id}/git/reset", gitReset)
 	r.POST("/api/sessions/{id}/git/push", gitPush)
 	r.POST("/api/sessions/{id}/git/pull", gitPull)
-	r.POST("/api/sessions/{id}/git/fetch", gitFetch)
 	r.POST("/api/sessions/{id}/git/file", gitWriteFile)
 }
 
@@ -110,22 +93,15 @@ type RepoSummary struct {
 // changes list of each repo — so a change event needs no follow-up
 // fetch (zero polling).
 type GitStatusSnapshot struct {
-	Repos    []RepoSummary               `json:"repos"`
-	Statuses map[string]scm.StatusResult `json:"statuses"`
-	// Active is the repo this session works in, resolved server-side from
-	// session meta (empty only when the cwd holds no repo). It travels
-	// with the snapshot so every reader — panel, rail badge, agent —
-	// names the SAME repo. The badge used to derive this from the
-	// browser's own storage and disagreed with the panel next to it.
-	Active         string `json:"active"`
-	ActiveExplicit bool   `json:"active_explicit"`
-	TotalChanged   int    `json:"total_changed"`
+	Repos        []RepoSummary               `json:"repos"`
+	Statuses     map[string]scm.StatusResult `json:"statuses"`
+	TotalChanged int                         `json:"total_changed"`
 }
 
 // buildGitSnapshot scans cwd and computes the full snapshot. One
 // `git status` per repo; bounded by repo count. Errors on a single repo
 // are skipped so one broken repo doesn't blank the whole panel.
-func buildGitSnapshot(ctx context.Context, cwd, storedRepo string) GitStatusSnapshot {
+func buildGitSnapshot(ctx context.Context, cwd string) GitStatusSnapshot {
 	snap := GitStatusSnapshot{Statuses: map[string]scm.StatusResult{}}
 	repos, err := scm.DiscoverRepos(cwd)
 	if err != nil {
@@ -149,97 +125,18 @@ func buildGitSnapshot(ctx context.Context, cwd, storedRepo string) GitStatusSnap
 		}
 		snap.Repos = append(snap.Repos, s)
 	}
-	if sel, err := scm.ResolveSelection(cwd, storedRepo); err == nil {
-		snap.Active, snap.ActiveExplicit = sel.Rel, sel.Explicit
-	}
 	return snap
-}
-
-// gitActiveRepo reports which repo this session is working in. The
-// selection lives in session meta rather than the browser because the
-// AGENT needs the same answer: it is what the system prompt names and
-// what wick_scm reads. Returns the first repo (explicit=false) when
-// nobody has picked one.
-func gitActiveRepo(c *tool.Ctx) {
-	sess, cwd, ok := sessionAndCwd(c)
-	if !ok {
-		return
-	}
-	sel, err := scm.ResolveSelection(cwd, sess.Meta.ScmRepo)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, sel)
-}
-
-// gitSetActiveRepo stores the panel's repo selection on the session.
-// An empty repo clears it, which reads as "no explicit pick" again.
-func gitSetActiveRepo(c *tool.Ctx) {
-	sess, cwd, ok := sessionAndCwd(c)
-	if !ok {
-		return
-	}
-	var body struct {
-		Repo string `json:"repo"`
-	}
-	if err := json.NewDecoder(c.R.Body).Decode(&body); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
-		return
-	}
-	rel := strings.TrimSpace(body.Repo)
-	if rel != "" {
-		repo, err := scm.ValidateRepo(cwd, rel)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		rel = repo.Rel
-	}
-	meta := sess.Meta
-	meta.ScmRepo = rel
-	if err := session.SaveMeta(globalLayout, sess.ID, meta); err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	globalMgr.Register(sessionWithMeta(sess, meta))
-	sel, err := scm.ResolveSelection(cwd, rel)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, sel)
-}
-
-// sessionAndCwd is sessionCwd plus the session itself, for the handlers
-// that also write meta.
-func sessionAndCwd(c *tool.Ctx) (session.Session, string, bool) {
-	if globalMgr == nil {
-		c.Error(http.StatusServiceUnavailable, "agents not initialised — check server boot logs")
-		return session.Session{}, "", false
-	}
-	sess, found := globalMgr.Registry().Session(c.PathValue("id"))
-	if !found {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
-		return session.Session{}, "", false
-	}
-	cwd, err := resolveSessionCwd(sess)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return session.Session{}, "", false
-	}
-	return sess, cwd, true
 }
 
 // gitRepos returns the full snapshot — repos + per-repo status — so the
 // FE's initial load is a single request and every later update arrives
 // via the git_status SSE event (same shape).
 func gitRepos(c *tool.Ctx) {
-	sess, cwd, ok := sessionAndCwd(c)
+	cwd, ok := sessionCwd(c)
 	if !ok {
 		return
 	}
-	c.JSON(http.StatusOK, buildGitSnapshot(c.Context(), cwd, sess.Meta.ScmRepo))
+	c.JSON(http.StatusOK, buildGitSnapshot(c.Context(), cwd))
 }
 
 func gitStatus(c *tool.Ctx) {
@@ -399,118 +296,6 @@ func gitCompare(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"original": original, "modified": modified, "path": path})
 }
 
-// boolQuery reads a query flag the way the rest of this file spells it:
-// present as "1" or "true" means on, anything else (including absent)
-// means off.
-func boolQuery(c *tool.Ctx, name string) bool {
-	v := c.Query(name)
-	return v == "1" || v == "true"
-}
-
-// gitCompareRefs lists what differs between two refs — the Compare tab's
-// file list, its ± totals and its ahead/behind header in one request.
-//
-// three_dot=1 asks the merge-base question ("what does head add?"),
-// which is what a reviewer means by comparing two branches; without it
-// the two trees are diffed directly.
-func gitCompareRefs(c *tool.Ctx) {
-	cwd, ok := sessionCwd(c)
-	if !ok {
-		return
-	}
-	dir, ok := repoDir(c, cwd)
-	if !ok {
-		return
-	}
-	base, head := c.Query("base"), c.Query("head")
-	if base == "" || head == "" {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "base and head required"})
-		return
-	}
-	res, err := scm.CompareRefs(c.Context(), dir, base, head, boolQuery(c, "three_dot"))
-	if err != nil {
-		gitErr(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, res)
-}
-
-// gitRefCompare returns the two raw sides of one file across two refs,
-// for the same Monaco diff editor the working-tree changes use. A file
-// absent on one side comes back as an empty string rather than an error
-// — that is an add or a delete, not a failure.
-//
-// three_dot=1 reads the left side at the merge base instead of at base's
-// tip, so the diff shown matches the file list gitCompareRefs produced
-// for the same toggle. head may be scm.WorktreeRef / scm.StagedRef, in
-// which case the right side is the file on disk / in the index.
-func gitRefCompare(c *tool.Ctx) {
-	cwd, ok := sessionCwd(c)
-	if !ok {
-		return
-	}
-	dir, ok := repoDir(c, cwd)
-	if !ok {
-		return
-	}
-	base, head, path := c.Query("base"), c.Query("head"), c.Query("path")
-	if base == "" || head == "" {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "base and head required"})
-		return
-	}
-	if path == "" {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "path required"})
-		return
-	}
-	if scm.IsWorkingSide(base) {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "base: the working tree can only be the head side"})
-		return
-	}
-	for _, ref := range []string{base, head} {
-		if err := scm.ValidateCompareRef(c.Context(), dir, ref); err != nil {
-			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-	}
-	// A working-tree head stands on HEAD for the merge base, the same
-	// way gitCompareRefs computed the file list.
-	tip := head
-	if scm.IsWorkingSide(head) {
-		tip = "HEAD"
-	}
-	left := base
-	if boolQuery(c, "three_dot") {
-		// Unrelated histories have no merge base; fall back to base's
-		// tip so the diff still renders instead of erroring out.
-		if mb, err := scm.MergeBase(c.Context(), dir, base, tip); err == nil && mb != "" {
-			left = mb
-		}
-	}
-	// The rename source, when the caller knows it: without it the left
-	// side of a renamed file reads as empty and the diff looks like a
-	// wholesale add.
-	origPath := c.Query("orig_path")
-	if origPath == "" {
-		origPath = path
-	}
-	original, err := scm.FileAtRef(c.Context(), dir, left, origPath)
-	if err != nil {
-		gitErr(c, err)
-		return
-	}
-	var modified string
-	if scm.IsWorkingSide(head) {
-		modified, err = scm.WorkingFile(c.Context(), dir, head, path)
-	} else {
-		modified, err = scm.FileAtRef(c.Context(), dir, head, path)
-	}
-	if err != nil {
-		gitErr(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, map[string]any{"original": original, "modified": modified, "path": path})
-}
-
 func gitLog(c *tool.Ctx) {
 	cwd, ok := sessionCwd(c)
 	if !ok {
@@ -526,92 +311,12 @@ func gitLog(c *tool.Ctx) {
 			limit = n
 		}
 	}
-	// refs picks which history the graph walks: "auto" (current branch +
-	// upstream), "all", or a comma-separated list of ref names. Absent
-	// means auto, which is what the panel opens on.
-	var refs []string
-	if v := strings.TrimSpace(c.Query("refs")); v != "" {
-		for _, part := range strings.Split(v, ",") {
-			if part = strings.TrimSpace(part); part != "" {
-				refs = append(refs, part)
-			}
-		}
-	}
-	// skip is the paging cursor: the panel asks for the next page once the
-	// list is scrolled near its end.
-	skip := 0
-	if v := c.Query("skip"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			skip = n
-		}
-	}
-	entries, err := scm.History(c.Context(), dir, scm.LogOptions{Limit: limit, Skip: skip, Refs: refs})
+	entries, err := scm.Log(c.Context(), dir, limit)
 	if err != nil {
 		gitErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, map[string]any{
-		"commits": entries,
-		"avatars": commitAvatars(c, entries),
-		// A full page means there is probably another one. Cheaper than
-		// counting the whole history to answer a question the scrollbar
-		// asks again on every page.
-		"has_more": len(entries) == limit,
-	})
-}
-
-// commitAvatars maps an author email to that person's wick avatar, for the
-// emails in this page of history.
-//
-// Only real avatars: an email that belongs to no account, or to an account
-// with no picture, is simply absent from the map and the panel draws nothing.
-// Inventing a placeholder (initials on a colour) was worse than showing
-// nothing — it looks like a product decision rather than missing data.
-//
-// One lookup per DISTINCT email, not per commit: a history page is usually a
-// handful of people, and the cache turns 80 rows into 3 queries.
-func commitAvatars(c *tool.Ctx, entries []scm.LogEntry) map[string]string {
-	if globalAuth == nil {
-		return map[string]string{}
-	}
-	out := map[string]string{}
-	seen := map[string]struct{}{}
-	for _, e := range entries {
-		email := strings.ToLower(strings.TrimSpace(e.AuthorEmail))
-		if email == "" {
-			continue
-		}
-		if _, done := seen[email]; done {
-			continue
-		}
-		seen[email] = struct{}{}
-		u, err := globalAuth.GetUserByEmail(c.Context(), email)
-		if err != nil || u == nil || strings.TrimSpace(u.Avatar) == "" {
-			continue
-		}
-		out[email] = u.Avatar
-	}
-	return out
-}
-
-// gitHistoryRefs lists the branches the graph can be pointed at, for the
-// picker. Separate from /git/branches, which answers a different question
-// (what can I check out) and carries no shas.
-func gitHistoryRefs(c *tool.Ctx) {
-	cwd, ok := sessionCwd(c)
-	if !ok {
-		return
-	}
-	dir, ok := repoDir(c, cwd)
-	if !ok {
-		return
-	}
-	refs, err := scm.HistoryRefs(c.Context(), dir)
-	if err != nil {
-		gitErr(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, map[string]any{"refs": refs, "trunk": scm.TrunkRef(c.Context(), dir)})
+	c.JSON(http.StatusOK, map[string]any{"commits": entries})
 }
 
 func gitCommitInfo(c *tool.Ctx) {
@@ -676,13 +381,8 @@ type repoMsgReq struct {
 }
 
 type repoBranchReq struct {
-	Repo   string `json:"repo"`
-	Branch string `json:"branch"`
-	// From starts a new branch somewhere other than HEAD; NewName is the
-	// rename target; Force is the delete that ignores git's unmerged check.
-	From     string `json:"from,omitempty"`
-	NewName  string `json:"new_name,omitempty"`
-	Force    bool   `json:"force,omitempty"`
+	Repo     string `json:"repo"`
+	Branch   string `json:"branch"`
 	Checkout bool   `json:"checkout"`
 }
 
@@ -694,14 +394,6 @@ type repoFileReq struct {
 
 type repoOnlyReq struct {
 	Repo string `json:"repo"`
-}
-
-// gitNetworkReq is repoOnlyReq plus the connector a push or pull runs
-// through. connector_id is what the picker sends on the first push in a
-// repo; afterwards the session remembers it and the field is empty.
-type gitNetworkReq struct {
-	Repo        string `json:"repo"`
-	ConnectorID string `json:"connector_id"`
 }
 
 // resolveBodyRepo resolves a repo handle taken from a JSON body field.
@@ -777,32 +469,6 @@ func gitDiscard(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"status": "discarded"})
 }
 
-type excludeReq struct {
-	Repo  string   `json:"repo"`
-	Paths []string `json:"paths"`
-}
-
-// gitExclude hides paths from git without deleting anything, by writing
-// them into .git/info/exclude. It is the way out for a folder this repo
-// should not be tracking and cannot remove — a clone that landed inside
-// the checkout.
-func gitExclude(c *tool.Ctx) {
-	var req excludeReq
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
-		return
-	}
-	dir, ok := resolveBodyRepo(c, req.Repo)
-	if !ok {
-		return
-	}
-	if err := scm.Exclude(c.Context(), dir, req.Paths); err != nil {
-		gitErr(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, map[string]any{"status": "excluded"})
-}
-
 func gitCommit(c *tool.Ctx) {
 	var req repoMsgReq
 	if err := c.BindJSON(&req); err != nil {
@@ -848,15 +514,15 @@ func gitBranchCreate(c *tool.Ctx) {
 	if !ok {
 		return
 	}
-	if err := scm.CreateBranchFrom(c.Context(), dir, req.Branch, req.From, req.Checkout); err != nil {
+	if err := scm.CreateBranch(c.Context(), dir, req.Branch, req.Checkout); err != nil {
 		gitErr(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"status": "created", "branch": req.Branch})
 }
 
-func gitBranchRename(c *tool.Ctx) {
-	var req repoBranchReq
+func gitPush(c *tool.Ctx) {
+	var req repoOnlyReq
 	if err := c.BindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
@@ -865,99 +531,16 @@ func gitBranchRename(c *tool.Ctx) {
 	if !ok {
 		return
 	}
-	if err := scm.RenameBranch(c.Context(), dir, req.Branch, req.NewName); err != nil {
-		gitErr(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, map[string]any{"status": "renamed", "branch": req.NewName})
-}
-
-func gitBranchDelete(c *tool.Ctx) {
-	var req repoBranchReq
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
-		return
-	}
-	dir, ok := resolveBodyRepo(c, req.Repo)
-	if !ok {
-		return
-	}
-	if err := scm.DeleteBranch(c.Context(), dir, req.Branch, req.Force); err != nil {
-		gitErr(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, map[string]any{"status": "deleted", "branch": req.Branch})
-}
-
-// ── Rollback endpoints ──────────────────────────────────────────────
-//
-// All three are DESTRUCTIVE in some mode and the FE must confirm with
-// the user first, naming the exact git effect — the same contract
-// gitDiscard already works under.
-
-type restoreReq struct {
-	Repo  string   `json:"repo"`
-	Ref   string   `json:"ref"`
-	Paths []string `json:"paths"`
-}
-
-// gitRestore puts single files back to their content at another ref.
-// It is the per-file rollback the Compare tab offers next to each entry.
-func gitRestore(c *tool.Ctx) {
-	var req restoreReq
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
-		return
-	}
-	dir, ok := resolveBodyRepo(c, req.Repo)
-	if !ok {
-		return
-	}
-	if err := scm.RestorePaths(c.Context(), dir, req.Ref, req.Paths); err != nil {
-		gitErr(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, map[string]any{"status": "restored", "ref": req.Ref, "paths": req.Paths})
-}
-
-type revertReq struct {
-	Repo     string `json:"repo"`
-	SHA      string `json:"sha"`
-	NoCommit bool   `json:"no_commit"`
-}
-
-// gitRevert applies the inverse of a commit. A conflict comes back as a
-// 400 carrying git's own message, which names the files in the way —
-// the working tree is left exactly as git left it, mid-revert, because
-// cleaning up after it would throw away the resolution in progress.
-func gitRevert(c *tool.Ctx) {
-	var req revertReq
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
-		return
-	}
-	dir, ok := resolveBodyRepo(c, req.Repo)
-	if !ok {
-		return
-	}
-	out, err := scm.RevertCommit(c.Context(), dir, req.SHA, req.NoCommit)
+	out, err := scm.Push(c.Context(), dir)
 	if err != nil {
 		gitErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, map[string]any{"status": "reverted", "sha": req.SHA, "output": out})
+	c.JSON(http.StatusOK, map[string]any{"status": "pushed", "output": out})
 }
 
-type resetReq struct {
-	Repo string `json:"repo"`
-	Ref  string `json:"ref"`
-	Mode string `json:"mode"` // soft | mixed | hard
-}
-
-// gitReset moves the current branch to another ref. mode=hard discards
-// uncommitted work outright, so the panel marks it destructive.
-func gitReset(c *tool.Ctx) {
-	var req resetReq
+func gitPull(c *tool.Ctx) {
+	var req repoOnlyReq
 	if err := c.BindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
@@ -966,92 +549,12 @@ func gitReset(c *tool.Ctx) {
 	if !ok {
 		return
 	}
-	if err := scm.ResetTo(c.Context(), dir, req.Ref, req.Mode); err != nil {
-		gitErr(c, err)
-		return
-	}
-	mode := req.Mode
-	if mode == "" {
-		mode = "mixed"
-	}
-	c.JSON(http.StatusOK, map[string]any{"status": "reset", "ref": req.Ref, "mode": mode})
-}
-
-// gitPush and gitPull run through a Git CLI connector when one is
-// chosen for the repo — that is where the credentials, the branch
-// policy and the audit trail live. Plain git remains the path when
-// nothing is chosen, which only reaches a remote that needs no
-// credential; the panel asks before it pushes as anybody.
-func gitPush(c *tool.Ctx) { gitNetworkOp(c, "push") }
-
-func gitPull(c *tool.Ctx) { gitNetworkOp(c, "pull") }
-
-// gitFetch refreshes remote-tracking refs. Same credential path as push/pull —
-// it talks to the server — but it changes nothing locally, so it is the safe
-// way to answer "am I behind?" without a merge.
-func gitFetch(c *tool.Ctx) { gitNetworkOp(c, "fetch") }
-
-func gitNetworkOp(c *tool.Ctx, op string) {
-	var req gitNetworkReq
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
-		return
-	}
-	sess, cwd, ok := sessionAndCwd(c)
-	if !ok {
-		return
-	}
-	rel := strings.TrimSpace(req.Repo)
-	if rel == "" {
-		sel, err := scm.ResolveSelection(cwd, sess.Meta.ScmRepo)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		rel = sel.Rel
-	}
-	dir, err := scm.ResolveRepoDir(cwd, rel)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid repo: " + err.Error()})
-		return
-	}
-	status := "pushed"
-	switch op {
-	case "pull":
-		status = "pulled"
-	case "fetch":
-		status = "fetched"
-	}
-
-	connID, cErr := resolveGitConnector(c, sess, req.ConnectorID)
-	if cErr != nil {
-		c.JSON(http.StatusForbidden, map[string]string{"error": cErr.Error()})
-		return
-	}
-	if connID != "" {
-		out, cerr := runGitConnectorOp(c, connID, op, map[string]string{"repo_path": dir})
-		if cerr != nil {
-			c.JSON(http.StatusBadRequest, map[string]string{"error": cerr.Error()})
-			return
-		}
-		c.JSON(http.StatusOK, map[string]any{"status": status, "output": out, "connector_id": connID})
-		return
-	}
-
-	var out string
-	switch op {
-	case "pull":
-		out, err = scm.Pull(c.Context(), dir)
-	case "fetch":
-		out, err = scm.Fetch(c.Context(), dir)
-	default:
-		out, err = scm.Push(c.Context(), dir)
-	}
+	out, err := scm.Pull(c.Context(), dir)
 	if err != nil {
 		gitErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, map[string]any{"status": status, "output": out})
+	c.JSON(http.StatusOK, map[string]any{"status": "pulled", "output": out})
 }
 
 func gitWriteFile(c *tool.Ctx) {

@@ -7,30 +7,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
+	"io"
 	"net"
 	"net/http"
 	_ "net/http/pprof" // opt-in profiling endpoints, served on loopback only (see WICK_PPROF in Run)
 	neturl "net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"runtime/debug"
-	"slices"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/yogasw/wick/internal/accesstoken"
 	"github.com/yogasw/wick/internal/admin"
-	"github.com/yogasw/wick/internal/agents/a2aserver"
 	"github.com/yogasw/wick/internal/agents/agentctl"
 	"github.com/yogasw/wick/internal/agents/airouter"
 	"github.com/yogasw/wick/internal/agents/askuser"
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
-	agentrest "github.com/yogasw/wick/internal/agents/channels/rest"
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
 	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
 	telegramch "github.com/yogasw/wick/internal/agents/channels/telegram"
@@ -43,34 +37,22 @@ import (
 	agentpool "github.com/yogasw/wick/internal/agents/pool"
 	agentproject "github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/provider"
-	"github.com/yogasw/wick/internal/agents/provider/managedbin"
-	ompprovider "github.com/yogasw/wick/internal/agents/provider/omp"
 	"github.com/yogasw/wick/internal/agents/provider/oomscore"
-	opencodeprovider "github.com/yogasw/wick/internal/agents/provider/opencode"
 	wickprovider "github.com/yogasw/wick/internal/agents/provider/wick"
 	"github.com/yogasw/wick/internal/agents/providersync"
 	agentregistry "github.com/yogasw/wick/internal/agents/registry"
-	"github.com/yogasw/wick/internal/agents/resourceguard"
 	"github.com/yogasw/wick/internal/agents/schedule"
 	agentsession "github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/sessionworkspace"
 	agentskills "github.com/yogasw/wick/internal/agents/skills"
-	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/storage"
 	"github.com/yogasw/wick/internal/agents/store"
-	"github.com/yogasw/wick/internal/agents/team"
-	"github.com/yogasw/wick/internal/agents/terminal"
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/agents/ticketprompt"
-	"github.com/yogasw/wick/internal/agents/todoprompt"
 	// systemprompt "github.com/yogasw/wick/internal/agents/system-prompt" // disabled: ConnectorCatalog injection (see ConnectorCatalogLoader below)
-	"github.com/yogasw/wick/internal/agents/aigen"
-	"github.com/yogasw/wick/internal/agents/clitoken"
-	"github.com/yogasw/wick/internal/agents/teamlink"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
 	wfnodes "github.com/yogasw/wick/internal/agents/workflow/nodes"
-	wfprovider "github.com/yogasw/wick/internal/agents/workflow/provider"
 	wfsetup "github.com/yogasw/wick/internal/agents/workflow/setup"
 	wfstate "github.com/yogasw/wick/internal/agents/workflow/state"
 	wftrigger "github.com/yogasw/wick/internal/agents/workflow/trigger"
@@ -86,10 +68,7 @@ import (
 	notesconn "github.com/yogasw/wick/internal/connectors/notes"
 	"github.com/yogasw/wick/internal/connectors/notifications"
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
-	sourceconn "github.com/yogasw/wick/internal/connectors/source"
 	subagents "github.com/yogasw/wick/internal/connectors/sub-agents"
-	teamagentsconn "github.com/yogasw/wick/internal/connectors/team-agents"
-	teamlinkconn "github.com/yogasw/wick/internal/connectors/team-link"
 	ticketconn "github.com/yogasw/wick/internal/connectors/tickets"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
 	wfconn "github.com/yogasw/wick/internal/connectors/workflow"
@@ -102,13 +81,11 @@ import (
 	"github.com/yogasw/wick/internal/jobs"
 	connectorrunspurge "github.com/yogasw/wick/internal/jobs/connector-runs-purge"
 	connectorrunsreaper "github.com/yogasw/wick/internal/jobs/connector-runs-reaper"
-	jobplugin "github.com/yogasw/wick/internal/jobs/plugin"
 	providerstorageretention "github.com/yogasw/wick/internal/jobs/provider-storage-retention"
 	providerstoragesync "github.com/yogasw/wick/internal/jobs/provider-storage-sync"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/mcp"
-	mcphandlers "github.com/yogasw/wick/internal/mcp/handlers"
 	"github.com/yogasw/wick/internal/metrics"
 	"github.com/yogasw/wick/internal/oauth"
 	"github.com/yogasw/wick/internal/pkg/config"
@@ -118,24 +95,18 @@ import (
 	"github.com/yogasw/wick/internal/pkg/spa"
 	"github.com/yogasw/wick/internal/pkg/sysmem"
 	"github.com/yogasw/wick/internal/pkg/ui"
-	"github.com/yogasw/wick/internal/pkg/upgrade"
-	pluginreplace "github.com/yogasw/wick/internal/plugins/replace"
-	pluginsource "github.com/yogasw/wick/internal/plugins/source"
 	"github.com/yogasw/wick/internal/processctl"
-	serviceplugin "github.com/yogasw/wick/internal/services/plugin"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/startupscript"
 	"github.com/yogasw/wick/internal/tags"
 	"github.com/yogasw/wick/internal/tools"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
 	encfieldstool "github.com/yogasw/wick/internal/tools/encfields"
-	toolplugin "github.com/yogasw/wick/internal/tools/plugin"
 	providerstoragetool "github.com/yogasw/wick/internal/tools/provider-storage"
 	"github.com/yogasw/wick/internal/updater"
 	"github.com/yogasw/wick/internal/userconfig"
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 	"github.com/yogasw/wick/pkg/job"
-	wickplugin "github.com/yogasw/wick/pkg/plugin"
 	"github.com/yogasw/wick/pkg/tool"
 	"github.com/yogasw/wick/web"
 
@@ -249,28 +220,6 @@ func NewServer() *Server {
 	tools.RegisterBuiltins()
 	jobs.RegisterBuiltins()
 
-	// Job plugins (plugins/jobs/<key>) register like built-in jobs, before
-	// validation and the configs bootstrap so their config rows get seeded.
-	jobPluginStore := connplugin.NewStateStore(db)
-	if n := jobplugin.Load(connplugin.KindDir(wickplugin.KindJob), jobPluginStore.Enabled, jobPluginStore.Record); n > 0 {
-		log.Info().Int("plugins", n).Msg("job plugins: loaded")
-	}
-	// Tool plugins (plugins/tools/<key>) register like built-in tools whose
-	// routes reverse-proxy to the plugin process (spawned on first use).
-	toolPlugins := toolplugin.NewPool()
-	if n := toolPlugins.Load(connplugin.KindDir(wickplugin.KindTool), jobPluginStore.Enabled, jobPluginStore.Record, tools.Register); n > 0 {
-		log.Info().Int("plugins", n).Msg("tool plugins: loaded")
-	}
-	toolPlugins.Start()
-	home.PluginVersions = toolPlugins.Version
-
-	// A job/tool that declares Replaces (a plugin extracted from a built-in)
-	// takes over the old key: the old module is unregistered and its config,
-	// schedule and access are migrated once — before the bootstraps below
-	// seed rows, so the new key starts with the old data.
-	replacePairs := pluginreplace.Prepare(jobs.All(), tools.All(), jobs.Unregister, tools.Unregister)
-	pluginreplace.New(db).ApplyAll(context.Background(), replacePairs)
-
 	// ── Tool modules (discover first so their Specs feed into the
 	// config bootstrap below) ──────────────────────────────────────
 	modules := tools.All()
@@ -311,7 +260,6 @@ func NewServer() *Server {
 	if mgr, n, err := connplugin.Load(connplugin.DefaultDir(), 5*time.Minute, pluginStore.Enabled); err != nil {
 		log.Warn().Err(err).Msg("connector plugins: load failed")
 	} else if mgr != nil {
-		mgr.SetDNSServersLoader(func() string { return configsSvc.Get(configs.KeyDNSServers) })
 		log.Info().Int("plugins", n).Msg("connector plugins: loaded")
 		pluginMgr = mgr
 		go pluginMgr.WarmUp()
@@ -405,7 +353,6 @@ func NewServer() *Server {
 	// ── Jobs (background workers) ────────────────────────────────
 	jobsSvc := manager.NewServiceFromDB(db)
 	jobsSvc.SetConfigReader(configsSvc)
-	jobsSvc.SetHidden(pluginreplace.IsReplaced)
 	if err := jobsSvc.Bootstrap(context.Background(), jobs.All()); err != nil {
 		log.Fatal().Msgf("jobs bootstrap: %s", err.Error())
 	}
@@ -501,12 +448,6 @@ func NewServer() *Server {
 	// Trim any backlog of spawn logs from before pruning existed so the
 	// dir is bounded immediately, not only after the next spawn.
 	_ = agentsSpawnLogger.Prune(provider.MaxSpawnLogs)
-	// Close out spawns the PREVIOUS wick was watching when it died. Their
-	// exit is written by the hook that reaps the subprocess, so a binary
-	// swap or a kill leaves the log ending on `start` and every reader
-	// believing the spawn is still running. This is the only moment that
-	// can be fixed: the process is gone and no one else will ever say so.
-	_, _ = agentsSpawnLogger.ReconcileOrphans(nil)
 
 	// Boot restore. Deferred to here (rather than the jobs-bootstrap block
 	// above) so the goroutine can capture agentsMgr and reload the registry
@@ -658,7 +599,7 @@ func NewServer() *Server {
 			channelReg.DispatchAgentEventFrom(sid, name, ev)
 			turnObserver.OnEvent(sid, name, ev)
 		},
-		OnExit: func(sid, name string, reason provider.ExitReason, reasonDetail string) {
+		OnExit: func(sid, name string, reason provider.ExitReason) {
 			// OnExit fires from the agent reader goroutine — no HTTP ctx
 			// in scope here, so request_id is not available. Pool's
 			// onAgentExit (called via HandleExit) will use the spawn-time
@@ -669,7 +610,7 @@ func NewServer() *Server {
 				Str("agent", name).
 				Int("reason", int(reason)).
 				Msg("OnExit: publishing synthetic Done + handing to pool")
-			agentsPool.HandleExit(sid, name, reason, reasonDetail)
+			agentsPool.HandleExit(sid, name, reason)
 			doneEv := agentevent.AgentEvent{Type: agentevent.Done}
 			agentsBcast.Publish(sid, name, doneEv)
 			channelReg.DispatchAgentEvent(sid, doneEv)
@@ -709,11 +650,6 @@ func NewServer() *Server {
 	agentsFactory.SystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt")
 	}
-	// A Team agent's session reads its own operator row instead, never
-	// system_prompt (see ClaudeFactory.composePrompt).
-	agentsFactory.TeamSystemPromptLoader = func() string {
-		return configsSvc.GetOwned("agents", "system_prompt_team")
-	}
 	// How much of a message sender's identity reaches the model. Read per
 	// Build so the setting takes effect on the next spawn without a restart.
 	// The wick provider is the one that needs it: it rebuilds prompts from
@@ -726,19 +662,8 @@ func NewServer() *Server {
 	// notes so the agent knows to read them through the notes connector.
 	// Read per Build, so a ticket attached (or a note added) mid-session
 	// shows up on the next spawn without a restart.
-	// The unfinished todo list rides along on the same hook: a fresh
-	// subprocess otherwise starts blind to the checklist it wrote itself,
-	// and either abandons it or replaces it with an unrelated one while the
-	// person watching the panel sees the work stop.
 	agentsFactory.TicketPointerLoader = func(sessionID string) string {
-		parts := make([]string, 0, 2)
-		if p := ticketprompt.Pointer(agentsLayout, sessionID); p != "" {
-			parts = append(parts, p)
-		}
-		if p := todoprompt.Pointer(agentsLayout, sessionID); p != "" {
-			parts = append(parts, p)
-		}
-		return strings.Join(parts, "\n\n")
+		return ticketprompt.Pointer(agentsLayout, sessionID)
 	}
 	// Memory guard. Read per Build so mode and limits can change in the UI
 	// without a restart. An unset or "off" mode returns nil, which is the
@@ -771,45 +696,10 @@ func NewServer() *Server {
 			// Contention controls; 0 = kernel default. Enforce-mode only —
 			// sliceLimits() drops them in measure.
 			CPUWeight:   atoi("agents_cpu_weight"),
-			CPUQuotaPct: agentconfig.CPUQuotaCorePct(agentconfig.CPUQuotaMachinePct(configsSvc.GetOwned("agents", "agents_cpu_quota_pct"), runtime.NumCPU()), runtime.NumCPU()),
+			CPUQuotaPct: atoi("agents_cpu_quota_pct"),
 			TasksMax:    atoi("agents_tasks_max"),
 			IOWeight:    atoi("agents_io_weight"),
 		}
-	}
-	// Managed provider binaries: the sandboxed `--version` of a fresh
-	// download runs inside the same memory scope an agent spawn would get,
-	// and a reload waits for an in-flight install instead of cutting it.
-	managedbin.Default.Wrap = func(bin string, args []string) (string, []string, func()) {
-		g := agentsFactory.MemGuardLoader()
-		if g == nil {
-			return bin, args, func() {}
-		}
-		wb, wa, unit := g.Wrap(bin, args, "managed-verify", int(time.Now().UnixNano()%1_000_000))
-		return wb, wa, func() { g.ReleaseScope(unit) }
-	}
-	upgrade.Register("provider binary installs", managedbin.Default.InflightCount)
-	// Provider helper processes (omp/opencode model listings, export/
-	// import, usage and auth-broker probes, version probes) run under the
-	// same policy as agent spawns, each with its instance's own limit —
-	// see provider.HelperCommand.
-	provider.HelperGuard = agentsFactory.MemGuardLoader
-	// Every helper is recorded; the reaper kills any still running past
-	// its deadline, and helper scopes a previous wick left are stopped.
-	provider.StartHelperReaper(context.Background())
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		provider.CleanupStaleHelperScopes(ctx)
-	}()
-	// Web terminals (gotty) run their command in the same memory scope an
-	// agent spawn gets; gotty and everything under it share one scope.
-	terminal.Default.Wrap = func(bin string, args []string) (string, []string, func()) {
-		g := agentsFactory.MemGuardLoader()
-		if g == nil {
-			return bin, args, func() {}
-		}
-		wb, wa, unit := g.Wrap(bin, args, "terminal", int(time.Now().UnixNano()%1_000_000))
-		return wb, wa, func() { g.ReleaseScope(unit) }
 	}
 	agentsFactory.ToolMemoryLoader = func() int {
 		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "tool_memory_max_mb"))
@@ -836,7 +726,7 @@ func NewServer() *Server {
 		sampler := &memreport.Sampler{
 			History:  hist,
 			Interval: time.Duration(cfgInt("resource_sample_interval_sec", 15)) * time.Second,
-			Names:    []string{"claude", "codex", "gemini", "omp", "opencode"},
+			Names:    []string{"claude", "codex", "gemini"},
 			TotalAvail: func() (uint64, uint64) {
 				total, _ := sysmem.Total()
 				avail, _ := sysmem.Available()
@@ -863,10 +753,6 @@ func NewServer() *Server {
 	}
 	agentsFactory.TraceEventMaxKBLoader = func() int {
 		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "trace_event_max_kb"))
-		return v
-	}
-	agentsFactory.TraceBlobMaxMBLoader = func() int {
-		v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "trace_blob_max_mb"))
 		return v
 	}
 
@@ -906,49 +792,8 @@ func NewServer() *Server {
 	// (which revokes them on exit) is built before the delegation service
 	// (which issues the sub-agent ones) — one issuer, shared by both.
 	mcpScopedTokens := mcp.NewScopedTokens()
-	// omp revokes its own per-session tokens (they live as long as the
-	// session's RPC process, not one turn).
-	ompprovider.SetMCPTokenRevoker(func(token string) { mcpScopedTokens.Revoke(token) })
 
 	preemptIdle := configsSvc.GetOwned("agents", "preempt_idle") != "false"
-	// Resource Guard: the fast watchdog over the agent tree. Config is
-	// read per tick so mode, action and knobs apply without a restart;
-	// it acts in enforce mode, only records in measure, and runs only on Linux
-	// (NewHost is nil elsewhere and Run returns at once).
-	resourceGuard := resourceguard.New(resourceguard.NewHost(), func() resourceguard.Config {
-		atoiOr := func(key string, def int) int {
-			if n, err := strconv.Atoi(configsSvc.GetOwned("agents", key)); err == nil && n > 0 {
-				return n
-			}
-			return def
-		}
-		atoi := func(key string) int {
-			n, _ := strconv.Atoi(configsSvc.GetOwned("agents", key))
-			return n
-		}
-		action := configsSvc.GetOwned("agents", "resource_guard_action")
-		if action == "" {
-			action = resourceguard.ActionKill
-		}
-		// enforce acts; measure only records what it would stop; off is off.
-		mode := configsSvc.GetOwned("agents", "memory_guard_mode")
-		return resourceguard.Config{
-			Enabled:     mode == agentconfig.MemGuardEnforce || mode == agentconfig.MemGuardMeasure,
-			Measure:     mode == agentconfig.MemGuardMeasure,
-			Action:      action,
-			Interval:    time.Duration(atoiOr("resource_guard_interval_ms", 1000)) * time.Millisecond,
-			SafePct:     atoiOr("resource_guard_safe_pct", 80),
-			HorizonSec:  atoiOr("resource_guard_exhaust_horizon_sec", 20),
-			MinFreeMB:   atoi("min_free_memory_mb"),
-			CPUPSIMax:   float64(atoiOr("resource_guard_cpu_psi_max", 90)),
-			CPUQuotaPct: agentconfig.CPUQuotaCorePct(agentconfig.CPUQuotaMachinePct(configsSvc.GetOwned("agents", "agents_cpu_quota_pct"), runtime.NumCPU()), runtime.NumCPU()),
-			CPUWeight:   atoi("agents_cpu_weight"),
-			TasksMax:    atoi("agents_tasks_max"),
-		}
-	})
-	// Agents app (Team) service: declared ahead of the pool because both
-	// the pool's respawn rule and the MCP minter consult it.
-	var teamSvc *team.Service
 	agentsPool = agentpool.New(agentpool.PoolConfig{
 		MaxConcurrent: maxConc,
 		IdleTimeout:   time.Duration(idleSec) * time.Second,
@@ -969,14 +814,6 @@ func NewServer() *Server {
 			// and reuses whatever process is already running, even one holding
 			// another principal's credential.
 			return agentchannels.CallerUserID(ctx)
-		},
-		// Which credential is behind this dispatch, when the caller used one.
-		// Only the REST channel has an answer — a browser or a Slack message
-		// carries a person, not a token — and it is recorded on the session so
-		// "which script has been calling" is answerable after the fact.
-		CallerToken: func(ctx context.Context) (string, string) {
-			t := agentchannels.CallerTokenFrom(ctx)
-			return t.ID, t.Name
 		},
 		// Who the agent is talking to, for the `[wick-sender ...]` line and
 		// the UI's sender chip. Channels stamp this themselves from their
@@ -1010,14 +847,9 @@ func NewServer() *Server {
 		// Read live so the switch takes effect without a restart, matching
 		// how the other agents settings behave.
 		RespawnOnCallerChange: configsSvc.GetOwned("agents", "respawn_on_caller_change") == "true",
-		// A Team agent running as its owner keeps one identity whoever
-		// talks to it; teamSvc is assigned below, before any send.
-		IdentityFixed: func(ctx context.Context, sessionID string) bool {
-			return teamSvc.IdentityFixed(ctx, sessionID)
-		},
-		Layout:          agentsLayout,
-		Factory:         agentsFactory,
-		DefaultProvider: configsSvc.GetOwned("agents", "default_provider"),
+		Layout:                agentsLayout,
+		Factory:               agentsFactory,
+		DefaultProvider:       configsSvc.GetOwned("agents", "default_provider"),
 		// Queue a spawn instead of starting it while the machine is
 		// already short of memory. Read live so the floor can be changed
 		// in the UI without a restart; 0 (the default) disables it.
@@ -1025,9 +857,6 @@ func NewServer() *Server {
 			v, _ := strconv.Atoi(configsSvc.GetOwned("agents", "min_free_memory_mb"))
 			return v
 		},
-		// Trend gate: hold a spawn while free memory is falling toward the
-		// floor, not only once it is under it.
-		SpawnHold: resourceGuard.HoldSpawns,
 		OnSessionCreated: func(s agentsession.Session) {
 			agentsMgr.Register(s)
 		},
@@ -1135,27 +964,6 @@ func NewServer() *Server {
 			channelReg.DispatchAgentEvent(ev.SessionID, doneEv)
 		},
 	})
-	// Guard events reach the session whose agent was acted on, as a
-	// system line in its history, and the Resources page reads the rest.
-	resourceGuard.OnEvent = func(e resourceguard.Event) {
-		if e.AgentPID == 0 || e.DryRun {
-			return
-		}
-		for _, a := range agentsPool.ActiveSnapshot() {
-			if a.PID == e.AgentPID {
-				st := store.New(store.Options{Layout: agentsLayout, SessionID: a.SessionID, AgentName: a.AgentName})
-				_ = st.AppendNoticeTurn(e.Detail)
-				return
-			}
-		}
-	}
-	resourceGuard.OnQuotaApplied = func() {
-		if err := agentsFactory.MemGuardLoader().SyncSlice(); err != nil {
-			log.Warn().Err(err).Msg("resource guard: could not persist agents.slice limits")
-		}
-	}
-	agentstool.SetResourceGuard(resourceGuard)
-	go resourceGuard.Run(context.Background())
 	// When the sweeper reaps an idle session's connectors, record a system
 	// turn on that session so its agent's context reflects the deletion. The
 	// session is idle by definition (that's why it was reaped), so a non-user
@@ -1229,42 +1037,6 @@ func NewServer() *Server {
 	agentstool.SetAuth(authSvc)
 	go agentstool.AutoInstallMCP()
 	agentstool.SetDB(db)
-	// Agents app: the MCP layer narrows an agent session's connector
-	// reach to that agent's checklist through this resolver.
-	teamSvc = team.NewService(db, agentsLayout)
-	// Team identity: read per Build so a rename or a new teammate shows up
-	// on the next spawn.
-	agentsFactory.TeamPromptLoader = func(sessionID string, subAgent bool) string {
-		return teamSvc.PromptFor(context.Background(), sessionID, subAgent)
-	}
-	agentsFactory.RemoteSpawnerLoader = agentstool.RemoteSpawnerFor
-	agentsFactory.TeamSpawnLoader = func(sessionID string) (agentpool.TeamSpawn, bool) {
-		sp, ok := teamSvc.SpawnPromptFor(context.Background(), sessionID)
-		return agentpool.TeamSpawn{Prompt: sp.Prompt, Access: sp.Access, Subagents: sp.Subagents, Schedule: sp.Schedule, Files: sp.Files, UseGlobalPrompt: sp.UseGlobalPrompt, TeamInstructions: sp.TeamInstructions}, ok
-	}
-	// Action cards outside the web UI: Slack buttons and numbered replies
-	// reach the agent through the same postback check as the web endpoint.
-	agentchannels.CardPostback = agentstool.ChannelPostback
-	agentchannels.CardNumberPostback = agentstool.ChannelNumberPostback
-	agentsFactory.TeamLimitsLoader = func(sessionID string) (agentpool.TeamLimits, bool) {
-		lim, ok := teamSvc.LimitsFor(context.Background(), sessionID)
-		if !ok {
-			return agentpool.TeamLimits{}, false
-		}
-		return agentpool.TeamLimits{
-			AgentID:         lim.AgentID,
-			DisallowedTools: team.DisallowedClaudeTools(lim.NativeTools),
-			BashAllowed:     slices.Contains(lim.NativeTools, "Bash"),
-			BashRules:       lim.BashRules,
-			DefaultScope:    lim.ProjectDir,
-			DisabledSkills:  slices.DeleteFunc(slices.Clone(lim.DisabledSkills), skillsync.IsRequiredSkill),
-		}, true
-	}
-	agentsession.ProjectAgent = func(projectID string) string {
-		return teamSvc.AgentOfProject(context.Background(), projectID)
-	}
-	mcp.SetAgentScopeResolver(teamSvc.ScopeForSession)
-	agentstool.SetTeam(teamSvc)
 	agentstool.SetChannelRegistry(channelReg)
 	agentstool.SetSyncManager(syncMgr)
 
@@ -1281,9 +1053,7 @@ func NewServer() *Server {
 		}
 		return p.Meta.Ticket, true
 	})
-	// Teed into the agents stream too, so an open board refetches on a
-	// ticket write instead of polling.
-	ticket.SetEmitter(agentstool.WithTicketStreamSignal(ticketWebhooks))
+	ticket.SetEmitter(ticketWebhooks)
 	agentstool.SetTicketDispatcher(ticketWebhooks)
 
 	// ask_user Manager: blocks the calling agent over MCP until the
@@ -1292,16 +1062,12 @@ func NewServer() *Server {
 	// one on resolve) so every open tab updates without polling.
 	askUsersMgr := askuser.NewManager(askuser.Options{
 		OnRequest: func(req askuser.AskRequest) {
-			agentstool.RecordAskRequest(req)
 			payload, _ := json.Marshal(req)
 			agentsBcast.PublishAskUser(req.SessionID, req.AgentName, payload)
 		},
 		OnResolved: func(sessionID, requestID string) {
 			agentsBcast.PublishAskUserResolved(sessionID, requestID)
 		},
-		// The question stays in the thread as an input_request card, with
-		// its answer once settled — not only above the composer.
-		OnSettled: agentstool.RecordAskSettled,
 	})
 	agentstool.SetAskUsers(askUsersMgr)
 	// Bind the askuser unix socket so sibling processes (stdio MCP —
@@ -1388,27 +1154,9 @@ func NewServer() *Server {
 	// this call, workflow body + draft + history + tests live in SQL;
 	// only state.json + env.json + runs/<id>/ stay on disk.
 	wfMgr.WithDB(db)
-	// Cron waits for the intake baton (started from Run); the rest of the
-	// workflow subsystem — router workers, webhook index, channel triggers —
-	// boots now so the UI and MCP are complete either way.
-	wfMgr.DeferCron = true
 	if err := wfMgr.Start(context.Background()); err != nil {
 		log.Warn().Err(err).Msg("workflow bootstrap failed; workflows tab will be empty")
 	}
-	// Run retention: cap each workflow's finished-run history by count
-	// and age. Re-read per pass so an edit on the settings page applies
-	// without a restart; unset/0 falls back to the package defaults. The
-	// all-workflow sweep starts with cron, once the intake baton is ours.
-	wfMgr.StartRunRetention(func() wfsetup.CleanupOptions {
-		opts := wfsetup.CleanupOptions{}
-		if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "workflow_run_keep_max")); err == nil {
-			opts.KeepMax = n
-		}
-		if n, err := strconv.Atoi(configsSvc.GetOwned("agents", "workflow_run_retention_days")); err == nil {
-			opts.TTL = time.Duration(n) * 24 * time.Hour
-		}
-		return opts
-	})
 	agentstool.SetWorkflowManager(wfMgr)
 	agentstool.SetWorkflowEncService(encSvc)
 	// Wire master-key decryptor into the engine so wick_enc_ workflow
@@ -1440,8 +1188,7 @@ func NewServer() *Server {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		// Fresh persisted probes (<24h, same binary) are not re-spawned.
-		_ = provider.RescanStale(ctx)
+		_ = provider.RescanAll(ctx)
 	}()
 
 	// ── Gate: ApprovalManager (shared socket + initial spec.json) ────────
@@ -1467,12 +1214,10 @@ func NewServer() *Server {
 			return "", false
 		},
 		OnRequest: func(sessionID string, r gate.ApprovalRequest) {
-			agentstool.RecordApprovalRequest(sessionID, r)
 			agentsBcast.PublishApprovalRequest(sessionID, r)
 			channelReg.DispatchApprovalRequest(sessionID, r)
 		},
 		OnResolved: func(sessionID, requestID, decision string) {
-			agentstool.RecordApprovalResolved(sessionID, requestID, decision)
 			agentsBcast.PublishApprovalResolved(sessionID, requestID, decision)
 			channelReg.DispatchApprovalResolved(sessionID, requestID, decision)
 		},
@@ -1584,19 +1329,6 @@ func NewServer() *Server {
 	// rather than beside the dispatcher because tokensSvc lives at this
 	// point in boot.
 	agentstool.SetTicketAPIAuth(tokensSvc, authSvc)
-	// A CLI token is useless without the address to send it to, and on a
-	// host behind a proxy that address is not the loopback port.
-	clitoken.SetBaseURL(configsSvc.AppURL)
-	// CLI tokens are signed statements, not rows in a map: the app's own
-	// session secret is what lets ANY process — including a successor that
-	// booted after the token was minted — verify one. Rotating that secret
-	// invalidates outstanding CLI tokens too, which is the behaviour
-	// somebody rotating it expects.
-	clitoken.SetSecret(configsSvc.SessionSecret)
-	// The per-spawn MCP credentials are signed with the same key and for
-	// the same reason: an agent outlives the daemon that spawned it, and a
-	// successor must be able to verify a token it never issued.
-	mcp.SetScopedTokenSecret(configsSvc.SessionSecret)
 
 	// One call wires every built-in channel: setup.All handles EnsureChannel,
 	// config load, NewChannel, setters, and registry.Add per transport.
@@ -1604,21 +1336,7 @@ func NewServer() *Server {
 	// line never changes.
 	channelStore := agentchannels.NewDBStore(db)
 	channelStore.Configs = configsSvc
-	// Channels added after boot (a Team agent's own bot, a per-user
-	// instance saved from the dashboard) take their dispatch from
-	// SendFuncFor. Without this they get nil and the first message panics.
-	// The closure does not depend on the transport, so one serves all.
-	channelReg.WithSendFunc(sendFnFor("runtime"))
 	channelsetup.All(channelReg, channelStore, sendFnFor, tokensSvc)
-
-	// Team agents as A2A servers (/integrations/a2a/<agent_id>). One channel
-	// serves every agent; each agent's connection row decides if it answers.
-	a2aSrv := a2aserver.New(agentstool.A2ADirectory(), a2aserver.NewStore(db), tokensSvc, configsSvc.AppURL)
-	channelReg.Add(a2aSrv, nil)
-	a2aSrv.SetSendFunc(sendFnFor("a2a"))
-	agentstool.SetA2AServer(a2aSrv)
-	// Team agents over the OpenAI-compatible endpoint ("model": "agent:<handle>").
-	agentrest.SetAgentDirectory(agentstool.RESTDirectory())
 
 	// Wire each channel's workflow integration surface — registers
 	// per-event + per-action descriptors and attaches the inbound
@@ -1636,24 +1354,6 @@ func NewServer() *Server {
 	connectorsSvc.SetConfigs(configsSvc)
 	metricsRec := metrics.NewSimpleRecorder()
 	connectorsSvc.SetMetrics(metricsRec)
-	// An agent's tier defaults and "include new connectors" toggle reach
-	// only what its owner's own catalog lists — not the triggering user's.
-	ownerCatalog := func(ctx context.Context, userID string) ([]connectors.CatalogEntry, error) {
-		u, err := authSvc.GetUserByID(ctx, userID)
-		if err != nil {
-			return nil, err
-		}
-		ctx = connectors.WithoutAgentScope(ctx)
-		return connectorsSvc.AgentCatalog(ctx, userID, authSvc.GetUserFilterTagIDs(ctx, userID), u.IsAdmin())
-	}
-	teamSvc.SetOwnerCatalog(ownerCatalog)
-	teamSvc.SetOwnerReach(func(ctx context.Context, userID string) (team.Reach, error) {
-		cat, err := ownerCatalog(ctx, userID)
-		if err != nil {
-			return nil, err
-		}
-		return team.ReachOf(cat), nil
-	})
 
 	// Map an agent session to the Slack bot that owns it, so the Slack
 	// connector's "Sent using @bot" footer always names the session
@@ -1794,7 +1494,6 @@ func NewServer() *Server {
 	// grantable without any access to the ticket board.
 	connectors.Register(ticketconn.Module(agentsLayout))
 	connectors.Register(notesconn.Module(agentsLayout))
-	connectors.Register(sourceconn.Module(agentsLayout))
 
 	// Notes follow their session when it changes ticket. Wired as a hook
 	// because internal/agents/notes already imports internal/agents/ticket
@@ -1833,38 +1532,6 @@ func NewServer() *Server {
 		Layout:  agentsLayout,
 	}))
 
-	// Team messaging over A2A. Same late binding as sub-agents: the Hub
-	// needs the Team service and the pool, built further down.
-	var (
-		teamHub     *teamlink.Hub
-		teamHubOnce sync.Once
-	)
-	hub := func() *teamlink.Hub {
-		teamHubOnce.Do(func() {
-			if teamSvc == nil {
-				return
-			}
-			d := poolDeliverer{pool: agentsPool, channels: channelReg}
-			teamHub = agentstool.NewTeamLinkHub(teamSvc, func(ctx context.Context, sessionID, text string) error {
-				return d.DeliverToSession(ctx, sessionID, "", text)
-			})
-		})
-		return teamHub
-	}
-	connectors.Register(teamlinkconn.Module(teamlinkconn.Deps{Hub: hub, AgentOf: agentstool.TeamAgentOf}))
-	connectors.Register(teamagentsconn.Module(teamagentsconn.Deps{Ops: agentstool.TeamAgentOps}))
-	agentstool.SetTeamHub(hub)
-	// team_* tools only in a Team agent's session with a reachable teammate.
-	mcphandlers.TeamToolsVisible = func(ctx context.Context, sessionID string) bool {
-		h := hub()
-		id := agentstool.TeamAgentOf(ctx, sessionID)
-		if h == nil || id == "" {
-			return false
-		}
-		peers, err := h.Reachable(ctx, id)
-		return err == nil && len(peers) > 0
-	}
-
 	// Custom connectors: replay admin-built definitions from the DB
 	// into the registry. MUST run before Bootstrap so custom modules
 	// ride the same instance seeding, allItems, and tag passes as
@@ -1892,37 +1559,6 @@ func NewServer() *Server {
 		}
 		return out
 	})
-	// Generate jobs ("✨ Generate" buttons, the paste page's AI tab) run
-	// queued behind the agent pool: each borrows a pool slot before it
-	// forks a CLI, so a burst of clicks waits in line instead of
-	// overloading the host. The provider defaults to the operator's
-	// default_provider, read live.
-	aigenSvc := aigen.New(aigen.Config{
-		Gate: aigen.GateFunc(func(key, pType, pName string) (func(), bool) {
-			if agentsPool == nil {
-				return func() {}, true
-			}
-			return agentsPool.TryLease(key, pType, pName)
-		}),
-		Resolve: aigen.ListResolver(wfsetup.NewCLIProviders, func() string {
-			return configsSvc.GetOwned("agents", "default_provider")
-		}),
-	})
-	aigenSvc.Register(aigen.Kind{
-		Name:     "connector-parse",
-		MaxInput: 8 * 1024,
-		Validate: func(in aigen.Input) error { return customconn.CheckPasteSize(in.Text) },
-		Build: func(in aigen.Input) (wfprovider.StructuredRequest, error) {
-			return customconn.AIParseRequest(in.Text), nil
-		},
-		Finish: func(res wfprovider.StructuredResult) (any, error) {
-			return customconn.DraftFromAIResult(res)
-		},
-	})
-	// "agent-persona": the Team app's New agent brief and Settings ›
-	// Persona Generate / Improve.
-	aigenSvc.Register(team.PersonaKindSpec())
-	aigenHandler := aigen.NewHandler(aigenSvc)
 	if err := customConnSvc.RegisterAllAtBoot(context.Background()); err != nil {
 		log.Error().Err(err).Msg("custom connectors: boot registration failed")
 	}
@@ -1955,11 +1591,7 @@ func NewServer() *Server {
 	// Note: OAuth flow (start/callback) has moved to the generic connector
 	// manager at /manager/connectors/{key}/oauth/*. The Slack channel only
 	// needs token-refresh wiring for the send-proxy feature.
-	// Team agents with their own Slack app or Telegram bot join the registry
-	// here so the wiring below (identity, owner, tokens) reaches them too.
-	agentstool.RegisterAgentSlackInstances(context.Background())
-	agentstool.RegisterAgentTelegramInstances(context.Background())
-	wireChannel := func(ch agentchannels.Channel) {
+	for _, ch := range channelReg.Channels() {
 		if slackCh, ok := ch.(*slackch.Channel); ok {
 			// Wire the refresh function so RefreshTokenMap can rebuild the map
 			// from connector rows without a server restart.
@@ -2028,10 +1660,6 @@ func NewServer() *Server {
 				})
 			}
 
-			// Record whether each reply reached its Slack thread, for the
-			// web UI's "Sent to Slack" status on the bubble.
-			slackCh.SetDeliveryFn(agentstool.RecordChannelDelivery)
-
 			// Background ticker: refresh every 5 minutes.
 			go func(ch *slackch.Channel) {
 				ticker := time.NewTicker(5 * time.Minute)
@@ -2069,11 +1697,6 @@ func NewServer() *Server {
 			}
 		}
 	}
-	for _, ch := range channelReg.Channels() {
-		wireChannel(ch)
-	}
-	// A bot connected while wick runs gets the same wiring.
-	agentstool.SetChannelWirer(wireChannel)
 
 	// ── Personal Access Tokens (MCP bearer auth) ─────────────────
 	// tokensSvc instantiated earlier so the REST channel can reuse it.
@@ -2110,89 +1733,35 @@ func NewServer() *Server {
 	//
 	// ok=false (no owner: legacy rows, cron, system jobs) makes the factory
 	// fall back to the internal token rather than lose MCP access.
-	// Shared between the delegation service (which computes the narrowing)
-	// and the MCP minter above (which must apply it).
-	delegationChildGrants := delegation.NewChildGrants()
-	agentsFactory.SessionMCPToken = func(sessionID, callerUserID string) (string, string, bool) {
-		// A running SUB-AGENT has an identity chosen for it: its triggering
-		// human, with tags already intersected against the role's allowed
-		// list. Honour that first — the delegation computing the narrowing
-		// and this minter ignoring it is how a role's allowed_tags became
-		// decorative (see delegation.ChildGrants).
-		if g, ok := delegationChildGrants.Get(sessionID); ok {
-			// stripAdmin=true: the narrowing is the whole point, so a child
-			// must be tag-filtered even when the human who triggered it is
-			// an administrator.
-			tok, err := mcpScopedTokens.IssueForSession(g.UserID, sessionID, g.TagIDs, true)
-			if err != nil {
-				log.Warn().Err(err).Str("session", sessionID).
-					Msg("mcp: sub-agent token mint failed; falling back to internal token")
-				return "", "", false
-			}
-			return tok, g.UserID, true
-		}
+	agentsFactory.SessionMCPToken = func(sessionID string) (string, bool) {
 		sess, found := agentsMgr.Registry().Session(sessionID)
-		if !found {
-			return "", "", false
+		if !found || sess.Meta.UserID == "" {
+			return "", false
 		}
-		// WHOSE access this spawn gets. The caller wins when a human
-		// triggered it: a turn must run with the reach of the person who
-		// asked for it, not of whoever happens to own the conversation.
-		//
-		// Keying this on the owner alone was a privilege escalation on any
-		// shared session — a Slack thread is multi-user by design, so a
-		// teammate replying into an admin's thread had their turn served
-		// with the admin's connectors. It also quietly disabled
-		// RespawnOnCallerChange, which kills the process precisely so the
-		// next turn can be minted for the new caller.
-		//
-		// The owner remains the fallback for spawns with no human behind
-		// them — a schedule fire, a cron job — where there is no caller to
-		// be faithful to. Either way the identity is a real user's own, so
-		// this can only narrow what a spawn reaches.
-		//
-		// A Team agent's session follows the agent's run_as mode instead:
-		// "owner" always runs as the agent's owner, "caller" as above but
-		// falling back to the agent's owner. The agent's checklist narrows
-		// either identity — the scope resolver applies it on every MCP
-		// request, and a deleted agent resolves to deny-all.
-		identity := team.SpawnIdentity(sess.Meta, teamSvc.AgentFor(context.Background(), sessionID), callerUserID)
-		if identity == "" {
-			return "", "", false
-		}
-		// The session rides in the token as well as in the per-spawn
-		// header. claude sends the header; codex cannot send any header at
-		// all, so without this its calls have no session to resolve and
-		// every session-scoped tool falls back to whatever id the model
-		// remembered to type.
-		tok, err := mcpScopedTokens.IssueForSession(
-			identity,
-			sessionID,
-			authSvc.GetUserFilterTagIDs(context.Background(), identity),
+		tok, err := mcpScopedTokens.IssueFor(
+			sess.Meta.UserID,
+			authSvc.GetUserFilterTagIDs(context.Background(), sess.Meta.UserID),
 			false,
 		)
 		if err != nil {
-			log.Warn().Err(err).Str("session", sessionID).Str("identity", identity).
+			log.Warn().Err(err).Str("session", sessionID).
 				Msg("mcp: per-user token mint failed; falling back to internal token")
-			return "", "", false
+			return "", false
 		}
-		return tok, identity, true
+		return tok, true
 	}
 	delegationSvc = &delegation.Service{
-		Repo:     delegation.NewRepo(db),
-		Children: delegationChildGrants,
-		Runner:   delegation.NewPoolRunner(agentsPool, agentsLayout, agentsMgr.Register),
-		Stream:   agentstool.NewDelegationStream(agentsBcast),
-		Tokens:   mcpScopedTokens,
-		Tags:     authSvc,
+		Repo:   delegation.NewRepo(db),
+		Runner: delegation.NewPoolRunner(agentsPool, agentsLayout, agentsMgr.Register),
+		Stream: agentstool.NewDelegationStream(agentsBcast),
+		Tokens: mcpScopedTokens,
+		Tags:   authSvc,
 		// Phase 3: private git worktrees for sub-agents that edit code.
 		// Falls back to the shared workspace (with a note) on non-git
 		// projects rather than refusing the work.
 		Workspaces: delegation.NewGitWorktrees(agentsLayout),
 		// Phase 2/4: where an async result goes once it lands.
 		Deliver: poolDeliverer{pool: agentsPool, channels: channelReg},
-		// @handle lines naming a Team agent go over the Team A2A link.
-		TeamRouter: agentstool.TeamMentionRouter{Hub: hub},
 		// Take-over: a human steering a running sub-agent.
 		Steerer: poolSteerer{pool: agentsPool},
 		// Keeps the "leader stopped, sub-agents still running" thread notice
@@ -2206,17 +1775,6 @@ func NewServer() *Server {
 				})
 			}
 			channelReg.DispatchDetachedSurvivors(parentSessionID, out)
-		},
-		// Background sub-agents in a channel thread: one start ping each, and
-		// a banner kept up from the same rows the web UI's sub-agent rail
-		// spins on, so Slack does not read as finished while they work.
-		OnBackgroundStart: func(parentSessionID string, st delegation.BackgroundStart) {
-			channelReg.DispatchBackgroundStart(parentSessionID, channelSurvivor(st.Agent), st.Task, st.Queued)
-		},
-		OnBackgroundChange: func(parentSessionID string, active []delegation.Survivor) {
-			channelReg.DispatchBackgroundAgents(parentSessionID, channelSurvivors(active))
-			// And the Team roster, whose card shows the same set.
-			agentstool.TeamSubagentsChanged(parentSessionID)
 		},
 		// Messaging: make an exited sub-agent addressable again, and say
 		// so when it can only come back without its memory.
@@ -2236,14 +1794,6 @@ func NewServer() *Server {
 			}
 			return false
 		},
-		// Continue refuses while the child's previous turn still runs, so
-		// it never starts a second process on the same session.
-		AgentBusy: func(childSessionID, agentName string) bool {
-			return slices.Contains(turnSessions(agentsPool), childSessionID)
-		},
-		// Where a draining predecessor lists the sub-agents it is still
-		// running — the same dir drainForUpgrade publishes into.
-		DrainDir: agentsLayout.BaseDir,
 		// Customer-facing drafts are masked on the way out. The drafter's
 		// prompt asks it not to include credentials; this is what makes
 		// that true when a prompt injection asks otherwise.
@@ -2293,9 +1843,6 @@ func NewServer() *Server {
 	// interrupt endpoints and the leader-kill cascade all act on the very
 	// delegations the MCP tool created.
 	agentstool.SetDelegation(delegationSvc)
-	// A channel's background banner asks again once it has gone stale, so a
-	// sub-agent that died without closing its row cannot hold it forever.
-	channelReg.SetBackgroundRecheck(backgroundRecheck(delegationSvc))
 
 	// Return board tasks whose worker vanished to the queue; without this
 	// a crashed worker's claim pins its task forever.
@@ -2303,9 +1850,6 @@ func NewServer() *Server {
 		configsSvc.GetOwned("agents", "sub_agents_stale_claim_min"),
 		agentconfig.DefaultGeneralConfig().SubAgentsStaleClaimMin,
 	)) * time.Minute
-	// Declare delegations to the drain tracker (the Service is a literal, so
-	// it has no constructor to self-register from).
-	delegationSvc.RegisterDrain()
 	delegation.NewStaleClaimSweeper(delegationSvc.Repo, staleAfter).Start(context.Background())
 
 	// Backstop for the serial queue: release slots held by delegations
@@ -2344,56 +1888,6 @@ func NewServer() *Server {
 			return askUserPolicy(db, configsSvc, agentsLayout, sessionID)
 		}).
 		WithPool(agentsPool, agentsLayout).
-		// wick_usage answers "what is left on the account" as well as
-		// "what has this cost". The reading comes from the agents tool's
-		// paced probe cache, so an agent asking cannot contribute to the
-		// rate limit it is asking about.
-		WithAccountQuota(func(ctx context.Context, key string) (mcphandlers.AccountQuota, bool) {
-			q, ok := agentstool.ProviderAccountQuota(ctx, key)
-			if !ok {
-				return mcphandlers.AccountQuota{}, false
-			}
-			// Everything the Usage panel shows, minus the account email:
-			// it names a person and answers none of the questions this
-			// reading exists for. A failed probe is passed through as
-			// itself — a 401 has to arrive as "401", not as an account
-			// with no windows, which reads as "you have nothing left".
-			out := mcphandlers.AccountQuota{
-				Provider: q.Provider, Supported: q.Supported, Reason: q.Reason,
-				Connected: q.Connected, Plan: q.Plan, Org: q.Org,
-				AuthMethod: q.AuthMethod,
-				Pending:    q.Pending, Checking: q.Checking, Err: q.Err,
-			}
-			now := time.Now()
-			if !q.ExpiresAt.IsZero() {
-				out.ExpiresAt = q.ExpiresAt.UTC().Format(time.RFC3339)
-			}
-			if !q.FetchedAt.IsZero() {
-				out.FetchedAt = q.FetchedAt.UTC().Format(time.RFC3339)
-				out.AgeS = int(now.Sub(q.FetchedAt).Round(time.Second) / time.Second)
-			}
-			if d := q.NextAt.Sub(now); d > 0 {
-				out.NextS = int(d.Round(time.Second) / time.Second)
-			}
-			for _, w := range q.Windows {
-				row := mcphandlers.AccountQuotaWindow{
-					Key:         w.Key,
-					Label:       mcphandlers.QuotaWindowLabel(w.Key),
-					Utilization: w.Utilization,
-				}
-				if !w.ResetsAt.IsZero() {
-					row.ResetsAt = w.ResetsAt.UTC().Format(time.RFC3339)
-					if d := w.ResetsAt.Sub(now); d > 0 {
-						row.ResetsInS = int(d.Round(time.Second) / time.Second)
-					}
-				}
-				if !w.ObservedAt.IsZero() {
-					row.ObservedAt = w.ObservedAt.UTC().Format(time.RFC3339)
-				}
-				out.Windows = append(out.Windows, row)
-			}
-			return out, true
-		}).
 		WithSchedule(scheduleStore).
 		WithRefreshSession(func(id string) error {
 			syncSessionMeta(id)
@@ -2560,52 +2054,6 @@ func NewServer() *Server {
 	// onto existing instance rows. Idempotent — rows that already carry
 	// tags keep their admin edits.
 	customConnSvc.SetTags(tagsSvc)
-
-	// What a tool module is allowed to know about its caller. Wired here
-	// rather than at the router, because tag NAMES need tagsSvc and that
-	// only exists at this point in boot.
-	//
-	// Two doors, one shape: a browser session (Ctx.User) and a Personal
-	// Access Token (WebhookCtx.TokenUser). Both carry the person's access
-	// tags, so a tool everyone may read can still gate its writes.
-	toolTagNames := func(ctx context.Context, ids []string) []string {
-		if len(ids) == 0 {
-			return nil
-		}
-		rows, err := tagsSvc.TagsByIDs(ctx, ids)
-		if err != nil {
-			return nil
-		}
-		names := make([]string, 0, len(rows))
-		for _, t := range rows {
-			names = append(names, t.Name)
-		}
-		return names
-	}
-	tool.SetUserResolver(func(r *http.Request) (tool.User, bool) {
-		u := login.GetUser(r.Context())
-		if u == nil {
-			return tool.User{}, false
-		}
-		return tool.User{
-			ID: u.ID, Name: u.Name, Email: u.Email, IsAdmin: u.IsAdmin(),
-			Tags: toolTagNames(r.Context(), login.GetUserTagIDs(r.Context())),
-		}, true
-	})
-	tool.SetTokenResolver(func(ctx context.Context, plain string) (tool.User, bool) {
-		uid, err := tokensSvc.Authenticate(ctx, plain)
-		if err != nil {
-			return tool.User{}, false
-		}
-		u, err := authSvc.GetUserByID(ctx, uid)
-		if err != nil || u == nil || !u.Approved {
-			return tool.User{}, false
-		}
-		return tool.User{
-			ID: u.ID, Name: u.Name, Email: u.Email, IsAdmin: u.IsAdmin(),
-			Tags: toolTagNames(ctx, authSvc.GetUserFilterTagIDs(ctx, uid)),
-		}, true
-	})
 	agentstool.SetTagsService(tagsSvc)
 	agentstool.SetSkillStore(agentskills.NewStore(db))
 	customConnSvc.EnsureInstanceTags(context.Background())
@@ -2616,9 +2064,6 @@ func NewServer() *Server {
 	if wfMgr != nil && wfMgr.DataTables != nil {
 		dtconn.SetDataTableACL(dataTableACL{tags: tagsSvc, login: authSvc, dt: wfMgr.DataTables, cfg: configsSvc})
 	}
-	// Same idea for workflows the agent creates: record the session owner so
-	// the workflow shows up for them, instead of being visible to admins only.
-	wfconn.SetWorkflowOwnership(workflowOwnership{tags: tagsSvc})
 	// Connect MCP custom connectors before the gate lifts: boot
 	// registered them without probing, this pass pulls each server's
 	// live catalog now that configs (incl. oauth instance tokens) are
@@ -2655,34 +2100,7 @@ func NewServer() *Server {
 	// written from the manager SPA, the legacy form POST, and the
 	// wickmanager MCP tool, and a rule only some of those doors enforce is
 	// not a rule.
-	//
-	// The combined memory ceiling is checked against the machine's real
-	// RAM, read now rather than assumed, together with the free-memory
-	// floor: a ceiling the host cannot hold never binds.
-	configsSvc.RegisterValidator("agents", func(key, value string) error {
-		if err := agentconfig.ValidateConfigValue(key, value); err != nil {
-			return err
-		}
-		if key != "agents_total_memory_mb" && key != "min_free_memory_mb" {
-			return nil
-		}
-		total, _ := strconv.Atoi(configsSvc.GetOwned("agents", "agents_total_memory_mb"))
-		minFree, _ := strconv.Atoi(configsSvc.GetOwned("agents", "min_free_memory_mb"))
-		n, err := strconv.Atoi(strings.TrimSpace(value))
-		if err != nil {
-			return nil // not a number: the generic form validation reports it
-		}
-		if key == "agents_total_memory_mb" {
-			total = n
-		} else {
-			minFree = n
-		}
-		ramBytes, ok := sysmem.Total()
-		if !ok {
-			return nil
-		}
-		return agentconfig.ValidateMemoryBudget(total, minFree, int(ramBytes/(1024*1024)))
-	})
+	configsSvc.RegisterValidator("agents", agentconfig.ValidateConfigValue)
 
 	managerHandler.RegisterConfigDecorator("agents", func(rows []pkgentity.Config) []pkgentity.Config {
 		projectIDs, _ := agentproject.List(agentsLayout)
@@ -2801,8 +2219,6 @@ func NewServer() *Server {
 		Coordinator:  updCoord,
 		VersionCache: verCache,
 		AppName:      updAppName,
-		DataDir:      agentsLayout.BaseDir,
-		AppVersion:   releaseAppVersion,
 		WickVersion:  buildWickVersion,
 		Commit:       buildCommit,
 		BuildTime:    buildTime,
@@ -2815,29 +2231,8 @@ func NewServer() *Server {
 		wfLister = wfListerAdapter{svc: wfMgr.Service}
 	}
 	adminHandler := admin.NewHandler(db, allItems, configsSvc, ssoSvc, jobsSvc, connectorsSvc, tokensSvc, oauthSvc, authSvc, agentsMgr.Registry(), wfLister, skillsStore, sysCfg)
-	// The People & usage page reads the session store. Handed the SAME
-	// resolved layout the agents tool uses — resolving that path twice is how
-	// two parts of one binary end up reading two different directories.
-	admin.SetAgentsLayout(agentsLayout)
 	if wfMgr != nil && wfMgr.DataTables != nil {
 		adminHandler.SetDataTables(wfMgr.DataTables) // /admin/data-tables grant page
-	}
-	// /admin/schedule — the identity each scheduled fire runs as.
-	adminHandler.SetSchedules(scheduleStore, scheduleProjectNamer{layout: agentsLayout})
-	// /admin/projects — re-stamping a project's owner needs the manager, not
-	// the registry the page lists through.
-	if agentsMgr != nil {
-		adminHandler.SetProjectWriter(agentsMgr)
-	}
-	// /admin/team-agents — share Team agents by tag.
-	adminHandler.SetTeamAgents(teamAgentLister{})
-	// /admin/workflows — same for a workflow's owner. Only the DB-backed
-	// service can re-stamp one, so the picker appears when that is what is
-	// running and stays a plain label otherwise.
-	if wfMgr != nil {
-		if ow, canSet := wfMgr.Service.(admin.WorkflowOwnerWriter); canSet {
-			adminHandler.SetWorkflowOwnerWriter(ow)
-		}
 	}
 
 	// ── Shared services ─────────────────────────────────────────
@@ -2907,11 +2302,7 @@ func NewServer() *Server {
 	// bootReady flips, requests fall through to here and get true.
 	r.HandleFunc("GET /boot-status", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
-		// Same shape the gate answers with, so a caller does not have to
-		// know which side replied — and it carries the version/pid the
-		// navbar compares to notice a handover happened under it.
-		_ = json.NewEncoder(w).Encode(bootStatusPayload(true, ""))
+		_, _ = io.WriteString(w, `{"ready":true}`)
 	})
 
 	// PWA manifest is dynamic — bakes the configured app name into the
@@ -2931,20 +2322,7 @@ func NewServer() *Server {
 	}
 
 	// Static files (embedded in binary). Directory listings are blocked.
-	//
-	// In dev (WICK_DEV_REPO_ROOT) /public is served from disk instead: the
-	// embed freezes app.css into the binary, so a Tailwind rebuild would
-	// otherwise be invisible until the server is recompiled — the same trade
-	// spa.Loader already makes for the SPA bundles.
-	publicFS := fs.FS(web.PublicFiles)
-	if root := os.Getenv("WICK_DEV_REPO_ROOT"); root != "" {
-		webDir := filepath.Join(root, "web")
-		if info, err := os.Stat(filepath.Join(webDir, "public")); err == nil && info.IsDir() {
-			fmt.Fprintf(os.Stderr, "[static] live disk — /public → %s\n", webDir)
-			publicFS = os.DirFS(webDir)
-		}
-	}
-	r.Handle("GET /public/", ui.StaticHandler("", publicFS))
+	r.Handle("GET /public/", ui.StaticHandler("", web.PublicFiles))
 
 	// Home module static assets (JS etc.) — served at /modules/home/js/*
 	r.Handle("GET /modules/home/", ui.StaticHandler("/modules/home/", home.StaticFS))
@@ -2973,9 +2351,6 @@ func NewServer() *Server {
 
 	// Bookmark API (auth-gated inside)
 	bookmarkHandler.Register(r, authMidd)
-
-	// Queued LLM generate jobs (auth-gated inside, owner-scoped).
-	aigenHandler.Register(r, authMidd)
 
 	// Notification API (auth-gated inside)
 	pushHandler.Register(r, authMidd)
@@ -3033,103 +2408,11 @@ func NewServer() *Server {
 	// Handler signature stays untouched. Wire the reloader so install / enable /
 	// disable / remove reconcile immediately. Guard the typed-nil: passing a nil
 	// *Reloader into the interface would make it non-nil (and panic on Reload).
-	pluginsHandler := manager.NewPluginsHandler(db).SetReplaceRefresh(configsSvc.EnsureOwned)
+	pluginsHandler := manager.NewPluginsHandler(db)
 	if pluginReloader != nil {
 		pluginsHandler.SetReloader(pluginReloader)
 	}
 	pluginsHandler.RegisterRoutes(r, authMidd)
-
-	// Service plugins (plugins/services/<key>) are supervised with restart
-	// backoff (and auto-off sleep when it applies) and served at /x/{key}/* with per-route auth
-	// (public / admin-issued token / wick session). Admin API under
-	// /manager/api/service-plugins; plugin callbacks under /x/-/api/.
-	servicePlugins := serviceplugin.NewHost(serviceplugin.NewTokens(filepath.Join(connplugin.RootDir(), "service-tokens.json")), "")
-	servicePlugins.BaseURL = func() string { return strings.TrimRight(configsSvc.AppURL(), "/") }
-	servicePlugins.SessionUser = func(req *http.Request) *serviceplugin.User {
-		u := login.GetUser(req.Context())
-		if u == nil {
-			return nil
-		}
-		return &serviceplugin.User{ID: u.ID, Email: u.Email, Name: u.Name, Admin: u.IsAdmin()}
-	}
-	servicePlugins.Configs = configsSvc
-	if n := servicePlugins.Load(connplugin.KindDir(wickplugin.KindService), jobPluginStore.Enabled, jobPluginStore.Record); n > 0 {
-		log.Info().Int("plugins", n).Msg("service plugins: loaded")
-	}
-	servicePlugins.RegisterAdmin(r, authMidd.RequireAdmin)
-	r.Handle("/x/", servicePlugins)
-	serviceplugin.SetDefault(servicePlugins)
-	servicePlugins.Start()
-	// Uninstall stops what is running before the files go: the service
-	// process, the tool runner, and drops a job / tool from its registry so
-	// it is no longer scheduled or listed.
-	pluginsHandler.SetUninstall(func(ctx context.Context, kind, key string) {
-		switch kind {
-		case wickplugin.KindService:
-			servicePlugins.Remove(key)
-		case wickplugin.KindTool:
-			toolPlugins.Remove(key)
-			tools.Unregister(key)
-		case wickplugin.KindJob:
-			jobs.Unregister(key)
-		}
-	}, func(key string) bool {
-		for _, m := range connectors.All() {
-			if m.Meta.Key == key {
-				return true
-			}
-		}
-		for _, m := range tools.All() {
-			if m.Meta.Key == key {
-				return true
-			}
-		}
-		for _, m := range jobs.All() {
-			if m.Meta.Key == key {
-				return true
-			}
-		}
-		return false
-	})
-
-	// Plugin sources (url / GitHub releases): Admin → Plugins → Sources,
-	// Available, Add (upload / link / GitHub). Installs land in the kind
-	// folder; connectors reconcile through the reloader, a service plugin is
-	// reloaded from its new manifest and started, tools and jobs pick it up on next spawn.
-	pluginSources := &pluginsource.Manager{
-		DB:      db,
-		Client:  pluginsource.NewClient(configsSvc.DecryptSecret),
-		Encrypt: configsSvc.EncryptSecret,
-		OnInstalled: func(ctx context.Context, kind, key string) {
-			switch kind {
-			case wickplugin.KindConnector:
-				if pluginReloader != nil {
-					pluginReloader.Reload(ctx)
-				}
-			case wickplugin.KindService:
-				servicePlugins.Install(connplugin.KindDir(wickplugin.KindService), key, jobPluginStore.Enabled, jobPluginStore.Record)
-			}
-		},
-	}
-	pluginSourcesHandler := &manager.PluginSourcesHandler{
-		Sources: pluginSources,
-		Health: manager.InstalledHealth(func(kind, key string) (bool, string) {
-			if kind != wickplugin.KindService {
-				return true, "verified"
-			}
-			svc, ok := servicePlugins.Get(key)
-			if !ok {
-				return false, "not loaded (reload wick)"
-			}
-			st := svc.Sup.Status()
-			// sleeping = stopped by auto-off; the next request wakes it.
-			return st.State == serviceplugin.StateRunning || st.State == serviceplugin.StateSleeping, st.State
-		}),
-	}
-	servicePlugins.Audit = func(actor, key, detail string) { pluginSources.Record(actor, "service_auto_off", key, detail) }
-	pluginSourcesHandler.RegisterRoutes(r, authMidd)
-	pluginsHandler.SetSources(pluginSourcesHandler)
-	go pluginSources.Run(context.Background(), time.Minute)
 
 	// Tool routes — per-tool visibility enforced via RequireToolAccess.
 	// Public tools are reachable without login; Private tools require
@@ -3138,42 +2421,22 @@ func NewServer() *Server {
 	for _, t := range allItems {
 		toolMetas = append(toolMetas, login.ToolMeta{Path: t.Path, DefaultVisibility: t.DefaultVisibility})
 	}
+	// TicketAPIAuthMW sits in FRONT of RequireToolAccess: that middleware
+	// turns away a request with no user in context, so a bearer-only caller
+	// on the ticket endpoints has to be resolved into a user before it gets
+	// there. It ignores every other path, so the rest of /tools/ stays
+	// cookie-only.
 	// Webhook groups declared via Router.WebhookGroup are exempt: a webhook
 	// sender is a program with no session cookie, so RequireToolAccess would
 	// 302 it to /auth/login, which it cannot follow. webhookBypass routes
 	// those prefixes straight to toolsMux and leaves every other path on the
 	// gated chain. Authentication for an exempt route is the module's job —
 	// see tool.WebhookGroup's contract.
-	gatedTools := authMidd.RequireToolAccess(toolMetas)(toolsMux)
 	r.Handle("/tools/", webhookBypass(
 		tr.WebhookPrefixes(),
 		toolsMux,
-		gatedTools,
+		agentstool.TicketAPIAuthMW(authMidd.RequireToolAccess(toolMetas)(toolsMux)),
 	))
-
-	// Machine-facing REST APIs live at the wick root under /api — short,
-	// stable, and one base URL for every integration. This catch-all serves
-	// the ticket surface today: the shim rewrites onto the tool-internal
-	// routes, so tool access and per-project checks apply unchanged.
-	// TicketAPIAuthMW (bearer → user) wraps ONLY this mount: a Personal
-	// Access Token works here and nowhere else — /tools/ stays cookie-only.
-	// It must sit in front of RequireToolAccess, which turns away a request
-	// with no user in context.
-	//
-	// Extending /api needs NO new plumbing here:
-	//   - a new agents endpoint joins by adding its path to the token
-	//     allowlist (agentstool isTicketAPIPath) — the shim forwards it;
-	//   - a new module mounts its own r.Handle("/api/<thing>/", h) — the
-	//     longer ServeMux pattern wins over this catch-all automatically.
-	//
-	// Two validators sit in front of it, each owning its own paths and its
-	// own token prefix: PATs reach the ticket endpoints, and the CLI
-	// channel's session-bound tokens reach /api/cli/… and nothing else.
-	// Neither can widen the other, and a request the CLI middleware does
-	// not recognise as its own passes straight through to the ticket one.
-	r.Handle(agentstool.TicketRESTBase+"/",
-		agentstool.TicketRESTShim(
-			agentstool.CLIAPIAuthMW(agentstool.TicketAPIAuthMW(gatedTools))))
 
 	// AI-router dashboards + OpenAI-compatible API proxies, mounted at the wick
 	// root (not under the tool) so each embedded Next.js app's root-absolute
@@ -3208,21 +2471,7 @@ func NewServer() *Server {
 	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
 	r.Handle("/mini-tools", http.HandlerFunc(homeHandler.Launcher))
 
-	runAsUsable := func(ctx context.Context, userID string) bool {
-		if userID == "" {
-			return false
-		}
-		// Bounded on purpose. This runs inside a runner tick that delivers a
-		// batch of due schedules, so an unreachable database must cost one
-		// fire rather than stalling every schedule behind it. Failing the
-		// lookup refuses the fire, which is the safe direction: better a
-		// visible failed row than a run under an identity nobody confirmed.
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		u, err := authSvc.GetUserByID(ctx, userID)
-		return err == nil && u != nil && u.Approved
-	}
-	return &Server{runAsUsable: runAsUsable, router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, toolPlugins: toolPlugins, servicePlugins: servicePlugins, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler, mcpScopedTokens: mcpScopedTokens}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler}
 }
 
 type Server struct {
@@ -3232,8 +2481,6 @@ type Server struct {
 	agentsPool     *agentpool.Pool
 	agentsLayout   agentconfig.Layout
 	pluginMgr      *connplugin.Manager
-	toolPlugins    *toolplugin.Pool
-	servicePlugins *serviceplugin.Host
 	pluginReloader *connplugin.Reloader
 	// syncSessionMeta reloads one session into the in-memory registry
 	// and broadcasts its meta over SSE. Built in NewServer (where the
@@ -3247,11 +2494,6 @@ type Server struct {
 	// which owns the context cancelled at shutdown — running it on
 	// context.Background() would leak the goroutine past every stop.
 	resourceSampler *memreport.Sampler
-	// runAsUsable reports whether a user id may still be run as — it exists
-	// and is approved. The schedule runner consults it at fire time so a
-	// disabled account stops its jobs instead of silently handing them to the
-	// internal principal.
-	runAsUsable func(ctx context.Context, userID string) bool
 	// scheduleStore backs wick_schedule_message; Run starts the runner that
 	// polls it and delivers due messages through agentsPool. nil-safe: the
 	// runner is only started when both store and pool are present.
@@ -3271,29 +2513,7 @@ type Server struct {
 	// during the restore window. The gate lifts only once EVERY registered
 	// step is Done — add a step by Register/Done, not by flipping a flag.
 	bootGate *BootGate
-	// intakeReady closes once this process holds the intake baton, i.e. once
-	// it is the process allowed to accept NEW work (channel listeners, cron,
-	// scheduled messages). During a graceful upgrade the successor parks here
-	// until the draining parent is finished, so exactly one process is ever
-	// consuming Slack events. Read by the single-node `all` entrypoint, which
-	// must hold its job scheduler back for the same reason.
-	intakeReady chan struct{}
-	// httpInflight counts requests still being handled, so a handover waits
-	// for them like any other work instead of cutting them off when a
-	// shutdown deadline expires. Streams exclude themselves — see
-	// drain_http.go.
-	httpInflight *httpInflight
-	// mcpScopedTokens issues the per-spawn MCP credentials agents use. Held
-	// on the server so a graceful upgrade can hand the live grants to its
-	// successor — without that, every running agent's wick tools answer 401
-	// the moment the successor owns the socket.
-	mcpScopedTokens *mcp.ScopedTokens
 }
-
-// IntakeReady closes when this process may start accepting new work. Callers
-// outside the server (the `all` command's cron scheduler) wait on it so a
-// draining predecessor keeps ownership of every singleton until it exits.
-func (s *Server) IntakeReady() <-chan struct{} { return s.intakeReady }
 
 // JobsSvc returns the manager.Service the API server owns. Exposed so
 // the single-node `lab all` entrypoint can hand it to worker.RunScheduler
@@ -3661,114 +2881,22 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		}()
 	}
 
-	// Graceful upgrade. When enabled, the listener below is inherited from a
-	// predecessor instead of freshly bound, and SIGHUP starts a successor that
-	// takes over the socket while this process finishes what it is doing.
-	// Disabled or unsupported (Windows, tray-managed) degrades to a normal
-	// listener and the classic stop/start.
-	upg, upgWhy := upgrade.New(s.agentsLayout.BaseDir)
-	// Mirror the answer where the admin UI can read it without holding the
-	// Upgrader: the Force control only makes sense when a handover is what
-	// would happen.
-	upgrade.MarkArmed(upg.Enabled())
-	upgrade.LoadBootStats(s.agentsLayout.BaseDir)
-	if s.mcpScopedTokens != nil {
-		baseDir := s.agentsLayout.BaseDir
-		// Hand the live MCP credentials to the successor just before it is
-		// forked. An agent still running in THIS process keeps calling wick
-		// tools over the socket the successor now owns, and a token the
-		// successor never issued is a 401 — tools silently broken mid-turn,
-		// which is worse than the interruption the handover avoids.
-		upgrade.BeforeSpawn = func() {
-			n, err := s.mcpScopedTokens.SaveHandoff(baseDir)
-			if err != nil {
-				logger.Warn().Err(err).Msg("upgrade: could not hand MCP tokens to the successor")
-			} else {
-				logger.Info().Int("grants", n).Msg("upgrade: MCP tokens handed to the successor")
-			}
-		}
-		// The other side of that: adopt what a predecessor left, then delete
-		// it. Unconditional — a file only exists when one was written.
-		if n := s.mcpScopedTokens.LoadHandoff(baseDir); n > 0 {
-			logger.Info().Int("grants", n).Msg("upgrade: adopted MCP tokens from the predecessor")
-		}
-	}
-	// A force left over from a handover that never started must not ambush
-	// the next one.
-	upgrade.ClearForce()
-	defer upg.Stop()
-	if upg.Enabled() {
-		logger.Info().Bool("inherited", upg.IsChild()).
-			Dur("drain_timeout", upgrade.DrainTimeout()).
-			Msg("graceful upgrade armed (SIGHUP hands over to a new binary)")
-	} else {
-		logger.Info().Str("reason", upgWhy).Msg("graceful upgrade off")
-	}
-	upg.WatchSignal(ctx)
-	if upg.Enabled() {
-		// Self-update should use the same handover as `reload`: swap the
-		// binary, fork a successor, drain. Otherwise the one path that most
-		// wants to be seamless — clicking Update in the UI — is the one that
-		// still closes the port.
-		updater.GracefulRestart = upg.Upgrade
-		// Same handover, reachable from the admin UI: a binary installed by a
-		// deploy script is applied by a click instead of by finding a shell
-		// to send SIGHUP from.
-		upgrade.SetTrigger(upg.Upgrade)
-		// And without a click at all: a binary sitting at the exec path is
-		// picked up once this process is idle. See watchBinarySwap.
-		go s.watchBinarySwap(ctx, releaseAppVersion, buildTime, logger)
-	}
+	// Start channel listeners and watch for config changes.
+	s.startChannels(ctx)
 
-	// Intake — channel listeners, config watcher, workflow watcher and the
-	// scheduled-message runner — starts only once this process holds the
-	// intake baton.
-	//
-	// Deferred rather than started inline because during an upgrade the
-	// PREDECESSOR still holds it: it keeps consuming Slack events and running
-	// its turns until it is completely drained. Starting a second socket-mode
-	// connection here would split inbound events between two binaries at
-	// random and double-fire every cron; parking instead means intake moves
-	// exactly once, at the moment the old process exits.
-	batonCh := make(chan *upgrade.IntakeBaton, 1)
-	go func() {
-		if upg.Enabled() && upg.IsChild() {
-			logger.Info().Msg("intake: waiting for the previous process to finish draining")
-		}
-		baton, err := upg.AcquireIntake(ctx)
-		if err != nil {
-			if ctx.Err() == nil {
-				logger.Error().Err(err).Msg("intake: could not acquire the baton — channels and cron are NOT running")
-			}
-			return
-		}
-		batonCh <- baton
-		logger.Info().Msg("intake: baton acquired — starting channels, cron and scheduled messages")
-		s.startChannels(ctx)
-		if s.wfMgr != nil {
-			s.wfMgr.StartCron(ctx)
-			s.wfMgr.StartRunSweep(ctx)
-		}
-		if s.scheduleStore != nil && s.agentsPool != nil {
-			// Boot recovery is implicit — the first tick picks up anything
-			// that came due while wick was down.
-			go schedule.NewRunner(s.scheduleStore, s.agentsPool, s.agentsLayout).
-				WithRunAsCheck(s.runAsUsable).
-				Run(ctx)
-		}
-		close(s.intakeReady)
-	}()
+	// Start the scheduled-message runner: polls the store and delivers due
+	// messages through the pool (wick_schedule_message). Boot recovery is
+	// implicit — the first tick picks up anything that came due while wick
+	// was down. Only runs where both the store and the pool exist.
+	if s.scheduleStore != nil && s.agentsPool != nil {
+		go schedule.NewRunner(s.scheduleStore, s.agentsPool, s.agentsLayout).Run(ctx)
+	}
 
 	// Refresh the user-menu version cache: once on boot, then every 6h.
 	// Lives off the request path so opening the dropdown costs no network.
 	if s.verCache != nil {
 		go s.verCache.Run(ctx, 6*time.Hour)
 	}
-	// Same idea for wick-managed provider binaries (omp, opencode): the
-	// newest-release + release-list snapshot refreshes in the background
-	// (jittered boot, then hourly), so the Providers page reads it with no
-	// GitHub call. Warm from latest-cache.json across reloads.
-	go managedbin.Default.RunLatest(ctx)
 
 	// Admin-defined startup script (e.g. ngrok / cloudflared tunnel).
 	// Lifetime is tied to the server ctx — tray stop or process exit
@@ -3784,25 +2912,14 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		}()
 	}
 
-	s.httpInflight = newHTTPInflight()
-	// A request being handled is work: declare it so the drain waits for it.
-	upgrade.RegisterDetailed("http requests", s.httpInflight.Count, s.httpInflight.Names)
-
 	h := chainMiddleware(
-		// EmbedContext sits inside Session so every page render — tool,
-		// job, error page — can ask whether it is being drawn inside an
-		// <iframe> and drop the chrome accordingly. Context only: it
-		// changes no routing and blocks nothing.
-		s.authMidd.Session(ui.EmbedContext(withAirouterRedirect(s.router))),
+		s.authMidd.Session(withAirouterRedirect(s.router)),
 		recoverHandler,
 		loggerHandler(func(w http.ResponseWriter, r *http.Request) bool { return false }),
 		s.appNameHandler,
 		s.hostAllowlistHandler,
 		realIPHandler,
 		requestIDHandler,
-		// Counts in-flight requests for the drain. Inside the boot gate, so
-		// the gate's own 503 pages never register as work.
-		s.httpInflight.middleware,
 		// Outermost: short-circuit to the "Booting…" page until the async
 		// boot restore + registry reload finish. Sits above auth/host checks
 		// so the gate shows even before a session exists, but inside
@@ -3849,45 +2966,15 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	}
 
 	shutdownErr := make(chan error, 1)
-	// drained marks a completed graceful handoff. The hard-stop goroutine
-	// below also fires on the way out (the process cancels ctx as it exits),
-	// and re-running teardown that has already happened is how a clean
-	// upgrade turned into a panic at the last moment.
-	var drained atomic.Bool
 	go func() {
 		<-ctx.Done()
-		if drained.Load() {
-			shutdownErr <- nil
-			return
-		}
 		logger.Info().Msg("server is shutting down...")
-		// Name what is about to be killed. This is a hard stop (SIGTERM /
-		// tray stop), not a drain: run `reload` instead when the work should
-		// be allowed to finish.
-		if busy := upgrade.Busy(); len(busy) > 0 {
-			logger.Warn().Strs("outstanding", busy).
-				Msg("hard stop: background work is still running and will be interrupted")
-		}
 		if s.agentsPool != nil {
 			s.agentsPool.Stop()
 		}
-		// After the pool: its turns are gone, so the shared opencode
-		// servers have no one left to serve and must not outlive wick.
-		opencodeprovider.ShutdownServers()
-		ompprovider.ShutdownServers()
-		// Web terminals are shells on this host: never leave one behind.
-		_ = terminal.Default.Shutdown(context.Background())
 		if s.pluginReloader != nil {
 			s.pluginReloader.Stop()
 		}
-		if s.toolPlugins != nil {
-			s.toolPlugins.KillAll()
-		}
-		// Service plugins are always-on children: SIGTERM, then SIGKILL.
-		if s.servicePlugins != nil {
-			s.servicePlugins.Shutdown()
-		}
-		jobplugin.KillAll()
 		if s.pluginMgr != nil {
 			s.pluginMgr.KillAll()
 		}
@@ -3920,261 +3007,15 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		fmt.Println()
 	}
 	logger.Info().Msgf("server serving on port %d", port)
-	// The listener, not ListenAndServe: during an upgrade this socket is
-	// inherited from the predecessor, so the port is never closed and no
-	// client ever sees a refused connection.
-	ln, lnErr := upg.Listen("tcp", addr)
-	if lnErr != nil {
-		return fmt.Errorf("listen on %s: %w", addr, lnErr)
-	}
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- httpSrv.Serve(ln) }()
-	// Tell the service manager we hold the socket now (and, under systemd,
-	// that it should follow THIS pid). Deliberately before the boot gate:
-	// Type=notify has a start timeout that a slow registry restore would blow.
-	upg.NotifyServing()
-	// Record HOW this process came to be serving. A UI can then say "handover
-	// complete, now on 0.1.126" instead of leaving the operator to work it
-	// out from a version number that changed while they were not looking.
-	upgrade.MarkServing(upg.IsChild())
-
-	// Report readiness only once boot restore has finished. Announcing
-	// earlier would hand traffic to a process that still answers the
-	// "Booting…" gate, and would tell a draining predecessor to let go while
-	// this one cannot yet do the work.
-	go func() {
-		// No deadline: readiness is a condition, not a duration. Reporting
-		// ready on a timer would do the one thing the whole handover exists
-		// to prevent — move traffic onto a process that cannot serve it. A
-		// successor that never finishes booting is bounded from the OTHER
-		// side, where the failure is safe: the predecessor gives up on it,
-		// keeps serving, and the binary is rolled back.
-		s.waitBootGate(ctx)
-		// Measure before announcing: this is the duration a watching operator
-		// is about to be told to expect next time.
-		upgrade.RecordBootComplete(s.agentsLayout.BaseDir)
-		upg.Ready()
-	}()
-
-	select {
-	case err := <-serveErr:
-		// Normal path (including ctx-cancelled shutdown, which closes Serve).
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("listen on %s: %w", addr, err)
-		}
-	case <-upg.Exit():
-		s.drainForUpgrade(logger, &httpSrv, batonCh)
-		drained.Store(true)
-		return nil
+	err := httpSrv.ListenAndServe()
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
 	if e := <-shutdownErr; e != nil {
 		return fmt.Errorf("shutdown: %w", e)
 	}
 	logger.Info().Msg("server stopped")
 	return nil
-}
-
-// waitBootGate blocks until the boot gate lifts or ctx is done. Polled rather
-// than signalled: BootGate is written by many independent boot steps and
-// exposes Ready() as the single source of truth.
-//
-// It cannot time out on purpose — see the caller. A slow boot is reported
-// every 30s so the wait is legible instead of looking like a hang.
-func (s *Server) waitBootGate(ctx context.Context) {
-	if s.bootGate == nil {
-		return
-	}
-	started := time.Now()
-	report := time.NewTicker(30 * time.Second)
-	defer report.Stop()
-	for {
-		if s.bootGate.Ready() {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-report.C:
-			log.Info().Dur("waited", time.Since(started).Round(time.Second)).
-				Str("phase", s.bootPhaseLabel()).
-				Msg("boot gate still closed — not reporting ready yet")
-		case <-time.After(250 * time.Millisecond):
-		}
-	}
-}
-
-// turnSessions lists the sessions with an agent turn in flight — spawning or
-// working, not an idle process kept warm between turns.
-func turnSessions(p *agentpool.Pool) []string {
-	if p == nil {
-		return nil
-	}
-	var out []string
-	for _, a := range p.ActiveSnapshot() {
-		if a.Lifecycle == "spawning" || a.Lifecycle == "working" {
-			out = append(out, a.SessionID)
-		}
-	}
-	return out
-}
-
-// drainForUpgrade runs in the OLD process once a successor has taken over the
-// listener. It is the whole point of the feature: instead of killing agents
-// mid-turn, this process stops answering HTTP and then simply waits for its
-// own work to finish.
-//
-// Order matters:
-//
-//  1. HTTP down first — the successor already holds the same socket, so every
-//     new request (including MCP calls from our own agents) is served there.
-//  2. Wait for the pool. Nothing is signalled; a ten-minute debug run keeps
-//     running and still posts its reply to Slack, because this process also
-//     keeps its channel listeners for the whole drain.
-//  3. Release the intake baton LAST. The successor is parked on it and starts
-//     its Slack listeners the moment it is free, so intake moves exactly once
-//     — never split across two binaries, never absent.
-func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, batonCh chan *upgrade.IntakeBaton) {
-	logger.Info().Msg("upgrade: successor is serving — draining this process (nothing is killed)")
-	// Stop watching the binary. The successor holds the socket and runs its
-	// own watcher; a draining parent that noticed a newer build would be
-	// trying to start a third generation while it is itself the second.
-	upgrade.MarkDraining()
-	// Deliberately silent towards the service manager from here on. This
-	// process is no longer the unit's main process — the successor claimed
-	// that with MAINPID — and a STOPPING=1 from here reads as "the SERVICE is
-	// going down": systemd starts deactivating the unit and SIGTERMs the new
-	// process we just handed everything to. Even a STATUS= line would
-	// overwrite the successor's. Our exit is a normal non-main process exit.
-
-	httpSrv.SetKeepAlivesEnabled(false)
-	// Shutdown stops this process accepting NEW connections (the successor
-	// holds the same socket and answers them) and then waits for the
-	// handlers still running. No deadline: a request being handled is work,
-	// and cutting it off at 30 seconds is the behaviour this drain exists to
-	// remove. It returns once every handler has — streams included, which is
-	// why they are dropped explicitly further down rather than waited for.
-	shutdownDone := make(chan struct{})
-	go func() {
-		defer close(shutdownDone)
-		if err := httpSrv.Shutdown(context.Background()); err != nil {
-			logger.Warn().Err(err).Msg("upgrade: http shutdown")
-		}
-	}()
-
-	// ONE wait, on a condition, for everything this process is doing: agent
-	// turns, workflow runs mid-node, cron jobs mid-write, connector and
-	// plugin calls, delegations, scheduled deliveries. Whatever is running is
-	// waited for until it is done, however long that takes, and the moment
-	// the last of it settles this process exits.
-	//
-	// No default deadline, because a deadline here does not stop work — it
-	// kills it, and the subsystems most likely to be mid-flight are exactly
-	// the ones that cannot be resumed. An operator who cannot wait forces the
-	// swap; WICK_DRAIN_TIMEOUT is an optional hard cap for an unattended
-	// deploy, and is unset by default.
-	if v := strings.TrimSpace(os.Getenv("WICK_DRAIN_AGENT_GRACE")); v != "" {
-		// Silently ignoring it would be worse than either behaviour: the
-		// operator set it to bound a handover and would never learn that the
-		// bound is gone.
-		logger.Warn().Str("value", v).
-			Msg("upgrade: WICK_DRAIN_AGENT_GRACE is obsolete and ignored — the drain waits for the work now; use WICK_DRAIN_TIMEOUT for a hard cap")
-	}
-	// Say what this process is still finishing, where a process that is NOT
-	// this one can read it. Once the socket is handed over this one answers
-	// nothing, so its remaining work is invisible — and the successor, which
-	// cannot start a third generation while this lives, could only tell the
-	// operator "previous process still finishing". True, and useless: it
-	// names who is blocking without ever saying why.
-	drainDir := s.agentsLayout.BaseDir
-	drainStarted := time.Now()
-	stopPublish := make(chan struct{})
-	go func() {
-		t := time.NewTicker(3 * time.Second)
-		defer t.Stop()
-		// The session list lets the successor's delegation sweep tell this
-		// process's sub-agents from dead ones: it shares their rows but
-		// cannot see this pool.
-		upgrade.PublishDrainState(drainDir, os.Getpid(), drainStarted, upgrade.Busy(), turnSessions(s.agentsPool)...)
-		for {
-			select {
-			case <-stopPublish:
-				upgrade.ClearDrainState(drainDir)
-				return
-			case <-t.C:
-				upgrade.PublishDrainState(drainDir, os.Getpid(), drainStarted, upgrade.Busy(), turnSessions(s.agentsPool)...)
-			}
-		}
-	}()
-	defer close(stopPublish)
-
-	quiet := upgrade.DrainQuiet()
-	ev := logger.Info().Strs("outstanding", upgrade.Busy()).Dur("settle", quiet)
-	dctx := context.Background()
-	dcancel := context.CancelFunc(func() {})
-	if hard := upgrade.DrainTimeout(); hard > 0 {
-		ev = ev.Dur("cap", hard)
-		dctx, dcancel = context.WithTimeout(dctx, hard)
-	}
-	ev.Msg("upgrade: waiting for this process to settle before exiting")
-	left := upgrade.WaitSettled(dctx, quiet)
-	dcancel()
-	if len(left) > 0 {
-		logger.Warn().Strs("still_running", left).
-			Msg("upgrade: drain cap reached — exiting with work still running (it will be interrupted)")
-	} else {
-		logger.Info().Msg("upgrade: settled — nothing is still running")
-	}
-
-	// Everything that finishes on its own has finished. What can still hold
-	// the HTTP server open is a stream nobody closed — an SSE subscriber, a
-	// websocket — and those do not end while a browser is watching. Dropping
-	// them is safe and invisible: the client reconnects, and the successor
-	// already owns the socket.
-	select {
-	case <-shutdownDone:
-	default:
-		logger.Info().Msg("upgrade: dropping open streams — everything else has finished")
-		_ = httpSrv.Close()
-		<-shutdownDone
-	}
-	// A web terminal the dropped websocket did not already end (opened,
-	// never attached) is killed here rather than left to its gotty timeout.
-	_ = terminal.Default.Shutdown(context.Background())
-	// Stop the workflow subsystem explicitly. Its Stop() had no caller at
-	// all before this path existed, so every restart cut running workflows
-	// off mid-node; here the runs above have already finished, and this only
-	// unwinds the (now idle) cron + worker goroutines.
-	if s.wfMgr != nil {
-		s.wfMgr.Stop()
-	}
-	// Every turn has drained by now; the shared opencode servers go with
-	// this process rather than lingering beside its successor.
-	opencodeprovider.ShutdownServers()
-	ompprovider.ShutdownServers()
-	if s.pluginReloader != nil {
-		s.pluginReloader.Stop()
-	}
-	if s.toolPlugins != nil {
-		s.toolPlugins.KillAll()
-	}
-	// The successor spawns its own service plugins; stop ours (SIGTERM, then
-	// SIGKILL) so none is orphaned by the handover, and reap any job run the
-	// drain left behind.
-	if s.servicePlugins != nil {
-		s.servicePlugins.Shutdown()
-	}
-	jobplugin.KillAll()
-	if s.pluginMgr != nil {
-		s.pluginMgr.KillAll()
-	}
-	select {
-	case baton := <-batonCh:
-		baton.Release()
-		logger.Info().Msg("upgrade: intake baton handed to the successor")
-	default:
-		logger.Warn().Msg("upgrade: no intake baton held — successor may already have taken over")
-	}
-	logger.Info().Msg("upgrade: drained, exiting")
 }
 
 // Stdio MCP entry points (BuildMCPHandler, RunMCPStdio, resolveWickGateBin)
@@ -4450,37 +3291,4 @@ func channelKindOf(m agentsession.Meta) string {
 		return agentproject.ChannelKindDM
 	}
 	return agentproject.ChannelKindChannel
-}
-
-// scheduleProjectNamer resolves a project id to its display name for the
-// admin schedules page, so a row reads "Ygsw Bot" rather than a uuid. A
-// project that no longer exists yields "", and the page falls back to showing
-// the id — better than a blank cell when the point is to spot a stale row.
-type scheduleProjectNamer struct{ layout agentconfig.Layout }
-
-func (n scheduleProjectNamer) ProjectName(id string) string {
-	p, err := agentproject.Load(n.layout, id)
-	if err != nil {
-		return ""
-	}
-	return p.Meta.Name
-}
-
-// teamAgentLister feeds /admin/team-agents from the agents tool.
-type teamAgentLister struct{}
-
-func (teamAgentLister) TeamAgents(ctx context.Context) ([]admin.TeamAgent, error) {
-	rows, err := agentstool.TeamAgentsForAdmin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]admin.TeamAgent, len(rows))
-	for i, r := range rows {
-		out[i] = admin.TeamAgent{ID: r.ID, Name: r.Name, Handle: r.Handle, OwnerUserID: r.OwnerUserID, Block: r.Block, Disabled: r.Disabled}
-	}
-	return out, nil
-}
-
-func (teamAgentLister) TrackTeamAgentChange(ctx context.Context, id string) func() {
-	return agentstool.TrackTeamAgentChange(ctx, id)
 }

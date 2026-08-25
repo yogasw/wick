@@ -21,25 +21,15 @@ type scriptedStream struct {
 	// hold, when set, keeps the channel open after the script so the
 	// runner can be observed mid-run instead of falling through to EOF.
 	hold bool
-	// gate, when set, holds the script back until it is closed, so a
-	// test can line up more work before the run reacts to its events.
-	gate chan struct{}
 }
 
 func (s *scriptedStream) SubscribeSession(string) (<-chan StreamEvent, func()) {
 	ch := make(chan StreamEvent, len(s.events)+1)
-	play := func() {
-		for _, e := range s.events {
-			ch <- e
-		}
-		if !s.hold {
-			close(ch)
-		}
+	for _, e := range s.events {
+		ch <- e
 	}
-	if s.gate == nil {
-		play()
-	} else {
-		go func() { <-s.gate; play() }()
+	if !s.hold {
+		close(ch)
 	}
 	return ch, func() {}
 }
@@ -52,16 +42,6 @@ type fakeTokens struct {
 	issued  int
 	revoked int
 	last    []string
-	// lastSession records the session the child's token was minted for,
-	// so a regression back to a session-less grant is visible.
-	lastSession string
-}
-
-func (f *fakeTokens) IssueForSession(_, sessionID string, tagIDs []string, _ bool) (string, error) {
-	f.mu.Lock()
-	f.lastSession = sessionID
-	f.mu.Unlock()
-	return f.Issue("", tagIDs)
 }
 
 func (f *fakeTokens) Issue(_ string, tagIDs []string) (string, error) {
@@ -84,12 +64,6 @@ func (f *fakeTokens) counts() (issued, revoked int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.issued, f.revoked
-}
-
-func (f *fakeTokens) session() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.lastSession
 }
 
 func (f *fakeTokens) lastTags() []string {
@@ -153,15 +127,6 @@ func TestRunReturnsFinalTextOnDone(t *testing.T) {
 	// The scoped credential must not outlive the run.
 	if issued, revoked := tok.counts(); issued != 1 || revoked != 1 {
 		t.Fatalf("token issued=%d revoked=%d, want 1/1", issued, revoked)
-	}
-	// A child runs in its OWN session, so its credential must name that
-	// one — not the parent's, and not nothing. Without this the child's
-	// session-scoped tools depend on a header it may not be able to send.
-	if got, want := tok.session(), got.ChildSessionID; got != want || got == "" {
-		t.Fatalf("token session = %q, want the child session %q", got, want)
-	}
-	if tok.session() == "leader" {
-		t.Fatal("child token was minted for the parent session")
 	}
 }
 
@@ -278,31 +243,6 @@ func TestRunSurfacesErrorEventAsFailedStatus(t *testing.T) {
 	}
 	if res.Status != entity.DelegationFailed {
 		t.Fatalf("status = %q, want %q", res.Status, entity.DelegationFailed)
-	}
-}
-
-// A line the provider parser could not read arrives as a Warning while the
-// child keeps working. Treating it as the end of the run closed delegations
-// "(no output)" minutes before the child finished, lost the real answer and
-// released the conversation's queue slot early.
-func TestRunKeepsRunningThroughWarning(t *testing.T) {
-	stream := &scriptedStream{events: []StreamEvent{
-		{Type: event.TextDelta, Text: "checking. "},
-		{Type: event.Warning, Text: "claude parse: unexpected end of JSON input"},
-		{Type: event.TextDelta, Text: "real answer"},
-		{Type: event.Done},
-	}}
-	s, _, _ := runService(t, stream, &fakeRunner{})
-
-	res, err := s.Run(context.Background(), baseReq())
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	if res.Status != entity.DelegationDone {
-		t.Fatalf("status = %q, want %q (note %q)", res.Status, entity.DelegationDone, res.Note)
-	}
-	if !strings.Contains(res.Result, "real answer") {
-		t.Fatalf("result = %q, want the output that came after the warning", res.Result)
 	}
 }
 

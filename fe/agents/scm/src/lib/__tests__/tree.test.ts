@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { buildTree, allFilePaths, allChanges, splitPath, type TreeNode } from "$lib/tree";
+import { buildTree, allFilePaths, allChanges, type TreeNode } from "$lib/tree";
 import type { FileChange } from "$lib/api/scm";
 
 function mk(path: string): FileChange {
@@ -20,41 +20,6 @@ describe("buildTree", () => {
       { name: "src", dir: true },
       { name: "zoo.txt", dir: false },
     ]);
-  });
-
-  test("renders a folder-scoped change as one named leaf, not a blank row", () => {
-    // git reports a nested repo as "vendored/" — splitting that naively
-    // produced a folder whose only child had an empty name.
-    const raw: FileChange = { ...mk("vendored/"), work_tree: "?", untracked: true, dir: true };
-    const tree = buildTree([raw]);
-    expect(tree.map((n) => ({ name: n.name, isDir: n.isDir, dirEntry: n.dirEntry }))).toEqual([
-      { name: "vendored", isDir: false, dirEntry: true },
-    ]);
-    // The path stays bare so stage/discard can pass it straight to git.
-    expect(tree[0].path).toBe("vendored");
-    expect(allFilePaths(tree[0])).toEqual(["vendored/"]);
-  });
-
-  test("keeps a shared parent folder when every change lives under it", () => {
-    // Staged changes under internal/agents/{event,pool,provider} used to show
-    // "event", "pool", "provider" at the top: the root collapsed the common
-    // prefix and buildTree dropped it.
-    const tree = buildTree([
-      mk("internal/agents/event/a.go"),
-      mk("internal/agents/pool/b.go"),
-      mk("internal/agents/provider/c.go"),
-    ]);
-    expect(tree).toHaveLength(1);
-    expect(tree[0].name).toBe("internal/agents");
-    expect(tree[0].path).toBe("internal/agents");
-    expect(tree[0].children?.map((n) => n.name)).toEqual(["event", "pool", "provider"]);
-  });
-
-  test("a lone nested file keeps its folder chain instead of floating at the root", () => {
-    const tree = buildTree([mk("pkg/a/b/deep.ts")]);
-    expect(tree).toHaveLength(1);
-    expect(tree[0]).toMatchObject({ name: "pkg/a/b", isDir: true });
-    expect(tree[0].children?.map((n) => n.name)).toEqual(["deep.ts"]);
   });
 
   test("collapses a single-child directory chain into one node", () => {
@@ -92,24 +57,5 @@ describe("allFilePaths / allChanges", () => {
   test("a single file node returns just its own path", () => {
     const file: TreeNode = { name: "x.ts", path: "x.ts", isDir: false, change: mk("x.ts") };
     expect(allFilePaths(file)).toEqual(["x.ts"]);
-  });
-});
-
-describe("splitPath", () => {
-  // A Changes list that truncates the filename is a list you cannot read.
-  // Name and folder are separate so the folder is what gives way.
-  test("separates the name from the folder that disambiguates it", () => {
-    expect(splitPath("internal/agents/store/store.go")).toEqual({
-      name: "store.go",
-      dir: "internal/agents/store",
-    });
-  });
-
-  test("a root-level file has no folder to show", () => {
-    expect(splitPath("go.mod")).toEqual({ name: "go.mod", dir: "" });
-  });
-
-  test("a folder entry keeps its own name, not an empty one", () => {
-    expect(splitPath("vendor/github.com/pkg/")).toEqual({ name: "pkg", dir: "vendor/github.com" });
   });
 });

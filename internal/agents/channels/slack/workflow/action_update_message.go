@@ -6,6 +6,7 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
+	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
@@ -26,7 +27,7 @@ type UpdateMessageOutput struct {
 	TS      string `json:"ts"`
 }
 
-func registerActionUpdateMessage(reg *integration.Registry, pick ChannelPicker) {
+func registerActionUpdateMessage(reg *integration.Registry, ch *slack.Channel) {
 	reg.RegisterAction(integration.ActionDescriptor{
 		Channel:     Channel,
 		Action:      "update_message",
@@ -46,15 +47,11 @@ func registerActionUpdateMessage(reg *integration.Registry, pick ChannelPicker) 
 				"Doesn't work on ephemerals — use respond_url with replace_original instead.",
 				"blocks REPLACES the entire block set; pass the full new state, not a diff.",
 			},
-			PairWith:     []string{"channel:slack.send_message", "channel:slack.delete_message"},
+			PairWith: []string{"channel:slack.send_message", "channel:slack.delete_message"},
 			InputSample:  `{"channel":"C12345","ts":"1700001234.005600","text":"Ticket resolved. Thanks!"}`,
 			OutputSample: `{"channel":"C12345","ts":"1700001234.005600"}`,
 		},
 		Execute: func(ctx context.Context, args map[string]any) (any, error) {
-			ch := pick(ctx)
-			if ch == nil {
-				return nil, fmt.Errorf("slack channel not configured")
-			}
 			api := ch.API()
 			if api == nil {
 				return nil, fmt.Errorf("slack channel not configured")

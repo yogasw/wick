@@ -15,40 +15,19 @@ Use the `tickets` connector. Notes are a different connector — see the
 
 ## Know what you are on
 
-Your prompt already names this session's ticket — its id, title, status, and
-an excerpt of its **description** — so when the user starts talking, assume
-the conversation is about that ticket unless they say otherwise.
-
 `ticket_get` with no arguments returns the ticket this session is attached to,
-in full:
+including its other sessions:
 
 ```
 ticket_get
 ```
 
-Call it when you need what the prompt excerpt does not carry — the full
-description (`body`), the fields, who it is assigned to, how many other
-sessions are on it.
+Your prompt already names the ticket and its note count, so call this when you
+need the detail — the fields, who it is assigned to, how many other sessions
+are on it.
 
 `ticket_list` shows a project's tickets, newest first, and takes an optional
-`status` filter, plus `mine=true` or `assignee=<id>`. Use it to answer "what is
-open?" and "what is mine?" — the questions a filter can answer.
-
-`ticket_search` answers the one it cannot: **where is the ticket about X**.
-
-```
-ticket_search query="webhook 401"
-ticket_search query="paragon" status=open mine=true
-```
-
-It matches the id, the title, the **description** and the field values,
-case-insensitively, and each hit says which of them matched (`matched_in`), so
-a ticket that merely mentions the word in passing is not mistaken for one
-named after it — title hits are returned first for the same reason. Searching
-the description matters more than it looks: a title is written in the first
-minute, when the least is known, while the detail that makes a ticket findable
-later ends up in the body. `limit` defaults to 20, and the response reports
-`scanned` alongside `total`, so a truncated result never looks complete.
+`status` filter. Use it to answer "what is open?" without opening the board.
 
 ## Keep the status honest
 
@@ -69,12 +48,9 @@ Every update also resets the project's stale-follow-up timer. **If a follow-up
 message woke you, update the ticket before you finish**, or you will be woken
 again for the same reason.
 
-`ticket_update` also takes `title`, `body` (the markdown description — an
-empty string clears it), `assignee` (an empty string unassigns), and `fields`
-as a JSON object of the project's own field values. Only what you pass
-changes. Keep the description current the same way you keep status honest:
-when the understanding of the work changes, rewrite `body` so the next
-session starts from the truth.
+`ticket_update` also takes `title`, `assignee` (an empty string unassigns), and
+`fields` as a JSON object of the project's own field values. Only what you pass
+changes.
 
 ## Several sessions on one ticket
 
@@ -102,6 +78,4 @@ A conversation that turns out to be real work can become a ticket in place:
 ticket_create title="Payment webhook returns 401" attach_current_session=true
 ```
 
-Pass `body` too when the conversation already surfaced repro steps or context
-worth keeping. Its notes then live on the ticket, so the next session
-inherits them.
+Its notes then live on the ticket, so the next session inherits them.

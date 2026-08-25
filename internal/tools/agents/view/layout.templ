@@ -20,28 +20,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 	     view. Scrolling happens inside [data-chat-panel] only. -->
 	<style>
 		html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
-		/* Smooth Team <-> Agents switch; see agents_app.templ. */
-		@view-transition { navigation: auto; }
-		[data-space-sidebar] { view-transition-name: wick-space-sidebar; }
-		[data-space-switch] { view-transition-name: wick-space-switch; }
-		[data-space-account] { view-transition-name: wick-space-account; }
-		/* the selected half of the switch slides across, like a pill */
-		[data-space-active] { view-transition-name: wick-space-pill; }
-		::view-transition-group(*) { animation-duration: 220ms; animation-timing-function: cubic-bezier(.2, 0, 0, 1); }
-		/* Thin green bar on top from the switch click until the other page
-		   paints; pageshow clears it when the page comes back from bfcache. */
-		html.wick-space-loading::before {
-			content: ""; position: fixed; top: 0; left: 0; z-index: 9999; height: 2px; background: #22c55e;
-			animation: wick-space-load 1.4s cubic-bezier(.2, 0, 0, 1) forwards;
-		}
-		@keyframes wick-space-load { from { width: 0 } to { width: 85% } }
-		/* The account menu rises in instead of popping. */
-		[data-account-panel], [data-account-menu] { animation: wick-menu-in 140ms ease-out; }
-		@keyframes wick-menu-in { from { opacity: 0; transform: translateY(6px) } }
 	</style>
-	<script>
-		addEventListener("pageshow", function () { document.documentElement.classList.remove("wick-space-loading"); });
-	</script>
 	<!-- Compact / landscape-phone shell. The md: width breakpoint pins
 	     the sidebar open as a static column once the viewport is ≥768px
 	     wide — which a phone in LANDSCAPE is, even though it's only a few
@@ -52,26 +31,10 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 	     and let the script below toggle it. Paired with the matchMedia
 	     query in the script (max-width:767px OR max-height:600px). -->
 	<style>
-		/* This shell is the whole viewport, which is only true when nothing
-		   else occupies it. The impersonation banner does, and publishes how
-		   much (--wick-chrome-top, 0 when absent) — without this the shell
-		   stays a full 100svh BELOW the banner and its bottom edge, the
-		   composer and the end of the inbox list, falls off the screen. */
-		[data-agents-shell] {
-			height: calc(100svh - var(--wick-chrome-top, 0px));
-		}
-		/* The drawer is position:fixed below md, so it is measured from the
-		   viewport and not from the shell: it needs the same offset or it
-		   slides up underneath the banner. Above md it is static and ignores
-		   `top`, so this can stay unconditional. */
-		[data-agents-shell] [data-sidebar],
-		[data-agents-shell] [data-sidebar-backdrop] {
-			top: var(--wick-chrome-top, 0px);
-		}
 		@media (max-height: 600px) {
 			[data-agents-shell] [data-sidebar] {
 				position: fixed !important;
-				top: var(--wick-chrome-top, 0px); bottom: 0; left: 0;
+				top: 0; bottom: 0; left: 0;
 				width: 18rem !important;
 				z-index: 50 !important;
 				transform: translateX(-100%) !important;
@@ -90,7 +53,6 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 		}
 	</style>
 	{{ user := login.GetUser(ctx) }}
-	@sidebarResize("agents", sidebarWidth(user, "agents"))
 	<!-- 100svh (not 100dvh): the small-viewport unit is the always-visible
 	     height (address bar counted in), so the bottom-pinned chat composer
 	     isn't pushed below the fold on first paint before the dynamic
@@ -115,14 +77,17 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 			aria-hidden="true"
 		></div>
 		<!-- Sidebar: fixed drawer on mobile, static column on md+ -->
-		<aside data-sidebar data-space-sidebar class="fixed inset-y-0 left-0 z-50 flex w-72 shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 -translate-x-full transition-transform duration-200 ease-out md:relative md:w-60 md:translate-x-0 md:transition-none">
-			<div data-sidebar-resize={ vm.Base + "/api/me/sidebar" } data-space="agents" data-default="15rem" title="Drag to resize · double-click to reset"></div>
-			<!-- Top: the Team | Agents switch (replaces the brand bar; the
-			     account moved to the row at the foot of the sidebar). Same box
-			     as the Team sidebar's header, so the switch does not move when
-			     you cross between the two. -->
-			<div data-agents-top-widgets class="flex items-center gap-2 px-2.5 pt-3 pb-1">
-				@sidebarSpaceSwitch(vm.Base + "/team")
+		<aside data-sidebar class="fixed inset-y-0 left-0 z-50 flex w-72 shrink-0 flex-col border-r border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 -translate-x-full transition-transform duration-200 ease-out md:static md:w-60 md:translate-x-0 md:transition-none">
+			<!-- Header: brand + project + profile (single row, replaces global navbar) -->
+			<div data-agents-top-widgets class="flex items-center gap-2 px-3 py-2.5 border-b border-white-300 dark:border-navy-600">
+				<a href="/" class="flex flex-1 min-w-0 items-center gap-2 hover:opacity-80 transition-opacity" title={ ui.AppNameFromContext(ctx) }>
+					<div class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-green-500 text-xs text-white-100 font-semibold select-none">✦</div>
+					<div class="flex min-w-0 flex-col leading-tight">
+						<span class="truncate text-sm font-semibold text-black-900 dark:text-white-100">{ ui.AppNameFromContext(ctx) }</span>
+						<span class="truncate text-[10px] font-medium text-black-600 dark:text-black-700 uppercase tracking-wider">Agents</span>
+					</div>
+				</a>
+				@ui.UserMenu(user, true)
 				<!-- Mobile close drawer (md:hidden) -->
 				<button
 					type="button"
@@ -156,18 +121,9 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 					<span>New session</span>
 				</a>
 				@agentsNavLink(vm.Base+"/overview", "Overview", vm.ActivePage == "overview")
+				@agentsNavLink(vm.Base+"/workflows", "Workflows", vm.ActivePage == "workflows")
 				@agentsNavLink(vm.Base+"/connectors", "Connectors", vm.ActivePage == "connectors")
-				{{ moreItems := AgentsMoreItems(vm, user) }}
-				// The page you are on is lifted OUT of the collapsed group and
-				// shown here, so navigating into "More" does not leave you
-				// looking at a sidebar that forgot where you are. See
-				// AgentsMoreItems for why this beats auto-expanding the group.
-				for _, it := range moreItems {
-					if it.Active {
-						@agentsNavLink(it.Href, it.Label, true)
-					}
-				}
-				<details class="group" data-menu>
+				<details class="group" { agentsMoreOpenAttr(vm.ActivePage)... }>
 					<summary class="list-none cursor-pointer flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-black-800 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors select-none">
 						<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
 							<circle cx="4" cy="8" r="1" fill="currentColor"></circle>
@@ -180,10 +136,29 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 						</svg>
 					</summary>
 					<div class="flex flex-col gap-0.5 pt-0.5">
-						for _, it := range moreItems {
-							if !it.Active {
-								@agentsNavLink(it.Href, it.Label, false)
-							}
+						// Ordered by use-frequency: monitoring + everyday tools first,
+						// config/infra last. Scheduled → Channels → Skills → Presets
+						// → Providers → Data Tables → 9router.
+						if user != nil {
+							@agentsNavLink(vm.Base+"/scheduled", "Scheduled", vm.ActivePage == "scheduled")
+						}
+						// Admin-only to match its API, which is admin-gated: the
+						// page reports machine-wide process usage.
+						if user != nil && user.IsAdmin() {
+							@agentsNavLink(vm.Base+"/resources", "Resources", vm.ActivePage == "resources")
+						}
+						if user != nil {
+							@agentsNavLink(vm.Base+"/channels", "Channels", vm.ActivePage == "channels")
+						}
+						@agentsNavLink(vm.Base+"/skills", "Skills", vm.ActivePage == "skills")
+						@agentsNavLink(vm.Base+"/agent-profiles", "Sub-agents", vm.ActivePage == "agent-profiles")
+						@agentsNavLink(vm.Base+"/presets", "Presets", vm.ActivePage == "presets")
+						if user != nil && user.IsAdmin() {
+							@agentsNavLink(vm.Base+"/providers", "Providers", vm.ActivePage == "providers")
+						}
+						@agentsNavLink(vm.Base+"/data-tables", "Data Tables", vm.ActivePage == "data-tables")
+						if vm.AirouterVisible {
+							@agentsNavLink(vm.Base+"/airouter", "AI Router", vm.ActivePage == "airouter")
 						}
 					</div>
 				</details>
@@ -197,7 +172,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 			if len(vm.ProjectList) > 0 {
 				<div data-project-list class="px-2 pb-1 space-y-0.5 max-h-40 overflow-y-auto">
 					for _, pid := range vm.ProjectList {
-						@sidebarProjectRow(vm.Base, vm.ProjectIcon(pid), vm.ProjectName(pid), pid, vm.ScopedProjectID == pid, vm.PinnedProjectID == pid, vm.SharedOwners[pid])
+						@sidebarProjectRow(vm.Base, vm.ProjectIcon(pid), vm.ProjectName(pid), pid, vm.ProjectCounts[pid], vm.ScopedProjectID == pid, vm.PinnedProjectID == pid)
 					}
 				</div>
 			} else {
@@ -218,19 +193,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 						<a href={ templ.SafeURL(vm.Base + "/sessions") } class="text-[11px] text-black-600 dark:text-black-700 hover:text-black-900 dark:hover:text-white-100 transition-colors">All chats</a>
 					</div>
 				}
-				<!-- Yours/All scope toggle — plain links that re-render the
-				     current page with ?sb= set (persisted via cookie), so it
-				     works on every page without script. Same "yours" rule as
-				     the /sessions tabs: owned + ticket-assigned sessions. -->
-				<div class="px-3 pb-2">
-					<div class="inline-flex overflow-hidden rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
-						@sidebarOwnerTab(vm.SidebarOwnerMeHref, "Yours", vm.SidebarOwner != "all")
-						@sidebarOwnerTab(vm.SidebarOwnerAllHref, "All", vm.SidebarOwner == "all")
-					</div>
-				</div>
-				<!-- data-sidebar-sessions: the shell island re-sorts these rows
-				     live (running first, then last use) and refreshes their ages. -->
-				<div class="flex-1 overflow-y-auto pb-2" data-sidebar-sessions>
+				<div class="flex-1 overflow-y-auto pb-2">
 					if len(vm.SidebarIDs) == 0 {
 						<p class="px-3 py-4 text-xs text-black-600 dark:text-black-700 text-center">No sessions yet</p>
 					}
@@ -241,11 +204,13 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 					}
 				</div>
 			</div>
-			<!-- Bottom: the account row. Mini Tools and Agent settings
-			     (admin-only) live in its menu, like the Team sidebar. -->
+			<!-- Bottom: Mini Tools (all users) + Settings (admin-only) -->
 			if user != nil {
-				<div class="border-t border-white-300 dark:border-navy-600 px-1.5 pb-2.5 pt-1.5" data-sidebar-account data-space-account>
-					@ui.SidebarAccountMenu(user, vm.Base+"/settings")
+				<div class="border-t border-white-300 dark:border-navy-600 px-2 py-2">
+					@agentsNavLink("/mini-tools", "Mini Tools", false)
+					if user.IsAdmin() {
+						@agentsNavLink(vm.Base+"/settings", "Settings", vm.ActivePage == "settings")
+					}
 				</div>
 			}
 			<!-- Constrain top-widget dropdowns to sidebar width so menus don't overflow -->
@@ -348,14 +313,11 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 }
 
 // sidebarProjectRow renders one project entry in the sidebar Projects
-// section: icon + name + a hover pin toggle. No session-count pill: the
-// count meant walking every session on every page render, and the number
-// belongs on the project's own sessions list, not on each row of a nav.
-// The row navigates to the scoped sessions view (mockup ①) via
-// data-row-link (a div, not an anchor, so it can legally hold the pin
-// button). Active = currently scoped; pinned = the user's personal-default
-// project.
-templ sidebarProjectRow(base, icon, name, id string, active, pinned bool, sharedBy string) {
+// section: icon + name + a hover pin toggle + session-count pill. The
+// row navigates to the scoped sessions view (mockup ①) via data-row-link
+// (a div, not an anchor, so it can legally hold the pin button). Active =
+// currently scoped; pinned = the user's personal-default project.
+templ sidebarProjectRow(base, icon, name, id string, count int, active, pinned bool) {
 	<div
 		data-project-drop={ id }
 		if active {
@@ -370,7 +332,7 @@ templ sidebarProjectRow(base, icon, name, id string, active, pinned bool, shared
 		<!-- Native anchor: navigates without JS, so the sidebar works on
 		     every page (incl. the workflow SPA) even before agents.js loads. -->
 		<a
-			href={ templ.SafeURL(base + "/sessions?project=" + id + "&sb=me") }
+			href={ templ.SafeURL(base + "/sessions?project=" + id) }
 			class={
 				"flex flex-1 min-w-0 items-center gap-2 pl-3 py-1.5",
 				templ.KV("text-black-900 dark:text-white-100 font-semibold", active),
@@ -379,15 +341,6 @@ templ sidebarProjectRow(base, icon, name, id string, active, pinned bool, shared
 		>
 			<span class="shrink-0">{ icon }</span>
 			<span class="flex-1 min-w-0 truncate">{ name }</span>
-			if sharedBy != "" {
-				<!-- Hover-only icon styled like the pin beside it: a permanent
-				     marker ate the name's width. The owner rides on title, and
-				     sr-only keeps it for screen readers. -->
-				<span data-project-shared title={ "Shared by " + sharedBy } class="shrink-0 text-[11px] leading-none transition-opacity opacity-0 group-hover:opacity-100 grayscale">
-					<span aria-hidden="true">👥</span>
-					<span class="sr-only">{ "Shared by " + sharedBy }</span>
-				</span>
-			}
 		</a>
 		<button
 			type="button"
@@ -403,72 +356,20 @@ templ sidebarProjectRow(base, icon, name, id string, active, pinned bool, shared
 				templ.KV("opacity-0 group-hover:opacity-100 grayscale hover:grayscale-0", !pinned),
 			}
 		>📌</button>
+		if count > 0 {
+			<span class="shrink-0 rounded-full bg-white-100 dark:bg-navy-700 px-1.5 text-[10px] text-black-700 dark:text-black-600">{ fmt.Sprintf("%d", count) }</span>
+		}
 	</div>
 }
 
-// sidebarOwnerTab is one half of the sidebar's Yours/All toggle — an anchor,
-// not a button, so the scope switch is an ordinary navigation.
-templ sidebarOwnerTab(href, label string, active bool) {
-	<a
-		href={ templ.SafeURL(href) }
-		aria-pressed={ fmt.Sprintf("%t", active) }
-		class={
-			"px-2.5 py-1 text-[10px] font-medium transition-colors",
-			templ.KV("bg-green-500 text-white-100", active),
-			templ.KV("text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600", !active),
-		}
-	>{ label }</a>
-}
-
-// sharedSessionMark flags a conversation more than one person has spoken
-// in — a Slack thread several people replied into, so the row reads as
-// shared rather than looking like the viewer's own private chat. The count
-// is in the tooltip, not the row: the sidebar is 15rem wide and a number
-// there would eat title space on every row to serve the rare one.
-templ sharedSessionMark(people int) {
-	<span
-		class="shrink-0 mr-1 text-black-600 dark:text-black-600"
-		title={ fmt.Sprintf("Shared conversation — %d people", people) }
-		aria-label={ fmt.Sprintf("Shared conversation, %d people", people) }
-	>
-		<svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-			<path d="M7 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM14.5 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM1.6 16.2C1.6 13.3 4 11 7 11s5.4 2.3 5.4 5.2c0 .4-.3.8-.8.8H2.4a.8.8 0 0 1-.8-.8ZM13.7 17a2 2 0 0 0 .2-.8c0-1.8-.7-3.4-1.9-4.6.8-.4 1.6-.6 2.5-.6 2.4 0 4.3 1.8 4.3 4.2 0 .4-.3.8-.8.8h-4.3Z"></path>
-		</svg>
-	</span>
-}
-
-// sidebarSessionRow is one conversation in the sidebar. A running row
-// (see IsRunningStatus) gets a green left border and a faint green wash on
-// top of its spinner, and sorts to the top, so the busy ones are findable
-// at a glance without a group header eating a row; every other row shows a
-// compact "last update" age instead, in the board's muted meta style. The
-// border is always there — transparent when idle — so toggling it live
-// never shifts text. The wash is skipped on the open row, whose own
-// highlight already says more.
-//
-// data-session-row / data-last-active / data-running are read by the
-// shell island (fe/agents/shell/src/main.ts), which re-sorts the rows and
-// refreshes the age from live lifecycle events.
 templ sidebarSessionRow(base, id string, sess session.Session, label string, lc SessionLifecycleVM, active bool) {
-	{{ status := SidebarRowStatus(sess, lc) }}
-	{{ running := IsRunningStatus(status) }}
-	{{ lastMs := SidebarLastActiveMs(sess, lc) }}
 	<a
 		href={ templ.SafeURL(base + "/sessions/" + id) }
 		draggable="true"
 		data-session-drag={ id }
-		data-session-row={ id }
-		data-last-active={ fmt.Sprint(lastMs) }
-		data-running={ fmt.Sprint(running) }
-		if active {
-			aria-current="page"
-		}
 		title="Drag onto a project to move"
 		class={
-			"flex items-center gap-0 w-full border-l-2 pl-2.5 pr-3 py-2 transition-colors text-left cursor-pointer",
-			templ.KV("border-green-500", running),
-			templ.KV("border-transparent", !running),
-			templ.KV("bg-green-500/5 dark:bg-green-500/10", running && !active),
+			"flex items-center gap-0 w-full px-3 py-2 transition-colors text-left cursor-pointer",
 			templ.KV("bg-white-300 dark:bg-navy-600", active),
 			templ.KV("hover:bg-white-200 dark:hover:bg-navy-600/60", !active),
 		}
@@ -487,17 +388,7 @@ templ sidebarSessionRow(base, id string, sess session.Session, label string, lc 
 				New session
 			}
 		</span>
-		if sess.Meta.Shared() {
-			@sharedSessionMark(sess.Meta.PeopleCount())
-		}
-		<span
-			data-session-age={ id }
-			class={
-				"ml-2 shrink-0 whitespace-nowrap tabular-nums text-xs text-black-600 dark:text-black-700",
-				templ.KV("hidden", running),
-			}
-		>{ sidebarAgeLabel(lastMs) }</span>
-		@statusDot(id, status)
+		@statusDot(id, effectiveStatus(lc.Lifecycle, string(sess.Meta.Status), lc.SubAgent))
 	</a>
 }
 
@@ -598,7 +489,7 @@ func kebabActionAttrs(a kebabAction) templ.Attributes {
 // inside [data-row-action] so opening the menu doesn't navigate the
 // row at the same time.
 templ kebabMenu(action kebabAction) {
-	<details class="relative inline-block" data-row-action data-menu>
+	<details class="relative inline-block" data-row-action>
 		<summary
 			class="list-none cursor-pointer rounded-md p-1 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors"
 			aria-label="More actions"
@@ -624,7 +515,7 @@ templ kebabMenu(action kebabAction) {
 
 // kebabMenuMulti renders a 3-dot menu with multiple actions.
 templ kebabMenuMulti(actions []kebabAction) {
-	<details class="relative inline-block" data-row-action data-menu>
+	<details class="relative inline-block" data-row-action>
 		<summary
 			class="list-none cursor-pointer rounded-md p-1 text-black-700 dark:text-black-600 hover:bg-white-300 dark:hover:bg-navy-600 hover:text-black-900 dark:hover:text-white-100 transition-colors"
 			aria-label="More actions"
@@ -853,41 +744,16 @@ templ agentsNavLink(href, label string, active bool) {
 	</a>
 }
 
-// sidebarSpaceSwitch is the segmented Team | Agents switch at the top of the
-// sidebar, the same control the Team app shows at the top of its own. Agents
-// is the page you are on, so only Team is a link. The click remembers the
-// page it left from, so Team's switch can bring the user back there
-// (teamReturn.ts reads the same key).
-templ sidebarSpaceSwitch(teamHref string) {
-	<div data-space-switch class="flex min-w-0 flex-1 rounded-xl bg-white-300 p-0.5 dark:bg-navy-800" role="group" aria-label="Switch between Team and Agents">
-		<a
-			href={ templ.SafeURL(teamHref) }
-			data-space-team
-			onclick="try{sessionStorage.setItem('wick.team.return',location.pathname+location.search+location.hash)}catch(e){};document.documentElement.classList.add('wick-space-loading')"
-			class="flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-black-700 transition-colors hover:text-black-900 dark:text-black-600 dark:hover:text-white-100"
-		>
-			// Three heads side by side — a team, not a single session.
-			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
-				<circle cx="8" cy="5" r="2"></circle>
-				<circle cx="3.5" cy="7" r="1.5"></circle>
-				<circle cx="12.5" cy="7" r="1.5"></circle>
-				<path d="M4.5 13.5a3.5 3.5 0 017 0M1 13a2.5 2.5 0 013-2.4M15 13a2.5 2.5 0 00-3-2.4" stroke-linecap="round"></path>
-			</svg>
-			Team
-		</a>
-		<span
-			data-space-agents
-			data-space-active
-			aria-current="page"
-			class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-white-100 px-2 py-1.5 text-xs font-medium text-black-900 shadow-sm dark:bg-navy-600 dark:text-white-100"
-		>
-			<svg viewBox="0 0 16 16" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
-				<rect x="2.5" y="3" width="11" height="10" rx="2"></rect>
-				<path d="M5.5 7h5M5.5 10h3" stroke-linecap="round"></path>
-			</svg>
-			Agents
-		</span>
-	</div>
+// agentsMoreOpenAttr returns an "open" attribute on the <details>
+// when the active page lives inside the collapsed "More" group, so
+// the section auto-expands when the user lands on a secondary tool
+// (otherwise the active row would be hidden).
+func agentsMoreOpenAttr(activePage string) templ.Attributes {
+	switch activePage {
+	case "presets", "providers", "skills", "channels", "data-tables", "scheduled", "airouter", "agent-profiles", "resources":
+		return templ.Attributes{"open": ""}
+	}
+	return templ.Attributes{}
 }
 
 templ agentsNavIcon(label string) {

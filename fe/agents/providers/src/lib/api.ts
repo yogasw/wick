@@ -15,7 +15,6 @@ import type {
   GateStatusDTO,
   LiveProcessDTO,
   ConfigFieldDTO,
-  ProviderConnection,
 } from "./types.js";
 import type { ModelCaps } from "@wick-fe/common-ui";
 
@@ -26,7 +25,6 @@ interface WireProviderInstance {
   disabled: boolean;
   max_concurrent: number;
   send_mode: string;
-  idle_compact?: { seconds: number; trigger: string; threshold: number; scope?: string; match?: string[] } | null;
 }
 
 interface WireProviderCap {
@@ -44,11 +42,9 @@ interface WireHookCapability {
 }
 
 interface WireProviderStatus {
-  can_manage?: boolean;
   instance: WireProviderInstance;
   path: string;
   path_found: boolean;
-  source?: string;
   version: string;
   version_err?: string;
   probing: boolean;
@@ -123,8 +119,6 @@ interface WireSpawnDetailResponse {
   session_deleted: boolean;
   repro: Record<string, string> | null;
   has_resume: boolean;
-  prompt_supported?: boolean;
-  wick_prompt?: string;
   logs?: WireSpawnLogs;
 }
 
@@ -171,7 +165,6 @@ interface WireConfigField {
 }
 
 interface WireProvidersListResponse {
-  is_admin?: boolean;
   providers: WireProviderStatus[] | null;
   gate: WireGateStatus | null;
   mcp: WireMCPStatus | null;
@@ -184,13 +177,9 @@ interface WireProvidersListResponse {
 }
 
 interface WireProviderDetailResponse {
-  read_only?: boolean;
-  can_manage?: boolean;
-  secrets_hidden?: boolean;
   instance: WireProviderInstance;
   path: string;
   path_found: boolean;
-  source?: string;
   version: string;
   version_err?: string;
   probing: boolean;
@@ -224,9 +213,7 @@ function getBase(): string {
   return document.getElementById("app")?.dataset.base ?? "";
 }
 
-/* get/post/del are shared with sibling api modules (logintty.ts) — one
-   fetch wrapper for the whole SPA, per the dedup rule. */
-export async function get<T>(path: string): Promise<T> {
+async function get<T>(path: string): Promise<T> {
   const resp = await fetch(path, {
     credentials: "same-origin",
     headers: { "Accept": "application/json" },
@@ -238,7 +225,7 @@ export async function get<T>(path: string): Promise<T> {
   return resp.json() as Promise<T>;
 }
 
-export async function post<T>(path: string, body?: unknown): Promise<T> {
+async function post<T>(path: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method: "POST", redirect: "follow" };
   if (body !== undefined) {
     init.headers = { "Content-Type": "application/json", "Accept": "application/json" };
@@ -280,9 +267,6 @@ function mapInstance(w: WireProviderInstance): ProviderInstanceDTO {
     Disabled: w.disabled ?? false,
     MaxConcurrent: w.max_concurrent ?? 0,
     SendMode: w.send_mode ?? "",
-    IdleCompact: w.idle_compact
-      ? { Seconds: w.idle_compact.seconds ?? 0, Trigger: w.idle_compact.trigger ?? "", Threshold: w.idle_compact.threshold ?? 0, Scope: w.idle_compact.scope ?? "skip", Match: w.idle_compact.match ?? [] }
-      : null,
   };
 }
 
@@ -383,23 +367,17 @@ function mapProviderStatus(w: WireProviderStatus): ProviderStatusDTO {
     Instance: mapInstance(w.instance),
     Path: w.path ?? "",
     PathFound: w.path_found ?? false,
-    Source: w.source ?? "",
     Version: w.version ?? "",
     VersionErr: w.version_err ?? "",
     Probing: w.probing ?? false,
     Hooks: mapHooks(w.hooks),
     Cap: mapCap(w.cap),
     HookEnabled: w.hook_enabled ?? {},
-    CanManage: w.can_manage ?? false,
   };
 }
 
 export function normalizeProviders(r: WireProvidersListResponse): ProvidersListResponse {
   return {
-    // Absent is-admin reads as NOT admin: a payload from an older server
-    // (or a field that silently disappears) must render the read-only
-    // page, never hand out admin chrome the API would refuse anyway.
-    IsAdmin: r.is_admin ?? false,
     Providers: (r.providers ?? []).map(mapProviderStatus),
     Gate: mapGate(r.gate),
     MCPClients: mapMCP(r.mcp),
@@ -505,20 +483,10 @@ export async function apiCreateProvider(fields: {
   airouter_models?: Record<string, string>;
   airouter_api_key?: string;
   airouter_raw_config?: string;
-  omp_profile?: string;
-  opencode_data_dir?: string;
 }): Promise<void> {
   const form = new URLSearchParams();
   form.set("type", fields.type);
   form.set("name", fields.name);
-  // Account-store override (omp/opencode). Empty = server default, pinned
-  // on first save.
-  if (fields.omp_profile) {
-    form.set("omp_profile", fields.omp_profile);
-  }
-  if (fields.opencode_data_dir) {
-    form.set("opencode_data_dir", fields.opencode_data_dir);
-  }
   if (fields.binary) {
     form.set("binary", fields.binary);
   }
@@ -588,16 +556,9 @@ export async function apiProbeGate(type: string, name: string): Promise<void> {
 
 export function normalizeProviderDetail(r: WireProviderDetailResponse): ProviderDetailResponse {
   return {
-    // Absent read_only means an older server that only ever served
-    // admins — treat it as read-only rather than rendering an editor
-    // whose saves would be refused.
-    ReadOnly: r.read_only ?? true,
-    CanManage: r.can_manage ?? false,
-    SecretsHidden: r.secrets_hidden ?? false,
     Instance: mapInstance(r.instance),
     Path: r.path ?? "",
     PathFound: r.path_found ?? false,
-    Source: r.source ?? "",
     Version: r.version ?? "",
     VersionErr: r.version_err ?? "",
     Probing: r.probing ?? false,
@@ -757,8 +718,6 @@ export async function apiGetSpawnDetail(base: string, file: string): Promise<Spa
     SessionDeleted: r.session_deleted ?? false,
     Repro: r.repro ?? {},
     HasResume: r.has_resume ?? false,
-    PromptSupported: r.prompt_supported ?? false,
-    WickPrompt: r.wick_prompt ?? "",
     Logs: {
       SpawnPath: r.logs?.spawn_path ?? "",
       LogsDir: r.logs?.logs_dir ?? "",
@@ -777,22 +736,6 @@ export async function apiGetSpawnDetail(base: string, file: string): Promise<Spa
 
 export async function apiRevealSpawn(base: string, file: string): Promise<Record<string, string>> {
   return get<Record<string, string>>(`${base}/providers/spawns/${encodeURIComponent(file)}/reveal`);
-}
-
-// apiSpawnRepro re-renders the reproduce variants (same keys) with a prompt
-// folded in — piped to stdin as stream-json for a headless spawn, appended as a
-// positional arg for an interactive one. Server-side because the quoting is
-// per-shell and lives in Go; POST because a prompt can be kilobytes.
-export async function apiSpawnRepro(
-  base: string,
-  file: string,
-  env: string,
-  prompt: string,
-): Promise<Record<string, string>> {
-  return post<Record<string, string>>(
-    `${base}/api/providers/spawns/${encodeURIComponent(file)}/repro`,
-    { env, prompt },
-  );
 }
 
 export async function apiSaveProviderDetail(base: string, type: string, name: string, fields: Record<string, string>): Promise<void> {
@@ -1507,185 +1450,3 @@ export async function apiGetWickModelKey(base: string, modelId: string): Promise
 export type { StorageFileDTO };
 
 export { ApiError };
-
-interface WireProviderConnection {
-  type: string;
-  name: string;
-  connected?: boolean;
-  account_unknown?: boolean;
-  email?: string;
-  plan?: string;
-  org?: string;
-  auth_method?: string;
-  usage_supported?: boolean;
-  usage_err?: string;
-  usage_pending?: boolean;
-  usage_checking?: boolean;
-  usage_fetched_at?: string;
-  usage_age_s?: number;
-  usage_next_s?: number;
-  windows?: { key?: string; utilization?: number; resets_at?: string }[] | null;
-}
-
-export function normalizeConnections(
-  raw: { connections?: WireProviderConnection[] | null },
-): ProviderConnection[] {
-  return (raw?.connections ?? []).map((c) => ({
-    type: c.type ?? "",
-    name: c.name ?? "",
-    connected: c.connected ?? false,
-    accountUnknown: c.account_unknown ?? false,
-    email: c.email ?? "",
-    plan: c.plan ?? "",
-    org: c.org ?? "",
-    authMethod: c.auth_method ?? "",
-    usageSupported: c.usage_supported ?? false,
-    usageErr: c.usage_err ?? "",
-    usagePending: c.usage_pending ?? false,
-    usageChecking: c.usage_checking ?? false,
-    usageFetchedAt: c.usage_fetched_at ?? "",
-    usageAgeS: c.usage_age_s ?? 0,
-    usageNextS: c.usage_next_s ?? 0,
-    windows: (c.windows ?? []).map((w) => ({
-      key: w.key ?? "",
-      utilization: w.utilization ?? 0,
-      resetsAt: w.resets_at ?? "",
-    })),
-  }));
-}
-
-/* apiGetConnections fetches account + usage for every instance in one
-   request. Separate from apiGetProviders so the list paints from the
-   local-only payload first and fills these badges in when the remote
-   usage probe returns. */
-export async function apiGetConnections(): Promise<ProviderConnection[]> {
-  const r = await get<{ connections?: WireProviderConnection[] | null }>(
-    getBase() + "/api/providers/connections",
-  );
-  return normalizeConnections(r);
-}
-
-/* ── omp/opencode live CLI model list ─────────────────────────────────── */
-
-export interface CLIModel {
-  id: string;
-  desc?: string;
-  /** Listed by the CLI, but this account was refused it (model_not_found). */
-  unavailable?: boolean;
-  /** Recorded refusal reason, when the CLI gave one. */
-  reason?: string;
-  /** The model a turn with no pin runs (server's effective default). */
-  default?: boolean;
-}
-
-/** GET /api/providers/{type}/{name}/cli-models — the CLI's own model list,
-    cached server-side ~10 min (refresh=true re-runs the CLI), refusals
-    marked: the raw list an unsaved filter is previewed over. The effective
-    list comes from apiGetEffectiveLiveModels (the composer picker's own
-    endpoint). `error` = a failed refresh over a stale list. */
-export interface CLIModelsResponse {
-  models: CLIModel[];
-  hostedAllowed: boolean;
-  /** "" when nothing is known yet (no harvest, no Refresh). */
-  fetchedAt: string;
-  /** "files" / "server" (read without the CLI) or "cli" (a Refresh). */
-  source?: string;
-  error?: string;
-}
-
-export async function apiGetCLIModels(base: string, type: string, name: string, refresh = false): Promise<CLIModelsResponse> {
-  const r = await get<{ models?: CLIModel[]; hosted_allowed?: boolean; fetched_at?: string; source?: string; error?: string }>(
-    `${base}/api/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}/cli-models${refresh ? "?refresh=1" : ""}`,
-  );
-  return {
-    models: r.models ?? [],
-    hostedAllowed: r.hosted_allowed ?? true,
-    fetchedAt: r.fetched_at ?? "",
-    source: r.source,
-    error: r.error,
-  };
-}
-
-/** GET /providers/options/{type}/{name}/models?all=1 — the instance's
-    EFFECTIVE live list through the composer picker's own pipeline
-    (ModelSets: saved filter, chosen Default first, refusals marked
-    "unavailable", the default a spawn runs flagged), every level
-    flattened. The same endpoint the wick provider page reads its live
-    sets from, so the page and the picker cannot disagree. */
-export async function apiGetEffectiveLiveModels(base: string, type: string, name: string): Promise<CLIModel[]> {
-  const r = await get<{ models?: { id?: string; desc?: string; default?: boolean; unavailable?: boolean }[] | null }>(
-    `${base}/providers/options/${encodeURIComponent(type)}/${encodeURIComponent(name)}/models?all=1`,
-  );
-  return (r?.models ?? [])
-    .filter((m) => !!m.id)
-    .map((m) => ({ id: m.id!, desc: m.unavailable ? undefined : m.desc, reason: m.unavailable ? m.desc : undefined, unavailable: m.unavailable, default: m.default }));
-}
-
-/** POST …/cli-models/recheck — forget one refusal so the next turn tries
-    the model again (a second refusal records it again). */
-export async function apiRecheckCLIModel(base: string, type: string, name: string, model: string): Promise<boolean> {
-  const r = await post<{ cleared?: boolean }>(
-    `${base}/api/providers/${encodeURIComponent(type)}/${encodeURIComponent(name)}/cli-models/recheck`,
-    { model },
-  );
-  return !!r.cleared;
-}
-
-/** Hosted opencode models (opencode/…, opencode-go/…) — mirrors
-    provider.IsOpencodeHostedModel. */
-export function isOpencodeHostedModel(id: string): boolean {
-  const p = id.split("/")[0];
-  return p === "opencode" || p === "opencode-go";
-}
-
-export interface IdleCompactProbe {
-  session_id: string;
-  title: string;
-  project: string;
-  project_id: string;
-  /* sub_agent: a sub-agent's session, never compacted. */
-  sub_agent?: boolean;
-  /* rule is the 1-based pattern line that matched, 0 for none. */
-  rule: number;
-  rule_text?: string;
-  in_scope: boolean;
-  enabled: boolean;
-  session_provider?: string;
-  same_provider: boolean;
-  context_used: number;
-  context_window: number;
-  over_threshold: boolean;
-}
-
-/* apiIdleCompactProbe asks whether a session (link or id) would be
-   compacted by this instance under the given, possibly unsaved, scope
-   and patterns. */
-export async function apiIdleCompactProbe(
-  base: string,
-  type: string,
-  name: string,
-  session: string,
-  scope: string,
-  match: string,
-): Promise<IdleCompactProbe> {
-  const resp = await fetch(
-    `${base}/providers/idle-compact-probe/${encodeURIComponent(type)}/${encodeURIComponent(name)}`,
-    {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
-      body: new URLSearchParams({ session, scope, match }).toString(),
-    },
-  );
-  const text = await resp.text().catch(() => "");
-  if (!resp.ok) {
-    let msg = text || `HTTP ${resp.status}`;
-    try {
-      msg = (JSON.parse(text) as { error?: string }).error || msg;
-    } catch {
-      /* not JSON */
-    }
-    throw new ApiError(resp.status, msg);
-  }
-  return JSON.parse(text) as IdleCompactProbe;
-}

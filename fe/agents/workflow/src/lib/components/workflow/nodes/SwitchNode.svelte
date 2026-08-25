@@ -7,7 +7,6 @@
 </script>
 
 <BaseNode
-  description={node.description ?? ""}
   id={node.id}
   type={node.type}
   label={node.label}
@@ -17,6 +16,7 @@
   {onselect}
   headBg="#f43f5e"
   icon="⇆"
+  outputs={Math.max(1, rules.length)}
 >
   {#snippet body()}
     {#if rules.length === 0}

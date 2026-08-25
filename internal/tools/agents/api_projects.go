@@ -164,7 +164,7 @@ type ProjectPinnedSession struct {
 // project defaults dropdown, sourced from the same cached status the
 // new-session composer uses so both selectors agree on what's healthy.
 func projectProviderList(c *tool.Ctx) []ProviderListItem {
-	ps := providerChoicesFor(c)
+	ps := providerChoicesCached(c.Context())
 	out := make([]ProviderListItem, 0, len(ps))
 	for _, p := range ps {
 		var models []ProviderModelItem

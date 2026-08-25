@@ -49,57 +49,19 @@ type ProviderInstanceDTO struct {
 	Disabled      bool   `json:"disabled"`
 	MaxConcurrent int    `json:"max_concurrent"`
 	SendMode      string `json:"send_mode"`
-	// IdleCompact is the instance's compact-when-idle policy, nil when it
-	// is off, so the list can show it without opening the detail page.
-	IdleCompact *IdleCompactDTO `json:"idle_compact,omitempty"`
-}
-
-// IdleCompactDTO is an enabled idle-compact policy with defaults filled in.
-type IdleCompactDTO struct {
-	Seconds int    `json:"seconds"`
-	Trigger string `json:"trigger"`
-	// Threshold is a percentage or a token count, by Trigger.
-	Threshold int `json:"threshold"`
-	// Scope is skip, whitelist or all; Match its pattern lines.
-	Scope string   `json:"scope"`
-	Match []string `json:"match,omitempty"`
-}
-
-// idleCompactDTO projects ins's idle-compact policy, nil when it is off.
-func idleCompactDTO(ins provider.Instance) *IdleCompactDTO {
-	pol := provider.IdleCompactPolicyOf(ins)
-	if !pol.Enabled {
-		return nil
-	}
-	raw := ins.IdleCompactMatch
-	if pol.Scope == provider.IdleCompactScopeSkip && strings.TrimSpace(raw) == "" {
-		raw = provider.DefaultIdleCompactSkip
-	}
-	var match []string
-	if pol.Scope != provider.IdleCompactScopeAll {
-		match = provider.IdleCompactMatchLines(raw)
-	}
-	return &IdleCompactDTO{Seconds: int(pol.Idle / time.Second), Trigger: pol.Trigger, Threshold: pol.Threshold, Scope: pol.Scope, Match: match}
 }
 
 // ProviderStatusDTO is one provider card's data: instance config + live status.
 type ProviderStatusDTO struct {
-	Instance  ProviderInstanceDTO `json:"instance"`
-	Path      string              `json:"path"`
-	PathFound bool                `json:"path_found"`
-	// Source is where Path came from: "managed" (wick-managed version),
-	// "registry" (manual Binary path), "path", "scan", "miss".
-	Source      string                       `json:"source,omitempty"`
+	Instance    ProviderInstanceDTO          `json:"instance"`
+	Path        string                       `json:"path"`
+	PathFound   bool                         `json:"path_found"`
 	Version     string                       `json:"version"`
 	VersionErr  string                       `json:"version_err,omitempty"`
 	Probing     bool                         `json:"probing"`
 	Hooks       map[string]HookCapabilityDTO `json:"hooks"`
 	Cap         ProviderCapDTO               `json:"cap"`
 	HookEnabled map[string]bool              `json:"hook_enabled"`
-	// CanManage is the per-instance answer to "may this caller reconnect
-	// it and force a usage re-check?" — admins always, everyone else by
-	// manage tag. Never implies permission to edit configuration.
-	CanManage bool `json:"can_manage"`
 }
 
 // SpawnLogFileDTO is a parsed spawn log file entry.
@@ -157,26 +119,9 @@ type SpawnDetailResponse struct {
 	// HasResume is true when the spawn carried a --resume/resume id, so the
 	// Keep/Fresh toggle is meaningful. False on a session's first spawn.
 	HasResume bool `json:"has_resume"`
-	// PromptSupported is true when this provider needs the prompt added to
-	// the reproduce command (claude/gemini take it on stdin). False for
-	// codex, whose logged argv already ends with the message.
-	PromptSupported bool `json:"prompt_supported"`
-	// WickPrompt is the message wick sent on this spawn — the "Wick" option
-	// of the Prompt control. It is the spawn log's first_user_message, i.e.
-	// the 10-word preview; enough to re-run the same kind of turn, and the
-	// Custom option is there when the exact text matters.
-	WickPrompt string `json:"wick_prompt,omitempty"`
 	// Logs points the operator at the on-disk log files relevant to this
 	// spawn so a crash can be copied out for analysis without shelling in.
 	Logs SpawnLogsDTO `json:"logs"`
-}
-
-// SpawnReproRequest is the body of POST /api/providers/spawns/{file}/repro.
-// Env is "masked" (default) or "live"; Prompt is the user message to fold into
-// the rendered command, empty for the bare spawn command.
-type SpawnReproRequest struct {
-	Env    string `json:"env,omitempty"`
-	Prompt string `json:"prompt,omitempty"`
 }
 
 // SpawnLogsDTO carries the on-disk log paths + the spawn's time window for
@@ -311,11 +256,6 @@ type SpawnsListResponse struct {
 
 // ProvidersListResponse is the JSON envelope for GET /api/providers.
 type ProvidersListResponse struct {
-	// IsAdmin tells the SPA which chrome to render at all. Everything
-	// that edits configuration is admin-only however the tags are set,
-	// so a non-admin gets the read-only page rather than buttons that
-	// would come back 403.
-	IsAdmin       bool                `json:"is_admin"`
 	Providers     []ProviderStatusDTO `json:"providers"`
 	Gate          GateStatusDTO       `json:"gate"`
 	MCPClients    MCPStatusDTO        `json:"mcp"`
@@ -340,32 +280,20 @@ type ConfigFieldDTO struct {
 
 // ProviderDetailResponse is the JSON envelope for GET /api/providers/{type}/{name}.
 type ProviderDetailResponse struct {
-	// ReadOnly marks a payload rendered for someone who may look but not
-	// edit: every field is shown, every control is disabled, and the API
-	// refuses the write anyway (requireProviderAdmin).
-	ReadOnly bool `json:"read_only"`
-	// CanManage: may this caller reconnect the account and force a usage
-	// re-check? Independent of ReadOnly — manage is not edit.
-	CanManage bool `json:"can_manage"`
-	// SecretsHidden marks a payload whose resolved-config previews were
-	// withheld. They contain live auth tokens verbatim, which is fine for
-	// the admin who owns the credential and not for a viewer.
-	SecretsHidden bool                         `json:"secrets_hidden,omitempty"`
-	Instance      ProviderInstanceDTO          `json:"instance"`
-	Path          string                       `json:"path"`
-	PathFound     bool                         `json:"path_found"`
-	Source        string                       `json:"source,omitempty"`
-	Version       string                       `json:"version"`
-	VersionErr    string                       `json:"version_err,omitempty"`
-	Probing       bool                         `json:"probing"`
-	Hooks         map[string]HookCapabilityDTO `json:"hooks"`
-	HookEnabled   map[string]bool              `json:"hook_enabled"`
-	Gate          GateStatusDTO                `json:"gate"`
-	GlobalMax     int                          `json:"global_max"`
-	ActiveCount   int                          `json:"active_count"`
-	ActivePIDs    []LiveProcessDTO             `json:"active_pids"`
-	ConfigFields  []ConfigFieldDTO             `json:"config_fields"`
-	AIRouter      AIRouterDetailDTO            `json:"airouter"`
+	Instance     ProviderInstanceDTO          `json:"instance"`
+	Path         string                       `json:"path"`
+	PathFound    bool                         `json:"path_found"`
+	Version      string                       `json:"version"`
+	VersionErr   string                       `json:"version_err,omitempty"`
+	Probing      bool                         `json:"probing"`
+	Hooks        map[string]HookCapabilityDTO `json:"hooks"`
+	HookEnabled  map[string]bool              `json:"hook_enabled"`
+	Gate         GateStatusDTO                `json:"gate"`
+	GlobalMax    int                          `json:"global_max"`
+	ActiveCount  int                          `json:"active_count"`
+	ActivePIDs   []LiveProcessDTO             `json:"active_pids"`
+	ConfigFields []ConfigFieldDTO             `json:"config_fields"`
+	AIRouter     AIRouterDetailDTO            `json:"airouter"`
 	// DefaultModels are the per-type catalog seed models (id + description),
 	// shown in the model-selection card so the operator sees what's used when
 	// the curated list is empty, and can Load them as an editable starting
@@ -481,11 +409,9 @@ func providerStatusDTO(st provider.Status, caps map[string]view.ProviderCapVM) P
 			Disabled:      st.Instance.Disabled,
 			MaxConcurrent: st.Instance.MaxConcurrent,
 			SendMode:      st.Instance.SendMode,
-			IdleCompact:   idleCompactDTO(st.Instance),
 		},
 		Path:        st.Path,
 		PathFound:   st.PathFound,
-		Source:      st.Source,
 		Version:     st.Version,
 		VersionErr:  st.VersionErr,
 		Probing:     st.Probing,
@@ -599,10 +525,9 @@ func apiProvidersList(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireProviderMenu(c) {
+	if !requireAdmin(c) {
 		return
 	}
-	isAdmin := callerIsAdmin(c)
 
 	ctx, cancel := context.WithTimeout(c.Context(), 3*time.Second)
 	defer cancel()
@@ -618,26 +543,12 @@ func apiProvidersList(c *tool.Ctx) {
 
 	if globalSpawnLog != nil {
 		_ = globalSpawnLog.Prune(provider.MaxSpawnLogs)
-		// A spawn whose wick died with it never got an exit written, so it
-		// reads as running and the Stop button has nothing to signal. Close
-		// those out here too, not only at boot: the row a person is staring
-		// at should stop lying on the next refresh rather than on the next
-		// restart.
-		_, _ = globalSpawnLog.ReconcileOrphans(nil)
 	}
 
 	caps := providerCapacities()
-	// The menu lists what the caller MANAGES. Access tags do not appear
-	// here at all — they decide which providers can be picked for a
-	// project or a session, which is a different job (provider_access.go).
-	statuses = manageableProviders(c, statuses, func(st provider.Status) (provider.Type, string) {
-		return st.Instance.Type, st.Instance.Name
-	})
 	providerDTOs := make([]ProviderStatusDTO, 0, len(statuses))
 	for _, st := range statuses {
-		dto := providerStatusDTO(st, caps)
-		dto.CanManage = isAdmin || canManageProvider(c, st.Instance.Type, st.Instance.Name)
-		providerDTOs = append(providerDTOs, dto)
+		providerDTOs = append(providerDTOs, providerStatusDTO(st, caps))
 	}
 
 	// Recent Spawns now loads from the dedicated /api/providers/spawns
@@ -655,7 +566,6 @@ func apiProvidersList(c *tool.Ctx) {
 	mcpVM := buildMCPStatusVM()
 
 	c.JSON(http.StatusOK, ProvidersListResponse{
-		IsAdmin:       isAdmin,
 		Providers:     providerDTOs,
 		Gate:          gateStatusDTO(gateVM),
 		MCPClients:    mcpStatusDTO(mcpVM),
@@ -675,7 +585,7 @@ func apiProviderDetail(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
-	if !requireApprovedUser(c) {
+	if !requireAdmin(c) {
 		return
 	}
 
@@ -684,9 +594,6 @@ func apiProviderDetail(c *tool.Ctx) {
 	ins, err := provider.Find(t, name)
 	if err != nil {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "provider not found"})
-		return
-	}
-	if !requireProviderManage(c, t, name) {
 		return
 	}
 
@@ -723,20 +630,7 @@ func apiProviderDetail(c *tool.Ctx) {
 
 	gateVM := gateStatusVM()
 
-	isAdmin := callerIsAdmin(c)
-	airouterDTO := aiRouterDetailDTO(st.Instance)
-	if !isAdmin {
-		// aiRouterConfigPreview resolves the REAL spawn config, auth
-		// token included, because it was written for an admin-only page.
-		// A viewer gets the settings without the credential.
-		airouterDTO.Preview = ""
-		airouterDTO.RawConfig = ""
-	}
-
 	c.JSON(http.StatusOK, ProviderDetailResponse{
-		ReadOnly:      !isAdmin,
-		CanManage:     canManageProvider(c, t, name),
-		SecretsHidden: !isAdmin,
 		Instance: ProviderInstanceDTO{
 			Type:          string(st.Instance.Type),
 			Name:          st.Instance.Name,
@@ -744,11 +638,9 @@ func apiProviderDetail(c *tool.Ctx) {
 			Disabled:      st.Instance.Disabled,
 			MaxConcurrent: st.Instance.MaxConcurrent,
 			SendMode:      st.Instance.SendMode,
-			IdleCompact:   idleCompactDTO(st.Instance),
 		},
 		Path:          st.Path,
 		PathFound:     st.PathFound,
-		Source:        st.Source,
 		Version:       st.Version,
 		VersionErr:    st.VersionErr,
 		Probing:       st.Probing,
@@ -759,7 +651,7 @@ func apiProviderDetail(c *tool.Ctx) {
 		ActiveCount:   len(activePIDs),
 		ActivePIDs:    activePIDs,
 		ConfigFields:  configFieldDTOs(provider.SeedInstanceConfig(st.Instance)),
-		AIRouter:      airouterDTO,
+		AIRouter:      aiRouterDetailDTO(st.Instance),
 		DefaultModels: seedModelDTOs(st.Instance.Type),
 	})
 }

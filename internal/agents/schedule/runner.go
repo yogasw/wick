@@ -2,8 +2,6 @@ package schedule
 
 import (
 	"context"
-	"github.com/yogasw/wick/internal/pkg/upgrade"
-	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -22,13 +20,6 @@ import (
 type Sender interface {
 	SendWithProject(ctx context.Context, sessionID, agentName, source, role, text, projectID string) error
 	EnsureSession(ctx context.Context, sessionID, source, projectID string) error
-	// EnsureSessionOwner attaches an identity to the target session. Without
-	// it a scheduled fire runs ownerless, and an ownerless session mints no
-	// per-user MCP credential — the spawn falls back to the synthetic
-	// internal principal, which holds no access tags. That is how a job that
-	// worked when its creator ran it by hand comes back seeing almost
-	// nothing once it runs on a timer.
-	EnsureSessionOwner(ctx context.Context, sessionID, userID string)
 }
 
 // deliverySource tags turns injected by the scheduler, and doubles as the
@@ -57,45 +48,10 @@ type Runner struct {
 	// of the point of asking. Buffered + non-blocking send, so a burst of
 	// nudges coalesces into one extra tick.
 	wake chan struct{}
-	// active counts deliveries in flight, for the drain tracker.
-	active atomic.Int64
-	// runAsUsable reports whether a user id may still be run as — they
-	// exist and are approved. Checked at FIRE time, not create time,
-	// because the gap between the two is where accounts get disabled.
-	//
-	// Takes the tick's ctx: this runs a DB lookup, and a tick delivers a
-	// BATCH. Handing it a detached context meant one unreachable database
-	// could park the runner forever and hold up every other schedule due in
-	// the same tick — a lookup that guards one fire must not be able to
-	// stop all of them.
-	//
-	// nil disables the check (stdio, tests), which is safe there: without a
-	// server there is no MCP credential to mint in the first place.
-	runAsUsable func(ctx context.Context, userID string) bool
 }
 
 func NewRunner(store *Store, sender Sender, layout agentconfig.Layout) *Runner {
-	r := &Runner{store: store, sender: sender, layout: layout, wake: make(chan struct{}, 1)}
-	// A due row is claimed in the DB before delivery, so a delivery abandoned
-	// mid-flight is LOST rather than retried. That makes it worth draining.
-	upgrade.Register("scheduled messages", r.ActiveCount)
-	return r
-}
-
-// WithRunAsCheck installs the fire-time guard on the run-as identity. The
-// server passes a lookup over its user store; callers without one (tests,
-// stdio) simply skip the check.
-func (r *Runner) WithRunAsCheck(usable func(ctx context.Context, userID string) bool) *Runner {
-	r.runAsUsable = usable
-	return r
-}
-
-// ActiveCount is how many due messages are being delivered right now.
-func (r *Runner) ActiveCount() int {
-	if r == nil {
-		return 0
-	}
-	return int(r.active.Load())
+	return &Runner{store: store, sender: sender, layout: layout, wake: make(chan struct{}, 1)}
 }
 
 // Wake asks the runner to poll immediately instead of waiting for the next
@@ -163,9 +119,7 @@ func (r *Runner) tick(ctx context.Context, l zerologLogger) {
 		return
 	}
 	for i := range due {
-		r.active.Add(1)
 		r.deliver(ctx, l, due[i])
-		r.active.Add(-1)
 	}
 }
 
@@ -213,36 +167,11 @@ func (r *Runner) deliver(ctx context.Context, l zerologLogger, m entity.Schedule
 		projectID = sess.Meta.ProjectID
 	}
 
-	// Attach the identity BEFORE sending, because the send is what spawns the
-	// agent and the spawn mints its MCP credential from the session's owner.
-	// Stamping afterwards would be a turn too late: that run would already be
-	// executing as the synthetic internal principal.
-	//
-	// EnsureSessionOwner is first-writer-wins, so a schedule pointed at a
-	// session somebody else already owns does not take it over — that run
-	// stays on the session owner's identity rather than the schedule's.
-	// A run-as user who has since been removed or un-approved must STOP the
-	// fire, not quietly downgrade it. Falling through would hand the run to
-	// the synthetic internal principal — an admin-role identity carrying no
-	// access tags — so a revoked account would turn into "runs as something
-	// else entirely", silently, on a timer. Better a failed row somebody can
-	// see than a job that keeps running under an identity nobody chose.
-	if runAs := m.EffectiveRunAsUser(); runAs != "" {
-		if r.runAsUsable != nil && !r.runAsUsable(ctx, runAs) {
-			l.Warn().Str("id", m.ID).Str("run_as", runAs).
-				Msg("run-as user is gone or not approved; refusing to fire")
-			_ = r.store.MarkFailed(ctx, m.ID, "run-as user "+runAs+" is missing or not approved")
-			return
-		}
-		r.sender.EnsureSessionOwner(ctx, target, runAs)
-	}
-
 	if err := r.sender.SendWithProject(ctx, target, m.AgentName, deliverySource, "user", m.Message, projectID); err != nil {
 		l.Warn().Str("id", m.ID).Str("session", target).Err(err).Msg("deliver failed")
 		_ = r.store.MarkFailed(ctx, m.ID, err.Error())
 		return
 	}
-	notifyFired(ctx, m, target)
 
 	// A manual run (run_now) is an EXTRA fire, not the next scheduled one: it
 	// puts the real next fire back exactly where it was, so testing a
@@ -291,29 +220,6 @@ func (r *Runner) deliver(ctx context.Context, l zerologLogger, m entity.Schedule
 		return
 	}
 	l.Info().Str("id", m.ID).Str("session", target).Msg("delivered")
-}
-
-// FiredHook is told about every successful delivery: the row as claimed
-// and the session the message landed in. Used to record a visible
-// "scheduled ran" event in that chat. Runs synchronously after the send,
-// so it must be cheap.
-type FiredHook func(ctx context.Context, m entity.ScheduledMessage, sessionID string)
-
-var firedHook atomic.Pointer[FiredHook]
-
-// SetFiredHook installs (or, with nil, removes) the process-wide FiredHook.
-func SetFiredHook(fn FiredHook) {
-	if fn == nil {
-		firedHook.Store(nil)
-		return
-	}
-	firedHook.Store(&fn)
-}
-
-func notifyFired(ctx context.Context, m entity.ScheduledMessage, sessionID string) {
-	if fn := firedHook.Load(); fn != nil {
-		(*fn)(ctx, m, sessionID)
-	}
 }
 
 // zerologLogger is a local alias so the tick/deliver signatures read

@@ -4,16 +4,6 @@ import ConfigsForm from "../ConfigsForm.svelte";
 import * as api from "$lib/api.js";
 import type { ConfigField } from "$lib/types.js";
 
-/* pickOption drives the themed <Select> (common-ui): open its trigger,
-   click the option carrying `value`. The listbox is portalled to body. */
-async function pickOption(trigger: HTMLElement, value: string): Promise<void> {
-  await fireEvent.click(trigger);
-  const opt = document.body.querySelector<HTMLElement>(`[role="option"][data-value="${value}"]`);
-  if (!opt) throw new Error(`no option ${value}`);
-  await fireEvent.click(opt);
-}
-
-
 vi.mock("$lib/api.js");
 
 function field(over: Partial<ConfigField>): ConfigField {
@@ -90,8 +80,8 @@ describe("ConfigsForm", () => {
       ],
       canConfigure: true,
     });
-    const select = screen.getByTestId("wick-select-trigger");
-    await pickOption(select, "advanced");
+    const select = screen.getByRole("combobox");
+    await fireEvent.change(select, { target: { value: "advanced" } });
     expect(screen.getByText("secret_key")).toBeTruthy();
   });
 
@@ -102,8 +92,8 @@ describe("ConfigsForm", () => {
       fields: [field({ key: "mode", type: "dropdown", options: "A::a|B::b", value: "a" })],
       canConfigure: true,
     });
-    const select = screen.getByTestId("wick-select-trigger");
-    await pickOption(select, "b");
+    const select = screen.getByRole("combobox");
+    await fireEvent.change(select, { target: { value: "b" } });
     expect(api.setConnectorConfig).toHaveBeenCalledWith("slack", "row1", "mode", "b");
   });
 

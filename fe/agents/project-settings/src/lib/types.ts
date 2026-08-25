@@ -75,22 +75,6 @@ export interface TicketField {
   type: "text" | "select";
   options?: string[];
   required?: boolean;
-  /** Show this field's value on the board card. Off by default — the full
-      set is always on the ticket's own page. */
-  show_on_card?: boolean;
-}
-
-/** One custom action button. Clicking it POSTs to `url`: a ticket.action
-    event carrying that ticket (placement "ticket", e.g. "Sync to Notion"),
-    or a ticket.board_action event carrying the list's filter and matches
-    (placement "board", e.g. "Pull my tickets from Notion"). */
-export interface TicketButton {
-  id?: string; // minted server-side on first save
-  label: string;
-  url: string;
-  /** Where the button is drawn. Absent = "ticket", so buttons saved before
-      placements existed stay on the ticket page they were made for. */
-  placement?: "ticket" | "board";
 }
 
 /** One column on the project's board. `key` is what tickets store and what
@@ -136,8 +120,6 @@ export interface TicketIntegrations {
   /** Lets a Personal Access Token call this project's ticket endpoints. */
   api_enabled?: boolean;
   webhooks?: TicketWebhook[];
-  /** Custom action buttons rendered on every ticket's page. */
-  buttons?: TicketButton[];
 }
 
 /** One outbound endpoint. */

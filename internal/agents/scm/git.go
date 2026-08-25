@@ -9,10 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/yogasw/wick/internal/pkg/envscrub"
 	"github.com/yogasw/wick/pkg/safeexec"
 )
 
@@ -49,7 +47,6 @@ func (e *GitError) Unwrap() error { return e.Err }
 // captured into a GitError on failure.
 func run(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := safeexec.CommandContext(ctx, "git", args...)
-	cmd.Env = envscrub.ScrubOSEnv()
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -59,76 +56,6 @@ func run(ctx context.Context, dir string, args ...string) (string, error) {
 	}
 	return stdout.String(), nil
 }
-
-// indexLocks serializes wick's OWN index-writing commands per repository.
-// Two panel actions on one repo (stage while a discard is running) would
-// otherwise race for git's index.lock and one of them would simply lose.
-var indexLocks sync.Map // repo dir -> *sync.Mutex
-
-func repoMu(dir string) *sync.Mutex {
-	mu, _ := indexLocks.LoadOrStore(dir, &sync.Mutex{})
-	return mu.(*sync.Mutex)
-}
-
-// lockContention reports whether git refused because another process holds
-// index.lock. It is the one git failure that is nearly always transient: a
-// status refresh, a shell, an editor's plugin — each holds the index for
-// milliseconds.
-func lockContention(err error) bool {
-	var ge *GitError
-	if !errors.As(err, &ge) {
-		return false
-	}
-	return strings.Contains(ge.Stderr, "index.lock") && strings.Contains(ge.Stderr, "File exists")
-}
-
-// runIndex runs a git command that writes the index, serialized against
-// wick's other writers and retried while a FOREIGN process holds the lock.
-//
-// Without this, staging a file the moment anything else touched the repo
-// failed outright with git's own "Another git process seems to be running"
-// wall of text — for a collision that was over before the person could read
-// it. wick's git watcher runs `status` on every write in the tree, so on a
-// busy session that collision is not rare, it is the normal case.
-//
-// The lock is never removed here. A lock left behind by a crashed process
-// looks identical to one held by a command that is still working, and
-// deleting the wrong one corrupts the index of a repository somebody is
-// mid-operation in. After the budget the error says where it is, so a human
-// can decide.
-func runIndex(ctx context.Context, dir string, args ...string) (string, error) {
-	mu := repoMu(dir)
-	mu.Lock()
-	defer mu.Unlock()
-
-	delay := 50 * time.Millisecond
-	deadline := time.Now().Add(indexLockBudget)
-	for {
-		out, err := run(ctx, dir, args...)
-		if err == nil || !lockContention(err) {
-			return out, err
-		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
-			return out, fmt.Errorf(
-				"another git process is holding %s — wick waited %s for it. "+
-					"If nothing is running (no rebase, no commit, no editor plugin), that lock is stale and can be deleted: %w",
-				filepath.Join(dir, ".git", "index.lock"), indexLockBudget, err)
-		}
-		select {
-		case <-ctx.Done():
-			return out, ctx.Err()
-		case <-time.After(delay):
-		}
-		if delay < 400*time.Millisecond {
-			delay *= 2
-		}
-	}
-}
-
-// indexLockBudget is how long a write waits out somebody else's lock. Long
-// enough for a status refresh or a commit hook, short enough that a stuck
-// repository is reported rather than hung on.
-const indexLockBudget = 5 * time.Second
 
 // ── Status ──────────────────────────────────────────────────────────
 
@@ -150,10 +77,6 @@ type FileChange struct {
 	Staged    bool   `json:"staged"`              // has staged changes
 	Unstaged  bool   `json:"unstaged"`            // has worktree changes
 	Untracked bool   `json:"untracked"`
-	// Dir marks an entry that stands for a whole directory rather than a
-	// single file. git reports one of these when it cannot look inside —
-	// a nested repository — so the path names a folder, not a blob.
-	Dir bool `json:"dir,omitempty"`
 }
 
 // StatusResult bundles a repo's branch + change list.
@@ -162,15 +85,11 @@ type StatusResult struct {
 	Changes []FileChange `json:"changes"`
 }
 
-// Status runs `git status --porcelain=v2 --branch -z -uall` and parses it.
-//
-// -uall matters: with git's default (-unormal) a new directory collapses
-// into ONE entry for the folder, so the panel showed "1 change" for a
-// folder of fifty new files and only expanded once they were staged.
+// Status runs `git status --porcelain=v2 --branch -z` and parses it.
 func Status(ctx context.Context, dir string) (StatusResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
-	out, err := run(ctx, dir, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all")
+	out, err := run(ctx, dir, "status", "--porcelain=v2", "--branch", "-z")
 	if err != nil {
 		return StatusResult{}, err
 	}
@@ -221,16 +140,9 @@ func parseStatus(out string) StatusResult {
 			}
 			res.Changes = append(res.Changes, fc)
 		case strings.HasPrefix(line, "? "):
-			// Even under -uall git keeps one entry for a directory it
-			// will not descend into (a nested repo), reported with a
-			// trailing slash. Drop the slash — every git command takes
-			// the bare path — and flag it so the UI names a folder
-			// instead of building a child with an empty name.
-			path := strings.TrimPrefix(line, "? ")
-			isDir := strings.HasSuffix(path, "/")
 			res.Changes = append(res.Changes, FileChange{
-				Path: strings.TrimSuffix(path, "/"), WorkTree: "?",
-				Unstaged: true, Untracked: true, Dir: isDir,
+				Path: strings.TrimPrefix(line, "? "), WorkTree: "?",
+				Unstaged: true, Untracked: true,
 			})
 		case strings.HasPrefix(line, "u "):
 			// Unmerged (conflict). XY then path at the end.
@@ -273,10 +185,6 @@ func parseOrdinary(line string) FileChange {
 		WorkTree: y,
 		Staged:   x != "." && x != " ",
 		Unstaged: y != "." && y != " ",
-		// The <sub> field reads "S<c><m><u>" when the entry is a
-		// gitlink — a nested repo recorded as one commit pointer. Same
-		// as an untracked folder: a directory wearing a file's clothes.
-		Dir: strings.HasPrefix(parts[1], "S"),
 	}
 }
 
@@ -331,8 +239,8 @@ func FileAtIndex(ctx context.Context, dir, path string) (string, error) {
 // BranchList is the set of local + remote branches plus the current one.
 type BranchList struct {
 	Current  string   `json:"current"`
-	Branches []string `json:"branches"` // local
-	Remotes  []string `json:"remotes"`  // remote-tracking (e.g. origin/main)
+	Branches []string `json:"branches"`        // local
+	Remotes  []string `json:"remotes"`         // remote-tracking (e.g. origin/main)
 }
 
 // Branches lists local + remote branches and marks the current local one.
@@ -384,7 +292,7 @@ func Stage(ctx context.Context, dir string, paths []string) error {
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
 	args := append([]string{"add", "--"}, paths...)
-	_, err := runIndex(ctx, dir, args...)
+	_, err := run(ctx, dir, args...)
 	return err
 }
 
@@ -396,7 +304,7 @@ func Unstage(ctx context.Context, dir string, paths []string) error {
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
 	args := append([]string{"restore", "--staged", "--"}, paths...)
-	_, err := runIndex(ctx, dir, args...)
+	_, err := run(ctx, dir, args...)
 	return err
 }
 
@@ -408,7 +316,7 @@ func Commit(ctx context.Context, dir, message string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
-	if _, err := runIndex(ctx, dir, "commit", "-m", message); err != nil {
+	if _, err := run(ctx, dir, "commit", "-m", message); err != nil {
 		return "", err
 	}
 	out, err := run(ctx, dir, "rev-parse", "--short", "HEAD")
@@ -423,7 +331,6 @@ func Commit(ctx context.Context, dir, message string) (string, error) {
 //   - untracked → removed from disk (git clean -fd <path>)
 //   - tracked   → working + index restored to HEAD (git restore --staged
 //     --worktree <path>), so both staged and unstaged edits are dropped.
-//
 // untrackedPaths must list which of paths are untracked (the caller knows
 // from status) so we pick clean vs restore correctly.
 func Discard(ctx context.Context, dir string, paths []string, untrackedPaths []string) error {
@@ -446,109 +353,18 @@ func Discard(ctx context.Context, dir string, paths []string, untrackedPaths []s
 		}
 	}
 	if len(tracked) > 0 {
-		// A repository with no commits has no HEAD to restore from, so
-		// `restore` fails outright ("could not resolve HEAD") and discard
-		// is dead in a fresh clone whose files are all staged as new.
-		// There, unstaging IS the discard: the content was never
-		// committed, so the file stays on disk as untracked rather than
-		// being deleted out from under the user.
 		args := append([]string{"restore", "--staged", "--worktree", "--"}, tracked...)
-		if !hasCommits(ctx, dir) {
-			args = append([]string{"rm", "--cached", "-r", "--"}, tracked...)
-		}
-		if _, err := runIndex(ctx, dir, args...); err != nil {
+		if _, err := run(ctx, dir, args...); err != nil {
 			return err
 		}
 	}
-	// A path that is a repository of its own is not ours to delete, and
-	// `git clean -fd` agrees: it skips it, prints nothing, and exits 0.
-	// Cleaning the rest and then saying so beats reporting a success the
-	// folder plainly did not have.
-	var ownRepos []string
-	cleanable := toClean[:0]
-	for _, p := range toClean {
-		if isRepoRoot(filepath.Join(dir, filepath.FromSlash(p))) {
-			ownRepos = append(ownRepos, p)
-			continue
-		}
-		cleanable = append(cleanable, p)
-	}
-	if len(cleanable) > 0 {
-		args := append([]string{"clean", "-fd", "--"}, cleanable...)
-		if _, err := runIndex(ctx, dir, args...); err != nil {
+	if len(toClean) > 0 {
+		args := append([]string{"clean", "-fd", "--"}, toClean...)
+		if _, err := run(ctx, dir, args...); err != nil {
 			return err
 		}
-	}
-	if len(ownRepos) > 0 {
-		return fmt.Errorf("%s is a repository of its own — git will not delete it; remove the folder yourself, or add it to .git/info/exclude to stop it showing up here", strings.Join(ownRepos, ", "))
 	}
 	return nil
-}
-
-// Exclude stops git reporting the given paths, by appending them to
-// .git/info/exclude — the repo-local ignore list. Nothing on disk is
-// touched and nothing is committed: unlike .gitignore this file is not
-// tracked, so one person hiding a stray folder does not push that
-// decision to everybody else.
-//
-// It is the honest answer for a clone that landed inside a checkout —
-// the folder is not this repo's to delete, but it does not belong in
-// its change list either.
-func Exclude(ctx context.Context, dir string, paths []string) error {
-	if len(paths) == 0 {
-		return errors.New("no paths to exclude")
-	}
-	file := filepath.Join(dir, ".git", "info", "exclude")
-	// A worktree or submodule keeps .git as a FILE pointing elsewhere;
-	// git itself tells us where the real one lives.
-	if fi, err := os.Stat(filepath.Join(dir, ".git")); err != nil || !fi.IsDir() {
-		out, err := run(ctx, dir, "rev-parse", "--git-dir")
-		if err != nil {
-			return err
-		}
-		gitDir := strings.TrimSpace(out)
-		if !filepath.IsAbs(gitDir) {
-			gitDir = filepath.Join(dir, gitDir)
-		}
-		file = filepath.Join(gitDir, "info", "exclude")
-	}
-	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
-		return err
-	}
-	existing, err := os.ReadFile(file)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	have := map[string]bool{}
-	for _, line := range strings.Split(string(existing), "\n") {
-		have[strings.TrimSpace(line)] = true
-	}
-	var add []string
-	for _, p := range paths {
-		p = strings.TrimSuffix(filepath.ToSlash(strings.TrimSpace(p)), "/")
-		if p == "" || have[p] || have["/"+p] {
-			continue
-		}
-		have[p] = true
-		add = append(add, "/"+p) // anchored: hide THIS path, not every match
-	}
-	if len(add) == 0 {
-		return nil
-	}
-	body := string(existing)
-	if body != "" && !strings.HasSuffix(body, "\n") {
-		body += "\n"
-	}
-	body += strings.Join(add, "\n") + "\n"
-	return os.WriteFile(file, []byte(body), 0o644)
-}
-
-// hasCommits reports whether the repository has a commit HEAD can resolve.
-// False on a branch that has never been committed to — the state git calls
-// "unborn", where anything that reads HEAD fails.
-func hasCommits(ctx context.Context, dir string) bool {
-	_, err := run(ctx, dir, "rev-parse", "--verify", "HEAD")
-	return err == nil
 }
 
 // Checkout switches to an existing branch.
@@ -559,87 +375,24 @@ func Checkout(ctx context.Context, dir, branch string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
-	_, err := runIndex(ctx, dir, "checkout", branch)
+	_, err := run(ctx, dir, "checkout", branch)
 	return err
 }
 
 // CreateBranch creates a branch. When checkout is true it switches to it.
 func CreateBranch(ctx context.Context, dir, name string, checkout bool) error {
-	return CreateBranchFrom(ctx, dir, name, "", checkout)
-}
-
-// CreateBranchFrom starts a branch at `from` (a branch, tag or sha) instead of
-// at HEAD. Empty `from` means HEAD, which is what the plain CreateBranch does.
-func CreateBranchFrom(ctx context.Context, dir, name, from string, checkout bool) error {
-	if err := validRefName(name); err != nil {
-		return err
-	}
-	from = strings.TrimSpace(from)
-	if from != "" {
-		if err := validRefName(from); err != nil {
-			return fmt.Errorf("start point: %w", err)
-		}
-	}
-	ctx, cancel := context.WithTimeout(ctx, localTimeout)
-	defer cancel()
-	args := []string{"branch", name}
-	if checkout {
-		args = []string{"checkout", "-b", name}
-	}
-	if from != "" {
-		args = append(args, from)
-	}
-	_, err := runIndex(ctx, dir, args...)
-	return err
-}
-
-// RenameBranch renames a branch. Refuses to clobber an existing name — the
-// force form of this is how you lose a branch you meant to keep.
-func RenameBranch(ctx context.Context, dir, from, to string) error {
-	if err := validRefName(from); err != nil {
-		return err
-	}
-	if err := validRefName(to); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(ctx, localTimeout)
-	defer cancel()
-	_, err := run(ctx, dir, "branch", "-m", from, to)
-	return err
-}
-
-// DeleteBranch removes a local branch. Without force git refuses to delete a
-// branch whose work is not merged — keep that refusal reachable, because a
-// squash-merged branch also trips it and the caller needs to be told rather
-// than have the branch deleted anyway.
-func DeleteBranch(ctx context.Context, dir, name string, force bool) error {
-	if err := validRefName(name); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(ctx, localTimeout)
-	defer cancel()
-	flag := "-d"
-	if force {
-		flag = "-D"
-	}
-	_, err := run(ctx, dir, "branch", flag, name)
-	return err
-}
-
-// validRefName rejects the shapes that would turn a branch name into a git
-// option or escape the argument list. `git check-ref-format` is the authority
-// on what is a legal name; this is the guard for what is legal to PASS.
-func validRefName(name string) error {
 	name = strings.TrimSpace(name)
-	switch {
-	case name == "":
+	if name == "" {
 		return errors.New("branch name is empty")
-	case strings.HasPrefix(name, "-"):
-		return errors.New("branch name may not start with '-'")
-	case strings.ContainsAny(name, " \t\n"):
-		return errors.New("branch name may not contain whitespace")
 	}
-	return nil
+	ctx, cancel := context.WithTimeout(ctx, localTimeout)
+	defer cancel()
+	if checkout {
+		_, err := run(ctx, dir, "checkout", "-b", name)
+		return err
+	}
+	_, err := run(ctx, dir, "branch", name)
+	return err
 }
 
 // Push runs `git push`. stderr (auth, rejection) surfaces via GitError.
@@ -653,17 +406,7 @@ func Push(ctx context.Context, dir string) (string, error) {
 func Pull(ctx context.Context, dir string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, netTimeout)
 	defer cancel()
-	return runIndex(ctx, dir, "pull", "--ff-only")
-}
-
-// Fetch updates the remote-tracking refs without touching the working tree
-// or the current branch. --prune drops tracking refs whose branch was deleted
-// on the server, which is what keeps a merged-and-deleted branch from sitting
-// in the picker forever.
-func Fetch(ctx context.Context, dir string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, netTimeout)
-	defer cancel()
-	return run(ctx, dir, "fetch", "--prune")
+	return run(ctx, dir, "pull", "--ff-only")
 }
 
 // ── File read/write (within repo) ───────────────────────────────────
@@ -752,24 +495,11 @@ func safeRepoJoin(base, rel string) (string, error) {
 
 // LogEntry is one commit in the history list.
 type LogEntry struct {
-	SHA     string `json:"sha"` // short sha
-	Subject string `json:"subject"`
-	Author  string `json:"author"`
-	// AuthorEmail is what git recorded. The HTTP layer uses it to look up a
-	// wick account and, if one matches, hand the panel a real avatar.
-	AuthorEmail string `json:"author_email,omitempty"`
-	RelDate     string `json:"rel_date"` // e.g. "2 hours ago"
-	ISODate     string `json:"iso_date"`
-	// Parents are the short shas this commit descends from — one for an
-	// ordinary commit, two or more for a merge. The panel draws its lanes
-	// from these; without them a graph can only guess.
-	Parents []string `json:"parents,omitempty"`
-	// Refs are the branch/tag names pointing AT this commit, so the row can
-	// carry the same badges the editor shows ("master", "origin/master").
-	Refs []string `json:"refs,omitempty"`
-	// State is how far the commit has travelled: StateLocal, StatePushed or
-	// StateTrunk. See history.go.
-	State string `json:"state,omitempty"`
+	SHA      string `json:"sha"`       // short sha
+	Subject  string `json:"subject"`
+	Author   string `json:"author"`
+	RelDate  string `json:"rel_date"`  // e.g. "2 hours ago"
+	ISODate  string `json:"iso_date"`
 }
 
 // logSep / logFieldSep are unlikely-to-collide delimiters for parsing
@@ -779,33 +509,49 @@ const (
 	logFieldSep = "\x1f" // field separator
 )
 
-// Log returns up to limit recent commits, walking the checked-out branch
-// and its upstream. It is History with the default selector — kept as its
-// own name because most callers want exactly that.
+// Log returns up to limit recent commits on the current branch.
 func Log(ctx context.Context, dir string, limit int) ([]LogEntry, error) {
-	return History(ctx, dir, LogOptions{Limit: limit})
+	if limit <= 0 {
+		limit = 50
+	}
+	ctx, cancel := context.WithTimeout(ctx, localTimeout)
+	defer cancel()
+	format := strings.Join([]string{"%h", "%s", "%an", "%cr", "%cI"}, logFieldSep) + logRecSep
+	out, err := run(ctx, dir, "log", "--max-count="+strconv.Itoa(limit), "--pretty=format:"+format)
+	if err != nil {
+		return nil, err
+	}
+	var entries []LogEntry
+	for _, rec := range strings.Split(out, logRecSep) {
+		rec = strings.Trim(rec, "\n\r")
+		if rec == "" {
+			continue
+		}
+		f := strings.Split(rec, logFieldSep)
+		if len(f) < 5 {
+			continue
+		}
+		entries = append(entries, LogEntry{
+			SHA: f[0], Subject: f[1], Author: f[2], RelDate: f[3], ISODate: f[4],
+		})
+	}
+	if entries == nil {
+		entries = []LogEntry{}
+	}
+	return entries, nil
 }
 
 // CommitFile is one file changed in a commit.
 type CommitFile struct {
 	Path   string `json:"path"`
 	Status string `json:"status"` // A/M/D/R...
-	// Additions/Deletions are the line counts git reports for this file.
-	// -1 means "binary", which git prints as "-" and which is not the same
-	// as a file that changed by zero lines.
-	Additions int `json:"additions"`
-	Deletions int `json:"deletions"`
 }
 
 // CommitDetail is a commit's metadata + changed-file list.
 type CommitDetail struct {
-	SHA     string `json:"sha"`
-	Subject string `json:"subject"`
-	Author  string `json:"author"`
-	// Email and Body carry what a commit says beyond its first line: who to
-	// ask about it, and the reasoning the author wrote under the subject.
-	Email   string       `json:"email,omitempty"`
-	Body    string       `json:"body,omitempty"`
+	SHA     string       `json:"sha"`
+	Subject string       `json:"subject"`
+	Author  string       `json:"author"`
 	ISODate string       `json:"iso_date"`
 	Files   []CommitFile `json:"files"`
 }
@@ -820,7 +566,7 @@ func CommitInfo(ctx context.Context, dir, sha string) (CommitDetail, error) {
 	ctx, cancel := context.WithTimeout(ctx, localTimeout)
 	defer cancel()
 	// Header line (field-separated) then NUL-delimited name-status.
-	format := strings.Join([]string{"%h", "%s", "%an", "%cI", "%ae", "%b"}, logFieldSep)
+	format := strings.Join([]string{"%h", "%s", "%an", "%cI"}, logFieldSep)
 	out, err := run(ctx, dir, "show", "--no-color", "--name-status", "-z", "--pretty=format:"+format+"%x00", sha)
 	if err != nil {
 		return CommitDetail{}, err
@@ -828,63 +574,14 @@ func CommitInfo(ctx context.Context, dir, sha string) (CommitDetail, error) {
 	det := CommitDetail{Files: []CommitFile{}}
 	// Split header from the name-status body at the first NUL.
 	parts := strings.SplitN(out, "\x00", 2)
-	// SplitN, not Split: %b is last and a commit body may legitimately
-	// contain the field separator. An unbounded split would cut the body at
-	// the first such byte and silently drop the rest of the message.
-	hf := strings.SplitN(parts[0], logFieldSep, 6)
+	hf := strings.Split(parts[0], logFieldSep)
 	if len(hf) >= 4 {
 		det.SHA, det.Subject, det.Author, det.ISODate = hf[0], hf[1], hf[2], hf[3]
-	}
-	if len(hf) >= 5 {
-		det.Email = hf[4]
-	}
-	if len(hf) >= 6 {
-		det.Body = strings.TrimSpace(hf[5])
 	}
 	if len(parts) == 2 {
 		det.Files = parseNameStatusZ(parts[1])
 	}
-	// Line counts come from a second pass: --name-status gives the status
-	// letter and --numstat the numbers, and git will not print both from one
-	// invocation. Failure here is not fatal — a detail panel without counts
-	// is still useful, an error page instead of it is not.
-	if counts, cerr := numstat(ctx, dir, sha); cerr == nil {
-		for i := range det.Files {
-			if n, ok := counts[det.Files[i].Path]; ok {
-				det.Files[i].Additions, det.Files[i].Deletions = n[0], n[1]
-			}
-		}
-	}
 	return det, nil
-}
-
-// numstat maps path -> [additions, deletions] for one commit. A binary file
-// is reported by git as "-\t-" and comes back as -1/-1 so the caller can say
-// "binary" instead of "0 lines changed".
-func numstat(ctx context.Context, dir, sha string) (map[string][2]int, error) {
-	out, err := run(ctx, dir, "show", "--no-color", "--numstat", "--format=", sha)
-	if err != nil {
-		return nil, err
-	}
-	res := map[string][2]int{}
-	for _, ln := range strings.Split(out, "\n") {
-		f := strings.Split(strings.TrimRight(ln, "\r"), "\t")
-		if len(f) < 3 || f[2] == "" {
-			continue
-		}
-		parse := func(v string) int {
-			if v == "-" {
-				return -1
-			}
-			n, err := strconv.Atoi(v)
-			if err != nil {
-				return 0
-			}
-			return n
-		}
-		res[f[2]] = [2]int{parse(f[0]), parse(f[1])}
-	}
-	return res, nil
 }
 
 // parseNameStatusZ decodes `--name-status -z` output. Each entry is a

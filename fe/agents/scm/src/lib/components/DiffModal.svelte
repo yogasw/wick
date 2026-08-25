@@ -1,7 +1,5 @@
 <script lang="ts">
   import MonacoView from "$lib/components/MonacoView.svelte";
-  import { portal } from "$lib/portal";
-  import { layer } from "@wick-fe/common-ui";
   import { loadCompare, loadCommitCompare, saveFile, langFor, type CompareData, type FileChange } from "$lib/git-actions";
 
   type Props = {
@@ -50,12 +48,10 @@
   }
 </script>
 
-<!-- Escape closes this layer only, never the panel under it (layers.ts). -->
+<svelte:window onkeydown={(e) => e.key === "Escape" && onClose()} />
+
 <div
-  use:portal
-  use:layer={{ onEscape: onClose }}
-  style="z-index:9998"
-  class="fixed inset-0 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm sm:p-4"
+  class="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm sm:p-4"
   role="presentation"
   onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}
 >

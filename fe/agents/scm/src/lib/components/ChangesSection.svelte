@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { splitPath } from "$lib/tree";
   import type { FileChange } from "$lib/api/scm";
   import { buildTree } from "$lib/tree";
   import { statusBadge } from "$lib/git-actions";
@@ -15,12 +14,11 @@
     onOpen: (path: string, staged: boolean) => void;
     onAction: (paths: string[], untracked: string[]) => void;  // stage/unstage all in scope
     onDiscard: (paths: string[], untracked: string[]) => void;
-    onIgnore: (paths: string[]) => void;
     actionIcon: "stage" | "unstage";
   };
   let {
     title, items, staged, viewMode, expanded,
-    onToggleDir, onOpen, onAction, onDiscard, onIgnore, actionIcon,
+    onToggleDir, onOpen, onAction, onDiscard, actionIcon,
   }: Props = $props();
 
   let open = $state(true);
@@ -55,34 +53,16 @@
   {#if open}
     {#if viewMode === "tree"}
       {#each tree as node (node.path)}
-        <FileTreeNode {node} depth={1} {staged} {expanded} {onToggleDir} {onOpen} {onAction} {onDiscard} {onIgnore} {actionIcon} />
+        <FileTreeNode {node} depth={1} {staged} {expanded} {onToggleDir} {onOpen} {onAction} {onDiscard} {actionIcon} />
       {/each}
     {:else}
       {#each items as c (c.path)}
-        {@const parts = splitPath(c.path)}
         <div class="group flex items-center gap-2 py-1 pr-2 pl-3 hover:bg-white-200 dark:hover:bg-navy-800">
-          <button type="button" onclick={() => onOpen(c.path, staged)} class="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs text-black-800 dark:text-black-600">
-            <!-- Name first, folder after it in grey — the editor convention,
-                 and the only layout where a long path truncates the part
-                 nobody reads instead of the filename itself. -->
-            <span class="shrink-0 truncate font-medium text-black-900 dark:text-white-100">{parts.name}{c.dir ? "/" : ""}</span>
-            {#if parts.dir}
-              <span class="min-w-0 truncate text-[11px] text-black-600 dark:text-black-700" title={c.path}>{parts.dir}</span>
-            {/if}
-            {#if c.dir}
-              <span class="shrink-0 rounded bg-white-300 px-1 text-[9px] font-medium whitespace-nowrap text-black-700 dark:bg-navy-600 dark:text-black-600">nested repo</span>
-            {/if}
-          </button>
+          <button type="button" onclick={() => onOpen(c.path, staged)} class="min-w-0 flex-1 truncate text-left text-xs text-black-800 dark:text-black-600">{c.path}</button>
           <div class="hidden shrink-0 items-center gap-1 group-hover:flex">
-            {#if c.dir}
-              <button type="button" title="Ignore this folder (adds it to .git/info/exclude — nothing is deleted)" onclick={() => onIgnore([c.path])} class="text-black-600 hover:text-cau-600 dark:hover:text-cau-400">
-                <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1.5 8S3.8 3.5 8 3.5 14.5 8 14.5 8 12.2 12.5 8 12.5 1.5 8 1.5 8z" stroke-linejoin="round"/><path d="M2 14 14 2" stroke-linecap="round"/></svg>
-              </button>
-            {:else}
-              <button type="button" title="Discard" onclick={() => onDiscard([c.path], c.untracked ? [c.path] : [])} class="text-black-600 hover:text-cau-600 dark:hover:text-cau-400">
-                <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8a6 6 0 0110.5-4M11 2v3H8M14 8a6 6 0 01-10.5 4M5 14v-3h3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </button>
-            {/if}
+            <button type="button" title="Discard" onclick={() => onDiscard([c.path], c.untracked ? [c.path] : [])} class="text-black-600 hover:text-cau-600 dark:hover:text-cau-400">
+              <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 8a6 6 0 0110.5-4M11 2v3H8M14 8a6 6 0 01-10.5 4M5 14v-3h3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
             <button type="button" title={actionIcon === "stage" ? "Stage" : "Unstage"} onclick={() => onAction([c.path], c.untracked ? [c.path] : [])} class="text-black-600 hover:text-green-600 dark:hover:text-green-400">
               {#if actionIcon === "stage"}
                 <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 3v10M3 8h10" stroke-linecap="round"/></svg>

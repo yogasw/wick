@@ -53,29 +53,16 @@ const { metaStore } = vi.hoisted(() => {
   };
 });
 
-/* What the mocked thread store hands out at subscribe time. Tests that need
-   a running or queued turn set these before render; afterEach resets them. */
-const { threadState } = vi.hoisted(() => ({
-  threadState: {
-    typing: { active: false } as { active: boolean },
-    lifecycle: { state: "", pid: 0, substate: "", at: 0 },
-  },
-}));
-
 vi.mock("../../stores/thread.js", () => ({
   createThreadStore: () => ({
     turns: { subscribe: (fn: (v: unknown[]) => void) => { fn([]); return () => {}; } },
     live: { subscribe: (fn: (v: null) => void) => { fn(null); return () => {}; } },
-    typing: { subscribe: (fn: (v: { active: boolean }) => void) => { fn(threadState.typing); return () => {}; } },
-    turnStartedAt: { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; } },
-    contextUsed: { subscribe: (fn: (v: number) => void) => { fn(0); return () => {}; } },
-    lifecycle: { subscribe: (fn: (v: { state: string; pid: number; substate: string; at: number }) => void) => { fn(threadState.lifecycle); return () => {}; } },
+    typing: { subscribe: (fn: (v: { active: boolean }) => void) => { fn({ active: false }); return () => {}; } },
+    lifecycle: { subscribe: (fn: (v: { state: string; pid: number; substate: string; at: number }) => void) => { fn({ state: "", pid: 0, substate: "", at: 0 }); return () => {}; } },
     meta: metaStore,
-    cards: { subscribe: (fn: (v: Record<string, unknown>) => void) => { fn({}); return () => {}; }, set: vi.fn(), update: vi.fn() },
     setHistory: vi.fn(),
     appendUserTurn: vi.fn(),
     handleEvent: vi.fn(),
-    handleKilledLocally: vi.fn(),
   }),
 }));
 
@@ -139,18 +126,6 @@ vi.mock("../../api/messages.js", () => ({
   sendMessage: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
 }));
 
-vi.mock("../../api/context.js", () => ({
-  fetchSessionContext: vi.fn(async () => ({
-    session_id: "S1",
-    used: 0,
-    window: 0,
-    pct: 0,
-    turns: 0,
-    totals: { input: 0, cache_read: 0, cache_write: 0, output: 0, total: 0, cost_usd: 0, cache_hit_pct: 0 },
-    providers: [],
-  })),
-}));
-
 vi.mock("../../api/subagents.js", () => ({
   getSubAgents: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   getSubAgentPanel: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
@@ -165,7 +140,7 @@ vi.mock("../../api/subagents.js", () => ({
 
 vi.mock("../../api/files.js", () => ({
   listFiles: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
-  searchMentionPaths: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  searchFiles: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   readFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   saveFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   createFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
@@ -211,12 +186,11 @@ vi.mock("svelte/store", async (importActual) => {
 });
 
 import DetailView from "../DetailView.svelte";
-import { killProcess, getProcesses, dequeueProcess } from "../../api/processes.js";
+import { killProcess, getProcesses } from "../../api/processes.js";
 import { getAsks } from "../../api/asks.js";
 import { getApprovals } from "../../api/approvals.js";
-import { fetchSessionContext } from "../../api/context.js";
 import { getConversation } from "../../api/sessions.js";
-import { getSubAgentPanel, interruptAllSubAgents } from "../../api/subagents.js";
+import { getSubAgentPanel } from "../../api/subagents.js";
 import { SCM_DEFAULT_W, RAIL_GUTTER_PX } from "../../scmWidth.js";
 import { Effect } from "effect";
 
@@ -283,7 +257,7 @@ describe("DetailView — SCM source rail panel", () => {
     const sourceBtn = screen.getByRole("button", { name: /source/i });
     await fireEvent.click(sourceBtn);
 
-    const contextBtn = screen.getByRole("button", { name: /files/i });
+    const contextBtn = screen.getByRole("button", { name: /context/i });
     await fireEvent.click(contextBtn);
 
     /* source panel removed; context btn is now active */
@@ -302,7 +276,7 @@ describe("DetailView — SCM source rail panel", () => {
     expect(container.querySelector("[data-scm-host]")).not.toBeNull();
 
     /* Switch to context — scm host must be gone */
-    const contextBtn = screen.getByRole("button", { name: /files/i });
+    const contextBtn = screen.getByRole("button", { name: /context/i });
     await fireEvent.click(contextBtn);
     expect(container.querySelector("[data-scm-host]")).toBeNull();
   });
@@ -352,7 +326,7 @@ describe("DetailView — SCM source rail panel", () => {
     await Promise.resolve();
 
     /* Switch away from source */
-    const contextBtn = screen.getByRole("button", { name: /files/i });
+    const contextBtn = screen.getByRole("button", { name: /context/i });
     await fireEvent.click(contextBtn);
     await Promise.resolve();
 
@@ -503,7 +477,7 @@ describe("DetailView — rail tab count badges (#31)", () => {
 
   test("rail tabs render without a count badge when counts are zero", () => {
     const { container } = render(DetailView, { props: DEFAULT_PROPS });
-    expect(container.querySelector('[aria-label="Files"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Context"]')).not.toBeNull();
     /* zero-count badges must not appear */
     expect(container.querySelectorAll(".rounded-full.bg-green-500").length).toBe(0);
   });
@@ -532,18 +506,6 @@ describe("DetailView — approvals modal error propagation (#35)", () => {
   test("fetches pending approvals on mount, not just on tab click", () => {
     render(DetailView, { props: DEFAULT_PROPS });
     expect(getApprovals).toHaveBeenCalledWith(DEFAULT_PROPS.base, DEFAULT_PROPS.sessionId);
-  });
-
-  /* The meter beside the composer is read once on mount and again on each
-     lifecycle transition. Guarding the transitions with a seed of "" made
-     the FIRST read look like a repeat — an idle session's lifecycle is ""
-     — so the ring stayed blank and /context opened empty until the agent
-     happened to move. */
-  test("reads the context meter on mount, before anything happens", async () => {
-    render(DetailView, { props: DEFAULT_PROPS });
-    await waitFor(() =>
-      expect(fetchSessionContext).toHaveBeenCalledWith(DEFAULT_PROPS.base, DEFAULT_PROPS.sessionId),
-    );
   });
 });
 
@@ -711,8 +673,6 @@ describe("DetailView — conversation refetch on turn completion (artifacts)", (
    exactly the stretch where you want to see that work has fanned out. */
 describe("DetailView — sub-agent roster follows delegation tool calls", () => {
   const runPromise = Effect.runPromise as unknown as ReturnType<typeof vi.fn>;
-  /* Rows the panel endpoint returns; null = the generic empty shape. */
-  let liveRows: unknown[] | null = null;
   const calls = () => (getSubAgentPanel as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
 
   beforeEach(() => {
@@ -721,49 +681,7 @@ describe("DetailView — sub-agent roster follows delegation tool calls", () => 
     // The file-wide stub never settles, which parks loadSubAgents behind its
     // own in-flight guard forever — a refetch would be indistinguishable from
     // no refetch. Resolve here so the guard clears between events.
-    //
-    // ONE stub answers every effect in this block, and each loader reads a
-    // DIFFERENT field off the result, so no single literal fits: a bare []
-    // left `subAgents` undefined and the derived busy-count threw on every
-    // render — three unhandled errors that failed the workspace while all
-    // 1019 tests passed, which reads as green to everything but the exit
-    // code. Filling in the fields one at a time just moved the throw to the
-    // next loader.
-    //
-    // So: an array whose every OTHER property is an empty array, with the
-    // few that must not be a list named explicitly (`incident` especially —
-    // [] is truthy and would render an incident that does not exist). New
-    // loaders are covered without touching this.
-    //
-    // The real client normalises the shape (getSubAgentPanel maps
-    // `r?.subagents ?? []`), but Effect.map is stubbed to identity here, so
-    // it has to be right at the source.
-    const notLists: Record<string, unknown> = {
-      incident: null,
-      schema: null,
-      active: null,
-      values: {},
-      label: "",
-      active_agent: "",
-      provider: "",
-      model_id: "",
-      cwd: "",
-      hopsLeft: 0,
-      hasMore: false,
-      truncated: false,
-      deleted: false,
-      always_approved: false,
-      session_approved: false,
-    };
-    const anyShape = new Proxy([] as unknown[], {
-      get(target, key) {
-        if (key in target) return Reflect.get(target, key);
-        if (typeof key !== "string") return undefined;
-        if (key === "subAgents" && liveRows) return liveRows;
-        return key in notLists ? notLists[key] : [];
-      },
-    });
-    runPromise.mockReturnValue(Promise.resolve(anyShape));
+    runPromise.mockReturnValue(Promise.resolve([]));
     if (!document.getElementById("app")) {
       const el = document.createElement("div");
       el.id = "app";
@@ -772,35 +690,7 @@ describe("DetailView — sub-agent roster follows delegation tool calls", () => 
   });
 
   afterEach(() => {
-    liveRows = null;
     runPromise.mockReturnValue(new Promise(() => {}));
-  });
-
-  /* A child's lifecycle rides its own session id; the server re-addresses
-     a sub_agent signal to the leader's stream (stream_subagent.go). */
-  test("a sub_agent signal refreshes the roster", async () => {
-    render(DetailView, { props: DEFAULT_PROPS });
-    await waitFor(() => expect(calls()).toBeGreaterThan(0));
-    const before = calls();
-    sseBus.handler!({ type: "sub_agent", data: '{"child_session_id":"c1","state":"turn"}' } as { type: string });
-    await waitFor(() => expect(calls()).toBeGreaterThan(before));
-  });
-
-  /* The old panel polled every 3 s while a sub-agent ran. With the stream
-     up the signal covers it, so a running sub-agent issues no timer fetches. */
-  test("a live sub-agent is not polled while the stream is connected", async () => {
-    liveRows = [{ delegation_id: "d1", child_session_id: "c1", status: "running", lifecycle: "working", role: "x", task: "t" }];
-    vi.useFakeTimers();
-    try {
-      render(DetailView, { props: DEFAULT_PROPS });
-      await vi.advanceTimersByTimeAsync(1000);
-      const before = calls();
-      expect(before).toBeGreaterThan(0);
-      await vi.advanceTimersByTimeAsync(5 * 60_000);
-      expect(calls()).toBe(before);
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   test("a wick_delegate call refreshes the roster", async () => {
@@ -829,71 +719,5 @@ describe("DetailView — sub-agent roster follows delegation tool calls", () => 
     sseBus.handler!({ type: "tool_use", tool_name: "read_file" });
     await new Promise((r) => setTimeout(r, 350));
     expect(calls()).toBe(before);
-  });
-});
-
-/* The composer's Stop: the only stop control in the Team app, where the
-   header (and its Kill) is hidden. It must act without a confirm. */
-describe("DetailView — composer Stop", () => {
-  const runPromise = Effect.runPromise as unknown as ReturnType<typeof vi.fn>;
-  const TEAM_PROPS = { ...DEFAULT_PROPS, agentMode: { hideHeader: true } };
-
-  beforeEach(() => {
-    localStorage.clear();
-    vi.clearAllMocks();
-    if (!document.getElementById("app")) {
-      const el = document.createElement("div");
-      el.id = "app";
-      document.body.appendChild(el);
-    }
-  });
-
-  afterEach(() => {
-    threadState.typing = { active: false };
-    threadState.lifecycle = { state: "", pid: 0, substate: "", at: 0 };
-    runPromise.mockReturnValue(new Promise(() => {}));
-  });
-
-  test("no Stop while the agent is idle", () => {
-    render(DetailView, { props: TEAM_PROPS });
-    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
-  });
-
-  test("Team mode: Stop shows while running and kills without a confirm", async () => {
-    threadState.typing = { active: true };
-    render(DetailView, { props: TEAM_PROPS as never });
-    expect(screen.queryByRole("button", { name: /kill session/i })).toBeNull();
-    await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
-    expect(killProcess).toHaveBeenCalledWith("/api", "test-sess");
-    expect(screen.queryByText("Stop this agent?")).toBeNull();
-  });
-
-  test("busy sub-agents: Stop asks first, and confirming stops them too", async () => {
-    threadState.lifecycle = { state: "working", pid: 7, substate: "", at: 0 };
-    const panel = { pipe: () => panel };
-    (getSubAgentPanel as unknown as ReturnType<typeof vi.fn>).mockReturnValue(panel);
-    runPromise.mockImplementation((e: unknown) =>
-      e === panel
-        ? Promise.resolve({ subAgents: [{ id: "d1", status: "running", lifecycle: "working" }], incident: null })
-        : new Promise(() => {}),
-    );
-    render(DetailView, { props: TEAM_PROPS as never });
-    await waitFor(() => expect(getSubAgentPanel).toHaveBeenCalled());
-    await new Promise((r) => setTimeout(r, 0));
-    await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
-    expect(killProcess).not.toHaveBeenCalled();
-    expect(screen.getByText("Stop this agent and its sub-agents?")).toBeDefined();
-    await fireEvent.click(screen.getByRole("button", { name: /^stop all$/i }));
-    expect(killProcess).toHaveBeenCalledWith("/api", "test-sess");
-    expect(interruptAllSubAgents).toHaveBeenCalledWith("/api", "test-sess");
-  });
-
-  test("queued spawn: the button reads Cancel and dequeues", async () => {
-    threadState.lifecycle = { state: "queued", pid: 0, substate: "", at: 0 };
-    render(DetailView, { props: TEAM_PROPS as never });
-    const btn = screen.getByRole("button", { name: "Cancel the queued agent" });
-    await fireEvent.click(btn);
-    expect(dequeueProcess).toHaveBeenCalledWith("/api", "test-sess");
-    expect(killProcess).not.toHaveBeenCalled();
   });
 });

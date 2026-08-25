@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
-
-	"github.com/yogasw/wick/internal/pkg/envscrub"
 )
 
 // execagent_linux.go is the far end of WrapArgvCgroupFS: the hidden
@@ -72,7 +70,7 @@ func RunAgentExec(o ExecOpts) error {
 	}
 
 	argv := append([]string{o.Bin}, o.Args...)
-	if err := execFn(o.Bin, argv, envscrub.ScrubOSEnv()); err != nil {
+	if err := execFn(o.Bin, argv, os.Environ()); err != nil {
 		return fmt.Errorf("memscope: exec %s: %w", o.Bin, err)
 	}
 	return nil // unreachable on success — execFn replaces this process

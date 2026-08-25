@@ -79,31 +79,6 @@ func toolUseLine(id, name string, input json.RawMessage) []byte {
 	}})
 }
 
-// levelLine reports how full the window was for the request that just
-// finished — mid-turn, while the turn is still running.
-//
-// An `assistant` frame carrying usage and NO content: the parser reads
-// the level off it (that is where claude reports the level too) and then
-// finds nothing to render, so it costs one line and changes nothing
-// else. Without it every meter stays frozen on the previous turn for the
-// whole of a long one, which is exactly when someone is watching it.
-//
-// Only the level travels. The spend is emitted once, by doneLineUsage,
-// because a turn's cost is not known until the turn is over.
-func levelLine(lastIn, lastCache int) []byte {
-	return mustLine(map[string]any{
-		"type": "assistant",
-		"message": map[string]any{
-			"role":    "assistant",
-			"content": []map[string]any{},
-			"usage": map[string]any{
-				"input_tokens":            lastIn,
-				"cache_read_input_tokens": lastCache,
-			},
-		},
-	})
-}
-
 // toolResultLine wraps a tool result as a `user` frame (claude's
 // headless convention) → ToolResult.
 func toolResultLine(toolUseID, content string, isError bool) []byte {
@@ -130,64 +105,6 @@ func doneLine(result string) []byte {
 		"subtype":  "success",
 		"is_error": false,
 		"result":   result,
-	})
-}
-
-// doneLineUsage is doneLine plus the turn's token accounting, in the
-// same shape claude's CLI uses — `usage` for the last call (the context
-// level) and `modelUsage` for the turn totals (the spend). The engine's
-// stream is parsed by ClaudeParser, so writing the vendor's own shape
-// here is what makes wick-engine turns land in the usage ledger next to
-// claude's without a second code path.
-//
-// No contextWindow is emitted: the engine does not learn the model's
-// limit from the vendor, and a guessed ceiling would render as a fill
-// percentage nobody can trust.
-func doneLineUsage(result, model string, t turnTokens) []byte {
-	line := map[string]any{
-		"type":     "result",
-		"subtype":  "success",
-		"is_error": false,
-		"result":   result,
-	}
-	if t.lastIn+t.lastCache+t.output > 0 {
-		line["usage"] = map[string]any{
-			"input_tokens":                t.lastIn,
-			"cache_read_input_tokens":     t.lastCache,
-			"cache_creation_input_tokens": 0,
-			"output_tokens":               t.output,
-		}
-		if model != "" {
-			line["modelUsage"] = map[string]any{model: map[string]any{
-				"inputTokens":          t.freshIn,
-				"cacheReadInputTokens": t.cacheRead,
-				"outputTokens":         t.output,
-			}}
-		}
-	}
-	return mustLine(line)
-}
-
-// compactBoundaryLine reports that history was folded into a summary,
-// in claude's compact_boundary shape so one parser path and one UI
-// marker cover every provider.
-func compactBoundaryLine(trigger string, pre, post int) []byte {
-	if trigger == "" {
-		trigger = "auto"
-	}
-	dropped := pre - post
-	if dropped < 0 {
-		dropped = 0
-	}
-	return mustLine(map[string]any{
-		"type":    "system",
-		"subtype": "compact_boundary",
-		"compact_metadata": map[string]any{
-			"trigger":                   trigger,
-			"pre_tokens":                pre,
-			"post_tokens":               post,
-			"cumulative_dropped_tokens": dropped,
-		},
 	})
 }
 

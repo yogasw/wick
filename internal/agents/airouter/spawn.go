@@ -21,9 +21,6 @@ func Init() {
 		}
 		return resolveKey(rt, *ins)
 	})
-	for _, rt := range List() {
-		rt.Mgr.log.Info().Int("pref_port", rt.Desc.PrefPort).Str("prefix", rt.Mgr.prefix).Msg("airouter: manager configured")
-	}
 }
 
 // spawnContribution resolves an instance's selected router and builds the CLI

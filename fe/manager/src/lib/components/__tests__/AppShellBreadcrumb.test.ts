@@ -59,7 +59,6 @@ beforeEach(() => {
     multi_account: false,
     allow_others_connect_sso: false,
     allow_others_configure: false,
-    allow_others_see_accounts: false,
     session_config_capable: false,
     session_config_allowed: false,
   });
@@ -80,7 +79,6 @@ beforeEach(() => {
     runs: [],
     ops: [],
     users: [],
-    credentials: [],
     page: 1,
     total_pages: 1,
     total: 0,

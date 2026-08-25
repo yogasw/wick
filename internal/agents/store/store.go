@@ -13,12 +13,10 @@
 package store
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,25 +27,18 @@ import (
 	"github.com/yogasw/wick/internal/agents/storage"
 )
 
-// TurnEvent is one tool_use, tool_result, thinking, or text event
-// recorded within an assistant turn. Stored alongside the text so the UI
-// can replay the full trace on reload. "text" is a narration segment the
-// model streamed BEFORE a tool call — kept in the trace so it renders in
-// position between tool cards; the full reply (all segments concatenated)
-// still lives on the conversation turn itself.
+// TurnEvent is one tool_use, tool_result, or thinking event recorded
+// within an assistant turn. Stored alongside the text so the UI can
+// replay the full trace on reload.
 type TurnEvent struct {
-	Type      string    `json:"type"`                 // "tool_use" | "tool_result" | "thinking" | "text"
+	Type      string    `json:"type"`                 // "tool_use" | "tool_result" | "thinking"
 	ToolName  string    `json:"tool_name,omitempty"`  // tool_use only
 	ToolInput string    `json:"tool_input,omitempty"` // tool_use only
 	ToolUseID string    `json:"tool_use_id,omitempty"`
 	IsError   bool      `json:"is_error,omitempty"` // tool_result only
-	Text      string    `json:"text,omitempty"`     // tool_result body / thinking text / text segment
+	Text      string    `json:"text,omitempty"`     // tool_result body / thinking text
 	At        time.Time `json:"at,omitempty"`       // when this event arrived
 	EndAt     time.Time `json:"end_at,omitempty"`   // tool_result: when tool finished
-	// Display is how the tool_use input / tool_result body renders, set by
-	// the parser on the full payload. Absent on traces written before it
-	// existed — the UI classifies those itself.
-	Display *event.Display `json:"display,omitempty"`
 }
 
 // Attachment is one file uploaded with a user turn. The file content
@@ -81,10 +72,6 @@ type Sender struct {
 	Handle     string `json:"handle,omitempty"`       // @handle, without the @
 	Channel    string `json:"channel"`                // slack | telegram | rest | ui
 	WickUserID string `json:"wick_user_id,omitempty"` // resolved wick account, when mapped
-	// Permalink opens the original message on its platform (Slack today).
-	// Captured once when the message arrives; empty when the channel has
-	// no such link or could not get one.
-	Permalink string `json:"permalink,omitempty"`
 }
 
 // Artifact is a file produced by an assistant turn, derived from the turn's
@@ -104,42 +91,22 @@ type Artifact struct {
 // Events are NOT stored here — they live in thinking/<TurnID>.json so
 // conversation.jsonl stays small regardless of tool payload size.
 type ConversationTurn struct {
-	TurnID      string    `json:"turn_id,omitempty"`
-	Timestamp   time.Time `json:"ts"`
-	Role        string    `json:"role"`               // "user" | "assistant" | "system"
-	Agent       string    `json:"agent,omitempty"`    // assistant turn only
-	Provider    string    `json:"provider,omitempty"` // assistant turn only — "type/name" snapshot at turn time
-	Source      string    `json:"source,omitempty"`
-	Sender      *Sender   `json:"sender,omitempty"` // user turn only — who sent it, resolved by the channel
-	Text        string    `json:"text"`
-	Truncated   bool      `json:"truncated,omitempty"`
-	Interrupted bool      `json:"interrupted,omitempty"` // true when killed before Done — distinct from text-cap truncation
-	// Who or what cut the turn short. "Interrupted" alone leaves the reader
-	// guessing between a person clicking Stop, the agent stopping one of its
-	// own children, and wick going down under them — three situations with
-	// three different responses. Empty when nothing claimed it, and then the
-	// UI says only that it was interrupted rather than inventing a culprit.
-	InterruptedBy   string       `json:"interrupted_by,omitempty"`   // "user" | "agent" | "wick"
-	InterruptedNote string       `json:"interrupted_note,omitempty"` // one sentence: who, and what they did
-	HasTrace        bool         `json:"has_trace,omitempty"`        // true when thinking/<TurnID>.json exists
-	Events          []TurnEvent  `json:"events,omitempty"`           // legacy: populated only when reading old turns
-	Attachments     []Attachment `json:"attachments,omitempty"`      // user turn only
-	HasArtifact     bool         `json:"has_artifact,omitempty"`     // assistant turn — true when Artifacts derived
-	Artifacts       []Artifact   `json:"artifacts,omitempty"`        // assistant turn, derived read-time
-	IsError         bool         `json:"is_error,omitempty"`         // system turn — provider/runtime error, render as a failure
-	// RemoteNote is how a remote agent's turn ended ("ended without
-	// marker", "follow-up", "late reply"); assistant turn only.
-	RemoteNote string `json:"remote_note,omitempty"`
-	// Replaces is the turn this one stands in for: a remote agent's reply
-	// that arrived after its turn timed out takes the place of the timeout
-	// error. The replaced turn stays in the file for audit; the UI shows
-	// this one where it was.
-	Replaces string `json:"replaces,omitempty"`
-	// Delivery is whether this assistant turn's reply reached the channel
-	// thread it answers (Slack). Never written to conversation.jsonl: it is
-	// recorded after the turn is saved and stamped on at read time from
-	// deliveries.json. Nil for a turn no channel posted.
-	Delivery *Delivery `json:"delivery,omitempty"`
+	TurnID      string       `json:"turn_id,omitempty"`
+	Timestamp   time.Time    `json:"ts"`
+	Role        string       `json:"role"`               // "user" | "assistant" | "system"
+	Agent       string       `json:"agent,omitempty"`    // assistant turn only
+	Provider    string       `json:"provider,omitempty"` // assistant turn only — "type/name" snapshot at turn time
+	Source      string       `json:"source,omitempty"`
+	Sender      *Sender      `json:"sender,omitempty"` // user turn only — who sent it, resolved by the channel
+	Text        string       `json:"text"`
+	Truncated   bool         `json:"truncated,omitempty"`
+	Interrupted bool         `json:"interrupted,omitempty"` // true when killed before Done — distinct from text-cap truncation
+	HasTrace    bool         `json:"has_trace,omitempty"`   // true when thinking/<TurnID>.json exists
+	Events      []TurnEvent  `json:"events,omitempty"`      // legacy: populated only when reading old turns
+	Attachments []Attachment `json:"attachments,omitempty"`  // user turn only
+	HasArtifact bool         `json:"has_artifact,omitempty"` // assistant turn — true when Artifacts derived
+	Artifacts   []Artifact   `json:"artifacts,omitempty"`    // assistant turn, derived read-time
+	IsError     bool         `json:"is_error,omitempty"`     // system turn — provider/runtime error, render as a failure
 
 	// Kind tags a structured system turn so the UI can render it specially
 	// and callers can identify it (e.g. "provider_switch"). Empty for a
@@ -147,129 +114,18 @@ type ConversationTurn struct {
 	// (provider_switch: from, to, note) without growing the schema per feature.
 	Kind   string            `json:"kind,omitempty"`   // system turn only
 	Extras map[string]string `json:"extras,omitempty"` // system turn only
-
-	// Speaker names the Team agent behind an assistant turn. Set by the
-	// server at read time from the session, never parsed from the text, so
-	// an agent cannot speak as another one.
-	Speaker *Speaker `json:"speaker,omitempty"`
-	// Postback marks a user turn sent by clicking an actioncard button.
-	// Only the postback endpoint sets it: text that merely looks like a
-	// postback is an ordinary message.
-	Postback *Postback `json:"postback,omitempty"`
-}
-
-// Speaker is who said an assistant turn. Via is how the turn came to be:
-// "mention" (another agent handed it over), "group" (a multi-agent chat)
-// or "direct" (the agent's own conversation).
-type Speaker struct {
-	AgentID string `json:"agent_id"`
-	Handle  string `json:"handle,omitempty"`
-	Via     string `json:"via"`
-	// SessionID is where a group turn actually ran — the member's backing
-	// session, whose trace and tool calls the group thread does not copy.
-	// Set for via "group" only.
-	SessionID string `json:"session_id,omitempty"`
-}
-
-// Speaker.Via values.
-const (
-	ViaDirect  = "direct"
-	ViaMention = "mention"
-	ViaGroup   = "group"
-)
-
-// Postback is one actioncard button click.
-type Postback struct {
-	CardID string `json:"card_id"`
-	Value  string `json:"value"`
-	Label  string `json:"label,omitempty"`
-}
-
-// PostbackText is how a click reads to the model: short, and with the
-// card and value spelled out so the agent can tell which decision it is.
-func (p Postback) PostbackText() string {
-	t := fmt.Sprintf("[postback card=%s value=%s]", p.CardID, p.Value)
-	if p.Label != "" {
-		t += " " + p.Label
-	}
-	return t
-}
-
-type postbackKey struct{}
-
-// WithPostback marks the user turn sent with ctx as a postback.
-func WithPostback(ctx context.Context, p *Postback) context.Context {
-	return context.WithValue(ctx, postbackKey{}, p)
-}
-
-// PostbackFrom returns the postback WithPostback put on ctx, or nil.
-func PostbackFrom(ctx context.Context) *Postback {
-	p, _ := ctx.Value(postbackKey{}).(*Postback)
-	return p
 }
 
 // SystemTurnKind values for ConversationTurn.Kind.
 const KindProviderSwitch = "provider_switch"
-
-// Kinds of the server-recorded Team events (system turns). Each is
-// written by wick itself, never by an agent, so none can be forged from a
-// reply. Extras per kind are listed where each is emitted.
-const (
-	KindAgentCreated  = "agent_created"
-	KindAccessChanged = "access_changed"
-	// KindAccessChangeDeclined: the owner declined an access change the
-	// Captain proposed (agents.set_access).
-	KindAccessChangeDeclined = "access_change_declined"
-	// KindPersonaChanged: the Captain edited the agent's persona
-	// (agents.update_persona).
-	KindPersonaChanged = "persona_changed"
-	KindMentionHandoff = "mention_handoff"
-	KindHopLimit       = "hop_limit"
-	// KindScheduledFired: a schedule aimed at the agent ran (extras:
-	// schedule_id, title). Older rows carry KindRoutineFired.
-	KindScheduledFired = "scheduled_fired"
-	KindRoutineFired   = "routine_fired"
-	// KindScheduleChanged: the Captain created, edited, paused or resumed
-	// one of the agent's schedules (agents.schedule; extras: schedule_id,
-	// title, action, changed_by).
-	KindScheduleChanged   = "schedule_changed"
-	KindConnectionChanged = "connection_changed"
-	KindMentionRefused    = "mention_refused"
-	KindA2AContext        = "a2a_context"
-	// KindInputRequest is an ask_user question, recorded when asked and
-	// again when settled (same extras.ask_id, extras.state changes).
-	KindInputRequest = "input_request"
-	// KindApprovalRequest is a gate approval prompt, recorded when raised
-	// and again when decided (same extras.approval_id).
-	KindApprovalRequest = "approval_request"
-	// KindGroupMemberAdded / KindGroupMemberRemoved record a member
-	// change in a group chat (extras: agent_id, handle, by).
-	KindGroupMemberAdded   = "group_member_added"
-	KindGroupMemberRemoved = "group_member_removed"
-)
-
-// KindCompaction marks the point where the CLI folded older turns into
-// a summary. Recorded as a turn of its own so the gap in the
-// conversation has a visible cause — without it the history simply
-// appears to have holes.
-const KindCompaction = "compaction"
-
-// KindRemoteQueue: where a message sent to a busy remote agent stands
-// (extras: queue_id, state = queued | sent | cancelled | forwarded). The
-// turns of one queue_id fold into one row in the UI.
-const KindRemoteQueue = "remote_queue"
-
-// KindRemoteLink: the remote's own page for the running turn (extras: url),
-// e.g. a Jules session, where a turn wick cannot stop can be stopped.
-const KindRemoteLink = "remote_link"
 
 // TurnTraceIndex is the lightweight index written to thinking/<turn_id>.json.
 // Events below the inline threshold have their Text embedded here.
 // Events at or above the threshold have Text omitted and Large=true —
 // UI must fetch thinking/<turn_id>/<event_id>.json separately.
 type TurnTraceIndex struct {
-	TurnID string           `json:"turn_id"`
-	Events []TurnEventIndex `json:"events"`
+	TurnID string            `json:"turn_id"`
+	Events []TurnEventIndex  `json:"events"`
 }
 
 // TurnEventIndex is one row in the trace index.
@@ -287,10 +143,6 @@ type TurnEventIndex struct {
 	// Large=true means payload lives in <event_id>.json, fetch on demand.
 	Large bool  `json:"large,omitempty"`
 	Size  int64 `json:"size,omitempty"`
-	// Display rides in the index so the card header (kind, title, size,
-	// binary chip) renders before a Large payload is fetched; for Large
-	// events its Body is empty and lives in the payload file instead.
-	Display *event.Display `json:"display,omitempty"`
 }
 
 // TurnEventPayload is written to thinking/<turn_id>/<event_id>.json
@@ -301,8 +153,6 @@ type TurnEventPayload struct {
 	Text      string `json:"text,omitempty"`
 	ToolInput string `json:"tool_input,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`
-	// Display carries the (possibly truncated) render body.
-	Display *event.Display `json:"display,omitempty"`
 }
 
 // DefaultTraceInlineBytes is the fallback threshold when no config is set.
@@ -310,25 +160,15 @@ type TurnEventPayload struct {
 // in the trace index; larger events get their own file.
 const DefaultTraceInlineBytes = 10 * 1024
 
-// DefaultTraceBlobMaxBytes caps one binary trace payload (trace_blob_max_mb).
-const DefaultTraceBlobMaxBytes = 10 << 20
-
 // Store collects events for one session+agent and persists them.
 type Store struct {
 	layout    config.Layout
 	sessionID string
 	agentName string
 	provider  string // "type/name" — stamped onto each assistant turn
-	// remoteNote is the closing note of a remote agent's turn, set from
-	// its Done and stamped onto the turn it flushes.
-	remoteNote string
 
 	// turnBuf accumulates TextDelta chunks; flushed on Done.
 	turnBuf strings.Builder
-	// textSeen is the byte offset into turnBuf already recorded into
-	// eventBuf as "text" trace events. Everything past it is the segment
-	// still streaming; flushed when a tool/thinking event interrupts it.
-	textSeen int
 
 	// eventBuf collects tool_use/tool_result/thinking events within the
 	// current turn so they can be stored alongside the text.
@@ -336,18 +176,6 @@ type Store struct {
 	// InFlightEvents is called from HTTP handler goroutines.
 	mu       sync.RWMutex
 	eventBuf []TurnEvent
-
-	// interruptBy/Note: who declared they were about to cut the current
-	// turn short. Set just before the stop, consumed by the interrupted
-	// flush. Guarded by mu like eventBuf — it is written from the HTTP
-	// handler goroutine that services the Stop click.
-	interruptBy   string
-	interruptNote string
-
-	// turnLevel is the newest mid-turn context level of the turn in
-	// progress (unthrottled, unlike the ledger write), plotted when the
-	// turn ends with no usage of its own.
-	turnLevel int
 
 	// recordRaw mirrors every event line into raw.jsonl. Off by
 	// default per design (raw is opt-in, retention agressive).
@@ -359,50 +187,8 @@ type Store struct {
 	traceInlineBytes int
 	// traceEventMaxBytes caps per-event file payload. 0 = no cap.
 	traceEventMaxBytes int
-	// traceBlobMaxBytes caps one binary blob. 0 = DefaultTraceBlobMaxBytes.
-	traceBlobMaxBytes int
-
-	// lastLevelWrite throttles the mid-turn context-level writes. The
-	// level arrives on every frame of a long turn and the ledger is
-	// rewritten whole each time, so persisting all of them would be a
-	// steady trickle of pointless IO for a number nobody reads that fast.
-	lastLevelWrite time.Time
-
-	// timedOut is the remote timeout error turn written last, while no
-	// message and no reply followed it: the late reply that comes next
-	// replaces it. Guarded by mu.
-	timedOut string
 
 	now func() time.Time
-}
-
-// Remote turn markers the store reacts to. They mirror remote.NoteLate
-// and remote.TimeoutMessage, kept here so the store stays free of the
-// remote package.
-const (
-	remoteNoteLate      = "late reply"
-	remoteTimeoutPrefix = "No reply from the remote agent after "
-)
-
-// setTimedOut records (or, with "", forgets) the timeout turn a late
-// reply replaces.
-func (s *Store) setTimedOut(id string) {
-	s.mu.Lock()
-	s.timedOut = id
-	s.mu.Unlock()
-}
-
-// replacedBy is the timeout turn a turn noted note replaces, if any; any
-// assistant turn ends the wait.
-func (s *Store) replacedBy(note string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	id := s.timedOut
-	s.timedOut = ""
-	if note != remoteNoteLate {
-		return ""
-	}
-	return id
 }
 
 // Options configures a Store. AgentName ties assistant turns to the
@@ -410,14 +196,13 @@ func (s *Store) replacedBy(note string) string {
 // stamped on every assistant turn so the UI can render which model
 // produced it even after the active provider switches.
 type Options struct {
-	Layout             config.Layout
-	SessionID          string
-	AgentName          string
-	Provider           string
-	RecordRaw          bool
-	TraceInlineBytes   int              // 0 = DefaultTraceInlineBytes
-	TraceEventMaxBytes int              // 0 = no cap on per-event file size
-	TraceBlobMaxBytes  int              // 0 = DefaultTraceBlobMaxBytes
+	Layout           config.Layout
+	SessionID        string
+	AgentName        string
+	Provider         string
+	RecordRaw        bool
+	TraceInlineBytes   int             // 0 = DefaultTraceInlineBytes
+	TraceEventMaxBytes int             // 0 = no cap on per-event file size
 	Now                func() time.Time // optional; defaults to time.Now
 }
 
@@ -440,7 +225,6 @@ func New(opt Options) *Store {
 		recordRaw:          opt.RecordRaw,
 		traceInlineBytes:   inlineBytes,
 		traceEventMaxBytes: opt.TraceEventMaxBytes,
-		traceBlobMaxBytes:  opt.TraceBlobMaxBytes,
 		now:                now,
 	}
 }
@@ -469,13 +253,6 @@ func (s *Store) AppendUserTurnWithAttachments(role, source, text string, atts []
 // not persisted, so the UI can render the message the person actually typed
 // and build the sender chip from these fields instead of parsing text.
 func (s *Store) AppendUserTurnWithSender(role, source, text string, atts []Attachment, sender *Sender) error {
-	return s.AppendUserTurnWithPostback(role, source, text, atts, sender, nil)
-}
-
-// AppendUserTurnWithPostback is AppendUserTurnWithSender for a turn that
-// may be an actioncard click. postback nil = an ordinary message.
-func (s *Store) AppendUserTurnWithPostback(role, source, text string, atts []Attachment, sender *Sender, postback *Postback) error {
-	s.setTimedOut("")
 	turn := ConversationTurn{
 		Timestamp:   s.now().UTC(),
 		Role:        role,
@@ -483,7 +260,6 @@ func (s *Store) AppendUserTurnWithPostback(role, source, text string, atts []Att
 		Sender:      sender,
 		Text:        text,
 		Attachments: atts,
-		Postback:    postback,
 	}
 	return storage.AppendJSONL(
 		s.layout.SessionConversation(s.sessionID),
@@ -499,7 +275,7 @@ func (s *Store) AppendUserTurnWithPostback(role, source, text string, atts []Att
 // Side effects per event type:
 //
 //   - SessionStart    → persists cli_session_id into agents.json (if
-//     AgentName is set) so resume works after kill.
+//                        AgentName is set) so resume works after kill.
 //   - TextDelta       → appended to turnBuf.
 //   - Done / Error    → flush turnBuf as one assistant turn.
 //   - Anything else   → optionally mirrored to raw.jsonl.
@@ -517,17 +293,6 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		)
 	}
 
-	// A mid-turn window reading, on whatever frame carried it. Recorded
-	// before the type switch because the frame with the newest level is
-	// often one the switch ignores — a suppressed duplicate of text that
-	// already streamed. Level only: no turn counted, no flows added, no
-	// point appended to the series. Those belong to the turn, and the
-	// turn has not finished.
-	if ev.ContextUsed > 0 && ev.Type != event.Done {
-		s.turnLevel = ev.ContextUsed
-		_ = s.recordContextLevel(ev.ContextUsed, s.now().UTC())
-	}
-
 	switch ev.Type {
 	case event.SessionStart:
 		if ev.SessionID != "" && s.agentName != "" {
@@ -535,19 +300,6 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 				return false, err
 			}
 		}
-		return false, nil
-
-	case event.TextReplace:
-		s.mu.Lock()
-		s.turnBuf.Reset()
-		s.turnBuf.WriteString(ev.Text)
-		s.textSeen = 0
-		s.mu.Unlock()
-		_ = s.appendInflight(InflightEntry{
-			Type: "text_replace",
-			Text: ev.Text,
-			At:   s.now().UTC(),
-		})
 		return false, nil
 
 	case event.TextDelta:
@@ -564,7 +316,6 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 	case event.Thinking:
 		now := s.now().UTC()
 		s.mu.Lock()
-		s.flushTextSegmentLocked(now)
 		if n := len(s.eventBuf); n > 0 && s.eventBuf[n-1].Type == "thinking" {
 			s.eventBuf[n-1].Text += ev.Text
 		} else {
@@ -590,10 +341,8 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 			ToolInput: ev.ToolInput,
 			ToolUseID: ev.ToolUseID,
 			At:        now,
-			Display:   ev.Display,
 		}
 		s.mu.Lock()
-		s.flushTextSegmentLocked(now)
 		s.eventBuf = append(s.eventBuf, te)
 		s.mu.Unlock()
 		_ = s.appendInflight(InflightEntry{
@@ -602,14 +351,12 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 			ToolInput: ev.ToolInput,
 			ToolUseID: ev.ToolUseID,
 			At:        now,
-			Display:   ev.Display,
 		})
 		return false, nil
 
 	case event.ToolResult:
 		now := s.now().UTC()
 		s.mu.Lock()
-		s.flushTextSegmentLocked(now)
 		for i := range s.eventBuf {
 			if s.eventBuf[i].Type == "tool_use" && s.eventBuf[i].ToolUseID == ev.ToolUseID {
 				s.eventBuf[i].EndAt = now
@@ -622,7 +369,6 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 			IsError:   ev.IsError,
 			Text:      ev.Text,
 			At:        now,
-			Display:   ev.Display,
 		})
 		s.mu.Unlock()
 		_ = s.appendInflight(InflightEntry{
@@ -631,36 +377,16 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 			IsError:   ev.IsError,
 			Text:      ev.Text,
 			At:        now,
-			Display:   ev.Display,
 		})
 		return false, nil
 
 	case event.Done:
-		// Token accounting goes to the session ledger (usage.json), not
-		// onto the turn: the questions it answers are aggregate ones, and
-		// a failure to record must never fail the turn that earned it.
-		if ev.Usage != nil {
-			_ = s.recordUsage(ev.Usage, s.now().UTC())
-		} else if s.turnLevel > 0 {
-			// A turn that ended without a usage reading (stopped, killed,
-			// its process gone) still climbed: plot the last level it
-			// reached, or the history draws a flat line through it.
-			_ = s.recordLevelPoint(s.turnLevel, s.now().UTC())
-		}
-		s.turnLevel = 0
-		s.remoteNote = ev.RemoteNote
 		if err := s.flushAssistantTurn(false); err != nil {
 			return false, err
 		}
 		return true, nil
 
 	case event.Error:
-		// An errored turn ended too: plot the level it climbed to (as a
-		// usage-less Done does), and leave nothing for the next turn.
-		if s.turnLevel > 0 {
-			_ = s.recordLevelPoint(s.turnLevel, s.now().UTC())
-			s.turnLevel = 0
-		}
 		// On error we still want whatever partial text accumulated;
 		// don't lose it.
 		if err := s.flushAssistantTurn(false); err != nil {
@@ -688,44 +414,6 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		}
 		return false, nil
 
-	case event.RemoteQueue:
-		// Not flushed: the running reply is still one answer, and the mark
-		// belongs to the user message above it, not after the reply.
-		if ev.Queue != nil {
-			if err := s.appendRemoteQueueTurn(ev.Queue); err != nil {
-				return false, err
-			}
-		}
-		return false, nil
-
-	case event.RemoteLink:
-		if ev.Text != "" {
-			if err := s.appendRemoteLinkTurn(ev.Text); err != nil {
-				return false, err
-			}
-		}
-		return false, nil
-
-	case event.Compaction:
-		// Flush whatever text the turn had produced first, so the marker
-		// lands after it rather than jumping ahead of the reply it
-		// followed. Compaction does NOT end the turn — the CLI carries on
-		// with the same session — so this returns false.
-		if err := s.flushAssistantTurn(false); err != nil {
-			return false, err
-		}
-		if err := s.appendCompactionTurn(ev.Compaction); err != nil {
-			return false, err
-		}
-		// Keep the meter honest immediately: the level just dropped, and
-		// waiting for the next turn to say so makes the ring contradict
-		// the marker sitting right above it.
-		_ = s.recordCompaction(ev.Compaction, s.now().UTC())
-		// recordCompaction plotted this level: a usage-less Done right
-		// after must not plot it a second time.
-		s.turnLevel = 0
-		return false, nil
-
 	case event.Trace:
 		// Unrecognized frame — keep it in the turn's trace (expandable in
 		// the UI) instead of the main thread. Buffered like other trace
@@ -737,7 +425,6 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		if strings.TrimSpace(raw) != "" {
 			now := s.now().UTC()
 			s.mu.Lock()
-			s.flushTextSegmentLocked(now)
 			s.eventBuf = append(s.eventBuf, TurnEvent{Type: "raw", Text: raw, At: now})
 			s.mu.Unlock()
 			_ = s.appendInflight(InflightEntry{Type: "raw", Text: raw, At: now})
@@ -746,24 +433,6 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 	}
 
 	return false, nil
-}
-
-// flushTextSegmentLocked records assistant text accumulated since the
-// last flushed segment as a "text" trace event, so narration the model
-// streams between tool calls keeps its position in the trace timeline.
-// The full reply (all segments) still lands on the conversation turn —
-// trace text is positional context, not the canonical reply. Whitespace-
-// only separators ("\n\n" between tool calls) are skipped. Trailing text
-// after the last tool call is never flushed here: it stays only in the
-// turn body, where it renders as the reply bubble. Caller must hold s.mu.
-func (s *Store) flushTextSegmentLocked(now time.Time) {
-	full := s.turnBuf.String()
-	seg := full[s.textSeen:]
-	s.textSeen = len(full)
-	if strings.TrimSpace(seg) == "" {
-		return
-	}
-	s.eventBuf = append(s.eventBuf, TurnEvent{Type: "text", Text: seg, At: now})
 }
 
 // InFlightEvents returns a snapshot of events buffered in the current
@@ -801,86 +470,15 @@ func (s *Store) PartialText() string {
 // Flush is the explicit drain hook for callers that want to write
 // whatever's buffered (e.g. subprocess crashed mid-stream, no Done
 // arrived). Marks the turn as truncated since it didn't end naturally.
-// SetInterruptCause records who is about to cut this turn short, so the
-// interrupted turn can say so. Called just BEFORE the stop it describes —
-// by then the flush is milliseconds away and nothing else can claim it.
-// A later call wins: the last thing to declare itself is the thing that
-// actually did it.
-func (s *Store) SetInterruptCause(by, note string) {
-	s.mu.Lock()
-	s.interruptBy, s.interruptNote = by, note
-	s.mu.Unlock()
-}
-
-// SetInterruptCauseIfUnset is the fallback for a path that only knows the
-// shape of the interruption, not its author — wick shutting down, say. It
-// must never overwrite a caller that named itself.
-func (s *Store) SetInterruptCauseIfUnset(by, note string) {
-	s.mu.Lock()
-	if s.interruptBy == "" {
-		s.interruptBy, s.interruptNote = by, note
-	}
-	s.mu.Unlock()
-}
-
-// takeInterruptCause reads and clears the pending cause: it belongs to the
-// turn being written now, not to the next one.
-func (s *Store) takeInterruptCause() (string, string) {
-	s.mu.Lock()
-	by, note := s.interruptBy, s.interruptNote
-	s.interruptBy, s.interruptNote = "", ""
-	s.mu.Unlock()
-	return by, note
-}
-
 func (s *Store) Flush() error {
 	s.mu.RLock()
 	evEmpty := len(s.eventBuf) == 0
 	bufEmpty := s.turnBuf.Len() == 0
 	s.mu.RUnlock()
 	if bufEmpty && evEmpty {
-		// Nothing was buffered — the agent was thinking, or running a tool,
-		// and had not written a word yet. There is no turn to mark, and the
-		// old behaviour was to record NOTHING: you clicked Stop, the process
-		// died, and the transcript carried on as if you had never clicked.
-		// The stop itself is the event worth keeping, so write it as a
-		// system line when somebody claimed it.
-		return s.noteInterruptOnly()
-	}
-	return s.flushAssistantTurn(true)
-}
-
-// noteInterruptOnly records a stop that cut nothing off mid-sentence. It is
-// the only trace such a stop leaves, so it says who did it and stays silent
-// when nobody claimed it (a pending cause is only set by the paths that know
-// one — see SetInterruptCause).
-func (s *Store) noteInterruptOnly() error {
-	by, note := s.takeInterruptCause()
-	if by == "" && note == "" {
 		return nil
 	}
-	if note == "" {
-		note = "the agent was stopped"
-	}
-	now := s.now().UTC()
-	turn := ConversationTurn{
-		TurnID:          fmt.Sprintf("%d", now.UnixNano()),
-		Timestamp:       now,
-		Role:            "system",
-		Agent:           s.agentName,
-		Provider:        s.provider,
-		Text:            note,
-		Kind:            "interrupted",
-		Interrupted:     true,
-		InterruptedBy:   by,
-		InterruptedNote: note,
-	}
-	return storage.AppendJSONL(
-		s.layout.SessionConversation(s.sessionID),
-		"wick-conv-v1",
-		s.sessionID,
-		turn,
-	)
+	return s.flushAssistantTurn(true)
 }
 
 // flushAssistantTurn writes the buffered text as one assistant turn
@@ -890,20 +488,14 @@ func (s *Store) noteInterruptOnly() error {
 // Events (tool_use, tool_result, thinking) are written to
 // thinking/<turn_id>.json so conversation.jsonl stays lean.
 func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
-	note := s.remoteNote
-	s.remoteNote = ""
 	if s.turnBuf.Len() == 0 && len(s.eventBuf) == 0 {
 		return nil
 	}
 	body := s.turnBuf.String()
-	// A resumed turn replays the interrupted one from its first word; drop
-	// what the reader already has. See resume_dedupe.go.
-	body = s.dedupeResumedPrefix(body)
 	truncated := wasInterrupted
 	s.mu.Lock()
 	evSnap := s.eventBuf
 	s.eventBuf = nil
-	s.textSeen = 0
 	s.mu.Unlock()
 
 	now := s.now().UTC()
@@ -926,11 +518,6 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		Truncated:   truncated,
 		Interrupted: wasInterrupted,
 		HasTrace:    hasTrace,
-		RemoteNote:  note,
-		Replaces:    s.replacedBy(note),
-	}
-	if wasInterrupted {
-		turn.InterruptedBy, turn.InterruptedNote = s.takeInterruptCause()
 	}
 	s.turnBuf.Reset()
 	if err := storage.AppendJSONL(
@@ -960,27 +547,6 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 // before the agent starts — to record the failure as inline history.
 func (s *Store) AppendErrorTurn(msg string) error { return s.appendErrorTurn(msg) }
 
-// AppendNoticeTurn persists a plain (non-error) system line — something
-// the reader should know that is neither the agent's reply nor a
-// failure, e.g. "your message was queued behind the running turn".
-func (s *Store) AppendNoticeTurn(msg string) error {
-	now := s.now().UTC()
-	turn := ConversationTurn{
-		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
-		Timestamp: now,
-		Role:      "system",
-		Agent:     s.agentName,
-		Provider:  s.provider,
-		Text:      msg,
-	}
-	return storage.AppendJSONL(
-		s.layout.SessionConversation(s.sessionID),
-		"wick-conv-v1",
-		s.sessionID,
-		turn,
-	)
-}
-
 func (s *Store) appendErrorTurn(msg string) error {
 	now := s.now().UTC()
 	turn := ConversationTurn{
@@ -992,114 +558,12 @@ func (s *Store) appendErrorTurn(msg string) error {
 		Text:      msg,
 		IsError:   true,
 	}
-	if err := storage.AppendJSONL(
-		s.layout.SessionConversation(s.sessionID),
-		"wick-conv-v1",
-		s.sessionID,
-		turn,
-	); err != nil {
-		return err
-	}
-	if strings.HasPrefix(msg, remoteTimeoutPrefix) {
-		s.setTimedOut(turn.TurnID)
-	} else {
-		s.setTimedOut("")
-	}
-	return nil
-}
-
-// appendRemoteQueueTurn records where a message to a busy remote agent
-// stands as a structured system turn (KindRemoteQueue).
-func (s *Store) appendRemoteQueueTurn(q *event.QueueInfo) error {
-	now := s.now().UTC()
-	turn := ConversationTurn{
-		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
-		Timestamp: now,
-		Role:      "system",
-		Agent:     s.agentName,
-		Provider:  s.provider,
-		Kind:      KindRemoteQueue,
-		Text:      q.Text,
-		Extras:    map[string]string{"queue_id": q.ID, "state": q.State},
-	}
 	return storage.AppendJSONL(
 		s.layout.SessionConversation(s.sessionID),
 		"wick-conv-v1",
 		s.sessionID,
 		turn,
 	)
-}
-
-// appendRemoteLinkTurn records the remote's page for the running turn
-// (KindRemoteLink).
-func (s *Store) appendRemoteLinkTurn(url string) error {
-	now := s.now().UTC()
-	turn := ConversationTurn{
-		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
-		Timestamp: now,
-		Role:      "system",
-		Agent:     s.agentName,
-		Provider:  s.provider,
-		Kind:      KindRemoteLink,
-		Extras:    map[string]string{"url": url},
-	}
-	return storage.AppendJSONL(
-		s.layout.SessionConversation(s.sessionID),
-		"wick-conv-v1",
-		s.sessionID,
-		turn,
-	)
-}
-
-// appendCompactionTurn records a compaction boundary as a structured
-// system turn. Numbers go in Extras rather than into prose so the UI can
-// render them however it likes (and so a later reader can chart them);
-// Text stays human-readable for channels that show plain text only.
-func (s *Store) appendCompactionTurn(info *event.CompactionInfo) error {
-	if info == nil {
-		return nil
-	}
-	now := s.now().UTC()
-	trigger := info.Trigger
-	if trigger == "" {
-		trigger = "auto"
-	}
-	extras := map[string]string{
-		"trigger":     trigger,
-		"pre_tokens":  strconv.Itoa(info.PreTokens),
-		"post_tokens": strconv.Itoa(info.PostTokens),
-	}
-	if info.DroppedTokens > 0 {
-		extras["dropped_tokens"] = strconv.Itoa(info.DroppedTokens)
-	}
-	if info.DurationMS > 0 {
-		extras["duration_ms"] = strconv.Itoa(info.DurationMS)
-	}
-	turn := ConversationTurn{
-		TurnID:    fmt.Sprintf("%d", now.UnixNano()),
-		Timestamp: now,
-		Role:      "system",
-		Agent:     s.agentName,
-		Provider:  s.provider,
-		Kind:      KindCompaction,
-		Text:      compactionText(trigger, info),
-		Extras:    extras,
-	}
-	return storage.AppendJSONL(
-		s.layout.SessionConversation(s.sessionID),
-		"wick-conv-v1",
-		s.sessionID,
-		turn,
-	)
-}
-
-// compactionText is the plain-text fallback recorded on the turn, e.g.
-// "Context compacted (manual) — 31.3k → 4.1k tokens". The sentence itself
-// comes from the event so the chat channels can post the identical one.
-func compactionText(trigger string, info *event.CompactionInfo) string {
-	c := *info
-	c.Trigger = trigger
-	return c.Summary()
 }
 
 // writeTraceIndex writes thinking/<turn_id>.json (the index) and, for
@@ -1120,7 +584,6 @@ func (s *Store) writeTraceIndex(turnID string, evs []TurnEvent) bool {
 	idx := TurnTraceIndex{TurnID: turnID}
 	for i, ev := range evs {
 		eventID := fmt.Sprintf("e%d", i)
-		ev = s.storeBlobs(turnID, eventID, ev)
 		payload := ev.Text + ev.ToolInput
 		row := TurnEventIndex{
 			EventID:   eventID,
@@ -1130,44 +593,21 @@ func (s *Store) writeTraceIndex(turnID string, evs []TurnEvent) bool {
 			IsError:   ev.IsError,
 			At:        ev.At,
 			EndAt:     ev.EndAt,
-			Display:   ev.Display,
 		}
 		if len(payload) >= s.traceInlineBytes {
-			// Apply per-event max cap before writing to file. Cut on a rune
-			// boundary so a multibyte character is never split in half.
+			// Apply per-event max cap before writing to file.
 			text := ev.Text
 			toolInput := ev.ToolInput
-			disp := ev.Display
 			truncated := false
 			if s.traceEventMaxBytes > 0 {
 				if len(text) > s.traceEventMaxBytes {
-					text = truncateUTF8(text, s.traceEventMaxBytes)
+					text = text[:s.traceEventMaxBytes]
 					truncated = true
 				}
 				if len(toolInput) > s.traceEventMaxBytes {
-					toolInput = truncateUTF8(toolInput, s.traceEventMaxBytes)
+					toolInput = toolInput[:s.traceEventMaxBytes]
 					truncated = true
 				}
-				if disp != nil && len(disp.Body) > s.traceEventMaxBytes {
-					d := *disp
-					d.Body = truncateUTF8(d.Body, s.traceEventMaxBytes)
-					d.Truncated = true
-					disp = &d
-				}
-			}
-			if disp != nil && truncated && !disp.Truncated && !disp.HasBinary() {
-				// The raw text was cut even though the body fit: the trace
-				// copy is still partial, say so.
-				d := *disp
-				d.Truncated = true
-				disp = &d
-			}
-			if disp != nil {
-				// The index keeps the header facts; the body is fetched with
-				// the payload.
-				head := *disp
-				head.Body = ""
-				row.Display = &head
 			}
 			ep := TurnEventPayload{
 				EventID:   eventID,
@@ -1175,7 +615,6 @@ func (s *Store) writeTraceIndex(turnID string, evs []TurnEvent) bool {
 				Text:      text,
 				ToolInput: toolInput,
 				Truncated: truncated,
-				Display:   disp,
 			}
 			if data, err := json.Marshal(ep); err == nil {
 				_ = os.WriteFile(s.layout.SessionThinkingEvent(s.sessionID, turnID, eventID), data, 0o644)
@@ -1207,9 +646,6 @@ type InflightEntry struct {
 	ToolUseID string    `json:"tool_use_id,omitempty"`
 	IsError   bool      `json:"is_error,omitempty"`
 	At        time.Time `json:"at,omitempty"`
-	// Display mirrors TurnEvent.Display. A binary's bytes are not in it
-	// (Blob is never serialized); recovery re-derives them from Text.
-	Display *event.Display `json:"display,omitempty"`
 }
 
 // appendInflight writes one entry to the session's inflight.jsonl.
@@ -1280,25 +716,11 @@ func RecoverInflight(layout config.Layout, sessionID, agentName, provider string
 	}
 	var body strings.Builder
 	var events []TurnEvent
-	// seen mirrors Store.textSeen: text_delta runs between tool/thinking
-	// entries become "text" trace events so the recovered trace keeps the
-	// same interleaving a live turn would have had.
-	seen := 0
-	flushSeg := func(at time.Time) {
-		full := body.String()
-		seg := full[seen:]
-		seen = len(full)
-		if strings.TrimSpace(seg) == "" {
-			return
-		}
-		events = append(events, TurnEvent{Type: "text", Text: seg, At: at})
-	}
 	for _, e := range entries {
 		switch e.Type {
 		case "text_delta":
 			body.WriteString(e.Text)
 		case "thinking", "tool_use", "tool_result":
-			flushSeg(e.At)
 			events = append(events, TurnEvent{
 				Type:      e.Type,
 				ToolName:  e.ToolName,
@@ -1307,7 +729,6 @@ func RecoverInflight(layout config.Layout, sessionID, agentName, provider string
 				IsError:   e.IsError,
 				Text:      e.Text,
 				At:        e.At,
-				Display:   e.Display,
 			})
 		}
 	}

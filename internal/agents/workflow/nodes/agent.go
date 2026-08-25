@@ -20,16 +20,15 @@ import (
 
 type agentSchema struct {
 	Prompt            string `wick:"required;textarea;key=prompt;desc=Inline prompt rendered as a Go template (with .Event / .Node / .Trigger context)."`
-	Provider          string `wick:"key=provider;desc=Provider instance name (empty = default). Must be one the workflow owner may access (provider access tags)."`
-	Model             string `wick:"key=model;desc=Model id pinned for this node (empty = the provider's default). Only applied together with provider, ignored on the non-pool (codex/gemini one-shot) path."`
+	Provider          string `wick:"key=provider;desc=Provider name"`
 	Skills            string `wick:"key=skills;desc=YAML list of skill names to expose"`
 	Tools             string `wick:"key=tools;desc=YAML list of tool names to allowlist"`
 	MaxTurns          int    `wick:"key=max_turns;desc=Max agent turns. 0 = unlimited (provider default)."`
-	Thinking          string `wick:"key=thinking;dropdown=on|off;default=on;desc=Extended thinking. on = enabled (set a token budget below), off disables it to cut latency (claude only)."`
-	MaxThinkingTokens int    `wick:"key=max_thinking_tokens;number;visible_when=thinking:on;desc=Thinking token budget when on. 0 = unlimited (provider default), set >=1024 to cap. Claude only."`
+	Thinking          string `wick:"key=thinking;dropdown=on|off;default=on;desc=Extended thinking. on = enabled (set a token budget below); off disables it to cut latency (claude only)."`
+	MaxThinkingTokens int    `wick:"key=max_thinking_tokens;number;visible_when=thinking:on;desc=Thinking token budget when on. 0 = unlimited (provider default); set >=1024 to cap. Claude only."`
 	Session           string `wick:"key=session;desc=new=fresh session per run, empty=inherit run session"`
 	TimeoutSec        int    `wick:"key=timeout_sec;number;desc=Hard timeout in seconds. The node fails with a clear error if the agent does not finish in time (e.g. connector/MCP tools never connect). 0 = inherit the run's max duration."`
-	RequireStatus     bool   `wick:"key=require_status;desc=When true the agent must end with a JSON object {\"status\":\"done|blocked|needs_input\",\"summary\":\"...\"}, any non-done status (or missing JSON) fails the node so a blocked or question-only run is not marked success."`
+	RequireStatus     bool   `wick:"key=require_status;desc=When true the agent must end with a JSON object {\"status\":\"done|blocked|needs_input\",\"summary\":\"...\"}; any non-done status (or missing JSON) fails the node so a blocked or question-only run is not marked success."`
 }
 
 // AgentEvent is the minimal event shape the agent executor consumes
@@ -104,8 +103,6 @@ func (e *AgentExecutor) Descriptor() engine.NodeDescriptor {
 				"prompt is rendered as a Go template with .Event / .Node / .Trigger context. Use {{.Node.<upstream>.<field>}} to pull data from prior nodes.",
 				"arg_modes.prompt defaults to expression. Set to fixed if you want the inline prompt rendered literally without Go template expansion.",
 				"session = \"new\" forces a fresh provider session per run. Omit to inherit the workflow-run session set by an upstream session_init node (or the engine default wf_<id>_run_<runID>).",
-				"provider is the instance NAME from workflow_providers (not type/name). model pins one of that instance's model ids (see the composer's model list); empty = instance default. model is ignored without provider and on the codex/gemini one-shot path.",
-				"The workflow OWNER must be allowed to use the provider (provider access tags); otherwise the node fails with \"owner has no access to provider\".",
 				"max_turns 0 (unset) = provider default (typically unlimited). Set explicitly when the agent is meant to do a single bounded reasoning step.",
 			},
 			PairWith: []string{
@@ -118,7 +115,7 @@ func (e *AgentExecutor) Descriptor() engine.NodeDescriptor {
 				"Avoid referencing .Node.<this>.parsed assuming structured output was auto-parsed. The engine surfaces raw text; if the prompt is supposed to return JSON, parse it downstream with {{fromJson .Node.<this>.text}}.",
 				"Listing a skill in skills: that the provider hasn't installed errors at run time. Call workflow_skills (optionally filter by provider) first to see what's available.",
 			},
-			InputSample:  `{"provider":"claude","model":"sonnet","prompt":"Summarize this ticket: {{.Node.trigger.payload.text}}","max_turns":4,"session":"new"}`,
+			InputSample:  `{"provider":"claude","prompt":"Summarize this ticket: {{.Node.trigger.payload.text}}","max_turns":4,"session":"new"}`,
 			OutputSample: `{"text":"User reported an authentication bug after the latest deploy. Suggesting we roll back the JWT middleware.","tools_used":["Read","Grep"],"skills_used":[],"usage":{"input_tokens":1284,"output_tokens":97,"total_tokens":1381},"session_id":"wf_adhoc_3f9b…"}`,
 			Examples: []wickdocs.Example{
 				{
@@ -166,17 +163,6 @@ func (e *AgentExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 	if err != nil {
 		return workflow.NodeOutput{}, err
 	}
-	usesPool := e.Pool != nil && e.Subscribe != nil && providerUsesPool(prov)
-	// The owner must be allowed to run on the node's provider. An empty
-	// provider on the pool path is not the registry default: the spawn
-	// resolves the session/project default, which the project binding
-	// already gates — so only an explicit pick (or the one-shot path,
-	// which really runs the registry default) is checked here.
-	if strings.TrimSpace(n.Provider) != "" || !usesPool {
-		if err := e.Providers.CheckAccess(ctx, workflowOwner(rc), prov); err != nil {
-			return workflow.NodeOutput{}, err
-		}
-	}
 	prompt := n.Prompt
 	if n.RequireStatus {
 		prompt += agentStatusInstruction
@@ -203,12 +189,10 @@ func (e *AgentExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 	// Pool path — only for providers wired through the agent pool
 	// (claude today; codex/gemini stay on the cliProvider path until
 	// pool gains multi-factory support).
-	if usesPool {
-		return e.runViaPool(ctx, n, prov, prompt, sessionID, rc.Workflow.CreatedBy)
+	if e.Pool != nil && e.Subscribe != nil && providerUsesPool(prov.Name()) {
+		return e.runViaPool(ctx, n, prompt, sessionID)
 	}
 
-	// n.Model is a no-op here: AgentRequest has no model field and the
-	// one-shot CLI runs the instance's own default model.
 	req := provider.AgentRequest{
 		Prompt:         prompt,
 		Preset:         n.Preset,
@@ -238,7 +222,7 @@ func (e *AgentExecutor) Execute(ctx context.Context, n workflow.Node, rc *workfl
 // Subscription happens before the Send so the first text_delta can't
 // race past the receiver. The loop exits on Done (success), Error
 // (failed turn), or ctx cancellation (timeout / workflow abort).
-func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prov provider.Provider, prompt, sessionID, ownerUserID string) (workflow.NodeOutput, error) {
+func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prompt, sessionID string) (workflow.NodeOutput, error) {
 	evCh, unsub := e.Subscribe(sessionID)
 	defer unsub()
 
@@ -248,15 +232,11 @@ func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prov pr
 	// SetMaxTurns/SendWithProject below read meta.json. Without this the
 	// node fails with "set max turns: open …/meta.json: cannot find the
 	// path". Idempotent: a no-op when the session already exists.
-	// Same reason as session_init: an ownerless session spawns as the
-	// internal principal with no access tags. An agent node can be reached
-	// without a session_init upstream, so it has to stamp too.
 	if err := e.Pool.EnsureSession(ctx, sessionID, "workflow", n.Workspace); err != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("ensure session: %w", err)
 	}
-	e.Pool.EnsureSessionOwner(ctx, sessionID, ownerUserID)
 
-	if err := e.persistAgentSessionConfig(sessionID, n, prov); err != nil {
+	if err := e.persistAgentSessionConfig(sessionID, n); err != nil {
 		return workflow.NodeOutput{}, err
 	}
 
@@ -299,66 +279,19 @@ func (e *AgentExecutor) runViaPool(ctx context.Context, n workflow.Node, prov pr
 }
 
 // persistAgentSessionConfig writes the per-spawn knobs (max turns,
-// thinking, provider + model) onto the session's "default" agent before the pool send so
+// thinking) onto the session's "default" agent before the pool send so
 // the next spawn reads them from meta. Both are always persisted
 // (including the zero/clearing values) so a reused session reflects the
 // current node config rather than a prior run's. See resolveThinkingTokens
 // for the thinking value mapping.
-func (e *AgentExecutor) persistAgentSessionConfig(sessionID string, n workflow.Node, prov provider.Provider) error {
+func (e *AgentExecutor) persistAgentSessionConfig(sessionID string, n workflow.Node) error {
 	if err := e.Pool.SetMaxTurns(sessionID, "default", n.MaxTurns); err != nil {
 		return fmt.Errorf("set max turns: %w", err)
 	}
 	if err := e.Pool.SetThinkingTokens(sessionID, "default", resolveThinkingTokens(n.Thinking, n.MaxThinkingTokens)); err != nil {
 		return fmt.Errorf("set thinking: %w", err)
 	}
-	// The pool spawns whatever the session's agent entry names, so the
-	// node's provider has to be written there or it is decorative: a fresh
-	// workflow session carries no entry, and the blank one SetMaxTurns just
-	// created resolves to the project/global default instead. Only written
-	// when the node actually picked a provider — an empty field means
-	// "inherit", and stamping the registry default would take a reused
-	// session over.
-	if prov != nil && strings.TrimSpace(n.Provider) != "" {
-		if key := agentProviderKey(prov); key != "" {
-			if err := e.Pool.SetAgentProvider(sessionID, "default", key); err != nil {
-				return fmt.Errorf("set provider: %w", err)
-			}
-		}
-		// A model id resolves against one instance, so it rides only with
-		// an explicit provider. Empty leaves the session's pin untouched.
-		if model := strings.TrimSpace(n.Model); model != "" {
-			if err := e.Pool.SetModelID(sessionID, "default", model); err != nil {
-				return fmt.Errorf("set model: %w", err)
-			}
-		}
-	}
 	return nil
-}
-
-// workflowOwner is the user a run borrows access from (Workflow.CreatedBy),
-// "" when the workflow has no owner or the run context carries none.
-func workflowOwner(rc *workflow.RunContext) string {
-	if rc == nil {
-		return ""
-	}
-	return rc.Workflow.CreatedBy
-}
-
-// agentProviderKey renders a provider as the "type/name" key the pool
-// stores on a session's agent entry (e.g. "claude/claude_support_ent").
-// Falls back to the bare name when the runtime type is unknown, which the
-// pool reads as type == name.
-func agentProviderKey(p provider.Provider) string {
-	name := strings.TrimSpace(p.Name())
-	if name == "" {
-		return ""
-	}
-	if t, ok := p.(providerTyper); ok {
-		if typ := strings.TrimSpace(t.ProviderType()); typ != "" {
-			return typ + "/" + name
-		}
-	}
-	return name
 }
 
 // resolveThinkingTokens maps the agent node's thinking dropdown + the
@@ -415,32 +348,11 @@ func DefaultRunSessionID(id, runID string) string {
 	return fmt.Sprintf("wf_%s_run_%s", id, runID)
 }
 
-// providerTyper is implemented by providers that know their underlying
-// runtime ("claude" / "codex" / "gemini"). Optional so the workflow
-// provider interface — and every fake in the tests — stays untouched.
-type providerTyper interface{ ProviderType() string }
-
-// providerUsesPool reports whether a provider routes through the shared
-// agent pool. Today only claude has a pool factory; codex and gemini stay
-// on the cliProvider one-shot path.
-//
-// Decided on the runtime TYPE, not the instance name. Matching the name
-// against "claude" meant an instance called anything else — "enginer",
-// "claude_support_ent", any provider a user actually configures — was
-// treated as non-pool and spawned as a bare `claude --print`: no
-// --mcp-config, so no wick MCP tools at all (the spawn silently inherited
-// the user's own ~/.claude.json servers instead), no instance env, and no
-// session events, which left the run's node stuck with no history. Since
-// no configured instance is literally named "claude", that was every
-// agent node on this host.
-//
-// The name check remains as the fallback for providers that predate
-// ProviderType (test doubles).
-func providerUsesPool(p provider.Provider) bool {
-	if t, ok := p.(providerTyper); ok {
-		return strings.EqualFold(t.ProviderType(), "claude")
-	}
-	return strings.EqualFold(p.Name(), "claude")
+// providerUsesPool reports whether a provider name routes through the
+// shared agent pool. Today only claude has a pool factory; codex and
+// gemini stay on the cliProvider one-shot path.
+func providerUsesPool(name string) bool {
+	return strings.EqualFold(name, "claude")
 }
 
 func validateSkills(ctx context.Context, prov provider.Provider, skills []string) error {

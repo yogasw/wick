@@ -108,8 +108,7 @@ spawn request
         │
    process exits
         │
-   memscope.ReadStats(unit) → oom_kill > 0 ? ──yes──> oom > 0 ? ExitOOM (own limit)
-                                                      : ExitError (host OOM, retryable)
+   memscope.ReadStats(unit) → oom_kill > 0 ? ──yes──> ExitOOM + measured peak
 ```
 
 ## Packages
@@ -227,25 +226,12 @@ get one knob each on the shared slice, `enforce`-mode only.
 | Knob | Default | What it does |
 |---|---|---|
 | `AgentsCPUWeight` | `50` | A **bias, not a cap**. Under contention agents yield to wick; when idle they use everything. Prevents "wick feels hung" on a small box — the failure that *looks* like a crash but is starvation. |
-| `AgentsCPUQuotaPct` | `80` (% of the whole machine) | A hard cap on combined agent CPU, given as a share of the **whole machine** (0–100) so the operator never needs the core count — wick multiplies it by the cores for systemd `CPUQuota` (80 → 160% on 2 cores, 640% on 8). Empty = 80, 0 = no cap. A stored value above 100 is a legacy percent-of-one-core and is divided by the cores (140 on 2 cores → 70). Keeps CPU for wick and the OS whatever the machine. |
+| `AgentsCPUQuotaPct` | `0` (off) | A hard cap on combined agent CPU. **Deliberately off**: a cap slows legitimate heavy work even on an idle machine, causing timeouts and retries that add load. The weight gives the same protection under contention without punishing idle-time work. |
 | `AgentsTasksMax` | `512` | The fork-bomb guard. Thousands of tiny processes cripple the scheduler while staying under every memory ceiling — **no memory knob catches this**. |
 | `AgentsIOWeight` | `0` (off) | Same shape as CPUWeight, for block IO. Off because IO starvation has not been an observed incident; the knob exists so enabling it is a config change, not a code change. |
 
 All four live on the slice, not per-scope: contention is a machine-level
 phenomenon.
-
-### Load from outside wick
-
-The fast watchdog (`internal/agents/resourceguard`) only acts when the load
-is wick's. Before stopping, pausing or throttling anything it compares the
-agents' share — CPU from `cpu.stat usage_usec` of agents.slice plus the
-detached `run-*` units (exited processes still count), memory as the larger
-of each scope's cgroup memory and its processes' RSS — against what the host
-uses. Under 30% for every near-hang reason means the load is outside wick (a
-build in someone's SSH session): agents keep running, spawns are held only
-when memory really is running out, and one `outside_busy` event names the
-busiest outside process (`<user>/<comm> X% CPU`) on the Resources page. An
-unmeasurable CPU share keeps the old behaviour.
 
 ## Config surface
 
@@ -311,25 +297,6 @@ read races the reap. Therefore:
 `MemGuard.ClassifyExit` returns `ok=false` whenever there is no evidence, and
 only reclassifies `ExitError` (a clean or deliberate stop is already explained).
 
-**`oom` and `oom_kill` are different counters, and the difference is the
-verdict.** `memory.events` `oom` counts OOM conditions raised by THIS cgroup
-hitting its own limit; `oom_kill` counts processes here killed by ANY OOM
-killer — the global one included. `classifyStats` (the pure decision behind
-`ClassifyExit`, testable on every platform) discriminates:
-
-- `oom_kill > 0 && oom > 0` → the agent broke its own ceiling → `ExitOOM`,
-  `OOMDetail`, never retried.
-- `oom_kill > 0 && oom == 0` → the kill came from OUTSIDE this agent's own
-  ceiling → stays a retryable `ExitError`. Which outside cause is decided by
-  the slice's own `oom` counter — `memory.events` propagates upward only, so
-  a kill by the aggregate ceiling counts its event at the slice, never at the
-  victim's scope. The Agent snapshots `MemGuard.SliceOOMCount()` at each
-  spawn; a positive delta at exit → `SliceOOMDetail` (the combined limit),
-  otherwise `HostOOMDetail` (the machine ran out; the agent's
-  `oom_score_adj` bias makes it the likely victim). Blaming the per-agent
-  limit here was a real production misread: a 1.2 GB peak reported as "over
-  its 1285 MB limit".
-
 `OOMDetail` names whatever numbers it actually has, and invents none:
 
 | peak | limit | message shape |
@@ -374,12 +341,7 @@ will die again, so unlimited retries turn one broken config into an infinite
 loop. `TestRespawnBudget_TerminatesTheRecursion` pins that the budget bounds it
 with no off-by-one.
 
-**What the agent is told** (`crashNotice` / `oomNotice`) — the notice embeds
-the exit's actual reason sentence (`ExitDetail.ReasonDetail`, threaded through
-`OnExit` → `HandleExit`), not a generic "unexpected exit". This matters most
-for a host-OOM kill: it is retried as an `ExitError`, and without the memory
-cause in the notice the agent would repeat the exact allocation that got it
-killed. The agent resumes
+**What the agent is told** (`crashNotice` / `oomNotice`) — the agent resumes
 with its conversation intact, so from the inside a crash is invisible: the last
 thing it did simply produced nothing. Without a notice it either goes silent or
 starts the task over. The message therefore states the cause, warns that work in
@@ -390,14 +352,6 @@ same work would hit the same limit.
 Restarting reuses `pool.Send` rather than calling the spawner directly: `Send`
 is the pool's one entry point for starting an agent, so the restart inherits
 slot accounting, queueing, and admission. A second spawn path would drift.
-
-One subtlety makes that work: `pool.send` buffers non-user turns without
-spawning (channel origin-context, reap notices — a user turn always follows or
-none is wanted). Recovery notices are the exception, carved out by their
-source `"recover"`: the agent just died and NO user turn is coming, so the
-notice must spawn on its own or it sits buffered until a human happens to
-message the session — which silently disables the entire respawn path.
-`TestRecoverTurnSpawnsAlone` / `TestRecoverOOMNoticeSpawnsAlone` pin it.
 
 ## wick's own OOM protection
 
