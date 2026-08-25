@@ -108,7 +108,8 @@ spawn request
         │
    process exits
         │
-   memscope.ReadStats(unit) → oom_kill > 0 ? ──yes──> ExitOOM + measured peak
+   memscope.ReadStats(unit) → oom_kill > 0 ? ──yes──> oom > 0 ? ExitOOM (own limit)
+                                                      : ExitError (host OOM, retryable)
 ```
 
 ## Packages
@@ -297,6 +298,25 @@ read races the reap. Therefore:
 `MemGuard.ClassifyExit` returns `ok=false` whenever there is no evidence, and
 only reclassifies `ExitError` (a clean or deliberate stop is already explained).
 
+**`oom` and `oom_kill` are different counters, and the difference is the
+verdict.** `memory.events` `oom` counts OOM conditions raised by THIS cgroup
+hitting its own limit; `oom_kill` counts processes here killed by ANY OOM
+killer — the global one included. `classifyStats` (the pure decision behind
+`ClassifyExit`, testable on every platform) discriminates:
+
+- `oom_kill > 0 && oom > 0` → the agent broke its own ceiling → `ExitOOM`,
+  `OOMDetail`, never retried.
+- `oom_kill > 0 && oom == 0` → the kill came from OUTSIDE this agent's own
+  ceiling → stays a retryable `ExitError`. Which outside cause is decided by
+  the slice's own `oom` counter — `memory.events` propagates upward only, so
+  a kill by the aggregate ceiling counts its event at the slice, never at the
+  victim's scope. The Agent snapshots `MemGuard.SliceOOMCount()` at each
+  spawn; a positive delta at exit → `SliceOOMDetail` (the combined limit),
+  otherwise `HostOOMDetail` (the machine ran out; the agent's
+  `oom_score_adj` bias makes it the likely victim). Blaming the per-agent
+  limit here was a real production misread: a 1.2 GB peak reported as "over
+  its 1285 MB limit".
+
 `OOMDetail` names whatever numbers it actually has, and invents none:
 
 | peak | limit | message shape |
@@ -341,7 +361,12 @@ will die again, so unlimited retries turn one broken config into an infinite
 loop. `TestRespawnBudget_TerminatesTheRecursion` pins that the budget bounds it
 with no off-by-one.
 
-**What the agent is told** (`crashNotice` / `oomNotice`) — the agent resumes
+**What the agent is told** (`crashNotice` / `oomNotice`) — the notice embeds
+the exit's actual reason sentence (`ExitDetail.ReasonDetail`, threaded through
+`OnExit` → `HandleExit`), not a generic "unexpected exit". This matters most
+for a host-OOM kill: it is retried as an `ExitError`, and without the memory
+cause in the notice the agent would repeat the exact allocation that got it
+killed. The agent resumes
 with its conversation intact, so from the inside a crash is invisible: the last
 thing it did simply produced nothing. Without a notice it either goes silent or
 starts the task over. The message therefore states the cause, warns that work in
@@ -352,6 +377,14 @@ same work would hit the same limit.
 Restarting reuses `pool.Send` rather than calling the spawner directly: `Send`
 is the pool's one entry point for starting an agent, so the restart inherits
 slot accounting, queueing, and admission. A second spawn path would drift.
+
+One subtlety makes that work: `pool.send` buffers non-user turns without
+spawning (channel origin-context, reap notices — a user turn always follows or
+none is wanted). Recovery notices are the exception, carved out by their
+source `"recover"`: the agent just died and NO user turn is coming, so the
+notice must spawn on its own or it sits buffered until a human happens to
+message the session — which silently disables the entire respawn path.
+`TestRecoverTurnSpawnsAlone` / `TestRecoverOOMNoticeSpawnsAlone` pin it.
 
 ## wick's own OOM protection
 

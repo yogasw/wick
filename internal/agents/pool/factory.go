@@ -33,7 +33,7 @@ type ClaudeFactory struct {
 	Spawner   provider.Spawner // optional override; nil = real claude
 	RecordRaw bool
 	OnEvent   func(sessionID, agentName string, ev event.AgentEvent)
-	OnExit    func(sessionID, agentName string, reason provider.ExitReason)
+	OnExit    func(sessionID, agentName string, reason provider.ExitReason, reasonDetail string)
 
 	// Gate (optional) attaches a static command whitelist to every spawn.
 	// When non-nil, Build writes a per-session settings.json + spec
@@ -432,9 +432,9 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 			})
 		}
 	}
-	onExit := func(r provider.ExitReason) {
+	onExit := func(r provider.ExitReason, reasonDetail string) {
 		if f.OnExit != nil {
-			f.OnExit(opt.SessionID, opt.AgentName, r)
+			f.OnExit(opt.SessionID, opt.AgentName, r, reasonDetail)
 		}
 	}
 
@@ -655,6 +655,8 @@ func exitReasonString(r provider.ExitReason) string {
 		return "error"
 	case provider.ExitRespawn:
 		return "respawn"
+	case provider.ExitOOM:
+		return "oom"
 	}
 	return "unknown"
 }

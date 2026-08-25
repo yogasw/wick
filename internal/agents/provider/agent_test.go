@@ -227,7 +227,7 @@ func TestAgentIdleTTLKills(t *testing.T) {
 		ParserFactory: func() event.Parser { return event.NewClaudeParser() },
 		Spawner:       spawner,
 		State:         state.New(nil),
-		OnExit:        func(r ExitReason) { exitReasons <- r },
+		OnExit:        func(r ExitReason, _ string) { exitReasons <- r },
 	})
 	if err := a.Start(context.Background()); err != nil {
 		t.Fatal(err)

@@ -129,6 +129,7 @@ func crashNotice(reason string, attempt int, giveUp bool) string {
 func oomNotice(detail string) string {
 	return "[system] Your process was stopped for using too much memory: " + detail +
 		" It was NOT restarted automatically, because repeating the same work would hit the same limit. " +
-		"Tell the user what you were doing, and suggest a smaller way to do it " +
+		"Any settings advice in that message is for the user, not you — relay it to them. " +
+		"Tell them what you were doing, and suggest a smaller way to do it yourself " +
 		"(fewer files at once, streaming instead of loading everything, or a narrower scope)."
 }

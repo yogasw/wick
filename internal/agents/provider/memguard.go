@@ -195,15 +195,49 @@ func (g *MemGuard) BiasChild(pid int) {
 // cannot distinguish an OOM kill from any other SIGKILL, and --collect
 // reaps a scope as soon as its last process exits, so a guess here would
 // mislabel the very failure this exists to explain.
-func (g *MemGuard) ClassifyExit(unit string, limitMB int) (ExitReason, string, bool) {
+// sliceOOMAtSpawn is the slice's oom counter snapshotted when this spawn
+// started (Agent captures it via SliceOOMCount); the delta since then
+// attributes a kill to the aggregate slice ceiling.
+func (g *MemGuard) ClassifyExit(unit string, limitMB, sliceOOMAtSpawn int) (ExitReason, string, bool) {
 	if g == nil || unit == "" {
 		return ExitError, "", false
 	}
-	st := memscope.ReadStats(unit)
+	delta := memscope.ReadSliceOOM() - sliceOOMAtSpawn
+	return classifyStats(memscope.ReadStats(unit), limitMB, delta)
+}
+
+// SliceOOMCount reads the agents slice's current oom counter, for the
+// spawn-time snapshot ClassifyExit diffs against. Nil-safe; 0 wherever
+// the slice (or the platform's cgroup v2) is absent.
+func (g *MemGuard) SliceOOMCount() int {
+	if g == nil {
+		return 0
+	}
+	return memscope.ReadSliceOOM()
+}
+
+// classifyStats is the pure decision behind ClassifyExit, split out so the
+// discrimination is testable on every platform (ReadStats is Linux-only).
+func classifyStats(st memscope.Stats, limitMB, sliceOOMDelta int) (ExitReason, string, bool) {
 	if !st.Known || st.OOMKills == 0 {
 		return ExitError, "", false
 	}
-	return ExitOOM, OOMDetail(st.PeakBytes, limitMB), true
+	// oom_kill counts kills by ANY OOM killer; oom counts OOM conditions
+	// raised by this cgroup hitting its OWN limit — that is the most
+	// specific evidence, so it wins outright.
+	if st.OOMEvents > 0 {
+		return ExitOOM, OOMDetail(st.PeakBytes, limitMB), true
+	}
+	// No own-limit event. memory.events propagates upward only, so a kill
+	// by the AGGREGATE slice ceiling counts its oom at the slice, not at
+	// the victim's scope. A slice event since this spawn started names the
+	// shared limit; otherwise the machine itself ran out. Both stay a
+	// retryable ExitError — neither is this agent exceeding its ceiling —
+	// but the detail must point at the right knob.
+	if sliceOOMDelta > 0 {
+		return ExitError, SliceOOMDetail(st.PeakBytes), true
+	}
+	return ExitError, HostOOMDetail(st.PeakBytes), true
 }
 
 // ReleaseScope removes the cgroup a spawn ran inside, once nothing is

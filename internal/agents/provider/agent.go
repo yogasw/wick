@@ -59,7 +59,7 @@ type Agent struct {
 
 	// onExit is fired when the subprocess exits (either via Stop or
 	// idle TTL). Optional.
-	onExit func(reason ExitReason)
+	onExit func(reason ExitReason, reasonDetail string)
 
 	// onExitDetail is fired alongside onExit with the full ExitDetail
 	// (reason detail + exit code + stderr tail on crash). Optional; the
@@ -70,6 +70,13 @@ type Agent struct {
 	// exitReasonSet ensures OnExit fires at most once per spawn, even
 	// when both the idle goroutine and the reader-exit path race.
 	exitReasonSet bool
+
+	// sliceOOMAtSpawn snapshots the agents slice's oom counter when this
+	// spawn started. ClassifyExit diffs it against the counter at exit to
+	// attribute a kill to the aggregate slice ceiling — the slice counter
+	// is cumulative across every agent and spawn, so only the delta says
+	// anything about THIS process's death.
+	sliceOOMAtSpawn int
 
 	// pendingQueue holds messages that arrived while a RespawnOnSend
 	// (codex) turn was in flight, in FIFO order. Codex is one-shot per
@@ -183,7 +190,11 @@ type Options struct {
 	ToolMemoryMaxMB int
 
 	OnEvent func(event.AgentEvent)
-	OnExit  func(reason ExitReason)
+	// OnExit also carries the human reason sentence (ExitDetail.ReasonDetail)
+	// so the pool's crash-recovery notice can tell the agent WHY it died —
+	// an OOM cause must reach the agent, or the generic "carry on" notice
+	// tells it to repeat the allocation that got it killed.
+	OnExit  func(reason ExitReason, reasonDetail string)
 	// OnExitDetail fires with the full ExitDetail (reason detail + exit
 	// code + stderr tail on crash) alongside OnExit. Optional — the
 	// factory wires it so the spawn log records the crash/kill reason.
@@ -385,6 +396,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	a.cancel = cancel
 	a.running = true
 	a.done = make(chan struct{})
+	a.sliceOOMAtSpawn = a.cfg.MemGuard.SliceOOMCount()
 	a.mu.Unlock()
 
 	go a.run(subCtx)
@@ -547,6 +559,7 @@ func (a *Agent) respawnWithMessage(text string) error {
 	a.cancel = cancel
 	a.running = true
 	a.done = make(chan struct{})
+	a.sliceOOMAtSpawn = a.cfg.MemGuard.SliceOOMCount()
 	a.mu.Unlock()
 
 	// Respawn = a brand-new subprocess from the FE's perspective; flip
@@ -1075,7 +1088,7 @@ drained:
 		Str("component", "agent").
 		Int("pid", a.PID()).
 		Int("reason", int(reason)).
-		Str("reason_name", exitReasonName(reason))
+		Str("reason_name", ExitReasonName(reason))
 	if waitErr != nil {
 		ev = ev.Str("wait_err", waitErr.Error())
 	}
@@ -1105,7 +1118,10 @@ drained:
 	if a.cfg.MemGuard != nil {
 		unit := scopeUnitOf(a.proc)
 		if reason == ExitError {
-			if r, d, ok := a.cfg.MemGuard.ClassifyExit(unit, a.cfg.MemGuard.AgentLimitMB); ok {
+			a.mu.Lock()
+			sliceOOMAtSpawn := a.sliceOOMAtSpawn
+			a.mu.Unlock()
+			if r, d, ok := a.cfg.MemGuard.ClassifyExit(unit, a.cfg.MemGuard.AgentLimitMB, sliceOOMAtSpawn); ok {
 				reason, oomDetail = r, d
 			}
 		}
@@ -1144,10 +1160,10 @@ drained:
 	a.exitReasonD(detail)
 }
 
-// exitReasonName mirrors the ExitReason iota for log lines. Kept local
+// ExitReasonName mirrors the ExitReason iota for log lines. Kept local
 // to agent.go so the reader path doesn't need to import the pool's
 // stringifier.
-func exitReasonName(r ExitReason) string {
+func ExitReasonName(r ExitReason) string {
 	switch r {
 	case ExitClean:
 		return "clean"
@@ -1196,8 +1212,9 @@ func (a *Agent) exitReason(r ExitReason) {
 
 // exitReasonD fires OnExit + OnExitDetail at most once per spawn.
 // Idempotent because both the idle timer and the reader-exit path call
-// it. OnExit gets the bare enum (unchanged contract); OnExitDetail gets
-// the full detail so the spawn log can record WHY the process ended.
+// it. OnExit gets the enum plus the reason sentence (crash recovery
+// forwards it to the agent); OnExitDetail gets the full detail so the
+// spawn log can record WHY the process ended.
 //
 // Non-clean exits also emit an Error AgentEvent into the live stream /
 // conversation history so the operator AND the next turn's model see
@@ -1222,7 +1239,7 @@ func (a *Agent) exitReasonD(d ExitDetail) {
 		}
 	}
 	if hook != nil {
-		hook(d.Reason)
+		hook(d.Reason, d.ReasonDetail)
 	}
 	if hookD != nil {
 		hookD(d)

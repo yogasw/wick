@@ -10,6 +10,23 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.4.0](https://github.com/yogasw/wick/compare/v1.3.0...v1.4.0) — Agents
+
+_Released on 2026-08-25_
+
+### Fixed
+
+*   **Crash-recovery notices now actually restart the agent**: The recovery notice sent after an unexpected agent death (crash or OOM kill) was delivered as a system turn, which the pool deliberately buffers without spawning. This meant the agent was never brought back and the notice sat unread until the next human message. Recovery turns now spawn on their own, restoring both automatic crash respawn and immediate OOM notification.
+*   **Memory kills by the host are no longer blamed on the agent's limit**: An agent killed by the global OOM killer (machine out of memory) was previously reported as having exceeded its own memory limit — even when its measured peak was below it — and was never retried.
+    *   The cgroup's `oom` and `oom_kill` counters are now read separately. Only a kill triggered by the agent's own ceiling is classified as an OOM (and is not retried).
+    *   A kill from outside the agent's individual limit (either due to the combined agent limit, detected via the `agents` slice's own counter, or the machine running out of memory) now correctly stays a retryable error whose message names the actual cause.
+    *   Recovery notices now carry the exit's actual reason sentence (including the memory cause and measured figures) instead of a generic "unexpected exit," so a restarted agent knows to change its approach rather than repeat the allocation that got it killed. The OOM notice also now tells the agent to relay operator advice to the user and keep the smaller-approach remedy for itself.
+    *   Documentation for the memory-guard page and the `wick-resource-limits` skill has been updated to distinguish between own-limit OOM, combined-limit OOM, and host OOM, and clarify their retry behaviors.
+*   **OOM kills labeled correctly in Recent Spawns**: A memory kill was previously logged with `exit_reason: "unknown"` instead of `oom` in the spawn log. This has been corrected.
+
+---
+
+
 ## [v1.3.0](https://github.com/yogasw/wick/compare/v1.2.0...v1.3.0) — Agents, Tickets, Tools
 
 _Released on 2026-08-25_
