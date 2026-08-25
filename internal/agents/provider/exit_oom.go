@@ -43,6 +43,33 @@ func OOMDetail(peakBytes uint64, limitMB int) string {
 	}
 }
 
+// HostOOMDetail builds the sentence for a kill by the GLOBAL OOM killer:
+// the machine ran out of memory, not this agent's own ceiling. Naming a
+// per-agent limit here would send the operator to a setting that did not
+// cause the kill — the numbers to change are host-level (total headroom,
+// aggregate limits, or how many agents run at once).
+func HostOOMDetail(peakBytes uint64) string {
+	const remedy = "Free up memory on the host, lower the combined agent limits, or run fewer agents at once."
+	if peakBytes == 0 {
+		return "killed by the kernel because the machine ran out of memory — its own limit was not hit. " + remedy
+	}
+	return fmt.Sprintf("used %s when the kernel killed it because the machine ran out of memory — its own limit was not hit. %s",
+		humanBytes(peakBytes), remedy)
+}
+
+// SliceOOMDetail builds the sentence for a kill by the AGGREGATE slice
+// ceiling (agents_total_memory_mb): all agents together crossed the shared
+// limit and the kernel picked this one. Its own limit was not hit, so —
+// like HostOOMDetail — no per-agent setting is named.
+func SliceOOMDetail(peakBytes uint64) string {
+	const remedy = "Raise the combined agent limit, or run fewer agents at once."
+	if peakBytes == 0 {
+		return "killed when the combined memory of all agents went over the shared limit — its own limit was not hit. " + remedy
+	}
+	return fmt.Sprintf("used %s when the combined memory of all agents went over the shared limit — its own limit was not hit. %s",
+		humanBytes(peakBytes), remedy)
+}
+
 // humanBytes renders a byte count the way an operator reads it.
 func humanBytes(b uint64) string {
 	const unit = 1024

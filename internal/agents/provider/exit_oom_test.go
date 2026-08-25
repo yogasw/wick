@@ -12,8 +12,8 @@ func TestExitOOM_IsDistinct(t *testing.T) {
 	if ExitOOM == ExitError || ExitOOM == ExitClean {
 		t.Fatal("ExitOOM collides with an existing reason")
 	}
-	if got := exitReasonName(ExitOOM); got != "oom" {
-		t.Fatalf("exitReasonName(ExitOOM) = %q, want %q", got, "oom")
+	if got := ExitReasonName(ExitOOM); got != "oom" {
+		t.Fatalf("ExitReasonName(ExitOOM) = %q, want %q", got, "oom")
 	}
 	if got := exitReasonDetail(ExitOOM); got == "" || got == "unknown" {
 		t.Fatalf("exitReasonDetail(ExitOOM) = %q, want a real sentence", got)

@@ -57,6 +57,49 @@ func TestReadStatsAt_MaxWithoutKillIsNotOOM(t *testing.T) {
 	}
 }
 
+// memory.events keeps `oom` (OOM conditions raised by THIS cgroup hitting
+// its own limit) and `oom_kill` (processes here killed by ANY OOM killer,
+// the global one included) as separate counters. Both must be read: their
+// difference is what tells a limit kill from the machine running out.
+func TestReadStatsAt_SeparatesOOMEventsFromKills(t *testing.T) {
+	root := t.TempDir()
+	// Limit-triggered kill: the cgroup raised the OOM condition itself.
+	writeScope(t, root, "claude-agent-6", "low 0\nmax 12\noom 3\noom_kill 1\n", "")
+	got := ReadStatsAt(root, "claude-agent-6")
+	if got.OOMEvents != 3 || got.OOMKills != 1 {
+		t.Fatalf("limit kill: OOMEvents=%d OOMKills=%d, want 3 and 1", got.OOMEvents, got.OOMKills)
+	}
+
+	// Global kill: a process died to the host OOM killer, but this cgroup
+	// never hit its own limit — oom stays 0 while oom_kill counts.
+	writeScope(t, root, "claude-agent-7", "low 0\nmax 0\noom 0\noom_kill 1\n", "")
+	got = ReadStatsAt(root, "claude-agent-7")
+	if got.OOMEvents != 0 || got.OOMKills != 1 {
+		t.Fatalf("global kill: OOMEvents=%d OOMKills=%d, want 0 and 1", got.OOMEvents, got.OOMKills)
+	}
+}
+
+// The slice's own memory.events tells an aggregate-ceiling kill from a
+// host OOM: a scope killed by agents_total_memory_mb has oom==0 locally
+// (the event is counted at the slice whose limit was hit), so without
+// this reading it is indistinguishable from the machine running out.
+func TestReadSliceOOMAt(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, SliceName)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "memory.events"), []byte("low 0\nmax 2\noom 4\noom_kill 4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := ReadSliceOOMAt(root); got != 4 {
+		t.Fatalf("ReadSliceOOMAt = %d, want 4", got)
+	}
+	if got := ReadSliceOOMAt(t.TempDir()); got != 0 {
+		t.Fatalf("missing slice: ReadSliceOOMAt = %d, want 0", got)
+	}
+}
+
 // --collect reaps a scope as soon as its last process exits, so the read
 // races the reap. A missing scope must read as "unknown", never as a
 // confident "not OOM" and never as a false OOM.
