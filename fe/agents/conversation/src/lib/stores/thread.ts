@@ -16,6 +16,7 @@ import type {
   Attachment,
   ConversationTurn,
   LiveTurn,
+  Sender,
   ThreadBlock,
   TypingState,
 } from "../types/agents.js";
@@ -278,10 +279,18 @@ export function createThreadStore(): ThreadStore {
         // filters "ui" out) — those render optimistically via appendUserTurn.
         let text = "";
         let source = "";
+        // Who sent it, when the channel resolved one. Carried on the event so
+        // the live turn shows the same sender chip a reloaded one does.
+        let sender: Sender | undefined;
         try {
-          const d = JSON.parse(ev.data ?? "{}") as { text?: string; source?: string };
+          const d = JSON.parse(ev.data ?? "{}") as {
+            text?: string;
+            source?: string;
+            sender?: Sender;
+          };
           text = d.text ?? "";
           source = d.source ?? "";
+          sender = d.sender;
         } catch (_) {}
         if (text.trim()) {
           const userTurn: ConversationTurn = {
@@ -291,6 +300,7 @@ export function createThreadStore(): ThreadStore {
             provider: "",
             text,
             source,
+            sender,
             timestamp: Date.now(),
             truncated: false,
             interrupted: false,

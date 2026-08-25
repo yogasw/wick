@@ -55,7 +55,7 @@ func TestTurnToContent_Image(t *testing.T) {
 		Text:        "what is this?",
 		Attachments: []store.Attachment{{AbsPath: p, MIME: "image/png"}},
 	}
-	c := turnToContent(turn)
+	c := turnToContent(turn, store.SenderName)
 	if c == nil || len(c.Parts) != 2 {
 		t.Fatalf("want text+image (2 parts), got %+v", c)
 	}

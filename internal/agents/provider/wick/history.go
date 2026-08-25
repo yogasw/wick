@@ -26,7 +26,7 @@ import (
 // maxContextTokens>0 trims oldest-first (keeping the most recent turns)
 // so the replay fits the budget. Token count uses the cheap chars/4
 // estimate; the engine calibrates against real usage on later turns.
-func loadHistory(sessionDir string, maxContextTokens int) []*genai.Content {
+func loadHistory(sessionDir string, maxContextTokens int, senderVisibility string) []*genai.Content {
 	if sessionDir == "" {
 		return nil
 	}
@@ -58,7 +58,7 @@ func loadHistory(sessionDir string, maxContextTokens int) []*genai.Content {
 		if cs != nil && idx < cs.CoveredThrough {
 			return true
 		}
-		if c := turnToContent(t); c != nil {
+		if c := turnToContent(t, senderVisibility); c != nil {
 			contents = append(contents, c)
 		}
 		return true
@@ -186,7 +186,10 @@ func appendAttachmentPaths(text string, atts []store.Attachment) string {
 }
 
 // turnToContent maps one stored turn to a genai.Content, or nil to skip.
-func turnToContent(t store.ConversationTurn) *genai.Content {
+//
+// senderVisibility is the operator's setting for how much of the sender to
+// re-apply on a user turn (store.SenderOff / SenderName / …).
+func turnToContent(t store.ConversationTurn, senderVisibility string) *genai.Content {
 	text := strings.TrimSpace(t.Text)
 	switch t.Role {
 	case "user":
@@ -202,6 +205,12 @@ func turnToContent(t store.ConversationTurn) *genai.Content {
 		// is told nothing about the files (it then hunts/hallucinates paths).
 		// Images ALSO ride as inline parts (bonus for vision models).
 		text = appendAttachmentPaths(text, t.Attachments)
+		// Same story for WHO sent the turn: t.Sender is a sibling field of
+		// t.Text, never part of it, so a replay has to re-apply the
+		// `[from: …]` line the live send carried. Without this a resumed or
+		// compacted shared thread comes back with every message anonymous,
+		// and the model answers the wrong person or asks who it is talking to.
+		text = store.PrependSenderLine(text, t.Sender, senderVisibility)
 		return userContentWithImages(text, imgs)
 	case "assistant":
 		if text == "" {

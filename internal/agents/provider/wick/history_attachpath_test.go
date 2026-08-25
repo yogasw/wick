@@ -28,7 +28,7 @@ func TestHistoryReplayReAppendsAttachmentPath(t *testing.T) {
 	sto.AppendUserTurnWithAttachments("user", "ui", "summarize this doc",
 		[]store.Attachment{{Name: "report.pdf", AbsPath: doc, MIME: "application/pdf"}})
 
-	hist := loadHistory(layout.SessionDir(sid), 0)
+	hist := loadHistory(layout.SessionDir(sid), 0, store.SenderName)
 	var got string
 	for _, c := range hist {
 		for _, p := range c.Parts {
