@@ -41,7 +41,9 @@ The active repo selection is persisted per session in `localStorage` and restore
 
 ## Multi-repo support
 
-On open, the panel recursively scans the session cwd for git repositories. The scan skips heavy directories (`node_modules`, `vendor`, `dist`, `.cache`, etc.) and caps at a fixed depth. If more than one repository is found, a dropdown appears in the left column header. Select a repo from the dropdown to switch; all sections apply to the active repo.
+On open, the panel recursively scans the session cwd for git repositories. The scan skips heavy directories (`node_modules`, `vendor`, `dist`, `.cache`, etc.) and caps at a fixed depth. If more than one repository is found, a collapsible **Repositories** section appears above the file list, showing each repo's name, branch, and ahead/behind count. Click a row to switch the active repo; all other sections apply to the active repo.
+
+The list is capped at roughly 5 visible rows with vertical scroll so it can't push the rest of the panel down. When there are more than 5 repositories, a **Search repositories** filter input appears above the list, matching against repo name and path.
 
 ## File list
 
