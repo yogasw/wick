@@ -39,6 +39,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/agents/store"
 )
 
 // Authenticator validates a plaintext Bearer token and returns the owning
@@ -504,7 +505,18 @@ func (c *Channel) dispatch(ctx context.Context, sessionID, userID, userField, pr
 		}
 	}
 
-	if err := c.sendFn(sendCtx, sessionID, agentName, "rest", "user", prompt); err != nil {
+	// Who sent it. userID is the authenticated wick account behind the
+	// Bearer token — the trustworthy half. userField is a free-text label
+	// the client chose (an end-user name in a bot relaying for others), so
+	// it is a display name only and never the identity: a caller can write
+	// anything there, but cannot change whose token this is.
+	sender := &store.Sender{
+		ID:         userID,
+		Name:       strings.TrimSpace(userField),
+		Channel:    "rest",
+		WickUserID: userID,
+	}
+	if err := c.sendFn(agentchannels.WithSender(sendCtx, sender), sessionID, agentName, "rest", "user", prompt); err != nil {
 		return dispatchResult{}, http.StatusInternalServerError, "pool dispatch failed: " + err.Error()
 	}
 

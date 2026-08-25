@@ -122,7 +122,7 @@ func (p *wickProcess) runEngine(opt provider.SpawnOptions) {
 		ToolMemoryMaxMB: opt.ToolMemoryMaxMB,
 	}
 	tools := buildTools(tc)
-	history := loadHistory(opt.SessionDir, maxContextTokens(wc))
+	history := loadHistory(opt.SessionDir, maxContextTokens(wc), opt.SenderVisibility)
 
 	// System prompt = the factory-assembled preset (immutable rules +
 	// preset body + connector catalog + session identity) plus the

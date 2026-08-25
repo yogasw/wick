@@ -28,6 +28,16 @@ type GeneralConfig struct {
 
 	RespawnOnCallerChange bool `wick:"bool;key=respawn_on_caller_change;group=Session Identity|How a session behaves when more than one person talks to it.;desc=When another user sends a message into a session already running for someone else, restart the subprocess so the new turn runs under that user's own identity and connector access. Off = the running process is reused and the turn inherits the original user's access. Costs the process's in-memory context on each handover (conversation history is reloaded)."`
 
+	// How much of a sender's identity is repeated to the model on every
+	// message. This is a privacy decision, and it is deliberately separate
+	// from what the dashboard shows: the dashboard always renders the full
+	// sender (name, channel, avatar) because a person reading a shared thread
+	// needs to tell the participants apart. What the model receives is a
+	// different question — it is repeated into every turn, it is billed as
+	// tokens, and on most installs the model has no use for a platform user
+	// ID at all.
+	SenderVisibility string `wick:"dropdown=off|name|name_id|full;key=sender_visibility;group=Session Identity;desc=How much about the sender is written into each message the agent receives. name (default) = just their display name, so the agent can address people correctly in a shared thread. off = nothing, and the agent cannot tell participants apart. name_id = adds the platform user ID, for agents that need to @-mention or DM a specific person. full = also adds the channel and handle. The dashboard always shows the full sender regardless of this setting, and none of the options let a message body override who the sender is."`
+
 	// Memory guard. MaxConcurrent above counts PROCESSES; these count
 	// BYTES. One slot is an idle agent at ~150 MB or an agent driving a
 	// browser at ~2 GB, and the pool cannot tell them apart — which is how
@@ -151,6 +161,11 @@ func DefaultGeneralConfig() GeneralConfig {
 		// Off by default: an inbound message should not be able to create an
 		// account until an operator decides that is wanted.
 		ChannelAutoRegister: false,
+		// The name alone: enough for the agent to address people correctly in
+		// a shared thread, without repeating a platform user ID into every
+		// turn on installs that have no use for one. The dashboard shows the
+		// full sender either way.
+		SenderVisibility: "name",
 		SystemPrompt:        systemprompt.DefaultSystemPrompt(),
 		WorkflowGuardMode:   "off",
 		TraceEventInlineKB:  10,

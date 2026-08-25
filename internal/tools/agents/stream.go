@@ -10,6 +10,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/agents/store"
 )
 
 // subBuffer is per-subscriber channel depth. Sized for tool_use bursts
@@ -353,12 +354,18 @@ func (b *Broadcaster) PublishRaw(sessionID, agentName, evType, data string) {
 // schedule runner) live, instead of only after a manual refresh. Without
 // this the SSE stream carries only the assistant reply, so the incoming
 // user turn silently goes missing until a refetch. Data is JSON with the
-// text + source so the UI can badge where the message came from.
-func (b *Broadcaster) PublishUserMessage(sessionID, agentName, source, text string) {
-	body, err := json.Marshal(map[string]any{
+// text + source so the UI can badge where the message came from, plus the
+// resolved sender (when the channel had one) so the live chip names the same
+// person a reloaded turn does.
+func (b *Broadcaster) PublishUserMessage(sessionID, agentName, source, text string, sender *store.Sender) {
+	payload := map[string]any{
 		"text":   text,
 		"source": source,
-	})
+	}
+	if sender != nil {
+		payload["sender"] = sender
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		log.Warn().Err(err).Str("session_id", sessionID).Msg("user_message marshal failed")
 		return

@@ -30,6 +30,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/agents/store"
 )
 
 const (
@@ -255,13 +256,16 @@ type Channel struct {
 	userTokenMu    sync.RWMutex
 	userTokenCache map[string]string
 
-	// userDisplayCache maps Slack user ID → a resolved "Name (@handle, U…)"
-	// label, prefixed onto every inbound turn so the agent always knows who
-	// spoke (matters in multi-user threads, and for picking the right
-	// connector when replying). Cached because resolving needs a users.info
-	// API call per user; the directory rarely changes mid-session.
+	// userDisplayCache maps Slack user ID → the resolved sender identity
+	// carried with every inbound turn, so the agent always knows who spoke
+	// (matters in multi-user threads, and for picking the right connector
+	// when replying). Cached because resolving needs a users.info API call
+	// per user; the directory rarely changes mid-session.
+	//
+	// Entries are handed out as copies — a caller that mutates its sender
+	// must not reach back into the cache and rename the person for everyone.
 	userDisplayMu    sync.RWMutex
-	userDisplayCache map[string]string
+	userDisplayCache map[string]*store.Sender
 
 	// tokenRefreshFn rebuilds the full userID→token map from connector rows.
 	// Wired at startup via SetTokenRefreshFn; triggered on-demand when a
@@ -300,7 +304,7 @@ func New(cfg agentconfig.SlackChannelConfig) *Channel {
 	ch := &Channel{
 		turns:            make(map[string]*turn),
 		userTokenCache:   make(map[string]string),
-		userDisplayCache: make(map[string]string),
+		userDisplayCache: make(map[string]*store.Sender),
 		autoReply:        make(map[string]bool),
 	}
 	ch.applyConfig(cfg, "")
@@ -1291,53 +1295,64 @@ func normalizeUserText(text string) string {
 	return text
 }
 
-// senderLabel resolves a Slack user ID into a "Name (@handle, U…)" label,
-// cached per user. On a cache miss it calls users.info; if that fails it
-// falls back to the bare user ID so the prefix is never empty. The label
-// prefixes every inbound turn so the agent knows who spoke — in a shared
-// thread, and for matching the sender to a connector when replying.
-func (s *Channel) senderLabel(userID string) string {
+// resolveSender turns a Slack user ID into the sender identity carried with
+// every inbound turn, cached per user. On a cache miss it calls users.info;
+// when that fails the sender still carries the ID, so the agent knows the
+// turns came from different people even if it cannot name them.
+//
+// Cached because users.info sits in a low rate-limit tier and the workspace
+// directory barely changes within a session, while a busy thread would
+// otherwise call it on every single message.
+//
+// This used to build a "Name (@handle, U…): " string prepended to the message
+// text. That put the identity inside the turn — persisted into
+// conversation.jsonl, rendered raw in the web UI, and indistinguishable from
+// something the user typed, so anyone could open a message with a matching
+// prefix and impersonate a colleague. The identity is structured data now:
+// the pool writes it as a `[wick-sender …]` line the user cannot forge, and
+// the UI renders it as a chip beside the untouched message.
+func (s *Channel) resolveSender(userID string) *store.Sender {
 	if userID == "" {
-		return ""
+		return nil
 	}
 	s.userDisplayMu.RLock()
-	label, ok := s.userDisplayCache[userID]
+	cached, ok := s.userDisplayCache[userID]
 	s.userDisplayMu.RUnlock()
 	if ok {
-		return label
+		clone := *cached
+		return &clone
 	}
 
 	s.cfgMu.Lock()
 	api := s.api
 	s.cfgMu.Unlock()
 
-	label = userID // fallback when the API is unavailable or the lookup fails
+	sender := &store.Sender{ID: userID, Channel: "slack"}
 	if api != nil {
 		if u, err := api.GetUserInfo(userID); err == nil && u != nil {
-			label = formatSenderLabel(userID, u.Name, u.RealName)
+			sender.Handle = u.Name
+			sender.Name = u.RealName
+			if sender.Name == "" {
+				sender.Name = u.Name
+			}
+		} else if err != nil {
+			log.Debug().Str("channel", "slack").Str("user", userID).Err(err).
+				Msg("resolveSender: users.info failed; sender carries the ID only")
 		}
+	}
+	// The wick account this Slack user maps to, when identity mapping is on.
+	// Distinct from the ID above: it is what the turn RUNS as, while the
+	// Slack fields are who the agent is talking to. They differ for a Slack
+	// user with no wick account, whose turns run as the channel owner.
+	if wickID, ok := s.resolveSessionOwner(userID); ok {
+		sender.WickUserID = wickID
 	}
 
 	s.userDisplayMu.Lock()
-	s.userDisplayCache[userID] = label
+	s.userDisplayCache[userID] = sender
 	s.userDisplayMu.Unlock()
-	return label
-}
-
-// formatSenderLabel builds the "Name (@handle, U…)" prefix from the parts a
-// users.info lookup returns, degrading gracefully when a part is missing. The
-// user ID is always present (it's the fallback), so the result is never empty.
-func formatSenderLabel(userID, handle, real string) string {
-	switch {
-	case real != "" && handle != "":
-		return fmt.Sprintf("%s (@%s, %s)", real, handle, userID)
-	case handle != "":
-		return fmt.Sprintf("@%s (%s)", handle, userID)
-	case real != "":
-		return fmt.Sprintf("%s (%s)", real, userID)
-	default:
-		return userID
-	}
+	clone := *sender
+	return &clone
 }
 
 // formatAttachments renders a Slack message's files as a text block appended
@@ -1626,15 +1641,13 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	})
 
 	userText := normalizeUserText(ev.Text)
-	// Prefix the sender so the agent always knows who spoke — essential in
-	// multi-user threads and for matching the sender to a connector (bot vs
-	// the user's SSO-connected account) when replying. Skip for the bare-ping
-	// fallback, which is a meta instruction rather than something the user said.
-	if strings.TrimSpace(ev.Text) != "" {
-		if who := s.senderLabel(ev.User); who != "" {
-			userText = who + ": " + userText
-		}
-	}
+	// Who spoke — essential in multi-user threads and for matching the sender
+	// to a connector (bot vs the user's SSO-connected account) when replying.
+	// Travels on the send context rather than inside userText: the pool turns
+	// it into a `[wick-sender …]` line for the agent and persists it as
+	// structured fields, so the message the user typed stays untouched in
+	// storage and in the web UI.
+	sender := s.resolveSender(ev.User)
 	// Append an attachment manifest so the agent knows the user posted files
 	// (images, PDFs, …) and has a permalink to fetch each one — the bytes
 	// themselves aren't downloaded here. Empty when the message had no files.
@@ -1691,7 +1704,8 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		}
 	}
 
-	if err := s.sendFn(s.sendCtxAs(context.Background(), callerUserID), sessionID, "main", "slack", "user", userText); err != nil {
+	userCtx := agentchannels.WithSender(s.sendCtxAs(context.Background(), callerUserID), sender)
+	if err := s.sendFn(userCtx, sessionID, "main", "slack", "user", userText); err != nil {
 		log.Error().Str("channel", "slack").Str("session", sessionID).Err(err).Msg("pool send failed")
 		s.cancelQueueTimer(sessionID, ev.Channel, ev.TimeStamp)
 		s.setReaction(reactionError, ev.Channel, ev.TimeStamp, "")

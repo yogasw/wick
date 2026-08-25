@@ -27,6 +27,7 @@ import (
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	channelsetup "github.com/yogasw/wick/internal/agents/channels/setup"
 	slackch "github.com/yogasw/wick/internal/agents/channels/slack"
+	telegramch "github.com/yogasw/wick/internal/agents/channels/telegram"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/delegation"
 	agentevent "github.com/yogasw/wick/internal/agents/event"
@@ -649,6 +650,14 @@ func NewServer() *Server {
 	agentsFactory.SystemPromptLoader = func() string {
 		return configsSvc.GetOwned("agents", "system_prompt")
 	}
+	// How much of a message sender's identity reaches the model. Read per
+	// Build so the setting takes effect on the next spawn without a restart.
+	// The wick provider is the one that needs it: it rebuilds prompts from
+	// conversation.jsonl, where the sender lives in its own field rather than
+	// in the message text.
+	agentsFactory.SenderVisibilityLoader = func() string {
+		return configsSvc.GetOwned("agents", "sender_visibility")
+	}
 	// Ticket / notes pointer: names the session's ticket and COUNTS its
 	// notes so the agent knows to read them through the notes connector.
 	// Read per Build, so a ticket attached (or a note added) mid-session
@@ -806,6 +815,34 @@ func NewServer() *Server {
 			// another principal's credential.
 			return agentchannels.CallerUserID(ctx)
 		},
+		// Who the agent is talking to, for the `[wick-sender ...]` line and
+		// the UI's sender chip. Channels stamp this themselves from their
+		// own transport envelope; a composer send falls back to the logged-in
+		// user, so a message typed in the dashboard is attributed the same
+		// way a Slack one is.
+		SenderFrom: func(ctx context.Context) *store.Sender {
+			if s := agentchannels.SenderFrom(ctx); s != nil {
+				return s
+			}
+			if u := login.GetUser(ctx); u != nil {
+				name := u.Name
+				if name == "" {
+					name = u.Email
+				}
+				return &store.Sender{
+					ID:         u.ID,
+					Name:       name,
+					Channel:    "ui",
+					WickUserID: u.ID,
+				}
+			}
+			return nil
+		},
+		// Read live so the operator can dial sender detail up or down without
+		// a restart, matching how the other agents settings behave.
+		SenderVisibilityLoader: func() string {
+			return configsSvc.GetOwned("agents", "sender_visibility")
+		},
 		RevokeMCPToken: func(token string) { mcpScopedTokens.Revoke(token) },
 		// Read live so the switch takes effect without a restart, matching
 		// how the other agents settings behave.
@@ -905,7 +942,7 @@ func NewServer() *Server {
 			// to connected web viewers, so it shows up live instead of only
 			// after a refresh. Web-sourced turns are already filtered out in
 			// the pool (the composer renders them optimistically).
-			agentsBcast.PublishUserMessage(ev.SessionID, ev.AgentName, ev.Source, ev.Text)
+			agentsBcast.PublishUserMessage(ev.SessionID, ev.AgentName, ev.Source, ev.Text, ev.Sender)
 		},
 		OnSpawnError: func(ev agentpool.SpawnErrorEvent) {
 			// The spawn failed before the agent started, so no AgentEvent will
@@ -1609,6 +1646,33 @@ func NewServer() *Server {
 					ch.RefreshTokenMap(context.Background())
 				}
 			}(slackCh)
+		}
+
+		// Telegram identity. Same resolver, same install-level auto-register
+		// switch, and the same approval gate as Slack — a second transport
+		// that skipped them would be a way around the dashboard's own access
+		// control.
+		//
+		// The join key differs because Telegram's API reports no email at
+		// any scope: the channel synthesises a reserved-domain stand-in from
+		// the sender's numeric id (see telegram/identity.go). An admin can
+		// merge that placeholder account into the person's real one later;
+		// the link survives because it is keyed on the numeric id.
+		if tgCh, ok := ch.(*telegramch.Channel); ok {
+			tgCh.SetUserResolver(slackUserResolver{
+				users:      authSvc,
+				identities: channelIdentities,
+				notifier:   channelNotifier,
+				autoRegister: func() bool {
+					return configsSvc.GetOwned("agents", "channel_auto_register") == "true"
+				},
+				instanceKey: channelReg.InstanceKeyOf(ch),
+			})
+			if agentsPool != nil {
+				tgCh.SetOwnerFn(func(ctx context.Context, sessionID, userID string) {
+					agentsPool.EnsureSessionOwner(ctx, sessionID, userID)
+				})
+			}
 		}
 	}
 

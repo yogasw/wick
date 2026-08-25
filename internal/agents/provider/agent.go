@@ -207,6 +207,11 @@ type Options struct {
 	// Preset is the system prompt content forwarded to the spawner as
 	// --append-system-prompt (or equivalent). Stripped from spawn logs.
 	Preset string
+	// SenderVisibility is forwarded to spawners that replay
+	// conversation.jsonl themselves, so a replayed turn keeps the sender the
+	// live send carried. Empty = store.SenderName. See
+	// SpawnOptions.SenderVisibility.
+	SenderVisibility string
 	// ExtraEnv merges into the subprocess env on every spawn. Used by
 	// per-channel transports (Slack, HTTP) that need to inject auth
 	// tokens or routing keys. Instance.Env is merged in by the factory.
@@ -354,21 +359,22 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
-		Workspace:       a.cfg.Workspace,
-		SessionDir:      a.cfg.SessionDir,
-		SessionID:       a.cfg.SessionID,
-		ResumeID:        a.resumeID,
-		ExtraEnv:        a.cfg.ExtraEnv,
-		ExtraArgs:       a.cfg.ExtraArgs,
-		Instance:        a.cfg.Instance,
-		GateBinary:      a.cfg.GateBinary,
-		Preset:          a.cfg.Preset,
-		MaxTurns:        a.cfg.MaxTurns,
-		ThinkingTokens:  a.cfg.ThinkingTokens,
-		ModelID:         a.cfg.ModelID,
-		MemGuard:        a.cfg.MemGuard,
-		SpawnSeq:        nextSpawnSeq(),
-		ToolMemoryMaxMB: a.cfg.ToolMemoryMaxMB,
+		Workspace:        a.cfg.Workspace,
+		SessionDir:       a.cfg.SessionDir,
+		SessionID:        a.cfg.SessionID,
+		ResumeID:         a.resumeID,
+		ExtraEnv:         a.cfg.ExtraEnv,
+		ExtraArgs:        a.cfg.ExtraArgs,
+		Instance:         a.cfg.Instance,
+		GateBinary:       a.cfg.GateBinary,
+		Preset:           a.cfg.Preset,
+		SenderVisibility: a.cfg.SenderVisibility,
+		MaxTurns:         a.cfg.MaxTurns,
+		ThinkingTokens:   a.cfg.ThinkingTokens,
+		ModelID:          a.cfg.ModelID,
+		MemGuard:         a.cfg.MemGuard,
+		SpawnSeq:         nextSpawnSeq(),
+		ToolMemoryMaxMB:  a.cfg.ToolMemoryMaxMB,
 	})
 	if err != nil {
 		cancel()
@@ -512,22 +518,23 @@ func (a *Agent) respawnWithMessage(text string) error {
 
 	subCtx, cancel := context.WithCancel(ctx)
 	proc, err := a.spawner.Spawn(subCtx, SpawnOptions{
-		Workspace:       a.cfg.Workspace,
-		SessionDir:      a.cfg.SessionDir,
-		SessionID:       a.cfg.SessionID,
-		ResumeID:        resumeID,
-		ExtraEnv:        a.cfg.ExtraEnv,
-		ExtraArgs:       a.cfg.ExtraArgs,
-		Instance:        a.cfg.Instance,
-		GateBinary:      a.cfg.GateBinary,
-		Preset:          a.cfg.Preset,
-		InitialMessage:  text,
-		MaxTurns:        a.cfg.MaxTurns,
-		ThinkingTokens:  a.cfg.ThinkingTokens,
-		ModelID:         a.cfg.ModelID,
-		MemGuard:        a.cfg.MemGuard,
-		SpawnSeq:        nextSpawnSeq(),
-		ToolMemoryMaxMB: a.cfg.ToolMemoryMaxMB,
+		Workspace:        a.cfg.Workspace,
+		SessionDir:       a.cfg.SessionDir,
+		SessionID:        a.cfg.SessionID,
+		ResumeID:         resumeID,
+		ExtraEnv:         a.cfg.ExtraEnv,
+		ExtraArgs:        a.cfg.ExtraArgs,
+		Instance:         a.cfg.Instance,
+		GateBinary:       a.cfg.GateBinary,
+		Preset:           a.cfg.Preset,
+		SenderVisibility: a.cfg.SenderVisibility,
+		InitialMessage:   text,
+		MaxTurns:         a.cfg.MaxTurns,
+		ThinkingTokens:   a.cfg.ThinkingTokens,
+		ModelID:          a.cfg.ModelID,
+		MemGuard:         a.cfg.MemGuard,
+		SpawnSeq:         nextSpawnSeq(),
+		ToolMemoryMaxMB:  a.cfg.ToolMemoryMaxMB,
 	})
 	if err != nil {
 		// Spawn failed — clear turnActive so a retry isn't parked forever.

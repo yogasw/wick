@@ -35,6 +35,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/storage"
+	"github.com/yogasw/wick/internal/agents/store"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
 	"github.com/yogasw/wick/internal/configs"
@@ -1224,7 +1225,7 @@ func startNewSession(c *tool.Ctx) {
 		return
 	}
 	// Detach from HTTP ctx (see sendMessage note) — keep request_id for logs.
-	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
+	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()))
 	if err := globalPool.SendWithAttachments(bgCtx, id, "main", "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose send: %s", err.Error())
 		renderCompose(c, text, err.Error())
@@ -1326,6 +1327,7 @@ func sessionsPage(c *tool.Ctx) {
 		ScmAsset:      spaAssetURL("scm"),
 		IdleTimeoutMs: idleTimeoutMs(),
 		RailPrefs:     railPrefsJSON(c),
+		ViewerID:      viewerID(c),
 	}))
 }
 
@@ -1410,6 +1412,7 @@ func sessionDetail(c *tool.Ctx) {
 		InitialSession: id,
 		IdleTimeoutMs:  idleTimeoutMs(),
 		RailPrefs:      railPrefsJSON(c),
+		ViewerID:       viewerID(c),
 	}))
 }
 
@@ -1512,6 +1515,47 @@ type sendReq struct {
 	Text string `json:"text"`
 }
 
+// viewerID is the wick user reading the page, inlined into the SPA shell so
+// the conversation can tell this person's own messages from everyone else's
+// on the first paint. Empty when there is no login session.
+func viewerID(c *tool.Ctx) string {
+	if u := login.GetUser(c.Context()); u != nil {
+		return u.ID
+	}
+	return ""
+}
+
+// withComposerSender stamps the logged-in user onto a detached send context
+// as the message's sender.
+//
+// A composer send cannot just let the pool read the login session, because
+// the send context is deliberately built from context.Background(): the pool
+// spawns with exec.CommandContext, so inheriting the request context would
+// SIGKILL the subprocess the moment the HTTP response returns. That detach
+// drops the login session with everything else, which is why the sender has
+// to be copied across explicitly here — the same thing a channel does with
+// its own resolved sender.
+//
+// Without this a dashboard message is stored with no sender at all, so a
+// thread mixing web and Slack turns can attribute the Slack ones and not its
+// own — and the web turns come back anonymous on replay.
+func withComposerSender(c *tool.Ctx, bg context.Context) context.Context {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		return bg
+	}
+	name := u.Name
+	if name == "" {
+		name = u.Email
+	}
+	return agentchannels.WithSender(bg, &store.Sender{
+		ID:         u.ID,
+		Name:       name,
+		Channel:    "ui",
+		WickUserID: u.ID,
+	})
+}
+
 func sendMessage(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -1604,7 +1648,7 @@ func sendMessage(c *tool.Ctx) {
 	// Detach from HTTP ctx — pool.spawn calls exec.CommandContext, so
 	// inheriting c.Context() would SIGKILL claude.exe the moment the
 	// response returns. Copy request_id over so logs still correlate.
-	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
+	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()))
 	// The person's words are never rewritten, but the leader is told, in
 	// the same message and before it reads them, which mentions wick is
 	// dispatching itself. Routing runs detached below, so without this
