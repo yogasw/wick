@@ -108,6 +108,7 @@ POST /api/projects/{projectID}/tickets
 | Field | Required | Notes |
 |---|---|---|
 | `title` | yes | Trimmed; must not be empty. |
+| `id` | no | Adopt an external id instead of a generated one — see [Adopting an external id](#adopting-an-external-id). |
 | `status` | no | Defaults to the board's first column. Must be one of the project's keys. |
 | `assignee` | no | A wick user id. **Omit** it and the token's own user is assigned; send `""` for deliberately unassigned. |
 | `fields` | no | Custom fields, keyed by the project's field keys. |
@@ -136,6 +137,45 @@ curl -s -X POST "$WICK_API/projects/$PROJECT/tickets" \
   "updated_at": "2026-08-25T04:11:09Z"
 }
 ```
+
+### Adopting an external id
+
+By default wick mints a short, human-quotable id (`T-4F2A`) — the code that
+goes on the board card and gets typed into chat. When the ticket mirrors a
+record that already has an identity elsewhere, send that identity as `id` and
+the ticket becomes addressable by it directly:
+
+```bash
+curl -s -X POST "$WICK_API/projects/$PROJECT/tickets" \
+  -H "Authorization: Bearer $WICK_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "1f2e3d4c-5b6a-7988-9a0b-1c2d3e4f5a6b",
+    "title": "Checkout returns 502 on retry"
+  }'
+```
+
+The id must be a Notion page id: 32 hex characters, dashes optional. Both
+shapes Notion hands out — the dashless one in a page URL, the dashed uuid from
+its API — normalise to the same dashless lowercase id, so one page can only
+ever map to one ticket:
+
+```json
+{ "id": "1f2e3d4c5b6a79889a0b1c2d3e4f5a6b", "…": "…" }
+```
+
+That is what makes the mapping disposable. The source system already knows the
+page id, so it can read the ticket back with
+`GET /api/tickets/1f2e3d4c5b6a79889a0b1c2d3e4f5a6b` without storing anything,
+and a second create from the same page is refused with `400` rather than
+quietly opening a duplicate.
+
+Two things to weigh before using it. The id is long where a generated one is
+short, so it reads worse on a card and in chat. And a board mixing both kinds
+carries two id shapes at once — fine when the external system is the system of
+record, worse when tickets arrive from everywhere. Omit `id` and nothing
+changes: tickets created by hand, by an agent, or by an auto-create rule keep
+getting `T-XXXX`.
 
 ## Get one ticket
 

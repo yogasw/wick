@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Tickets can adopt an external id**: `POST /api/projects/{projectID}/tickets` and the `ticket_create` MCP op now accept an optional `id` — a Notion page id, 32 hex characters with dashes optional — instead of minting a `T-XXXX` code. Both shapes Notion hands out (dashless from a page URL, dashed uuid from its API) normalise to the same dashless lowercase id, so a page maps to exactly one ticket: the source system addresses the ticket by the id it already holds, with no mapping to store, and a second create from the same page is refused rather than duplicated. Omitting `id` is unchanged — tickets created by hand, by an agent, or by an auto-create rule still get a generated code. See [Ticket Integrations ▶ Adopting an external id](/guide/agents/ticket-integrations#adopting-an-external-id).
 
 ---
 

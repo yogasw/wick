@@ -384,3 +384,72 @@ func TestCreateUsesTheProjectsOwnStatuses(t *testing.T) {
 		t.Fatal("a status this board does not have must be refused")
 	}
 }
+
+func TestCreateAdoptsExternalID(t *testing.T) {
+	l := newLayout(t)
+	// The dashed form the Notion API returns.
+	tk, err := Create(l, CreateOptions{
+		ProjectID: "p1",
+		ID:        "1f2e3d4c-5b6a-7988-9a0b-1c2d3e4f5a6b",
+		Title:     "Mirror of a Notion page",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "1f2e3d4c5b6a79889a0b1c2d3e4f5a6b"
+	if tk.ID != want {
+		t.Fatalf("id = %q, want the dashless form %q", tk.ID, want)
+	}
+	if _, lerr := Load(l, "p1", want); lerr != nil {
+		t.Fatalf("ticket not readable under its adopted id: %v", lerr)
+	}
+}
+
+func TestCreateRejectsAdoptedIDTwice(t *testing.T) {
+	l := newLayout(t)
+	const dashless = "1f2e3d4c5b6a79889a0b1c2d3e4f5a6b"
+	if _, err := Create(l, CreateOptions{ProjectID: "p1", ID: dashless, Title: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	// Same page, copied in the other shape and in upper case. It must not
+	// open a second ticket — that is the whole reason the id is adopted.
+	_, err := Create(l, CreateOptions{
+		ProjectID: "p1",
+		ID:        "1F2E3D4C-5B6A-7988-9A0B-1C2D3E4F5A6B",
+		Title:     "second",
+	})
+	if err == nil {
+		t.Fatal("re-creating from the same page id should be refused")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("error = %v, want it to name the collision", err)
+	}
+}
+
+func TestCreateRejectsUnusableIDs(t *testing.T) {
+	l := newLayout(t)
+	for _, id := range []string{
+		"../escape",
+		"a/b",
+		"T-4F2A",
+		"not-a-uuid",
+		"1f2e3d4c5b6a79889a0b1c2d3e4f5a6",   // 31 chars
+		"1f2e3d4c5b6a79889a0b1c2d3e4f5a6bc", // 33 chars
+		"1f2e3d4c5b6a79889a0b1c2d3e4f5a6g",  // g is not hex
+	} {
+		if _, err := Create(l, CreateOptions{ProjectID: "p1", ID: id, Title: "x"}); err == nil {
+			t.Fatalf("id %q should be refused", id)
+		}
+	}
+}
+
+func TestCreateWithoutIDStillGenerates(t *testing.T) {
+	l := newLayout(t)
+	tk, err := Create(l, CreateOptions{ProjectID: "p1", Title: "no id given"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(tk.ID, "T-") || len(tk.ID) != 6 {
+		t.Fatalf("id %q, want the generated T- form to be untouched", tk.ID)
+	}
+}
