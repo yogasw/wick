@@ -9,6 +9,12 @@
   let { repos, activeRepo, onSelect }: Props = $props();
 
   let open = $state(false); // default collapsed — expand manually
+  let query = $state("");
+  const filtered = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return repos;
+    return repos.filter((r) => r.name.toLowerCase().includes(q) || r.rel.toLowerCase().includes(q));
+  });
 </script>
 
 <div class="border-b border-white-300 dark:border-navy-600">
@@ -18,8 +24,22 @@
     <span class="rounded-full bg-white-300 px-1.5 text-[10px] font-semibold text-black-700 dark:bg-navy-600 dark:text-black-600">{repos.length}</span>
   </button>
   {#if open}
-    <div class="pb-1">
-      {#each repos as r (r.rel)}
+    {#if repos.length > 5}
+      <div class="px-2 pb-1">
+        <input
+          type="text"
+          bind:value={query}
+          placeholder="Search repositories"
+          class="w-full rounded-lg border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 px-2.5 py-1.5 text-xs text-black-900 dark:text-white-100 placeholder-black-600 dark:placeholder-black-700 focus:border-green-500 focus:ring-2 focus:ring-green-200 dark:focus:ring-green-800 focus:outline-none"
+        />
+      </div>
+    {/if}
+    <!-- Cap at ~5 rows; longer lists scroll instead of pushing the panel down. -->
+    <div class="max-h-[150px] overflow-y-auto pb-1">
+      {#if filtered.length === 0}
+        <p class="px-3 py-2 text-xs text-black-700 dark:text-black-600">No repositories match.</p>
+      {/if}
+      {#each filtered as r (r.rel)}
         <button
           type="button"
           onclick={() => onSelect(r.rel)}
