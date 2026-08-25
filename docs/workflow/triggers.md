@@ -131,3 +131,4 @@ Fires when the referenced workflow's run ends in `failed`. The failed run's meta
 
 - [Built-in Workflow connector ▶ `workflow_trigger_types`](/connectors/workflow#tier-1-introspection-read-only) — live trigger catalog with schemas.
 - [Channels](/guide/agents/channels) — what `channel: slack` / `telegram` resolves to.
+- [Tool Module ▶ Unauthenticated webhook endpoints](/guide/tool-module#unauthenticated-webhook-endpoints) — when a receiver needs real Go logic, a custom response body, or a home alongside an existing tool's UI and config, rather than steps an operator can wire up on the canvas.
