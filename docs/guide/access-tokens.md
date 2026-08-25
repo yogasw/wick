@@ -44,7 +44,7 @@ Both modes coexist on the same `/mcp` endpoint — wick dispatches based on the 
 
 ## Token scope
 
-A PAT carries the **same permissions as the user that issued it**. There is no per-token capability scoping yet — a token can call every connector the user has access to via tags. Treat tokens like passwords:
+A PAT carries the **same permissions as the user that issued it**. There is no per-token capability scoping yet — a token can call every connector the user has access to via tags, and, for a project that has opted in, the [ticket REST API](./agents/ticket-integrations) — a token reaches exactly the projects your user can see, and no others. Treat tokens like passwords:
 
 - Store in a password manager or a CI secret store.
 - Never commit to a repo.

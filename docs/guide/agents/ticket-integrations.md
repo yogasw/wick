@@ -66,9 +66,10 @@ Failures are JSON with a single `error` key.
 |---|---|
 | `400` | Malformed JSON, or a value the board rejects (unknown status, empty title). |
 | `401` | Missing, malformed, revoked, or unapproved token. |
-| `403` | Authenticated, but not allowed (admin-only endpoints). |
 | `404` | Ticket or project not found — **or** the project's REST API is off. |
 | `500` | Server-side failure writing the ticket. |
+
+No endpoint in this reference returns `403` to a token — sending test webhooks and reading delivery logs are admin-only actions reachable from the settings UI, not part of the token-authed surface.
 
 ---
 
