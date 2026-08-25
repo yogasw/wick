@@ -6,22 +6,54 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v1.3.0](https://github.com/yogasw/wick/compare/v1.2.0...v1.3.0) — Agents, Tickets, Tools
+
+_Released on 2026-08-25_
+
 ### Added
 
-*   **Tool webhook endpoints**: Tool modules can now open an unauthenticated, JSON-only subtree under their own mount via `r.WebhookGroup(prefix)`, so external systems can deliver callbacks without a session cookie (they can't follow the login redirect wick's per-tool access check would otherwise send). Handlers receive a `*tool.WebhookCtx` and own their own authentication — see [Tool Module ▶ Unauthenticated webhook endpoints](/guide/tool-module#unauthenticated-webhook-endpoints). Declared endpoints are listed on the tool's manager settings page with copy-ready URLs.
-*   **Ticket integrations**: A project's ticket board can now be wired to the outside world from **Ticket system → Integrations**. Outbound **webhooks** POST a signed (`X-Wick-Signature`, HMAC-SHA256) JSON event on ticket create/update/status change/assign/delete/session attach/detach/note-add and on the sweeper's followup/auto-resolve actions, with 3 retries over ~30s, a per-endpoint delivery log, and an SSRF guard refusing private/loopback/link-local addresses. A new **REST API toggle** lets a Personal Access Token authenticate against the existing ticket REST endpoints for that project, so an outside system can create and move tickets without a browser session. See [Ticket Integrations](/guide/agents/ticket-integrations).
-*   **Jump to ticket from a chat**: The conversation header's view menu now offers a jump straight to a chat's ticket (or to the board, if the chat isn't on one). Only shown on projects with ticket mode enabled.
-*   **Sender identity**: Slack, Telegram, REST, and the web composer now resolve who sent each message from their own transport envelope and carry it as a structured `sender` field on the turn, next to `text` — never inside it. A new **`agents.sender_visibility`** setting (Agents → Session Identity; `off` / `name` default / `name_id` / `full`) controls how much of that identity is repeated into the model's copy of each message via a `[from: Name]` line; the dashboard always shows the full sender regardless. The conversation UI shows a name/channel chip and colour-stable avatar initial for messages from someone other than the person reading, with a neutral bubble instead of the "you" green. See [Channels ▶ Sender identity](/guide/agents/channels#sender-identity).
-*   **Telegram identity mapping**: Telegram now maps senders to wick accounts the same way Slack does — same `channel_auto_register` switch, same approval gate. Since the Telegram Bot API reports no email at any scope, the sender's numeric ID becomes a reserved-domain stand-in (e.g. `8812@telegram.local`) used purely as a lookup key; an admin can merge it into the person's real account later. **Behaviour change:** an unknown, pending, or unapproved Telegram sender now gets a reply naming the missing step instead of silently running as the channel owner. See [Channels ▶ Telegram ▶ Sender identity mapping](/guide/agents/channels#sender-identity-mapping).
-*   **Silent replies built-in skill**: A new built-in skill (`wick-silent-replies`) teaches agents the `[silent]` reply marker — when to open a turn with it (a monitor/poll finding nothing new, a mid-sequence scheduled run, bookkeeping with nothing to decide) versus replying normally, and the exact prefix rule that makes or breaks it (case-insensitive, leading whitespace/newlines tolerated, no preamble or markdown decoration).
+*   **Tool webhook endpoints**: Tool modules can now open an unauthenticated, JSON-only subtree under their own mount via `r.WebhookGroup(prefix)`, allowing external systems to deliver callbacks without a session cookie. Handlers receive a `*tool.WebhookCtx` and are responsible for their own authentication. Declared endpoints are listed on the tool's manager settings page with copy-ready URLs.
+*   **Ticket integrations**: A project's ticket board can now be wired to external systems from **Ticket system → Integrations**.
+    *   Outbound **webhooks** POST a signed (`X-Wick-Signature`, HMAC-SHA256) JSON event on ticket create/update/status change/assign/delete/session attach/detach/note-add and on the sweeper's followup/auto-resolve actions. Webhooks include 3 retries over ~30s, a per-endpoint delivery log, and an SSRF guard refusing private/loopback/link-local addresses.
+    *   A new **REST API toggle** enables Personal Access Token authentication against existing ticket REST endpoints for that project, allowing outside systems to create and move tickets without a browser session.
+    See [Ticket Integrations](/guide/agents/ticket-integrations).
+*   **Jump to ticket from a chat**: The conversation header's view menu now offers a direct jump to a chat's associated ticket (or to the board, if not on one). This option is only shown on projects with ticket mode enabled.
+*   **Sender identity**: Slack, Telegram, REST, and the web composer now resolve message senders from their transport envelope, carrying it as a structured `sender` field on the turn, separate from the message text.
+    *   A new **`agents.sender_visibility`** setting (Agents → Session Identity; `off` / `name` default / `name_id` / `full`) controls how much of this identity is repeated into the model's copy of each message via a `[from: Name]` line; the dashboard always shows the full sender regardless.
+    *   The conversation UI displays a name/channel chip and colour-stable avatar initial for messages from someone other than the reader, using a neutral bubble instead of the "you" green.
+    See [Channels ▶ Sender identity](/guide/agents/channels#sender-identity).
+*   **Telegram identity mapping**: Telegram now maps senders to wick accounts similarly to Slack, using the same `channel_auto_register` switch and approval gate. As the Telegram Bot API does not report email, the sender's numeric ID becomes a reserved-domain stand-in (e.g., `8812@telegram.local`) for lookup.
+    *   **Behaviour change:** An unknown, pending, or unapproved Telegram sender now receives a reply naming the missing step instead of silently running as the channel owner.
+    See [Channels ▶ Telegram ▶ Sender identity mapping](/guide/agents/channels#sender-identity-mapping).
+*   **Silent replies built-in skill**: A new built-in skill (`wick-silent-replies`) teaches agents when and how to use the `[silent]` reply marker, including specific prefix rules and scenarios where silent replies are appropriate or not.
+*   **Wick-docs built-in skill**: A new built-in skill (`wick-docs`) provides agents with an evergreen pointer to relevant documentation, including a machine index of docs pages, the changelog, GitHub releases, and the running build version. The catalog block injected into provider prompts has also been raised to 8KB to accommodate a growing skill library.
 
 ### Fixed
 
-*   **Custom MCP-proxy connectors**: Object and array arguments are now forwarded to the upstream MCP server in their original JSON type instead of being stringified, fixing calls that were rejected with "expected object, received string" when such a parameter landed on a text/textarea widget.
-*   **Notes panel ordering**: Notes are now ordered by last activity (edited or created, whichever is newer) instead of creation time, so an edited note no longer sits below notes it postdates.
-*   **Ticket sessions and chat scoping**: A ticket's session list is now ordered by last activity instead of attach order. Selecting a ticket on the board (not only pressing "+ New session") now scopes the next chat to it, and the project-landing composer names the selected ticket with an option to back out. Auto-create rules are now validated when saved from the ticket-config API, so an uncompilable regex is rejected instead of silently never matching.
+*   **Custom MCP-proxy connectors**: Object and array arguments are now forwarded to the upstream MCP server in their original JSON type instead of being stringified, resolving "expected object, received string" errors when such parameters were used with text/textarea widgets.
+*   **Notes panel ordering**: Notes are now ordered by last activity (edited or created, whichever is newer) instead of creation time, ensuring the panel order reflects the displayed timestamps.
+*   **Ticket sessions and chat scoping**:
+    *   A ticket's session list is now ordered by last activity, newest first.
+    *   Selecting a ticket on the board now scopes the next chat to that ticket. The project-landing composer names the selected ticket in its placeholder and footer, with an option to start a chat without a ticket.
+    *   Auto-create rules are now validated when saved from the ticket-config API, rejecting uncompilable regular expressions immediately.
+    *   The ticket name in the composer placeholder is now clipped at 32 characters to prevent long titles from pushing UI elements off-screen.
+    *   The project options now explicitly carry `ticket_enabled` for client-side UI logic.
+*   **Agent pool race condition**: Resolved a `WaitGroup` misuse race where `wg.Add` could conflict with `wg.Wait` during agent exit, ensuring proper synchronization.
+*   **Sender identity feature fixes**:
+    *   The web composer now correctly stores sender information for dashboard messages, which previously had no sender.
+    *   The wick provider now re-applies the `[from: …]` line on replay for resumed or compacted threads, ensuring sender identity is preserved.
+    *   Telegram messages no longer render as being from "somebody else" due to missing `WickUserID`.
+*   **Tool webhook robustness**:
+    *   Webhook body reads are now capped at 1 MiB (`DefaultMaxBodyBytes`). Over-cap bodies will error rather than truncate, preventing signature verification failures from misreporting "bad signature."
+    *   Corrected `CfgBool` documentation and parsing behavior: "yes"/"on" values are now correctly identified as `false` by `strconv.ParseBool`, consistent with widget storage.
+    *   JSON encoding failures for webhook responses are now logged instead of being silently discarded.
 
 ---
+
 
 ## [v1.2.0](https://github.com/yogasw/wick/compare/v1.1.0...v1.2.0) — Agents, UI, Connectors
 
