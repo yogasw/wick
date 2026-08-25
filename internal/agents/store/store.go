@@ -55,6 +55,25 @@ type Attachment struct {
 	Size       int64  `json:"size,omitempty"`
 }
 
+// Sender identifies the human behind a user turn, as resolved by the
+// channel from its own platform API — never parsed out of message content.
+// This is what makes "who is speaking" trustworthy: the channel knows the
+// sender from the transport envelope (Slack's ev.User, Telegram's msg.From,
+// the authenticated REST caller), so a message body claiming to be someone
+// else cannot change it.
+//
+// Persisted alongside the ORIGINAL text — the `[wick-sender ...]` line the
+// pool prepends before handing the turn to the subprocess never reaches
+// conversation.jsonl, so the UI renders a clean message plus a chip built
+// from these fields.
+type Sender struct {
+	ID         string `json:"id"`                     // platform user id (U0104, 8812, wick uuid)
+	Name       string `json:"name,omitempty"`         // display name
+	Handle     string `json:"handle,omitempty"`       // @handle, without the @
+	Channel    string `json:"channel"`                // slack | telegram | rest | ui
+	WickUserID string `json:"wick_user_id,omitempty"` // resolved wick account, when mapped
+}
+
 // Artifact is a file produced by an assistant turn, derived from the turn's
 // trace at read time (never persisted). URL serves bytes inline (images, pdf);
 // DownloadURL forces a download. Kind drives how the UI previews it.
@@ -78,6 +97,7 @@ type ConversationTurn struct {
 	Agent       string       `json:"agent,omitempty"`    // assistant turn only
 	Provider    string       `json:"provider,omitempty"` // assistant turn only — "type/name" snapshot at turn time
 	Source      string       `json:"source,omitempty"`
+	Sender      *Sender      `json:"sender,omitempty"` // user turn only — who sent it, resolved by the channel
 	Text        string       `json:"text"`
 	Truncated   bool         `json:"truncated,omitempty"`
 	Interrupted bool         `json:"interrupted,omitempty"` // true when killed before Done — distinct from text-cap truncation
@@ -220,10 +240,24 @@ func (s *Store) AppendUserTurn(role, source, text string) error {
 // uploaded files. The attachments are persisted alongside the text so
 // the UI can re-render thumbnails / file chips after reload.
 func (s *Store) AppendUserTurnWithAttachments(role, source, text string, atts []Attachment) error {
+	return s.AppendUserTurnWithSender(role, source, text, atts, nil)
+}
+
+// AppendUserTurnWithSender is AppendUserTurnWithAttachments plus the
+// resolved identity of whoever sent the turn. sender may be nil — a
+// scheduled run, a recovery message, or a legacy caller has no human
+// behind it, and turns written before this field existed read back as nil.
+//
+// text is the ORIGINAL message. The pool prepends a `[wick-sender ...]`
+// line before handing the turn to the subprocess; that line is deliberately
+// not persisted, so the UI can render the message the person actually typed
+// and build the sender chip from these fields instead of parsing text.
+func (s *Store) AppendUserTurnWithSender(role, source, text string, atts []Attachment, sender *Sender) error {
 	turn := ConversationTurn{
 		Timestamp:   s.now().UTC(),
 		Role:        role,
 		Source:      source,
+		Sender:      sender,
 		Text:        text,
 		Attachments: atts,
 	}

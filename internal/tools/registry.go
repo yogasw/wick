@@ -26,12 +26,12 @@ import (
 	pkgentity "github.com/yogasw/wick/pkg/entity"
 
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
-	converttext "github.com/yogasw/wick/internal/tools/convert-text"
 	agentstool "github.com/yogasw/wick/internal/tools/agents"
-	providerstorage "github.com/yogasw/wick/internal/tools/provider-storage"
-	"github.com/yogasw/wick/internal/tools/webtty"
+	converttext "github.com/yogasw/wick/internal/tools/convert-text"
 	"github.com/yogasw/wick/internal/tools/encfields"
 	"github.com/yogasw/wick/internal/tools/external"
+	providerstorage "github.com/yogasw/wick/internal/tools/provider-storage"
+	"github.com/yogasw/wick/internal/tools/webtty"
 
 	"github.com/yogasw/wick/pkg/tool"
 )

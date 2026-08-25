@@ -170,6 +170,14 @@ Filters — statuses, assignee, and the Untracked chip — decide what the board
 
 Deleting a ticket asks whether its chats survive as untracked or are deleted with it.
 
+Opening a ticket's detail lists its sessions **most recently active first**, not in the order they were attached — the chat someone was just in surfaces at the top rather than wherever it happened to land on a long-running ticket.
+
+### Starting a chat on a ticket
+
+Selecting a ticket on the board — not only pressing **+ New session** — scopes the next chat you start to it: the composer names the ticket and the placeholder reflects it (clipped if the title runs long), and a **Start without a ticket** link backs out of the selection. The new session is attached to the ticket as soon as it opens, so it reads the ticket's notes from its first turn.
+
+From inside a chat, the conversation header's view menu offers a jump: a chat already attached to a ticket jumps straight to it, one that isn't opens the board instead. It only appears when the project has ticket mode on.
+
 ### Per-project settings
 
 Configured from the project settings page (or via `ticket_settings_get` / `ticket_settings_set` on the [Tickets connector](/connectors/tickets#operations)):
@@ -208,9 +216,14 @@ Rules are tried **in order and the first match wins**, so a disabled narrow rule
 
 Notes are a separate subsystem from tickets, not a ticket-only feature — a session with no ticket still has its own notes. See the [Notes connector](/connectors/notes) for the full model (audience, hidden notes, and how notes travel when a session is attached, moved, or detached).
 
+### Integrations
+
+A project's board can also be wired to the outside world: outbound webhooks that fire on ticket events, and a Personal Access Token-authed REST API for another system to create and move tickets. Both are off by default and configured under **Ticket system → Integrations**. See [Ticket Integrations](./ticket-integrations) for setup, the full endpoint reference, and the webhook event catalogue.
+
 ## See also
 
 - [Pool & Sessions](./pool) — how the cwd is actually wired into `exec.Cmd`.
 - [Providers](./providers) — the `provider` default on project meta.
 - [Channels](./channels) — per-channel default project config.
 - [Tickets connector](/connectors/tickets) / [Notes connector](/connectors/notes) — the MCP surface for both.
+- [Ticket Integrations](./ticket-integrations) — outbound webhooks and the token-authed REST API.

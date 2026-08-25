@@ -130,6 +130,7 @@ export default withMermaid(defineConfig({
           },
           { text: 'Overview', link: '/guide/agents' },
           { text: 'Projects', link: '/guide/agents/projects' },
+          { text: 'Ticket Integrations', link: '/guide/agents/ticket-integrations' },
           { text: 'Providers', link: '/guide/agents/providers' },
           { text: 'Channels (Slack / Telegram / Web)', link: '/guide/agents/channels' },
           { text: 'Scheduled Messages', link: '/guide/agents/scheduled-messages' },

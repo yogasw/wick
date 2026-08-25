@@ -43,9 +43,13 @@ export const getPresetOptions = (base: string) =>
   );
 
 export const getProjectOptions = (base: string) =>
-  apiGetE<(ProjectOption & { default_provider?: string; default_model?: string })[] | null>(
-    `${base}/projects/options`,
-  ).pipe(
+  apiGetE<
+    (ProjectOption & {
+      default_provider?: string;
+      default_model?: string;
+      ticket_enabled?: boolean;
+    })[] | null
+  >(`${base}/projects/options`).pipe(
     Effect.map((r) =>
       (r ?? []).map((p) => ({
         ...p,
@@ -55,6 +59,7 @@ export const getProjectOptions = (base: string) =>
         // Carried alongside the provider so the landing composer can preselect
         // the exact model the project pins, down to a live-set leaf.
         defaultModel: p.defaultModel ?? p.default_model ?? "",
+        ticketEnabled: p.ticketEnabled ?? p.ticket_enabled ?? false,
       })),
     ),
   );

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/yogasw/wick/internal/pkg/render"
@@ -44,6 +45,7 @@ type toolRouter struct {
 	statics []staticEntry
 	raws    []rawEntry
 	mws     []mwEntry
+	hooks   []hookEntry
 }
 
 type routeEntry struct {
@@ -67,6 +69,17 @@ type mwEntry struct {
 	prefix string // resolved, /tools/{key}-prefixed
 	owner  string
 	mw     tool.Middleware
+}
+
+// hookEntry is one route declared on a WebhookGroup. These mount on the
+// same toolsMux as ordinary routes but their resolved paths are also
+// reported via WebhookPrefixes so server.go can route them around the
+// per-tool access check.
+type hookEntry struct {
+	method, path, owner, group string
+	toolKey                    string
+	h                          tool.WebhookHandlerFunc
+	meta                       tool.Tool
 }
 
 func newToolRouter(cfg tool.ConfigReader) *toolRouter {
@@ -117,6 +130,71 @@ func (t *toolRouter) HandleRaw(prefix string, fn func(cfg tool.ConfigReader) htt
 		owner:  t.meta.Name,
 		fn:     fn,
 	})
+}
+
+// WebhookGroup opens an unauthenticated JSON-only subtree at prefix and
+// returns a router scoped to it. The prefix is resolved against the
+// current meta's /tools/{key} base immediately, so the returned router
+// keeps working after withScope moves on to the next module.
+func (t *toolRouter) WebhookGroup(prefix string) tool.WebhookRouter {
+	return &webhookRouter{
+		parent: t,
+		group:  t.resolve(prefix),
+		meta:   t.meta,
+	}
+}
+
+// webhookRouter implements tool.WebhookRouter by appending to its
+// parent's hooks slice. It captures the meta at construction time
+// rather than reading t.meta per call, so a module may hold the group
+// past the end of its own Register without picking up another tool's
+// scope.
+type webhookRouter struct {
+	parent *toolRouter
+	group  string // resolved, /tools/{key}-prefixed
+	meta   tool.Tool
+}
+
+func (g *webhookRouter) GET(path string, h tool.WebhookHandlerFunc) { g.add("GET", path, h) }
+func (g *webhookRouter) POST(path string, h tool.WebhookHandlerFunc) {
+	g.add("POST", path, h)
+}
+func (g *webhookRouter) PUT(path string, h tool.WebhookHandlerFunc) { g.add("PUT", path, h) }
+func (g *webhookRouter) DELETE(path string, h tool.WebhookHandlerFunc) {
+	g.add("DELETE", path, h)
+}
+func (g *webhookRouter) PATCH(path string, h tool.WebhookHandlerFunc) {
+	g.add("PATCH", path, h)
+}
+
+// add joins the group prefix with a route-relative path and records the
+// entry on the parent router.
+func (g *webhookRouter) add(method, path string, h tool.WebhookHandlerFunc) {
+	if h == nil {
+		return
+	}
+	g.parent.hooks = append(g.parent.hooks, hookEntry{
+		method:  method,
+		path:    joinPath(g.group, path),
+		owner:   g.meta.Name,
+		group:   g.group,
+		toolKey: g.meta.Key,
+		h:       h,
+		meta:    g.meta,
+	})
+}
+
+// joinPath appends a route-relative path to an already-resolved base.
+// An empty or "/" rel means the base itself.
+func joinPath(base, rel string) string {
+	rel = strings.TrimSpace(rel)
+	if rel == "" || rel == "/" {
+		return base
+	}
+	if !strings.HasPrefix(rel, "/") {
+		rel = "/" + rel
+	}
+	return base + rel
 }
 
 // Meta returns the tool currently being registered. Useful when a
@@ -188,6 +266,24 @@ func (t *toolRouter) validate() error {
 		}
 		seen[key] = r.owner
 	}
+	// Webhook routes share the mux with ordinary routes, so they share
+	// the duplicate check. Checking them in the same map also catches a
+	// module that opens a webhook group over a path it already serves
+	// as a normal (access-checked) route — that would silently strip the
+	// access check off the earlier route, so it must fail the boot.
+	for _, hk := range t.hooks {
+		if strings.TrimSpace(hk.group) == "" {
+			return fmt.Errorf("tool %q: WebhookGroup called with empty prefix", hk.owner)
+		}
+		if hk.group == "/tools/"+hk.toolKey {
+			return fmt.Errorf("tool %q: WebhookGroup(%q) would expose the whole tool without authentication; use a sub-path such as \"/webhook\"", hk.owner, hk.group)
+		}
+		key := hk.method + " " + hk.path
+		if prev, dup := seen[key]; dup {
+			return fmt.Errorf("tool: duplicate route %s (owned by %q and %q)", key, prev, hk.owner)
+		}
+		seen[key] = hk.owner
+	}
 	for _, s := range t.statics {
 		if strings.TrimSpace(s.prefix) == "" {
 			return fmt.Errorf("tool %q: Static called with empty prefix", s.owner)
@@ -241,4 +337,52 @@ func (t *toolRouter) mount(mux *http.ServeMux) {
 	for _, raw := range t.raws {
 		mux.Handle(raw.prefix, raw.fn(t.cfg))
 	}
+	for _, hk := range t.hooks {
+		hk := hk
+		cfg := t.cfg
+		mux.Handle(hk.method+" "+hk.path, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			hk.h(tool.NewWebhookCtx(w, req, hk.meta, cfg))
+		}))
+	}
+}
+
+// WebhookPrefixes returns the distinct group prefixes opened via
+// Router.WebhookGroup, sorted for a stable boot log and a stable admin
+// listing. server.go routes requests under these prefixes straight to
+// the tools mux, skipping the per-tool access check.
+func (t *toolRouter) WebhookPrefixes() []string {
+	seen := make(map[string]bool, len(t.hooks))
+	out := make([]string, 0, len(t.hooks))
+	for _, hk := range t.hooks {
+		if seen[hk.group] {
+			continue
+		}
+		seen[hk.group] = true
+		out = append(out, hk.group)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// WebhookRoutes returns one descriptor per declared webhook route,
+// grouped by tool key and sorted by path then method. The manager
+// surfaces these on a tool's settings page so an operator can see the
+// exact URLs that answer without a login.
+func (t *toolRouter) WebhookRoutes() []tool.WebhookRoute {
+	out := make([]tool.WebhookRoute, 0, len(t.hooks))
+	for _, hk := range t.hooks {
+		out = append(out, tool.WebhookRoute{
+			ToolKey: hk.toolKey,
+			Method:  hk.method,
+			Path:    hk.path,
+			Group:   hk.group,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Path != out[j].Path {
+			return out[i].Path < out[j].Path
+		}
+		return out[i].Method < out[j].Method
+	})
+	return out
 }

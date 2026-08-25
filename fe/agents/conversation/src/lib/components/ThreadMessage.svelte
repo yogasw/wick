@@ -4,6 +4,8 @@
   import { turnTime, parseEventTime } from "../timeFormat.js";
   import { enrich } from "../richRender.js";
   import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal } from "../todoGroups.js";
+  import { avatarTone } from "../senderTone.js";
+  import { isViewer } from "../viewer.js";
   import ToolCard from "./ToolCard.svelte";
   import TodoCard from "./TodoCard.svelte";
   import ArtifactGallery from "./ArtifactGallery.svelte";
@@ -45,15 +47,69 @@
   });
   const routedHandles = $derived(routed.note.match(/@[a-z0-9-]+/g) ?? []);
 
-  /* Source badge for user turns that did NOT come from this web session —
-     a channel (Slack/Telegram/…) or the schedule runner. "ui"/empty = typed
-     here, no badge. Keeps it clear which messages arrived from elsewhere. */
+  /* Whether this user turn came from somebody other than the person reading.
+     A session can be written into by several people — a colleague on the same
+     dashboard, a teammate in Slack — and their bubbles are otherwise
+     identical to yours, which is exactly the confusion this feature exists to
+     remove. Matching on wick_user_id means the same human is recognised
+     whether they typed here or in Slack. */
+  const fromSomeoneElse = $derived(
+    isUser && turn.sender != null && !isViewer(turn.sender.wick_user_id)
+  );
+
+  /* Badge above a user bubble. Shown when the message is from someone else
+     (name, plus the channel when it did not come from the dashboard), or when
+     it arrived from a non-web source at all — an unattributed Slack message
+     still has to read as "not typed here".
+
+     Your own messages get nothing: labelling every bubble you sent with your
+     own name is noise, and the right-hand side already means "you".
+
+     The name comes from the structured `sender` field, never from the message
+     text, so nobody can put someone else's name on their own message. */
   const sourceBadge = $derived.by(() => {
     if (!isUser) return null;
     const src = (turn.source ?? "").trim().toLowerCase();
-    if (src === "" || src === "ui" || src === "web" || src === "rest") return null;
     if (src === "schedule") return { label: "Scheduled", icon: "clock" };
-    return { label: "via " + src.charAt(0).toUpperCase() + src.slice(1), icon: "channel" };
+
+    const isWeb = src === "" || src === "ui" || src === "web";
+    if (isWeb && !fromSomeoneElse) return null;
+
+    const who = (turn.sender?.name || turn.sender?.handle || "").trim();
+    const channelName = src.charAt(0).toUpperCase() + src.slice(1);
+    // A colleague on the dashboard is named, not channel-labelled: "via Ui"
+    // says nothing a reader wants. Off-web messages keep the channel, which
+    // is genuinely useful context.
+    const label = isWeb
+      ? who
+      : who
+        ? `${who} · ${channelName}`
+        : "via " + channelName;
+    if (!label) return null;
+
+    return {
+      label,
+      icon: src === "slack" || src === "telegram" ? src : "channel",
+      // Split parts so the name can carry the visual weight and the channel
+      // recede — the person is what a reader scans for in a busy thread.
+      who,
+      // Empty for a dashboard message: the label already omits it, and the
+      // markup keys off this to decide whether to render the "· Channel" half.
+      channelName: isWeb ? "" : channelName,
+      // A one-letter avatar reads faster than any icon when several people
+      // are talking: colour and initial are recognisable before the text is.
+      initial: who ? who.trim().charAt(0).toUpperCase() : "",
+      // Six fixed hues, picked from the sender ID so one person keeps the
+      // same colour across every message and every reload. Hashing the ID
+      // rather than the name means a display-name change doesn't reshuffle
+      // it. Neutral-ish tones only — these must not read as status colours.
+      tone: avatarTone(turn.sender?.id ?? who),
+      title: turn.sender
+        ? (who || turn.sender.id) +
+          (isWeb ? "" : ` · via ${channelName}`) +
+          (turn.sender.handle ? ` (@${turn.sender.handle})` : "")
+        : `Sent via ${channelName}`,
+    };
   });
 
   /* Per-bubble timestamp is just the clock (WhatsApp shows only HH:mm inside
@@ -281,21 +337,67 @@
              message rather than a floating label. -->
         <div class="flex flex-col items-end gap-0.5 min-w-0 max-w-full">
           {#if sourceBadge}
-            <span class="inline-flex items-center gap-1 rounded-full bg-green-200 dark:bg-green-900 px-2 py-0.5 text-[10px] font-medium text-green-700 dark:text-green-300 mr-0.5">
+            <span
+              data-testid="sender-chip"
+              title={sourceBadge.title}
+              class="inline-flex items-center gap-1.5 pr-1 mr-0.5 text-[11px] leading-4 text-black-800 dark:text-black-600"
+            >
+              {#if sourceBadge.initial}
+                <!-- One-letter avatar in a colour stable per person: in a busy
+                     thread you recognise the speaker before reading the name. -->
+                <span
+                  aria-hidden="true"
+                  class={"flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold " +
+                    sourceBadge.tone.cls}
+                >{sourceBadge.initial}</span>
+              {/if}
+
               {#if sourceBadge.icon === "clock"}
-                <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5">
+                <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 opacity-70" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="8" cy="9" r="5.5"></circle>
                   <path d="M8 6v3l2 1.5M3 2.5 1.5 4M13 2.5 14.5 4" stroke-linecap="round" stroke-linejoin="round"></path>
                 </svg>
+              {:else if sourceBadge.icon === "slack"}
+                <!-- Slack's four-bar mark, monochrome so it inherits the muted
+                     chip colour instead of competing with the message. -->
+                <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 opacity-70" fill="currentColor" aria-hidden="true">
+                  <path d="M3.4 9.9a1.4 1.4 0 1 1-1.4-1.4h1.4v1.4Zm.7 0a1.4 1.4 0 1 1 2.8 0v3.5a1.4 1.4 0 1 1-2.8 0V9.9Z"></path>
+                  <path d="M6.5 3.4A1.4 1.4 0 1 1 7.9 2v1.4H6.5Zm0 .7a1.4 1.4 0 1 1 0 2.8H3a1.4 1.4 0 1 1 0-2.8h3.5Z"></path>
+                  <path d="M12.6 6.5a1.4 1.4 0 1 1 1.4 1.4h-1.4V6.5Zm-.7 0a1.4 1.4 0 1 1-2.8 0V3a1.4 1.4 0 1 1 2.8 0v3.5Z"></path>
+                  <path d="M9.5 12.6a1.4 1.4 0 1 1-1.4 1.4v-1.4h1.4Zm0-.7a1.4 1.4 0 1 1 0-2.8H13a1.4 1.4 0 1 1 0 2.8H9.5Z"></path>
+                </svg>
+              {:else if sourceBadge.icon === "telegram"}
+                <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 opacity-70" fill="currentColor" aria-hidden="true">
+                  <path d="M14.5 2.3 1.9 7.2c-.7.3-.7.8 0 1l3.2 1 1.2 3.7c.2.4.3.6.6.6.3 0 .4-.1.6-.3l1.5-1.5 3.1 2.3c.6.3 1 .1 1.1-.5l2.1-9.8c.2-.8-.3-1.1-.8-.9ZM6.3 9.4l6.4-4c.3-.2.6 0 .3.2L7.9 10.4l-.2 2.1-1.4-3.1Z"></path>
+                </svg>
               {:else}
-                <svg viewBox="0 0 16 16" class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="1.5">
+                <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 opacity-70" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M3 4a1 1 0 011-1h8a1 1 0 011 1v6a1 1 0 01-1 1H6l-3 2.5V4z" stroke-linejoin="round"></path>
                 </svg>
               {/if}
-              {sourceBadge.label}
+
+              {#if sourceBadge.who}
+                <!-- The person carries the weight; the channel recedes. Both
+                     stay in one text node so a screen reader (and the tests)
+                     read "Name · Channel" as a single label. -->
+                <span class="min-w-0 truncate"
+                  ><span class="font-medium text-black-900 dark:text-white-100">{sourceBadge.who}</span
+                  >{#if sourceBadge.channelName}<span class="opacity-70">{" · " + sourceBadge.channelName}</span>{/if}</span
+                >
+              {:else}
+                <span class="truncate">{sourceBadge.label}</span>
+              {/if}
             </span>
           {/if}
-          <div class="min-w-0 max-w-full overflow-hidden rounded-2xl rounded-tr-sm bg-green-500 px-4 py-2.5 text-base text-white-100 whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm">
+          <!-- Green is "you". Someone else writing into this session gets a
+               neutral surface instead, so the two are distinguishable at a
+               glance rather than only by reading the name above them. -->
+          <div
+            class={"min-w-0 max-w-full overflow-hidden rounded-2xl rounded-tr-sm px-4 py-2.5 text-base whitespace-pre-wrap [overflow-wrap:anywhere] leading-relaxed shadow-sm " +
+              (fromSomeoneElse
+                ? "bg-white-200 dark:bg-navy-700 text-black-900 dark:text-white-100 ring-1 ring-white-400 dark:ring-navy-600"
+                : "bg-green-500 text-white-100")}
+          >
             {@html linkifyText(routed.text)}
           </div>
         </div>

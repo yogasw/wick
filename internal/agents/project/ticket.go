@@ -1,5 +1,10 @@
 package project
 
+import (
+	"slices"
+	"strings"
+)
+
 // TicketField is one custom field in a project's ticket schema. Values
 // live per session in session.Meta.Ticket.Fields keyed by Key.
 type TicketField struct {
@@ -58,6 +63,10 @@ type TicketConfig struct {
 	// starts as. Rules are tried in order and the FIRST match wins, so a
 	// narrow exception belongs above the broad rule it carves out of.
 	AutoCreate []AutoCreateRule `json:"auto_create,omitempty"`
+
+	// Integrations wires the board to the outside world — outbound webhooks
+	// and the token-authed REST surface. Zero value = both off.
+	Integrations TicketIntegrations `json:"integrations,omitempty"`
 }
 
 // Channel kinds an AutoCreateRule can be narrowed to. A DM is somebody's
@@ -192,4 +201,72 @@ func DefaultTicketFields() []TicketField {
 		{Key: "type", Label: "Type", Type: "select", Options: []string{"bug", "incident", "task", "question"}},
 		{Key: "priority", Label: "Priority", Type: "select", Options: []string{"low", "normal", "high", "urgent"}},
 	}
+}
+
+// TicketIntegrations wires a project's board to the outside world: outbound
+// webhooks that fire when a ticket changes, and a token-authed REST surface
+// so another system can create and move tickets.
+//
+// The zero value means both are off, so every meta.json written before this
+// field existed decodes to "no integrations" and nothing starts talking to
+// the network because of an upgrade.
+type TicketIntegrations struct {
+	// APIEnabled opens the ticket REST endpoints to Personal Access Token
+	// auth for this project. Off by default: the board is reachable from
+	// the browser either way, and a project should have to opt in before a
+	// bearer token can move its work.
+	APIEnabled bool `json:"api_enabled,omitempty"`
+	// Webhooks are the endpoints notified when this project's tickets
+	// change. Order is display order only.
+	Webhooks []TicketWebhook `json:"webhooks,omitempty"`
+}
+
+// TicketWebhook is one outbound endpoint.
+type TicketWebhook struct {
+	// ID is stable across edits so a delivery log can be kept per webhook
+	// even as its URL or name is reworded.
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	URL  string `json:"url"`
+	// Secret keys the HMAC-SHA256 signature sent as X-Wick-Signature. Empty
+	// means unsigned — allowed (a receiver on a private network may not
+	// need it) but the UI nudges against it.
+	//
+	// Never rendered back to a client: the API redacts it on read, and a
+	// blank value on save means "keep the stored one" rather than "clear
+	// it", so editing a webhook's URL cannot silently unsign it.
+	Secret string `json:"secret,omitempty"`
+	// Events filters which events reach this endpoint. Empty means all of
+	// them, which is the least surprising default for a fresh webhook.
+	Events []string `json:"events,omitempty"`
+	// Headers are extra request headers, for receivers that need a static
+	// API key or a routing hint alongside the signature.
+	Headers map[string]string `json:"headers,omitempty"`
+	// Enabled parks an endpoint without losing how it was configured.
+	Enabled bool `json:"enabled"`
+}
+
+// WantsEvent reports whether this webhook should receive event name.
+func (w TicketWebhook) WantsEvent(name string) bool {
+	if !w.Enabled {
+		return false
+	}
+	if len(w.Events) == 0 {
+		return true // no filter = everything
+	}
+	return slices.Contains(w.Events, name)
+}
+
+// ActiveWebhooks returns the enabled webhooks that want event name.
+func (c TicketConfig) ActiveWebhooks(event string) []TicketWebhook {
+	var out []TicketWebhook
+	for _, w := range c.Integrations.Webhooks {
+		if strings.TrimSpace(w.URL) == "" {
+			continue // half-written row in the editor
+		}
+		if w.WantsEvent(event) {
+			out = append(out, w)
+		}
+	}
+	return out
 }

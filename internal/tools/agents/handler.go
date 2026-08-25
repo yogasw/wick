@@ -35,6 +35,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/skills"
 	"github.com/yogasw/wick/internal/agents/skillsync"
 	"github.com/yogasw/wick/internal/agents/storage"
+	"github.com/yogasw/wick/internal/agents/store"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
 	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
 	"github.com/yogasw/wick/internal/configs"
@@ -345,6 +346,13 @@ func Register(r tool.Router) {
 	r.DELETE("/api/tickets/{ticketID}", apiTicketDelete)
 	r.PUT("/api/tickets/{ticketID}/sessions/{sid}", apiTicketAttachSession)
 	r.DELETE("/api/tickets/{ticketID}/sessions/{sid}", apiTicketDetachSession)
+
+	// JSON API — ticket integrations. The event catalogue is served from the
+	// code so the settings UI and the docs cannot drift from what actually
+	// fires; the webhook rows themselves are saved through ticket-config.
+	r.GET("/api/ticket-events", apiTicketEvents)
+	r.GET("/api/projects/{id}/ticket-webhooks/{webhookID}/deliveries", apiTicketWebhookDeliveries)
+	r.POST("/api/projects/{id}/ticket-webhooks/{webhookID}/test", apiTicketWebhookTest)
 
 	// JSON API — notes. Scoped by ?ticket_id= or ?session_id=; a session
 	// that belongs to a ticket resolves to the ticket's notes.
@@ -1224,7 +1232,7 @@ func startNewSession(c *tool.Ctx) {
 		return
 	}
 	// Detach from HTTP ctx (see sendMessage note) — keep request_id for logs.
-	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
+	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()))
 	if err := globalPool.SendWithAttachments(bgCtx, id, "main", "ui", "user", text, "", atts); err != nil {
 		log.Ctx(c.Context()).Error().Msgf("compose send: %s", err.Error())
 		renderCompose(c, text, err.Error())
@@ -1326,6 +1334,7 @@ func sessionsPage(c *tool.Ctx) {
 		ScmAsset:      spaAssetURL("scm"),
 		IdleTimeoutMs: idleTimeoutMs(),
 		RailPrefs:     railPrefsJSON(c),
+		ViewerID:      viewerID(c),
 	}))
 }
 
@@ -1410,6 +1419,7 @@ func sessionDetail(c *tool.Ctx) {
 		InitialSession: id,
 		IdleTimeoutMs:  idleTimeoutMs(),
 		RailPrefs:      railPrefsJSON(c),
+		ViewerID:       viewerID(c),
 	}))
 }
 
@@ -1512,6 +1522,47 @@ type sendReq struct {
 	Text string `json:"text"`
 }
 
+// viewerID is the wick user reading the page, inlined into the SPA shell so
+// the conversation can tell this person's own messages from everyone else's
+// on the first paint. Empty when there is no login session.
+func viewerID(c *tool.Ctx) string {
+	if u := login.GetUser(c.Context()); u != nil {
+		return u.ID
+	}
+	return ""
+}
+
+// withComposerSender stamps the logged-in user onto a detached send context
+// as the message's sender.
+//
+// A composer send cannot just let the pool read the login session, because
+// the send context is deliberately built from context.Background(): the pool
+// spawns with exec.CommandContext, so inheriting the request context would
+// SIGKILL the subprocess the moment the HTTP response returns. That detach
+// drops the login session with everything else, which is why the sender has
+// to be copied across explicitly here — the same thing a channel does with
+// its own resolved sender.
+//
+// Without this a dashboard message is stored with no sender at all, so a
+// thread mixing web and Slack turns can attribute the Slack ones and not its
+// own — and the web turns come back anonymous on replay.
+func withComposerSender(c *tool.Ctx, bg context.Context) context.Context {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		return bg
+	}
+	name := u.Name
+	if name == "" {
+		name = u.Email
+	}
+	return agentchannels.WithSender(bg, &store.Sender{
+		ID:         u.ID,
+		Name:       name,
+		Channel:    "ui",
+		WickUserID: u.ID,
+	})
+}
+
 func sendMessage(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -1604,7 +1655,7 @@ func sendMessage(c *tool.Ctx) {
 	// Detach from HTTP ctx — pool.spawn calls exec.CommandContext, so
 	// inheriting c.Context() would SIGKILL claude.exe the moment the
 	// response returns. Copy request_id over so logs still correlate.
-	bgCtx := log.Ctx(c.Context()).WithContext(context.Background())
+	bgCtx := withComposerSender(c, log.Ctx(c.Context()).WithContext(context.Background()))
 	// The person's words are never rewritten, but the leader is told, in
 	// the same message and before it reads them, which mentions wick is
 	// dispatching itself. Routing runs detached below, so without this
@@ -2106,6 +2157,10 @@ func projectOptionsJSON(c *tool.Ctx) {
 		// one instance's registry and is meaningless beside another.
 		DefaultModel  string `json:"default_model"`
 		DefaultPreset string `json:"default_preset"`
+		// TicketEnabled lets the UI offer ticket affordances (the board jump
+		// in a chat's menu) only where a board exists. Without it the client
+		// would have to fetch each project's ticket config to find out.
+		TicketEnabled bool `json:"ticket_enabled"`
 	}
 	access := callerProjectAccess(c)
 	pinned := pinnedProjectID(c)
@@ -2129,6 +2184,7 @@ func projectOptionsJSON(c *tool.Ctx) {
 			DefaultProvider: p.Meta.Defaults.Provider,
 			DefaultModel:    p.Meta.Defaults.Model,
 			DefaultPreset:   p.Meta.Defaults.Preset,
+			TicketEnabled:   p.Meta.Ticket.Enabled,
 		})
 	}
 	c.JSON(http.StatusOK, opts)

@@ -771,6 +771,35 @@
       .catch(() => { notesInfo = null; });
   }
 
+  /* Jump from this chat to its ticket — offered only where a board exists.
+     A chat already ON a ticket opens that ticket; one that is not opens the
+     board, which is where it would be put on one. The ticket rail can do
+     both too, but only once opened: this lives in the header menu so the
+     board is reachable without hunting for the right rail tab first. */
+  const ticketModeOn = $derived(
+    activeProjectId !== null &&
+      projectOptions.some((p) => p.id === activeProjectId && p.ticketEnabled),
+  );
+  const ticketJump = $derived.by(() => {
+    if (!ticketModeOn || activeProjectId === null) return undefined;
+    const proj = encodeURIComponent(activeProjectId);
+    const tk = notesInfo?.ticket;
+    if (tk) {
+      return {
+        label: `Ticket ${tk.id}`,
+        onJump: () => {
+          window.location.href = `${base}/sessions?project=${proj}&ticket=${encodeURIComponent(tk.id)}`;
+        },
+      };
+    }
+    return {
+      label: "Ticket board",
+      onJump: () => {
+        window.location.href = `${base}/sessions?project=${proj}`;
+      },
+    };
+  });
+
   /* Rehydrate a question that arrived while the tab was closed; never
    * clobber an ask already shown by a live SSE event. */
   function loadPendingAsk() {
@@ -1619,6 +1648,7 @@
       {idleTimeoutMs}
       subAgentsBusy={busySubAgentCount}
       {activeView}
+      {ticketJump}
       onKill={handleKill}
       onDelete={handleDelete}
       onTabChange={handleTabChange}

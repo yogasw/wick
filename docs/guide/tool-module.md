@@ -132,6 +132,55 @@ func Register(r tool.Router) {
 - Multiple middlewares matching one route run in registration order (first registered = outermost).
 - The chain is composed once at mount, not per request.
 
+### Unauthenticated webhook endpoints
+
+Ordinary routes are gated by wick's per-tool access check — a request with no session cookie gets a `302` to `/auth/login`. That's fine for a human, but a webhook sender is a program: it can't follow the redirect, so its callback fails silently.
+
+`r.WebhookGroup(prefix)` opens a JSON-only subtree that bypasses the access check entirely, so external systems can reach it regardless of the tool's own visibility:
+
+```go
+func Register(r tool.Router) {
+    r.GET("/", index)                  // private, HTML, login-gated as usual
+    wh := r.WebhookGroup("/webhook")   // unauthenticated, JSON-only
+    wh.POST("/hook", receive)          // POST /tools/{key}/webhook/hook
+}
+
+func receive(c *tool.WebhookCtx) {
+    raw, _ := c.Body() // read raw bytes before decoding — signatures cover the exact body
+    if !validSig(raw, c.Header("X-Hook-Signature"), c.Cfg("secret")) {
+        c.Error(http.StatusUnauthorized, "bad signature")
+        return
+    }
+    var payload map[string]any
+    json.Unmarshal(raw, &payload)
+    c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+}
+```
+
+The rest of the tool is unaffected — a Private tool stays private everywhere except the prefixes it opens this way.
+
+Handlers on a webhook group receive `*tool.WebhookCtx`, not `*tool.Ctx`. It deliberately has no `HTML`, `Redirect`, or styled `NotFound` — the caller is a program, not a browser. It carries `Body()`, `BindJSON`, `Header`, `Query`, `PathValue`, `Method`, the full `Cfg` family (`Cfg`/`CfgOf`/`CfgInt`/`CfgBool`/`Missing`/`ConfigReader`), and `JSON`/`Status`/`Error` — `Error` replies JSON-shaped (`{"error": msg}`) rather than plain text.
+
+**The handler owns authentication entirely.** Wick does not verify anything on this path. A few rules that matter in practice:
+
+- Verify a signature with `hmac.Equal`, never `==` — a plain string compare leaks timing information one byte at a time.
+- Call `c.Body()` before `BindJSON`/`json.Unmarshal` if you need the raw bytes for a signature check — the body can only be read once, and the signature covers the exact bytes sent.
+- Fail closed when the configured secret is empty — don't let "no secret set" mean "signature always matches."
+- Store the secret as a `wick:"secret"` config row (see [Runtime Config](#runtime-config)) so it can be rotated from the manager UI without a redeploy. Consider leaving it non-`required`, paired with a `bool` toggle that ships **off** — that way a tool that has never enabled its webhook doesn't show a permanent "setup required" banner, and a disabled endpoint can return `404` instead of `403` so probing can't tell installed-but-off apart from not-installed.
+
+Two guard rails fail the build/boot rather than fail quietly at runtime:
+
+- `WebhookGroup("/")` is rejected — it would expose the whole tool unauthenticated.
+- A webhook route colliding with an ordinary route at the same `METHOD PATH` is rejected — that would silently strip the access check off the existing route.
+
+Declared webhook endpoints are listed on the tool's `/manager/tools/{key}` settings page with copy-ready absolute URLs, so an operator can see what answers without a login without reading the module source.
+
+Reference implementation: [`template/tools/convert-text/webhook.go`](https://github.com/yogasw/wick/blob/master/template/tools/convert-text/webhook.go).
+
+::: tip Webhook group vs. workflow webhook trigger
+If the payload just needs to kick off steps an operator can wire up (call an API, run an agent, write a row), prefer a [workflow webhook trigger](/workflow/triggers#webhook) (`/webhook/{wf_id}/{slug}`) — no Go code at all. Reach for `WebhookGroup` when the receiver needs real Go logic, a custom response body, or a home alongside an existing tool's UI and config.
+:::
+
 ## Handlers
 
 Handlers are plain top-level funcs that receive `*tool.Ctx`:

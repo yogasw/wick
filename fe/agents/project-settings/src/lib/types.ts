@@ -112,7 +112,44 @@ export interface TicketConfig {
   auto_create?: AutoCreateRule[];
   /** Board columns, in order. Empty means the built-in set. */
   statuses?: TicketStatus[];
+  integrations?: TicketIntegrations;
 }
+
+/** Outbound webhooks + the token-authed REST surface. */
+export interface TicketIntegrations {
+  /** Lets a Personal Access Token call this project's ticket endpoints. */
+  api_enabled?: boolean;
+  webhooks?: TicketWebhook[];
+}
+
+/** One outbound endpoint. */
+export interface TicketWebhook {
+  /** Stable across edits, so the delivery log survives a URL change. */
+  id: string;
+  name?: string;
+  url: string;
+  /** Never the real value on read: `__stored__` means "signed, key hidden",
+      empty means unsigned. Sending `__stored__` back keeps the stored key. */
+  secret?: string;
+  /** Empty means every event. */
+  events?: string[];
+  headers?: Record<string, string>;
+  enabled: boolean;
+}
+
+/** One recorded delivery attempt, for the settings page. */
+export interface TicketDelivery {
+  webhook_id: string;
+  event: string;
+  at: string;
+  status?: number;
+  error?: string;
+  attempts: number;
+  ok: boolean;
+}
+
+/** Sentinel standing in for a stored webhook secret. */
+export const SECRET_REDACTED = "__stored__";
 
 export interface UpdateProjectRequest {
   name: string;

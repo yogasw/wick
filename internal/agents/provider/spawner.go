@@ -156,6 +156,19 @@ type SpawnOptions struct {
 	// Empty = no positional prompt arg appended. claude ignores this field.
 	InitialMessage string
 
+	// SenderVisibility is the operator's setting for how much of a message
+	// sender's identity reaches the model (store.SenderOff / SenderName /
+	// SenderNameID / SenderFull). Empty = SenderName.
+	//
+	// Only providers that REPLAY conversation.jsonl themselves need this. The
+	// pool prepends the `[from: …]` line on a live send, but the stored turn
+	// keeps the sender as a structured field rather than in its text — so a
+	// provider rebuilding a prompt from history has to re-apply the line, the
+	// same way it re-appends attachment paths, or every replayed turn comes
+	// back anonymous and a shared thread loses track of who said what.
+	// Providers that resume via the CLI's own transcript ignore this.
+	SenderVisibility string
+
 	// MaxTurns caps agentic turns for this spawn (--max-turns on claude).
 	// 0 = no cap. Threaded from the agent node's max_turns.
 	MaxTurns int

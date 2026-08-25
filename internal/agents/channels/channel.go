@@ -18,6 +18,7 @@ import (
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
+	"github.com/yogasw/wick/internal/agents/store"
 )
 
 // SendFunc is the signature the pool exposes for sending a user message
@@ -77,6 +78,42 @@ func ChannelProject(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// senderKey carries the resolved identity of the human who sent this
+// message.
+type senderKey struct{}
+
+// WithSender returns ctx carrying who sent this message, as the channel
+// resolved it from its own transport envelope (Slack's ev.User via
+// users.info, Telegram's msg.From, the authenticated REST caller).
+//
+// The pool reads it back with SenderFrom to do two things: prepend a
+// `[wick-sender ...]` line to the text handed to the subprocess, so the
+// agent knows who it is talking to, and persist the fields on the turn so
+// the UI can render a sender chip. Neither is derived from message
+// content — that is the whole point. A body claiming to be someone else
+// changes nothing here, and the system prompt tells the agent to trust
+// only this line.
+//
+// A channel that leaves this unset produces an anonymous turn: no prefix,
+// no chip, same behaviour as before this existed. That is correct for
+// non-human traffic (scheduled runs, recovery messages, sub-agent
+// results), which is why nil is a supported value rather than an error.
+func WithSender(ctx context.Context, s *store.Sender) context.Context {
+	if s == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, senderKey{}, s)
+}
+
+// SenderFrom returns the sender stamped by WithSender, or nil when the
+// dispatch has no human behind it.
+func SenderFrom(ctx context.Context) *store.Sender {
+	if v, ok := ctx.Value(senderKey{}).(*store.Sender); ok {
+		return v
+	}
+	return nil
 }
 
 // callerUserIDKey carries the wick user a channel message came from.

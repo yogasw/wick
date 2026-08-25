@@ -1,4 +1,4 @@
-package slack
+package channels
 
 import (
 	"context"
@@ -67,7 +67,7 @@ func (f *fakeUsers) RegisterFromChannel(_ context.Context, email, _, _ string) (
 // a wick account, so the session runs as them.
 func TestResolveWickUser_MatchesByEmail(t *testing.T) {
 	f := &fakeUsers{byEmail: map[string]string{"ada@example.com": "u-ada"}}
-	got, err := resolveWickUser(context.Background(), f, SlackUser{Email: "ada@example.com", Name: "Ada"}, false, "slack:acme", "U-ext")
+	got, err := ResolveWickUser(context.Background(), f, SenderIdentity{ExternalUserID: "U-ext", Email: "ada@example.com", Name: "Ada"}, false, "slack", "slack:acme")
 	if err != nil || got != "u-ada" {
 		t.Fatalf("got (%q, %v), want (u-ada, nil)", got, err)
 	}
@@ -80,7 +80,7 @@ func TestResolveWickUser_MatchesByEmail(t *testing.T) {
 // person into two accounts.
 func TestResolveWickUser_EmailIsCaseInsensitive(t *testing.T) {
 	f := &fakeUsers{byEmail: map[string]string{"ada@example.com": "u-ada"}}
-	got, err := resolveWickUser(context.Background(), f, SlackUser{Email: "Ada@Example.COM"}, true, "slack:acme", "U-ext")
+	got, err := ResolveWickUser(context.Background(), f, SenderIdentity{ExternalUserID: "U-ext", Email: "Ada@Example.COM"}, true, "slack", "slack:acme")
 	if err != nil || got != "u-ada" {
 		t.Fatalf("got (%q, %v), want (u-ada, nil)", got, err)
 	}
@@ -97,17 +97,17 @@ func TestResolveWickUser_EmailRequired(t *testing.T) {
 	f := &fakeUsers{}
 	cases := []struct {
 		name string
-		u    SlackUser
+		u    SenderIdentity
 	}{
-		{"blank email (missing users:read.email scope)", SlackUser{Email: ""}},
-		{"whitespace-only email", SlackUser{Email: "   "}},
-		{"bot sender", SlackUser{Email: "bot@example.com", IsBot: true}},
+		{"blank email (missing users:read.email scope)", SenderIdentity{ExternalUserID: "U-ext", Email: ""}},
+		{"whitespace-only email", SenderIdentity{ExternalUserID: "U-ext", Email: "   "}},
+		{"bot sender", SenderIdentity{ExternalUserID: "U-ext", Email: "bot@example.com", IsBot: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			u := tc.u
 			u.Email = strings.TrimSpace(u.Email)
-			if _, err := resolveWickUser(context.Background(), f, u, true, "slack:acme", "U-ext"); !errors.Is(err, ErrEmailRequired) {
+			if _, err := ResolveWickUser(context.Background(), f, u, true, "slack", "slack:acme"); !errors.Is(err, ErrEmailRequired) {
 				t.Fatalf("err = %v, want ErrEmailRequired", err)
 			}
 			if len(f.registered) != 0 {
@@ -122,7 +122,7 @@ func TestResolveWickUser_EmailRequired(t *testing.T) {
 // party DM the bot. Refused even with a valid email.
 func TestResolveWickUser_GuestRefused(t *testing.T) {
 	f := &fakeUsers{}
-	_, err := resolveWickUser(context.Background(), f, SlackUser{Email: "outsider@other.com", IsGuest: true}, true, "slack:acme", "U-ext")
+	_, err := ResolveWickUser(context.Background(), f, SenderIdentity{ExternalUserID: "U-ext", Email: "outsider@other.com", IsGuest: true}, true, "slack", "slack:acme")
 	if !errors.Is(err, ErrGuestNotAllowed) {
 		t.Fatalf("err = %v, want ErrGuestNotAllowed", err)
 	}
@@ -135,7 +135,7 @@ func TestResolveWickUser_GuestRefused(t *testing.T) {
 // account is created.
 func TestResolveWickUser_AutoRegisterOff(t *testing.T) {
 	f := &fakeUsers{byEmail: map[string]string{}}
-	_, err := resolveWickUser(context.Background(), f, SlackUser{Email: "new@example.com"}, false, "slack:acme", "U-ext")
+	_, err := ResolveWickUser(context.Background(), f, SenderIdentity{ExternalUserID: "U-ext", Email: "new@example.com"}, false, "slack", "slack:acme")
 	if !errors.Is(err, ErrNoAccount) {
 		t.Fatalf("err = %v, want ErrNoAccount", err)
 	}
@@ -147,7 +147,7 @@ func TestResolveWickUser_AutoRegisterOff(t *testing.T) {
 // TestResolveWickUser_AutoRegisterOn creates the account and returns its id.
 func TestResolveWickUser_AutoRegisterOn(t *testing.T) {
 	f := &fakeUsers{byEmail: map[string]string{}}
-	got, err := resolveWickUser(context.Background(), f, SlackUser{Email: "new@example.com", Name: "New Person"}, true, "slack:acme", "U-ext")
+	got, err := ResolveWickUser(context.Background(), f, SenderIdentity{ExternalUserID: "U-ext", Email: "new@example.com", Name: "New Person"}, true, "slack", "slack:acme")
 	if err != nil || got != "new-new@example.com" {
 		t.Fatalf("got (%q, %v)", got, err)
 	}
@@ -159,27 +159,9 @@ func TestResolveWickUser_AutoRegisterOn(t *testing.T) {
 // TestResolveWickUser_NilResolverRefuses: with no resolver wired there is no
 // way to establish identity, so nothing is assumed.
 func TestResolveWickUser_NilResolverRefuses(t *testing.T) {
-	if _, err := resolveWickUser(context.Background(), nil,
-		SlackUser{Email: "ada@example.com"}, true, "slack:acme", "U-ext"); !errors.Is(err, ErrEmailRequired) {
+	if _, err := ResolveWickUser(context.Background(), nil,
+		SenderIdentity{ExternalUserID: "U-ext", Email: "ada@example.com"}, true, "slack", "slack:acme"); !errors.Is(err, ErrEmailRequired) {
 		t.Fatalf("err = %v, want ErrEmailRequired", err)
-	}
-}
-
-// TestIdentityErrorMessage checks each refusal names the fix, since the person
-// reading it in Slack is the one who has to unblock it.
-func TestIdentityErrorMessage(t *testing.T) {
-	if m := identityErrorMessage(ErrEmailRequired, false); !strings.Contains(m, "email is required") ||
-		!strings.Contains(m, "users:read.email") {
-		t.Errorf("email message should state the cause and the scope to add: %q", m)
-	}
-	if m := identityErrorMessage(ErrNoAccount, false); !strings.Contains(m, "Auto-register") {
-		t.Errorf("with auto-register off, point at the setting: %q", m)
-	}
-	if m := identityErrorMessage(ErrNoAccount, true); strings.Contains(m, "Auto-register") {
-		t.Errorf("with auto-register on, do not suggest enabling it: %q", m)
-	}
-	if m := identityErrorMessage(ErrGuestNotAllowed, true); !strings.Contains(m, "Guest") {
-		t.Errorf("guest message unclear: %q", m)
 	}
 }
 
@@ -193,7 +175,7 @@ func TestResolveWickUser_ToolAccessGate(t *testing.T) {
 		byEmail:    map[string]string{"blocked@example.com": "u-blocked"},
 		denyAgents: map[string]bool{"u-blocked": true},
 	}
-	_, err := resolveWickUser(context.Background(), f, SlackUser{Email: "blocked@example.com"}, false, "slack:acme", "U-ext")
+	_, err := ResolveWickUser(context.Background(), f, SenderIdentity{ExternalUserID: "U-ext", Email: "blocked@example.com"}, false, "slack", "slack:acme")
 	if !errors.Is(err, ErrToolAccessDenied) {
 		t.Fatalf("err = %v, want ErrToolAccessDenied", err)
 	}
@@ -207,7 +189,7 @@ func TestResolveWickUser_AutoRegisterStillGated(t *testing.T) {
 		byEmail: map[string]string{},
 		pending: map[string]bool{"new-new@example.com": true},
 	}
-	_, err := resolveWickUser(context.Background(), f, SlackUser{Email: "new@example.com", Name: "New"}, true, "slack:acme", "U-ext")
+	_, err := ResolveWickUser(context.Background(), f, SenderIdentity{ExternalUserID: "U-ext", Email: "new@example.com", Name: "New"}, true, "slack", "slack:acme")
 	if !errors.Is(err, ErrPendingApproval) {
 		t.Fatalf("err = %v, want ErrPendingApproval", err)
 	}
@@ -222,21 +204,9 @@ func TestResolveWickUser_AutoRegisterStillGated(t *testing.T) {
 // everyone: a user who may use the tool resolves normally.
 func TestResolveWickUser_GatePassesForPermittedUser(t *testing.T) {
 	f := &fakeUsers{byEmail: map[string]string{"ada@example.com": "u-ada"}}
-	got, err := resolveWickUser(context.Background(), f, SlackUser{Email: "ada@example.com"}, false, "slack:acme", "U-ext")
+	got, err := ResolveWickUser(context.Background(), f, SenderIdentity{ExternalUserID: "U-ext", Email: "ada@example.com"}, false, "slack", "slack:acme")
 	if err != nil || got != "u-ada" {
 		t.Fatalf("got (%q, %v), want (u-ada, nil)", got, err)
-	}
-}
-
-// TestIdentityErrorMessage_ToolAccess: the reply must say what to ask for, and
-// must not imply Slack is a way around the permission.
-func TestIdentityErrorMessage_ToolAccess(t *testing.T) {
-	m := identityErrorMessage(ErrToolAccessDenied, true)
-	if !strings.Contains(m, "approve") || !strings.Contains(m, "Admin") {
-		t.Errorf("message should name the fix: %q", m)
-	}
-	if !strings.Contains(m, "does not bypass") {
-		t.Errorf("message should state Slack is not a bypass: %q", m)
 	}
 }
 
@@ -250,32 +220,9 @@ func TestResolveWickUser_PendingBeforeToolGate(t *testing.T) {
 		pending:    map[string]bool{"u-both": true},
 		denyAgents: map[string]bool{"u-both": true},
 	}
-	_, err := resolveWickUser(context.Background(), f, SlackUser{Email: "both@example.com"}, false, "slack:acme", "U-ext")
+	_, err := ResolveWickUser(context.Background(), f, SenderIdentity{ExternalUserID: "U-ext", Email: "both@example.com"}, false, "slack", "slack:acme")
 	if !errors.Is(err, ErrPendingApproval) {
 		t.Fatalf("err = %v, want ErrPendingApproval (approval outranks the tool gate)", err)
-	}
-}
-
-// TestIdentityErrorMessage_PendingVsDenied: the two refusals must not read the
-// same, or the sender cannot tell which fix to ask for.
-func TestIdentityErrorMessage_PendingVsDenied(t *testing.T) {
-	pending := identityErrorMessage(ErrPendingApproval, true)
-	denied := identityErrorMessage(ErrToolAccessDenied, true)
-
-	if pending == denied {
-		t.Fatal("pending and denied produce the same message")
-	}
-	if !strings.Contains(pending, "pending approval") || !strings.Contains(pending, "approve") {
-		t.Errorf("pending message should name approval as the fix: %q", pending)
-	}
-	if strings.Contains(pending, "granted access") {
-		t.Errorf("pending message should not talk about grants: %q", pending)
-	}
-	if !strings.Contains(denied, "granted access") {
-		t.Errorf("denied message should name the missing grant: %q", denied)
-	}
-	if !strings.Contains(denied, "does not bypass") {
-		t.Errorf("denied message should state Slack is not a bypass: %q", denied)
 	}
 }
 
@@ -292,9 +239,9 @@ func TestResolveWickUser_ExistingLinkSurvivesEmailChange(t *testing.T) {
 		// The new email matches nothing — an email-first lookup would miss here.
 		byEmail: map[string]string{},
 	}
-	got, err := resolveWickUser(context.Background(), f,
-		SlackUser{Email: "ada.renamed@example.com", Name: "Ada"},
-		true, "slack:acme", "U123")
+	got, err := ResolveWickUser(context.Background(), f,
+		SenderIdentity{ExternalUserID: "U123", Email: "ada.renamed@example.com", Name: "Ada"},
+		true, "slack", "slack:acme")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -314,12 +261,50 @@ func TestResolveWickUser_LinkBeatsAConflictingEmail(t *testing.T) {
 		byExternal: map[string]string{"U123": "u-ada"},
 		byEmail:    map[string]string{"boss@example.com": "u-boss"},
 	}
-	got, err := resolveWickUser(context.Background(), f,
-		SlackUser{Email: "boss@example.com"}, false, "slack:acme", "U123")
+	got, err := ResolveWickUser(context.Background(), f,
+		SenderIdentity{ExternalUserID: "U123", Email: "boss@example.com"}, false, "slack", "slack:acme")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	if got != "u-ada" {
 		t.Fatalf("resolved %q — an edited email took over another account", got)
+	}
+}
+
+// The synthetic address is matched against real accounts with FindByEmail, so
+// the domain has to be one nobody can ever own. A registrable domain would
+// mean someone signing up under it gets matched into a channel session that
+// is not theirs.
+func TestSyntheticEmailUsesAReservedDomain(t *testing.T) {
+	got := SyntheticEmail("8812")
+	if got != "8812@telegram.local" {
+		t.Fatalf("got %q, want 8812@telegram.local", got)
+	}
+	// .local and .invalid are reserved by RFC 6761/2606 — never resolvable,
+	// never registrable. Anything else would be a real domain someone owns.
+	if !strings.HasSuffix(got, ".local") && !strings.HasSuffix(got, ".invalid") {
+		t.Errorf("domain %q is registrable; it must be reserved", got)
+	}
+}
+
+func TestSyntheticEmailIsStableAndNormalised(t *testing.T) {
+	if a, b := SyntheticEmail("8812"), SyntheticEmail("8812"); a != b {
+		t.Errorf("not stable: %q vs %q", a, b)
+	}
+	if got := SyntheticEmail("  8812  "); got != "8812@telegram.local" {
+		t.Errorf("whitespace not trimmed: %q", got)
+	}
+	if got := SyntheticEmail("ABC"); got != "abc@telegram.local" {
+		t.Errorf("not lowercased: %q", got)
+	}
+}
+
+// An empty id must not produce "@telegram.local" — every unidentified sender
+// would then collapse onto one shared account.
+func TestSyntheticEmailRefusesEmptyID(t *testing.T) {
+	for _, in := range []string{"", "   "} {
+		if got := SyntheticEmail(in); got != "" {
+			t.Errorf("SyntheticEmail(%q) = %q, want empty", in, got)
+		}
 	}
 }

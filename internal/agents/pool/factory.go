@@ -75,6 +75,12 @@ type ClaudeFactory struct {
 	// every preset. Preset stays the primary; this only adds to it.
 	SystemPromptLoader func() string
 
+	// SenderVisibilityLoader (optional) returns how much of a message
+	// sender's identity reaches the model. Forwarded to spawners that replay
+	// conversation.jsonl themselves, so a replayed turn is attributed the
+	// same way the live send was. nil = store.SenderName.
+	SenderVisibilityLoader func() string
+
 	// TraceEventMaxKBLoader (optional) returns the current trace_event_max_kb
 	// config value. 0 = no cap.
 	TraceEventMaxKBLoader func() int
@@ -468,9 +474,18 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 		OnSpawn: func(binary string, argv []string, env []string, pid int, firstMsg string) {
 			writeStartEvent(pid, binary, argv, env, firstMsg)
 		},
-		Instance:       &insCopy,
-		GateBinary:     gateBin,
-		Preset:         presetContent,
+		Instance:   &insCopy,
+		GateBinary: gateBin,
+		Preset:     presetContent,
+		// Only the wick provider reads this (it rebuilds prompts from
+		// conversation.jsonl); the CLI providers resume from their own
+		// transcript and ignore it.
+		SenderVisibility: func() string {
+			if f.SenderVisibilityLoader == nil {
+				return store.SenderName
+			}
+			return store.NormalizeSenderVisibility(f.SenderVisibilityLoader())
+		}(),
 		MaxTurns:       opt.MaxTurns,
 		ThinkingTokens: opt.ThinkingTokens,
 		ModelID:        opt.ModelID,

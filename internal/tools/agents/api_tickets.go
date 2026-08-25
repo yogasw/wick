@@ -160,6 +160,12 @@ func resolveTicketProject(c *tool.Ctx, ticketID string) (string, bool) {
 			continue
 		}
 		if ticket.Exists(globalLayout, id, ticketID) {
+			// A token may only address tickets in a project that opted into
+			// the REST surface. Reporting "not found" keeps a token holder
+			// from discovering projects whose API is switched off.
+			if !requireTicketAPI(c, id) {
+				return "", false
+			}
 			return id, true
 		}
 	}
@@ -222,6 +228,10 @@ func apiProjectTickets(c *tool.Ctx) {
 		return
 	}
 	id := c.PathValue("id")
+	if !requireTicketAPI(c, id) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+		return
+	}
 	p, ok := globalMgr.Registry().Project(id)
 	if !ok {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
@@ -374,6 +384,10 @@ func apiTicketCreate(c *tool.Ctx) {
 		return
 	}
 	projectID := c.PathValue("id")
+	if !requireTicketAPI(c, projectID) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+		return
+	}
 	var req struct {
 		Title  string `json:"title"`
 		Status string `json:"status"`
@@ -423,6 +437,7 @@ func apiTicketCreate(c *tool.Ctx) {
 		Assignee:  assignee,
 		Fields:    req.Fields,
 		Sessions:  seed,
+		Actor:     callerActor(c),
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
@@ -463,6 +478,25 @@ func apiTicketDetail(c *tool.Ctx) {
 	for _, sid := range tk.Sessions {
 		resp.Sessions = append(resp.Sessions, sessionRow(sid, live, lc, ids))
 	}
+	// MOST RECENTLY ACTIVE FIRST. tk.Sessions is attach order, so the chat
+	// someone was just in sat wherever it happened to be added — a ticket
+	// with a long history buried it. Each row prints its own last-active
+	// time, so the order has to follow that clock. Rows with no live
+	// session carry no timestamp; they sink to the bottom rather than
+	// jumping the queue on an empty string.
+	sort.SliceStable(resp.Sessions, func(i, j int) bool {
+		a, b := resp.Sessions[i].LastActive, resp.Sessions[j].LastActive
+		if a == b {
+			return false
+		}
+		if a == "" {
+			return false
+		}
+		if b == "" {
+			return true
+		}
+		return a > b // RFC3339 is lexicographically ordered
+	})
 
 	// The UI view includes hidden notes (rendered blurred); only the MCP
 	// surface filters them out.
@@ -541,7 +575,7 @@ func apiTicketUpdate(c *tool.Ctx) {
 			tk.Fields[k] = v
 		}
 	}
-	if err := ticket.Save(globalLayout, tk); err != nil {
+	if err := ticket.SaveAs(globalLayout, tk, callerActor(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
@@ -793,6 +827,11 @@ func apiNotesAdd(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	// Only a ticket-scoped note is a ticket event. A note on a loose session
+	// belongs to that chat, and no board is watching it.
+	if sc.TicketID != "" {
+		ticket.EmitNoteAdded(globalLayout, sc.ProjectID, sc.TicketID, req.Body, callerActor(c))
+	}
 	c.JSON(http.StatusOK, n)
 }
 
@@ -921,6 +960,13 @@ func apiProjectTicketConfig(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "durations must be >= 0"})
 		return
 	}
+	// Auto-create rules carry a regex an operator typed. Refusing it here is
+	// the only place it can be reported: by the time a rule is judged, the
+	// session that would have been tracked is already past.
+	if err := ticket.ValidateAutoCreate(req.AutoCreate); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	// First enable with an empty schema gets the seed fields, so the board
 	// is useful before anyone visits the field editor.
 	if req.Enabled && len(req.Fields) == 0 {
@@ -930,6 +976,13 @@ func apiProjectTicketConfig(c *tool.Ctx) {
 	p, ok := globalMgr.Registry().Project(id)
 	if !ok {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+		return
+	}
+	// Webhooks carry a secret the client never sees, so the stored copy has
+	// to be merged in before validation — otherwise saving an unrelated
+	// setting would silently unsign every endpoint.
+	if err := normaliseWebhooks(&req.Integrations, p.Meta.Ticket.Integrations); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	meta := p.Meta

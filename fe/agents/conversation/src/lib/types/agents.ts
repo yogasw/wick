@@ -119,6 +119,17 @@ export type Artifact = {
   size?: number;
 };
 
+// Sender is who a user turn came from, resolved by the channel from its
+// transport envelope. Mirrors agentstore.Sender.
+export type Sender = {
+  id: string;
+  name?: string;
+  handle?: string;
+  // "slack" | "telegram" | "rest" | "ui"
+  channel: string;
+  wick_user_id?: string;
+};
+
 export type ConversationTurn = {
   turn_id: string;
   role: string;
@@ -130,6 +141,12 @@ export type ConversationTurn = {
   // (agentstore.ConversationTurn.Source) and carried on live user_message
   // events. Used to badge messages that didn't come from this web session.
   source?: string;
+  // Who sent a user turn, as the originating channel resolved it from its
+  // own transport envelope — never parsed out of `text`, so a message body
+  // claiming to be someone else cannot change it. Absent on turns with no
+  // human behind them (scheduled runs, system messages) and on turns written
+  // before this field existed.
+  sender?: Sender;
   // RFC3339 string from history payload (Go struct `json:"ts"`). Live turns
   // built client-side only set `timestamp` (epoch ms) — read either.
   ts?: string;
@@ -440,6 +457,10 @@ export type ProjectOption = {
       wick, "<entryID>@<vendorModelID>"). Only meaningful together with
       defaultProvider — a model id does not resolve on its own. */
   defaultModel?: string;
+  /** Whether this project has a ticket board. Ticket affordances outside
+      the board itself (a chat's jump-to-ticket entry) key off this, so a
+      project without one shows none of them. */
+  ticketEnabled?: boolean;
 };
 
 /** One column on a project's board. Statuses are per project: a team names

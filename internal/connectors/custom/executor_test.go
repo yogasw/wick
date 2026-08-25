@@ -381,6 +381,63 @@ func TestCoerceArgsPreservesRawScalarTypes(t *testing.T) {
 	}
 }
 
+// TestCoerceArgsPreservesRawCompositeTypes: an upstream MCP server may
+// declare an object/array parameter in a shape mapInputSchema cannot
+// express (wick's widget grammar has no object type), so the field lands
+// on a plain text widget. When the caller actually sent an object or
+// array, the stringified form fails the server's own schema validation
+// ("expected object, received string"). Composites must forward in their
+// original JSON type regardless of the stored widget — the widget is a
+// UI hint, not the authority on type.
+func TestCoerceArgsPreservesRawCompositeTypes(t *testing.T) {
+	fields := []DefField{
+		{Key: "inputs", Label: "inputs", Widget: "text"},     // object on a text widget
+		{Key: "tags", Label: "tags", Widget: "text"},         // array on a text widget
+		{Key: "nested", Label: "nested", Widget: "textarea"}, // object on textarea (already worked)
+		{Key: "note", Label: "note", Widget: "text"},         // genuine string
+	}
+	obj := map[string]any{"body": map[string]any{"row": map[string]any{"client": "acme"}}}
+	arr := []any{"a", "b"}
+	// Input holds the stringified form StringifyArgs produces.
+	in := map[string]string{
+		"inputs": `{"body":{"row":{"client":"acme"}}}`,
+		"tags":   `["a","b"]`,
+		"nested": `{"k":"v"}`,
+		"note":   "plain text",
+	}
+	c := connector.NewCtx(context.Background(), "i", nil, in, nil, nil, nil)
+	c.SetRawInput(map[string]any{
+		"inputs": obj,
+		"tags":   arr,
+		"nested": map[string]any{"k": "v"},
+		"note":   "plain text",
+	})
+
+	out := coerceArgs(fields, c)
+
+	got, ok := out["inputs"].(map[string]any)
+	if !ok {
+		t.Fatalf("inputs = %#v (%T), want map[string]any not a JSON string", out["inputs"], out["inputs"])
+	}
+	body, ok := got["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("inputs.body = %#v, want nested object preserved", got["body"])
+	}
+	if row, ok := body["row"].(map[string]any); !ok || row["client"] != "acme" {
+		t.Errorf("inputs.body.row = %#v, want {client: acme}", body["row"])
+	}
+
+	if v, ok := out["tags"].([]any); !ok || len(v) != 2 || v[0] != "a" {
+		t.Errorf("tags = %#v (%T), want []any{a, b}", out["tags"], out["tags"])
+	}
+	if v, ok := out["nested"].(map[string]any); !ok || v["k"] != "v" {
+		t.Errorf("nested = %#v, want object (textarea path still works)", out["nested"])
+	}
+	if v, ok := out["note"].(string); !ok || v != "plain text" {
+		t.Errorf("note = %#v, want string passthrough", out["note"])
+	}
+}
+
 // TestCoerceArgsRawInputAbsentFallsBack: with no RawInput recorded (e.g.
 // the panel-test path), coerceArgs must behave exactly as before —
 // widget-driven coercion off the string input map.

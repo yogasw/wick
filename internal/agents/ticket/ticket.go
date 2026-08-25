@@ -144,6 +144,10 @@ type CreateOptions struct {
 	// Sessions optionally seeds the session list (used when a ticket is
 	// created from an existing conversation).
 	Sessions []string
+	// Actor is who is creating this, for the outbound webhook envelope.
+	// Zero value reports as "system", which is right for internal writes
+	// (auto-create, the sweeper) and wrong for nothing.
+	Actor Actor
 }
 
 // idAlphabet excludes I, O, 0, and 1 — a ticket code gets read aloud and
@@ -217,6 +221,7 @@ func Create(layout config.Layout, opt CreateOptions) (Ticket, error) {
 		if err := storage.WriteJSON(layout.TicketFile(opt.ProjectID, id), &tk); err != nil {
 			return Ticket{}, err
 		}
+		emit(Event{Event: EventCreated, Ticket: tk, Actor: opt.Actor.orSystem()})
 		return tk, nil
 	}
 	return Ticket{}, fmt.Errorf("could not allocate a free ticket id after 8 attempts")
@@ -238,8 +243,37 @@ func Load(layout config.Layout, projectID, ticketID string) (Ticket, error) {
 // auto-resolve timers key on. Callers that must NOT move those timers
 // (the sweeper stamping LastFollowupAt) use SaveKeepingTimestamp.
 func Save(layout config.Layout, tk Ticket) error {
+	return SaveAs(layout, tk, Actor{})
+}
+
+// SaveAs is Save with the actor named, so the outbound event can say who
+// moved the ticket. Save stays as the unattributed form because most
+// internal callers genuinely have nobody to name.
+func SaveAs(layout config.Layout, tk Ticket, actor Actor) error {
 	tk.UpdatedAt = time.Now().UTC()
-	return SaveKeepingTimestamp(layout, tk)
+	return saveEmitting(layout, tk, actor)
+}
+
+// saveEmitting writes tk and fires the events its diff implies.
+//
+// The pre-image is read before the write so the envelope can carry a real
+// before/after. A ticket that cannot be read (first write, corrupt file) is
+// simply saved without a diff rather than failing: losing an event is a far
+// better outcome than losing the edit.
+func saveEmitting(layout config.Layout, tk Ticket, actor Actor) error {
+	before, err := Load(layout, tk.ProjectID, tk.ID)
+	hadBefore := err == nil
+	if werr := SaveKeepingTimestamp(layout, tk); werr != nil {
+		return werr
+	}
+	if !hadBefore {
+		return nil
+	}
+	changes := diff(before, tk)
+	for _, name := range EventsFor(changes) {
+		emit(Event{Event: name, Ticket: tk, Changes: changes, Actor: actor.orSystem()})
+	}
+	return nil
 }
 
 // SaveKeepingTimestamp persists a ticket exactly as given, leaving
@@ -326,6 +360,7 @@ func AttachSession(layout config.Layout, projectID, ticketID, sessionID string) 
 	if err := SaveKeepingTimestamp(layout, tk); err != nil {
 		return err
 	}
+	emit(Event{Event: EventSessionAttached, Ticket: tk, Session: sessionID, Actor: Actor{}.orSystem()})
 	return moveNotes(layout, sessionID, from, ticketID)
 }
 
@@ -336,6 +371,9 @@ func DetachSession(layout config.Layout, projectID, ticketID, sessionID string) 
 	changed, err := detachAndReport(layout, projectID, ticketID, sessionID)
 	if err != nil || !changed {
 		return err
+	}
+	if tk, lerr := Load(layout, projectID, ticketID); lerr == nil {
+		emit(Event{Event: EventSessionDetached, Ticket: tk, Session: sessionID, Actor: Actor{}.orSystem()})
 	}
 	// Notes go back to the session, not into the void: the ticket keeps
 	// what other sessions wrote, this session keeps what it wrote.
@@ -399,7 +437,16 @@ func Delete(layout config.Layout, projectID, ticketID string) error {
 	if !Exists(layout, projectID, ticketID) {
 		return fmt.Errorf("ticket %q not found", ticketID)
 	}
-	return os.RemoveAll(layout.TicketDir(projectID, ticketID))
+	// Read before removing: the event carries the ticket that was deleted,
+	// which is the only copy a receiver will ever get of it.
+	tk, lerr := Load(layout, projectID, ticketID)
+	if err := os.RemoveAll(layout.TicketDir(projectID, ticketID)); err != nil {
+		return err
+	}
+	if lerr == nil {
+		emit(Event{Event: EventDeleted, Ticket: tk, Actor: Actor{}.orSystem()})
+	}
+	return nil
 }
 
 // OrphanedStatuses returns the status keys that would be left holding

@@ -92,3 +92,4 @@ Deleting a ticket (with the choice to keep or delete its chats) is a UI/admin ac
 
 - [Notes connector](./notes) — the paired connector for ticket/session notes.
 - [Projects → Tickets](/guide/agents/projects#tickets) — the board, auto-create rules, and settings UI.
+- [Ticket Integrations](/guide/agents/ticket-integrations) — for a system outside wick: outbound webhooks and a token-authed REST API, as an alternative to this MCP connector.

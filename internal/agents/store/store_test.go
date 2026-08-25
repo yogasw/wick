@@ -118,6 +118,70 @@ func TestAppendUserTurnWithAttachments(t *testing.T) {
 	}
 }
 
+func TestAppendUserTurnWithSenderRoundTrips(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	sender := &Sender{
+		ID:         "U0104",
+		Name:       "Yoga Setiawan",
+		Handle:     "yoga",
+		Channel:    "slack",
+		WickUserID: "wick-uuid-1",
+	}
+	if err := st.AppendUserTurnWithSender("user", "slack", "cek error 401", nil, sender); err != nil {
+		t.Fatal(err)
+	}
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 turn, got %d", len(lines))
+	}
+	got := lines[0]
+	if got.Sender == nil {
+		t.Fatal("sender not persisted")
+	}
+	if *got.Sender != *sender {
+		t.Errorf("sender = %+v, want %+v", *got.Sender, *sender)
+	}
+	// The stored text is what the person typed. The `[wick-sender …]` line
+	// the pool prepends goes to the subprocess only — if it leaked in here,
+	// the web UI would render it as part of the message.
+	if got.Text != "cek error 401" {
+		t.Errorf("text = %q, want the original message with no sender line", got.Text)
+	}
+}
+
+// Turns with nobody behind them (scheduled runs, system messages) and turns
+// written before this field existed must read back cleanly, with no
+// "sender": null noise for tooling that parses conversation.jsonl.
+func TestAppendUserTurnNilSenderOmitted(t *testing.T) {
+	st, layout := newStore(t, "", false)
+	if err := st.AppendUserTurnWithSender("user", "schedule", "nightly run", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := readFirstRaw(t, st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, "\"sender\"") {
+		t.Errorf("expected no sender key on disk, got: %s", raw)
+	}
+	if lines := readConvLines(t, layout); len(lines) != 1 || lines[0].Sender != nil {
+		t.Errorf("expected a turn with no sender, got %+v", lines)
+	}
+}
+
+// AppendUserTurn and AppendUserTurnWithAttachments predate senders; they must
+// keep working and simply record no sender.
+func TestAppendUserTurnLegacyHelpersLeaveSenderNil(t *testing.T) {
+	st, layout := newStore(t, "", false)
+	if err := st.AppendUserTurn("user", "ui", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 || lines[0].Sender != nil {
+		t.Errorf("expected no sender, got %+v", lines)
+	}
+}
+
 func TestAppendUserTurnEmptyAttachmentsOmitted(t *testing.T) {
 	// Verify the JSON-on-disk does NOT include an "attachments": null
 	// noise field when no files are attached — existing tooling reading

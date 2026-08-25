@@ -50,6 +50,15 @@ func augmentWithAttachments(text string, atts []store.Attachment) string {
 	return b.String()
 }
 
+// senderVisibility resolves the configured level, defaulting to
+// store.SenderName when unset or unrecognised.
+func (p *Pool) senderVisibility() string {
+	if p.cfg.SenderVisibilityLoader == nil {
+		return store.SenderName
+	}
+	return store.NormalizeSenderVisibility(p.cfg.SenderVisibilityLoader())
+}
+
 // Pool is the global slot manager. It tracks how many agent
 // subprocesses are alive across all sessions, FIFO-queues sessions
 // that arrive while full, and grants slots when one frees up.
@@ -108,6 +117,32 @@ type PoolConfig struct {
 	// this. nil (or empty result) = no resolved caller, which disables
 	// caller-change respawn for that message.
 	CallerUserID func(ctx context.Context) string
+
+	// SenderFrom resolves WHO sent a message from its context — the human
+	// identity the originating channel read off its own transport envelope.
+	// Injected for the same reason as CallerUserID: the pool must not import
+	// the channels package.
+	//
+	// Distinct from CallerUserID, which answers "whose wick account does this
+	// turn run as" (a permissions question, and the reason a process gets
+	// recycled). This answers "who is the agent talking to" — a display and
+	// prompting question. They diverge whenever a Slack user has no mapped
+	// wick account, or when several people share one channel-owner identity.
+	//
+	// nil (or a nil result) = anonymous turn: no `[wick-sender ...]` prefix
+	// and no sender persisted, exactly how every turn behaved before this
+	// existed.
+	SenderFrom func(ctx context.Context) *store.Sender
+
+	// SenderVisibilityLoader reports how much of the sender to write into the
+	// text handed to the model: SenderOff / SenderName / SenderNameID /
+	// SenderFull. nil or an empty result means SenderName.
+	//
+	// A loader rather than a value because the operator changes this in the
+	// UI while wick is running, same as the memory-guard settings. It governs
+	// the model's copy only — the store and the dashboard always get the full
+	// sender.
+	SenderVisibilityLoader func() string
 
 	// RevokeMCPToken invalidates a per-session MCP credential once its
 	// subprocess is gone, so a leaked token stops working at process death
@@ -204,6 +239,11 @@ type UserMessageEvent struct {
 	AgentName string
 	Source    string
 	Text      string
+	// Sender is who sent it, when the channel resolved one. Carried here so
+	// a live-rendered turn shows the same sender chip a reloaded one does —
+	// without it, a Slack message would arrive anonymous and only grow its
+	// name after a refetch.
+	Sender *store.Sender
 }
 
 // LifecycleEvent is emitted for the two transitions the pool drives
@@ -596,6 +636,19 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// name-keyed write after it landed on a row nobody reads.
 	agentName = p.resolveAgentName(sessionID, agentName)
 
+	// Who is speaking, per the originating channel. Resolved once here so
+	// the live and buffered paths below agree, and only for "user" turns:
+	// a system context block or a sub-agent result has no human behind it,
+	// and stamping one would put a person's name on a message they never
+	// sent.
+	var sender *store.Sender
+	if role == "user" && p.cfg.SenderFrom != nil {
+		sender = p.cfg.SenderFrom(ctx)
+	}
+	// Read once per send so the live and buffered paths below agree even if
+	// the operator changes the setting mid-flight.
+	senderLevel := p.senderVisibility()
+
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -652,15 +705,15 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 			Msg("pool.send: routing to live subprocess")
 		// Active agent — append to conversation log + send straight.
 		if entry.store != nil {
-			_ = entry.store.AppendUserTurnWithAttachments(role, source, text, atts)
+			_ = entry.store.AppendUserTurnWithSender(role, source, text, atts, sender)
 			turnPersisted = true
 		}
 		if role == "user" {
 			p.setLabelIfEmpty(sessionID, text)
-			p.notifyUserMessage(sessionID, agentName, source, text)
+			p.notifyUserMessage(sessionID, agentName, source, text, sender)
 			userMsgNotified = true
 		}
-		err := entry.agent.Send(augmentWithAttachments(text, atts))
+		err := entry.agent.Send(store.PrependSenderLine(augmentWithAttachments(text, atts), sender, senderLevel))
 		// Nudge SSE so the Process panel's queued count updates in
 		// realtime — a RespawnQueue (codex) Send while busy just appended
 		// to the agent's pending queue, which fires no lifecycle event on
@@ -707,10 +760,17 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	if err != nil {
 		return err
 	}
-	// Buffer the agent-facing text (with attachment block appended) so
-	// the first drain after spawn includes file references in the user
-	// message. Storage gets the un-augmented text + structured atts.
-	if err := buf.Append(augmentWithAttachments(text, atts)); err != nil {
+	// Buffer the agent-facing text (sender line prepended, attachment block
+	// appended) so the first drain after spawn carries both the identity of
+	// the sender and any file references. Storage gets the un-augmented text
+	// plus the structured atts/sender.
+	//
+	// The sender line has to go into the buffer rather than being added at
+	// drain time: a buffer can accumulate messages from several people
+	// before the subprocess exists, and drain concatenates them into one
+	// prompt. Stamping at drain would label every one of them with whoever
+	// happened to send last.
+	if err := buf.Append(store.PrependSenderLine(augmentWithAttachments(text, atts), sender, senderLevel)); err != nil {
 		return err
 	}
 	// Persist the user turn to conversation.jsonl immediately so a page
@@ -718,10 +778,10 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// shows the messages — they previously only lived in PendingInput.
 	// We build a transient Store because no entry.store exists yet.
 	if !turnPersisted {
-		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts)
+		p.persistBufferedTurn(sessionID, agentName, role, source, text, atts, sender)
 	}
 	if role == "user" && !userMsgNotified {
-		p.notifyUserMessage(sessionID, agentName, source, text)
+		p.notifyUserMessage(sessionID, agentName, source, text, sender)
 	}
 
 	// A non-user turn (e.g. the one-time origin-context block channels
@@ -783,13 +843,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 // (subprocess not yet alive) used to skip this, which made messages
 // disappear from the UI after a page refresh — they only lived in
 // meta.PendingInput, which the conversation view doesn't read.
-func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment) {
+func (p *Pool) persistBufferedTurn(sessionID, agentName, role, source, text string, atts []store.Attachment, sender *store.Sender) {
 	sto := store.New(store.Options{
 		Layout:    p.cfg.Layout,
 		SessionID: sessionID,
 		AgentName: agentName,
 	})
-	_ = sto.AppendUserTurnWithAttachments(role, source, text, atts)
+	_ = sto.AppendUserTurnWithSender(role, source, text, atts, sender)
 }
 
 // preemptIdleSlot picks the longest-idle active entry (Lifecycle == Idle,
@@ -821,13 +881,19 @@ func (p *Pool) preemptIdleSlot() bool {
 			oldest = t
 		}
 	}
+	// Register the Stop goroutine while still holding the lock that guards
+	// p.closed. Adding after the unlock leaves a window for Stop() to close
+	// the pool and reach wg.Wait() in between, and sync.WaitGroup forbids an
+	// Add racing a Wait already blocked at zero.
+	if victim != nil {
+		p.wg.Add(1)
+	}
 	p.mu.Unlock()
 	if victim == nil {
 		return false
 	}
 	log.Debug().Str("session", victim.sessID).Str("agent", victim.agentNm).
 		Msg("pool: preempting idle slot for queued session")
-	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
 		_ = victim.agent.Stop()
@@ -1215,10 +1281,20 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 // The whole body runs under p.wg so Stop() can wait for any tail
 // work to finish before tearing down.
 func (p *Pool) onAgentExit(sessionID, agentName string) {
-	p.wg.Add(1)
-	defer p.wg.Done()
 	key := sessionKey(sessionID, agentName)
 	p.mu.Lock()
+	// Join p.wg only while the pool is open. An exit can fire at any moment,
+	// including after Stop() has begun waiting, and sync.WaitGroup forbids an
+	// Add that races a Wait already blocked at zero. Reading p.closed under
+	// the same lock Stop() sets it under makes the two mutually exclusive:
+	// either we register before Stop() looks, or we see it closed and stay
+	// out. Staying out loses nothing — the body below still runs to release
+	// the slot, and Stop() waits for that through its p.active poll rather
+	// than through wg.
+	if !p.closed {
+		p.wg.Add(1)
+		defer p.wg.Done()
+	}
 	entry, ok := p.active[key]
 	if ok && entry.state != nil {
 		// MarkKilled flips the state machine → its lifecycle hook
@@ -1280,7 +1356,7 @@ func (p *Pool) notifyLifecycle(ctx context.Context, entry *runEntry, sessionID, 
 // an injected user turn to connected web viewers. Skips web-sourced turns
 // ("ui"): the composer already renders those optimistically, so echoing one
 // back would double it. No-op when no hook or empty text.
-func (p *Pool) notifyUserMessage(sessionID, agentName, source, text string) {
+func (p *Pool) notifyUserMessage(sessionID, agentName, source, text string, sender *store.Sender) {
 	if p.cfg.OnUserMessage == nil {
 		return
 	}
@@ -1292,6 +1368,7 @@ func (p *Pool) notifyUserMessage(sessionID, agentName, source, text string) {
 		AgentName: agentName,
 		Source:    source,
 		Text:      text,
+		Sender:    sender,
 	})
 }
 
