@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -137,10 +138,16 @@ type Ticket struct {
 // CreateOptions describes a new ticket.
 type CreateOptions struct {
 	ProjectID string
-	Title     string
-	Status    string // defaults to open
-	Assignee  string
-	Fields    map[string]string
+	// ID adopts an external identifier instead of generating one. It exists
+	// so a ticket mirroring a Notion page can BE that page — no mapping to
+	// store, and creating from the same page twice collides instead of
+	// silently opening a second ticket. Empty means "generate one", which
+	// is what every internal caller wants. See NormalizeID for the shape.
+	ID       string
+	Title    string
+	Status   string // defaults to open
+	Assignee string
+	Fields   map[string]string
 	// Sessions optionally seeds the session list (used when a ticket is
 	// created from an existing conversation).
 	Sessions []string
@@ -153,6 +160,48 @@ type CreateOptions struct {
 // idAlphabet excludes I, O, 0, and 1 — a ticket code gets read aloud and
 // retyped, and those four are where that goes wrong.
 const idAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+// customIDRe is the charset a caller-supplied id must fit. A ticket id
+// becomes a directory name, so this is the same traversal-safe family
+// session ids use, with a length cap because the id also has to render on
+// a board card. Leading dots and ".." are refused separately.
+var customIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// uuidRe matches a uuid once its dashes are stripped.
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// generatedIDRe matches the shape newID mints. A caller may not claim one:
+// the generator has to stay free to mint any code without checking whether
+// somebody reserved it by hand.
+var generatedIDRe = regexp.MustCompile(`^T-[` + idAlphabet + `]{4}$`)
+
+// NormalizeID canonicalises a caller-supplied ticket id.
+//
+// Any id in the safe charset is kept verbatim — "TIK-2026-001" stays what
+// the caller typed, because an id adopted from another system is only
+// useful if it survives the trip unchanged.
+//
+// The one exception is a uuid, which is folded to dashless lowercase.
+// Notion hands the same page id out in two shapes (dashless 32-hex in a
+// page URL, dashed uuid from its API) and they must not become two
+// tickets: collapsing both to one form is what makes "create from this
+// page" idempotent no matter which shape the caller copied.
+func NormalizeID(id string) (string, error) {
+	s := strings.TrimSpace(id)
+	if s == "" {
+		return "", fmt.Errorf("ticket id is empty")
+	}
+	if strings.HasPrefix(s, ".") || strings.Contains(s, "..") || !customIDRe.MatchString(s) {
+		return "", fmt.Errorf("invalid ticket id %q (allowed: [A-Za-z0-9._-], up to 64 characters)", id)
+	}
+	if generatedIDRe.MatchString(s) {
+		return "", fmt.Errorf("ticket id %q is reserved for generated codes", id)
+	}
+	if h := strings.ToLower(strings.ReplaceAll(s, "-", "")); uuidRe.MatchString(h) {
+		return h, nil
+	}
+	return s, nil
+}
 
 // newID returns a short code like "T-4F2A".
 func newID() (string, error) {
@@ -196,14 +245,7 @@ func Create(layout config.Layout, opt CreateOptions) (Ticket, error) {
 	}
 
 	now := time.Now().UTC()
-	for attempt := 0; attempt < 8; attempt++ {
-		id, err := newID()
-		if err != nil {
-			return Ticket{}, err
-		}
-		if storage.PathExists(layout.TicketFile(opt.ProjectID, id)) {
-			continue
-		}
+	write := func(id string) (Ticket, error) {
 		tk := Ticket{
 			ID:        id,
 			ProjectID: opt.ProjectID,
@@ -223,6 +265,31 @@ func Create(layout config.Layout, opt CreateOptions) (Ticket, error) {
 		}
 		emit(Event{Event: EventCreated, Ticket: tk, Actor: opt.Actor.orSystem()})
 		return tk, nil
+	}
+
+	// A caller-supplied id is a claim on one specific slot, so a taken slot
+	// is an error rather than something to retry past: the point of adopting
+	// an external id is that creating twice from the same source is caught.
+	if raw := strings.TrimSpace(opt.ID); raw != "" {
+		id, err := NormalizeID(raw)
+		if err != nil {
+			return Ticket{}, err
+		}
+		if Exists(layout, opt.ProjectID, id) {
+			return Ticket{}, fmt.Errorf("ticket %q already exists", id)
+		}
+		return write(id)
+	}
+
+	for attempt := 0; attempt < 8; attempt++ {
+		id, err := newID()
+		if err != nil {
+			return Ticket{}, err
+		}
+		if storage.PathExists(layout.TicketFile(opt.ProjectID, id)) {
+			continue
+		}
+		return write(id)
 	}
 	return Ticket{}, fmt.Errorf("could not allocate a free ticket id after 8 attempts")
 }

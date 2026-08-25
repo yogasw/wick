@@ -384,3 +384,120 @@ func TestCreateUsesTheProjectsOwnStatuses(t *testing.T) {
 		t.Fatal("a status this board does not have must be refused")
 	}
 }
+
+func TestCreateAdoptsExternalID(t *testing.T) {
+	l := newLayout(t)
+	// The dashed form the Notion API returns.
+	tk, err := Create(l, CreateOptions{
+		ProjectID: "p1",
+		ID:        "1f2e3d4c-5b6a-7988-9a0b-1c2d3e4f5a6b",
+		Title:     "Mirror of a Notion page",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "1f2e3d4c5b6a79889a0b1c2d3e4f5a6b"
+	if tk.ID != want {
+		t.Fatalf("id = %q, want the dashless form %q", tk.ID, want)
+	}
+	if _, lerr := Load(l, "p1", want); lerr != nil {
+		t.Fatalf("ticket not readable under its adopted id: %v", lerr)
+	}
+}
+
+func TestCreateKeepsANonUUIDIDVerbatim(t *testing.T) {
+	l := newLayout(t)
+	// An id adopted from a system that does not use uuids is only useful if
+	// it survives the trip unchanged.
+	tk, err := Create(l, CreateOptions{ProjectID: "p1", ID: "TIK-2026-001", Title: "from a helpdesk"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.ID != "TIK-2026-001" {
+		t.Fatalf("id = %q, want it kept verbatim", tk.ID)
+	}
+	if !Exists(l, "p1", "TIK-2026-001") {
+		t.Fatal("adopted id should resolve by direct path lookup")
+	}
+}
+
+func TestCreateRejectsAdoptedIDTwice(t *testing.T) {
+	l := newLayout(t)
+	const dashless = "1f2e3d4c5b6a79889a0b1c2d3e4f5a6b"
+	if _, err := Create(l, CreateOptions{ProjectID: "p1", ID: dashless, Title: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	// Same page, copied in the other shape and in upper case. It must not
+	// open a second ticket — that is the whole reason the id is adopted.
+	_, err := Create(l, CreateOptions{
+		ProjectID: "p1",
+		ID:        "1F2E3D4C-5B6A-7988-9A0B-1C2D3E4F5A6B",
+		Title:     "second",
+	})
+	if err == nil {
+		t.Fatal("re-creating from the same page id should be refused")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("error = %v, want it to name the collision", err)
+	}
+}
+
+// An adopted id becomes a directory name, so anything that could escape the
+// project's tickets directory — or hide inside it — must be refused before
+// os.MkdirAll ever sees it.
+func TestCreateRejectsUnusableIDs(t *testing.T) {
+	l := newLayout(t)
+	for _, id := range []string{
+		"..",
+		"../escape",
+		"a/b",
+		"a\\b",
+		".hidden",
+		"has space",
+		"emoji-\U0001F600",
+		strings.Repeat("a", 65),
+		"T-4F2A", // reserved: the generator must stay free to mint it
+	} {
+		if _, err := Create(l, CreateOptions{ProjectID: "p1", ID: id, Title: "x"}); err == nil {
+			t.Fatalf("id %q should be refused", id)
+		}
+	}
+}
+
+// The point of adopting an id is that a lookup is a direct path read: no
+// listing of the tickets directory, no reading of every ticket file.
+func TestAdoptedIDResolvesWithoutScanning(t *testing.T) {
+	l := newLayout(t)
+	const id = "1f2e3d4c5b6a79889a0b1c2d3e4f5a6b"
+	for i := 0; i < 5; i++ {
+		if _, err := Create(l, CreateOptions{ProjectID: "p1", Title: "noise"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Create(l, CreateOptions{ProjectID: "p1", ID: id, Title: "the one"}); err != nil {
+		t.Fatal(err)
+	}
+	// Load addresses the file directly; if it ever started scanning, the
+	// noise tickets above would be read too.
+	tk, err := Load(l, "p1", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Title != "the one" {
+		t.Fatalf("title = %q, want the directly addressed ticket", tk.Title)
+	}
+	if Exists(l, "p1", "1f2e3d4c-5b6a-7988-9a0b-1c2d3e4f5a6b") {
+		t.Fatal("the dashed form must not resolve — ids are stored normalised")
+	}
+}
+
+func TestCreateWithoutIDStillGenerates(t *testing.T) {
+	l := newLayout(t)
+	tk, err := Create(l, CreateOptions{ProjectID: "p1", Title: "no id given"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(tk.ID, "T-") || len(tk.ID) != 6 {
+		t.Fatalf("id %q, want the generated T- form to be untouched", tk.ID)
+	}
+}

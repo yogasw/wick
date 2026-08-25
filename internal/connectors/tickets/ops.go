@@ -213,6 +213,7 @@ func (h *handlers) create(c *connector.Ctx) (any, error) {
 	}
 	tk, err := ticket.Create(h.layout, ticket.CreateOptions{
 		ProjectID: projectID,
+		ID:        strings.TrimSpace(c.Input("id")),
 		Title:     c.Input("title"),
 		Status:    strings.TrimSpace(c.Input("status")),
 		Assignee:  assignee,

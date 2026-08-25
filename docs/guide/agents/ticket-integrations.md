@@ -108,6 +108,7 @@ POST /api/projects/{projectID}/tickets
 | Field | Required | Notes |
 |---|---|---|
 | `title` | yes | Trimmed; must not be empty. |
+| `id` | no | Adopt an external id instead of a generated one — see [Adopting an external id](#adopting-an-external-id). |
 | `status` | no | Defaults to the board's first column. Must be one of the project's keys. |
 | `assignee` | no | A wick user id. **Omit** it and the token's own user is assigned; send `""` for deliberately unassigned. |
 | `fields` | no | Custom fields, keyed by the project's field keys. |
@@ -136,6 +137,55 @@ curl -s -X POST "$WICK_API/projects/$PROJECT/tickets" \
   "updated_at": "2026-08-25T04:11:09Z"
 }
 ```
+
+### Adopting an external id
+
+By default wick mints a short, human-quotable id (`T-4F2A`) — the code that
+goes on the board card and gets typed into chat. When the ticket mirrors a
+record that already has an identity elsewhere, send that identity as `id` and
+the ticket becomes addressable by it directly:
+
+```bash
+curl -s -X POST "$WICK_API/projects/$PROJECT/tickets" \
+  -H "Authorization: Bearer $WICK_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "1f2e3d4c-5b6a-7988-9a0b-1c2d3e4f5a6b",
+    "title": "Checkout returns 502 on retry"
+  }'
+```
+
+An id must fit `[A-Za-z0-9._-]`, be at most 64 characters, and is kept
+verbatim — `TIK-2026-001` stays exactly that. Two shapes are refused: anything
+that could escape or hide inside the project's ticket directory (`..`, a path
+separator, a leading dot), and the generated `T-XXXX` form, which stays
+reserved so the generator never has to check whether someone claimed a code by
+hand.
+
+A uuid is the one id that gets normalised. Notion hands the same page id out in
+two shapes — dashless in a page URL, dashed from its API — and they must not
+become two tickets, so both fold to the dashless lowercase form:
+
+```json
+{ "id": "1f2e3d4c5b6a79889a0b1c2d3e4f5a6b", "…": "…" }
+```
+
+That is what makes the mapping disposable. The source system already knows the
+page id, so it can read the ticket back with
+`GET /api/tickets/1f2e3d4c5b6a79889a0b1c2d3e4f5a6b` without storing anything,
+and a second create from the same page is refused with `400` rather than
+quietly opening a duplicate.
+
+Lookups stay cheap: a ticket id **is** its directory name, so addressing one by
+its adopted id is a direct file read — nothing lists the board or opens every
+ticket to find it.
+
+Two things to weigh before using it. The id is long where a generated one is
+short, so it reads worse on a card and in chat. And a board mixing both kinds
+carries two id shapes at once — fine when the external system is the system of
+record, worse when tickets arrive from everywhere. Omit `id` and nothing
+changes: tickets created by hand, by an agent, or by an auto-create rule keep
+getting `T-XXXX`.
 
 ## Get one ticket
 

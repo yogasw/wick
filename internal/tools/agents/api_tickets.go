@@ -389,7 +389,11 @@ func apiTicketCreate(c *tool.Ctx) {
 		return
 	}
 	var req struct {
-		Title  string `json:"title"`
+		Title string `json:"title"`
+		// ID adopts an external identifier (a Notion page id) as the ticket
+		// id, so the source system can address the ticket it just created
+		// without keeping a mapping. Omitted means wick generates one.
+		ID     string `json:"id"`
 		Status string `json:"status"`
 		// Assignee is a pointer so "not sent" stays distinct from "sent
 		// empty": omitting it means "whoever is creating this", while an
@@ -432,6 +436,7 @@ func apiTicketCreate(c *tool.Ctx) {
 	}
 	tk, err := ticket.Create(globalLayout, ticket.CreateOptions{
 		ProjectID: projectID,
+		ID:        req.ID,
 		Title:     req.Title,
 		Status:    req.Status,
 		Assignee:  assignee,
