@@ -356,7 +356,12 @@ will die again, so unlimited retries turn one broken config into an infinite
 loop. `TestRespawnBudget_TerminatesTheRecursion` pins that the budget bounds it
 with no off-by-one.
 
-**What the agent is told** (`crashNotice` / `oomNotice`) — the agent resumes
+**What the agent is told** (`crashNotice` / `oomNotice`) — the notice embeds
+the exit's actual reason sentence (`ExitDetail.ReasonDetail`, threaded through
+`OnExit` → `HandleExit`), not a generic "unexpected exit". This matters most
+for a host-OOM kill: it is retried as an `ExitError`, and without the memory
+cause in the notice the agent would repeat the exact allocation that got it
+killed. The agent resumes
 with its conversation intact, so from the inside a crash is invisible: the last
 thing it did simply produced nothing. Without a notice it either goes silent or
 starts the task over. The message therefore states the cause, warns that work in

@@ -2014,7 +2014,7 @@ func (p *Pool) DequeueSession(sessionID string) int {
 //
 // claude (append mode) keeps the 1-agent-1-process model: every exit is
 // the agent dying, so all reasons release.
-func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReason) {
+func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) {
 	if reason == provider.ExitError {
 		p.healStaleResume(sessionID, agentName)
 	}
@@ -2039,7 +2039,7 @@ func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReaso
 	// restart and tell the agent what happened. Ordered after
 	// onAgentExit so the restart competes for a free slot like any other
 	// spawn rather than racing the one it just vacated.
-	p.recoverFromExit(sessionID, agentName, reason)
+	p.recoverFromExit(sessionID, agentName, reason, reasonDetail)
 }
 
 // recoverFromExit restarts an agent that died for no stated reason, and
@@ -2050,8 +2050,15 @@ func (p *Pool) HandleExit(sessionID, agentName string, reason provider.ExitReaso
 // stopping mid-sentence — no message, no continuation, and the next user
 // turn began with a fresh process that had no idea anything had gone
 // wrong.
-func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.ExitReason) {
+// reasonDetail is the exit's human sentence (ExitDetail.ReasonDetail);
+// it names the cause in the notice so the agent can act on it — a
+// host-OOM kill retried with a generic "carry on" would repeat the exact
+// allocation that got it killed.
+func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.ExitReason, reasonDetail string) {
 	key := sessionKey(sessionID, agentName)
+	if reasonDetail == "" {
+		reasonDetail = "unexpected exit"
+	}
 
 	// An explained exit clears the history: a clean stop today must not
 	// eat into the restart budget of an unrelated crash next week.
@@ -2076,13 +2083,10 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 		p.clearCrashesLocked(key)
 		p.mu.Unlock()
 		l.Warn().Msg("pool.recover: agent stopped for memory; not restarting")
-		// The measured peak and the ceiling live on ExitDetail, which
-		// travels a different hook (OnExitDetail → the spawn log). Rather
-		// than thread that value through a second path just for this
-		// sentence, the notice states the cause and points at where the
-		// numbers already are.
-		p.notifySession(sessionID, agentName, oomNotice(
-			"It went over the memory limit set for it; Recent Spawns has the measured figure."))
+		// reasonDetail carries the measured peak and the ceiling it broke
+		// (OOMDetail) — the agent needs the numbers to propose a smaller
+		// approach.
+		p.notifySession(sessionID, agentName, oomNotice(reasonDetail))
 		return
 	}
 
@@ -2093,7 +2097,7 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 	if !ShouldRespawn(reason, attempt-1) {
 		l.Error().Int("attempts", attempt).
 			Msg("pool.recover: repeated unexplained exits; giving up")
-		p.notifySession(sessionID, agentName, crashNotice("repeated unexpected exits", attempt, true))
+		p.notifySession(sessionID, agentName, crashNotice(reasonDetail, attempt, true))
 		return
 	}
 
@@ -2103,7 +2107,7 @@ func (p *Pool) recoverFromExit(sessionID, agentName string, reason provider.Exit
 	// the restart goes through the same slot accounting, queueing, and
 	// admission checks as any other. A separate spawn path here would be a
 	// second way to start an agent, and the two would drift.
-	p.notifySession(sessionID, agentName, crashNotice("unexpected exit", attempt, false))
+	p.notifySession(sessionID, agentName, crashNotice(reasonDetail, attempt, false))
 }
 
 // notifySession delivers a system turn to the session, which also brings

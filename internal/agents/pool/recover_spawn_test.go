@@ -24,7 +24,7 @@ func TestRecoverTurnSpawnsAlone(t *testing.T) {
 	p, layout := newPool(t, 2, sp)
 	setupSession(t, layout, "S1")
 
-	p.recoverFromExit("S1", "default", provider.ExitError)
+	p.recoverFromExit("S1", "default", provider.ExitError, "")
 	waitFor(t, func() bool { return sp.procCount() == 1 && p.Active() == 0 }, 3*time.Second)
 
 	if n := sp.procCount(); n != 1 {
@@ -33,6 +33,31 @@ func TestRecoverTurnSpawnsAlone(t *testing.T) {
 	stdin := sp.procAt(0).recordedStdin()
 	if !contains(stdin, "stopped unexpectedly") {
 		t.Fatalf("spawned prompt missing the crash notice: %q", stdin)
+	}
+}
+
+// A host-OOM kill arrives as a retryable ExitError, but the agent must
+// still be told the cause was memory: the generic "unexpected exit,
+// carry on" notice tells it to repeat the exact allocation that got it
+// killed. The exit's ReasonDetail (HostOOMDetail) must reach the notice.
+func TestRecoverNoticeCarriesHostOOMDetail(t *testing.T) {
+	sp := &scriptedSpawner{Lines: [][]string{{
+		`{"type":"system","subtype":"init","session_id":"abc"}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"ok"}`,
+	}}}
+	p, layout := newPool(t, 2, sp)
+	setupSession(t, layout, "S1")
+
+	p.recoverFromExit("S1", "default", provider.ExitError, provider.HostOOMDetail(1<<30))
+	waitFor(t, func() bool { return sp.procCount() == 1 && p.Active() == 0 }, 3*time.Second)
+
+	if n := sp.procCount(); n != 1 {
+		t.Fatalf("expected exactly 1 spawn, got %d", n)
+	}
+	stdin := sp.procAt(0).recordedStdin()
+	if !contains(stdin, "machine ran out of memory") {
+		t.Fatalf("notice does not name the memory cause: %q", stdin)
 	}
 }
 
@@ -48,7 +73,7 @@ func TestRecoverOOMNoticeSpawnsAlone(t *testing.T) {
 	p, layout := newPool(t, 2, sp)
 	setupSession(t, layout, "S1")
 
-	p.recoverFromExit("S1", "default", provider.ExitOOM)
+	p.recoverFromExit("S1", "default", provider.ExitOOM, "used 2.0 GB, over its 1024 MB limit.")
 	waitFor(t, func() bool { return sp.procCount() == 1 && p.Active() == 0 }, 3*time.Second)
 
 	if n := sp.procCount(); n != 1 {
@@ -57,6 +82,25 @@ func TestRecoverOOMNoticeSpawnsAlone(t *testing.T) {
 	stdin := sp.procAt(0).recordedStdin()
 	if !contains(stdin, "too much memory") {
 		t.Fatalf("spawned prompt missing the OOM notice: %q", stdin)
+	}
+	if !contains(stdin, "over its 1024 MB limit") {
+		t.Fatalf("OOM notice missing the measured detail: %q", stdin)
+	}
+}
+
+// exitReasonString is the pool's copy of the provider's reason names —
+// the labels differ on purpose ("idle" vs "idle_ttl" are persisted in
+// spawn logs), but coverage must not: a reason the provider can name and
+// the pool logs as "unknown" is how ExitOOM shipped mislabeled.
+func TestExitReasonStringCoversEveryReason(t *testing.T) {
+	for r := provider.ExitReason(0); r < 32; r++ {
+		if provider.ExitReasonName(r) == "unknown" {
+			continue
+		}
+		if got := exitReasonString(r); got == "unknown" {
+			t.Errorf("exitReasonString(%d) = \"unknown\", but the provider names it %q",
+				r, provider.ExitReasonName(r))
+		}
 	}
 }
 
