@@ -599,7 +599,7 @@ func NewServer() *Server {
 			channelReg.DispatchAgentEventFrom(sid, name, ev)
 			turnObserver.OnEvent(sid, name, ev)
 		},
-		OnExit: func(sid, name string, reason provider.ExitReason) {
+		OnExit: func(sid, name string, reason provider.ExitReason, reasonDetail string) {
 			// OnExit fires from the agent reader goroutine — no HTTP ctx
 			// in scope here, so request_id is not available. Pool's
 			// onAgentExit (called via HandleExit) will use the spawn-time
@@ -610,7 +610,7 @@ func NewServer() *Server {
 				Str("agent", name).
 				Int("reason", int(reason)).
 				Msg("OnExit: publishing synthetic Done + handing to pool")
-			agentsPool.HandleExit(sid, name, reason)
+			agentsPool.HandleExit(sid, name, reason, reasonDetail)
 			doneEv := agentevent.AgentEvent{Type: agentevent.Done}
 			agentsBcast.Publish(sid, name, doneEv)
 			channelReg.DispatchAgentEvent(sid, doneEv)

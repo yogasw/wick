@@ -21,11 +21,29 @@ func ReadStatsAt(root, unit string) Stats {
 		// Reaped, or never existed. Either way: no evidence, no verdict.
 		return Stats{}
 	}
-	st := Stats{Known: true, OOMKills: parseEventCount(string(ev), "oom_kill")}
+	st := Stats{
+		Known:     true,
+		OOMKills:  parseEventCount(string(ev), "oom_kill"),
+		OOMEvents: parseEventCount(string(ev), "oom"),
+	}
 	if peak, err := os.ReadFile(filepath.Join(dir, "memory.peak")); err == nil {
 		st.PeakBytes = parseUint(string(peak))
 	}
 	return st
+}
+
+// ReadSliceOOMAt reports the `oom` counter of the agents slice itself,
+// rooted at an explicit directory. A kill by the aggregate slice ceiling
+// counts its oom event at the slice, not at the victim's scope — so the
+// scope alone cannot tell "the combined limit was hit" from "the machine
+// ran out". Callers snapshot this at spawn and diff at exit; 0 on any
+// read failure, which safely reads as "no slice event".
+func ReadSliceOOMAt(root string) int {
+	ev, err := os.ReadFile(filepath.Join(root, SliceName, "memory.events"))
+	if err != nil {
+		return 0
+	}
+	return parseEventCount(string(ev), "oom")
 }
 
 // parseEventCount pulls one counter out of a flat "key value" file,

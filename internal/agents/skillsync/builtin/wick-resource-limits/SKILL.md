@@ -113,6 +113,14 @@ Going straight to `enforce` with guessed numbers is what produces surprise kills
 
 ## When an agent is killed
 
-An OOM kill is reported with its cause, and on Linux with systemd it carries the measured peak so there is no guessing about what happened. The session recovers and can respawn — a kill is not a lost session.
+A memory kill is reported with its actual cause — there are three, and they behave differently:
 
-If the user reports an agent dying with no OOM report, check the platform table first: outside Linux + systemd the kill can still happen but cannot always be *named*, which looks like an unexplained exit.
+| Cause | What it means | Auto-restarted? |
+|---|---|---|
+| **Its own limit** (`agent_memory_max_mb`) | the agent alone crossed its ceiling | **no** — the same work would hit the same ceiling; the message names the peak and the limit, and the remedy is a higher limit or smaller work |
+| **The combined limit** (`agents_total_memory_mb`) | all agents together crossed the shared ceiling and the kernel picked this one | yes — contention, not this agent's fault; raise the combined limit or run fewer agents at once |
+| **The machine ran out** | the global OOM killer picked this agent (agents are biased to die before wick) | yes — free up host memory, lower the combined limits, or run fewer agents |
+
+On Linux with systemd the report carries the measured peak, so there is no guessing. Either way a kill is not a lost session: the conversation is intact, and the notice the agent receives states the cause so it knows whether to continue, shrink the work, or relay a settings change to the user.
+
+If the user reports an agent dying with no OOM report, check the platform table first: outside Linux + systemd the kill can still happen but cannot always be *named*, which looks like an unexplained exit. Unexplained exits are auto-restarted up to 3 times in a 10-minute window.

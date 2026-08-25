@@ -141,6 +141,12 @@ func TestOOMNotice_AsksForASmallerApproach(t *testing.T) {
 	if !strings.Contains(got, "1.6 GB") {
 		t.Fatalf("notice %q dropped the measured figure", got)
 	}
+	// The detail's settings advice ("raise the limit") is addressed to the
+	// operator — the agent cannot change settings. The notice must tell
+	// the agent to relay that advice, not act on it.
+	if !strings.Contains(low, "relay") {
+		t.Fatalf("notice %q does not tell the agent to relay the settings advice", got)
+	}
 }
 
 // The restart path re-enters the pool through Send, which can spawn,

@@ -23,6 +23,13 @@ func ReadStats(unit string) Stats {
 	return ReadStatsV1At(cgroupV1MemoryRoot, SliceName, unit)
 }
 
+// ReadSliceOOM reads the agents slice's own oom counter on the running
+// system. Only meaningful on the v2 path — cgroup v1 has no per-group
+// oom event counter, and 0 there degrades to the host-OOM verdict.
+func ReadSliceOOM() int {
+	return ReadSliceOOMAt(scopeSearchRoot())
+}
+
 // scopeSearchRoot resolves the directory the agents slice sits in.
 //
 // The path embeds the uid (user@1000.service), so it is derived from this
