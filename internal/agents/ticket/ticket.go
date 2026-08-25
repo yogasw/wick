@@ -161,27 +161,44 @@ type CreateOptions struct {
 // retyped, and those four are where that goes wrong.
 const idAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
-// customIDRe matches a Notion page id once its dashes are stripped.
-var customIDRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+// customIDRe is the charset a caller-supplied id must fit. A ticket id
+// becomes a directory name, so this is the same traversal-safe family
+// session ids use, with a length cap because the id also has to render on
+// a board card. Leading dots and ".." are refused separately.
+var customIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// uuidRe matches a uuid once its dashes are stripped.
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// generatedIDRe matches the shape newID mints. A caller may not claim one:
+// the generator has to stay free to mint any code without checking whether
+// somebody reserved it by hand.
+var generatedIDRe = regexp.MustCompile(`^T-[` + idAlphabet + `]{4}$`)
 
 // NormalizeID canonicalises a caller-supplied ticket id.
 //
-// Notion hands the same page id out in two shapes — dashless 32-hex in a
-// page URL, dashed uuid from the API — so both are accepted and both
-// normalise to the dashless lowercase form. That is the whole point: one
-// page can only ever map to one ticket id, so "create from this page"
-// stays idempotent no matter which shape the caller copied.
+// Any id in the safe charset is kept verbatim — "TIK-2026-001" stays what
+// the caller typed, because an id adopted from another system is only
+// useful if it survives the trip unchanged.
 //
-// The charset is deliberately narrower than the id could technically be.
-// A ticket id becomes a directory name, so anything outside [0-9a-f] would
-// need its own traversal audit; refusing it here means there is nothing to
-// audit. It also keeps a board readable: an id is either the generated
-// "T-4F2A" or a page id, never a free-text string someone invented.
+// The one exception is a uuid, which is folded to dashless lowercase.
+// Notion hands the same page id out in two shapes (dashless 32-hex in a
+// page URL, dashed uuid from its API) and they must not become two
+// tickets: collapsing both to one form is what makes "create from this
+// page" idempotent no matter which shape the caller copied.
 func NormalizeID(id string) (string, error) {
-	s := strings.ToLower(strings.TrimSpace(id))
-	s = strings.ReplaceAll(s, "-", "")
-	if !customIDRe.MatchString(s) {
-		return "", fmt.Errorf("invalid ticket id %q (want a Notion page id: 32 hex characters, dashes optional)", id)
+	s := strings.TrimSpace(id)
+	if s == "" {
+		return "", fmt.Errorf("ticket id is empty")
+	}
+	if strings.HasPrefix(s, ".") || strings.Contains(s, "..") || !customIDRe.MatchString(s) {
+		return "", fmt.Errorf("invalid ticket id %q (allowed: [A-Za-z0-9._-], up to 64 characters)", id)
+	}
+	if generatedIDRe.MatchString(s) {
+		return "", fmt.Errorf("ticket id %q is reserved for generated codes", id)
+	}
+	if h := strings.ToLower(strings.ReplaceAll(s, "-", "")); uuidRe.MatchString(h) {
+		return h, nil
 	}
 	return s, nil
 }

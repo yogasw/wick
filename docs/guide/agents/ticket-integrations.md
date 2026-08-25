@@ -155,10 +155,16 @@ curl -s -X POST "$WICK_API/projects/$PROJECT/tickets" \
   }'
 ```
 
-The id must be a Notion page id: 32 hex characters, dashes optional. Both
-shapes Notion hands out — the dashless one in a page URL, the dashed uuid from
-its API — normalise to the same dashless lowercase id, so one page can only
-ever map to one ticket:
+An id must fit `[A-Za-z0-9._-]`, be at most 64 characters, and is kept
+verbatim — `TIK-2026-001` stays exactly that. Two shapes are refused: anything
+that could escape or hide inside the project's ticket directory (`..`, a path
+separator, a leading dot), and the generated `T-XXXX` form, which stays
+reserved so the generator never has to check whether someone claimed a code by
+hand.
+
+A uuid is the one id that gets normalised. Notion hands the same page id out in
+two shapes — dashless in a page URL, dashed from its API — and they must not
+become two tickets, so both fold to the dashless lowercase form:
 
 ```json
 { "id": "1f2e3d4c5b6a79889a0b1c2d3e4f5a6b", "…": "…" }
@@ -169,6 +175,10 @@ page id, so it can read the ticket back with
 `GET /api/tickets/1f2e3d4c5b6a79889a0b1c2d3e4f5a6b` without storing anything,
 and a second create from the same page is refused with `400` rather than
 quietly opening a duplicate.
+
+Lookups stay cheap: a ticket id **is** its directory name, so addressing one by
+its adopted id is a direct file read — nothing lists the board or opens every
+ticket to find it.
 
 Two things to weigh before using it. The id is long where a generated one is
 short, so it reads worse on a card and in chat. And a board mixing both kinds
