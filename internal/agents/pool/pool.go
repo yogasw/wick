@@ -792,7 +792,13 @@ func (p *Pool) send(ctx context.Context, sessionID, agentName, source, role, tex
 	// see a request" and then reply again when the real message lands
 	// (two replies for one prompt). Channels always send the user turn
 	// right after, so the buffered context is never stranded.
-	if role != "user" {
+	//
+	// Crash-recovery notices (source "recover") are the exception: the
+	// agent just died and no user turn is coming — the notice IS the
+	// prompt, and delivering it is what brings the agent back. Without
+	// this carve-out the notice sits buffered until a human happens to
+	// message the session, and auto-restart never fires.
+	if role != "user" && source != "recover" {
 		return nil
 	}
 

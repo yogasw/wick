@@ -21,7 +21,11 @@ func ReadStatsAt(root, unit string) Stats {
 		// Reaped, or never existed. Either way: no evidence, no verdict.
 		return Stats{}
 	}
-	st := Stats{Known: true, OOMKills: parseEventCount(string(ev), "oom_kill")}
+	st := Stats{
+		Known:     true,
+		OOMKills:  parseEventCount(string(ev), "oom_kill"),
+		OOMEvents: parseEventCount(string(ev), "oom"),
+	}
 	if peak, err := os.ReadFile(filepath.Join(dir, "memory.peak")); err == nil {
 		st.PeakBytes = parseUint(string(peak))
 	}

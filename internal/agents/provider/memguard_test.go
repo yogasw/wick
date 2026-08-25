@@ -178,6 +178,42 @@ func TestMemGuard_ClassifyExitWithoutEvidence(t *testing.T) {
 	}
 }
 
+// classifyStats must tell a limit kill from a global one. oom_kill counts
+// kills by ANY OOM killer, so a host that ran out of memory used to be
+// reported as "over its limit" even when the measured peak was under it —
+// and, worse, was never retried, though the agent did nothing wrong.
+func TestClassifyStats_SeparatesHostFromLimitOOM(t *testing.T) {
+	// Limit kill: the cgroup raised its own OOM condition. Not retryable.
+	r, d, ok := classifyStats(memscope.Stats{Known: true, OOMKills: 1, OOMEvents: 2, PeakBytes: 2 << 30}, 1024)
+	if !ok || r != ExitOOM {
+		t.Fatalf("limit kill: reason=%v ok=%v, want ExitOOM true", r, ok)
+	}
+	if d == "" {
+		t.Fatal("limit kill: empty detail")
+	}
+
+	// Global kill: killed by the host OOM killer without hitting its own
+	// ceiling. Stays ExitError (retryable) with a detail naming the host.
+	r, d, ok = classifyStats(memscope.Stats{Known: true, OOMKills: 1, OOMEvents: 0, PeakBytes: 1 << 30}, 1285)
+	if !ok || r != ExitError {
+		t.Fatalf("global kill: reason=%v ok=%v, want ExitError true", r, ok)
+	}
+	if d == "" || !strings.Contains(d, "machine") {
+		t.Fatalf("global kill: detail must name the machine, got %q", d)
+	}
+	if strings.Contains(d, "over its") {
+		t.Fatalf("global kill: detail claims the limit was exceeded: %q", d)
+	}
+
+	// No kill at all: no verdict, regardless of the oom counter.
+	if _, _, ok := classifyStats(memscope.Stats{Known: true, OOMEvents: 1}, 1024); ok {
+		t.Fatal("classified an OOM with zero kills")
+	}
+	if _, _, ok := classifyStats(memscope.Stats{}, 1024); ok {
+		t.Fatal("classified an OOM from unknown stats")
+	}
+}
+
 // A cgroupfs spawn that cannot resolve wick's own binary path has no
 // wrapper to re-exec through. It must degrade to unguarded, matching how
 // an EnsureSlice failure degrades on the systemd path — never refuse the

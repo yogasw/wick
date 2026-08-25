@@ -655,6 +655,8 @@ func exitReasonString(r provider.ExitReason) string {
 		return "error"
 	case provider.ExitRespawn:
 		return "respawn"
+	case provider.ExitOOM:
+		return "oom"
 	}
 	return "unknown"
 }

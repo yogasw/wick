@@ -57,6 +57,28 @@ func TestReadStatsAt_MaxWithoutKillIsNotOOM(t *testing.T) {
 	}
 }
 
+// memory.events keeps `oom` (OOM conditions raised by THIS cgroup hitting
+// its own limit) and `oom_kill` (processes here killed by ANY OOM killer,
+// the global one included) as separate counters. Both must be read: their
+// difference is what tells a limit kill from the machine running out.
+func TestReadStatsAt_SeparatesOOMEventsFromKills(t *testing.T) {
+	root := t.TempDir()
+	// Limit-triggered kill: the cgroup raised the OOM condition itself.
+	writeScope(t, root, "claude-agent-6", "low 0\nmax 12\noom 3\noom_kill 1\n", "")
+	got := ReadStatsAt(root, "claude-agent-6")
+	if got.OOMEvents != 3 || got.OOMKills != 1 {
+		t.Fatalf("limit kill: OOMEvents=%d OOMKills=%d, want 3 and 1", got.OOMEvents, got.OOMKills)
+	}
+
+	// Global kill: a process died to the host OOM killer, but this cgroup
+	// never hit its own limit — oom stays 0 while oom_kill counts.
+	writeScope(t, root, "claude-agent-7", "low 0\nmax 0\noom 0\noom_kill 1\n", "")
+	got = ReadStatsAt(root, "claude-agent-7")
+	if got.OOMEvents != 0 || got.OOMKills != 1 {
+		t.Fatalf("global kill: OOMEvents=%d OOMKills=%d, want 0 and 1", got.OOMEvents, got.OOMKills)
+	}
+}
+
 // --collect reaps a scope as soon as its last process exits, so the read
 // races the reap. A missing scope must read as "unknown", never as a
 // confident "not OOM" and never as a false OOM.

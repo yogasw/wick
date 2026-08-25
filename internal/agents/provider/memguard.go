@@ -199,9 +199,22 @@ func (g *MemGuard) ClassifyExit(unit string, limitMB int) (ExitReason, string, b
 	if g == nil || unit == "" {
 		return ExitError, "", false
 	}
-	st := memscope.ReadStats(unit)
+	return classifyStats(memscope.ReadStats(unit), limitMB)
+}
+
+// classifyStats is the pure decision behind ClassifyExit, split out so the
+// discrimination is testable on every platform (ReadStats is Linux-only).
+func classifyStats(st memscope.Stats, limitMB int) (ExitReason, string, bool) {
 	if !st.Known || st.OOMKills == 0 {
 		return ExitError, "", false
+	}
+	// oom_kill counts kills by ANY OOM killer; oom counts OOM conditions
+	// raised by this cgroup hitting its OWN limit. A kill without an oom
+	// event came from the machine running out of memory — the agent never
+	// exceeded its ceiling, so the exit stays a retryable ExitError and the
+	// detail must not blame a limit that was never hit.
+	if st.OOMEvents == 0 {
+		return ExitError, HostOOMDetail(st.PeakBytes), true
 	}
 	return ExitOOM, OOMDetail(st.PeakBytes, limitMB), true
 }

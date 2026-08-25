@@ -108,7 +108,8 @@ spawn request
         │
    process exits
         │
-   memscope.ReadStats(unit) → oom_kill > 0 ? ──yes──> ExitOOM + measured peak
+   memscope.ReadStats(unit) → oom_kill > 0 ? ──yes──> oom > 0 ? ExitOOM (own limit)
+                                                      : ExitError (host OOM, retryable)
 ```
 
 ## Packages
@@ -297,6 +298,20 @@ read races the reap. Therefore:
 `MemGuard.ClassifyExit` returns `ok=false` whenever there is no evidence, and
 only reclassifies `ExitError` (a clean or deliberate stop is already explained).
 
+**`oom` and `oom_kill` are different counters, and the difference is the
+verdict.** `memory.events` `oom` counts OOM conditions raised by THIS cgroup
+hitting its own limit; `oom_kill` counts processes here killed by ANY OOM
+killer — the global one included. `classifyStats` (the pure decision behind
+`ClassifyExit`, testable on every platform) discriminates:
+
+- `oom_kill > 0 && oom > 0` → the agent broke its own ceiling → `ExitOOM`,
+  `OOMDetail`, never retried.
+- `oom_kill > 0 && oom == 0` → the MACHINE ran out and the global OOM killer
+  picked this agent (its `oom_score_adj` bias makes that likely) → stays a
+  retryable `ExitError`, with `HostOOMDetail` naming host-level remedies.
+  Blaming the per-agent limit here was a real production misread: a 1.2 GB
+  peak reported as "over its 1285 MB limit".
+
 `OOMDetail` names whatever numbers it actually has, and invents none:
 
 | peak | limit | message shape |
@@ -352,6 +367,14 @@ same work would hit the same limit.
 Restarting reuses `pool.Send` rather than calling the spawner directly: `Send`
 is the pool's one entry point for starting an agent, so the restart inherits
 slot accounting, queueing, and admission. A second spawn path would drift.
+
+One subtlety makes that work: `pool.send` buffers non-user turns without
+spawning (channel origin-context, reap notices — a user turn always follows or
+none is wanted). Recovery notices are the exception, carved out by their
+source `"recover"`: the agent just died and NO user turn is coming, so the
+notice must spawn on its own or it sits buffered until a human happens to
+message the session — which silently disables the entire respawn path.
+`TestRecoverTurnSpawnsAlone` / `TestRecoverOOMNoticeSpawnsAlone` pin it.
 
 ## wick's own OOM protection
 

@@ -6,7 +6,11 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+*   **Crash-recovery notices now actually restart the agent**: The recovery notice sent after an unexpected agent death (crash or OOM kill) was delivered as a system turn, which the pool deliberately buffers without spawning — so the agent was never brought back and the notice sat unread until the next human message. Recovery turns now spawn on their own, restoring both automatic crash respawn and immediate OOM notification.
+*   **Memory kills by the host are no longer blamed on the agent's limit**: An agent killed by the global OOM killer (machine out of memory) was reported as having exceeded its own memory limit — even when its measured peak was below it — and was never retried. The cgroup's `oom` and `oom_kill` counters are now read separately: only a kill triggered by the agent's own ceiling is classified as an OOM (not retried); a host-level kill stays a retryable error with a message naming host memory as the cause.
+*   **OOM kills labeled correctly in Recent Spawns**: A memory kill was logged with `exit_reason: "unknown"` instead of `oom` in the spawn log.
 
 ---
 
