@@ -101,13 +101,20 @@ These are systemd unit properties. On the cgroupfs fallback only the memory cont
 
 ## What happens when an agent is killed
 
-When the kernel kills an agent's scope for exceeding its limit, the session's exit reason names both numbers instead of a bare "agent stopped":
+cgroup v2's `memory.events` exposes two different counters, and wick reads them separately because they mean different things:
 
-> killed by the kernel for exceeding its 2000 MB memory limit. Raise the limit in provider settings, or split the work into smaller steps.
+- **`oom`** — this scope hit its *own* limit. The agent's exit reason names both numbers, and the exit is not auto-restarted — restarting would just hit the same ceiling again:
 
-(or, with a measured peak available: "used 2.3 GB, over its 2000 MB limit. …"). This is surfaced in the chat and the spawn log, same as any other exit reason.
+  > killed by the kernel for exceeding its 2000 MB memory limit. Raise the limit in provider settings, or split the work into smaller steps.
 
-Naming the kill needs a per-scope OOM-kill counter, which only cgroup v2 (the systemd backend) has. On the [cgroupfs fallback](#linux-only) the agent is still killed by the kernel, but the exit reason stays the generic "agent stopped" one rather than claiming a kill it can't prove. Check the Resources page or `wick memory report` for the peak in that case.
+  (or, with a measured peak available: "used 2.3 GB, over its 2000 MB limit. …")
+- **`oom_kill` without a matching `oom`** — the *machine* ran out of memory and the global OOM killer picked this agent, even though it never crossed its own ceiling. This stays a retryable error, and the message points at host-level remedies instead of the per-agent limit that was never actually hit:
+
+  > used 1.2 GB when the kernel killed it because the machine ran out of memory — its own limit was not hit. Free up memory on the host, lower the combined agent limits, or run fewer agents at once.
+
+Both are surfaced in the chat and the spawn log — `exit_reason: "oom"` for the own-limit case, `"error"` for the host-OOM case, since it's retried the same as any other error.
+
+Telling the two apart needs a per-scope OOM counter, which only cgroup v2 (the systemd backend) has. On the [cgroupfs fallback](#linux-only) the agent is still killed by the kernel, but the exit reason stays the generic "agent stopped" one rather than claiming a kill it can't prove. Check the Resources page or `wick memory report` for the peak in that case.
 
 ## Usage History
 
