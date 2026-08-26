@@ -171,6 +171,86 @@ func TestAccessibleSessionIDsDropsSubAgents(t *testing.T) {
 	}
 }
 
+/* ── pageTurns ───────────────────────────────────────────────────────── */
+
+func turnsWithIDs(ids ...string) []agentstore.ConversationTurn {
+	out := make([]agentstore.ConversationTurn, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, agentstore.ConversationTurn{TurnID: id})
+	}
+	return out
+}
+
+func idsOf(turns []agentstore.ConversationTurn) []string {
+	out := make([]string, 0, len(turns))
+	for _, t := range turns {
+		out = append(out, t.TurnID)
+	}
+	return out
+}
+
+func TestPageTurns(t *testing.T) {
+	all := turnsWithIDs("t1", "t2", "t3", "t4", "t5")
+
+	cases := []struct {
+		name     string
+		before   string
+		limit    int
+		want     []string
+		wantMore bool
+	}{
+		{"no limit returns all", "", 0, []string{"t1", "t2", "t3", "t4", "t5"}, false},
+		{"limit returns latest window", "", 2, []string{"t4", "t5"}, true},
+		{"limit covering all has no more", "", 5, []string{"t1", "t2", "t3", "t4", "t5"}, false},
+		{"limit beyond len clamps", "", 99, []string{"t1", "t2", "t3", "t4", "t5"}, false},
+		{"before walks back one window", "t4", 2, []string{"t2", "t3"}, true},
+		{"before reaching start exhausts", "t2", 2, []string{"t1"}, false},
+		{"before first turn returns empty", "t1", 2, []string{}, false},
+		{"unknown before falls back to latest window", "nope", 2, []string{"t4", "t5"}, true},
+		{"before without limit returns all older", "t4", 0, []string{"t1", "t2", "t3"}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, more := pageTurns(all, tc.before, tc.limit)
+			gotIDs := idsOf(got)
+			if len(gotIDs) != len(tc.want) {
+				t.Fatalf("page = %v, want %v", gotIDs, tc.want)
+			}
+			for i := range tc.want {
+				if gotIDs[i] != tc.want[i] {
+					t.Fatalf("page = %v, want %v", gotIDs, tc.want)
+				}
+			}
+			if more != tc.wantMore {
+				t.Errorf("hasMore = %v, want %v", more, tc.wantMore)
+			}
+		})
+	}
+}
+
+func TestBackfillTurnIDs(t *testing.T) {
+	turns := []agentstore.ConversationTurn{
+		{TurnID: ""},
+		{TurnID: "1787411830493006700"},
+		{TurnID: ""},
+	}
+	backfillTurnIDs(turns)
+	if turns[0].TurnID != "turn-0" || turns[2].TurnID != "turn-2" {
+		t.Errorf("missing ids not backfilled by index: %q, %q", turns[0].TurnID, turns[2].TurnID)
+	}
+	if turns[1].TurnID != "1787411830493006700" {
+		t.Errorf("existing id overwritten: %q", turns[1].TurnID)
+	}
+}
+
+func TestPageTurnsEmpty(t *testing.T) {
+	got, more := pageTurns(nil, "", 20)
+	if len(got) != 0 || more {
+		t.Fatalf("got %v more=%v, want empty and no more", got, more)
+	}
+}
+
 /* ── ConversationTurn JSON tags smoke test ───────────────────────────── */
 
 func TestConversationTurnHasJSONTags(t *testing.T) {

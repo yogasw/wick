@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Agent conversation history loads incrementally**: The agent conversation page now opens with only the latest 20 turns instead of the full transcript, and loads older turns automatically as you scroll to the top (scroll position stays anchored), with a "Load older messages" fallback button. `GET /api/sessions/{id}/conversation` gains `?limit=N` and `&before=<turn_id>` query params plus a `has_more` field in the response; calling it with no params still returns the full history, so existing integrations are unaffected. Traces remain lazy-loaded per turn as before.
 
 ---
 
