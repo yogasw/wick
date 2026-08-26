@@ -75,6 +75,17 @@ export interface TicketField {
   type: "text" | "select";
   options?: string[];
   required?: boolean;
+  /** Show this field's value on the board card. Off by default — the full
+      set is always on the ticket's own page. */
+  show_on_card?: boolean;
+}
+
+/** One custom action button on every ticket's page. Clicking it POSTs the
+    ticket to `url` as a ticket.action event (e.g. "Sync to Notion"). */
+export interface TicketButton {
+  id?: string; // minted server-side on first save
+  label: string;
+  url: string;
 }
 
 /** One column on the project's board. `key` is what tickets store and what
@@ -120,6 +131,8 @@ export interface TicketIntegrations {
   /** Lets a Personal Access Token call this project's ticket endpoints. */
   api_enabled?: boolean;
   webhooks?: TicketWebhook[];
+  /** Custom action buttons rendered on every ticket's page. */
+  buttons?: TicketButton[];
 }
 
 /** One outbound endpoint. */

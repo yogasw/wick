@@ -346,6 +346,9 @@ func Register(r tool.Router) {
 	r.DELETE("/api/tickets/{ticketID}", apiTicketDelete)
 	r.PUT("/api/tickets/{ticketID}/sessions/{sid}", apiTicketAttachSession)
 	r.DELETE("/api/tickets/{ticketID}/sessions/{sid}", apiTicketDetachSession)
+	// A custom ticket button was clicked — POST the ticket to that button's
+	// URL and report the outcome to the clicker.
+	r.POST("/api/tickets/{ticketID}/actions/{buttonID}", apiTicketAction)
 
 	// JSON API — ticket integrations. The event catalogue is served from the
 	// code so the settings UI and the docs cannot drift from what actually

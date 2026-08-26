@@ -13,6 +13,10 @@ type TicketField struct {
 	Type     string   `json:"type"`  // "text" | "select"
 	Options  []string `json:"options,omitempty"`
 	Required bool     `json:"required,omitempty"`
+	// ShowOnCard puts this field's value on the board card. Off by default:
+	// a card is a glance, and every chip on it is one more thing between the
+	// eye and the title. The full set is always on the ticket's own page.
+	ShowOnCard bool `json:"show_on_card,omitempty"`
 }
 
 // TicketStatus is one column on a project's board.
@@ -64,9 +68,53 @@ type TicketConfig struct {
 	// narrow exception belongs above the broad rule it carves out of.
 	AutoCreate []AutoCreateRule `json:"auto_create,omitempty"`
 
-	// Integrations wires the board to the outside world — outbound webhooks
-	// and the token-authed REST surface. Zero value = both off.
+	// Integrations wires the board to the outside world — outbound webhooks,
+	// the token-authed REST surface, and the custom ticket buttons. Zero
+	// value = all off.
 	Integrations TicketIntegrations `json:"integrations,omitempty"`
+}
+
+// TicketButton is one custom action rendered on every ticket's page.
+// Clicking it POSTs a ticket.action event envelope (the full ticket, the
+// actor, and this button's id) to URL and reports the response to the
+// clicker. One label, one URL — anything smarter belongs in the receiver.
+type TicketButton struct {
+	// ID is stable across edits, minted on first save. It travels in the
+	// event so a receiver serving several buttons can tell them apart.
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
+// ButtonByID finds one of the project's ticket buttons.
+func (c TicketConfig) ButtonByID(id string) (TicketButton, bool) {
+	for _, b := range c.Integrations.Buttons {
+		if b.ID == id && strings.TrimSpace(b.URL) != "" {
+			return b, true
+		}
+	}
+	return TicketButton{}, false
+}
+
+// CardFields filters a ticket's field values down to what the board card
+// draws: schema fields explicitly marked show_on_card, in no particular
+// order (the client orders by schema). Values written outside the schema —
+// the REST surface accepts any key — stay stored and stay on the ticket's
+// page, but never reach a card: the board is a glance, not a record.
+func (c TicketConfig) CardFields(values map[string]string) map[string]string {
+	var out map[string]string
+	for _, f := range c.Fields {
+		if !f.ShowOnCard {
+			continue
+		}
+		if v, ok := values[f.Key]; ok && v != "" {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[f.Key] = v
+		}
+	}
+	return out
 }
 
 // Channel kinds an AutoCreateRule can be narrowed to. A DM is somebody's
@@ -219,6 +267,9 @@ type TicketIntegrations struct {
 	// Webhooks are the endpoints notified when this project's tickets
 	// change. Order is display order only.
 	Webhooks []TicketWebhook `json:"webhooks,omitempty"`
+	// Buttons are custom actions on every ticket's page ("Sync to Notion").
+	// Clicking one POSTs the ticket to that button's URL — see TicketButton.
+	Buttons []TicketButton `json:"buttons,omitempty"`
 }
 
 // TicketWebhook is one outbound endpoint.

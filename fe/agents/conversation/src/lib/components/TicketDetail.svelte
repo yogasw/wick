@@ -4,12 +4,13 @@
      The session list plus "New session" is the reason tickets exist as
      their own entity — when a conversation goes wrong you start another one
      here, and the ticket's notes carry over. */
-  import type { TicketDetail } from "../types/agents.js";
-  import { deleteTicket, detachSession, getTicket, updateTicket } from "../api/tickets.js";
-  import { toastError } from "@wick-fe/common-stores";
+  import type { TicketButton, TicketDetail } from "../types/agents.js";
+  import { deleteTicket, detachSession, getTicket, runTicketAction, updateTicket } from "../api/tickets.js";
+  import { toastError, toastOk } from "@wick-fe/common-stores";
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { timeAgo } from "../timeFormat.js";
+  import { renderMarkdown } from "../markdown.js";
   import NotesPanel from "./NotesPanel.svelte";
 
   type Props = {
@@ -92,6 +93,72 @@
     data?.ticket.assignee ? (data.users?.[data.ticket.assignee] ?? data.ticket.assignee) : "",
   );
 
+  /* ── description (markdown) ──
+     Edits go through a draft, same contract as the title: a keystroke is
+     not a request, and Cancel throws the draft away. */
+  let editingBody = $state(false);
+  let bodyDraft = $state("");
+  function startBody() {
+    bodyDraft = data?.ticket.body ?? "";
+    editingBody = true;
+  }
+  function saveBody() {
+    editingBody = false;
+    const b = bodyDraft.trim();
+    if (b !== (data?.ticket.body ?? "")) patch({ body: b });
+  }
+
+  /* ── fields, capped ──
+     The page draws the schema fields first (editable, typed), then any
+     value written outside the schema — the REST surface accepts any key.
+     Only the first three show by default; a ticket mirrored from another
+     system can carry a dozen properties, and stacking them all would bury
+     the sessions below. */
+  const FIELDS_SHOWN = 3;
+  let showAllFields = $state(false);
+  const fieldDefs = $derived.by(() => {
+    const schema = data?.config.fields ?? [];
+    const values = data?.ticket.fields ?? {};
+    const extras = Object.keys(values)
+      .filter((k) => values[k] && !schema.some((d) => d.key === k))
+      .sort()
+      .map((k) => ({ key: k, label: k, type: "text" as const, options: [] as string[] }));
+    return [...schema, ...extras];
+  });
+  const visibleFieldDefs = $derived(showAllFields ? fieldDefs : fieldDefs.slice(0, FIELDS_SHOWN));
+
+  /* ── sessions, capped ──
+     A long-lived ticket collects conversations; five is what fits a glance.
+     The rest sit behind "show more" rather than stretching the page — same
+     contract as the fields. */
+  const SESSIONS_SHOWN = 5;
+  let showAllSessions = $state(false);
+  const visibleSessions = $derived(
+    showAllSessions ? (data?.sessions ?? []) : (data?.sessions ?? []).slice(0, SESSIONS_SHOWN),
+  );
+
+  /* ── custom buttons ──
+     One click, one delivery, one answer. The id doubles as the busy flag so
+     a slow receiver cannot be double-fired. */
+  let actionBusy = $state("");
+  function runAction(b: TicketButton) {
+    if (!b.id || actionBusy !== "") return;
+    actionBusy = b.id;
+    Effect.runPromise(
+      runTicketAction(base, ticketId, b.id).pipe(Effect.provide(WickClientLayer)),
+    )
+      .then((r) => {
+        if (r.ok) toastOk(`${b.label}: delivered (HTTP ${r.status})`);
+        else toastError(`${b.label} failed: ${r.error || "HTTP " + r.status}`);
+      })
+      .catch((e: unknown) =>
+        toastError(e instanceof Error ? e.message : `${b.label} failed`),
+      )
+      .finally(() => {
+        actionBusy = "";
+      });
+  }
+
   /* ── deleting the ticket ──
      Two outcomes with very different weight, so they are two buttons rather
      than one with a checkbox: keeping the chats is routine, deleting them
@@ -129,108 +196,107 @@
       Back to board
     </button>
 
-    <!-- Header -->
+    <!-- Two panes: the work reads down the main column — title, description,
+         conversations, then the notes as the comment thread (notes are long
+         and wide by nature, so they get the width). The ticket's state sits
+         in the properties rail on the right; on a phone it drops below. -->
+    <div class="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+    <div class="flex min-w-0 flex-col gap-4">
+    <!-- Header. Identity first (code + status), then the title with room to
+         be a sentence — the layout every ticketing tool converged on. -->
     <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
-      <div class="flex items-start gap-3">
-        <span class="rounded bg-white-200 px-2 py-1 font-mono text-xs font-semibold text-black-800 dark:bg-navy-800 dark:text-black-600">
+      <div class="flex items-center gap-2">
+        <!-- An adopted external id can be 32+ characters; it truncates with
+             the full code on hover rather than squeezing the row out. -->
+        <span
+          title={t.id}
+          class="min-w-0 truncate rounded bg-white-200 px-2 py-0.5 font-mono text-[11px] font-semibold text-black-800 dark:bg-navy-800 dark:text-black-600"
+        >
           {t.id}
         </span>
-        <div class="min-w-0 flex-1">
-          {#if editingTitle}
-            <input
-              bind:value={titleDraft}
-              onblur={saveTitle}
-              onkeydown={(e) => { if (e.key === "Enter") saveTitle(); }}
-              aria-label="Ticket title"
-              class="w-full rounded-lg border border-white-400 bg-white-100 px-2 py-1 text-base font-semibold text-black-900 outline-none focus:border-green-500 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
-            />
-          {:else}
-            <button
-              type="button"
-              onclick={startTitle}
-              class="w-full rounded text-left text-base font-semibold text-black-900 hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-800"
-            >{t.title}</button>
-          {/if}
-          <p class="mt-1 text-xs text-black-700 dark:text-black-600">
-            updated {timeAgo(t.updated_at)} · created {timeAgo(t.created_at)}
-          </p>
-        </div>
         <span class={"shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold " + pillFor(t.status)}>
           {labelOf(t.status)}
         </span>
+        <!-- Delete lives top-right as a quiet trash icon; the confirm
+             dialog carries the gravity. -->
         <button
           type="button"
+          aria-label="Delete ticket"
+          title="Delete ticket"
           onclick={() => { confirmDelete = true; }}
-          class="shrink-0 rounded-lg border border-neg-400/40 px-2 py-1 text-[11px] font-medium text-neg-400 transition-colors hover:bg-neg-100"
-        >Delete</button>
+          class="ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-black-700 transition-colors hover:bg-neg-100 hover:text-neg-400 dark:text-black-600"
+        >
+          <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9a1 1 0 001 .9h4.6a1 1 0 001-.9L12 4" stroke-linecap="round" stroke-linejoin="round"></path>
+            <path d="M6.5 7v4M9.5 7v4" stroke-linecap="round"></path>
+          </svg>
+        </button>
       </div>
-
-      <div class="mt-4 grid gap-3 sm:grid-cols-2">
-        <div>
-          <label class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600" for="tkt-status">Status</label>
-          <select
-            id="tkt-status"
-            value={t.status}
-            onchange={(e) => patch({ status: (e.target as HTMLSelectElement).value })}
-            class="w-full rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
-          >
-            {#each data.statuses as s (s.key)}
-              <option value={s.key}>{s.label || s.key}</option>
-            {/each}
-          </select>
-        </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600" for="tkt-assignee">Assignee</label>
-          <div class="flex gap-2">
-            <input
-              id="tkt-assignee"
-              value={t.assignee ?? ""}
-              onblur={(e) => patch({ assignee: (e.target as HTMLInputElement).value })}
-              placeholder="unassigned"
-              class="min-w-0 flex-1 rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
-            />
-            {#if data.me}
-              <button
-                type="button"
-                onclick={() => patch({ assignee: data?.me })}
-                class="shrink-0 rounded-lg border border-green-500 px-3 py-2 text-xs font-medium text-green-600 transition-colors hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-900/20"
-              >Take it</button>
-            {/if}
-          </div>
-          {#if assigneeName && assigneeName !== t.assignee}
-            <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">{assigneeName}</p>
-          {/if}
-        </div>
-
-        {#each data.config.fields ?? [] as f (f.key)}
-          <div>
-            <label class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600" for={"tkt-f-" + f.key}>
-              {f.label || f.key}{#if f.required}<span class="text-neg-400"> *</span>{/if}
-            </label>
-            {#if f.type === "select"}
-              <select
-                id={"tkt-f-" + f.key}
-                value={t.fields?.[f.key] ?? ""}
-                onchange={(e) => patch({ fields: { [f.key]: (e.target as HTMLSelectElement).value } })}
-                class="w-full rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
-              >
-                <option value="">—</option>
-                {#each f.options ?? [] as opt (opt)}
-                  <option value={opt}>{opt}</option>
-                {/each}
-              </select>
-            {:else}
-              <input
-                id={"tkt-f-" + f.key}
-                value={t.fields?.[f.key] ?? ""}
-                onblur={(e) => patch({ fields: { [f.key]: (e.target as HTMLInputElement).value } })}
-                class="w-full rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
-              />
-            {/if}
-          </div>
-        {/each}
+      <div class="mt-2">
+        {#if editingTitle}
+          <input
+            bind:value={titleDraft}
+            onblur={saveTitle}
+            onkeydown={(e) => { if (e.key === "Enter") saveTitle(); }}
+            aria-label="Ticket title"
+            class="w-full rounded-lg border border-white-400 bg-white-100 px-2 py-1 text-xl font-semibold text-black-900 outline-none focus:border-green-500 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+          />
+        {:else}
+          <button
+            type="button"
+            onclick={startTitle}
+            title="Click to rename"
+            class="w-full break-words rounded text-left text-xl font-semibold leading-snug text-black-900 hover:bg-white-200 dark:text-white-100 dark:hover:bg-navy-800"
+          >{t.title}</button>
+        {/if}
       </div>
     </div>
+
+    <!-- Description. Markdown, because repro steps and links deserve
+         better than a flat string. Click to edit, same as the title. -->
+    <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
+        <div class="mb-1 flex items-center justify-between">
+          <span class="text-xs font-medium text-black-800 dark:text-black-600">Description</span>
+          {#if !editingBody && t.body}
+            <button
+              type="button"
+              onclick={startBody}
+              class="rounded px-2 py-0.5 text-[11px] text-black-700 transition-colors hover:text-green-600 dark:text-black-600 dark:hover:text-green-400"
+            >Edit</button>
+          {/if}
+        </div>
+        {#if editingBody}
+          <textarea
+            bind:value={bodyDraft}
+            rows="6"
+            placeholder="Markdown — repro steps, links, context…"
+            aria-label="Ticket description"
+            class="w-full rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm text-black-900 outline-none focus:border-green-500 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+          ></textarea>
+          <div class="mt-2 flex justify-end gap-2">
+            <button
+              type="button"
+              onclick={() => { editingBody = false; }}
+              class="rounded-lg px-3 py-1.5 text-xs text-black-700 transition-colors hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-800"
+            >Cancel</button>
+            <button
+              type="button"
+              onclick={saveBody}
+              class="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white-100 transition-colors hover:bg-green-700"
+            >Save</button>
+          </div>
+        {:else if t.body}
+          <div class="wick-note-md break-words rounded-lg bg-white-200 px-3 py-2 text-sm text-black-900 dark:bg-navy-800 dark:text-white-100">
+            {@html renderMarkdown(t.body)}
+          </div>
+        {:else}
+          <button
+            type="button"
+            onclick={startBody}
+            class="w-full rounded-lg border border-dashed border-white-400 px-3 py-2 text-left text-xs text-black-700 transition-colors hover:border-green-500 hover:text-green-600 dark:border-navy-600 dark:text-black-600 dark:hover:text-green-400"
+          >+ Add a description</button>
+        {/if}
+      </div>
 
     <!-- Sessions. Several per ticket is the normal case, not an edge one. -->
     <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
@@ -253,7 +319,7 @@
         <p class="text-xs text-black-700 dark:text-black-600">No sessions yet.</p>
       {:else}
         <ul class="flex flex-col gap-2">
-          {#each data.sessions as s (s.id)}
+          {#each visibleSessions as s (s.id)}
             <li class="flex items-center gap-3 rounded-lg border border-white-300 bg-white-100 px-4 py-2.5 dark:border-navy-600 dark:bg-navy-800">
               <button
                 type="button"
@@ -283,10 +349,22 @@
             </li>
           {/each}
         </ul>
+        {#if data.sessions.length > SESSIONS_SHOWN}
+          <button
+            type="button"
+            onclick={() => { showAllSessions = !showAllSessions; }}
+            class="mt-2 w-fit rounded px-1 py-0.5 text-[11px] text-black-700 transition-colors hover:text-green-600 dark:text-black-600 dark:hover:text-green-400"
+          >
+            {showAllSessions
+              ? "Show less"
+              : `Show ${data.sessions.length - SESSIONS_SHOWN} more session${data.sessions.length - SESSIONS_SHOWN === 1 ? "" : "s"}`}
+          </button>
+        {/if}
       {/if}
     </div>
 
-    <!-- Notes -->
+    <!-- Notes: the comment thread. Long and wide by nature, so it sits at
+         the bottom of the main column with the full width, not in a rail. -->
     <div class="rounded-xl border border-white-300 bg-white-100 p-5 shadow-sm dark:border-navy-600 dark:bg-navy-700">
       <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Notes in this ticket's scope</h2>
       <p class="mb-3 mt-1 text-xs leading-relaxed text-black-700 dark:text-black-600">
@@ -302,6 +380,117 @@
         users={data.users}
         onChanged={load}
       />
+    </div>
+    </div>
+
+    <!-- Properties: the field panel on the right, a card like everything
+         else on the page — no divider lines, whitespace does the grouping.
+         Sticky, so the state stays in reach on a long thread. -->
+    <aside class="flex flex-col gap-4 lg:sticky lg:top-4">
+      <div class="rounded-xl border border-white-300 bg-white-100 p-4 shadow-sm dark:border-navy-600 dark:bg-navy-700">
+        <h2 class="mb-3 text-[11px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">Details</h2>
+        <div class="flex flex-col gap-3">
+          <div>
+            <label class="mb-1 block text-xs font-medium text-black-800 dark:text-black-600" for="tkt-status">Status</label>
+            <select
+              id="tkt-status"
+              value={t.status}
+              onchange={(e) => patch({ status: (e.target as HTMLSelectElement).value })}
+              class="w-full rounded-lg border border-white-400 bg-white-100 px-2.5 py-1.5 text-xs text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+            >
+              {#each data.statuses as s (s.key)}
+                <option value={s.key}>{s.label || s.key}</option>
+              {/each}
+            </select>
+          </div>
+
+          <div>
+            <!-- "take it" is a link beside the label, the Zendesk idiom —
+                 claiming a ticket is one click, not a form control. -->
+            <div class="mb-1 flex items-center justify-between">
+              <label class="block text-xs font-medium text-black-800 dark:text-black-600" for="tkt-assignee">Assignee</label>
+              {#if data.me}
+                <button
+                  type="button"
+                  onclick={() => patch({ assignee: data?.me })}
+                  class="text-[11px] font-medium text-green-600 transition-colors hover:underline dark:text-green-400"
+                >take it</button>
+              {/if}
+            </div>
+            <input
+              id="tkt-assignee"
+              value={t.assignee ?? ""}
+              onblur={(e) => patch({ assignee: (e.target as HTMLInputElement).value })}
+              placeholder="unassigned"
+              class="w-full rounded-lg border border-white-400 bg-white-100 px-2.5 py-1.5 text-xs text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+            />
+            {#if assigneeName && assigneeName !== t.assignee}
+              <p class="mt-1 text-[11px] text-black-700 dark:text-black-600">{assigneeName}</p>
+            {/if}
+          </div>
+
+          {#each visibleFieldDefs as f (f.key)}
+            <div class="min-w-0">
+              <label class="mb-1 block truncate text-xs font-medium text-black-800 dark:text-black-600" for={"tkt-f-" + f.key} title={f.label || f.key}>
+                {f.label || f.key}{#if "required" in f && f.required}<span class="text-neg-400"> *</span>{/if}
+              </label>
+              {#if f.type === "select"}
+                <select
+                  id={"tkt-f-" + f.key}
+                  value={t.fields?.[f.key] ?? ""}
+                  onchange={(e) => patch({ fields: { [f.key]: (e.target as HTMLSelectElement).value } })}
+                  class="w-full rounded-lg border border-white-400 bg-white-100 px-2.5 py-1.5 text-xs text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+                >
+                  <option value="">—</option>
+                  {#each f.options ?? [] as opt (opt)}
+                    <option value={opt}>{opt}</option>
+                  {/each}
+                </select>
+              {:else}
+                <input
+                  id={"tkt-f-" + f.key}
+                  value={t.fields?.[f.key] ?? ""}
+                  onblur={(e) => patch({ fields: { [f.key]: (e.target as HTMLInputElement).value } })}
+                  class="w-full rounded-lg border border-white-400 bg-white-100 px-2.5 py-1.5 text-xs text-black-900 focus:border-green-500 focus:outline-none dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
+                />
+              {/if}
+            </div>
+          {/each}
+
+          {#if fieldDefs.length > FIELDS_SHOWN}
+            <button
+              type="button"
+              onclick={() => { showAllFields = !showAllFields; }}
+              class="w-fit rounded px-1 py-0.5 text-left text-[11px] text-black-700 transition-colors hover:text-green-600 dark:text-black-600 dark:hover:text-green-400"
+            >
+              {showAllFields
+                ? "Show less"
+                : `Show ${fieldDefs.length - FIELDS_SHOWN} more field${fieldDefs.length - FIELDS_SHOWN === 1 ? "" : "s"}`}
+            </button>
+          {/if}
+        </div>
+
+        <!-- Custom buttons (configured under Integrations). Each POSTs this
+             ticket to its own URL — "Sync to Notion" and friends — and
+             reports whether the receiver took it. -->
+        {#if (data.config.integrations?.buttons ?? []).length > 0}
+          <div class="mt-4 flex flex-col gap-2">
+            {#each data.config.integrations?.buttons ?? [] as b (b.id)}
+              <button
+                type="button"
+                disabled={actionBusy !== ""}
+                onclick={() => runAction(b)}
+                class="w-full rounded-lg border border-white-400 px-3 py-2 text-xs font-medium text-black-800 transition-colors hover:border-green-500 hover:text-green-600 disabled:opacity-40 dark:border-navy-600 dark:text-black-600 dark:hover:text-green-400"
+              >{actionBusy === b.id ? "Sending…" : b.label}</button>
+            {/each}
+          </div>
+        {/if}
+
+        <p class="mt-4 text-[11px] leading-relaxed text-black-600 dark:text-black-700">
+          updated {timeAgo(t.updated_at)}<br />created {timeAgo(t.created_at)}
+        </p>
+      </div>
+    </aside>
     </div>
   </div>
   <!-- Deleting the ticket. The two outcomes are separate buttons because

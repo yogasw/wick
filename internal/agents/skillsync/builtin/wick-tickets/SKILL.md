@@ -15,19 +15,25 @@ Use the `tickets` connector. Notes are a different connector — see the
 
 ## Know what you are on
 
+Your prompt already names this session's ticket — its id, title, status, and
+an excerpt of its **description** — so when the user starts talking, assume
+the conversation is about that ticket unless they say otherwise.
+
 `ticket_get` with no arguments returns the ticket this session is attached to,
-including its other sessions:
+in full:
 
 ```
 ticket_get
 ```
 
-Your prompt already names the ticket and its note count, so call this when you
-need the detail — the fields, who it is assigned to, how many other sessions
-are on it.
+Call it when you need what the prompt excerpt does not carry — the full
+description (`body`), the fields, who it is assigned to, how many other
+sessions are on it.
 
 `ticket_list` shows a project's tickets, newest first, and takes an optional
-`status` filter. Use it to answer "what is open?" without opening the board.
+`status` filter. Use it to answer "what is open?" without opening the board —
+and to find tickets **related** to this one: list, then `ticket_get` the
+candidates whose titles look relevant and compare their descriptions.
 
 ## Keep the status honest
 
@@ -48,9 +54,12 @@ Every update also resets the project's stale-follow-up timer. **If a follow-up
 message woke you, update the ticket before you finish**, or you will be woken
 again for the same reason.
 
-`ticket_update` also takes `title`, `assignee` (an empty string unassigns), and
-`fields` as a JSON object of the project's own field values. Only what you pass
-changes.
+`ticket_update` also takes `title`, `body` (the markdown description — an
+empty string clears it), `assignee` (an empty string unassigns), and `fields`
+as a JSON object of the project's own field values. Only what you pass
+changes. Keep the description current the same way you keep status honest:
+when the understanding of the work changes, rewrite `body` so the next
+session starts from the truth.
 
 ## Several sessions on one ticket
 
@@ -78,4 +87,6 @@ A conversation that turns out to be real work can become a ticket in place:
 ticket_create title="Payment webhook returns 401" attach_current_session=true
 ```
 
-Its notes then live on the ticket, so the next session inherits them.
+Pass `body` too when the conversation already surfaced repro steps or context
+worth keeping. Its notes then live on the ticket, so the next session
+inherits them.

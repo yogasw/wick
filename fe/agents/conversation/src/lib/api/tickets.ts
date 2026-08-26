@@ -86,11 +86,20 @@ export const updateTicket = (
   ticketId: string,
   patch: {
     title?: string;
+    /** Markdown description. An explicit "" clears it. */
+    body?: string;
     status?: string;
     assignee?: string;
     fields?: Record<string, string>;
   },
 ) => apiPatchE<TicketCard>(`${base}/api/tickets/${encodeURIComponent(ticketId)}`, patch);
+
+/** One custom-button click: the server POSTs the ticket to the button's URL
+    and reports how that went — the user is waiting to see their "Sync" land. */
+export const runTicketAction = (base: string, ticketId: string, buttonId: string) =>
+  apiPostE<{ ok: boolean; status?: number; error?: string; attempts?: number }>(
+    `${base}/api/tickets/${encodeURIComponent(ticketId)}/actions/${encodeURIComponent(buttonId)}`,
+  );
 
 /** Deleting a ticket either keeps its chats (they become untracked) or
     deletes them with it. The destructive shape has to be named: a ticket is

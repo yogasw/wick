@@ -104,6 +104,54 @@ func normaliseWebhooks(next *project.TicketIntegrations, prev project.TicketInte
 	return nil
 }
 
+// normaliseTicketButtons validates the custom-button list on its way into
+// config. Same shape as the webhook rules: empty editor rows are dropped
+// rather than rejected, a URL that could never work is refused at the only
+// moment a human can be told, and a new row gets a stable id so the event
+// it later fires can name it.
+func normaliseTicketButtons(in []project.TicketButton) ([]project.TicketButton, error) {
+	seen := map[string]bool{}
+	out := make([]project.TicketButton, 0, len(in))
+	for _, b := range in {
+		b.Label = strings.TrimSpace(b.Label)
+		b.URL = strings.TrimSpace(b.URL)
+		if b.Label == "" && b.URL == "" {
+			continue
+		}
+		if b.Label == "" {
+			return nil, fmt.Errorf("ticket button: label is required")
+		}
+		if b.URL == "" {
+			return nil, fmt.Errorf("ticket button %q: url is required", b.Label)
+		}
+		u, err := url.Parse(b.URL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return nil, fmt.Errorf("ticket button %q: url must be a full http(s) URL", b.Label)
+		}
+		if b.ID == "" {
+			b.ID = newTicketButtonID()
+		}
+		if seen[b.ID] {
+			b.ID = newTicketButtonID() // duplicated row (copy/paste in the editor)
+		}
+		seen[b.ID] = true
+		out = append(out, b)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// newTicketButtonID mints a stable id for a new button.
+func newTicketButtonID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "btn_fallback"
+	}
+	return "btn_" + hex.EncodeToString(b)
+}
+
 // RedactIntegrations returns a copy safe to send to a client.
 //
 // Secrets never leave the server: a stored one reads as the sentinel so the

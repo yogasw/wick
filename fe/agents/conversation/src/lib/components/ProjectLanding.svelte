@@ -194,6 +194,25 @@
     new URLSearchParams(window.location.search).get("ticket"),
   );
 
+  /* Ticket navigation writes the URL, so back/forward walk board ↔ ticket
+     like pages and a ticket's URL can be shared. Every place that opens or
+     closes a ticket goes through here; popstate feeds the same state back. */
+  function gotoTicket(id: string | null) {
+    openTicketId = id;
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set("ticket", id);
+    else url.searchParams.delete("ticket");
+    if (url.toString() !== window.location.href) history.pushState({}, "", url);
+  }
+
+  $effect(() => {
+    const onPop = () => {
+      openTicketId = new URLSearchParams(window.location.search).get("ticket");
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  });
+
   function reloadBoard() {
     Effect.runPromise(
       getProjectTickets(base, project.id, boardOptions).pipe(Effect.provide(WickClientLayer)),
@@ -254,7 +273,7 @@
      stashed and applied once the new session exists. */
   function newSessionInTicket(ticketId: string) {
     pendingTicketId = ticketId;
-    openTicketId = null;
+    gotoTicket(null);
   }
   let pendingTicketId = $state<string | null>(null);
   /* The ticket the next message lands on. SELECTING one is enough — having
@@ -275,10 +294,16 @@
   );
   /* The placeholder sits on ONE line that cannot wrap, so a long ticket
      title would run past the input's right edge and hide the "/ commands"
-     hint after it. The footer below states the title in full and wraps, so
-     nothing is lost by clipping it here. */
+     hint after it. The footer below carries a longer cut and the full title
+     on hover, so nothing is lost by clipping it here. */
   const activeTicketShort = $derived(
     activeTicketLabel.length > 32 ? activeTicketLabel.slice(0, 32).trimEnd() + "…" : activeTicketLabel,
+  );
+  /* The footer line gets the same treatment with more room: a run-on title
+     (or a pasted id) must not stretch the banner to three lines. The full
+     title sits on the hover. */
+  const activeTicketBanner = $derived(
+    activeTicketLabel.length > 60 ? activeTicketLabel.slice(0, 60).trimEnd() + "…" : activeTicketLabel,
   );
 
   let filterSaveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -323,53 +348,53 @@
   }
 </script>
 
-<div class="flex flex-col h-full p-6 max-w-4xl mx-auto w-full gap-6">
+<!-- The page is full-bleed, but only the board and a ticket's page USE that
+     width — they are work surfaces, like any ticketing tool. The back link,
+     header, and composer stay a centered column no matter the view, so
+     typing a message never happens in a viewport-wide input. -->
+<div class="flex flex-col h-full p-6 mx-auto w-full gap-6">
+  <!-- One slim top bar for every view: breadcrumb identity on the left, the
+       project's two actions on the right. The old hero header (icon, path,
+       big title) said the same things with far more chrome; the path and
+       chat count now live in the name's tooltip and a muted suffix. -->
+  <div class="mx-auto flex w-full max-w-7xl flex-wrap items-center gap-x-2 gap-y-1 text-xs text-black-700 dark:text-black-600">
+    <a
+      href={`${base}/sessions`}
+      class="inline-flex items-center gap-1 transition-colors hover:text-green-600 dark:hover:text-green-400"
+    >
+      <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path>
+      </svg>
+      All chats
+    </a>
+    <span aria-hidden="true">/</span>
+    <span
+      class="max-w-[240px] truncate text-sm font-semibold text-black-900 dark:text-white-100"
+      title={project.path || project.name}
+    >{project.name}</span>
+    {#if ticketEnabled && openTicketId}
+      <span aria-hidden="true">/</span>
+      <span class="min-w-0 truncate font-mono" title={openTicketId}>{openTicketId}</span>
+    {:else}
+      <span class="text-black-600 dark:text-black-700">{chatCount} chats · {project.managed ? "managed" : "custom"}</span>
+    {/if}
 
-  <!-- Back link -->
-  <a
-    href={`${base}/sessions`}
-    class="inline-flex items-center gap-1.5 text-xs text-black-700 dark:text-black-600 hover:text-green-600 dark:hover:text-green-400 transition-colors w-fit"
-  >
-    <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-      <path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path>
-    </svg>
-    All chats
-  </a>
-
-  <!-- Project header -->
-  <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-    <div class="flex items-center gap-3 min-w-0">
-      <div class="shrink-0 flex items-center justify-center w-10 h-10 rounded-xl bg-white-200 dark:bg-navy-700 border border-white-300 dark:border-navy-600">
-        <svg viewBox="0 0 16 16" class="h-5 w-5 text-black-800 dark:text-white-100" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M2 4a1 1 0 011-1h3l2 2h5a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke-linecap="round" stroke-linejoin="round"></path>
-        </svg>
-      </div>
-      <div class="min-w-0">
-        <h1 class="text-lg font-semibold text-black-900 dark:text-white-100 truncate">{project.name}</h1>
-        <p class="text-xs text-black-700 dark:text-black-600 mt-0.5">
-          {chatCount} chats · {project.managed ? "managed" : "custom"}
-        </p>
-        {#if project.path}
-          <p class="text-[11px] font-mono text-black-600 dark:text-black-700 mt-0.5 truncate">{project.path}</p>
-        {/if}
-      </div>
-    </div>
-
-    <div class="flex flex-wrap items-center gap-2">
+    <span class="ml-auto flex items-center gap-2">
       <button
         type="button"
         onclick={onPin}
         aria-pressed={project.pinned}
-        class="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors {project.pinned
+        title={project.pinned ? "Pinned as default" : "Pin as default"}
+        class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors {project.pinned
           ? 'border-green-500 bg-green-500 text-white-100 hover:bg-green-600'
           : 'border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 text-black-800 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-600'}"
       >
         <span class="text-[11px] leading-none {project.pinned ? '' : 'grayscale'}">📌</span>
-        {project.pinned ? "Pinned as default" : "Pin as default"}
+        {project.pinned ? "Pinned" : "Pin"}
       </button>
       <a
         href={`${base}/projects/${project.id}`}
-        class="inline-flex items-center gap-1.5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-3 py-1.5 text-xs font-medium text-black-800 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-600 transition-colors"
+        class="inline-flex items-center gap-1.5 rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-2.5 py-1 text-[11px] font-medium text-black-800 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-600 transition-colors"
       >
         <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="8" cy="8" r="6"></circle>
@@ -377,49 +402,24 @@
         </svg>
         Settings
       </a>
-    </div>
+    </span>
   </div>
 
-  <!-- Compose box: shared Composer (project is fixed here, shown in the header). -->
-  <Composer
-    onSend={handleSend}
-    placeholder={activeTicketId
-      ? `Ask anything on ${activeTicketShort}…   / commands · @ files`
-      : "Ask anything…   / commands · @ files"}
-    notifyKey={NOTIFY_KEY}
-    provider={providerSelect}
-    preset={presetSelect}
-    onSearchFiles={searchMentionFiles}
-    commands={composerCommands}
-  />
-  <!-- With a ticket selected the composer says so by NAME, and offers the
-       way out: picking a ticket is a mode, and a mode you cannot see or
-       leave is a trap. Without one the line stays the plain project
-       default. -->
-  {#if activeTicketId}
-    <p class="text-center text-xs text-black-600 dark:text-black-700">
-      New session on <span class="font-medium text-green-600 dark:text-green-400"
-        >{activeTicketLabel}</span
-      >
-      in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span> — this
-      chat joins the ticket and reads its notes.
-      <button
-        type="button"
-        onclick={() => { pendingTicketId = null; openTicketId = null; }}
-        class="underline transition-colors hover:text-black-800 dark:hover:text-black-500"
-        >Start without a ticket</button
-      >
-    </p>
-  {:else}
-    <p class="text-center text-xs text-black-600 dark:text-black-700">
-      New session in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span>{#if project.defaultProvider} · defaults to <span class="font-mono">{project.defaultProvider}</span>{/if}. Pick provider / model / preset above to override for this session.
-    </p>
-  {/if}
-
   <!-- Session list / ticket board. The List|Card toggle appears only when
-       this project has ticket mode enabled; the choice is saved per user. -->
-  <div class="flex flex-col gap-3 flex-1 min-h-0">
-    {#if ticketEnabled}
+       this project has ticket mode enabled; the choice is saved per user.
+       Width follows the job: the plain list stays the composer's column, the
+       board gets room for four columns, a ticket's page sits in between —
+       wide enough for a main column plus its properties rail, never
+       edge-to-edge. -->
+  <div
+    class={"mx-auto w-full flex flex-col gap-3 flex-1 min-h-0 " +
+      (ticketEnabled && openTicketId
+        ? "max-w-7xl"
+        : ticketEnabled && viewMode === "card"
+          ? "max-w-none"
+          : "max-w-4xl")}
+  >
+    {#if ticketEnabled && !openTicketId}
       <div class="flex items-center justify-between">
         <div class="inline-flex overflow-hidden rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
           <button
@@ -446,7 +446,7 @@
       <TicketDetail
         {base}
         ticketId={openTicketId}
-        onBack={() => { openTicketId = null; reloadBoard(); }}
+        onBack={() => { gotoTicket(null); reloadBoard(); }}
         onOpenSession={onSelectSession}
         onNewSession={newSessionInTicket}
       />
@@ -457,7 +457,7 @@
         {board}
         filter={ticketFilter}
         onFilter={applyFilter}
-        onOpen={(id) => { openTicketId = id; }}
+        onOpen={(id) => { gotoTicket(id); }}
         onOpenSession={onSelectSession}
         onReload={reloadBoard}
         onEmptied={handleEmptied}
@@ -470,6 +470,43 @@
         onSelect={onSelectSession}
       />
     {/if}
+  </div>
+
+  <!-- The floating composer: every view's reply box, bottom-centre like a
+       helpdesk's. Starting a chat from a ticket page joins that ticket; from
+       the list or board it is a plain new session in the project. Sticky, so
+       a long page never scrolls it away. -->
+  <div class="sticky bottom-0 z-10 mx-auto w-full max-w-3xl pb-1">
+    <div class="rounded-xl border border-white-300 bg-white-100 p-3 shadow-lg dark:border-navy-600 dark:bg-navy-700">
+      <Composer
+        onSend={handleSend}
+        placeholder={activeTicketId
+          ? `Ask anything on ${activeTicketShort}…   / commands · @ files`
+          : "Ask anything…   / commands · @ files"}
+        notifyKey={NOTIFY_KEY}
+        provider={providerSelect}
+        preset={presetSelect}
+        onSearchFiles={searchMentionFiles}
+        commands={composerCommands}
+      />
+      <p class="mt-2 text-center text-[11px] text-black-600 dark:text-black-700">
+        {#if activeTicketId}
+          New session on <span
+            class="font-medium text-green-600 dark:text-green-400"
+            title={activeTicketLabel}
+            >{activeTicketBanner}</span
+          > — this chat joins the ticket and reads its notes.
+          <button
+            type="button"
+            onclick={() => { pendingTicketId = null; gotoTicket(null); }}
+            class="underline transition-colors hover:text-black-800 dark:hover:text-black-500"
+            >Start without a ticket</button
+          >
+        {:else}
+          New session in <span class="font-medium text-black-800 dark:text-black-600">{project.name}</span>{#if project.defaultProvider} · defaults to <span class="font-mono">{project.defaultProvider}</span>{/if}. Pick provider / model / preset above to override.
+        {/if}
+      </p>
+    </div>
   </div>
 </div>
 

@@ -4,7 +4,7 @@ outline: deep
 
 # Tickets
 
-`tickets` exposes wick's **ticket entities** as a fixed connector. A ticket is the unit of work; a session is one conversation about it, and a ticket can hold several — that is what lets an agent abandon a session that has gone off the rails and continue on a fresh one without losing status, assignee, fields, or notes.
+`tickets` exposes wick's **ticket entities** as a fixed connector. A ticket is the unit of work; a session is one conversation about it, and a ticket can hold several — that is what lets an agent abandon a session that has gone off the rails and continue on a fresh one without losing status, assignee, fields, body, or notes.
 
 | | |
 |---|---|
@@ -30,9 +30,11 @@ All ops accept an implicit `project_id` (defaults to the calling session's proje
 
 List a project's tickets, newest first: id, title, status, assignee, fields, and session count. Optional `status` filter — the accepted keys are that project's own (see [Board columns](#board-columns)).
 
+`body` (the markdown description) is included but truncated to 280 characters — a board-style listing must not cost a long description per row. Call `ticket_get` for the full text.
+
 ### `ticket_get` — Get Ticket
 
-Return one ticket in full, including its session list. Omit `ticket_id` to get the ticket the calling session belongs to.
+Return one ticket in full, including its session list and the untruncated `body`. Omit `ticket_id` to get the ticket the calling session belongs to.
 
 Alongside `assignee` (the wick user id — what `ticket_create`/`ticket_update` accept and what filters match on), every ticket in the response also carries `assignee_name`: the assignee's display name, resolved per call. It is omitted when the ticket has no assignee or the id cannot be resolved.
 
@@ -43,6 +45,7 @@ Create a ticket in a project. Status defaults to the board's first column.
 | Input | Notes |
 |---|---|
 | `title` | Required. |
+| `body` | Optional markdown description — repro steps, links, context. |
 | `status` | One of the project's status keys. Defaults to its first column. |
 | `assignee` | Optional wick user id. |
 | `fields` | Optional JSON object of project-defined field values. |
@@ -50,7 +53,7 @@ Create a ticket in a project. Status defaults to the board's first column.
 
 ### `ticket_update` — Update Ticket
 
-Update title, status, assignee, or fields. Partial update — only what you pass changes. Status must be one of the project's own [board columns](#board-columns). **Every update resets the project's stale-followup and auto-resolve timers**, so an agent acting on a followup should call this afterward.
+Update title, body, status, assignee, or fields. Partial update — only what you pass changes; `body` follows the same contract as `assignee` — omit it to leave the description alone, pass `""` to clear it. Status must be one of the project's own [board columns](#board-columns). **Every update resets the project's stale-followup and auto-resolve timers**, so an agent acting on a followup should call this afterward.
 
 ### `ticket_attach_session` / `ticket_detach_session` — Attach / Detach Session
 

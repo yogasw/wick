@@ -23,6 +23,10 @@ const (
 	EventNoteAdded       = "ticket.note_added"
 	EventFollowup        = "ticket.followup"
 	EventAutoResolved    = "ticket.auto_resolved"
+	// EventAction is a custom ticket button being clicked. It is delivered
+	// to THAT BUTTON's URL only — it is not in AllEvents, because a config
+	// webhook cannot subscribe to it: the button already names its receiver.
+	EventAction = "ticket.action"
 )
 
 // AllEvents is the catalogue the settings UI offers and the docs list, in a
@@ -97,6 +101,9 @@ type Event struct {
 	Session string `json:"session,omitempty"`
 	// Note carries the note body for ticket.note_added.
 	Note string `json:"note,omitempty"`
+	// Action carries the button id for ticket.action, so a receiver serving
+	// several buttons can tell which one was clicked.
+	Action string `json:"action,omitempty"`
 }
 
 // Emitter delivers a ticket event. Implemented by the webhook dispatcher and
@@ -167,6 +174,9 @@ func diff(before, after Ticket) map[string]Change {
 	}
 	if before.Title != after.Title {
 		out["title"] = Change{From: before.Title, To: after.Title}
+	}
+	if before.Body != after.Body {
+		out["body"] = Change{From: before.Body, To: after.Body}
 	}
 	for k, v := range after.Fields {
 		if before.Fields[k] != v {

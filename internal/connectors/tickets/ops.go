@@ -94,7 +94,10 @@ type ticketView struct {
 	// tickets had different owners.
 	Assignee     string            `json:"assignee,omitempty"`
 	AssigneeName string            `json:"assignee_name,omitempty"`
-	Fields       map[string]string `json:"fields,omitempty"`
+	// Body is the markdown description. Truncated in list responses — a
+	// board listing must not cost a long body per row; ticket_get has it all.
+	Body   string            `json:"body,omitempty"`
+	Fields map[string]string `json:"fields,omitempty"`
 	Sessions     []string          `json:"sessions,omitempty"`
 	Notes        int               `json:"notes"`
 	OpenTasks    int               `json:"open_tasks"`
@@ -106,6 +109,7 @@ func (h *handlers) view(c *connector.Ctx, tk ticket.Ticket) ticketView {
 	return ticketView{
 		ID: tk.ID, ProjectID: tk.ProjectID, Title: tk.Title, Status: tk.Status,
 		Assignee: tk.Assignee, AssigneeName: c.UserName(tk.Assignee),
+		Body:   tk.Body,
 		Fields: tk.Fields, Sessions: tk.Sessions,
 		Notes: count.Visible, OpenTasks: count.OpenTasks,
 		UpdatedAt: tk.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
@@ -154,7 +158,14 @@ func (h *handlers) listFiltered(c *connector.Ctx, assignee string) (any, error) 
 		if filter != "" && tk.Status != filter {
 			continue
 		}
-		out = append(out, h.view(c, tk))
+		v := h.view(c, tk)
+		// A list row carries a taste of the body, not the whole thing — a
+		// board of long descriptions would cost more than the answer is
+		// worth. ticket_get returns it in full.
+		if len(v.Body) > 280 {
+			v.Body = v.Body[:280] + "…"
+		}
+		out = append(out, v)
 	}
 
 	res := map[string]any{
@@ -215,6 +226,7 @@ func (h *handlers) create(c *connector.Ctx) (any, error) {
 		ProjectID: projectID,
 		ID:        strings.TrimSpace(c.Input("id")),
 		Title:     c.Input("title"),
+		Body:      c.Input("body"),
 		Status:    strings.TrimSpace(c.Input("status")),
 		Assignee:  assignee,
 		Fields:    fields,
@@ -250,6 +262,13 @@ func (h *handlers) update(c *connector.Ctx) (any, error) {
 	}
 	if t := strings.TrimSpace(c.Input("title")); t != "" {
 		tk.Title = t
+	}
+	// Body is cleared by an explicitly-present empty value — same contract
+	// as assignee, because "remove the description" is a real edit.
+	if raw, ok := c.RawInputValue("body"); ok {
+		if s, isStr := raw.(string); isStr {
+			tk.Body = strings.TrimSpace(s)
+		}
 	}
 	// Assignee is cleared by an explicitly-present empty value, which is
 	// how "unassign" is expressed without a separate op.

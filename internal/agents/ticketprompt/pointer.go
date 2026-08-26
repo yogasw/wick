@@ -9,12 +9,33 @@ package ticketprompt
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/notes"
 	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/ticket"
 )
+
+// bodyExcerptLen bounds how much of the ticket's description rides in the
+// prompt. Enough for repro steps and links to register; anything longer is
+// a document, and documents are read through ticket_get.
+const bodyExcerptLen = 600
+
+// excerpt returns at most n bytes of s, cut on a rune boundary via the
+// trailing-space trim, with surrounding whitespace dropped.
+func excerpt(s string, n int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= n {
+		return s
+	}
+	cut := s[:n]
+	// Never split a UTF-8 sequence: back up to the last full rune.
+	for len(cut) > 0 && !utf8.ValidString(cut) {
+		cut = cut[:len(cut)-1]
+	}
+	return strings.TrimSpace(cut) + "…"
+}
 
 // Pointer returns the short system-prompt block telling a session which
 // ticket it is working on and how many notes are waiting — a count and an
@@ -71,6 +92,17 @@ func Pointer(layout config.Layout, sessionID string) string {
 			fmt.Fprintf(&b, ", %d sessions", n)
 		}
 		b.WriteString(").\n")
+		// The body rides along, excerpted: unlike notes it does not grow
+		// with the work, so a bounded slice of it is a fixed cost — and it
+		// is exactly the context that makes "what is this chat about?"
+		// answerable without a tool call. The full text (and the fields)
+		// stay one ticket_get away.
+		if body := excerpt(tk.Body, bodyExcerptLen); body != "" {
+			fmt.Fprintf(&b, "Its description:\n\n%s\n\n", body)
+			if len(tk.Body) > bodyExcerptLen {
+				b.WriteString("(truncated — ticket_get returns the full description and fields.)\n")
+			}
+		}
 	}
 	switch {
 	case count.Visible == 0:

@@ -6,9 +6,11 @@ Wire a project's ticket board to another system, in both directions:
   ticket is created, moved, assigned, or deleted.
 - **Inbound — REST API.** Your system creates and updates tickets with a
   Personal Access Token.
+- **Custom buttons.** A button on every ticket's page that POSTs the ticket to
+  your URL on click — see [Custom buttons](#custom-buttons).
 
-Both are configured per project, under **Project settings → Ticket system →
-Integrations**. Both are off until you switch them on.
+All three are configured per project, under **Project settings → Ticket
+system → Integrations**. All are off (empty) until you add one.
 
 ## Setup
 
@@ -18,6 +20,8 @@ Integrations**. Both are off until you switch them on.
 4. For webhooks: **Add webhook**, fill in the URL, set a signing secret, pick
    the events, then **Send test** to prove the endpoint before a real ticket
    depends on it.
+5. For a custom button: **Add button**, fill in a label and a URL, and save —
+   see [Custom buttons](#custom-buttons).
 
 You need a Personal Access Token for the REST API. Create one at
 `/profile/tokens` — see [Access Tokens](/guide/access-tokens). A token acts as
@@ -115,6 +119,7 @@ POST /projects/{projectID}/tickets
 | Field | Required | Notes |
 |---|---|---|
 | `title` | yes | Trimmed; must not be empty. |
+| `body` | no | Markdown description. Rendered as markdown on the ticket page. |
 | `id` | no | Adopt an external id instead of a generated one — see [Adopting an external id](#adopting-an-external-id). |
 | `status` | no | Defaults to the board's first column. Must be one of the project's keys. |
 | `assignee` | no | A wick user id. **Omit** it and the token's own user is assigned; send `""` for deliberately unassigned. |
@@ -127,6 +132,7 @@ curl -s -X POST "$WICK_API/projects/$PROJECT/tickets" \
   -H "Content-Type: application/json" \
   -d '{
     "title": "Checkout returns 502 on retry",
+    "body": "Reproduced on staging with retry enabled. Fails after the third attempt.",
     "status": "open",
     "assignee": "",
     "fields": { "type": "bug", "priority": "high" }
@@ -138,6 +144,7 @@ curl -s -X POST "$WICK_API/projects/$PROJECT/tickets" \
   "id": "T-4F2A",
   "project_id": "proj_7f21c9",
   "title": "Checkout returns 502 on retry",
+  "body": "Reproduced on staging with retry enabled. Fails after the third attempt.",
   "status": "open",
   "fields": { "type": "bug", "priority": "high" },
   "created_at": "2026-08-25T04:11:09Z",
@@ -246,7 +253,9 @@ curl -s -X PATCH "$WICK_API/tickets/T-4F2A" \
 
 ::: tip Clearing a field
 `fields` merges rather than replaces. Send a field as `""` to delete it; other
-fields are left alone. To unassign, send `"assignee": ""`.
+fields are left alone. To unassign, send `"assignee": ""`. To clear the
+description, send `"body": ""` explicitly — omitting `body` leaves it
+unchanged.
 :::
 
 Close it — use the key your board marks as finished:
@@ -390,6 +399,7 @@ missed an earlier delivery can still act on current state without calling back.
     "id": "T-4F2A",
     "project_id": "proj_7f21c9",
     "title": "Checkout returns 502 on retry",
+    "body": "Reproduced on staging with retry enabled.",
     "status": "in_progress",
     "assignee": "usr_a91f",
     "fields": { "type": "bug", "priority": "high" },
@@ -421,7 +431,7 @@ come straight back at you.
 ### `changes`
 
 Present on `ticket.updated`, `ticket.status_changed`, and `ticket.assigned`.
-Keys are `status`, `assignee`, `title`, and `fields.<key>`:
+Keys are `status`, `assignee`, `title`, `body`, and `fields.<key>`:
 
 ```json
 {
@@ -454,6 +464,13 @@ A status move sends **both** `ticket.status_changed` and `ticket.updated`.
 Subscribe to the specific event if you only care about board movement; subscribe
 to `ticket.updated` to mirror every edit without enumerating each event as new
 ones are added. Subscribing to both means two deliveries for one change.
+:::
+
+::: info `ticket.action` is not in this list
+Clicking a [custom button](#custom-buttons) fires a `ticket.action` event, but
+it is delivered **only** to that button's own URL — it is not part of the
+catalogue above and cannot be subscribed to from a regular webhook row. See
+[Custom buttons](#custom-buttons).
 :::
 
 ### `ticket.created`
@@ -546,6 +563,60 @@ ones are added. Subscribing to both means two deliveries for one change.
   "ticket": { "id": "T-4F2A", "title": "Checkout 502s on payment retry", "…": "…" }
 }
 ```
+
+## Custom buttons
+
+A custom button is a single label + URL pair that appears on **every ticket's
+page**. Clicking it POSTs the ticket to that URL and shows the delivery
+outcome to whoever clicked — use it for things a human decides to trigger,
+like "Sync to abc.com" or "Deploy", rather than something that should fire on
+every change (that is what webhooks are for).
+
+Add one under **Project settings → Ticket system → Integrations → Custom
+buttons**: fill in a label and a full `http(s)://` URL, then save.
+
+Clicking the button calls:
+
+```
+POST /api/tickets/{ticketID}/actions/{buttonID}
+```
+
+which delivers a `ticket.action` event to the button's own URL — same
+envelope shape as a webhook delivery, same headers (`X-Wick-Event:
+ticket.action`, `X-Wick-Signature` if the button carried a secret), and the
+same SSRF guard and retry schedule as a configured webhook. The event's
+`action` field carries the button's id, so one receiver serving several
+buttons can tell them apart:
+
+```json
+{
+  "id": "evt_4KQ8ZN2R",
+  "event": "ticket.action",
+  "action": "btn_9f3a1c2d4e5b6a7f",
+  "delivered_at": "2026-08-26T04:11:09.412Z",
+  "project_id": "proj_7f21c9",
+  "actor": { "type": "user", "id": "usr_a91f", "name": "Dana Reyes" },
+  "ticket": {
+    "id": "T-4F2A",
+    "project_id": "proj_7f21c9",
+    "title": "Checkout returns 502 on retry",
+    "body": "Reproduced on staging with retry enabled.",
+    "status": "in_progress",
+    "assignee": "usr_a91f",
+    "fields": { "type": "bug", "priority": "high" }
+  }
+}
+```
+
+The click response mirrors the delivery outcome, not a generic "queued":
+
+```json
+{ "ok": true, "status": 200, "error": "", "attempts": 1 }
+```
+
+`ticket.action` is **not** subscribable from a regular webhook row — it only
+ever reaches the button's own URL, because the button already names its
+receiver.
 
 ## Verifying the signature
 

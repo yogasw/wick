@@ -176,3 +176,43 @@ func TestEventCatalogueIsNonEmptyAndValid(t *testing.T) {
 		}
 	}
 }
+
+func TestNormaliseTicketButtons(t *testing.T) {
+	// Blank editor rows are dropped; real rows get an id minted.
+	out, err := normaliseTicketButtons([]project.TicketButton{
+		{Label: "Sync", URL: " https://abc.com/hook "},
+		{Label: "", URL: ""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || out[0].URL != "https://abc.com/hook" {
+		t.Fatalf("out = %+v, want one trimmed button", out)
+	}
+	if out[0].ID == "" {
+		t.Error("id was not minted")
+	}
+
+	// A stored id survives the round trip unchanged.
+	out, err = normaliseTicketButtons([]project.TicketButton{{ID: "btn_keep", Label: "Sync", URL: "https://abc.com/h"}})
+	if err != nil || out[0].ID != "btn_keep" {
+		t.Fatalf("stored id not kept: %+v %v", out, err)
+	}
+
+	// Broken rows are refused, not silently dropped.
+	for _, bad := range []project.TicketButton{
+		{Label: "", URL: "https://abc.com"},   // no label
+		{Label: "x", URL: ""},                 // no url
+		{Label: "x", URL: "ftp://abc.com/x"},  // wrong scheme
+		{Label: "x", URL: "not a url at all"}, // unparseable
+	} {
+		if _, err := normaliseTicketButtons([]project.TicketButton{bad}); err == nil {
+			t.Errorf("button %+v should have been refused", bad)
+		}
+	}
+
+	// An empty list normalises to nil so the config stays omitempty-clean.
+	if out, err := normaliseTicketButtons(nil); err != nil || out != nil {
+		t.Fatalf("nil in should be nil out, got %+v %v", out, err)
+	}
+}

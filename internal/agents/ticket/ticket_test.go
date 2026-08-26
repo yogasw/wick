@@ -45,6 +45,34 @@ func TestCreateAndLoad(t *testing.T) {
 	}
 }
 
+func TestCreateStoresBodyAndDiffReportsIt(t *testing.T) {
+	l := newLayout(t)
+	tk, err := Create(l, CreateOptions{ProjectID: "p1", Title: "with body", Body: "  ## Repro\nsteps here  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tk.Body != "## Repro\nsteps here" {
+		t.Fatalf("body not trimmed/stored: %q", tk.Body)
+	}
+	got, err := Load(l, "p1", tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Body != tk.Body {
+		t.Fatalf("body round-trip mismatch: %q", got.Body)
+	}
+
+	after := got
+	after.Body = "rewritten"
+	changes := diff(got, after)
+	if c, ok := changes["body"]; !ok || c.From != "## Repro\nsteps here" || c.To != "rewritten" {
+		t.Fatalf("diff missed the body change: %+v", changes)
+	}
+	if evs := EventsFor(changes); len(evs) != 1 || evs[0] != EventUpdated {
+		t.Fatalf("body-only change should fire ticket.updated alone, got %v", evs)
+	}
+}
+
 func TestCreateRejectsUnknownProject(t *testing.T) {
 	l := newLayout(t)
 	if _, err := Create(l, CreateOptions{ProjectID: "nope", Title: "x"}); err == nil {
