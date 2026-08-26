@@ -11,16 +11,27 @@ export const listSessions = (base: string, projectId?: string) => {
   );
 };
 
-export const getConversation = (base: string, id: string) =>
-  apiGetE<{ turns: ConversationTurn[] }>(`${base}/api/sessions/${id}/conversation`).pipe(
+export const getConversation = (
+  base: string,
+  id: string,
+  opts?: { limit?: number; before?: string },
+) => {
+  const params = new URLSearchParams();
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.before) params.set("before", opts.before);
+  const qs = params.toString();
+  const url = `${base}/api/sessions/${id}/conversation${qs ? `?${qs}` : ""}`;
+  return apiGetE<{ turns: ConversationTurn[]; has_more?: boolean }>(url).pipe(
     Effect.map((r) => ({
       turns: (r.turns ?? []).map((t) => ({
         ...t,
         events: t.events ?? [],
         attachments: t.attachments ?? [],
       })),
+      hasMore: r.has_more === true,
     })),
   );
+};
 
 export const getSessionMeta = (base: string, id: string) =>
   apiGetE<SessionMeta>(`${base}/api/sessions/${id}/meta`);

@@ -3,6 +3,7 @@ package agents
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 
 	agentsconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/session"
@@ -140,8 +141,46 @@ func apiSessionList(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string][]SessionListItem{"sessions": items})
 }
 
+// backfillTurnIDs assigns a synthetic, position-stable id to every turn that
+// was persisted without one (user turns, and anything written before turn_id
+// existed). The conversation file is append-only, so the index is stable
+// across loads — which is all the pagination cursor and the SPA's dedup need.
+// Real ids are numeric timestamps, so the "turn-" prefix can't collide.
+func backfillTurnIDs(turns []agentstore.ConversationTurn) {
+	for i := range turns {
+		if turns[i].TurnID == "" {
+			turns[i].TurnID = fmt.Sprintf("turn-%d", i)
+		}
+	}
+}
+
+// pageTurns returns the window of turns ending just before the turn with id
+// `before` (empty = end of history), holding at most `limit` entries (0 = no
+// cap). hasMore reports whether older turns remain before the window. An
+// unknown `before` falls back to the latest window rather than erroring — the
+// turn may have been pruned (e.g. collapsed provider-switch turns) between
+// the client's fetches.
+func pageTurns(turns []agentstore.ConversationTurn, before string, limit int) ([]agentstore.ConversationTurn, bool) {
+	end := len(turns)
+	if before != "" {
+		for i, t := range turns {
+			if t.TurnID == before {
+				end = i
+				break
+			}
+		}
+	}
+	start := 0
+	if limit > 0 && end-limit > 0 {
+		start = end - limit
+	}
+	return turns[start:end], start > 0
+}
+
 // apiSessionConversation handles GET /api/sessions/{id}/conversation and
-// returns all ConversationTurn entries for the session.
+// returns the session's ConversationTurn entries. With no query params it
+// returns the full history; `?limit=N` returns only the latest N turns and
+// `&before=<turn_id>` walks back one window at a time (infinite scroll up).
 func apiSessionConversation(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -164,11 +203,16 @@ func apiSessionConversation(c *tool.Ctx) {
 	if turns == nil {
 		turns = []agentstore.ConversationTurn{}
 	}
+	// Label derives from the FIRST user message, so it must see the full
+	// history — page after it, not before.
 	resolveLabelFromTurns(globalLayout, id, turns)
+	backfillTurnIDs(turns)
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	page, hasMore := pageTurns(turns, c.Query("before"), limit)
 	if cwd, err := resolveSessionCwd(sess); err == nil {
-		attachArtifactsToTurns(globalLayout, id, c.Base(), cwd, turns)
+		attachArtifactsToTurns(globalLayout, id, c.Base(), cwd, page)
 	}
-	c.JSON(http.StatusOK, map[string][]agentstore.ConversationTurn{"turns": turns})
+	c.JSON(http.StatusOK, map[string]any{"turns": page, "has_more": hasMore})
 }
 
 // apiSessionMeta handles GET /api/sessions/{id}/meta and returns the

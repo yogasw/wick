@@ -102,6 +102,54 @@ describe("getConversation", () => {
     );
     expect(result.turns).toHaveLength(0);
   });
+
+  test("maps has_more (absent → false)", async () => {
+    const withMore = await Effect.runPromise(
+      getConversation("/tools/agents", "sess-1").pipe(
+        Effect.provide(mockLayer(200, { turns: [TURN], has_more: true })),
+      ),
+    );
+    expect(withMore.hasMore).toBe(true);
+
+    const without = await Effect.runPromise(
+      getConversation("/tools/agents", "sess-1").pipe(
+        Effect.provide(mockLayer(200, { turns: [TURN] })),
+      ),
+    );
+    expect(without.hasMore).toBe(false);
+  });
+
+  test("passes limit and before as query params, omits them when unset", async () => {
+    const urls: string[] = [];
+    const captureLayer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((req) => {
+        urls.push(req.url);
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(JSON.stringify({ turns: [] }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+        );
+      }),
+    );
+
+    await Effect.runPromise(
+      getConversation("/tools/agents", "sess-1", { limit: 20, before: "t9" }).pipe(
+        Effect.provide(captureLayer),
+      ),
+    );
+    await Effect.runPromise(
+      getConversation("/tools/agents", "sess-1").pipe(Effect.provide(captureLayer)),
+    );
+
+    expect(urls[0]).toContain("limit=20");
+    expect(urls[0]).toContain("before=t9");
+    expect(urls[1]).not.toContain("?");
+  });
 });
 
 describe("getConversation - null array normalization (Go nil → JSON null)", () => {
