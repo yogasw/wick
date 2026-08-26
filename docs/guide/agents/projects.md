@@ -156,21 +156,23 @@ A project can turn its sessions into a **ticket board**. Off by default — enab
 Code: [`internal/agents/ticket/`](https://github.com/yogasw/wick/blob/master/internal/agents/ticket) (entity, sweeper, auto-create rules), [`internal/agents/project/ticket.go`](https://github.com/yogasw/wick/blob/master/internal/agents/project/ticket.go) (per-project config). MCP surface: [Tickets connector](/connectors/tickets) and [Notes connector](/connectors/notes).
 :::
 
-A **ticket** is the unit of work; a **session** is one conversation about it, and a ticket can hold several. Tickets live at `projects/<id>/tickets/<T-XXXX>/ticket.json` with a short, quotable id (`T-4F2A`) rather than a UUID — it appears on board cards and gets typed into chat. A ticket carries a title, a status drawn from the project's own board columns, an assignee, project-defined custom fields, and its session list.
+A **ticket** is the unit of work; a **session** is one conversation about it, and a ticket can hold several. Tickets live at `projects/<id>/tickets/<T-XXXX>/ticket.json` with a short, quotable id (`T-4F2A`) rather than a UUID — it appears on board cards and gets typed into chat. A ticket carries a title, a markdown **description**, a status drawn from the project's own board columns, an assignee, project-defined custom fields, and its session list.
 
 ### The board
 
-The project landing page shows a kanban board — one column per status, cards are **tickets**, not sessions. The filter bar's **Untracked** chip (off by default) adds a rail of chats that belong to no ticket alongside the columns; its count is always shown even while off. Dragging:
+The project landing page shows a kanban board — one column per status, cards are **tickets**, not sessions, laid out as fixed-width columns in a single horizontally scrollable row. The filter bar's **Untracked** chip (off by default) adds a rail of chats that belong to no ticket alongside the columns; its count is always shown even while off. Dragging:
 
 - a ticket card between columns changes its status;
 - a chat from the Untracked rail onto a ticket card attaches it to that ticket;
 - a chat onto a column turns it into a new ticket of its own.
 
+A card shows only the custom fields marked **Card** in the schema (see [Per-project settings](#per-project-settings)) — everything else stays on the ticket's own page.
+
 Filters — statuses, assignee, and the Untracked chip — decide what the board asks the server for, not just what it draws: switching a column or the Untracked rail off stops the server building those cards at all, so a project with hundreds of chats costs the same to poll as a small one.
 
-Deleting a ticket asks whether its chats survive as untracked or are deleted with it.
+Deleting a ticket (the trash icon on its page) asks whether its chats survive as untracked or are deleted with it.
 
-Opening a ticket's detail lists its sessions **most recently active first**, not in the order they were attached — the chat someone was just in surfaces at the top rather than wherever it happened to land on a long-running ticket.
+Opening a ticket's page puts the title, description, and sessions (capped at 5, with "show more") in the main column and its status/assignee/fields in a rail alongside; it also lists sessions **most recently active first**, not in the order they were attached — the chat someone was just in surfaces at the top rather than wherever it happened to land on a long-running ticket. The open ticket is reflected in the URL (`?ticket=<id>`), so back/forward and sharing a link both work.
 
 ### Starting a chat on a ticket
 
@@ -186,7 +188,7 @@ Configured from the project settings page (or via `ticket_settings_get` / `ticke
 |---|---|
 | **Enabled** | Turns the board and automation on for this project. Off by default. |
 | **Board columns** | The statuses this board uses, in order — see [Board columns](#board-columns). |
-| **Custom fields** | A schema of `{key, label, type, options, required}` fields shown on every ticket card and edit form. |
+| **Custom fields** | A schema of `{key, label, type, options, required, show_on_card}` fields shown on the ticket's own page (and available to `fields`). Only fields with **Card** checked also appear on the board card — off by default, so a card stays a glance rather than growing with the schema. |
 | **Stale-followup window** | A ticket not on the board's finished column, untouched for this long, gets a follow-up turn sent to its most recently attached session's agent, using the project's follow-up prompt. The agent decides what to do (update the ticket, ping someone, close it) rather than wick messaging anyone. Repeats once per window while still stale. |
 | **Auto-resolve window** | A ticket untouched for this long is moved to the board's finished column automatically, no agent spawn. Auto-resolve wins over follow-up when both are due. |
 

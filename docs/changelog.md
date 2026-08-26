@@ -10,6 +10,23 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.5.0](https://github.com/yogasw/wick/compare/v1.4.3...v1.5.0) — Ticket Descriptions, Card Fields, Custom Buttons
+
+_Released on 2026-08-26_
+
+### Added
+
+*   **Tickets gain a markdown description**: A ticket now carries a `body` alongside its title — editable on the ticket page and rendered as markdown. `POST /api/projects/{id}/tickets` and `PATCH /api/tickets/{ticketID}` accept `body` (an explicit `""` on `PATCH` clears it; omitting it leaves it unchanged), and the `ticket_create` / `ticket_update` MCP ops on the [Tickets connector](/connectors/tickets) accept it the same way. `ticket_get` returns it in full; `ticket_list` truncates it to 280 characters so a board listing doesn't pay for long descriptions per row. A 600-character excerpt also rides in the session's system prompt so an agent knows what a ticket is about without a tool call. See [Ticket Integrations](/guide/agents/ticket-integrations#create-a-ticket).
+*   **Per-field control over what shows on the board card**: Ticket schema fields gain a **Card** checkbox (Project settings → Ticket system → Custom fields), off by default. Only fields marked **Card** appear on the kanban card; the full set — plus any value written outside the schema — stays on the ticket's own page. See [Projects → Per-project settings](/guide/agents/projects#per-project-settings).
+*   **Custom ticket buttons**: A project can add its own buttons (label + URL) under **Project settings → Ticket system → Integrations → Custom buttons**. Each appears on every ticket's page; clicking one POSTs the full ticket as a `ticket.action` event to that button's URL through the same delivery machinery as ticket webhooks (SSRF guard, retries), and the click reports back the delivery outcome. `ticket.action` is not subscribable from a regular webhook — it only reaches the button's own URL. See [Ticket Integrations → Custom buttons](/guide/agents/ticket-integrations#custom-buttons).
+*   **Ticket board and detail page revamp**: Kanban columns are now fixed-width in a single horizontally scrollable row. A ticket's page is reorganized into a main column (title, description, sessions capped at 5 with "show more", notes) plus a properties rail, with delete moved to a trash icon and the open ticket reflected in the URL (`?ticket=<id>`) so back/forward and sharing a link both work.
+
+### Security
+
+*   **Webhook secrets no longer leak through board/detail responses**: `GET /api/projects/{id}/tickets` and the ticket detail API previously returned a project's ticket integration config, including webhook secrets, to any board viewer. Both now redact secrets before the response leaves the server.
+
+---
+
 ## [v1.4.3](https://github.com/yogasw/wick/compare/v1.4.2...v1.4.3) — Conversation Pagination
 
 _Released on 2026-08-26_
