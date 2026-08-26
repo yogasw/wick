@@ -84,7 +84,10 @@ func (r *Registry) Reload() error {
 		if err != nil {
 			// Skip unreadable folders rather than fail the whole boot.
 			// A broken project shouldn't prevent the rest of wick
-			// from running — operator can fix it manually.
+			// from running — operator can fix it manually. Logged loudly:
+			// a skipped project 404s everywhere with no other trace.
+			log.Warn().Err(err).Str("project", id).
+				Msg("registry: skipping unreadable project folder")
 			continue
 		}
 		projects[id] = p

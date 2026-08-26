@@ -39,6 +39,9 @@ export interface ThreadStore {
   lifecycle: Writable<LifecycleState>;
   meta: Writable<ThreadMeta>;
   setHistory(turns: ConversationTurn[]): void;
+  /* Insert an older history page (infinite scroll up) before the turns
+     already loaded, dropping any turn whose id is already present. */
+  prependHistory(older: ConversationTurn[]): void;
   appendUserTurn(text: string, attachments?: Attachment[]): void;
   handleEvent(ev: AgentEvent): void;
   /* Remove a stuck tool card from the live turn (a run with no runId to
@@ -482,7 +485,26 @@ export function createThreadStore(): ThreadStore {
         const pendingLocal = cur.filter(
           (t) => isLocal(t) && !persistedKeys.has(`${t.role} ${t.text}`),
         );
-        return [...merged, ...pendingLocal];
+        // Pagination: `newTurns` may be only the LATEST window (limit=N), while
+        // `cur` still holds older pages scrolled in via prependHistory. Keep
+        // everything in `cur` that precedes the window's first turn; a full
+        // (unpaginated) reload matches at index 0, so nothing is kept and the
+        // old replace-all semantics hold.
+        const firstId = newTurns[0]?.turn_id;
+        const winStart = firstId ? cur.findIndex((t) => t.turn_id === firstId) : -1;
+        const olderPrefix = winStart > 0 ? cur.slice(0, winStart) : [];
+
+        return [...olderPrefix, ...merged, ...pendingLocal];
+      });
+    },
+    prependHistory(older) {
+      if (older.length === 0) return;
+      turns.update((cur) => {
+        // Turns persisted before turn_id existed have no id — they can't be
+        // deduped, so always keep them (pages are disjoint ranges anyway).
+        const have = new Set(cur.map((t) => t.turn_id).filter(Boolean));
+        const fresh = older.filter((t) => !t.turn_id || !have.has(t.turn_id));
+        return fresh.length > 0 ? [...fresh, ...cur] : cur;
       });
     },
     appendUserTurn,

@@ -25,8 +25,9 @@ you: it reaches exactly the projects your user can see, and no others.
 
 ::: warning The API toggle is per project
 A token cannot touch a project whose REST API is switched off — those requests
-answer `404`, the same as a project that does not exist, so a token cannot be
-used to discover which projects exist.
+answer `403` with `the REST API is disabled for this project`. A project you
+cannot see at all answers `403 you don't have access to this project`; one
+that does not exist answers `404`.
 :::
 
 ---
@@ -36,7 +37,14 @@ used to discover which projects exist.
 ## Base URL and auth
 
 ```
-https://<your-wick-host>/tools/agents/api
+https://<your-wick-host>/api
+```
+
+Every endpoint path in this reference is **relative to this base URL** —
+append it as-is. `GET /projects/{id}/tickets` means:
+
+```
+https://<your-wick-host>/api/projects/{id}/tickets
 ```
 
 Every request carries the token:
@@ -49,7 +57,7 @@ Set up the shell for every example below:
 
 ```bash
 export WICK_HOST="https://wick.abc.com"
-export WICK_API="$WICK_HOST/tools/agents/api"
+export WICK_API="$WICK_HOST/api"
 export WICK_TOKEN="wick_pat_..."
 export PROJECT="proj_7f21c9"
 ```
@@ -66,17 +74,16 @@ Failures are JSON with a single `error` key.
 |---|---|
 | `400` | Malformed JSON, or a value the board rejects (unknown status, empty title). |
 | `401` | Missing, malformed, revoked, or unapproved token. |
-| `404` | Ticket or project not found — **or** the project's REST API is off. |
+| `403` | `you don't have access to this project` — the project exists but your user is not its owner and has no tag grant. Or `the REST API is disabled for this project` — switch it on under Project settings → Ticket system → Integrations. |
+| `404` | Ticket or project does not exist. |
 | `500` | Server-side failure writing the ticket. |
-
-No endpoint in this reference returns `403` to a token — sending test webhooks and reading delivery logs are admin-only actions reachable from the settings UI, not part of the token-authed surface.
 
 ---
 
 ## List tickets
 
 ```
-GET /api/projects/{projectID}/tickets
+GET /projects/{projectID}/tickets
 ```
 
 | Query | Default | Meaning |
@@ -102,7 +109,7 @@ curl -s "$WICK_API/projects/$PROJECT/tickets?statuses=open,in_progress&assignee=
 ## Create a ticket
 
 ```
-POST /api/projects/{projectID}/tickets
+POST /projects/{projectID}/tickets
 ```
 
 | Field | Required | Notes |
@@ -172,7 +179,7 @@ become two tickets, so both fold to the dashless lowercase form:
 
 That is what makes the mapping disposable. The source system already knows the
 page id, so it can read the ticket back with
-`GET /api/tickets/1f2e3d4c5b6a79889a0b1c2d3e4f5a6b` without storing anything,
+`GET /tickets/1f2e3d4c5b6a79889a0b1c2d3e4f5a6b` without storing anything,
 and a second create from the same page is refused with `400` rather than
 quietly opening a duplicate.
 
@@ -190,7 +197,7 @@ getting `T-XXXX`.
 ## Get one ticket
 
 ```
-GET /api/tickets/{ticketID}
+GET /tickets/{ticketID}
 ```
 
 ```bash
@@ -200,7 +207,7 @@ curl -s "$WICK_API/tickets/T-4F2A" -H "Authorization: Bearer $WICK_TOKEN"
 ## Update a ticket
 
 ```
-PATCH /api/tickets/{ticketID}
+PATCH /tickets/{ticketID}
 ```
 
 Every field is optional — send only what changes. Any edit bumps `updated_at`,
@@ -254,7 +261,7 @@ curl -s -X PATCH "$WICK_API/tickets/T-4F2A" \
 ## Delete a ticket
 
 ```
-DELETE /api/tickets/{ticketID}?sessions=keep|delete
+DELETE /tickets/{ticketID}?sessions=keep|delete
 ```
 
 | `sessions` | Effect |
@@ -276,8 +283,8 @@ destructive shape has to be asked for by name.
 ## Attach / detach a session
 
 ```
-PUT    /api/tickets/{ticketID}/sessions/{sessionID}
-DELETE /api/tickets/{ticketID}/sessions/{sessionID}
+PUT    /tickets/{ticketID}/sessions/{sessionID}
+DELETE /tickets/{ticketID}/sessions/{sessionID}
 ```
 
 A session belongs to exactly one ticket, so attaching one that sits on another
@@ -291,10 +298,10 @@ curl -s -X PUT "$WICK_API/tickets/T-4F2A/sessions/sess_9931" \
 ## Notes
 
 ```
-GET    /api/notes?ticket_id=T-4F2A
-POST   /api/notes
-PATCH  /api/notes/{noteID}
-DELETE /api/notes/{noteID}
+GET    /notes?ticket_id=T-4F2A
+POST   /notes
+PATCH  /notes/{noteID}
+DELETE /notes/{noteID}
 ```
 
 Scope reads with `?ticket_id=` or `?session_id=`; a session that belongs to a
@@ -310,22 +317,26 @@ curl -s -X POST "$WICK_API/notes" \
 ## Read the board's schema
 
 ```
-GET /api/projects/{projectID}
+GET /projects/{projectID}/tickets?rows=0
 ```
 
-Returns the project, including `ticket.statuses` and `ticket.fields` — the
-valid `status` keys and field keys for everything above. Read this rather than
-hardcoding `open` / `done`: a project renames its own stages.
+The board response carries `statuses` and `config.fields` — the valid
+`status` keys and field keys for everything above. Read these rather than
+hardcoding `open` / `done`: a project renames its own stages. `rows=0` keeps
+the response to counts and schema, without paying for session rows.
 
 ```bash
-curl -s "$WICK_API/projects/$PROJECT" \
-  -H "Authorization: Bearer $WICK_TOKEN" | jq '.ticket.statuses'
+curl -s "$WICK_API/projects/$PROJECT/tickets?rows=0" \
+  -H "Authorization: Bearer $WICK_TOKEN" | jq '{statuses, fields: .config.fields}'
 ```
+
+There is no token-authed `GET /projects/{id}` — the bare project route is
+part of the browser UI surface and stays cookie-only on purpose.
 
 ## The event catalogue
 
 ```
-GET /api/ticket-events
+GET /ticket-events
 ```
 
 ```bash
@@ -361,7 +372,7 @@ overridden by one — a misconfiguration must not silently disable verification.
   out of order: compare `delivered_at`, or re-read the ticket over the REST API
   when order matters.
 - There is **no durable queue**. If your receiver must never miss an event,
-  reconcile with `GET /api/projects/{id}/tickets` on startup.
+  reconcile with `GET /projects/{id}/tickets` on startup.
 
 ## Envelope
 

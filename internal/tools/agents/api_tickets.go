@@ -161,8 +161,9 @@ func resolveTicketProject(c *tool.Ctx, ticketID string) (string, bool) {
 		}
 		if ticket.Exists(globalLayout, id, ticketID) {
 			// A token may only address tickets in a project that opted into
-			// the REST surface. Reporting "not found" keeps a token holder
-			// from discovering projects whose API is switched off.
+			// the REST surface. The caller answers "ticket not found"; the
+			// server log (requireTicketAPI) records that the real reason
+			// was the project's API toggle.
 			if !requireTicketAPI(c, id) {
 				return "", false
 			}
@@ -229,7 +230,7 @@ func apiProjectTickets(c *tool.Ctx) {
 	}
 	id := c.PathValue("id")
 	if !requireTicketAPI(c, id) {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+		c.JSON(http.StatusForbidden, map[string]string{"error": "the REST API is disabled for this project"})
 		return
 	}
 	p, ok := globalMgr.Registry().Project(id)
@@ -385,7 +386,7 @@ func apiTicketCreate(c *tool.Ctx) {
 	}
 	projectID := c.PathValue("id")
 	if !requireTicketAPI(c, projectID) {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+		c.JSON(http.StatusForbidden, map[string]string{"error": "the REST API is disabled for this project"})
 		return
 	}
 	var req struct {

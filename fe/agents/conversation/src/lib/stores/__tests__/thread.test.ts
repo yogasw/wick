@@ -49,6 +49,29 @@ describe("createThreadStore", () => {
     expect(turns[0].turn_id).toBe("new1");
   });
 
+  /* ── pagination: prependHistory + older-prefix preservation ───────── */
+
+  test("prependHistory puts older turns before existing ones", () => {
+    store.setHistory([makeTurn({ turn_id: "t3", text: "c" }), makeTurn({ turn_id: "t4", text: "d" })]);
+    store.prependHistory([makeTurn({ turn_id: "t1", text: "a" }), makeTurn({ turn_id: "t2", text: "b" })]);
+    expect(get(store.turns).map((t) => t.turn_id)).toEqual(["t1", "t2", "t3", "t4"]);
+  });
+
+  test("prependHistory drops turns already in the thread", () => {
+    store.setHistory([makeTurn({ turn_id: "t2", text: "b" }), makeTurn({ turn_id: "t3", text: "c" })]);
+    store.prependHistory([makeTurn({ turn_id: "t1", text: "a" }), makeTurn({ turn_id: "t2", text: "b" })]);
+    expect(get(store.turns).map((t) => t.turn_id)).toEqual(["t1", "t2", "t3"]);
+  });
+
+  test("setHistory keeps older loaded turns when the new window starts mid-history", () => {
+    // Loaded state: latest window [t3,t4] plus older page [t1,t2] scrolled in.
+    store.setHistory([makeTurn({ turn_id: "t3", text: "c" }), makeTurn({ turn_id: "t4", text: "d" })]);
+    store.prependHistory([makeTurn({ turn_id: "t1", text: "a" }), makeTurn({ turn_id: "t2", text: "b" })]);
+    // Refetch after a new turn: window slid to [t4,t5]. t1–t3 must survive.
+    store.setHistory([makeTurn({ turn_id: "t4", text: "d" }), makeTurn({ turn_id: "t5", text: "e" })]);
+    expect(get(store.turns).map((t) => t.turn_id)).toEqual(["t1", "t2", "t3", "t4", "t5"]);
+  });
+
   test("setHistory grafts a dropped local turn's trace onto a trace-less persisted twin", () => {
     // Stream a turn with a tool call + result, then `done` finalizes it into a
     // local (live-*) turn carrying the inline trace.

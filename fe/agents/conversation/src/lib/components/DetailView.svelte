@@ -922,6 +922,8 @@
       userScrolledUp = distFromBottom > 80;
       stickToBottom = !userScrolledUp;
       showJumpBtn = userScrolledUp;
+      // Near the top → pull the next older history page in.
+      if (el.scrollTop < 80) loadOlderHistory();
     }
 
     // Content can grow AFTER the initial layout with no scroll event — an HTML
@@ -1070,15 +1072,61 @@
       .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
   }
 
+  /* ── history pagination ───────────────────────────────────────── */
+  // First load ships only the latest window; scrolling to the top pulls
+  // older pages in. Keeps huge sessions from rendering thousands of turns.
+  const HISTORY_PAGE = 20;
+  let hasMoreHistory = $state(false);
+  let loadingOlder = $state(false);
+
   /* Refetch the persisted conversation so a just-completed turn picks up
      server-derived artifacts — the live SSE turn is built client-side and
-     carries none. showError surfaces a toast only on the initial load. */
+     carries none. Fetches only the latest window; setHistory keeps any
+     older pages already scrolled in. showError surfaces a toast only on
+     the initial load. */
   function loadConversation(showError = false) {
-    return run(getConversation(base, sessionId).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => thread.setHistory(res.turns))
+    return run(getConversation(base, sessionId, { limit: HISTORY_PAGE }).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        // res.hasMore is relative to the WINDOW start, so it only describes
+        // the thread when no older pages were scrolled in — i.e. when the
+        // oldest loaded turn is the window's first turn (or nothing loaded).
+        const oldestLoaded = turns[0]?.turn_id;
+        thread.setHistory(res.turns);
+        if (!oldestLoaded || oldestLoaded === res.turns[0]?.turn_id) {
+          hasMoreHistory = res.hasMore;
+        }
+      })
       .catch((e: unknown) => {
         if (showError) toastError(`History: ${e instanceof Error ? e.message : String(e)}`);
       });
+  }
+
+  /* Pull one older page and keep the viewport anchored on the turn the
+     user was looking at (prepending grows scrollHeight above it). */
+  function loadOlderHistory() {
+    if (loadingOlder || !hasMoreHistory) return;
+    // Old sessions can hold turns persisted before turn_id existed — skip
+    // id-less turns (they can't anchor a `before` cursor) and local ones.
+    const before = turns.find((t) => t.turn_id && !t.turn_id.startsWith("local-user-"))?.turn_id;
+    if (!before) return;
+    loadingOlder = true;
+    const el = threadEl;
+    const prevHeight = el?.scrollHeight ?? 0;
+    const prevTop = el?.scrollTop ?? 0;
+    run(getConversation(base, sessionId, { limit: HISTORY_PAGE, before }).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        hasMoreHistory = res.hasMore;
+        thread.prependHistory(res.turns);
+        requestAnimationFrame(() => {
+          if (el) {
+            suppressScrollCheck = true;
+            el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
+            requestAnimationFrame(() => { suppressScrollCheck = false; });
+          }
+        });
+      })
+      .catch((e: unknown) => toastError(`History: ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => { loadingOlder = false; });
   }
 
   /* ── SSE fan-out ──────────────────────────────────────────────── */
@@ -1662,6 +1710,20 @@
         data-chat-panel
       >
         <div class="max-w-4xl mx-auto w-full px-6 pt-14 pb-6 md:pt-6">
+          {#if loadingOlder}
+            <div class="flex items-center justify-center gap-2 py-3 text-[11px] text-black-600 dark:text-black-700">
+              <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M8 2a6 6 0 106 6" stroke-linecap="round"/></svg>
+              <span>Loading older messages…</span>
+            </div>
+          {:else if hasMoreHistory}
+            <div class="py-1.5 text-center">
+              <button
+                type="button"
+                onclick={loadOlderHistory}
+                class="rounded-full px-3 py-1 text-[11px] text-black-600 dark:text-black-700 hover:bg-white-300 dark:hover:bg-navy-700 hover:text-black-800 dark:hover:text-black-500 transition-colors"
+              >Load older messages</button>
+            </div>
+          {/if}
           <ConversationThread {turns} {live} {typing} loadTrace={(turnId) => Effect.runPromise(getTurnTrace(base, sessionId, turnId).pipe(Effect.provide(WickClientLayer)))} onOpenPath={openFileByPath} onCancelRun={handleCancelRun} onDismissTool={(toolUseId) => thread.dismissToolBlock(toolUseId)} onOpenSubAgent={openSubAgent} />
         </div>
       </div>
