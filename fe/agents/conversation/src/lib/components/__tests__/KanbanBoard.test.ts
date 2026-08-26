@@ -42,7 +42,12 @@ beforeEach(() => {
 const board: TicketBoard = {
   config: {
     enabled: true,
-    fields: [{ key: "priority", label: "Priority", type: "select", options: ["low", "high"] }],
+    // Card chips are opt-in per field: priority is marked, severity is not
+    // and must never appear on a card.
+    fields: [
+      { key: "priority", label: "Priority", type: "select", options: ["low", "high"], show_on_card: true },
+      { key: "severity", label: "Severity", type: "text" },
+    ],
   },
   statuses: [
     { key: "open", label: "Open" },
@@ -139,6 +144,22 @@ describe("KanbanBoard", () => {
     expect(screen.getByText("T-4F2A")).toBeTruthy();
     expect(screen.getByText("Priority: high")).toBeTruthy();
     expect(screen.getByText("stale")).toBeTruthy();
+  });
+
+  // Chips are opt-in per field (show_on_card); a ticket value whose field is
+  // not marked must stay off the card — it lives on the ticket's own page.
+  test("hides field values not marked show_on_card", () => {
+    renderBoard({
+      board: {
+        ...board,
+        tickets: [
+          { ...board.tickets[0], fields: { priority: "high", severity: "sev1" } },
+          ...board.tickets.slice(1),
+        ],
+      },
+    });
+    expect(screen.getByText("Priority: high")).toBeTruthy();
+    expect(screen.queryByText("Severity: sev1")).toBeNull();
   });
 
   // A card standing for a ticket has to show its sessions, because a row is

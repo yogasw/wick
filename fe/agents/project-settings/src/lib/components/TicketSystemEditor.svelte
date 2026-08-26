@@ -19,10 +19,12 @@
      whether anything is actually wired up. */
   const integrationsSummary = $derived.by(() => {
     const hooks = (cfg.integrations?.webhooks ?? []).filter((w) => w.enabled).length;
+    const buttons = (cfg.integrations?.buttons ?? []).length;
     const api = cfg.integrations?.api_enabled === true;
-    if (!api && hooks === 0) return "No webhooks · REST API off";
+    if (!api && hooks === 0 && buttons === 0) return "No webhooks · REST API off";
     const parts: string[] = [];
     parts.push(hooks === 0 ? "No webhooks" : `${hooks} webhook${hooks === 1 ? "" : "s"}`);
+    if (buttons > 0) parts.push(`${buttons} button${buttons === 1 ? "" : "s"}`);
     parts.push(api ? "REST API on" : "REST API off");
     return parts.join(" · ");
   });
@@ -385,8 +387,8 @@
             <div
               class={"grid min-w-0 flex-1 gap-2 " +
                 (f.type === "select"
-                  ? "sm:grid-cols-[1fr_1fr_96px_1.4fr_auto]"
-                  : "sm:grid-cols-[1fr_1fr_96px_auto]")}
+                  ? "sm:grid-cols-[1fr_1fr_96px_1.4fr_auto_auto]"
+                  : "sm:grid-cols-[1fr_1fr_96px_auto_auto]")}
             >
               <input
                 value={f.key}
@@ -429,6 +431,19 @@
                   class="h-3.5 w-3.5 rounded border-white-400 text-green-600 focus:ring-green-500 dark:border-navy-600"
                 />
                 Req.
+              </label>
+              <label
+                title="Show this field's value on the board card. Off keeps the card to id, title, and assignee; the full set is always on the ticket's page."
+                class="flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-[11px] text-black-800 dark:text-black-600"
+              >
+                <input
+                  type="checkbox"
+                  checked={f.show_on_card === true}
+                  aria-label="Show field on board card"
+                  onchange={(e) => patchField(i, { show_on_card: (e.target as HTMLInputElement).checked })}
+                  class="h-3.5 w-3.5 rounded border-white-400 text-green-600 focus:ring-green-500 dark:border-navy-600"
+                />
+                Card
               </label>
             </div>
             <button

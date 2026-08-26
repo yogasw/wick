@@ -144,6 +144,23 @@ func (d *Dispatcher) SendTest(w project.TicketWebhook, projectID string) Deliver
 	return d.deliver(w, ev)
 }
 
+// Deliver sends one event to one endpoint synchronously and reports the
+// outcome. The custom ticket buttons come through here: the user clicked
+// and is waiting for the answer, so unlike Emit there is no goroutine
+// between them and the result. The URL passes the same SSRF guard every
+// configured webhook does.
+func (d *Dispatcher) Deliver(w project.TicketWebhook, ev Event) Delivery {
+	if ev.ID == "" {
+		if id, err := newID(); err == nil {
+			ev.ID = "evt_" + strings.TrimPrefix(id, "T-")
+		}
+	}
+	if ev.DeliveredAt.IsZero() {
+		ev.DeliveredAt = time.Now().UTC()
+	}
+	return d.deliver(w, ev)
+}
+
 // deliver POSTs the event, retrying on failure, and records the outcome.
 func (d *Dispatcher) deliver(w project.TicketWebhook, ev Event) Delivery {
 	rec := Delivery{WebhookID: w.ID, Event: ev.Event, At: time.Now().UTC()}

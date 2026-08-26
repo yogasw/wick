@@ -310,11 +310,14 @@ func apiProjectTickets(c *tool.Ctx) {
 			rows = append(rows, sessionRow(sid, live, lc, ids))
 		}
 		cards = append(cards, TicketCard{
-			ID:          t.ID,
-			Title:       t.Title,
-			Status:      t.Status,
-			Assignee:    t.Assignee,
-			Fields:      t.Fields,
+			ID:       t.ID,
+			Title:    t.Title,
+			Status:   t.Status,
+			Assignee: t.Assignee,
+			// A card carries only the schema fields marked show_on_card.
+			// Everything else — unmarked fields, values written outside the
+			// schema via the REST surface — lives on the ticket's own page.
+			Fields: cfg.CardFields(t.Fields),
 			SessionRows: rows,
 			Sessions:    len(t.Sessions),
 			Notes:       count.Visible,
@@ -364,7 +367,9 @@ func apiProjectTickets(c *tool.Ctx) {
 	}
 
 	resp := ticketBoardResponse{
-		Config:         cfg,
+		// Redacted: the config carries webhook secrets, and this response
+		// reaches every board viewer.
+		Config:         redactTicketConfig(cfg),
 		Tickets:        cards,
 		Untracked:      untracked,
 		UntrackedTotal: untrackedTotal,
@@ -396,6 +401,8 @@ func apiTicketCreate(c *tool.Ctx) {
 		// without keeping a mapping. Omitted means wick generates one.
 		ID     string `json:"id"`
 		Status string `json:"status"`
+		// Body is the markdown description, optional.
+		Body string `json:"body"`
 		// Assignee is a pointer so "not sent" stays distinct from "sent
 		// empty": omitting it means "whoever is creating this", while an
 		// explicit "" is a deliberate no-assignee.
@@ -439,6 +446,7 @@ func apiTicketCreate(c *tool.Ctx) {
 		ProjectID: projectID,
 		ID:        req.ID,
 		Title:     req.Title,
+		Body:      req.Body,
 		Status:    req.Status,
 		Assignee:  assignee,
 		Fields:    req.Fields,
@@ -473,7 +481,8 @@ func apiTicketDetail(c *tool.Ctx) {
 	}
 	resp := ticketDetailResponse{Ticket: tk}
 	if p, pok := globalMgr.Registry().Project(projectID); pok {
-		resp.Config = p.Meta.Ticket
+		// Redacted: the config carries webhook secrets.
+		resp.Config = redactTicketConfig(p.Meta.Ticket)
 	}
 	resp.Statuses = resp.Config.StatusList()
 
@@ -533,7 +542,10 @@ func apiTicketUpdate(c *tool.Ctx) {
 		return
 	}
 	var req struct {
-		Title    *string           `json:"title"`
+		Title *string `json:"title"`
+		// Body is a pointer so "not sent" stays distinct from "clear it":
+		// an explicit "" deliberately empties the description.
+		Body     *string           `json:"body"`
 		Status   *string           `json:"status"`
 		Assignee *string           `json:"assignee"`
 		Fields   map[string]string `json:"fields"`
@@ -566,6 +578,9 @@ func apiTicketUpdate(c *tool.Ctx) {
 		}
 		tk.Title = title
 	}
+	if req.Body != nil {
+		tk.Body = strings.TrimSpace(*req.Body)
+	}
 	if req.Assignee != nil {
 		tk.Assignee = strings.TrimSpace(*req.Assignee)
 	}
@@ -586,6 +601,58 @@ func apiTicketUpdate(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, tk)
+}
+
+// apiTicketAction handles POST /api/tickets/{ticketID}/actions/{buttonID} —
+// a custom ticket button was clicked. The ticket is POSTed to that button's
+// URL as a ticket.action event, synchronously: the user is waiting to see
+// whether their "Sync" landed, so the delivery outcome IS the response.
+func apiTicketAction(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	ticketID := c.PathValue("ticketID")
+	projectID, ok := resolveTicketProject(c, ticketID)
+	if !ok {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
+		return
+	}
+	cfg := project.TicketConfig{}
+	if p, pok := globalMgr.Registry().Project(projectID); pok {
+		cfg = p.Meta.Ticket
+	}
+	btn, found := cfg.ButtonByID(c.PathValue("buttonID"))
+	if !found {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "button not found"})
+		return
+	}
+	if ticketDispatcher == nil {
+		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "webhook dispatcher not wired"})
+		return
+	}
+	tk, err := ticket.Load(globalLayout, projectID, ticketID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "ticket not found"})
+		return
+	}
+	rec := ticketDispatcher.Deliver(
+		// The button rides the webhook delivery machinery (signing aside —
+		// buttons carry no secret), so it inherits the SSRF guard and the
+		// retry schedule without a second HTTP path.
+		project.TicketWebhook{ID: "btn:" + btn.ID, URL: btn.URL, Enabled: true},
+		ticket.Event{
+			Event:  ticket.EventAction,
+			Ticket: tk,
+			Action: btn.ID,
+			Actor:  callerActor(c),
+		},
+	)
+	c.JSON(http.StatusOK, map[string]any{
+		"ok":       rec.OK,
+		"status":   rec.Status,
+		"error":    rec.Err,
+		"attempts": rec.Attempts,
+	})
 }
 
 // apiTicketDelete handles DELETE /api/tickets/{ticketID}.
@@ -991,6 +1058,12 @@ func apiProjectTicketConfig(c *tool.Ctx) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	buttons, err := normaliseTicketButtons(req.Integrations.Buttons)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	req.Integrations.Buttons = buttons
 	meta := p.Meta
 	meta.Ticket = req
 	if _, err := globalMgr.UpdateProject(c.Context(), id, meta); err != nil {
