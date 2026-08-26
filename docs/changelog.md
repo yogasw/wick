@@ -10,6 +10,30 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.5.0](https://github.com/yogasw/wick/compare/v1.4.3...v1.5.0) — Tickets
+
+_Released on 2026-08-26_
+
+ 
+ ### Added
+ *   Tickets now feature a markdown body (description), supporting entity creation/PATCH, MCP operations (truncated in list, full in get), `ticket.updated` diff tracking, and a 600-character excerpt injected into the session system prompt.
+ *   Introduced a `show_on_card` flag for schema fields, allowing specific fields to be displayed on board cards.
+ *   Custom action buttons under Integrations, configurable with a label and URL, rendered on every ticket page. A click POSTs the ticket as a `ticket.action` event via the webhook dispatcher, including SSRF guard, retry, and synchronous outcome reporting.
+ *   Documentation for ticket body, card fields, and custom buttons.
+ 
+ ### Improved
+ *   Board UI revamped with fixed-width, horizontally scrollable columns that center when they fit, status-dot headers, and a full-width card view.
+ *   Ticket page UI revamped with a two-pane layout (work column + properties rail), a markdown description editor, sessions capped at 5 with a "show more" option, notes displayed as a comment thread, a trash-icon delete option, a breadcrumb top bar, a floating bottom-centre composer, and `?ticket=` URL synchronization for back/forward browser navigation.
+ 
+ ### Fixed
+ *   Webhook secrets are now redacted from board and detail configuration responses.
+ 
+ ### Dev
+ *   The development environment now serves `/public` from disk under `WICK_DEV_REPO_ROOT`, allowing Tailwind rebuilds to apply without recompiling the server.
+
+---
+
+
 ## [v1.5.0](https://github.com/yogasw/wick/compare/v1.4.3...v1.5.0) — Ticket Descriptions, Card Fields, Custom Buttons
 
 _Released on 2026-08-26_
