@@ -995,8 +995,32 @@ func projectAccessMW(next tool.HandlerFunc) tool.HandlerFunc {
 			next(c)
 			return
 		}
-		if _, ok := globalMgr.Registry().Project(id); !ok || !callerProjectAccess(c).allowProject(id) {
-			c.JSON(http.StatusNotFound, map[string]string{"error": "project not found"})
+		// Honest errors: "does not exist" and "you may not see it" are
+		// different problems with different fixes, so they answer with
+		// different statuses AND get logged — a caller debugging an
+		// integration must not have to guess which one they hit.
+		uid := ""
+		if u := login.GetUser(c.Context()); u != nil {
+			uid = u.ID
+		}
+		deny := func(status int, msg, reason string) {
+			ev := log.Ctx(c.Context()).Debug()
+			if bearerToken(c.R) != "" {
+				// A bearer caller is a machine integration someone is
+				// actively debugging — warn, not debug.
+				ev = log.Ctx(c.Context()).Warn()
+			}
+			ev.Str("project", id).Str("user", uid).Str("reason", reason).
+				Msg("project access denied")
+			c.JSON(status, map[string]string{"error": msg})
+		}
+		if _, known := globalMgr.Registry().Project(id); !known {
+			deny(http.StatusNotFound, "project not found", "project not in registry")
+			return
+		}
+		if !callerProjectAccess(c).allowProject(id) {
+			deny(http.StatusForbidden, "you don't have access to this project",
+				"caller lacks access (not owner, no tag grant, adminSeeAll off)")
 			return
 		}
 		next(c)

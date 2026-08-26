@@ -2421,22 +2421,35 @@ func NewServer() *Server {
 	for _, t := range allItems {
 		toolMetas = append(toolMetas, login.ToolMeta{Path: t.Path, DefaultVisibility: t.DefaultVisibility})
 	}
-	// TicketAPIAuthMW sits in FRONT of RequireToolAccess: that middleware
-	// turns away a request with no user in context, so a bearer-only caller
-	// on the ticket endpoints has to be resolved into a user before it gets
-	// there. It ignores every other path, so the rest of /tools/ stays
-	// cookie-only.
 	// Webhook groups declared via Router.WebhookGroup are exempt: a webhook
 	// sender is a program with no session cookie, so RequireToolAccess would
 	// 302 it to /auth/login, which it cannot follow. webhookBypass routes
 	// those prefixes straight to toolsMux and leaves every other path on the
 	// gated chain. Authentication for an exempt route is the module's job —
 	// see tool.WebhookGroup's contract.
+	gatedTools := authMidd.RequireToolAccess(toolMetas)(toolsMux)
 	r.Handle("/tools/", webhookBypass(
 		tr.WebhookPrefixes(),
 		toolsMux,
-		agentstool.TicketAPIAuthMW(authMidd.RequireToolAccess(toolMetas)(toolsMux)),
+		gatedTools,
 	))
+
+	// Machine-facing REST APIs live at the wick root under /api — short,
+	// stable, and one base URL for every integration. This catch-all serves
+	// the ticket surface today: the shim rewrites onto the tool-internal
+	// routes, so tool access and per-project checks apply unchanged.
+	// TicketAPIAuthMW (bearer → user) wraps ONLY this mount: a Personal
+	// Access Token works here and nowhere else — /tools/ stays cookie-only.
+	// It must sit in front of RequireToolAccess, which turns away a request
+	// with no user in context.
+	//
+	// Extending /api needs NO new plumbing here:
+	//   - a new agents endpoint joins by adding its path to the token
+	//     allowlist (agentstool isTicketAPIPath) — the shim forwards it;
+	//   - a new module mounts its own r.Handle("/api/<thing>/", h) — the
+	//     longer ServeMux pattern wins over this catch-all automatically.
+	r.Handle(agentstool.TicketRESTBase+"/",
+		agentstool.TicketRESTShim(agentstool.TicketAPIAuthMW(gatedTools)))
 
 	// AI-router dashboards + OpenAI-compatible API proxies, mounted at the wick
 	// root (not under the tool) so each embedded Next.js app's root-absolute
