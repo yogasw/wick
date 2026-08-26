@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/yogasw/wick/internal/agents/project"
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/entity"
@@ -23,6 +25,11 @@ type TokenAuthenticator interface {
 // same *entity.User the cookie path puts in the context.
 type UserLookup interface {
 	GetUserByID(ctx context.Context, id string) (*entity.User, error)
+	// GetUserFilterTagIDs returns the user's filter tag IDs — the same set
+	// the login cookie carries. Without them a token request cannot pass
+	// tag-share checks, so a project the user reaches in the browser via a
+	// tag grant would answer 404 to their own token.
+	GetUserFilterTagIDs(ctx context.Context, userID string) []string
 }
 
 var (
@@ -41,6 +48,36 @@ func SetTicketAPIAuth(tokens TokenAuthenticator, users UserLookup) {
 // against it rather than guessed, so a rename of the tool cannot silently
 // open (or close) the token surface.
 const ticketAPIPrefix = "/tools/agents/api"
+
+// TicketRESTBase is the public, machine-facing mount of the ticket REST
+// API. The tool-internal routes stay under /tools/agents/api where the
+// browser SPA fetches them; this short root path is what integrations are
+// told to use, so the documented base URL does not leak the internal tool
+// layout.
+const TicketRESTBase = "/api"
+
+// TicketRESTShim serves the ticket REST API at TicketRESTBase by rewriting
+// the path onto the tool-internal prefix and handing the request to the
+// same gated chain mounted at /tools/ — bearer auth, tool access, and
+// per-project checks all apply unchanged.
+//
+// A path outside the token allowlist answers JSON 404 instead of falling
+// through to cookie auth: everything under /api is a machine caller, and a
+// machine must never be answered with a login redirect.
+func TicketRESTShim(gated http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rewritten := ticketAPIPrefix + strings.TrimPrefix(r.URL.Path, TicketRESTBase)
+		if !isTicketAPIPath(rewritten) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"unknown endpoint"}`))
+			return
+		}
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = rewritten
+		gated.ServeHTTP(w, r2)
+	})
+}
 
 // isTicketAPIPath reports whether a URL is one of the ticket endpoints a
 // Personal Access Token may reach.
@@ -93,8 +130,9 @@ func bearerToken(r *http.Request) string {
 // Why a dedicated middleware rather than teaching login.Session about
 // bearers: the cookie is the browser's credential for the WHOLE app, and
 // making every page token-authable would widen the attack surface for a
-// feature only the ticket API needs. This runs in front of the ticket
-// handlers only, and only for a project that opted in.
+// feature only the ticket API needs. It is mounted on the /api shim only
+// (see TicketRESTShim) — a bearer works nowhere else; /tools/ stays
+// cookie-only.
 //
 // A cookie session already in context wins — a browser request carrying a
 // stale Authorization header should not be downgraded to whatever that
@@ -134,10 +172,12 @@ func TicketAPIAuthMW(next http.Handler) http.Handler {
 			writeTicketAuthError(w, "token owner is not approved")
 			return
 		}
-		// Nil tag IDs, not an empty slice: the cookie path stores the tag
-		// set chosen at login, and a token has made no such choice, so it
-		// gets the user's full tag set rather than a filtered view.
-		next.ServeHTTP(w, r.WithContext(login.WithUser(r.Context(), user, nil)))
+		// Resolve the user's filter tags fresh, mirroring what the login
+		// cookie stores. Stamping nil here is NOT "full tag set" — every
+		// tag check intersects the context set, so nil means "no tags" and
+		// silently 404s any project the user only reaches via a tag grant.
+		tags := ticketAPIUsers.GetUserFilterTagIDs(r.Context(), uid)
+		next.ServeHTTP(w, r.WithContext(login.WithUser(r.Context(), user, tags)))
 	})
 }
 
@@ -174,15 +214,23 @@ func jsonQuote(s string) string {
 // has not opted into the REST surface.
 //
 // A cookie request is the browser UI and is always allowed: the toggle
-// governs machine access, not whether the board works. The refusal is a 404
-// rather than a 403 so a token holder cannot enumerate which projects exist
-// but have the API switched off.
+// governs machine access, not whether the board works. Callers answer a
+// refusal with an explicit 403 — projectAccessMW has already established
+// the caller may see this project, so naming the real reason ("the API is
+// off") leaks nothing and saves the integrator a debugging session.
 func requireTicketAPI(c *tool.Ctx, projectID string) bool {
 	if bearerToken(c.R) == "" {
 		return true // cookie session — the UI, always allowed
 	}
 	cfg, ok := ticketConfigFor(projectID)
-	if !ok || !cfg.Integrations.APIEnabled {
+	if !ok {
+		log.Ctx(c.Context()).Warn().Str("project", projectID).
+			Msg("ticket api: 404 — project meta unreadable")
+		return false
+	}
+	if !cfg.Integrations.APIEnabled {
+		log.Ctx(c.Context()).Warn().Str("project", projectID).
+			Msg("ticket api: 404 — REST API toggle is off for this project")
 		return false
 	}
 	return true
@@ -212,8 +260,16 @@ func displayName(u *entity.User) string {
 	return u.Email
 }
 
-// ticketConfigFor reads a project's ticket config.
+// ticketConfigFor reads a project's ticket config, disk first: meta.json is
+// the source of truth (the project id is its folder name), so a toggle an
+// admin just flipped is honoured even if the registry's cached copy is
+// stale. The registry stays as a fallback for a momentarily unreadable
+// file. Only ids already known to the registry reach this (projectAccessMW
+// / ticket lookup run first), so the id cannot be attacker-shaped.
 func ticketConfigFor(projectID string) (project.TicketConfig, bool) {
+	if p, err := project.Load(globalLayout, projectID); err == nil {
+		return p.Meta.Ticket, true
+	}
 	if globalMgr == nil {
 		return project.TicketConfig{}, false
 	}

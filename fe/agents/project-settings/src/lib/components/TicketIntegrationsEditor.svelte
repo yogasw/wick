@@ -133,8 +133,9 @@
   }
 
   /* Shown next to the API toggle so the curl in the docs can be copied with
-     the right host already filled in. */
-  const apiBase = $derived(`${window.location.origin}${base}/api`);
+     the right host already filled in. The machine API is mounted at the wick
+     root (/api), not under the tool — see TicketRESTShim. */
+  const apiBase = $derived(`${window.location.origin}/api`);
 
   async function copy(text: string, label: string) {
     try {
