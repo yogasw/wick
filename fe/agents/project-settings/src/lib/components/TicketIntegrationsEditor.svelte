@@ -10,6 +10,7 @@
   import { getTicketEvents, getWebhookDeliveries, testWebhook } from "$lib/api.js";
   import {
     SECRET_REDACTED,
+    type TicketButton,
     type TicketDelivery,
     type TicketIntegrations,
     type TicketWebhook,
@@ -26,6 +27,26 @@
 
   const apiEnabled = $derived(cfg.api_enabled === true);
   const webhooks = $derived(cfg.webhooks ?? []);
+
+  /* ── custom buttons ──
+     One label, one URL. The button appears on every ticket's page; a click
+     POSTs that ticket to the URL as a ticket.action event — anything
+     smarter belongs in the receiver. */
+  const buttons = $derived(cfg.buttons ?? []);
+
+  function patchButton(i: number, p: Partial<TicketButton>) {
+    patch({ buttons: buttons.map((b, idx) => (idx === i ? { ...b, ...p } : b)) });
+  }
+
+  function addButton() {
+    /* No id: the server mints one on save, so the event a click later fires
+       can name the button across edits. */
+    patch({ buttons: [...buttons, { label: "", url: "" }] });
+  }
+
+  function removeButton(i: number) {
+    patch({ buttons: buttons.filter((_, idx) => idx !== i) });
+  }
 
   /* The catalogue comes from the server so the picker can never offer an
      event that does not fire. */
@@ -232,6 +253,66 @@
         <span class="shrink-0 text-xs text-link-400">Docs ↗</span>
       </a>
     {/if}
+  </div>
+
+  <!-- ── Custom buttons ────────────────────────────────────────── -->
+  <div class="space-y-2">
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0">
+        <p class="text-xs font-medium text-black-800 dark:text-black-600">Custom buttons</p>
+        <p class="mt-1 text-[11px] leading-relaxed text-black-700 dark:text-black-600">
+          Each button appears on every ticket's page. Clicking it sends that ticket as JSON to
+          the URL (a <span class="font-mono">ticket.action</span> event) — use it to trigger a
+          sync, a deploy, or anything else that lives behind an endpoint.
+        </p>
+      </div>
+      <button
+        type="button"
+        onclick={addButton}
+        class="shrink-0 rounded-lg border border-white-300 px-2.5 py-1.5 text-xs font-medium text-black-800 transition-colors hover:bg-white-200 dark:border-navy-600 dark:text-black-600 dark:hover:bg-navy-800"
+      >
+        Add button
+      </button>
+    </div>
+
+    {#if buttons.length === 0}
+      <p class="rounded-lg border border-dashed border-white-400 px-4 py-6 text-center text-xs text-black-700 dark:border-navy-600 dark:text-black-600">
+        No buttons yet. Ticket pages show none.
+      </p>
+    {/if}
+
+    {#each buttons as b, i (i)}
+      <div class="rounded-lg border border-white-300 bg-white-200 p-2.5 dark:border-navy-600 dark:bg-navy-800">
+        <div class="flex items-center gap-2">
+          <div class="grid min-w-0 flex-1 gap-2 sm:grid-cols-[1fr_2fr]">
+            <input
+              value={b.label}
+              placeholder="Sync ticket"
+              aria-label="Button label"
+              oninput={(e) => patchButton(i, { label: (e.target as HTMLInputElement).value })}
+              class="w-full rounded-lg border border-white-400 bg-white-100 px-2 py-1.5 text-xs text-black-900 outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100"
+            />
+            <input
+              value={b.url}
+              placeholder="https://abc.com/hooks/sync"
+              aria-label="Button webhook URL"
+              oninput={(e) => patchButton(i, { url: (e.target as HTMLInputElement).value })}
+              class="w-full rounded-lg border border-white-400 bg-white-100 px-2 py-1.5 font-mono text-xs text-black-900 outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-700 dark:text-white-100"
+            />
+          </div>
+          <button
+            type="button"
+            aria-label="Remove button"
+            onclick={() => removeButton(i)}
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-black-700 transition-colors hover:bg-neg-100 hover:text-neg-400 dark:text-black-600"
+          >
+            <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+    {/each}
   </div>
 
   <!-- ── Webhooks ──────────────────────────────────────────────── -->

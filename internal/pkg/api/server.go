@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	_ "net/http/pprof" // opt-in profiling endpoints, served on loopback only (see WICK_PPROF in Run)
@@ -2322,7 +2323,20 @@ func NewServer() *Server {
 	}
 
 	// Static files (embedded in binary). Directory listings are blocked.
-	r.Handle("GET /public/", ui.StaticHandler("", web.PublicFiles))
+	//
+	// In dev (WICK_DEV_REPO_ROOT) /public is served from disk instead: the
+	// embed freezes app.css into the binary, so a Tailwind rebuild would
+	// otherwise be invisible until the server is recompiled — the same trade
+	// spa.Loader already makes for the SPA bundles.
+	publicFS := fs.FS(web.PublicFiles)
+	if root := os.Getenv("WICK_DEV_REPO_ROOT"); root != "" {
+		webDir := filepath.Join(root, "web")
+		if info, err := os.Stat(filepath.Join(webDir, "public")); err == nil && info.IsDir() {
+			fmt.Fprintf(os.Stderr, "[static] live disk — /public → %s\n", webDir)
+			publicFS = os.DirFS(webDir)
+		}
+	}
+	r.Handle("GET /public/", ui.StaticHandler("", publicFS))
 
 	// Home module static assets (JS etc.) — served at /modules/home/js/*
 	r.Handle("GET /modules/home/", ui.StaticHandler("/modules/home/", home.StaticFS))

@@ -480,6 +480,17 @@ export type TicketField = {
   type: "text" | "select";
   options?: string[];
   required?: boolean;
+  /** Show this field's value on the board card. Off by default — the full
+      set is always on the ticket's own page. */
+  show_on_card?: boolean;
+};
+
+/** One custom action button on every ticket's page. Clicking it POSTs the
+    ticket to `url` as a ticket.action event (e.g. "Sync to Notion"). */
+export type TicketButton = {
+  id?: string; // minted server-side on first save
+  label: string;
+  url: string;
 };
 
 /** One rule deciding when a new session gets a ticket on its own. Rules
@@ -507,6 +518,9 @@ export type TicketConfig = {
   auto_create?: AutoCreateRule[];
   /** Board columns, in order. Empty means the built-in set. */
   statuses?: TicketStatus[];
+  /** The integrations half, of which this SPA only reads the buttons —
+      webhook rows and the API toggle are edited in project settings. */
+  integrations?: { buttons?: TicketButton[] };
 };
 
 /** One card on the project ticket board. A card is a TICKET, not a
@@ -558,6 +572,8 @@ export type Ticket = {
   id: string;
   project_id: string;
   title: string;
+  /** Markdown description. */
+  body?: string;
   status: string;
   assignee?: string;
   fields?: Record<string, string>;

@@ -39,15 +39,18 @@
     ticket.assignee ? (users?.[ticket.assignee] ?? ticket.assignee) : "",
   );
 
+  /* A card shows only schema fields marked show_on_card, in schema order so
+     cards in one column line up. The server already filters to the same set;
+     doing it here too means an unmarked field can never leak onto a card.
+     Everything else — unmarked fields, values written outside the schema via
+     the REST surface — lives on the ticket's own page. */
   const fieldEntries = $derived.by(() => {
     const f = ticket.fields ?? {};
     const out: { label: string; value: string }[] = [];
-    // Schema order first so cards in one column line up.
     for (const def of schema ?? []) {
-      if (f[def.key]) out.push({ label: def.label || def.key, value: f[def.key] });
-    }
-    for (const [k, v] of Object.entries(f)) {
-      if (!(schema ?? []).some((d) => d.key === k) && v) out.push({ label: k, value: v });
+      if (def.show_on_card && f[def.key]) {
+        out.push({ label: def.label || def.key, value: f[def.key] });
+      }
     }
     return out;
   });
@@ -88,24 +91,32 @@
       : "border-white-300 hover:border-green-500 dark:border-navy-600 dark:hover:border-green-500",
   ].join(" ")}
 >
-  <!-- The ticket code leads: it is what gets quoted in chat and standups. -->
-  <div class="flex items-center gap-2">
-    <span class="rounded bg-white-200 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-black-800 dark:bg-navy-800 dark:text-black-600">
+  <!-- The ticket code leads: it is what gets quoted in chat and standups.
+       An adopted external id can be 32+ characters, so it truncates rather
+       than pushing past the card's edge — the full code is on the page. -->
+  <div class="flex min-w-0 items-center gap-2">
+    <span
+      title={ticket.id}
+      class="min-w-0 truncate rounded bg-white-200 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-black-800 dark:bg-navy-800 dark:text-black-600"
+    >
       {ticket.id}
     </span>
     {#if ticket.stale}
-      <span class="rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-medium text-neg-400">stale</span>
+      <span class="shrink-0 rounded bg-neg-100 px-1.5 py-0.5 text-[10px] font-medium text-neg-400">stale</span>
     {/if}
   </div>
 
-  <p class="mt-1.5 line-clamp-2 text-sm font-medium text-black-900 dark:text-white-100">
+  <p class="mt-1.5 line-clamp-2 break-words text-sm font-medium text-black-900 dark:text-white-100">
     {ticket.title || "Untitled ticket"}
   </p>
 
   {#if fieldEntries.length > 0}
     <div class="mt-2 flex flex-wrap gap-1">
       {#each fieldEntries as f (f.label)}
-        <span class="rounded bg-white-200 px-1.5 py-0.5 text-[10px] text-black-800 dark:bg-navy-800 dark:text-black-600">
+        <span
+          title={f.label + ": " + f.value}
+          class="max-w-full truncate rounded bg-white-200 px-1.5 py-0.5 text-[10px] text-black-800 dark:bg-navy-800 dark:text-black-600"
+        >
           {f.label}: {f.value}
         </span>
       {/each}

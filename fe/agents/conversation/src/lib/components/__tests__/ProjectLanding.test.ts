@@ -35,9 +35,11 @@ describe("ProjectLanding — presentational rendering", () => {
     onSelectSession: vi.fn(),
   };
 
-  test("renders project name as heading", () => {
+  test("renders project name in the top bar", () => {
     render(ProjectLanding, { props: baseProps });
-    expect(screen.getByRole("heading", { name: "Acme API" })).toBeDefined();
+    // The name shows in the top bar and again in the composer's context
+    // line, so any-of is the right assertion.
+    expect(screen.getAllByText("Acme API").length).toBeGreaterThan(0);
   });
 
   test("renders chat count derived from sessions length", () => {
@@ -58,7 +60,8 @@ describe("ProjectLanding — presentational rendering", () => {
 
   test("renders a Pin as default button", () => {
     render(ProjectLanding, { props: baseProps });
-    expect(screen.getByRole("button", { name: /pin as default/i })).toBeDefined();
+    // The button label is compact ("Pin"); the full wording is its tooltip.
+    expect(screen.getByTitle(/pin as default/i)).toBeDefined();
   });
 
   test("renders a Settings link pointing to the project settings page", () => {
@@ -132,10 +135,12 @@ describe("ProjectLanding — composer default provider (#983)", () => {
 });
 
 describe("ProjectLanding — folder path in header (#41)", () => {
-  test("project header shows the folder path", () => {
+  test("project name carries the folder path as its tooltip", () => {
     const project = { id: "p1", name: "Proj", path: "/home/work/proj", managed: true };
     render(ProjectLanding, { props: { base: "/agents", project, providers: [], sessions: [], onPin: vi.fn(), onSelectSession: vi.fn() } });
-    expect(screen.getByText("/home/work/proj")).toBeDefined();
+    // The slim top bar keeps the path on the name's tooltip rather than a
+    // line of its own.
+    expect(screen.getByTitle("/home/work/proj")).toBeDefined();
   });
 });
 
