@@ -120,7 +120,10 @@ type Ticket struct {
 	ID        string `json:"id"`
 	ProjectID string `json:"project_id"`
 	Title     string `json:"title"`
-	Status    string `json:"status"`
+	// Body is the ticket's description, markdown. The title says what the
+	// work is; this is where the detail lives (repro steps, links, context).
+	Body   string `json:"body,omitempty"`
+	Status string `json:"status"`
 	Assignee  string `json:"assignee,omitempty"` // wick user ID
 	// Fields holds values keyed by project.TicketField.Key.
 	Fields map[string]string `json:"fields,omitempty"`
@@ -145,6 +148,7 @@ type CreateOptions struct {
 	// is what every internal caller wants. See NormalizeID for the shape.
 	ID       string
 	Title    string
+	Body     string // markdown description, optional
 	Status   string // defaults to open
 	Assignee string
 	Fields   map[string]string
@@ -250,6 +254,7 @@ func Create(layout config.Layout, opt CreateOptions) (Ticket, error) {
 			ID:        id,
 			ProjectID: opt.ProjectID,
 			Title:     title,
+			Body:      strings.TrimSpace(opt.Body),
 			Status:    status,
 			Assignee:  strings.TrimSpace(opt.Assignee),
 			Fields:    opt.Fields,

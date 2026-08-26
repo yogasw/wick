@@ -505,3 +505,47 @@ func TestValidEvent(t *testing.T) {
 		t.Error("ValidEvent accepted an unknown event")
 	}
 }
+
+// Deliver is the custom-button path: synchronous, one endpoint, and the
+// event stamps its own id/time when the caller left them empty so the
+// receiver can still dedupe on X-Wick-Delivery.
+func TestDeliverStampsEnvelopeAndPostsAction(t *testing.T) {
+	type got struct {
+		event, delivery string
+		body            []byte
+	}
+	recv := make(chan got, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(b)
+		recv <- got{event: r.Header.Get(HeaderEvent), delivery: r.Header.Get(HeaderDelivery), body: b}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	d := NewDispatcher(nil)
+	d.AllowPrivate = true
+
+	rec := d.Deliver(
+		project.TicketWebhook{ID: "btn:btn_1", URL: srv.URL, Enabled: true},
+		Event{Event: EventAction, Action: "btn_1", Ticket: Ticket{ID: "T-4F2A", ProjectID: "p1", Title: "x"}},
+	)
+	if !rec.OK || rec.Status != http.StatusOK {
+		t.Fatalf("delivery = %+v, want ok 200", rec)
+	}
+
+	g := <-recv
+	if g.event != EventAction {
+		t.Errorf("%s = %q, want %q", HeaderEvent, g.event, EventAction)
+	}
+	if g.delivery == "" {
+		t.Error("delivery id was not stamped")
+	}
+	var ev Event
+	if err := json.Unmarshal(g.body, &ev); err != nil {
+		t.Fatalf("body is not an event envelope: %v", err)
+	}
+	if ev.Action != "btn_1" || ev.Ticket.ID != "T-4F2A" || ev.DeliveredAt.IsZero() {
+		t.Fatalf("envelope incomplete: %+v", ev)
+	}
+}

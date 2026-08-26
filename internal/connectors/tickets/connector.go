@@ -160,6 +160,7 @@ type getInput struct {
 
 type createInput struct {
 	Title     string `wick:"required;desc=Short description of the work. Example: Payment webhook returns 401"`
+	Body      string `wick:"textarea;desc=Optional markdown description — repro steps, links, context. The title says what; this says why and how."`
 	ProjectID string `wick:"desc=Project to create the ticket in. Defaults to the calling session's project."`
 	ID        string `wick:"desc=Optional external id to adopt instead of a generated one, so a ticket mirroring a record elsewhere carries that record's id: [A-Za-z0-9._-] up to 64 chars, kept verbatim. A uuid is folded to dashless lowercase, so both shapes of a Notion page id land on one ticket and a second create from it is refused."`
 	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=Initial status. Defaults to open."`
@@ -174,6 +175,7 @@ type updateInput struct {
 	TicketID  string `wick:"desc=Ticket id to update. Defaults to the ticket the calling session belongs to."`
 	ProjectID string `wick:"desc=Project the ticket belongs to. Defaults to the calling session's project."`
 	Title     string `wick:"desc=New title. Omit to leave unchanged."`
+	Body      string `wick:"textarea;desc=New markdown description. Omit to leave unchanged; pass an empty string to clear it."`
 	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=New status. Omit to leave unchanged."`
 	Assignee  string `wick:"desc=New assignee (wick user id). Pass an empty string to unassign."`
 	Fields    string `wick:"textarea;desc=Field values to merge as JSON. An empty string value clears that field."`
