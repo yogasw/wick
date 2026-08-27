@@ -89,6 +89,12 @@ func Pointer(layout config.Layout, sessionID string) string {
 	b.WriteString("See the wick-notes skill.")
 	if hasTicket {
 		b.WriteString(" Keep the ticket's status current through the tickets connector (wick-tickets skill).")
+		b.WriteString("\n\nThis ticket is what the session is about: unless the user plainly says otherwise, ")
+		b.WriteString("assume every request here concerns it. Read the ticket before anything else — ")
+		b.WriteString("ticket_get for the description and fields, notes_list for its notes — ")
+		b.WriteString("then check your skills for one that covers the ask (logging time, reports, and the like) and follow it. ")
+		b.WriteString("Do not go digging through other sessions or unrelated data; ")
+		b.WriteString("ad-hoc exploration is a last resort when neither the ticket, its notes, nor a skill covers the ask.")
 	}
 	return b.String()
 }
