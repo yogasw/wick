@@ -5,6 +5,7 @@
   import { toastError } from "@wick-fe/common-stores";
   import SessionList from "./SessionList.svelte";
   import ProjectLanding from "./ProjectLanding.svelte";
+  import OwnerTabs from "./OwnerTabs.svelte";
   import { listSessions } from "../api/sessions.js";
   import { getProjectOptions, getProviderOptions, pinProject } from "../api/options.js";
   import { push } from "../router.js";
@@ -19,46 +20,74 @@
   const projectId = new URLSearchParams(window.location.search).get("project") ?? "";
 
   let sessions = $state<SessionListItem[]>([]);
+  /* How many sessions matched the current scope BEFORE the server's page
+     window — the honest number the list prints at its end. */
+  let sessionTotal = $state(0);
+  let hasMore = $state(false);
   let loading = $state(true);
+  let listLoading = $state(false);
   let error = $state("");
   let search = $state("");
 
+  /* Scope of the list: the caller's own sessions by default. "all" is a
+     click away and fetches (and counts) only then — a page over a project
+     with hundreds of chats starts by loading just yours, one page at a
+     time. */
+  let ownerTab = $state<"me" | "all">("me");
+
+  function loadSessions(append = false) {
+    listLoading = true;
+    const offset = append ? sessions.length : 0;
+    Effect.runPromise(
+      listSessions(base, projectId || undefined, ownerTab, offset).pipe(
+        Effect.provide(WickClientLayer),
+      ),
+    )
+      .then((res) => {
+        sessions = append ? [...sessions, ...res.sessions] : res.sessions;
+        sessionTotal = res.total;
+        hasMore = res.hasMore;
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        error = msg;
+        toastError(`Failed to load sessions: ${msg}`);
+      })
+      .finally(() => {
+        listLoading = false;
+        loading = false;
+      });
+  }
+
+  function setOwnerTab(v: "me" | "all") {
+    if (ownerTab === v) return;
+    ownerTab = v;
+    loadSessions();
+  }
+
   let project = $state<ProjectOption | null>(null);
+  /* Distinguishes "still fetching the project" from "fetched, and it does
+     not exist" — without it an unknown project id would spin forever. */
+  let projectLoaded = $state(false);
   let providers = $state<ProviderOption[]>([]);
 
   onMount(() => {
-    const sessionsEffect = listSessions(base, projectId || undefined).pipe(Effect.provide(WickClientLayer));
-
+    loadSessions();
     if (projectId) {
       const projectEffect = getProjectOptions(base).pipe(Effect.provide(WickClientLayer));
       const providerEffect = getProviderOptions(base).pipe(Effect.provide(WickClientLayer));
-
-      Effect.runPromise(
-        Effect.all([sessionsEffect, projectEffect, providerEffect])
-      )
-        .then(([sessRes, projects, provs]) => {
-          sessions = sessRes.sessions;
+      Effect.runPromise(Effect.all([projectEffect, providerEffect]))
+        .then(([projects, provs]) => {
           project = projects.find((p) => p.id === projectId) ?? null;
           providers = provs;
-          loading = false;
         })
         .catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : String(err);
           error = msg;
-          loading = false;
           toastError(`Failed to load project: ${msg}`);
-        });
-    } else {
-      Effect.runPromise(sessionsEffect)
-        .then((res) => {
-          sessions = res.sessions;
-          loading = false;
         })
-        .catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          error = msg;
-          loading = false;
-          toastError(`Failed to load sessions: ${msg}`);
+        .finally(() => {
+          projectLoaded = true;
         });
     }
   });
@@ -81,7 +110,7 @@
   }
 </script>
 
-{#if loading}
+{#if loading || (projectId && !projectLoaded && !error)}
   <div class="flex items-center justify-center py-16 h-full">
     <svg class="h-6 w-6 animate-spin text-green-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
       <path d="M8 2a6 6 0 016 6" stroke-linecap="round"></path>
@@ -100,6 +129,12 @@
     {project}
     {providers}
     {sessions}
+    {sessionTotal}
+    {ownerTab}
+    {listLoading}
+    {hasMore}
+    onLoadMore={() => loadSessions(true)}
+    onOwnerTab={setOwnerTab}
     onPin={handlePin}
     onSelectSession={(id) => push(`/sessions/${id}`)}
   />
@@ -111,9 +146,16 @@
   </div>
 {:else}
   <div class="flex flex-col h-full p-6 max-w-2xl mx-auto w-full">
-    <h1 class="text-xl font-semibold text-black-900 dark:text-white-100 mb-4">Sessions</h1>
+    <div class="mb-4 flex items-center justify-between gap-3">
+      <h1 class="text-xl font-semibold text-black-900 dark:text-white-100">Sessions</h1>
+      <OwnerTabs value={ownerTab} onChange={setOwnerTab} />
+    </div>
     <SessionList
       {sessions}
+      total={sessionTotal}
+      loading={listLoading}
+      {hasMore}
+      onLoadMore={() => loadSessions(true)}
       {search}
       newChatHref={`${base}/`}
       onSearch={(s) => { search = s; }}

@@ -172,7 +172,7 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 			if len(vm.ProjectList) > 0 {
 				<div data-project-list class="px-2 pb-1 space-y-0.5 max-h-40 overflow-y-auto">
 					for _, pid := range vm.ProjectList {
-						@sidebarProjectRow(vm.Base, vm.ProjectIcon(pid), vm.ProjectName(pid), pid, vm.ProjectCounts[pid], vm.ScopedProjectID == pid, vm.PinnedProjectID == pid)
+						@sidebarProjectRow(vm.Base, vm.ProjectIcon(pid), vm.ProjectName(pid), pid, vm.ScopedProjectID == pid, vm.PinnedProjectID == pid)
 					}
 				</div>
 			} else {
@@ -193,6 +193,16 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 						<a href={ templ.SafeURL(vm.Base + "/sessions") } class="text-[11px] text-black-600 dark:text-black-700 hover:text-black-900 dark:hover:text-white-100 transition-colors">All chats</a>
 					</div>
 				}
+				<!-- Yours/All scope toggle — plain links that re-render the
+				     current page with ?sb= set (persisted via cookie), so it
+				     works on every page without script. Same "yours" rule as
+				     the /sessions tabs: owned + ticket-assigned sessions. -->
+				<div class="px-3 pb-2">
+					<div class="inline-flex overflow-hidden rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700">
+						@sidebarOwnerTab(vm.SidebarOwnerMeHref, "Yours", vm.SidebarOwner != "all")
+						@sidebarOwnerTab(vm.SidebarOwnerAllHref, "All", vm.SidebarOwner == "all")
+					</div>
+				</div>
 				<div class="flex-1 overflow-y-auto pb-2">
 					if len(vm.SidebarIDs) == 0 {
 						<p class="px-3 py-4 text-xs text-black-600 dark:text-black-700 text-center">No sessions yet</p>
@@ -313,11 +323,14 @@ templ AgentsLayout(vm AgentsLayoutVM) {
 }
 
 // sidebarProjectRow renders one project entry in the sidebar Projects
-// section: icon + name + a hover pin toggle + session-count pill. The
-// row navigates to the scoped sessions view (mockup ①) via data-row-link
-// (a div, not an anchor, so it can legally hold the pin button). Active =
-// currently scoped; pinned = the user's personal-default project.
-templ sidebarProjectRow(base, icon, name, id string, count int, active, pinned bool) {
+// section: icon + name + a hover pin toggle. No session-count pill: the
+// count meant walking every session on every page render, and the number
+// belongs on the project's own sessions list, not on each row of a nav.
+// The row navigates to the scoped sessions view (mockup ①) via
+// data-row-link (a div, not an anchor, so it can legally hold the pin
+// button). Active = currently scoped; pinned = the user's personal-default
+// project.
+templ sidebarProjectRow(base, icon, name, id string, active, pinned bool) {
 	<div
 		data-project-drop={ id }
 		if active {
@@ -332,7 +345,7 @@ templ sidebarProjectRow(base, icon, name, id string, count int, active, pinned b
 		<!-- Native anchor: navigates without JS, so the sidebar works on
 		     every page (incl. the workflow SPA) even before agents.js loads. -->
 		<a
-			href={ templ.SafeURL(base + "/sessions?project=" + id) }
+			href={ templ.SafeURL(base + "/sessions?project=" + id + "&sb=me") }
 			class={
 				"flex flex-1 min-w-0 items-center gap-2 pl-3 py-1.5",
 				templ.KV("text-black-900 dark:text-white-100 font-semibold", active),
@@ -356,10 +369,21 @@ templ sidebarProjectRow(base, icon, name, id string, count int, active, pinned b
 				templ.KV("opacity-0 group-hover:opacity-100 grayscale hover:grayscale-0", !pinned),
 			}
 		>📌</button>
-		if count > 0 {
-			<span class="shrink-0 rounded-full bg-white-100 dark:bg-navy-700 px-1.5 text-[10px] text-black-700 dark:text-black-600">{ fmt.Sprintf("%d", count) }</span>
-		}
 	</div>
+}
+
+// sidebarOwnerTab is one half of the sidebar's Yours/All toggle — an anchor,
+// not a button, so the scope switch is an ordinary navigation.
+templ sidebarOwnerTab(href, label string, active bool) {
+	<a
+		href={ templ.SafeURL(href) }
+		aria-pressed={ fmt.Sprintf("%t", active) }
+		class={
+			"px-2.5 py-1 text-[10px] font-medium transition-colors",
+			templ.KV("bg-green-500 text-white-100", active),
+			templ.KV("text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600", !active),
+		}
+	>{ label }</a>
 }
 
 templ sidebarSessionRow(base, id string, sess session.Session, label string, lc SessionLifecycleVM, active bool) {
