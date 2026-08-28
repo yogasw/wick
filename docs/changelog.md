@@ -19,6 +19,10 @@ All notable changes to Wick are documented here.
 
 *   **Ticketed sessions default to their ticket**: A session attached to a ticket now has its system prompt tell the agent to treat that ticket as the conversation's default subject — read the ticket and its notes first, then follow a matching skill — instead of leaving it to ad-hoc exploration across sessions.
 
+### Fixed
+
+*   **Cancelled runs reliably show as cancelled**: A run stopped via the **Cancel** button, a job disable, or shutdown could sometimes finalize with status `error` instead of `cancelled` due to a race with the sweep that clears open runs. Cancellation is now finalized as `cancelled` in all cases; a run that ends because of a timeout still finalizes as `error`. See [Job Module ▶ Cancelling a run](/guide/job-module#cancelling-a-run).
+
 ---
 
 ## [v1.5.0](https://github.com/yogasw/wick/compare/v1.4.3...v1.5.0) — Tickets
