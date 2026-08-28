@@ -21,10 +21,15 @@ type AgentsLayoutVM struct {
 	// chips. Keyed by project id; ProjectList is the display order.
 	Projects    map[string]project.Project
 	ProjectList []string
-	// ProjectCounts is the number of sessions bound to each project id
-	// (sidebar pill). ScopedProjectID, when set, highlights the active
-	// project row + drives the scoped breadcrumb.
-	ProjectCounts   map[string]int
+	// SidebarOwner is the sidebar session list's scope: "me" (default)
+	// shows only the caller's sessions, "all" everything they may see.
+	// The two hrefs re-render the CURRENT page with ?sb= set — the toggle
+	// is a pair of plain links, no script.
+	SidebarOwner        string
+	SidebarOwnerMeHref  string
+	SidebarOwnerAllHref string
+	// ScopedProjectID, when set, highlights the active project row +
+	// drives the scoped breadcrumb.
 	ScopedProjectID string
 	// PinnedProjectID is the current user's pinned (personal-default)
 	// project id, shown with a 📌 in the sidebar. Empty = none.

@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	agentsconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/session"
 	agentstore "github.com/yogasw/wick/internal/agents/store"
+	"github.com/yogasw/wick/internal/agents/ticket"
+	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -88,8 +91,72 @@ func accessibleSessionIDs(ids []string, sessions map[string]session.Session, acc
 	return out
 }
 
+// ticketAssignedSessions returns the session ids attached to tickets
+// assigned to userID in projectID, or nil when the project has ticket mode
+// off (or there is nothing to resolve). This is what makes the "your
+// sessions" tab honest under ticket mode: a chat someone else started on a
+// ticket assigned to you IS your work, even though you don't own it.
+func ticketAssignedSessions(projectID, userID string) map[string]bool {
+	if projectID == "" || userID == "" {
+		return nil
+	}
+	p, ok := globalMgr.Registry().Project(projectID)
+	if !ok || !p.Meta.Ticket.Enabled {
+		return nil
+	}
+	tickets, err := ticket.List(globalLayout, projectID)
+	if err != nil {
+		return nil
+	}
+	var out map[string]bool
+	for _, t := range tickets {
+		if t.Assignee != userID {
+			continue
+		}
+		if out == nil {
+			out = map[string]bool{}
+		}
+		for _, sid := range t.Sessions {
+			out[sid] = true
+		}
+	}
+	return out
+}
+
+// ownedSessionIDs narrows ids to the caller's own sessions — plus, when the
+// scoped project runs ticket mode, sessions on tickets assigned to them.
+// This is the "your sessions" scope, shared by the JSON list and the templ
+// sidebar so the two never disagree about what "yours" means. A nil user
+// (internal/MCP caller) gets ids back unfiltered.
+func ownedSessionIDs(c *tool.Ctx, ids []string, sessions map[string]session.Session, scoped string) []string {
+	u := login.GetUser(c.Context())
+	if u == nil {
+		return ids
+	}
+	assigned := ticketAssignedSessions(scoped, u.ID)
+	out := ids[:0:0]
+	for _, id := range ids {
+		if sessions[id].Meta.UserID == u.ID || assigned[id] {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // apiSessionList handles GET /api/sessions and returns a JSON list of
 // sessions the caller is allowed to see.
+//
+//	?project=ID   scope to one project
+//	?owner=me     only the caller's sessions — plus, when the scoped project
+//	              runs ticket mode, sessions on tickets assigned to the
+//	              caller (their work, whoever started the chat). Absent or
+//	              anything else = everyone's (the historical behaviour).
+//	?offset=N     skip the first N matches — the "Load more" cursor. Each
+//	              response is one page of at most sessionListCap rows.
+//
+// The response carries `total` — how many sessions matched BEFORE the page
+// window — and `has_more`, so the UI can print a real count and offer the
+// next page without ever shipping every row.
 func apiSessionList(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -103,7 +170,18 @@ func apiSessionList(c *tool.Ctx) {
 	access := callerProjectAccess(c)
 	allSessions := globalMgr.Registry().Sessions()
 	ids := accessibleSessionIDs(globalMgr.Registry().SessionIDs(), allSessions, access, scoped)
-	if len(ids) > sessionListCap {
+	if strings.EqualFold(strings.TrimSpace(c.Query("owner")), "me") {
+		ids = ownedSessionIDs(c, ids, allSessions, scoped)
+	}
+	total := len(ids)
+	if off, err := strconv.Atoi(c.Query("offset")); err == nil && off > 0 {
+		if off > len(ids) {
+			off = len(ids)
+		}
+		ids = ids[off:]
+	}
+	hasMore := len(ids) > sessionListCap
+	if hasMore {
 		ids = ids[:sessionListCap]
 	}
 
@@ -138,7 +216,7 @@ func apiSessionList(c *tool.Ctx) {
 		})
 	}
 
-	c.JSON(http.StatusOK, map[string][]SessionListItem{"sessions": items})
+	c.JSON(http.StatusOK, map[string]any{"sessions": items, "total": total, "has_more": hasMore})
 }
 
 // backfillTurnIDs assigns a synthetic, position-stable id to every turn that

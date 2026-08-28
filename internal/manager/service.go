@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -20,21 +21,29 @@ type cfgReader interface {
 	GetOwned(owner, key string) string
 }
 
+// runHandle identifies one in-flight run owned by this process. The runID
+// lets the run's own deferred cleanup tell "my entry" from a newer run's
+// entry under the same key (cancel + immediate re-run reuses the key).
+type runHandle struct {
+	runID  string
+	cancel context.CancelFunc
+}
+
 // Service manages job lifecycle: bootstrap from code-defined jobs,
 // manual/scheduled execution, and result storage.
 type Service struct {
 	repo      *repo
 	mu        sync.RWMutex
-	runners   map[string]job.RunFunc    // key -> run func
-	cancels   map[string]context.CancelFunc // key -> cancel for running job
-	cfg       cfgReader                 // for injecting job.Ctx; may be nil in tests
+	runners   map[string]job.RunFunc  // key -> run func
+	running   map[string]runHandle    // key -> in-flight run owned by this process
+	cfg       cfgReader               // for injecting job.Ctx; may be nil in tests
 }
 
 func NewService(r *repo) *Service {
 	return &Service{
 		repo:    r,
 		runners: make(map[string]job.RunFunc),
-		cancels: make(map[string]context.CancelFunc),
+		running: make(map[string]runHandle),
 	}
 }
 
@@ -71,15 +80,21 @@ func (s *Service) Bootstrap(ctx context.Context, mods []job.Module) error {
 	// stuck row is cosmetic and not worth touching here. The worker
 	// tick keeps sweeping every minute after this so post-startup
 	// stalls also recover without intervention.
-	enabledJobs, err := s.repo.ListEnabledJobs(ctx)
+	allJobs, err := s.repo.ListJobs(ctx)
 	if err != nil {
-		log.Ctx(ctx).Warn().Err(err).Msg("bootstrap: list enabled for stuck sweep failed")
+		log.Ctx(ctx).Warn().Err(err).Msg("bootstrap: list jobs for stuck sweep failed")
 	} else {
 		count := 0
-		for i := range enabledJobs {
-			reset, err := s.repo.ResetStuckForJob(ctx, &enabledJobs[i])
+		for i := range allJobs {
+			// Disabled jobs included: their stuck row is not cosmetic —
+			// last_status="running" blocks Run Now (and the manual-run
+			// guard) even while the job is disabled or once re-enabled.
+			if allJobs[i].LastStatus != entity.JobStatusRunning {
+				continue
+			}
+			reset, err := s.repo.ResetStuckForJob(ctx, &allJobs[i])
 			if err != nil {
-				log.Ctx(ctx).Warn().Err(err).Str("job", enabledJobs[i].Key).Msg("bootstrap: reset stuck job failed")
+				log.Ctx(ctx).Warn().Err(err).Str("job", allJobs[i].Key).Msg("bootstrap: reset stuck job failed")
 				continue
 			}
 			if reset {
@@ -132,7 +147,54 @@ func (s *Service) UpdateSchedule(ctx context.Context, key string, schedule strin
 	if err != nil {
 		return err
 	}
-	return s.repo.UpdateSchedule(ctx, j.ID, schedule, enabled, maxRuns, maxTimeoutMin)
+	if err := s.repo.UpdateSchedule(ctx, j.ID, schedule, enabled, maxRuns, maxTimeoutMin); err != nil {
+		return err
+	}
+	// Disabling stops a run in flight. A disabled job that keeps
+	// executing surprises the admin, and its last_status="running"
+	// leftover would block the first manual run after re-enable.
+	if !enabled {
+		stopped := s.stopLocal(j.Key)
+		if stopped || j.LastStatus == entity.JobStatusRunning {
+			if err := s.repo.CancelOpenRuns(ctx, j.ID, "cancelled: job disabled"); err != nil {
+				log.Ctx(ctx).Warn().Err(err).Str("job", j.Key).Msg("disable: cancel open runs failed")
+			}
+			if err := s.repo.SetStatus(ctx, j.ID, entity.JobStatusIdle); err != nil {
+				log.Ctx(ctx).Warn().Err(err).Str("job", j.Key).Msg("disable: set idle failed")
+			}
+		}
+	}
+	return nil
+}
+
+// stillRunning reports whether j is genuinely executing right now: this
+// process owns a live run, or the DB shows an open run younger than the
+// job's timeout (another process owns it). When neither holds — the
+// last_status="running" row is stale — it repairs the row and returns
+// false, so a stuck job never needs manual DB surgery to run again.
+func (s *Service) stillRunning(ctx context.Context, j *entity.Job) bool {
+	s.mu.RLock()
+	_, inProcess := s.running[j.Key]
+	s.mu.RUnlock()
+	if inProcess {
+		return true
+	}
+	timeout := j.MaxTimeoutMin
+	if timeout <= 0 {
+		timeout = 30
+	}
+	cutoff := time.Now().Add(-time.Duration(timeout) * time.Minute)
+	fresh, err := s.repo.FreshOpenRunExists(ctx, j.ID, cutoff)
+	if err != nil || fresh {
+		// On a read error assume running: refusing a trigger is cheaper
+		// than a double run.
+		return true
+	}
+	if _, err := s.repo.ResetStuckForJob(ctx, j); err != nil {
+		log.Ctx(ctx).Warn().Err(err).Str("job", j.Key).Msg("reconcile stale running status failed")
+		return true
+	}
+	return false
 }
 
 // RunManual triggers a job run initiated by a user. Returns the run ID.
@@ -144,7 +206,7 @@ func (s *Service) RunManual(ctx context.Context, key string, userID string) (str
 	if j.MaxRuns > 0 && j.TotalRuns >= j.MaxRuns {
 		return "", fmt.Errorf("job has reached the maximum number of runs (%d)", j.MaxRuns)
 	}
-	if j.LastStatus == entity.JobStatusRunning {
+	if j.LastStatus == entity.JobStatusRunning && s.stillRunning(ctx, j) {
 		return "", fmt.Errorf("job is already running")
 	}
 	return s.execute(ctx, j, entity.RunTriggerManual, userID)
@@ -159,7 +221,7 @@ func (s *Service) RunCron(ctx context.Context, key string) (string, error) {
 	if j.MaxRuns > 0 && j.TotalRuns >= j.MaxRuns {
 		return "", fmt.Errorf("max runs reached")
 	}
-	if j.LastStatus == entity.JobStatusRunning {
+	if j.LastStatus == entity.JobStatusRunning && s.stillRunning(ctx, j) {
 		return "", fmt.Errorf("job is already running")
 	}
 	return s.execute(ctx, j, entity.RunTriggerCron, "")
@@ -193,7 +255,7 @@ func (s *Service) execute(ctx context.Context, j *entity.Job, trigger entity.Run
 	}
 	bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMin)*time.Minute)
 	s.mu.Lock()
-	s.cancels[j.Key] = cancel
+	s.running[j.Key] = runHandle{runID: run.ID, cancel: cancel}
 	s.mu.Unlock()
 
 	go func() {
@@ -213,12 +275,19 @@ func (s *Service) execute(ctx context.Context, j *entity.Job, trigger entity.Run
 				l.Error().Err(err).Msg("failed to finish run")
 			}
 			_ = s.repo.IncrementRuns(cleanupCtx, j.ID)
-			_ = s.repo.SetStatus(cleanupCtx, j.ID, entity.JobStatusIdle)
+			// Conditional idle: after cancel + immediate re-run, this
+			// (late) finalize must not clobber the newer run's badge.
+			_ = s.repo.SetIdleIfNoOpenRun(cleanupCtx, j.ID)
 		}
 
 		defer func() {
+			// Delete only our own entry: after cancel + immediate re-run
+			// the key already holds the newer run's handle, and blindly
+			// deleting it would make that live run invisible to Cancel.
 			s.mu.Lock()
-			delete(s.cancels, j.Key)
+			if h, ok := s.running[j.Key]; ok && h.runID == run.ID {
+				delete(s.running, j.Key)
+			}
 			s.mu.Unlock()
 			cancel()
 			// Catch panics in the RunFunc so a misbehaving job
@@ -239,14 +308,29 @@ func (s *Service) execute(ctx context.Context, j *entity.Job, trigger entity.Run
 		result, runErr := runFn(runCtx)
 
 		status := entity.RunStatusSuccess
-		if runErr != nil {
+		switch {
+		case runErr == nil:
+			l.Info().Msg("job run completed")
+		case errors.Is(runErr, context.Canceled) && bgCtx.Err() == context.Canceled:
+			// The run ended because ITS OWN context was canceled — the
+			// Cancel button, a disable, or shutdown stopped it on purpose.
+			// That is a cancellation, not a failure: without this, whenever
+			// this finalize wins the race against the cancel path's
+			// CancelOpenRuns (which only touches still-open rows), the row
+			// ended up "error" for a run the user deliberately stopped.
+			// Timeouts don't take this branch (bgCtx reports
+			// DeadlineExceeded) — they stay errors.
+			status = entity.RunStatusCancelled
+			if result == "" {
+				result = "cancelled"
+			}
+			l.Info().Msg("job run cancelled")
+		default:
 			status = entity.RunStatusError
 			if result == "" {
 				result = runErr.Error()
 			}
 			l.Error().Err(runErr).Msg("job run failed")
-		} else {
-			l.Info().Msg("job run completed")
 		}
 		finalize(status, result)
 	}()
@@ -254,21 +338,52 @@ func (s *Service) execute(ctx context.Context, j *entity.Job, trigger entity.Run
 	return run.ID, nil
 }
 
-// CancelJob cancels a running job by key. Returns error if job not running.
-func (s *Service) CancelJob(ctx context.Context, key string) error {
+// stopLocal cancels the in-process run for key, if this process owns one.
+// Reports whether there was one. The map entry is removed here so a
+// follow-up Run Now can start immediately; the run's own deferred cleanup
+// is runID-guarded and won't touch a newer entry.
+func (s *Service) stopLocal(key string) bool {
 	s.mu.Lock()
-	cancel, ok := s.cancels[key]
-	s.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("job %q is not running", key)
+	h, ok := s.running[key]
+	if ok {
+		delete(s.running, key)
 	}
-	cancel()
+	s.mu.Unlock()
+	if ok {
+		h.cancel()
+	}
+	return ok
+}
+
+// CancelJob stops a running job by key. It cancels the in-process run
+// when this process owns one, then closes the books either way: open run
+// rows become "cancelled" and last_status flips to idle. Called on a job
+// whose row is stale (DB says running, nothing actually is) it repairs
+// the row instead of failing, so Cancel is also the operator's unstick
+// button. Errors only when the job is idle everywhere.
+//
+// The context cancel is best-effort by nature: a RunFunc that ignores its
+// context keeps executing until its timeout, but the DB no longer calls
+// the job running, its row can't block future triggers, and any late
+// finalize is guarded (FinishRun / SetIdleIfNoOpenRun) so it can't
+// resurrect the cancelled state.
+func (s *Service) CancelJob(ctx context.Context, key string) error {
 	j, err := s.repo.GetJobByKey(ctx, key)
 	if err != nil {
 		return err
 	}
-	_ = s.repo.SetStatus(ctx, j.ID, entity.JobStatusIdle)
-	return nil
+	stopped := s.stopLocal(j.Key)
+	hasOpen, err := s.repo.HasOpenRun(ctx, j.ID)
+	if err != nil {
+		return err
+	}
+	if !stopped && !hasOpen && j.LastStatus != entity.JobStatusRunning {
+		return fmt.Errorf("job %q is not running", key)
+	}
+	if err := s.repo.CancelOpenRuns(ctx, j.ID, "cancelled by user"); err != nil {
+		return err
+	}
+	return s.repo.SetStatus(ctx, j.ID, entity.JobStatusIdle)
 }
 
 func (s *Service) GetRun(ctx context.Context, runID string) (*entity.JobRun, error) {

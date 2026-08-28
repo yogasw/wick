@@ -10,6 +10,30 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.6.0](https://github.com/yogasw/wick/compare/v1.5.0...v1.6.0) — Job, Session, Migrate
+
+_Released on 2026-08-28_
+
+### Improved
+
+*   **Faster restarts on Postgres**: Startup now skips the full `AutoMigrate` catalog scan when the schema hasn't changed since the last boot. It checks a fingerprint stored in a new single-row `wick_schema_state` table instead, dramatically reducing startup time. A full migration is automatically triggered if the fingerprint is missing or doesn't match. No configuration changes are required.
+
+### Added
+
+*   **Jobs can be cancelled mid-run**: A **Cancel** button is now available on a running job's page and in the manager SPA's job detail view. This action cancels the run's context, marks the run as `cancelled` (a new status distinct from `Success`/`Error`), and returns the job to an idle state. The **Cancel** button also serves as an unstick action for jobs stuck showing `running` without any actual activity (e.g., after a crash). Stuck jobs are now automatically swept on every worker tick and at bootstrap, including disabled jobs. Disabling a running job will also cancel it.
+*   **Your sessions / All sessions tabs**: The Sessions page and sidebar now default to displaying your own chats, along with chats on tickets assigned to you when in ticket mode. A new tab allows widening the view to include everyone's sessions. Both lists now support scroll-to-load for more items, replacing the old paging mechanism. The sidebar's former per-project session-count pill has been replaced with a Yours/All toggle, which is cookie-persisted and resets to 'Yours' upon a project switch. The ticket board's Untracked rail also gains the same Yours/All split (filtered by `?untracked_owner=me` on `GET /api/projects/{id}/tickets`), plus scroll-to-load paging. The ticket board itself is now viewport-locked, with each column scrolling independently under pinned headers. The `GET /api/sessions` endpoint has been enhanced with `?owner=me` and `?offset=` parameters, and its response now includes `total` and `has_more` fields.
+
+### Changed
+
+*   **Ticketed sessions default to their ticket**: For sessions attached to a ticket, the system prompt now directs the agent to treat that ticket as the conversation's primary subject. Agents are prompted to first read the ticket and its notes, then follow a matching skill, before resorting to ad-hoc exploration across sessions.
+
+### Fixed
+
+*   **Cancelled runs reliably show as cancelled**: A race condition could sometimes cause runs stopped via the **Cancel** button, a job disable, or a shutdown to finalize with an `error` status instead of `cancelled`. This has been resolved; cancellation is now reliably finalized as `cancelled` in all such cases. Runs that end due to a timeout will continue to finalize as `error`.
+
+---
+
+
 ## [v1.5.0](https://github.com/yogasw/wick/compare/v1.4.3...v1.5.0) — Tickets
 
 _Released on 2026-08-26_

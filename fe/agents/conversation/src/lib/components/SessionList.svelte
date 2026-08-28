@@ -1,8 +1,16 @@
 <script lang="ts">
   import type { SessionListItem } from "../types/agents.js";
+  import ScrollSentinel from "./ScrollSentinel.svelte";
 
   type Props = {
     sessions: SessionListItem[];
+    /* How many sessions exist server-side for the current scope — printed at
+       the end of the list so the number is only as fresh as the data it
+       describes. The rows themselves arrive one page at a time. */
+    total?: number;
+    loading?: boolean;
+    hasMore?: boolean;
+    onLoadMore?: () => void;
     selectedId?: string;
     search: string;
     pageSize?: number;
@@ -15,6 +23,10 @@
 
   let {
     sessions,
+    total,
+    loading = false,
+    hasMore = false,
+    onLoadMore,
     selectedId,
     search,
     pageSize = 10,
@@ -25,7 +37,6 @@
     onDelete,
   }: Props = $props();
 
-  let currentPage = $state(1);
   let openKebabId = $state<string | null>(null);
 
   function toggleKebab(e: MouseEvent, id: string) {
@@ -47,18 +58,30 @@
         )
   );
 
-  const totalPages = $derived(Math.max(1, Math.ceil(filtered.length / pageSize)));
+  /* Infinite scroll: show one chunk (pageSize rows), reveal the next when
+     the ScrollSentinel at the list's end comes into view, and once the
+     loaded rows run out ask the server for its next page — no pager, no
+     click. The list scrolls in its OWN container, so reaching its end
+     never means scrolling the whole page. */
+  let visibleCount = $state(pageSize);
 
   $effect(() => {
     search;
-    currentPage = 1;
+    visibleCount = pageSize;
   });
 
-  const paginated = $derived(
-    filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize)
-  );
+  const visible = $derived(filtered.slice(0, visibleCount));
+  /* More to show: either rows already in memory beyond the window, or a
+     further server page behind hasMore. */
+  const canShowMore = $derived(visibleCount < filtered.length || hasMore);
 
-  const showPager = $derived(filtered.length > pageSize);
+  function showMore() {
+    if (visibleCount < filtered.length) {
+      visibleCount += pageSize;
+    } else if (hasMore && !loading) {
+      onLoadMore?.();
+    }
+  }
 
   function formatLastActive(ts: string): string {
     if (!ts) return "";
@@ -86,7 +109,9 @@
   }
 </script>
 
-<div class="space-y-4">
+<!-- A flex column with min-h-0 so the row area below can scroll in its OWN
+     container: the page never has to scroll to reach the list's end. -->
+<div class="flex min-h-0 flex-col gap-4">
   {#if newChatHref}
     <a
       href={newChatHref}
@@ -127,8 +152,11 @@
       <p class="px-5 py-8 text-center text-sm text-black-600 dark:text-black-700">No chats match your search.</p>
     </div>
   {:else}
+    <!-- The scroller: rows + sentinel live inside, so "reached the bottom"
+         means THIS box's bottom, not the page's. -->
+    <div class="min-h-0 overflow-y-auto">
     <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 overflow-hidden divide-y divide-white-300 dark:divide-navy-600">
-      {#each paginated as sess (sess.id)}
+      {#each visible as sess (sess.id)}
         {@const isSelected = sess.id === selectedId}
         <div
           data-testid={"session-row-" + sess.id}
@@ -201,33 +229,22 @@
       {/each}
     </div>
 
-    {#if showPager}
-      <div class="flex items-center justify-between pt-2">
-        <button
-          type="button"
-          disabled={currentPage <= 1}
-          onclick={() => { if (currentPage > 1) currentPage--; }}
-          class="inline-flex items-center gap-1 text-sm text-green-600 dark:text-green-400 hover:underline disabled:opacity-40 disabled:cursor-default disabled:no-underline"
-        >
-          <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M10 4L6 8l4 4" stroke-linecap="round" stroke-linejoin="round"></path>
-          </svg>
-          Prev
-        </button>
-        <span class="text-xs text-black-700 dark:text-black-600">
-          Page {currentPage} / {totalPages}
+    <ScrollSentinel
+      canMore={canShowMore}
+      {loading}
+      epoch={visible.length}
+      onMore={showMore}
+    />
+    </div>
+
+    <!-- The count sits at the END of the list, after the rows themselves —
+         the number arrives with each scope's fetch, never computed up
+         front. -->
+    {#if total !== undefined}
+      <div class="flex items-center justify-center pt-1 text-xs text-black-600 dark:text-black-700">
+        <span data-testid="session-total">
+          {total > visible.length ? `${visible.length} of ${total} chats` : `${total} chat${total === 1 ? "" : "s"}`}
         </span>
-        <button
-          type="button"
-          disabled={currentPage >= totalPages}
-          onclick={() => { if (currentPage < totalPages) currentPage++; }}
-          class="inline-flex items-center gap-1 text-sm text-green-600 dark:text-green-400 hover:underline disabled:opacity-40 disabled:cursor-default disabled:no-underline"
-        >
-          Next
-          <svg viewBox="0 0 16 16" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path>
-          </svg>
-        </button>
       </div>
     {/if}
   {/if}

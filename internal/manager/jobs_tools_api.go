@@ -172,6 +172,17 @@ func (h *Handler) apiRunJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "started", "run_id": runID})
 }
 
+// apiCancelJob serves POST /manager/api/jobs/{key}/cancel, the JSON twin of
+// cancelJob. Stops the running job (and repairs a stale "running" row).
+func (h *Handler) apiCancelJob(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("key")
+	if err := h.svc.CancelJob(r.Context(), key); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+}
+
 // apiJobRun serves GET /manager/api/jobs/{key}/runs/{runID}, the JSON twin
 // of getRun used by the SPA run poller. Status drives the poll loop;
 // result carries the run output (markdown) on completion.

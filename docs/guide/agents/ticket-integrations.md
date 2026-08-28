@@ -97,6 +97,7 @@ GET /projects/{projectID}/tickets
 | `assignee` | everyone | A user id, or `me`. |
 | `untracked` | `0` | `1` also returns sessions with no ticket. |
 | `untracked_limit` | — | Caps that list. |
+| `untracked_owner` | everyone | `me` limits the untracked list (and its count) to sessions the caller owns. |
 
 ```bash
 curl -s "$WICK_API/projects/$PROJECT/tickets?rows=0" \

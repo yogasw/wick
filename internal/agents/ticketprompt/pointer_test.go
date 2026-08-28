@@ -67,7 +67,7 @@ func TestPointerNamesTicketAndCountsNotes(t *testing.T) {
 	}
 
 	got := Pointer(l, "s1")
-	for _, want := range []string{tk.ID, "Payment webhook failing", "2 note(s)", "1 of them unchecked", "notes_list"} {
+	for _, want := range []string{tk.ID, "Payment webhook failing", "2 note(s)", "1 of them unchecked", "notes_list", "ticket_get", "check your skills"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("pointer missing %q in:\n%s", want, got)
 		}

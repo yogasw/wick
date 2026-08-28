@@ -22,17 +22,39 @@
   import SessionList from "./SessionList.svelte";
   import KanbanBoard from "./KanbanBoard.svelte";
   import TicketDetail from "./TicketDetail.svelte";
+  import OwnerTabs from "./OwnerTabs.svelte";
 
   type Props = {
     base: string;
     project: ProjectOption;
     providers: ProviderOption[];
     sessions: SessionListItem[];
+    /* Server-side match count for the current scope — the list's number and
+       the breadcrumb's, both printed only once the list itself arrived. */
+    sessionTotal?: number;
+    ownerTab: "me" | "all";
+    listLoading?: boolean;
+    hasMore?: boolean;
+    onLoadMore?: () => void;
+    onOwnerTab: (v: "me" | "all") => void;
     onPin: () => void;
     onSelectSession: (id: string) => void;
   };
 
-  let { base, project, providers, sessions, onPin, onSelectSession }: Props = $props();
+  let {
+    base,
+    project,
+    providers,
+    sessions,
+    sessionTotal,
+    ownerTab,
+    listLoading = false,
+    hasMore = false,
+    onLoadMore,
+    onOwnerTab,
+    onPin,
+    onSelectSession,
+  }: Props = $props();
 
   let search = $state("");
   let selectedProvider = $state<string>("");
@@ -133,11 +155,18 @@
       .catch(() => { /* commands optional */ });
   });
 
-  const chatCount = $derived(sessions.length);
+  const chatCount = $derived(sessionTotal ?? sessions.length);
 
   /* ── ticket board (only when the project has ticket mode enabled) ── */
   let board = $state<TicketBoard | null>(null);
   let ticketFilter = $state<TicketFilter>({});
+  /* The untracked rail's scope. Deliberately NOT part of the saved filter:
+     every visit to a project board starts back at "yours" — widening to
+     everyone's loose chats is a per-look choice, not a standing one. */
+  let untrackedOwner = $state<"me" | "all">("me");
+  /* One page of the rail; scrolling its end raises the limit (the server
+     caps at 200), and the raised limit re-keys the board request below. */
+  let untrackedLimit = $state(25);
 
   /* The filter IS the request: statuses, assignee and the untracked rail all
      decide what the server builds, so a switched-off column costs nothing to
@@ -158,7 +187,11 @@
       statuses,
       assignee: ticketFilter.assignee || undefined,
       untracked: ticketFilter.show_untracked === true,
-      untrackedLimit: 25,
+      untrackedLimit,
+      /* Your own loose chats by default — "all" is an explicit choice, and
+         the count follows the scope so the rail's number and its rows always
+         describe the same set. */
+      untrackedOwner,
     };
   });
 
@@ -439,23 +472,39 @@
               : "text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-600")}
           >Card</button>
         </div>
+        {#if viewMode === "list"}
+          <OwnerTabs value={ownerTab} onChange={onOwnerTab} />
+        {/if}
+      </div>
+    {:else if !ticketEnabled && !openTicketId}
+      <!-- No board here, but the same scope choice: your chats first, the
+           whole project's on request. -->
+      <div class="flex items-center justify-end">
+        <OwnerTabs value={ownerTab} onChange={onOwnerTab} />
       </div>
     {/if}
 
     {#if ticketEnabled && openTicketId}
-      <TicketDetail
-        {base}
-        ticketId={openTicketId}
-        onBack={() => { gotoTicket(null); reloadBoard(); }}
-        onOpenSession={onSelectSession}
-        onNewSession={newSessionInTicket}
-      />
+      <!-- The page height is locked (each panel scrolls itself), so the
+           ticket's long page scrolls in its own container. -->
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <TicketDetail
+          {base}
+          ticketId={openTicketId}
+          onBack={() => { gotoTicket(null); reloadBoard(); }}
+          onOpenSession={onSelectSession}
+          onNewSession={newSessionInTicket}
+        />
+      </div>
     {:else if ticketEnabled && viewMode === "card" && board}
       <KanbanBoard
         {base}
         projectId={project.id}
         {board}
         filter={ticketFilter}
+        {untrackedOwner}
+        onUntrackedOwner={(v) => { untrackedOwner = v; untrackedLimit = 25; }}
+        onUntrackedMore={() => { untrackedLimit = Math.min(200, untrackedLimit + 25); }}
         onFilter={applyFilter}
         onOpen={(id) => { gotoTicket(id); }}
         onOpenSession={onSelectSession}
@@ -465,6 +514,10 @@
     {:else}
       <SessionList
         {sessions}
+        total={sessionTotal}
+        loading={listLoading}
+        {hasMore}
+        {onLoadMore}
         {search}
         onSearch={(s) => { search = s; }}
         onSelect={onSelectSession}

@@ -2,12 +2,30 @@ import { Effect } from "effect";
 import { apiGetE, apiDeleteE, apiPostE } from "@wick-fe/common-api";
 import type { SessionListItem, SessionMeta, ConversationTurn, TurnEvent } from "../types/agents.js";
 
-export const listSessions = (base: string, projectId?: string) => {
-  const url = projectId
-    ? `${base}/api/sessions?project=${encodeURIComponent(projectId)}`
-    : `${base}/api/sessions`;
-  return apiGetE<{ sessions: SessionListItem[] }>(url).pipe(
-    Effect.map((r) => ({ sessions: r.sessions ?? [] })),
+/** owner: "me" = only the caller's sessions (plus, under ticket mode,
+    sessions on tickets assigned to them); omitted = everyone's. The server
+    sends one page at a time — `offset` is the "Load more" cursor, `total`
+    is the match count before the page window, `hasMore` says whether
+    another page exists. */
+export const listSessions = (
+  base: string,
+  projectId?: string,
+  owner?: "me" | "all",
+  offset?: number,
+) => {
+  const q = new URLSearchParams();
+  if (projectId) q.set("project", projectId);
+  if (owner === "me") q.set("owner", "me");
+  if (offset) q.set("offset", String(offset));
+  const qs = q.toString();
+  return apiGetE<{ sessions: SessionListItem[]; total?: number; has_more?: boolean }>(
+    `${base}/api/sessions${qs ? `?${qs}` : ""}`,
+  ).pipe(
+    Effect.map((r) => ({
+      sessions: r.sessions ?? [],
+      total: r.total ?? (r.sessions ?? []).length,
+      hasMore: r.has_more === true,
+    })),
   );
 };
 

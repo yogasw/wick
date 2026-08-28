@@ -160,7 +160,7 @@ A **ticket** is the unit of work; a **session** is one conversation about it, an
 
 ### The board
 
-The project landing page shows a kanban board — one column per status, cards are **tickets**, not sessions, laid out as fixed-width columns in a single horizontally scrollable row. The filter bar's **Untracked** chip (off by default) adds a rail of chats that belong to no ticket alongside the columns; its count is always shown even while off. Dragging:
+The project landing page shows a kanban board — one column per status, cards are **tickets**, not sessions, laid out as fixed-width columns in a single horizontally scrollable row. The filter bar's **Untracked** chip (off by default) adds a rail of chats that belong to no ticket alongside the columns; its count is always shown even while off. Once open, the rail has its own **Yours / All** tabs (default Yours, reset each visit) and scrolls to load more instead of paging. Dragging:
 
 - a ticket card between columns changes its status;
 - a chat from the Untracked rail onto a ticket card attaches it to that ticket;
@@ -177,6 +177,8 @@ Opening a ticket's page puts the title, description, and sessions (capped at 5, 
 ### Starting a chat on a ticket
 
 Selecting a ticket on the board — not only pressing **+ New session** — scopes the next chat you start to it: the composer names the ticket and the placeholder reflects it (clipped if the title runs long), and a **Start without a ticket** link backs out of the selection. The new session is attached to the ticket as soon as it opens, so it reads the ticket's notes from its first turn.
+
+A session attached to a ticket is told, in its system prompt, to treat that ticket as the default subject of the conversation: read the ticket (`ticket_get`) and its notes (`notes_list`) before anything else, then follow whatever skill matches the ask. Unrelated digging through other sessions or data is a last resort, not a first move.
 
 From inside a chat, the conversation header's view menu offers a jump: a chat already attached to a ticket jumps straight to it, one that isn't opens the board instead. It only appears when the project has ticket mode on.
 

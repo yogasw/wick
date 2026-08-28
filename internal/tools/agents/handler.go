@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,6 +41,7 @@ import (
 	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
 	"github.com/yogasw/wick/internal/configs"
 	"github.com/yogasw/wick/internal/connectors"
+	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/manager"
 	"github.com/yogasw/wick/internal/pkg/ui"
@@ -721,45 +723,50 @@ func adminSeeAll() bool {
 	return globalConfigs.GetOwned("agents", "admin_see_all") == "true"
 }
 
-// callerProjectAccess resolves the caller's project visibility once per
-// request with a single bulk query, instead of an N+1 UserOwnsResource per
-// project/session. Unauthenticated and admin/owner callers see everything.
-func callerProjectAccess(c *tool.Ctx) projectAccess {
-	u := login.GetUser(c.Context())
-	// No user in context = internal / MCP caller: unrestricted.
-	if u == nil {
-		return projectAccess{seeAll: true}
-	}
-	// Admins see everything only when AdminSeeAll is on (legacy behaviour).
-	// With it off (default) an admin is scoped like a regular user, falling
-	// through to the tag-based path below — keeps the admin's own session
-	// list and conversation history clean and private.
-	if u.IsAdmin() && adminSeeAll() {
-		return projectAccess{seeAll: true}
+// grantCacheTTL bounds how stale a user's DB-derived grants may be.
+// callerProjectAccess runs on every dashboard request, and the tag +
+// shared-resource resolution behind it costs 1 + O(projects + data tables)
+// DB queries — a user who lives in the dashboard pays that on every click.
+// Only the DB-backed grants ride the cache; ownership is re-read from the
+// in-memory registry on every call, so a project you just created appears
+// immediately. The cost of the cache is that a granted or revoked tag takes
+// at most this long to show.
+const grantCacheTTL = 15 * time.Second
+
+type grantCacheEntry struct {
+	set    map[string]struct{}
+	expiry time.Time
+}
+
+// grantCache holds each user's cached DB-derived grant set, keyed by user
+// id. Entries are replaced whole, never mutated — readers share them.
+var grantCache sync.Map
+
+// cachedGrantSet resolves the DB-backed part of the caller's access — tag
+// grants, tag-shared projects, tag-shared data tables — through a short
+// per-user cache. The returned map is SHARED: callers must copy before
+// adding to it.
+func cachedGrantSet(c *tool.Ctx, u *entity.User) map[string]struct{} {
+	if e, ok := grantCache.Load(u.ID); ok {
+		if ent := e.(grantCacheEntry); time.Now().Before(ent.expiry) {
+			return ent.set
+		}
 	}
 	set := make(map[string]struct{})
 	if globalTagsSvc != nil {
-		var err error
-		set, err = globalTagsSvc.AccessibleResourceIDs(c.Context(), u.ID)
+		got, err := globalTagsSvc.AccessibleResourceIDs(c.Context(), u.ID)
 		if err != nil {
 			log.Ctx(c.Context()).Warn().Err(err).Msg("resolve accessible projects")
-			set = map[string]struct{}{}
+		} else {
+			set = got
 		}
 	}
-	// Union tag grants with project ownership. Some legacy projects can predate
-	// owner tags (or lose their tag rows), but their metadata still records the
-	// creator — a scoped admin/user must keep access to projects they own even
-	// when AdminSeeAll is off.
-	//
-	// Ownerless projects (OwnerUserID == "") are NOT a public escape hatch: they
-	// are admin-only by default. A non-admin reaches one only via an explicit tag
-	// grant (already unioned in from AccessibleResourceIDs above), never just
-	// because it lacks an owner. Without this guard every authenticated user
-	// could see (and open) every ownerless project + its sessions in Recent.
 	isAdmin := u.IsAdmin()
 	for pid, p := range globalMgr.Registry().Projects() {
+		// Owned / ownerless-for-admin projects need no DB lookup here — the
+		// caller unions ownership in fresh. Skipping them keeps the cache
+		// fill to the projects that actually need a tag check.
 		if p.Meta.OwnerUserID == u.ID || (p.Meta.OwnerUserID == "" && isAdmin) {
-			set[pid] = struct{}{}
 			continue
 		}
 		// Tag-filter grant: an admin shares a project on /admin/projects, which
@@ -767,9 +774,7 @@ func callerProjectAccess(c *tool.Ctx) projectAccess {
 		// the project's filter tags is admitted — the same tag-share mechanism
 		// tools use, but via CanAccessSharedResource, NOT CanAccessTool: an
 		// untagged project stays private to its owner instead of leaking to
-		// every authenticated user (owner/admin are handled just above).
-		// Without this a tag-shared project never entered `set`, so the sidebar,
-		// projectAccessMW, and ownsSession all denied it even when the tag matched.
+		// every authenticated user.
 		if globalAuth != nil &&
 			globalAuth.CanAccessSharedResource(c.Context(), u, "/projects/"+pid) {
 			set[pid] = struct{}{}
@@ -791,7 +796,88 @@ func callerProjectAccess(c *tool.Ctx) projectAccess {
 			}
 		}
 	}
+	// Cache only when the backing services exist: with them unwired (tests,
+	// minimal boots) the build above is free, and caching would let one
+	// test world leak grants into the next.
+	if globalTagsSvc != nil || globalAuth != nil {
+		grantCache.Store(u.ID, grantCacheEntry{set: set, expiry: time.Now().Add(grantCacheTTL)})
+	}
+	return set
+}
+
+// callerProjectAccess resolves the caller's project visibility once per
+// request: DB-derived grants through a short per-user cache, ownership
+// fresh from the in-memory registry. Unauthenticated and admin/owner
+// callers see everything.
+func callerProjectAccess(c *tool.Ctx) projectAccess {
+	u := login.GetUser(c.Context())
+	// No user in context = internal / MCP caller: unrestricted.
+	if u == nil {
+		return projectAccess{seeAll: true}
+	}
+	// Admins see everything only when AdminSeeAll is on (legacy behaviour).
+	// With it off (default) an admin is scoped like a regular user, falling
+	// through to the tag-based path below — keeps the admin's own session
+	// list and conversation history clean and private.
+	if u.IsAdmin() && adminSeeAll() {
+		return projectAccess{seeAll: true}
+	}
+	grants := cachedGrantSet(c, u)
+	// Copied before the ownership union below: the cached map is shared
+	// across requests and must never be written to.
+	set := make(map[string]struct{}, len(grants)+8)
+	for k := range grants {
+		set[k] = struct{}{}
+	}
+	// Union tag grants with project ownership, re-read fresh every call. Some
+	// legacy projects can predate owner tags (or lose their tag rows), but
+	// their metadata still records the creator — a scoped admin/user must
+	// keep access to projects they own even when AdminSeeAll is off.
+	//
+	// Ownerless projects (OwnerUserID == "") are NOT a public escape hatch:
+	// they are admin-only by default. A non-admin reaches one only via an
+	// explicit tag grant (already unioned in from the cached set above),
+	// never just because it lacks an owner. Without this guard every
+	// authenticated user could see (and open) every ownerless project + its
+	// sessions in Recent.
+	isAdmin := u.IsAdmin()
+	for pid, p := range globalMgr.Registry().Projects() {
+		if p.Meta.OwnerUserID == u.ID || (p.Meta.OwnerUserID == "" && isAdmin) {
+			set[pid] = struct{}{}
+		}
+	}
 	return projectAccess{userID: u.ID, projects: set}
+}
+
+// sidebarOwnerScope resolves the sidebar's Your/All choice. The ?sb= query
+// wins and is persisted to a cookie so the choice survives navigation; the
+// cookie carries it between pages; the default is "me" — the sidebar is
+// your recent work unless you deliberately widen it.
+func sidebarOwnerScope(c *tool.Ctx) string {
+	const cookieName = "wick_sidebar_owner"
+	switch v := strings.TrimSpace(c.Query("sb")); v {
+	case "me", "all":
+		http.SetCookie(c.W, &http.Cookie{
+			Name: cookieName, Value: v, Path: "/",
+			MaxAge: 365 * 24 * 3600, SameSite: http.SameSiteLaxMode,
+		})
+		return v
+	}
+	if ck, err := c.R.Cookie(cookieName); err == nil && ck.Value == "all" {
+		return "all"
+	}
+	return "me"
+}
+
+// sidebarOwnerHref rebuilds the CURRENT page URL with ?sb= set — the toggle
+// is a plain link, so it works on every page the sidebar renders on without
+// any script.
+func sidebarOwnerHref(c *tool.Ctx, v string) string {
+	u := *c.R.URL
+	q := u.Query()
+	q.Set("sb", v)
+	u.RawQuery = q.Encode()
+	return u.RequestURI()
 }
 
 // sidebarVMScoped builds the sidebar VM, optionally scoped to a project.
@@ -801,19 +887,18 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 	const sidebarCap = 10
 	access := callerProjectAccess(c)
 	allSessions := globalMgr.Registry().Sessions()
-	// Per-project session counts across ALL sessions (sidebar pills).
-	// Sub-agents are excluded: the pill counts conversations, and a leader
-	// that fanned out to eight roles has not started eight chats.
-	counts := make(map[string]int, len(allSessions))
-	for _, s := range allSessions {
-		if s.Meta.ProjectID != "" && s.Meta.ParentSessionID == "" {
-			counts[s.Meta.ProjectID]++
-		}
-	}
 	// Same filter the JSON list uses, so the templ sidebar and /api/sessions
 	// never disagree about what a conversation is — sub-agent sessions are
 	// dropped here too, since they belong to their parent's rail panel.
 	ids := accessibleSessionIDs(globalMgr.Registry().SessionIDs(), allSessions, access, scopedProjectID)
+	// The sidebar defaults to YOUR recent work (plus ticket-assigned
+	// sessions under ticket mode); the Yours/All toggle widens it to
+	// everything you may see. Same helper the JSON list uses, so the two
+	// never disagree about what "yours" means.
+	sidebarOwner := sidebarOwnerScope(c)
+	if sidebarOwner == "me" {
+		ids = ownedSessionIDs(c, ids, allSessions, scopedProjectID)
+	}
 	if len(ids) > sidebarCap {
 		ids = ids[:sidebarCap]
 	}
@@ -874,10 +959,12 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		SidebarLabels:    labels,
 		ActiveSessionID:  activeSessionID,
 		IdleTimeoutMs:    globalPool.IdleTimeout().Milliseconds(),
-		Projects:         allProjects,
-		ProjectList:      allProjectIDs,
-		ProjectCounts:    counts,
-		ScopedProjectID:  scopedProjectID,
+		Projects:            allProjects,
+		ProjectList:         allProjectIDs,
+		SidebarOwner:        sidebarOwner,
+		SidebarOwnerMeHref:  sidebarOwnerHref(c, "me"),
+		SidebarOwnerAllHref: sidebarOwnerHref(c, "all"),
+		ScopedProjectID:     scopedProjectID,
 		PinnedProjectID:  pinnedProjectID(c),
 		ShellAssetURL:    spaAssetURL("shell"),
 		AirouterVisible:  AirouterVisible(c.Context()),
@@ -1354,8 +1441,15 @@ func sessionsPage(c *tool.Ctx) {
 			scoped = ""
 		}
 	}
+	layout := sidebarVMScoped(c, "sessions", "", scoped)
+	// FullBleed: the SPA owns its height (#app is h-full) so each panel —
+	// session list, board columns, untracked rail, chat thread — scrolls
+	// inside itself instead of the page scrolling as one. The default
+	// wrapper div has no height, which collapsed that chain into a single
+	// global scroll.
+	layout.FullBleed = true
 	c.HTML(view.Conversation(view.ConversationVM{
-		Layout:        sidebarVMScoped(c, "sessions", "", scoped),
+		Layout:        layout,
 		Base:          c.Base(),
 		AssetURL:      spaAssetURL("conversation"),
 		ScmAsset:      spaAssetURL("scm"),
@@ -1438,8 +1532,13 @@ func sessionDetail(c *tool.Ctx) {
 		c.Redirect(c.Base()+"/sessions/"+parent+"?rail=subagents&sub="+id, http.StatusSeeOther)
 		return
 	}
+	layout := sidebarVMScoped(c, "sessions", id, sess.Meta.ProjectID)
+	// FullBleed for the same reason as sessionsPage — and it must match:
+	// the SPA client-routes between list and detail without a reload, so
+	// the two shells have to agree on who owns the scroll.
+	layout.FullBleed = true
 	c.HTML(view.Conversation(view.ConversationVM{
-		Layout:         sidebarVMScoped(c, "sessions", id, sess.Meta.ProjectID),
+		Layout:         layout,
 		Base:           c.Base(),
 		AssetURL:       spaAssetURL("conversation"),
 		ScmAsset:       spaAssetURL("scm"),

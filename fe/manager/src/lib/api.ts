@@ -403,6 +403,10 @@ export async function runJob(key: string): Promise<string> {
   return r.run_id;
 }
 
+export async function cancelJob(key: string): Promise<void> {
+  await apiPost(`${jobBase(key)}/cancel`);
+}
+
 export async function getJobRun(key: string, runID: string): Promise<JobRunResult> {
   return apiGet<JobRunResult>(`${jobBase(key)}/runs/${encodeURIComponent(runID)}`);
 }
