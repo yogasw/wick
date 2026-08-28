@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -307,14 +308,29 @@ func (s *Service) execute(ctx context.Context, j *entity.Job, trigger entity.Run
 		result, runErr := runFn(runCtx)
 
 		status := entity.RunStatusSuccess
-		if runErr != nil {
+		switch {
+		case runErr == nil:
+			l.Info().Msg("job run completed")
+		case errors.Is(runErr, context.Canceled) && bgCtx.Err() == context.Canceled:
+			// The run ended because ITS OWN context was canceled — the
+			// Cancel button, a disable, or shutdown stopped it on purpose.
+			// That is a cancellation, not a failure: without this, whenever
+			// this finalize wins the race against the cancel path's
+			// CancelOpenRuns (which only touches still-open rows), the row
+			// ended up "error" for a run the user deliberately stopped.
+			// Timeouts don't take this branch (bgCtx reports
+			// DeadlineExceeded) — they stay errors.
+			status = entity.RunStatusCancelled
+			if result == "" {
+				result = "cancelled"
+			}
+			l.Info().Msg("job run cancelled")
+		default:
 			status = entity.RunStatusError
 			if result == "" {
 				result = runErr.Error()
 			}
 			l.Error().Err(runErr).Msg("job run failed")
-		} else {
-			l.Info().Msg("job run completed")
 		}
 		finalize(status, result)
 	}()
