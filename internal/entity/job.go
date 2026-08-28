@@ -22,6 +22,9 @@ const (
 	RunStatusRunning RunStatus = "running"
 	RunStatusSuccess RunStatus = "success"
 	RunStatusError   RunStatus = "error"
+	// RunStatusCancelled is a run stopped before it finished: the user hit
+	// Cancel, or the job was disabled while running.
+	RunStatusCancelled RunStatus = "cancelled"
 )
 
 // RunTrigger describes how a run was initiated.

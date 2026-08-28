@@ -99,57 +99,90 @@ func (r *repo) ResetStuckForJob(ctx context.Context, j *entity.Job) (bool, error
 		timeout = 30
 	}
 	cutoff := time.Now().Add(-time.Duration(timeout) * time.Minute)
+	now := time.Now()
 
-	var stuckIDs []string
+	// Close open runs that outlived max_timeout_min.
 	if err := r.db.WithContext(ctx).Model(&entity.JobRun{}).
 		Where("job_id = ? AND ended_at IS NULL AND started_at < ?", j.ID, cutoff).
-		Pluck("id", &stuckIDs).Error; err != nil {
-		return false, err
-	}
-	if len(stuckIDs) == 0 {
-		return false, nil
-	}
-
-	now := time.Now()
-	tx := r.db.WithContext(ctx).Begin()
-	if tx.Error != nil {
-		return false, tx.Error
-	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			tx.Rollback()
-		}
-	}()
-
-	if err := tx.Model(&entity.JobRun{}).
-		Where("id IN ?", stuckIDs).
 		Updates(map[string]any{
 			"status":   entity.RunStatusError,
 			"result":   "timed out (max_timeout exceeded)",
 			"ended_at": &now,
 		}).Error; err != nil {
-		tx.Rollback()
 		return false, err
 	}
 
-	// Flip job.last_status to idle only when no other open run remains.
-	// A manual trigger fired right after a stuck cron tick should keep
-	// running — that fresh run's row still has ended_at IS NULL.
-	res := tx.Model(&entity.Job{}).
+	// Flip job.last_status to idle when no open run remains. Guarded by
+	// NOT EXISTS so a fresh run (manual trigger fired right after a stuck
+	// cron tick) keeps its "running" badge — that run's row still has
+	// ended_at IS NULL.
+	//
+	// This flip must run even when the sweep above matched nothing: a
+	// crash between FinishRun and SetStatus(idle) — or purged run history
+	// — leaves last_status="running" with no open run row at all, and
+	// that orphan used to stick forever because the old sweep returned
+	// early unless it found an open row.
+	res := r.db.WithContext(ctx).Model(&entity.Job{}).
 		Where("id = ? AND last_status = ?", j.ID, entity.JobStatusRunning).
 		Where("NOT EXISTS (?)",
-			tx.Model(&entity.JobRun{}).Select("1").
+			r.db.Model(&entity.JobRun{}).Select("1").
 				Where("job_runs.job_id = ? AND job_runs.ended_at IS NULL", j.ID)).
 		Updates(map[string]any{
 			"last_status": entity.JobStatusIdle,
 			"updated_at":  now,
 		})
-	if res.Error != nil {
-		tx.Rollback()
-		return false, res.Error
-	}
+	return res.RowsAffected > 0, res.Error
+}
 
-	return res.RowsAffected > 0, tx.Commit().Error
+// FreshOpenRunExists reports whether the job has an open run younger than
+// cutoff — i.e. a run some process is (as far as the DB can tell) still
+// genuinely executing.
+func (r *repo) FreshOpenRunExists(ctx context.Context, jobID string, cutoff time.Time) (bool, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Model(&entity.JobRun{}).
+		Where("job_id = ? AND ended_at IS NULL AND started_at >= ?", jobID, cutoff).
+		Count(&n).Error
+	return n > 0, err
+}
+
+// HasOpenRun reports whether the job has any run row still open,
+// regardless of age.
+func (r *repo) HasOpenRun(ctx context.Context, jobID string) (bool, error) {
+	var n int64
+	err := r.db.WithContext(ctx).Model(&entity.JobRun{}).
+		Where("job_id = ? AND ended_at IS NULL", jobID).
+		Count(&n).Error
+	return n > 0, err
+}
+
+// CancelOpenRuns closes every open run of the job as cancelled with the
+// given result text.
+func (r *repo) CancelOpenRuns(ctx context.Context, jobID string, result string) error {
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&entity.JobRun{}).
+		Where("job_id = ? AND ended_at IS NULL", jobID).
+		Updates(map[string]any{
+			"status":   entity.RunStatusCancelled,
+			"result":   result,
+			"ended_at": &now,
+		}).Error
+}
+
+// SetIdleIfNoOpenRun flips last_status to idle only when no open run
+// remains, so a finalize racing a newer run cannot clobber that run's
+// "running" badge.
+func (r *repo) SetIdleIfNoOpenRun(ctx context.Context, jobID string) error {
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&entity.Job{}).
+		Where("id = ?", jobID).
+		Where("NOT EXISTS (?)",
+			r.db.Model(&entity.JobRun{}).Select("1").
+				Where("job_runs.job_id = ? AND job_runs.ended_at IS NULL", jobID)).
+		Updates(map[string]any{
+			"last_status": entity.JobStatusIdle,
+			"last_run_at": &now,
+			"updated_at":  now,
+		}).Error
 }
 
 func (r *repo) SetStatus(ctx context.Context, id string, status entity.JobStatus) error {
@@ -175,7 +208,10 @@ func (r *repo) CreateRun(ctx context.Context, run *entity.JobRun) error {
 
 func (r *repo) FinishRun(ctx context.Context, runID string, status entity.RunStatus, result string) error {
 	now := time.Now()
-	return r.db.WithContext(ctx).Model(&entity.JobRun{}).Where("id = ?", runID).
+	// ended_at IS NULL: a run already closed by CancelOpenRuns or the
+	// stuck sweep keeps its status — the late finalize must not rewrite
+	// "cancelled" into success/error.
+	return r.db.WithContext(ctx).Model(&entity.JobRun{}).Where("id = ? AND ended_at IS NULL", runID).
 		Updates(map[string]any{
 			"status":   status,
 			"result":   strutil.LimitText(result, strutil.DefaultLimit),

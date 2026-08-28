@@ -178,6 +178,8 @@ Opening a ticket's page puts the title, description, and sessions (capped at 5, 
 
 Selecting a ticket on the board — not only pressing **+ New session** — scopes the next chat you start to it: the composer names the ticket and the placeholder reflects it (clipped if the title runs long), and a **Start without a ticket** link backs out of the selection. The new session is attached to the ticket as soon as it opens, so it reads the ticket's notes from its first turn.
 
+A session attached to a ticket is told, in its system prompt, to treat that ticket as the default subject of the conversation: read the ticket (`ticket_get`) and its notes (`notes_list`) before anything else, then follow whatever skill matches the ask. Unrelated digging through other sessions or data is a last resort, not a first move.
+
 From inside a chat, the conversation header's view menu offers a jump: a chat already attached to a ticket jumps straight to it, one that isn't opens the board instead. It only appears when the project has ticket mode on.
 
 ### Per-project settings

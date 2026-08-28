@@ -6,7 +6,13 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Jobs can be cancelled mid-run**: A **Cancel** button appears on a running job's page (`/jobs/{key}` and the manager SPA job detail view) — it cancels the run's context, marks the run **cancelled** (a new status distinct from Success/Error), and returns the job to idle. Cancel doubles as an unstick action for a job stuck showing `running` with nothing actually in flight (e.g. after a crash), which is now also swept automatically on every worker tick and at bootstrap, including disabled jobs. Disabling a running job cancels it the same way. See [Job Module ▶ Cancelling a run](/guide/job-module#cancelling-a-run).
+
+### Changed
+
+*   **Ticketed sessions default to their ticket**: A session attached to a ticket now has its system prompt tell the agent to treat that ticket as the conversation's default subject — read the ticket and its notes first, then follow a matching skill — instead of leaving it to ad-hoc exploration across sessions.
 
 ---
 
