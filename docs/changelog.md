@@ -9,6 +9,7 @@ All notable changes to Wick are documented here.
 ### Added
 
 *   **Jobs can be cancelled mid-run**: A **Cancel** button appears on a running job's page (`/jobs/{key}` and the manager SPA job detail view) — it cancels the run's context, marks the run **cancelled** (a new status distinct from Success/Error), and returns the job to idle. Cancel doubles as an unstick action for a job stuck showing `running` with nothing actually in flight (e.g. after a crash), which is now also swept automatically on every worker tick and at bootstrap, including disabled jobs. Disabling a running job cancels it the same way. See [Job Module ▶ Cancelling a run](/guide/job-module#cancelling-a-run).
+*   **Your sessions / All sessions tabs**: The Sessions page and sidebar both default to your own chats — plus, under ticket mode, chats on tickets assigned to you — with a tab to widen to everyone's; both scroll to load more instead of paging. The sidebar's old per-project session-count pill is replaced with a Yours/All toggle (cookie-persisted, resets to Yours on project switch). The ticket board's Untracked rail gets the same Yours/All split (`?untracked_owner=me` on `GET /api/projects/{id}/tickets`, see [Ticket Integrations](/guide/agents/ticket-integrations#list-tickets)), plus scroll-to-load paging, and the board now locks to the viewport with each column scrolling independently under pinned headers. `GET /api/sessions` gains `?owner=me` and `?offset=` with `total` / `has_more` in the response to back this.
 
 ### Changed
 
