@@ -6,6 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+### Improved
+
+*   **Faster restarts on Postgres**: Startup skips the full `AutoMigrate` catalog scan when the schema hasn't changed since the last boot, checking a fingerprint stored in a new single-row `wick_schema_state` table instead. Falls back to a full migration automatically whenever the fingerprint is missing or doesn't match. No config change needed. See [Headless Server ▶ Postgres instead of SQLite](/guide/headless#postgres-instead-of-sqlite).
+
 ### Added
 
 *   **Jobs can be cancelled mid-run**: A **Cancel** button appears on a running job's page (`/jobs/{key}` and the manager SPA job detail view) — it cancels the run's context, marks the run **cancelled** (a new status distinct from Success/Error), and returns the job to idle. Cancel doubles as an unstick action for a job stuck showing `running` with nothing actually in flight (e.g. after a crash), which is now also swept automatically on every worker tick and at bootstrap, including disabled jobs. Disabling a running job cancels it the same way. See [Job Module ▶ Cancelling a run](/guide/job-module#cancelling-a-run).
