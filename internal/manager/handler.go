@@ -135,6 +135,7 @@ func (h *Handler) Register(mux *http.ServeMux, authMidd *login.Middleware) {
 	// behaviour on the /manager/api surface so the SPA stays consistent.
 	mux.Handle("GET /manager/api/jobs/{key}", authJob(h.apiJobDetail))
 	mux.Handle("POST /manager/api/jobs/{key}/run", authJob(h.apiRunJob))
+	mux.Handle("POST /manager/api/jobs/{key}/cancel", authJob(h.apiCancelJob))
 	mux.Handle("GET /manager/api/jobs/{key}/runs/{runID}", authJob(h.apiJobRun))
 	mux.Handle("POST /manager/api/jobs/{key}/settings", adminOnly(h.apiUpdateJobSettings))
 	mux.Handle("POST /manager/api/jobs/{key}/configs/{configKey}", adminOnly(h.apiSetJobConfig))

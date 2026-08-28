@@ -261,6 +261,9 @@ func apiProjectTickets(c *tool.Ctx) {
 	//   ?assignee=ID|me  only this person's tickets; absent/empty = everyone
 	//   ?untracked=1     ask for the untracked list at all (default: no)
 	//   ?untracked_limit=N
+	//   ?untracked_owner=me   only the caller's loose chats; absent = everyone's.
+	//                    Applied to the COUNT too, so the rail's number and its
+	//                    rows always describe the same set.
 	rowsPerCard := queryInt(c, "rows", defaultRowsPerCard, 0, maxRowsPerCard)
 	// The untracked list is the board's most expensive part and the one
 	// least often looked at, so it is opt-in: a caller that never asks
@@ -268,6 +271,14 @@ func apiProjectTickets(c *tool.Ctx) {
 	// opt-out spelling.
 	wantUntracked := isTrueish(c.Query("untracked"))
 	untrackedLimit := queryInt(c, "untracked_limit", defaultUntrackedLimit, 1, maxUntrackedLimit)
+	// "me" resolves against the caller here, same as ?assignee=me. An
+	// untracked chat has no ticket, so ownership is the only "mine" there is.
+	untrackedOwner := ""
+	if strings.EqualFold(strings.TrimSpace(c.Query("untracked_owner")), "me") {
+		if u := login.GetUser(c.Context()); u != nil {
+			untrackedOwner = u.ID
+		}
+	}
 
 	wantStatus, statusFiltered := queryCSV(c, "statuses")
 	// "me" resolves against the caller, so the client can save a filter that
@@ -348,6 +359,9 @@ func apiProjectTickets(c *tool.Ctx) {
 	loose := make([]looseSession, 0, 32)
 	for sid, s := range live {
 		if s.Meta.ProjectID != id || s.Meta.ParentSessionID != "" || ticketed[sid] {
+			continue
+		}
+		if untrackedOwner != "" && s.Meta.UserID != untrackedOwner {
 			continue
 		}
 		loose = append(loose, looseSession{id: sid, last: s.Meta.LastActive})

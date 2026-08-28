@@ -110,6 +110,8 @@ DATABASE_URL=postgres://wick:pass@db.local:5432/wick ./wick start
 
 SQLite WAL mode handles single-host concurrency fine, but Postgres is the move once you have multiple wick processes hitting one DB.
 
+Restarts skip the full schema migration pass when the model shape hasn't changed since the last boot — a fingerprint is checked against a single-row `wick_schema_state` table instead of re-inspecting the catalog. This matters most over a network hop to Postgres, where the full pass can otherwise take tens of seconds. No config needed; it falls back to a full migration automatically if the fingerprint is missing or stale.
+
 ### Log location
 
 zerolog writes per-day files at `~/.wick/logs/wick-YYYY-MM-DD.log` plus stderr. Rotation kicks in on the next launch on a new day; files older than `log_retention_days` (default 7) get deleted.
