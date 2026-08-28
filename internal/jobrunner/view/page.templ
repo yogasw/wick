@@ -44,6 +44,14 @@ templ JobPage(j *entity.Job, runs []entity.JobRun, user *entity.User, errMsg str
 							class="rounded-lg border border-white-400 dark:border-navy-600 bg-white-100 dark:bg-navy-700 px-4 py-2 text-sm font-medium text-black-900 dark:text-white-100 hover:border-green-400 hover:text-green-600 transition-colors"
 						>Settings</a>
 					}
+					if j.LastStatus == entity.JobStatusRunning {
+						<form method="POST" action={ templ.SafeURL("/jobs/" + j.Key + "/cancel") }>
+							<button
+								type="submit"
+								class="rounded-lg border border-neg-300 bg-white-100 dark:bg-navy-700 px-4 py-2 text-sm font-medium text-neg-400 hover:bg-neg-100 transition-colors"
+							>Cancel</button>
+						</form>
+					}
 					<form method="POST" action={ templ.SafeURL("/jobs/" + j.Key + "/run") }>
 						<button
 							type="submit"
@@ -143,6 +151,8 @@ templ runStatusBadge(status entity.RunStatus) {
 		<span class="rounded-full bg-prog-100 px-2 py-0.5 text-[10px] font-medium text-prog-400">Running</span>
 	} else if status == entity.RunStatusSuccess {
 		<span class="rounded-full bg-pos-100 px-2 py-0.5 text-[10px] font-medium text-pos-400">Success</span>
+	} else if status == entity.RunStatusCancelled {
+		<span class="rounded-full bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-[10px] font-medium text-black-800 dark:text-black-500">Cancelled</span>
 	} else {
 		<span class="rounded-full bg-neg-100 px-2 py-0.5 text-[10px] font-medium text-neg-400">Error</span>
 	}
