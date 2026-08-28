@@ -260,6 +260,65 @@ describe("listSessions — project scoping", () => {
   });
 });
 
+describe("listSessions — owner scope + paging", () => {
+  const capture = () => {
+    let capturedReq: HttpClientRequest.HttpClientRequest | null = null;
+    const layer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((req) => {
+        capturedReq = req;
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(JSON.stringify({ sessions: [], total: 638, has_more: true }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+        );
+      }),
+    );
+    return { layer, url: () => (capturedReq as unknown as HttpClientRequest.HttpClientRequest).url };
+  };
+
+  test("owner=me and offset ride the query string", async () => {
+    const c = capture();
+    await Effect.runPromise(
+      listSessions("/tools/agents", "proj1", "me", 100).pipe(Effect.provide(c.layer)),
+    );
+    expect(c.url()).toContain("owner=me");
+    expect(c.url()).toContain("offset=100");
+  });
+
+  test('"all" sends no owner param (the server default)', async () => {
+    const c = capture();
+    await Effect.runPromise(
+      listSessions("/tools/agents", "proj1", "all").pipe(Effect.provide(c.layer)),
+    );
+    expect(c.url()).not.toContain("owner=");
+    expect(c.url()).not.toContain("offset=");
+  });
+
+  test("surfaces the server's total and has_more", async () => {
+    const c = capture();
+    const result = await Effect.runPromise(
+      listSessions("/tools/agents", undefined, "me").pipe(Effect.provide(c.layer)),
+    );
+    expect(result.total).toBe(638);
+    expect(result.hasMore).toBe(true);
+  });
+
+  test("falls back to sessions.length when total is absent (older server)", async () => {
+    const result = await Effect.runPromise(
+      listSessions("/tools/agents").pipe(
+        Effect.provide(mockLayer(200, { sessions: [SESSION] })),
+      ),
+    );
+    expect(result.total).toBe(1);
+    expect(result.hasMore).toBe(false);
+  });
+});
+
 describe("getTurnTrace", () => {
   test("normalizes array response to TurnEvent[]", async () => {
     const events = [

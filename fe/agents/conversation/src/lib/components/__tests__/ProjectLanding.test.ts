@@ -31,6 +31,8 @@ describe("ProjectLanding — presentational rendering", () => {
     project: PROJECT,
     providers: [PROVIDER],
     sessions: [makeSession("s1"), makeSession("s2"), makeSession("s3")],
+    ownerTab: "me" as const,
+    onOwnerTab: vi.fn(),
     onPin: vi.fn(),
     onSelectSession: vi.fn(),
   };
@@ -110,6 +112,8 @@ describe("ProjectLanding — composer default provider (#983)", () => {
       project: { ...PROJECT, defaultProvider },
       providers: [CLAUDE, CODEX],
       sessions: [],
+      ownerTab: "me" as const,
+      onOwnerTab: vi.fn(),
       onPin: vi.fn(),
       onSelectSession: vi.fn(),
     };
@@ -136,8 +140,8 @@ describe("ProjectLanding — composer default provider (#983)", () => {
 
 describe("ProjectLanding — folder path in header (#41)", () => {
   test("project name carries the folder path as its tooltip", () => {
-    const project = { id: "p1", name: "Proj", path: "/home/work/proj", managed: true };
-    render(ProjectLanding, { props: { base: "/agents", project, providers: [], sessions: [], onPin: vi.fn(), onSelectSession: vi.fn() } });
+    const project = { id: "p1", name: "Proj", path: "/home/work/proj", managed: true, pinned: false };
+    render(ProjectLanding, { props: { base: "/agents", project, providers: [], sessions: [], ownerTab: "me" as const, onOwnerTab: vi.fn(), onPin: vi.fn(), onSelectSession: vi.fn() } });
     // The slim top bar keeps the path on the name's tooltip rather than a
     // line of its own.
     expect(screen.getByTitle("/home/work/proj")).toBeDefined();
@@ -146,17 +150,17 @@ describe("ProjectLanding — folder path in header (#41)", () => {
 
 describe("ProjectLanding — SessionList reuse (#39)", () => {
   test("in-project session list renders lifecycle status badge", () => {
-    const project = { id: "p1", name: "Proj", path: "/p", managed: true };
+    const project = { id: "p1", name: "Proj", path: "/p", managed: true, pinned: false };
     const sessions = [{ id: "s1", label: "Chat A", status: "", project_id: "p1", active_agent: "", created_at: "", last_active: "", lifecycle: "working" }];
-    render(ProjectLanding, { props: { base: "/agents", project, providers: [], sessions, onPin: vi.fn(), onSelectSession: vi.fn() } });
+    render(ProjectLanding, { props: { base: "/agents", project, providers: [], sessions, ownerTab: "me" as const, onOwnerTab: vi.fn(), onPin: vi.fn(), onSelectSession: vi.fn() } });
     expect(screen.getByText("working")).toBeDefined();
   });
 
   test("clicking a session row calls onSelectSession", async () => {
-    const project = { id: "p1", name: "Proj", path: "/p", managed: true };
+    const project = { id: "p1", name: "Proj", path: "/p", managed: true, pinned: false };
     const sessions = [{ id: "s1", label: "Chat A", status: "", project_id: "p1", active_agent: "", created_at: "", last_active: "", lifecycle: "" }];
     const onSelectSession = vi.fn();
-    render(ProjectLanding, { props: { base: "/agents", project, providers: [], sessions, onPin: vi.fn(), onSelectSession } });
+    render(ProjectLanding, { props: { base: "/agents", project, providers: [], sessions, ownerTab: "me" as const, onOwnerTab: vi.fn(), onPin: vi.fn(), onSelectSession } });
     await fireEvent.click(screen.getByTestId("session-row-s1"));
     expect(onSelectSession).toHaveBeenCalledWith("s1");
   });
@@ -195,6 +199,8 @@ describe("ProjectLanding — create-and-navigate on send", () => {
         project: PROJECT,
         providers: [PROVIDER],
         sessions: [],
+        ownerTab: "me" as const,
+        onOwnerTab: vi.fn(),
         onPin: vi.fn(),
         onSelectSession: vi.fn(),
       },
@@ -230,6 +236,8 @@ describe("ProjectLanding — create-and-navigate on send", () => {
         project: PROJECT,
         providers: [PROVIDER],
         sessions: [],
+        ownerTab: "me" as const,
+        onOwnerTab: vi.fn(),
         onPin: vi.fn(),
         onSelectSession: vi.fn(),
       },

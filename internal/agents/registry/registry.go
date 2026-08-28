@@ -37,6 +37,22 @@ type Registry struct {
 	projects map[string]project.Project
 	sessions map[string]session.Session
 	presets  map[string]struct{}
+
+	// Cached read views, rebuilt lazily on the first read after a write
+	// (nil = stale). Sessions() and SessionIDs() are on every dashboard
+	// request; without the cache each call re-copied the whole map and
+	// re-sorted it, which is O(all sessions) work for a page that shows 50.
+	// The maps/slices handed out are REPLACED on rebuild, never mutated, so
+	// callers may hold them across the lock — but must treat them as
+	// read-only.
+	viewIDs []string                   // session ids, LastActive descending
+	viewMap map[string]session.Session // shared snapshot
+}
+
+// invalidateSessionViews marks the cached views stale. Callers must hold
+// the write lock.
+func (r *Registry) invalidateSessionViews() {
+	r.viewIDs, r.viewMap = nil, nil
 }
 
 // New returns an empty registry bound to the given layout. Call
@@ -150,6 +166,7 @@ func (r *Registry) Reload() error {
 	r.projects = projects
 	r.sessions = sessions
 	r.presets = presets
+	r.invalidateSessionViews()
 	return nil
 }
 
@@ -192,38 +209,46 @@ func (r *Registry) Project(id string) (project.Project, bool) {
 	return p, ok
 }
 
-// Sessions returns a snapshot copy.
+// Sessions returns a shared read-only snapshot of the sessions map. The
+// snapshot is cached between writes: repeated dashboard reads cost a map
+// return, not an O(all sessions) copy. Do NOT mutate the result — writes
+// replace the snapshot, they never edit it, so a mutation here would
+// corrupt every other reader holding it.
 func (r *Registry) Sessions() map[string]session.Session {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	out := make(map[string]session.Session, len(r.sessions))
-	for k, v := range r.sessions {
-		out[k] = v
-	}
-	return out
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rebuildSessionViewsLocked()
+	return r.viewMap
 }
 
 // SessionIDs returns IDs sorted by last_active descending — the order
-// listing pages want by default.
+// listing pages want by default. Cached between writes (see Sessions);
+// treat the slice as read-only.
 func (r *Registry) SessionIDs() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	type kv struct {
-		id string
-		s  session.Session
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rebuildSessionViewsLocked()
+	return r.viewIDs
+}
+
+// rebuildSessionViewsLocked (re)builds the cached snapshot + sorted-id list
+// when stale. Callers must hold the write lock. Both views are built
+// together: they are two shapes of the same read and always describe the
+// same state, so a list page and its meta lookups can never disagree.
+func (r *Registry) rebuildSessionViewsLocked() {
+	if r.viewMap != nil && r.viewIDs != nil {
+		return
 	}
-	all := make([]kv, 0, len(r.sessions))
+	snap := make(map[string]session.Session, len(r.sessions))
+	ids := make([]string, 0, len(r.sessions))
 	for k, v := range r.sessions {
-		all = append(all, kv{k, v})
+		snap[k] = v
+		ids = append(ids, k)
 	}
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].s.Meta.LastActive.After(all[j].s.Meta.LastActive)
+	sort.Slice(ids, func(i, j int) bool {
+		return snap[ids[i]].Meta.LastActive.After(snap[ids[j]].Meta.LastActive)
 	})
-	out := make([]string, len(all))
-	for i, kv := range all {
-		out[i] = kv.id
-	}
-	return out
+	r.viewMap, r.viewIDs = snap, ids
 }
 
 // Session returns one session by ID, ok=false if missing.
@@ -267,6 +292,7 @@ func (r *Registry) upsertSession(s session.Session) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sessions[s.ID] = s
+	r.invalidateSessionViews()
 }
 
 func (r *Registry) upsertPreset(name string) {
@@ -297,6 +323,7 @@ func (r *Registry) deleteSession(id string) {
 			delete(r.sessions, sid)
 		}
 	}
+	r.invalidateSessionViews()
 }
 
 func (r *Registry) deletePreset(name string) {

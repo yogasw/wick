@@ -1,8 +1,12 @@
 <script lang="ts">
-  import type { TicketCard, TicketField } from "../types/agents.js";
+  import type { TicketCard, TicketField, TicketSessionRow } from "../types/agents.js";
   import { timeAgo } from "../timeFormat.js";
+  import { Effect } from "effect";
+  import { WickClientLayer } from "@wick-fe/common-api";
+  import { getTicket } from "../api/tickets.js";
 
   type Props = {
+    base: string;
     ticket: TicketCard;
     /* Project schema, so fields render with their labels, not raw keys. */
     schema?: TicketField[];
@@ -22,6 +26,7 @@
   };
 
   let {
+    base,
     ticket,
     schema,
     users,
@@ -55,7 +60,28 @@
     return out;
   });
 
-  const sessionRows = $derived(ticket.session_rows ?? []);
+  /* The board payload carries one page of rows per card (the cap that keeps
+     a big project cheap to poll). Scrolling the card's OWN row area to its
+     end lazily fetches the ticket's full session list once; the rows scroll
+     inside the card, never stretching the column. */
+  let expanded = $state<TicketSessionRow[] | null>(null);
+  let loadingMore = $state(false);
+  $effect(() => {
+    // A board reload hands us a fresh ticket — drop the stale expansion.
+    ticket.session_rows;
+    expanded = null;
+  });
+  const sessionRows = $derived(expanded ?? ticket.session_rows ?? []);
+  const moreSessions = $derived(expanded === null && ticket.sessions > sessionRows.length);
+
+  function loadAllSessions() {
+    if (loadingMore) return;
+    loadingMore = true;
+    Effect.runPromise(getTicket(base, ticket.id).pipe(Effect.provide(WickClientLayer)))
+      .then((d) => { expanded = d.sessions; })
+      .catch(() => { /* the +page link on the ticket still shows them */ })
+      .finally(() => { loadingMore = false; });
+  }
 
   function initial(name: string): string {
     return name.trim().charAt(0).toUpperCase() || "?";
@@ -141,7 +167,7 @@
        handle for moving that conversation to another ticket, which a number
        could never be. -->
   {#if sessionRows.length > 0}
-    <ul class="mt-2 flex flex-col gap-1 border-t border-white-300 pt-2 dark:border-navy-600">
+    <ul class="mt-2 flex max-h-40 flex-col gap-1 overflow-y-auto border-t border-white-300 pt-2 dark:border-navy-600">
       {#each sessionRows as s (s.id)}
         <li>
           <div
@@ -166,15 +192,20 @@
         </li>
       {/each}
       <!-- The card carries a page of rows, not all of them: a ticket with
-           twenty sessions must not stretch the column. The rest are on the
-           ticket's own page. -->
-      {#if ticket.sessions > sessionRows.length}
+           twenty sessions must not stretch the column. "+N more" pulls the
+           REST of the rows into the card (which then scrolls within its
+           max height) — in place, no navigation. Not a scroll-sentinel on
+           purpose: a card short enough to fit shows its end immediately,
+           and auto-fetching every visible card would undo the payload cap
+           the board polls on. -->
+      {#if moreSessions || loadingMore}
         <li>
           <button
             type="button"
-            onclick={(e) => { e.stopPropagation(); onOpen(ticket.id); }}
-            class="w-full rounded px-1.5 py-0.5 text-left text-[10px] text-black-700 transition-colors hover:text-green-600 dark:text-black-600 dark:hover:text-green-400"
-          >+{ticket.sessions - sessionRows.length} more session{ticket.sessions - sessionRows.length === 1 ? "" : "s"}</button>
+            disabled={loadingMore}
+            onclick={(e) => { e.stopPropagation(); loadAllSessions(); }}
+            class="w-full rounded px-1.5 py-0.5 text-left text-[10px] text-black-700 transition-colors hover:text-green-600 disabled:opacity-60 dark:text-black-600 dark:hover:text-green-400"
+          >{loadingMore ? "Loading…" : `+${ticket.sessions - sessionRows.length} more session${ticket.sessions - sessionRows.length === 1 ? "" : "s"}`}</button>
         </li>
       {/if}
     </ul>
