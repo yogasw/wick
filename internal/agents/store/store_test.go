@@ -396,6 +396,142 @@ func TestApplyThinkingRunsSplitByToolUse(t *testing.T) {
 	}
 }
 
+// TestApplyTextSegmentRecordedBeforeTool verifies narration text streamed
+// BEFORE a tool call is recorded into the trace as a "text" event so it keeps
+// its position between tool cards, while the conversation turn still carries
+// the full concatenated reply. Trailing text (after the last tool) is the
+// visible reply bubble and must NOT be duplicated into the trace.
+func TestApplyTextSegmentRecordedBeforeTool(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "checking config "})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "first…"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.ToolResult, Text: "ok", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "config fine."})
+	st.Apply(event.AgentEvent{Type: event.Done})
+
+	lines := readConvLines(t, layout)
+	if len(lines) != 1 {
+		t.Fatalf("turns: %d", len(lines))
+	}
+	if lines[0].Text != "checking config first…config fine." {
+		t.Fatalf("turn text = %q", lines[0].Text)
+	}
+	evs := readTraceEvents(t, layout, lines[0])
+	if len(evs) != 3 {
+		t.Fatalf("events: %d, want 3 (text, tool_use, tool_result): %+v", len(evs), evs)
+	}
+	if evs[0].Type != "text" || evs[0].Text != "checking config first…" {
+		t.Fatalf("evs[0]: %+v", evs[0])
+	}
+	if evs[1].Type != "tool_use" || evs[2].Type != "tool_result" {
+		t.Fatalf("evs[1:]: %+v", evs[1:])
+	}
+}
+
+// TestApplyTextSegmentBeforeThinking verifies a text run is also flushed when
+// a thinking event follows it, so think→text→think ordering survives in the
+// trace instead of the two thinking runs coalescing across the text.
+func TestApplyTextSegmentBeforeThinking(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "plan"})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "status update"})
+	st.Apply(event.AgentEvent{Type: event.Thinking, Text: "more"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+
+	lines := readConvLines(t, layout)
+	evs := readTraceEvents(t, layout, lines[0])
+	if len(evs) != 4 {
+		t.Fatalf("events: %d, want 4 (thinking, text, thinking, tool_use): %+v", len(evs), evs)
+	}
+	if evs[0].Type != "thinking" || evs[0].Text != "plan" {
+		t.Fatalf("evs[0]: %+v", evs[0])
+	}
+	if evs[1].Type != "text" || evs[1].Text != "status update" {
+		t.Fatalf("evs[1]: %+v", evs[1])
+	}
+	if evs[2].Type != "thinking" || evs[2].Text != "more" {
+		t.Fatalf("evs[2]: %+v", evs[2])
+	}
+}
+
+// TestApplyWhitespaceTextSegmentSkipped verifies pure-whitespace text between
+// tool calls (models often emit "\n\n" separators) does not create an empty
+// text card in the trace.
+func TestApplyWhitespaceTextSegmentSkipped(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "\n\n"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t2"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+
+	lines := readConvLines(t, layout)
+	evs := readTraceEvents(t, layout, lines[0])
+	for _, ev := range evs {
+		if ev.Type == "text" {
+			t.Fatalf("whitespace-only segment recorded: %+v", ev)
+		}
+	}
+}
+
+// TestTextSegmentOffsetResetBetweenTurns guards the segment cursor: turn 2's
+// first tool call must not re-emit (or mis-slice) text that belonged to turn 1.
+func TestTextSegmentOffsetResetBetweenTurns(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	// turn 1 — interim text + tool
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "long first turn narration"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+	// turn 2 — short text + tool
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "hi"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t2"})
+	st.Apply(event.AgentEvent{Type: event.Done})
+
+	lines := readConvLines(t, layout)
+	if len(lines) != 2 {
+		t.Fatalf("turns: %d", len(lines))
+	}
+	evs := readTraceEvents(t, layout, lines[1])
+	if len(evs) != 2 {
+		t.Fatalf("turn2 events: %d, want 2: %+v", len(evs), evs)
+	}
+	if evs[0].Type != "text" || evs[0].Text != "hi" {
+		t.Fatalf("turn2 evs[0]: %+v", evs[0])
+	}
+}
+
+// TestRecoverInflightSegmentsText verifies crash recovery rebuilds the same
+// interleaving a live turn would have had: text_delta runs between tool
+// entries in inflight.jsonl become "text" trace events, and the recovered
+// turn body still carries the full concatenation.
+func TestRecoverInflightSegmentsText(t *testing.T) {
+	st, layout := newStore(t, "backend", false)
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: "working on it"})
+	st.Apply(event.AgentEvent{Type: event.ToolUse, ToolName: "Bash", ToolInput: "{}", ToolUseID: "t1"})
+	st.Apply(event.AgentEvent{Type: event.TextDelta, Text: " done half"})
+	// No Done — the process "died" here; recover from inflight.jsonl.
+	recovered, err := RecoverInflight(layout, "S1", "backend", "claude/x", nil)
+	if err != nil || !recovered {
+		t.Fatalf("recover: %v %v", recovered, err)
+	}
+	lines := readConvLines(t, layout)
+	last := lines[len(lines)-1]
+	if last.Text != "working on it done half" {
+		t.Fatalf("recovered text = %q", last.Text)
+	}
+	evs := readTraceEvents(t, layout, last)
+	if len(evs) != 2 {
+		t.Fatalf("events: %d, want 2 (text, tool_use): %+v", len(evs), evs)
+	}
+	if evs[0].Type != "text" || evs[0].Text != "working on it" {
+		t.Fatalf("evs[0]: %+v", evs[0])
+	}
+	if evs[1].Type != "tool_use" {
+		t.Fatalf("evs[1]: %+v", evs[1])
+	}
+}
+
 func TestApplyToolUseAndResultBuffered(t *testing.T) {
 	st, layout := newStore(t, "backend", false)
 	st.Apply(event.AgentEvent{

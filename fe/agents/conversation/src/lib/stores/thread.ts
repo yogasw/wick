@@ -105,7 +105,8 @@ export function createThreadStore(): ThreadStore {
                 text: b.result,
               };
             }
-            return { type: "thinking", text: b.text };
+            // thinking / text / raw block kinds match their event type names.
+            return { type: b.kind, text: b.text };
           }),
         attachments: [],
       };
