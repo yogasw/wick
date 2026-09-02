@@ -2,7 +2,7 @@ import { describe, test, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import ThreadMessage from "../ThreadMessage.svelte";
 import { setViewerId } from "../../viewer.js";
-import type { ConversationTurn, TurnEvent } from "../../types/agents.js";
+import type { ConversationTurn, TurnEvent, TurnEventPayload } from "../../types/agents.js";
 
 function makeTurn(overrides: Partial<ConversationTurn> = {}): ConversationTurn {
   return {
@@ -911,7 +911,7 @@ describe("ThreadMessage - large spilled tool_result", () => {
     },
   ];
 
-  async function openTrace(turn: ConversationTurn, loadTraceEvent?: (turnId: string, eventId: string) => Promise<TurnEvent>) {
+  async function openTrace(turn: ConversationTurn, loadTraceEvent?: (turnId: string, eventId: string) => Promise<TurnEventPayload>) {
     const utils = render(ThreadMessage, { props: { turn, loadTraceEvent } });
     await fireEvent.click(screen.getByText(/show trace/i).closest("button")!);
     await vi.waitFor(() => {
@@ -958,6 +958,55 @@ describe("ThreadMessage - large spilled tool_result", () => {
       expect(loadTraceEvent).toHaveBeenCalledWith("backend-big", "e1");
       // Appears in both the header preview and the expanded <pre>.
       expect(screen.getAllByText(/SPILLED PAYLOAD/).length).toBeGreaterThan(0);
+    });
+  });
+
+  /* Same spill mechanism, other side: a tool_use whose ARGUMENTS are big
+     (payload = text + tool_input in store.writeTraceIndex) also loses its
+     inline tool_input — the card must not claim "no input" for a 12 KB
+     command; it lazy-loads from the same sidecar, keyed by the tool_use's
+     own event_id. */
+  const largeInputEvents = (): TurnEvent[] => [
+    {
+      event_id: "e44",
+      type: "tool_use",
+      tool_use_id: "tu-in",
+      tool_name: "Bash",
+      large: true,
+      size: 12588,
+      at: "2026-09-02T09:00:00.000Z",
+      end_at: "2026-09-02T09:00:05.000Z",
+    },
+    { type: "tool_result", tool_use_id: "tu-in", text: "ok" },
+  ];
+
+  test("spilled tool_input does NOT render as 'no input'", async () => {
+    const turn = makeTurn({ role: "assistant", text: "done", events: largeInputEvents() });
+    render(ThreadMessage, { props: { turn } });
+    await fireEvent.click(screen.getByText(/show trace/i).closest("button")!);
+    await vi.waitFor(() => {
+      expect(screen.getByText("Bash")).toBeDefined();
+    });
+    await fireEvent.click(screen.getByText("Bash").closest("button")!);
+    expect(screen.queryByText(/no input/)).toBeNull();
+    // Size hint shows in both the header slot and the expanded body.
+    expect(screen.getAllByText(/12\.3 KB/).length).toBeGreaterThan(0);
+  });
+
+  test("expanding the header lazy-loads the spilled input via loadTraceEvent", async () => {
+    const loadTraceEvent = vi
+      .fn()
+      .mockResolvedValue({ event_id: "e44", type: "tool_use", tool_input: '{"cmd":"HEREDOC-CSV"}' });
+    const turn = makeTurn({ role: "assistant", text: "done", turn_id: "backend-input", events: largeInputEvents() });
+    render(ThreadMessage, { props: { turn, loadTraceEvent } });
+    await fireEvent.click(screen.getByText(/show trace/i).closest("button")!);
+    await vi.waitFor(() => {
+      expect(screen.getByText("Bash")).toBeDefined();
+    });
+    await fireEvent.click(screen.getByText("Bash").closest("button")!);
+    await vi.waitFor(() => {
+      expect(loadTraceEvent).toHaveBeenCalledWith("backend-input", "e44");
+      expect(screen.getByText(/HEREDOC-CSV/)).toBeDefined();
     });
   });
 

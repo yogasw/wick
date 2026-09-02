@@ -200,6 +200,11 @@
           toolUseId: ev.tool_use_id ?? "",
           toolName: ev.tool_name ?? "",
           toolInput: ev.tool_input ?? "",
+          // Big arguments spill the same way big results do — the sidecar
+          // is keyed by the tool_use's own event_id.
+          toolInputLarge: ev.large === true,
+          toolInputSize: ev.size,
+          toolInputEventId: ev.event_id,
           result: res?.text,
           // A large (spilled) result event has no text — the EVENT existing
           // is what marks the call finished, or the card spins forever.

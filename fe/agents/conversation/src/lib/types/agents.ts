@@ -362,6 +362,12 @@ export type ThreadBlock =
       toolUseId: string;
       toolName: string;
       toolInput: string;
+      // The tool_use's own arguments were spilled (TurnEvent.large on the
+      // tool_use row): toolInput is empty until the sidecar payload —
+      // keyed by the tool_use's OWN event_id — is fetched on expand.
+      toolInputLarge?: boolean;
+      toolInputSize?: number;
+      toolInputEventId?: string;
       result?: string;
       // Whether a tool_result EVENT was paired to this call. This — not the
       // presence of result text — is what says the call finished: a large
