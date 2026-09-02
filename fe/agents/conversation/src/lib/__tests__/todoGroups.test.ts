@@ -182,6 +182,25 @@ describe("stripTodoBlocks", () => {
     const blocks = [thinking("a"), toolBlock("s1", "shell")];
     expect(stripTodoBlocks(blocks)).toEqual(blocks);
   });
+
+  /* A todo call whose input was spilled (large payload) has an empty
+     toolInput until fetched: the merged checklist gets nothing from it, so
+     stripping it too would make the checklist vanish without a trace. Keep
+     it in the flat trace as a generic card — it renders as "input N KB —
+     click to load". */
+  test("keeps a todo block whose spilled input has not been fetched", () => {
+    const spilled: ToolBlock = {
+      kind: "tool",
+      toolUseId: "t-big",
+      toolName: "todo",
+      toolInput: "",
+      toolInputLarge: true,
+      toolInputSize: 11264,
+      toolInputEventId: "e9",
+    };
+    const shellCall = toolBlock("s1", "shell");
+    expect(stripTodoBlocks([spilled, shellCall])).toEqual([spilled, shellCall]);
+  });
 });
 
 /* ── MCP-namespaced tool names ─────────────────────────────────────────
