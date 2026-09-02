@@ -1,7 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { Effect, Layer } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "@effect/platform";
-import { listSessions, getConversation, getSessionMeta, getTurnTrace } from "../sessions.js";
+import { listSessions, getConversation, getSessionMeta, getTurnTrace, getTurnEvent } from "../sessions.js";
 import type { SessionListItem, ConversationTurn, SessionMeta } from "../../types/agents.js";
 
 const mockLayer = (status: number, body: unknown) =>
@@ -384,5 +384,44 @@ describe("getTurnTrace", () => {
 
     const r = capturedReq as unknown as HttpClientRequest.HttpClientRequest;
     expect(r.url).toContain("/tools/agents/sessions/sess-99/turns/turn-42");
+  });
+});
+
+describe("getTurnEvent", () => {
+  test("returns the spilled event payload", async () => {
+    const payload = { event_id: "e1", type: "tool_result", text: "big spilled text" };
+    const result = await Effect.runPromise(
+      getTurnEvent("/tools/agents", "sess-1", "turn-1", "e1").pipe(
+        Effect.provide(mockLayer(200, payload)),
+      ),
+    );
+    expect(result.event_id).toBe("e1");
+    expect(result.text).toBe("big spilled text");
+  });
+
+  test("requests the correct per-event URL", async () => {
+    let capturedReq: HttpClientRequest.HttpClientRequest | null = null;
+    const captureLayer = Layer.succeed(
+      HttpClient.HttpClient,
+      HttpClient.make((req) => {
+        capturedReq = req;
+        return Effect.succeed(
+          HttpClientResponse.fromWeb(
+            req,
+            new Response(JSON.stringify({ event_id: "e7", type: "tool_result" }), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          ),
+        );
+      }),
+    );
+
+    await Effect.runPromise(
+      getTurnEvent("/tools/agents", "sess-99", "turn-42", "e7").pipe(Effect.provide(captureLayer)),
+    );
+
+    const r = capturedReq as unknown as HttpClientRequest.HttpClientRequest;
+    expect(r.url).toContain("/tools/agents/sessions/sess-99/turns/turn-42/events/e7");
   });
 });

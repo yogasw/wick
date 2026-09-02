@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+*   **Trace tool cards no longer spin forever on large results**: A tool result big enough to be spilled to a sidecar file was missing its inline text in the trace index, which the card misread as "still running." Completion is now inferred from the result event itself, and the spilled payload is fetched on demand when you expand the result (the collapsed row shows its size first; a truncated payload is noted once loaded).
 
 ---
 
