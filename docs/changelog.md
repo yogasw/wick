@@ -6,11 +6,24 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v1.7.0](https://github.com/yogasw/wick/compare/v1.6.0...v1.7.0) — Trace Improvements
+
+_Released on 2026-09-02_
+
 ### Improved
 
 *   **Turn trace shows narration and why a tool ran**: Expanding **show trace** on an assistant turn now interleaves the narration text the model streamed between tool calls, positioned where it actually occurred, instead of showing bare tool cards with no context. Tool cards also surface the call's `description` field next to the tool name (an MCP `mcp__<server>__` prefix is stripped from the display, full name on hover), with duration/time moved to the right of the header. See [AI Agents ▶ Turn trace](/guide/agents#turn-trace).
 
+### Fixed
+
+*   **Job runs cancelled by user now correctly show as 'cancelled'**: Resolved a race condition where deliberately canceled job runs would sometimes incorrectly show an 'error' status instead of 'cancelled'. The system now consistently records the run as cancelled when a user stops it.
+
 ---
+
 
 ## [v1.6.0](https://github.com/yogasw/wick/compare/v1.5.0...v1.6.0) — Job, Session, Migrate
 
