@@ -8,6 +8,7 @@ All notable changes to Wick are documented here.
 
 ### Improved
 
+*   **Turn trace shows narration and why a tool ran**: Expanding **show trace** on an assistant turn now interleaves the narration text the model streamed between tool calls, positioned where it actually occurred, instead of showing bare tool cards with no context. Tool cards also surface the call's `description` field next to the tool name (an MCP `mcp__<server>__` prefix is stripped from the display, full name on hover), with duration/time moved to the right of the header. See [AI Agents ▶ Turn trace](/guide/agents#turn-trace).
 *   **Faster restarts on Postgres**: Startup skips the full `AutoMigrate` catalog scan when the schema hasn't changed since the last boot, checking a fingerprint stored in a new single-row `wick_schema_state` table instead. Falls back to a full migration automatically whenever the fingerprint is missing or doesn't match. No config change needed. See [Headless Server ▶ Postgres instead of SQLite](/guide/headless#postgres-instead-of-sqlite).
 
 ### Added
