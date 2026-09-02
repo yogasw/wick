@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ThreadBlock } from "../types/agents.js";
+  import type { ThreadBlock, TurnEventPayload } from "../types/agents.js";
   import { subAgentStatusCls, subAgentStatusLabel } from "../lifecycleCls.js";
 
   type ToolBlock = Extract<ThreadBlock, { kind: "tool" }>;
@@ -19,8 +19,11 @@
     // Opens the Sub-agents rail panel on this delegation's child. Only
     // meaningful for wick_delegate cards; omitted elsewhere.
     onOpenSubAgent?: (delegationId: string) => void;
+    // Fetches a large (spilled) result payload by its trace event id when the
+    // user expands the result — keeps the big blob out of the index load.
+    loadEventPayload?: (eventId: string) => Promise<TurnEventPayload>;
   };
-  let { block, onCancel, onDismiss, interrupted = false, onOpenSubAgent }: Props = $props();
+  let { block, onCancel, onDismiss, interrupted = false, onOpenSubAgent, loadEventPayload }: Props = $props();
 
   let cancelling = $state(false);
 
@@ -47,8 +50,46 @@
   // during the 10m shell window the user hit. A tool call on an interrupted
   // turn is NOT running — its result never came because the turn was cut off,
   // so it must read "interrupted", never an eternal spinner.
-  const running = $derived(block.result === undefined && !!block.startedAt && !interrupted);
-  const wasInterrupted = $derived(block.result === undefined && interrupted);
+  //
+  // "Finished" means the result EVENT exists, not that result text is present:
+  // a large (spilled) result has hasResult:true with no inline text until it
+  // is fetched on demand. Live-built blocks don't carry hasResult — there,
+  // text presence stays the signal.
+  const hasResult = $derived(block.hasResult ?? block.result !== undefined);
+  const running = $derived(!hasResult && !!block.startedAt && !interrupted);
+  const wasInterrupted = $derived(!hasResult && interrupted);
+
+  // Large (spilled) result payload, fetched on first expand so the big blob
+  // never rides along with the trace index.
+  let loadedResult = $state<string | null>(null);
+  let loadedTruncated = $state(false);
+  let resultLoading = $state(false);
+  let resultLoadError = $state(false);
+
+  const displayResult = $derived(block.result ?? loadedResult ?? undefined);
+  const sizeLabel = $derived(
+    block.resultSize ? `${(block.resultSize / 1024).toFixed(1)} KB` : ""
+  );
+
+  async function fetchLargeResult(): Promise<void> {
+    if (resultLoading || loadedResult !== null || !loadEventPayload || !block.resultEventId) return;
+    resultLoading = true;
+    resultLoadError = false;
+    try {
+      const p = await loadEventPayload(block.resultEventId);
+      loadedResult = p.text ?? "";
+      loadedTruncated = p.truncated === true;
+    } catch {
+      resultLoadError = true;
+    } finally {
+      resultLoading = false;
+    }
+  }
+
+  function toggleResult(): void {
+    resultCollapsed = !resultCollapsed;
+    if (!resultCollapsed && block.resultLarge && block.result === undefined) void fetchLargeResult();
+  }
 
   // The ✕ is shown on any running tool. It cancels the op when a runId is known
   // (a live run), otherwise it just dismisses the stuck card from the UI.
@@ -102,7 +143,8 @@
     let text = "";
     let delegationId = "";
     try {
-      const r = JSON.parse(block.result || "{}");
+      // displayResult so a spilled delegate result fills in once fetched.
+      const r = JSON.parse(displayResult || "{}");
       status = r?.status ?? "";
       text = r?.result ?? "";
       delegationId = r?.delegation_id ?? "";
@@ -231,11 +273,11 @@
       {/if}
     </div>
   {/if}
-  {#if block.result !== undefined}
+  {#if hasResult}
     <div class="border-t border-white-300 dark:border-navy-600">
       <button
         type="button"
-        onclick={() => (resultCollapsed = !resultCollapsed)}
+        onclick={toggleResult}
         class={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors ${block.isError ? "text-red-600 dark:text-red-400" : "text-black-600 dark:text-black-700"}`}
       >
         <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -247,7 +289,13 @@
           {/if}
         </svg>
         <span class="text-[10px] uppercase tracking-wide shrink-0">{block.isError ? "error" : "result"}</span>
-        <span class="ml-2 truncate font-mono opacity-60">{block.result.slice(0, 80).replace(/\n/g, " ")}{block.result.length > 80 ? "…" : ""}</span>
+        {#if displayResult !== undefined}
+          <span class="ml-2 truncate font-mono opacity-60">{displayResult.slice(0, 80).replace(/\n/g, " ")}{displayResult.length > 80 ? "…" : ""}</span>
+        {:else}
+          <!-- Spilled payload not fetched yet — show its size so the reader
+               knows the result exists and what expanding will pull. -->
+          <span class="ml-2 truncate opacity-60">{sizeLabel}{sizeLabel ? " — " : ""}click to load</span>
+        {/if}
         <svg
           data-chevron
           viewBox="0 0 16 16"
@@ -262,7 +310,22 @@
       </button>
       {#if !resultCollapsed}
         <div class="border-t border-white-300 dark:border-navy-600">
-          <pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">{block.result}</pre>
+          {#if resultLoading}
+            <p class="px-3 py-2 italic text-black-500 dark:text-black-600">loading…</p>
+          {:else if resultLoadError}
+            <div class="flex items-center gap-2 px-3 py-2 text-red-600 dark:text-red-400">
+              <span>failed to load result</span>
+              <button type="button" onclick={() => void fetchLargeResult()} class="underline hover:no-underline">retry</button>
+            </div>
+          {:else if displayResult !== undefined}
+            {#if loadedTruncated}
+              <p class="px-3 pt-2 text-[10px] italic text-amber-600 dark:text-amber-400">content truncated by the trace size cap</p>
+            {/if}
+            <pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">{displayResult}</pre>
+          {:else}
+            <!-- No fetcher wired (e.g. a synthetic turn) — nothing to show. -->
+            <p class="px-3 py-2 italic text-black-500 dark:text-black-600">payload not loaded</p>
+          {/if}
         </div>
       {/if}
     </div>

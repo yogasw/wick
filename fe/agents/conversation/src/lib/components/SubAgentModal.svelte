@@ -22,7 +22,7 @@
 
   import { createThreadStore } from "../stores/thread.js";
   import { connectSession } from "../stores/sse.js";
-  import { getConversation, getTurnTrace } from "../api/sessions.js";
+  import { getConversation, getTurnTrace, getTurnEvent } from "../api/sessions.js";
   import { getSubAgents, interruptSubAgent } from "../api/subagents.js";
   import { sendMessage } from "../api/messages.js";
   import ConversationThread from "./ConversationThread.svelte";
@@ -148,6 +148,12 @@
   function loadTrace(turnId: string): Promise<TurnEvent[]> {
     return run(getTurnTrace(base, currentSessionId, turnId).pipe(Effect.provide(WickClientLayer)))
       .catch(() => [] as TurnEvent[]);
+  }
+
+  // Spilled payload of one large trace event — rejection propagates so the
+  // ToolCard can show its own inline error + retry.
+  function loadTraceEvent(turnId: string, eventId: string) {
+    return run(getTurnEvent(base, currentSessionId, turnId, eventId).pipe(Effect.provide(WickClientLayer)));
   }
 
   /* ── this crumb's own sub-agents ───────────────────────────────── */
@@ -379,6 +385,7 @@
             {live}
             {typing}
             {loadTrace}
+            {loadTraceEvent}
             onOpenSubAgent={openDelegation}
           />
         {/if}

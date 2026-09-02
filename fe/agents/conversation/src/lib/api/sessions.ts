@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { apiGetE, apiDeleteE, apiPostE } from "@wick-fe/common-api";
-import type { SessionListItem, SessionMeta, ConversationTurn, TurnEvent } from "../types/agents.js";
+import type { SessionListItem, SessionMeta, ConversationTurn, TurnEvent, TurnEventPayload } from "../types/agents.js";
 
 /** owner: "me" = only the caller's sessions (plus, under ticket mode,
     sessions on tickets assigned to them); omitted = everyone's. The server
@@ -77,3 +77,9 @@ export const getTurnTrace = (base: string, id: string, turnId: string) =>
   apiGetE<unknown>(`${base}/sessions/${id}/turns/${turnId}`).pipe(
     Effect.map(normalizeTurnEvents),
   );
+
+// getTurnEvent fetches the spilled payload of one large trace event — an
+// index row with large:true carries no text; its content lives in
+// thinking/<turn_id>/<event_id>.json behind this endpoint.
+export const getTurnEvent = (base: string, id: string, turnId: string, eventId: string) =>
+  apiGetE<TurnEventPayload>(`${base}/sessions/${id}/turns/${turnId}/events/${eventId}`);

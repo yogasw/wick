@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { ConversationTurn, LiveTurn, TypingState, TurnEvent } from "../types/agents.js";
+  import type { ConversationTurn, LiveTurn, TypingState, TurnEvent, TurnEventPayload } from "../types/agents.js";
   import { renderLive } from "../richRender.js";
   import { mergeTodoItemsWithSteps, stripTodoBlocks, latestTodoGoal, bareToolName } from "../todoGroups.js";
   import type { ThreadBlock } from "../types/agents.js";
@@ -14,6 +14,8 @@
     live: LiveTurn | null;
     typing: TypingState;
     loadTrace?: (turnId: string) => Promise<TurnEvent[]>;
+    // Fetches one large (spilled) trace event's payload on demand.
+    loadTraceEvent?: (turnId: string, eventId: string) => Promise<TurnEventPayload>;
     onOpenPath?: (path: string) => void;
     // Cancel an in-flight connector run behind a running tool call.
     onCancelRun?: (runId: string) => void;
@@ -23,7 +25,7 @@
     onOpenSubAgent?: (delegationId: string) => void;
   };
 
-  let { turns, live, typing, loadTrace, onOpenPath, onCancelRun, onDismissTool, onOpenSubAgent }: Props = $props();
+  let { turns, live, typing, loadTrace, loadTraceEvent, onOpenPath, onCancelRun, onDismissTool, onOpenSubAgent }: Props = $props();
 
   let containerEl: HTMLElement | undefined = $state();
 
@@ -156,7 +158,7 @@
         <span class="rounded-md bg-white-200 dark:bg-navy-800 px-2.5 py-0.5 text-[11px] font-medium text-black-700 dark:text-black-600 shadow-sm">{label}</span>
       </div>
     {/if}
-    <ThreadMessage {turn} {loadTrace} />
+    <ThreadMessage {turn} {loadTrace} {loadTraceEvent} />
   {/each}
 
   {#if live && turns.length === 0}

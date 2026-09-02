@@ -89,6 +89,8 @@ export type SessionMeta = {
 };
 
 export type TurnEvent = {
+  /** Index id ("e0", "e1", …) — the key for fetching a spilled payload. */
+  event_id?: string;
   type: string;
   tool_name?: string;
   tool_input?: string;
@@ -99,6 +101,24 @@ export type TurnEvent = {
       finished (tool_result's end_at). Absent on older recorded traces. */
   at?: string;
   end_at?: string;
+  /** true when the payload was too big for the trace index and lives in
+      thinking/<turn_id>/<event_id>.json instead — text/tool_input are
+      absent here and must be fetched on demand (store.TurnEventIndex). */
+  large?: boolean;
+  /** Payload size in bytes; set only alongside large. */
+  size?: number;
+};
+
+/** thinking/<turn_id>/<event_id>.json — the spilled payload of one large
+    trace event, served by GET /sessions/{id}/turns/{turn_id}/events/{event_id}
+    (store.TurnEventPayload). */
+export type TurnEventPayload = {
+  event_id: string;
+  type: string;
+  text?: string;
+  tool_input?: string;
+  /** true when the stored payload was capped by traceEventMaxBytes. */
+  truncated?: boolean;
 };
 
 export type Attachment = {
@@ -343,6 +363,17 @@ export type ThreadBlock =
       toolName: string;
       toolInput: string;
       result?: string;
+      // Whether a tool_result EVENT was paired to this call. This — not the
+      // presence of result text — is what says the call finished: a large
+      // (spilled) result has hasResult:true with result undefined until its
+      // payload is fetched on demand. Absent on live-built blocks, where
+      // result-text presence remains the signal.
+      hasResult?: boolean;
+      // The paired result was spilled to a sidecar file (TurnEvent.large):
+      // fetch it lazily via resultEventId when the user expands the card.
+      resultLarge?: boolean;
+      resultSize?: number;
+      resultEventId?: string;
       isError?: boolean;
       startedAt?: number;
       endedAt?: number;
