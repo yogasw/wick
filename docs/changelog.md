@@ -6,11 +6,22 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Fixed
-
-*   **Trace tool cards no longer spin forever on large results**: A tool result big enough to be spilled to a sidecar file was missing its inline text in the trace index, which the card misread as "still running." Completion is now inferred from the result event itself, and the spilled payload is fetched on demand when you expand the result (the collapsed row shows its size first; a truncated payload is noted once loaded).
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v1.7.1](https://github.com/yogasw/wick/compare/v1.7.0...v1.7.1) — Trace UI
+
+_Released on 2026-09-02_
+
+### Fixed
+
+*   **Trace tool cards no longer spin forever on large results**: A tool result large enough to be spilled to a sidecar file was previously rendered as perpetually running because the frontend inferred completion from inline text, which was absent. Completion is now correctly inferred from the existence of the result event. The spilled payload is fetched lazily when the result is expanded; collapsed cards display their size (e.g., '16.8 KB — click to load') to avoid including large data in the trace index. Payloads capped by `traceEventMaxBytes` include a truncation note. This fix covers DetailView and SubAgentModal. Live-built blocks fall back to text presence, and old traces remain unaffected.
+*   **Lazy-load spilled tool_use input**: Fixed an issue where `tool_use` cards with large, spilled inputs incorrectly displayed 'no input'. The tool input is now lazy-loaded upon expansion, with collapsed headers showing an 'input N KB — click to load' hint. The 'no input' message only renders when there is genuinely no input. This also includes a fix for the `loadTraceEvent` test helper type.
+*   **Retain spilled-input todo cards**: `todo` calls whose input was spilled were previously removed from the flat trace and merged checklist. Such cards are now retained in the flat trace as generic cards, displaying 'input N KB — click to load'.
+
+---
+
 
 ## [v1.7.0](https://github.com/yogasw/wick/compare/v1.6.0...v1.7.0) — Trace Improvements
 
