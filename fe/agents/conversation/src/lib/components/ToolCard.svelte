@@ -116,6 +116,23 @@
     (delegateInfo?.text ?? "").split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "",
   );
 
+  // Tools like Bash/Agent carry a human-readable `description` in their
+  // input ("List files with sizes and count") — surface it in the header
+  // so the collapsed card says WHY the tool ran, not just which tool.
+  const inputDescription = $derived.by(() => {
+    if (!block.toolInput) return "";
+    try {
+      const d = (JSON.parse(block.toolInput) as { description?: unknown }).description;
+      return typeof d === "string" ? d.trim() : "";
+    } catch {
+      return "";
+    }
+  });
+
+  // MCP-namespaced names (mcp__wick__wick_set_title) read as noise in the
+  // header — show the bare tool name; the full name stays in the tooltip.
+  const displayName = $derived(block.toolName.replace(/^mcp__.+?__/, ""));
+
   const duration = $derived(fmtDuration(block.startedAt, block.endedAt));
   const startLabel = $derived(fmtTime(block.startedAt));
   // Live elapsed while running (now − startedAt), formatted the same way.
@@ -134,12 +151,12 @@
       <path d="M2 4h4v8H2zM10 4h4v8h-4z" stroke-linejoin="round"></path>
       <path d="M6 8h4" stroke-linecap="round"></path>
     </svg>
-    <span class="font-mono font-medium text-black-900 dark:text-white-100">{block.toolName}</span>
-    {#if startLabel}
-      <span class="font-mono text-[10px] text-black-500 dark:text-black-600">{startLabel}</span>
-    {/if}
-    {#if duration}
-      <span class="font-mono text-[10px] text-black-500 dark:text-black-600">· {duration}</span>
+    <span class="font-mono font-medium text-black-900 dark:text-white-100 shrink-0" title={block.toolName}>{displayName}</span>
+    <!-- "Why it ran" hugs the name; flex-1 also works as the spacer that
+         pushes the metadata cluster right when there's no description. -->
+    <span data-tool-description class="flex-1 min-w-0 truncate text-black-700 dark:text-black-600">{inputDescription}</span>
+    {#if duration || startLabel}
+      <span class="font-mono text-[10px] text-black-500 dark:text-black-600 shrink-0">{duration}{duration && startLabel ? " · " : ""}{startLabel}</span>
     {/if}
     {#if running}
       <span class="ml-auto flex items-center gap-1.5 text-[10px] font-medium text-green-600 dark:text-green-400 shrink-0">

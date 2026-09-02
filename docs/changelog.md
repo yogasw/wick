@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Improved
+
+*   **Turn trace shows narration and why a tool ran**: Expanding **show trace** on an assistant turn now interleaves the narration text the model streamed between tool calls, positioned where it actually occurred, instead of showing bare tool cards with no context. Tool cards also surface the call's `description` field next to the tool name (an MCP `mcp__<server>__` prefix is stripped from the display, full name on hover), with duration/time moved to the right of the header. See [AI Agents ▶ Turn trace](/guide/agents#turn-trace).
 
 ---
 
