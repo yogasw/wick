@@ -185,6 +185,9 @@
     for (const ev of resolvedTraceEvents) {
       if (ev.type === "thinking") {
         thinking = (thinking ?? "") + (ev.text ?? "");
+      } else if (ev.type === "text") {
+        flush();
+        blocks.push({ kind: "text", text: ev.text ?? "" });
       } else if (ev.type === "tool_use") {
         flush();
         const res = resolvedTraceEvents.find((r) => r.type === "tool_result" && r.tool_use_id === ev.tool_use_id);
@@ -464,6 +467,13 @@
               {#each nonTodoBlocks as block}
                 {#if block.kind === "thinking"}
                   <div data-thinking-block class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 italic text-black-600 dark:text-black-700 whitespace-pre-wrap break-words">
+                    {block.text}
+                  </div>
+                {:else if block.kind === "text"}
+                  <!-- Narration segment streamed before a tool call — same card
+                       as thinking but upright and a step darker, so "what the
+                       agent said" reads apart from "what it thought". -->
+                  <div data-text-block class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs px-3 py-2 text-black-800 dark:text-black-500 whitespace-pre-wrap break-words">
                     {block.text}
                   </div>
                 {:else if block.kind === "raw"}

@@ -27,16 +27,19 @@ import (
 	"github.com/yogasw/wick/internal/agents/storage"
 )
 
-// TurnEvent is one tool_use, tool_result, or thinking event recorded
-// within an assistant turn. Stored alongside the text so the UI can
-// replay the full trace on reload.
+// TurnEvent is one tool_use, tool_result, thinking, or text event
+// recorded within an assistant turn. Stored alongside the text so the UI
+// can replay the full trace on reload. "text" is a narration segment the
+// model streamed BEFORE a tool call — kept in the trace so it renders in
+// position between tool cards; the full reply (all segments concatenated)
+// still lives on the conversation turn itself.
 type TurnEvent struct {
-	Type      string    `json:"type"`                 // "tool_use" | "tool_result" | "thinking"
+	Type      string    `json:"type"`                 // "tool_use" | "tool_result" | "thinking" | "text"
 	ToolName  string    `json:"tool_name,omitempty"`  // tool_use only
 	ToolInput string    `json:"tool_input,omitempty"` // tool_use only
 	ToolUseID string    `json:"tool_use_id,omitempty"`
 	IsError   bool      `json:"is_error,omitempty"` // tool_result only
-	Text      string    `json:"text,omitempty"`     // tool_result body / thinking text
+	Text      string    `json:"text,omitempty"`     // tool_result body / thinking text / text segment
 	At        time.Time `json:"at,omitempty"`       // when this event arrived
 	EndAt     time.Time `json:"end_at,omitempty"`   // tool_result: when tool finished
 }
@@ -169,6 +172,10 @@ type Store struct {
 
 	// turnBuf accumulates TextDelta chunks; flushed on Done.
 	turnBuf strings.Builder
+	// textSeen is the byte offset into turnBuf already recorded into
+	// eventBuf as "text" trace events. Everything past it is the segment
+	// still streaming; flushed when a tool/thinking event interrupts it.
+	textSeen int
 
 	// eventBuf collects tool_use/tool_result/thinking events within the
 	// current turn so they can be stored alongside the text.
@@ -316,6 +323,7 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 	case event.Thinking:
 		now := s.now().UTC()
 		s.mu.Lock()
+		s.flushTextSegmentLocked(now)
 		if n := len(s.eventBuf); n > 0 && s.eventBuf[n-1].Type == "thinking" {
 			s.eventBuf[n-1].Text += ev.Text
 		} else {
@@ -343,6 +351,7 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 			At:        now,
 		}
 		s.mu.Lock()
+		s.flushTextSegmentLocked(now)
 		s.eventBuf = append(s.eventBuf, te)
 		s.mu.Unlock()
 		_ = s.appendInflight(InflightEntry{
@@ -357,6 +366,7 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 	case event.ToolResult:
 		now := s.now().UTC()
 		s.mu.Lock()
+		s.flushTextSegmentLocked(now)
 		for i := range s.eventBuf {
 			if s.eventBuf[i].Type == "tool_use" && s.eventBuf[i].ToolUseID == ev.ToolUseID {
 				s.eventBuf[i].EndAt = now
@@ -425,6 +435,7 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 		if strings.TrimSpace(raw) != "" {
 			now := s.now().UTC()
 			s.mu.Lock()
+			s.flushTextSegmentLocked(now)
 			s.eventBuf = append(s.eventBuf, TurnEvent{Type: "raw", Text: raw, At: now})
 			s.mu.Unlock()
 			_ = s.appendInflight(InflightEntry{Type: "raw", Text: raw, At: now})
@@ -433,6 +444,24 @@ func (s *Store) Apply(ev event.AgentEvent) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// flushTextSegmentLocked records assistant text accumulated since the
+// last flushed segment as a "text" trace event, so narration the model
+// streams between tool calls keeps its position in the trace timeline.
+// The full reply (all segments) still lands on the conversation turn —
+// trace text is positional context, not the canonical reply. Whitespace-
+// only separators ("\n\n" between tool calls) are skipped. Trailing text
+// after the last tool call is never flushed here: it stays only in the
+// turn body, where it renders as the reply bubble. Caller must hold s.mu.
+func (s *Store) flushTextSegmentLocked(now time.Time) {
+	full := s.turnBuf.String()
+	seg := full[s.textSeen:]
+	s.textSeen = len(full)
+	if strings.TrimSpace(seg) == "" {
+		return
+	}
+	s.eventBuf = append(s.eventBuf, TurnEvent{Type: "text", Text: seg, At: now})
 }
 
 // InFlightEvents returns a snapshot of events buffered in the current
@@ -496,6 +525,7 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 	s.mu.Lock()
 	evSnap := s.eventBuf
 	s.eventBuf = nil
+	s.textSeen = 0
 	s.mu.Unlock()
 
 	now := s.now().UTC()
@@ -716,11 +746,25 @@ func RecoverInflight(layout config.Layout, sessionID, agentName, provider string
 	}
 	var body strings.Builder
 	var events []TurnEvent
+	// seen mirrors Store.textSeen: text_delta runs between tool/thinking
+	// entries become "text" trace events so the recovered trace keeps the
+	// same interleaving a live turn would have had.
+	seen := 0
+	flushSeg := func(at time.Time) {
+		full := body.String()
+		seg := full[seen:]
+		seen = len(full)
+		if strings.TrimSpace(seg) == "" {
+			return
+		}
+		events = append(events, TurnEvent{Type: "text", Text: seg, At: at})
+	}
 	for _, e := range entries {
 		switch e.Type {
 		case "text_delta":
 			body.WriteString(e.Text)
 		case "thinking", "tool_use", "tool_result":
+			flushSeg(e.At)
 			events = append(events, TurnEvent{
 				Type:      e.Type,
 				ToolName:  e.ToolName,

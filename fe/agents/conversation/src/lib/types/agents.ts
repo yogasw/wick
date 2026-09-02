@@ -332,6 +332,10 @@ export type SSEStatus = "connecting" | "connected" | "error";
 
 export type ThreadBlock =
   | { kind: "thinking"; text: string }
+  /* Narration the model streamed BEFORE a tool call — shown in position
+     between tool cards. The full reply (all segments) is still the turn
+     body; these are positional context only. */
+  | { kind: "text"; text: string }
   | { kind: "raw"; text: string }
   | {
       kind: "tool";

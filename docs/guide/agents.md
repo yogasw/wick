@@ -168,6 +168,16 @@ Files produced in a single turn are shown as a **grid** (up to 4 items) or a **c
 | Text / code | File card with a fullscreen text viewer + download. |
 | Any other type | Downloadable file chip (icon + filename). |
 
+## Turn trace
+
+Every assistant bubble in the Conversation tab has a **show trace ›** toggle that expands the turn's tool calls in order:
+
+- **Narration** — text the model streamed between tool calls (e.g. "checking the config first…") renders as its own block positioned between the tool cards it separates, so you can follow *why* the next tool ran. This is separate from the turn's final reply text, which still renders as the normal message bubble.
+- **Tool cards** — each shows the bare tool name (an MCP `mcp__<server>__` prefix is stripped from the display, full name on hover) plus, when the tool call included a `description` field, a short "why it ran" note next to the name. Duration and start time sit on the right of the card header.
+- **Thinking** blocks (when the provider streams them) render italicized, above/between the narration and tool cards in the same order they occurred.
+
+This trace is recorded incrementally as the turn streams — including on crash recovery — so it's available immediately on reload, not just for turns that finished cleanly.
+
 Detection rules: Write and Edit calls on any file type qualify as artifacts. Read calls qualify only for non-text files (e.g. a PNG the agent generated and then read back). Text files the agent only read — not wrote — are not shown as artifacts.
 
 ### HTML artifact Content-Security-Policy
