@@ -316,6 +316,49 @@ describe("ThreadMessage - show trace toggle", () => {
     });
   });
 
+  test("after expand, text (narration) event renders between tool cards, upright not italic", async () => {
+    const traceEvents: TurnEvent[] = [
+      { type: "text", text: "checking the config first" },
+      { type: "tool_use", tool_use_id: "tu-n1", tool_name: "bash", tool_input: '{"cmd":"ls"}' },
+      { type: "tool_result", tool_use_id: "tu-n1", text: "ok", is_error: false },
+    ];
+    const loadTrace = vi.fn().mockResolvedValue(traceEvents);
+    const turn = makeTurn({ role: "assistant", has_trace: true });
+
+    const { container } = render(ThreadMessage, { props: { turn, loadTrace } });
+
+    const btn = screen.getByText(/show trace/i).closest("button")!;
+    await fireEvent.click(btn);
+
+    await vi.waitFor(() => {
+      expect(screen.getByText("checking the config first")).toBeDefined();
+    });
+    const textBlock = container.querySelector("[data-text-block]")!;
+    expect(textBlock).not.toBeNull();
+    expect(textBlock.className).not.toContain("italic");
+    // Narration precedes the tool card in the DOM — order is preserved.
+    const traceRoot = container.querySelector("[data-trace-blocks]")!;
+    const children = Array.from(traceRoot.children);
+    expect(children.indexOf(textBlock)).toBe(0);
+  });
+
+  test("tool card header shows the input's description field when present", async () => {
+    const traceEvents: TurnEvent[] = [
+      { type: "tool_use", tool_use_id: "tu-d1", tool_name: "bash", tool_input: '{"command":"ls","description":"List files with sizes"}' },
+    ];
+    const loadTrace = vi.fn().mockResolvedValue(traceEvents);
+    const turn = makeTurn({ role: "assistant", has_trace: true });
+
+    render(ThreadMessage, { props: { turn, loadTrace } });
+
+    const btn = screen.getByText(/show trace/i).closest("button")!;
+    await fireEvent.click(btn);
+
+    await vi.waitFor(() => {
+      expect(screen.getByText("List files with sizes")).toBeDefined();
+    });
+  });
+
   test("clicking hide trace hides the section without refetching loadTrace", async () => {
     const traceEvents: TurnEvent[] = [{ type: "thinking", text: "cached thought" }];
     const loadTrace = vi.fn().mockResolvedValue(traceEvents);
