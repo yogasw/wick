@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ThreadBlock } from "../types/agents.js";
+  import type { ThreadBlock, TurnEventPayload } from "../types/agents.js";
   import { subAgentStatusCls, subAgentStatusLabel } from "../lifecycleCls.js";
 
   type ToolBlock = Extract<ThreadBlock, { kind: "tool" }>;
@@ -19,8 +19,11 @@
     // Opens the Sub-agents rail panel on this delegation's child. Only
     // meaningful for wick_delegate cards; omitted elsewhere.
     onOpenSubAgent?: (delegationId: string) => void;
+    // Fetches a large (spilled) result payload by its trace event id when the
+    // user expands the result — keeps the big blob out of the index load.
+    loadEventPayload?: (eventId: string) => Promise<TurnEventPayload>;
   };
-  let { block, onCancel, onDismiss, interrupted = false, onOpenSubAgent }: Props = $props();
+  let { block, onCancel, onDismiss, interrupted = false, onOpenSubAgent, loadEventPayload }: Props = $props();
 
   let cancelling = $state(false);
 
@@ -47,8 +50,79 @@
   // during the 10m shell window the user hit. A tool call on an interrupted
   // turn is NOT running — its result never came because the turn was cut off,
   // so it must read "interrupted", never an eternal spinner.
-  const running = $derived(block.result === undefined && !!block.startedAt && !interrupted);
-  const wasInterrupted = $derived(block.result === undefined && interrupted);
+  //
+  // "Finished" means the result EVENT exists, not that result text is present:
+  // a large (spilled) result has hasResult:true with no inline text until it
+  // is fetched on demand. Live-built blocks don't carry hasResult — there,
+  // text presence stays the signal.
+  const hasResult = $derived(block.hasResult ?? block.result !== undefined);
+  const running = $derived(!hasResult && !!block.startedAt && !interrupted);
+  const wasInterrupted = $derived(!hasResult && interrupted);
+
+  // Large (spilled) result payload, fetched on first expand so the big blob
+  // never rides along with the trace index.
+  let loadedResult = $state<string | null>(null);
+  let loadedTruncated = $state(false);
+  let resultLoading = $state(false);
+  let resultLoadError = $state(false);
+
+  const displayResult = $derived(block.result ?? loadedResult ?? undefined);
+  const sizeLabel = $derived(
+    block.resultSize ? `${(block.resultSize / 1024).toFixed(1)} KB` : ""
+  );
+
+  async function fetchLargeResult(): Promise<void> {
+    if (resultLoading || loadedResult !== null || !loadEventPayload || !block.resultEventId) return;
+    resultLoading = true;
+    resultLoadError = false;
+    try {
+      const p = await loadEventPayload(block.resultEventId);
+      loadedResult = p.text ?? "";
+      loadedTruncated = p.truncated === true;
+    } catch {
+      resultLoadError = true;
+    } finally {
+      resultLoading = false;
+    }
+  }
+
+  function toggleResult(): void {
+    resultCollapsed = !resultCollapsed;
+    if (!resultCollapsed && block.resultLarge && block.result === undefined) void fetchLargeResult();
+  }
+
+  // Big ARGUMENTS spill exactly like big results (payload = text +
+  // tool_input in the store) — same sidecar, keyed by the tool_use's own
+  // event_id. Without this, a 12 KB command reads as "no input".
+  let loadedInput = $state<string | null>(null);
+  let loadedInputTruncated = $state(false);
+  let inputLoading = $state(false);
+  let inputLoadError = $state(false);
+
+  const displayInput = $derived(block.toolInput || loadedInput || "");
+  const inputSizeLabel = $derived(
+    block.toolInputSize ? `${(block.toolInputSize / 1024).toFixed(1)} KB` : ""
+  );
+
+  async function fetchLargeInput(): Promise<void> {
+    if (inputLoading || loadedInput !== null || !loadEventPayload || !block.toolInputEventId) return;
+    inputLoading = true;
+    inputLoadError = false;
+    try {
+      const p = await loadEventPayload(block.toolInputEventId);
+      loadedInput = p.tool_input ?? "";
+      loadedInputTruncated = p.truncated === true;
+    } catch {
+      inputLoadError = true;
+    } finally {
+      inputLoading = false;
+    }
+  }
+
+  function toggleInput(): void {
+    inputCollapsed = !inputCollapsed;
+    if (!inputCollapsed && block.toolInputLarge && !block.toolInput) void fetchLargeInput();
+  }
 
   // The ✕ is shown on any running tool. It cancels the op when a runId is known
   // (a live run), otherwise it just dismisses the stuck card from the UI.
@@ -79,8 +153,8 @@
   }
 
   const prettyInput = $derived(
-    block.toolInput
-      ? (() => { try { return JSON.stringify(JSON.parse(block.toolInput), null, 2); } catch { return block.toolInput; } })()
+    displayInput
+      ? (() => { try { return JSON.stringify(JSON.parse(displayInput), null, 2); } catch { return displayInput; } })()
       : ""
   );
 
@@ -96,13 +170,14 @@
     if (!isDelegate) return null;
     let profile = "";
     try {
-      profile = JSON.parse(block.toolInput || "{}")?.profile ?? "";
+      profile = JSON.parse(displayInput || "{}")?.profile ?? "";
     } catch { /* malformed input — fall back to the result payload */ }
     let status = "";
     let text = "";
     let delegationId = "";
     try {
-      const r = JSON.parse(block.result || "{}");
+      // displayResult so a spilled delegate result fills in once fetched.
+      const r = JSON.parse(displayResult || "{}");
       status = r?.status ?? "";
       text = r?.result ?? "";
       delegationId = r?.delegation_id ?? "";
@@ -120,14 +195,22 @@
   // input ("List files with sizes and count") — surface it in the header
   // so the collapsed card says WHY the tool ran, not just which tool.
   const inputDescription = $derived.by(() => {
-    if (!block.toolInput) return "";
+    if (!displayInput) return "";
     try {
-      const d = (JSON.parse(block.toolInput) as { description?: unknown }).description;
+      const d = (JSON.parse(displayInput) as { description?: unknown }).description;
       return typeof d === "string" ? d.trim() : "";
     } catch {
       return "";
     }
   });
+
+  // Spilled, not-yet-fetched input gets a size hint in the description slot
+  // so the collapsed header says what expanding will pull instead of nothing.
+  const inputPlaceholder = $derived(
+    block.toolInputLarge && !displayInput
+      ? `input ${inputSizeLabel}${inputSizeLabel ? " — " : ""}click to load`
+      : ""
+  );
 
   // MCP-namespaced names (mcp__wick__wick_set_title) read as noise in the
   // header — show the bare tool name; the full name stays in the tooltip.
@@ -144,7 +227,7 @@
 <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-800 overflow-hidden text-xs">
   <button
     type="button"
-    onclick={() => (inputCollapsed = !inputCollapsed)}
+    onclick={toggleInput}
     class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors"
   >
     <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -154,7 +237,7 @@
     <span class="font-mono font-medium text-black-900 dark:text-white-100 shrink-0" title={block.toolName}>{displayName}</span>
     <!-- "Why it ran" hugs the name; flex-1 also works as the spacer that
          pushes the metadata cluster right when there's no description. -->
-    <span data-tool-description class="flex-1 min-w-0 truncate text-black-700 dark:text-black-600">{inputDescription}</span>
+    <span data-tool-description class="flex-1 min-w-0 truncate text-black-700 dark:text-black-600 {inputDescription ? '' : 'italic opacity-70'}">{inputDescription || inputPlaceholder}</span>
     {#if duration || startLabel}
       <span class="font-mono text-[10px] text-black-500 dark:text-black-600 shrink-0">{duration}{duration && startLabel ? " · " : ""}{startLabel}</span>
     {/if}
@@ -224,18 +307,32 @@
 
   {#if !inputCollapsed}
     <div class="border-t border-white-300 dark:border-navy-600">
-      {#if prettyInput}
+      {#if inputLoading}
+        <p class="px-3 py-2 italic text-black-500 dark:text-black-600">loading…</p>
+      {:else if inputLoadError}
+        <div class="flex items-center gap-2 px-3 py-2 text-red-600 dark:text-red-400">
+          <span>failed to load input</span>
+          <button type="button" onclick={() => void fetchLargeInput()} class="underline hover:no-underline">retry</button>
+        </div>
+      {:else if prettyInput}
+        {#if loadedInputTruncated}
+          <p class="px-3 pt-2 text-[10px] italic text-amber-600 dark:text-amber-400">content truncated by the trace size cap</p>
+        {/if}
         <pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">{prettyInput}</pre>
+      {:else if block.toolInputLarge}
+        <!-- No fetcher wired (e.g. a synthetic turn) — the input exists,
+             it just can't be pulled from here. Never claim "no input". -->
+        <p class="px-3 py-2 italic text-black-500 dark:text-black-600">{inputSizeLabel}{inputSizeLabel ? " — " : ""}payload not loaded</p>
       {:else}
         <p class="px-3 py-2 text-black-500 dark:text-black-600 italic">no input</p>
       {/if}
     </div>
   {/if}
-  {#if block.result !== undefined}
+  {#if hasResult}
     <div class="border-t border-white-300 dark:border-navy-600">
       <button
         type="button"
-        onclick={() => (resultCollapsed = !resultCollapsed)}
+        onclick={toggleResult}
         class={`flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-white-200 dark:hover:bg-navy-800 transition-colors ${block.isError ? "text-red-600 dark:text-red-400" : "text-black-600 dark:text-black-700"}`}
       >
         <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -247,7 +344,13 @@
           {/if}
         </svg>
         <span class="text-[10px] uppercase tracking-wide shrink-0">{block.isError ? "error" : "result"}</span>
-        <span class="ml-2 truncate font-mono opacity-60">{block.result.slice(0, 80).replace(/\n/g, " ")}{block.result.length > 80 ? "…" : ""}</span>
+        {#if displayResult !== undefined}
+          <span class="ml-2 truncate font-mono opacity-60">{displayResult.slice(0, 80).replace(/\n/g, " ")}{displayResult.length > 80 ? "…" : ""}</span>
+        {:else}
+          <!-- Spilled payload not fetched yet — show its size so the reader
+               knows the result exists and what expanding will pull. -->
+          <span class="ml-2 truncate opacity-60">{sizeLabel}{sizeLabel ? " — " : ""}click to load</span>
+        {/if}
         <svg
           data-chevron
           viewBox="0 0 16 16"
@@ -262,7 +365,22 @@
       </button>
       {#if !resultCollapsed}
         <div class="border-t border-white-300 dark:border-navy-600">
-          <pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">{block.result}</pre>
+          {#if resultLoading}
+            <p class="px-3 py-2 italic text-black-500 dark:text-black-600">loading…</p>
+          {:else if resultLoadError}
+            <div class="flex items-center gap-2 px-3 py-2 text-red-600 dark:text-red-400">
+              <span>failed to load result</span>
+              <button type="button" onclick={() => void fetchLargeResult()} class="underline hover:no-underline">retry</button>
+            </div>
+          {:else if displayResult !== undefined}
+            {#if loadedTruncated}
+              <p class="px-3 pt-2 text-[10px] italic text-amber-600 dark:text-amber-400">content truncated by the trace size cap</p>
+            {/if}
+            <pre class="overflow-x-auto px-3 py-2 font-mono text-[11px] text-black-900 dark:text-white-100 leading-relaxed whitespace-pre-wrap break-words">{displayResult}</pre>
+          {:else}
+            <!-- No fetcher wired (e.g. a synthetic turn) — nothing to show. -->
+            <p class="px-3 py-2 italic text-black-500 dark:text-black-600">payload not loaded</p>
+          {/if}
         </div>
       {/if}
     </div>

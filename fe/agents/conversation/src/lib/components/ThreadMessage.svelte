@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ConversationTurn, ThreadBlock, TurnEvent } from "../types/agents.js";
+  import type { ConversationTurn, ThreadBlock, TurnEvent, TurnEventPayload } from "../types/agents.js";
   import { renderMarkdown, linkifyText } from "../markdown.js";
   import { turnTime, parseEventTime } from "../timeFormat.js";
   import { enrich } from "../richRender.js";
@@ -14,8 +14,12 @@
   type Props = {
     turn: ConversationTurn;
     loadTrace?: (turnId: string) => Promise<TurnEvent[]>;
+    // Fetches the spilled payload of one large trace event (an index row
+    // with large:true carries no text) — wired to
+    // GET /sessions/{id}/turns/{turn_id}/events/{event_id}.
+    loadTraceEvent?: (turnId: string, eventId: string) => Promise<TurnEventPayload>;
   };
-  let { turn, loadTrace }: Props = $props();
+  let { turn, loadTrace, loadTraceEvent }: Props = $props();
 
   const isUser = $derived(turn.role === "user");
   const isSystem = $derived(turn.role === "system");
@@ -196,7 +200,18 @@
           toolUseId: ev.tool_use_id ?? "",
           toolName: ev.tool_name ?? "",
           toolInput: ev.tool_input ?? "",
+          // Big arguments spill the same way big results do — the sidecar
+          // is keyed by the tool_use's own event_id.
+          toolInputLarge: ev.large === true,
+          toolInputSize: ev.size,
+          toolInputEventId: ev.event_id,
           result: res?.text,
+          // A large (spilled) result event has no text — the EVENT existing
+          // is what marks the call finished, or the card spins forever.
+          hasResult: res !== undefined,
+          resultLarge: res?.large === true,
+          resultSize: res?.size,
+          resultEventId: res?.event_id,
           isError: res?.is_error,
           startedAt: parseEventTime(ev.at),
           endedAt: parseEventTime(res?.end_at ?? res?.at),
@@ -213,6 +228,10 @@
           toolName: ev.tool_name ?? "tool result",
           toolInput: "",
           result: ev.text,
+          hasResult: true,
+          resultLarge: ev.large === true,
+          resultSize: ev.size,
+          resultEventId: ev.event_id,
           isError: ev.is_error,
           endedAt: parseEventTime(ev.end_at ?? ev.at),
         });
@@ -482,7 +501,13 @@
                     <pre class="px-3 pb-2 overflow-x-auto text-[11px] text-black-700 dark:text-black-600 whitespace-pre-wrap break-words">{block.text}</pre>
                   </details>
                 {:else}
-                  <ToolCard {block} interrupted={turn.interrupted} />
+                  <ToolCard
+                    {block}
+                    interrupted={turn.interrupted}
+                    loadEventPayload={loadTraceEvent && !isSyntheticId
+                      ? (eventId) => loadTraceEvent!(turn.turn_id, eventId)
+                      : undefined}
+                  />
                 {/if}
               {/each}
             </div>

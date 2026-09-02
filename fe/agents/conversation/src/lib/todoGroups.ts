@@ -182,9 +182,14 @@ export function mergeTodoItemsWithSteps(blocks: ThreadBlock[]): TodoItemWithStep
     checklist widget (built from mergeTodoItems) replaces them, so they
     shouldn't ALSO render as individual generic tool cards. Matches the
     MCP-namespaced name too, so `mcp__wick__todo` calls don't leak
-    through as raw tool cards. */
+    through as raw tool cards.
+
+    Exception: a todo call whose input was spilled (large payload, empty
+    toolInput until fetched) contributed nothing to the merged checklist —
+    stripping it too would erase the checklist without a trace, so it stays
+    in the flat trace as a generic card. */
 export function stripTodoBlocks(blocks: ThreadBlock[]): ThreadBlock[] {
-  return blocks.filter((b) => !isTodoBlock(b));
+  return blocks.filter((b) => !isTodoBlock(b) || (b.toolInputLarge === true && !b.toolInput));
 }
 
 /** Progress summary for a merged item list — used for the "X/Y done"
