@@ -12,7 +12,7 @@ import (
 // Use action_id whitelist to route different buttons to different workflows
 // without needing a branch node.
 type SlackBlockActionMatch struct {
-	Mode            string `wick:"dropdown=all|whitelist;default=all;desc=Filter mode: all=fire every action; whitelist=only listed action IDs / channels"`
+	Mode            string `wick:"dropdown=all|whitelist;default=all;desc=Filter mode: all=fire every action, whitelist=only listed action IDs / channels"`
 	ActionID        string `wick:"visible_when=mode:whitelist;key=action_id;desc=Exact action_id to match (e.g. create_ticket). Leave blank to allow any."`
 	AllowedChannels string `wick:"picker=slack.channels;visible_when=mode:whitelist;key=channel_id;desc=Only fire from these channels"`
 }

@@ -32,7 +32,7 @@ const defaultBaseURL = "https://slack.com/api"
 // ClientID and ClientSecret are the Slack OAuth App credentials for this
 // instance; they enable the "Connect Account" button on the detail page.
 type Configs struct {
-	AuthMode     string `wick:"dropdown=bot_token|user_token;default=bot_token;desc=Which Slack OAuth token type to use. Bot tokens (xoxb-) cover the standard surface; user tokens (xoxp-) act as a workspace member and are required for ops that need user identity."`
+	AuthMode     string `wick:"dropdown=bot_token|user_token;default=bot_token;desc=Which Slack OAuth token type to use. Bot tokens (xoxb-) cover the standard surface, user tokens (xoxp-) act as a workspace member and are required for ops that need user identity."`
 	BotToken     string `wick:"secret;desc=Bot User OAuth Token (xoxb-...). Scopes: channels:read, groups:read, im:read, mpim:read, channels:history, groups:history, im:history, mpim:history, users:read, users:read.email, chat:write, chat:write.public, reactions:write, reactions:read, files:read, files:write, canvases:read, canvases:write, lists:read, lists:write."`
 	UserToken    string `wick:"secret;desc=User OAuth Token (xoxp-...). Filled automatically via the Connect Account button when ClientID is configured. Or paste manually."`
 	ClientID     string `wick:"desc=Slack OAuth App Client ID. Required to use the Connect Account button for user-token OAuth flow."`
@@ -157,7 +157,7 @@ type CreateChannelCanvasInput struct {
 type EditCanvasInput struct {
 	CanvasID  string `wick:"required;desc=Canvas ID (F...) to edit."`
 	Operation string `wick:"dropdown=insert_at_end|insert_at_start|insert_after|insert_before|replace|delete|rename;default=insert_at_end;desc=Edit action. Section ID is required for insert_before, insert_after, and delete."`
-	SectionID string `wick:"desc=Section ID returned by lookup_canvas_sections. Optional for replace; required for relative insertion and delete."`
+	SectionID string `wick:"desc=Section ID returned by lookup_canvas_sections. Optional for replace, required for relative insertion and delete."`
 	Markdown  string `wick:"textarea;desc=Markdown content for insert or replace, or new title for rename. Not used for delete."`
 }
 
@@ -174,13 +174,13 @@ type SetCanvasAccessInput struct {
 }
 
 type ListFilesInput struct {
-	Channel   string `wick:"desc=Optional channel ID (C.../G.../D...) to only list files shared in that channel."`
-	User      string `wick:"desc=Optional user ID (U...) to only list files created by that user."`
-	TSFrom    string `wick:"desc=Optional inclusive lower bound on file creation time (Unix seconds, e.g. 1700000000)."`
-	TSTo      string `wick:"desc=Optional inclusive upper bound on file creation time (Unix seconds)."`
-	Types     string `wick:"desc=Comma-separated file type filter: all,spaces,snippets,images,gdocs,zips,pdfs. Default: all."`
-	Limit     int    `wick:"desc=Max files per page (1-200). Default: 100."`
-	Page      int    `wick:"desc=1-based page number (files.list is page-based, not cursor-based). Default: 1."`
+	Channel string `wick:"desc=Optional channel ID (C.../G.../D...) to only list files shared in that channel."`
+	User    string `wick:"desc=Optional user ID (U...) to only list files created by that user."`
+	TSFrom  string `wick:"desc=Optional inclusive lower bound on file creation time (Unix seconds, e.g. 1700000000)."`
+	TSTo    string `wick:"desc=Optional inclusive upper bound on file creation time (Unix seconds)."`
+	Types   string `wick:"desc=Comma-separated file type filter: all,spaces,snippets,images,gdocs,zips,pdfs. Default: all."`
+	Limit   int    `wick:"desc=Max files per page (1-200). Default: 100."`
+	Page    int    `wick:"desc=1-based page number (files.list is page-based, not cursor-based). Default: 1."`
 }
 
 // ── Lists (slackLists.*) ─────────────────────────────────────────────
@@ -246,8 +246,8 @@ type GetFileInfoInput struct {
 }
 
 type ReadFileInput struct {
-	File      string `wick:"required;desc=File ID (F...) to download and read. The bot must be a member of a channel the file was shared in."`
-	MaxBytes  int    `wick:"desc=Refuse to download files larger than this many bytes (guards context blow-up). Default: 8388608 (8 MiB)."`
+	File     string `wick:"required;desc=File ID (F...) to download and read. The bot must be a member of a channel the file was shared in."`
+	MaxBytes int    `wick:"desc=Refuse to download files larger than this many bytes (guards context blow-up). Default: 8388608 (8 MiB)."`
 }
 
 type GetReactionsInput struct {
@@ -258,8 +258,10 @@ type GetReactionsInput struct {
 }
 
 type UploadFileInput struct {
-	Filename       string `wick:"required;desc=Filename for the upload (e.g. report.txt, diagram.png). Slack infers file type from the extension."`
-	Content        string `wick:"required;textarea;desc=File content as a UTF-8 string. Binary content is not supported in this operation."`
+	Filename       string `wick:"desc=Filename for the upload (e.g. report.pdf, diagram.png). Slack infers the file type from the extension. Optional with path (it defaults to that file's base name). Required with content or content_base64."`
+	Path           string `wick:"desc=Absolute path to a file on the wick host to upload — the way to send a PDF, image, or archive. Must sit inside wick's agents dir (session, project, and workspace files) — anything outside is refused. Mutually exclusive with content and content_base64."`
+	Content        string `wick:"textarea;desc=File content as a UTF-8 string, for text files. Use path or content_base64 for binary. Mutually exclusive with path and content_base64."`
+	ContentBase64  string `wick:"textarea;desc=File content as base64 — arbitrary bytes held inline (PDF, image, archive) instead of read from disk. Mutually exclusive with path and content."`
 	ChannelID      string `wick:"desc=Channel ID (C...) to share the file to after upload. Omit to upload without sharing."`
 	Title          string `wick:"desc=Optional display title shown in Slack. Defaults to filename when omitted."`
 	ThreadTS       string `wick:"desc=Parent message ts to share the file into a thread. Requires channel_id."`
@@ -578,7 +580,7 @@ func Operations() []connector.Category {
 			connector.OpDestructive(
 				"upload_file",
 				"Upload File",
-				"Upload a file to Slack via the v2 two-step API, then optionally share it to a channel or thread. Requires files:write scope.",
+				"Upload a file to Slack via the v2 upload API, then optionally share it to a channel or thread. Send it from disk with path (any type — PDF, image, archive), inline bytes with content_base64, or text with content. Requires files:write scope.",
 				UploadFileInput{},
 				uploadFile,
 				wickdocs.Docs{
@@ -589,14 +591,19 @@ func Operations() []connector.Category {
 						"permalink": "Permanent link to the file in the Slack UI.",
 						"channel":   "Channel ID the file was shared to (only present when channel_id was provided).",
 					},
-					TemplateableFields: []string{"filename", "content", "channel_id", "thread_ts", "title", "initial_comment"},
+					TemplateableFields: []string{"filename", "path", "content", "content_base64", "channel_id", "thread_ts", "title", "initial_comment"},
 					Quirks: []string{
+						"Exactly one of path, content_base64, or content. path is the one to reach for with binary files — content is UTF-8 text only.",
+						"path must be absolute AND inside the agents dir. Anything outside is refused, so copy the file there first.",
+						"<agents-dir> in the sample is <data-dir>/agents — by default ~/.<app>/agents, where <app> is the configured app name (wick.yml `name:`, default \"wick\"), so do not paste \".wick\" literally. When a path is rejected the error names the resolved root.",
+						"filename is optional with path (it defaults to that file's base name) but required with content / content_base64.",
 						"Uses Slack v2 upload API (files.getUploadURLExternal + files.completeUploadExternal). The legacy files.upload is deprecated.",
 						"Slack determines the file type from the filename extension — choose the extension carefully.",
 						"Omitting channel_id uploads the file without sharing it.",
 						"Requires files:write scope.",
 					},
-					PairWith: []string{"connector:slack.send_message"},
+					PairWith:    []string{"connector:slack.send_message", "connector:slack.read_file"},
+					InputSample: `{"path":"<agents-dir>/projects/p1/files/report.pdf","channel_id":"C12345","initial_comment":"laporan minggu ini"}`,
 				},
 			),
 		),
@@ -1573,8 +1580,6 @@ func parseCanvasIDs(raw string) []string {
 }
 
 func uploadFile(c *connector.Ctx) (any, error) {
-	filename := strings.TrimSpace(c.Input("filename"))
-	content := c.Input("content")
 	channelID := strings.TrimSpace(c.Input("channel_id"))
 	title := strings.TrimSpace(c.Input("title"))
 	threadTS := strings.TrimSpace(c.Input("thread_ts"))
@@ -1584,7 +1589,14 @@ func uploadFile(c *connector.Ctx) (any, error) {
 		return nil, fmt.Errorf("channel_id is required when thread_ts is set")
 	}
 
-	raw, err := slackPostMultipart(c, filename, []byte(content), title, channelID, threadTS, initialComment)
+	content, filename, err := resolveUploadSource(
+		c.Input("path"), c.Input("content_base64"), c.Input("content"), c.Input("filename"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	raw, err := slackPostMultipart(c, filename, content, title, channelID, threadTS, initialComment)
 	if err != nil {
 		return nil, err
 	}

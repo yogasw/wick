@@ -108,7 +108,7 @@ type slugInput struct {
 
 type createInput struct {
 	Slug       string `wick:"required;desc=Lowercase a-z0-9- slug. Used as the alias workflows reference."`
-	Mode       string `wick:"desc=strict (default) rejects extra keys; lax accepts them."`
+	Mode       string `wick:"desc=strict (default) rejects extra keys, lax accepts them."`
 	PrimaryKey string `wick:"desc=Comma-separated primary key column names. Defaults to the first column."`
 	Columns    string `wick:"required;textarea;desc=One column per line: name:type. Types: string, int, float, bool, timestamp, json, enum. Example:\\nid:string\\nstatus:enum\\ncreated_at:timestamp"`
 	Access     string `wick:"desc=Optional access JSON: {\"workflows\":[\"wf-id\"],\"row_filter\":\"by_creator\"}."`

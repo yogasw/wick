@@ -35,7 +35,7 @@ func ensureYaegiStdio() {
 // GoScriptSchema reflects the inspector form. The Code field uses the
 // textarea widget; UI swaps it for an Ace editor at hydrate time.
 type GoScriptSchema struct {
-	Code    string `wick:"required;key=code;textarea;desc=Full Go program. Read RunContext via json.NewDecoder(os.Stdin).Decode(&ctx); write result via json.NewEncoder(os.Stdout).Encode(v). Anything on stderr surfaces as 'stderr' field. Imports allowed (yaegi stdlib)."`
+	Code    string `wick:"required;key=code;textarea;desc=Full Go program. Read RunContext via json.NewDecoder(os.Stdin).Decode(&ctx), write result via json.NewEncoder(os.Stdout).Encode(v). Anything on stderr surfaces as 'stderr' field. Imports allowed (yaegi stdlib)."`
 	Timeout string `wick:"key=timeout_sec;number;desc=Script timeout in seconds (default 10)."`
 }
 

@@ -183,7 +183,7 @@ type appGetInput struct {
 
 type appSetInput struct {
 	Key   string `wick:"required;desc=Variable key."`
-	Value string `wick:"textarea;desc=New value. Empty string clears non-secret rows; empty submit on a secret row is a no-op."`
+	Value string `wick:"textarea;desc=New value. Empty string clears non-secret rows, empty submit on a secret row is a no-op."`
 }
 
 type appRegenerateInput struct {

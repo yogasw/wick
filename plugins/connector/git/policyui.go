@@ -219,7 +219,7 @@ type policyManagerInput struct {
 	GBranch    string `wick:"desc=Fallback branch name pattern (regex)."`
 	GMessage   string `wick:"desc=Fallback commit message pattern (regex)."`
 	GProtected string `wick:"desc=Fallback protected branches, comma-separated globs."`
-	GForce     string `wick:"desc=Present when force push is allowed; absent means denied."`
+	GForce     string `wick:"desc=Present when force push is allowed, absent means denied."`
 
 	// NewRepo is the sidebar's add box. The per-rule inputs are named r_*_<index>
 	// and cannot be declared here — the index is only known at render time — so they
