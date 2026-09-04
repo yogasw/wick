@@ -6,15 +6,31 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v1.7.2](https://github.com/yogasw/wick/compare/v1.7.1...v1.7.2) — Channels & Files
+
+_Released on 2026-09-04_
+
 ### Added
 
-*   **REST channel background mode**: `POST /chat/completions` and `POST /responses` now accept `"background": true` (or `metadata.background: "true"`) to return immediately with `"status": "queued"` instead of waiting for the agent — useful behind aggressive HTTP timeouts. The reply lands in the session history; pair with `conversation` and read it back with a follow-up request. See [Channels ▶ REST](/guide/agents/channels#background-mode).
+*   **REST channel background mode**: `POST /chat/completions` and `POST /responses` now accept `"background": true` (or `metadata.background: "true"`) to return immediately with `"status": "queued"` instead of waiting for the agent to complete. The reply lands in the session history; pair with `conversation` and read it back with a follow-up request. See [Channels ▶ REST](/guide/agents/channels#background-mode).
 
 ### Improved
 
-*   **REST channel: concurrent requests on one conversation now queue instead of erroring**: a second request on the same `conversation` while an earlier one is still in flight used to return `409 session busy`. It now queues FIFO behind the in-flight turn, like a chat channel message, and each request gets the reply to its own message — even if an earlier request was cancelled client-side. See [Channels ▶ REST](/guide/agents/channels#concurrency).
+*   **REST channel: concurrent requests on one conversation now queue instead of erroring**: A second request on the same `conversation` while an earlier one is still in flight used to return `409 session busy`. It now queues FIFO behind the in-flight turn, like a chat channel message, and each request gets the reply to its own message — even if an earlier request was cancelled client-side. See [Channels ▶ REST](/guide/agents/channels#concurrency).
+*   **Slack channel `upload_file` now supports binary files and is more robust**:
+    *   The `upload_file` action in the Slack channel now correctly handles `application/x-www-form-urlencoded` for `files.getUploadURLExternal`, resolving a previous issue where no uploads worked.
+    *   Added support for uploading binary content via `path` (reading from disk) and `content_base64` (inline bytes) inputs. The `path` input is confined to Wick's agents directory with symlink resolution and containment checks for security.
+    *   Addressed a Time-of-Check to Time-of-Use (TOCTOU) vulnerability in file uploads by ensuring path validation and file reading occur through a single, secure handle, preventing symlink race conditions.
+    *   Fixed a bug where a semicolon `;` in the `desc=` prose within Wick struct-tags silently truncated schema descriptions, affecting 61 tags. A test has been added to prevent future regressions.
+    *   The `content` input source for uploads is now explicitly named, and the `InputSample` uses `<agents-dir>` instead of a hardcoded path.
+    *   Documentation for the semicolon rule in config-tags skill has been updated.
 
 ---
+
 
 ## [v1.7.1](https://github.com/yogasw/wick/compare/v1.7.0...v1.7.1) — Trace UI
 
