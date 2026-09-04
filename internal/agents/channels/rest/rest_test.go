@@ -15,6 +15,7 @@ import (
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
 	"github.com/yogasw/wick/internal/agents/event"
+	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/provider"
 )
 
@@ -421,55 +422,364 @@ func TestChatCompletions_StatefulSessionReuse(t *testing.T) {
 
 // ── concurrency safety ────────────────────────────────────────────────
 
-func TestChatCompletions_SessionBusyReturns409(t *testing.T) {
+// TestChatCompletions_ConcurrentSameSessionQueues verifies a second sync
+// request on a busy session no longer 409s — it queues behind the
+// in-flight turn (like a chat message) and gets its own reply.
+func TestChatCompletions_ConcurrentSameSessionQueues(t *testing.T) {
 	stubModels(t, "claude")
 
-	// Block the first request inside sendFn until we fire the second
-	// request, so the second sees an in-flight turn → 409.
+	// Hold the first send inside sendFn so the second request arrives
+	// while the first turn is still in flight.
 	release := make(chan struct{})
 	ch, _, _ := newTestChannel(t, "ok", func(sessionID string) {
-		// Hold off on the agent reply for the first call so the turn
-		// stays in-flight. Channel state mutex isn't held here.
-		<-release
+		<-release // closed channel → later sends pass straight through
 	})
 
 	body := map[string]any{
-		"model":      "claude",
+		"model":        "claude",
 		"conversation": "busy",
-		"messages":   []map[string]string{{"role": "user", "content": "long-running"}},
+		"messages":     []map[string]string{{"role": "user", "content": "long-running"}},
 	}
 
-	var firstStatus int32
+	var codes [2]int32
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		rec := postJSON(t, http.HandlerFunc(ch.handleChatCompletions), "/", "good", body)
-		atomic.StoreInt32(&firstStatus, int32(rec.Code))
-	}()
-
-	// Give first request time to register the turn.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		ch.mu.Lock()
-		busy := ch.turns["rest-busy"] != nil
-		ch.mu.Unlock()
-		if busy {
-			break
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec := postJSON(t, http.HandlerFunc(ch.handleChatCompletions), "/", "good", body)
+			atomic.StoreInt32(&codes[i], int32(rec.Code))
+		}(i)
+		if i == 0 {
+			// Wait until the first turn is queued before firing the second.
+			sid := restSessionID("user-1", "busy")
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				ch.mu.Lock()
+				queued := len(ch.turns[sid]) > 0
+				ch.mu.Unlock()
+				if queued {
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
 
-	rec := postJSON(t, http.HandlerFunc(ch.handleChatCompletions), "/", "good", body)
-	if rec.Code != http.StatusConflict {
-		t.Errorf("concurrent same-session → got %d want 409 (body=%s)", rec.Code, rec.Body.String())
-	}
-
-	// Release the held first request and confirm it succeeds.
 	close(release)
 	wg.Wait()
-	if got := atomic.LoadInt32(&firstStatus); got != 200 {
-		t.Errorf("first request after release: %d want 200", got)
+	for i := range codes {
+		if got := atomic.LoadInt32(&codes[i]); got != 200 {
+			t.Errorf("request %d: got %d want 200 (same-session requests must queue, not 409)", i, got)
+		}
+	}
+}
+
+// TestChatCompletions_AbandonedRequestDoesNotShiftReplies reproduces the
+// Postman stop-button scenario: request 1 is cancelled mid-flight, the
+// agent still finishes message 1, and request 2 must receive message 2's
+// reply — not message 1's leftover.
+func TestChatCompletions_AbandonedRequestDoesNotShiftReplies(t *testing.T) {
+	stubModels(t, "claude")
+	ch := New(agentconfig.RestChannelConfig{Enabled: "true", ProjectID: "main"}, &fakeAuth{wantToken: "good", userID: "u"})
+	ch.SetSessionChecker(fakeSessions{exists: true})
+	ch.SetSendFunc(func(_ context.Context, _, _, _, _, _ string) error { return nil }) // events fired manually
+	sid := restSessionID("u", "pm")
+
+	post := func(ctx context.Context, content string) (*httptest.ResponseRecorder, chan struct{}) {
+		buf, _ := json.Marshal(map[string]any{
+			"model":        "claude",
+			"conversation": "pm",
+			"messages":     []map[string]string{{"role": "user", "content": content}},
+		})
+		req := httptest.NewRequest("POST", "/", bytes.NewReader(buf)).WithContext(ctx)
+		req.Header.Set("Authorization", "Bearer good")
+		rec := httptest.NewRecorder()
+		done := make(chan struct{})
+		go func() {
+			ch.handleChatCompletions(rec, req)
+			close(done)
+		}()
+		return rec, done
+	}
+	waitQueue := func(n int) {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			ch.mu.Lock()
+			l := len(ch.turns[sid])
+			ch.mu.Unlock()
+			if l == n {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatalf("queue never reached %d turns", n)
+	}
+
+	// Request 1 — user clicks stop before the agent finishes.
+	ctx1, cancel := context.WithCancel(context.Background())
+	rec1, done1 := post(ctx1, "message one")
+	waitQueue(1)
+	cancel()
+	<-done1
+	if rec1.Code != 499 {
+		t.Fatalf("cancelled request: code=%d want 499", rec1.Code)
+	}
+
+	// Request 2 arrives while message 1 is still being processed.
+	rec2, done2 := post(context.Background(), "message two")
+	waitQueue(2)
+
+	// Agent finishes message 1 → must pop the abandoned turn, silently.
+	ch.OnAgentEvent(sid, event.AgentEvent{Type: event.TextDelta, Text: "reply-ONE"})
+	ch.OnAgentEvent(sid, event.AgentEvent{Type: event.Done})
+	// Agent finishes message 2 → this is request 2's reply.
+	ch.OnAgentEvent(sid, event.AgentEvent{Type: event.TextDelta, Text: "reply-TWO"})
+	ch.OnAgentEvent(sid, event.AgentEvent{Type: event.Done})
+
+	<-done2
+	if rec2.Code != 200 {
+		t.Fatalf("request 2: code=%d body=%s", rec2.Code, rec2.Body.String())
+	}
+	var body chatResponse
+	_ = json.Unmarshal(rec2.Body.Bytes(), &body)
+	if got := body.Choices[0].Message.Content; got != "reply-TWO" {
+		t.Errorf("request 2 got %q want \"reply-TWO\" — replies shifted after abandoned request", got)
+	}
+}
+
+// ── background mode ───────────────────────────────────────────────────
+
+// TestChatCompletions_BackgroundReturnsImmediately verifies background:true
+// returns 200 with status "queued" without waiting for Done — the agent
+// never replies in this test, so a blocking handler would hang.
+func TestChatCompletions_BackgroundReturnsImmediately(t *testing.T) {
+	stubModels(t, "claude")
+	ch := New(agentconfig.RestChannelConfig{Enabled: "true", ProjectID: "main"}, &fakeAuth{wantToken: "good", userID: "u"})
+	ch.SetSessionChecker(fakeSessions{exists: true})
+
+	var mu sync.Mutex
+	var captured []sentCall
+	ch.SetSendFunc(func(_ context.Context, sessionID, agentName, source, role, text string) error {
+		mu.Lock()
+		captured = append(captured, sentCall{sessionID, agentName, source, role, text})
+		mu.Unlock()
+		return nil // no Done ever fires
+	})
+
+	respCh := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		respCh <- postJSON(t, http.HandlerFunc(ch.handleChatCompletions), "/", "good", map[string]any{
+			"model":        "claude",
+			"conversation": "bg",
+			"background":   true,
+			"messages":     []map[string]string{{"role": "user", "content": "long job"}},
+		})
+	}()
+
+	var rec *httptest.ResponseRecorder
+	select {
+	case rec = <-respCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background request blocked waiting for Done")
+	}
+	if rec.Code != 200 {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body chatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Status != "queued" {
+		t.Errorf("status=%q want \"queued\"", body.Status)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	var userCalls int
+	for _, c := range captured {
+		if c.Role == "user" {
+			userCalls++
+			if !strings.Contains(c.Text, "long job") {
+				t.Errorf("prompt missing: %q", c.Text)
+			}
+		}
+	}
+	if userCalls != 1 {
+		t.Errorf("user dispatches=%d want 1", userCalls)
+	}
+}
+
+// TestChatCompletions_BackgroundQueuesMultiple verifies several background
+// sends on one conversation all dispatch (no 409) — they queue in the
+// pool, exactly like chat channel messages.
+func TestChatCompletions_BackgroundQueuesMultiple(t *testing.T) {
+	stubModels(t, "claude")
+	ch := New(agentconfig.RestChannelConfig{Enabled: "true", ProjectID: "main"}, &fakeAuth{wantToken: "good", userID: "u"})
+	ch.SetSessionChecker(fakeSessions{exists: true})
+
+	var mu sync.Mutex
+	var userCalls int
+	ch.SetSendFunc(func(_ context.Context, _, _, _, role, _ string) error {
+		if role == "user" {
+			mu.Lock()
+			userCalls++
+			mu.Unlock()
+		}
+		return nil // agent still busy — no Done
+	})
+
+	for i := 0; i < 3; i++ {
+		rec := postJSON(t, http.HandlerFunc(ch.handleChatCompletions), "/", "good", map[string]any{
+			"model":        "claude",
+			"conversation": "bg-queue",
+			"background":   true,
+			"messages":     []map[string]string{{"role": "user", "content": "msg"}},
+		})
+		if rec.Code != 200 {
+			t.Fatalf("send %d: status=%d body=%s", i, rec.Code, rec.Body.String())
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if userCalls != 3 {
+		t.Errorf("user dispatches=%d want 3", userCalls)
+	}
+}
+
+// TestBackground_MetadataFlag verifies metadata.background="true" works for
+// SDKs that only expose the standard OpenAI fields.
+func TestBackground_MetadataFlag(t *testing.T) {
+	stubModels(t, "claude")
+	ch := New(agentconfig.RestChannelConfig{Enabled: "true", ProjectID: "main"}, &fakeAuth{wantToken: "good", userID: "u"})
+	ch.SetSessionChecker(fakeSessions{exists: true})
+	ch.SetSendFunc(func(_ context.Context, _, _, _, _, _ string) error { return nil })
+
+	rec := postJSON(t, http.HandlerFunc(ch.handleChatCompletions), "/", "good", map[string]any{
+		"model":    "claude",
+		"metadata": map[string]string{"background": "true", "conversation": "bg-meta"},
+		"messages": []map[string]string{{"role": "user", "content": "hi"}},
+	})
+	if rec.Code != 200 {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body chatResponse
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if body.Status != "queued" {
+		t.Errorf("status=%q want \"queued\"", body.Status)
+	}
+}
+
+// TestBackground_AutoBlocksApprovalWhilePending verifies gate approvals
+// arriving during a background turn are auto-blocked (no waiter exists,
+// but bgPending keeps the session marked as REST-owned), and that the
+// accounting clears once the turn's Done arrives.
+func TestBackground_AutoBlocksApprovalWhilePending(t *testing.T) {
+	stubModels(t, "claude")
+	ch := New(agentconfig.RestChannelConfig{Enabled: "true", ProjectID: "main"}, &fakeAuth{wantToken: "good", userID: "u"})
+	ch.SetSessionChecker(fakeSessions{exists: true})
+	ch.SetSendFunc(func(_ context.Context, _, _, _, _, _ string) error { return nil })
+
+	var mu sync.Mutex
+	var blocks int
+	ch.SetApproveFn(func(sid, rid, decision, matchKey string) error {
+		mu.Lock()
+		if decision == gate.DecisionBlock {
+			blocks++
+		}
+		mu.Unlock()
+		return nil
+	})
+
+	rec := postJSON(t, http.HandlerFunc(ch.handleChatCompletions), "/", "good", map[string]any{
+		"model":        "claude",
+		"conversation": "bg-appr",
+		"background":   true,
+		"messages":     []map[string]string{{"role": "user", "content": "rm -rf"}},
+	})
+	if rec.Code != 200 {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	sid := restSessionID("u", "bg-appr")
+
+	// Approval during the background turn → auto-block.
+	ch.OnApprovalRequest(sid, gate.ApprovalRequest{ID: "r1"})
+	mu.Lock()
+	if blocks != 1 {
+		t.Errorf("blocks=%d want 1 (approval during background turn must auto-block)", blocks)
+	}
+	mu.Unlock()
+
+	// Turn finishes → accounting cleared → later approvals (e.g. the
+	// session continued interactively in the web UI) are left alone.
+	ch.OnAgentEvent(sid, event.AgentEvent{Type: event.Done})
+	ch.OnApprovalRequest(sid, gate.ApprovalRequest{ID: "r2"})
+	mu.Lock()
+	if blocks != 1 {
+		t.Errorf("blocks=%d want 1 (approval after Done must NOT auto-block)", blocks)
+	}
+	mu.Unlock()
+
+	ch.mu.Lock()
+	if len(ch.turns) != 0 {
+		t.Errorf("turn queue not cleaned after Done: %v", ch.turns)
+	}
+	ch.mu.Unlock()
+}
+
+// TestResponses_Background verifies the Responses API variant returns
+// status "queued" with a chainable resp_ id.
+func TestResponses_Background(t *testing.T) {
+	stubModels(t, "claude")
+	ch := New(agentconfig.RestChannelConfig{Enabled: "true", ProjectID: "main"}, &fakeAuth{wantToken: "good", userID: "user-1"})
+	ch.SetSessionChecker(fakeSessions{exists: true})
+	ch.SetSendFunc(func(_ context.Context, _, _, _, _, _ string) error { return nil })
+
+	rec := postJSON(t, http.HandlerFunc(ch.handleResponses), "/", "good", map[string]any{
+		"model":        "claude",
+		"conversation": "bg-resp",
+		"background":   true,
+		"input":        "long job",
+	})
+	if rec.Code != 200 {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body responsesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Status != "queued" {
+		t.Errorf("status=%q want \"queued\"", body.Status)
+	}
+	wantID := responsesIDPrefix + strings.TrimPrefix(restSessionID("user-1", "bg-resp"), "rest-")
+	if body.ID != wantID {
+		t.Errorf("id=%q want %q (must stay chainable)", body.ID, wantID)
+	}
+	if body.OutputText != "" || len(body.Output) != 0 {
+		t.Errorf("queued response must carry no output: %+v", body)
+	}
+}
+
+func TestResolveBackground(t *testing.T) {
+	tests := []struct {
+		name string
+		bg   bool
+		meta map[string]string
+		want bool
+	}{
+		{"off", false, nil, false},
+		{"explicit field", true, nil, true},
+		{"metadata true", false, map[string]string{"background": "true"}, true},
+		{"metadata 1", false, map[string]string{"background": "1"}, true},
+		{"metadata yes", false, map[string]string{"background": "YES"}, true},
+		{"metadata false", false, map[string]string{"background": "false"}, false},
+		{"unrelated metadata", false, map[string]string{"foo": "bar"}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveBackground(tc.bg, tc.meta); got != tc.want {
+				t.Errorf("got %v want %v", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -24,11 +24,11 @@ type agentSchema struct {
 	Skills            string `wick:"key=skills;desc=YAML list of skill names to expose"`
 	Tools             string `wick:"key=tools;desc=YAML list of tool names to allowlist"`
 	MaxTurns          int    `wick:"key=max_turns;desc=Max agent turns. 0 = unlimited (provider default)."`
-	Thinking          string `wick:"key=thinking;dropdown=on|off;default=on;desc=Extended thinking. on = enabled (set a token budget below); off disables it to cut latency (claude only)."`
-	MaxThinkingTokens int    `wick:"key=max_thinking_tokens;number;visible_when=thinking:on;desc=Thinking token budget when on. 0 = unlimited (provider default); set >=1024 to cap. Claude only."`
+	Thinking          string `wick:"key=thinking;dropdown=on|off;default=on;desc=Extended thinking. on = enabled (set a token budget below), off disables it to cut latency (claude only)."`
+	MaxThinkingTokens int    `wick:"key=max_thinking_tokens;number;visible_when=thinking:on;desc=Thinking token budget when on. 0 = unlimited (provider default), set >=1024 to cap. Claude only."`
 	Session           string `wick:"key=session;desc=new=fresh session per run, empty=inherit run session"`
 	TimeoutSec        int    `wick:"key=timeout_sec;number;desc=Hard timeout in seconds. The node fails with a clear error if the agent does not finish in time (e.g. connector/MCP tools never connect). 0 = inherit the run's max duration."`
-	RequireStatus     bool   `wick:"key=require_status;desc=When true the agent must end with a JSON object {\"status\":\"done|blocked|needs_input\",\"summary\":\"...\"}; any non-done status (or missing JSON) fails the node so a blocked or question-only run is not marked success."`
+	RequireStatus     bool   `wick:"key=require_status;desc=When true the agent must end with a JSON object {\"status\":\"done|blocked|needs_input\",\"summary\":\"...\"}, any non-done status (or missing JSON) fails the node so a blocked or question-only run is not marked success."`
 }
 
 // AgentEvent is the minimal event shape the agent executor consumes

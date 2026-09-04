@@ -537,11 +537,19 @@ Not supported. `"stream": true` returns `400` immediately — clients should lea
 
 Gate prompts are **auto-blocked** ([`rest.go OnApprovalRequest`](https://github.com/yogasw/wick/blob/master/internal/agents/channels/rest/rest.go)). REST clients cannot deliver an interactive decision, so any approval request resolves to `block` and the resulting error surfaces as a `403`. Use the web UI to approve sensitive commands.
 
+### Background mode
+
+Add `"background": true` (or `metadata.background: "true"` for SDKs that only expose the standard OpenAI `metadata` map) to either endpoint to return immediately with `"status": "queued"` instead of waiting for the agent:
+
+```json
+{ "id": "wick-…", "object": "chat.completion", "status": "queued", "choices": [...] }
+```
+
+The message is queued on the session exactly like a chat message — the reply is not returned in that response, it lands in the session history. Pair `background` with `conversation` and read the result back with a normal follow-up request on the same conversation; without `conversation` the request is fire-and-forget and the reply is unreachable. Useful behind aggressive HTTP timeouts (proxies, serverless gateways) where the caller can't wait out a long-running turn.
+
 ### Concurrency
 
-Two safeguards:
-
-1. **Per-session REST lock**: a second request on the same `conversation` while the first is still in flight gets `409 session busy`. Prevents two REST clients racing the same wick session.
+1. **Per-session turn queue**: concurrent requests on the same `conversation` no longer conflict — a request that arrives while an earlier one is still in flight queues FIFO behind it, same as chat channel messages, and each request gets the reply to its own message (never mixed up, even if an earlier caller gave up and disconnected).
 2. **Pool queue**: dispatch always goes through `sendFn → pool.Send`, which FIFO-queues when slots are full and preempts idle slots when configured. REST has no direct spawn path. See [Pool & Sessions](./pool).
 
 ### Configured response shape (chat completions)

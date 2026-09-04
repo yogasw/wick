@@ -11,7 +11,7 @@ import (
 //
 // Use callback_id whitelist to route different modal forms to different workflows.
 type SlackViewSubmissionMatch struct {
-	Mode             string `wick:"dropdown=all|whitelist;default=all;desc=Filter mode: all=fire every submission; whitelist=only listed callback IDs"`
+	Mode             string `wick:"dropdown=all|whitelist;default=all;desc=Filter mode: all=fire every submission, whitelist=only listed callback IDs"`
 	AllowedCallbacks string `wick:"desc=Comma-separated callback_id values (exact match). E.g. create_ticket_modal,update_ticket_modal;key=callback_id;visible_when=mode:whitelist"`
 }
 

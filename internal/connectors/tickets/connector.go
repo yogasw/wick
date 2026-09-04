@@ -136,7 +136,7 @@ type listInput struct {
 	Mine bool `wick:"desc=Only tickets assigned to the caller. Use this for \"my tickets\" — the user is resolved from the credential, so no id is needed."`
 	// Assignee is for looking at a NAMED person's queue, which is a different
 	// question from "mine" and needs an explicit id.
-	Assignee string `wick:"desc=Only tickets assigned to this wick user id. Leave empty for everyone; prefer mine=true for the caller's own tickets. Pass 'unassigned' for tickets with nobody on them."`
+	Assignee string `wick:"desc=Only tickets assigned to this wick user id. Leave empty for everyone, prefer mine=true for the caller's own tickets. Pass 'unassigned' for tickets with nobody on them."`
 }
 
 type mineInput struct {
@@ -160,7 +160,7 @@ type getInput struct {
 
 type createInput struct {
 	Title     string `wick:"required;desc=Short description of the work. Example: Payment webhook returns 401"`
-	Body      string `wick:"textarea;desc=Optional markdown description — repro steps, links, context. The title says what; this says why and how."`
+	Body      string `wick:"textarea;desc=Optional markdown description — repro steps, links, context. The title says what, this says why and how."`
 	ProjectID string `wick:"desc=Project to create the ticket in. Defaults to the calling session's project."`
 	ID        string `wick:"desc=Optional external id to adopt instead of a generated one, so a ticket mirroring a record elsewhere carries that record's id: [A-Za-z0-9._-] up to 64 chars, kept verbatim. A uuid is folded to dashless lowercase, so both shapes of a Notion page id land on one ticket and a second create from it is refused."`
 	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=Initial status. Defaults to open."`
@@ -175,7 +175,7 @@ type updateInput struct {
 	TicketID  string `wick:"desc=Ticket id to update. Defaults to the ticket the calling session belongs to."`
 	ProjectID string `wick:"desc=Project the ticket belongs to. Defaults to the calling session's project."`
 	Title     string `wick:"desc=New title. Omit to leave unchanged."`
-	Body      string `wick:"textarea;desc=New markdown description. Omit to leave unchanged; pass an empty string to clear it."`
+	Body      string `wick:"textarea;desc=New markdown description. Omit to leave unchanged, pass an empty string to clear it."`
 	Status    string `wick:"dropdown=open|in_progress|waiting|done;desc=New status. Omit to leave unchanged."`
 	Assignee  string `wick:"desc=New assignee (wick user id). Pass an empty string to unassign."`
 	Fields    string `wick:"textarea;desc=Field values to merge as JSON. An empty string value clears that field."`
@@ -195,7 +195,7 @@ type settingsSetInput struct {
 	AutoResolveAfterDays string `wick:"desc=Close a ticket untouched this long, in days. 0 turns it off. Omit to leave unchanged."`
 	FollowupPrompt       string `wick:"textarea;desc=Instruction sent to the agent when a ticket goes stale. Omit to leave unchanged."`
 	AutoCreate           string `wick:"textarea;desc=JSON array of auto-create rules. Pass [] to remove them all. Omit to leave unchanged."`
-	Statuses             string `wick:"textarea;desc=JSON array of board statuses, in column order: [{\"key\":\"triage\",\"label\":\"Triage\"},{\"key\":\"shipped\",\"label\":\"Shipped\",\"terminal\":true}]. Keys are lowercase a-z0-9_ and are what tickets store; labels are display only. EXACTLY ONE must have terminal:true — that is the stage auto-resolve moves finished work to. Pass [] to return to the built-in set. Omit to leave unchanged."`
+	Statuses             string `wick:"textarea;desc=JSON array of board statuses, in column order: [{\"key\":\"triage\",\"label\":\"Triage\"},{\"key\":\"shipped\",\"label\":\"Shipped\",\"terminal\":true}]. Keys are lowercase a-z0-9_ and are what tickets store, labels are display only. EXACTLY ONE must have terminal:true — that is the stage auto-resolve moves finished work to. Pass [] to return to the built-in set. Omit to leave unchanged."`
 }
 
 type attachInput struct {

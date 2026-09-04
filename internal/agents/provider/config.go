@@ -21,7 +21,7 @@ type InstanceConfig struct {
 	// turn, mid-turn messages wait then run in order (none lost). spawn =
 	// one-shot, every message its own parallel process (no queue, contexts
 	// independent — only safe where turns don't need shared history).
-	SendMode string `wick:"key=send_mode;dropdown=default|append|queue|spawn;desc=How a message reaches the CLI.\ndefault — follow the provider type (claude=append, codex=queue).\nappend — one persistent process; the CLI queues input itself (claude).\nqueue — one process per turn; messages sent while busy wait, then run in order. Context continues (resume). Nothing is dropped.\nspawn — one process per message, all in parallel. No queue; each runs in its own session, so contexts do NOT share history."`
+	SendMode string `wick:"key=send_mode;dropdown=default|append|queue|spawn;desc=How a message reaches the CLI.\ndefault — follow the provider type (claude=append, codex=queue).\nappend — one persistent process, the CLI queues input itself (claude).\nqueue — one process per turn, messages sent while busy wait, then run in order. Context continues (resume). Nothing is dropped.\nspawn — one process per message, all in parallel. No queue, each runs in its own session, so contexts do NOT share history."`
 }
 
 // CLIModelConfig is the model-picker section for CLI providers

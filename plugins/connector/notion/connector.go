@@ -50,7 +50,7 @@ type queryDatabaseInput struct {
 }
 
 type createPageInput struct {
-	ParentType string `wick:"required;dropdown=database|page;desc=Where to create the page. database = a row in a database; page = a subpage under a page."`
+	ParentType string `wick:"required;dropdown=database|page;desc=Where to create the page. database = a row in a database, page = a subpage under a page."`
 	ParentID   string `wick:"required;desc=ID of the parent database (for a row) or parent page (for a subpage)."`
 	Title      string `wick:"required;desc=Page title. For a database row this fills the title property."`
 	Properties string `wick:"desc=Optional extra properties as raw JSON, keyed by property NAME, in Notion property-object form. Example: {\"Status\":{\"select\":{\"name\":\"Doing\"}},\"Priority\":{\"number\":2}}"`
@@ -73,14 +73,14 @@ type createDatabaseInput struct {
 type updateDatabaseInput struct {
 	DatabaseID string `wick:"required;desc=ID of the database whose schema/title to change."`
 	Title      string `wick:"desc=New database title. Optional."`
-	Properties string `wick:"desc=Schema changes as raw JSON keyed by property name. Add = new key; remove = set the key to null; rename = {\"name\":\"New\"}. Example: {\"Due\":{\"date\":{}},\"Old\":null}"`
+	Properties string `wick:"desc=Schema changes as raw JSON keyed by property name. Add = new key, remove = set the key to null, rename = {\"name\":\"New\"}. Example: {\"Due\":{\"date\":{}},\"Old\":null}"`
 }
 
 // createCommentInput targets one of three destinations, in priority order:
 // discussion_id (reply to a thread) → block_id (comment on a specific block/
 // text) → page_id (page-level). Exactly one is used.
 type createCommentInput struct {
-	Text         string `wick:"required;desc=Comment text (plain text; sent as a single rich-text run)."`
+	Text         string `wick:"required;desc=Comment text (plain text, sent as a single rich-text run)."`
 	PageID       string `wick:"desc=Page to comment on (page-level comment). Used if block_id and discussion_id are empty."`
 	BlockID      string `wick:"desc=Block ID to attach the comment to a specific block/text on a page. Takes priority over page_id."`
 	DiscussionID string `wick:"desc=Existing discussion/thread ID to reply into. Takes priority over block_id and page_id."`
@@ -98,7 +98,7 @@ type getUsersInput struct {
 // html widget always calls the backing op with the currently-selected value in
 // an arg named "browser"; the status card ignores it.
 type pickerInput struct {
-	Browser string `wick:"desc=Unused; present because the html widget always sends it."`
+	Browser string `wick:"desc=Unused, present because the html widget always sends it."`
 }
 
 // Module is the connector definition.

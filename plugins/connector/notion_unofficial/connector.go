@@ -23,7 +23,7 @@ type Config struct {
 	Import string `wick:"html=import_form;group=Authentication;desc=Paste a Copy-as-cURL of any notion.so/api/v3 request from DevTools, then Extract — it fills the fields below."`
 
 	TokenV2      string `wick:"required;secret;group=Authentication;desc=Value of the token_v2 cookie from a logged-in notion.so browser session (DevTools → Application → Cookies → token_v2). Filled by Extract, or paste manually. Expires when the session ends."`
-	ActiveUserID string `wick:"required;group=Authentication;desc=Notion user ID for the x-notion-active-user-header. Filled by Extract from a Copy-as-cURL; needed on sessions with multiple accounts."`
+	ActiveUserID string `wick:"required;group=Authentication;desc=Notion user ID for the x-notion-active-user-header. Filled by Extract from a Copy-as-cURL, needed on sessions with multiple accounts."`
 	// Status is a read-only widget: it calls LoadUserContent live and shows the
 	// logged-in user + workspace so the operator can confirm the cookie works.
 	Status string `wick:"html=connection_status;group=Authentication;desc=Live connection status: probes the cookie and shows the logged-in user + workspace. Paste a cURL or fill token_v2 first."`
@@ -35,8 +35,8 @@ type Config struct {
 	// NOTE: no default= in the User-Agent tag — the value contains ';' which is
 	// the wick tag delimiter and would corrupt parsing. The in-code fallback
 	// (newClient → defaultUserAgent) covers a missing value.
-	UserAgent           string `wick:"required;group=Advanced;desc=Browser User-Agent sent with every request. Filled by Extract from a Copy-as-cURL; matches your real session so requests blend in."`
-	NotionClientVersion string `wick:"required;group=Advanced;default=23.13.0.0;desc=Notion-Client-Version header the web app sends. Filled by Extract from a Copy-as-cURL; defaults to a sensible value."`
+	UserAgent           string `wick:"required;group=Advanced;desc=Browser User-Agent sent with every request. Filled by Extract from a Copy-as-cURL, matches your real session so requests blend in."`
+	NotionClientVersion string `wick:"required;group=Advanced;default=23.13.0.0;desc=Notion-Client-Version header the web app sends. Filled by Extract from a Copy-as-cURL, defaults to a sensible value."`
 }
 
 // --- per-operation input structs ---
@@ -67,13 +67,13 @@ type listBlocksInput struct {
 
 type updateBlockInput struct {
 	BlockID string `wick:"required;desc=ID of the block to rewrite (get it from list_blocks). Only this block changes."`
-	Text    string `wick:"required;desc=New plain-text content for the block. Replaces the block's current text; the block type is kept unless 'type' is set."`
+	Text    string `wick:"required;desc=New plain-text content for the block. Replaces the block's current text, the block type is kept unless 'type' is set."`
 	Type    string `wick:"desc=Optional new block type to switch to, e.g. text, header, sub_header, sub_sub_header, bulleted_list, numbered_list, to_do, quote, code. Leave blank to keep the current type."`
 }
 
 type deleteBlockInput struct {
 	PageID  string `wick:"required;desc=ID of the page the block sits on."`
-	BlockID string `wick:"required;desc=ID of the block to delete (get it from list_blocks). Only this block is removed; the rest of the page stays."`
+	BlockID string `wick:"required;desc=ID of the block to delete (get it from list_blocks). Only this block is removed, the rest of the page stays."`
 }
 
 type describeDatabaseInput struct {
@@ -81,15 +81,15 @@ type describeDatabaseInput struct {
 }
 
 type createPageInput struct {
-	ParentType string `wick:"required;dropdown=page|database;default=page;desc=page = subpage under a page; database = a new row in a database (collection)."`
+	ParentType string `wick:"required;dropdown=page|database;default=page;desc=page = subpage under a page, database = a new row in a database (collection)."`
 	ParentID   string `wick:"required;desc=ID of the parent page (for a subpage) or database (for a row)."`
 	Title      string `wick:"required;desc=Page/row title (plain text). Fills the Name/title column."`
-	Properties string `wick:"desc=Database rows only. JSON object keyed by property NAME → string value. Call describe_database first for names/types/options. Formats: select=exact option; multi_select=comma-separated; checkbox=true/false; date=\"YYYY-MM-DD\" or \"YYYY-MM-DD HH:MM\" (range with \" → \"); relation/person=comma-separated ids. Example: {\"Activity\":\"Debug\",\"Start time\":\"2026-07-17 06:00\",\"End time\":\"2026-07-17 07:00\",\"Ticket\":\"<page-id>\"}"`
+	Properties string `wick:"desc=Database rows only. JSON object keyed by property NAME → string value. Call describe_database first for names/types/options. Formats: select=exact option, multi_select=comma-separated, checkbox=true/false, date=\"YYYY-MM-DD\" or \"YYYY-MM-DD HH:MM\" (range with \" → \"), relation/person=comma-separated ids. Example: {\"Activity\":\"Debug\",\"Start time\":\"2026-07-17 06:00\",\"End time\":\"2026-07-17 07:00\",\"Ticket\":\"<page-id>\"}"`
 }
 
 type updatePagePropertiesInput struct {
-	PageID     string `wick:"required;desc=ID of the database ROW (a row is a page) whose properties to update. Must be a row inside a database — a plain page has no properties. For its title use set_title; for body content use update_block."`
-	Properties string `wick:"required;desc=JSON object keyed by property NAME → string value; only the listed properties change, the rest of the row is untouched. Call describe_database first for names/types/options. Formats: select=exact option; multi_select=comma-separated; checkbox=true/false; date=\"YYYY-MM-DD\" or \"YYYY-MM-DD HH:MM\" (range with \" → \"); relation/person=comma-separated ids. To clear a cell pass an empty string. Example: {\"Status\":\"Done\",\"End time\":\"2026-07-21 07:00\"}"`
+	PageID     string `wick:"required;desc=ID of the database ROW (a row is a page) whose properties to update. Must be a row inside a database — a plain page has no properties. For its title use set_title, for body content use update_block."`
+	Properties string `wick:"required;desc=JSON object keyed by property NAME → string value, only the listed properties change, the rest of the row is untouched. Call describe_database first for names/types/options. Formats: select=exact option, multi_select=comma-separated, checkbox=true/false, date=\"YYYY-MM-DD\" or \"YYYY-MM-DD HH:MM\" (range with \" → \"), relation/person=comma-separated ids. To clear a cell pass an empty string. Example: {\"Status\":\"Done\",\"End time\":\"2026-07-21 07:00\"}"`
 }
 
 type createCommentInput struct {
@@ -104,14 +104,14 @@ type recordsInput struct {
 // pickerInput drives the connection_status html widget (arg always sent as
 // "browser"; ignored here).
 type pickerInput struct {
-	Browser string `wick:"desc=Unused; present because the html widget always sends it."`
+	Browser string `wick:"desc=Unused, present because the html widget always sends it."`
 }
 
 // importFormInput drives the import_form html widget. On Extract, the widget
 // sends the textarea's value under the name "raw"; the initial render sends
 // nothing meaningful.
 type importFormInput struct {
-	Browser string `wick:"desc=Unused; the html widget always sends it."`
+	Browser string `wick:"desc=Unused, the html widget always sends it."`
 	Raw     string `wick:"desc=The pasted cURL text (sent as the textarea's named value on Extract)."`
 }
 

@@ -16,7 +16,7 @@ import (
 // not the reflected ArgForm. Schema still surfaces the description so
 // AI knows to populate `cases` and `default_case` on the YAML node.
 type switchSchema struct {
-	Cases       string `wick:"required;key=cases;textarea;desc=List of {when, case} rules. First rule whose 'when' is true wins; engine emits Verdict=case so edges with matching case: route downstream. UI uses a rows builder."`
+	Cases       string `wick:"required;key=cases;textarea;desc=List of {when, case} rules. First rule whose 'when' is true wins, engine emits Verdict=case so edges with matching case: route downstream. UI uses a rows builder."`
 	DefaultCase string `wick:"key=default_case;desc=Verdict to emit when no rule matches. Leave blank to fail closed."`
 }
 

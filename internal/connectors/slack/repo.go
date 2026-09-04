@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/yogasw/wick/pkg/connector"
@@ -39,6 +40,27 @@ func slackGetWithHeaders(c *connector.Ctx, method string, form map[string]string
 	return doSlack(c, req, method)
 }
 
+// slackPostForm calls a Slack Web API method with an
+// application/x-www-form-urlencoded body. Not every method accepts JSON:
+// files.getUploadURLExternal is form-encoded only and answers a JSON body
+// with a bare `invalid_arguments`, so it has to go through here rather
+// than slackPost.
+func slackPostForm(c *connector.Ctx, method string, form map[string]string) (any, error) {
+	q := url.Values{}
+	for k, v := range form {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	req, err := http.NewRequestWithContext(c.Context(), http.MethodPost, buildURL(c, method), strings.NewReader(q.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
+	resp, _, err := doSlack(c, req, method)
+	return resp, err
+}
+
 // slackPost calls a Slack Web API method with a JSON body. Slack
 // accepts JSON for all the methods we use here so long as the
 // Content-Type header is set correctly.
@@ -62,10 +84,15 @@ func slackPost(c *connector.Ctx, method string, body map[string]any) (any, error
 // 3. POST files.completeUploadExternal → share to channel
 // Returns the decoded completeUploadExternal response.
 func slackPostMultipart(c *connector.Ctx, filename string, content []byte, title, channelID, threadTS, initialComment string) (any, error) {
-	// Step 1: get upload URL
-	step1Resp, err := slackPost(c, "files.getUploadURLExternal", map[string]any{
+	// Step 1: get upload URL. Form-encoded, not JSON — see slackPostForm.
+	// Slack also rejects a zero length, so an empty upload is caught here
+	// rather than surfacing as invalid_arguments.
+	if len(content) == 0 {
+		return nil, fmt.Errorf("nothing to upload: file content is empty")
+	}
+	step1Resp, err := slackPostForm(c, "files.getUploadURLExternal", map[string]string{
 		"filename": filename,
-		"length":   len(content),
+		"length":   strconv.Itoa(len(content)),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get upload URL: %w", err)

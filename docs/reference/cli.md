@@ -240,7 +240,7 @@ Example session (interactive):
 $ wick upgrade
 upgrade cli binary v0.1.13 -> v0.4.2? [Y/n]: y
 upgrade go.mod dep v0.1.13 -> v0.4.2? [Y/n]: y
-> go get github.com/yogasw/wick@v1.7.1
+> go get github.com/yogasw/wick@v1.7.2
 > go mod tidy
 Dockerfile: wick@v0.1.13 -> v0.4.2? [Y/n]: y
 ```
