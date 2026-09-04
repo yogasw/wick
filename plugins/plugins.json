@@ -23,6 +23,7 @@
       }
     ],
     "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.0/bitbucket-0.2.0-linux-amd64.zip",
       "linux/arm64": "https://github.com/yogasw/wick/releases/download/bitbucket/v0.2.0/bitbucket-0.2.0-linux-arm64.zip"
     }
   },
@@ -50,6 +51,7 @@
       }
     ],
     "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/git/v0.3.0/git-0.3.0-linux-amd64.zip",
       "linux/arm64": "https://github.com/yogasw/wick/releases/download/git/v0.3.0/git-0.3.0-linux-arm64.zip"
     }
   },
@@ -77,6 +79,7 @@
       }
     ],
     "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/github/v0.2.0/github-0.2.0-linux-amd64.zip",
       "linux/arm64": "https://github.com/yogasw/wick/releases/download/github/v0.2.0/github-0.2.0-linux-arm64.zip"
     }
   },
@@ -104,6 +107,7 @@
       }
     ],
     "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/google_workspace/v0.2.0/google_workspace-0.2.0-linux-amd64.zip",
       "linux/arm64": "https://github.com/yogasw/wick/releases/download/google_workspace/v0.2.0/google_workspace-0.2.0-linux-arm64.zip"
     }
   },
@@ -187,6 +191,7 @@
       }
     ],
     "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/notion/v0.2.0/notion-0.2.0-linux-amd64.zip",
       "linux/arm64": "https://github.com/yogasw/wick/releases/download/notion/v0.2.0/notion-0.2.0-linux-arm64.zip"
     }
   },
@@ -214,6 +219,7 @@
       }
     ],
     "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.5.0/notion_unofficial-0.5.0-linux-amd64.zip",
       "linux/arm64": "https://github.com/yogasw/wick/releases/download/notion_unofficial/v0.5.0/notion_unofficial-0.5.0-linux-arm64.zip"
     }
   },
@@ -269,6 +275,7 @@
       }
     ],
     "assets": {
+      "linux/amd64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.12.0/playwright_browser-0.12.0-linux-amd64.zip",
       "linux/arm64": "https://github.com/yogasw/wick/releases/download/playwright_browser/v0.12.0/playwright_browser-0.12.0-linux-arm64.zip"
     }
   }
