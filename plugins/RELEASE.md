@@ -58,6 +58,21 @@ Why no cross-firing:
 
 Steps 4–8 are **fully automated**. You only do 1–3 (author, bump VERSION, open the PR).
 
+Build targets come from the `BUILD_TARGETS_PLUGINS` Actions variable (comma-separated
+`<os>/<arch>`, or `all`). It's separate from `BUILD_TARGETS` (the wick binary set) so
+plugins can ship a wider set; unset → falls back to `BUILD_TARGETS`, then the default.
+
+## Rebuild ALL plugins / re-release (backfill a new arch)
+
+After widening `BUILD_TARGETS_PLUGINS` (say, adding `linux/arm64`), existing releases
+lack the new zips. Backfill without bumping any VERSION:
+
+Actions → **Release plugins** → *Run workflow* → leave **name** empty (or `all`) and
+tick **force**. Every plugin rebuilds at its current VERSION; same-name zips on the
+existing `<name>/v<ver>` release are replaced and new-arch zips added (the tag stays
+on its original commit), then `update-catalog` regenerates plugins.json. Without
+`force`, `all` only builds plugins whose VERSION has no release tag yet.
+
 ## Manual release (no CI)
 
 ```bash

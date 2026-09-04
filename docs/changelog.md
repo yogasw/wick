@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Improved
+
+*   **Plugin release pipeline: separate target knob + rebuild-all**: plugin builds now read the `BUILD_TARGETS_PLUGINS` Actions variable (falling back to `BUILD_TARGETS`, then the shared default), so plugins can ship a wider os/arch set than the wick binary. The manual `release-plugins.yml` run no longer requires a plugin name — empty or `all` rebuilds every plugin, and a new `force` option re-releases already-tagged versions by replacing/extending the zips on their existing releases (e.g. to backfill a newly added architecture).
 
 ---
 

@@ -30,16 +30,28 @@ on:
   # plugin-only paths. This is the only automatic trigger — never a bare PR.
   repository_dispatch:
     types: [core-released]
-  # Manual escape hatch: rebuild one named plugin on demand.
+  # Manual escape hatch: rebuild one plugin — or ALL of them (leave name empty
+  # or "all"). Combine with force=true to re-release versions whose tag already
+  # exists: the build re-runs against the current BUILD_TARGETS_PLUGINS set and
+  # the zips REPLACE the assets on the existing "<name>/v<ver>" release (same
+  # tag, same release — softprops overwrites same-name assets and adds new
+  # ones). That's how you backfill a new os/arch across every released plugin
+  # after widening BUILD_TARGETS_PLUGINS, without bumping any VERSION.
   workflow_dispatch:
     inputs:
       name:
-        description: 'Plugin folder name to force-build (e.g. httpbin)'
-        required: true
+        description: 'Plugin folder name (e.g. httpbin). Empty or "all" = every plugin.'
+        required: false
+        default: all
       kind:
-        description: 'connector | tool | job'
+        description: 'connector | tool | job (ignored when name is "all")'
         required: false
         default: connector
+      force:
+        description: 'Re-release even if the <name>/v<version> tag exists (rebuild + replace zips on the existing release)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write # create releases (the catalog commit uses ADMIN_TOKEN — see below)
@@ -88,12 +100,14 @@ jobs:
           entries='[]'
           ev="${{ github.event_name }}"
 
-          # Helper: append every buildable plugin (has main.go, not a _ scaffold)
-          # whose <name>/v<VERSION> tag does NOT exist yet. Doing the tag check
-          # here (not just in the build job) keeps the matrix to only the plugins
-          # that will actually cut a release — bump one plugin, get one build leg,
-          # not a leg per plugin that immediately skips itself.
-          add_unreleased() {
+          # Helper: append every buildable plugin (has main.go, not a _ scaffold).
+          # By default only plugins whose <name>/v<VERSION> tag does NOT exist yet
+          # enter the matrix — doing the tag check here (not just in the build job)
+          # keeps the matrix to only the plugins that will actually cut a release:
+          # bump one plugin, get one build leg, not a leg per plugin that
+          # immediately skips itself. Pass "released_too" (force rebuild-all) to
+          # include already-released plugins so their assets get re-built.
+          add_plugins() {
             tags=$(git ls-remote --tags origin)
             for kind in connector tool job; do
               [ -d "$kind" ] || continue
@@ -103,7 +117,7 @@ jobs:
                 [ -f "$kind/$n/main.go" ] || continue
                 [ -f "$kind/$n/VERSION" ] || continue
                 v=$(cat "$kind/$n/VERSION")
-                if echo "$tags" | grep -q "refs/tags/$n/v$v\$"; then
+                if [ "${1:-}" != "released_too" ] && echo "$tags" | grep -q "refs/tags/$n/v$v\$"; then
                   echo "skip $kind/$n v$v — tag already released"
                   continue
                 fi
@@ -113,15 +127,30 @@ jobs:
           }
 
           if [ "$ev" = "workflow_dispatch" ]; then
-            # Manual: one named plugin.
-            entries='[{"kind":"${{ github.event.inputs.kind }}","name":"${{ github.event.inputs.name }}"}]'
+            name="${{ github.event.inputs.name }}"
+            force="${{ github.event.inputs.force }}"
+            if [ -z "$name" ] || [ "$name" = "all" ]; then
+              # Rebuild-all. With force=true even released versions enter the
+              # matrix (the build job re-releases them, replacing the zips on
+              # the existing release); without force the tag filter applies as
+              # usual so already-released versions are skipped up front.
+              if [ "$force" = "true" ]; then
+                add_plugins released_too
+              else
+                add_plugins
+              fi
+            else
+              # One named plugin. force (if set) is honored by the build job's
+              # tag gate.
+              entries=$(jq -cn --arg k "${{ github.event.inputs.kind }}" --arg n "$name" '[{kind:$k,name:$n}]')
+            fi
           else
             # repository_dispatch (core-released) — the only automatic trigger.
             # Only plugins whose VERSION has no matching release tag enter the
             # matrix. A core release with no plugin bumps yields an empty matrix,
             # which also skips the test job (any=false).
             echo "core-released (v${{ github.event.client_payload.version }}) → detect unreleased plugins"
-            add_unreleased
+            add_plugins
           fi
           echo "matrix={\"include\":$entries}" >> "$GITHUB_OUTPUT"
           if [ "$(echo "$entries" | jq 'length')" -gt 0 ]; then
@@ -231,17 +260,26 @@ jobs:
       # <name>/v<version> already exists, this version is already released — skip
       # build + release so re-running the PR on synchronize doesn't duplicate it.
       # Bump the plugin's VERSION to cut a new release.
+      #
+      # EXCEPTION: a manual workflow_dispatch with force=true bypasses the gate.
+      # The build then re-runs against the current BUILD_TARGETS_PLUGINS set and
+      # the Release step targets the SAME existing tag — softprops replaces the
+      # same-name zips and adds zips for any new os/arch. The tag keeps pointing
+      # at its original commit; only the assets are refreshed (built from the ref
+      # this dispatch ran on, normally master).
       - name: Resolve version + check tag
         id: ver
         shell: bash
+        env:
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force == 'true' }}
         run: |
           set -euo pipefail
           v=$(cat "plugins/${{ matrix.kind }}/${{ matrix.name }}/VERSION")
           echo "v=$v" >> "$GITHUB_OUTPUT"
           tag="${{ matrix.name }}/v$v"
-          if git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
+          if [ "$FORCE" != "true" ] && git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "tag $tag already exists — skipping"
+            echo "tag $tag already exists — skipping (re-run with force=true to re-release)"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -285,14 +323,17 @@ jobs:
           go build -o "$RUNNER_TEMP/wick" .
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-      # Same BUILD_TARGETS Actions variable as release-artifacts.yml so binary
-      # and plugin releases build the exact same os/arch set from one knob.
-      # `all` → every supported target; unset → the shared default.
+      # Plugin os/arch set comes from the BUILD_TARGETS_PLUGINS Actions variable.
+      # It's a SEPARATE knob from BUILD_TARGETS (the wick binary set) on purpose:
+      # people can build wick itself, but plugins rarely change and self-building
+      # them is a chore — so plugin releases usually want a WIDER target set than
+      # the core binary. Falls back to BUILD_TARGETS when unset (one-knob setups
+      # keep working), then to the shared default. `all` → every supported target.
       - name: Build targets → zips
         if: steps.ver.outputs.skip == 'false'
         working-directory: plugins
         env:
-          TARGETS: ${{ vars.BUILD_TARGETS }}
+          TARGETS: ${{ vars.BUILD_TARGETS_PLUGINS || vars.BUILD_TARGETS }}
         run: |
           set -euo pipefail
           : "${TARGETS:=darwin/amd64,darwin/arm64,windows/amd64}"
@@ -302,6 +343,10 @@ jobs:
             wick plugin build --kind "${{ matrix.kind }}" "${{ matrix.name }}" --target "$TARGETS"
           fi
 
+      # On the normal path this CREATES the "<name>/v<ver>" release. On a forced
+      # re-release the tag already exists, so softprops UPDATES that release
+      # instead: same-name zips are replaced, new-arch zips are added — nothing
+      # else about the release changes.
       - name: Release
         if: steps.ver.outputs.skip == 'false'
         uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0 (pinned, matches core)
