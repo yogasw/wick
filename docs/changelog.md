@@ -6,7 +6,13 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **REST channel background mode**: `POST /chat/completions` and `POST /responses` now accept `"background": true` (or `metadata.background: "true"`) to return immediately with `"status": "queued"` instead of waiting for the agent — useful behind aggressive HTTP timeouts. The reply lands in the session history; pair with `conversation` and read it back with a follow-up request. See [Channels ▶ REST](/guide/agents/channels#background-mode).
+
+### Improved
+
+*   **REST channel: concurrent requests on one conversation now queue instead of erroring**: a second request on the same `conversation` while an earlier one is still in flight used to return `409 session busy`. It now queues FIFO behind the in-flight turn, like a chat channel message, and each request gets the reply to its own message — even if an earlier request was cancelled client-side. See [Channels ▶ REST](/guide/agents/channels#concurrency).
 
 ---
 

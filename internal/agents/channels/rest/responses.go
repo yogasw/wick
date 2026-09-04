@@ -8,7 +8,9 @@
 // previous_response_id for a fresh stateless turn — the input is sent
 // as-is. Streaming, tool calls, function calls, and structured-output
 // formats are not supported; the assistant text is returned as a single
-// output_text content part.
+// output_text content part. `background: true` queues the turn and
+// returns immediately with status "queued" — the output lands in the
+// session history, readable via a follow-up chained request.
 
 package rest
 
@@ -35,7 +37,13 @@ type responsesRequest struct {
 	Conversation       string            `json:"conversation"`
 	User               string            `json:"user"`
 	Stream             bool              `json:"stream"`
-	Metadata           map[string]string `json:"metadata"`
+	// Background mirrors OpenAI's Responses background param: return
+	// immediately with status "queued" instead of waiting for the agent.
+	// The output lands in the session history — chain the returned id
+	// (previous_response_id) or reuse the conversation to read it later.
+	// Also accepted via metadata.background.
+	Background bool              `json:"background"`
+	Metadata   map[string]string `json:"metadata"`
 	// Project optionally names the wick Project (id) for this request,
 	// overriding the channel default. Also via metadata.project[_id].
 	Project string `json:"project"`
@@ -155,6 +163,31 @@ func (c *Channel) handleResponses(w http.ResponseWriter, r *http.Request) {
 	prompt := composeResponsesPrompt(req.Instructions, userInput, reused)
 	if strings.TrimSpace(prompt) == "" {
 		writeError(w, http.StatusBadRequest, "input is required")
+		return
+	}
+
+	if resolveBackground(req.Background, req.Metadata) {
+		if status, msg := c.dispatchBackground(sessionID, userID, req.User, prompt, reused, resolveProject(req.Project, req.Metadata)); status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+		resp := responsesResponse{
+			ID:         responsesIDPrefix + strings.TrimPrefix(sessionID, "rest-"),
+			Object:     "response",
+			CreatedAt:  time.Now().Unix(),
+			Status:     "queued",
+			Model:      firstNonEmpty(req.Model, "wick"),
+			Output:     []responsesOutput{},
+			OutputText: "",
+			Usage:      responsesUsage{},
+			Metadata:   req.Metadata,
+		}
+		if reused {
+			v := req.PreviousResponseID
+			resp.PreviousResponseID = &v
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
 		return
 	}
 
