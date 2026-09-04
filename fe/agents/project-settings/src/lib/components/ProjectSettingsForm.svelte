@@ -124,8 +124,13 @@
 
   /* Bound to text inputs — waits for a pause in typing. */
   const edit = () => autosave.schedule();
-  /* Bound to selects, toggles, radios, and blur — saves at once. */
+  /* Bound to blur — saves at once, but only if an edit is pending, so
+     tabbing through an untouched form stays silent. */
   const commit = () => autosave.flush();
+  /* Bound to selects, pickers, toggles, radios — the event itself is the
+     edit, so this saves unconditionally. flush() would skip it: nothing
+     marked the form dirty beforehand. */
+  const change = () => autosave.commit();
 
   async function load() {
     loading = true;
@@ -392,13 +397,13 @@
         <button
           type="button"
           aria-pressed={folderMode === "managed"}
-          onclick={() => { folderMode = "managed"; commit(); }}
+          onclick={() => { folderMode = "managed"; change(); }}
           class={folderModeClass(folderMode === "managed")}
         >Managed</button>
         <button
           type="button"
           aria-pressed={folderMode === "custom"}
-          onclick={() => { folderMode = "custom"; commit(); }}
+          onclick={() => { folderMode = "custom"; change(); }}
           class={folderModeClass(folderMode === "custom")}
         >Custom path</button>
       </div>
@@ -427,7 +432,7 @@
                 class="hidden"
                 onchange={(e) => {
                   const f = (e.currentTarget as HTMLInputElement).files?.[0];
-                  if (f) { customPath = f.name; commit(); }
+                  if (f) { customPath = f.name; change(); }
                 }}
               />
             </label>
@@ -453,7 +458,7 @@
             id="ps-provider"
             options={providerOptions}
             value={pickerValue}
-            onChange={(v) => { pickerValue = v; commit(); }}
+            onChange={(v) => { pickerValue = v; change(); }}
             loadModels={loadProviderModels}
             placeholder="Select provider"
           />
@@ -463,7 +468,7 @@
           <select
             id="ps-preset"
             bind:value={preset}
-            onchange={commit}
+            onchange={change}
             class="w-full rounded-lg border border-white-400 bg-white-100 px-3 py-2 text-sm text-black-900 outline-none transition-colors focus:border-green-500 dark:border-navy-600 dark:bg-navy-800 dark:text-white-100"
           >
             {#each data.preset_list as p (p)}
@@ -489,7 +494,7 @@
     {#if !data.is_new}
       <!-- Both of these are long editors that most visits do not touch, so
            they stay folded with their current state in the subtitle. -->
-      <div onchange={commit} role="none">
+      <div onchange={change} role="none">
         <SettingsSection
           title="Ticket system"
           subtitle={ticketSummary}
@@ -504,7 +509,7 @@
         </SettingsSection>
       </div>
 
-      <div onchange={commit} role="none">
+      <div onchange={change} role="none">
         <SettingsSection
           title="Widget permissions"
           subtitle={widgetSummary}

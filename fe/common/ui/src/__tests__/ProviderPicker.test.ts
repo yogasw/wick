@@ -126,6 +126,20 @@ describe("ProviderPicker live sets", () => {
     expect(await screen.findByRole("button", { name: /Grok 4\.5/ })).toBeTruthy();
   });
 
+  // An instance whose loader returns nothing (no models activated, vendor
+  // unreachable) must still be selectable: without an escape row the drill
+  // shows "No models available" and the provider can never be chosen at all.
+  test("an empty model list still lets the instance be picked without a pin", async () => {
+    const onChange = vi.fn();
+    const loadModels = vi.fn().mockResolvedValue([]);
+    render(ProviderPicker, { options: [WICK], value: "", onChange, loadModels });
+
+    await openAndDrill();
+    await fireEvent.click(await screen.findByText(/use default model/i));
+
+    expect(onChange).toHaveBeenCalledWith("wick/x");
+  });
+
   // A live-set pin matches no entry in the static list, so showing the bare
   // instance name would read as "no model chosen" for a project that pinned
   // a specific leaf.
