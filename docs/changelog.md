@@ -12,6 +12,7 @@ All notable changes to Wick are documented here.
 
 ### Improved
 
+*   **Plugin release pipeline: separate target knob + rebuild-all**: plugin builds now read the `BUILD_TARGETS_PLUGINS` Actions variable (falling back to `BUILD_TARGETS`, then the shared default), so plugins can ship a wider os/arch set than the wick binary. The manual `release-plugins.yml` run no longer requires a plugin name — empty or `all` rebuilds every plugin, and a new `force` option re-releases already-tagged versions by replacing/extending the zips on their existing releases (e.g. to backfill a newly added architecture).
 *   **REST channel: concurrent requests on one conversation now queue instead of erroring**: a second request on the same `conversation` while an earlier one is still in flight used to return `409 session busy`. It now queues FIFO behind the in-flight turn, like a chat channel message, and each request gets the reply to its own message — even if an earlier request was cancelled client-side. See [Channels ▶ REST](/guide/agents/channels#concurrency).
 
 ---
