@@ -76,12 +76,12 @@ type defCreateInput struct {
 
 type defUpdateInput struct {
 	Key   string `wick:"required;desc=Definition key to update (immutable, must match the existing def)."`
-	Draft string `wick:"textarea;required;desc=Full replacement draft as JSON — same shape as def_create. Fetch the current shape with def_get first; the stored definition is replaced wholesale and the live module reloads immediately."`
+	Draft string `wick:"textarea;required;desc=Full replacement draft as JSON — same shape as def_create. Fetch the current shape with def_get first, the stored definition is replaced wholesale and the live module reloads immediately."`
 }
 
 type defSetDisabledInput struct {
 	Key      string `wick:"required;desc=Definition key."`
-	Disabled bool   `wick:"desc=true disables (zero operations served; instances and pages stay), false re-enables."`
+	Disabled bool   `wick:"desc=true disables (zero operations served, instances and pages stay), false re-enables."`
 }
 
 type defResyncInput struct {
@@ -91,8 +91,8 @@ type defResyncInput struct {
 
 type mcpRegisterInput struct {
 	Label       string `wick:"required;desc=Display name — becomes the connector's name and its key (slugified)."`
-	Icon        string `wick:"desc=Optional icon: an emoji, an inline <svg>, or a data:image/...;base64 payload (max 32KB)."`
-	Description string `wick:"textarea;desc=Optional connector description. Empty = adopt the server's own initialize instructions and keep them fresh on every re-sync; non-empty = locked, never auto-replaced."`
+	Icon        string `wick:"desc=Optional icon: an emoji, an inline <svg>, or a data:image/...,base64 payload (max 32KB)."`
+	Description string `wick:"textarea;desc=Optional connector description. Empty = adopt the server's own initialize instructions and keep them fresh on every re-sync, non-empty = locked, never auto-replaced."`
 	URL         string `wick:"url;required;desc=Streamable-HTTP MCP endpoint. Example: https://mcp.example.com/v1"`
 	AuthScheme  string `wick:"dropdown=none|bearer|custom_header|sso;desc=Auth scheme. Default none. The oauth scheme needs a browser login and is NOT available here — register from the dashboard instead."`
 	AuthSecret  string `wick:"secret;desc=Bearer token (bearer scheme only)."`

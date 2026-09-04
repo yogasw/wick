@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -333,6 +335,146 @@ func shapePostResult(raw any) any {
 		}
 	}
 	return out
+}
+
+// maxUploadBytes caps a single upload_file call. Slack itself allows up to
+// 1 GB, but the connector holds the whole file in memory across three HTTP
+// steps, so keep it to something the daemon can absorb without being
+// knocked over by one call.
+const maxUploadBytes = 64 << 20
+
+// uploadSandboxRoot is the only tree a path= upload will read from: wick's
+// own agents dir, which is where session, project, and workspace files live
+// — the report an agent just generated, the screenshot it downloaded. A
+// wider root would turn one Slack write scope into "read any file on the
+// host and post it to a channel" (~/.ssh/id_rsa, ~/.aws/credentials, a
+// service .env), so the check is deliberate, not incidental. Indirected
+// through a var so tests can point it at a temp dir.
+var uploadSandboxRoot = appname.AgentsDir
+
+// resolveUploadSource turns upload_file's three mutually exclusive content
+// inputs into the bytes to send and the name to send them under. Exactly one
+// of path / content_base64 / content must be set:
+//
+//   - path          — read from disk, the only way to send something large;
+//     also supplies the filename when the caller omits one
+//   - content_base64 — arbitrary bytes held inline (PDF, PNG, zip)
+//   - content       — a UTF-8 string, for text files
+//
+// Returns the bytes and the resolved filename.
+func resolveUploadSource(path, contentB64, content, filename string) ([]byte, string, error) {
+	path = strings.TrimSpace(path)
+	contentB64 = strings.TrimSpace(contentB64)
+	filename = strings.TrimSpace(filename)
+
+	set := make([]string, 0, 3)
+	if path != "" {
+		set = append(set, "path")
+	}
+	if contentB64 != "" {
+		set = append(set, "content_base64")
+	}
+	if content != "" {
+		set = append(set, "content")
+	}
+	switch {
+	case len(set) == 0:
+		return nil, "", fmt.Errorf("one of path, content_base64, or content is required")
+	case len(set) > 1:
+		return nil, "", fmt.Errorf("path, content_base64, and content are mutually exclusive — got %s", strings.Join(set, " + "))
+	}
+
+	switch set[0] {
+	case "path":
+		abs, err := resolveUploadPath(path)
+		if err != nil {
+			return nil, "", err
+		}
+		b, err := os.ReadFile(abs)
+		if err != nil {
+			return nil, "", fmt.Errorf("read path: %w", err)
+		}
+		if filename == "" {
+			filename = filepath.Base(abs)
+		}
+		return b, filename, nil
+
+	case "content_base64":
+		b, err := decodeUploadBase64(contentB64)
+		if err != nil {
+			return nil, "", err
+		}
+		if len(b) > maxUploadBytes {
+			return nil, "", fmt.Errorf("content_base64 decodes to %d bytes, over the %d-byte limit", len(b), maxUploadBytes)
+		}
+		if filename == "" {
+			return nil, "", fmt.Errorf("filename is required when uploading content_base64")
+		}
+		return b, filename, nil
+
+	default:
+		if len(content) > maxUploadBytes {
+			return nil, "", fmt.Errorf("content is %d bytes, over the %d-byte limit", len(content), maxUploadBytes)
+		}
+		if filename == "" {
+			return nil, "", fmt.Errorf("filename is required when uploading content")
+		}
+		return []byte(content), filename, nil
+	}
+}
+
+// decodeUploadBase64 accepts both standard and URL-safe base64, with or
+// without padding, because callers paste whatever their tool produced.
+func decodeUploadBase64(s string) ([]byte, error) {
+	s = strings.Join(strings.Fields(s), "") // strip the newlines a wrapped blob carries
+	encodings := []*base64.Encoding{
+		base64.StdEncoding, base64.RawStdEncoding,
+		base64.URLEncoding, base64.RawURLEncoding,
+	}
+	for _, enc := range encodings {
+		if b, err := enc.DecodeString(s); err == nil {
+			return b, nil
+		}
+	}
+	return nil, fmt.Errorf("content_base64 is not valid base64")
+}
+
+// resolveUploadPath validates a path= upload against uploadSandboxRoot and
+// returns the absolute, symlink-resolved file to read. Symlinks are resolved
+// BEFORE the containment check so a link planted inside the sandbox cannot
+// point at something outside it.
+func resolveUploadPath(path string) (string, error) {
+	root := uploadSandboxRoot()
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("path must be absolute (got %q) — pass the full path, e.g. %s/projects/<project-id>/files/report.pdf", path, root)
+	}
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	} else {
+		root = filepath.Clean(root)
+	}
+	abs, err := filepath.EvalSymlinks(filepath.Clean(path))
+	if err != nil {
+		return "", fmt.Errorf("path: %w", err)
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q is outside %s — upload_file only reads files from wick's agents dir (session, project, and workspace files)", path, root)
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("path: %w", err)
+	}
+	if st.IsDir() {
+		return "", fmt.Errorf("path %q is a directory, not a file", path)
+	}
+	if !st.Mode().IsRegular() {
+		return "", fmt.Errorf("path %q is not a regular file", path)
+	}
+	if st.Size() > maxUploadBytes {
+		return "", fmt.Errorf("path %q is %d bytes, over the %d-byte limit", path, st.Size(), maxUploadBytes)
+	}
+	return abs, nil
 }
 
 func shapeUploadResult(raw any) (any, error) {

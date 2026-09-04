@@ -103,7 +103,7 @@ type GetPRDiffInput struct {
 	Owner    string `wick:"required;desc=Repository owner."`
 	Repo     string `wick:"required;desc=Repository name."`
 	Number   int    `wick:"required;desc=PR number."`
-	MaxBytes int    `wick:"desc=Truncate diff to this many bytes; 0 = no limit."`
+	MaxBytes int    `wick:"desc=Truncate diff to this many bytes, 0 = no limit."`
 }
 
 // MergePRInput merges a pull request.
@@ -134,8 +134,8 @@ type CreateOrUpdateFileInput struct {
 	Path    string `wick:"required;desc=file path in repo. Example: src/main.go"`
 	Content string `wick:"textarea;required;desc=new file content, PLAINTEXT — will be base64-encoded."`
 	Message string `wick:"required;desc=commit message."`
-	Branch  string `wick:"desc=target branch; default repo default."`
-	Sha     string `wick:"desc=blob sha of the file being replaced; required by GitHub when updating an existing file."`
+	Branch  string `wick:"desc=target branch, default repo default."`
+	Sha     string `wick:"desc=blob sha of the file being replaced, required by GitHub when updating an existing file."`
 }
 
 // ── REPO inputs ──────────────────────────────────────────────────────
@@ -214,7 +214,7 @@ type UpdateIssueInput struct {
 	Title  string `wick:"desc=New issue title. Omit to leave unchanged."`
 	Body   string `wick:"textarea;desc=New issue body (Markdown). Omit to leave unchanged."`
 	State  string `wick:"desc=open | closed. Omit to leave unchanged."`
-	Labels string `wick:"desc=Comma-separated label names; replaces the existing set. Omit to leave unchanged."`
+	Labels string `wick:"desc=Comma-separated label names, replaces the existing set. Omit to leave unchanged."`
 }
 
 // ListIssueCommentsInput lists comments on an issue or PR.
