@@ -113,7 +113,7 @@ type CreatePullRequestCommentInput struct {
 	Body          string `wick:"textarea;required;desc=Comment body."`
 	InlinePath    string `wick:"key=inline_path;desc=Optional. File path to anchor an inline comment (e.g. src/main.go). Required for any inline comment."`
 	InlineTo      int    `wick:"key=inline_to;number;desc=Optional. Line number in the NEW (post-diff) version to anchor the inline comment. Needs inline_path."`
-	InlineFrom    int    `wick:"key=inline_from;number;desc=Optional. Line number in the OLD (pre-diff) version; use instead of inline_to to comment on a removed/old line. Needs inline_path."`
+	InlineFrom    int    `wick:"key=inline_from;number;desc=Optional. Line number in the OLD (pre-diff) version, use instead of inline_to to comment on a removed/old line. Needs inline_path."`
 }
 
 type MergePullRequestInput struct {

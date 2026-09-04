@@ -46,9 +46,9 @@ func Module(deps Deps) connector.Module {
 }
 
 type sendInput struct {
-	PushID string `wick:"required;desc=Recipient PN ID. Ask the user to open Account → Notifications and copy the PN ID shown there; the ID starts with pn_ and does not expose the user's real user ID."`
+	PushID string `wick:"required;desc=Recipient PN ID. Ask the user to open Account → Notifications and copy the PN ID shown there, the ID starts with pn_ and does not expose the user's real user ID."`
 	Title  string `wick:"desc=Notification title shown by the browser. Defaults to Wick notification."`
-	Body   string `wick:"textarea;desc=Notification body text. Keep it short; browsers may truncate long text."`
+	Body   string `wick:"textarea;desc=Notification body text. Keep it short, browsers may truncate long text."`
 	URL    string `wick:"desc=Relative app URL to open when the notification is clicked, for example /tools/agents. Defaults to /."`
 }
 

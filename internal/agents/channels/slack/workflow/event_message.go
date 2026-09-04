@@ -19,7 +19,7 @@ import (
 // Picker entries serialize to `[{id,name}, ...]` JSON. Router checks
 // payload.channel_id / payload.user as id-membership against the list.
 type SlackMessageMatch struct {
-	Mode            string `wick:"dropdown=all|whitelist;default=all;desc=Filter mode: all=fire every message; whitelist=only listed channels/users"`
+	Mode            string `wick:"dropdown=all|whitelist;default=all;desc=Filter mode: all=fire every message, whitelist=only listed channels/users"`
 	AllowedChannels string `wick:"picker=slack.channels;visible_when=mode:whitelist;key=channel_id;desc=Only fire from these channels"`
 	AllowedUsers    string `wick:"picker=slack.users;visible_when=mode:whitelist;key=user;desc=Only from these users"`
 	TextContains    string `wick:"desc=Case-insensitive substring filter (optional)"`

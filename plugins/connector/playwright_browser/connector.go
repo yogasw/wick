@@ -72,12 +72,12 @@ type Config struct {
 	MaxTab              int `wick:"default=5;group=Timeouts & limits;desc=Maximum pages (tabs) a single run may open. Guards against a script fanning out unbounded."`
 
 	// Live-session mode (session_open / session_list / tab_* / session_close).
-	SessionDir      string `wick:"group=Live sessions|Persistent-browser mode: where sessions are stored and how many may run.|collapsed;desc=Directory where live-session metadata, browser profiles, and downloaded engines (e.g. cloakbrowser) are stored. Live browsers survive plugin restarts via these files. Default: the plugin's persistent data dir under the app tree (~/.<app>/plugins/playwright_browser); set this only to override that location."`
+	SessionDir      string `wick:"group=Live sessions|Persistent-browser mode: where sessions are stored and how many may run.|collapsed;desc=Directory where live-session metadata, browser profiles, and downloaded engines (e.g. cloakbrowser) are stored. Live browsers survive plugin restarts via these files. Default: the plugin's persistent data dir under the app tree (~/.<app>/plugins/playwright_browser), set this only to override that location."`
 	MaxLiveSessions int    `wick:"default=1;group=Live sessions;desc=Maximum persistent browsers alive at once (session_open cap). Guards RAM. Set 0 for unlimited. Default 1."`
 	// MaxTabsPerSession caps tabs within one session. Default 1 (single-tab):
 	// extra tabs each hold a live page in RAM, so multi-tab is opt-in. Raise it
 	// to allow parallel tabs; 0 = unlimited. tab_new is rejected past the cap.
-	MaxTabsPerSession int `wick:"default=1;group=Live sessions;desc=Maximum tabs per live session (tab_new cap). Each open tab costs RAM, so multi-tab is opt-in — default 1. Raise to allow parallel tabs; set 0 for unlimited."`
+	MaxTabsPerSession int `wick:"default=1;group=Live sessions;desc=Maximum tabs per live session (tab_new cap). Each open tab costs RAM, so multi-tab is opt-in — default 1. Raise to allow parallel tabs, set 0 for unlimited."`
 	// BrowserIdleTimeoutMin reclaims browsers nobody is using. A live session is
 	// detached on purpose, so without this it only ends when session_close is
 	// called — an agent that crashes or forgets leaves one resident forever.
@@ -110,7 +110,7 @@ type Config struct {
 	CloakExecutablePath string `wick:"group=CloakBrowser;desc=Path to an already-downloaded CloakBrowser binary. Set this to skip the GitHub download / CLI resolution (e.g. on a platform with no published build). Applies to both cloak engines."`
 	// Pro-tier license: passed to the browser at launch, and used by the
 	// cloakbrowser-pro engine to install/update the licensed binary via the CLI.
-	CloakLicenseKey string `wick:"secret;group=CloakBrowser;desc=CloakBrowser Pro license key (cb_...). Passed as CLOAKBROWSER_LICENSE_KEY at launch so a paid binary runs at its licensed tier. Required by the cloakbrowser-pro engine; leave empty for the free cloakbrowser engine."`
+	CloakLicenseKey string `wick:"secret;group=CloakBrowser;desc=CloakBrowser Pro license key (cb_...). Passed as CLOAKBROWSER_LICENSE_KEY at launch so a paid binary runs at its licensed tier. Required by the cloakbrowser-pro engine, leave empty for the free cloakbrowser engine."`
 	CloakCLIPath    string `wick:"group=CloakBrowser;desc=Path to the 'cloakbrowser' CLI used by the cloakbrowser-pro engine. Default: resolved on PATH. Only needed for a non-PATH install."`
 }
 
@@ -127,7 +127,7 @@ type screenshotInput struct {
 // getContentInput is the argument schema for the "get_content" operation.
 type getContentInput struct {
 	URL      string `wick:"url;required;desc=Page URL to open."`
-	Selector string `wick:"desc=Optional CSS selector. When set, returns that element's inner text; otherwise the whole page."`
+	Selector string `wick:"desc=Optional CSS selector. When set, returns that element's inner text, otherwise the whole page."`
 	AsText   bool   `wick:"bool;default=true;desc=Return visible text (default) instead of the rendered HTML."`
 	WaitFor  string `wick:"desc=Optional CSS selector to wait for before reading. Useful for JS-rendered content."`
 }
@@ -153,12 +153,12 @@ type evalInput struct {
 
 // runInput is the argument schema for the "run" script-runner operation.
 type runInput struct {
-	Actions   string `wick:"textarea;required;desc=JSON array of action objects run in order in one browser session. Each has an \"action\" key. NAVIGATION: goto{url}, go_back, go_forward, reload, wait_for_load_state{state?}, wait_for_url{url}. INTERACTION: click{selector}, dblclick{selector}, hover{selector}, tap{selector}, focus{selector}, fill{selector,value}, type{selector,value}, press{key,selector?}, check{selector}, uncheck{selector}, select_option{selector,value|values}, set_input_files{selector,files}, drag_and_drop{selector,target}, scroll{delta_x?,delta_y?}. WAIT: wait_for{selector}, wait{ms}. READ: screenshot{full_page?,selector?}, content{selector?}, eval{script}, get_attribute{selector,attr}, text_content{selector}, inner_html{selector}, is_visible{selector}, is_checked{selector}, count{selector}, title, url. Returns one result per step; stops at the first failure. Example: [{\"action\":\"goto\",\"url\":\"https://abc.com\"},{\"action\":\"fill\",\"selector\":\"#q\",\"value\":\"hi\"},{\"action\":\"click\",\"selector\":\"button[type=submit]\"},{\"action\":\"wait_for\",\"selector\":\".result\"},{\"action\":\"screenshot\",\"full_page\":true}]"`
+	Actions   string `wick:"textarea;required;desc=JSON array of action objects run in order in one browser session. Each has an \"action\" key. NAVIGATION: goto{url}, go_back, go_forward, reload, wait_for_load_state{state?}, wait_for_url{url}. INTERACTION: click{selector}, dblclick{selector}, hover{selector}, tap{selector}, focus{selector}, fill{selector,value}, type{selector,value}, press{key,selector?}, check{selector}, uncheck{selector}, select_option{selector,value|values}, set_input_files{selector,files}, drag_and_drop{selector,target}, scroll{delta_x?,delta_y?}. WAIT: wait_for{selector}, wait{ms}. READ: screenshot{full_page?,selector?}, content{selector?}, eval{script}, get_attribute{selector,attr}, text_content{selector}, inner_html{selector}, is_visible{selector}, is_checked{selector}, count{selector}, title, url. Returns one result per step, stops at the first failure. Example: [{\"action\":\"goto\",\"url\":\"https://abc.com\"},{\"action\":\"fill\",\"selector\":\"#q\",\"value\":\"hi\"},{\"action\":\"click\",\"selector\":\"button[type=submit]\"},{\"action\":\"wait_for\",\"selector\":\".result\"},{\"action\":\"screenshot\",\"full_page\":true}]"`
 	SessionID string `wick:"desc=Optional live session id (from session_open). When set, actions run in that persistent browser and the browser is NOT closed afterwards. Leave empty for a throwaway browser launched and closed for this call."`
 	Tab       int    `wick:"desc=Which tab to act on when session_id is set (0-based, from session_list). Default 0 (first tab). Ignored without session_id."`
 	// Network-capture opt-in. Decided up front (before the actions run) so the
 	// recorder is attached before any navigation and misses nothing.
-	RecordRequest       bool   `wick:"bool;desc=Record every HTTP request the browser makes while this script runs, so they can be inspected or replayed over plain HTTP later. Saved to disk; read back with get_request."`
+	RecordRequest       bool   `wick:"bool;desc=Record every HTTP request the browser makes while this script runs, so they can be inspected or replayed over plain HTTP later. Saved to disk, read back with get_request."`
 	RecordName          string `wick:"desc=Name for the saved capture file (letters/digits/dash/underscore). Default 'captured'. When a profile is set, the capture is stored under that profile instead."`
 	RecordURLPattern    string `wick:"desc=Optional substring or regex the request URL must match to be recorded. Leave empty to record all XHR/fetch calls (static assets are skipped)."`
 	RecordIncludeAssets bool   `wick:"bool;desc=Also record static assets (images, CSS, fonts, JS). Off by default — those are usually noise for replay."`
