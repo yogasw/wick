@@ -371,6 +371,16 @@
               {:else if modelSearch}No models match “{modelSearch}”.
               {:else}No models available.{/if}
             </div>
+            <!-- Escape hatch: an instance whose loader yields nothing would
+                 otherwise be unselectable — the drill is forced whenever a
+                 loader is wired, and there is no model row to commit through. -->
+            {#if !loadingModels && !modelSearch && !setDrill}
+              <button
+                type="button"
+                onclick={() => { onChange(d.value); close(); }}
+                class="flex w-full items-center px-3 py-1.5 text-left text-sm text-black-900 dark:text-white-100 hover:bg-white-200 dark:hover:bg-navy-700"
+              >Use default model</button>
+            {/if}
           {/each}
         </div>
       {:else if typeDrill}
