@@ -128,9 +128,17 @@ wick plugin build --kind tool <key>
 wick plugin build <key> --all --sign-key key.ed25519 --cosign-key cosign.key
 ```
 
-CI builds plugins for the os/arch set in the `BUILD_TARGETS` Actions variable — the
-SAME knob the wick binary release uses (default `darwin/amd64,darwin/arm64,windows/amd64`;
-`all` = every target). One variable controls both binary and plugin targets.
+CI builds plugins for the os/arch set in the `BUILD_TARGETS_PLUGINS` Actions
+variable — a SEPARATE knob from `BUILD_TARGETS` (the wick binary set), because
+plugin releases usually want a wider set (users can build wick themselves, but
+self-building plugins is a chore). Falls back to `BUILD_TARGETS` when unset, then
+to the default `darwin/amd64,darwin/arm64,windows/amd64`; `all` = every target.
+
+To backfill a new os/arch across ALL already-released plugins (after widening
+`BUILD_TARGETS_PLUGINS`): run `release-plugins.yml` via workflow_dispatch with
+name empty/`all` + `force=true` — every plugin rebuilds at its current VERSION and
+the zips replace/extend the assets on the existing `<name>/v<ver>` release (no
+VERSION bumps, tags stay put, catalog regenerates after).
 
 Each zip = `{<key>[.exe], plugin.json}`. `plugin.json` is generated FROM the binary
 (`--dump-manifest`) so it can never drift. sha256 + signature live INSIDE plugin.json.
@@ -211,7 +219,7 @@ You do steps 1–3; CI does 4–8. See `plugins/RELEASE.md` for the full flow.
 4. detect     rebuild EVERY plugin (the build's tag-exists check is idempotent, so
               only plugins whose VERSION changed actually cut a release)
 5. test       go test pkg/plugin + internal/connectors/plugin + cmd/cli  (hard gate)
-6. build      wick plugin build <key> --target <BUILD_TARGETS> → gh release "<key>/v<ver>"
+6. build      wick plugin build <key> --target <BUILD_TARGETS_PLUGINS> → gh release "<key>/v<ver>"
               with make_latest:false (so a plugin never steals "Latest" from core)
               (skipped if that tag already exists — bump VERSION for a new one)
 7. update-catalog  `wick plugin catalog` regenerates plugins.json + commits to master

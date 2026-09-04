@@ -32,7 +32,10 @@ export type AutosaveOptions = {
 export type Autosave = {
   /** Text input changed: save after the debounce window. */
   schedule: () => void;
-  /** Committing interaction (blur, select, toggle): save now. */
+  /** The value definitely changed (select, picker, toggle): save now, even
+      with no schedule() before it. */
+  commit: () => void;
+  /** Blur after a possible edit: save now if anything is pending. */
   flush: () => void;
   /** Re-run the save that failed. No-op when the last save succeeded. */
   retry: () => void;
@@ -98,6 +101,16 @@ export function createAutosave(opts: AutosaveOptions): Autosave {
         timer = undefined;
         void run();
       }, debounceMs);
+    },
+    /* A change event from a select/picker/toggle IS the edit, so there is no
+       prior schedule() to leave a pending marker — mark dirty here. Without
+       this, those controls fell through flush()'s no-pending guard and were
+       never saved at all. */
+    commit() {
+      if (suspended) return;
+      dirty = true;
+      clearTimer();
+      void run();
     },
     /* Flush only sends when something is actually pending: a blur with no
        edit behind it must not fire a request, which is what would make
