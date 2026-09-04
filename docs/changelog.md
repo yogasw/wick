@@ -6,11 +6,29 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Improved
-
-*   **Plugin release pipeline: separate target knob + rebuild-all**: plugin builds now read the `BUILD_TARGETS_PLUGINS` Actions variable (falling back to `BUILD_TARGETS`, then the shared default), so plugins can ship a wider os/arch set than the wick binary. The manual `release-plugins.yml` run no longer requires a plugin name — empty or `all` rebuilds every plugin, and a new `force` option re-releases already-tagged versions by replacing/extending the zips on their existing releases (e.g. to backfill a newly added architecture).
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v1.7.3](https://github.com/yogasw/wick/compare/v1.7.2...v1.7.3) — Plugins & Autosave
+
+_Released on 2026-09-04_
+
+### Added
+
+*   **Autosave commit method**: Added a new method to immediately save without a prior schedule.
+*   **Project Settings Form**: Updated event handlers to use the new autosave commit method for selects and toggles.
+*   **Provider Picker**: Enabled selection of instances even with an empty model list through a default model button.
+
+### Improved
+
+*   **Plugin release pipeline**:
+    *   **Separate target knob + rebuild-all**: Plugin builds now read the `BUILD_TARGETS_PLUGINS` Actions variable (falling back to `BUILD_TARGETS`, then the shared default), allowing plugins to ship a wider OS/architecture set than the Wick binary.
+    *   The manual `release-plugins.yml` run no longer requires a plugin name; an empty value or `all` rebuilds every plugin.
+    *   A new `force` option allows re-releasing already-tagged versions by replacing/extending the zips on their existing releases (e.g., to backfill a newly added architecture).
+
+---
+
 
 ## [v1.7.2](https://github.com/yogasw/wick/compare/v1.7.1...v1.7.2) — Channels & Files
 
