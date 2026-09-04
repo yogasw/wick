@@ -594,7 +594,8 @@ func Operations() []connector.Category {
 					TemplateableFields: []string{"filename", "path", "content", "content_base64", "channel_id", "thread_ts", "title", "initial_comment"},
 					Quirks: []string{
 						"Exactly one of path, content_base64, or content. path is the one to reach for with binary files — content is UTF-8 text only.",
-						"path must be absolute AND inside wick's agents dir (session/project/workspace files). Anything outside is refused, so copy the file there first.",
+						"path must be absolute AND inside the agents dir. Anything outside is refused, so copy the file there first.",
+						"<agents-dir> in the sample is <data-dir>/agents — by default ~/.<app>/agents, where <app> is the configured app name (wick.yml `name:`, default \"wick\"), so do not paste \".wick\" literally. When a path is rejected the error names the resolved root.",
 						"filename is optional with path (it defaults to that file's base name) but required with content / content_base64.",
 						"Uses Slack v2 upload API (files.getUploadURLExternal + files.completeUploadExternal). The legacy files.upload is deprecated.",
 						"Slack determines the file type from the filename extension — choose the extension carefully.",
@@ -602,7 +603,7 @@ func Operations() []connector.Category {
 						"Requires files:write scope.",
 					},
 					PairWith:    []string{"connector:slack.send_message", "connector:slack.read_file"},
-					InputSample: `{"path":"/home/you/.wick/agents/projects/p1/files/report.pdf","channel_id":"C12345","initial_comment":"laporan minggu ini"}`,
+					InputSample: `{"path":"<agents-dir>/projects/p1/files/report.pdf","channel_id":"C12345","initial_comment":"laporan minggu ini"}`,
 				},
 			),
 		),

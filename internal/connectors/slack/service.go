@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -386,18 +387,7 @@ func resolveUploadSource(path, contentB64, content, filename string) ([]byte, st
 
 	switch set[0] {
 	case "path":
-		abs, err := resolveUploadPath(path)
-		if err != nil {
-			return nil, "", err
-		}
-		b, err := os.ReadFile(abs)
-		if err != nil {
-			return nil, "", fmt.Errorf("read path: %w", err)
-		}
-		if filename == "" {
-			filename = filepath.Base(abs)
-		}
-		return b, filename, nil
+		return readUploadPath(path, filename)
 
 	case "content_base64":
 		b, err := decodeUploadBase64(contentB64)
@@ -412,7 +402,7 @@ func resolveUploadSource(path, contentB64, content, filename string) ([]byte, st
 		}
 		return b, filename, nil
 
-	default:
+	case "content":
 		if len(content) > maxUploadBytes {
 			return nil, "", fmt.Errorf("content is %d bytes, over the %d-byte limit", len(content), maxUploadBytes)
 		}
@@ -420,6 +410,14 @@ func resolveUploadSource(path, contentB64, content, filename string) ([]byte, st
 			return nil, "", fmt.Errorf("filename is required when uploading content")
 		}
 		return []byte(content), filename, nil
+
+	default:
+		// Unreachable today: set is built from exactly these three names and
+		// the guards above have narrowed it to one. Named rather than folded
+		// into a default-carries-content branch so that adding a fourth source
+		// and forgetting to handle it fails loudly instead of silently being
+		// treated as UTF-8 content.
+		return nil, "", fmt.Errorf("unhandled upload source %q", set[0])
 	}
 }
 
@@ -439,14 +437,35 @@ func decodeUploadBase64(s string) ([]byte, error) {
 	return nil, fmt.Errorf("content_base64 is not valid base64")
 }
 
-// resolveUploadPath validates a path= upload against uploadSandboxRoot and
-// returns the absolute, symlink-resolved file to read. Symlinks are resolved
-// BEFORE the containment check so a link planted inside the sandbox cannot
-// point at something outside it.
-func resolveUploadPath(path string) (string, error) {
+// uploadRaceProbe is nil in production. A test sets it to run in the one
+// window that matters — between the pre-open stat and the open — so the
+// "changed under us" branch below can be exercised deterministically instead
+// of being asserted by eye.
+var uploadRaceProbe func()
+
+// readUploadPath validates a path= upload against uploadSandboxRoot and
+// returns the file's bytes plus the name to upload them under.
+//
+// Validation and read go through ONE open handle on purpose. The obvious
+// shape — stat the path, then os.ReadFile(path) — checks one entry and reads
+// another: the two calls resolve the name independently, so an entry that
+// passed the sandbox check can be swapped for a symlink pointing out of the
+// sandbox before the read lands, and the read follows it. Opening once and
+// taking every subsequent answer from that handle (f.Stat is an fstat on the
+// inode we hold, not a fresh path lookup) makes what was validated
+// necessarily what was read.
+//
+// What this does NOT claim: a swap of an intermediate DIRECTORY component
+// during resolution is still possible in principle. Closing that needs
+// openat2(RESOLVE_BENEATH), which is Linux-only, and it buys nothing here —
+// anyone able to write inside the agents dir can simply copy the file they
+// want exfiltrated into it and upload that legitimately. The sandbox exists
+// to stop a MODEL from being talked into passing /etc/shadow or an .ssh key,
+// and a model cannot win a filesystem race.
+func readUploadPath(path, filename string) ([]byte, string, error) {
 	root := uploadSandboxRoot()
 	if !filepath.IsAbs(path) {
-		return "", fmt.Errorf("path must be absolute (got %q) — pass the full path, e.g. %s/projects/<project-id>/files/report.pdf", path, root)
+		return nil, "", fmt.Errorf("path must be absolute (got %q) — pass the full path, e.g. %s/projects/<project-id>/files/report.pdf", path, root)
 	}
 	if r, err := filepath.EvalSymlinks(root); err == nil {
 		root = r
@@ -455,26 +474,62 @@ func resolveUploadPath(path string) (string, error) {
 	}
 	abs, err := filepath.EvalSymlinks(filepath.Clean(path))
 	if err != nil {
-		return "", fmt.Errorf("path: %w", err)
+		return nil, "", fmt.Errorf("path: %w", err)
 	}
 	rel, err := filepath.Rel(root, abs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q is outside %s — upload_file only reads files from wick's agents dir (session, project, and workspace files)", path, root)
+		return nil, "", fmt.Errorf("path %q is outside %s — upload_file only reads files from wick's agents dir (session, project, and workspace files)", path, root)
 	}
-	st, err := os.Stat(abs)
+
+	// Lstat, not Stat: abs came out of EvalSymlinks so it should not itself be
+	// a link. If it has become one since, this sees the link and the SameFile
+	// comparison below fails, which is the outcome we want.
+	before, err := os.Lstat(abs)
 	if err != nil {
-		return "", fmt.Errorf("path: %w", err)
+		return nil, "", fmt.Errorf("path: %w", err)
+	}
+
+	if uploadRaceProbe != nil {
+		uploadRaceProbe()
+	}
+
+	f, err := os.Open(abs)
+	if err != nil {
+		return nil, "", fmt.Errorf("path: %w", err)
+	}
+	defer f.Close()
+
+	st, err := f.Stat()
+	if err != nil {
+		return nil, "", fmt.Errorf("path: %w", err)
+	}
+	if !os.SameFile(before, st) {
+		return nil, "", fmt.Errorf("path %q changed while it was being validated — refusing to upload it", path)
 	}
 	if st.IsDir() {
-		return "", fmt.Errorf("path %q is a directory, not a file", path)
+		return nil, "", fmt.Errorf("path %q is a directory, not a file", path)
 	}
 	if !st.Mode().IsRegular() {
-		return "", fmt.Errorf("path %q is not a regular file", path)
+		return nil, "", fmt.Errorf("path %q is not a regular file", path)
 	}
 	if st.Size() > maxUploadBytes {
-		return "", fmt.Errorf("path %q is %d bytes, over the %d-byte limit", path, st.Size(), maxUploadBytes)
+		return nil, "", fmt.Errorf("path %q is %d bytes, over the %d-byte limit", path, st.Size(), maxUploadBytes)
 	}
-	return abs, nil
+
+	// Read from the handle, and one byte past the cap so a file that grew
+	// after the fstat is caught rather than silently truncated.
+	b, err := io.ReadAll(io.LimitReader(f, maxUploadBytes+1))
+	if err != nil {
+		return nil, "", fmt.Errorf("read path: %w", err)
+	}
+	if len(b) > maxUploadBytes {
+		return nil, "", fmt.Errorf("path %q grew past the %d-byte limit while being read", path, maxUploadBytes)
+	}
+
+	if strings.TrimSpace(filename) == "" {
+		filename = filepath.Base(abs)
+	}
+	return b, filename, nil
 }
 
 func shapeUploadResult(raw any) (any, error) {

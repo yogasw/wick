@@ -279,3 +279,46 @@ func TestUploadFile_ThreadTSNeedsChannel(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "channel_id is required")
 }
+
+// TestResolveUploadSource_SwapAfterValidationRefused exercises the TOCTOU
+// window directly: the probe fires between the pre-open stat and the open, and
+// replaces the validated file with a symlink to a secret outside the sandbox —
+// exactly the swap that the stat-then-ReadFile shape would have followed.
+func TestResolveUploadSource_SwapAfterValidationRefused(t *testing.T) {
+	root := sandboxAt(t)
+	victim := filepath.Join(root, "report.pdf")
+	require.NoError(t, os.WriteFile(victim, pdfBytes, 0o644))
+
+	secret := filepath.Join(t.TempDir(), "id_rsa")
+	require.NoError(t, os.WriteFile(secret, []byte("PRIVATE KEY"), 0o600))
+
+	prev := uploadRaceProbe
+	uploadRaceProbe = func() {
+		// One shot: swap the entry, then disarm so the retry-free path is clean.
+		uploadRaceProbe = nil
+		require.NoError(t, os.Remove(victim))
+		require.NoError(t, os.Symlink(secret, victim))
+	}
+	t.Cleanup(func() { uploadRaceProbe = prev })
+
+	b, _, err := resolveUploadSource(victim, "", "", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "changed while it was being validated")
+	assert.NotContains(t, string(b), "PRIVATE KEY", "the secret must never be read")
+}
+
+// TestResolveUploadSource_OverSizeLimitRefused covers the size ceiling on the
+// path branch, which is now checked against the open handle rather than a
+// separate stat of the name.
+func TestResolveUploadSource_OverSizeLimitRefused(t *testing.T) {
+	root := sandboxAt(t)
+	big := filepath.Join(root, "big.bin")
+	f, err := os.Create(big)
+	require.NoError(t, err)
+	require.NoError(t, f.Truncate(int64(maxUploadBytes)+1))
+	require.NoError(t, f.Close())
+
+	_, _, err = resolveUploadSource(big, "", "", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "over the")
+}
