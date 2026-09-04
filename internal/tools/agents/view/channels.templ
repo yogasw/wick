@@ -323,10 +323,15 @@ templ RestDocs(vm RestDocsVM) {
 					<li><b>Stateless</b> (omit <code class="font-mono">conversation</code> / <code class="font-mono">previous_response_id</code>): every request spawns a fresh wick session, you re-send the full history each turn.</li>
 					<li><b>Stateful</b>: reuse the same <code class="font-mono">conversation</code> id across calls, or chain Responses turns with <code class="font-mono">previous_response_id</code> — wick keeps the history and only the new turn is sent.</li>
 				</ul>
+				Messages on one conversation queue like chat messages: a request sent while the agent is still working waits for its own turn (never <code class="font-mono">409</code>), each request gets the reply to its own message.
 			</dd>
 			<dt class="text-black-700 dark:text-black-600">Project</dt>
 			<dd class="text-xs text-black-900 dark:text-white-100">
 				Optional <code class="font-mono">project</code> field (a project id) picks which wick Project the session runs in — its folder becomes the agent cwd and its preset/provider defaults apply. Omit it for the channel's configured default project. Also accepted as <code class="font-mono">metadata.project</code> / <code class="font-mono">metadata.project_id</code>.
+			</dd>
+			<dt class="text-black-700 dark:text-black-600">Background</dt>
+			<dd class="text-xs text-black-900 dark:text-white-100">
+				Add <code class="font-mono">"background": true</code> (or <code class="font-mono">metadata.background: "true"</code>) to return immediately with <code class="font-mono">status: "queued"</code> instead of waiting for the agent — useful behind aggressive HTTP timeouts. The reply lands in the session history: pair with <code class="font-mono">conversation</code> and read it back with a normal follow-up request. Without <code class="font-mono">conversation</code> it is fire-and-forget.
 			</dd>
 			<dt class="text-black-700 dark:text-black-600">Streaming</dt>
 			<dd class="text-xs text-black-900 dark:text-white-100">Not supported. Set <code class="font-mono">stream:false</code> (the default).</dd>
@@ -366,6 +371,10 @@ templ RestDocs(vm RestDocsVM) {
 			<p class="text-xs text-black-700 dark:text-black-600 mb-2">Send the same <code class="font-mono">conversation</code> id on each call. Only the last user message is sent — wick remembers prior turns.</p>
 			<pre class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-900 dark:text-white-100 text-xs font-mono p-3 overflow-x-auto mb-5"><code>{ "# Turn 1\ncurl -X POST " + vm.ChatEndpoint + " \\\n  -H 'Authorization: Bearer wick_pat_REPLACE_ME' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"claude\",\n    \"conversation\": \"chat-42\",\n    \"messages\": [\n      { \"role\": \"user\", \"content\": \"Remember the number 7.\" }\n    ]\n  }'\n\n# Turn 2 — same conversation, no history needed\ncurl -X POST " + vm.ChatEndpoint + " \\\n  -H 'Authorization: Bearer wick_pat_REPLACE_ME' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"claude\",\n    \"conversation\": \"chat-42\",\n    \"messages\": [\n      { \"role\": \"user\", \"content\": \"What number did I ask you to remember?\" }\n    ]\n  }'" }</code></pre>
 
+			<h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-2">curl — background (don't wait)</h3>
+			<p class="text-xs text-black-700 dark:text-black-600 mb-2">Returns immediately with <code class="font-mono">status: "queued"</code>; the agent keeps working and the reply lands in the conversation history. Fetch it later with a normal request on the same <code class="font-mono">conversation</code>.</p>
+			<pre class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-900 dark:text-white-100 text-xs font-mono p-3 overflow-x-auto mb-5"><code>{ "# Fire the long-running job — returns instantly.\ncurl -X POST " + vm.ChatEndpoint + " \\\n  -H 'Authorization: Bearer wick_pat_REPLACE_ME' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"claude\",\n    \"conversation\": \"job-42\",\n    \"background\": true,\n    \"messages\": [\n      { \"role\": \"user\", \"content\": \"Run the full analysis.\" }\n    ]\n  }'\n# → { \"object\": \"chat.completion\", \"status\": \"queued\", ... }\n\n# Later — same conversation, ask for the result (waits normally).\ncurl -X POST " + vm.ChatEndpoint + " \\\n  -H 'Authorization: Bearer wick_pat_REPLACE_ME' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model\": \"claude\",\n    \"conversation\": \"job-42\",\n    \"messages\": [\n      { \"role\": \"user\", \"content\": \"What was the result?\" }\n    ]\n  }'" }</code></pre>
+
 			<h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-2">Python (OpenAI SDK)</h3>
 			<p class="text-xs text-black-700 dark:text-black-600 mb-2">Pass <code class="font-mono">conversation</code> via <code class="font-mono">extra_body</code> to keep the wick session across calls.</p>
 			<pre class="rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 text-black-900 dark:text-white-100 text-xs font-mono p-3 overflow-x-auto mb-5"><code>{ "from openai import OpenAI\n\nclient = OpenAI(\n    base_url=\"" + vm.APIBase + "\",\n    api_key=\"wick_pat_REPLACE_ME\",\n)\n\n# Stateless — resend history each call.\nresp = client.chat.completions.create(\n    model=\"claude\",\n    messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n)\nprint(resp.choices[0].message.content)\n\n# Stateful — same conversation id reuses one wick session.\nresp = client.chat.completions.create(\n    model=\"claude\",\n    messages=[{\"role\": \"user\", \"content\": \"Remember 7.\"}],\n    extra_body={\"conversation\": \"chat-42\"},\n)" }</code></pre>
@@ -381,7 +390,7 @@ templ RestDocs(vm RestDocsVM) {
 				<dd class="font-mono text-xs text-black-900 dark:text-white-100 break-all">POST { vm.ResponsesEndpoint }</dd>
 			</dl>
 			<p class="text-xs text-black-700 dark:text-black-600 mb-3">
-				OpenAI's newer Responses API surface. <code class="font-mono">input</code> accepts either a plain string or the OpenAI array form. To chain turns, pass the <code class="font-mono">id</code> returned by the previous response as <code class="font-mono">previous_response_id</code> — wick reuses the same underlying session.
+				OpenAI's newer Responses API surface. <code class="font-mono">input</code> accepts either a plain string or the OpenAI array form. To chain turns, pass the <code class="font-mono">id</code> returned by the previous response as <code class="font-mono">previous_response_id</code> — wick reuses the same underlying session. <code class="font-mono">"background": true</code> queues the turn and returns immediately with <code class="font-mono">status: "queued"</code> — chain the returned <code class="font-mono">id</code> later to read the result.
 			</p>
 
 			<h3 class="text-sm font-semibold text-black-900 dark:text-white-100 mb-2">curl — single turn</h3>

@@ -19,6 +19,16 @@
 // used as an audit label — it does not key the session. Streaming and
 // interactive approvals are unsupported (approvals auto-block) so REST
 // clients never hang waiting for a button-press they cannot deliver.
+//
+// Background mode: `"background": true` (or metadata.background="true")
+// makes the request return immediately with status "queued" instead of
+// waiting for the agent — for callers behind aggressive HTTP timeouts.
+// The message is queued on the session exactly like a chat channel
+// message; several background requests on one conversation stack up in
+// the pool's per-session FIFO. The reply is not returned anywhere: it
+// lands in the session history, so pair background with `conversation`
+// and read the result with a follow-up request. Background without
+// `conversation` is fire-and-forget — the output is unreachable.
 package rest
 
 import (
@@ -48,14 +58,26 @@ type Authenticator interface {
 	Authenticate(ctx context.Context, plain string) (userID string, err error)
 }
 
-// turn holds per-session state for one in-flight request. Done is closed
-// when the Done event arrives.
+// agentName is the pool agent every REST dispatch routes to. The project
+// binding (cwd) is resolved by the pool send closure from the channel's
+// configured project_id or the per-request override.
+const agentName = "main"
+
+// turn holds the state of one dispatched user message. Done is closed
+// when the message's terminal event arrives. Turns queue per session in
+// the same FIFO order the pool processes messages, so each waiter gets
+// the reply to its own message — a turn whose waiter left (client
+// disconnect) or never existed (background) stays queued until its Done
+// pops it, keeping the alignment intact.
 type turn struct {
 	buf      strings.Builder
 	done     chan struct{}
 	errMsg   string
 	blocked  bool
 	finished bool
+	// bg marks a fire-and-forget (background) turn: no waiter, the
+	// buffered reply is discarded on Done — it lives in session history.
+	bg bool
 }
 
 // Channel implements agentchannels.Channel for an OpenAI-compatible HTTP
@@ -72,8 +94,14 @@ type Channel struct {
 	sessions       agentchannels.SessionChecker
 	onSessionStart agentchannels.SessionStartHook
 
-	mu    sync.Mutex
-	turns map[string]*turn
+	mu sync.Mutex
+	// turns holds the per-session FIFO of dispatched messages, aligned
+	// with the pool's own per-session queue: head = the message the agent
+	// is working on, tail = still queued. Terminal events pop the head.
+	turns map[string][]*turn
+	// sendMu serializes {enqueue turn + pool send} so the turns FIFO and
+	// the pool's message order can never interleave differently.
+	sendMu sync.Mutex
 
 	ownerUserID string // wick user who owns this channel row; empty = App Owner
 }
@@ -84,7 +112,7 @@ func New(cfg agentconfig.RestChannelConfig, auth Authenticator) *Channel {
 	return &Channel{
 		cfg:   cfg,
 		auth:  auth,
-		turns: make(map[string]*turn),
+		turns: make(map[string][]*turn),
 	}
 }
 
@@ -168,41 +196,36 @@ func (c *Channel) HTTPHandlers() map[string]http.Handler {
 
 // AgentEventReceiver -----------------------------------------------------
 
-// OnAgentEvent satisfies channels.AgentEventReceiver — accumulates text
-// for the in-flight request and signals Done via the turn's done channel.
+// OnAgentEvent satisfies channels.AgentEventReceiver. Deltas accumulate
+// on the head turn (the message the agent is working on); a terminal
+// event finishes the head and pops it, advancing the queue to the next
+// message. Events for sessions this channel didn't originate find an
+// empty queue and are ignored.
 func (c *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 	c.mu.Lock()
-	tn := c.turns[sessionID]
-	c.mu.Unlock()
-	if tn == nil {
+	defer c.mu.Unlock()
+	q := c.turns[sessionID]
+	if len(q) == 0 {
 		return
 	}
+	tn := q[0]
 	switch ev.Type {
 	case event.TextDelta:
-		c.mu.Lock()
 		tn.buf.WriteString(ev.Text)
-		c.mu.Unlock()
-	case event.Done:
-		c.mu.Lock()
-		if !tn.finished {
-			tn.finished = true
-			if ev.ErrorMsg != "" {
-				tn.errMsg = ev.ErrorMsg
-			}
-			close(tn.done)
-		}
-		c.mu.Unlock()
-	case event.Error:
-		c.mu.Lock()
+	case event.Done, event.Error:
 		if !tn.finished {
 			tn.finished = true
 			tn.errMsg = ev.ErrorMsg
-			if tn.errMsg == "" {
+			if ev.Type == event.Error && tn.errMsg == "" {
 				tn.errMsg = ev.Text
 			}
 			close(tn.done)
 		}
-		c.mu.Unlock()
+		if len(q) == 1 {
+			delete(c.turns, sessionID)
+		} else {
+			c.turns[sessionID] = q[1:]
+		}
 	}
 }
 
@@ -214,15 +237,17 @@ func (c *Channel) OnAgentEvent(sessionID string, ev event.AgentEvent) {
 // Done event path.
 func (c *Channel) OnApprovalRequest(sessionID string, req gate.ApprovalRequest) {
 	c.mu.Lock()
-	tn := c.turns[sessionID]
+	q := c.turns[sessionID]
 	fn := c.approveFn
+	if len(q) > 0 {
+		// The approval belongs to the active (head) turn — mark it so a
+		// sync waiter surfaces the block as 403 instead of a bare error.
+		q[0].blocked = true
+	}
 	c.mu.Unlock()
-	if tn == nil || fn == nil {
+	if fn == nil || len(q) == 0 {
 		return
 	}
-	c.mu.Lock()
-	tn.blocked = true
-	c.mu.Unlock()
 	if err := fn(sessionID, req.ID, gate.DecisionBlock, req.MatchKey); err != nil {
 		log.Warn().Str("channel", "rest").Err(err).Msg("auto-block approval failed")
 	}
@@ -247,7 +272,14 @@ type chatRequest struct {
 	Conversation string            `json:"conversation"`
 	Metadata     map[string]string `json:"metadata"`
 	Stream       bool              `json:"stream"`
-	Messages     []chatMessage     `json:"messages"`
+	// Background makes the request return immediately with status
+	// "queued" instead of waiting for the agent. The reply is not
+	// returned — it lands in the session history, so pair with
+	// `conversation` and fetch it with a follow-up request. Also
+	// accepted via metadata.background for SDKs that only expose the
+	// standard OpenAI fields.
+	Background bool          `json:"background"`
+	Messages   []chatMessage `json:"messages"`
 	// Project optionally names the wick Project (id) for this request,
 	// overriding the channel's configured default. Also accepted via
 	// metadata.project / metadata.project_id for SDKs that only expose
@@ -268,6 +300,9 @@ type chatResponse struct {
 	Created int64        `json:"created"`
 	Model   string       `json:"model"`
 	Choices []chatChoice `json:"choices"`
+	// Status is a wick extension: "queued" on background requests, empty
+	// (omitted) on the normal synchronous path. OpenAI SDKs ignore it.
+	Status string `json:"status,omitempty"`
 }
 
 type chatChoice struct {
@@ -330,6 +365,28 @@ func (c *Channel) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 	if strings.TrimSpace(prompt) == "" {
 		writeError(w, http.StatusBadRequest, "no user message found")
+		return
+	}
+
+	if resolveBackground(req.Background, req.Metadata) {
+		if status, msg := c.dispatchBackground(sessionID, userID, req.User, prompt, reused, resolveProject(req.Project, req.Metadata)); status != 0 {
+			writeError(w, status, msg)
+			return
+		}
+		resp := chatResponse{
+			ID:      "wick-" + sessionID + "-" + fmt.Sprintf("%d", time.Now().UnixNano()),
+			Object:  "chat.completion",
+			Created: time.Now().Unix(),
+			Model:   firstNonEmpty(req.Model, "wick"),
+			Status:  "queued",
+			Choices: []chatChoice{{
+				Index:        0,
+				Message:      chatMessage{Role: "assistant", Content: ""},
+				FinishReason: "stop",
+			}},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
 		return
 	}
 
@@ -399,6 +456,22 @@ func resolveConversation(conversation string, metadata map[string]string) string
 	return ""
 }
 
+// resolveBackground picks the background flag from the explicit field or,
+// failing that, metadata.background — for SDKs that only expose the
+// standard OpenAI `metadata` map.
+func resolveBackground(background bool, metadata map[string]string) bool {
+	if background {
+		return true
+	}
+	if metadata != nil {
+		switch strings.ToLower(strings.TrimSpace(metadata["background"])) {
+		case "true", "1", "yes":
+			return true
+		}
+	}
+	return false
+}
+
 // resolveProject picks the per-request project id from the explicit
 // `project` field or, failing that, metadata.project / metadata.project_id.
 // Empty means "use the channel's configured default project".
@@ -453,76 +526,25 @@ type dispatchResult struct {
 	blocked bool
 }
 
-// dispatch claims sessionID, optionally injects origin context, sends the
-// prompt to the agent pool, and waits for Done. Returns either a result
-// (status 0) or an HTTP error (non-zero status + msg).
+// dispatch enqueues the prompt on the session's turn FIFO, sends it to
+// the agent pool, and waits for that message's Done. A busy session no
+// longer 409s — the request queues behind the in-flight turns exactly
+// like chat messages, and each waiter receives the reply to its own
+// message. Returns either a result (status 0) or an HTTP error.
 func (c *Channel) dispatch(ctx context.Context, sessionID, userID, userField, prompt string, reused bool, projectOverride string) (dispatchResult, int, string) {
-	// agentName is the pool agent to route to; default "main". The
-	// project binding (cwd) is resolved by the pool send closure from
-	// the channel's configured project_id — unless the request named a
-	// project, in which case projectOverride wins (threaded via ctx).
-	agentName := "main"
-	// sendCtx is detached from the HTTP request (the pool spawns the CLI
-	// with this ctx; inheriting the request ctx would kill it on return)
-	// but still carries both project signals: this instance's configured
-	// default, and the per-request override that outranks it.
-	c.cfgMu.Lock()
-	instanceProject := c.cfg.ProjectID
-	c.cfgMu.Unlock()
-	sendCtx := agentchannels.WithChannelProject(context.Background(), instanceProject)
-	sendCtx = agentchannels.WithProjectOverride(sendCtx, projectOverride)
+	sendCtx := c.newSendCtx(projectOverride)
 
 	tn := &turn{done: make(chan struct{})}
-	c.mu.Lock()
-	if existing := c.turns[sessionID]; existing != nil && !existing.finished {
-		c.mu.Unlock()
-		return dispatchResult{}, http.StatusConflict, "session busy: a prior request is still in flight"
-	}
-	c.turns[sessionID] = tn
-	c.mu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		if c.turns[sessionID] == tn {
-			delete(c.turns, sessionID)
-		}
-		c.mu.Unlock()
-	}()
-
-	if c.sessions != nil && (!reused || !c.sessions.SessionExists(sessionID)) {
-		userLabel := userID
-		if u := strings.TrimSpace(userField); u != "" {
-			userLabel = userID + " (" + u + ")"
-		}
-		ctxText := fmt.Sprintf(
-			"[REST request context — sent automatically by wick]\nUser: %s\nSession: %s",
-			userLabel, sessionID,
-		)
-		if err := c.sendFn(sendCtx, sessionID, agentName, "rest", "system", ctxText); err != nil {
-			log.Warn().Str("channel", "rest").Err(err).Msg("inject session context failed")
-		}
-		if hook := c.onSessionStart; hook != nil {
-			hook(sessionID, "rest", ctxText)
-		}
-	}
-
-	// Who sent it. userID is the authenticated wick account behind the
-	// Bearer token — the trustworthy half. userField is a free-text label
-	// the client chose (an end-user name in a bot relaying for others), so
-	// it is a display name only and never the identity: a caller can write
-	// anything there, but cannot change whose token this is.
-	sender := &store.Sender{
-		ID:         userID,
-		Name:       strings.TrimSpace(userField),
-		Channel:    "rest",
-		WickUserID: userID,
-	}
-	if err := c.sendFn(agentchannels.WithSender(sendCtx, sender), sessionID, agentName, "rest", "user", prompt); err != nil {
+	if err := c.enqueueAndSend(sendCtx, tn, sessionID, userID, userField, prompt, reused); err != nil {
 		return dispatchResult{}, http.StatusInternalServerError, "pool dispatch failed: " + err.Error()
 	}
 
 	select {
 	case <-tn.done:
 	case <-ctx.Done():
+		// Client gave up (timeout / stop button). The turn deliberately
+		// stays queued: its terminal event must still pop it, otherwise
+		// every later reply on this session shifts one message back.
 		return dispatchResult{}, 499, "client closed request"
 	}
 
@@ -530,6 +552,105 @@ func (c *Channel) dispatch(ctx context.Context, sessionID, userID, userField, pr
 	res := dispatchResult{text: tn.buf.String(), errMsg: tn.errMsg, blocked: tn.blocked}
 	c.mu.Unlock()
 	return res, 0, ""
+}
+
+// dispatchBackground queues the prompt and returns without waiting for
+// the agent — the REST analogue of dropping a message into a chat
+// channel. The bg turn keeps the FIFO aligned with the pool's queue and
+// keeps approval auto-block alive; its buffered reply is discarded on
+// Done (the output lives in the session history).
+func (c *Channel) dispatchBackground(sessionID, userID, userField, prompt string, reused bool, projectOverride string) (int, string) {
+	sendCtx := c.newSendCtx(projectOverride)
+	tn := &turn{done: make(chan struct{}), bg: true}
+	if err := c.enqueueAndSend(sendCtx, tn, sessionID, userID, userField, prompt, reused); err != nil {
+		return http.StatusInternalServerError, "pool dispatch failed: " + err.Error()
+	}
+	return 0, ""
+}
+
+// enqueueAndSend appends tn to the session's turn FIFO and dispatches the
+// prompt (plus the one-time origin-context inject) to the pool. sendMu
+// makes {enqueue + send} atomic across requests, so the channel's FIFO
+// can never order differently from the pool's per-session queue. On send
+// failure the turn is removed again — it never reached the pool.
+func (c *Channel) enqueueAndSend(sendCtx context.Context, tn *turn, sessionID, userID, userField, prompt string, reused bool) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+
+	c.maybeInjectContext(sendCtx, sessionID, userID, userField, reused)
+
+	c.mu.Lock()
+	c.turns[sessionID] = append(c.turns[sessionID], tn)
+	c.mu.Unlock()
+
+	if err := c.sendUserTurn(sendCtx, sessionID, userID, userField, prompt); err != nil {
+		c.mu.Lock()
+		q := c.turns[sessionID]
+		for i, t := range q {
+			if t == tn {
+				c.turns[sessionID] = append(q[:i:i], q[i+1:]...)
+				break
+			}
+		}
+		if len(c.turns[sessionID]) == 0 {
+			delete(c.turns, sessionID)
+		}
+		c.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// newSendCtx builds the context every pool dispatch uses. It is detached
+// from the HTTP request (the pool spawns the CLI with this ctx;
+// inheriting the request ctx would kill it on return) but carries both
+// project signals: this instance's configured default, and the
+// per-request override that outranks it.
+func (c *Channel) newSendCtx(projectOverride string) context.Context {
+	c.cfgMu.Lock()
+	instanceProject := c.cfg.ProjectID
+	c.cfgMu.Unlock()
+	sendCtx := agentchannels.WithChannelProject(context.Background(), instanceProject)
+	return agentchannels.WithProjectOverride(sendCtx, projectOverride)
+}
+
+// maybeInjectContext sends the one-time origin-context system turn when
+// the session is brand new (or stateless). Best-effort — a failed inject
+// never blocks the user message.
+func (c *Channel) maybeInjectContext(sendCtx context.Context, sessionID, userID, userField string, reused bool) {
+	if c.sessions == nil || (reused && c.sessions.SessionExists(sessionID)) {
+		return
+	}
+	userLabel := userID
+	if u := strings.TrimSpace(userField); u != "" {
+		userLabel = userID + " (" + u + ")"
+	}
+	ctxText := fmt.Sprintf(
+		"[REST request context — sent automatically by wick]\nUser: %s\nSession: %s",
+		userLabel, sessionID,
+	)
+	if err := c.sendFn(sendCtx, sessionID, agentName, "rest", "system", ctxText); err != nil {
+		log.Warn().Str("channel", "rest").Err(err).Msg("inject session context failed")
+	}
+	if hook := c.onSessionStart; hook != nil {
+		hook(sessionID, "rest", ctxText)
+	}
+}
+
+// sendUserTurn dispatches the prompt as the authenticated user. userID is
+// the wick account behind the Bearer token — the trustworthy half.
+// userField is a free-text label the client chose (an end-user name in a
+// bot relaying for others), so it is a display name only and never the
+// identity: a caller can write anything there, but cannot change whose
+// token this is.
+func (c *Channel) sendUserTurn(sendCtx context.Context, sessionID, userID, userField, prompt string) error {
+	sender := &store.Sender{
+		ID:         userID,
+		Name:       strings.TrimSpace(userField),
+		Channel:    "rest",
+		WickUserID: userID,
+	}
+	return c.sendFn(agentchannels.WithSender(sendCtx, sender), sessionID, agentName, "rest", "user", prompt)
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
