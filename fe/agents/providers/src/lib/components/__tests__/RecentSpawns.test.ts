@@ -63,6 +63,19 @@ describe("RecentSpawns (per-session)", () => {
     expect(vi.mocked(api.apiGetSessions).mock.calls.at(-1)![1]).toMatchObject({ page: 2 });
   });
 
+  it("collapsible: hidden by default, no fetch until the header is clicked", async () => {
+    vi.mocked(api.apiGetSessions).mockClear();
+    render(RecentSpawns, { props: { base: "/wick", type: "claude", name: "main", onOpenSession: vi.fn(), collapsible: true } });
+    await screen.findByText("Recent Sessions");
+    expect(api.apiGetSessions).not.toHaveBeenCalled();
+    expect(screen.queryByPlaceholderText(/Search session/)).toBeNull();
+    await fireEvent.click(screen.getByText("Recent Sessions"));
+    expect(await screen.findByText("sess-123")).toBeTruthy();
+    expect(api.apiGetSessions).toHaveBeenCalledOnce();
+    await fireEvent.click(screen.getByText("Recent Sessions"));
+    expect(screen.queryByText("sess-123")).toBeNull();
+  });
+
   it("shows empty state when no sessions", async () => {
     vi.mocked(api.apiGetSessions).mockResolvedValue(list({ Sessions: [], Total: 0 }));
     render(RecentSpawns, { props: { base: "/wick", onOpenSession: vi.fn() } });

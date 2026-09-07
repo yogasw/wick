@@ -213,7 +213,9 @@ function getBase(): string {
   return document.getElementById("app")?.dataset.base ?? "";
 }
 
-async function get<T>(path: string): Promise<T> {
+/* get/post/del are shared with sibling api modules (logintty.ts) — one
+   fetch wrapper for the whole SPA, per the dedup rule. */
+export async function get<T>(path: string): Promise<T> {
   const resp = await fetch(path, {
     credentials: "same-origin",
     headers: { "Accept": "application/json" },
@@ -225,7 +227,7 @@ async function get<T>(path: string): Promise<T> {
   return resp.json() as Promise<T>;
 }
 
-async function post<T>(path: string, body?: unknown): Promise<T> {
+export async function post<T>(path: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method: "POST", redirect: "follow" };
   if (body !== undefined) {
     init.headers = { "Content-Type": "application/json", "Accept": "application/json" };
