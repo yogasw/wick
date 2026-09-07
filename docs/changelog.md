@@ -6,9 +6,17 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
+_Nothing yet — notes for the next release go here._
+
+---
+
+## [v1.8.0](https://github.com/yogasw/wick/compare/v1.7.3...v1.8.0) — Providers & Fixes
+
+_Released on 2026-09-07_
+
 ### Added
 
-*   **Providers: Reconnect via login TTY**: The provider detail page's Connection panel can now run `claude`'s interactive `/login` inside a wick-owned terminal, streamed live to the browser (xterm.js over a websocket) — no separate Web Terminal / SSH session needed. The OAuth login link is parsed out and offered as Copy/Open, an authorization-code field types codes into the CLI, and success/failure are detected and timestamped. The session is TTL-bound: 5 minutes by default, +5 minute extends, 30 minute hard cap, auto-killed on expiry. The panel also shows the connected account (email/org/plan) and claude's usage windows, read from the instance's own credential files (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`-aware). `codex`/`gemini` show account status only for now; `wick` is unaffected. See [Providers ▶ Reconnect (login TTY)](/guide/agents/providers#reconnect-login-tty).
+*   **Providers: Reconnect via login TTY**: The provider detail page's Connection panel can now run `claude`'s interactive `/login` inside a wick-owned terminal, streamed live to the browser (xterm.js over a websocket) — no separate Web Terminal / SSH session needed. The OAuth login link is parsed out and offered as Copy/Open, an authorization-code field types codes into the CLI, and success/failure are detected and timestamped. The session is TTL-bound: 5 minutes by default, +5 minute extends, 30 minute hard cap, auto-killed on expiry. The panel also shows the connected account (email/org/plan) and `claude`'s usage windows, read from the instance's own credential files (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`-aware). `codex`/`gemini` show account status only for now; `wick` is unaffected. See [Providers ▶ Reconnect (login TTY)](/guide/agents/providers#reconnect-login-tty).
 
 ### Improved
 
@@ -21,6 +29,7 @@ All notable changes to Wick are documented here.
 *   **Windows: no more DNS resolver override**: `/etc/resolv.conf` never exists on Windows, so wick's network bootstrap always read that as "no nameserver configured" and replaced Go's resolver with a direct-UDP fallback to public DNS (1.1.1.1 / 8.8.8.8) on every Windows install. Networks that block outbound UDP port 53 to public resolvers (common behind corporate firewalls/VPNs) then failed every outbound call. Wick now skips this step entirely on Windows, where the stdlib resolver already talks to the OS DNS APIs directly.
 
 ---
+
 
 ## [v1.7.3](https://github.com/yogasw/wick/compare/v1.7.2...v1.7.3) — Plugins & Autosave
 
