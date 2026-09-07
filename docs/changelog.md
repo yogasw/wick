@@ -6,7 +6,10 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+*   **Slack: no more duplicated/truncated replies on mid-turn follow-ups**: Sending a follow-up message while the agent was still streaming a reply superseded the in-flight turn but dropped its pointer to the live Slack message, causing `finalizeReply` to post a brand-new message and strand the streamed one mid-word. The live message pointer now carries over to the new turn, so the reply is edited in place instead of duplicated.
+*   **Slack: long replies no longer split mid-link or mid-code-block**: Chunking a long reply could previously cut inside a `<url|label>` link or a ` ``` ` fenced code block, leaking raw URLs or breaking formatting across both halves. Chunk boundaries now skip over these spans and prefer a blank line, then a newline, then a space before falling back to a hard cut.
 
 ---
 
