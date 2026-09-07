@@ -192,6 +192,18 @@ type turn struct {
 	staleShown bool
 }
 
+// carryOver copies in-flight streaming state from a superseded turn so a
+// follow-up message arriving mid-turn continues the same live reply instead
+// of orphaning it.
+func (t *turn) carryOver(old *turn) {
+	t.buf.WriteString(old.buf.String())
+	t.hasStarted = old.hasStarted
+	// Keep pointing at the live message: dropping these makes finalizeReply
+	// post a fresh message and strand the streamed one mid-word.
+	t.liveTS = old.liveTS
+	t.lastSent = old.lastSent
+}
+
 // Channel implements agentchannels.Channel for Slack, supporting both
 // Socket Mode (default — no public URL required) and HTTP Event API
 // (requires public URL).
@@ -1593,8 +1605,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 		running: true, lastActivity: time.Now(),
 	}
 	if old != nil {
-		t.buf.WriteString(old.buf.String())
-		t.hasStarted = old.hasStarted
+		t.carryOver(old)
 		// A new turn supersedes the old one: stop its status heartbeat so the
 		// goroutine doesn't outlive the turn it was refreshing.
 		s.stopStatusAnimation(old)
@@ -2756,17 +2767,85 @@ func chunkText(s string, max int) []string {
 	}
 	var chunks []string
 	for len(s) > max {
-		cut := max
-		if idx := strings.LastIndex(s[:cut], "\n"); idx > cut-200 {
-			cut = idx + 1
+		cut := chunkCut(s, max)
+		if c := strings.TrimRight(s[:cut], " \n"); c != "" {
+			chunks = append(chunks, c)
 		}
-		chunks = append(chunks, strings.TrimRight(s[:cut], "\n"))
 		s = s[cut:]
 	}
 	if s != "" {
 		chunks = append(chunks, s)
 	}
 	return chunks
+}
+
+// chunkCut picks where to split s (len > max) so the first chunk fits in max
+// without breaking a pattern the channel can't render half of. Priority:
+//  1. never inside a protected span (Slack `<...>` link, ``` fence) — cut
+//     before the span so it moves whole to the next chunk;
+//  2. blank line (the author's own paragraph break);
+//  3. newline;
+//  4. space;
+//  5. hard cut at the limit (unbreakable run longer than max).
+// Boundary candidates only count within the trailing quarter of the limit so
+// a lone early newline can't produce a degenerate tiny chunk.
+func chunkCut(s string, max int) int {
+	limit := max
+	for _, sp := range protectedSpans(s) {
+		if sp[0] >= limit {
+			break
+		}
+		if sp[1] > limit && sp[0] > 0 {
+			limit = sp[0]
+			break
+		}
+	}
+	window := limit - limit/4
+	if idx := strings.LastIndex(s[:limit], "\n\n"); idx >= window {
+		return idx + 2
+	}
+	if idx := strings.LastIndex(s[:limit], "\n"); idx >= window {
+		return idx + 1
+	}
+	if idx := strings.LastIndex(s[:limit], " "); idx >= window {
+		return idx + 1
+	}
+	return limit
+}
+
+// protectedSpans returns [start,end) ranges that must not be cut: Slack
+// mrkdwn links/mentions `<...>` (the label may contain spaces, so the whole
+// bracket is atomic) and ``` fenced code blocks (a split fence breaks
+// rendering in both halves). Spans are ascending and non-overlapping. An
+// unclosed fence protects through end-of-string; a bare `<` that doesn't
+// look like a link is ignored.
+func protectedSpans(s string) [][2]int {
+	var spans [][2]int
+	for i := 0; i < len(s); {
+		if strings.HasPrefix(s[i:], "```") {
+			end := strings.Index(s[i+3:], "```")
+			if end < 0 {
+				spans = append(spans, [2]int{i, len(s)})
+				break
+			}
+			spans = append(spans, [2]int{i, i + 3 + end + 3})
+			i = i + 3 + end + 3
+			continue
+		}
+		if s[i] == '<' {
+			if rel := strings.IndexByte(s[i:], '>'); rel > 0 {
+				body := s[i+1 : i+rel]
+				if strings.Contains(body, "://") || strings.HasPrefix(body, "mailto:") ||
+					strings.HasPrefix(body, "#") || strings.HasPrefix(body, "@") {
+					spans = append(spans, [2]int{i, i + rel + 1})
+					i += rel + 1
+					continue
+				}
+			}
+		}
+		i++
+	}
+	return spans
 }
 
 // toolStatusLabel turns a ToolUse event into a banner phase like

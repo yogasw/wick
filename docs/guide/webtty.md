@@ -17,6 +17,10 @@ codex login      # similar OAuth flow
 
 Without a terminal, you would need SSH access to the server to run these commands. The Web Terminal lets you do it directly from the Wick admin panel.
 
+::: tip Scoped alternative for claude
+For `claude` specifically, the provider detail page has a purpose-built **Reconnect** flow instead of a full shell: it parses the login link out automatically, enforces a session timeout, and shows account + usage status — see [Providers ▶ Reconnect (login TTY)](./agents/providers#reconnect-login-tty). `codex` and `gemini` don't have this yet, so the Web Terminal below is still the way to run their login flow.
+:::
+
 **Typical workflow with Provider Storage:**
 
 1. Open **Tools → Web Terminal**.

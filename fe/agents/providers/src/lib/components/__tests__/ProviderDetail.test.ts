@@ -74,9 +74,19 @@ describe("ProviderDetail - rendering", () => {
     expect(await screen.findByText("/usr/bin/claude")).toBeTruthy();
   });
 
-  it("renders Configuration section with simple fields", async () => {
+  it("collapses Configuration / extra_args / env by default", async () => {
     render(ProviderDetail, { props: defaultProps });
-    expect(await screen.findByText("Configuration")).toBeTruthy();
+    await screen.findByText("Configuration");
+    expect(screen.queryByText("max_concurrent")).toBeNull();
+    expect(screen.queryByText("Save All")).toBeNull();
+    const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
+    expect(inputs.map((i) => i.value)).not.toContain("--foo");
+    expect(inputs.map((i) => i.value)).not.toContain("FOO");
+  });
+
+  it("renders Configuration section with simple fields after expanding", async () => {
+    render(ProviderDetail, { props: defaultProps });
+    await fireEvent.click(await screen.findByText("Configuration"));
     /* "binary" also appears as a Command Gate row label */
     expect(screen.getAllByText("binary").length).toBeGreaterThan(0);
     expect(screen.getByText("max_concurrent")).toBeTruthy();
@@ -84,6 +94,7 @@ describe("ProviderDetail - rendering", () => {
 
   it("renders dropdown select for dropdown-type fields", async () => {
     render(ProviderDetail, { props: defaultProps });
+    await fireEvent.click(await screen.findByText("Configuration"));
     await screen.findByText("send_mode");
     const selects = document.querySelectorAll("select");
     expect(selects.length).toBeGreaterThan(0);
@@ -130,7 +141,7 @@ describe("ProviderDetail - rendering", () => {
       Page: 1, HasNext: false, Total: 1,
     });
     render(ProviderDetail, { props: defaultProps });
-    expect(await screen.findByText("Recent Sessions")).toBeTruthy();
+    await fireEvent.click(await screen.findByText("Recent Sessions"));
     expect(await screen.findByText("sess-abc")).toBeTruthy();
   });
 
@@ -175,6 +186,7 @@ describe("ProviderDetail - enable/disable toggle", () => {
 describe("ProviderDetail - simple field save", () => {
   it("Save All sends simple fields only", async () => {
     render(ProviderDetail, { props: defaultProps });
+    await fireEvent.click(await screen.findByText("Configuration"));
     await screen.findByText("Save All");
     fireEvent.click(screen.getByText("Save All"));
     await vi.waitFor(() => expect(api.apiSaveProviderDetail).toHaveBeenCalled());
@@ -191,7 +203,7 @@ describe("ProviderDetail - simple field save", () => {
 describe("ProviderDetail - value-list editor (extra_args)", () => {
   it("renders existing value rows", async () => {
     render(ProviderDetail, { props: defaultProps });
-    await screen.findByText("extra_args");
+    await fireEvent.click(await screen.findByText("extra_args"));
     const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
     const vals = inputs.map((i) => i.value);
     expect(vals).toContain("--foo");
@@ -203,7 +215,7 @@ describe("ProviderDetail - value-list editor (extra_args)", () => {
     data.ConfigFields = data.ConfigFields.filter((f) => f.Key === "extra_args");
     vi.mocked(api.apiGetProviderDetail).mockResolvedValue(data);
     render(ProviderDetail, { props: defaultProps });
-    await screen.findByText("extra_args");
+    await fireEvent.click(await screen.findByText("extra_args"));
     const addBtns = screen.getAllByText("+ Add Row");
     fireEvent.click(addBtns[0]);
     // Exclude the Recent Spawns search box (also an <input>) so "the fresh
@@ -224,7 +236,7 @@ describe("ProviderDetail - value-list editor (extra_args)", () => {
 describe("ProviderDetail - key-value editor (env)", () => {
   it("renders existing key-value rows", async () => {
     render(ProviderDetail, { props: defaultProps });
-    await screen.findByText("env");
+    await fireEvent.click(await screen.findByText("env"));
     const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
     const vals = inputs.map((i) => i.value);
     expect(vals).toContain("FOO");
@@ -236,7 +248,7 @@ describe("ProviderDetail - key-value editor (env)", () => {
     data.ConfigFields = data.ConfigFields.filter((f) => f.Key === "env");
     vi.mocked(api.apiGetProviderDetail).mockResolvedValue(data);
     render(ProviderDetail, { props: defaultProps });
-    await screen.findByText("env");
+    await fireEvent.click(await screen.findByText("env"));
     const inputs = Array.from(document.querySelectorAll("input")) as HTMLInputElement[];
     await fireEvent.blur(inputs[0]);
     await vi.waitFor(() => expect(api.apiSaveConfigKey).toHaveBeenCalled());
@@ -251,7 +263,7 @@ describe("ProviderDetail - key-value editor (env)", () => {
     data.ConfigFields = [{ Key: "env", Value: "", Type: "kvlist", Options: "key|value", IsSecret: false, Description: "", Required: false }];
     vi.mocked(api.apiGetProviderDetail).mockResolvedValue(data);
     render(ProviderDetail, { props: defaultProps });
-    await screen.findByText("env");
+    await fireEvent.click(await screen.findByText("env"));
     expect(screen.getByText(/No rows yet/)).toBeTruthy();
   });
 });

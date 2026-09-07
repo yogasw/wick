@@ -383,6 +383,15 @@ func Register(r tool.Router) {
 	r.GET("/api/providers/storage", apiProvidersStorage)
 	r.GET("/api/providers/{type}/{name}", apiProviderDetail)
 
+	// Reconnect (login TTY): run the CLI's interactive login inside a
+	// wick PTY, streamed to the browser terminal over ws. TTL-bound.
+	r.GET("/api/providers/{type}/{name}/logintty", apiProviderLoginTTYStatus)
+	r.GET("/api/providers/{type}/{name}/logintty/usage", apiProviderLoginTTYUsage)
+	r.POST("/api/providers/{type}/{name}/logintty/start", apiProviderLoginTTYStart)
+	r.POST("/api/providers/{type}/{name}/logintty/extend", apiProviderLoginTTYExtend)
+	r.POST("/api/providers/{type}/{name}/logintty/kill", apiProviderLoginTTYKill)
+	r.GET("/api/providers/{type}/{name}/logintty/ws", apiProviderLoginTTYWS)
+
 	// Git source control (session cwd, multi-repo).
 	registerSCM(r)
 

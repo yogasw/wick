@@ -154,6 +154,82 @@ func TestChunkTextBreaksOnNewline(t *testing.T) {
 	}
 }
 
+// A Slack link `<url|label>` crossing the boundary must move to the next chunk
+// whole — a cut inside it breaks the link AND leaks raw URL soup into the
+// thread (the Loki-link incident).
+func TestChunkTextNeverSplitsSlackLink(t *testing.T) {
+	link := "<https://loki.example/explore?" + strings.Repeat("x", 350) + "|Cika offline 17:00 WIB>"
+	in := strings.Repeat("a", 3650) + " " + link
+	chunks := chunkText(in, 3800)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if strings.Contains(chunks[0], "<https") {
+		t.Errorf("link start leaked into first chunk: ...%q", chunks[0][len(chunks[0])-40:])
+	}
+	if chunks[1] != link {
+		t.Errorf("second chunk must be the intact link, got %q", chunks[1][:40])
+	}
+}
+
+// A blank line is the author's own paragraph break — the best cut point.
+// It must win even when it sits further back than a plain newline would.
+func TestChunkTextPrefersBlankLine(t *testing.T) {
+	in := strings.Repeat("a", 3000) + "\n\n" + strings.Repeat("b", 1500)
+	chunks := chunkText(in, 3800)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if chunks[0] != strings.Repeat("a", 3000) {
+		t.Errorf("first chunk must end at the blank line, got len %d", len(chunks[0]))
+	}
+}
+
+// No newline anywhere → fall back to a space so no word is cut in half.
+func TestChunkTextFallsBackToSpace(t *testing.T) {
+	in := strings.TrimRight(strings.Repeat("abcdef ", 700), " ") // 4899 chars, no newline
+	chunks := chunkText(in, 3800)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if !strings.HasSuffix(chunks[0], "abcdef") {
+		t.Errorf("first chunk ends mid-word: ...%q", chunks[0][len(chunks[0])-10:])
+	}
+	if !strings.HasPrefix(chunks[1], "abcdef") {
+		t.Errorf("second chunk starts mid-word: %q...", chunks[1][:10])
+	}
+}
+
+// A fenced code block crossing the boundary must not be cut — a split fence
+// renders as broken formatting in BOTH chunks.
+func TestChunkTextNeverSplitsCodeFence(t *testing.T) {
+	fence := "```\n" + strings.Repeat("code line\n", 35) + "```"
+	in := strings.Repeat("a", 3600) + "\n" + fence
+	chunks := chunkText(in, 3800)
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if strings.Contains(chunks[0], "```") {
+		t.Error("fence leaked into first chunk")
+	}
+	if chunks[1] != fence {
+		t.Errorf("second chunk must be the intact fence, got %q...", chunks[1][:20])
+	}
+}
+
+// An unbreakable token longer than max still hard-cuts — never loop forever,
+// never drop content.
+func TestChunkTextOversizedLinkStillHardCuts(t *testing.T) {
+	in := "<https://example.com/" + strings.Repeat("y", 9000) + ">"
+	chunks := chunkText(in, 3800)
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 chunks, got %d", len(chunks))
+	}
+	if joined := strings.Join(chunks, ""); joined != in {
+		t.Error("hard-cut chunks must reassemble losslessly")
+	}
+}
+
 func TestReconcilePlan(t *testing.T) {
 	big := strings.Repeat("a", maxSlackChunk+50) // overflows one chunk
 

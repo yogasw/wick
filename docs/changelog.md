@@ -10,6 +10,27 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.8.0](https://github.com/yogasw/wick/compare/v1.7.3...v1.8.0) — Providers & Fixes
+
+_Released on 2026-09-07_
+
+### Added
+
+*   **Providers: Reconnect via login TTY**: The provider detail page's Connection panel can now run `claude`'s interactive `/login` inside a wick-owned terminal, streamed live to the browser (xterm.js over a websocket) — no separate Web Terminal / SSH session needed. The OAuth login link is parsed out and offered as Copy/Open, an authorization-code field types codes into the CLI, and success/failure are detected and timestamped. The session is TTL-bound: 5 minutes by default, +5 minute extends, 30 minute hard cap, auto-killed on expiry. The panel also shows the connected account (email/org/plan) and `claude`'s usage windows, read from the instance's own credential files (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`-aware). `codex`/`gemini` show account status only for now; `wick` is unaffected. See [Providers ▶ Reconnect (login TTY)](/guide/agents/providers#reconnect-login-tty).
+
+### Improved
+
+*   **Providers: detail page sections collapsed by default**: Configuration, Extra Args, Env, and Recent Sessions on the provider detail page now start collapsed behind a clickable summary header; Recent Sessions defers its request until first expanded instead of loading on every page visit.
+
+### Fixed
+
+*   **Slack: no more duplicated/truncated replies on mid-turn follow-ups**: Sending a follow-up message while the agent was still streaming a reply superseded the in-flight turn but dropped its pointer to the live Slack message, causing `finalizeReply` to post a brand-new message and strand the streamed one mid-word. The live message pointer now carries over to the new turn, so the reply is edited in place instead of duplicated.
+*   **Slack: long replies no longer split mid-link or mid-code-block**: Chunking a long reply could previously cut inside a `<url|label>` link or a ` ``` ` fenced code block, leaking raw URLs or breaking formatting across both halves. Chunk boundaries now skip over these spans and prefer a blank line, then a newline, then a space before falling back to a hard cut.
+*   **Windows: no more DNS resolver override**: `/etc/resolv.conf` never exists on Windows, so wick's network bootstrap always read that as "no nameserver configured" and replaced Go's resolver with a direct-UDP fallback to public DNS (1.1.1.1 / 8.8.8.8) on every Windows install. Networks that block outbound UDP port 53 to public resolvers (common behind corporate firewalls/VPNs) then failed every outbound call. Wick now skips this step entirely on Windows, where the stdlib resolver already talks to the OS DNS APIs directly.
+
+---
+
+
 ## [v1.7.3](https://github.com/yogasw/wick/compare/v1.7.2...v1.7.3) — Plugins & Autosave
 
 _Released on 2026-09-04_

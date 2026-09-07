@@ -19,6 +19,7 @@
   import type { ProviderDetailResponse, ConfigFieldDTO, SpawnLogFileDTO } from "$lib/types.js";
   import AIRouterConfig from "$lib/components/AIRouterConfig.svelte";
   import RecentSpawns from "$lib/components/RecentSpawns.svelte";
+  import ReconnectPanel from "$lib/components/ReconnectPanel.svelte";
 
   type Props = {
     base: string;
@@ -65,6 +66,22 @@
     return "";
   });
   let busy = $state<Record<string, boolean>>({});
+
+  /* Heavy sections (Configuration, env/extra_args editors, Recent
+     Sessions) are collapsed by default — the header row is the summary
+     and clicking it toggles the body. */
+  let secOpen = $state<Record<string, boolean>>({});
+  function toggleSec(k: string) {
+    secOpen[k] = !(secOpen[k] ?? false);
+  }
+  function secKeydown(k: string) {
+    return (e: KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggleSec(k);
+      }
+    };
+  }
 
   let fieldValues = $state<Record<string, string>>({});
   let secretTouched = $state<Record<string, boolean>>({});
@@ -745,12 +762,26 @@
       {/if}
     </div>
 
-    <!-- Configuration (simple fields, 2-column grid) -->
+    <!-- Connection: account status + usage + reconnect via login TTY -->
+    <ReconnectPanel {base} {type} {name} />
+
+    <!-- Configuration (simple fields, 2-column grid). Collapsed by
+         default; the header is the toggle. -->
     {#if simpleFields.length > 0}
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+        <div
+          role="button"
+          tabindex="0"
+          aria-expanded={secOpen["config"] ?? false}
+          onclick={() => toggleSec("config")}
+          onkeydown={secKeydown("config")}
+          class="flex items-center gap-3 px-5 py-3 cursor-pointer select-none bg-white-200 dark:bg-navy-800 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors {secOpen['config'] ? 'border-b border-white-300 dark:border-navy-600' : ''}"
+        >
+          <svg class="h-3.5 w-3.5 shrink-0 text-black-600 transition-transform {secOpen['config'] ? 'rotate-90' : ''}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
           <h3 class="text-sm font-semibold text-black-900 dark:text-white-100">Configuration</h3>
+          <span class="text-[11px] text-black-700 dark:text-black-600">{simpleFields.length} fields</span>
         </div>
+        {#if secOpen["config"]}
         <div class="p-5">
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
             {#each simpleFields as f (f.Key)}
@@ -824,6 +855,7 @@
             class="rounded-lg bg-green-600 hover:bg-green-700 px-4 py-1.5 text-xs font-medium text-white-100 disabled:opacity-50"
           >{saving ? "Saving…" : "Save All"}</button>
         </div>
+        {/if}
       </div>
     {/if}
 
@@ -921,25 +953,39 @@
       </div>
     {/if}
 
-    <!-- Value-list editors (single-column kvlist, e.g. extra_args) -->
+    <!-- Value-list editors (single-column kvlist, e.g. extra_args).
+         Collapsed by default; header shows the row count. -->
     {#each valueListFields as f (f.Key)}
       {@const entries = catalogFor(f)}
+      {@const secKey = "vl:" + f.Key}
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+        <div
+          role="button"
+          tabindex="0"
+          aria-expanded={secOpen[secKey] ?? false}
+          onclick={() => toggleSec(secKey)}
+          onkeydown={secKeydown(secKey)}
+          class="px-5 py-3 cursor-pointer select-none bg-white-200 dark:bg-navy-800 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors {secOpen[secKey] ? 'border-b border-white-300 dark:border-navy-600' : ''}"
+        >
           <div class="flex items-center justify-between gap-2 flex-wrap">
-            <span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">{f.Key}</span>
-            {#if entries.length > 0}
+            <div class="flex items-center gap-3">
+              <svg class="h-3.5 w-3.5 shrink-0 text-black-600 transition-transform {secOpen[secKey] ? 'rotate-90' : ''}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              <span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">{f.Key}</span>
+              <span class="text-[11px] text-black-700 dark:text-black-600">{(editorRows[f.Key] ?? []).length} rows</span>
+            </div>
+            {#if entries.length > 0 && secOpen[secKey]}
               <button
                 type="button"
-                onclick={() => openPicker(f)}
+                onclick={(e) => { e.stopPropagation(); openPicker(f); }}
                 class="rounded-lg border border-green-400 dark:border-green-700 bg-green-50 dark:bg-green-900 px-3 py-1 text-xs font-medium text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-800 transition-colors"
               >+ Add from catalog</button>
             {/if}
           </div>
-          {#if f.Description}
+          {#if f.Description && secOpen[secKey]}
             <p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{f.Description}</p>
           {/if}
         </div>
+        {#if secOpen[secKey]}
         <div class="p-5">
           <KvList
             columns={kvCols(f)}
@@ -951,32 +997,44 @@
             emptyText="No rows yet — click + Add Row to start"
           />
         </div>
+        {/if}
       </div>
     {/each}
 
-    <!-- Key-value editors (multi-column kvlist, e.g. env) -->
+    <!-- Key-value editors (multi-column kvlist, e.g. env). Collapsed by
+         default; header shows the row count. -->
     {#each keyValueFields as f (f.Key)}
       {@const cols = kvCols(f)}
       {@const entries = catalogFor(f)}
+      {@const secKey = "kv:" + f.Key}
       <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-        <div class="px-5 py-3 border-b border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800">
+        <div
+          role="button"
+          tabindex="0"
+          aria-expanded={secOpen[secKey] ?? false}
+          onclick={() => toggleSec(secKey)}
+          onkeydown={secKeydown(secKey)}
+          class="px-5 py-3 cursor-pointer select-none bg-white-200 dark:bg-navy-800 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors {secOpen[secKey] ? 'border-b border-white-300 dark:border-navy-600' : ''}"
+        >
           <div class="flex items-center justify-between gap-2 flex-wrap">
             <div class="flex items-center gap-2">
+              <svg class="h-3.5 w-3.5 shrink-0 text-black-600 transition-transform {secOpen[secKey] ? 'rotate-90' : ''}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
               <span class="font-mono text-sm font-semibold text-black-900 dark:text-white-100">{f.Key}</span>
-              <span class="text-[11px] text-black-700 dark:text-black-600 font-normal">{cols.join(" · ")}</span>
+              <span class="text-[11px] text-black-700 dark:text-black-600 font-normal">{(editorRows[f.Key] ?? []).length} rows</span>
             </div>
-            {#if entries.length > 0}
+            {#if entries.length > 0 && secOpen[secKey]}
               <button
                 type="button"
-                onclick={() => openPicker(f)}
+                onclick={(e) => { e.stopPropagation(); openPicker(f); }}
                 class="rounded-lg border border-green-400 dark:border-green-700 bg-green-50 dark:bg-green-900 px-3 py-1 text-xs font-medium text-green-700 dark:text-green-300 hover:bg-green-200 dark:hover:bg-green-800 transition-colors"
               >+ Add from catalog</button>
             {/if}
           </div>
-          {#if f.Description}
+          {#if f.Description && secOpen[secKey]}
             <p class="mt-0.5 text-xs text-black-700 dark:text-black-600 whitespace-pre-line">{f.Description}</p>
           {/if}
         </div>
+        {#if secOpen[secKey]}
         <div class="p-5">
           <KvList
             columns={cols}
@@ -1014,6 +1072,7 @@
             {/snippet}
           </KvList>
         </div>
+        {/if}
       </div>
     {/each}
 
@@ -1149,6 +1208,6 @@
     {/if}
 
     <!-- Recent spawns — shared component (search + pagination + inline detail) -->
-    <RecentSpawns {base} {type} {name} {onOpenSession} />
+    <RecentSpawns {base} {type} {name} {onOpenSession} collapsible={true} />
   {/if}
 </div>

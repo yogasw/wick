@@ -10,8 +10,23 @@
     name?: string;
     /** Open the session detail page for the clicked session. */
     onOpenSession: (sessionID: string) => void;
+    /** Collapsed by default with a click-to-toggle header; the list is
+        fetched lazily on first expand. */
+    collapsible?: boolean;
   };
-  let { base, type, name, onOpenSession }: Props = $props();
+  let { base, type, name, onOpenSession, collapsible = false }: Props = $props();
+
+  let expanded = $state(false);
+  let loadedOnce = false;
+
+  function toggle(): void {
+    if (!collapsible) return;
+    expanded = !expanded;
+    if (expanded && !loadedOnce) {
+      loadedOnce = true;
+      void load();
+    }
+  }
 
   let scoped = $derived(!!type || !!name);
 
@@ -53,17 +68,34 @@
     void load();
   }
 
-  onMount(load);
+  onMount(() => {
+    if (!collapsible) {
+      expanded = true;
+      loadedOnce = true;
+      void load();
+    }
+  });
 </script>
 
 <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-sm overflow-hidden">
-  <div class="px-5 py-3 flex items-center gap-2 border-b border-white-300 dark:border-navy-600">
+  <div
+    role={collapsible ? "button" : undefined}
+    tabindex={collapsible ? 0 : undefined}
+    aria-expanded={collapsible ? expanded : undefined}
+    onclick={toggle}
+    onkeydown={(e) => { if (collapsible && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggle(); } }}
+    class="px-5 py-3 flex items-center gap-2 {collapsible ? 'cursor-pointer select-none bg-white-200 dark:bg-navy-800 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors' : ''} {!collapsible || expanded ? 'border-b border-white-300 dark:border-navy-600' : ''}"
+  >
+    {#if collapsible}
+      <svg class="h-3.5 w-3.5 shrink-0 text-black-600 transition-transform {expanded ? 'rotate-90' : ''}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 4l4 4-4 4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+    {/if}
     <h2 class="text-sm font-semibold text-black-900 dark:text-white-100">Recent Sessions</h2>
     {#if data}
       <span class="rounded bg-white-300 dark:bg-navy-600 px-2 py-0.5 text-xs font-medium text-black-700 dark:text-black-600">{data.Total}</span>
     {/if}
   </div>
 
+  {#if expanded}
   <div class="flex flex-wrap items-center gap-2 px-5 py-3 border-b border-white-300 dark:border-navy-600">
     <input
       type="text"
@@ -133,5 +165,6 @@
         {/if}
       </div>
     {/if}
+  {/if}
   {/if}
 </div>
