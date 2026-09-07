@@ -72,6 +72,65 @@ The exact lists live in each provider subpackage's `catalog.go` (`internal/agent
 | `codex` | `CODEX_HOME`, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, `CODEX_NON_INTERACTIVE`, `RUST_LOG`, TLS cert vars | `--model`, `--sandbox`, `--ask-for-approval`, `--add-dir`, `--profile`, `--search`, `--oss`, plus `-c key=value` config overrides (`model_reasoning_effort`, `sandbox_mode`, `approval_policy`, `web_search`, …) |
 | `gemini` | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_GENAI_USE_VERTEXAI`, `GEMINI_MODEL`, `GEMINI_SANDBOX`, trust + telemetry vars | `--model`, `--approval-mode`, `--yolo` |
 
+## Reconnect (login TTY)
+
+::: info Source
+Code: [`internal/agents/provider/logintty/`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/logintty).
+API handlers: [`internal/tools/agents/api_provider_logintty.go`](https://github.com/yogasw/wick/blob/master/internal/tools/agents/api_provider_logintty.go).
+:::
+
+The provider detail page has a **Connection** panel, collapsed by default like the page's other sections (Configuration, Extra Args, Env, Recent Sessions — click any header to expand it). Collapsed, it still shows a status badge (`Connected` / `Not connected`) and the account email when connected.
+
+Expanded, it shows:
+
+- **Account** — email, organization, plan, and auth method (`Claude AI`, `ChatGPT`, `API key`, `Google`), read straight from the instance's own credential files — never from a running process. `.credentials.json` + `.claude.json` for claude, `auth.json` for codex, `google_accounts.json` + `oauth_creds.json` for gemini. An instance's `CLAUDE_CONFIG_DIR` / `CODEX_HOME` env override is honoured; the per-type home directory (`~/.claude`, `~/.codex`, `~/.gemini`) is the fallback.
+- **Usage** (claude only) — the account's rate-limit utilization windows (session / weekly), each as a percentage bar with a "resets in" countdown, read from the same OAuth usage endpoint claude's own `/usage` screen uses.
+
+### Reconnect button
+
+**Reconnect** launches the instance's binary with its configured Extra Args plus `/login` — the same slash-command the CLI's own REPL uses — inside a wick-owned PTY, and opens a terminal modal (xterm.js over a websocket) to complete the flow:
+
+- The most recently detected `https://` login link in the raw output is shown as its own row with **Copy** and **Open** actions, so you don't have to find and select it inside the terminal yourself.
+- wick also watches the output for known success/failure phrases (e.g. "logged in as", "invalid authorization code") and shows a one-line **Success** / **Failed** banner with a timestamp; the raw terminal is always there too if a phrase isn't recognized.
+- An **authorization code** field + **Submit** types a pasted code into the TUI, for login flows that ask you to paste one back.
+- **Auto-open login link in this browser** (off by default, per-open, never persisted) opens the first detected link in a new tab automatically instead of requiring a click.
+- The terminal is fully live underneath all of this — typing directly into it works too.
+
+wick spoofs the spawn's environment so the CLI's own "open a browser" step never fires on the wick host (which is almost never where you're sitting) — the link is parsed out and handed to you instead, via Copy/Open or the auto-open toggle.
+
+The collapsed row only offers **Reconnect** when the account isn't currently connected; expanding the panel always offers it, for a deliberate re-login (e.g. switching accounts). While a login session is already running, the row shows **Open login terminal** to reattach instead — there is at most one login session per instance, and reattaching replays everything that already happened (buffered output, detected link, elapsed TTL) to the new viewer.
+
+The binary is resolved the same way as any other spawn (see [Binary resolution chain](#binary-resolution-chain)); Reconnect fails immediately with an error if none is found instead of trying to spawn one.
+
+### Session TTL
+
+| | |
+|---|---|
+| Default duration | 5 minutes |
+| **Extend +5m** button | Adds 5 minutes, clamped at the cap |
+| Hard cap | 30 minutes from session start, regardless of how many times it's extended |
+| On expiry | Session is killed automatically; the modal shows **Expired — session killed** |
+
+**Stop session** in the modal ends it early. Closing the modal does not kill the session — it keeps running until it exits, expires, or is stopped, and reopening Reconnect (or reloading the page) reattaches to it.
+
+### Provider support
+
+| Provider | Account status | Reconnect (TTY login) |
+|---|---|---|
+| `claude` | ✓ | ✓ |
+| `codex` | ✓ | not yet — "Reconnect via terminal is not available for this provider type yet" |
+| `gemini` | ✓ | not yet — same as codex |
+| `wick` | — | No Connection panel at all — `wick` authenticates per-model with API keys, not a CLI login. |
+
+Backing endpoints:
+
+- `GET /api/providers/{type}/{name}/logintty` — connect status: `supported`, `account`, the live `session` (if any), and the TTL constants.
+- `GET /api/providers/{type}/{name}/logintty/usage` — usage windows for the connected account (`claude` only; `supported:false` for the rest).
+- `POST .../logintty/start`, `.../extend`, `.../kill` — session lifecycle. `extend` and `kill` return `409` once there's nothing to act on.
+- `GET .../logintty/ws` — the websocket stream powering the terminal modal (PTY output, detected link/success/failure, TTL countdown, post-exit account snapshot).
+
+All admin only, like the rest of the Providers API.
+
 ## Web UI
 
 > **📸 Screenshot needed:** `agents-providers-list.png` — capture `/tools/agents/providers` showing the three default cards (claude / codex / gemini) with version + path resolved, plus the "Add Instance" + "Rescan all" + "Auto-rescan" header. Save to `docs/public/screenshots/agents-providers-list.png`.
@@ -317,6 +376,8 @@ Quick cheatsheet for what each provider supports — useful when picking a defau
 | Built-in tools | Task, Bash, Read, Edit, Glob, Grep, WebFetch, WebSearch, MCP | function_call, mcp_tool_call, command_execution (Shell), web_search | _(provider-defined)_ |
 | Tool gate hook | ✓ via PreToolUse hook | — | — |
 | MCP servers | ✓ | ✓ via TOML config | ✓ |
+| Account status (Connection panel) | ✓ | ✓ | ✓ |
+| Reconnect via login TTY | ✓ | not yet | not yet |
 
 ## API reference
 
@@ -332,6 +393,12 @@ Quick cheatsheet for what each provider supports — useful when picking a defau
 | `GET` | `/api/providers/sessions/{id}` | Every spawn of one session, newest first, for the session detail page. Admin only. |
 | `GET` | `/api/providers/logs/{file}?bytes=` | Tails a runtime log file (server/mcp/worker/app/gate/daemon) for the log viewer. Admin only. |
 | `GET` | `/api/providers/logs/{file}/download` | Downloads the full runtime log file. Admin only. |
+| `GET` | `/api/providers/{type}/{name}/logintty` | Connect status (account + live session + TTL constants) for the [Reconnect](#reconnect-login-tty) panel. Admin only. |
+| `GET` | `/api/providers/{type}/{name}/logintty/usage` | Rate-limit usage windows for the connected account (`claude` only). Admin only. |
+| `POST` | `/api/providers/{type}/{name}/logintty/start` | Starts (or attaches to) the login TTY session. Admin only. |
+| `POST` | `/api/providers/{type}/{name}/logintty/extend` | Extends the running session by one step; `409` at the cap or with nothing running. Admin only. |
+| `POST` | `/api/providers/{type}/{name}/logintty/kill` | Kills the running session. Admin only. |
+| `GET` | `/api/providers/{type}/{name}/logintty/ws` | Websocket stream powering the terminal modal. Admin only. |
 
 ## CLI model picker
 
@@ -443,3 +510,4 @@ The skills that ship inside the wick binary get the same catalog treatment for `
 - [AI Router](./airouter) — routing provider spawns through an embedded AI router (9router / OmniRoute).
 - [Command Gate](../command-gate) — gate sidecar lives next to the main binary, separate from providers.
 - [Skills Manager](./skills-manager) — shared skill directories, sync, and the file browser UI.
+- [Web Terminal](../webtty) — general-purpose shell terminal, still the way to run `codex login` / `gemini` login until they get their own Reconnect flow.
