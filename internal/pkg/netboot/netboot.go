@@ -19,6 +19,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +63,13 @@ func Setup() {
 // the Termux case). A configured loopback nameserver such as
 // systemd-resolved's 127.0.0.53 is a working resolver and is left alone.
 func setupDNS() {
+	// /etc/resolv.conf is a unix concept: on Windows it never exists,
+	// while the stdlib resolver uses the OS DNS APIs and works without
+	// it. Installing the public-UDP fallback there breaks every
+	// outbound call on networks that block UDP 53 to public resolvers.
+	if runtime.GOOS == "windows" {
+		return
+	}
 	content, _ := os.ReadFile(resolvConfPath)
 	if hasConfiguredNameserver(string(content)) {
 		return

@@ -696,6 +696,27 @@ func Delete(t Type, name string) error {
 
 // ── Detect / version probing ──────────────────────────────────────────
 
+// ResolveBinary resolves the executable an instance would spawn,
+// without running it: explicit Binary override, then PATH lookup by
+// type name, then the per-OS known install locations. The returned
+// path is non-empty even for a missing override so the UI can show
+// what wick would have run.
+func ResolveBinary(ins Instance) (path string, found bool) {
+	if ins.Binary != "" {
+		if _, err := safeexec.LookPath(ins.Binary); err == nil {
+			return ins.Binary, true
+		}
+		return ins.Binary, false
+	}
+	if p, err := safeexec.LookPath(string(ins.Type)); err == nil {
+		return p, true
+	}
+	if p, ok := scanKnownLocations(ins.Type); ok {
+		return p, true
+	}
+	return "", false
+}
+
 // Probe resolves the binary path and runs `--version` for one
 // instance. Disabled instances skip the spawn but still report the
 // resolved path so the UI can show what wick would have run.
