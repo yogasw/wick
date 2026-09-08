@@ -155,7 +155,7 @@ Every card also shows the account it runs as and how much of its rate-limit wind
 
 The badges load from a separate request after the card list paints, so the page never blocks on the remote usage probe. A failed fetch just leaves the badges off; the rest of the card list stays usable.
 
-Backing endpoint: `GET /api/providers/connections` — account + usage for every instance in one call, keyed by `{type, name}` so the SPA can join it onto the cards it already rendered. Usage is probed once per distinct credential dir (instances sharing a `CLAUDE_CONFIG_DIR` share one probe) and cached for 60 seconds; a transient failure isn't cached, an "unsupported provider type" verdict is. Same two local/remote sources as the detail page's [Connection panel](#reconnect-login-tty) — no CLI is spawned.
+Backing endpoint: `GET /api/providers/connections` — account + usage for every instance in one call, keyed by `{type, name}` so the SPA can join it onto the cards it already rendered. Instances come from the same [`provider.Load()`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/provider.go) list the detail page reads via `provider.Find()`, so a per-instance `CLAUDE_CONFIG_DIR` override carries through end to end — two instances pointed at different credential folders report their own account and their own usage instead of sharing one probe. Usage is probed once per distinct credential dir (instances sharing a `CLAUDE_CONFIG_DIR` share one probe) and cached for 60 seconds; a transient failure isn't cached, an "unsupported provider type" verdict is. Same two local/remote sources as the detail page's [Connection panel](#reconnect-login-tty) — no CLI is spawned.
 
 ### Active Processes panel
 
