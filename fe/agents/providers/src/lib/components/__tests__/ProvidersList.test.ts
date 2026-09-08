@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import ProvidersList from "../ProvidersList.svelte";
 import * as api from "$lib/api.js";
-import type { ProvidersListResponse } from "$lib/types.js";
+import type { ProvidersListResponse, ProviderConnection } from "$lib/types.js";
 
 vi.mock("$lib/api.js");
 vi.mock("@wick-fe/common-stores", () => ({
@@ -69,6 +69,7 @@ beforeEach(() => {
   vi.mocked(api.apiHookEnable).mockResolvedValue(undefined);
   vi.mocked(api.apiHookDisable).mockResolvedValue(undefined);
   vi.mocked(api.apiHookCheck).mockResolvedValue(undefined);
+  vi.mocked(api.apiGetConnections).mockResolvedValue([]);
 });
 
 describe("ProvidersList", () => {
@@ -249,6 +250,66 @@ describe("ProvidersList - wick built-in card", () => {
     });
     render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "/wick" } });
     expect(await screen.findByText("Needs setup")).toBeTruthy();
+  });
+});
+
+describe("ProvidersList connection badges", () => {
+  function conn(over: Partial<ProviderConnection> = {}): ProviderConnection {
+    return {
+      type: "claude",
+      name: "claude",
+      connected: true,
+      email: "dev@abc.com",
+      plan: "max",
+      org: "",
+      authMethod: "Claude AI",
+      usageSupported: true,
+      usageErr: "",
+      windows: [
+        { key: "five_hour", utilization: 42, resetsAt: "" },
+        { key: "seven_day", utilization: 80, resetsAt: "" },
+      ],
+      ...over,
+    };
+  }
+
+  it("shows the account email on the matching card", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    expect(await screen.findByText("dev@abc.com")).toBeTruthy();
+  });
+
+  it("shows both usage percentages beside the rings", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    expect(screen.getByText("42%")).toBeTruthy();
+    expect(screen.getByText("80%")).toBeTruthy();
+  });
+
+  it("badges an instance with no credentials as not connected", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([
+      conn({ connected: false, email: "", plan: "", windows: [] }),
+    ]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    expect(await screen.findByText("Not connected")).toBeTruthy();
+  });
+
+  it("does not badge a card the connections payload never mentioned", async () => {
+    // Only claude/claude is reported; openai/gpt4 must stay unbadged
+    // rather than borrowing another instance's account.
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn()]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    expect(screen.getAllByText("dev@abc.com")).toHaveLength(1);
+  });
+
+  it("renders cards even when the connections request fails", async () => {
+    vi.mocked(api.apiGetConnections).mockRejectedValue(new Error("boom"));
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    // The list payload is independent — a failed usage probe must not
+    // take the page down with it.
+    expect(await screen.findByText("claude/claude")).toBeTruthy();
   });
 });
 

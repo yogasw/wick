@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Added
+
+*   **Providers: connection badges on the list page**: Each provider instance card now shows its connect state (`Connected` / `Not connected`), account email, and two nested usage rings (inner = rolling 5-hour window, outer = rolling 7-day window) with both percentages spelled out beside them — so instances of the same type are distinguishable without opening each one's detail page. Provider types with no usage API (`codex`, `gemini` today) show the badge and email without rings. Backed by a new `GET /api/providers/connections` endpoint that returns account + usage for every instance in one request. See [Providers ▶ Connection badges](/guide/agents/providers#connection-badges).
 
 ---
 
