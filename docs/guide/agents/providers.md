@@ -145,6 +145,18 @@ What each card shows ([Status struct](https://github.com/yogasw/wick/blob/master
 - **Edit / Rescan / Delete** buttons per card.
 - **Add Instance** for a new named profile of the same type.
 
+### Connection badges
+
+Every card also shows the account it runs as and how much of its rate-limit windows are spent, so instances of the same type are distinguishable without opening each one's detail page:
+
+- **Connect state** — `Connected` / `Not connected` badge, plus the account email when known.
+- **Usage rings** — two nested arcs where present: the inner ring is the rolling 5-hour session window, the outer ring the rolling 7-day window. Both percentages are also spelled out beside the rings (`5h 42%`, `7d 18%`).
+- Provider types with no usage API (`codex`, `gemini` today) still get the connect state and email, just no rings — see the [provider support table](#provider-support) above.
+
+The badges load from a separate request after the card list paints, so the page never blocks on the remote usage probe. A failed fetch just leaves the badges off; the rest of the card list stays usable.
+
+Backing endpoint: `GET /api/providers/connections` — account + usage for every instance in one call, keyed by `{type, name}` so the SPA can join it onto the cards it already rendered. Instances come from the same [`provider.Load()`](https://github.com/yogasw/wick/blob/master/internal/agents/provider/provider.go) list the detail page reads via `provider.Find()`, so a per-instance `CLAUDE_CONFIG_DIR` override carries through end to end — two instances pointed at different credential folders report their own account and their own usage instead of sharing one probe. Usage is probed once per distinct credential dir (instances sharing a `CLAUDE_CONFIG_DIR` share one probe) and cached for 60 seconds; a transient failure isn't cached, an "unsupported provider type" verdict is. Same two local/remote sources as the detail page's [Connection panel](#reconnect-login-tty) — no CLI is spawned.
+
 ### Active Processes panel
 
 When at least one agent is running, an **Active Processes** table appears above the provider cards showing every live spawn: session ID (first 8 chars), agent name, PID, and lifecycle/substate badge. The count badge reads `N / PoolMax`. The panel is hidden when the pool is empty.
@@ -388,6 +400,7 @@ Quick cheatsheet for what each provider supports — useful when picking a defau
 | `GET` | `/providers/options/{type}/{name}/models` | Live model list for one configured instance, used by the composer's model drill-in. `?entry=<id>` expands one `wick` live model set (see [Built-in wick provider](#built-in-wick-provider)) by resolving the vendor's current models against its stored filter. |
 | `GET` | `/providers/airouter/slots/{type}?router=<id>` | Returns the model slots the given router exposes for a provider type. Admin only. |
 | `POST` | `/providers/detail/{type}/{name}/airouter` | Saves AI-router settings (toggle + selected router + model slots + API key) for one instance. Admin only. |
+| `GET` | `/api/providers/connections` | Account + usage for every instance in one request, backing the [connection badges](#connection-badges) on the providers list. Admin only. |
 | `GET` | `/api/providers/spawns?type=&name=&q=&page=` | Flat, searchable, paginated (10/page) spawn list backing the Recent Spawns table. Admin only. |
 | `GET` | `/api/providers/sessions?type=&name=&q=&page=` | Per-session spawn summaries (grouped, paginated) for the Recent Spawns list. Admin only. |
 | `GET` | `/api/providers/sessions/{id}` | Every spawn of one session, newest first, for the session detail page. Admin only. |

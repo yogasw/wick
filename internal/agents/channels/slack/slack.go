@@ -2220,7 +2220,7 @@ func (s *Channel) finalizeReply(sessionKey, channelID, threadTS, text, liveTS, l
 		})
 	}
 	for _, chunk := range plan.continuations {
-		s.postReply(channelID, threadTS, "_(cont.)_\n"+chunk)
+		s.postReply(channelID, threadTS, chunk)
 	}
 }
 
@@ -2232,7 +2232,7 @@ type replyPlan struct {
 	postFresh     bool     // post the whole text via postChunked (no live msg)
 	update        bool     // chat.update the live message to first
 	first         string   // first chunk shown in the live message
-	continuations []string // overflow chunks posted as "_(cont.)_" replies
+	continuations []string // overflow chunks posted as follow-up replies
 }
 
 // reconcilePlan computes how to settle a finished turn given the final text,
@@ -2752,12 +2752,8 @@ func (s *Channel) setReaction(newReaction, channelID, msgTS, oldReaction string)
 
 func (s *Channel) postChunked(channelID, threadTS, text string) {
 	chunks := chunkText(text, maxSlackChunk)
-	for i, chunk := range chunks {
-		msg := chunk
-		if i > 0 {
-			msg = "_(cont.)_\n" + chunk
-		}
-		s.postReply(channelID, threadTS, msg)
+	for _, chunk := range chunks {
+		s.postReply(channelID, threadTS, chunk)
 	}
 }
 

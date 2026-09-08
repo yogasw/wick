@@ -381,6 +381,10 @@ func Register(r tool.Router) {
 	// JSON API — providers SPA endpoints (mirrors templ providers handlers).
 	r.GET("/api/providers", apiProvidersList)
 	r.GET("/api/providers/storage", apiProvidersStorage)
+	// Account + usage for every instance in one request, so the list can
+	// badge each card. Registered before the {type} pattern so the
+	// literal path wins.
+	r.GET("/api/providers/connections", apiProviderConnections)
 	r.GET("/api/providers/{type}/{name}", apiProviderDetail)
 
 	// Reconnect (login TTY): run the CLI's interactive login inside a

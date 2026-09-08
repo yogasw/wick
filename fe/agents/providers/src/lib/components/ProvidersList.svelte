@@ -18,8 +18,11 @@
     apiHookDisable,
     apiHookCheck,
     apiGetWickConfig,
+    apiGetConnections,
   } from "$lib/api.js";
-  import type { ProvidersListResponse, ProviderStatusDTO } from "$lib/types.js";
+  import type { ProvidersListResponse, ProviderStatusDTO, ProviderConnection } from "$lib/types.js";
+  import UsageRings from "$lib/components/UsageRings.svelte";
+  import { pickWindows, connectionKey } from "$lib/usagerings.js";
 
   const HOOK_EVENT = "PreToolUse";
 
@@ -37,6 +40,10 @@
   // (the /api/providers list doesn't carry them), so fetch it alongside the
   // list to fill the built-in card. Null until first fetch resolves.
   let wickInfo = $state<{ count: number; defaultLabel: string } | null>(null);
+  // Account + usage per instance, keyed by `${type}/${name}`. Loaded from
+  // its own endpoint after the list paints: the account read is local but
+  // the usage probe is a remote call, and the cards must not wait on it.
+  let connections = $state<Record<string, ProviderConnection>>({});
   let confirmDelete = $state<ProviderStatusDTO | null>(null);
   let busy = $state<Record<string, boolean>>({});
   let mcpOpen = $state(false);
@@ -90,6 +97,7 @@
     try {
       data = await apiGetProviders();
       void loadWick();
+      void loadConnections();
     } catch (e) {
       if (!silent) {
         error = e instanceof Error ? e.message : "Failed to load providers";
@@ -117,6 +125,22 @@
       };
     } catch {
       wickInfo = { count: 0, defaultLabel: "" };
+    }
+  }
+
+  /* loadConnections fills the per-card account + usage badges. A failure
+     leaves the badges absent rather than surfacing an error: the list
+     itself came from a separate, local-only payload and stays usable. */
+  async function loadConnections(): Promise<void> {
+    try {
+      const rows = await apiGetConnections();
+      const next: Record<string, ProviderConnection> = {};
+      for (const c of rows) {
+        next[connectionKey(c.type, c.name)] = c;
+      }
+      connections = next;
+    } catch {
+      connections = {};
     }
   }
 
@@ -513,6 +537,7 @@
           {@const hookKey = `hook-${p.Instance.Type}-${p.Instance.Name}`}
           {@const hc = p.Hooks[HOOK_EVENT]}
           {@const intent = p.HookEnabled[HOOK_EVENT] === true}
+          {@const conn = connections[connectionKey(p.Instance.Type, p.Instance.Name)]}
           <div class="rounded-xl border border-white-300 dark:border-navy-600 bg-white-100 dark:bg-navy-700 p-5 shadow-sm space-y-3">
             <div class="flex items-start justify-between gap-3">
               <div>
@@ -560,6 +585,44 @@
                 </div>
               {/if}
             </dl>
+            <!-- Account + usage: which login this instance runs as, and how
+                 much of its rate-limit windows is spent. Two nested arcs
+                 (inner 5-hour, outer 7-day) keep it to one glance; the
+                 numbers are spelled out beside them. Absent until the
+                 connections request resolves, and for provider types that
+                 keep no credentials on disk. -->
+            {#if conn}
+              {@const rings = pickWindows(conn.windows)}
+              <div class="pt-3 border-t border-white-300 dark:border-navy-600 flex items-center gap-3">
+                {#if rings.inner || rings.outer}
+                  <UsageRings windows={conn.windows} />
+                {/if}
+                <div class="min-w-0 flex-1 space-y-0.5">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    {#if conn.connected}
+                      <span class="rounded bg-pos-100 dark:bg-pos-400/20 px-2 py-0.5 text-xs font-medium text-pos-400">Connected</span>
+                    {:else}
+                      <span class="rounded bg-neg-100 dark:bg-neg-400/20 px-2 py-0.5 text-xs font-medium text-neg-400">Not connected</span>
+                    {/if}
+                    {#if conn.email}
+                      <span class="min-w-0 truncate font-mono text-xs text-black-800 dark:text-black-600">{conn.email}</span>
+                    {/if}
+                  </div>
+                  {#if rings.inner || rings.outer}
+                    <div class="flex items-center gap-3 text-xs text-black-700 dark:text-black-600">
+                      {#if rings.inner}
+                        <span>5h <span class="font-medium text-black-900 dark:text-white-100">{Math.round(rings.inner.utilization)}%</span></span>
+                      {/if}
+                      {#if rings.outer}
+                        <span>7d <span class="font-medium text-black-900 dark:text-white-100">{Math.round(rings.outer.utilization)}%</span></span>
+                      {/if}
+                    </div>
+                  {:else if conn.usageErr}
+                    <p class="font-mono text-xs text-black-700 dark:text-black-600 truncate">usage unavailable: {conn.usageErr}</p>
+                  {/if}
+                </div>
+              </div>
+            {/if}
             <div class="pt-3 border-t border-white-300 dark:border-navy-600 space-y-2">
               <div class="flex items-center justify-between gap-2">
                 <div class="flex items-center gap-2 flex-wrap">
