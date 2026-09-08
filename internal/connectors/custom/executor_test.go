@@ -50,7 +50,7 @@ func TestExecuteHTTPRendersRecipe(t *testing.T) {
 	in := map[string]string{"item_id": "42", "q": "a b", "name": "Ann"}
 	c := connector.NewCtx(context.Background(), "inst-1", cfg, in, srv.Client(), nil, nil)
 
-	res, err := executeHTTP(c, recipe, []string{"base_url", "token"}, []string{"item_id", "q", "name"})
+	res, err := executeHTTP(c, recipe, []DefField{{Key: "base_url"}, {Key: "token"}}, []string{"item_id", "q", "name"})
 	if err != nil {
 		t.Fatalf("executeHTTP: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestExecuteHTTPNon2xx(t *testing.T) {
 	recipe := OpRequest{Method: "GET", URLTemplate: "{{.cfg.base_url}}/x"}
 	c := connector.NewCtx(context.Background(), "i", map[string]string{"base_url": srv.URL}, nil, srv.Client(), nil, nil)
 
-	_, err := executeHTTP(c, recipe, []string{"base_url"}, nil)
+	_, err := executeHTTP(c, recipe, []DefField{{Key: "base_url"}}, nil)
 	if err == nil {
 		t.Fatal("expected error for HTTP 500")
 	}
@@ -115,7 +115,7 @@ func TestExecuteHTTPNonJSONResponse(t *testing.T) {
 	recipe := OpRequest{Method: "GET", URLTemplate: "{{.cfg.base_url}}/ping"}
 	c := connector.NewCtx(context.Background(), "i", map[string]string{"base_url": srv.URL}, nil, srv.Client(), nil, nil)
 
-	res, err := executeHTTP(c, recipe, []string{"base_url"}, nil)
+	res, err := executeHTTP(c, recipe, []DefField{{Key: "base_url"}}, nil)
 	if err != nil {
 		t.Fatalf("executeHTTP: %v", err)
 	}
@@ -124,11 +124,49 @@ func TestExecuteHTTPNonJSONResponse(t *testing.T) {
 	}
 }
 
+func TestExecuteFuncFallsBackToConfigDefaults(t *testing.T) {
+	var got recordedReq
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = recordedReq{path: r.URL.Path, header: r.Header.Clone()}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	cfgFields := []DefField{
+		{Key: "base_url", Default: srv.URL},
+		{Key: "token", Default: "tok-default"},
+	}
+	op := DefOp{
+		Key: "ping",
+		Request: &OpRequest{
+			Method:      "GET",
+			URLTemplate: "{{.cfg.base_url}}/ping",
+			Headers:     map[string]string{"Authorization": "Bearer {{.cfg.token}}"},
+		},
+	}
+	fn := (&Service{}).executeFunc(cfgFields, op)
+
+	// base_url absent from the instance config (session instances start
+	// blank) → must fall back to the field default; token is set → the
+	// stored value must win over its default.
+	c := connector.NewCtx(context.Background(), "i", map[string]string{"token": "tok-real"}, nil, srv.Client(), nil, nil)
+	if _, err := fn(c); err != nil {
+		t.Fatalf("executeFunc: %v", err)
+	}
+	if got.path != "/ping" {
+		t.Errorf("upstream path = %q, want /ping (default base_url not applied)", got.path)
+	}
+	if h := got.header.Get("Authorization"); h != "Bearer tok-real" {
+		t.Errorf("Authorization = %q, want stored value to win over default", h)
+	}
+}
+
 func TestExecuteHTTPNonHTTPURL(t *testing.T) {
 	recipe := OpRequest{Method: "GET", URLTemplate: "{{.cfg.base_url}}/etc"}
 	c := connector.NewCtx(context.Background(), "i", map[string]string{"base_url": "file:///tmp"}, nil, nil, nil, nil)
 
-	_, err := executeHTTP(c, recipe, []string{"base_url"}, nil)
+	_, err := executeHTTP(c, recipe, []DefField{{Key: "base_url"}}, nil)
 	if err == nil || !strings.Contains(err.Error(), "is not http(s)") {
 		t.Fatalf("err = %v, want non-http(s) rejection", err)
 	}
@@ -142,7 +180,7 @@ func TestExecuteHTTPTemplateErrorSurfaces(t *testing.T) {
 	}
 	c := connector.NewCtx(context.Background(), "i", map[string]string{"base_url": "https://example.com"}, map[string]string{"name": "x"}, nil, nil, nil)
 
-	_, err := executeHTTP(c, recipe, []string{"base_url"}, []string{"name"})
+	_, err := executeHTTP(c, recipe, []DefField{{Key: "base_url"}}, []string{"name"})
 	if err == nil || !strings.Contains(err.Error(), "body template") {
 		t.Fatalf("err = %v, want body template error", err)
 	}

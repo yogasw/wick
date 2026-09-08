@@ -454,7 +454,7 @@ func parseExcluded(raw string) map[string]bool {
 // take effect after an explicit Reload swaps the module (the design's
 // no-hot-reload rule).
 func (s *Service) executeFunc(cfgFields []DefField, op DefOp) connector.ExecuteFunc {
-	cfgKeys := fieldKeys(cfgFields)
+	cfg := append([]DefField(nil), cfgFields...)
 	inKeys := fieldKeys(op.Inputs)
 	if op.MCPSource != nil {
 		src := *op.MCPSource
@@ -465,7 +465,7 @@ func (s *Service) executeFunc(cfgFields []DefField, op DefOp) connector.ExecuteF
 	}
 	req := *op.Request
 	return func(c *connector.Ctx) (any, error) {
-		return executeHTTP(c, req, cfgKeys, inKeys)
+		return executeHTTP(c, req, cfg, inKeys)
 	}
 }
 
@@ -478,11 +478,20 @@ func fieldKeys(fields []DefField) []string {
 }
 
 // ctxMaps materializes the {.cfg, .in} template namespaces from the
-// framework-resolved (already decrypted) Ctx reads.
-func ctxMaps(c *connector.Ctx, cfgKeys, inKeys []string) (cfg, in map[string]string) {
-	cfg = make(map[string]string, len(cfgKeys))
-	for _, k := range cfgKeys {
-		cfg[k] = c.Cfg(k)
+// framework-resolved (already decrypted) Ctx reads. A config key with no
+// stored value falls back to the field's declared default — the same
+// semantics entity.MapToStruct gives built-in connectors, and what the
+// session-instance "ready" status check assumes (a required field counts
+// as satisfied when its default is non-empty). Session instances start
+// blank, so without this fallback a defaulted base_url renders empty.
+func ctxMaps(c *connector.Ctx, cfgFields []DefField, inKeys []string) (cfg, in map[string]string) {
+	cfg = make(map[string]string, len(cfgFields))
+	for _, f := range cfgFields {
+		v := c.Cfg(f.Key)
+		if v == "" {
+			v = f.Default
+		}
+		cfg[f.Key] = v
 	}
 	in = make(map[string]string, len(inKeys))
 	for _, k := range inKeys {
@@ -495,8 +504,8 @@ func ctxMaps(c *connector.Ctx, cfgKeys, inKeys []string) (cfg, in map[string]str
 // the shared client. Responses pass through as decoded JSON (or raw
 // text when the upstream is not JSON); non-2xx statuses surface as
 // errors carrying a body snippet for the history panel.
-func executeHTTP(c *connector.Ctx, recipe OpRequest, cfgKeys, inKeys []string) (any, error) {
-	cfg, in := ctxMaps(c, cfgKeys, inKeys)
+func executeHTTP(c *connector.Ctx, recipe OpRequest, cfgFields []DefField, inKeys []string) (any, error) {
+	cfg, in := ctxMaps(c, cfgFields, inKeys)
 
 	rurl, err := renderTemplate("url", recipe.URLTemplate, cfg, in)
 	if err != nil {
