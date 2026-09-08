@@ -52,9 +52,10 @@ func SessionInstanceForID(layout agentconfig.Layout, sessionID, connectorID stri
 // "ready" when every required (non-hidden) base config field is satisfied,
 // "needs_setup" otherwise. A field counts as satisfied when the instance
 // config carries a value OR the base spec ships a non-empty default — the
-// runtime falls back to that default (see entity.MapToStruct), and the
-// Config-tab form already renders it, so a freshly-added instance whose
-// required fields all default must read as ready without a redundant save.
+// runtime falls back to that default (built-ins via entity.MapToStruct,
+// custom connectors via custom.ctxMaps), and the Config-tab form already
+// renders it, so a freshly-added instance whose required fields all default
+// must read as ready without a redundant save.
 func sessionInstanceStatus(mod connector.Module, cfg map[string]string) string {
 	return sessionConfigStatus(mod.Configs, cfg)
 }

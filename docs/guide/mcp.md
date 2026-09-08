@@ -613,6 +613,8 @@ This means sessions get a descriptive label automatically without prompting the 
 
 Use it when the user wants to hit an endpoint or use a credential that only matters right now. Once added and configured, the instance's id shows in `wick_list` (pass the same `session_id`) and you `wick_execute` it like any connector. A session instance reports `kind: "session"` in the list response. When its config is incomplete its status is `needs_setup_workspace` (distinct from a saved connector's `needs_setup`) — direct the user to the **Workspace** tab, not the admin dashboard.
 
+A session instance starts blank and is filled key-by-key as the user submits the fill modal. Any config field the base connector declares a **default** for (e.g. `base_url`) counts toward "ready" as soon as the instance exists, and falls back to that default at call time for both built-in and custom connectors — so you never need to explicitly re-set a config key just because its value happens to match the declared default.
+
 The tool is **human-driven for config**. The agent creates blank instances and can open the fill modal, but the **user** types the values; secrets are encrypted server-side with a system-only master key, and the agent only ever learns **which keys were filled**, never the values. This keeps connector credentials and endpoints off the agent's context entirely.
 
 ### Eligibility

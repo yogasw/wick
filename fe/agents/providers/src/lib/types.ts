@@ -257,3 +257,21 @@ export interface AIRouterDetailDTO {
   RawConfig: string;
   Preview: string;
 }
+
+/* ProviderConnection is one instance's account + usage, from
+   GET /api/providers/connections. Keyed by {type, name} so the list can
+   join it onto cards it already rendered. */
+export interface ProviderConnection {
+  type: string;
+  name: string;
+  connected: boolean;
+  email: string;
+  plan: string;
+  org: string;
+  authMethod: string;
+  /* usageSupported is false for provider types with no usage API
+     (codex/gemini today) — distinct from a fetch that failed. */
+  usageSupported: boolean;
+  usageErr: string;
+  windows: { key: string; utilization: number; resetsAt: string }[];
+}

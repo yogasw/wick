@@ -15,6 +15,7 @@ import type {
   GateStatusDTO,
   LiveProcessDTO,
   ConfigFieldDTO,
+  ProviderConnection,
 } from "./types.js";
 import type { ModelCaps } from "@wick-fe/common-ui";
 
@@ -1452,3 +1453,48 @@ export async function apiGetWickModelKey(base: string, modelId: string): Promise
 export type { StorageFileDTO };
 
 export { ApiError };
+
+interface WireProviderConnection {
+  type: string;
+  name: string;
+  connected?: boolean;
+  email?: string;
+  plan?: string;
+  org?: string;
+  auth_method?: string;
+  usage_supported?: boolean;
+  usage_err?: string;
+  windows?: { key?: string; utilization?: number; resets_at?: string }[] | null;
+}
+
+export function normalizeConnections(
+  raw: { connections?: WireProviderConnection[] | null },
+): ProviderConnection[] {
+  return (raw?.connections ?? []).map((c) => ({
+    type: c.type ?? "",
+    name: c.name ?? "",
+    connected: c.connected ?? false,
+    email: c.email ?? "",
+    plan: c.plan ?? "",
+    org: c.org ?? "",
+    authMethod: c.auth_method ?? "",
+    usageSupported: c.usage_supported ?? false,
+    usageErr: c.usage_err ?? "",
+    windows: (c.windows ?? []).map((w) => ({
+      key: w.key ?? "",
+      utilization: w.utilization ?? 0,
+      resetsAt: w.resets_at ?? "",
+    })),
+  }));
+}
+
+/* apiGetConnections fetches account + usage for every instance in one
+   request. Separate from apiGetProviders so the list paints from the
+   local-only payload first and fills these badges in when the remote
+   usage probe returns. */
+export async function apiGetConnections(): Promise<ProviderConnection[]> {
+  const r = await get<{ connections?: WireProviderConnection[] | null }>(
+    getBase() + "/api/providers/connections",
+  );
+  return normalizeConnections(r);
+}

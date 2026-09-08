@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -204,8 +205,16 @@ func apiProviderLoginTTYWS(c *tool.Ctx) {
 		return
 	}
 
+	restoreWSUpgradeHeader(c.R.Header)
+
 	conn, err := loginTTYUpgrader.Upgrade(c.W, c.R, nil)
 	if err != nil {
+		log.Debug().
+			Str("component", "logintty-ws").
+			Str("type", string(ins.Type)).
+			Str("name", ins.Name).
+			Err(err).
+			Msg("logintty-ws: upgrade failed")
 		return
 	}
 	defer conn.Close()
@@ -283,4 +292,32 @@ func apiProviderLoginTTYWS(c *tool.Ctx) {
 			}
 		}
 	}
+}
+
+// restoreWSUpgradeHeader puts the "upgrade" token back into the
+// Connection header of a websocket handshake that lost it on the way
+// in. Some reverse proxies (nginx/ingress with a hardcoded
+// `proxy_set_header Connection`) forward the client's
+// "Upgrade: websocket" but rewrite Connection to "keep-alive";
+// gorilla's Upgrade() then rejects the handshake with 400 and the SPA
+// terminal never connects. The gotty proxy in internal/tty already
+// does the same repair.
+func restoreWSUpgradeHeader(h http.Header) {
+	if strings.EqualFold(h.Get("Upgrade"), "websocket") &&
+		!headerHasToken(h, "Connection", "upgrade") {
+		h.Set("Connection", "Upgrade")
+	}
+}
+
+// headerHasToken reports whether the comma-separated header named key
+// contains token (case-insensitive), e.g. "Connection: keep-alive, Upgrade".
+func headerHasToken(h http.Header, key, token string) bool {
+	for _, v := range h[http.CanonicalHeaderKey(key)] {
+		for _, part := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), token) {
+				return true
+			}
+		}
+	}
+	return false
 }
