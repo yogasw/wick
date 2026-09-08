@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+*   **Custom connectors: session instances now honor config field defaults**: An operation whose URL template referenced a config field with a declared default (e.g. `base_url`) failed with `rendered URL "..." is not http(s)` on a fresh session-workspace instance, because the instance config starts blank and custom connectors only read stored values. The status check already counted a non-empty default as "ready," so the instance looked usable but every call failed until the user manually set that field. Custom connectors now fall back to the field's declared default when no value is stored, matching built-in connector behavior — no more workaround of re-setting config that already matched its default.
 
 ---
 
