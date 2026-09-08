@@ -6,15 +6,25 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-### Fixed
-
-*   **Slack: continuation chunks posted plain**: Overflow chunks of a long reply were prefixed with an `_(cont.)_` marker; they're now posted as plain follow-up messages with no prefix.
-*   **Custom connectors: session instances now honor config field defaults**: An operation whose URL template referenced a config field with a declared default (e.g. `base_url`) failed with `rendered URL "..." is not http(s)` on a fresh session-workspace instance, because the instance config starts blank and custom connectors only read stored values. The status check already counted a non-empty default as "ready," so the instance looked usable but every call failed until the user manually set that field. Custom connectors now fall back to the field's declared default when no value is stored, matching built-in connector behavior — no more workaround of re-setting config that already matched its default.
-
-### Added
-*   **Providers: connection badges on the list page**: Each provider instance card now shows its connect state (`Connected` / `Not connected`), account email, and two nested usage rings (inner = rolling 5-hour window, outer = rolling 7-day window) with both percentages spelled out beside them — so instances of the same type are distinguishable without opening each one's detail page. Provider types with no usage API (`codex`, `gemini` today) show the badge and email without rings. Backed by a new `GET /api/providers/connections` endpoint that returns account + usage for every instance in one request. See [Providers ▶ Connection badges](/guide/agents/providers#connection-badges).
+_Nothing yet — notes for the next release go here._
 
 ---
+
+## [v1.8.1](https://github.com/yogasw/wick/compare/v1.8.0...v1.8.1) — Providers & Fixes
+
+_Released on 2026-09-08_
+
+### Fixed
+
+*   **Slack: continuation chunks posted plain**: Overflow chunks of a long reply were previously prefixed with an `_(cont.)_` marker; they are now posted as plain follow-up messages with no prefix.
+*   **Custom connectors: session instances now honor config field defaults**: An operation whose URL template referenced a config field with a declared default (e.g., `base_url`) previously failed with `rendered URL "..." is not http(s)` on fresh session-workspace instances. This occurred because custom connectors read config directly from the instance map without applying defaults. Custom connectors now fall back to the field's declared default when no value is stored (applied in `ctxMaps`), matching built-in connector behavior which uses `entity.MapToStruct` for default substitution. This resolves issues where instances appeared "ready" but operations failed until config fields were manually reset, even if they matched their defaults.
+*   **Websocket upgrade behind Nginx for login TTY**: Fixed an issue where the login TTY websocket failed to connect behind Nginx. Proxies forwarding the client's `Upgrade: websocket` header often rewrote the `Connection` header to `keep-alive`. The `gorilla` websocket `Upgrade()` function required the `upgrade` token in the `Connection` header, leading to a 400 error. The fix restores the `upgrade` token before processing the handshake, enabling the terminal to stream correctly.
+
+### Added
+*   **Providers: connection badges on the list page**: Each provider instance card now displays its connection state (`Connected` / `Not connected`), associated account email, and two nested usage rings. The inner ring represents a rolling 5-hour window, and the outer ring a rolling 7-day window, with both percentages spelled out. This allows distinguishing instances of the same type without needing to open each one's detail page. Provider types without a usage API (e.g., `codex`, `gemini`) show only the badge and email. This feature is backed by a new `GET /api/providers/connections` endpoint that efficiently returns account and usage data for all instances in a single request. Usage is probed once per distinct credential directory and results are cached for 60 seconds. The endpoint is deliberately separate from `GET /api/providers` to ensure the list page loads quickly, with badges filling in asynchronously. See [Providers ▶ Connection badges](/guide/agents/providers#connection-badges).
+
+---
+
 
 ## [v1.8.0](https://github.com/yogasw/wick/compare/v1.7.3...v1.8.0) — Providers & Fixes
 
