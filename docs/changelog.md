@@ -6,7 +6,9 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Fixed
+
+*   **Slack: continuation chunks posted plain**: Overflow chunks of a long reply were prefixed with an `_(cont.)_` marker; they're now posted as plain follow-up messages with no prefix.
 
 ---
 

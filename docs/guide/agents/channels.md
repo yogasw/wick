@@ -218,7 +218,7 @@ Rather than waiting until the full response is ready, wick posts an empty placeh
 
 ### Chunked reply
 
-Slack hard-limits messages to 4000 chars. Wick chunks at **3800** to leave 200 chars headroom for continuation markers ([slack.go:32](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go#L32)). Each chunk is a separate threaded reply.
+Slack hard-limits messages to 4000 chars. Wick chunks at **3800** ([slack.go:32](https://github.com/yogasw/wick/blob/master/internal/agents/channels/slack/slack.go#L32)). Each chunk is a separate threaded reply, posted plain with no continuation marker.
 
 ### Approval prompt cleanup
 
