@@ -258,10 +258,11 @@
         const text = c.action.slice("send:".length);
         run = () => void handleSend({ text, files: [] });
       }
-      return { value: c.id, label: c.label, hint: c.hint, category: c.category, run };
+      return { key: c.id, value: c.id, label: c.label, hint: c.hint, category: c.category, run };
     }
-    // insert-type (skills): value is placed after `/`
-    return { value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category };
+    // insert-type (skills): value is placed after `/`. `key` carries the id
+    // because `value` (the skill's frontmatter name) is not unique.
+    return { key: c.id, value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category };
   }
   let composerCommands = $state<ComposerCommand[]>([]);
 
