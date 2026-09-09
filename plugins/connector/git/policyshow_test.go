@@ -412,10 +412,21 @@ func TestGatesAndAppliesToAgree(t *testing.T) {
 		}
 	}
 
-	// The specific claim that was wrong, asserted by name so a future rewrite of the
-	// sentence cannot quietly drop it again.
-	if !strings.Contains(appliesTo, "checkout") {
-		t.Error("applies_to must say checkout is blocked on a protected branch — that was the misreading")
+	// pull and checkout are the two mutating-looking ops that are NOT refused on a
+	// protected branch, and a caller that believes otherwise cannot sync master at
+	// all. Asserting the exemption by name — rather than just that the word appears
+	// — because the earlier version of this test checked only for "checkout" and
+	// went on passing once the sentence changed from blocking it to exempting it.
+	for _, exempt := range []string{"pull", "checkout"} {
+		if !strings.Contains(appliesTo, exempt) {
+			t.Errorf("applies_to never mentions %q, which is exempt on a protected branch:\n%s", exempt, appliesTo)
+		}
+		if containsExact(protectedOpNames(), exempt) {
+			t.Errorf("%s is listed among the operations refused on a protected branch, but it is exempt", exempt)
+		}
+	}
+	if !strings.Contains(appliesTo, "exempt") {
+		t.Errorf("applies_to must say pull and checkout are exempt, not merely name them:\n%s", appliesTo)
 	}
 	// And a read must not be listed, or a caller avoids diagnostics it is allowed to run.
 	for _, read := range []string{"status", "log", "diff"} {

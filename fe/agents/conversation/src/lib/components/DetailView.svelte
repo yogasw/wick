@@ -26,7 +26,7 @@
   import { getAsks, answerAsk } from "../api/asks.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
   import { sendMessage } from "../api/messages.js";
-  import { listFiles, searchFiles, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
+  import { listFiles, searchTree, searchMentionPaths, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
   import { listComposerCommands, type ComposerApiCommand } from "../api/composer.js";
   import { getProcesses, killProcess, dequeueProcess, liveProcesses as filterLiveProcesses } from "../api/processes.js";
   import {
@@ -188,12 +188,18 @@
   let filesVal = $state<ContextFileEntry[]>([]);
   let filesLoading = $state(false);
   let filesLoadError = $state("");
+  /* Which directories have had their children fetched. The tree is loaded
+     one level at a time, so this is what separates "empty folder" from
+     "not opened yet" — and it is what a refresh has to forget. */
+  let loadedDirs = $state<Record<string, boolean>>({});
+  let loadingDirs = $state<Record<string, boolean>>({});
+  let findTruncated = $state(false);
 
   /* Composer autocomplete data. `@` searches the session's files via the
      backend (whole tree, ranked, fresh per keystroke); `/` lists commands from
      GET /api/composer/commands (built-in actions + skills). */
   function searchMentionFiles(query: string): Promise<string[]> {
-    return run(searchFiles(base, sessionId, query).pipe(Effect.provide(WickClientLayer)))
+    return run(searchMentionPaths(base, sessionId, query).pipe(Effect.provide(WickClientLayer)))
       .catch(() => [] as string[]);
   }
   // The `/` command list comes from the backend (GET /api/composer/commands) so
@@ -531,17 +537,150 @@
   }
 
   /* ── data loaders ─────────────────────────────────────────────── */
+  function parentOf(path: string): string {
+    const i = path.lastIndexOf("/");
+    return i === -1 ? "" : path.slice(0, i);
+  }
+
+  /* Merge one level (or a search result) into the flat entry list the panel
+     builds its tree from. Keyed by path so a re-fetch replaces a row instead
+     of doubling it.
+
+     With dirScope set, the response is treated as the COMPLETE contents of
+     that directory: anything still listed under it that the server no longer
+     returns is dropped, along with its subtree. Without that, a file deleted
+     on disk would sit in the panel until a full refresh. */
+  function mergeFiles(incoming: ContextFileEntry[], dirScope?: string) {
+    const byPath = new Map(filesVal.map((f) => [f.path, f]));
+    if (dirScope !== undefined) {
+      const keep = new Set(incoming.map((f) => f.path));
+      for (const p of [...byPath.keys()]) {
+        if (parentOf(p) !== dirScope || keep.has(p)) continue;
+        byPath.delete(p);
+        const prefix = `${p}/`;
+        for (const q of [...byPath.keys()]) if (q.startsWith(prefix)) byPath.delete(q);
+      }
+    }
+    for (const f of incoming) byPath.set(f.path, f);
+    filesVal = [...byPath.values()];
+  }
+
   function loadFiles() {
     filesLoading = true;
     filesLoadError = "";
     run(listFiles(base, sessionId).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => { cwdVal = res.cwd; filesVal = res.files; filesLoading = false; })
+      .then((res) => {
+        cwdVal = res.cwd;
+        // A full reload starts the tree over: anything previously expanded
+        // is re-fetched when it is opened again, so a stale child list can
+        // never outlive the parent it belonged to.
+        filesVal = res.files;
+        loadedDirs = { "": true };
+        filesLoading = false;
+      })
       .catch((e: unknown) => {
         filesLoading = false;
         const msg = e instanceof Error ? e.message : String(e);
         filesLoadError = msg;
         toastError(`Files: ${msg}`);
       });
+  }
+
+  /* Fetch a folder's children the first time it is opened. Re-entrancy is
+     guarded because a double-click on the chevron fires two toggles before
+     the first response lands. */
+  function loadDirChildren(path: string) {
+    if (loadedDirs[path] || loadingDirs[path]) return;
+    loadingDirs = { ...loadingDirs, [path]: true };
+    run(listFiles(base, sessionId, path).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        mergeFiles(res.files, path);
+        loadedDirs = { ...loadedDirs, [path]: true };
+        const { [path]: _drop, ...rest } = loadingDirs;
+        loadingDirs = rest;
+      })
+      .catch((e: unknown) => {
+        const { [path]: _drop, ...rest } = loadingDirs;
+        loadingDirs = rest;
+        toastError(`Open ${path}: ${e instanceof Error ? e.message : String(e)}`);
+      });
+  }
+
+  function toggleDir(path: string) {
+    const opening = !openDirs[path];
+    openDirs = { ...openDirs, [path]: opening };
+    if (opening) loadDirChildren(path);
+  }
+
+  /* Deleting used to re-fetch the whole tree, which collapsed every open
+     folder and threw the scroll position away — so removing one file meant
+     finding your place again. The row is dropped locally instead: the
+     server is the only thing that needs telling, and it has already been
+     told. DELETE_ANIM_MS matches the CSS collapse so the row finishes
+     shrinking before its neighbours close the gap. */
+  const DELETE_ANIM_MS = 160;
+  let deletingPaths = $state<Record<string, boolean>>({});
+
+  function dropFromTree(path: string) {
+    const prefix = `${path}/`;
+    filesVal = filesVal.filter((f) => f.path !== path && !f.path.startsWith(prefix));
+    const nextOpen = { ...openDirs };
+    const nextLoaded = { ...loadedDirs };
+    for (const key of Object.keys(nextOpen)) {
+      if (key === path || key.startsWith(prefix)) delete nextOpen[key];
+    }
+    for (const key of Object.keys(nextLoaded)) {
+      if (key === path || key.startsWith(prefix)) delete nextLoaded[key];
+    }
+    openDirs = nextOpen;
+    loadedDirs = nextLoaded;
+  }
+
+  function removeEntry(path: string) {
+    if (deletingPaths[path]) return;
+    // Start the collapse immediately — the click should look like it landed,
+    // not wait on a round trip.
+    deletingPaths = { ...deletingPaths, [path]: true };
+    const settled = run(deleteFile(base, sessionId, path).pipe(Effect.provide(WickClientLayer)));
+    const animated = new Promise((r) => setTimeout(r, DELETE_ANIM_MS));
+    Promise.all([settled, animated])
+      .then(() => {
+        dropFromTree(path);
+        const { [path]: _gone, ...rest } = deletingPaths;
+        deletingPaths = rest;
+      })
+      .catch((e: unknown) => {
+        // The file is still there, so the row has to come back.
+        const { [path]: _gone, ...rest } = deletingPaths;
+        deletingPaths = rest;
+        toastError(`Delete: ${e instanceof Error ? e.message : String(e)}`);
+      });
+  }
+
+  /* "Subfolders" search runs on the server: the client only holds the levels
+     someone has opened, so filtering in the browser could never find a folder
+     nobody had expanded — which is exactly the search people reach for. */
+  let findTimer: ReturnType<typeof setTimeout> | null = null;
+  function runDeepFind(q: string) {
+    if (findTimer !== null) clearTimeout(findTimer);
+    const term = q.trim();
+    if (term === "") { findTruncated = false; return; }
+    findTimer = setTimeout(() => {
+      run(searchTree(base, sessionId, term).pipe(Effect.provide(WickClientLayer)))
+        .then((res) => {
+          mergeFiles(res.files);
+          findTruncated = res.truncated;
+          // Open the branch down to each hit so the match is visible rather
+          // than hidden behind a collapsed ancestor.
+          const next = { ...openDirs };
+          for (const f of res.files) {
+            const parts = f.path.split("/");
+            for (let i = 1; i < parts.length; i++) next[parts.slice(0, i).join("/")] = true;
+          }
+          openDirs = next;
+        })
+        .catch(() => { /* a failed search leaves the tree as it was */ });
+    }, 250);
   }
 
   // Populate the composer's `/` menu from the backend registry (built-in
@@ -562,11 +701,43 @@
      reloading on every idle SSE heartbeat while the panel is closed just
      hammered GET /files for nothing. */
   let fileReloadTimer: ReturnType<typeof setTimeout> | null = null;
-  function reloadFilesSilently() {
+  /* Refresh only what is on screen: the top level plus every folder the user
+     has opened. Re-walking the whole tree is what this panel stopped doing,
+     and an SSE heartbeat is no reason to start again.
+
+     Strictly ONE request at a time. Firing a level per open folder in
+     parallel turned an ordinary heartbeat into a burst of a dozen
+     simultaneous GETs, which is what produced the intermittent
+     "Transport error (GET …/files)" — the requests were competing with
+     each other, not failing on their own merits. A burst arriving mid-flight
+     re-arms the pass instead of starting a second one. */
+  let filesRefreshing = false;
+  let filesRefreshAgain = false;
+  async function reloadFilesSilently() {
     if (railTab !== "context") return;
-    run(listFiles(base, sessionId).pipe(Effect.provide(WickClientLayer)))
-      .then((res) => { cwdVal = res.cwd; filesVal = res.files; })
-      .catch(() => { /* keep the current tree on a transient failure */ });
+    if (filesRefreshing) { filesRefreshAgain = true; return; }
+    filesRefreshing = true;
+    try {
+      do {
+        filesRefreshAgain = false;
+        const dirs = ["", ...Object.keys(openDirs).filter((p) => openDirs[p] && loadedDirs[p])];
+        for (const dir of dirs) {
+          // A folder deleted (or closed) while the pass was walking is no
+          // longer worth a request.
+          if (dir !== "" && !openDirs[dir]) continue;
+          try {
+            const res = await run(listFiles(base, sessionId, dir).pipe(Effect.provide(WickClientLayer)));
+            if (dir === "") cwdVal = res.cwd;
+            mergeFiles(res.files, dir);
+            loadedDirs = { ...loadedDirs, [dir]: true };
+          } catch {
+            /* keep the current tree on a transient failure */
+          }
+        }
+      } while (filesRefreshAgain);
+    } finally {
+      filesRefreshing = false;
+    }
   }
   function scheduleFileReload() {
     if (railTab !== "context") return; // nothing renders the tree — skip the fetch
@@ -1114,8 +1285,17 @@
     const path = parentDir ? `${parentDir}/${name}` : name;
     run(createFile(base, sessionId, path, isDir).pipe(Effect.provide(WickClientLayer)))
       .then(() => {
+        // Refresh only the level it landed in. A full reload would collapse
+        // every open folder and lose the scroll position, which is a lot of
+        // disruption for one new file.
+        const dir = parentDir ?? "";
         if (parentDir) openDirs = { ...openDirs, [parentDir]: true };
-        loadFiles();
+        run(listFiles(base, sessionId, dir).pipe(Effect.provide(WickClientLayer)))
+          .then((res) => {
+            mergeFiles(res.files, dir);
+            loadedDirs = { ...loadedDirs, [dir]: true };
+          })
+          .catch(() => loadFiles());
       })
       .catch((e: unknown) => toastError(`Create: ${e instanceof Error ? e.message : String(e)}`));
   }
@@ -2044,20 +2224,21 @@
           files={filesVal}
           search={fileSearch}
           {openDirs}
+          {loadedDirs}
+          {loadingDirs}
+          {deletingPaths}
+          {findTruncated}
+          onFind={(fq) => runDeepFind(fq)}
           loading={filesLoading}
           loadError={filesLoadError}
           onSearch={(s) => { fileSearch = s; }}
-          onToggleDir={(p) => { openDirs = { ...openDirs, [p]: !openDirs[p] }; }}
+          onToggleDir={toggleDir}
           onOpen={openFile}
           onRefresh={loadFiles}
           onNewFile={() => createEntry(false)}
           onNewDir={() => createEntry(true)}
           onDownload={(p) => { window.open(downloadURL(base, sessionId, p), "_blank"); }}
-          onDelete={(p) => {
-            run(deleteFile(base, sessionId, p).pipe(Effect.provide(WickClientLayer)))
-              .then(loadFiles)
-              .catch((e: unknown) => toastError(`Delete: ${e instanceof Error ? e.message : String(e)}`));
-          }}
+          onDelete={removeEntry}
           onNewHere={(dir) => createEntry(false, dir)}
         />
       {:else if railTab === "process"}
@@ -2221,20 +2402,21 @@
               files={filesVal}
               search={fileSearch}
               {openDirs}
+              {loadedDirs}
+              {loadingDirs}
+              {deletingPaths}
+              {findTruncated}
+              onFind={(fq) => runDeepFind(fq)}
               loading={filesLoading}
               loadError={filesLoadError}
               onSearch={(s) => { fileSearch = s; }}
-              onToggleDir={(p) => { openDirs = { ...openDirs, [p]: !openDirs[p] }; }}
+              onToggleDir={toggleDir}
               onOpen={openFile}
               onRefresh={loadFiles}
               onNewFile={() => createEntry(false)}
               onNewDir={() => createEntry(true)}
               onDownload={(p) => { window.open(downloadURL(base, sessionId, p), "_blank"); }}
-              onDelete={(p) => {
-                run(deleteFile(base, sessionId, p).pipe(Effect.provide(WickClientLayer)))
-                  .then(loadFiles)
-                  .catch((e: unknown) => toastError(`Delete: ${e instanceof Error ? e.message : String(e)}`));
-              }}
+              onDelete={removeEntry}
               onNewHere={(dir) => createEntry(false, dir)}
             />
           {:else if railTab === "process"}

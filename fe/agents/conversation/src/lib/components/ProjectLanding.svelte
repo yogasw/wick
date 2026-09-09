@@ -4,7 +4,7 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { createSessionInProject, getPresetOptions, getProviderOptionModels } from "../api/options.js";
-  import { searchProjectFiles } from "../api/files.js";
+  import { searchProjectMentionPaths } from "../api/files.js";
   import { listComposerCommands } from "../api/composer.js";
   import {
     attachSession,
@@ -140,7 +140,7 @@
 
   // `@` searches THIS project's folder; `/` shows skills only (pre-session).
   function searchMentionFiles(query: string): Promise<string[]> {
-    return Effect.runPromise(searchProjectFiles(base, project.id, query).pipe(Effect.provide(WickClientLayer)))
+    return Effect.runPromise(searchProjectMentionPaths(base, project.id, query).pipe(Effect.provide(WickClientLayer)))
       .catch(() => [] as string[]);
   }
   let composerCommands = $state<ComposerCommand[]>([]);

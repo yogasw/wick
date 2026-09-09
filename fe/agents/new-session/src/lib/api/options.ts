@@ -90,9 +90,9 @@ export const getProjectOptions = (base: string) =>
 
 /* Project-scoped @-mention file search — the session cwd IS the project folder,
    so the new-session composer can browse it before the session exists. */
-export const searchProjectFiles = (base: string, projectId: string, q: string, limit = 30) =>
+export const searchProjectMentionPaths = (base: string, projectId: string, q: string, limit = 30) =>
   apiGetE<{ files: string[] }>(
-    `${base}/api/projects/${projectId}/files/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    `${base}/api/projects/${projectId}/files/mentions?q=${encodeURIComponent(q)}&limit=${limit}`,
   ).pipe(Effect.map((r) => r.files ?? []));
 
 export type ComposerApiCommand = {

@@ -295,14 +295,23 @@ The panel is the single place to inspect what the agent has actually written, wi
 
 | Action | How |
 |---|---|
-| **Browse** | Folder tree, click a directory to expand. Filter box does substring match on the full relative path. |
+| **Browse** | Folder tree, **loaded one level at a time**. Opening the panel fetches the cwd's own children; clicking a folder fetches that folder's, and an opened folder shows its contents as `12 folders · 43 files` (or `empty`) beside its name. Sort by name / recent / type — folders always first. |
 | **Read** | Click a file → opens a modal with preview tab. Markdown gets sanitized HTML (via `marked` + `DOMPurify`), HTML renders in a sandboxed iframe (`sandbox="allow-scripts"`, no same-origin), images / PDFs render inline, plain text shows in a `<pre>`. Binary files and files over 2 MiB show a "download instead" affordance. |
 | **Edit** | Switch to the Edit tab — Ace editor mounts with syntax mode picked from the file extension (JS, Go, MD, HTML, CSS, JSON, YAML, Python, etc). Save writes back to disk. |
 | **Download** | Per-row download icon or modal header button. Filename in `Content-Disposition` is stripped of CR/LF/quote/backslash to defend against header injection. |
 | **Create** | `+ file` and `+ folder` icons in the panel header, plus a "new file here" icon on hover of each folder row. |
-| **Delete** | Per-row trash icon. Folders recurse. The session `cwd` itself is refused. |
+| **Search** | Filter box, two modes. Default matches names **at the level you are looking at**, like a file manager's filter. The **Subfolders** toggle sends the query to the server instead, which walks the whole tree and returns **folders as well as files**, opening the branch down to each hit. |
+| **Delete** | Per-row trash icon. Folders recurse. The session `cwd` itself is refused. The row collapses in place and its neighbours slide up — the tree is not re-fetched, so nothing you had open closes and the scroll position stays put. |
 
-Heavy build artifact directories (`node_modules`, `.git`, `.venv`, `__pycache__`, `dist`, `build`, `target`, `.cache`, `.next`) are pruned from the walk and the listing caps at 5000 entries so the panel stays responsive on large projects.
+Heavy build artifact directories (`node_modules`, `.git`, `.venv`, `__pycache__`, `dist`, `build`, `target`, `.cache`, `.next`) are pruned from every walk.
+
+::: tip Why one level at a time
+The panel used to fetch the entire tree depth-first and cut the result off at 5000 entries. That is fine for a session holding one repository and quietly wrong for one holding many: the budget is spent in alphabetical order, so the first few repos consume it and every later top-level entry is never sent at all.
+
+A session with 55 clones showed 98 of its 410 top-level entries — the walk died inside `chatnshop/vendor`, and a folder as ordinary as `wick` looked like it had never been cloned, with nothing in the UI to say otherwise.
+
+Loading a level at a time removes the shared budget entirely. The 5000 cap still exists but now applies to a **single directory**, which no real folder reaches, and depth costs one extra request instead of everyone else's visibility.
+:::
 
 ### Sandbox
 

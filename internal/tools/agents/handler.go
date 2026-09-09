@@ -266,6 +266,7 @@ func Register(r tool.Router) {
 
 	r.GET("/sessions/{id}/files", sessionContextList)
 	r.GET("/sessions/{id}/files/search", sessionContextSearch)
+	r.GET("/sessions/{id}/files/mentions", sessionContextMentions)
 	r.GET("/sessions/{id}/processes", sessionProcesses)
 	r.GET("/sessions/{id}/files/read", sessionContextRead)
 	r.GET("/sessions/{id}/files/download", sessionContextDownload)
@@ -332,7 +333,7 @@ func Register(r tool.Router) {
 
 	// JSON API — project-settings SPA endpoints.
 	r.GET("/api/projects/{id}", apiProjectDetail)
-	r.GET("/api/projects/{id}/files/search", projectFileSearch)
+	r.GET("/api/projects/{id}/files/mentions", projectFileMentions)
 	r.POST("/api/projects/{id}", apiProjectUpdate)
 
 	// JSON API — tickets. A ticket is its own entity holding many
