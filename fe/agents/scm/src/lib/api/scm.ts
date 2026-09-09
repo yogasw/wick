@@ -135,11 +135,44 @@ export const switchBranch = (id: string, repo: string, branch: string) =>
 export const createBranch = (id: string, repo: string, branch: string, checkout: boolean) =>
   apiPost(`${s(id)}/branch/create`, { repo, branch, checkout });
 
-export const push = (id: string, repo: string) =>
-  apiPost<{ output: string }>(`${s(id)}/push`, { repo });
+// push/pull run through a Git CLI connector when one is chosen for the
+// repo — that is where the credentials and the branch policy live.
+// connector_id is only sent by the picker, on the first push in a repo;
+// after that the session remembers it.
+export const push = (id: string, repo: string, connectorID?: string) =>
+  apiPost<{ output: string; connector_id?: string }>(`${s(id)}/push`, {
+    repo,
+    connector_id: connectorID ?? "",
+  });
 
-export const pull = (id: string, repo: string) =>
-  apiPost<{ output: string }>(`${s(id)}/pull`, { repo });
+export const pull = (id: string, repo: string, connectorID?: string) =>
+  apiPost<{ output: string; connector_id?: string }>(`${s(id)}/pull`, {
+    repo,
+    connector_id: connectorID ?? "",
+  });
+
+export type GitConnector = {
+  id: string;
+  label: string;
+  author?: string;
+  /** The connector whose label names the remote's host — a guess, since
+      the connector stores a credential, not a host. */
+  suggested?: boolean;
+};
+
+export type GitConnectorsResponse = {
+  repo: string;
+  remote_url?: string;
+  remote_host?: string;
+  selected?: string;
+  candidates: GitConnector[];
+};
+
+export const getGitConnectors = (id: string, repo: string) =>
+  apiGet<GitConnectorsResponse>(`${s(id)}/connectors?repo=${q(repo)}`);
+
+export const setGitConnector = (id: string, repo: string, connectorID: string) =>
+  apiPost<{ ok: boolean }>(`${s(id)}/connectors`, { repo, connector_id: connectorID });
 
 export const saveFile = (id: string, repo: string, path: string, content: string) =>
   apiPost(`${s(id)}/file`, { repo, path, content });

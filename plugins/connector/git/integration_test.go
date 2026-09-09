@@ -366,15 +366,14 @@ func TestIntegrationFetchAndPullFromLocalRemote(t *testing.T) {
 		t.Errorf("fetch envelope does not report the effective remote: %v", e["remote"])
 	}
 
-	// pull DOES integrate into the current branch, so on a protected branch it is
-	// correctly refused. This is the asymmetry between fetch and pull, and it is
-	// worth pinning: it would be easy to "fix" pull into allowing this.
+	// pull integrates into the current branch, but only to make it match the
+	// remote it already tracks — nothing anyone else sees changes, and the
+	// commit and push that WOULD change it stay refused. Protecting a branch
+	// must not mean you can never sync it: that leaves master permanently
+	// stale locally while protecting nothing.
 	e = env(doPull(opCtx(cfg, map[string]string{"repo_path": consumer, "remote": "origin"})))
-	if e["ok"] != false {
-		t.Fatalf("pull onto protected branch main succeeded: %v", e)
-	}
-	if reason, _ := policyOf(t, e)["reason"].(string); !strings.Contains(reason, "protected") {
-		t.Errorf("reason = %q, want it to name the protected branch", reason)
+	if e["ok"] != true {
+		t.Fatalf("pull onto protected branch main was refused: %v", e)
 	}
 
 	// On an unprotected branch the same pull goes through, proving the refusal

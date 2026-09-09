@@ -20,6 +20,8 @@ func registerSCM(r tool.Router) {
 	r.GET("/api/sessions/{id}/git/repos", gitRepos)
 	r.GET("/api/sessions/{id}/git/active", gitActiveRepo)
 	r.POST("/api/sessions/{id}/git/active", gitSetActiveRepo)
+	r.GET("/api/sessions/{id}/git/connectors", gitConnectors)
+	r.POST("/api/sessions/{id}/git/connectors", setGitConnector)
 	r.GET("/api/sessions/{id}/git/status", gitStatus)
 	r.GET("/api/sessions/{id}/git/diff", gitDiff)
 	r.GET("/api/sessions/{id}/git/file", gitReadFile)
@@ -487,6 +489,14 @@ type repoOnlyReq struct {
 	Repo string `json:"repo"`
 }
 
+// gitNetworkReq is repoOnlyReq plus the connector a push or pull runs
+// through. connector_id is what the picker sends on the first push in a
+// repo; afterwards the session remembers it and the field is empty.
+type gitNetworkReq struct {
+	Repo        string `json:"repo"`
+	ConnectorID string `json:"connector_id"`
+}
+
 // resolveBodyRepo resolves a repo handle taken from a JSON body field.
 func resolveBodyRepo(c *tool.Ctx, repo string) (dir string, ok bool) {
 	cwd, ok := sessionCwd(c)
@@ -612,40 +622,70 @@ func gitBranchCreate(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"status": "created", "branch": req.Branch})
 }
 
-func gitPush(c *tool.Ctx) {
-	var req repoOnlyReq
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
-		return
-	}
-	dir, ok := resolveBodyRepo(c, req.Repo)
-	if !ok {
-		return
-	}
-	out, err := scm.Push(c.Context(), dir)
-	if err != nil {
-		gitErr(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, map[string]any{"status": "pushed", "output": out})
-}
+// gitPush and gitPull run through a Git CLI connector when one is
+// chosen for the repo — that is where the credentials, the branch
+// policy and the audit trail live. Plain git remains the path when
+// nothing is chosen, which only reaches a remote that needs no
+// credential; the panel asks before it pushes as anybody.
+func gitPush(c *tool.Ctx) { gitNetworkOp(c, "push") }
 
-func gitPull(c *tool.Ctx) {
-	var req repoOnlyReq
+func gitPull(c *tool.Ctx) { gitNetworkOp(c, "pull") }
+
+func gitNetworkOp(c *tool.Ctx, op string) {
+	var req gitNetworkReq
 	if err := c.BindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	dir, ok := resolveBodyRepo(c, req.Repo)
+	sess, cwd, ok := sessionAndCwd(c)
 	if !ok {
 		return
 	}
-	out, err := scm.Pull(c.Context(), dir)
+	rel := strings.TrimSpace(req.Repo)
+	if rel == "" {
+		sel, err := scm.ResolveSelection(cwd, sess.Meta.ScmRepo)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		rel = sel.Rel
+	}
+	dir, err := scm.ResolveRepoDir(cwd, rel)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid repo: " + err.Error()})
+		return
+	}
+	status := "pushed"
+	if op == "pull" {
+		status = "pulled"
+	}
+
+	connID, cErr := resolveGitConnector(c, sess, req.ConnectorID)
+	if cErr != nil {
+		c.JSON(http.StatusForbidden, map[string]string{"error": cErr.Error()})
+		return
+	}
+	if connID != "" {
+		out, cerr := runGitConnectorOp(c, connID, op, map[string]string{"repo_path": dir})
+		if cerr != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": cerr.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, map[string]any{"status": status, "output": out, "connector_id": connID})
+		return
+	}
+
+	var out string
+	if op == "pull" {
+		out, err = scm.Pull(c.Context(), dir)
+	} else {
+		out, err = scm.Push(c.Context(), dir)
+	}
 	if err != nil {
 		gitErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, map[string]any{"status": "pulled", "output": out})
+	c.JSON(http.StatusOK, map[string]any{"status": status, "output": out})
 }
 
 func gitWriteFile(c *tool.Ctx) {
