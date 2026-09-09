@@ -15,6 +15,30 @@
     if (!q) return repos;
     return repos.filter((r) => r.name.toLowerCase().includes(q) || r.rel.toLowerCase().includes(q));
   });
+
+  let listEl = $state<HTMLDivElement | null>(null);
+
+  /* Bring the selected repo into view. The list shows ~5 rows of what can be
+     dozens of repos AND starts collapsed, so expanding it lands at scroll 0
+     with the active repo almost always off-screen — the selection was there,
+     just invisible until you scrolled for it.
+
+     Re-runs on open, on a new selection, and after the search filter changes
+     the rows. block:"nearest" scrolls the list only as far as it must and
+     never moves the surrounding panel. The row is looked up by data-active
+     rather than bound per-row, which keeps this out of the each block. */
+  $effect(() => {
+    if (!open) return;
+    void activeRepo;
+    void query;
+    void filtered.length;
+    const root = listEl;
+    if (!root) return;
+    requestAnimationFrame(() => {
+      // Absent when the search box filtered the selection out — nothing to do.
+      root.querySelector<HTMLElement>('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+    });
+  });
 </script>
 
 <div class="border-b border-white-300 dark:border-navy-600">
@@ -35,7 +59,7 @@
       </div>
     {/if}
     <!-- Cap at ~5 rows; longer lists scroll instead of pushing the panel down. -->
-    <div class="max-h-[150px] overflow-y-auto pb-1">
+    <div bind:this={listEl} class="max-h-[150px] overflow-y-auto pb-1">
       {#if filtered.length === 0}
         <p class="px-3 py-2 text-xs text-black-700 dark:text-black-600">No repositories match.</p>
       {/if}
@@ -43,10 +67,22 @@
         <button
           type="button"
           onclick={() => onSelect(r.rel)}
+          data-active={activeRepo === r.rel}
+          aria-current={activeRepo === r.rel ? "true" : undefined}
+          title={activeRepo === r.rel ? `${r.name} — current source` : r.name}
           class={"flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors " +
-            (activeRepo === r.rel ? "bg-green-100 dark:bg-green-900/30" : "hover:bg-white-200 dark:hover:bg-navy-800")}
+            (activeRepo === r.rel
+              ? "bg-green-100 dark:bg-green-900/30 border-l-2 border-green-500"
+              : "border-l-2 border-transparent hover:bg-white-200 dark:hover:bg-navy-800")}
         >
-          <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 text-black-600" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 6h12" stroke-linecap="round"/></svg>
+          <!-- The selected row swaps the repo glyph for a check in the accent
+               colour: the background tint alone is easy to miss while scanning,
+               and it disappears entirely against a hover on a neighbouring row. -->
+          {#if activeRepo === r.rel}
+            <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zm3.1 4.9l-3.6 4.2a.75.75 0 01-1.1.04L4.9 9.1a.75.75 0 011.06-1.06l1 1 3.1-3.6a.75.75 0 011.14.98z"/></svg>
+          {:else}
+            <svg viewBox="0 0 16 16" class="h-3.5 w-3.5 shrink-0 text-black-600" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M2 6h12" stroke-linecap="round"/></svg>
+          {/if}
           <span class={"min-w-0 flex-1 truncate text-xs font-medium " + (activeRepo === r.rel ? "text-black-900 dark:text-white-100" : "text-black-800 dark:text-black-600")}>{r.name}</span>
           {#if r.branch}
             <span class="flex shrink-0 items-center gap-0.5 text-[10px] text-black-600 dark:text-black-700">
