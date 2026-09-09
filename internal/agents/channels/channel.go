@@ -206,6 +206,37 @@ type Channel interface {
 // SendFuncSetter receives the pool dispatch closure.
 type SendFuncSetter interface{ SetSendFunc(SendFunc) }
 
+// BotNamer reports the display name of the bot an instance runs as
+// ("Ygsw Bot", "@wick_bot"). Empty when the instance has no bot concept
+// or has not resolved one yet.
+//
+// Implement it and every channel picker in the UI labels this instance
+// as "<Channel> - <bot name> - <owner>" instead of the bare channel type
+// — which is unusable once one channel type runs several instances.
+type BotNamer interface{ BotUserName() string }
+
+// IdentityCache is the seam that keeps a bot identity across restarts.
+// Resolving it costs a provider round trip (Slack auth.test, Telegram
+// getMe) and the answer changes about never, so wick stores it on the
+// instance's own agent_channels row and hands it back at boot.
+//
+// A channel implements the three methods; the setup composer wires the
+// persistence generically, so a NEW transport gets caching (and named
+// picker rows) without touching setup, the workflow catalog, or the
+// palette:
+//
+//   - BotIdentity   — what the instance knows right now.
+//   - SeedIdentity  — hand it the cached values before it connects.
+//   - SetIdentitySink — callback fired whenever it resolves fresh ones.
+//
+// workspace is the provider's account/team/workspace name where that
+// exists (Slack team), empty otherwise.
+type IdentityCache interface {
+	BotIdentity() (botUserID, botName, workspace string)
+	SeedIdentity(botUserID, botName, workspace string)
+	SetIdentitySink(fn func(botUserID, botName, workspace string))
+}
+
 // SessionCheckerSetter receives the session-exists probe.
 type SessionCheckerSetter interface{ SetSessionChecker(SessionChecker) }
 

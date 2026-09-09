@@ -266,3 +266,26 @@ func TriggerPayload(ctx context.Context) map[string]any {
 	p, _ := ctx.Value(triggerPayloadKey{}).(map[string]any)
 	return p
 }
+
+type channelInstanceKey struct{}
+
+// WithChannelInstance returns ctx carrying the instance a node pinned its
+// action to ("slack:<user-id>"). Set by the channel executor from the
+// node's channel_instance field; empty string is stored as absent.
+//
+// This is what makes a picker with several same-type instances honest: a
+// run without it falls back to "whichever bot saw the event, else the
+// first registered", which is a coin flip for a cron or manual run.
+func WithChannelInstance(ctx context.Context, instanceKey string) context.Context {
+	if instanceKey == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, channelInstanceKey{}, instanceKey)
+}
+
+// ChannelInstance returns the instance key the running node pinned, or ""
+// when it pinned none.
+func ChannelInstance(ctx context.Context) string {
+	k, _ := ctx.Value(channelInstanceKey{}).(string)
+	return k
+}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	wf "github.com/yogasw/wick/internal/agents/workflow"
+	wfchannel "github.com/yogasw/wick/internal/agents/workflow/channel"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/agents/workflow/mcp"
 	"github.com/yogasw/wick/internal/agents/workflow/parse"
@@ -344,6 +346,106 @@ func triggerLabel(t string) string {
 	return string(out)
 }
 
+// channelPickerLabel is the PRIMARY text of a channel picker row — just
+// the channel, e.g. "Slack".
+//
+// Which bot and whose row it is travel separately (bot_name /
+// owner_name, palette meta/owner) so the UI can render them as muted
+// secondary text. Chaining them into one "Slack - Ygsw - Yoga Setiawan"
+// string reads badly and runs out of room the moment a bot or a person
+// has a long name.
+func channelPickerLabel(channelType string) string {
+	return triggerLabel(channelType)
+}
+
+// channelOwnerLabel resolves an instance owner to the name a picker row
+// shows. The App Owner row (no user id) is labelled as such; an unknown
+// id falls back to the id so the row still says something specific.
+func channelOwnerLabel(names map[string]string, ownerUserID string) string {
+	if ownerUserID == "" {
+		return "App Owner"
+	}
+	if n := names[ownerUserID]; n != "" {
+		return n
+	}
+	return ownerUserID
+}
+
+// channelOwnerNames maps wick user id → display name so a channel
+// instance can say whose it is. Falls back to the email, then the raw id,
+// so a row never renders as a bare UUID when a name is missing.
+func channelOwnerNames() map[string]string {
+	out := map[string]string{}
+	if globalDB == nil {
+		return out
+	}
+	var users []entity.User
+	if err := globalDB.Select("id", "name", "email").Find(&users).Error; err != nil {
+		log.Warn().Err(err).Msg("agents: loading channel owner names failed")
+		return out
+	}
+	for _, u := range users {
+		switch {
+		case u.Name != "":
+			out[u.ID] = u.Name
+		case u.Email != "":
+			out[u.ID] = u.Email
+		default:
+			out[u.ID] = u.ID
+		}
+	}
+	return out
+}
+
+// sortOwnChannelsFirst puts the caller's own instances at the top of each
+// channel type, so the editor's default pick ("the first row of this
+// type") is the user's own bot rather than whichever registered first.
+func sortOwnChannelsFirst(rows []wfchannel.Info, me string) []wfchannel.Info {
+	out := make([]wfchannel.Info, 0, len(rows))
+	for _, r := range rows {
+		if r.OwnerUserID == me {
+			out = append(out, r)
+		}
+	}
+	for _, r := range rows {
+		if r.OwnerUserID != me {
+			out = append(out, r)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// visibleChannelInstances narrows the per-instance channel rows to the
+// ONE row per channel type the CURRENT user should pick from.
+//
+// One Slack bot is registered per owning user, so listing every instance
+// gives five rows that all read "slack" and all store the same value —
+// the user cannot tell which is theirs, and picking a different row
+// changes nothing. A node stores the channel TYPE, so one row per type is
+// the honest shape.
+//
+// Which instance labels that row: the caller's own if they have one,
+// otherwise the first registered — which is also the instance the engine
+// falls back to when a run has no triggering bot to resolve from.
+func visibleChannelInstances(rows []wfchannel.Info, me string) []wfchannel.Info {
+	out := make([]wfchannel.Info, 0, len(rows))
+	at := map[string]int{}
+	for _, r := range rows {
+		i, seen := at[r.Name]
+		if !seen {
+			at[r.Name] = len(out)
+			out = append(out, r)
+			continue
+		}
+		// Own instance wins over whichever happened to register first.
+		if r.OwnerUserID == me && out[i].OwnerUserID != me {
+			out[i] = r
+		}
+	}
+	return out
+}
+
 // workflowRegistryAPI returns JSON catalog the editor uses to hydrate
 // pickers (channels, channel ops, connectors, providers).
 func workflowRegistryAPI(c *tool.Ctx) {
@@ -351,7 +453,13 @@ func workflowRegistryAPI(c *tool.Ctx) {
 		return
 	}
 	channels := []map[string]any{}
-	for _, info := range globalWorkflowMgr.MCP.ChannelsList() {
+	me := currentUserIDForChannel(c)
+	ownerNames := channelOwnerNames()
+	// The catalog carries EVERY registered instance (the editor picks which
+	// to show — its own by default, plus whatever a node already pinned),
+	// with the caller's own instances first.
+	rows := sortOwnChannelsFirst(globalWorkflowMgr.MCP.ChannelsList(), me)
+	for _, info := range rows {
 		actionDescs := map[string]integration.ActionDescriptor{}
 		for _, ad := range globalWorkflowMgr.Integration.ActionsByChannel(info.Name) {
 			actionDescs[ad.Action] = ad
@@ -380,8 +488,16 @@ func workflowRegistryAPI(c *tool.Ctx) {
 				"match_schema": ev.MatchSchema,
 			})
 		}
+		ownerName := channelOwnerLabel(ownerNames, info.OwnerUserID)
 		channels = append(channels, map[string]any{
 			"name":             info.Name,
+			"label":            channelPickerLabel(info.Name),
+			"instance_key":     info.InstanceKey,
+			"owner_user_id":    info.OwnerUserID,
+			"owner_name":       ownerName,
+			"bot_name":         info.BotName,
+			"mine":             info.OwnerUserID == me,
+			"configured":       info.Configured,
 			"supports_session": info.SupportsSession,
 			"ops":              ops,
 			"events":           events,

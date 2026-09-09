@@ -478,6 +478,15 @@ func MatchTrigger(tr workflow.Trigger, evt workflow.Event) bool {
 func triggerPassesRouterChecks(wfID string, tr workflow.Trigger, evt workflow.Event) bool {
 	switch tr.Type {
 	case workflow.TriggerChannel:
+		// A trigger pinned to one instance ignores the other bots of the
+		// same channel type. Events from a channel that doesn't stamp an
+		// instance still pass — pinning is opt-in, and an unstamped event
+		// must not silently stop firing an existing trigger.
+		if tr.ChannelInstance != "" {
+			if got := payloadString(evt, "channel_instance"); got != "" && got != tr.ChannelInstance {
+				return false
+			}
+		}
 		if tr.Target != "" {
 			gotChannel := payloadString(evt, "channel_id")
 			if gotChannel == "" {

@@ -384,7 +384,29 @@
     document.getElementById("app")?.dataset.scmAsset ??
     document.querySelector<HTMLElement>("[data-scm-asset]")?.dataset.scmAsset ??
     "";
-  let scmChangeCount = $state(0);
+  // Per-repo change counts from the last git_status snapshot, plus which
+  // repo the SCM panel has open. A session can hold dozens of repos, so
+  // the session-wide total pinned the badge at "99+" and said nothing
+  // about the repo actually being worked on — the badge follows the
+  // selected repo and only falls back to the total when none is picked.
+  let scmChangedByRepo = $state<Record<string, number>>({});
+  let scmTotalChanged = $state(0);
+  let scmActiveRepo = $state(readScmActiveRepo());
+  const scmChangeCount = $derived(
+    scmActiveRepo && scmActiveRepo in scmChangedByRepo
+      ? scmChangedByRepo[scmActiveRepo]
+      : scmTotalChanged,
+  );
+
+  let scmCleanup: (() => void) | null = null;
+
+  function readScmActiveRepo(): string {
+    try {
+      return localStorage.getItem(`wick.scm.activeRepo.${sessionId}`) ?? "";
+    } catch {
+      return "";
+    }
+  }
   let scmHostEl: HTMLElement | undefined = $state(undefined);
   let scmHostMobileEl: HTMLElement | undefined = $state(undefined);
   let scmMounted = false;
@@ -1189,8 +1211,16 @@
         scheduleFileReload();
       } else if (ev.type === "git_status") {
         try {
-          const d = JSON.parse(ev.data ?? "{}") as { total_changed?: number };
-          if (typeof d.total_changed === "number") scmChangeCount = d.total_changed;
+          const d = JSON.parse(ev.data ?? "{}") as {
+            total_changed?: number;
+            repos?: { rel: string; changed: number }[];
+          };
+          if (typeof d.total_changed === "number") scmTotalChanged = d.total_changed;
+          if (Array.isArray(d.repos)) {
+            scmChangedByRepo = Object.fromEntries(
+              d.repos.map((r) => [r.rel, r.changed ?? 0]),
+            );
+          }
         } catch (_) { /* skip */ }
         scheduleFileReload();
       }
@@ -1363,6 +1393,21 @@
     setFileContext(base, sessionId);
     loadConversation(true);
 
+    // The SCM panel lives in its own bundle; it announces a repo switch
+    // on the window (and via localStorage for other tabs).
+    const onScmRepo = (e: Event) => {
+      scmActiveRepo = String((e as CustomEvent).detail ?? "");
+    };
+    const onScmStorage = (e: StorageEvent) => {
+      if (e.key === `wick.scm.activeRepo.${sessionId}`) scmActiveRepo = e.newValue ?? "";
+    };
+    window.addEventListener("wick:scm-active-repo", onScmRepo);
+    window.addEventListener("storage", onScmStorage);
+    scmCleanup = () => {
+      window.removeEventListener("wick:scm-active-repo", onScmRepo);
+      window.removeEventListener("storage", onScmStorage);
+    };
+
     run(getSessionMeta(base, sessionId).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
         title = res.label || res.id;
@@ -1428,6 +1473,7 @@
   }
 
   onDestroy(() => {
+    scmCleanup?.();
     if (fileReloadTimer !== null) clearTimeout(fileReloadTimer);
     if (processReloadTimer !== null) clearTimeout(processReloadTimer);
     document.removeEventListener("visibilitychange", handleResync);

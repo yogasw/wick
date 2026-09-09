@@ -48,7 +48,7 @@ func RegisterSlackIntegration(intReg *integration.Registry, base *agentchannels.
 		if first == nil {
 			first = slackCh
 		}
-		AttachSlackWorkflowSink(slackCh, router)
+		AttachSlackWorkflowSinkKeyed(slackCh, router, base.InstanceKeyOf(ch))
 	}
 	if first == nil {
 		return
@@ -73,12 +73,26 @@ func RegisterSlackIntegration(intReg *integration.Registry, base *agentchannels.
 // tell WHICH bot saw the event when several are connected to the same
 // workspace.
 func AttachSlackWorkflowSink(ch *agentslack.Channel, router *trigger.Router) {
+	AttachSlackWorkflowSinkKeyed(ch, router, "")
+}
+
+// AttachSlackWorkflowSinkKeyed is AttachSlackWorkflowSink plus the
+// registry instance key of this bot, stamped into every event as
+// channel_instance. A trigger pinned to one instance compares against
+// it, so two bots in the same workspace no longer both fire a workflow
+// that was wired to one of them.
+func AttachSlackWorkflowSinkKeyed(ch *agentslack.Channel, router *trigger.Router, instanceKey string) {
 	if ch == nil || router == nil {
 		return
 	}
 	ch.SetWorkflowEventSink(func(ctx context.Context, event string, payload map[string]any) {
 		if payload == nil {
 			payload = map[string]any{}
+		}
+		if instanceKey != "" {
+			if _, ok := payload["channel_instance"]; !ok {
+				payload["channel_instance"] = instanceKey
+			}
 		}
 		if _, ok := payload["bot_user_id"]; !ok {
 			payload["bot_user_id"] = ch.BotUserID()
@@ -104,12 +118,21 @@ func AttachSlackWorkflowSink(ch *agentslack.Channel, router *trigger.Router) {
 // identity the user never talked to, and in a private channel the other
 // bot isn't in it fails outright with not_in_channel.
 //
+// A node that PINNED an instance (channel_instance) wins over the
+// payload: the editor showed exactly which bot the row was, so the run
+// must use it — and a cron or manual run carries no bot at all.
+//
 // Falls back to `fallback` when the run has no Slack trigger (manual,
 // cron, webhook) or when the recorded bot is no longer registered — an
 // action that used to work must not start erroring because the payload
 // lacks a key.
 func SlackInstancePicker(base *agentchannels.Registry, fallback *agentslack.Channel) slackwf.ChannelPicker {
 	return func(ctx context.Context) *agentslack.Channel {
+		if key := integration.ChannelInstance(ctx); key != "" {
+			if ch, ok := base.ChannelByKey(key).(*agentslack.Channel); ok && ch != nil {
+				return ch
+			}
+		}
 		botID, _ := integration.TriggerPayload(ctx)["bot_user_id"].(string)
 		if inst := agentslack.InstanceForBot(base, botID); inst != nil {
 			return inst
