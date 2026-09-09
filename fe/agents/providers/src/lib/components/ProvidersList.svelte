@@ -22,7 +22,7 @@
   } from "$lib/api.js";
   import type { ProvidersListResponse, ProviderStatusDTO, ProviderConnection } from "$lib/types.js";
   import UsageRings from "$lib/components/UsageRings.svelte";
-  import { pickWindows, connectionKey } from "$lib/usagerings.js";
+  import { pickWindows, connectionKey, resetHint } from "$lib/usagerings.js";
 
   const HOOK_EVENT = "PreToolUse";
 
@@ -609,13 +609,25 @@
                     {/if}
                   </div>
                   {#if rings.inner || rings.outer}
+                    <!-- "5h 42% ↻3h": window, usage, and how long until it
+                         resets. The ↻ is what separates the reset time from
+                         the window's own length — "5h … 3h" side by side is
+                         ambiguous without it — and the title spells it out.
+                         Date.now() is re-read on the list's 4s poll, so the
+                         countdown never sits stale. -->
                     <div class="flex items-center gap-3 text-xs text-black-700 dark:text-black-600">
-                      {#if rings.inner}
-                        <span>5h <span class="font-medium text-black-900 dark:text-white-100">{Math.round(rings.inner.utilization)}%</span></span>
-                      {/if}
-                      {#if rings.outer}
-                        <span>7d <span class="font-medium text-black-900 dark:text-white-100">{Math.round(rings.outer.utilization)}%</span></span>
-                      {/if}
+                      {#each [{ w: rings.inner, tag: "5h" }, { w: rings.outer, tag: "7d" }] as slot (slot.tag)}
+                        {#if slot.w}
+                          {@const reset = resetHint(slot.w, Date.now())}
+                          <span class="inline-flex items-baseline gap-1 whitespace-nowrap">
+                            {slot.tag}
+                            <span class="font-medium text-black-900 dark:text-white-100">{Math.round(slot.w.utilization)}%</span>
+                            {#if reset.short}
+                              <span class="text-black-600 dark:text-black-700" title={reset.full} aria-label={reset.full}>↻{reset.short}</span>
+                            {/if}
+                          </span>
+                        {/if}
+                      {/each}
                     </div>
                   {:else if conn.usageErr}
                     <p class="font-mono text-xs text-black-700 dark:text-black-600 truncate">usage unavailable: {conn.usageErr}</p>

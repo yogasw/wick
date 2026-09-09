@@ -4,7 +4,7 @@
      7-day window. Sized for a card badge, so it carries no text of its
      own — the percentages live in the accessible label and the card
      spells out the numbers beside it. */
-  import { pickWindows, ringDash, ringColor } from "$lib/usagerings.js";
+  import { pickWindows, ringDash, ringColor, resetHint } from "$lib/usagerings.js";
   import { usageLabel, type UsageWindow } from "$lib/logintty.js";
 
   type Props = { windows: UsageWindow[]; size?: number };
@@ -17,11 +17,20 @@
   let outerR = $derived(size / 2 - stroke / 2 - 1);
   let innerR = $derived(outerR - stroke - 2);
 
+  /* The rings carry no text, so the accessible name is the only place a
+     screen reader learns the numbers — it names the reset time too, so it
+     is not poorer than what the card shows sighted users. */
   let label = $derived.by(() => {
+    const now = Date.now();
     const parts: string[] = [];
-    if (rings.inner) parts.push(`${usageLabel("five_hour")} ${Math.round(rings.inner.utilization)}%`);
-    if (rings.outer) parts.push(`${usageLabel(rings.outer.key)} ${Math.round(rings.outer.utilization)}%`);
-    return parts.length > 0 ? `Usage: ${parts.join(", ")}` : "";
+    const describe = (w: UsageWindow, key: string) => {
+      const reset = resetHint(w, now);
+      const pct = `${usageLabel(key)} ${Math.round(w.utilization)}%`;
+      return reset.short ? `${pct}, resets in ${reset.short}` : pct;
+    };
+    if (rings.inner) parts.push(describe(rings.inner, "five_hour"));
+    if (rings.outer) parts.push(describe(rings.outer, rings.outer.key));
+    return parts.length > 0 ? `Usage: ${parts.join("; ")}` : "";
   });
 </script>
 

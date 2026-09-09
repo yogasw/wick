@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/svelte";
 import UsageRings from "../UsageRings.svelte";
-import { ringDash, pickWindows, connectionKey } from "$lib/usagerings.js";
+import { ringDash, pickWindows, connectionKey, resetHint } from "$lib/usagerings.js";
 
 describe("pickWindows", () => {
   it("maps the 5-hour window to the inner ring and the 7-day to the outer", () => {
@@ -91,5 +91,34 @@ describe("connectionKey", () => {
 
   it("distinguishes instances that differ only by name", () => {
     expect(connectionKey("claude", "a")).not.toBe(connectionKey("claude", "b"));
+  });
+});
+
+describe("resetHint", () => {
+  const now = Date.parse("2026-09-07T09:00:00Z");
+
+  it("renders the countdown in the largest single unit", () => {
+    expect(resetHint({ key: "five_hour", utilization: 10, resetsAt: "2026-09-07T09:25:00Z" }, now).short).toBe("25m");
+    expect(resetHint({ key: "five_hour", utilization: 10, resetsAt: "2026-09-07T12:10:00Z" }, now).short).toBe("3h");
+    expect(resetHint({ key: "seven_day", utilization: 10, resetsAt: "2026-09-11T09:30:00Z" }, now).short).toBe("4d");
+  });
+
+  it("names the window in the tooltip, so the chip is not just a bare duration", () => {
+    const got = resetHint({ key: "seven_day", utilization: 10, resetsAt: "2026-09-11T09:30:00Z" }, now);
+    expect(got.full).toBe("Weekly (7 day) resets in 4d");
+  });
+
+  it("uses the model-specific weekly label when that is the reported window", () => {
+    const got = resetHint({ key: "seven_day_opus", utilization: 10, resetsAt: "2026-09-08T09:00:00Z" }, now);
+    expect(got.full).toBe("Weekly Fable resets in 1d");
+  });
+
+  // The card drops the element when both are empty, so a missing or stale
+  // timestamp must not yield a stray separator.
+  it("is empty for a null window, and for missing, past or unparseable timestamps", () => {
+    expect(resetHint(null, now)).toEqual({ short: "", full: "" });
+    for (const resetsAt of ["", "2026-09-07T08:00:00Z", "not-a-date"]) {
+      expect(resetHint({ key: "five_hour", utilization: 10, resetsAt }, now)).toEqual({ short: "", full: "" });
+    }
   });
 });
