@@ -386,6 +386,23 @@ templ sidebarOwnerTab(href, label string, active bool) {
 	>{ label }</a>
 }
 
+// sharedSessionMark flags a conversation more than one person has spoken
+// in — a Slack thread several people replied into, so the row reads as
+// shared rather than looking like the viewer's own private chat. The count
+// is in the tooltip, not the row: the sidebar is 15rem wide and a number
+// there would eat title space on every row to serve the rare one.
+templ sharedSessionMark(people int) {
+	<span
+		class="shrink-0 mr-1 text-black-600 dark:text-black-600"
+		title={ fmt.Sprintf("Shared conversation — %d people", people) }
+		aria-label={ fmt.Sprintf("Shared conversation, %d people", people) }
+	>
+		<svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+			<path d="M7 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM14.5 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM1.6 16.2C1.6 13.3 4 11 7 11s5.4 2.3 5.4 5.2c0 .4-.3.8-.8.8H2.4a.8.8 0 0 1-.8-.8ZM13.7 17a2 2 0 0 0 .2-.8c0-1.8-.7-3.4-1.9-4.6.8-.4 1.6-.6 2.5-.6 2.4 0 4.3 1.8 4.3 4.2 0 .4-.3.8-.8.8h-4.3Z"></path>
+		</svg>
+	</span>
+}
+
 templ sidebarSessionRow(base, id string, sess session.Session, label string, lc SessionLifecycleVM, active bool) {
 	<a
 		href={ templ.SafeURL(base + "/sessions/" + id) }
@@ -412,6 +429,9 @@ templ sidebarSessionRow(base, id string, sess session.Session, label string, lc 
 				New session
 			}
 		</span>
+		if sess.Meta.Shared() {
+			@sharedSessionMark(sess.Meta.PeopleCount())
+		}
 		@statusDot(id, effectiveStatus(lc.Lifecycle, string(sess.Meta.Status), lc.SubAgent))
 	</a>
 }

@@ -102,6 +102,21 @@ type Meta struct {
 	// legacy sessions created before ownership tracking was added.
 	// When non-empty, only the owning user (or app owner) may access it.
 	UserID string `json:"user_id,omitempty"`
+	// Participants is every wick user who has spoken in this session, in
+	// first-seen order, starting with UserID. A Slack thread is not
+	// single-owner: anyone in the channel can reply into it, and that
+	// reply is their work too — so it must show up under THEIR "Yours"
+	// and stay openable by them, without taking the session away from
+	// whoever started it.
+	//
+	// Kept alongside UserID rather than replacing it: UserID still
+	// answers "whose identity does a spawn run as" (one answer only),
+	// while this answers "whose conversation is this" (possibly several).
+	// len>1 is what the UI renders as the shared-thread marker.
+	//
+	// Empty on sessions created before this shipped; readers must treat
+	// that as "just UserID" rather than "nobody" (see Meta.People).
+	Participants []string `json:"participants,omitempty"`
 	// AutoReply marks a Slack channel thread as auto-reply: while true,
 	// replies in the thread are dispatched to the agent without an
 	// @mention. Set when the thread is created (the bot also drops a 🤖
@@ -176,6 +191,92 @@ func (m *Meta) RemoveSubscriber(userID string) bool {
 	return false
 }
 
+// People returns everyone who has spoken in this session, in first-seen
+// order — Participants when it is populated, else the owner alone.
+//
+// The fallback is what makes the field safe to add to a live install:
+// every session that predates Participants carries only UserID, and
+// answering "nobody" there would drop those rows out of their owner's
+// list the moment the visibility checks start reading this.
+func (m *Meta) People() []string {
+	if m == nil {
+		return nil
+	}
+	if len(m.Participants) > 0 {
+		return m.Participants
+	}
+	if m.UserID == "" {
+		return nil
+	}
+	return []string{m.UserID}
+}
+
+// IsParticipant reports whether userID has spoken in this session (or
+// owns it — see People).
+//
+// Deliberately does NOT go through People(): this runs once per session
+// per list render, over every session the caller can see, so the
+// owner-only fallback must not allocate a slice to answer one comparison.
+func (m *Meta) IsParticipant(userID string) bool {
+	if m == nil || userID == "" {
+		return false
+	}
+	if len(m.Participants) == 0 {
+		return m.UserID != "" && m.UserID == userID
+	}
+	for _, id := range m.Participants {
+		if id == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// PeopleCount is len(People()) without building the slice — the count the
+// UI needs for its shared-thread marker, on the same hot path as
+// IsParticipant.
+func (m *Meta) PeopleCount() int {
+	if m == nil {
+		return 0
+	}
+	if n := len(m.Participants); n > 0 {
+		return n
+	}
+	if m.UserID == "" {
+		return 0
+	}
+	return 1
+}
+
+// AddParticipant appends userID to Participants if not already there.
+// Returns true if the list changed (i.e. caller should persist Meta).
+//
+// Seeds from People() rather than the raw slice so a legacy session's
+// owner keeps first position instead of being appended after whoever
+// happens to speak next.
+func (m *Meta) AddParticipant(userID string) bool {
+	if m == nil || userID == "" {
+		return false
+	}
+	if m.IsParticipant(userID) {
+		// Materialize the implicit owner-only list so the persisted shape
+		// matches People() from here on.
+		if len(m.Participants) == 0 {
+			m.Participants = m.People()
+			return true
+		}
+		return false
+	}
+	m.Participants = append(m.People(), userID)
+	return true
+}
+
+// Shared reports whether more than one person has spoken here — the
+// condition behind the sidebar's multi-user marker.
+func (m *Meta) Shared() bool {
+	return m.PeopleCount() > 1
+}
+
 // Session is the in-memory view: ID + meta + agent registry. Mirrors
 // the trio of files at sessions/<id>/.
 type Session struct {
@@ -239,6 +340,12 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 		UserID:     opt.UserID,
 
 		ParentSessionID: opt.ParentSessionID,
+	}
+	// The creator is the first participant. Written at create rather than
+	// backfilled on the next message so the very first turn already reads
+	// as theirs.
+	if opt.UserID != "" {
+		meta.Participants = []string{opt.UserID}
 	}
 	if err := storage.WriteJSON(layout.SessionMeta(opt.ID), &meta); err != nil {
 		_ = os.RemoveAll(dir)

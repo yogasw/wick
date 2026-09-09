@@ -52,7 +52,7 @@ func sessionsLifecycleSSE(c *tool.Ctx) {
 		if !ok || sess.Meta.ParentSessionID != "" {
 			return false
 		}
-		return access.allowSession(sess.Meta.ProjectID, sess.Meta.UserID)
+		return access.allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants)
 	}
 
 	fmt.Fprintf(w, ": connected\n\n")
