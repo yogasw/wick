@@ -727,11 +727,20 @@ func doPull(c *connector.Ctx) (any, error) {
 		if c.InputBool("rebase") {
 			args = append(args, "--rebase")
 		}
-		// The remote NAME: an omitted {branch} is meant to fall back to the current
-		// branch's upstream, and an upstream can only resolve against a named remote.
+		// The remote NAME, so an upstream can resolve against it.
 		args = append(args, "--end-of-options", remote)
-		if b := strings.TrimSpace(c.Input("branch")); b != "" {
-			args = append(args, b)
+		branch := strings.TrimSpace(c.Input("branch"))
+		if branch == "" {
+			// Naming the remote without a branch only works when that remote is
+			// the one the current branch tracks. Everywhere else git refuses with
+			// "you asked to pull from the remote 'origin', but did not specify a
+			// branch" — after already fetching, so it looks like a half-done pull.
+			// A clone whose branch tracks nothing, or tracks a second remote, hits
+			// this every time. The current branch is the branch meant, so say so.
+			branch = currentBranch(c, c.Input("repo_path"))
+		}
+		if branch != "" {
+			args = append(args, branch)
 		}
 		return args
 	})

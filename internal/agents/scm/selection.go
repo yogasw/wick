@@ -1,6 +1,7 @@
 package scm
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -92,4 +93,47 @@ func ValidateRepo(cwd, rel string) (Repo, error) {
 		names = append(names[:20], "…")
 	}
 	return Repo{}, fmt.Errorf("no repo %q under the session cwd (have: %s)", rel, strings.Join(names, ", "))
+}
+
+// RemoteURL returns the URL configured for a remote, with any embedded
+// credentials left as git reports them (callers strip before display).
+// Empty string and no error when the remote is not configured — a repo
+// with no remote is a normal local repo, not a failure.
+func RemoteURL(ctx context.Context, dir, remote string) (string, error) {
+	if remote == "" {
+		remote = "origin"
+	}
+	out, err := run(ctx, dir, "remote", "get-url", remote)
+	if err != nil {
+		return "", nil
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// RemoteHost extracts the host from a git remote URL, covering both the
+// https://host/owner/repo and the git@host:owner/repo forms. Empty when
+// the URL is a local path or unparseable.
+func RemoteHost(rawURL string) string {
+	u := strings.TrimSpace(rawURL)
+	if u == "" {
+		return ""
+	}
+	if i := strings.Index(u, "://"); i >= 0 {
+		rest := u[i+3:]
+		if at := strings.Index(rest, "@"); at >= 0 {
+			rest = rest[at+1:]
+		}
+		if slash := strings.IndexAny(rest, "/:"); slash >= 0 {
+			rest = rest[:slash]
+		}
+		return rest
+	}
+	// scp-like: [user@]host:path
+	if at := strings.Index(u, "@"); at >= 0 {
+		rest := u[at+1:]
+		if colon := strings.Index(rest, ":"); colon > 0 {
+			return rest[:colon]
+		}
+	}
+	return ""
 }

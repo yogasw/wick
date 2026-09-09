@@ -133,6 +133,17 @@ type Meta struct {
 	// system prompt names as the repo being worked on, and what
 	// wick_scm reports and switches.
 	ScmRepo string `json:"scm_repo,omitempty"`
+	// ScmGitConnectors maps a wick user id to the Git CLI connector
+	// instance that user's push and pull run through in this session, or
+	// the literal "native" for plain git.
+	//
+	// Per session rather than per repo: a session's checkouts are one
+	// body of work, and asking again for each of dozens of repos is a
+	// chore. Keyed by user because a session can be shared — a Slack
+	// thread is open to everyone in the channel — and a credential is
+	// exactly the thing that must not be inherited from whoever pushed
+	// first. Absent = plain git, until someone picks otherwise.
+	ScmGitConnectors map[string]string `json:"scm_git_connectors,omitempty"`
 	// ParentSessionID links a sub-agent's isolated session back to the
 	// session that delegated it. Non-empty = this is a child: hidden
 	// from the conversation list and surfaced in the parent's Sub-agents

@@ -319,15 +319,14 @@ func policyRules(p EffectivePolicy) map[string]any {
 	protected := map[string]any{
 		"branches": p.Protected,
 		"syntax":   syntaxGlob,
-		// Derived from mutatingOps, not written by hand. The hand-written version said
-		// "push, commit, merge and pull" and was simply wrong: Evaluate checks
-		// IsProtected for EVERY mutating operation, so checkout and branch_create are
-		// refused too — and an agent reading the shorter list concluded a checkout to main
-		// was safe. A list that has to be kept in sync with a map by hand will drift,
-		// so it is read off the map instead.
-		"applies_to": "Every operation that changes the repository, when it targets a matching branch: " +
-			strings.Join(mutatingOpNames(), ", ") +
-			". This includes checkout — a protected branch cannot be switched to, not only written to. " +
+		// Derived from the maps Evaluate uses, never written by hand: a list kept in
+		// sync with a map by hand drifts, and an agent that believes the wrong list
+		// either skips a call it could make or makes one it will be refused.
+		"applies_to": "Operations that AUTHOR changes on a matching branch: " +
+			strings.Join(protectedOpNames(), ", ") +
+			". pull and checkout are exempt — reading the branch, or making the local one " +
+			"match its remote, changes nothing anyone else sees, while the commit and push " +
+			"that would are still refused. " +
 			"Reads (status, log, diff, show, branch_list) are never affected.",
 	}
 	if len(p.Protected) == 0 {
@@ -387,13 +386,29 @@ const (
 	syntaxGlob = "Comma-separated glob patterns where * is the only wildcard. Not regular expressions."
 )
 
-// mutatingOpNames lists every operation the protected-branch rule can refuse, read
-// off mutatingOps so the description cannot drift from the code that enforces it.
-// Sorted, because map order is randomised and two identical calls must not look like
-// two different answers.
+// mutatingOpNames lists every mutating operation, read off mutatingOps so the
+// description cannot drift from the code that enforces it. Sorted, because map
+// order is randomised and two identical calls must not look like two different
+// answers.
 func mutatingOpNames() []string {
 	out := make([]string, 0, len(mutatingOps))
 	for op := range mutatingOps {
+		out = append(out, op)
+	}
+	sortStrings(out)
+	return out
+}
+
+// protectedOpNames lists the operations the protected-branch rule can actually
+// refuse: the mutations minus the ones exempted for reading and syncing. Read
+// off the same two maps Evaluate uses, so the documented list cannot claim a
+// refusal the code will not make.
+func protectedOpNames() []string {
+	out := make([]string, 0, len(mutatingOps))
+	for op := range mutatingOps {
+		if protectedExemptOps[op] {
+			continue
+		}
 		out = append(out, op)
 	}
 	sortStrings(out)
@@ -431,8 +446,17 @@ func opGates() map[string]any {
 
 	gates := make(map[string]any, len(mutatingOps)+1)
 	for _, op := range mutatingOpNames() {
-		rules := append([]string(nil), universal...)
+		var rules []string
+		if !protectedExemptOps[op] {
+			rules = append(rules, universal...)
+		}
 		rules = append(rules, extra[op]...)
+		if len(rules) == 0 {
+			// Exempt and carrying no other rule: say so, rather than
+			// printing an empty list a reader has to interpret.
+			gates[op] = []string{"no policy rule (protected branches do not block it)"}
+			continue
+		}
 		gates[op] = rules
 	}
 	// raw is judged by its allow-list alone — Evaluate returns from evaluateRaw before

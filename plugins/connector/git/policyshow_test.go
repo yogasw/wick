@@ -389,14 +389,23 @@ func TestGatesAndAppliesToAgree(t *testing.T) {
 	appliesTo, _ := rule(t, res, "protected_branches")["applies_to"].(string)
 
 	// Every op gates says is subject to protected_branches must also be covered by the
-	// prose, and vice versa. mutatingOps is the single source both are derived from.
+	// prose, and vice versa. mutatingOps minus protectedExemptOps is the single source
+	// both are derived from.
 	for op := range mutatingOps {
 		if op == "raw" {
 			continue // judged by its allow-list alone; Evaluate returns before branch checks
 		}
 		rules, _ := gates[op].([]string)
+		if protectedExemptOps[op] {
+			// Exempt: neither the gates map nor the prose may claim it is refused,
+			// or an agent skips a call it is allowed to make.
+			if containsExact(rules, "protected_branches") {
+				t.Errorf("gates[%s] = %v, but %s is exempt from the protected-branch rule", op, rules, op)
+			}
+			continue
+		}
 		if !containsExact(rules, "protected_branches") {
-			t.Errorf("gates[%s] = %v, want protected_branches — Evaluate checks IsProtected for every mutating op", op, rules)
+			t.Errorf("gates[%s] = %v, want protected_branches — Evaluate checks IsProtected for every non-exempt mutating op", op, rules)
 		}
 		if !strings.Contains(appliesTo, op) {
 			t.Errorf("applies_to does not mention %q, but that operation IS refused on a protected branch:\n%s", op, appliesTo)

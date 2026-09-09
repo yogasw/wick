@@ -1,6 +1,16 @@
 <script lang="ts">
-  import type { BranchInfo } from "$lib/api/scm";
-  import { listBranches, switchBranch, createBranch, push, pull } from "$lib/git-actions";
+  import type { BranchInfo, GitConnectorsResponse } from "$lib/api/scm";
+  import {
+    listBranches,
+    switchBranch,
+    createBranch,
+    push,
+    pull,
+    gitConnectors,
+    rememberGitConnector,
+  } from "$lib/git-actions";
+  import GitConnectorModal from "$lib/components/GitConnectorModal.svelte";
+  import { activeRepo } from "$lib/stores/scm";
 
   type Props = { branch: BranchInfo; busy: boolean };
   let { branch, busy }: Props = $props();
@@ -10,6 +20,90 @@
   let remotes = $state<string[]>([]);
   let newName = $state("");
   let filter = $state("");
+
+  // Credential picker. A push with no chosen connector opens this first:
+  // the panel's own git carries no credentials, and running as whichever
+  // connector happens to be there is not a decision to make on the
+  // user's behalf.
+  let ask = $state<{ action: "push" | "pull"; info: GitConnectorsResponse; error?: string } | null>(null);
+  let settings = $state<GitConnectorsResponse | null>(null);
+
+  // What this repo currently pushes through, kept so the key button can
+  // show that the answer is NOT the ordinary one. Native git gets no
+  // marker: it is what git does anyway, and a dot on every repo would
+  // stop meaning anything.
+  let current = $state<GitConnectorsResponse | null>(null);
+  const viaConnector = $derived(
+    !!current?.selected && current.selected !== "native",
+  );
+  const connectorLabel = $derived(
+    current?.candidates.find((c) => c.id === current?.selected)?.label ?? "",
+  );
+
+  async function refreshCurrent() {
+    current = await gitConnectors();
+  }
+
+  // Re-read on repo switch: the choice is per repo, so the marker has to
+  // follow the selection rather than the panel's lifetime.
+  $effect(() => {
+    void $activeRepo;
+    void refreshCurrent();
+  });
+
+  // Plain git is the default: a repo whose remote needs no credential
+  // just works, and nobody is stopped by a dialog to be told so. The
+  // picker appears when git ITSELF says the credential is the problem —
+  // which is the only moment the answer is worth asking for.
+  const AUTH_HINTS = [
+    "could not read username",
+    "could not read password",
+    "authentication failed",
+    "terminal prompts disabled",
+    "permission denied",
+    "403",
+    "401",
+    "access denied",
+    "invalid credentials",
+  ];
+
+  function looksLikeAuth(msg: string): boolean {
+    const m = msg.toLowerCase();
+    return AUTH_HINTS.some((h) => m.includes(h));
+  }
+
+  async function run(action: "push" | "pull") {
+    const err = await (action === "push" ? push() : pull());
+    if (!err) return;
+    if (!looksLikeAuth(err)) return;
+    // Auth is what failed, so offer the credentials there are.
+    const info = await gitConnectors();
+    if (!info || info.candidates.length === 0) return;
+    ask = { action, info, error: err };
+  }
+
+  // The choice always sticks: it is per session and per user, so there is
+  // nothing to opt into and no checkbox to explain.
+  async function confirmRun(connectorID: string) {
+    const action = ask?.action ?? "push";
+    ask = null;
+    if (connectorID) {
+      await rememberGitConnector(connectorID);
+      await refreshCurrent();
+    }
+    await (action === "push" ? push(connectorID) : pull(connectorID));
+  }
+
+  async function openSettings() {
+    const info = await gitConnectors();
+    if (info) settings = info;
+  }
+
+  async function saveSettings(connectorID: string) {
+    settings = null;
+    await rememberGitConnector(connectorID);
+    await refreshCurrent();
+  }
 
   async function toggle() {
     open = !open;
@@ -89,7 +183,54 @@
   {/if}
 
   <div class="flex gap-2">
-    <button type="button" onclick={pull} disabled={busy} class="flex-1 rounded-lg border border-white-300 dark:border-navy-600 px-2 py-1.5 text-xs text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50 transition-colors">Pull</button>
-    <button type="button" onclick={push} disabled={busy} class="flex-1 rounded-lg border border-white-300 dark:border-navy-600 px-2 py-1.5 text-xs text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50 transition-colors">Push</button>
+    <button type="button" onclick={() => run("pull")} disabled={busy} class="flex-1 rounded-lg border border-white-300 dark:border-navy-600 px-2 py-1.5 text-xs text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50 transition-colors">Pull</button>
+    <button type="button" onclick={() => run("push")} disabled={busy} class="flex-1 rounded-lg border border-white-300 dark:border-navy-600 px-2 py-1.5 text-xs text-black-800 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800 disabled:opacity-50 transition-colors">Push</button>
+    <!-- Change the credential without having to push to be asked. -->
+    <button
+      type="button"
+      onclick={openSettings}
+      title={viaConnector
+        ? `Pushes through ${connectorLabel}`
+        : "Git credential for this session"}
+      aria-label="Git credential for this session"
+      class="relative shrink-0 rounded-lg border px-2 py-1.5 transition-colors
+             {viaConnector
+        ? 'border-green-500 text-green-600 dark:text-green-400'
+        : 'border-white-300 dark:border-navy-600 text-black-700 dark:text-black-600 hover:bg-white-200 dark:hover:bg-navy-800'}"
+    >
+      {#if viaConnector}
+        <span class="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-green-500"></span>
+      {/if}
+      <!-- A key, not a gear: this picks the CREDENTIAL a push runs as,
+           and a gear next to a theme-toggle-shaped icon reads as settings. -->
+      <svg viewBox="0 0 16 16" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="5.5" cy="5.5" r="3"/>
+        <path d="M7.7 7.7L13 13M11 11l1.5-1.5M12.5 12.5L14 11" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
   </div>
 </div>
+
+{#if ask}
+  <GitConnectorModal
+    action={ask.action}
+    error={ask.error}
+    repo={ask.info.repo}
+    remoteURL={ask.info.remote_url}
+    candidates={ask.info.candidates}
+    selected={ask.info.selected}
+    onConfirm={confirmRun}
+    onCancel={() => (ask = null)}
+  />
+{/if}
+
+{#if settings}
+  <GitConnectorModal
+    repo={settings.repo}
+    remoteURL={settings.remote_url}
+    candidates={settings.candidates}
+    selected={settings.selected}
+    onConfirm={(id) => saveSettings(id)}
+    onCancel={() => (settings = null)}
+  />
+{/if}
