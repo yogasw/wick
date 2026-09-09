@@ -407,6 +407,18 @@ func Run(ctx context.Context, c Cmd, o RunOpts) (Result, error) {
 	// by hand. Clear it once and retry; anything less certain is left
 	// alone and reported as git wrote it.
 	if note, ok := clearStaleIndexLock(c.RepoPath, res.Stderr); ok {
+		// The retry deliberately keeps the CALLER's context: a second git run
+		// under a fresh background context would outlive the request that
+		// asked for it, which is worse than not retrying. What it must not do
+		// is report a cancellation as if it were git's answer — an exhausted
+		// deadline would replace "index.lock: File exists" with "context
+		// deadline exceeded", hiding both the real failure and the fact that
+		// the lock was cleared. So when there is no time left, the first
+		// result stands, annotated with what was removed.
+		if err := ctx.Err(); err != nil {
+			res.Recovered = note + " (not retried: " + err.Error() + ")"
+			return res, nil
+		}
 		retry, rerr := runOnce(ctx, c, o)
 		retry.Recovered = note
 		return retry, rerr

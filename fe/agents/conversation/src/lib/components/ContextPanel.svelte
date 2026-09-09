@@ -9,6 +9,15 @@
     files: ContextFileEntry[];
     search: string;
     openDirs: Record<string, boolean>;
+    loadedDirs?: Record<string, boolean>;
+    loadingDirs?: Record<string, boolean>;
+    /** Rows mid-delete: shown collapsing rather than vanishing. */
+    deletingPaths?: Record<string, boolean>;
+    /** Whole-tree search, run on the server. The client holds only the
+        levels someone has opened, so deep search cannot be done here. */
+    onFind?: (q: string, deep: boolean) => void;
+    /** The server capped the last deep search. */
+    findTruncated?: boolean;
     onSearch: (s: string) => void;
     onToggleDir: (path: string) => void;
     onOpen: (f: ContextFileEntry) => void;
@@ -22,7 +31,7 @@
     loadError?: string;
   };
 
-  let { cwd, files, search, openDirs, onSearch, onToggleDir, onOpen, onRefresh, onNewFile, onNewDir, onDownload = () => {}, onDelete = () => {}, onNewHere = () => {}, loading = false, loadError = "" }: Props = $props();
+  let { cwd, files, search, openDirs, loadedDirs = {}, loadingDirs = {}, deletingPaths = {}, onFind = () => {}, findTruncated = false, onSearch, onToggleDir, onOpen, onRefresh, onNewFile, onNewDir, onDownload = () => {}, onDelete = () => {}, onNewHere = () => {}, loading = false, loadError = "" }: Props = $props();
 
   type SortKey = "name" | "recent" | "type";
 
@@ -128,10 +137,26 @@
   const q = $derived(search.toLowerCase().trim());
   const visible = $derived(filterTree(tree, q, deep).children);
 
-  const fileCount = $derived(files.filter((f) => !f.isDir).length);
-  const dirCount = $derived(files.filter((f) => f.isDir).length);
+  // Deep search has to go to the server: the tree is loaded a level at a
+  // time, so a folder nobody has expanded is simply not here to filter —
+  // and finding one is the main reason to search at all. Shallow search
+  // stays local; it only ever means "the names in front of me".
+  $effect(() => {
+    if (deep && q) onFind(q, true);
+  });
+
+  // The header counts THIS folder, not everything loaded. Since the tree
+  // fetches a level at a time, counting every entry in memory made the
+  // number climb each time someone expanded something — "406 files · 116
+  // folders" for a directory that holds 326 and 84. A per-folder count
+  // already sits on each folder row; this line is the root's.
+  const rootEntries = $derived(files.filter((f) => !f.path.includes("/")));
+  const fileCount = $derived(rootEntries.filter((f) => !f.isDir).length);
+  const dirCount = $derived(rootEntries.length - fileCount);
+  // Deep search reaches past this level, so its match count is allowed to;
+  // the shallow filter only ever looks at names in front of you.
   const matchCount = $derived(
-    q ? files.filter((f) => f.name.toLowerCase().includes(q)).length : 0,
+    q ? (deep ? files : rootEntries).filter((f) => f.name.toLowerCase().includes(q)).length : 0,
   );
 </script>
 
@@ -226,7 +251,7 @@
 
     <p class="text-[11px] text-black-700 dark:text-black-600">
       {#if q}
-        {matchCount} match{matchCount === 1 ? "" : "es"} · {deep ? "all subfolders" : "this folder"}
+        {matchCount} match{matchCount === 1 ? "" : "es"} · {deep ? "all subfolders" : "this folder"}{findTruncated && deep ? " · capped" : ""}
       {:else}
         {fileCount} file{fileCount === 1 ? "" : "s"}{dirCount ? ` · ${dirCount} folder${dirCount === 1 ? "" : "s"}` : ""}
       {/if}
@@ -253,7 +278,7 @@
       </div>
     {:else}
       {#each visible as node (node.entry.path)}
-        <FileTreeNode {node} depth={0} forceOpen={!!q && deep} {openDirs} {onToggleDir} {onOpen} {onDownload} {onDelete} {onNewHere} />
+        <FileTreeNode {node} depth={0} forceOpen={!!q && deep} {openDirs} {loadedDirs} {loadingDirs} {deletingPaths} {onToggleDir} {onOpen} {onDownload} {onDelete} {onNewHere} />
       {/each}
     {/if}
   </div>

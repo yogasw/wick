@@ -104,9 +104,28 @@ type contextFileEntry struct {
 	MTime int64  `json:"mtime"` // unix ms
 }
 
-// sessionContextList walks the session cwd and returns every file +
-// directory (depth-first). Hidden dotfiles are included. Symlinks are
-// not followed.
+// maxDirEntries caps ONE directory listing. It is a guard against a
+// pathological folder, not a budget shared across the tree — see
+// sessionContextList for why that distinction is the whole point.
+const maxDirEntries = 5000
+
+// sessionContextList returns the immediate children of ONE directory:
+// the session cwd, or ?path= relative to it. Hidden dotfiles are
+// included, skipWalkDirs are omitted, and symlinks are not followed.
+//
+// It used to walk the entire tree depth-first and cut the result off at
+// 5000 entries. That is fine for a session holding one repository and
+// silently wrong for one holding many: the budget is spent depth-first
+// in alphabetical order, so the contents of the first few repos consume
+// it and every later top-level entry is never sent at all. In a session
+// with 55 clones the walk died inside `chatnshop/vendor`, and the panel
+// showed 98 of 410 top-level entries — with no indication that the rest
+// existed. The folder people actually wanted (`wick`, letter w) looked
+// like it had never been cloned.
+//
+// One level at a time removes the shared budget: the cap now applies to
+// a single directory, which no real folder reaches, and depth costs an
+// extra request instead of everyone else's visibility.
 func sessionContextList(c *tool.Ctx) {
 	if notReady(c) {
 		return
@@ -122,46 +141,173 @@ func sessionContextList(c *tool.Ctx) {
 		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	entries := []contextFileEntry{}
-	_, statErr := os.Stat(cwd)
-	if statErr != nil {
-		c.JSON(http.StatusOK, map[string]any{"cwd": cwd, "files": entries})
+	rel := strings.Trim(strings.ReplaceAll(c.Query("path"), "\\", "/"), "/")
+	dir, err := safeJoin(cwd, rel)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	const maxEntries = 5000
-	_ = filepath.Walk(cwd, func(p string, info os.FileInfo, err error) error {
-		if err != nil || p == cwd {
-			return nil
-		}
-		name := info.Name()
-		if info.IsDir() {
-			if _, drop := skipWalkDirs[name]; drop {
-				return filepath.SkipDir
+	entries, truncated := readDirEntries(dir, rel)
+	c.JSON(http.StatusOK, map[string]any{
+		"cwd": cwd, "path": rel, "files": entries, "truncated": truncated,
+	})
+}
+
+// readDirEntries lists one directory as context entries, with rel as the
+// prefix their paths are reported under. A directory that cannot be read
+// (deleted mid-browse, permissions) yields an empty list rather than an
+// error: the panel keeps working and simply shows nothing inside.
+func readDirEntries(dir, rel string) ([]contextFileEntry, bool) {
+	entries := []contextFileEntry{}
+	names, err := os.ReadDir(dir)
+	if err != nil {
+		return entries, false
+	}
+	truncated := false
+	for _, de := range names {
+		if de.IsDir() {
+			if _, drop := skipWalkDirs[de.Name()]; drop {
+				continue
 			}
 		}
-		if len(entries) >= maxEntries {
-			return filepath.SkipDir
+		if len(entries) >= maxDirEntries {
+			truncated = true
+			break
 		}
-		rel, _ := filepath.Rel(cwd, p)
+		info, ierr := de.Info()
+		if ierr != nil {
+			continue
+		}
+		p := de.Name()
+		if rel != "" {
+			p = rel + "/" + p
+		}
 		entries = append(entries, contextFileEntry{
-			Path:  filepath.ToSlash(rel),
-			Name:  name,
+			Path:  p,
+			Name:  de.Name(),
+			Size:  info.Size(),
+			IsDir: de.IsDir(),
+			MTime: info.ModTime().UnixMilli(),
+		})
+	}
+	return entries, truncated
+}
+
+// sessionContextSearch backs the file panel's "Subfolders" search: a
+// name substring across the whole tree, returning DIRECTORIES as well as
+// files. GET /sessions/{id}/files/search?q=&limit=
+//
+// Separate from sessionContextMentions, which feeds the composer's
+// @-mention and is deliberately files-only — you mention a file, not a
+// folder. Here the folder is often the thing being looked for, and
+// excluding it is what made typing "wick" in the panel return nothing
+// useful.
+//
+// Ancestors of every hit are included so the client can attach the
+// result to its tree without inventing the intermediate nodes.
+func sessionContextSearch(c *tool.Ctx) {
+	if notReady(c) {
+		return
+	}
+	id := c.PathValue("id")
+	sess, ok := globalMgr.Registry().Session(id)
+	if !ok || !ownsSession(c, sess) {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+	cwd, err := resolveSessionCwd(sess)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	q := strings.ToLower(strings.TrimSpace(c.Query("q")))
+	if q == "" {
+		c.JSON(http.StatusOK, map[string]any{"files": []contextFileEntry{}, "truncated": false})
+		return
+	}
+	limit := 300
+	if n, e := strconv.Atoi(c.Query("limit")); e == nil && n > 0 {
+		limit = n
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+
+	// maxVisit bounds the WALK, not the answer: a query that matches
+	// early still returns promptly, and one that matches nothing stops
+	// instead of touching every file in 55 checkouts.
+	const maxVisit = 200000
+	visited, truncated := 0, false
+	seen := map[string]bool{}
+	entries := []contextFileEntry{}
+	add := func(rel string, info os.FileInfo) {
+		if seen[rel] {
+			return
+		}
+		seen[rel] = true
+		entries = append(entries, contextFileEntry{
+			Path:  rel,
+			Name:  info.Name(),
 			Size:  info.Size(),
 			IsDir: info.IsDir(),
 			MTime: info.ModTime().UnixMilli(),
 		})
+	}
+	_ = filepath.Walk(cwd, func(p string, info os.FileInfo, err error) error {
+		if err != nil || p == cwd {
+			return nil
+		}
+		if info.IsDir() {
+			if _, drop := skipWalkDirs[info.Name()]; drop {
+				return filepath.SkipDir
+			}
+		}
+		if len(entries) >= limit || visited >= maxVisit {
+			truncated = true
+			return filepath.SkipAll
+		}
+		visited++
+		if !strings.Contains(strings.ToLower(info.Name()), q) {
+			return nil
+		}
+		rel, rerr := filepath.Rel(cwd, p)
+		if rerr != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		// Ancestors first, so the client can build the branch top-down.
+		for _, anc := range ancestorPaths(rel) {
+			if ai, aerr := os.Stat(filepath.Join(cwd, anc)); aerr == nil {
+				add(anc, ai)
+			}
+		}
+		add(rel, info)
 		return nil
 	})
-	c.JSON(http.StatusOK, map[string]any{"cwd": cwd, "files": entries})
+	c.JSON(http.StatusOK, map[string]any{"files": entries, "truncated": truncated})
 }
 
-// sessionContextSearch walks the session cwd and returns FILE paths matching
+// ancestorPaths lists the directory chain above a relative path, closest
+// to the root first ("a/b/c.txt" → "a", "a/b").
+func ancestorPaths(rel string) []string {
+	segs := strings.Split(rel, "/")
+	if len(segs) < 2 {
+		return nil
+	}
+	out := make([]string, 0, len(segs)-1)
+	for i := 1; i < len(segs); i++ {
+		out = append(out, strings.Join(segs[:i], "/"))
+	}
+	return out
+}
+
+// sessionContextMentions walks the session cwd and returns FILE paths matching
 // the space-separated AND terms in ?q= (every term must appear in the path),
 // ranked best-first, capped at ?limit= (default 30, max 100). This backs the
 // composer's @-mention search so it works over the whole tree — fresh on each
 // keystroke and unaffected by the list endpoint's client-side cap. Dirs are
 // excluded; an empty query returns the first files (a browsable default).
-func sessionContextSearch(c *tool.Ctx) {
+func sessionContextMentions(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
@@ -186,11 +332,11 @@ func sessionContextSearch(c *tool.Ctx) {
 	})
 }
 
-// projectFileSearch mirrors sessionContextSearch but scopes the walk to a
+// projectFileMentions mirrors sessionContextMentions but scopes the walk to a
 // project's folder — used by the new-session composer's @-mention before any
 // session exists (the session cwd IS the project folder once created).
-// GET /api/projects/{id}/files/search. Access is enforced by projectAccessMW.
-func projectFileSearch(c *tool.Ctx) {
+// GET /api/projects/{id}/files/mentions. Access is enforced by projectAccessMW.
+func projectFileMentions(c *tool.Ctx) {
 	if notReady(c) {
 		return
 	}
@@ -281,7 +427,13 @@ var skipWalkDirs = map[string]struct{}{
 // walkFilePaths returns slash-separated relative paths of every FILE under cwd
 // (dirs excluded, skipWalkDirs pruned), capped at maxScan.
 func walkFilePaths(cwd string) []string {
-	const maxScan = 20000
+	// The cap is a runaway guard, not a budget anyone should hit. At 20000
+	// it clipped a real session — 55 clones, 21605 files — so @-mentioning
+	// anything in a repo late in the alphabet silently found nothing, the
+	// same failure the file panel had. The walk itself costs ~70ms for that
+	// tree and the result is cached for treeCacheTTL, so the old number was
+	// buying nothing.
+	const maxScan = 200000
 	paths := make([]string, 0, 256)
 	if _, err := os.Stat(cwd); err != nil {
 		return paths

@@ -1130,7 +1130,7 @@ func Operations() []connector.Category {
 				"Update remote-tracking refs for {remote} at {repo_path} without touching the working tree. Uses the connector's credential and the remote's HTTPS URL, ignoring any credentials stored in .git/config.",
 				FetchInput{}, doFetch, wickdocs.Docs{}),
 			connector.Op("pull", "Pull",
-				"Fetch {remote} and integrate it into the current branch at {repo_path}, rebasing instead of merging when {rebase} is set. Blocked when the current branch is protected.",
+				"Fetch {remote} and integrate it into the current branch at {repo_path}, rebasing instead of merging when {rebase} is set. Allowed on a protected branch — making the local branch match its remote changes nothing anyone else sees; the commit and push that would are still refused.",
 				PullInput{}, doPull, wickdocs.Docs{}),
 		),
 		connector.Cat("Destructive", "Operations that publish or discard work. Each is off by default on a new instance.",
