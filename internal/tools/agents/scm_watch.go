@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/agents/scm"
+	"github.com/yogasw/wick/internal/agents/session"
 )
 
 // gitWatchDebounce coalesces bursty filesystem events (a single git
@@ -183,7 +184,11 @@ func publishGitSummary(ctx context.Context, sessionID, cwd string) {
 	if globalBcast == nil {
 		return
 	}
-	snap := buildGitSnapshot(ctx, cwd)
+	stored := ""
+	if sess, err := session.Load(globalLayout, sessionID); err == nil {
+		stored = sess.Meta.ScmRepo
+	}
+	snap := buildGitSnapshot(ctx, cwd, stored)
 	body, err := json.Marshal(snap)
 	if err != nil {
 		return
