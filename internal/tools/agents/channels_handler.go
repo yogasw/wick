@@ -429,6 +429,10 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 			}
 		} else {
 			ch := agentslack.NewWithOwner(cfg, userID)
+			// Same identity cache boot wires, so an instance configured
+			// while wick runs also labels itself "Slack - <bot> - <owner>"
+			// after the next restart without another auth.test.
+			channelsetup.WireIdentityCache(store, channelType, userID, ch)
 			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
 			ch.SetPublicURL(pubURL)
 			ch.SetSessionPrefix(sessPrefix)
@@ -437,7 +441,7 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 			// Slack events fire no channel trigger until the next
 			// restart.
 			if globalWorkflowMgr != nil {
-				setup.AttachSlackWorkflowSink(ch, globalWorkflowMgr.Router)
+				setup.AttachSlackWorkflowSinkKeyed(ch, globalWorkflowMgr.Router, iKey)
 			}
 			src := agentslack.NewConfigSourceKeyed(store, ch, userID)
 			globalChannels.AddKeyed(iKey, ch, src)
@@ -462,6 +466,7 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 			}
 		} else {
 			ch := agenttelegram.NewWithOwner(cfg, userID)
+			channelsetup.WireIdentityCache(store, channelType, userID, ch)
 			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
 			ch.SetSessionPrefix(sessPrefix)
 			src := agenttelegram.NewConfigSourceKeyed(store, ch, userID)
@@ -494,6 +499,7 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 				return
 			}
 			ch := agentrest.NewWithOwner(cfg, auth, userID)
+			channelsetup.WireIdentityCache(store, channelType, userID, ch)
 			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
 			src := agentrest.NewConfigSourceKeyed(store, ch, userID)
 			globalChannels.AddKeyed(iKey, ch, src)

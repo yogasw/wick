@@ -222,6 +222,17 @@ type Channel struct {
 	ownerFn     func(ctx context.Context, sessionID, userID string)
 	ownerUserID string // wick user who owns this channel row; empty = App Owner
 
+	// identitySink persists the bot identity (id, display name, team) the
+	// moment auth.test resolves it, so the next boot can label this
+	// instance without asking Slack again. Guarded by cfgMu.
+	identitySink func(botUserID, botName, teamName string)
+
+	// identityToken is the bot token the cached identity belongs to. A
+	// config reload that keeps the same token reuses the cache; a new
+	// token means a (possibly) different bot, so the identity is
+	// re-resolved. Guarded by cfgMu.
+	identityToken string
+
 	// sessionPrefix namespaces this instance's session keys so multiple
 	// Slack bots (per-user owners, possibly across different workspaces)
 	// never collide on a shared threadTS. Set by the registry/setup composer
@@ -326,8 +337,28 @@ func New(cfg agentconfig.SlackChannelConfig) *Channel {
 // NewWithOwner creates a Slack Channel tied to a specific wick user owner.
 // ownerUserID="" means the App Owner's channel (user_id = NULL row).
 func NewWithOwner(cfg agentconfig.SlackChannelConfig, ownerUserID string) *Channel {
-	ch := New(cfg)
+	return NewWithOwnerCached(cfg, ownerUserID, "", "", "")
+}
+
+// NewWithOwnerCached is NewWithOwner with the bot identity already known
+// — the values this instance cached in its channel row on a previous
+// run. Seeded before the first applyConfig so boot costs no auth.test
+// call: the identity is treated as valid for the token it was resolved
+// with, and re-resolved as soon as that token changes (or on the next
+// Socket Mode connect, which always re-asks).
+func NewWithOwnerCached(cfg agentconfig.SlackChannelConfig, ownerUserID, botUserID, botName, teamName string) *Channel {
+	ch := &Channel{
+		turns:            make(map[string]*turn),
+		userTokenCache:   make(map[string]string),
+		userDisplayCache: make(map[string]*store.Sender),
+		autoReply:        make(map[string]bool),
+	}
 	ch.ownerUserID = ownerUserID
+	ch.SeedIdentity(botUserID, botName, teamName)
+	if botUserID != "" {
+		ch.identityToken = cfg.BotToken
+	}
+	ch.applyConfig(cfg, "")
 	return ch
 }
 
@@ -466,8 +497,18 @@ func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string)
 	api := slackgo.New(cfg.BotToken, slackgo.OptionAppLevelToken(cfg.AppToken))
 	socket := socketmode.New(api)
 
-	botUserID, botUserName, teamName, teamDomain := "", "", "", ""
-	if cfg.BotToken != "" {
+	s.cfgMu.Lock()
+	cachedFor := s.identityToken
+	botUserID, botUserName := s.botUserID, s.botUserName
+	teamName, teamDomain := s.teamName, s.teamDomain
+	s.cfgMu.Unlock()
+
+	// The identity is CACHED — seeded from the channel row at boot and
+	// re-persisted whenever auth.test resolves it. A bot's name changes
+	// about never, so re-asking Slack on every applyConfig (boot + every
+	// hot-reload of an unrelated setting) is a round trip for an answer we
+	// already have. Only ask when nothing is cached or the token changed.
+	if cfg.BotToken != "" && (botUserID == "" || cfg.BotToken != cachedFor) {
 		if resp, err := api.AuthTest(); err == nil {
 			botUserID = resp.UserID
 			teamName = resp.Team
@@ -485,6 +526,50 @@ func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string)
 	s.botUserName = botUserName
 	s.teamName = teamName
 	s.teamDomain = teamDomain
+	s.identityToken = cfg.BotToken
+	sink := s.identitySink
+	s.cfgMu.Unlock()
+
+	if sink != nil && botUserID != "" {
+		sink(botUserID, botUserName, teamName)
+	}
+}
+
+// BotIdentity satisfies agentchannels.IdentityCache — the bot user id,
+// display name, and workspace this instance currently knows.
+func (s *Channel) BotIdentity() (string, string, string) {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.botUserID, s.botUserName, s.teamName
+}
+
+// SeedIdentity hydrates the cached bot identity from persistent storage
+// (the channel's config row) before the channel ever talks to Slack, so
+// pickers and labels can name the bot at boot without an API call. A
+// later auth.test overwrites it with the live answer.
+func (s *Channel) SeedIdentity(botUserID, botName, teamName string) {
+	if botUserID == "" && botName == "" {
+		return
+	}
+	s.cfgMu.Lock()
+	if s.botUserID == "" {
+		s.botUserID = botUserID
+	}
+	if s.botUserName == "" {
+		s.botUserName = botName
+	}
+	if s.teamName == "" {
+		s.teamName = teamName
+	}
+	s.cfgMu.Unlock()
+}
+
+// SetIdentitySink registers the callback that persists a freshly
+// resolved bot identity. Wired by the channel setup composer to the
+// agent_channels row this instance was loaded from; nil in tests.
+func (s *Channel) SetIdentitySink(fn func(botUserID, botName, teamName string)) {
+	s.cfgMu.Lock()
+	s.identitySink = fn
 	s.cfgMu.Unlock()
 }
 
@@ -655,7 +740,11 @@ func (s *Channel) refreshBotUserID(ctx context.Context) {
 	s.botUserName = displayName
 	s.teamName = resp.Team
 	s.teamDomain = extractTeamDomain(resp.URL)
+	sink := s.identitySink
 	s.cfgMu.Unlock()
+	if sink != nil && resp.UserID != "" {
+		sink(resp.UserID, displayName, resp.Team)
+	}
 	if prev != resp.UserID {
 		log.Info().Str("channel", "slack").Str("bot_user_id", resp.UserID).Str("prev", prev).Msg("bot user id refreshed on connect")
 	}
