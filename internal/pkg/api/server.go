@@ -67,6 +67,7 @@ import (
 	customconnector "github.com/yogasw/wick/internal/connectors/customconnector"
 	dtconn "github.com/yogasw/wick/internal/connectors/datatables"
 	notesconn "github.com/yogasw/wick/internal/connectors/notes"
+	sourceconn "github.com/yogasw/wick/internal/connectors/source"
 	"github.com/yogasw/wick/internal/connectors/notifications"
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	subagents "github.com/yogasw/wick/internal/connectors/sub-agents"
@@ -1495,6 +1496,7 @@ func NewServer() *Server {
 	// grantable without any access to the ticket board.
 	connectors.Register(ticketconn.Module(agentsLayout))
 	connectors.Register(notesconn.Module(agentsLayout))
+	connectors.Register(sourceconn.Module(agentsLayout))
 
 	// Notes follow their session when it changes ticket. Wired as a hook
 	// because internal/agents/notes already imports internal/agents/ticket
