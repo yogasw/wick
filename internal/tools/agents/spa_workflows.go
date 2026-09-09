@@ -82,6 +82,7 @@ func registerSPAWorkflows(r tool.Router) {
 	r.POST("/api/workflows/lock/{id}", spaWorkflowLock)
 	r.POST("/api/workflows/run/{id}", spaWorkflowRunNow)
 	r.GET("/api/workflows/runs/{id}", spaWorkflowRuns)
+	r.POST("/api/workflows/runs/{id}/delete-all", spaWorkflowRunsDeleteAll)
 	r.POST("/api/workflows/runs/{id}/{runID}/delete", spaWorkflowRunDelete)
 	r.POST("/api/workflows/runs/{id}/{runID}/rerun", spaWorkflowRerun)
 	r.POST("/api/workflows/exec-node/{id}", spaExecNode)
@@ -708,6 +709,28 @@ func spaWorkflowRunDelete(c *tool.Ctx) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"ok": true})
+}
+
+// spaWorkflowRunsDeleteAll clears a workflow's entire run history.
+// POST /api/workflows/runs/{id}/delete-all -> {ok, deleted}
+//
+// Ignores the list filters on purpose: the Executions panel confirms
+// against the total, and "delete everything except the rows I happen to
+// be filtering on" is a footgun, not a feature.
+func spaWorkflowRunsDeleteAll(c *tool.Ctx) {
+	if notReadyWorkflow(c) {
+		return
+	}
+	id := c.PathValue("id")
+	deleted, err := globalWorkflowMgr.StateStore.DeleteAll(id)
+	if err != nil {
+		// Report the partial count alongside the error — the caller
+		// refreshes either way, and "0 of 900 gone" reads very
+		// differently from "899 of 900 gone".
+		c.JSON(http.StatusInternalServerError, map[string]any{"error": err.Error(), "deleted": deleted})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]any{"ok": true, "deleted": deleted})
 }
 
 // parseDateInput accepts "yyyy-mm-dd" (FE date input) or full RFC3339.
