@@ -16,6 +16,12 @@
     return repos.filter((r) => r.name.toLowerCase().includes(q) || r.rel.toLowerCase().includes(q));
   });
 
+  // The active repo, for the collapsed header. Closed is the default
+  // state, and closed it said nothing about WHICH of the 58 repos the
+  // panel below it belongs to — the only way to find out was to expand
+  // the list and hunt for the checked row.
+  const active = $derived(repos.find((r) => r.rel === activeRepo));
+
   let listEl = $state<HTMLDivElement | null>(null);
 
   /* Bring the selected repo into view. The list shows ~5 rows of what can be
@@ -46,6 +52,19 @@
     <svg class={"h-3 w-3 shrink-0 text-black-600 transition-transform " + (open ? "rotate-90" : "")} fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
     <span class="text-[10px] font-semibold uppercase tracking-wide text-black-700 dark:text-black-600">Repositories</span>
     <span class="rounded-full bg-white-300 px-1.5 text-[10px] font-semibold text-black-700 dark:bg-navy-600 dark:text-black-600">{repos.length}</span>
+    <!-- Only while collapsed: expanded, the checked row already says it,
+         and repeating it here would just crowd the row. -->
+    {#if !open && active}
+      <span class="ml-auto flex min-w-0 items-center gap-1 pl-2" title={`${active.name}${active.branch ? ` — ${active.branch}` : ""}`}>
+        <span class="truncate text-xs font-medium text-black-900 dark:text-white-100">{active.name}</span>
+        {#if active.branch}
+          <span class="flex min-w-0 max-w-[45%] items-center gap-0.5 text-[10px] text-black-600 dark:text-black-700">
+            <svg viewBox="0 0 16 16" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="4" r="1.5"/><circle cx="4" cy="12" r="1.5"/><circle cx="12" cy="5" r="1.5"/><path d="M4 5.5v5M5.5 4H9a2 2 0 012 2v0" stroke-linecap="round"/></svg>
+            <span class="truncate">{active.branch}</span>
+          </span>
+        {/if}
+      </span>
+    {/if}
   </button>
   {#if open}
     {#if repos.length > 5}
