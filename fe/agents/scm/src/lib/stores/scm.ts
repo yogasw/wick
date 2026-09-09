@@ -19,7 +19,16 @@ function readStoredRepo(): string {
   try { return localStorage.getItem(repoKey()) ?? ""; } catch { return ""; }
 }
 export const activeRepo = writable<string>(readStoredRepo());
-activeRepo.subscribe((v) => { try { localStorage.setItem(repoKey(), v); } catch { /* ignore */ } });
+activeRepo.subscribe((v) => {
+  try { localStorage.setItem(repoKey(), v); } catch { /* ignore */ }
+  // The SCM panel is a separate bundle from the conversation shell that
+  // draws the Source rail badge. localStorage writes don't fire `storage`
+  // in the tab that made them, so announce the switch — otherwise the
+  // badge keeps counting a repo the user is no longer looking at.
+  try {
+    window.dispatchEvent(new CustomEvent("wick:scm-active-repo", { detail: v }));
+  } catch { /* ignore */ }
+});
 export const loading = writable<boolean>(false);
 
 // Derived views the components bind to.
