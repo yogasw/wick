@@ -38,17 +38,22 @@ var (
 // Lookup satisfies channels.LookupProvider. Supported sources:
 //   - "slack.users"      → workspace users (skips bots / deleted)
 //   - "slack.usergroups" → user groups (matches name + handle)
-//   - "slack.channels"   → public + private channels the bot can see
+//   - "slack.channels"   → public + private channels this bot is a MEMBER of
 func (s *Channel) Lookup(source, query string) ([]agentchannels.LookupItem, error) {
 	s.cfgMu.Lock()
 	api := s.api
+	instance := s.ownerUserID
 	s.cfgMu.Unlock()
 	if api == nil {
 		return nil, fmt.Errorf("slack not configured")
 	}
 
 	q := strings.ToLower(strings.TrimSpace(query))
-	cacheKey := source + "|" + q
+	// The cache is package-level but the results are per-bot (each
+	// instance has its own token and its own channel memberships), so the
+	// owning instance has to be part of the key — otherwise the first bot
+	// to answer a query serves its channel list to every other bot.
+	cacheKey := instance + "|" + source + "|" + q
 	lookupCacheMu.Lock()
 	if e, ok := lookupCache[cacheKey]; ok && time.Since(e.at) < lookupCacheTTL {
 		lookupCacheMu.Unlock()
@@ -70,13 +75,9 @@ func (s *Channel) Lookup(source, query string) ([]agentchannels.LookupItem, erro
 	case "slack.usergroups":
 		items, err = lookupSlackUserGroups(api, q)
 	case "slack.channels":
-		items, err = lookupSlackChannelsAssistant(api, q)
-		if err != nil || len(items) == 0 {
-			if err != nil {
-				log.Debug().Str("channel", "slack").Err(err).Msg("assistant.search.context channels failed, falling back to conversations.list")
-			}
-			items, err = lookupSlackChannels(api, q)
-		}
+		// No assistant.search.context here: it searches the whole
+		// workspace, which is exactly what this source must NOT offer.
+		items, err = lookupSlackChannels(api, q)
 	default:
 		return nil, fmt.Errorf("unknown source %q", source)
 	}
@@ -129,59 +130,6 @@ func lookupSlackUsersAssistant(api *slackgo.Client, q string) ([]agentchannels.L
 	return out, nil
 }
 
-// lookupSlackChannelsAssistant queries assistant.search.context for channel
-// entities matching q. The Slack response carries no channel ID, only a
-// permalink (…/archives/<channel_id>) — parse it back out.
-func lookupSlackChannelsAssistant(api *slackgo.Client, q string) ([]agentchannels.LookupItem, error) {
-	if q == "" {
-		return nil, nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	resp, err := api.SearchAssistantContextContext(ctx, slackgo.AssistantSearchContextParameters{
-		Query:        q,
-		ChannelTypes: []string{"public_channel", "private_channel"},
-		ContentTypes: []string{"channels"},
-		Limit:        50,
-	})
-	if err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{}
-	out := make([]agentchannels.LookupItem, 0, lookupMaxResults)
-	for _, ch := range resp.Results.Channels {
-		id := channelIDFromPermalink(ch.Permalink)
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		out = append(out, agentchannels.LookupItem{ID: id, Name: "#" + ch.Name})
-		if len(out) >= lookupMaxResults {
-			break
-		}
-	}
-	return out, nil
-}
-
-// channelIDFromPermalink extracts the channel ID from a Slack archive
-// permalink like https://team.slack.com/archives/C0123ABC or
-// .../archives/C0123ABC/p1234567890. Returns empty when unparseable.
-func channelIDFromPermalink(permalink string) string {
-	const marker = "/archives/"
-	i := strings.Index(permalink, marker)
-	if i < 0 {
-		return ""
-	}
-	rest := permalink[i+len(marker):]
-	if j := strings.IndexByte(rest, '/'); j >= 0 {
-		rest = rest[:j]
-	}
-	if q := strings.IndexByte(rest, '?'); q >= 0 {
-		rest = rest[:q]
-	}
-	return rest
-}
-
 func lookupSlackUsers(api *slackgo.Client, q string) ([]agentchannels.LookupItem, error) {
 	users, err := api.GetUsers()
 	if err != nil {
@@ -232,15 +180,21 @@ func lookupSlackUserGroups(api *slackgo.Client, q string) ([]agentchannels.Looku
 	return out, nil
 }
 
+// lookupSlackChannels lists the channels THIS bot is a member of.
+//
+// users.conversations, not conversations.list: the latter returns every
+// non-archived channel in the workspace, so the picker offered hundreds
+// of channels the bot was never invited to — a trigger scoped to one of
+// them can never fire, and a send to it fails with not_in_channel.
 func lookupSlackChannels(api *slackgo.Client, q string) ([]agentchannels.LookupItem, error) {
-	params := &slackgo.GetConversationsParameters{
+	params := &slackgo.GetConversationsForUserParameters{
 		ExcludeArchived: true,
 		Limit:           200,
 		Types:           []string{"public_channel", "private_channel"},
 	}
 	out := make([]agentchannels.LookupItem, 0, lookupMaxResults)
 	for {
-		chans, cursor, err := api.GetConversations(params)
+		chans, cursor, err := api.GetConversationsForUser(params)
 		if err != nil {
 			return nil, err
 		}
@@ -266,4 +220,29 @@ func containsFold(s, sub string) bool {
 		return true
 	}
 	return strings.Contains(strings.ToLower(s), sub)
+}
+
+// InstanceForBot returns the registered Slack instance whose resolved
+// bot user id matches botID, or nil when none does.
+//
+// One process hosts one Slack instance per owning user, all reporting
+// Name() == "slack", so callers that need a SPECIFIC bot cannot use
+// Registry.ChannelByName — it returns whichever was registered first.
+// An empty botID never matches (an instance whose auth.test hasn't
+// landed yet also reports "", and "the bot with no id" is not a thing
+// anyone means to select).
+func InstanceForBot(reg *agentchannels.Registry, botID string) *Channel {
+	if reg == nil || botID == "" {
+		return nil
+	}
+	for _, ch := range reg.Channels() {
+		sc, ok := ch.(*Channel)
+		if !ok {
+			continue
+		}
+		if sc.BotUserID() == botID {
+			return sc
+		}
+	}
+	return nil
 }

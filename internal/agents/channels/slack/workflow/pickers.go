@@ -5,6 +5,12 @@
 // One PickerFunc per source name. Pulled live from the Slack API on
 // each call — small workspaces tolerate that fine; heavy-traffic
 // callers can wrap with their own caching layer at setup if needed.
+//
+// Every source fans out over EVERY registered Slack instance: one
+// process hosts one bot per owning user, each with its own token and
+// its own set of channels. Binding a picker to a single instance would
+// offer the author channels the bot that actually runs the workflow has
+// never joined.
 package workflow
 
 import (
@@ -13,45 +19,103 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	"github.com/yogasw/wick/internal/agents/channels/slack"
 	wfmcp "github.com/yogasw/wick/internal/agents/workflow/mcp"
 )
 
 // RegisterPickers wires this channel's picker sources into the
 // workflow MCP picker registry. Setup composers call this after
-// constructing the slack.Channel and the workflow mcp.Ops.
+// constructing the channel registry.
 //
 // Sources registered:
 //
-//	slack.channels    — public + private channels visible to the bot
+//	slack.channels    — channels each bot is a MEMBER of
 //	slack.users       — workspace members (non-bot, non-deleted)
 //	slack.usergroups  — workspace user groups (subteams)
-func RegisterPickers(pr *wfmcp.PickerRegistry, ch *slack.Channel) {
-	if pr == nil || ch == nil {
+func RegisterPickers(pr *wfmcp.PickerRegistry, reg *agentchannels.Registry) {
+	if pr == nil || reg == nil {
 		return
 	}
-	pr.Register("slack.channels", channelsPicker(ch))
-	pr.Register("slack.users", usersPicker(ch))
-	pr.Register("slack.usergroups", usergroupsPicker(ch))
+	pr.Register("slack.channels", channelsPicker(reg))
+	pr.Register("slack.users", usersPicker(reg))
+	pr.Register("slack.usergroups", usergroupsPicker(reg))
 }
 
-// channelsPicker returns a PickerFunc that lists channels the bot can
-// see. Returns {id, name} pairs with the # prefix on names so the UI
-// can render them as-is.
-func channelsPicker(ch *slack.Channel) wfmcp.PickerFunc {
+// slackInstances returns every Slack channel instance in the registry,
+// in registration order.
+func slackInstances(reg *agentchannels.Registry) []*slack.Channel {
+	out := []*slack.Channel{}
+	for _, ch := range reg.Channels() {
+		if sc, ok := ch.(*slack.Channel); ok {
+			out = append(out, sc)
+		}
+	}
+	return out
+}
+
+// perInstance runs fn against each configured Slack instance and merges
+// the results, de-duped by item ID. When more than one bot is connected,
+// each name is suffixed with the bot that can reach it so the author can
+// tell two same-named entries apart. An instance whose call fails is
+// skipped rather than failing the whole lookup — one bot with a missing
+// scope shouldn't blank the dropdown for the others.
+func perInstance(reg *agentchannels.Registry, fn func(context.Context, *slackgo.Client) ([]wfmcp.PickerItem, error)) wfmcp.PickerFunc {
 	return func(ctx context.Context, _ string) ([]wfmcp.PickerItem, error) {
-		api := ch.API()
-		if api == nil {
+		insts := slackInstances(reg)
+		if len(insts) == 0 {
 			return nil, fmt.Errorf("slack channel not configured")
 		}
-		params := &slackgo.GetConversationsParameters{
+		label := len(insts) > 1
+		seen := map[string]bool{}
+		out := []wfmcp.PickerItem{}
+		var lastErr error
+		for _, inst := range insts {
+			api := inst.API()
+			if api == nil {
+				continue
+			}
+			items, err := fn(ctx, api)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			bot := inst.BotUserName()
+			for _, it := range items {
+				if seen[it.ID] {
+					continue
+				}
+				seen[it.ID] = true
+				if label && bot != "" {
+					it.Name = it.Name + " — @" + bot
+				}
+				out = append(out, it)
+			}
+		}
+		if len(out) == 0 && lastErr != nil {
+			return nil, lastErr
+		}
+		return out, nil
+	}
+}
+
+// channelsPicker lists the channels each bot is a MEMBER of.
+//
+// users.conversations (GetConversationsForUser with an empty User =
+// the token's own bot), NOT conversations.list: the latter returns every
+// non-archived channel in the workspace, including thousands the bot was
+// never invited to — picking one of those yields a trigger that can
+// never fire and a send that fails with not_in_channel.
+func channelsPicker(reg *agentchannels.Registry) wfmcp.PickerFunc {
+	return perInstance(reg, func(ctx context.Context, api *slackgo.Client) ([]wfmcp.PickerItem, error) {
+		params := &slackgo.GetConversationsForUserParameters{
 			ExcludeArchived: true,
 			Types:           []string{"public_channel", "private_channel"},
 			Limit:           1000,
 		}
 		out := []wfmcp.PickerItem{}
 		for {
-			chans, cursor, err := api.GetConversationsContext(ctx, params)
+			chans, cursor, err := api.GetConversationsForUserContext(ctx, params)
 			if err != nil {
 				return nil, err
 			}
@@ -64,18 +128,13 @@ func channelsPicker(ch *slack.Channel) wfmcp.PickerFunc {
 			params.Cursor = cursor
 		}
 		return out, nil
-	}
+	})
 }
 
-// usersPicker returns a PickerFunc that lists workspace members. Bots
-// and deleted users are filtered out — they're rarely valid match
-// targets.
-func usersPicker(ch *slack.Channel) wfmcp.PickerFunc {
-	return func(ctx context.Context, _ string) ([]wfmcp.PickerItem, error) {
-		api := ch.API()
-		if api == nil {
-			return nil, fmt.Errorf("slack channel not configured")
-		}
+// usersPicker lists workspace members. Bots and deleted users are
+// filtered out — they're rarely valid match targets.
+func usersPicker(reg *agentchannels.Registry) wfmcp.PickerFunc {
+	return perInstance(reg, func(ctx context.Context, api *slackgo.Client) ([]wfmcp.PickerItem, error) {
 		users, err := api.GetUsersContext(ctx)
 		if err != nil {
 			return nil, err
@@ -95,17 +154,13 @@ func usersPicker(ch *slack.Channel) wfmcp.PickerFunc {
 			out = append(out, wfmcp.PickerItem{ID: u.ID, Name: name})
 		}
 		return out, nil
-	}
+	})
 }
 
-// usergroupsPicker returns a PickerFunc that lists workspace
-// user groups. Slack labels them as "subteams" in the API.
-func usergroupsPicker(ch *slack.Channel) wfmcp.PickerFunc {
-	return func(ctx context.Context, _ string) ([]wfmcp.PickerItem, error) {
-		api := ch.API()
-		if api == nil {
-			return nil, fmt.Errorf("slack channel not configured")
-		}
+// usergroupsPicker lists workspace user groups. Slack labels them as
+// "subteams" in the API.
+func usergroupsPicker(reg *agentchannels.Registry) wfmcp.PickerFunc {
+	return perInstance(reg, func(ctx context.Context, api *slackgo.Client) ([]wfmcp.PickerItem, error) {
 		groups, err := api.GetUserGroupsContext(ctx)
 		if err != nil {
 			return nil, err
@@ -115,5 +170,5 @@ func usergroupsPicker(ch *slack.Channel) wfmcp.PickerFunc {
 			out = append(out, wfmcp.PickerItem{ID: g.ID, Name: "@" + g.Handle})
 		}
 		return out, nil
-	}
+	})
 }

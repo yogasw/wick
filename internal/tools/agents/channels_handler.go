@@ -34,6 +34,7 @@ import (
 	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
 	agenttelegram "github.com/yogasw/wick/internal/agents/channels/telegram"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/workflow/setup"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
@@ -431,6 +432,13 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
 			ch.SetPublicURL(pubURL)
 			ch.SetSessionPrefix(sessPrefix)
+			// Boot wires the workflow event sink per instance; an
+			// instance born here has to be wired too, or this bot's
+			// Slack events fire no channel trigger until the next
+			// restart.
+			if globalWorkflowMgr != nil {
+				setup.AttachSlackWorkflowSink(ch, globalWorkflowMgr.Router)
+			}
 			src := agentslack.NewConfigSourceKeyed(store, ch, userID)
 			globalChannels.AddKeyed(iKey, ch, src)
 			startInstance(ch)

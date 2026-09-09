@@ -14,7 +14,7 @@ import (
 // Field semantics matched by the router:
 //   - Mode = "all"       → channel_id / user fields hidden, no filter
 //   - Mode = "whitelist" → only fire when message source matches the
-//                          chip lists
+//     chip lists
 //
 // Picker entries serialize to `[{id,name}, ...]` JSON. Router checks
 // payload.channel_id / payload.user as id-membership against the list.
@@ -47,12 +47,14 @@ func registerEventMessage(reg *integration.Registry) {
 		MatchSchema: entity.StructToConfigs(SlackMessageMatch{}),
 		Docs: wickdocs.Docs{
 			OutputShape: map[string]string{
-				"payload.text":       "Raw message text the user posted. Whitespace untrimmed; mentions of the bot are NOT stripped — use replace / trim helpers downstream if needed.",
-				"payload.user":       "Slack user ID (U…) of the sender. Resolve to email/name via the slack connector users.info / users.lookupByEmail ops.",
-				"payload.channel_id": "Channel ID (C…) or DM ID (D…). DMs prefix with D; check payload.is_dm for the boolean.",
-				"payload.thread":     "Thread root ts. Equal to payload.ts when this is the first message in a new thread.",
-				"payload.ts":         "Message timestamp / Slack message ID. Pass to update_message / delete_message to target this exact message.",
-				"payload.is_dm":      "True when channel_id starts with D (direct message). Use to branch DM-only paths.",
+				"payload.text":        "Raw message text the user posted. Whitespace untrimmed; mentions of the bot are NOT stripped — use replace / trim helpers downstream if needed.",
+				"payload.user":        "Slack user ID (U…) of the sender. Resolve to email/name via the slack connector users.info / users.lookupByEmail ops.",
+				"payload.channel_id":  "Channel ID (C…) or DM ID (D…). DMs prefix with D; check payload.is_dm for the boolean.",
+				"payload.thread":      "Thread root ts. Equal to payload.ts when this is the first message in a new thread.",
+				"payload.ts":          "Message timestamp / Slack message ID. Pass to update_message / delete_message to target this exact message.",
+				"payload.is_dm":       "True when channel_id starts with D (direct message). Use to branch DM-only paths.",
+				"payload.bot_user_id": "Slack user ID of the wick bot that RECEIVED this event. One process runs one bot per owning user, so this is how a workflow tells them apart.",
+				"payload.bot_name":    "Handle of the bot that received this event ('' until auth.test lands).",
 			},
 			Quirks: []string{
 				"Bot's own messages are filtered before reaching this event — no infinite loops from send_message.",

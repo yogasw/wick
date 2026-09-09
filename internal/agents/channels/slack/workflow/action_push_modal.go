@@ -6,7 +6,6 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
-	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
@@ -24,7 +23,7 @@ type PushModalOutput struct {
 	ViewHash string `json:"view_hash"`
 }
 
-func registerActionPushModal(reg *integration.Registry, ch *slack.Channel) {
+func registerActionPushModal(reg *integration.Registry, pick ChannelPicker) {
 	reg.RegisterAction(integration.ActionDescriptor{
 		Channel:     Channel,
 		Action:      "push_modal",
@@ -48,6 +47,10 @@ func registerActionPushModal(reg *integration.Registry, ch *slack.Channel) {
 			},
 		},
 		Execute: func(ctx context.Context, args map[string]any) (any, error) {
+			ch := pick(ctx)
+			if ch == nil {
+				return nil, fmt.Errorf("slack channel not configured")
+			}
 			api := ch.API()
 			if api == nil {
 				return nil, fmt.Errorf("slack channel not configured")

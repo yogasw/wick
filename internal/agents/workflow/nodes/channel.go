@@ -97,7 +97,11 @@ func (e *ChannelExecutor) Execute(ctx context.Context, n workflow.Node, rc *work
 	if err != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("render args: %w", err)
 	}
-	result, err := desc.Execute(ctx, args)
+	// Hand the firing trigger's payload down so a multi-instance channel
+	// can resolve WHICH instance saw the event (Slack: which bot). Without
+	// it every action runs as whichever instance happened to be bound at
+	// boot, so a workflow triggered by bot B replies as bot A.
+	result, err := desc.Execute(integration.WithTriggerPayload(ctx, rc.Event.Payload), args)
 	if err != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("%s: %w", key, err)
 	}
