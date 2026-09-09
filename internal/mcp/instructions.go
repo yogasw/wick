@@ -40,6 +40,10 @@ ACTIVE REPOSITORY
 - Treat "this repo" / "the repo" as that one unless the user names another. When the block
   is missing it, or looks stale, use the Source connector: source_active re-reads it and
   source_list shows every repo under the cwd with branch and change counts.
+- wick MOVES that selection itself: whoever writes a file — you or the person — makes that
+  file's repo the active one within a couple of seconds. So active_repo in your prompt is
+  only true as of spawn; after you edit somewhere else it names the wrong repo. Read it back
+  with source_active rather than repeating the prompt's value.
 - Call source_select only when the user asks to work in a different repo — it moves the
-  human's Source panel too.
+  human's Source panel too, and editing there would have moved it anyway.
 `

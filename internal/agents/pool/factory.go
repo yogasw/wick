@@ -585,9 +585,12 @@ func sessionIdentityBlock(sessionID, channel, title string, titleCustom bool, ac
 		b.WriteString(activeRepo)
 		b.WriteString("\n\nactive_repo is the repository the Source panel has open — treat")
 		b.WriteString(" \"this repo\" as that one unless the user names another. It is a")
-		b.WriteString(" snapshot from spawn time; the Source connector re-reads it")
-		b.WriteString(" (source_active), lists the others (source_list), and switches the")
-		b.WriteString(" panel (source_select) when the user asks to work somewhere else.")
+		b.WriteString(" snapshot from spawn time AND wick moves the selection itself to")
+		b.WriteString(" whichever repo a file was just written in, so it goes stale the")
+		b.WriteString(" moment you edit elsewhere. The Source connector re-reads it")
+		b.WriteString(" (source_active), lists the others (source_list), shows what is")
+		b.WriteString(" currently changed (source_changes), and switches the panel")
+		b.WriteString(" (source_select) when the user asks to work somewhere else.")
 	}
 	return b.String()
 }

@@ -79,6 +79,14 @@ func Operations(layout agentconfig.Layout) []connector.Category {
 				"which one is active. Use it to answer \"which repos are here\" and to get the rel handle "+
 				"source_select expects.",
 			scopeInput{}, h.list, wickdocs.Docs{}),
+		connector.Op("source_changes", "Changed Files",
+			"List the files changed in a repository right now: path, staged / unstaged / untracked, and the "+
+				"git status codes. Defaults to the active repo. "+
+				"This is deliberately NOT in your system prompt \u2014 the list changes every few seconds, and a "+
+				"snapshot from spawn time would describe files nobody is editing any more. Call it when you need "+
+				"to know what is in flight: before proposing a commit, when the user says \"what did I change\", "+
+				"or to check whether your own edit landed.",
+			changesInput{}, h.changes, wickdocs.Docs{}),
 		connector.Op("source_select", "Select Repository",
 			"Switch the repository this session works in. This MOVES THE HUMAN'S Source panel too, so only call it "+
 				"when the user asks to work somewhere else — not to look something up, which needs no selection. "+
@@ -93,6 +101,11 @@ func Operations(layout agentconfig.Layout) []connector.Category {
 // scopeInput selects which session's repos to look at. Empty = the
 // calling session, which is the common case.
 type scopeInput struct {
+	SessionID string `wick:"desc=Session whose working directory to inspect. Defaults to the calling session."`
+}
+
+type changesInput struct {
+	Repo      string `wick:"desc=Repository to inspect: the rel handle from source_list, its name, or its absolute path. Defaults to the active repo."`
 	SessionID string `wick:"desc=Session whose working directory to inspect. Defaults to the calling session."`
 }
 

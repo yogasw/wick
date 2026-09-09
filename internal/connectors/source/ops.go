@@ -119,6 +119,48 @@ func (h *handlers) list(c *connector.Ctx) (any, error) {
 	}, nil
 }
 
+// changes lists what is currently modified in a repo. Kept as an op
+// rather than a prompt line because the answer has a shelf life of
+// seconds — see the op description.
+func (h *handlers) changes(c *connector.Ctx) (any, error) {
+	sess, cwd, err := h.resolveSession(c)
+	if err != nil {
+		return nil, err
+	}
+	rel := strings.TrimSpace(c.Input("repo"))
+	if rel == "" {
+		sel, serr := scm.ResolveSelection(cwd, sess.Meta.ScmRepo)
+		if serr != nil {
+			return nil, fmt.Errorf("resolve active repo: %w", serr)
+		}
+		if sel.Rel == "" {
+			return nil, fmt.Errorf("no git repository under this session's working directory")
+		}
+		rel = sel.Rel
+	} else {
+		repo, verr := scm.ValidateRepo(cwd, rel)
+		if verr != nil {
+			return nil, verr
+		}
+		rel = repo.Rel
+	}
+	dir, err := scm.ResolveRepoDir(cwd, rel)
+	if err != nil {
+		return nil, err
+	}
+	st, err := scm.Status(c.Context(), dir)
+	if err != nil {
+		return nil, fmt.Errorf("git status: %w", err)
+	}
+	return map[string]any{
+		"repo":    rel,
+		"dir":     dir,
+		"branch":  st.Branch.Name,
+		"changes": st.Changes,
+		"total":   len(st.Changes),
+	}, nil
+}
+
 func (h *handlers) selectRepo(c *connector.Ctx) (any, error) {
 	sess, cwd, err := h.resolveSession(c)
 	if err != nil {
