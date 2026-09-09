@@ -6,7 +6,6 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
-	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
@@ -26,7 +25,7 @@ type UpdateModalOutput struct {
 	ViewHash string `json:"view_hash"`
 }
 
-func registerActionUpdateModal(reg *integration.Registry, ch *slack.Channel) {
+func registerActionUpdateModal(reg *integration.Registry, pick ChannelPicker) {
 	reg.RegisterAction(integration.ActionDescriptor{
 		Channel:     Channel,
 		Action:      "update_modal",
@@ -53,6 +52,10 @@ func registerActionUpdateModal(reg *integration.Registry, ch *slack.Channel) {
 			OutputSample: `{"view_id":"V0123ABCDE","view_hash":"1700001245.xyz"}`,
 		},
 		Execute: func(ctx context.Context, args map[string]any) (any, error) {
+			ch := pick(ctx)
+			if ch == nil {
+				return nil, fmt.Errorf("slack channel not configured")
+			}
 			api := ch.API()
 			if api == nil {
 				return nil, fmt.Errorf("slack channel not configured")

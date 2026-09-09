@@ -10,6 +10,7 @@ import (
 
 	"github.com/yogasw/wick/internal/agents/agentctl"
 	"github.com/yogasw/wick/internal/agents/askuser"
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
 	slackwf "github.com/yogasw/wick/internal/agents/channels/slack/workflow"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
@@ -131,11 +132,15 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 	// stub Slack channel (no live API) — they error at runtime if a node
 	// actually fires, but AI discovery + workflow_validate work fully.
 	stdioStubSlack := agentslack.New(agentconfig.SlackChannelConfig{})
-	slackwf.RegisterAll(stdioWfMgr.Integration, stdioStubSlack)
+	slackwf.RegisterAll(stdioWfMgr.Integration, slackwf.StaticPicker(stdioStubSlack))
 	// stdio path: register pickers too, even though the stub channel
 	// has no live API — calls will surface the configuration error
-	// rather than silently returning empty lists.
-	slackwf.RegisterPickers(stdioWfMgr.MCP.Pickers, stdioStubSlack)
+	// rather than silently returning empty lists. Pickers resolve over a
+	// channel registry (one Slack instance per owning user in the server
+	// path), so wrap the stub in a throwaway registry here.
+	stdioStubReg := agentchannels.NewRegistry()
+	stdioStubReg.Add(stdioStubSlack, nil)
+	slackwf.RegisterPickers(stdioWfMgr.MCP.Pickers, stdioStubReg)
 	stdioWfMgr.WithDataTablesDB(db)
 	// DB-primary workflow store also needs wiring in stdio mode so
 	// workflow_versions / workflow_diff_versions / workflow_restore_version

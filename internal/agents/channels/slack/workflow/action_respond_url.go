@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
@@ -40,7 +39,9 @@ type respondURLBody struct {
 // budget for follow-up posts.
 var respondURLClient = &http.Client{Timeout: 5 * time.Second}
 
-func registerActionRespondURL(reg *integration.Registry, _ *slack.Channel) {
+// The picker is unused here: respond_url posts back to the URL Slack
+// handed us, which carries its own auth — no bot token involved.
+func registerActionRespondURL(reg *integration.Registry, _ ChannelPicker) {
 	reg.RegisterAction(integration.ActionDescriptor{
 		Channel:     Channel,
 		Action:      "respond_url",

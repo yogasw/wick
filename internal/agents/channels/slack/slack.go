@@ -671,6 +671,16 @@ func (s *Channel) BotUserID() string {
 	return s.botUserID
 }
 
+// BotUserName returns this instance's bot handle (auth.test's resp.User,
+// resolved to a display name), or "" before auth.test has succeeded.
+// Used to label which bot a picker entry / workflow event came from when
+// several Slack instances share one workspace.
+func (s *Channel) BotUserName() string {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.botUserName
+}
+
 // OwnsSession reports whether sessionID belongs to this instance.
 //
 // The App Owner instance's prefix is the bare "slack-", which is ALSO a
@@ -1008,6 +1018,7 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				"channel_id": ev.Channel,
 				"thread":     threadKey(ev.ThreadTimeStamp, ev.TimeStamp),
 				"ts":         ev.TimeStamp,
+				"event_key":  slackEventKey(ev.Channel, ev.TimeStamp),
 			})
 			// ev.Files carries any images/attachments posted with the mention.
 			// MessageEvent has no Files field, so pass them alongside — without
@@ -1040,6 +1051,7 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				"thread":       threadKey(ev.ThreadTimeStamp, ev.TimeStamp),
 				"ts":           ev.TimeStamp,
 				"is_dm":        ev.ChannelType == "im" || ev.ChannelType == "mpim",
+				"event_key":    slackEventKey(ev.Channel, ev.TimeStamp),
 			}
 			s.emitWorkflow(ctx, "message", msgPayload)
 			// A top-level post (no parent thread_ts, or thread_ts == its own
@@ -1087,6 +1099,28 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 			s.handleReactionRemoved(ev)
 		}
 	}
+}
+
+// slackEventKey identifies a physical Slack event independently of WHICH
+// bot received it: (channel, message ts) is unique per message
+// workspace-wide.
+//
+// Needed because a channel message is delivered to every app that is a
+// member of the channel, and one process runs one Slack instance per
+// owning user — so the same human message reaches the workflow router
+// once per bot. The router collapses deliveries sharing this key
+// (Router.firstDelivery), which also absorbs Slack's own webhook
+// retries. Slack's per-delivery event_id is deliberately NOT used: each
+// app gets a different one for the same message, so it cannot collapse
+// them.
+//
+// Empty when either part is missing — the router treats a blank key as
+// "not deduplicable" and lets the event through.
+func slackEventKey(channelID, ts string) string {
+	if channelID == "" || ts == "" {
+		return ""
+	}
+	return channelID + "/" + ts
 }
 
 // threadKey returns the conversation thread key: parent thread_ts when

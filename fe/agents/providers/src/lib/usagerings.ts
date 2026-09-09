@@ -3,7 +3,7 @@
    = the rolling 7-day window. Kept out of the component so the maths is
    unit-testable without rendering. */
 
-import type { UsageWindow } from "./logintty.js";
+import { fmtResetsIn, usageLabel, type UsageWindow } from "./logintty.js";
 
 /* connectionKey is the join key between a connection row and the card it
    belongs to — the same {type, name} pair the list keys cards on.
@@ -51,4 +51,24 @@ export function ringColor(utilization: number): string {
   if (utilization >= 90) return "text-neg-400";
   if (utilization >= 70) return "text-cau-400";
   return "text-link-400";
+}
+
+/* resetHint renders "when does this window reset" for the compact card.
+
+   `short` is the inline chip text (3h / 25m / 4d) and `full` is the
+   spelled-out sentence used as the tooltip and the accessible name —
+   the chip alone is ambiguous next to the window's own length, where
+   "5h 42%" already contains a duration.
+
+   Both are empty when the API gave no usable timestamp (missing, past,
+   unparseable), so a caller can drop the element entirely rather than
+   render a stray separator. */
+export function resetHint(
+  window: UsageWindow | null,
+  nowMs: number,
+): { short: string; full: string } {
+  if (!window) return { short: "", full: "" };
+  const short = fmtResetsIn(window.resetsAt, nowMs);
+  if (!short) return { short: "", full: "" };
+  return { short, full: `${usageLabel(window.key)} resets in ${short}` };
 }

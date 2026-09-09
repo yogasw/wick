@@ -360,6 +360,9 @@ func (r *Router) DispatchWithDone(ctx context.Context, evt workflow.Event) []<-c
 //
 // Returns the number of workflows that accepted the event.
 func (r *Router) Dispatch(ctx context.Context, evt workflow.Event) int {
+	if !r.firstDelivery(evt) {
+		return 0
+	}
 	r.mu.RLock()
 	// Key = "wfID:triggerIdx" so a workflow with multiple triggers of the
 	// same type (e.g. two webhook triggers) each get a candidate slot.
@@ -554,17 +557,42 @@ func filterMatchSpec(spec map[string]any) map[string]any {
 //   - string spec → payload[key] equals spec
 //   - JSON array `[{"id":..},..]` (picker output) → payload[key] is
 //     a member of the id list
+//   - a "<field>_contains" key → case-insensitive substring of
+//     payload[<field>] (there is no payload key by that name, so plain
+//     equality would compare the operator's text against "" and reject
+//     every event — a filter that silently disables the trigger)
 //
 // Events that need fancier semantics (regex, set difference, custom
 // transform) fall back to dump-all and filter inside the graph with
 // a branch / transform node.
 func matchEventPayload(spec map[string]any, payload map[string]any) bool {
 	for k, raw := range spec {
+		if base, ok := strings.CutSuffix(k, "_contains"); ok {
+			if _, declared := payload[k]; !declared {
+				if !matchContains(raw, payload[base]) {
+					return false
+				}
+				continue
+			}
+		}
 		if !matchOne(raw, payload[k]) {
 			return false
 		}
 	}
 	return true
+}
+
+// matchContains implements the "<field>_contains" spec key: an empty
+// value is no filter, anything else is a case-insensitive substring test
+// against the payload field it names.
+func matchContains(specVal, gotVal any) bool {
+	want, _ := specVal.(string)
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return true
+	}
+	got, _ := gotVal.(string)
+	return strings.Contains(strings.ToLower(got), strings.ToLower(want))
 }
 
 func matchOne(specVal, gotVal any) bool {
@@ -788,6 +816,43 @@ func PathMatches(tmpl, got string) bool {
 		if tp != gParts[i] {
 			return false
 		}
+	}
+	return true
+}
+
+// sourceDedup collapses repeat deliveries of ONE physical upstream event.
+// Process-wide and always on — distinct from the per-trigger Dedup, which
+// is an opt-in (DedupTTLSec) "don't re-run for this event id" rule.
+//
+// 5 minutes covers both cases this exists for: N channel instances
+// handing over the same message within milliseconds, and an upstream
+// webhook retry minutes later.
+var sourceDedup = NewDedup(4096, 5*time.Minute)
+
+// firstDelivery reports whether this is the first time the router has
+// seen a given physical event, and records it.
+//
+// One process runs one channel instance PER OWNING USER (e.g. several
+// Slack bots), and a channel message is delivered to EVERY app that is a
+// member — so the same human message arrives once per bot. Each delivery
+// carries a different bot identity but the same event_key, and firing a
+// workflow once per bot that happens to sit in the channel is wrong: the
+// user performed one action.
+//
+// Events with no event_key (cron, manual, webhook, channels that don't
+// set one) are always let through — this must never become an accidental
+// filter on event classes that have no duplicate problem.
+func (r *Router) firstDelivery(evt workflow.Event) bool {
+	key, _ := evt.Payload["event_key"].(string)
+	if key == "" {
+		return true
+	}
+	full := evt.Type + "|" + evt.Channel + "|" + evt.Subtype + "|" + key
+	if sourceDedup.Seen(full) {
+		log.Debug().Str("component", "wf").Str("wf_event", evt.Subtype).
+			Str("channel", evt.Channel).Str("event_key", key).
+			Msg("dispatch: duplicate delivery of one event — skipped")
+		return false
 	}
 	return true
 }

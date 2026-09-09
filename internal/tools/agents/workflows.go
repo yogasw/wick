@@ -480,23 +480,60 @@ func workflowLookupAPI(c *tool.Ctx) {
 		c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "channel registry not ready"})
 		return
 	}
-	ch := globalChannels.ChannelByName(module)
-	if ch == nil {
-		c.JSON(http.StatusNotFound, map[string]string{"error": "module not registered: " + module})
+	// One process hosts one instance of a channel type PER OWNING USER
+	// (registry AddKeyed), each with its own credentials — so a Slack
+	// picker has to ask every bot, not just whichever ChannelByName
+	// happened to return first. Results merge de-duped by ID; when more
+	// than one instance answers, the bot that can reach an entry is
+	// appended to its label so two same-named rows stay tellable apart.
+	providers := []agentchannels.Channel{}
+	for _, ch := range globalChannels.Channels() {
+		if ch.Name() != module {
+			continue
+		}
+		if _, ok := ch.(agentchannels.LookupProvider); ok {
+			providers = append(providers, ch)
+		}
+	}
+	if len(providers) == 0 {
+		if globalChannels.ChannelByName(module) == nil {
+			c.JSON(http.StatusNotFound, map[string]string{"error": "module not registered: " + module})
+		} else {
+			c.JSON(http.StatusNotImplemented, map[string]string{"error": "module does not support lookup"})
+		}
 		return
 	}
-	lp, ok := ch.(agentchannels.LookupProvider)
-	if !ok {
-		c.JSON(http.StatusNotImplemented, map[string]string{"error": "module does not support lookup"})
-		return
+
+	label := len(providers) > 1
+	seen := map[string]bool{}
+	items := []agentchannels.LookupItem{}
+	var lastErr error
+	for _, ch := range providers {
+		got, err := ch.(agentchannels.LookupProvider).Lookup(source, query)
+		if err != nil {
+			// One bot missing a scope (or not yet authed) must not blank
+			// the dropdown for the rest.
+			lastErr = err
+			continue
+		}
+		suffix := ""
+		if label {
+			if named, ok := ch.(interface{ BotUserName() string }); ok && named.BotUserName() != "" {
+				suffix = " — @" + named.BotUserName()
+			}
+		}
+		for _, it := range got {
+			if seen[it.ID] {
+				continue
+			}
+			seen[it.ID] = true
+			it.Name += suffix
+			items = append(items, it)
+		}
 	}
-	items, err := lp.Lookup(source, query)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, map[string]string{"error": err.Error()})
+	if len(items) == 0 && lastErr != nil {
+		c.JSON(http.StatusBadGateway, map[string]string{"error": lastErr.Error()})
 		return
-	}
-	if items == nil {
-		items = []agentchannels.LookupItem{}
 	}
 	c.JSON(http.StatusOK, items)
 }

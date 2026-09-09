@@ -498,6 +498,13 @@ export const workflowAPI = {
   deleteRun: (id: string, runID: string): Promise<{ ok: boolean }> =>
     apiPost(`${BASE}/api/workflows/runs/${encodeURIComponent(id)}/${encodeURIComponent(runID)}/delete`, {}),
 
+  // Clear the whole run history for a workflow. Returns how many run
+  // folders went away, so the caller can report "Deleted 412 runs"
+  // instead of a bare success. Ignores the panel's list filters by
+  // design — see spaWorkflowRunsDeleteAll.
+  deleteAllRuns: (id: string): Promise<{ ok: boolean; deleted: number }> =>
+    apiPost(`${BASE}/api/workflows/runs/${encodeURIComponent(id)}/delete-all`, {}),
+
   // Re-run a past run: re-fires the current draft with that run's original
   // trigger event (same input). Returns {ok}; caller refreshes the runs list.
   rerunRun: (id: string, runID: string): Promise<{ ok: boolean }> =>

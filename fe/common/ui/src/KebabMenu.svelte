@@ -32,8 +32,16 @@
     ariaLabel?: string;
     /* Menu width in px (Tailwind w-* isn't available on the fixed layer). */
     width?: number;
+    /* Trigger size. "md" (default, 32px) suits list rows and card headers.
+       "sm" (24px) is for dense toolbars whose other controls are ~16px —
+       a 32px trigger there is the tallest flex child and silently makes the
+       whole bar 50% taller. */
+    size?: "sm" | "md";
   };
-  let { items, ariaLabel = "Actions", width = 176 }: Props = $props();
+  let { items, ariaLabel = "Actions", width = 176, size = "md" }: Props = $props();
+
+  const triggerSize = $derived(size === "sm" ? "h-6 w-6" : "h-8 w-8");
+  const iconSize = $derived(size === "sm" ? "h-4 w-4" : "h-5 w-5");
 
   let myId = $state(0);
   let triggerEl = $state<HTMLButtonElement | null>(null);
@@ -141,10 +149,10 @@
   aria-label={ariaLabel}
   aria-haspopup="menu"
   aria-expanded={isOpen}
-  class="flex h-8 w-8 items-center justify-center rounded-lg text-black-700 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
+  class="flex {triggerSize} items-center justify-center rounded-lg text-black-700 hover:bg-white-200 dark:text-black-600 dark:hover:bg-navy-700"
   onclick={toggle}
 >
-  <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 6a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm0 5.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm0 5.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z"/></svg>
+  <svg class={iconSize} fill="currentColor" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 6a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm0 5.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm0 5.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z"/></svg>
 </button>
 
 {#if isOpen && pos}

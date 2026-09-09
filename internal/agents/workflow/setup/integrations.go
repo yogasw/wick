@@ -33,19 +33,59 @@ func RegisterSlackIntegration(intReg *integration.Registry, base *agentchannels.
 	if intReg == nil || base == nil || router == nil {
 		return
 	}
-	ch := base.ChannelByName("slack")
-	if ch == nil {
+	// One process hosts one Slack instance PER OWNING USER (registry
+	// AddKeyed, "slack:<user-id>"), and every one of them has its own
+	// socket/webhook feed. ChannelByName would hand back whichever was
+	// registered first, so every other bot's messages would never reach
+	// the router — channel triggers silently stop firing the moment a
+	// second Slack bot is configured. Attach the sink to all of them.
+	var first *agentslack.Channel
+	for _, ch := range base.Channels() {
+		slackCh, ok := ch.(*agentslack.Channel)
+		if !ok {
+			continue
+		}
+		if first == nil {
+			first = slackCh
+		}
+		AttachSlackWorkflowSink(slackCh, router)
+	}
+	if first == nil {
 		return
 	}
-	slackCh, ok := ch.(*agentslack.Channel)
-	if !ok {
-		return
-	}
-	slackwf.RegisterAll(intReg, slackCh)
+	// Descriptors and picker sources are process-wide (one catalog for
+	// the whole editor), so they bind once. Actions resolve their own
+	// instance per run, and pickers fan out over every instance
+	// internally — see slackwf.RegisterPickers.
+	slackwf.RegisterAll(intReg, SlackInstancePicker(base, first))
 	if pickers != nil {
-		slackwf.RegisterPickers(pickers, slackCh)
+		slackwf.RegisterPickers(pickers, base)
 	}
-	slackCh.SetWorkflowEventSink(func(ctx context.Context, event string, payload map[string]any) {
+}
+
+// AttachSlackWorkflowSink points one Slack instance's inbound event sink
+// at the workflow router. Exported so the hot-reload path in
+// tools/agents can wire an instance created after boot — without it a
+// bot added from the dashboard receives Slack events but fires no
+// workflow trigger until the next restart.
+//
+// bot_user_id / bot_name ride along in the payload so a workflow can
+// tell WHICH bot saw the event when several are connected to the same
+// workspace.
+func AttachSlackWorkflowSink(ch *agentslack.Channel, router *trigger.Router) {
+	if ch == nil || router == nil {
+		return
+	}
+	ch.SetWorkflowEventSink(func(ctx context.Context, event string, payload map[string]any) {
+		if payload == nil {
+			payload = map[string]any{}
+		}
+		if _, ok := payload["bot_user_id"]; !ok {
+			payload["bot_user_id"] = ch.BotUserID()
+		}
+		if _, ok := payload["bot_name"]; !ok {
+			payload["bot_name"] = ch.BotUserName()
+		}
 		router.Dispatch(ctx, workflow.Event{
 			Type:    string(workflow.TriggerChannel),
 			Subtype: event,
@@ -54,4 +94,26 @@ func RegisterSlackIntegration(intReg *integration.Registry, base *agentchannels.
 			Payload: payload,
 		})
 	})
+}
+
+// SlackInstancePicker resolves which Slack bot an action node runs as.
+//
+// The run's trigger payload carries bot_user_id — the bot that received
+// the event that started this run (see AttachSlackWorkflowSink). Sending
+// as a different bot is not a cosmetic difference: it posts under an
+// identity the user never talked to, and in a private channel the other
+// bot isn't in it fails outright with not_in_channel.
+//
+// Falls back to `fallback` when the run has no Slack trigger (manual,
+// cron, webhook) or when the recorded bot is no longer registered — an
+// action that used to work must not start erroring because the payload
+// lacks a key.
+func SlackInstancePicker(base *agentchannels.Registry, fallback *agentslack.Channel) slackwf.ChannelPicker {
+	return func(ctx context.Context) *agentslack.Channel {
+		botID, _ := integration.TriggerPayload(ctx)["bot_user_id"].(string)
+		if inst := agentslack.InstanceForBot(base, botID); inst != nil {
+			return inst
+		}
+		return fallback
+	}
 }
