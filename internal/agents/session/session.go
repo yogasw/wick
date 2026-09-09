@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -125,6 +126,13 @@ type Meta struct {
 	// the channel's in-memory state is lost. Only meaningful for Slack
 	// channel sessions; absent/false everywhere else.
 	AutoReply bool `json:"auto_reply,omitempty"`
+	// ScmRepo is the repository the Source panel has selected in this
+	// session, relative to the session cwd ("" = none picked yet, which
+	// reads as the first repo discovered). Server-side rather than
+	// browser-local because the AGENT needs it too: it is what the
+	// system prompt names as the repo being worked on, and what
+	// wick_scm reports and switches.
+	ScmRepo string `json:"scm_repo,omitempty"`
 	// ParentSessionID links a sub-agent's isolated session back to the
 	// session that delegated it. Non-empty = this is a child: hidden
 	// from the conversation list and surfaced in the parent's Sub-agents
@@ -375,6 +383,18 @@ func Load(layout config.Layout, id string) (Session, error) {
 		}
 	}
 	return Session{ID: id, Meta: meta, Agents: agents}, nil
+}
+
+// Cwd is the directory a session's work happens in: its project path
+// when it belongs to a project, else sessions/<id>/cwd. Exported here
+// because three callers need the SAME answer — the SCM HTTP layer, the
+// wick_scm MCP tool, and the system prompt that names the repo being
+// worked on — and a second copy of this rule would drift.
+func Cwd(layout config.Layout, sess Session) (string, error) {
+	if id := sess.Meta.ProjectID; id != "" && project.Exists(layout, id) {
+		return project.ResolvePath(layout, id)
+	}
+	return filepath.Join(layout.SessionDir(sess.ID), "cwd"), nil
 }
 
 // SaveMeta atomically rewrites sessions/<id>/meta.json.

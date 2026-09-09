@@ -390,13 +390,38 @@
   // about the repo actually being worked on — the badge follows the
   // selected repo and only falls back to the total when none is picked.
   let scmChangedByRepo = $state<Record<string, number>>({});
-  let scmTotalChanged = $state(0);
+  // Which repo the snapshot says this session works in. Resolved
+  // server-side from session meta, so the badge counts the same repo the
+  // Source panel shows and the agent is told about — deriving it from
+  // this bundle's own storage had the badge and the panel disagreeing.
+  let scmSnapshotRepo = $state("");
+  // Set for a couple of seconds when the active repo moves on its own —
+  // wick follows whichever repo is being edited, and a badge that
+  // silently starts counting a different repo is a number the user has
+  // no reason to trust. The pulse is the "this changed, and here is
+  // where" cue; the tooltip names the repo.
+  let scmRepoPulse = $state(false);
+  let scmPulseTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function flashScmRepo() {
+    scmRepoPulse = true;
+    if (scmPulseTimer !== null) clearTimeout(scmPulseTimer);
+    scmPulseTimer = setTimeout(() => (scmRepoPulse = false), 2500);
+  }
+  let scmRepoOrder = $state<string[]>([]);
   let scmActiveRepo = $state(readScmActiveRepo());
-  const scmChangeCount = $derived(
-    scmActiveRepo && scmActiveRepo in scmChangedByRepo
-      ? scmChangedByRepo[scmActiveRepo]
-      : scmTotalChanged,
-  );
+  const scmChangeCount = $derived.by(() => {
+    // scmActiveRepo is the panel's live pick, which lands before the next
+    // snapshot does; the snapshot is the durable answer; the first repo
+    // is the fallback the server itself applies.
+    const repo =
+      scmActiveRepo && scmActiveRepo in scmChangedByRepo
+        ? scmActiveRepo
+        : scmSnapshotRepo && scmSnapshotRepo in scmChangedByRepo
+          ? scmSnapshotRepo
+          : scmRepoOrder[0];
+    return repo ? (scmChangedByRepo[repo] ?? 0) : 0;
+  });
 
   let scmCleanup: (() => void) | null = null;
 
@@ -1212,14 +1237,20 @@
       } else if (ev.type === "git_status") {
         try {
           const d = JSON.parse(ev.data ?? "{}") as {
-            total_changed?: number;
             repos?: { rel: string; changed: number }[];
+            active?: string;
           };
-          if (typeof d.total_changed === "number") scmTotalChanged = d.total_changed;
           if (Array.isArray(d.repos)) {
             scmChangedByRepo = Object.fromEntries(
               d.repos.map((r) => [r.rel, r.changed ?? 0]),
             );
+            scmRepoOrder = d.repos.map((r) => r.rel);
+          }
+          if (typeof d.active === "string" && d.active !== scmSnapshotRepo) {
+            // Not on the first snapshot: that one is the session opening,
+            // not the repo moving under the user.
+            if (scmSnapshotRepo) flashScmRepo();
+            scmSnapshotRepo = d.active;
           }
         } catch (_) { /* skip */ }
         scheduleFileReload();
@@ -1474,6 +1505,7 @@
 
   onDestroy(() => {
     scmCleanup?.();
+    if (scmPulseTimer !== null) clearTimeout(scmPulseTimer);
     if (fileReloadTimer !== null) clearTimeout(fileReloadTimer);
     if (processReloadTimer !== null) clearTimeout(processReloadTimer);
     document.removeEventListener("visibilitychange", handleResync);
@@ -2370,7 +2402,10 @@
             {/if}
           </span>
         {:else if tab.id === "source" && scmChangeCount > 0}
-          <span class="relative">
+          <span
+            class="relative {scmRepoPulse ? 'animate-pulse' : ''}"
+            title={scmSnapshotRepo ? `Source: ${scmSnapshotRepo}` : "Source"}
+          >
             <svg
               viewBox="0 0 16 16"
               class="h-4 w-4 text-green-500"

@@ -19,6 +19,12 @@ export type RepoSummary = {
 export type GitStatusSnapshot = {
   repos: RepoSummary[];
   statuses: Record<string, StatusResult>;
+  // Which repo the session works in, resolved server-side from session
+  // meta — the same answer the agent's system prompt and the Source
+  // connector give. active_explicit=false means nobody picked one and
+  // this is just the first repo found.
+  active: string;
+  active_explicit: boolean;
   total_changed: number;
 };
 
@@ -76,6 +82,22 @@ const s = (id: string) => `${BASE}/api/sessions/${encodeURIComponent(id)}/git`;
 const q = (v: string) => encodeURIComponent(v);
 
 export const getRepos = (id: string) => apiGet<GitStatusSnapshot>(`${s(id)}/repos`);
+
+// Which repo this session is working in. Server-side (session meta) and
+// not browser-local, because the agent reads the same selection — it is
+// what its system prompt names and what wick_scm reports.
+export type ActiveRepo = {
+  rel: string;
+  name: string;
+  dir: string;
+  explicit: boolean;
+  total: number;
+};
+
+export const getActiveRepo = (id: string) => apiGet<ActiveRepo>(`${s(id)}/active`);
+
+export const setActiveRepo = (id: string, repo: string) =>
+  apiPost<ActiveRepo>(`${s(id)}/active`, { repo });
 
 export const getStatus = (id: string, repo: string) =>
   apiGet<StatusResult>(`${s(id)}/status?repo=${q(repo)}`);

@@ -13,14 +13,52 @@ export const sessionID = writable<string>(readSessionID());
 // The full snapshot is the single source of truth. It arrives once via
 // HTTP on first load, then is replaced wholesale by each git_status SSE
 // event — so there is no per-change fetch (zero polling).
-export const snapshot = writable<GitStatusSnapshot>({ repos: [], statuses: {}, total_changed: 0 });
-function repoKey(): string { return `wick.scm.activeRepo.${readSessionID()}`; }
-function readStoredRepo(): string {
-  try { return localStorage.getItem(repoKey()) ?? ""; } catch { return ""; }
+export const snapshot = writable<GitStatusSnapshot>({
+  repos: [],
+  statuses: {},
+  active: "",
+  active_explicit: false,
+  total_changed: 0,
+});
+// Which repo is selected is remembered PER SESSION. The id has to come
+// from the sessionID store, not from the URL: mounted as an island in the
+// conversation shell there is no ?session= to read, so every session fell
+// back to the same empty key — one global selection that made a freshly
+// opened session jump to whatever repo the last one had picked.
+function repoKey(id: string): string { return `wick.scm.activeRepo.${id}`; }
+function readStoredRepo(id: string): string {
+  if (!id) return "";
+  try { return localStorage.getItem(repoKey(id)) ?? ""; } catch { return ""; }
 }
-export const activeRepo = writable<string>(readStoredRepo());
+
+// The island mounts before it is told its session (the prop lands in
+// onMount), so the first value is read under an id we may not have yet;
+// re-hydrate from the right key the moment the session is known.
+let currentSession = get(sessionID);
+export const activeRepo = writable<string>(readStoredRepo(currentSession));
+sessionID.subscribe((id) => {
+  if (id === currentSession) return;
+  currentSession = id;
+  activeRepo.set(readStoredRepo(id));
+});
+// hydrating suppresses the server write while a value is being applied
+// FROM the server or from a snapshot default — otherwise reading the
+// selection would immediately write it back.
+let hydrating = false;
+
 activeRepo.subscribe((v) => {
-  try { localStorage.setItem(repoKey(), v); } catch { /* ignore */ }
+  // No session yet = no key to write under. Persisting here is what
+  // created the shared global selection in the first place.
+  if (currentSession) {
+    try { localStorage.setItem(repoKey(currentSession), v); } catch { /* ignore */ }
+    // The selection also lives on the session server-side, because the
+    // AGENT reads it: it is what its system prompt names as the repo
+    // being worked on and what wick_scm reports. localStorage alone
+    // would leave the two sides describing different repos.
+    if (!hydrating && v) {
+      void api.setActiveRepo(currentSession, v).catch(() => { /* panel still works */ });
+    }
+  }
   // The SCM panel is a separate bundle from the conversation shell that
   // draws the Source rail badge. localStorage writes don't fire `storage`
   // in the tab that made them, so announce the switch — otherwise the
@@ -44,12 +82,35 @@ export const branch = derived(activeStatus, ($st): BranchInfo | null => $st?.bra
 export type Selection = { path: string; staged: boolean; untracked: boolean };
 export const selection = writable<Selection | null>(null);
 
-// applySnapshot replaces the snapshot and keeps activeRepo valid.
+// applySnapshot replaces the snapshot and keeps activeRepo valid. A
+// stored selection that no longer exists (repo removed) falls back to
+// the first repo — the same rule the server applies.
 export function applySnapshot(s: GitStatusSnapshot): void {
   snapshot.set(s);
   const cur = get(activeRepo);
-  if (!cur || !s.repos.some((r) => r.rel === cur)) {
-    activeRepo.set(s.repos[0]?.rel ?? "");
+  const known = s.repos.some((r) => r.rel === cur);
+  if (!cur || !known) {
+    // Adopt the session's selection; the server already applied the
+    // same "first repo when nothing is picked" fallback.
+    setActiveRepoQuietly(s.active || s.repos[0]?.rel || "");
+    return;
+  }
+  // Somebody else moved the selection — the agent via the Source
+  // connector, or this session in another tab. Follow it.
+  if (s.active_explicit && s.active && s.active !== cur) {
+    setActiveRepoQuietly(s.active);
+  }
+}
+
+// setActiveRepoQuietly applies a value without echoing it back to the
+// server — for values that CAME from the server, or from the fallback
+// rule the server already applies itself.
+function setActiveRepoQuietly(rel: string): void {
+  hydrating = true;
+  try {
+    activeRepo.set(rel);
+  } finally {
+    hydrating = false;
   }
 }
 

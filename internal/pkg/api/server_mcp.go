@@ -21,6 +21,7 @@ import (
 	"github.com/yogasw/wick/internal/connectors"
 	dtconn "github.com/yogasw/wick/internal/connectors/datatables"
 	notesconn "github.com/yogasw/wick/internal/connectors/notes"
+	sourceconn "github.com/yogasw/wick/internal/connectors/source"
 	"github.com/yogasw/wick/internal/connectors/notifications"
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
 	ticketconn "github.com/yogasw/wick/internal/connectors/tickets"
@@ -157,6 +158,7 @@ func BuildMCPHandler(version, commit, buildTime string) (*mcp.Handler, context.C
 	// Same pair as the HTTP server: stdio clients get tickets and notes too.
 	connectors.Register(ticketconn.Module(stdioWfLayout))
 	connectors.Register(notesconn.Module(stdioWfLayout))
+	connectors.Register(sourceconn.Module(stdioWfLayout))
 
 	connectors.RegisterProfile(configsSvc.Profile())
 

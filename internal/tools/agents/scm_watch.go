@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/yogasw/wick/internal/agents/scm"
+	"github.com/yogasw/wick/internal/agents/session"
 )
 
 // gitWatchDebounce coalesces bursty filesystem events (a single git
@@ -87,7 +89,13 @@ func runGitWatch(ctx context.Context, sessionID, cwd string) {
 
 	addWatches(w, cwd, &l)
 	// Publish an initial summary so the badge is correct on connect.
-	publishGitSummary(ctx, sessionID, cwd)
+	publishGitSummary(ctx, sessionID, cwd, "")
+
+	// touched is the path of the last file that changed, carried into the
+	// debounced publish so the Source panel can follow the repo actually
+	// being edited. Guarded because the timer fires on its own goroutine.
+	var touchedMu sync.Mutex
+	touched := ""
 
 	var timer *time.Timer
 	debounce := func() {
@@ -95,7 +103,11 @@ func runGitWatch(ctx context.Context, sessionID, cwd string) {
 			timer.Stop()
 		}
 		timer = time.AfterFunc(gitWatchDebounce, func() {
-			publishGitSummary(ctx, sessionID, cwd)
+			touchedMu.Lock()
+			p := touched
+			touched = ""
+			touchedMu.Unlock()
+			publishGitSummary(ctx, sessionID, cwd, p)
 		})
 	}
 
@@ -115,6 +127,11 @@ func runGitWatch(ctx context.Context, sessionID, cwd string) {
 				if fi, statErr := os.Stat(ev.Name); statErr == nil && fi.IsDir() {
 					_ = w.Add(ev.Name)
 				}
+			}
+			if isContentEvent(ev) {
+				touchedMu.Lock()
+				touched = ev.Name
+				touchedMu.Unlock()
 			}
 			debounce()
 		case werr, ok := <-w.Errors:
@@ -179,14 +196,77 @@ func skipWatchDir(name string) bool {
 // per-repo status) and pushes it to the session's subscribers. The FE
 // renders entirely from this payload, so a change event needs no
 // follow-up fetch — zero polling.
-func publishGitSummary(ctx context.Context, sessionID, cwd string) {
+func publishGitSummary(ctx context.Context, sessionID, cwd, touched string) {
 	if globalBcast == nil {
 		return
 	}
-	snap := buildGitSnapshot(ctx, cwd)
+	sess, sessErr := session.Load(globalLayout, sessionID)
+	stored := ""
+	if sessErr == nil {
+		stored = sess.Meta.ScmRepo
+	}
+	snap := buildGitSnapshot(ctx, cwd, stored)
+	// Follow the work: whoever just edited a file — the agent or the
+	// person — is working in that repo, so the Source panel moves there
+	// instead of sitting on a repo nobody is touching. Without this the
+	// panel only ever moved when someone clicked it, which is exactly
+	// when it is least needed.
+	if sessErr == nil {
+		if rel := repoForPath(cwd, snap.Repos, touched); rel != "" && rel != stored {
+			meta := sess.Meta
+			meta.ScmRepo = rel
+			if err := session.SaveMeta(globalLayout, sessionID, meta); err == nil {
+				if globalMgr != nil {
+					globalMgr.Register(sessionWithMeta(sess, meta))
+				}
+				snap.Active, snap.ActiveExplicit = rel, true
+			}
+		}
+	}
 	body, err := json.Marshal(snap)
 	if err != nil {
 		return
 	}
 	globalBcast.PublishGitStatusJSON(sessionID, string(body))
+}
+
+// isContentEvent reports whether an fsnotify event is somebody editing
+// content, as opposed to git's own bookkeeping. Writes inside .git
+// (index, refs, lock files) fire constantly during a commit or a fetch
+// and would drag the panel to whichever repo git last touched in the
+// background.
+func isContentEvent(ev fsnotify.Event) bool {
+	if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename|fsnotify.Remove) == 0 {
+		return false
+	}
+	p := filepath.ToSlash(ev.Name)
+	return !strings.Contains(p, "/.git/") && !strings.HasSuffix(p, "/.git")
+}
+
+// repoForPath maps an edited file to the repo it belongs to — the
+// LONGEST matching repo dir, so a file in a nested clone is attributed to
+// the inner repo rather than the outer one. Empty when the path is under
+// no repo (loose file in the session cwd).
+func repoForPath(cwd string, repos []RepoSummary, path string) string {
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	best, bestLen := "", -1
+	for _, r := range repos {
+		dir, derr := scm.ResolveRepoDir(cwd, r.Rel)
+		if derr != nil {
+			continue
+		}
+		if abs != dir && !strings.HasPrefix(abs, dir+string(filepath.Separator)) {
+			continue
+		}
+		if len(dir) > bestLen {
+			best, bestLen = r.Rel, len(dir)
+		}
+	}
+	return best
 }
