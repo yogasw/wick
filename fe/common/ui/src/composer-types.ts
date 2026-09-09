@@ -9,6 +9,16 @@ export type ComposerCommand = {
   hint?: string;
   category?: string;
   run?: () => void;
+  /** Stable identity for list keying, when `value` is not unique.
+
+      `value` is the text inserted after `/`, which for a skill is its
+      frontmatter `name` — and that is NOT unique: the same skill is mirrored
+      into every provider's skills dir, and two different folders can declare
+      the same name. Keying the menu on `value` then threw
+      `each_key_duplicate`, and because a Svelte keyed-each aborts on a
+      duplicate the WHOLE menu rendered empty rather than merely showing the
+      row twice. Callers should pass the server-side id (`skill:<folder>`). */
+  key?: string;
 };
 
 import type { ModelCaps } from "./capability-types.js";
