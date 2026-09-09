@@ -145,10 +145,18 @@
     if (deep && q) onFind(q, true);
   });
 
-  const fileCount = $derived(files.filter((f) => !f.isDir).length);
-  const dirCount = $derived(files.filter((f) => f.isDir).length);
+  // The header counts THIS folder, not everything loaded. Since the tree
+  // fetches a level at a time, counting every entry in memory made the
+  // number climb each time someone expanded something — "406 files · 116
+  // folders" for a directory that holds 326 and 84. A per-folder count
+  // already sits on each folder row; this line is the root's.
+  const rootEntries = $derived(files.filter((f) => !f.path.includes("/")));
+  const fileCount = $derived(rootEntries.filter((f) => !f.isDir).length);
+  const dirCount = $derived(rootEntries.length - fileCount);
+  // Deep search reaches past this level, so its match count is allowed to;
+  // the shallow filter only ever looks at names in front of you.
   const matchCount = $derived(
-    q ? files.filter((f) => f.name.toLowerCase().includes(q)).length : 0,
+    q ? (deep ? files : rootEntries).filter((f) => f.name.toLowerCase().includes(q)).length : 0,
   );
 </script>
 
