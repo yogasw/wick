@@ -13,6 +13,7 @@
 package registry
 
 import (
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -239,15 +240,37 @@ func (r *Registry) rebuildSessionViewsLocked() {
 	if r.viewMap != nil && r.viewIDs != nil {
 		return
 	}
-	snap := make(map[string]session.Session, len(r.sessions))
-	ids := make([]string, 0, len(r.sessions))
-	for k, v := range r.sessions {
-		snap[k] = v
-		ids = append(ids, k)
+	// maps.Clone, not an insert loop: it copies the hash table directly
+	// instead of re-hashing every key, which is the bulk of this rebuild
+	// once an install holds thousands of sessions.
+	snap := maps.Clone(r.sessions)
+	if snap == nil {
+		snap = map[string]session.Session{}
 	}
-	sort.Slice(ids, func(i, j int) bool {
-		return snap[ids[i]].Meta.LastActive.After(snap[ids[j]].Meta.LastActive)
+	// Sort ORDER KEYS, not ids-plus-map-lookups. Sorting ids alone means
+	// two map lookups per comparison — ~120k hash lookups at 5k sessions,
+	// for an answer that is one int64 per session. Reading the key once
+	// and sorting pairs turns the comparator into an integer compare.
+	type ordered struct {
+		id string
+		at int64
+	}
+	keys := make([]ordered, 0, len(snap))
+	for k, v := range snap {
+		keys = append(keys, ordered{id: k, at: v.Meta.LastActive.UnixNano()})
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].at != keys[j].at {
+			return keys[i].at > keys[j].at // LastActive descending
+		}
+		// Ties (seeded/imported sessions share a timestamp) resolve by id
+		// so paging over the list is stable rather than map-order random.
+		return keys[i].id < keys[j].id
 	})
+	ids := make([]string, len(keys))
+	for i, k := range keys {
+		ids[i] = k.id
+	}
 	r.viewMap, r.viewIDs = snap, ids
 }
 

@@ -834,7 +834,7 @@ func notesScopeFromQuery(c *tool.Ctx) (notes.Scope, bool) {
 		return notes.Scope{}, false
 	}
 	sess, ok := globalMgr.Registry().Session(sid)
-	if !ok || !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID) {
+	if !ok || !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants) {
 		return notes.Scope{}, false
 	}
 	sc, err := notes.Resolve(globalLayout, sid)

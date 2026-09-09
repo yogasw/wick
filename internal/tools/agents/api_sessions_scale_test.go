@@ -32,6 +32,10 @@ import (
 type seededSession struct {
 	id     string
 	userID string
+	// participants is everyone who has spoken in the session (owner
+	// first). Empty = owner-only, the shape every session had before
+	// multi-user threads were tracked.
+	participants []string
 }
 
 // withSessionWorld builds a real temp layout holding project "p1" plus the
@@ -60,8 +64,9 @@ func withSessionWorld(t *testing.T, seeds []seededSession) {
 			CreatedAt: base,
 			// Distinct LastActive per session: the list sorts by it, and
 			// offset paging is only well-defined over a total order.
-			LastActive: base.Add(time.Duration(i) * time.Second),
-			UserID:     s.userID,
+			LastActive:   base.Add(time.Duration(i) * time.Second),
+			UserID:       s.userID,
+			Participants: s.participants,
 		}
 		if err := os.MkdirAll(layout.SessionDir(s.id), 0o755); err != nil {
 			t.Fatal(err)

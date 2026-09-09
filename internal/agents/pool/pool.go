@@ -1535,9 +1535,16 @@ func (p *Pool) EnsureSession(ctx context.Context, sessionID, source, projectID s
 	return p.ensureSession(ctx, sessionID, source, projectID)
 }
 
-// EnsureSessionOwner stamps UserID on an existing session when the session
-// currently has no owner. No-op when the session does not exist or already
-// has an owner.
+// EnsureSessionOwner records userID against an existing session: it stamps
+// UserID when the session has no owner yet, and adds them to Participants
+// either way. No-op when the session does not exist.
+//
+// Owner is first-writer-wins — a later sender never takes the session over,
+// because UserID decides whose identity a spawn runs as and handing that to
+// whoever spoke last would silently move the whole conversation's access.
+// Participants is additive instead: a Slack thread is genuinely multi-user,
+// and someone who replied into it should find it under their own "Yours"
+// without owning it.
 //
 // The OnSessionMeta callback at the end is load-bearing, not cosmetic. This
 // writes to DISK, but the per-spawn MCP credential is minted from the IN-MEMORY
@@ -1552,10 +1559,20 @@ func (p *Pool) EnsureSessionOwner(ctx context.Context, sessionID, userID string)
 		return
 	}
 	sess, err := session.Load(p.cfg.Layout, sessionID)
-	if err != nil || sess.Meta.UserID != "" {
+	if err != nil {
 		return
 	}
-	sess.Meta.UserID = userID
+	changed := false
+	if sess.Meta.UserID == "" {
+		sess.Meta.UserID = userID
+		changed = true
+	}
+	if sess.Meta.AddParticipant(userID) {
+		changed = true
+	}
+	if !changed {
+		return
+	}
 	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
 		log.Warn().Err(err).
 			Str("session", sessionID).
@@ -1587,10 +1604,25 @@ func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID s
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	// Stamp the caller as owner AT CREATE, not after.
+	//
+	// A channel resolves the sender before dispatching, but its
+	// EnsureSessionOwner call cannot help on the first message of a new
+	// thread: the session does not exist on disk yet, so that call no-ops
+	// and the owner only lands from the SECOND message on — whoever sent
+	// it. Meanwhile the first spawn (below, same Send) mints its MCP
+	// credential from an ownerless session and falls back to the shared
+	// internal token, i.e. the synthetic admin, for the whole life of that
+	// process. Creating with the owner already set closes both.
+	var ownerUserID string
+	if p.cfg.CallerUserID != nil {
+		ownerUserID = p.cfg.CallerUserID(ctx)
+	}
 	sess, cerr := session.Create(ctx, p.cfg.Layout, session.CreateOptions{
 		ID:        sessionID,
 		Origin:    session.Origin(source),
 		ProjectID: projectID,
+		UserID:    ownerUserID,
 	})
 	// Suppress "already exists" — a concurrent call may have won the race.
 	if cerr != nil && !errors.Is(cerr, os.ErrExist) {
