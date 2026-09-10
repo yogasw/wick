@@ -174,3 +174,45 @@ func TestShim_NestedShimsAskForDistinctUnits(t *testing.T) {
 		t.Fatalf("both shims asked for %q — the second scope cannot be created", units[0])
 	}
 }
+
+// TestShim_SurvivesAPathWithSpacesAndAHostileName: both values the renderer
+// interpolates land inside a shell script — RealBin in an assignment, the
+// provider name in a comment line and inside a double-quoted unit name. A
+// path with a space (macOS "Application Support" is the everyday case) would
+// end the assignment and leave the remainder as a command; a name carrying a
+// quote or a newline would close the string and run as script. Neither can
+// happen today, and this is what keeps that from depending on Providers
+// staying a list of plain words.
+func TestShim_SurvivesAPathWithSpacesAndAHostileName(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "Application Support")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(dir, "real bin")
+	if err := os.WriteFile(real, []byte("#!/bin/sh\necho \"REAL $*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	canary := filepath.Join(t.TempDir(), "pwned")
+	hostile := "t\";touch " + canary + ";echo \""
+	body := RenderShim(Provider{Name: hostile, RealBin: real, LimitMB: 64}, "agents.slice")
+
+	shim := filepath.Join(t.TempDir(), "shim")
+	if err := os.WriteFile(shim, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := safeexec.Command("/bin/sh", "-n", shim).CombinedOutput(); err != nil {
+		t.Fatalf("shim is not valid sh: %v\n%s", err, out)
+	}
+
+	out, err := run(t, shim, []string{"PATH=/usr/bin:/bin"}, "hello")
+	if err != nil {
+		t.Fatalf("shim failed: %v (%s)", err, out)
+	}
+	if out != "REAL hello" {
+		t.Fatalf("output = %q, want the real binary to run from a path with a space", out)
+	}
+	if _, err := os.Stat(canary); err == nil {
+		t.Fatal("the provider name executed as a command — it reached the script unescaped")
+	}
+}

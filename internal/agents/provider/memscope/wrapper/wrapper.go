@@ -61,6 +61,18 @@ func RenderShim(p Provider, slice string) string {
 	if slice == "" {
 		slice = "agents.slice"
 	}
+	// Both values are interpolated into a shell script, so neither may carry
+	// the script's own syntax. RealBin is a path resolved from PATH — a
+	// directory with a space in it ("Application Support") would otherwise end
+	// the REAL= assignment and leave the rest of the path as a command. Name is
+	// safe today because Providers is a fixed list of plain words, but the shim
+	// puts it in a comment line AND inside a double-quoted unit name, so a
+	// newline or a quote there would run as script; sanitising it here is what
+	// keeps that from depending on the list staying plain.
+	name := shimSafeName(p.Name)
+	real := sh(p.RealBin)
+	// Same reasoning for the slice, which callers can override.
+	sliceArg := sh(slice)
 	var limit string
 	if p.LimitMB > 0 {
 		limit = fmt.Sprintf(" -p MemoryMax=%dM", p.LimitMB)
@@ -92,7 +104,27 @@ exec systemd-run --user --scope --quiet --collect \
     --slice=%[3]s --unit="$unit" \
    %[4]s -p MemoryHigh=infinity -p MemorySwapMax=0 \
     -- "$REAL" "$@"
-`, p.Name, p.RealBin, slice, limit)
+`, name, real, sliceArg, limit)
+}
+
+// shimSafeName reduces a provider name to characters that are safe in both
+// places the shim puts it: a POSIX shell script and a systemd unit name.
+// Every current Providers entry passes through unchanged.
+func shimSafeName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '_', r == '-', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	if b.Len() == 0 {
+		return "agent"
+	}
+	return b.String()
 }
 
 // LinkCommands returns the shell commands that point Link at the shim,
