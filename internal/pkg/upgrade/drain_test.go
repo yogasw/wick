@@ -2,18 +2,24 @@ package upgrade
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func TestTrackerWaitsUntilZero(t *testing.T) {
 	var tr Tracker
-	n := 2
-	tr.Add(Work{Name: "turns", InFlight: func() int { return n }})
+	// Atomic, not a plain int: Wait polls InFlight from its own goroutine
+	// while this one drops the count, which is exactly the unsynchronised
+	// pair -race flags. Every real InFlight reads its count under a lock
+	// for the same reason; the fake one has to be safe too.
+	var n atomic.Int64
+	n.Store(2)
+	tr.Add(Work{Name: "turns", InFlight: func() int { return int(n.Load()) }})
 
 	go func() {
 		time.Sleep(400 * time.Millisecond)
-		n = 0
+		n.Store(0)
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

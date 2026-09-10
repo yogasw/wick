@@ -18,6 +18,10 @@ func only(paths ...string) func(string) bool {
 }
 
 func TestSkillAddDirArgs(t *testing.T) {
+	// $CLAUDE_CONFIG_DIR relocates the dir away from home, and the machine
+	// running the test may well set it (every wick host does) — clear it so
+	// the assertion below is about home, not about this machine.
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	home := "/home/u"
 	skills := filepath.Join(home, ".claude", "skills")
 
@@ -43,6 +47,7 @@ func TestSkillAddDirArgsTrustsWickDir(t *testing.T) {
 	if wickDir == "" {
 		t.Skip("no wick skills dir resolvable in this environment")
 	}
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	got := skillAddDirArgs("/home/u", only(wickDir))
 	if len(got) != 2 || got[1] != wickDir {
 		t.Fatalf("got %v, want [--add-dir %s]", got, wickDir)

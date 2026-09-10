@@ -65,8 +65,17 @@ func RenderShim(p Provider, slice string) string {
 	if p.LimitMB > 0 {
 		limit = fmt.Sprintf(" -p MemoryMax=%dM", p.LimitMB)
 	}
-	// $$ is the shim shell's pid: unique while the scope is alive, which
-	// is all systemd requires of a transient unit name.
+	// The unit name carries a timestamp, not just $$, because the pid is
+	// NOT unique per invocation: exec replaces the shell in place, so a
+	// shim that execs into another shim (an older hand-rolled one still
+	// sitting at REAL, say) hands the second one the same $$ the first
+	// already named its scope with. systemd answers "unit was already
+	// loaded", systemd-run exits 1, and — because the shim execs it —
+	// the agent never starts at all. Observed on a host where wick's
+	// shim pointed at a pre-existing shim of the same shape. Pid reuse
+	// against a long-lived scope collides the same way; the nanosecond
+	// stamp settles both. tr keeps it digits-only for a /bin/sh whose
+	// date has no %N.
 	return fmt.Sprintf(`#!/bin/sh
 # Installed by wick: run each %[1]s session in its own cgroup.
 # Remove with: wick memory wrapper uninstall %[1]s
@@ -77,8 +86,10 @@ if ! command -v systemd-run >/dev/null 2>&1 || [ -z "$XDG_RUNTIME_DIR" ]; then
     exec "$REAL" "$@"
 fi
 
+unit="%[1]s-agent-$$-$(date +%%s%%N 2>/dev/null | tr -cd 0-9)"
+
 exec systemd-run --user --scope --quiet --collect \
-    --slice=%[3]s --unit="%[1]s-agent-$$" \
+    --slice=%[3]s --unit="$unit" \
    %[4]s -p MemoryHigh=infinity -p MemorySwapMax=0 \
     -- "$REAL" "$@"
 `, p.Name, p.RealBin, slice, limit)
