@@ -1164,7 +1164,33 @@
       }
     }
 
+    // A wheel notch or an upward drag is the user's INTENT to leave the
+    // bottom, and it has to win instantly. The scroll event that follows is
+    // dispatched a beat later, so a turn (or an iframe resize) arriving in
+    // that gap still saw stickToBottom true, re-pinned the thread, and
+    // swallowed the gesture — the panel snapped back down mid-scroll.
+    function releaseUp() {
+      stickToBottom = false;
+      userScrolledUp = true;
+      showJumpBtn = true;
+    }
+    function onWheel(e: WheelEvent) {
+      if (e.deltaY < 0) releaseUp();
+    }
+    let touchY = 0;
+    function onTouchStart(e: TouchEvent) {
+      touchY = e.touches[0]?.clientY ?? 0;
+    }
+    function onTouchMove(e: TouchEvent) {
+      const y = e.touches[0]?.clientY ?? touchY;
+      if (y > touchY + 2) releaseUp();
+      touchY = y;
+    }
+
     el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: true });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
     let ro: ResizeObserver | null = null;
     if (typeof ResizeObserver !== "undefined") {
       ro = new ResizeObserver(() => onResize());
@@ -1173,6 +1199,9 @@
     }
     return () => {
       el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
       ro?.disconnect();
     };
   });
