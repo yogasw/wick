@@ -2946,6 +2946,13 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		logger.Info().Str("reason", upgWhy).Msg("graceful upgrade off")
 	}
 	upg.WatchSignal(ctx)
+	if upg.Enabled() {
+		// Self-update should use the same handover as `reload`: swap the
+		// binary, fork a successor, drain. Otherwise the one path that most
+		// wants to be seamless — clicking Update in the UI — is the one that
+		// still closes the port.
+		updater.GracefulRestart = upg.Upgrade
+	}
 
 	// Intake — channel listeners, config watcher, workflow watcher and the
 	// scheduled-message runner — starts only once this process holds the
