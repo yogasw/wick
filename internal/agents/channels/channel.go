@@ -180,6 +180,25 @@ type SessionChecker interface {
 	// SetAutoReply persists the auto-reply flag on the session's meta.json.
 	// No-op (nil error swallowed by caller) when the session doesn't exist.
 	SetAutoReply(sessionID string, on bool)
+	// ThreadBinding reports the chat thread a session belongs to, as last
+	// persisted by the owning channel. ok=false when the session has none
+	// (every non-chat session) or cannot be read.
+	//
+	// This is what lets a channel deliver an answer for a turn it did not
+	// receive — a reply typed in the web UI, or a session a workflow
+	// created — after its in-memory turn map is gone.
+	ThreadBinding(sessionID string) (ThreadBinding, bool)
+	// SetThreadBinding persists the binding. Idempotent: writing the same
+	// values again does not touch the file.
+	SetThreadBinding(sessionID string, b ThreadBinding)
+}
+
+// ThreadBinding is the chat location a session's replies belong to.
+type ThreadBinding struct {
+	Channel  string // adapter name: "slack", "telegram"
+	ChatID   string // channel / room id inside that adapter
+	ThreadID string // thread within the chat (Slack thread_ts)
+	Instance string // which configured bot owns it
 }
 
 // SessionStartHook fires once when a channel sees a brand-new session

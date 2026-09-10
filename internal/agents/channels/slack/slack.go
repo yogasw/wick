@@ -414,6 +414,81 @@ func (s *Channel) sessionKey(threadTS string) string {
 	return p + threadTS
 }
 
+// persistThreadBinding records where this session's replies belong, so a
+// later turn can be delivered even if THIS process never sees the message
+// that starts it. Cheap to call on every message: the store skips the write
+// when nothing changed.
+func (s *Channel) persistThreadBinding(sessionID, channelID, threadTS string) {
+	if s.sessions == nil || sessionID == "" || channelID == "" {
+		return
+	}
+	s.sessions.SetThreadBinding(sessionID, agentchannels.ThreadBinding{
+		Channel:  "slack",
+		ChatID:   channelID,
+		ThreadID: threadTS,
+		Instance: s.sessionPrefixSnapshot(),
+	})
+}
+
+func (s *Channel) sessionPrefixSnapshot() string {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.sessionPrefix
+}
+
+// ensureTurn returns the turn to deliver a session's output to, restoring it
+// from the persisted binding when this process never registered one.
+//
+// The turns map is in-memory, and it is populated by the code path that
+// RECEIVES a Slack message. Two turns therefore had nowhere to go and were
+// dropped in silence: a reply typed in the WEB UI of a Slack-originated
+// session after a restart, and a session created by a WORKFLOW whose turn was
+// registered by a process that has since handed over. In both cases the agent
+// answered and the answer never reached the thread.
+//
+// Returns nil when the session is not ours or has no binding — a UI-only
+// session must not be answered into a Slack channel.
+func (s *Channel) ensureTurn(sessionKey string) *turn {
+	s.mu.Lock()
+	if t := s.turns[sessionKey]; t != nil && t.channelID != "" {
+		s.mu.Unlock()
+		return t
+	}
+	s.mu.Unlock()
+
+	if s.sessions == nil || !s.OwnsSession(sessionKey) {
+		return nil
+	}
+	b, ok := s.sessions.ThreadBinding(sessionKey)
+	if !ok || b.Channel != "slack" || b.ChatID == "" {
+		return nil
+	}
+	threadTS := b.ThreadID
+	if threadTS == "" {
+		// The key IS the prefix plus the thread ts, so the thread survives
+		// even a binding written before ThreadID was recorded.
+		threadTS = strings.TrimPrefix(sessionKey, s.sessionPrefixSnapshot())
+	}
+	if threadTS == "" {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t := s.turns[sessionKey]; t != nil && t.channelID != "" {
+		return t
+	}
+	t := &turn{
+		channelID: b.ChatID, threadTS: threadTS,
+		running: true, lastActivity: time.Now(),
+	}
+	s.turns[sessionKey] = t
+	log.Info().Str("channel", "slack").Str("session", sessionKey).
+		Str("slack_channel", b.ChatID).Str("thread_ts", threadTS).
+		Msg("turn restored from the session's stored thread binding")
+	return t
+}
+
 // API returns the live Slack web-API client. Returns nil when the
 // channel isn't configured yet — callers must nil-check before use.
 // The workflow action subpackage (slack/workflow) uses this to invoke
@@ -1790,6 +1865,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	}
 	s.turns[sessionID] = t
 	s.mu.Unlock()
+	s.persistThreadBinding(sessionID, ev.Channel, threadTS)
 
 	// Set the status (with our loading_messages) BEFORE spawning the agent —
 	// Slack's guidance is to set status immediately when a message arrives,
@@ -2303,6 +2379,9 @@ func (s *Channel) cancelQueueTimer(sessionID, channelID, msgTS string) bool {
 // sessionKey is the namespaced session key (turns map key); replies and the
 // status banner use the turn's native threadTS, never the namespaced key.
 func (s *Channel) NotifyState(sessionKey, state, text string) {
+	// Restore the thread from the session's stored binding when this process
+	// has no turn for it, or the reply is dropped without a trace.
+	s.ensureTurn(sessionKey)
 	s.mu.Lock()
 	t := s.turns[sessionKey]
 	var channelID, threadTS, msgTS, liveTS, lastSent string
@@ -2479,6 +2558,9 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.setStatusLabel(sessionKey, subAgentStatusLabel(ev))
 		return
 	}
+	// Same reason as NotifyState: without a turn every case below is a no-op,
+	// so a turn this process did not receive would stream into nothing.
+	s.ensureTurn(sessionKey)
 
 	switch ev.Type {
 	case event.TextDelta:
@@ -2643,6 +2725,7 @@ func (s *Channel) SendToThreadSession(ctx context.Context, channelID, threadTS, 
 	}
 	s.turns[sessionID] = t
 	s.mu.Unlock()
+	s.persistThreadBinding(sessionID, channelID, threadTS)
 
 	// Paint the banner before the spawn, same ordering rationale as
 	// handleMessage: Slack only honours our loading_messages override if it

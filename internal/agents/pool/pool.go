@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
 	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"os"
 	"path/filepath"
@@ -573,6 +574,57 @@ func (p *Pool) SetAutoReply(sessionID string, on bool) {
 	sess.Meta.AutoReply = on
 	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
 		log.Warn().Str("session", sessionID).Bool("on", on).Err(err).Msg("pool: set auto-reply — save failed")
+	}
+}
+
+// ThreadBinding reads the persisted chat-thread binding for a session.
+// Loaded fresh so a restart — or a handover to another process — sees the
+// last saved value rather than nothing.
+func (p *Pool) ThreadBinding(sessionID string) (agentchannels.ThreadBinding, bool) {
+	if sessionID == "" {
+		return agentchannels.ThreadBinding{}, false
+	}
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err != nil || sess.Meta.ChannelRef == nil {
+		return agentchannels.ThreadBinding{}, false
+	}
+	r := sess.Meta.ChannelRef
+	if r.ChatID == "" {
+		return agentchannels.ThreadBinding{}, false
+	}
+	return agentchannels.ThreadBinding{
+		Channel:  r.Channel,
+		ChatID:   r.ChatID,
+		ThreadID: r.ThreadID,
+		Instance: r.Instance,
+	}, true
+}
+
+// SetThreadBinding persists the binding on the session meta. Idempotent —
+// an unchanged binding writes nothing, so this can be called on every turn
+// without rewriting meta.json each time.
+func (p *Pool) SetThreadBinding(sessionID string, b agentchannels.ThreadBinding) {
+	if sessionID == "" || b.ChatID == "" {
+		return
+	}
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err != nil {
+		log.Warn().Str("session", sessionID).Err(err).Msg("pool: set thread binding — session load failed")
+		return
+	}
+	cur := sess.Meta.ChannelRef
+	if cur != nil && cur.Channel == b.Channel && cur.ChatID == b.ChatID &&
+		cur.ThreadID == b.ThreadID && cur.Instance == b.Instance {
+		return
+	}
+	sess.Meta.ChannelRef = &session.ChannelRef{
+		Channel:  b.Channel,
+		ChatID:   b.ChatID,
+		ThreadID: b.ThreadID,
+		Instance: b.Instance,
+	}
+	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
+		log.Warn().Str("session", sessionID).Err(err).Msg("pool: set thread binding — save failed")
 	}
 }
 

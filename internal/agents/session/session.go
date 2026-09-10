@@ -126,6 +126,19 @@ type Meta struct {
 	// the channel's in-memory state is lost. Only meaningful for Slack
 	// channel sessions; absent/false everywhere else.
 	AutoReply bool `json:"auto_reply,omitempty"`
+	// ChannelRef binds the session to the chat thread it belongs to, so a
+	// reply can be delivered there even when the message did NOT arrive
+	// from that chat.
+	//
+	// The channel keeps this mapping in memory per turn, which is enough
+	// while one process handles both sides. It is not enough for two cases
+	// that both end with an answer nobody receives: a reply typed in the
+	// WEB UI of a Slack-originated session after a restart (the in-memory
+	// map is gone, so the agent answers into the void), and a session
+	// created by a WORKFLOW, whose turn was registered by a process that
+	// has since handed over. Persisting the binding is what lets the
+	// channel find the thread again.
+	ChannelRef *ChannelRef `json:"channel_ref,omitempty"`
 	// ScmRepo is the repository the Source panel has selected in this
 	// session, relative to the session cwd ("" = none picked yet, which
 	// reads as the first repo discovered). Server-side rather than
@@ -164,6 +177,21 @@ type Meta struct {
 	// back-pointer the ticket does not confirm is treated as stale and
 	// ignored — see notes.Resolve.
 	TicketID string `json:"ticket_id,omitempty"`
+}
+
+// ChannelRef is where a session's replies belong: a chat channel and the
+// thread inside it. Written by the channel that owns the session and read
+// back when its in-memory state is unavailable.
+type ChannelRef struct {
+	// Channel names the adapter ("slack", "telegram").
+	Channel string `json:"channel"`
+	// ChatID is the room/channel id inside that adapter (a Slack C…).
+	ChatID string `json:"chat_id"`
+	// ThreadID is the thread within the chat (a Slack thread_ts).
+	ThreadID string `json:"thread_id,omitempty"`
+	// Instance identifies WHICH configured bot owns the thread, so a
+	// multi-instance host replies as the one that was there.
+	Instance string `json:"instance,omitempty"`
 }
 
 // IsSubscribed returns true when userID has opted in to receive
