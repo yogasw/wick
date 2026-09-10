@@ -57,7 +57,7 @@ func apiOverview(c *tool.Ctx) {
 		if !ok {
 			continue
 		}
-		if !access.allowSession(s.Meta.ProjectID, s.Meta.UserID) {
+		if !access.allowSession(s.Meta.ProjectID, s.Meta.UserID, s.Meta.Participants) {
 			continue
 		}
 		label := loadFirstUserMessage(globalLayout, e.SessionID, 60)
@@ -75,7 +75,7 @@ func apiOverview(c *tool.Ctx) {
 	queueItems := make([]OverviewQueuedDTO, 0, len(queue))
 	for _, q := range queue {
 		s, ok := allSessions[q.SessionID]
-		if ok && !access.allowSession(s.Meta.ProjectID, s.Meta.UserID) {
+		if ok && !access.allowSession(s.Meta.ProjectID, s.Meta.UserID, s.Meta.Participants) {
 			continue
 		}
 		projName := ""

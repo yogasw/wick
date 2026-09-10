@@ -109,6 +109,8 @@
     }
     // One HTTP fetch for the initial snapshot; afterwards every update is
     // a pushed git_status event carrying the full snapshot — no polling.
+    // The snapshot carries the session's own selection, so the panel and
+    // the agent's system prompt open on the same repo.
     void loadRepos();
     return subscribeGitStatus($sessionID, (snap) => applySnapshot(snap));
   });

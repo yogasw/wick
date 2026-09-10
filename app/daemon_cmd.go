@@ -165,6 +165,63 @@ func daemonStopCmd() *cobra.Command {
 	return c
 }
 
+// daemonReloadCmd performs a graceful, zero-downtime upgrade: the running
+// daemon starts a successor from the binary now on disk, hands it the
+// listening socket, and only then drains its own work and exits.
+//
+// Different from restart in the way that matters operationally — restart stops
+// first, which kills whatever agent turn, workflow run or job was in flight.
+// Reload keeps them: the old process stays alive until they finish.
+//
+// Routing, in order: an installed systemd unit gets `systemctl --user reload`
+// (which needs ExecReload in the unit); a unit without ExecReload falls back
+// to signalling its MainPID; a PID-file daemon is signalled directly.
+func daemonReloadCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:     "reload",
+		Aliases: []string{"upgrade-inplace"},
+		Short:   "Hand over to the new binary without dropping in-flight work",
+		Long: "Graceful upgrade of a running " + BuildAppName + " daemon.\n\n" +
+			"The current process starts a successor, passes it the listening socket, and\n" +
+			"then waits for its own in-flight work (agent turns, workflow runs, jobs) to\n" +
+			"finish before exiting. No connection is refused and nothing is killed.\n\n" +
+			"Requires the daemon to run with WICK_GRACEFUL_UPGRADE=1; otherwise the signal\n" +
+			"is ignored and you should use `restart` instead.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			p, err := daemon.ResolvePaths(BuildAppName)
+			if err != nil {
+				return err
+			}
+			if daemon.ServiceManaged(BuildAppName) {
+				if err := daemon.ServiceCtl(BuildAppName, "reload"); err == nil {
+					fmt.Printf("reloading %s (via systemd)\n  status: systemctl --user status %s\n", BuildAppName, BuildAppName)
+					return nil
+				}
+				// No ExecReload in the unit — signal the process itself.
+				if pid := daemon.ServiceMainPID(BuildAppName); pid > 0 {
+					if err := daemon.ReloadPID(pid); err != nil {
+						return fmt.Errorf("signal pid %d: %w", pid, err)
+					}
+					fmt.Printf("reload signalled to %s (pid %d)\n", BuildAppName, pid)
+					fmt.Printf("  tip: add `ExecReload=/bin/kill -HUP $MAINPID` to the unit so `systemctl --user reload` works\n")
+					return nil
+				}
+			}
+			err = daemon.Reload(p)
+			if errors.Is(err, daemon.ErrNotRunning) {
+				fmt.Printf("%s is not running\n", BuildAppName)
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			fmt.Printf("reload signalled to %s\n  watch: tail -f %s\n", BuildAppName, p.LogFile)
+			return nil
+		},
+	}
+	return c
+}
+
 // daemonRestartCmd is `stop` + `start` in one command. Returns the
 // new daemon's pid on success.
 func daemonRestartCmd() *cobra.Command {

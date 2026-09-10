@@ -1,14 +1,18 @@
 package codex
 
-// Integration test — requires a real `codex` binary on PATH.
-// Skip automatically when codex is not installed.
+// Integration test — spawns the real `codex` binary and makes a real model
+// call. Opt-in only: set WICK_CODEX_E2E=1 (same shape as WICK_CLAUDE_E2E in
+// the claude provider). A binary on PATH is not consent to run it — it may be
+// logged out, rate limited, or wrapped in a cgroup shim, and any of those
+// turns `go test ./...` red on a machine whose wick code is fine.
 //
 // Run:
-//   go test ./internal/agents/provider/codex/... -run TestIntegration -v -timeout 60s
+//   WICK_CODEX_E2E=1 go test ./internal/agents/provider/codex/... -run TestIntegration -v -timeout 60s
 
 import (
 	"bufio"
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +24,9 @@ import (
 
 func skipIfNoCodex(t *testing.T) string {
 	t.Helper()
+	if os.Getenv("WICK_CODEX_E2E") != "1" {
+		t.Skip("set WICK_CODEX_E2E=1 to run real-codex integration tests")
+	}
 	bin, err := safeexec.LookPath("codex")
 	if err != nil {
 		t.Skip("codex binary not found on PATH — skipping integration test")

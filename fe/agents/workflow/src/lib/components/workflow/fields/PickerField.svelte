@@ -51,6 +51,11 @@
   }
   const chips = $derived(parseChips(value));
 
+  // Rows already chipped are dropped from the dropdown rather than shown
+  // greyed out — otherwise editing an existing selection lists the same
+  // channel twice (once as the current chip, once in the results).
+  const visibleResults = $derived(results.filter((r) => !chips.some((c) => c.id === r.id)));
+
   function emitChips(next: Chip[]) {
     onChange(next.length === 0 ? "" : JSON.stringify(next));
   }
@@ -107,6 +112,7 @@
 
   <!-- Chips row. -->
   {#if chips.length > 0}
+    <div class="text-[10px] uppercase tracking-wide text-black-700 dark:text-black-600">Current</div>
     <div class="flex flex-wrap gap-1.5">
       {#each chips as c (c.id)}
         <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300 text-[11px]">
@@ -133,23 +139,22 @@
       onfocus={() => (open = true)}
       onblur={() => setTimeout(() => (open = false), 150)}
     />
-    {#if open && (loading || results.length > 0)}
+    {#if open && (loading || visibleResults.length > 0)}
       <div class="absolute left-0 right-0 top-full mt-1 z-30 max-h-60 overflow-y-auto rounded border border-slate-200 dark:border-navy-600 bg-white-100 dark:bg-navy-700 shadow-lg">
         {#if loading}
           <div class="px-3 py-2 text-[11px] italic text-black-700 dark:text-black-600">Searching…</div>
         {/if}
-        {#each results as r (r.id)}
+        {#each visibleResults as r (r.id)}
           <button
             type="button"
             class="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-left hover:bg-slate-50 dark:hover:bg-white-300 dark:bg-navy-600"
             onclick={() => addChip(r)}
-            disabled={chips.some((c) => c.id === r.id)}
           >
             <span class="text-sm">{r.name}</span>
             <span class="font-mono text-[10px] text-black-700 dark:text-black-600">{r.id}</span>
           </button>
         {/each}
-        {#if !loading && results.length === 0 && query}
+        {#if !loading && visibleResults.length === 0 && query}
           <div class="px-3 py-2 text-[11px] italic text-black-700 dark:text-black-600">No matches for "{query}"</div>
         {/if}
       </div>

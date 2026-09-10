@@ -29,6 +29,12 @@ type SessionListItem struct {
 	LastActive  string `json:"last_active"`
 	Lifecycle   string `json:"lifecycle"`
 	PID         int    `json:"pid,omitempty"`
+	// Participants is how many people have spoken in the session. 0/1 =
+	// a single-person chat; >1 is what the list renders as shared. A
+	// count, not the ids: the list only needs to draw a marker, and
+	// shipping the ids would expose who talks to whom to anyone who can
+	// see the row.
+	Participants int `json:"participants,omitempty"`
 }
 
 // SessionMetaDTO is the JSON shape returned by /api/sessions/{id}/meta.
@@ -83,7 +89,7 @@ func accessibleSessionIDs(ids []string, sessions map[string]session.Session, acc
 		if scoped != "" && s.Meta.ProjectID != scoped {
 			continue
 		}
-		if !access.allowSession(s.Meta.ProjectID, s.Meta.UserID) {
+		if !access.allowSession(s.Meta.ProjectID, s.Meta.UserID, s.Meta.Participants) {
 			continue
 		}
 		out = append(out, id)
@@ -128,6 +134,11 @@ func ticketAssignedSessions(projectID, userID string) map[string]bool {
 // This is the "your sessions" scope, shared by the JSON list and the templ
 // sidebar so the two never disagree about what "yours" means. A nil user
 // (internal/MCP caller) gets ids back unfiltered.
+//
+// "Own" means a session you took part in, not only one you started. Slack
+// threads are multi-user by nature: someone who replied into a thread did
+// that work too, so it belongs in their list even though the session's
+// owner (and its spawn identity) stays with the person who opened it.
 func ownedSessionIDs(c *tool.Ctx, ids []string, sessions map[string]session.Session, scoped string) []string {
 	u := login.GetUser(c.Context())
 	if u == nil {
@@ -136,7 +147,8 @@ func ownedSessionIDs(c *tool.Ctx, ids []string, sessions map[string]session.Sess
 	assigned := ticketAssignedSessions(scoped, u.ID)
 	out := ids[:0:0]
 	for _, id := range ids {
-		if sessions[id].Meta.UserID == u.ID || assigned[id] {
+		meta := sessions[id].Meta
+		if meta.IsParticipant(u.ID) || assigned[id] {
 			out = append(out, id)
 		}
 	}
@@ -213,6 +225,8 @@ func apiSessionList(c *tool.Ctx) {
 			LastActive:  s.Meta.LastActive.Format("2006-01-02T15:04:05Z07:00"),
 			Lifecycle:   lc.Lifecycle,
 			PID:         lc.PID,
+
+			Participants: s.Meta.PeopleCount(),
 		})
 	}
 
@@ -269,7 +283,7 @@ func apiSessionConversation(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	if !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID) {
+	if !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
@@ -305,7 +319,7 @@ func apiSessionMeta(c *tool.Ctx) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}
-	if !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID) {
+	if !callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants) {
 		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
 		return
 	}

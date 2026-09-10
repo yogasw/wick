@@ -26,6 +26,7 @@
   import ArgField from "./fields/ArgField.svelte";
   import KvListField from "./fields/KvListField.svelte";
   import Field from "./fields/Field.svelte";
+  import ChannelPicker from "./fields/ChannelPicker.svelte";
   import SchemaForm from "./fields/SchemaForm.svelte";
   import { CodeEditor } from "@wick-fe/common-ui";
   import DatatableForm from "./nodes/DatatableForm.svelte";
@@ -37,6 +38,7 @@
     if (!node || node.type !== "channel") return [];
     return $catalog?.channels?.find((c) => c.name === node.channel)?.ops ?? [];
   });
+
   const currentChannelOp = $derived.by(() => {
     return currentChannelOps.find((o) => o.id === node?.op);
   });
@@ -1394,12 +1396,14 @@
                     {/if}
                   </div>
                 {:else}
-                  <Field
-                    kind="select"
-                    label="Channel"
+                  <ChannelPicker
+                    channels={$catalog?.channels ?? []}
                     value={node.channel ?? ""}
-                    onChange={(v) => {
-                      patch("channel", v);
+                    instance={node.channel_instance ?? ""}
+                    onChange={(channel, instance) => {
+                      patch("channel", channel);
+                      // Pin WHICH bot of that channel type runs the action.
+                      patch("channel_instance", instance);
                       // Reset op + args when switching channels — catalog
                       // resolves a different op set + arg schema per
                       // channel, leaving stale values around will fail
@@ -1407,14 +1411,7 @@
                       patch("op", "");
                       patch("args", {});
                     }}
-                    options={[
-                      { label: "(select channel)", value: "" },
-                      ...($catalog?.channels ?? []).map((c) => ({
-                        label: c.name,
-                        value: c.name,
-                      })),
-                    ]}
-                    helper="Channels registered with the wick channel registry."
+                    helper="Which bot this action runs as. Yours is picked by default."
                   />
                   {#if node.channel}
                     <Field

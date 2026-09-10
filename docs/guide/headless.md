@@ -6,7 +6,7 @@ Two ways to run, pick one:
 
 | Mode | Command | When |
 |---|---|---|
-| **Daemon** | `wick start` / `wick stop` / `wick restart` | Quick install on a single box — wick manages its own PID file at `~/.wick/run.pid`, logs to `~/.wick/daemon.log` |
+| **Daemon** | `wick start` / `wick stop` / `wick restart` / `wick reload` | Quick install on a single box — wick manages its own PID file at `~/.wick/run.pid`, logs to `~/.wick/daemon.log` |
 | **Foreground** | `wick server` (or `wick all`) | Supervised by systemd / Docker / pm2 — the supervisor handles restart + logs |
 
 Full subcommand list: [App CLI Reference](/reference/app-cli).
@@ -28,6 +28,9 @@ Stop / restart:
 ./wick stop
 ./wick restart
 ```
+
+To replace the binary **without** closing the port, use `reload` instead of `restart` — see
+[Updating without downtime](#updating-without-downtime) below.
 
 ## Quickstart (foreground)
 
@@ -75,12 +78,16 @@ Description=Wick agent host
 After=network.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=all
+TimeoutStartSec=infinity
 User=wick
 WorkingDirectory=/opt/wick
 ExecStart=/opt/wick/wick server
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
+Environment=WICK_GRACEFUL_UPGRADE=1
 Environment=APP_BASE_URL=https://wick.example.com
 Environment=HOST=0.0.0.0
 
@@ -89,6 +96,44 @@ WantedBy=multi-user.target
 ```
 
 Then `systemctl enable --now wick`. Logs via `journalctl -u wick -f`.
+
+The last four lines are what make a zero-downtime handover possible, and each one earns its
+place:
+
+- `Type=notify` + `NotifyAccess=all` — during a handover the process systemd forked exits while
+  a *different* one keeps serving. The successor announces itself with `READY=1` and
+  `MAINPID=<its pid>`, so systemd follows it instead of treating the parent's exit as the
+  service dying and killing the whole cgroup. `NotifyAccess=all` is required because that
+  notification comes from a process systemd did not fork itself.
+- `TimeoutStartSec=infinity` — **not `0`**. In systemd, `TimeoutStartSec=0` means *time out
+  immediately*, and the unit fails the moment it starts.
+- `ExecReload` — makes `systemctl reload wick` the upgrade command.
+- `WICK_GRACEFUL_UPGRADE=1` — graceful upgrade is opt-in, since it changes how the process
+  exits.
+
+Leave them out and wick still runs; `reload` just reports that it is unavailable and you use
+`restart`.
+
+### Updating without downtime
+
+```bash
+# 1. install the new binary — rename, never copy over a running one
+cp ./wick-new /opt/wick/wick.new && chmod +x /opt/wick/wick.new
+mv -f /opt/wick/wick.new /opt/wick/wick
+
+# 2. hand over
+systemctl reload wick        # or: ./wick reload, or: kill -HUP $(pidof wick)
+```
+
+The successor boots — restoring the registry, reconnecting the database and connectors, which
+takes as long as any boot — **while the old process keeps answering on the same socket**. Only
+when it is ready does the old one stop serving, finish its outstanding work, and exit.
+
+`cp` onto the running binary fails with `ETXTBSY`; the rename is what avoids that, and it lets
+the draining process keep running the code it started with.
+
+See [`<app> reload`](/reference/app-cli#app-reload) for what the drain waits for, the two
+timeout knobs, and how to prove from outside the host that nothing was dropped.
 
 ### Headless build (no GUI libs)
 

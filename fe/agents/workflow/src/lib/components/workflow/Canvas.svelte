@@ -199,6 +199,7 @@
         const prefill = JSON.parse(actionPrefillRaw) as {
           type: string;
           channel?: string;
+          channel_instance?: string;
           module?: string;
           op?: string;
           row_id?: string;
@@ -208,6 +209,7 @@
           id: "",
           type: prefill.type as NodeType,
           ...(prefill.channel ? { channel: prefill.channel } : {}),
+          ...(prefill.channel_instance ? { channel_instance: prefill.channel_instance } : {}),
           ...(prefill.module ? { module: prefill.module } : {}),
           ...(prefill.op ? { op: prefill.op } : {}),
           ...(prefill.row_id ? { row_id: prefill.row_id } : {}),
@@ -230,7 +232,11 @@
       // Pre-formed channel trigger from the palette — pick the
       // channel + event then drop a ready-to-wire entry.
       try {
-        const parsed = JSON.parse(channelEventRaw) as { channel: string; event: string };
+        const parsed = JSON.parse(channelEventRaw) as {
+          channel: string;
+          channel_instance?: string;
+          event: string;
+        };
         const id = `trigger-${Math.random().toString(36).slice(2, 8)}`;
         draftWorkflow.update((wf) => {
           if (!wf) return wf;
@@ -240,6 +246,7 @@
               id,
               type: "channel",
               channel: parsed.channel,
+              ...(parsed.channel_instance ? { channel_instance: parsed.channel_instance } : {}),
               event: parsed.event,
             },
           ];
@@ -286,6 +293,7 @@
           id: "",
           type: drag.node_type as NodeType,
           ...(drag.channel ? { channel: drag.channel } : {}),
+          ...(drag.channel_instance ? { channel_instance: drag.channel_instance } : {}),
           ...(drag.module ? { module: drag.module } : {}),
           ...(drag.op ? { op: drag.op } : {}),
           ...(drag.row_id ? { row_id: drag.row_id } : {}),
@@ -301,7 +309,16 @@
       const id = `trigger-${Math.random().toString(36).slice(2, 8)}`;
       draftWorkflow.update((wf) => {
         if (!wf) return wf;
-        wf.triggers = [...(wf.triggers ?? []), { id, type: "channel", channel: drag.channel, event: drag.event }];
+        wf.triggers = [
+          ...(wf.triggers ?? []),
+          {
+            id,
+            type: "channel",
+            channel: drag.channel,
+            ...(drag.channel_instance ? { channel_instance: drag.channel_instance } : {}),
+            event: drag.event,
+          },
+        ];
         const canvas = ((wf as any)._canvas ?? {}) as any;
         if (!canvas.positions) canvas.positions = {};
         canvas.positions[id] = { x, y };

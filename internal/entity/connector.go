@@ -117,6 +117,12 @@ const (
 	// ConnectorRunSourceRetry marks runs that replay the request payload
 	// of a previous run, identified by ConnectorRun.ParentRunID.
 	ConnectorRunSourceRetry ConnectorRunSource = "retry"
+	// ConnectorRunSourceApp marks runs a wick surface made on a human's
+	// behalf — today the Source panel borrowing a Git CLI connector to
+	// push or pull. Distinct from "test": nobody is poking at the
+	// connector here, the app is using it to do the user's work, and the
+	// history should say which.
+	ConnectorRunSourceApp ConnectorRunSource = "app"
 )
 
 // ConnectorRunStatus describes the outcome of a ConnectorRun.

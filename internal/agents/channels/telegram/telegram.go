@@ -82,6 +82,70 @@ type Channel struct {
 
 	runCancel context.CancelFunc
 	runWg     sync.WaitGroup
+
+	// Cached bot identity (see agentchannels.IdentityCache). Telegram
+	// resolves it via getMe when the API client is built; caching it on the
+	// channel row means a picker can say WHICH bot this instance is even
+	// before it connects — and never has to ask twice. Guarded by mu.
+	botUserID    string
+	botUserName  string
+	identitySink func(botUserID, botName, workspace string)
+}
+
+// BotUserName satisfies agentchannels.BotNamer — the @handle pickers
+// label this instance with.
+func (t *Channel) BotUserName() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.botUserName
+}
+
+// BotIdentity satisfies agentchannels.IdentityCache.
+func (t *Channel) BotIdentity() (string, string, string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.botUserID, t.botUserName, ""
+}
+
+// SeedIdentity hydrates the identity from the channel row before getMe
+// has answered. Never overwrites a live value.
+func (t *Channel) SeedIdentity(botUserID, botName, _ string) {
+	t.mu.Lock()
+	if t.botUserID == "" {
+		t.botUserID = botUserID
+	}
+	if t.botUserName == "" {
+		t.botUserName = botName
+	}
+	t.mu.Unlock()
+}
+
+// SetIdentitySink registers the persistence callback (see IdentityCache).
+func (t *Channel) SetIdentitySink(fn func(botUserID, botName, workspace string)) {
+	t.mu.Lock()
+	t.identitySink = fn
+	t.mu.Unlock()
+}
+
+// rememberBot records the identity getMe returned and pushes it to the
+// cache. Called wherever a bot API client is (re)built.
+func (t *Channel) rememberBot(bot *tgbotapi.BotAPI) {
+	if bot == nil {
+		return
+	}
+	id := strconv.FormatInt(bot.Self.ID, 10)
+	name := bot.Self.UserName
+	if name != "" {
+		name = "@" + name
+	}
+	t.mu.Lock()
+	t.botUserID = id
+	t.botUserName = name
+	sink := t.identitySink
+	t.mu.Unlock()
+	if sink != nil {
+		sink(id, name, "")
+	}
 }
 
 // New constructs a Telegram Channel from cfg alone. SendFunc and other
@@ -98,6 +162,7 @@ func New(cfg agentconfig.TelegramChannelConfig) *Channel {
 	if cfg.BotToken != "" {
 		if bot, err := tgbotapi.NewBotAPI(cfg.BotToken); err == nil {
 			tc.bot = bot
+			tc.rememberBot(bot)
 		} else {
 			log.Warn().Err(err).Msg("telegram: invalid bot token, starting in dormant mode")
 		}
@@ -346,6 +411,7 @@ func (t *Channel) Reload(ctx context.Context, cfg agentconfig.TelegramChannelCon
 	t.cfg = cfg
 	t.bot = bot
 	t.mu.Unlock()
+	t.rememberBot(bot)
 
 	log.Info().Str("channel", "telegram").Str("bot", bot.Self.UserName).Msg("reload: restarting with new config")
 	go func() {

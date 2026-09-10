@@ -85,7 +85,7 @@
     } else if (d.type === "channel-trigger") {
       e.dataTransfer?.setData(
         "application/x-wick-channel-event",
-        JSON.stringify({ channel: d.channel, event: d.event }),
+        JSON.stringify({ channel: d.channel, channel_instance: d.channel_instance, event: d.event }),
       );
     } else if (d.type === "node") {
       // For plain node drops (no channel/module/op) the legacy
@@ -98,6 +98,7 @@
           JSON.stringify({
             type: d.node_type,
             channel: d.channel,
+            channel_instance: d.channel_instance,
             module: d.module,
             op: d.op,
             row_id: d.row_id,
@@ -171,7 +172,15 @@
               class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:hover:bg-navy-600 transition-colors"
               onclick={() => enterDrill(item)}
             >
-              <span class="text-sm font-medium truncate">{item.label}</span>
+              <span class="min-w-0 flex flex-col">
+                <span class="text-sm font-medium truncate">{item.label}</span>
+                {#if item.meta || item.owner}
+                  <span class="text-[10px] leading-snug truncate text-black-700 dark:text-black-500">
+                    {#if item.meta}<span>{item.meta}</span>{/if}
+                    {#if item.owner}<span class="opacity-70">{item.meta ? " · " : ""}{item.owner}</span>{/if}
+                  </span>
+                {/if}
+              </span>
               <span class="flex items-center gap-1.5 text-[10px] text-black-700 dark:text-black-500 shrink-0">
                 {#if item.badge}<span>{item.badge}</span>{/if}
                 <span aria-hidden="true">›</span>
@@ -213,7 +222,15 @@
                 class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded text-left text-black-800 dark:text-white-100 bg-white-200 dark:bg-navy-700 hover:bg-white-300 dark:bg-navy-600 transition-colors"
                 onclick={() => enterDrill(item)}
               >
-                <span class="text-sm font-medium truncate">{item.label}</span>
+                <span class="min-w-0 flex flex-col">
+                  <span class="text-sm font-medium truncate">{item.label}</span>
+                  {#if item.meta || item.owner}
+                    <span class="text-[10px] leading-snug truncate text-black-700 dark:text-black-500">
+                      {#if item.meta}<span>{item.meta}</span>{/if}
+                      {#if item.owner}<span class="opacity-70">{item.meta ? " · " : ""}{item.owner}</span>{/if}
+                    </span>
+                  {/if}
+                </span>
                 <span class="flex items-center gap-1.5 text-[10px] text-black-700 dark:text-black-500 shrink-0">
                   {#if item.badge}<span>{item.badge}</span>{/if}
                   <span aria-hidden="true">›</span>

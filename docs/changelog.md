@@ -10,6 +10,76 @@ _Nothing yet — notes for the next release go here._
 
 ---
 
+## [v1.9.0](https://github.com/yogasw/wick/compare/v1.8.1...v1.9.0) — Graceful Upgrades & Workflows
+
+_Released on 2026-09-10_
+
+### Added
+
+*   **Zero-downtime binary replacement (`<app> reload`)**: A `restart` closed the listening port and killed in-flight work. `reload` starts a successor, hands it the listening socket, and keeps serving until the successor is ready. The old process then drains and exits. Work that cannot be resumed (workflow runs mid-node, cron jobs mid-write) waits for `WICK_DRAIN_TIMEOUT` (default 20m), while resumable agent turns wait for `WICK_DRAIN_AGENT_GRACE` (default 45s). An intake baton ensures only one process accepts new work. Opt-in with `WICK_GRACEFUL_UPGRADE=1`; full support on Linux/macOS/BSD, with Windows and the tray falling back to stop/start. Background subsystems declare work with `upgrade.Register` / `upgrade.RegisterResumable`.
+*   **Slack: run an agent inside a thread from a workflow (`slack.send_to_session`)**: This action injects a task into the agent session bound to a Slack thread, making the turn an ordinary pool turn with status banners, tool activity streaming, and replies in the thread. `slack.send_message` also gains `auto_reply` to arm the thread's 🤖 switch. Bot messages now reach the workflow surface as `message` / `thread_started` with `is_bot`, `bot_id`, and `bot_username`, guarded against self-posts.
+*   **Self-update now uses the handover too**: Applying a staged update now performs a socket handover when graceful upgrade is armed, replacing the binary and forking a successor while the current process keeps serving and drains. The tray keeps the classic swap + re-exec.
+*   **Built-in skill: upgrading without downtime**: Ships in the binary, documenting `reload` vs `restart`, systemd lines needed for handover, binary renaming, drain wait times, registering background subsystems, proving zero downtime, and recognising failure modes.
+*   **Workflow: clear a workflow's run history from a menu**: Adds a bulk action to clear all runs from a workflow's history, accessible via a 3-dot menu. `state.FileStore.DeleteAll(id)` is used for deletion, ignoring panel filters. The `KebabMenu` gains a `size="sm"` option.
+*   **Providers: show when each usage window resets on the card**: Provider cards now display reset information (e.g., "5h 35% resets-1h") with a glyph and a tooltip for weekly and daily usage windows.
+*   **Built-in skill: HTML widget troubleshooting (`wick-html-widget`)**: Documents HTML artifact preview rules, including the one-file rule, CSP directives, widget permissions presets, the `wickReadFile` and `wickDataTable` bridges, and console message signatures.
+*   **SCM: scroll the selected repository into view and mark it**: The repository list now scrolls the selected row into view when opened, selection changes, or search filters rebuild rows. The selected row also gains a check icon and accent left border.
+*   **Sessions: own a channel thread from its first message, and share it with everyone in it**: `ensureSession` now stamps the caller as owner at creation. Session meta gains `participants` (all speakers), which drives visibility in "Yours", access to unscoped sessions, and a shared-thread icon.
+*   **Channels: name every channel instance and let a workflow pin one**: `Registry.Describe` now returns one row per instance with its key, owner, and bot name. The editor renders this as a two-line row, with the caller's instance first. Channel nodes and triggers gained `channel_instance` to pin an action to a specific bot, and identity is cached on the instance's `agent_channels` row.
+*   **Source: tell the agent which repository it is working in**: The "This session" block now carries `active_repo`, and a Source connector exposes the same selection through `source_active` (to re-read), `source_list` (to show all repos), and `source_select` (to switch).
+*   **Source: follow the repository being edited, and say so**: The git watcher now maps changed files to their owning repository and makes that the session's active repo, ignoring writes inside `.git`. The prompt and MCP instructions state `active_repo` is a spawn-time snapshot. The Source rail icon pulses with the repo name when the active repo moves.
+*   **SCM: give the Source panel a credential**: Push and Pull actions in the Source panel now borrow credentials from the Git CLI connector. The first network operation prompts for a credential, which is remembered per session, per user.
+
+### Improved
+
+*   **Registry: session-view rebuild 40% cheaper**: Optimised the registry's session-view rebuild process by using `maps.Clone` and sorting order keys (`LastActive`) instead of IDs. This reduced rebuild time from 5.9ms to 3.5ms per request for 5,000 sessions.
+
+### Fixed
+
+*   **Source panel missed changes deeper than one directory**: The `fsnotify` watcher now watches the active repository's tree in full (skipping `.git` and build/cache noise), capped at 4000 directories, addressing issues where changes in nested directories were not noticed. Each repo's `.git` is also watched.
+*   **Source rail badge showed no counter until a file changed**: The last `git_status` per session is now cached and replayed on every page load, ensuring the badge displays a counter immediately.
+*   **Assistant message duplicated on every page reload**: The stream snapshot's disk fallback now emits one cumulative `text_snapshot` instead of replaying assistant text as `text_delta` (append), preventing duplication.
+*   **A reply typed in the web UI never reached its Slack thread**: The session → (channel, thread) mapping is now persisted on the session (`meta.channel_ref`), allowing replies to be delivered even after a restart or from sessions created by workflows.
+*   **`plugin.Reloader.Stop` panicked on overlapping shutdown paths**: The stop channel is now idempotent, preventing double-closure panics.
+*   **Workflow subsystem was never stopped on shutdown**: `wfsetup.Manager.Stop` now has a caller, ensuring running workflows are properly stopped during shutdown.
+*   **Slack: route events from every bot instance**: The workflow event sink is now attached to all Slack instances, not just the first, ensuring all bots receive and route events correctly.
+*   **Slack: collapse repeat deliveries of one physical event**: Slack payloads now carry a bot-independent `event_key` (channel/ts), and the router drops keys it has already seen, preventing duplicate workflow runs from multiple bots in a channel or Slack webhook retries.
+*   **Slack: action nodes resolve instance per run from trigger's bot_user_id**: Workflows triggered by a specific bot now reply as that bot, preventing `not_in_channel` errors.
+*   **Slack: `slack.channels` picker offers only channels the bot is a member of**: The picker now uses `users.conversations` instead of `conversations.list`, showing only reachable channels and preventing selection of un-joinable ones.
+*   **Slack: `text_contains` trigger now means case-insensitive substring**: The `text_contains` filter in Slack message triggers now correctly performs a case-insensitive substring match.
+*   **Slack: editor picker no longer lists an already-selected entry twice**: Editor pickers for Slack channels now de-duplicate entries, and saved chips for values set by others are rendered under a "Current" label.
+*   **UI: fail the build on missing generated assets (explicit `go:embed`)**: Generated build outputs (css/app.css, lib/wick-markdown.js) are now explicitly named in `go:embed`, causing a compile-time error if they are missing instead of silently shipping 404s.
+*   **UI: one clashing skill name emptied the whole `/` command menu**: The `/` command menu now uses a unique `key` for list identity (e.g., `skill:<folder>`) and de-dupes by invokable name, preventing a single name clash from emptying the entire menu.
+*   **UI: Chrome warned that `apple-mobile-web-app-capable` is deprecated**: Added the standard `mobile-web-app-capable` meta tag while retaining the prefixed version for iOS Safari.
+*   **SCM: count the selected repository in the Source badge, not the session**: The Source rail badge now reflects the changes in the currently selected repository, falling back to the session total when none is selected.
+*   **Files: file panel explorer-shaped search and sort**: The file panel's filter is now scoped to the level being viewed, with a "Subfolders" toggle for recursive search. Ordering now follows standard file manager rules (folders first, Name/Recent/Type), and the search box includes a clear button.
+*   **Files: file panel header counts the folder you are in, not everything loaded**: The file panel header now accurately counts the entries in the current folder, rather than a cumulative count of all loaded entries as folders are expanded.
+*   **SCM: make the selected repository one answer, per session**: The active repository selection now lives on the session (`meta.scm_repo`) and is included in the `git_status` snapshot, ensuring consistency across the panel, badge, and server.
+*   **SCM: name the active repository on the collapsed Repositories header**: The collapsed repository list header now displays the active repo's name and branch, providing context without needing to expand the list.
+*   **SCM: give the collapsed repository name the room it needs**: The active repo's name on the collapsed header now sits right after the count, taking up the remaining row space, improving readability.
+*   **Git connector: policy refusal arrived as normal reply, not transport error**: `gitConnectorOutput` now reads policy verdicts (`ok:false, verdict "deny"`) first, preventing false "Pulled" messages.
+*   **Git connector: `pull` and `checkout` now exempt from protected branch policy**: These non-mutating operations are no longer gated by protected branch policies.
+*   **Git connector: stale `.git/index.lock` blocked commands; now retries after clearing old/unheld locks**: The `Run` command now retries once after clearing stale `.git/index.lock` files that are both old (>10m) and unheld.
+*   **Git connector: `pull` with no branch now falls back to current branch**: The `pull` operation now correctly defaults to the current branch when none is specified.
+*   **Git connector: `discard` on repo with no commits now uses `git rm --cached`**: The `discard` command now correctly handles repos with no commits by unstaging with `git rm --cached`.
+*   **Agents: load the file panel one level at a time (recursive listing cut off)**: The Context panel now loads directory contents one level at a time via `GET /files?path=`, applying the 5000-entry cap per directory rather than globally, ensuring all top-level repos are visible. Server-side search for "Subfolders" mode is also implemented.
+*   **Agents: the `@`-mention index cap increased from 20000 to 200000 files**: The `@`-mention index now supports a significantly larger number of files, preventing silent omissions in large sessions.
+*   **Agents: refresh on SSE heartbeat now strictly sequential, not parallel**: File panel refresh requests triggered by SSE heartbeats are now sequential, resolving intermittent "Transport error" issues from parallel requests.
+*   **Agents: `pull` op description updated to reflect exemption from protected branch**: The description for the `pull` operation in the git connector documentation has been corrected.
+*   **Agents: `policyshow` test for `checkout` exemption fixed**: A test verifying `checkout` exemption from protected branch policies has been corrected.
+*   **Upgrade: log-pipe cleanup waited unbounded for EOF**: The log-pipe cleanup no longer waits unbounded for EOF from inherited pipes, preventing the old process from hanging after a drain.
+*   **Upgrade: successor inherited parent's log pipes, causing SIGPIPE**: Successor processes now fork with real stdio, preventing SIGPIPE errors when the parent exits and stopping child boot output from being copied to the parent's log.
+*   **SCM: repository list no longer drags itself back to the selection on re-render**: Auto-scroll in the repository list now fires only when the reason for selection changes, and stands down for 5 seconds after manual scrolling. A pill appears to guide users back to the selection if it's out of view.
+*   **Agents: a scroll away from the bottom now wins the race against an arriving turn**: Upward scrolling in the chat panel now immediately releases the "stick to bottom" pin, preventing the thread from jumping back down when a new turn arrives mid-gesture.
+*   **Tests: unbreak the suite on a real host (provider/claude, provider/codex tests)**: Test hygiene fixes, including ensuring `CLAUDE_CONFIG_DIR` independence, gating `codex` integration tests behind `WICK_CODEX_E2E=1`, and fixing a race in `upgrade TestTrackerWaitsUntilZero` with an atomic counter.
+*   **Memscope: shim unit name carries nanosecond stamp for uniqueness**: The memscope shim's unit name now includes a nanosecond timestamp, preventing clashes when `exec` replaces the shell in place.
+*   **Git connector: `reset` and `branch_create` with checkout fixed for git 2.43 compatibility**: Addressed compatibility issues with Git 2.43 by ensuring `ValidateCommitish` refuses leading `-` and using plain documented forms for `reset` and `branch_create` arguments.
+*   **Memscope: quote what the shim interpolates to prevent script injection**: The shim now safely quotes interpolated values like `RealBin` and slice arguments using `sh()`, and `Provider.Name` through `shimSafeName`, preventing shell script injection from hostile names or paths with spaces.
+*   **Web: carry embedded build outputs (`app.css`, `wick-markdown.js`) in git to allow compilation without a frontend toolchain**: `public/css/app.css` and `public/lib/wick-markdown.js` are now committed to git, allowing `go build` and `go test` to succeed on fresh checkouts without requiring a frontend build toolchain.
+
+---
+
+
 ## [v1.8.1](https://github.com/yogasw/wick/compare/v1.8.0...v1.8.1) — Providers & Fixes
 
 _Released on 2026-09-08_

@@ -566,7 +566,7 @@ func scheduleMonitorVM(m entity.ScheduledMessage, sessions map[string]session.Se
 	if !ok {
 		return scheduleVM{}, false
 	}
-	if !access.allowSession(sess.Meta.ProjectID, sess.Meta.UserID) {
+	if !access.allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants) {
 		return scheduleVM{}, false
 	}
 	vm := scheduleToVM(m)

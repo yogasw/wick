@@ -111,3 +111,108 @@ func TestShim_IsValidShellSyntax(t *testing.T) {
 		}
 	}
 }
+
+// TestShim_NestedShimsAskForDistinctUnits: exec replaces the shell in
+// place, so a shim that execs into another shim of the same shape runs
+// under the SAME pid. Naming the scope after $$ alone made the inner one
+// ask systemd for the unit name the outer one already held — "unit was
+// already loaded", systemd-run exits 1, and since the shim execs it the
+// agent never starts. A host with an older hand-rolled shim still sitting
+// at REAL had every codex spawn failing this way.
+//
+// A stub systemd-run stands in for the real one (CI has no user session):
+// it records the unit it was asked for and then execs the command after
+// "--", preserving the pid exactly as systemd-run does.
+func TestShim_NestedShimsAskForDistinctUnits(t *testing.T) {
+	dir := t.TempDir()
+	unitsLog := filepath.Join(dir, "units")
+
+	bindir := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bindir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stub := "#!/bin/sh\n" +
+		"for a in \"$@\"; do case \"$a\" in --unit=*) echo \"${a#--unit=}\" >> " + unitsLog + " ;; esac; done\n" +
+		"while [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bindir, "systemd-run"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	real := filepath.Join(dir, "real")
+	if err := os.WriteFile(real, []byte("#!/bin/sh\necho \"REAL $*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// inner stands in for the pre-existing shim found at REAL.
+	inner := filepath.Join(dir, "inner")
+	if err := os.WriteFile(inner, []byte(RenderShim(Provider{Name: "t", RealBin: real, LimitMB: 64}, "agents.slice")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outer := filepath.Join(dir, "outer")
+	if err := os.WriteFile(outer, []byte(RenderShim(Provider{Name: "t", RealBin: inner, LimitMB: 64}, "agents.slice")), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := run(t, outer,
+		[]string{"PATH=" + bindir + ":/usr/bin:/bin", "XDG_RUNTIME_DIR=/run/user/1000"},
+		"hello")
+	if err != nil {
+		t.Fatalf("nested shims failed: %v (%s)", err, out)
+	}
+	if out != "REAL hello" {
+		t.Fatalf("output = %q, want the real binary to run through both shims", out)
+	}
+
+	raw, err := os.ReadFile(unitsLog)
+	if err != nil {
+		t.Fatalf("no unit names recorded: %v", err)
+	}
+	units := strings.Fields(string(raw))
+	if len(units) != 2 {
+		t.Fatalf("recorded units = %v, want one per shim", units)
+	}
+	if units[0] == units[1] {
+		t.Fatalf("both shims asked for %q — the second scope cannot be created", units[0])
+	}
+}
+
+// TestShim_SurvivesAPathWithSpacesAndAHostileName: both values the renderer
+// interpolates land inside a shell script — RealBin in an assignment, the
+// provider name in a comment line and inside a double-quoted unit name. A
+// path with a space (macOS "Application Support" is the everyday case) would
+// end the assignment and leave the remainder as a command; a name carrying a
+// quote or a newline would close the string and run as script. Neither can
+// happen today, and this is what keeps that from depending on Providers
+// staying a list of plain words.
+func TestShim_SurvivesAPathWithSpacesAndAHostileName(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "Application Support")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(dir, "real bin")
+	if err := os.WriteFile(real, []byte("#!/bin/sh\necho \"REAL $*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	canary := filepath.Join(t.TempDir(), "pwned")
+	hostile := "t\";touch " + canary + ";echo \""
+	body := RenderShim(Provider{Name: hostile, RealBin: real, LimitMB: 64}, "agents.slice")
+
+	shim := filepath.Join(t.TempDir(), "shim")
+	if err := os.WriteFile(shim, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := safeexec.Command("/bin/sh", "-n", shim).CombinedOutput(); err != nil {
+		t.Fatalf("shim is not valid sh: %v\n%s", err, out)
+	}
+
+	out, err := run(t, shim, []string{"PATH=/usr/bin:/bin"}, "hello")
+	if err != nil {
+		t.Fatalf("shim failed: %v (%s)", err, out)
+	}
+	if out != "REAL hello" {
+		t.Fatalf("output = %q, want the real binary to run from a path with a space", out)
+	}
+	if _, err := os.Stat(canary); err == nil {
+		t.Fatal("the provider name executed as a command — it reached the script unescaped")
+	}
+}

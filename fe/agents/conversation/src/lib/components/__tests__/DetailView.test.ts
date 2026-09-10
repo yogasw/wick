@@ -140,7 +140,7 @@ vi.mock("../../api/subagents.js", () => ({
 
 vi.mock("../../api/files.js", () => ({
   listFiles: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
-  searchFiles: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
+  searchMentionPaths: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   readFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   saveFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),
   createFile: vi.fn().mockReturnValue({ pipe: (x: unknown) => x }),

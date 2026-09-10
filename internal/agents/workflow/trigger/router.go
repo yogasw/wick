@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -58,9 +59,13 @@ type workerHandle struct {
 }
 
 type Router struct {
-	mu      sync.RWMutex
-	engine  *engine.Engine
-	service service.Service
+	mu sync.RWMutex
+	// activeRuns counts runs currently executing (serial worker + parallel
+	// fan-out). Separate from wg, which also holds idle worker goroutines, so
+	// only this can answer "is a workflow still running right now".
+	activeRuns atomic.Int64
+	engine     *engine.Engine
+	service    service.Service
 	// baseCtx is the server-lifetime context every worker goroutine is
 	// spawned under. Set once via SetBaseCtx at boot. Register ignores
 	// the ctx its caller passes for worker lifetime — HTTP handlers used
@@ -148,8 +153,31 @@ func (r *Router) GlobalParallelEnabled() bool {
 }
 
 // NewRouter wires a Router to an Engine + Service.
+// ActiveRuns is how many workflow runs are executing right now. Counted
+// separately from r.wg, which also tracks the idle worker goroutines and so
+// can never answer this question.
+func (r *Router) ActiveRuns() int { return int(r.activeRuns.Load()) }
+
+// QueuedRuns is how much work is waiting to start across every workflow.
+func (r *Router) QueuedRuns() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	n := 0
+	for _, q := range r.queues {
+		n += q.Len()
+	}
+	return n
+}
+
+// registerDrain declares workflow runs to the drain tracker: a graceful
+// upgrade waits for a running workflow to finish rather than cutting it off
+// mid-node, which would leave its run state half-written.
+func (r *Router) registerDrain() {
+	upgrade.Register("workflow runs", func() int { return r.ActiveRuns() + r.QueuedRuns() })
+}
+
 func NewRouter(e *engine.Engine, svc service.Service) *Router {
-	return &Router{
+	r := &Router{
 		engine:       e,
 		service:      svc,
 		defs:         map[string]workflow.Workflow{},
@@ -160,6 +188,8 @@ func NewRouter(e *engine.Engine, svc service.Service) *Router {
 		webhookIndex: map[string]webhookEntry{},
 		clock:        func() time.Time { return time.Now() },
 	}
+	r.registerDrain()
+	return r
 }
 
 // Register adds a workflow to the router and spawns its worker goroutine.
@@ -360,6 +390,9 @@ func (r *Router) DispatchWithDone(ctx context.Context, evt workflow.Event) []<-c
 //
 // Returns the number of workflows that accepted the event.
 func (r *Router) Dispatch(ctx context.Context, evt workflow.Event) int {
+	if !r.firstDelivery(evt) {
+		return 0
+	}
 	r.mu.RLock()
 	// Key = "wfID:triggerIdx" so a workflow with multiple triggers of the
 	// same type (e.g. two webhook triggers) each get a candidate slot.
@@ -475,6 +508,15 @@ func MatchTrigger(tr workflow.Trigger, evt workflow.Event) bool {
 func triggerPassesRouterChecks(wfID string, tr workflow.Trigger, evt workflow.Event) bool {
 	switch tr.Type {
 	case workflow.TriggerChannel:
+		// A trigger pinned to one instance ignores the other bots of the
+		// same channel type. Events from a channel that doesn't stamp an
+		// instance still pass — pinning is opt-in, and an unstamped event
+		// must not silently stop firing an existing trigger.
+		if tr.ChannelInstance != "" {
+			if got := payloadString(evt, "channel_instance"); got != "" && got != tr.ChannelInstance {
+				return false
+			}
+		}
 		if tr.Target != "" {
 			gotChannel := payloadString(evt, "channel_id")
 			if gotChannel == "" {
@@ -554,17 +596,42 @@ func filterMatchSpec(spec map[string]any) map[string]any {
 //   - string spec → payload[key] equals spec
 //   - JSON array `[{"id":..},..]` (picker output) → payload[key] is
 //     a member of the id list
+//   - a "<field>_contains" key → case-insensitive substring of
+//     payload[<field>] (there is no payload key by that name, so plain
+//     equality would compare the operator's text against "" and reject
+//     every event — a filter that silently disables the trigger)
 //
 // Events that need fancier semantics (regex, set difference, custom
 // transform) fall back to dump-all and filter inside the graph with
 // a branch / transform node.
 func matchEventPayload(spec map[string]any, payload map[string]any) bool {
 	for k, raw := range spec {
+		if base, ok := strings.CutSuffix(k, "_contains"); ok {
+			if _, declared := payload[k]; !declared {
+				if !matchContains(raw, payload[base]) {
+					return false
+				}
+				continue
+			}
+		}
 		if !matchOne(raw, payload[k]) {
 			return false
 		}
 	}
 	return true
+}
+
+// matchContains implements the "<field>_contains" spec key: an empty
+// value is no filter, anything else is a case-insensitive substring test
+// against the payload field it names.
+func matchContains(specVal, gotVal any) bool {
+	want, _ := specVal.(string)
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return true
+	}
+	got, _ := gotVal.(string)
+	return strings.Contains(strings.ToLower(got), strings.ToLower(want))
 }
 
 func matchOne(specVal, gotVal any) bool {
@@ -792,6 +859,43 @@ func PathMatches(tmpl, got string) bool {
 	return true
 }
 
+// sourceDedup collapses repeat deliveries of ONE physical upstream event.
+// Process-wide and always on — distinct from the per-trigger Dedup, which
+// is an opt-in (DedupTTLSec) "don't re-run for this event id" rule.
+//
+// 5 minutes covers both cases this exists for: N channel instances
+// handing over the same message within milliseconds, and an upstream
+// webhook retry minutes later.
+var sourceDedup = NewDedup(4096, 5*time.Minute)
+
+// firstDelivery reports whether this is the first time the router has
+// seen a given physical event, and records it.
+//
+// One process runs one channel instance PER OWNING USER (e.g. several
+// Slack bots), and a channel message is delivered to EVERY app that is a
+// member — so the same human message arrives once per bot. Each delivery
+// carries a different bot identity but the same event_key, and firing a
+// workflow once per bot that happens to sit in the channel is wrong: the
+// user performed one action.
+//
+// Events with no event_key (cron, manual, webhook, channels that don't
+// set one) are always let through — this must never become an accidental
+// filter on event classes that have no duplicate problem.
+func (r *Router) firstDelivery(evt workflow.Event) bool {
+	key, _ := evt.Payload["event_key"].(string)
+	if key == "" {
+		return true
+	}
+	full := evt.Type + "|" + evt.Channel + "|" + evt.Subtype + "|" + key
+	if sourceDedup.Seen(full) {
+		log.Debug().Str("component", "wf").Str("wf_event", evt.Subtype).
+			Str("channel", evt.Channel).Str("event_key", key).
+			Msg("dispatch: duplicate delivery of one event — skipped")
+		return false
+	}
+	return true
+}
+
 func (r *Router) passesDedup(id string, evt workflow.Event) bool {
 	r.mu.RLock()
 	d := r.dedups[id]
@@ -884,7 +988,9 @@ func (r *Router) runWorker(ctx context.Context, id string, h *workerHandle) {
 
 		// Serial if: global parallel disabled OR this workflow opted out.
 		if gSem == nil || !w.Concurrency.Enabled {
+			r.activeRuns.Add(1)
 			st, err := r.engine.Run(ctx, w, item.Event)
+			r.activeRuns.Add(-1)
 			if item.Done != nil {
 				item.Done <- RunResult{State: st, Err: err}
 			}
@@ -932,7 +1038,9 @@ func (r *Router) runWorker(ctx context.Context, id string, h *workerHandle) {
 				}
 			}
 
+			r.activeRuns.Add(1)
 			st, err := r.engine.Run(ctx, runW, runItem.Event)
+			r.activeRuns.Add(-1)
 			if runItem.Done != nil {
 				runItem.Done <- RunResult{State: st, Err: err}
 			}

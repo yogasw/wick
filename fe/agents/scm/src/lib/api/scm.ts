@@ -19,6 +19,12 @@ export type RepoSummary = {
 export type GitStatusSnapshot = {
   repos: RepoSummary[];
   statuses: Record<string, StatusResult>;
+  // Which repo the session works in, resolved server-side from session
+  // meta — the same answer the agent's system prompt and the Source
+  // connector give. active_explicit=false means nobody picked one and
+  // this is just the first repo found.
+  active: string;
+  active_explicit: boolean;
   total_changed: number;
 };
 
@@ -77,6 +83,22 @@ const q = (v: string) => encodeURIComponent(v);
 
 export const getRepos = (id: string) => apiGet<GitStatusSnapshot>(`${s(id)}/repos`);
 
+// Which repo this session is working in. Server-side (session meta) and
+// not browser-local, because the agent reads the same selection — it is
+// what its system prompt names and what wick_scm reports.
+export type ActiveRepo = {
+  rel: string;
+  name: string;
+  dir: string;
+  explicit: boolean;
+  total: number;
+};
+
+export const getActiveRepo = (id: string) => apiGet<ActiveRepo>(`${s(id)}/active`);
+
+export const setActiveRepo = (id: string, repo: string) =>
+  apiPost<ActiveRepo>(`${s(id)}/active`, { repo });
+
 export const getStatus = (id: string, repo: string) =>
   apiGet<StatusResult>(`${s(id)}/status?repo=${q(repo)}`);
 
@@ -113,11 +135,44 @@ export const switchBranch = (id: string, repo: string, branch: string) =>
 export const createBranch = (id: string, repo: string, branch: string, checkout: boolean) =>
   apiPost(`${s(id)}/branch/create`, { repo, branch, checkout });
 
-export const push = (id: string, repo: string) =>
-  apiPost<{ output: string }>(`${s(id)}/push`, { repo });
+// push/pull run through a Git CLI connector when one is chosen for the
+// repo — that is where the credentials and the branch policy live.
+// connector_id is only sent by the picker, on the first push in a repo;
+// after that the session remembers it.
+export const push = (id: string, repo: string, connectorID?: string) =>
+  apiPost<{ output: string; connector_id?: string }>(`${s(id)}/push`, {
+    repo,
+    connector_id: connectorID ?? "",
+  });
 
-export const pull = (id: string, repo: string) =>
-  apiPost<{ output: string }>(`${s(id)}/pull`, { repo });
+export const pull = (id: string, repo: string, connectorID?: string) =>
+  apiPost<{ output: string; connector_id?: string }>(`${s(id)}/pull`, {
+    repo,
+    connector_id: connectorID ?? "",
+  });
+
+export type GitConnector = {
+  id: string;
+  label: string;
+  author?: string;
+  /** The connector whose label names the remote's host — a guess, since
+      the connector stores a credential, not a host. */
+  suggested?: boolean;
+};
+
+export type GitConnectorsResponse = {
+  repo: string;
+  remote_url?: string;
+  remote_host?: string;
+  selected?: string;
+  candidates: GitConnector[];
+};
+
+export const getGitConnectors = (id: string, repo: string) =>
+  apiGet<GitConnectorsResponse>(`${s(id)}/connectors?repo=${q(repo)}`);
+
+export const setGitConnector = (id: string, repo: string, connectorID: string) =>
+  apiPost<{ ok: boolean }>(`${s(id)}/connectors`, { repo, connector_id: connectorID });
 
 export const saveFile = (id: string, repo: string, path: string, content: string) =>
   apiPost(`${s(id)}/file`, { repo, path, content });

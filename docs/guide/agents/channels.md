@@ -261,9 +261,13 @@ The `picker` widget is a generic typeahead bound to a channel-specific lookup so
 |---|---|---|
 | `slack.users` | [`assistant.search.context`](https://api.slack.com/methods/assistant.search.context) (messages → de-dupe by author) | `users.list` |
 | `slack.usergroups` | `usergroups.list` | — |
-| `slack.channels` | `assistant.search.context` (channels → parse permalink for ID) | `conversations.list` |
+| `slack.channels` | [`users.conversations`](https://api.slack.com/methods/users.conversations) (channels the bot is a MEMBER of) | — |
 
-The picker stores the chips as JSON `[{id,name},...]`, identical in shape to the kvlist widget, so the same access-control parser reads either. Lookups are cached 60s per `(source, query)` to avoid hammering Slack's rate limits while the operator types.
+`slack.channels` deliberately does **not** use `conversations.list` or `assistant.search.context`: both return every channel in the workspace, including the ones the bot was never invited to. Picking one of those yields a trigger that can never fire and a send that fails with `not_in_channel`, so the source is scoped to actual membership.
+
+The picker stores the chips as JSON `[{id,name},...]`, identical in shape to the kvlist widget, so the same access-control parser reads either. Lookups are cached 60s per `(instance, source, query)` — the instance is part of the key because each per-user bot has its own token and its own memberships.
+
+In the **workflow editor** the lookup fans out over every registered Slack instance and merges the results de-duped by ID; when more than one bot is connected each entry is suffixed with the bot that can reach it (`#support — @ygsw-bot`). A bot whose call fails (missing scope, not yet authed) is skipped rather than blanking the dropdown. The channel **config** page stays scoped to the signed-in user's own bot.
 
 ### Integration health check
 
@@ -279,7 +283,7 @@ Probes:
 - `conversations.list` (scopes: `channels:read`, `groups:read`)
 - `chat.postMessage` _(dry-run against an invalid channel ID — distinguishes `missing_scope` from `channel_not_found`)_
 - `reactions.add` _(dry-run against an invalid timestamp)_
-- `assistant.search.context` (scope: `assistant:write` — optional, falls back to list APIs)
+- `assistant.search.context` (scope: `assistant:write` — optional, used by the `slack.users` picker only)
 
 When all probes pass the panel shows a single "✓ All checks passed" line.
 

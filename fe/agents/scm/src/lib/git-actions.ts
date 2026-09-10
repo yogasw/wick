@@ -56,23 +56,56 @@ export async function commit(message: string): Promise<boolean> {
   }
 }
 
-export async function push(): Promise<void> {
+// push/pull take an explicit connector only on the first run in a repo,
+// when the picker just asked; afterwards the session remembers the
+// choice and these are called with no argument.
+// Both return the error text (empty on success) so the caller can react
+// to WHY it failed — an auth refusal means the panel should offer the
+// credentials it has, rather than leaving a toast and a dead button.
+export async function push(connectorID?: string): Promise<string> {
   try {
-    await api.push(sid(), repo());
+    await api.push(sid(), repo(), connectorID);
     toastOk("Pushed");
     await loadStatus();
+    return "";
   } catch (e) {
     toastError("Push failed", String(e));
+    return String(e);
   }
 }
 
-export async function pull(): Promise<void> {
+export async function pull(connectorID?: string): Promise<string> {
   try {
-    await api.pull(sid(), repo());
+    await api.pull(sid(), repo(), connectorID);
     toastOk("Pulled");
     await loadStatus();
+    return "";
   } catch (e) {
     toastError("Pull failed", String(e));
+    return String(e);
+  }
+}
+
+// gitConnectors reports which Git CLI instances this repo can push
+// through and which one it already uses.
+export async function gitConnectors(): Promise<api.GitConnectorsResponse | null> {
+  try {
+    return await api.getGitConnectors(sid(), repo());
+  } catch (e) {
+    toastError("Git connectors", String(e));
+    return null;
+  }
+}
+
+// rememberGitConnector stores the repo's choice. An empty id clears it,
+// which makes the next push ask again.
+export async function rememberGitConnector(connectorID: string): Promise<boolean> {
+  try {
+    await api.setGitConnector(sid(), repo(), connectorID);
+    return true;
+  } catch (e) {
+    toastError("Git connector", String(e));
+    return false;
   }
 }
 

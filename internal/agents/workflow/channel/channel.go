@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	agentchannels "github.com/yogasw/wick/internal/agents/channels"
@@ -109,7 +110,9 @@ func (r *Registry) Get(name string) (Channel, bool) {
 	return wrap(raw), true
 }
 
-// List returns all workflow-visible channel names sorted.
+// List returns all workflow-visible channel names sorted. One entry per
+// channel TYPE — a type registered once per owning user (slack) still
+// appears once, because the name is what a node stores.
 func (r *Registry) List() []string {
 	r.mu.RLock()
 	base := r.base
@@ -128,6 +131,7 @@ func (r *Registry) List() []string {
 			if _, dup := seen[raw.Name()]; dup {
 				continue
 			}
+			seen[raw.Name()] = struct{}{}
 			out = append(out, raw.Name())
 		}
 	}
@@ -135,31 +139,124 @@ func (r *Registry) List() []string {
 	return out
 }
 
-// Describe returns introspection rows for `workflow_channels` MCP op.
-// Only includes channels that opt into the workflow surface.
+// Describe returns introspection rows for `workflow_channels` MCP op —
+// ONE ROW PER REGISTERED INSTANCE, not per channel type. A channel type
+// like Slack is registered once per owning user ("slack:<user-id>"), and
+// every one of those instances is a different bot in a possibly
+// different workspace. Collapsing them to the bare type name is what
+// made the editor's Channel picker show five identical "slack" rows with
+// no way to tell whose bot each one is.
+//
+// Name stays the channel type (that is what a node stores and what the
+// engine resolves), while InstanceKey / OwnerUserID / BotName carry the
+// identity the UI needs to label the row. The HTTP catalog fills Label
+// with the owner's display name — the registry has no user store.
 func (r *Registry) Describe() []Info {
+	r.mu.RLock()
+	base := r.base
+	extras := make([]Channel, 0, len(r.extra))
+	for _, ch := range r.extra {
+		extras = append(extras, ch)
+	}
+	r.mu.RUnlock()
+
 	out := []Info{}
-	for _, name := range r.List() {
-		ch, ok := r.Get(name)
-		if !ok {
-			continue
-		}
+	seen := map[string]struct{}{}
+	for _, ch := range extras {
+		seen[ch.Name()] = struct{}{}
 		out = append(out, Info{
-			Name:            name,
+			Name:            ch.Name(),
+			Label:           ch.Name(),
 			Triggers:        ch.TriggerSpecs(),
 			Actions:         ch.Actions(),
 			SupportsSession: ch.SupportsSession(),
+			Configured:      true,
 		})
 	}
+	if base != nil {
+		for _, raw := range base.Channels() {
+			if !optsIntoWorkflow(raw) {
+				continue
+			}
+			if _, dup := seen[raw.Name()]; dup {
+				continue
+			}
+			ch := wrap(raw)
+			key := base.InstanceKeyOf(raw)
+			out = append(out, Info{
+				Name:            raw.Name(),
+				Label:           raw.Name(),
+				InstanceKey:     key,
+				OwnerUserID:     OwnerFromInstanceKey(key),
+				BotName:         botNameOf(raw),
+				Configured:      configuredOf(raw),
+				Triggers:        ch.TriggerSpecs(),
+				Actions:         ch.Actions(),
+				SupportsSession: ch.SupportsSession(),
+			})
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].InstanceKey < out[j].InstanceKey
+	})
 	return out
 }
 
-// Info is one row of the introspection response.
+// Info is one row of the introspection response — one registered channel
+// INSTANCE. Name is the channel type a node stores; the rest identifies
+// which bot / whose row that instance is.
 type Info struct {
 	Name            string        `json:"name"`
+	Label           string        `json:"label,omitempty"`
+	InstanceKey     string        `json:"instance_key,omitempty"`
+	OwnerUserID     string        `json:"owner_user_id,omitempty"`
+	OwnerName       string        `json:"owner_name,omitempty"`
+	BotName         string        `json:"bot_name,omitempty"`
+	Configured      bool          `json:"configured"`
 	Triggers        []TriggerSpec `json:"triggers"`
 	Actions         []ActionSpec  `json:"actions"`
 	SupportsSession bool          `json:"supports_session"`
+}
+
+// OwnerFromInstanceKey extracts the wick user id an instance was
+// registered for. Keys are "<type>:<user-id>", with the sentinel
+// "__owner__" standing for the App Owner row (user_id = NULL), which
+// reports "" — the same value the rest of the codebase uses for it.
+func OwnerFromInstanceKey(key string) string {
+	i := strings.Index(key, ":")
+	if i < 0 {
+		return ""
+	}
+	owner := key[i+1:]
+	if owner == "__owner__" {
+		return ""
+	}
+	return owner
+}
+
+// botNameOf reads the bot handle an instance resolved at connect time
+// (Slack's auth.test). Empty until the instance has connected, or for
+// transports with no bot identity.
+func botNameOf(raw agentchannels.Channel) string {
+	named, ok := raw.(agentchannels.BotNamer)
+	if !ok {
+		return ""
+	}
+	return named.BotUserName()
+}
+
+// configuredOf reports whether an instance holds the credentials it
+// needs to run. Channels that don't expose the check count as configured
+// so they aren't hidden from the picker.
+func configuredOf(raw agentchannels.Channel) bool {
+	c, ok := raw.(interface{ IsConfigured() bool })
+	if !ok {
+		return true
+	}
+	return c.IsConfigured()
 }
 
 // ValidateActionInput checks `args` against a spec's required keys.

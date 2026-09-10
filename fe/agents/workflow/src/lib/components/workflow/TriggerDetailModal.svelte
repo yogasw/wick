@@ -26,6 +26,7 @@
   } from "$lib/api/workflow";
   import { workflowAPI } from "$lib/api/workflow";
   import Field from "./fields/Field.svelte";
+  import ChannelPicker from "./fields/ChannelPicker.svelte";
   import SchemaForm from "./fields/SchemaForm.svelte";
 
   // Pull channel + event descriptors out of the shared catalog so the
@@ -469,22 +470,21 @@
                    event description shown inline, match form driven
                    by EventDescriptor.MatchSchema (entity.Config[]). -->
               {#if trigger.type === "channel"}
-                <Field
-                  kind="select"
-                  label="Channel"
+                <ChannelPicker
+                  channels={channelDescriptors}
                   value={trigger.channel ?? ""}
-                  onChange={(v) => {
-                    patch("channel", v);
+                  instance={trigger.channel_instance ?? ""}
+                  onChange={(channel, instance) => {
+                    patch("channel", channel);
+                    // Pin the trigger to that bot: with several bots in one
+                    // workspace, an unpinned trigger fires for all of them.
+                    patch("channel_instance", instance);
                     // Reset event + match when switching channels — the
                     // catalog only resolves events under the new channel.
                     patch("event", "");
                     patch("match", {});
                   }}
-                  options={[
-                    { label: "(select channel)", value: "" },
-                    ...channelDescriptors.map((c) => ({ label: c.name, value: c.name })),
-                  ]}
-                  helper="Channels registered with the wick channel registry."
+                  helper="Which bot's events start this workflow. Yours is picked by default."
                 />
                 {#if trigger.channel}
                   <Field

@@ -34,6 +34,7 @@ import (
 	agentslack "github.com/yogasw/wick/internal/agents/channels/slack"
 	agenttelegram "github.com/yogasw/wick/internal/agents/channels/telegram"
 	agentconfig "github.com/yogasw/wick/internal/agents/config"
+	"github.com/yogasw/wick/internal/agents/workflow/setup"
 	"github.com/yogasw/wick/internal/entity"
 	"github.com/yogasw/wick/internal/login"
 	"github.com/yogasw/wick/internal/tools/agents/view"
@@ -428,9 +429,20 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 			}
 		} else {
 			ch := agentslack.NewWithOwner(cfg, userID)
+			// Same identity cache boot wires, so an instance configured
+			// while wick runs also labels itself "Slack - <bot> - <owner>"
+			// after the next restart without another auth.test.
+			channelsetup.WireIdentityCache(store, channelType, userID, ch)
 			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
 			ch.SetPublicURL(pubURL)
 			ch.SetSessionPrefix(sessPrefix)
+			// Boot wires the workflow event sink per instance; an
+			// instance born here has to be wired too, or this bot's
+			// Slack events fire no channel trigger until the next
+			// restart.
+			if globalWorkflowMgr != nil {
+				setup.AttachSlackWorkflowSinkKeyed(ch, globalWorkflowMgr.Router, iKey)
+			}
 			src := agentslack.NewConfigSourceKeyed(store, ch, userID)
 			globalChannels.AddKeyed(iKey, ch, src)
 			startInstance(ch)
@@ -454,6 +466,7 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 			}
 		} else {
 			ch := agenttelegram.NewWithOwner(cfg, userID)
+			channelsetup.WireIdentityCache(store, channelType, userID, ch)
 			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
 			ch.SetSessionPrefix(sessPrefix)
 			src := agenttelegram.NewConfigSourceKeyed(store, ch, userID)
@@ -486,6 +499,7 @@ func syncChannelInstance(ctx context.Context, channelType, userID string) {
 				return
 			}
 			ch := agentrest.NewWithOwner(cfg, auth, userID)
+			channelsetup.WireIdentityCache(store, channelType, userID, ch)
 			ch.SetSendFunc(globalChannels.SendFuncFor(channelType))
 			src := agentrest.NewConfigSourceKeyed(store, ch, userID)
 			globalChannels.AddKeyed(iKey, ch, src)

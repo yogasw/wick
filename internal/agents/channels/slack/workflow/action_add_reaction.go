@@ -6,7 +6,6 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
-	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
@@ -19,7 +18,7 @@ type AddReactionInput struct {
 	Emoji   string `json:"emoji"   wick:"required;desc=Emoji shortname without colons (e.g. thumbsup)"`
 }
 
-func registerActionAddReaction(reg *integration.Registry, ch *slack.Channel) {
+func registerActionAddReaction(reg *integration.Registry, pick ChannelPicker) {
 	reg.RegisterAction(integration.ActionDescriptor{
 		Channel:     Channel,
 		Action:      "add_reaction",
@@ -36,7 +35,7 @@ func registerActionAddReaction(reg *integration.Registry, ch *slack.Channel) {
 				"emoji is the shortname WITHOUT colons — \"thumbsup\", not \":thumbsup:\".",
 				"Idempotent: re-adding the same reaction returns already=true rather than erroring.",
 			},
-			PairWith: []string{"channel:slack.remove_reaction", "channel:slack.send_message"},
+			PairWith:     []string{"channel:slack.remove_reaction", "channel:slack.send_message"},
 			InputSample:  `{"channel":"C12345","ts":"1700001234.005600","emoji":"white_check_mark"}`,
 			OutputSample: `{"ok":true}`,
 			Examples: []wickdocs.Example{
@@ -57,6 +56,10 @@ func registerActionAddReaction(reg *integration.Registry, ch *slack.Channel) {
 			},
 		},
 		Execute: func(ctx context.Context, args map[string]any) (any, error) {
+			ch := pick(ctx)
+			if ch == nil {
+				return nil, fmt.Errorf("slack channel not configured")
+			}
 			api := ch.API()
 			if api == nil {
 				return nil, fmt.Errorf("slack channel not configured")

@@ -37,13 +37,17 @@ In full mode the panel uses a two-column layout:
 - **Left column (220 px)** — file list grouped into Staged and Changes sections, commit message input, and branch bar at the bottom.
 - **Right column (flex)** — Monaco diff editor as the primary surface. The first changed file is selected automatically on load.
 
-The active repo selection is persisted per session in `localStorage` and restored on next open.
+The active repo selection lives **on the session**, not in the browser: it is stored in the session's `meta.json` (`ScmRepo`), so it survives a different browser, is scoped per session rather than shared across all of them, and — crucially — is visible to the agent. The agent's system prompt names it as `active_repo`, and the [Source connector](/connectors/source) lets it re-read or move that selection.
+
+Editing a file also moves the selection: when the filesystem watcher sees a write inside a repository other than the active one, the panel follows it there. What the agent is working in and what the panel shows stay in agreement without anyone clicking.
 
 ## Multi-repo support
 
 On open, the panel recursively scans the session cwd for git repositories. The scan skips heavy directories (`node_modules`, `vendor`, `dist`, `.cache`, etc.) and caps at a fixed depth. If more than one repository is found, a collapsible **Repositories** section appears above the file list, showing each repo's name, branch, and ahead/behind count. Click a row to switch the active repo; all other sections apply to the active repo.
 
 The list is capped at roughly 5 visible rows with vertical scroll so it can't push the rest of the panel down. When there are more than 5 repositories, a **Search repositories** filter input appears above the list, matching against repo name and path.
+
+Collapsed, the **Repositories** header names the active repo, so you can tell which one you are looking at without expanding the section.
 
 ## File list
 
@@ -115,6 +119,38 @@ The branch bar at the bottom of the left column shows the current branch name an
 
 **Pull** and **Push** buttons are below the branch picker.
 
+## Which credential push and pull use
+
+The panel shells out to plain `git`, which has no credential helper of its own. Against a private HTTPS remote that always failed — so Push and Pull were decorative for exactly the repositories people care about.
+
+The credentials already exist: the [Git CLI connector](/connectors/git) holds them, and it is how the agent pushes. So the panel borrows one, along with that connector's branch policy and its per-run audit trail — a panel push shows up in the connector's run history with `source: app` and the signed-in user's id.
+
+### Choosing one
+
+The first network operation opens a picker. **Native git** is preselected, because running as the machine already does is the option that changes nothing. Alongside it are the Git CLI instances **you personally can reach** — the same tag filter the connector manager applies, so the panel never hands out a credential you could not otherwise use.
+
+| Choice | What runs | Policy |
+|---|---|---|
+| **Native git** | The host's own `git`, with whatever credentials are on the machine | None — no protected branches, no force-push guard |
+| A Git CLI instance | The connector's `push` / `pull` op under your user id | The connector's full policy applies |
+
+An instance whose label contains the remote's host is marked **likely** — a guess from the label, and labelled as one, since the connector stores a username and a token, not a host.
+
+### How the choice is remembered
+
+Stored on the session, keyed by **user**:
+
+- **Per session, not per repo** — a session's repositories are one body of work, and answering the same question for each of 55 checkouts is a chore nobody asked for.
+- **Per user** — a session can be shared (a Slack thread is open to everyone in the channel), and a credential is the one thing that must never be inherited from whoever pushed first. If you have no access to the instance your colleague picked, your push is refused with a message saying so, not silently run under their identity.
+
+There is no "remember this" checkbox: the answer is always remembered, and **Clear** in the dialog is how you go back to being asked. Reopen the picker any time with the **key** button in the branch bar. A small dot on that button means this session pushes through a connector; native git shows no dot, because nothing about it is unusual.
+
+A remembered instance that is later deleted, disabled, or revoked from you is treated as no choice at all — the panel asks again rather than reporting a push that went nowhere.
+
+::: warning A refusal is not a failure
+The connector answers a policy denial *normally* — `ok:false` with a `deny` verdict — rather than as a transport error. Code that only checks the transport error reports a blocked pull as a success, which is exactly what happened here: the panel announced "Pulled" while git never ran and the branch stayed 65 commits behind. The panel now reads the verdict first and shows the connector's own reason.
+:::
+
 ## History
 
 The **History** tab inside the panel shows a commit log for the active repository. Each row displays:
@@ -132,7 +168,7 @@ Click a commit row to expand it and see the list of files changed in that commit
 
 The panel subscribes to the server-sent event stream for the session. A server-side filesystem watcher monitors the session cwd and pushes a `git_status` event over SSE whenever the working tree changes. The Changes section and the **Source** rail tab badge both update in real time — no polling, no manual refresh required.
 
-The rail tab badge shows the current count of changed files (staged + unstaged) across all discovered repositories.
+The rail tab badge shows the count of changed files (staged + unstaged) **in the active repository** — the same number the Changes section lists. It used to sum every discovered repo, so a session with 55 clones showed `99+` on the badge while the panel below it showed 14, and the two could never be reconciled.
 
 ## Endpoint reference
 
@@ -152,6 +188,9 @@ All endpoints are scoped to `/tools/agents/api/sessions/{id}/git/` and require t
 | `POST` | `.../git/push` | Push to upstream. |
 | `GET` | `.../git/log` | Commit history. |
 | `GET` | `.../git/log/diff` | Diff for a specific commit. |
+| `GET` | `.../git/active` | The session's active repository, and whether it was explicitly chosen. |
+| `GET` | `.../git/connectors` | Git CLI instances this caller may push through, plus the one remembered. |
+| `POST` | `.../git/connectors` | Remember (or clear) the credential for this session. Body: `{connector_id}`. |
 
 ## See also
 

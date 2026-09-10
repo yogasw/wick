@@ -32,8 +32,8 @@ import (
 // Manager bundles every wired piece so server.go can hand one struct
 // to consumers (UI handlers, MCP transport, jobs).
 type Manager struct {
-	Layout     config.Layout
-	Service    service.Service
+	Layout  config.Layout
+	Service service.Service
 	// Repo is the DB-backed workflow repository. Nil when no DB is
 	// wired (test paths) — every consumer that touches it must
 	// nil-check first. Populated by WithDB.
@@ -42,16 +42,20 @@ type Manager struct {
 	Engine     *engine.Engine
 	Router     *trigger.Router
 	Cron       *trigger.CronScheduler
-	ScheduleAt *trigger.ScheduleAtScheduler
-	Canvas     *canvas.Canvas
+	// DeferCron holds cron trigger firing back at Start, leaving it to an
+	// explicit StartCron. The daemon sets it so cron only begins once this
+	// process owns intake (see internal/pkg/upgrade.IntakeBaton).
+	DeferCron   bool
+	ScheduleAt  *trigger.ScheduleAtScheduler
+	Canvas      *canvas.Canvas
 	Channels    *channel.Registry
 	Integration *integration.Registry
 	Connectors  *connector.Registry
-	Providers  *provider.Registry
-	DataTables datatable.Service
-	Guard      *guard.Guard
-	Cost       *cost.Tracker
-	MCP        *mcp.Ops
+	Providers   *provider.Registry
+	DataTables  datatable.Service
+	Guard       *guard.Guard
+	Cost        *cost.Tracker
+	MCP         *mcp.Ops
 
 	// AgentPool + AgentSubscribe route the `agent` + `session_init`
 	// node types through the shared agent pool. Nil = engine still
@@ -247,10 +251,21 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err := Bootstrap(ctx, m.Service, m.Router, m.Cron, m.ScheduleAt); err != nil {
 		return err
 	}
-	if m.Cron != nil {
+	if m.Cron != nil && !m.DeferCron {
 		m.Cron.Start(ctx)
 	}
 	return nil
+}
+
+// StartCron starts the cron trigger scheduler on its own. Paired with
+// DeferCron so the daemon can bootstrap the workflow subsystem at boot but
+// hold cron firing until this process actually owns intake — during a
+// graceful upgrade the predecessor keeps firing until it has drained, and two
+// schedulers would run every cron workflow twice.
+func (m *Manager) StartCron(ctx context.Context) {
+	if m.Cron != nil {
+		m.Cron.Start(ctx)
+	}
 }
 
 // Stop drains the router workers cleanly.

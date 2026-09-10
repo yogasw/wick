@@ -203,8 +203,13 @@ type Node struct {
 	RequireStatus     bool     `json:"require_status,omitempty"`
 
 	// channel (action) — Channel field name avoided clash with Event.Channel
-	ChannelName string            `json:"channel,omitempty"`
-	Op          string            `json:"op,omitempty"`
+	ChannelName string `json:"channel,omitempty"`
+	// ChannelInstance pins the action to ONE registered instance of that
+	// channel ("slack:<user-id>"), for the common case of several bots of
+	// the same type — one per owning user. Empty keeps the old behaviour:
+	// resolve from the firing trigger's bot, else the first instance.
+	ChannelInstance string            `json:"channel_instance,omitempty"`
+	Op              string            `json:"op,omitempty"`
 	Args        map[string]any    `json:"args,omitempty"`
 	ArgModes    map[string]string `json:"arg_modes,omitempty"`
 
@@ -396,8 +401,12 @@ type Trigger struct {
 	Timezone string `json:"timezone,omitempty"`
 
 	// channel
-	ChannelName  string            `json:"channel,omitempty"`
-	Event        string            `json:"event,omitempty"`
+	ChannelName string `json:"channel,omitempty"`
+	// ChannelInstance restricts the trigger to events from ONE registered
+	// instance ("slack:<user-id>"). Empty = fire on any instance of the
+	// channel type, which is what every pre-existing trigger does.
+	ChannelInstance string            `json:"channel_instance,omitempty"`
+	Event           string            `json:"event,omitempty"`
 	Target       string            `json:"target,omitempty"`
 	Match        map[string]any    `json:"match,omitempty"`
 	MatchEnabled bool              `json:"match_enabled,omitempty"`

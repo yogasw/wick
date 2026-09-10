@@ -47,8 +47,8 @@ import (
 
 	"golang.org/x/mod/semver"
 
-	"github.com/yogasw/wick/pkg/safeexec"
 	"github.com/yogasw/wick/internal/userconfig"
+	"github.com/yogasw/wick/pkg/safeexec"
 )
 
 const (
@@ -308,12 +308,33 @@ func (u *Updater) CheckNow(ctx context.Context) (Result, error) {
 // binary swap + syscall.Exec — for a .deb we first peel out the inner
 // ELF. No path escalates privilege; an unwritable install dir fails
 // with a clear message instead.
+// GracefulRestart, when set, replaces the re-exec at the end of an update
+// with a socket handover: the binary is swapped, then this hook starts a
+// successor from the NEW binary while THIS process keeps serving and then
+// drains its own work.
+//
+// Set by the daemon when graceful upgrade is armed (WICK_GRACEFUL_UPGRADE=1),
+// and nil everywhere else — the tray runs the server in-process and cannot
+// hand a socket to another process, so it keeps the classic swap + re-exec.
+//
+// Without this, self-update was the one path that still took the service
+// down: syscall.Exec replaces the process image, so the listening socket
+// closes and every in-flight turn dies — exactly what `reload` exists to
+// avoid.
+var GracefulRestart func() error
+
 func (u *Updater) ApplyStagedAndRestart(stops ...func()) error {
 	if !u.HasStaged() {
 		return errors.New("no staged update")
 	}
-	for _, s := range stops {
-		s()
+	graceful := GracefulRestart != nil && runtime.GOOS != "windows"
+	// Deliberately NOT stopping anything on the graceful path: the whole
+	// point is that this process keeps answering until the successor is
+	// ready, and its drain decides when its own work is finished.
+	if !graceful {
+		for _, s := range stops {
+			s()
+		}
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -372,8 +393,17 @@ func (u *Updater) ApplyStagedAndRestart(stops ...func()) error {
 		staged = extracted
 	}
 	sentinel.Method = "binary-swap"
+	if graceful {
+		sentinel.Method = "binary-swap-handover"
+	}
 	if err := writeSentinel(u.cacheDir, sentinel); err != nil {
 		return fmt.Errorf("write sentinel: %w", err)
+	}
+	if graceful {
+		if err := installUnix(exe, staged); err != nil {
+			return err
+		}
+		return GracefulRestart()
 	}
 	return swapUnix(exe, staged)
 }
@@ -390,6 +420,19 @@ func (u *Updater) ApplyStagedAndRestart(stops ...func()) error {
 // works in the happy path but leaves no rollback if the new binary is
 // broken, and skipped quarantine clearing entirely.
 func swapUnix(current, staged string) error {
+	if err := installUnix(current, staged); err != nil {
+		return err
+	}
+	args := append([]string{current}, os.Args[1:]...)
+	return syscall.Exec(current, args, os.Environ())
+}
+
+// installUnix puts the staged binary in place WITHOUT relaunching: chmod,
+// clear quarantine on macOS, keep the old binary as <exe>.old for rollback,
+// then rename. Split out of swapUnix so a graceful handover can swap the
+// binary and let a successor be forked from it, instead of replacing this
+// process image and closing the socket with it.
+func installUnix(current, staged string) error {
 	if err := os.Chmod(staged, 0o755); err != nil {
 		return fmt.Errorf("chmod staged: %w", err)
 	}
@@ -422,8 +465,7 @@ func swapUnix(current, staged string) error {
 	if err := os.Chmod(current, 0o755); err != nil {
 		return fmt.Errorf("chmod current: %w", err)
 	}
-	args := append([]string{current}, os.Args[1:]...)
-	return syscall.Exec(current, args, os.Environ())
+	return nil
 }
 
 // clearQuarantine removes the com.apple.quarantine extended attribute

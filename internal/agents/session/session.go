@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -102,6 +103,21 @@ type Meta struct {
 	// legacy sessions created before ownership tracking was added.
 	// When non-empty, only the owning user (or app owner) may access it.
 	UserID string `json:"user_id,omitempty"`
+	// Participants is every wick user who has spoken in this session, in
+	// first-seen order, starting with UserID. A Slack thread is not
+	// single-owner: anyone in the channel can reply into it, and that
+	// reply is their work too — so it must show up under THEIR "Yours"
+	// and stay openable by them, without taking the session away from
+	// whoever started it.
+	//
+	// Kept alongside UserID rather than replacing it: UserID still
+	// answers "whose identity does a spawn run as" (one answer only),
+	// while this answers "whose conversation is this" (possibly several).
+	// len>1 is what the UI renders as the shared-thread marker.
+	//
+	// Empty on sessions created before this shipped; readers must treat
+	// that as "just UserID" rather than "nobody" (see Meta.People).
+	Participants []string `json:"participants,omitempty"`
 	// AutoReply marks a Slack channel thread as auto-reply: while true,
 	// replies in the thread are dispatched to the agent without an
 	// @mention. Set when the thread is created (the bot also drops a 🤖
@@ -110,6 +126,37 @@ type Meta struct {
 	// the channel's in-memory state is lost. Only meaningful for Slack
 	// channel sessions; absent/false everywhere else.
 	AutoReply bool `json:"auto_reply,omitempty"`
+	// ChannelRef binds the session to the chat thread it belongs to, so a
+	// reply can be delivered there even when the message did NOT arrive
+	// from that chat.
+	//
+	// The channel keeps this mapping in memory per turn, which is enough
+	// while one process handles both sides. It is not enough for two cases
+	// that both end with an answer nobody receives: a reply typed in the
+	// WEB UI of a Slack-originated session after a restart (the in-memory
+	// map is gone, so the agent answers into the void), and a session
+	// created by a WORKFLOW, whose turn was registered by a process that
+	// has since handed over. Persisting the binding is what lets the
+	// channel find the thread again.
+	ChannelRef *ChannelRef `json:"channel_ref,omitempty"`
+	// ScmRepo is the repository the Source panel has selected in this
+	// session, relative to the session cwd ("" = none picked yet, which
+	// reads as the first repo discovered). Server-side rather than
+	// browser-local because the AGENT needs it too: it is what the
+	// system prompt names as the repo being worked on, and what
+	// wick_scm reports and switches.
+	ScmRepo string `json:"scm_repo,omitempty"`
+	// ScmGitConnectors maps a wick user id to the Git CLI connector
+	// instance that user's push and pull run through in this session, or
+	// the literal "native" for plain git.
+	//
+	// Per session rather than per repo: a session's checkouts are one
+	// body of work, and asking again for each of dozens of repos is a
+	// chore. Keyed by user because a session can be shared — a Slack
+	// thread is open to everyone in the channel — and a credential is
+	// exactly the thing that must not be inherited from whoever pushed
+	// first. Absent = plain git, until someone picks otherwise.
+	ScmGitConnectors map[string]string `json:"scm_git_connectors,omitempty"`
 	// ParentSessionID links a sub-agent's isolated session back to the
 	// session that delegated it. Non-empty = this is a child: hidden
 	// from the conversation list and surfaced in the parent's Sub-agents
@@ -130,6 +177,21 @@ type Meta struct {
 	// back-pointer the ticket does not confirm is treated as stale and
 	// ignored — see notes.Resolve.
 	TicketID string `json:"ticket_id,omitempty"`
+}
+
+// ChannelRef is where a session's replies belong: a chat channel and the
+// thread inside it. Written by the channel that owns the session and read
+// back when its in-memory state is unavailable.
+type ChannelRef struct {
+	// Channel names the adapter ("slack", "telegram").
+	Channel string `json:"channel"`
+	// ChatID is the room/channel id inside that adapter (a Slack C…).
+	ChatID string `json:"chat_id"`
+	// ThreadID is the thread within the chat (a Slack thread_ts).
+	ThreadID string `json:"thread_id,omitempty"`
+	// Instance identifies WHICH configured bot owns the thread, so a
+	// multi-instance host replies as the one that was there.
+	Instance string `json:"instance,omitempty"`
 }
 
 // IsSubscribed returns true when userID has opted in to receive
@@ -174,6 +236,92 @@ func (m *Meta) RemoveSubscriber(userID string) bool {
 		}
 	}
 	return false
+}
+
+// People returns everyone who has spoken in this session, in first-seen
+// order — Participants when it is populated, else the owner alone.
+//
+// The fallback is what makes the field safe to add to a live install:
+// every session that predates Participants carries only UserID, and
+// answering "nobody" there would drop those rows out of their owner's
+// list the moment the visibility checks start reading this.
+func (m *Meta) People() []string {
+	if m == nil {
+		return nil
+	}
+	if len(m.Participants) > 0 {
+		return m.Participants
+	}
+	if m.UserID == "" {
+		return nil
+	}
+	return []string{m.UserID}
+}
+
+// IsParticipant reports whether userID has spoken in this session (or
+// owns it — see People).
+//
+// Deliberately does NOT go through People(): this runs once per session
+// per list render, over every session the caller can see, so the
+// owner-only fallback must not allocate a slice to answer one comparison.
+func (m *Meta) IsParticipant(userID string) bool {
+	if m == nil || userID == "" {
+		return false
+	}
+	if len(m.Participants) == 0 {
+		return m.UserID != "" && m.UserID == userID
+	}
+	for _, id := range m.Participants {
+		if id == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// PeopleCount is len(People()) without building the slice — the count the
+// UI needs for its shared-thread marker, on the same hot path as
+// IsParticipant.
+func (m *Meta) PeopleCount() int {
+	if m == nil {
+		return 0
+	}
+	if n := len(m.Participants); n > 0 {
+		return n
+	}
+	if m.UserID == "" {
+		return 0
+	}
+	return 1
+}
+
+// AddParticipant appends userID to Participants if not already there.
+// Returns true if the list changed (i.e. caller should persist Meta).
+//
+// Seeds from People() rather than the raw slice so a legacy session's
+// owner keeps first position instead of being appended after whoever
+// happens to speak next.
+func (m *Meta) AddParticipant(userID string) bool {
+	if m == nil || userID == "" {
+		return false
+	}
+	if m.IsParticipant(userID) {
+		// Materialize the implicit owner-only list so the persisted shape
+		// matches People() from here on.
+		if len(m.Participants) == 0 {
+			m.Participants = m.People()
+			return true
+		}
+		return false
+	}
+	m.Participants = append(m.People(), userID)
+	return true
+}
+
+// Shared reports whether more than one person has spoken here — the
+// condition behind the sidebar's multi-user marker.
+func (m *Meta) Shared() bool {
+	return m.PeopleCount() > 1
 }
 
 // Session is the in-memory view: ID + meta + agent registry. Mirrors
@@ -240,6 +388,12 @@ func Create(_ context.Context, layout config.Layout, opt CreateOptions) (Session
 
 		ParentSessionID: opt.ParentSessionID,
 	}
+	// The creator is the first participant. Written at create rather than
+	// backfilled on the next message so the very first turn already reads
+	// as theirs.
+	if opt.UserID != "" {
+		meta.Participants = []string{opt.UserID}
+	}
 	if err := storage.WriteJSON(layout.SessionMeta(opt.ID), &meta); err != nil {
 		_ = os.RemoveAll(dir)
 		return Session{}, err
@@ -268,6 +422,18 @@ func Load(layout config.Layout, id string) (Session, error) {
 		}
 	}
 	return Session{ID: id, Meta: meta, Agents: agents}, nil
+}
+
+// Cwd is the directory a session's work happens in: its project path
+// when it belongs to a project, else sessions/<id>/cwd. Exported here
+// because three callers need the SAME answer — the SCM HTTP layer, the
+// wick_scm MCP tool, and the system prompt that names the repo being
+// worked on — and a second copy of this rule would drift.
+func Cwd(layout config.Layout, sess Session) (string, error) {
+	if id := sess.Meta.ProjectID; id != "" && project.Exists(layout, id) {
+		return project.ResolvePath(layout, id)
+	}
+	return filepath.Join(layout.SessionDir(sess.ID), "cwd"), nil
 }
 
 // SaveMeta atomically rewrites sessions/<id>/meta.json.

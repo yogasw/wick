@@ -61,12 +61,33 @@ func RenderShim(p Provider, slice string) string {
 	if slice == "" {
 		slice = "agents.slice"
 	}
+	// Both values are interpolated into a shell script, so neither may carry
+	// the script's own syntax. RealBin is a path resolved from PATH — a
+	// directory with a space in it ("Application Support") would otherwise end
+	// the REAL= assignment and leave the rest of the path as a command. Name is
+	// safe today because Providers is a fixed list of plain words, but the shim
+	// puts it in a comment line AND inside a double-quoted unit name, so a
+	// newline or a quote there would run as script; sanitising it here is what
+	// keeps that from depending on the list staying plain.
+	name := shimSafeName(p.Name)
+	real := sh(p.RealBin)
+	// Same reasoning for the slice, which callers can override.
+	sliceArg := sh(slice)
 	var limit string
 	if p.LimitMB > 0 {
 		limit = fmt.Sprintf(" -p MemoryMax=%dM", p.LimitMB)
 	}
-	// $$ is the shim shell's pid: unique while the scope is alive, which
-	// is all systemd requires of a transient unit name.
+	// The unit name carries a timestamp, not just $$, because the pid is
+	// NOT unique per invocation: exec replaces the shell in place, so a
+	// shim that execs into another shim (an older hand-rolled one still
+	// sitting at REAL, say) hands the second one the same $$ the first
+	// already named its scope with. systemd answers "unit was already
+	// loaded", systemd-run exits 1, and — because the shim execs it —
+	// the agent never starts at all. Observed on a host where wick's
+	// shim pointed at a pre-existing shim of the same shape. Pid reuse
+	// against a long-lived scope collides the same way; the nanosecond
+	// stamp settles both. tr keeps it digits-only for a /bin/sh whose
+	// date has no %N.
 	return fmt.Sprintf(`#!/bin/sh
 # Installed by wick: run each %[1]s session in its own cgroup.
 # Remove with: wick memory wrapper uninstall %[1]s
@@ -77,11 +98,33 @@ if ! command -v systemd-run >/dev/null 2>&1 || [ -z "$XDG_RUNTIME_DIR" ]; then
     exec "$REAL" "$@"
 fi
 
+unit="%[1]s-agent-$$-$(date +%%s%%N 2>/dev/null | tr -cd 0-9)"
+
 exec systemd-run --user --scope --quiet --collect \
-    --slice=%[3]s --unit="%[1]s-agent-$$" \
+    --slice=%[3]s --unit="$unit" \
    %[4]s -p MemoryHigh=infinity -p MemorySwapMax=0 \
     -- "$REAL" "$@"
-`, p.Name, p.RealBin, slice, limit)
+`, name, real, sliceArg, limit)
+}
+
+// shimSafeName reduces a provider name to characters that are safe in both
+// places the shim puts it: a POSIX shell script and a systemd unit name.
+// Every current Providers entry passes through unchanged.
+func shimSafeName(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '_', r == '-', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	if b.Len() == 0 {
+		return "agent"
+	}
+	return b.String()
 }
 
 // LinkCommands returns the shell commands that point Link at the shim,

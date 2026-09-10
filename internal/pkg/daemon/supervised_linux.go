@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/yogasw/wick/pkg/safeexec"
@@ -49,4 +50,19 @@ func ServiceActive(appName string) bool {
 // so Restart=on-failure won't respawn behind our back.
 func ServiceCtl(appName, verb string) error {
 	return safeexec.Command("systemctl", "--user", verb, appName+".service").Run()
+}
+
+// ServiceMainPID returns the unit's MainPID, or 0 when systemd does not know
+// one. Needed by `reload`: a unit written before graceful upgrade existed has
+// no ExecReload, so the CLI signals the process itself instead of failing.
+func ServiceMainPID(appName string) int {
+	out, err := safeexec.Command("systemctl", "--user", "show", "-p", "MainPID", "--value", appName+".service").Output()
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0
+	}
+	return pid
 }

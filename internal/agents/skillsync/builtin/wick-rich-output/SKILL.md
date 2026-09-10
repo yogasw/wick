@@ -58,6 +58,21 @@ body { background: var(--wick-bg); color: var(--wick-fg); }
 
 Hard-code a palette **only** when the design genuinely needs a fixed look (a brand mock-up). Otherwise a hard-coded white page glares in dark mode. Do not set an opaque full-bleed background unless you mean to — leaving it as `var(--wick-bg)` lets the artifact sit seamlessly in the conversation.
 
+## One file, always — a multi-file page cannot preview
+
+An ` ```htmlfile ` fence must point at a **self-contained** file. A page that
+pulls a sibling `.css`, `.js` or image by URL loses every one of them: the
+preview injects markup as an iframe `srcdoc`, so there is no base URL and a
+relative `href="deck.css"` resolves against the parent route instead of the
+file's folder — and the default artifact CSP has no host source anyway. Where a
+build step emits both a multi-file `index.html` and a bundled standalone, point
+the fence at the standalone; they sit one filename apart and the wrong one is
+easy to grab.
+
+Inline the CSS/JS, base64 the images and fonts. For the full directive list,
+the Widget-permission presets, and the console signatures that identify each
+failure, see the `wick-html-widget` skill.
+
 ## Artifacts cannot fetch — this is the other frequent failure
 
 The sandbox gives an artifact an opaque origin and sets `connect-src 'none'`. Any `fetch()` or `XHR` — to a wick endpoint, a file, or an external URL — is refused with "Failed to fetch" or a CSP violation. This is deliberate: it stops an artifact from phoning home.

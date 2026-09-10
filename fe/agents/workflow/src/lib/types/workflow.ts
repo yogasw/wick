@@ -104,6 +104,9 @@ export type Node = {
 
   // channel + connector
   channel?: string;
+  // Pins the action to ONE registered instance of that channel
+  // ("slack:<user-id>") — which bot it runs as when several are wired.
+  channel_instance?: string;
   op?: string;
   args?: Record<string, unknown>;
   arg_modes?: Record<string, string>;
@@ -210,6 +213,8 @@ export type Trigger = {
 
   // channel
   channel?: string;
+  // Restricts the trigger to events from ONE registered instance.
+  channel_instance?: string;
   event?: string;
   target?: string;
   match?: Record<string, unknown>;

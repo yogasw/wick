@@ -29,6 +29,18 @@ func (s *Channel) SetWorkflowEventSink(fn WorkflowEventSink) {
 	s.cfgMu.Unlock()
 }
 
+// HasWorkflowEventSink reports whether this instance's sink is wired.
+//
+// A nil sink makes every inbound Slack event a silent no-op on the
+// workflow side, so "channel triggers stopped firing" looks identical to
+// "no workflow matched". Exposed so setup can be asserted directly —
+// each per-user instance needs its own wiring.
+func (s *Channel) HasWorkflowEventSink() bool {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.workflowEmit != nil
+}
+
 // emitWorkflow fires the sink when set, no-op when nil. Always
 // called from a goroutine that already holds — or doesn't need — the
 // channel locks; emitWorkflow itself touches no Channel state besides

@@ -453,6 +453,25 @@ var mutatingOps = map[string]bool{
 	"clone": true, "raw": true,
 }
 
+// protectedExemptOps are mutations the protected-branch rule does NOT
+// refuse, because protecting a branch means "nobody authors changes
+// here", not "nobody may see the branch as it is upstream".
+//
+//   - pull only makes the local branch match the remote it is tracking.
+//     Refusing it leaves master permanently stale locally, while the
+//     thing protection exists to stop — publishing to it — is still
+//     blocked at push.
+//   - checkout switches which branch is in the working tree. Looking at
+//     master is how you read it; the commit and push that would change
+//     it stay refused.
+//
+// Everything else is untouched: commit, push, merge, rebase, reset, add,
+// stash, branch_create and raw are still denied on a protected branch.
+var protectedExemptOps = map[string]bool{
+	"pull":     true,
+	"checkout": true,
+}
+
 // Evaluate judges a request against the compiled policy. It never touches the
 // filesystem or spawns a process, so a denial costs nothing.
 func (p EffectivePolicy) Evaluate(r Request) Verdict {
@@ -486,7 +505,7 @@ func (p EffectivePolicy) Evaluate(r Request) Verdict {
 			// happening, which reads as the connector having misunderstood the request.
 			return deny(forceDenyReason(r.Op))
 		}
-		if IsProtected(p, r.Branch) {
+		if IsProtected(p, r.Branch) && !protectedExemptOps[r.Op] {
 			return deny(fmt.Sprintf("branch %q is protected; direct %s is blocked", r.Branch, r.Op))
 		}
 		if r.NewBranch && p.BranchRe != nil && !p.BranchRe.MatchString(r.Branch) {

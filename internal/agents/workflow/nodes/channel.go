@@ -11,7 +11,8 @@ import (
 )
 
 type channelSchema struct {
-	ChannelName string `wick:"required;key=channel;desc=Channel module name (e.g. slack)"`
+	ChannelName     string `wick:"required;key=channel;desc=Channel module name (e.g. slack)"`
+	ChannelInstance string `wick:"key=channel_instance;desc=Pin the action to ONE registered instance of that channel (e.g. slack:<user-id>). Empty = the bot that fired the trigger, else the first registered instance"`
 	Op          string `wick:"required;key=op;desc=Action name — call workflow_integration to list available ops per channel"`
 	Args        string `wick:"key=args;desc=Op inputs as YAML map — see workflow_integration for exact schema per op"`
 	ArgModes    string `wick:"key=arg_modes;desc=Per-field mode: fixed=literal value, expression=Go template render (default)"`
@@ -97,7 +98,15 @@ func (e *ChannelExecutor) Execute(ctx context.Context, n workflow.Node, rc *work
 	if err != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("render args: %w", err)
 	}
-	result, err := desc.Execute(ctx, args)
+	// Hand the firing trigger's payload down so a multi-instance channel
+	// can resolve WHICH instance saw the event (Slack: which bot). Without
+	// it every action runs as whichever instance happened to be bound at
+	// boot, so a workflow triggered by bot B replies as bot A.
+	actionCtx := integration.WithTriggerPayload(ctx, rc.Event.Payload)
+	// A pinned instance wins over the payload's bot: the node said which
+	// bot to act as, and a cron/manual run has no bot in its payload at all.
+	actionCtx = integration.WithChannelInstance(actionCtx, n.ChannelInstance)
+	result, err := desc.Execute(actionCtx, args)
 	if err != nil {
 		return workflow.NodeOutput{}, fmt.Errorf("%s: %w", key, err)
 	}

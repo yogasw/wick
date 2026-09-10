@@ -266,6 +266,7 @@ func Register(r tool.Router) {
 
 	r.GET("/sessions/{id}/files", sessionContextList)
 	r.GET("/sessions/{id}/files/search", sessionContextSearch)
+	r.GET("/sessions/{id}/files/mentions", sessionContextMentions)
 	r.GET("/sessions/{id}/processes", sessionProcesses)
 	r.GET("/sessions/{id}/files/read", sessionContextRead)
 	r.GET("/sessions/{id}/files/download", sessionContextDownload)
@@ -332,7 +333,7 @@ func Register(r tool.Router) {
 
 	// JSON API — project-settings SPA endpoints.
 	r.GET("/api/projects/{id}", apiProjectDetail)
-	r.GET("/api/projects/{id}/files/search", projectFileSearch)
+	r.GET("/api/projects/{id}/files/mentions", projectFileMentions)
 	r.POST("/api/projects/{id}", apiProjectUpdate)
 
 	// JSON API — tickets. A ticket is its own entity holding many
@@ -696,15 +697,29 @@ func (a projectAccess) allowProject(projectID string) bool {
 // sessions (no ProjectID) aren't covered by any project tag, so a non-admin
 // may only see their OWN unscoped sessions — ownerless ones (UserID == "")
 // are admin-only, never shown to other users.
-func (a projectAccess) allowSession(projectID, userID string) bool {
+//
+// participants widens "own" to everyone who has spoken in the session, so a
+// Slack thread stays openable by every person in it and not just whoever
+// happened to send its first message. Callers pass session.Meta.Participants
+// raw — nil on sessions predating the field, where userID alone is the
+// answer — so this check stays allocation-free over a long session list.
+func (a projectAccess) allowSession(projectID, userID string, participants []string) bool {
 	if a.seeAll {
 		return true
 	}
 	if projectID == "" {
-		// Unscoped session: visible only to its own creator. Ownerless
+		// Unscoped session: visible only to the people in it. Ownerless
 		// unscoped sessions (UserID == "") are hidden from everyone while
 		// AdminSeeAll is off — no one is scoped to "see all".
-		return userID != "" && userID == a.userID
+		if userID != "" && userID == a.userID {
+			return true
+		}
+		for _, id := range participants {
+			if id != "" && id == a.userID {
+				return true
+			}
+		}
+		return false
 	}
 	_, ok := a.projects[projectID]
 	return ok
@@ -964,23 +979,23 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		allProjects = filteredMap
 	}
 	return view.AgentsLayoutVM{
-		Base:             c.Base(),
-		ActivePage:       activePage,
-		SidebarIDs:       ids,
-		SidebarSessions:  globalMgr.Registry().Sessions(),
-		SidebarLifecycle: lc,
-		SidebarLabels:    labels,
-		ActiveSessionID:  activeSessionID,
-		IdleTimeoutMs:    globalPool.IdleTimeout().Milliseconds(),
+		Base:                c.Base(),
+		ActivePage:          activePage,
+		SidebarIDs:          ids,
+		SidebarSessions:     globalMgr.Registry().Sessions(),
+		SidebarLifecycle:    lc,
+		SidebarLabels:       labels,
+		ActiveSessionID:     activeSessionID,
+		IdleTimeoutMs:       globalPool.IdleTimeout().Milliseconds(),
 		Projects:            allProjects,
 		ProjectList:         allProjectIDs,
 		SidebarOwner:        sidebarOwner,
 		SidebarOwnerMeHref:  sidebarOwnerHref(c, "me"),
 		SidebarOwnerAllHref: sidebarOwnerHref(c, "all"),
 		ScopedProjectID:     scopedProjectID,
-		PinnedProjectID:  pinnedProjectID(c),
-		ShellAssetURL:    spaAssetURL("shell"),
-		AirouterVisible:  AirouterVisible(c.Context()),
+		PinnedProjectID:     pinnedProjectID(c),
+		ShellAssetURL:       spaAssetURL("shell"),
+		AirouterVisible:     AirouterVisible(c.Context()),
 	}
 }
 
@@ -1054,13 +1069,15 @@ func ownsSession(c *tool.Ctx, sess session.Session) bool {
 	if u.IsAdmin() && adminSeeAll() {
 		return true
 	}
-	if sess.Meta.UserID != "" && sess.Meta.UserID == u.ID {
+	// Owner or any other person who has spoken in it: a Slack thread is
+	// shared work, so replying into one must not leave it unopenable.
+	if sess.Meta.IsParticipant(u.ID) {
 		return true
 	}
 	// Project-scoped sessions are reachable by anyone with access to the
 	// project (tag grant, ownership, or ownerless/system project) — same rule
 	// the sidebar uses, keeping list visibility and detail access consistent.
-	return callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID)
+	return callerProjectAccess(c).allowSession(sess.Meta.ProjectID, sess.Meta.UserID, sess.Meta.Participants)
 }
 
 // sessionAccessMW gates every route under /sessions/{id} and /api/sessions/{id}:
@@ -2925,6 +2942,23 @@ func streamMultiSSE(c *tool.Ctx) {
 func snapshotEvents(sessionID string) []Event {
 	var out []Event
 	matched := false
+	// git_status first: it is session STATE, not turn history, so it must be
+	// replayed whether or not an agent is live. The SharedWorker calls this
+	// on every page load (the stream itself is not re-opened), and the Source
+	// rail badge has no REST fallback — without this a reload showed no
+	// counter until the next filesystem event.
+	if globalBcast != nil {
+		if payload, ok := globalBcast.LastGitStatus(sessionID); ok {
+			out = append(out, Event{
+				SessionID: sessionID,
+				Type:      "git_status",
+				Data:      payload,
+			})
+		}
+	}
+	if globalPool == nil {
+		return out
+	}
 	for _, e := range globalPool.ActiveSnapshot() {
 		if e.SessionID != sessionID {
 			continue
@@ -3007,14 +3041,25 @@ func snapshotEvents(sessionID string) []Event {
 	if err != nil || len(entries) == 0 {
 		return out
 	}
+	// Assistant text is accumulated into ONE cumulative text_snapshot, never
+	// replayed as a series of text_delta.
+	//
+	// text_delta means "append". This path runs on every snapshot request —
+	// and the SharedWorker asks for a snapshot on every page load, not only
+	// after a real gap — so replaying deltas appended the same text again on
+	// each ask: the bubble showed the message twice, three times, once per
+	// reload. The pool path above already learned this; the disk fallback had
+	// not, and it is the path taken whenever the process serving the page is
+	// not the one running the agent.
+	var textSoFar strings.Builder
 	for _, e := range entries {
 		ev := Event{
 			SessionID: sessionID,
 		}
 		switch e.Type {
 		case "text_delta":
-			ev.Type = "text_delta"
-			ev.Data = e.Text
+			textSoFar.WriteString(e.Text)
+			continue
 		case "thinking":
 			ev.Type = "thinking"
 			ev.Data = e.Text
@@ -3042,6 +3087,13 @@ func snapshotEvents(sessionID string) []Event {
 		}
 		out = append(out, ev)
 	}
+	if t := textSoFar.String(); t != "" {
+		out = append(out, Event{
+			SessionID: sessionID,
+			Type:      "text_snapshot",
+			Data:      t,
+		})
+	}
 	return out
 }
 
@@ -3050,10 +3102,8 @@ func snapshotEvents(sessionID string) []Event {
 // (even when the EventSource is already open) so the UI can replay trace
 // cards without waiting for the next real event.
 func streamSnapshot(c *tool.Ctx) {
-	if globalPool == nil {
-		c.JSON(http.StatusOK, []Event{})
-		return
-	}
+	// No early return on a nil pool: the snapshot also carries git_status,
+	// which is session state and has nothing to do with a live agent.
 	sessionID := c.Query("session")
 	if sessionID == "" {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "session required"})

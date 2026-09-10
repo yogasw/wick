@@ -2,6 +2,8 @@ package schedule
 
 import (
 	"context"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -48,10 +50,24 @@ type Runner struct {
 	// of the point of asking. Buffered + non-blocking send, so a burst of
 	// nudges coalesces into one extra tick.
 	wake chan struct{}
+	// active counts deliveries in flight, for the drain tracker.
+	active atomic.Int64
 }
 
 func NewRunner(store *Store, sender Sender, layout agentconfig.Layout) *Runner {
-	return &Runner{store: store, sender: sender, layout: layout, wake: make(chan struct{}, 1)}
+	r := &Runner{store: store, sender: sender, layout: layout, wake: make(chan struct{}, 1)}
+	// A due row is claimed in the DB before delivery, so a delivery abandoned
+	// mid-flight is LOST rather than retried. That makes it worth draining.
+	upgrade.Register("scheduled messages", r.ActiveCount)
+	return r
+}
+
+// ActiveCount is how many due messages are being delivered right now.
+func (r *Runner) ActiveCount() int {
+	if r == nil {
+		return 0
+	}
+	return int(r.active.Load())
 }
 
 // Wake asks the runner to poll immediately instead of waiting for the next
@@ -119,7 +135,9 @@ func (r *Runner) tick(ctx context.Context, l zerologLogger) {
 		return
 	}
 	for i := range due {
+		r.active.Add(1)
 		r.deliver(ctx, l, due[i])
+		r.active.Add(-1)
 	}
 }
 

@@ -12,11 +12,13 @@ import (
 	"github.com/yogasw/wick/internal/agents/event"
 	"github.com/yogasw/wick/internal/agents/gate"
 	"github.com/yogasw/wick/internal/agents/preset"
+	"github.com/yogasw/wick/internal/agents/scm"
 	"github.com/yogasw/wick/internal/agents/provider"
 	"github.com/yogasw/wick/internal/agents/provider/claude"
 	codexpkg "github.com/yogasw/wick/internal/agents/provider/codex"
 	geminipkg "github.com/yogasw/wick/internal/agents/provider/gemini"
 	wickpkg "github.com/yogasw/wick/internal/agents/provider/wick"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/internal/agents/state"
 	"github.com/yogasw/wick/internal/agents/store"
 	systemprompt "github.com/yogasw/wick/internal/agents/system-prompt"
@@ -246,7 +248,8 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 	// having it in the system prompt means it is always available — not
 	// only on the first turn where channels inject a one-time context
 	// message.
-	presetContent += "\n\n" + sessionIdentityBlock(opt.SessionID, opt.Origin, opt.Title, opt.TitleCustom)
+	presetContent += "\n\n" + sessionIdentityBlock(opt.SessionID, opt.Origin, opt.Title, opt.TitleCustom,
+		f.activeRepoLine(opt.SessionID, opt.Workspace))
 
 	// Ticket / notes pointer — a COUNT and an id, never the note bodies.
 	// A ticket accumulates notes for as long as the work lasts, so
@@ -523,7 +526,40 @@ func (f *ClaudeFactory) Build(opt FactoryOptions) (BuildResult, error) {
 // title was already chosen and must be left alone. The values are a
 // snapshot at spawn time. channel falls back to "ui" when origin is
 // unset.
-func sessionIdentityBlock(sessionID, channel, title string, titleCustom bool) string {
+// activeRepoLine describes the repository this session is working in —
+// the same selection the Source panel shows the human. A session cwd
+// commonly holds many clones, so without it "this repo" is a guess the
+// agent makes from whatever path was mentioned last, and it guesses
+// wrong the moment the user switches panels.
+//
+// Best-effort: any failure returns "" and the block simply omits the
+// line, because a spawn must not fail over a git scan.
+func (f *ClaudeFactory) activeRepoLine(sessionID, workspace string) string {
+	if strings.TrimSpace(workspace) == "" {
+		return ""
+	}
+	stored := ""
+	if sessionID != "" {
+		if sess, err := session.Load(f.Layout, sessionID); err == nil {
+			stored = sess.Meta.ScmRepo
+		}
+	}
+	sel, err := scm.ResolveSelection(workspace, stored)
+	if err != nil || sel.Rel == "" {
+		return ""
+	}
+	line := sel.Dir
+	if sel.Total > 1 {
+		if sel.Explicit {
+			line += fmt.Sprintf(" (selected in Source; %d repos here)", sel.Total)
+		} else {
+			line += fmt.Sprintf(" (nothing selected in Source — first of %d repos here)", sel.Total)
+		}
+	}
+	return line
+}
+
+func sessionIdentityBlock(sessionID, channel, title string, titleCustom bool, activeRepo string) string {
 	if strings.TrimSpace(channel) == "" {
 		channel = "ui"
 	}
@@ -543,6 +579,18 @@ func sessionIdentityBlock(sessionID, channel, title string, titleCustom bool) st
 		b.WriteString("true")
 	} else {
 		b.WriteString("false")
+	}
+	if activeRepo != "" {
+		b.WriteString("\nactive_repo: ")
+		b.WriteString(activeRepo)
+		b.WriteString("\n\nactive_repo is the repository the Source panel has open — treat")
+		b.WriteString(" \"this repo\" as that one unless the user names another. It is a")
+		b.WriteString(" snapshot from spawn time AND wick moves the selection itself to")
+		b.WriteString(" whichever repo a file was just written in, so it goes stale the")
+		b.WriteString(" moment you edit elsewhere. The Source connector re-reads it")
+		b.WriteString(" (source_active), lists the others (source_list), shows what is")
+		b.WriteString(" currently changed (source_changes), and switches the panel")
+		b.WriteString(" (source_select) when the user asks to work somewhere else.")
 	}
 	return b.String()
 }

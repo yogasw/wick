@@ -965,7 +965,11 @@
       </div>
       {#if filtered.length > 0}
         <div bind:this={listEl} class="max-h-64 overflow-y-auto" role="listbox" aria-label={menuKind === "@" ? "File mentions" : "Commands"}>
-          {#each filtered as item, i (item.value)}
+          <!-- Keyed on `key` first: `value` is the inserted text and is not
+               unique across skills (see ComposerCommand.key). A duplicate key
+               aborts the whole each block, which is how one clashing skill
+               name emptied the entire menu. -->
+          {#each filtered as item, i (item.key ?? item.value)}
             {#if item.category && item.category !== filtered[i - 1]?.category}
               <div class="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-black-500 dark:text-black-600">{item.category}</div>
             {/if}

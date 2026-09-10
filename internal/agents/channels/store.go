@@ -336,3 +336,54 @@ func (s DBStore) ListChannelOwners(channelType string) ([]*string, error) {
 func (s DBStore) EnsureChannelForUser(channelType, userID string) error {
 	return EnsureChannelForUser(s.db, channelType, userID)
 }
+
+// ── cached bot identity ──────────────────────────────────────────────
+//
+// A channel's bot identity (Slack user id, display name, workspace) is
+// resolved from the provider with an API call. It changes about never,
+// but the UI needs it on every render of a channel picker — so it is
+// cached in the channel's own config row under keys the config structs
+// ignore. Written once when auth.test answers, read at boot to seed the
+// instance before it connects.
+
+const (
+	cachedBotUserIDKey = "cached_bot_user_id"
+	cachedBotNameKey   = "cached_bot_name"
+	cachedTeamNameKey  = "cached_team_name"
+)
+
+// LoadBotIdentity returns the cached identity for one channel instance.
+// Missing values come back empty — never an error the caller must handle
+// differently, since "not cached yet" is the normal first-boot state.
+func (s DBStore) LoadBotIdentity(channelType, userID string) (botUserID, botName, teamName string, err error) {
+	m, err := GetChannelConfigMapForUser(s.db, channelType, userID)
+	if err != nil {
+		return "", "", "", err
+	}
+	return m[cachedBotUserIDKey], m[cachedBotNameKey], m[cachedTeamNameKey], nil
+}
+
+// SaveBotIdentity caches the identity on the channel row. No-op when
+// nothing changed, so a reconnect storm doesn't turn into a write storm.
+func (s DBStore) SaveBotIdentity(channelType, userID, botUserID, botName, teamName string) error {
+	curID, curName, curTeam, err := s.LoadBotIdentity(channelType, userID)
+	if err != nil {
+		return err
+	}
+	if curID == botUserID && curName == botName && curTeam == teamName {
+		return nil
+	}
+	for _, kv := range [][2]string{
+		{cachedBotUserIDKey, botUserID},
+		{cachedBotNameKey, botName},
+		{cachedTeamNameKey, teamName},
+	} {
+		if kv[1] == "" {
+			continue
+		}
+		if err := SetChannelConfigKeyForUser(s.db, channelType, userID, kv[0], kv[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}

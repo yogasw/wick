@@ -173,8 +173,21 @@
           ].join(" ")}
         >
           <div class="flex-1 min-w-0">
-            <p class="truncate text-sm font-medium text-black-900 dark:text-white-100">
-              {sess.label || "New session"}
+            <p class="flex items-center gap-1.5 truncate text-sm font-medium text-black-900 dark:text-white-100">
+              {#if (sess.participants ?? 0) > 1}
+                <!-- Shared thread: more than one person has spoken here, so
+                     the row should not read as the viewer's private chat. -->
+                <span
+                  class="shrink-0 text-black-600 dark:text-black-600"
+                  title={`Shared conversation — ${sess.participants} people`}
+                  aria-label={`Shared conversation, ${sess.participants} people`}
+                >
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path d="M7 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM14.5 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5ZM1.6 16.2C1.6 13.3 4 11 7 11s5.4 2.3 5.4 5.2c0 .4-.3.8-.8.8H2.4a.8.8 0 0 1-.8-.8ZM13.7 17a2 2 0 0 0 .2-.8c0-1.8-.7-3.4-1.9-4.6.8-.4 1.6-.6 2.5-.6 2.4 0 4.3 1.8 4.3 4.2 0 .4-.3.8-.8.8h-4.3Z"></path>
+                  </svg>
+                </span>
+              {/if}
+              <span class="truncate">{sess.label || "New session"}</span>
             </p>
             <div class="flex items-center gap-2 mt-0.5">
               <span class="text-xs text-black-600 dark:text-black-700">

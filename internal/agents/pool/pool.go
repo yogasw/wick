@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -427,6 +430,17 @@ const reconcileDeadThreshold = 2
 // per-provider caps and host resources). The config UI seeds a sane
 // default of 2, but an operator may set 0 deliberately to lift the global
 // ceiling — capacity math treats 0 as "no global cap".
+// registerDrain declares the pool's in-flight turns to the drain tracker, so
+// a graceful upgrade waits for them instead of the drain path having to know
+// the pool exists. Same pattern for every background subsystem.
+func (p *Pool) registerDrain() {
+	// Resumable: a turn cut short is not lost work — the session is on disk
+	// and the next message resumes it. So a handover waits only a short
+	// grace for turns, instead of keeping the old process alive for as long
+	// as somebody keeps chatting.
+	upgrade.RegisterResumable("agent turns", p.ActiveCount, p.ActiveSessions)
+}
+
 func New(cfg PoolConfig) *Pool {
 	if cfg.MaxConcurrent < 0 {
 		cfg.MaxConcurrent = 0 // normalise negatives to the unlimited sentinel
@@ -451,6 +465,7 @@ func New(cfg PoolConfig) *Pool {
 	// EOF leaves a zombie slot that must be reclaimed regardless.
 	p.wg.Add(1)
 	go p.reconcileLoop()
+	p.registerDrain()
 	return p
 }
 
@@ -559,6 +574,57 @@ func (p *Pool) SetAutoReply(sessionID string, on bool) {
 	sess.Meta.AutoReply = on
 	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
 		log.Warn().Str("session", sessionID).Bool("on", on).Err(err).Msg("pool: set auto-reply — save failed")
+	}
+}
+
+// ThreadBinding reads the persisted chat-thread binding for a session.
+// Loaded fresh so a restart — or a handover to another process — sees the
+// last saved value rather than nothing.
+func (p *Pool) ThreadBinding(sessionID string) (agentchannels.ThreadBinding, bool) {
+	if sessionID == "" {
+		return agentchannels.ThreadBinding{}, false
+	}
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err != nil || sess.Meta.ChannelRef == nil {
+		return agentchannels.ThreadBinding{}, false
+	}
+	r := sess.Meta.ChannelRef
+	if r.ChatID == "" {
+		return agentchannels.ThreadBinding{}, false
+	}
+	return agentchannels.ThreadBinding{
+		Channel:  r.Channel,
+		ChatID:   r.ChatID,
+		ThreadID: r.ThreadID,
+		Instance: r.Instance,
+	}, true
+}
+
+// SetThreadBinding persists the binding on the session meta. Idempotent —
+// an unchanged binding writes nothing, so this can be called on every turn
+// without rewriting meta.json each time.
+func (p *Pool) SetThreadBinding(sessionID string, b agentchannels.ThreadBinding) {
+	if sessionID == "" || b.ChatID == "" {
+		return
+	}
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err != nil {
+		log.Warn().Str("session", sessionID).Err(err).Msg("pool: set thread binding — session load failed")
+		return
+	}
+	cur := sess.Meta.ChannelRef
+	if cur != nil && cur.Channel == b.Channel && cur.ChatID == b.ChatID &&
+		cur.ThreadID == b.ThreadID && cur.Instance == b.Instance {
+		return
+	}
+	sess.Meta.ChannelRef = &session.ChannelRef{
+		Channel:  b.Channel,
+		ChatID:   b.ChatID,
+		ThreadID: b.ThreadID,
+		Instance: b.Instance,
+	}
+	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
+		log.Warn().Str("session", sessionID).Err(err).Msg("pool: set thread binding — save failed")
 	}
 }
 
@@ -1535,9 +1601,16 @@ func (p *Pool) EnsureSession(ctx context.Context, sessionID, source, projectID s
 	return p.ensureSession(ctx, sessionID, source, projectID)
 }
 
-// EnsureSessionOwner stamps UserID on an existing session when the session
-// currently has no owner. No-op when the session does not exist or already
-// has an owner.
+// EnsureSessionOwner records userID against an existing session: it stamps
+// UserID when the session has no owner yet, and adds them to Participants
+// either way. No-op when the session does not exist.
+//
+// Owner is first-writer-wins — a later sender never takes the session over,
+// because UserID decides whose identity a spawn runs as and handing that to
+// whoever spoke last would silently move the whole conversation's access.
+// Participants is additive instead: a Slack thread is genuinely multi-user,
+// and someone who replied into it should find it under their own "Yours"
+// without owning it.
 //
 // The OnSessionMeta callback at the end is load-bearing, not cosmetic. This
 // writes to DISK, but the per-spawn MCP credential is minted from the IN-MEMORY
@@ -1552,10 +1625,20 @@ func (p *Pool) EnsureSessionOwner(ctx context.Context, sessionID, userID string)
 		return
 	}
 	sess, err := session.Load(p.cfg.Layout, sessionID)
-	if err != nil || sess.Meta.UserID != "" {
+	if err != nil {
 		return
 	}
-	sess.Meta.UserID = userID
+	changed := false
+	if sess.Meta.UserID == "" {
+		sess.Meta.UserID = userID
+		changed = true
+	}
+	if sess.Meta.AddParticipant(userID) {
+		changed = true
+	}
+	if !changed {
+		return
+	}
 	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
 		log.Warn().Err(err).
 			Str("session", sessionID).
@@ -1587,10 +1670,25 @@ func (p *Pool) ensureSession(ctx context.Context, sessionID, source, projectID s
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	// Stamp the caller as owner AT CREATE, not after.
+	//
+	// A channel resolves the sender before dispatching, but its
+	// EnsureSessionOwner call cannot help on the first message of a new
+	// thread: the session does not exist on disk yet, so that call no-ops
+	// and the owner only lands from the SECOND message on — whoever sent
+	// it. Meanwhile the first spawn (below, same Send) mints its MCP
+	// credential from an ownerless session and falls back to the shared
+	// internal token, i.e. the synthetic admin, for the whole life of that
+	// process. Creating with the owner already set closes both.
+	var ownerUserID string
+	if p.cfg.CallerUserID != nil {
+		ownerUserID = p.cfg.CallerUserID(ctx)
+	}
 	sess, cerr := session.Create(ctx, p.cfg.Layout, session.CreateOptions{
 		ID:        sessionID,
 		Origin:    session.Origin(source),
 		ProjectID: projectID,
+		UserID:    ownerUserID,
 	})
 	// Suppress "already exists" — a concurrent call may have won the race.
 	if cerr != nil && !errors.Is(cerr, os.ErrExist) {
@@ -1683,6 +1781,63 @@ func (p *Pool) markStatus(sessionID string, status session.Status) error {
 // Stop tears down all active agents and waits for trailing
 // post-exit work (markStatus, queue drain). Used on graceful shutdown
 // and by tests to flush goroutines before TempDir cleanup.
+// Drain waits for every in-flight turn to finish on its own. Unlike Stop it
+// never signals a running agent: a debug run that is eight minutes into its
+// work keeps going and still posts its reply.
+//
+// This is the graceful-upgrade path. Deliberately it does NOT close the pool.
+// The draining process still owns intake (channel listeners, cron) until it
+// exits, so closing here would make it REFUSE the very messages it is still
+// the only process listening for — a restart that answers "agent error"
+// instead of working. Old work and any work that arrives mid-drain both finish
+// on the old binary; the successor starts fresh once this returns.
+//
+// Returns the number of turns still active when it gave up — 0 means a clean
+// drain. ctx bounds the wait: on a host with continuous traffic the pool may
+// never reach zero, so the caller's timeout is what guarantees termination.
+func (p *Pool) Drain(ctx context.Context) int {
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		p.mu.Lock()
+		n := len(p.active)
+		p.mu.Unlock()
+		if n == 0 {
+			return 0
+		}
+		select {
+		case <-ctx.Done():
+			p.mu.Lock()
+			n = len(p.active)
+			p.mu.Unlock()
+			return n
+		case <-tick.C:
+		}
+	}
+}
+
+// ActiveCount reports how many turns are running right now. Used by the
+// drain path for progress logging.
+func (p *Pool) ActiveCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.active)
+}
+
+// ActiveSessions lists the sessions with a turn in flight. Sorted so a drain
+// log line is stable, and named rather than counted so an operator waiting on
+// a long drain can see WHICH conversation is still working.
+func (p *Pool) ActiveSessions() []string {
+	p.mu.Lock()
+	out := make([]string, 0, len(p.active))
+	for id := range p.active {
+		out = append(out, id)
+	}
+	p.mu.Unlock()
+	sort.Strings(out)
+	return out
+}
+
 func (p *Pool) Stop() {
 	p.mu.Lock()
 	alreadyClosed := p.closed

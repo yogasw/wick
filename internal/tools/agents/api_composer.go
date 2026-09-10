@@ -86,6 +86,12 @@ func apiComposerCommands(c *tool.Ctx) {
 	// A skill is a FOLDER holding a SKILL.md (loose files like CHANGELOG.md /
 	// install_skills.sh that happen to sit in the skills dir are not skills).
 	// The invokable name + description come from the SKILL.md frontmatter.
+	// One skill is mirrored into EVERY provider's skills dir, so without a
+	// provider filter the same skill came back 4-5 times; and two folders can
+	// declare the same frontmatter name (a copied folder that kept the
+	// original's name). Either way the menu listed duplicates, which the
+	// composer keys on — de-dupe by the invokable name and keep the first.
+	seenSkill := make(map[string]bool, len(cachedSkills()))
 	for _, s := range cachedSkills() {
 		if !s.IsDir {
 			continue
@@ -97,6 +103,10 @@ func apiComposerCommands(c *tool.Ctx) {
 		if name == "" {
 			name = s.Name // fall back to the folder name if no frontmatter name
 		}
+		if seenSkill[name] {
+			continue
+		}
+		seenSkill[name] = true
 		hint := truncate(s.Meta["description"], 60)
 		if hint == "" {
 			hint = "skill"

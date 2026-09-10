@@ -20,6 +20,7 @@
     { label: "MCP", value: "mcp" },
     { label: "Panel test", value: "test" },
     { label: "Retry", value: "retry" },
+    { label: "App", value: "app" },
   ];
   const statusOptions = [
     { label: "All statuses", value: "" },
