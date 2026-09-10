@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -58,9 +59,13 @@ type workerHandle struct {
 }
 
 type Router struct {
-	mu      sync.RWMutex
-	engine  *engine.Engine
-	service service.Service
+	mu sync.RWMutex
+	// activeRuns counts runs currently executing (serial worker + parallel
+	// fan-out). Separate from wg, which also holds idle worker goroutines, so
+	// only this can answer "is a workflow still running right now".
+	activeRuns atomic.Int64
+	engine     *engine.Engine
+	service    service.Service
 	// baseCtx is the server-lifetime context every worker goroutine is
 	// spawned under. Set once via SetBaseCtx at boot. Register ignores
 	// the ctx its caller passes for worker lifetime — HTTP handlers used
@@ -148,8 +153,31 @@ func (r *Router) GlobalParallelEnabled() bool {
 }
 
 // NewRouter wires a Router to an Engine + Service.
+// ActiveRuns is how many workflow runs are executing right now. Counted
+// separately from r.wg, which also tracks the idle worker goroutines and so
+// can never answer this question.
+func (r *Router) ActiveRuns() int { return int(r.activeRuns.Load()) }
+
+// QueuedRuns is how much work is waiting to start across every workflow.
+func (r *Router) QueuedRuns() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	n := 0
+	for _, q := range r.queues {
+		n += q.Len()
+	}
+	return n
+}
+
+// registerDrain declares workflow runs to the drain tracker: a graceful
+// upgrade waits for a running workflow to finish rather than cutting it off
+// mid-node, which would leave its run state half-written.
+func (r *Router) registerDrain() {
+	upgrade.Register("workflow runs", func() int { return r.ActiveRuns() + r.QueuedRuns() })
+}
+
 func NewRouter(e *engine.Engine, svc service.Service) *Router {
-	return &Router{
+	r := &Router{
 		engine:       e,
 		service:      svc,
 		defs:         map[string]workflow.Workflow{},
@@ -160,6 +188,8 @@ func NewRouter(e *engine.Engine, svc service.Service) *Router {
 		webhookIndex: map[string]webhookEntry{},
 		clock:        func() time.Time { return time.Now() },
 	}
+	r.registerDrain()
+	return r
 }
 
 // Register adds a workflow to the router and spawns its worker goroutine.
@@ -958,7 +988,9 @@ func (r *Router) runWorker(ctx context.Context, id string, h *workerHandle) {
 
 		// Serial if: global parallel disabled OR this workflow opted out.
 		if gSem == nil || !w.Concurrency.Enabled {
+			r.activeRuns.Add(1)
 			st, err := r.engine.Run(ctx, w, item.Event)
+			r.activeRuns.Add(-1)
 			if item.Done != nil {
 				item.Done <- RunResult{State: st, Err: err}
 			}
@@ -1006,7 +1038,9 @@ func (r *Router) runWorker(ctx context.Context, id string, h *workerHandle) {
 				}
 			}
 
+			r.activeRuns.Add(1)
 			st, err := r.engine.Run(ctx, runW, runItem.Event)
+			r.activeRuns.Add(-1)
 			if runItem.Done != nil {
 				runItem.Done <- RunResult{State: st, Err: err}
 			}

@@ -174,8 +174,12 @@ StartLimitIntervalSec=300
 StartLimitBurst=3
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=all
+TimeoutStartSec=infinity
 ExecStart=%s all
+ExecReload=/bin/kill -HUP $MAINPID
+Environment=WICK_GRACEFUL_UPGRADE=1
 Restart=on-failure
 RestartSec=5
 StandardOutput=append:%s

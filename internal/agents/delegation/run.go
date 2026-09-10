@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"strings"
 	"sync"
 	"time"
@@ -1165,6 +1166,22 @@ func (s *Service) limits() Limits {
 		return s.LimitsFn()
 	}
 	return s.Limits
+}
+
+// InflightCount is how many delegations are running under this process. A
+// sub-agent's own turn is also a pool turn, but the delegation wrapper
+// outlives it (claims, report write-back), so it is tracked separately.
+func (s *Service) InflightCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.inflight)
+}
+
+// RegisterDrain declares delegations to the drain tracker. Called by the
+// server once the Service is built — the struct is assembled as a literal, so
+// there is no constructor to put this in.
+func (s *Service) RegisterDrain() {
+	upgrade.Register("delegations", s.InflightCount)
 }
 
 func (s *Service) trackInflight(id string, cancel context.CancelFunc) {

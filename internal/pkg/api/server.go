@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/yogasw/wick/internal/accesstoken"
@@ -67,9 +68,9 @@ import (
 	customconnector "github.com/yogasw/wick/internal/connectors/customconnector"
 	dtconn "github.com/yogasw/wick/internal/connectors/datatables"
 	notesconn "github.com/yogasw/wick/internal/connectors/notes"
-	sourceconn "github.com/yogasw/wick/internal/connectors/source"
 	"github.com/yogasw/wick/internal/connectors/notifications"
 	connplugin "github.com/yogasw/wick/internal/connectors/plugin"
+	sourceconn "github.com/yogasw/wick/internal/connectors/source"
 	subagents "github.com/yogasw/wick/internal/connectors/sub-agents"
 	ticketconn "github.com/yogasw/wick/internal/connectors/tickets"
 	"github.com/yogasw/wick/internal/connectors/wickmanager"
@@ -97,6 +98,7 @@ import (
 	"github.com/yogasw/wick/internal/pkg/spa"
 	"github.com/yogasw/wick/internal/pkg/sysmem"
 	"github.com/yogasw/wick/internal/pkg/ui"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"github.com/yogasw/wick/internal/processctl"
 	"github.com/yogasw/wick/internal/sso"
 	"github.com/yogasw/wick/internal/startupscript"
@@ -1156,6 +1158,10 @@ func NewServer() *Server {
 	// this call, workflow body + draft + history + tests live in SQL;
 	// only state.json + env.json + runs/<id>/ stay on disk.
 	wfMgr.WithDB(db)
+	// Cron waits for the intake baton (started from Run); the rest of the
+	// workflow subsystem — router workers, webhook index, channel triggers —
+	// boots now so the UI and MCP are complete either way.
+	wfMgr.DeferCron = true
 	if err := wfMgr.Start(context.Background()); err != nil {
 		log.Warn().Err(err).Msg("workflow bootstrap failed; workflows tab will be empty")
 	}
@@ -1853,6 +1859,9 @@ func NewServer() *Server {
 		configsSvc.GetOwned("agents", "sub_agents_stale_claim_min"),
 		agentconfig.DefaultGeneralConfig().SubAgentsStaleClaimMin,
 	)) * time.Minute
+	// Declare delegations to the drain tracker (the Service is a literal, so
+	// it has no constructor to self-register from).
+	delegationSvc.RegisterDrain()
 	delegation.NewStaleClaimSweeper(delegationSvc.Repo, staleAfter).Start(context.Background())
 
 	// Backstop for the serial queue: release slots held by delegations
@@ -2500,7 +2509,7 @@ func NewServer() *Server {
 	r.Handle("/", http.HandlerFunc(homeHandler.RootRedirect))
 	r.Handle("/mini-tools", http.HandlerFunc(homeHandler.Launcher))
 
-	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler}
+	return &Server{router: r, configsSvc: configsSvc, authMidd: authMidd, agentsPool: agentsPool, agentsLayout: agentsLayout, syncSessionMeta: syncSessionMeta, channelReg: channelReg, db: db, scheduleStore: scheduleStore, gateBin: resolvedGateBin, jobsSvc: jobsSvc, wfMgr: wfMgr, bootGate: bootGate, intakeReady: make(chan struct{}), pluginMgr: pluginMgr, pluginReloader: pluginReloader, verCache: verCache, resourceSampler: resourceSampler}
 }
 
 type Server struct {
@@ -2542,7 +2551,19 @@ type Server struct {
 	// during the restore window. The gate lifts only once EVERY registered
 	// step is Done — add a step by Register/Done, not by flipping a flag.
 	bootGate *BootGate
+	// intakeReady closes once this process holds the intake baton, i.e. once
+	// it is the process allowed to accept NEW work (channel listeners, cron,
+	// scheduled messages). During a graceful upgrade the successor parks here
+	// until the draining parent is finished, so exactly one process is ever
+	// consuming Slack events. Read by the single-node `all` entrypoint, which
+	// must hold its job scheduler back for the same reason.
+	intakeReady chan struct{}
 }
+
+// IntakeReady closes when this process may start accepting new work. Callers
+// outside the server (the `all` command's cron scheduler) wait on it so a
+// draining predecessor keeps ownership of every singleton until it exits.
+func (s *Server) IntakeReady() <-chan struct{} { return s.intakeReady }
 
 // JobsSvc returns the manager.Service the API server owns. Exposed so
 // the single-node `lab all` entrypoint can hand it to worker.RunScheduler
@@ -2910,16 +2931,57 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		}()
 	}
 
-	// Start channel listeners and watch for config changes.
-	s.startChannels(ctx)
-
-	// Start the scheduled-message runner: polls the store and delivers due
-	// messages through the pool (wick_schedule_message). Boot recovery is
-	// implicit — the first tick picks up anything that came due while wick
-	// was down. Only runs where both the store and the pool exist.
-	if s.scheduleStore != nil && s.agentsPool != nil {
-		go schedule.NewRunner(s.scheduleStore, s.agentsPool, s.agentsLayout).Run(ctx)
+	// Graceful upgrade. When enabled, the listener below is inherited from a
+	// predecessor instead of freshly bound, and SIGHUP starts a successor that
+	// takes over the socket while this process finishes what it is doing.
+	// Disabled or unsupported (Windows, tray-managed) degrades to a normal
+	// listener and the classic stop/start.
+	upg, upgWhy := upgrade.New(s.agentsLayout.BaseDir)
+	defer upg.Stop()
+	if upg.Enabled() {
+		logger.Info().Bool("inherited", upg.IsChild()).
+			Dur("drain_timeout", upgrade.DrainTimeout()).
+			Msg("graceful upgrade armed (SIGHUP hands over to a new binary)")
+	} else {
+		logger.Info().Str("reason", upgWhy).Msg("graceful upgrade off")
 	}
+	upg.WatchSignal(ctx)
+
+	// Intake — channel listeners, config watcher, workflow watcher and the
+	// scheduled-message runner — starts only once this process holds the
+	// intake baton.
+	//
+	// Deferred rather than started inline because during an upgrade the
+	// PREDECESSOR still holds it: it keeps consuming Slack events and running
+	// its turns until it is completely drained. Starting a second socket-mode
+	// connection here would split inbound events between two binaries at
+	// random and double-fire every cron; parking instead means intake moves
+	// exactly once, at the moment the old process exits.
+	batonCh := make(chan *upgrade.IntakeBaton, 1)
+	go func() {
+		if upg.Enabled() && upg.IsChild() {
+			logger.Info().Msg("intake: waiting for the previous process to finish draining")
+		}
+		baton, err := upg.AcquireIntake(ctx)
+		if err != nil {
+			if ctx.Err() == nil {
+				logger.Error().Err(err).Msg("intake: could not acquire the baton — channels and cron are NOT running")
+			}
+			return
+		}
+		batonCh <- baton
+		logger.Info().Msg("intake: baton acquired — starting channels, cron and scheduled messages")
+		s.startChannels(ctx)
+		if s.wfMgr != nil {
+			s.wfMgr.StartCron(ctx)
+		}
+		if s.scheduleStore != nil && s.agentsPool != nil {
+			// Boot recovery is implicit — the first tick picks up anything
+			// that came due while wick was down.
+			go schedule.NewRunner(s.scheduleStore, s.agentsPool, s.agentsLayout).Run(ctx)
+		}
+		close(s.intakeReady)
+	}()
 
 	// Refresh the user-menu version cache: once on boot, then every 6h.
 	// Lives off the request path so opening the dropdown costs no network.
@@ -2995,9 +3057,25 @@ func (s *Server) Run(ctx context.Context, port int) error {
 	}
 
 	shutdownErr := make(chan error, 1)
+	// drained marks a completed graceful handoff. The hard-stop goroutine
+	// below also fires on the way out (the process cancels ctx as it exits),
+	// and re-running teardown that has already happened is how a clean
+	// upgrade turned into a panic at the last moment.
+	var drained atomic.Bool
 	go func() {
 		<-ctx.Done()
+		if drained.Load() {
+			shutdownErr <- nil
+			return
+		}
 		logger.Info().Msg("server is shutting down...")
+		// Name what is about to be killed. This is a hard stop (SIGTERM /
+		// tray stop), not a drain: run `reload` instead when the work should
+		// be allowed to finish.
+		if busy := upgrade.Busy(); len(busy) > 0 {
+			logger.Warn().Strs("outstanding", busy).
+				Msg("hard stop: background work is still running and will be interrupted")
+		}
 		if s.agentsPool != nil {
 			s.agentsPool.Stop()
 		}
@@ -3036,15 +3114,157 @@ func (s *Server) Run(ctx context.Context, port int) error {
 		fmt.Println()
 	}
 	logger.Info().Msgf("server serving on port %d", port)
-	err := httpSrv.ListenAndServe()
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("listen on %s: %w", addr, err)
+	// The listener, not ListenAndServe: during an upgrade this socket is
+	// inherited from the predecessor, so the port is never closed and no
+	// client ever sees a refused connection.
+	ln, lnErr := upg.Listen("tcp", addr)
+	if lnErr != nil {
+		return fmt.Errorf("listen on %s: %w", addr, lnErr)
+	}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- httpSrv.Serve(ln) }()
+	// Tell the service manager we hold the socket now (and, under systemd,
+	// that it should follow THIS pid). Deliberately before the boot gate:
+	// Type=notify has a start timeout that a slow registry restore would blow.
+	upg.NotifyServing()
+
+	// Report readiness only once boot restore has finished. Announcing
+	// earlier would hand traffic to a process that still answers the
+	// "Booting…" gate, and would tell a draining predecessor to let go while
+	// this one cannot yet do the work.
+	go func() {
+		// Bounded BELOW the upgrader's own wait for a successor, so Ready
+		// always lands before the predecessor gives up on us and kills this
+		// process for being slow.
+		s.waitBootGate(ctx, 2*time.Minute)
+		upg.Ready()
+	}()
+
+	select {
+	case err := <-serveErr:
+		// Normal path (including ctx-cancelled shutdown, which closes Serve).
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("listen on %s: %w", addr, err)
+		}
+	case <-upg.Exit():
+		s.drainForUpgrade(logger, &httpSrv, batonCh)
+		drained.Store(true)
+		return nil
 	}
 	if e := <-shutdownErr; e != nil {
 		return fmt.Errorf("shutdown: %w", e)
 	}
 	logger.Info().Msg("server stopped")
 	return nil
+}
+
+// waitBootGate blocks until the boot gate lifts, ctx is done, or the timeout
+// expires. Polled rather than signalled: BootGate is written by many
+// independent boot steps and exposes Ready() as the single source of truth.
+func (s *Server) waitBootGate(ctx context.Context, timeout time.Duration) {
+	if s.bootGate == nil {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		if s.bootGate.Ready() {
+			return
+		}
+		if time.Now().After(deadline) {
+			log.Warn().Dur("waited", timeout).Msg("boot gate still closed — reporting ready anyway")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+// drainForUpgrade runs in the OLD process once a successor has taken over the
+// listener. It is the whole point of the feature: instead of killing agents
+// mid-turn, this process stops answering HTTP and then simply waits for its
+// own work to finish.
+//
+// Order matters:
+//
+//  1. HTTP down first — the successor already holds the same socket, so every
+//     new request (including MCP calls from our own agents) is served there.
+//  2. Wait for the pool. Nothing is signalled; a ten-minute debug run keeps
+//     running and still posts its reply to Slack, because this process also
+//     keeps its channel listeners for the whole drain.
+//  3. Release the intake baton LAST. The successor is parked on it and starts
+//     its Slack listeners the moment it is free, so intake moves exactly once
+//     — never split across two binaries, never absent.
+func (s *Server) drainForUpgrade(logger *zerolog.Logger, httpSrv *http.Server, batonCh chan *upgrade.IntakeBaton) {
+	logger.Info().Msg("upgrade: successor is serving — draining this process (nothing is killed)")
+	// Deliberately silent towards the service manager from here on. This
+	// process is no longer the unit's main process — the successor claimed
+	// that with MAINPID — and a STOPPING=1 from here reads as "the SERVICE is
+	// going down": systemd starts deactivating the unit and SIGTERMs the new
+	// process we just handed everything to. Even a STATUS= line would
+	// overwrite the successor's. Our exit is a normal non-main process exit.
+
+	sctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	httpSrv.SetKeepAlivesEnabled(false)
+	if err := httpSrv.Shutdown(sctx); err != nil {
+		logger.Warn().Err(err).Msg("upgrade: http shutdown")
+	}
+
+	// Work that cannot be resumed gets the full drain: a workflow run stopped
+	// mid-node, a cron job mid-write or a connector call cut off is lost.
+	timeout := upgrade.DrainTimeout()
+	logger.Info().Strs("outstanding", upgrade.BusyKind(false)).Dur("timeout", timeout).
+		Msg("upgrade: waiting for non-resumable work to finish")
+	dctx, dcancel := context.WithTimeout(context.Background(), timeout)
+	left := upgrade.WaitKind(dctx, false)
+	dcancel()
+	if len(left) > 0 {
+		logger.Warn().Strs("still_running", left).
+			Msg("upgrade: drain timed out — exiting with work still running (it will be killed)")
+	} else {
+		logger.Info().Msg("upgrade: non-resumable work finished cleanly")
+	}
+
+	// Agent turns get a short grace, not the full drain. An interactive
+	// session stays "in flight" for as long as someone keeps talking to it,
+	// so waiting for it kept this process — and the two-process state — alive
+	// for hours. The session is on disk; the next message resumes it.
+	if grace := upgrade.AgentGrace(); grace > 0 {
+		if busy := upgrade.BusyKind(true); len(busy) > 0 {
+			logger.Info().Strs("outstanding", busy).Dur("grace", grace).
+				Msg("upgrade: giving resumable work a grace period before exiting")
+			gctx, gcancel := context.WithTimeout(context.Background(), grace)
+			if rest := upgrade.WaitKind(gctx, true); len(rest) > 0 {
+				logger.Info().Strs("interrupted", rest).
+					Msg("upgrade: grace expired — these resume on their next message")
+			}
+			gcancel()
+		}
+	}
+	// Stop the workflow subsystem explicitly. Its Stop() had no caller at
+	// all before this path existed, so every restart cut running workflows
+	// off mid-node; here the runs above have already finished, and this only
+	// unwinds the (now idle) cron + worker goroutines.
+	if s.wfMgr != nil {
+		s.wfMgr.Stop()
+	}
+	if s.pluginReloader != nil {
+		s.pluginReloader.Stop()
+	}
+	if s.pluginMgr != nil {
+		s.pluginMgr.KillAll()
+	}
+	select {
+	case baton := <-batonCh:
+		baton.Release()
+		logger.Info().Msg("upgrade: intake baton handed to the successor")
+	default:
+		logger.Warn().Msg("upgrade: no intake baton held — successor may already have taken over")
+	}
+	logger.Info().Msg("upgrade: drained, exiting")
 }
 
 // Stdio MCP entry points (BuildMCPHandler, RunMCPStdio, resolveWickGateBin)

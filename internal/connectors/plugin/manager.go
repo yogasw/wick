@@ -6,6 +6,7 @@ package plugin
 import (
 	"context"
 	"fmt"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"os"
 	"sync"
 	"time"
@@ -45,6 +46,19 @@ type Manager struct {
 }
 
 // NewManager builds a Manager and starts the idle sweeper.
+// InflightCount sums the in-flight calls across every plugin subprocess.
+// KillAll ignores this on a hard stop by design; the graceful path uses it to
+// avoid killing a plugin mid-request.
+func (m *Manager) InflightCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, e := range m.entries {
+		n += e.inflight
+	}
+	return n
+}
+
 func NewManager(binaries map[string]string, idleTimeout time.Duration) *Manager {
 	m := &Manager{
 		entries:      map[string]*entry{},
@@ -58,6 +72,7 @@ func NewManager(binaries map[string]string, idleTimeout time.Duration) *Manager 
 		breakers:     map[string]*breaker{},
 		socketDir:    RunDir(),
 	}
+	upgrade.Register("plugin calls", m.InflightCount)
 	m.cond = sync.NewCond(&m.mu)
 	m.spawnFn = m.spawn
 	m.killFn = m.kill
