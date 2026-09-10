@@ -4,7 +4,7 @@
   import { Effect } from "effect";
   import { WickClientLayer } from "@wick-fe/common-api";
   import { createSessionInProject, getPresetOptions, getProviderOptionModels } from "../api/options.js";
-  import { searchProjectFiles } from "../api/files.js";
+  import { searchProjectMentionPaths } from "../api/files.js";
   import { listComposerCommands } from "../api/composer.js";
   import {
     attachSession,
@@ -140,7 +140,7 @@
 
   // `@` searches THIS project's folder; `/` shows skills only (pre-session).
   function searchMentionFiles(query: string): Promise<string[]> {
-    return Effect.runPromise(searchProjectFiles(base, project.id, query).pipe(Effect.provide(WickClientLayer)))
+    return Effect.runPromise(searchProjectMentionPaths(base, project.id, query).pipe(Effect.provide(WickClientLayer)))
       .catch(() => [] as string[]);
   }
   let composerCommands = $state<ComposerCommand[]>([]);
@@ -148,8 +148,12 @@
     const providerType = selectedProvider ? selectedProvider.split("/")[0] : "";
     Effect.runPromise(listComposerCommands(base, "new", providerType).pipe(Effect.provide(WickClientLayer)))
       .then((res) => {
+        // key: c.id — `value` is the skill's frontmatter name, which repeats
+        // across providers' skills dirs and would abort the keyed each block.
+        // This page is the worst case for it: with no provider selected yet
+        // providerType is "", so the server returns every provider's copy.
         composerCommands = (res.commands ?? []).map((c) => ({
-          value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category,
+          key: c.id, value: c.insert ?? c.id, label: c.label, hint: c.hint, category: c.category,
         }));
       })
       .catch(() => { /* commands optional */ });

@@ -6,7 +6,6 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
-	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/pkg/wickdocs"
 )
@@ -22,7 +21,7 @@ type OpenDMOutput struct {
 	UserID    string `json:"user_id"`    // echoed back for reference
 }
 
-func registerActionOpenDM(reg *integration.Registry, ch *slack.Channel) {
+func registerActionOpenDM(reg *integration.Registry, pick ChannelPicker) {
 	reg.RegisterAction(integration.ActionDescriptor{
 		Channel:     Channel,
 		Action:      "open_dm",
@@ -41,11 +40,15 @@ func registerActionOpenDM(reg *integration.Registry, ch *slack.Channel) {
 				"Idempotent — returns existing DM channel ID if already opened.",
 				"Requires im:write scope on the bot token.",
 			},
-			PairWith: []string{"channel:slack.send_message"},
+			PairWith:     []string{"channel:slack.send_message"},
 			InputSample:  `{"user_id":"U02ABCDEF"}`,
 			OutputSample: `{"channel_id":"D03DM1234","user_id":"U02ABCDEF"}`,
 		},
 		Execute: func(ctx context.Context, args map[string]any) (any, error) {
+			ch := pick(ctx)
+			if ch == nil {
+				return nil, fmt.Errorf("slack channel not configured")
+			}
 			api := ch.API()
 			if api == nil {
 				return nil, fmt.Errorf("slack channel not configured")

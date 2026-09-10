@@ -44,8 +44,12 @@ func (e errAuth) Error() string { return string(e) }
 type fakeSessions struct{ exists bool }
 
 func (f fakeSessions) SessionExists(string) bool { return f.exists }
-func (f fakeSessions) AutoReplyOn(string) bool    { return false }
-func (f fakeSessions) SetAutoReply(string, bool)  {}
+func (f fakeSessions) AutoReplyOn(string) bool   { return false }
+func (f fakeSessions) SetAutoReply(string, bool) {}
+func (f fakeSessions) ThreadBinding(string) (agentchannels.ThreadBinding, bool) {
+	return agentchannels.ThreadBinding{}, false
+}
+func (f fakeSessions) SetThreadBinding(string, agentchannels.ThreadBinding) {}
 
 // captured sendFn payload — one entry per call.
 type sentCall struct {
@@ -133,11 +137,11 @@ func TestIsModelAllowed(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{"", true},          // empty → server picks
-		{"claude", true},    // bare type
-		{"codex/work", true},// named instance
-		{"gemini", false},   // not configured
-		{"gpt-4o", false},   // openai id wick doesn't advertise
+		{"", true},             // empty → server picks
+		{"claude", true},       // bare type
+		{"codex/work", true},   // named instance
+		{"gemini", false},      // not configured
+		{"gpt-4o", false},      // openai id wick doesn't advertise
 		{"claude/work", false}, // wrong combination
 	}
 	for _, tc := range tests {
@@ -381,9 +385,9 @@ func TestChatCompletions_StatefulSessionReuse(t *testing.T) {
 	// Two requests with same session_id → same sessionID, second call
 	// should NOT re-inject system context.
 	body := map[string]any{
-		"model":      "claude",
+		"model":        "claude",
 		"conversation": "abc",
-		"messages":   []map[string]string{{"role": "user", "content": "first"}},
+		"messages":     []map[string]string{{"role": "user", "content": "first"}},
 	}
 	rec := postJSON(t, http.HandlerFunc(ch.handleChatCompletions), "/", "good", body)
 	if rec.Code != 200 {
@@ -901,9 +905,9 @@ func TestChatCompletions_PoolDispatchError(t *testing.T) {
 		return errAuth("pool closed")
 	})
 	rec := postJSON(t, http.HandlerFunc(ch.handleChatCompletions), "/", "good", map[string]any{
-		"model":      "claude",
+		"model":        "claude",
 		"conversation": "abc",
-		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+		"messages":     []map[string]string{{"role": "user", "content": "hi"}},
 	})
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("got %d want 500 body=%s", rec.Code, rec.Body.String())
@@ -938,9 +942,9 @@ func TestChatCompletions_WaitsForDone(t *testing.T) {
 	respCh := make(chan int, 1)
 	go func() {
 		rec := postJSON(t, http.HandlerFunc(ch.handleChatCompletions), "/", "good", map[string]any{
-			"model":      "claude",
+			"model":        "claude",
 			"conversation": "wait",
-			"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+			"messages":     []map[string]string{{"role": "user", "content": "hi"}},
 		})
 		respCh <- rec.Code
 	}()
@@ -999,9 +1003,9 @@ func TestChatCompletions_ParallelDistinctSessions(t *testing.T) {
 			defer wg.Done()
 			sid := "s-" + string(rune('a'+i))
 			rec := postJSON(t, http.HandlerFunc(ch.handleChatCompletions), "/", "good", map[string]any{
-				"model":      "claude",
+				"model":        "claude",
 				"conversation": sid,
-				"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+				"messages":     []map[string]string{{"role": "user", "content": "hi"}},
 			})
 			codes[i] = rec.Code
 			var body chatResponse
@@ -1200,12 +1204,12 @@ func TestComposeResponsesPrompt(t *testing.T) {
 // type-asserts at wire-up time. A regression here would silently break
 // dispatch routing — surface it at compile time.
 var (
-	_ agentchannels.Channel                 = (*Channel)(nil)
-	_ agentchannels.SendFuncSetter          = (*Channel)(nil)
-	_ agentchannels.SessionCheckerSetter    = (*Channel)(nil)
-	_ agentchannels.SessionStartHookSetter  = (*Channel)(nil)
-	_ agentchannels.ApproveFnSetter         = (*Channel)(nil)
-	_ agentchannels.AgentEventReceiver      = (*Channel)(nil)
-	_ agentchannels.ApprovalReceiver        = (*Channel)(nil)
+	_ agentchannels.Channel                  = (*Channel)(nil)
+	_ agentchannels.SendFuncSetter           = (*Channel)(nil)
+	_ agentchannels.SessionCheckerSetter     = (*Channel)(nil)
+	_ agentchannels.SessionStartHookSetter   = (*Channel)(nil)
+	_ agentchannels.ApproveFnSetter          = (*Channel)(nil)
+	_ agentchannels.AgentEventReceiver       = (*Channel)(nil)
+	_ agentchannels.ApprovalReceiver         = (*Channel)(nil)
 	_ agentchannels.MultiHTTPHandlerProvider = (*Channel)(nil)
 )

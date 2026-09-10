@@ -8,6 +8,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/yogasw/wick/internal/agents/config"
@@ -174,4 +175,43 @@ func (s *FileStore) Delete(id, runID string) error {
 	}
 	_, err := s.indexStore(id).Remove(func(e IndexEntry) bool { return e.ID == runID })
 	return err
+}
+
+// DeleteAll clears a workflow's whole run history — every
+// runs/<runID>/ folder plus every row in the sharded index. Returns the
+// number of run folders removed.
+//
+// Deliberately NOT a RemoveAll of the runs/ tree: the index lives
+// *inside* runs/ (Layout.WorkflowIndexDir), and its cached
+// shardedlog.Store carries the mutex that serialises appends. Dropping
+// the directory under a run that fires mid-clear would race that
+// writer, so the index is emptied through the Store instead.
+//
+// Best-effort per run: one undeletable folder doesn't abort the rest,
+// and the first error is returned once everything else has been tried.
+func (s *FileStore) DeleteAll(id string) (int, error) {
+	names, err := s.ListRuns(id)
+	if err != nil {
+		return 0, err
+	}
+	// ListRuns scans runs/, which also contains the index dir.
+	indexName := filepath.Base(s.Layout.WorkflowIndexDir(id))
+	deleted := 0
+	var firstErr error
+	for _, name := range names {
+		if name == indexName {
+			continue
+		}
+		if err := os.RemoveAll(s.Layout.WorkflowRunDir(id, name)); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		deleted++
+	}
+	if _, err := s.indexStore(id).Remove(func(IndexEntry) bool { return true }); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	return deleted, firstErr
 }

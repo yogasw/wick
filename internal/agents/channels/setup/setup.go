@@ -44,6 +44,71 @@ type RestStore interface {
 	ListChannelOwners(channelType string) ([]*string, error)
 }
 
+// BotIdentityStore is the optional cache a store may provide for a
+// channel's resolved bot identity (id, display name, workspace). Kept
+// out of the per-channel Store interfaces so existing fakes in tests
+// keep compiling — a store that doesn't implement it simply resolves the
+// identity from the provider on every boot.
+type BotIdentityStore interface {
+	LoadBotIdentity(channelType, userID string) (botUserID, botName, workspace string, err error)
+	SaveBotIdentity(channelType, userID, botUserID, botName, workspace string) error
+}
+
+// WireIdentityCache connects an instance to the identity cache on its
+// own channel row: seed what was cached, persist whatever it resolves,
+// and flush an identity the constructor already fetched.
+//
+// Deliberately generic over the channel: a transport added later gets
+// caching — and named "<Channel> - <bot> - <owner>" rows in every picker
+// — the moment it implements agentchannels.IdentityCache. Nothing here,
+// in the workflow catalog, or in the palette needs a per-channel branch.
+// A store or channel that doesn't implement the seam is a silent no-op.
+// Exported so the dashboard's hot-add path (a channel configured while
+// wick runs) wires exactly what boot wires.
+func WireIdentityCache(store any, channelType, ownerUserID string, ch agentchannels.Channel) {
+	idStore, ok := store.(BotIdentityStore)
+	if !ok {
+		return
+	}
+	cache, ok := ch.(agentchannels.IdentityCache)
+	if !ok {
+		return
+	}
+	save := func(botID, botName, workspace string) {
+		if err := idStore.SaveBotIdentity(channelType, ownerUserID, botID, botName, workspace); err != nil {
+			log.Warn().Err(err).
+				Str("channel", channelType).
+				Str("user_id", ownerUserID).
+				Msg("agents: caching bot identity failed")
+		}
+	}
+	if botID, botName, workspace, err := idStore.LoadBotIdentity(channelType, ownerUserID); err == nil {
+		cache.SeedIdentity(botID, botName, workspace)
+	}
+	cache.SetIdentitySink(save)
+	// The constructor may already have resolved an identity (Telegram's
+	// getMe runs there) — with no sink wired yet, so persist it now.
+	if botID, botName, workspace := cache.BotIdentity(); botID != "" || botName != "" {
+		save(botID, botName, workspace)
+	}
+}
+
+// loadCachedIdentity reads a cached identity without wiring anything —
+// for a channel that wants it BEFORE construction (Slack, whose
+// constructor would otherwise spend an auth.test resolving what is
+// already known).
+func loadCachedIdentity(store any, channelType, ownerUserID string) (botID, botName, workspace string) {
+	idStore, ok := store.(BotIdentityStore)
+	if !ok {
+		return "", "", ""
+	}
+	botID, botName, workspace, err := idStore.LoadBotIdentity(channelType, ownerUserID)
+	if err != nil {
+		return "", "", ""
+	}
+	return botID, botName, workspace
+}
+
 // Store is the union of every per-channel store interface used by All.
 // DBStore satisfies it; tests can build a smaller fake by composing only
 // the per-channel interfaces they need (e.g. just SlackStore).
@@ -127,7 +192,11 @@ func Slack(reg *agentchannels.Registry, store SlackStore, sendFn agentchannels.S
 			log.Warn().Err(err).Str("user_id", uid).Msg("agents: failed to load slack config for user")
 			continue
 		}
-		ch := agentslack.NewWithOwner(cfg, uid)
+		// Read the cached identity BEFORE constructing: with it in hand the
+		// channel skips the auth.test its constructor would otherwise run.
+		cachedBotID, cachedBotName, cachedTeam := loadCachedIdentity(store, "slack", uid)
+		ch := agentslack.NewWithOwnerCached(cfg, uid, cachedBotID, cachedBotName, cachedTeam)
+		WireIdentityCache(store, "slack", uid, ch)
 		ch.SetSendFunc(sendFn)
 		ch.SetPublicURL(pubURL)
 		key := instanceKey("slack", ownerID)
@@ -164,6 +233,7 @@ func Rest(reg *agentchannels.Registry, store RestStore, sendFn agentchannels.Sen
 			continue
 		}
 		ch := agentrest.NewWithOwner(cfg, auth, uid)
+		WireIdentityCache(store, "rest", uid, ch)
 		ch.SetSendFunc(sendFn)
 		key := instanceKey("rest", ownerID)
 		src := agentrest.NewConfigSourceKeyed(store, ch, uid)
@@ -195,6 +265,7 @@ func Telegram(reg *agentchannels.Registry, store TelegramStore, sendFn agentchan
 			continue
 		}
 		ch := agenttelegram.NewWithOwner(cfg, uid)
+		WireIdentityCache(store, "telegram", uid, ch)
 		ch.SetSendFunc(sendFn)
 		key := instanceKey("telegram", ownerID)
 		ch.SetSessionPrefix(sessionPrefix("telegram", ownerID))

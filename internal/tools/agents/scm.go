@@ -2,10 +2,13 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/yogasw/wick/internal/agents/scm"
+	"github.com/yogasw/wick/internal/agents/session"
 	"github.com/yogasw/wick/pkg/tool"
 )
 
@@ -15,6 +18,10 @@ import (
 // handle DiscoverRepos produced — never a raw path.
 func registerSCM(r tool.Router) {
 	r.GET("/api/sessions/{id}/git/repos", gitRepos)
+	r.GET("/api/sessions/{id}/git/active", gitActiveRepo)
+	r.POST("/api/sessions/{id}/git/active", gitSetActiveRepo)
+	r.GET("/api/sessions/{id}/git/connectors", gitConnectors)
+	r.POST("/api/sessions/{id}/git/connectors", setGitConnector)
 	r.GET("/api/sessions/{id}/git/status", gitStatus)
 	r.GET("/api/sessions/{id}/git/diff", gitDiff)
 	r.GET("/api/sessions/{id}/git/file", gitReadFile)
@@ -93,15 +100,22 @@ type RepoSummary struct {
 // changes list of each repo — so a change event needs no follow-up
 // fetch (zero polling).
 type GitStatusSnapshot struct {
-	Repos        []RepoSummary               `json:"repos"`
-	Statuses     map[string]scm.StatusResult `json:"statuses"`
-	TotalChanged int                         `json:"total_changed"`
+	Repos    []RepoSummary               `json:"repos"`
+	Statuses map[string]scm.StatusResult `json:"statuses"`
+	// Active is the repo this session works in, resolved server-side from
+	// session meta (empty only when the cwd holds no repo). It travels
+	// with the snapshot so every reader — panel, rail badge, agent —
+	// names the SAME repo. The badge used to derive this from the
+	// browser's own storage and disagreed with the panel next to it.
+	Active         string `json:"active"`
+	ActiveExplicit bool   `json:"active_explicit"`
+	TotalChanged   int    `json:"total_changed"`
 }
 
 // buildGitSnapshot scans cwd and computes the full snapshot. One
 // `git status` per repo; bounded by repo count. Errors on a single repo
 // are skipped so one broken repo doesn't blank the whole panel.
-func buildGitSnapshot(ctx context.Context, cwd string) GitStatusSnapshot {
+func buildGitSnapshot(ctx context.Context, cwd, storedRepo string) GitStatusSnapshot {
 	snap := GitStatusSnapshot{Statuses: map[string]scm.StatusResult{}}
 	repos, err := scm.DiscoverRepos(cwd)
 	if err != nil {
@@ -125,18 +139,97 @@ func buildGitSnapshot(ctx context.Context, cwd string) GitStatusSnapshot {
 		}
 		snap.Repos = append(snap.Repos, s)
 	}
+	if sel, err := scm.ResolveSelection(cwd, storedRepo); err == nil {
+		snap.Active, snap.ActiveExplicit = sel.Rel, sel.Explicit
+	}
 	return snap
+}
+
+// gitActiveRepo reports which repo this session is working in. The
+// selection lives in session meta rather than the browser because the
+// AGENT needs the same answer: it is what the system prompt names and
+// what wick_scm reads. Returns the first repo (explicit=false) when
+// nobody has picked one.
+func gitActiveRepo(c *tool.Ctx) {
+	sess, cwd, ok := sessionAndCwd(c)
+	if !ok {
+		return
+	}
+	sel, err := scm.ResolveSelection(cwd, sess.Meta.ScmRepo)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, sel)
+}
+
+// gitSetActiveRepo stores the panel's repo selection on the session.
+// An empty repo clears it, which reads as "no explicit pick" again.
+func gitSetActiveRepo(c *tool.Ctx) {
+	sess, cwd, ok := sessionAndCwd(c)
+	if !ok {
+		return
+	}
+	var body struct {
+		Repo string `json:"repo"`
+	}
+	if err := json.NewDecoder(c.R.Body).Decode(&body); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	rel := strings.TrimSpace(body.Repo)
+	if rel != "" {
+		repo, err := scm.ValidateRepo(cwd, rel)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		rel = repo.Rel
+	}
+	meta := sess.Meta
+	meta.ScmRepo = rel
+	if err := session.SaveMeta(globalLayout, sess.ID, meta); err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	globalMgr.Register(sessionWithMeta(sess, meta))
+	sel, err := scm.ResolveSelection(cwd, rel)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, sel)
+}
+
+// sessionAndCwd is sessionCwd plus the session itself, for the handlers
+// that also write meta.
+func sessionAndCwd(c *tool.Ctx) (session.Session, string, bool) {
+	if globalMgr == nil {
+		c.Error(http.StatusServiceUnavailable, "agents not initialised — check server boot logs")
+		return session.Session{}, "", false
+	}
+	sess, found := globalMgr.Registry().Session(c.PathValue("id"))
+	if !found {
+		c.JSON(http.StatusNotFound, map[string]string{"error": "session not found"})
+		return session.Session{}, "", false
+	}
+	cwd, err := resolveSessionCwd(sess)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return session.Session{}, "", false
+	}
+	return sess, cwd, true
 }
 
 // gitRepos returns the full snapshot — repos + per-repo status — so the
 // FE's initial load is a single request and every later update arrives
 // via the git_status SSE event (same shape).
 func gitRepos(c *tool.Ctx) {
-	cwd, ok := sessionCwd(c)
+	sess, cwd, ok := sessionAndCwd(c)
 	if !ok {
 		return
 	}
-	c.JSON(http.StatusOK, buildGitSnapshot(c.Context(), cwd))
+	c.JSON(http.StatusOK, buildGitSnapshot(c.Context(), cwd, sess.Meta.ScmRepo))
 }
 
 func gitStatus(c *tool.Ctx) {
@@ -396,6 +489,14 @@ type repoOnlyReq struct {
 	Repo string `json:"repo"`
 }
 
+// gitNetworkReq is repoOnlyReq plus the connector a push or pull runs
+// through. connector_id is what the picker sends on the first push in a
+// repo; afterwards the session remembers it and the field is empty.
+type gitNetworkReq struct {
+	Repo        string `json:"repo"`
+	ConnectorID string `json:"connector_id"`
+}
+
 // resolveBodyRepo resolves a repo handle taken from a JSON body field.
 func resolveBodyRepo(c *tool.Ctx, repo string) (dir string, ok bool) {
 	cwd, ok := sessionCwd(c)
@@ -521,40 +622,70 @@ func gitBranchCreate(c *tool.Ctx) {
 	c.JSON(http.StatusOK, map[string]any{"status": "created", "branch": req.Branch})
 }
 
-func gitPush(c *tool.Ctx) {
-	var req repoOnlyReq
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
-		return
-	}
-	dir, ok := resolveBodyRepo(c, req.Repo)
-	if !ok {
-		return
-	}
-	out, err := scm.Push(c.Context(), dir)
-	if err != nil {
-		gitErr(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, map[string]any{"status": "pushed", "output": out})
-}
+// gitPush and gitPull run through a Git CLI connector when one is
+// chosen for the repo — that is where the credentials, the branch
+// policy and the audit trail live. Plain git remains the path when
+// nothing is chosen, which only reaches a remote that needs no
+// credential; the panel asks before it pushes as anybody.
+func gitPush(c *tool.Ctx) { gitNetworkOp(c, "push") }
 
-func gitPull(c *tool.Ctx) {
-	var req repoOnlyReq
+func gitPull(c *tool.Ctx) { gitNetworkOp(c, "pull") }
+
+func gitNetworkOp(c *tool.Ctx, op string) {
+	var req gitNetworkReq
 	if err := c.BindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid body"})
 		return
 	}
-	dir, ok := resolveBodyRepo(c, req.Repo)
+	sess, cwd, ok := sessionAndCwd(c)
 	if !ok {
 		return
 	}
-	out, err := scm.Pull(c.Context(), dir)
+	rel := strings.TrimSpace(req.Repo)
+	if rel == "" {
+		sel, err := scm.ResolveSelection(cwd, sess.Meta.ScmRepo)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		rel = sel.Rel
+	}
+	dir, err := scm.ResolveRepoDir(cwd, rel)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid repo: " + err.Error()})
+		return
+	}
+	status := "pushed"
+	if op == "pull" {
+		status = "pulled"
+	}
+
+	connID, cErr := resolveGitConnector(c, sess, req.ConnectorID)
+	if cErr != nil {
+		c.JSON(http.StatusForbidden, map[string]string{"error": cErr.Error()})
+		return
+	}
+	if connID != "" {
+		out, cerr := runGitConnectorOp(c, connID, op, map[string]string{"repo_path": dir})
+		if cerr != nil {
+			c.JSON(http.StatusBadRequest, map[string]string{"error": cerr.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, map[string]any{"status": status, "output": out, "connector_id": connID})
+		return
+	}
+
+	var out string
+	if op == "pull" {
+		out, err = scm.Pull(c.Context(), dir)
+	} else {
+		out, err = scm.Push(c.Context(), dir)
+	}
 	if err != nil {
 		gitErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, map[string]any{"status": "pulled", "output": out})
+	c.JSON(http.StatusOK, map[string]any{"status": status, "output": out})
 }
 
 func gitWriteFile(c *tool.Ctx) {

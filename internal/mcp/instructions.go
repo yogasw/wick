@@ -33,4 +33,17 @@ WORKFLOW
   single pass/fail. Use "timeout_ms" to bound slow calls (default 3 min, max 5 min). Up to
   100 calls per batch; the server bounds how many run at once, so you don't set concurrency.
   Still fetch each op's input_schema first.
+
+ACTIVE REPOSITORY
+- A session's working directory often holds many cloned repos, and the Source panel has ONE
+  of them selected. Your system prompt's "This session" block names it as active_repo.
+- Treat "this repo" / "the repo" as that one unless the user names another. When the block
+  is missing it, or looks stale, use the Source connector: source_active re-reads it and
+  source_list shows every repo under the cwd with branch and change counts.
+- wick MOVES that selection itself: whoever writes a file — you or the person — makes that
+  file's repo the active one within a couple of seconds. So active_repo in your prompt is
+  only true as of spawn; after you edit somewhere else it names the wrong repo. Read it back
+  with source_active rather than repeating the prompt's value.
+- Call source_select only when the user asks to work in a different repo — it moves the
+  human's Source panel too, and editing there would have moved it anyway.
 `

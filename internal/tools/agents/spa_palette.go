@@ -43,8 +43,14 @@ import (
 // navigates to `drills[drillKey]` and renders the same item shape.
 
 type paletteItem struct {
-	Kind        string         `json:"kind"` // "drag" | "drill"
-	Label       string         `json:"label"`
+	Kind  string `json:"kind"` // "drag" | "drill"
+	Label string `json:"label"`
+	// Meta and Owner are secondary, muted text under Label — for a
+	// channel: which bot this instance runs as, and whose channel row it
+	// is. Kept out of Label so a long bot or person name wraps on its own
+	// line instead of squeezing the row's primary text.
+	Meta        string         `json:"meta,omitempty"`
+	Owner       string         `json:"owner,omitempty"`
 	Badge       string         `json:"badge,omitempty"`
 	Description string         `json:"description,omitempty"`
 	Drag        map[string]any `json:"drag,omitempty"`
@@ -77,7 +83,7 @@ func spaWorkflowPalette(c *tool.Ctx) {
 		return
 	}
 
-	resp := buildPalette(gatherConnectorData(c))
+	resp := buildPalette(gatherConnectorData(c), currentUserIDForChannel(c))
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -142,11 +148,15 @@ func gatherConnectorData(c *tool.Ctx) map[string][]connectorInstance {
 // the connector registry. Separated from the handler so tests can
 // exercise the shape without HTTP plumbing.
 //
+// me is the caller's wick user id ("" = App Owner) — channel rows are
+// collapsed to that user's own instance, so a picker never shows five
+// identical "slack" entries nobody can tell apart.
+//
 // instancesByKey maps connector key → the caller's accessible instances
 // (already access-filtered, with readiness + usable SSO accounts resolved
 // by gatherConnectorData). A connector with no accessible instance is
 // omitted from the palette.
-func buildPalette(instancesByKey map[string][]connectorInstance) paletteResponse {
+func buildPalette(instancesByKey map[string][]connectorInstance, me string) paletteResponse {
 	resp := paletteResponse{
 		Categories: []paletteCategory{},
 		Drills:     map[string][]paletteItem{},
@@ -173,7 +183,12 @@ func buildPalette(instancesByKey map[string][]connectorInstance) paletteResponse
 		}
 	}
 	// Channel-as-trigger drill rows — one per channel that exposes events.
-	for _, ch := range globalWorkflowMgr.MCP.ChannelsList() {
+	// ChannelsList returns one row per registered INSTANCE (Slack runs one
+	// bot per owning user), so collapse to the row this user should see:
+	// theirs when they have one, labelled "Slack - <bot> - <owner>".
+	ownerNames := channelOwnerNames()
+	chRows := visibleChannelInstances(globalWorkflowMgr.MCP.ChannelsList(), me)
+	for _, ch := range chRows {
 		evs := globalWorkflowMgr.Integration.EventsByChannel(ch.Name)
 		if len(evs) == 0 {
 			continue
@@ -186,16 +201,19 @@ func buildPalette(instancesByKey map[string][]connectorInstance) paletteResponse
 				Label:       ev.Name,
 				Description: ev.Description,
 				Drag: map[string]any{
-					"type":    "channel-trigger",
-					"channel": ch.Name,
-					"event":   ev.Event,
+					"type":             "channel-trigger",
+					"channel":          ch.Name,
+					"channel_instance": ch.InstanceKey,
+					"event":            ev.Event,
 				},
 			})
 		}
 		resp.Drills[key] = events
 		triggers = append(triggers, paletteItem{
 			Kind:     "drill",
-			Label:    titleizeSlug(ch.Name),
+			Label:    channelPickerLabel(ch.Name),
+			Meta:     ch.BotName,
+			Owner:    channelOwnerLabel(ownerNames, ch.OwnerUserID),
 			Badge:    "trigger",
 			DrillKey: key,
 		})
@@ -252,7 +270,7 @@ func buildPalette(instancesByKey map[string][]connectorInstance) paletteResponse
 	// Per-channel action drills — one drill per channel that exposes
 	// at least one action. Same source the existing /workflows/api/registry
 	// endpoint uses, so the palette stays consistent with the inspector.
-	for _, ch := range globalWorkflowMgr.MCP.ChannelsList() {
+	for _, ch := range chRows {
 		if len(ch.Actions) == 0 {
 			continue
 		}
@@ -264,17 +282,20 @@ func buildPalette(instancesByKey map[string][]connectorInstance) paletteResponse
 				Label:       titleizeSlug(a.ID),
 				Description: a.Description,
 				Drag: map[string]any{
-					"type":      "node",
-					"node_type": "channel",
-					"channel":   ch.Name,
-					"op":        a.ID,
+					"type":             "node",
+					"node_type":        "channel",
+					"channel":          ch.Name,
+					"channel_instance": ch.InstanceKey,
+					"op":               a.ID,
 				},
 			})
 		}
 		resp.Drills[key] = ops
 		byCat[string(engine.CategoryAction)] = append(byCat[string(engine.CategoryAction)], paletteItem{
 			Kind:     "drill",
-			Label:    titleizeSlug(ch.Name),
+			Label:    channelPickerLabel(ch.Name),
+			Meta:     ch.BotName,
+			Owner:    channelOwnerLabel(ownerNames, ch.OwnerUserID),
 			Badge:    "channel",
 			DrillKey: key,
 		})

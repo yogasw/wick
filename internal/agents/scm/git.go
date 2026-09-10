@@ -353,7 +353,16 @@ func Discard(ctx context.Context, dir string, paths []string, untrackedPaths []s
 		}
 	}
 	if len(tracked) > 0 {
+		// A repository with no commits has no HEAD to restore from, so
+		// `restore` fails outright ("could not resolve HEAD") and discard
+		// is dead in a fresh clone whose files are all staged as new.
+		// There, unstaging IS the discard: the content was never
+		// committed, so the file stays on disk as untracked rather than
+		// being deleted out from under the user.
 		args := append([]string{"restore", "--staged", "--worktree", "--"}, tracked...)
+		if !hasCommits(ctx, dir) {
+			args = append([]string{"rm", "--cached", "-r", "--"}, tracked...)
+		}
 		if _, err := run(ctx, dir, args...); err != nil {
 			return err
 		}
@@ -365,6 +374,14 @@ func Discard(ctx context.Context, dir string, paths []string, untrackedPaths []s
 		}
 	}
 	return nil
+}
+
+// hasCommits reports whether the repository has a commit HEAD can resolve.
+// False on a branch that has never been committed to — the state git calls
+// "unborn", where anything that reads HEAD fails.
+func hasCommits(ctx context.Context, dir string) bool {
+	_, err := run(ctx, dir, "rev-parse", "--verify", "HEAD")
+	return err == nil
 }
 
 // Checkout switches to an existing branch.

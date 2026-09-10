@@ -127,6 +127,17 @@ export type ChannelOpDescriptor = {
 
 export type ChannelDescriptor = {
   name: string;
+  // Display row: "Slack - <bot name> - <owner>". The backend collapses
+  // the per-owner instances of a channel type to the caller's own, so
+  // this names WHICH bot the picker entry refers to. `name` stays the
+  // value a node stores.
+  label?: string;
+  instance_key?: string;
+  owner_user_id?: string;
+  owner_name?: string;
+  bot_name?: string;
+  mine?: boolean;
+  configured?: boolean;
   supports_session: boolean;
   ops?: ChannelOpDescriptor[];
   events?: ChannelEventDescriptor[];
@@ -163,13 +174,17 @@ export type CatalogResponse = {
 // single source of truth for category + label + badge + drill structure;
 // the FE just iterates and renders.
 export type PaletteDrag =
-  | { type: "node"; node_type: string; channel?: string; module?: string; op?: string; row_id?: string; account_id?: string }
+  | { type: "node"; node_type: string; channel?: string; channel_instance?: string; module?: string; op?: string; row_id?: string; account_id?: string }
   | { type: "trigger"; trigger_type: string }
-  | { type: "channel-trigger"; channel: string; event: string };
+  | { type: "channel-trigger"; channel: string; channel_instance?: string; event: string };
 
 export type PaletteItem = {
   kind: "drag" | "drill";
   label: string;
+  // Secondary, muted line under the label. For a channel row: which bot
+  // the instance runs as (meta) and whose channel row it is (owner).
+  meta?: string;
+  owner?: string;
   badge?: string;
   description?: string;
   drag?: PaletteDrag;
@@ -497,6 +512,13 @@ export const workflowAPI = {
 
   deleteRun: (id: string, runID: string): Promise<{ ok: boolean }> =>
     apiPost(`${BASE}/api/workflows/runs/${encodeURIComponent(id)}/${encodeURIComponent(runID)}/delete`, {}),
+
+  // Clear the whole run history for a workflow. Returns how many run
+  // folders went away, so the caller can report "Deleted 412 runs"
+  // instead of a bare success. Ignores the panel's list filters by
+  // design — see spaWorkflowRunsDeleteAll.
+  deleteAllRuns: (id: string): Promise<{ ok: boolean; deleted: number }> =>
+    apiPost(`${BASE}/api/workflows/runs/${encodeURIComponent(id)}/delete-all`, {}),
 
   // Re-run a past run: re-fires the current draft with that run's original
   // trigger event (same input). Returns {ok}; caller refreshes the runs list.

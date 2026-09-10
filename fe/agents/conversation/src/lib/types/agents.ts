@@ -66,6 +66,9 @@ export type SessionListItem = {
   last_active: string;
   lifecycle: string;
   pid?: number;
+  /** How many people have spoken in this session. >1 = a shared thread
+      (several Slack users replied into it), which the row marks. */
+  participants?: number;
 };
 
 export type SessionMeta = {

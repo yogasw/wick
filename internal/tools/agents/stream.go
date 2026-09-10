@@ -72,11 +72,21 @@ func (e Event) JSON() string {
 type Broadcaster struct {
 	mu   sync.RWMutex
 	subs map[string][]chan Event
+	// lastGit keeps the most recent git_status payload per session so a
+	// subscriber that joins later can be told the current state.
+	//
+	// git_status is the only event the FE treats as authoritative STATE
+	// rather than an increment: the Source rail badge is rendered purely
+	// from it, with no REST fallback. And because the SharedWorker keeps
+	// ONE stream alive across page loads, a reload does not re-open the
+	// stream — so without a replay the reloaded page waited for the next
+	// filesystem change and showed no counter at all until then.
+	lastGit map[string]string
 }
 
 // NewBroadcaster returns a ready Broadcaster.
 func NewBroadcaster() *Broadcaster {
-	return &Broadcaster{subs: make(map[string][]chan Event)}
+	return &Broadcaster{subs: make(map[string][]chan Event), lastGit: make(map[string]string)}
 }
 
 // Subscribe registers a listener for a specific session (or "" for all).
@@ -231,11 +241,42 @@ func (b *Broadcaster) PublishConnectorRun(sessionID, runID, connectorID, opKey, 
 // no follow-up fetch, hence no polling. The marshalling lives in the
 // caller (scm_watch.go) to avoid an import cycle on the scm types.
 func (b *Broadcaster) PublishGitStatusJSON(sessionID, jsonPayload string) {
+	if sessionID != "" {
+		b.mu.Lock()
+		if b.lastGit == nil {
+			b.lastGit = make(map[string]string)
+		}
+		b.lastGit[sessionID] = jsonPayload
+		b.mu.Unlock()
+	}
 	b.fanout(sessionID, Event{
 		SessionID: sessionID,
 		Type:      "git_status",
 		Data:      jsonPayload,
 	})
+}
+
+// ForgetGitStatus drops a session's cached payload — called when its
+// watcher stops, so the cache tracks live sessions only.
+func (b *Broadcaster) ForgetGitStatus(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	b.mu.Lock()
+	delete(b.lastGit, sessionID)
+	b.mu.Unlock()
+}
+
+// LastGitStatus returns the most recent git_status payload for a session,
+// for replaying state to a subscriber that joined after it was published.
+func (b *Broadcaster) LastGitStatus(sessionID string) (string, bool) {
+	if sessionID == "" {
+		return "", false
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	v, ok := b.lastGit[sessionID]
+	return v, ok
 }
 
 // PublishApprovalRequest fires when the gate binary dials the daemon socket

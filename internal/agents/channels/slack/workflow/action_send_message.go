@@ -8,7 +8,6 @@ import (
 
 	slackgo "github.com/slack-go/slack"
 
-	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 	"github.com/yogasw/wick/internal/appname"
 	"github.com/yogasw/wick/pkg/wickdocs"
@@ -23,6 +22,10 @@ type SendMessageInput struct {
 	Blocks   string `json:"blocks"     wick:"textarea;desc=Block Kit JSON array (overrides text)"`
 	ThreadTS string `json:"thread_ts"  wick:"key=thread_ts;desc=Post inside this thread (message ts)"`
 	Signed   bool   `json:"signed"     wick:"desc=Append 'Sent by wick' footer"`
+	// AutoReply arms the 🤖 auto-reply switch for the thread this message
+	// lands in, so a workflow-created thread answers later replies without
+	// anyone clicking the emoji. Needs the thread session to exist already.
+	AutoReply bool `json:"auto_reply" wick:"key=auto_reply;desc=After posting, switch ON 🤖 auto-reply for this thread so later replies are answered without a mention. Needs the thread session to already exist"`
 }
 
 // SendMessageOutput is the typed response a downstream node can
@@ -30,9 +33,12 @@ type SendMessageInput struct {
 type SendMessageOutput struct {
 	TS      string `json:"ts"`
 	Channel string `json:"channel"`
+	// AutoReply reports what happened when auto_reply was requested:
+	// "armed", or "skipped: <reason>". Empty when auto_reply was not set.
+	AutoReply string `json:"auto_reply,omitempty"`
 }
 
-func registerActionSendMessage(reg *integration.Registry, ch *slack.Channel) {
+func registerActionSendMessage(reg *integration.Registry, pick ChannelPicker) {
 	reg.RegisterAction(integration.ActionDescriptor{
 		Channel:     Channel,
 		Action:      "send_message",
@@ -43,8 +49,9 @@ func registerActionSendMessage(reg *integration.Registry, ch *slack.Channel) {
 		Destructive: true,
 		Docs: wickdocs.Docs{
 			OutputShape: map[string]string{
-				"ts":      "Posted message timestamp / Slack ID. Pass to update_message, delete_message, add_reaction, or thread_ts on follow-ups.",
-				"channel": "Resolved channel ID (C…/D…/G…). Use this for any subsequent ops referring to the same message.",
+				"ts":         "Posted message timestamp / Slack ID. Pass to update_message, delete_message, add_reaction, or thread_ts on follow-ups.",
+				"channel":    "Resolved channel ID (C…/D…/G…). Use this for any subsequent ops referring to the same message.",
+				"auto_reply": "Only when auto_reply was requested: \"armed\" when the 🤖 switch is on, or \"skipped: <reason>\" when it could not be armed (usually the thread has no session yet).",
 			},
 			TemplateableFields: []string{"channel", "text", "blocks", "thread_ts"},
 			Quirks: []string{
@@ -53,6 +60,9 @@ func registerActionSendMessage(reg *integration.Registry, ch *slack.Channel) {
 				"thread_ts must be the PARENT message ts (root of the thread), not a reply ts.",
 				"signed:true appends a small \"Sent by wick · <app>\" footer to text. Doesn't apply to blocks-only messages.",
 				"blocks accepts either a bare array `[{...}]` or Block Kit Builder's `{\"blocks\":[...]}` wrapper — wick normalises both.",
+				"auto_reply arms the thread this message lands in: thread_ts when set, otherwise the message just posted. The armed session belongs to the POSTING instance, so post as the bot whose session should answer.",
+				"auto_reply needs the thread session to exist already (reply-only, same rule as the manual 🤖). In a workflow, put it on a message sent AFTER session_init / the agent node — on the very first card it reports skipped.",
+				"auto_reply never fails the node: when it cannot arm, the node still succeeds and the reason lands in the auto_reply output field.",
 			},
 			PairWith: []string{
 				"channel:slack.update_message",
@@ -98,6 +108,10 @@ func registerActionSendMessage(reg *integration.Registry, ch *slack.Channel) {
 			},
 		},
 		Execute: func(ctx context.Context, args map[string]any) (any, error) {
+			ch := pick(ctx)
+			if ch == nil {
+				return nil, fmt.Errorf("slack channel not configured")
+			}
 			api := ch.API()
 			if api == nil {
 				return nil, fmt.Errorf("slack channel not configured")
@@ -137,7 +151,22 @@ func registerActionSendMessage(reg *integration.Registry, ch *slack.Channel) {
 			if err != nil {
 				return nil, err
 			}
-			return SendMessageOutput{TS: postedTS, Channel: postedChan}, nil
+			out := SendMessageOutput{TS: postedTS, Channel: postedChan}
+			// auto_reply: make the thread live without a human clicking 🤖.
+			// Arming failure is reported, never fatal — the message is already
+			// posted and losing the whole node over a switch would be worse.
+			if autoReply, _ := args["auto_reply"].(bool); autoReply {
+				target := threadTS
+				if target == "" {
+					target = postedTS
+				}
+				if err := ch.ArmAutoReply(postedChan, target); err != nil {
+					out.AutoReply = "skipped: " + err.Error()
+				} else {
+					out.AutoReply = "armed"
+				}
+			}
+			return out, nil
 		},
 	})
 }

@@ -10,6 +10,7 @@
   import RunDetail from "./executions/RunDetail.svelte";
   import { runKey } from "./executions/runHelpers";
   import { toastError, toastOk } from "@wick-fe/common-stores";
+  import { KebabMenu, ConfirmDialog } from "@wick-fe/common-ui";
 
   type Props = {
     workflowID: string;
@@ -106,6 +107,57 @@
     }
   }
 
+  // ── Panel-level actions (⋮ menu) ────────────────────────────────
+  // One entry per action; adding a future one (export, cancel all
+  // running, purge older than N days) means appending to this array —
+  // the menu, placement, keyboard and outside-click handling all come
+  // from the shared KebabMenu.
+  //
+  // "Delete all" is confirmed through the shared ConfirmDialog rather
+  // than window.confirm so it matches every other destructive action in
+  // the app, and so the body can state exactly how much is going away.
+  let confirmClearOpen = $state(false);
+  let clearing = $state(false);
+
+  // The header shows the loaded page ("50 runs"); the real history can be
+  // far larger. Prefer the server's total when it sent one so the
+  // confirmation never understates what is about to be destroyed.
+  const knownRunCount = $derived(total >= 0 ? total : runs.length);
+  const hasRuns = $derived(runs.length > 0 || total > 0);
+
+  const panelActions = $derived([
+    {
+      label: "Delete all runs",
+      danger: true,
+      disabled: !hasRuns || clearing,
+      onclick: () => {
+        confirmClearOpen = true;
+      },
+    },
+  ]);
+
+  async function clearAllRuns() {
+    confirmClearOpen = false;
+    if (clearing) return;
+    clearing = true;
+    try {
+      const res = await workflowAPI.deleteAllRuns(workflowID);
+      // Drop the open detail pane too — the run it shows is gone.
+      selectedRunID = null;
+      runDetail = null;
+      const n = res?.deleted ?? 0;
+      toastOk(n === 1 ? "1 run deleted" : `${n} runs deleted`);
+      await refresh();
+    } catch (e) {
+      toastError("Clear failed", e instanceof Error ? e.message : String(e));
+      // Refresh anyway: a partial failure still removed some runs, and a
+      // stale list would misreport what survived.
+      await refresh();
+    } finally {
+      clearing = false;
+    }
+  }
+
   async function loadRun(runID: string) {
     selectedRunID = runID;
     runDetail = null;
@@ -163,6 +215,12 @@
         <input type="checkbox" bind:checked={auto} />
         auto
       </label>
+      <!-- size="sm": this header's other controls are ~16px, so the
+           default 32px trigger would become the tallest flex child and
+           make the whole bar 50% taller. -->
+      <div class="-mr-1">
+        <KebabMenu ariaLabel="Run history actions" items={panelActions} width={188} size="sm" />
+      </div>
     </header>
 
     <!-- Status filter tabs + advanced toggle. Counts here reflect the
@@ -283,3 +341,16 @@
     {/if}
   </section>
 </div>
+
+<!-- Destructive and irreversible, so it names the count and says what
+     survives (the workflow itself) — the two things you want to know
+     before clearing a production run history. -->
+<ConfirmDialog
+  open={confirmClearOpen}
+  title="Delete all runs?"
+  body={`This permanently deletes ${knownRunCount === 1 ? "the 1 recorded run" : `all ${knownRunCount} recorded runs`} for this workflow, including their events and node outputs. The workflow itself, its triggers and its tests are not affected. This cannot be undone.`}
+  confirmLabel={clearing ? "Deleting…" : "Delete all"}
+  destructive
+  onConfirm={() => void clearAllRuns()}
+  onCancel={() => (confirmClearOpen = false)}
+/>

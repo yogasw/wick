@@ -23,9 +23,28 @@
 package workflow
 
 import (
+	"context"
+
 	"github.com/yogasw/wick/internal/agents/channels/slack"
 	"github.com/yogasw/wick/internal/agents/workflow/integration"
 )
+
+// ChannelPicker resolves the Slack instance an action should run as, for
+// one run's context. One process hosts one bot per owning user, so
+// "the" Slack channel is not a single object: replying as a bot other
+// than the one that received the trigger posts under the wrong identity,
+// or fails outright with not_in_channel.
+//
+// Returning nil means "no usable instance" — the action surfaces the
+// same "slack channel not configured" error it always did.
+type ChannelPicker func(ctx context.Context) *slack.Channel
+
+// StaticPicker always resolves to ch. For single-instance callers and
+// for the stdio MCP path, where a stub channel backs schema discovery
+// and no run ever actually fires.
+func StaticPicker(ch *slack.Channel) ChannelPicker {
+	return func(context.Context) *slack.Channel { return ch }
+}
 
 // Channel is the slack module name used as the descriptor Channel field
 // across every descriptor in this package. Centralized so a future
@@ -33,12 +52,13 @@ import (
 const Channel = "slack"
 
 // RegisterAll registers every Slack event + action descriptor with the
-// workflow integration registry. Bind to a concrete *slack.Channel so
-// action Execute closures can reach the live API client + config.
+// workflow integration registry. Actions bind to a ChannelPicker rather
+// than a fixed instance, so each Execute closure reaches the live API
+// client of the bot that belongs to the run.
 //
-// Call once at boot, after slack.Channel is constructed but before the
-// engine starts serving runs.
-func RegisterAll(reg *integration.Registry, ch *slack.Channel) {
+// Call once at boot, after the channel registry is populated but before
+// the engine starts serving runs.
+func RegisterAll(reg *integration.Registry, pick ChannelPicker) {
 	if reg == nil {
 		return
 	}
@@ -53,16 +73,17 @@ func RegisterAll(reg *integration.Registry, ch *slack.Channel) {
 	registerEventShortcut(reg)
 	registerEventCommand(reg)
 
-	// Actions — outbound (workflow node → Slack API). Bound to ch so
-	// each Execute closure dispatches against the live api client.
-	registerActionSendMessage(reg, ch)
-	registerActionSendEphemeral(reg, ch)
-	registerActionUpdateMessage(reg, ch)
-	registerActionAddReaction(reg, ch)
-	registerActionOpenModal(reg, ch)
-	registerActionUpdateModal(reg, ch)
-	registerActionPushModal(reg, ch)
-	registerActionPublishHome(reg, ch)
-	registerActionRespondURL(reg, ch)
-	registerActionOpenDM(reg, ch)
+	// Actions — outbound (workflow node → Slack API). Bound to pick so
+	// each Execute closure dispatches against the run's own bot.
+	registerActionSendMessage(reg, pick)
+	registerActionSendToSession(reg, pick)
+	registerActionSendEphemeral(reg, pick)
+	registerActionUpdateMessage(reg, pick)
+	registerActionAddReaction(reg, pick)
+	registerActionOpenModal(reg, pick)
+	registerActionUpdateModal(reg, pick)
+	registerActionPushModal(reg, pick)
+	registerActionPublishHome(reg, pick)
+	registerActionRespondURL(reg, pick)
+	registerActionOpenDM(reg, pick)
 }

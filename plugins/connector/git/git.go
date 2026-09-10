@@ -375,6 +375,11 @@ type Result struct {
 	Stderr     string `json:"stderr"`
 	Truncated  bool   `json:"truncated"`
 	DurationMS int64  `json:"duration_ms"`
+	// Recovered names a repository state the runner cleared before
+	// retrying — today only a stale index.lock. Always reported, never
+	// silent: removing a lock file is the kind of repair a caller must be
+	// able to see in the answer and in the audit row.
+	Recovered string `json:"recovered,omitempty"`
 }
 
 // RunOpts carries everything the runner needs that is not part of the command.
@@ -391,6 +396,37 @@ type RunOpts struct {
 // capped output. It returns an error only when the command could not be started
 // or was killed; a normal non-zero exit lands in Result.
 func Run(ctx context.Context, c Cmd, o RunOpts) (Result, error) {
+	res, err := runOnce(ctx, c, o)
+	if err != nil || res.OK {
+		return res, err
+	}
+	// git refused because an index.lock is in the way. When that lock is
+	// old and nothing holds it, it is debris from a process that died
+	// mid-operation — a killed agent, a restarted daemon — and every
+	// later git command in that repository fails until someone deletes it
+	// by hand. Clear it once and retry; anything less certain is left
+	// alone and reported as git wrote it.
+	if note, ok := clearStaleIndexLock(c.RepoPath, res.Stderr); ok {
+		// The retry deliberately keeps the CALLER's context: a second git run
+		// under a fresh background context would outlive the request that
+		// asked for it, which is worse than not retrying. What it must not do
+		// is report a cancellation as if it were git's answer — an exhausted
+		// deadline would replace "index.lock: File exists" with "context
+		// deadline exceeded", hiding both the real failure and the fact that
+		// the lock was cleared. So when there is no time left, the first
+		// result stands, annotated with what was removed.
+		if err := ctx.Err(); err != nil {
+			res.Recovered = note + " (not retried: " + err.Error() + ")"
+			return res, nil
+		}
+		retry, rerr := runOnce(ctx, c, o)
+		retry.Recovered = note
+		return retry, rerr
+	}
+	return res, nil
+}
+
+func runOnce(ctx context.Context, c Cmd, o RunOpts) (Result, error) {
 	// Only agent-supplied arguments are filtered. Validating c.Argv() instead
 	// would reject the plugin's own "-c credential.helper=…" injection and break
 	// every authenticated operation — the split exists precisely for this.
@@ -552,6 +588,27 @@ func shellQuote(a string) string {
 // The rules are git's own, from git-check-ref-format(1), minus the ones that only apply
 // to full refs. Enforcing the value rather than its position means it holds wherever the
 // value is used.
+// ValidateCommitish rejects a commit-ish that git would read as a flag.
+//
+// Separate from ValidateRefName because a commit-ish is not a ref NAME:
+// "HEAD~1" and "abc123^{commit}" are legitimate here and refused there. What
+// still has to hold is the shape — a leading "-" is what turns a value into an
+// option in any position, and two subcommands cannot put --end-of-options in
+// front of the value on every supported git (see the terminator notes in
+// connector.go). There this check IS the guard, not a second line behind one.
+func ValidateCommitish(kind, v string) error {
+	if strings.TrimSpace(v) == "" {
+		return fmt.Errorf("%s is required", kind)
+	}
+	if v != strings.TrimSpace(v) {
+		return fmt.Errorf("%s %q has leading or trailing whitespace", kind, v)
+	}
+	if strings.HasPrefix(v, "-") {
+		return fmt.Errorf("%s %q may not start with \"-\": it would be read as a command-line flag", kind, v)
+	}
+	return nil
+}
+
 func ValidateRefName(kind, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("%s is required", kind)
@@ -648,4 +705,75 @@ func resolvePath(p string) (string, error) {
 			return filepath.Clean(filepath.Join(resolved, rest)), nil
 		}
 	}
+}
+
+// staleLockMinAge is how long an index.lock must have sat untouched
+// before it is treated as debris. Long enough that a slow index write on
+// a huge repository is never mistaken for a corpse, short enough that a
+// person is not blocked for an afternoon.
+const staleLockMinAge = 10 * time.Minute
+
+// clearStaleIndexLock removes .git/index.lock when git failed because of
+// it AND the lock is provably abandoned: old enough, and held open by no
+// process on this machine. Returns the note to report, and whether
+// anything was removed.
+//
+// The holder check is what makes this safe. An index.lock with a live
+// writer means a git command is mid-write, and deleting it would corrupt
+// that operation — so a lock nobody can prove is dead stays exactly
+// where it is, and the caller sees git's own message.
+func clearStaleIndexLock(repoPath, stderr string) (string, bool) {
+	if repoPath == "" || !strings.Contains(stderr, "index.lock") ||
+		!strings.Contains(stderr, "File exists") {
+		return "", false
+	}
+	lock := filepath.Join(repoPath, ".git", "index.lock")
+	info, err := os.Stat(lock)
+	if err != nil {
+		// Already gone: the failure was a race with another process that has
+		// since finished, so a plain retry is the right answer.
+		if os.IsNotExist(err) {
+			return "another process released the index lock", true
+		}
+		return "", false
+	}
+	age := time.Since(info.ModTime())
+	if age < staleLockMinAge {
+		return "", false
+	}
+	if lockHeld(lock) {
+		return "", false
+	}
+	if err := os.Remove(lock); err != nil {
+		return "", false
+	}
+	return fmt.Sprintf("removed a stale .git/index.lock (%s old, held by no process)",
+		age.Round(time.Minute)), true
+}
+
+// lockHeld reports whether any process on this machine has the lock file
+// open, read off /proc. Returns TRUE when it cannot tell — on a system
+// with no /proc the safe answer is "assume someone holds it", because
+// the cost of being wrong is a corrupted index, not an inconvenience.
+func lockHeld(lock string) bool {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return true
+	}
+	for _, e := range entries {
+		if !e.IsDir() || e.Name()[0] < '0' || e.Name()[0] > '9' {
+			continue
+		}
+		fds, err := os.ReadDir(filepath.Join("/proc", e.Name(), "fd"))
+		if err != nil {
+			continue // another user's process, or one that just exited
+		}
+		for _, fd := range fds {
+			target, err := os.Readlink(filepath.Join("/proc", e.Name(), "fd", fd.Name()))
+			if err == nil && target == lock {
+				return true
+			}
+		}
+	}
+	return false
 }

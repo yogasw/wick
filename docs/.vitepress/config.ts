@@ -110,6 +110,7 @@ export default withMermaid(defineConfig({
           { text: 'Notifications', link: '/connectors/notifications' },
           { text: 'Tickets', link: '/connectors/tickets' },
           { text: 'Notes', link: '/connectors/notes' },
+          { text: 'Source', link: '/connectors/source' },
           { text: 'HTTPBin (sample)', link: '/connectors/httpbin' },
           { text: 'CRUD CRUD (lab)', link: '/connectors/crudcrud' },
         ],

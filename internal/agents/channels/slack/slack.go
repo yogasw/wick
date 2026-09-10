@@ -222,6 +222,17 @@ type Channel struct {
 	ownerFn     func(ctx context.Context, sessionID, userID string)
 	ownerUserID string // wick user who owns this channel row; empty = App Owner
 
+	// identitySink persists the bot identity (id, display name, team) the
+	// moment auth.test resolves it, so the next boot can label this
+	// instance without asking Slack again. Guarded by cfgMu.
+	identitySink func(botUserID, botName, teamName string)
+
+	// identityToken is the bot token the cached identity belongs to. A
+	// config reload that keeps the same token reuses the cache; a new
+	// token means a (possibly) different bot, so the identity is
+	// re-resolved. Guarded by cfgMu.
+	identityToken string
+
 	// sessionPrefix namespaces this instance's session keys so multiple
 	// Slack bots (per-user owners, possibly across different workspaces)
 	// never collide on a shared threadTS. Set by the registry/setup composer
@@ -326,8 +337,28 @@ func New(cfg agentconfig.SlackChannelConfig) *Channel {
 // NewWithOwner creates a Slack Channel tied to a specific wick user owner.
 // ownerUserID="" means the App Owner's channel (user_id = NULL row).
 func NewWithOwner(cfg agentconfig.SlackChannelConfig, ownerUserID string) *Channel {
-	ch := New(cfg)
+	return NewWithOwnerCached(cfg, ownerUserID, "", "", "")
+}
+
+// NewWithOwnerCached is NewWithOwner with the bot identity already known
+// — the values this instance cached in its channel row on a previous
+// run. Seeded before the first applyConfig so boot costs no auth.test
+// call: the identity is treated as valid for the token it was resolved
+// with, and re-resolved as soon as that token changes (or on the next
+// Socket Mode connect, which always re-asks).
+func NewWithOwnerCached(cfg agentconfig.SlackChannelConfig, ownerUserID, botUserID, botName, teamName string) *Channel {
+	ch := &Channel{
+		turns:            make(map[string]*turn),
+		userTokenCache:   make(map[string]string),
+		userDisplayCache: make(map[string]*store.Sender),
+		autoReply:        make(map[string]bool),
+	}
 	ch.ownerUserID = ownerUserID
+	ch.SeedIdentity(botUserID, botName, teamName)
+	if botUserID != "" {
+		ch.identityToken = cfg.BotToken
+	}
+	ch.applyConfig(cfg, "")
 	return ch
 }
 
@@ -381,6 +412,81 @@ func (s *Channel) sessionKey(threadTS string) string {
 	p := s.sessionPrefix
 	s.cfgMu.Unlock()
 	return p + threadTS
+}
+
+// persistThreadBinding records where this session's replies belong, so a
+// later turn can be delivered even if THIS process never sees the message
+// that starts it. Cheap to call on every message: the store skips the write
+// when nothing changed.
+func (s *Channel) persistThreadBinding(sessionID, channelID, threadTS string) {
+	if s.sessions == nil || sessionID == "" || channelID == "" {
+		return
+	}
+	s.sessions.SetThreadBinding(sessionID, agentchannels.ThreadBinding{
+		Channel:  "slack",
+		ChatID:   channelID,
+		ThreadID: threadTS,
+		Instance: s.sessionPrefixSnapshot(),
+	})
+}
+
+func (s *Channel) sessionPrefixSnapshot() string {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.sessionPrefix
+}
+
+// ensureTurn returns the turn to deliver a session's output to, restoring it
+// from the persisted binding when this process never registered one.
+//
+// The turns map is in-memory, and it is populated by the code path that
+// RECEIVES a Slack message. Two turns therefore had nowhere to go and were
+// dropped in silence: a reply typed in the WEB UI of a Slack-originated
+// session after a restart, and a session created by a WORKFLOW whose turn was
+// registered by a process that has since handed over. In both cases the agent
+// answered and the answer never reached the thread.
+//
+// Returns nil when the session is not ours or has no binding — a UI-only
+// session must not be answered into a Slack channel.
+func (s *Channel) ensureTurn(sessionKey string) *turn {
+	s.mu.Lock()
+	if t := s.turns[sessionKey]; t != nil && t.channelID != "" {
+		s.mu.Unlock()
+		return t
+	}
+	s.mu.Unlock()
+
+	if s.sessions == nil || !s.OwnsSession(sessionKey) {
+		return nil
+	}
+	b, ok := s.sessions.ThreadBinding(sessionKey)
+	if !ok || b.Channel != "slack" || b.ChatID == "" {
+		return nil
+	}
+	threadTS := b.ThreadID
+	if threadTS == "" {
+		// The key IS the prefix plus the thread ts, so the thread survives
+		// even a binding written before ThreadID was recorded.
+		threadTS = strings.TrimPrefix(sessionKey, s.sessionPrefixSnapshot())
+	}
+	if threadTS == "" {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t := s.turns[sessionKey]; t != nil && t.channelID != "" {
+		return t
+	}
+	t := &turn{
+		channelID: b.ChatID, threadTS: threadTS,
+		running: true, lastActivity: time.Now(),
+	}
+	s.turns[sessionKey] = t
+	log.Info().Str("channel", "slack").Str("session", sessionKey).
+		Str("slack_channel", b.ChatID).Str("thread_ts", threadTS).
+		Msg("turn restored from the session's stored thread binding")
+	return t
 }
 
 // API returns the live Slack web-API client. Returns nil when the
@@ -466,8 +572,18 @@ func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string)
 	api := slackgo.New(cfg.BotToken, slackgo.OptionAppLevelToken(cfg.AppToken))
 	socket := socketmode.New(api)
 
-	botUserID, botUserName, teamName, teamDomain := "", "", "", ""
-	if cfg.BotToken != "" {
+	s.cfgMu.Lock()
+	cachedFor := s.identityToken
+	botUserID, botUserName := s.botUserID, s.botUserName
+	teamName, teamDomain := s.teamName, s.teamDomain
+	s.cfgMu.Unlock()
+
+	// The identity is CACHED — seeded from the channel row at boot and
+	// re-persisted whenever auth.test resolves it. A bot's name changes
+	// about never, so re-asking Slack on every applyConfig (boot + every
+	// hot-reload of an unrelated setting) is a round trip for an answer we
+	// already have. Only ask when nothing is cached or the token changed.
+	if cfg.BotToken != "" && (botUserID == "" || cfg.BotToken != cachedFor) {
 		if resp, err := api.AuthTest(); err == nil {
 			botUserID = resp.UserID
 			teamName = resp.Team
@@ -485,6 +601,50 @@ func (s *Channel) applyConfig(cfg agentconfig.SlackChannelConfig, pubURL string)
 	s.botUserName = botUserName
 	s.teamName = teamName
 	s.teamDomain = teamDomain
+	s.identityToken = cfg.BotToken
+	sink := s.identitySink
+	s.cfgMu.Unlock()
+
+	if sink != nil && botUserID != "" {
+		sink(botUserID, botUserName, teamName)
+	}
+}
+
+// BotIdentity satisfies agentchannels.IdentityCache — the bot user id,
+// display name, and workspace this instance currently knows.
+func (s *Channel) BotIdentity() (string, string, string) {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.botUserID, s.botUserName, s.teamName
+}
+
+// SeedIdentity hydrates the cached bot identity from persistent storage
+// (the channel's config row) before the channel ever talks to Slack, so
+// pickers and labels can name the bot at boot without an API call. A
+// later auth.test overwrites it with the live answer.
+func (s *Channel) SeedIdentity(botUserID, botName, teamName string) {
+	if botUserID == "" && botName == "" {
+		return
+	}
+	s.cfgMu.Lock()
+	if s.botUserID == "" {
+		s.botUserID = botUserID
+	}
+	if s.botUserName == "" {
+		s.botUserName = botName
+	}
+	if s.teamName == "" {
+		s.teamName = teamName
+	}
+	s.cfgMu.Unlock()
+}
+
+// SetIdentitySink registers the callback that persists a freshly
+// resolved bot identity. Wired by the channel setup composer to the
+// agent_channels row this instance was loaded from; nil in tests.
+func (s *Channel) SetIdentitySink(fn func(botUserID, botName, teamName string)) {
+	s.cfgMu.Lock()
+	s.identitySink = fn
 	s.cfgMu.Unlock()
 }
 
@@ -655,7 +815,11 @@ func (s *Channel) refreshBotUserID(ctx context.Context) {
 	s.botUserName = displayName
 	s.teamName = resp.Team
 	s.teamDomain = extractTeamDomain(resp.URL)
+	sink := s.identitySink
 	s.cfgMu.Unlock()
+	if sink != nil && resp.UserID != "" {
+		sink(resp.UserID, displayName, resp.Team)
+	}
 	if prev != resp.UserID {
 		log.Info().Str("channel", "slack").Str("bot_user_id", resp.UserID).Str("prev", prev).Msg("bot user id refreshed on connect")
 	}
@@ -669,6 +833,16 @@ func (s *Channel) BotUserID() string {
 	s.cfgMu.Lock()
 	defer s.cfgMu.Unlock()
 	return s.botUserID
+}
+
+// BotUserName returns this instance's bot handle (auth.test's resp.User,
+// resolved to a display name), or "" before auth.test has succeeded.
+// Used to label which bot a picker entry / workflow event came from when
+// several Slack instances share one workspace.
+func (s *Channel) BotUserName() string {
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	return s.botUserName
 }
 
 // OwnsSession reports whether sessionID belongs to this instance.
@@ -1008,6 +1182,7 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				"channel_id": ev.Channel,
 				"thread":     threadKey(ev.ThreadTimeStamp, ev.TimeStamp),
 				"ts":         ev.TimeStamp,
+				"event_key":  slackEventKey(ev.Channel, ev.TimeStamp),
 			})
 			// ev.Files carries any images/attachments posted with the mention.
 			// MessageEvent has no Files field, so pass them alongside — without
@@ -1022,10 +1197,46 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				ChannelType:     "channel",
 			}, ev.Files)
 		case *slackevents.MessageEvent:
+			// Messages posted by OTHER apps are a legitimate workflow trigger.
+			// An intake form that files every request as a bot message is
+			// exactly the pattern channel triggers exist for, and dropping bot
+			// messages outright made those workflows silently never fire — the
+			// trigger looked healthy and nothing ever ran.
+			//
+			// So: surface them on the WORKFLOW side only. Agent-session
+			// dispatch further down stays human-only, so a bot still cannot
+			// open a conversation with the agent.
+			//
+			// Loop guard: skip whatever THIS instance posted, so a workflow
+			// that answers in the channel it watches cannot re-trigger itself.
+			// Bot messages carry no user id, so the bot handle is checked too.
+			if ev.BotID != "" || ev.SubType == "bot_message" {
+				if s.postedByThisInstance(ev) {
+					return
+				}
+				botPayload := map[string]any{
+					"user":         ev.User,
+					"text":         ev.Text,
+					"channel_id":   ev.Channel,
+					"channel_type": ev.ChannelType,
+					"thread":       threadKey(ev.ThreadTimeStamp, ev.TimeStamp),
+					"ts":           ev.TimeStamp,
+					"is_dm":        ev.ChannelType == "im" || ev.ChannelType == "mpim",
+					"event_key":    slackEventKey(ev.Channel, ev.TimeStamp),
+					"is_bot":       true,
+					"bot_id":       ev.BotID,
+					"bot_username": ev.Username,
+				}
+				s.emitWorkflow(ctx, "message", botPayload)
+				if ev.ThreadTimeStamp == "" || ev.ThreadTimeStamp == ev.TimeStamp {
+					s.emitWorkflow(ctx, "thread_started", botPayload)
+				}
+				return
+			}
 			// SubType "file_share" carries attachments with no real text —
 			// let it through (with its files) instead of dropping it. Other
 			// subtypes (edits, joins, …) are still ignored.
-			if ev.BotID != "" || (ev.SubType != "" && ev.SubType != "file_share") {
+			if ev.SubType != "" && ev.SubType != "file_share" {
 				return
 			}
 			// Workflow surface gets every non-bot message regardless of
@@ -1040,6 +1251,7 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				"thread":       threadKey(ev.ThreadTimeStamp, ev.TimeStamp),
 				"ts":           ev.TimeStamp,
 				"is_dm":        ev.ChannelType == "im" || ev.ChannelType == "mpim",
+				"event_key":    slackEventKey(ev.Channel, ev.TimeStamp),
 			}
 			s.emitWorkflow(ctx, "message", msgPayload)
 			// A top-level post (no parent thread_ts, or thread_ts == its own
@@ -1087,6 +1299,28 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 			s.handleReactionRemoved(ev)
 		}
 	}
+}
+
+// slackEventKey identifies a physical Slack event independently of WHICH
+// bot received it: (channel, message ts) is unique per message
+// workspace-wide.
+//
+// Needed because a channel message is delivered to every app that is a
+// member of the channel, and one process runs one Slack instance per
+// owning user — so the same human message reaches the workflow router
+// once per bot. The router collapses deliveries sharing this key
+// (Router.firstDelivery), which also absorbs Slack's own webhook
+// retries. Slack's per-delivery event_id is deliberately NOT used: each
+// app gets a different one for the same message, so it cannot collapse
+// them.
+//
+// Empty when either part is missing — the router treats a blank key as
+// "not deduplicable" and lets the event through.
+func slackEventKey(channelID, ts string) string {
+	if channelID == "" || ts == "" {
+		return ""
+	}
+	return channelID + "/" + ts
 }
 
 // threadKey returns the conversation thread key: parent thread_ts when
@@ -1240,6 +1474,25 @@ func (s *Channel) handleReactionRemoved(ev *slackevents.ReactionRemovedEvent) {
 // isBotUser reports whether userID is this channel's own bot, so a reaction
 // the bot itself places (or any other event it originates) never triggers
 // the switch.
+// postedByThisInstance reports whether this Slack instance itself posted the
+// message. Used as the loop guard when bot messages are surfaced to workflows:
+// a third-party app's post is a valid trigger, our own reply never is.
+//
+// Bot messages arrive with no user id in some shapes, so the bot handle is
+// compared as well — auth.test gives us both.
+func (s *Channel) postedByThisInstance(ev *slackevents.MessageEvent) bool {
+	if ev == nil {
+		return false
+	}
+	if s.isBotUser(ev.User) {
+		return true
+	}
+	s.cfgMu.Lock()
+	name := s.botUserName
+	s.cfgMu.Unlock()
+	return name != "" && ev.Username != "" && strings.EqualFold(ev.Username, name)
+}
+
 func (s *Channel) isBotUser(userID string) bool {
 	s.cfgMu.Lock()
 	botID := s.botUserID
@@ -1612,6 +1865,7 @@ func (s *Channel) handleMessage(ctx context.Context, ev *slackevents.MessageEven
 	}
 	s.turns[sessionID] = t
 	s.mu.Unlock()
+	s.persistThreadBinding(sessionID, ev.Channel, threadTS)
 
 	// Set the status (with our loading_messages) BEFORE spawning the agent —
 	// Slack's guidance is to set status immediately when a message arrives,
@@ -2125,6 +2379,9 @@ func (s *Channel) cancelQueueTimer(sessionID, channelID, msgTS string) bool {
 // sessionKey is the namespaced session key (turns map key); replies and the
 // status banner use the turn's native threadTS, never the namespaced key.
 func (s *Channel) NotifyState(sessionKey, state, text string) {
+	// Restore the thread from the session's stored binding when this process
+	// has no turn for it, or the reply is dropped without a trace.
+	s.ensureTurn(sessionKey)
 	s.mu.Lock()
 	t := s.turns[sessionKey]
 	var channelID, threadTS, msgTS, liveTS, lastSent string
@@ -2301,6 +2558,9 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		s.setStatusLabel(sessionKey, subAgentStatusLabel(ev))
 		return
 	}
+	// Same reason as NotifyState: without a turn every case below is a no-op,
+	// so a turn this process did not receive would stream into nothing.
+	s.ensureTurn(sessionKey)
 
 	switch ev.Type {
 	case event.TextDelta:
@@ -2384,6 +2644,163 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 		}
 		s.NotifyState(sessionKey, "error", msg)
 	}
+}
+
+// ArmAutoReply turns the 🤖 auto-reply switch ON for the thread whose parent
+// message is threadTS, and posts the 🤖 marker so a human can still toggle it
+// off by removing the emoji.
+//
+// This exists because the reaction path cannot arm a thread for an automation:
+// handleReactionAdded drops reactions from a bot user (isBotUser) and from any
+// reactor outside the access-control allowlist, so a workflow that just created
+// a Slack-thread session had no way to make that thread live without a human
+// clicking the emoji. The workflow send_message action calls this when
+// auto_reply is set.
+//
+// Reply-only is preserved deliberately: with no session on disk there is
+// nothing to arm, and the caller is told so instead of the request being
+// dropped silently.
+func (s *Channel) ArmAutoReply(channelID, threadTS string) error {
+	if channelID == "" || threadTS == "" {
+		return fmt.Errorf("channel and thread ts are required")
+	}
+	sessionID := s.sessionKey(threadTS)
+	if !s.sessionOnDisk(sessionID) {
+		return fmt.Errorf("no session on disk for %s", sessionID)
+	}
+	s.setAutoReply(sessionID, true)
+	s.setReaction(reactionTrigger, channelID, threadTS, "")
+	log.Info().Str("channel", "slack").Str("slack_channel", channelID).
+		Str("thread_ts", threadTS).Str("session", sessionID).
+		Msg("auto-reply armed by workflow (🤖 marker posted)")
+	return nil
+}
+
+// SendToThreadSession injects text into the agent session bound to a Slack
+// thread, as if a human had posted it in that thread. It exists for the
+// workflow path: a `channel` node can post a card and then hand the work to
+// the agent WITHOUT the agent living inside the workflow — an agent node runs
+// `claude --print` in a throwaway process, so its reasoning is invisible in
+// Slack and it holds no MCP. Routing the work through the thread session
+// instead means the turn behaves exactly like a mention: the banner animates,
+// tool activity streams into the loading bubble, and the reply lands in the
+// thread. Long turns (a full debug run is minutes) stay observable.
+//
+// The turn entry is registered BEFORE sendFn because that entry is the only
+// thing that maps sessionKey → (channel, thread) for NotifyState /
+// OnAgentEvent; without it, the agent's output has nowhere to go and is
+// silently dropped.
+//
+// The session runs as the instance owner (ownerUserID), not as whoever
+// triggered the workflow: there is no Slack sender to map here, and failing
+// open onto the synthetic admin token would hand the agent more access than
+// anyone asked for. An instance with no owner therefore refuses.
+//
+// Returns the session key it sent to and whether that session was new.
+func (s *Channel) SendToThreadSession(ctx context.Context, channelID, threadTS, text string, armAutoReply bool) (string, bool, error) {
+	if channelID == "" || threadTS == "" {
+		return "", false, fmt.Errorf("channel and thread ts are required")
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", false, fmt.Errorf("text is required")
+	}
+	if s.sendFn == nil {
+		return "", false, fmt.Errorf("slack channel not wired to the agent pool")
+	}
+	callerUserID := s.ownerUserID
+	if callerUserID == "" {
+		return "", false, fmt.Errorf("this slack instance has no owning wick user; cannot start a session on its behalf")
+	}
+	sessionID := s.sessionKey(threadTS)
+
+	s.mu.Lock()
+	old := s.turns[sessionID]
+	t := &turn{
+		channelID: channelID, threadTS: threadTS, msgTS: threadTS,
+		running: true, lastActivity: time.Now(),
+	}
+	if old != nil {
+		t.carryOver(old)
+		s.stopStatusAnimation(old)
+	}
+	s.turns[sessionID] = t
+	s.mu.Unlock()
+	s.persistThreadBinding(sessionID, channelID, threadTS)
+
+	// Paint the banner before the spawn, same ordering rationale as
+	// handleMessage: Slack only honours our loading_messages override if it
+	// lands before it paints its own default bubble.
+	s.startStatusAnimation(sessionID)
+
+	isNewSession := !s.sessionOnDisk(sessionID)
+	if isNewSession {
+		if ctxText := s.buildWorkflowSessionContext(channelID, threadTS); ctxText != "" {
+			if err := s.sendFn(s.sendCtxAs(context.Background(), callerUserID), sessionID, "main", "slack", "system", ctxText); err != nil {
+				log.Warn().Str("channel", "slack").Str("session", sessionID).Err(err).
+					Msg("inject workflow session context failed")
+			}
+		}
+	}
+	if s.ownerFn != nil {
+		s.ownerFn(context.Background(), sessionID, callerUserID)
+	}
+
+	if err := s.sendFn(s.sendCtxAs(context.Background(), callerUserID), sessionID, "main", "slack", "user", normalizeUserText(text)); err != nil {
+		s.mu.Lock()
+		if cur := s.turns[sessionID]; cur == t {
+			cur.running = false
+			s.stopStatusAnimation(cur)
+		}
+		s.mu.Unlock()
+		s.setAssistantStatus(channelID, threadTS, "")
+		return sessionID, isNewSession, fmt.Errorf("pool send failed: %w", err)
+	}
+
+	if armAutoReply {
+		// The session exists on disk now (sendFn created it), so the flag
+		// persists. 🤖 doubles as the on/off switch for later replies.
+		s.setAutoReply(sessionID, true)
+		s.setReaction(reactionTrigger, channelID, threadTS, "")
+	}
+	log.Info().Str("channel", "slack").Str("slack_channel", channelID).
+		Str("thread_ts", threadTS).Str("session", sessionID).
+		Bool("new_session", isNewSession).Bool("auto_reply", armAutoReply).
+		Int("text_len", len(text)).
+		Msg("workflow injected message into slack thread session")
+	return sessionID, isNewSession, nil
+}
+
+// buildWorkflowSessionContext is buildSessionContext's sibling for the
+// workflow path, where there is no sender to describe — only the thread the
+// agent is about to work in. Kept deliberately small: the workflow's own
+// message carries the task, this just tells the agent where it is.
+func (s *Channel) buildWorkflowSessionContext(channelID, threadTS string) string {
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return ""
+	}
+	channelName := channelID
+	if info, err := api.GetConversationInfo(&slackgo.GetConversationInfoInput{ChannelID: channelID}); err == nil && info != nil && info.Name != "" {
+		channelName = info.Name
+	}
+	permalink := ""
+	if pl, err := api.GetPermalink(&slackgo.PermalinkParameters{Channel: channelID, Ts: threadTS}); err == nil {
+		permalink = pl
+	}
+	lines := []string{
+		"[Slack thread context — injected by wick (workflow)]",
+		fmt.Sprintf("Channel: #%s [%s]", channelName, channelID),
+		"Thread: " + threadTS,
+	}
+	if permalink != "" {
+		lines = append(lines, "Link: "+permalink)
+	}
+	lines = append(lines,
+		"Started by a wick workflow, not by a person. Reply in this thread; your"+
+			" reply is posted there automatically.")
+	return strings.Join(lines, "\n")
 }
 
 func (s *Channel) sessionOnDisk(sessionID string) bool {
@@ -2783,6 +3200,7 @@ func chunkText(s string, max int) []string {
 //  3. newline;
 //  4. space;
 //  5. hard cut at the limit (unbreakable run longer than max).
+//
 // Boundary candidates only count within the trailing quarter of the limit so
 // a lone early newline can't produce a degenerate tiny chunk.
 func chunkCut(s string, max int) int {

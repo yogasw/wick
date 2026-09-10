@@ -432,6 +432,13 @@ func remoteNames(out string) []string {
 //	tag -a        "tag -a --end-of-options NAME -m MSG" is "fatal: too many
 //	              arguments". -m alone already implies an annotated tag, so -a is
 //	              dropped and the terminator sits after -m's value.
+//	reset         git 2.43 rejects the terminator anywhere in "reset --soft
+//	              --end-of-options REF" ("must come before non-option arguments"),
+//	              so doReset runs the ref through ValidateCommitish instead.
+//	checkout -b   with a start-point, "checkout -b NAME --end-of-options REF" makes
+//	  + ref       2.43 read the pair as pathspecs ("Cannot update paths and switch
+//	              to branch at the same time"). Same answer: ValidateCommitish on
+//	              the value, "--" to close the revision side.
 // ---------------------------------------------------------------------------
 
 // BranchCreateInput creates a branch. The name is checked against the policy's
@@ -572,13 +579,20 @@ func doBranchCreate(c *connector.Ctx) (any, error) {
 			}
 			if c.InputBool("checkout") {
 				// -b binds NAME as a value, so a flag-shaped name is rejected as an
-				// invalid branch name and needs no terminator. The terminator cannot
-				// go after NAME either — that slot is checkout's start-point, and git
-				// reads --end-of-options there as a commit-ish ("is not a commit").
-				// It goes before from_ref, the only positional here that needs it.
+				// invalid branch name and needs no terminator. The start-point takes
+				// no terminator either, in any position: after NAME git reads it as
+				// the start-point itself ("is not a commit"), and before the
+				// start-point git 2.43 reads BOTH as pathspecs — "fatal: Cannot
+				// update paths and switch to branch at the same time", so creating a
+				// branch from a ref never worked there. The portable shape is the
+				// documented one, with "--" closing the revision side, and the guard
+				// moves onto the value.
 				args := []string{"checkout", "-b", name}
 				if from := strings.TrimSpace(c.Input("from_ref")); from != "" {
-					args = append(args, "--end-of-options", from)
+					if err := ValidateCommitish("from_ref", from); err != nil {
+						return nil, err
+					}
+					args = append(args, from, "--")
 				}
 				return args, nil
 			}
@@ -727,11 +741,20 @@ func doPull(c *connector.Ctx) (any, error) {
 		if c.InputBool("rebase") {
 			args = append(args, "--rebase")
 		}
-		// The remote NAME: an omitted {branch} is meant to fall back to the current
-		// branch's upstream, and an upstream can only resolve against a named remote.
+		// The remote NAME, so an upstream can resolve against it.
 		args = append(args, "--end-of-options", remote)
-		if b := strings.TrimSpace(c.Input("branch")); b != "" {
-			args = append(args, b)
+		branch := strings.TrimSpace(c.Input("branch"))
+		if branch == "" {
+			// Naming the remote without a branch only works when that remote is
+			// the one the current branch tracks. Everywhere else git refuses with
+			// "you asked to pull from the remote 'origin', but did not specify a
+			// branch" — after already fetching, so it looks like a half-done pull.
+			// A clone whose branch tracks nothing, or tracks a second remote, hits
+			// this every time. The current branch is the branch meant, so say so.
+			branch = currentBranch(c, c.Input("repo_path"))
+		}
+		if branch != "" {
+			args = append(args, branch)
 		}
 		return args
 	})
@@ -859,11 +882,17 @@ func doReset(c *connector.Ctx) (any, error) {
 			default:
 				return nil, fmt.Errorf("mode %q is not one of soft, mixed, hard", mode)
 			}
-			// The terminator is what stops a ref of "--hard" from upgrading a soft
-			// reset. Verified against git 2.52: "reset --soft --hard" silently performs
-			// a HARD reset and exits 0, while "reset --soft --end-of-options --hard"
-			// is refused.
-			return []string{"reset", "--" + mode, "--end-of-options", ref}, nil
+			// git 2.43 refuses the terminator here outright — "option
+			// '--end-of-options' must come before non-option arguments" — so no
+			// reset of any mode ran there at all. The value check replaces the
+			// terminator, and it has to: without a guard "reset --soft
+			// --hard" silently performs a HARD reset and exits 0 (verified on 2.43
+			// and 2.52). ValidateRefName cannot be reused — "HEAD~1" is a valid
+			// commit-ish and not a valid ref name.
+			if err := ValidateCommitish("ref", ref); err != nil {
+				return nil, err
+			}
+			return []string{"reset", "--" + mode, ref}, nil
 		}, false)
 }
 
@@ -1121,7 +1150,7 @@ func Operations() []connector.Category {
 				"Update remote-tracking refs for {remote} at {repo_path} without touching the working tree. Uses the connector's credential and the remote's HTTPS URL, ignoring any credentials stored in .git/config.",
 				FetchInput{}, doFetch, wickdocs.Docs{}),
 			connector.Op("pull", "Pull",
-				"Fetch {remote} and integrate it into the current branch at {repo_path}, rebasing instead of merging when {rebase} is set. Blocked when the current branch is protected.",
+				"Fetch {remote} and integrate it into the current branch at {repo_path}, rebasing instead of merging when {rebase} is set. Allowed on a protected branch — making the local branch match its remote changes nothing anyone else sees; the commit and push that would are still refused.",
 				PullInput{}, doPull, wickdocs.Docs{}),
 		),
 		connector.Cat("Destructive", "Operations that publish or discard work. Each is off by default on a new instance.",

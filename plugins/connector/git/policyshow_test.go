@@ -389,24 +389,44 @@ func TestGatesAndAppliesToAgree(t *testing.T) {
 	appliesTo, _ := rule(t, res, "protected_branches")["applies_to"].(string)
 
 	// Every op gates says is subject to protected_branches must also be covered by the
-	// prose, and vice versa. mutatingOps is the single source both are derived from.
+	// prose, and vice versa. mutatingOps minus protectedExemptOps is the single source
+	// both are derived from.
 	for op := range mutatingOps {
 		if op == "raw" {
 			continue // judged by its allow-list alone; Evaluate returns before branch checks
 		}
 		rules, _ := gates[op].([]string)
+		if protectedExemptOps[op] {
+			// Exempt: neither the gates map nor the prose may claim it is refused,
+			// or an agent skips a call it is allowed to make.
+			if containsExact(rules, "protected_branches") {
+				t.Errorf("gates[%s] = %v, but %s is exempt from the protected-branch rule", op, rules, op)
+			}
+			continue
+		}
 		if !containsExact(rules, "protected_branches") {
-			t.Errorf("gates[%s] = %v, want protected_branches — Evaluate checks IsProtected for every mutating op", op, rules)
+			t.Errorf("gates[%s] = %v, want protected_branches — Evaluate checks IsProtected for every non-exempt mutating op", op, rules)
 		}
 		if !strings.Contains(appliesTo, op) {
 			t.Errorf("applies_to does not mention %q, but that operation IS refused on a protected branch:\n%s", op, appliesTo)
 		}
 	}
 
-	// The specific claim that was wrong, asserted by name so a future rewrite of the
-	// sentence cannot quietly drop it again.
-	if !strings.Contains(appliesTo, "checkout") {
-		t.Error("applies_to must say checkout is blocked on a protected branch — that was the misreading")
+	// pull and checkout are the two mutating-looking ops that are NOT refused on a
+	// protected branch, and a caller that believes otherwise cannot sync master at
+	// all. Asserting the exemption by name — rather than just that the word appears
+	// — because the earlier version of this test checked only for "checkout" and
+	// went on passing once the sentence changed from blocking it to exempting it.
+	for _, exempt := range []string{"pull", "checkout"} {
+		if !strings.Contains(appliesTo, exempt) {
+			t.Errorf("applies_to never mentions %q, which is exempt on a protected branch:\n%s", exempt, appliesTo)
+		}
+		if containsExact(protectedOpNames(), exempt) {
+			t.Errorf("%s is listed among the operations refused on a protected branch, but it is exempt", exempt)
+		}
+	}
+	if !strings.Contains(appliesTo, "exempt") {
+		t.Errorf("applies_to must say pull and checkout are exempt, not merely name them:\n%s", appliesTo)
 	}
 	// And a read must not be listed, or a caller avoids diagnostics it is allowed to run.
 	for _, read := range []string{"status", "log", "diff"} {
