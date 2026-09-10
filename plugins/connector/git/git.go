@@ -588,6 +588,27 @@ func shellQuote(a string) string {
 // The rules are git's own, from git-check-ref-format(1), minus the ones that only apply
 // to full refs. Enforcing the value rather than its position means it holds wherever the
 // value is used.
+// ValidateCommitish rejects a commit-ish that git would read as a flag.
+//
+// Separate from ValidateRefName because a commit-ish is not a ref NAME:
+// "HEAD~1" and "abc123^{commit}" are legitimate here and refused there. What
+// still has to hold is the shape — a leading "-" is what turns a value into an
+// option in any position, and two subcommands cannot put --end-of-options in
+// front of the value on every supported git (see the terminator notes in
+// connector.go). There this check IS the guard, not a second line behind one.
+func ValidateCommitish(kind, v string) error {
+	if strings.TrimSpace(v) == "" {
+		return fmt.Errorf("%s is required", kind)
+	}
+	if v != strings.TrimSpace(v) {
+		return fmt.Errorf("%s %q has leading or trailing whitespace", kind, v)
+	}
+	if strings.HasPrefix(v, "-") {
+		return fmt.Errorf("%s %q may not start with \"-\": it would be read as a command-line flag", kind, v)
+	}
+	return nil
+}
+
 func ValidateRefName(kind, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("%s is required", kind)
