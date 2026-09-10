@@ -1122,10 +1122,46 @@ func (s *Channel) handleEventsAPI(ctx context.Context, outer slackevents.EventsA
 				ChannelType:     "channel",
 			}, ev.Files)
 		case *slackevents.MessageEvent:
+			// Messages posted by OTHER apps are a legitimate workflow trigger.
+			// An intake form that files every request as a bot message is
+			// exactly the pattern channel triggers exist for, and dropping bot
+			// messages outright made those workflows silently never fire — the
+			// trigger looked healthy and nothing ever ran.
+			//
+			// So: surface them on the WORKFLOW side only. Agent-session
+			// dispatch further down stays human-only, so a bot still cannot
+			// open a conversation with the agent.
+			//
+			// Loop guard: skip whatever THIS instance posted, so a workflow
+			// that answers in the channel it watches cannot re-trigger itself.
+			// Bot messages carry no user id, so the bot handle is checked too.
+			if ev.BotID != "" || ev.SubType == "bot_message" {
+				if s.postedByThisInstance(ev) {
+					return
+				}
+				botPayload := map[string]any{
+					"user":         ev.User,
+					"text":         ev.Text,
+					"channel_id":   ev.Channel,
+					"channel_type": ev.ChannelType,
+					"thread":       threadKey(ev.ThreadTimeStamp, ev.TimeStamp),
+					"ts":           ev.TimeStamp,
+					"is_dm":        ev.ChannelType == "im" || ev.ChannelType == "mpim",
+					"event_key":    slackEventKey(ev.Channel, ev.TimeStamp),
+					"is_bot":       true,
+					"bot_id":       ev.BotID,
+					"bot_username": ev.Username,
+				}
+				s.emitWorkflow(ctx, "message", botPayload)
+				if ev.ThreadTimeStamp == "" || ev.ThreadTimeStamp == ev.TimeStamp {
+					s.emitWorkflow(ctx, "thread_started", botPayload)
+				}
+				return
+			}
 			// SubType "file_share" carries attachments with no real text —
 			// let it through (with its files) instead of dropping it. Other
 			// subtypes (edits, joins, …) are still ignored.
-			if ev.BotID != "" || (ev.SubType != "" && ev.SubType != "file_share") {
+			if ev.SubType != "" && ev.SubType != "file_share" {
 				return
 			}
 			// Workflow surface gets every non-bot message regardless of
@@ -1363,6 +1399,25 @@ func (s *Channel) handleReactionRemoved(ev *slackevents.ReactionRemovedEvent) {
 // isBotUser reports whether userID is this channel's own bot, so a reaction
 // the bot itself places (or any other event it originates) never triggers
 // the switch.
+// postedByThisInstance reports whether this Slack instance itself posted the
+// message. Used as the loop guard when bot messages are surfaced to workflows:
+// a third-party app's post is a valid trigger, our own reply never is.
+//
+// Bot messages arrive with no user id in some shapes, so the bot handle is
+// compared as well — auth.test gives us both.
+func (s *Channel) postedByThisInstance(ev *slackevents.MessageEvent) bool {
+	if ev == nil {
+		return false
+	}
+	if s.isBotUser(ev.User) {
+		return true
+	}
+	s.cfgMu.Lock()
+	name := s.botUserName
+	s.cfgMu.Unlock()
+	return name != "" && ev.Username != "" && strings.EqualFold(ev.Username, name)
+}
+
 func (s *Channel) isBotUser(userID string) bool {
 	s.cfgMu.Lock()
 	botID := s.botUserID
@@ -2509,6 +2564,162 @@ func (s *Channel) OnAgentEvent(sessionKey string, ev event.AgentEvent) {
 	}
 }
 
+// ArmAutoReply turns the 🤖 auto-reply switch ON for the thread whose parent
+// message is threadTS, and posts the 🤖 marker so a human can still toggle it
+// off by removing the emoji.
+//
+// This exists because the reaction path cannot arm a thread for an automation:
+// handleReactionAdded drops reactions from a bot user (isBotUser) and from any
+// reactor outside the access-control allowlist, so a workflow that just created
+// a Slack-thread session had no way to make that thread live without a human
+// clicking the emoji. The workflow send_message action calls this when
+// auto_reply is set.
+//
+// Reply-only is preserved deliberately: with no session on disk there is
+// nothing to arm, and the caller is told so instead of the request being
+// dropped silently.
+func (s *Channel) ArmAutoReply(channelID, threadTS string) error {
+	if channelID == "" || threadTS == "" {
+		return fmt.Errorf("channel and thread ts are required")
+	}
+	sessionID := s.sessionKey(threadTS)
+	if !s.sessionOnDisk(sessionID) {
+		return fmt.Errorf("no session on disk for %s", sessionID)
+	}
+	s.setAutoReply(sessionID, true)
+	s.setReaction(reactionTrigger, channelID, threadTS, "")
+	log.Info().Str("channel", "slack").Str("slack_channel", channelID).
+		Str("thread_ts", threadTS).Str("session", sessionID).
+		Msg("auto-reply armed by workflow (🤖 marker posted)")
+	return nil
+}
+
+// SendToThreadSession injects text into the agent session bound to a Slack
+// thread, as if a human had posted it in that thread. It exists for the
+// workflow path: a `channel` node can post a card and then hand the work to
+// the agent WITHOUT the agent living inside the workflow — an agent node runs
+// `claude --print` in a throwaway process, so its reasoning is invisible in
+// Slack and it holds no MCP. Routing the work through the thread session
+// instead means the turn behaves exactly like a mention: the banner animates,
+// tool activity streams into the loading bubble, and the reply lands in the
+// thread. Long turns (a full debug run is minutes) stay observable.
+//
+// The turn entry is registered BEFORE sendFn because that entry is the only
+// thing that maps sessionKey → (channel, thread) for NotifyState /
+// OnAgentEvent; without it, the agent's output has nowhere to go and is
+// silently dropped.
+//
+// The session runs as the instance owner (ownerUserID), not as whoever
+// triggered the workflow: there is no Slack sender to map here, and failing
+// open onto the synthetic admin token would hand the agent more access than
+// anyone asked for. An instance with no owner therefore refuses.
+//
+// Returns the session key it sent to and whether that session was new.
+func (s *Channel) SendToThreadSession(ctx context.Context, channelID, threadTS, text string, armAutoReply bool) (string, bool, error) {
+	if channelID == "" || threadTS == "" {
+		return "", false, fmt.Errorf("channel and thread ts are required")
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", false, fmt.Errorf("text is required")
+	}
+	if s.sendFn == nil {
+		return "", false, fmt.Errorf("slack channel not wired to the agent pool")
+	}
+	callerUserID := s.ownerUserID
+	if callerUserID == "" {
+		return "", false, fmt.Errorf("this slack instance has no owning wick user; cannot start a session on its behalf")
+	}
+	sessionID := s.sessionKey(threadTS)
+
+	s.mu.Lock()
+	old := s.turns[sessionID]
+	t := &turn{
+		channelID: channelID, threadTS: threadTS, msgTS: threadTS,
+		running: true, lastActivity: time.Now(),
+	}
+	if old != nil {
+		t.carryOver(old)
+		s.stopStatusAnimation(old)
+	}
+	s.turns[sessionID] = t
+	s.mu.Unlock()
+
+	// Paint the banner before the spawn, same ordering rationale as
+	// handleMessage: Slack only honours our loading_messages override if it
+	// lands before it paints its own default bubble.
+	s.startStatusAnimation(sessionID)
+
+	isNewSession := !s.sessionOnDisk(sessionID)
+	if isNewSession {
+		if ctxText := s.buildWorkflowSessionContext(channelID, threadTS); ctxText != "" {
+			if err := s.sendFn(s.sendCtxAs(context.Background(), callerUserID), sessionID, "main", "slack", "system", ctxText); err != nil {
+				log.Warn().Str("channel", "slack").Str("session", sessionID).Err(err).
+					Msg("inject workflow session context failed")
+			}
+		}
+	}
+	if s.ownerFn != nil {
+		s.ownerFn(context.Background(), sessionID, callerUserID)
+	}
+
+	if err := s.sendFn(s.sendCtxAs(context.Background(), callerUserID), sessionID, "main", "slack", "user", normalizeUserText(text)); err != nil {
+		s.mu.Lock()
+		if cur := s.turns[sessionID]; cur == t {
+			cur.running = false
+			s.stopStatusAnimation(cur)
+		}
+		s.mu.Unlock()
+		s.setAssistantStatus(channelID, threadTS, "")
+		return sessionID, isNewSession, fmt.Errorf("pool send failed: %w", err)
+	}
+
+	if armAutoReply {
+		// The session exists on disk now (sendFn created it), so the flag
+		// persists. 🤖 doubles as the on/off switch for later replies.
+		s.setAutoReply(sessionID, true)
+		s.setReaction(reactionTrigger, channelID, threadTS, "")
+	}
+	log.Info().Str("channel", "slack").Str("slack_channel", channelID).
+		Str("thread_ts", threadTS).Str("session", sessionID).
+		Bool("new_session", isNewSession).Bool("auto_reply", armAutoReply).
+		Int("text_len", len(text)).
+		Msg("workflow injected message into slack thread session")
+	return sessionID, isNewSession, nil
+}
+
+// buildWorkflowSessionContext is buildSessionContext's sibling for the
+// workflow path, where there is no sender to describe — only the thread the
+// agent is about to work in. Kept deliberately small: the workflow's own
+// message carries the task, this just tells the agent where it is.
+func (s *Channel) buildWorkflowSessionContext(channelID, threadTS string) string {
+	s.cfgMu.Lock()
+	api := s.api
+	s.cfgMu.Unlock()
+	if api == nil {
+		return ""
+	}
+	channelName := channelID
+	if info, err := api.GetConversationInfo(&slackgo.GetConversationInfoInput{ChannelID: channelID}); err == nil && info != nil && info.Name != "" {
+		channelName = info.Name
+	}
+	permalink := ""
+	if pl, err := api.GetPermalink(&slackgo.PermalinkParameters{Channel: channelID, Ts: threadTS}); err == nil {
+		permalink = pl
+	}
+	lines := []string{
+		"[Slack thread context — injected by wick (workflow)]",
+		fmt.Sprintf("Channel: #%s [%s]", channelName, channelID),
+		"Thread: " + threadTS,
+	}
+	if permalink != "" {
+		lines = append(lines, "Link: "+permalink)
+	}
+	lines = append(lines,
+		"Started by a wick workflow, not by a person. Reply in this thread; your"+
+			" reply is posted there automatically.")
+	return strings.Join(lines, "\n")
+}
+
 func (s *Channel) sessionOnDisk(sessionID string) bool {
 	if s.sessions == nil {
 		return false
@@ -2906,6 +3117,7 @@ func chunkText(s string, max int) []string {
 //  3. newline;
 //  4. space;
 //  5. hard cut at the limit (unbreakable run longer than max).
+//
 // Boundary candidates only count within the trailing quarter of the limit so
 // a lone early newline can't produce a degenerate tiny chunk.
 func chunkCut(s string, max int) int {
