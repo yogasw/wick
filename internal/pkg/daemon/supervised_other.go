@@ -10,3 +10,6 @@ package daemon
 func ServiceManaged(appName string) bool    { return false }
 func ServiceActive(appName string) bool     { return false }
 func ServiceCtl(appName, verb string) error { return nil }
+
+// ServiceMainPID has no meaning without systemd.
+func ServiceMainPID(appName string) int { return 0 }

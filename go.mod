@@ -9,6 +9,7 @@ require (
 	github.com/aymanbagabas/go-pty v0.2.3
 	github.com/blakesmith/ar v0.0.0-20190502131153-809d4375e1fb
 	github.com/caarlos0/env/v9 v9.0.0
+	github.com/cloudflare/tableflip v1.2.3
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/glebarez/go-sqlite v1.21.2
 	github.com/glebarez/sqlite v1.11.0

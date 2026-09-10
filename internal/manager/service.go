@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
+	"sort"
 	"sync"
 	"time"
 
@@ -32,19 +34,43 @@ type runHandle struct {
 // Service manages job lifecycle: bootstrap from code-defined jobs,
 // manual/scheduled execution, and result storage.
 type Service struct {
-	repo      *repo
-	mu        sync.RWMutex
-	runners   map[string]job.RunFunc  // key -> run func
-	running   map[string]runHandle    // key -> in-flight run owned by this process
-	cfg       cfgReader               // for injecting job.Ctx; may be nil in tests
+	repo    *repo
+	mu      sync.RWMutex
+	runners map[string]job.RunFunc // key -> run func
+	running map[string]runHandle   // key -> in-flight run owned by this process
+	cfg     cfgReader              // for injecting job.Ctx; may be nil in tests
 }
 
 func NewService(r *repo) *Service {
-	return &Service{
+	s := &Service{
 		repo:    r,
 		runners: make(map[string]job.RunFunc),
 		running: make(map[string]runHandle),
 	}
+	// A cron job can run for minutes; declare it so a graceful upgrade waits
+	// instead of cancelling it half-way through its writes.
+	upgrade.RegisterDetailed("cron jobs", s.RunningCount, s.RunningKeys)
+	return s
+}
+
+// RunningCount is how many job runs this process owns right now.
+func (s *Service) RunningCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.running)
+}
+
+// RunningKeys names the jobs currently running, so a drain log says which one
+// is holding things up.
+func (s *Service) RunningKeys() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.running))
+	for k := range s.running {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // NewServiceFromDB is a convenience constructor for callers that only

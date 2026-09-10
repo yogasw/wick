@@ -39,6 +39,15 @@ func allCmd() *cobra.Command {
 			// (or unexpected panic recovered upstream) doesn't silently
 			// disable cron until the next deploy.
 			go func() {
+				// Cron is a singleton: during a graceful upgrade the
+				// predecessor keeps firing jobs until it has drained, so
+				// starting a second loop here would run every job twice.
+				// IntakeReady closes once this process owns that right.
+				select {
+				case <-srv.IntakeReady():
+				case <-schedCtx.Done():
+					return
+				}
 				const (
 					backoffStart = 2 * time.Second
 					backoffMax   = 30 * time.Second

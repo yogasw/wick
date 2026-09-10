@@ -125,6 +125,75 @@ Stale PID files (process no longer alive) are silently cleaned up so the next `s
 ./bin/myapp restart --localhost        # shortcut for --host 127.0.0.1
 ```
 
+### `<app> reload`
+
+Replace the binary **without downtime**. The running daemon starts a successor, hands it the
+listening socket, and only then drains its own work and exits — the port is never closed, so
+nothing in front of wick (nginx, a load balancer, a browser) sees a refused connection, and
+no in-flight workflow run or cron job is cut off.
+
+This is the difference that matters against `restart`: `restart` stops first, so the port is
+closed for the successor's whole boot — tens of seconds once a registry restore, a database and
+connectors are involved — and everything in flight is killed.
+
+```bash
+# install the new binary FIRST, then hand over
+cp ./bin/myapp /usr/local/bin/myapp.new && chmod +x /usr/local/bin/myapp.new
+mv -f /usr/local/bin/myapp.new /usr/local/bin/myapp   # atomic rename
+./bin/myapp reload
+```
+
+The rename is not a detail: copying **onto** a running binary fails with `ETXTBSY`
+("Text file busy"), while a rename swaps the directory entry and lets the running process keep
+its old inode until it exits.
+
+Requires the daemon to run with `WICK_GRACEFUL_UPGRADE=1`; without it the signal is logged and
+ignored, and you should use `restart`. Supported on Linux, macOS and BSD, as a plain daemon or
+under a service manager. On **Windows** — and when wick runs inside the tray's in-process
+supervisor — a socket cannot be handed to another process, so `reload` reports that and you fall
+back to `restart`.
+
+`reload` routes itself: an installed systemd unit gets `systemctl --user reload`, a unit without
+`ExecReload` is signalled by its MainPID, and a PID-file daemon is signalled directly.
+`kill -HUP <pid>` does the same thing.
+
+**What the drain waits for**, because interrupting them costs different things:
+
+| Work | Deadline | Why |
+|---|---|---|
+| Workflow runs, cron jobs, connector calls, plugin requests, scheduled deliveries | `WICK_DRAIN_TIMEOUT` (default `20m`) | Interrupting them loses the work |
+| Agent turns | `WICK_DRAIN_AGENT_GRACE` (default `45s`) | The session is on disk and resumes on the next message |
+
+The short grace for agent turns is deliberate: an interactive session stays "in flight" for as
+long as somebody keeps talking to it, so waiting for it would keep two processes alive for hours
+— and only one handover can be in flight at a time. Raise it (`WICK_DRAIN_AGENT_GRACE=20m`) when
+you would rather let a long run finish, and accept the longer overlap; `0` hands over
+immediately. Both are read at process start, so changing them needs a `restart` rather than a
+`reload` — a successor inherits its parent's environment.
+
+Every 15 seconds a drain logs what is still outstanding, by name, so a long wait reads as
+"finishing a run" instead of a hang.
+
+**Self-update takes the same path.** With graceful upgrade armed, applying an update from the
+admin UI swaps the binary and then hands over exactly like `reload` — no separate step, and no
+window where the port is closed. Without it, the update re-execs in place as before.
+
+::: tip Proving it
+Claiming zero downtime from the server's own logs proves nothing. Probe from outside, through
+whatever sits in front of wick, and count the failures:
+
+```bash
+while true; do
+  printf '%s %s\n' "$(date -Is)" "$(curl -s -o /dev/null -m 5 -w '%{http_code}' https://wick.example.com/health)"
+  sleep 0.5
+done | tee probe.log
+
+grep -v ' 200$' probe.log     # anything here is real downtime
+```
+
+Then check that `MainPID` changed while the unit never left `active`.
+:::
+
 ### `<app> status`
 
 Report whether the daemon is alive, its PID, approximate uptime (PID file mtime), and the log / PID file paths. `--log N` tails the last N bytes of the daemon log — the **newest** `daemon-YYYY-MM-DD.log` in `logs/`, so a daemon that's been running since a previous day still tails correctly instead of showing an empty today-file.

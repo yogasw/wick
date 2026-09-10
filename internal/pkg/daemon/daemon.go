@@ -193,6 +193,38 @@ func Stop(p Paths, timeout time.Duration) error {
 
 // Restart stops the running daemon (if any) then starts a fresh
 // instance with the supplied argv tail.
+// ReloadPID sends the reload signal to an explicit pid. Used when the service
+// manager knows the process but wick has no PID file of its own (a systemd
+// unit installed by hand).
+func ReloadPID(pid int) error {
+	if pid <= 0 {
+		return ErrNotRunning
+	}
+	if !processAlive(pid) {
+		return ErrNotRunning
+	}
+	return reloadSignal(pid)
+}
+
+// Reload asks the running daemon to upgrade in place: it starts a successor
+// from the binary currently on disk, hands it the listening socket, and only
+// then drains and exits. No connection is refused and no in-flight agent turn
+// is killed — unlike Restart, which stops first and starts second.
+//
+// Requires the daemon to have graceful upgrade enabled
+// (WICK_GRACEFUL_UPGRADE=1); without it the signal is logged and ignored, and
+// the caller should fall back to Restart.
+func Reload(p Paths) error {
+	pid, _, err := readPID(p.PIDFile)
+	if err != nil {
+		return err
+	}
+	if !processAlive(pid) {
+		return ErrNotRunning
+	}
+	return reloadSignal(pid)
+}
+
 func Restart(p Paths, timeout time.Duration, args []string) (int, error) {
 	if err := Stop(p, timeout); err != nil && !errors.Is(err, ErrNotRunning) {
 		return 0, err

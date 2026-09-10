@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	agentchannels "github.com/yogasw/wick/internal/agents/channels"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -427,6 +430,17 @@ const reconcileDeadThreshold = 2
 // per-provider caps and host resources). The config UI seeds a sane
 // default of 2, but an operator may set 0 deliberately to lift the global
 // ceiling — capacity math treats 0 as "no global cap".
+// registerDrain declares the pool's in-flight turns to the drain tracker, so
+// a graceful upgrade waits for them instead of the drain path having to know
+// the pool exists. Same pattern for every background subsystem.
+func (p *Pool) registerDrain() {
+	// Resumable: a turn cut short is not lost work — the session is on disk
+	// and the next message resumes it. So a handover waits only a short
+	// grace for turns, instead of keeping the old process alive for as long
+	// as somebody keeps chatting.
+	upgrade.RegisterResumable("agent turns", p.ActiveCount, p.ActiveSessions)
+}
+
 func New(cfg PoolConfig) *Pool {
 	if cfg.MaxConcurrent < 0 {
 		cfg.MaxConcurrent = 0 // normalise negatives to the unlimited sentinel
@@ -451,6 +465,7 @@ func New(cfg PoolConfig) *Pool {
 	// EOF leaves a zombie slot that must be reclaimed regardless.
 	p.wg.Add(1)
 	go p.reconcileLoop()
+	p.registerDrain()
 	return p
 }
 
@@ -559,6 +574,57 @@ func (p *Pool) SetAutoReply(sessionID string, on bool) {
 	sess.Meta.AutoReply = on
 	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
 		log.Warn().Str("session", sessionID).Bool("on", on).Err(err).Msg("pool: set auto-reply — save failed")
+	}
+}
+
+// ThreadBinding reads the persisted chat-thread binding for a session.
+// Loaded fresh so a restart — or a handover to another process — sees the
+// last saved value rather than nothing.
+func (p *Pool) ThreadBinding(sessionID string) (agentchannels.ThreadBinding, bool) {
+	if sessionID == "" {
+		return agentchannels.ThreadBinding{}, false
+	}
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err != nil || sess.Meta.ChannelRef == nil {
+		return agentchannels.ThreadBinding{}, false
+	}
+	r := sess.Meta.ChannelRef
+	if r.ChatID == "" {
+		return agentchannels.ThreadBinding{}, false
+	}
+	return agentchannels.ThreadBinding{
+		Channel:  r.Channel,
+		ChatID:   r.ChatID,
+		ThreadID: r.ThreadID,
+		Instance: r.Instance,
+	}, true
+}
+
+// SetThreadBinding persists the binding on the session meta. Idempotent —
+// an unchanged binding writes nothing, so this can be called on every turn
+// without rewriting meta.json each time.
+func (p *Pool) SetThreadBinding(sessionID string, b agentchannels.ThreadBinding) {
+	if sessionID == "" || b.ChatID == "" {
+		return
+	}
+	sess, err := session.Load(p.cfg.Layout, sessionID)
+	if err != nil {
+		log.Warn().Str("session", sessionID).Err(err).Msg("pool: set thread binding — session load failed")
+		return
+	}
+	cur := sess.Meta.ChannelRef
+	if cur != nil && cur.Channel == b.Channel && cur.ChatID == b.ChatID &&
+		cur.ThreadID == b.ThreadID && cur.Instance == b.Instance {
+		return
+	}
+	sess.Meta.ChannelRef = &session.ChannelRef{
+		Channel:  b.Channel,
+		ChatID:   b.ChatID,
+		ThreadID: b.ThreadID,
+		Instance: b.Instance,
+	}
+	if err := session.SaveMeta(p.cfg.Layout, sessionID, sess.Meta); err != nil {
+		log.Warn().Str("session", sessionID).Err(err).Msg("pool: set thread binding — save failed")
 	}
 }
 
@@ -1715,6 +1781,63 @@ func (p *Pool) markStatus(sessionID string, status session.Status) error {
 // Stop tears down all active agents and waits for trailing
 // post-exit work (markStatus, queue drain). Used on graceful shutdown
 // and by tests to flush goroutines before TempDir cleanup.
+// Drain waits for every in-flight turn to finish on its own. Unlike Stop it
+// never signals a running agent: a debug run that is eight minutes into its
+// work keeps going and still posts its reply.
+//
+// This is the graceful-upgrade path. Deliberately it does NOT close the pool.
+// The draining process still owns intake (channel listeners, cron) until it
+// exits, so closing here would make it REFUSE the very messages it is still
+// the only process listening for — a restart that answers "agent error"
+// instead of working. Old work and any work that arrives mid-drain both finish
+// on the old binary; the successor starts fresh once this returns.
+//
+// Returns the number of turns still active when it gave up — 0 means a clean
+// drain. ctx bounds the wait: on a host with continuous traffic the pool may
+// never reach zero, so the caller's timeout is what guarantees termination.
+func (p *Pool) Drain(ctx context.Context) int {
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		p.mu.Lock()
+		n := len(p.active)
+		p.mu.Unlock()
+		if n == 0 {
+			return 0
+		}
+		select {
+		case <-ctx.Done():
+			p.mu.Lock()
+			n = len(p.active)
+			p.mu.Unlock()
+			return n
+		case <-tick.C:
+		}
+	}
+}
+
+// ActiveCount reports how many turns are running right now. Used by the
+// drain path for progress logging.
+func (p *Pool) ActiveCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.active)
+}
+
+// ActiveSessions lists the sessions with a turn in flight. Sorted so a drain
+// log line is stable, and named rather than counted so an operator waiting on
+// a long drain can see WHICH conversation is still working.
+func (p *Pool) ActiveSessions() []string {
+	p.mu.Lock()
+	out := make([]string, 0, len(p.active))
+	for id := range p.active {
+		out = append(out, id)
+	}
+	p.mu.Unlock()
+	sort.Strings(out)
+	return out
+}
+
 func (p *Pool) Stop() {
 	p.mu.Lock()
 	alreadyClosed := p.closed

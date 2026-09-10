@@ -979,23 +979,23 @@ func sidebarVMScoped(c *tool.Ctx, activePage, activeSessionID, scopedProjectID s
 		allProjects = filteredMap
 	}
 	return view.AgentsLayoutVM{
-		Base:             c.Base(),
-		ActivePage:       activePage,
-		SidebarIDs:       ids,
-		SidebarSessions:  globalMgr.Registry().Sessions(),
-		SidebarLifecycle: lc,
-		SidebarLabels:    labels,
-		ActiveSessionID:  activeSessionID,
-		IdleTimeoutMs:    globalPool.IdleTimeout().Milliseconds(),
+		Base:                c.Base(),
+		ActivePage:          activePage,
+		SidebarIDs:          ids,
+		SidebarSessions:     globalMgr.Registry().Sessions(),
+		SidebarLifecycle:    lc,
+		SidebarLabels:       labels,
+		ActiveSessionID:     activeSessionID,
+		IdleTimeoutMs:       globalPool.IdleTimeout().Milliseconds(),
 		Projects:            allProjects,
 		ProjectList:         allProjectIDs,
 		SidebarOwner:        sidebarOwner,
 		SidebarOwnerMeHref:  sidebarOwnerHref(c, "me"),
 		SidebarOwnerAllHref: sidebarOwnerHref(c, "all"),
 		ScopedProjectID:     scopedProjectID,
-		PinnedProjectID:  pinnedProjectID(c),
-		ShellAssetURL:    spaAssetURL("shell"),
-		AirouterVisible:  AirouterVisible(c.Context()),
+		PinnedProjectID:     pinnedProjectID(c),
+		ShellAssetURL:       spaAssetURL("shell"),
+		AirouterVisible:     AirouterVisible(c.Context()),
 	}
 }
 
@@ -2942,6 +2942,23 @@ func streamMultiSSE(c *tool.Ctx) {
 func snapshotEvents(sessionID string) []Event {
 	var out []Event
 	matched := false
+	// git_status first: it is session STATE, not turn history, so it must be
+	// replayed whether or not an agent is live. The SharedWorker calls this
+	// on every page load (the stream itself is not re-opened), and the Source
+	// rail badge has no REST fallback — without this a reload showed no
+	// counter until the next filesystem event.
+	if globalBcast != nil {
+		if payload, ok := globalBcast.LastGitStatus(sessionID); ok {
+			out = append(out, Event{
+				SessionID: sessionID,
+				Type:      "git_status",
+				Data:      payload,
+			})
+		}
+	}
+	if globalPool == nil {
+		return out
+	}
 	for _, e := range globalPool.ActiveSnapshot() {
 		if e.SessionID != sessionID {
 			continue
@@ -3024,14 +3041,25 @@ func snapshotEvents(sessionID string) []Event {
 	if err != nil || len(entries) == 0 {
 		return out
 	}
+	// Assistant text is accumulated into ONE cumulative text_snapshot, never
+	// replayed as a series of text_delta.
+	//
+	// text_delta means "append". This path runs on every snapshot request —
+	// and the SharedWorker asks for a snapshot on every page load, not only
+	// after a real gap — so replaying deltas appended the same text again on
+	// each ask: the bubble showed the message twice, three times, once per
+	// reload. The pool path above already learned this; the disk fallback had
+	// not, and it is the path taken whenever the process serving the page is
+	// not the one running the agent.
+	var textSoFar strings.Builder
 	for _, e := range entries {
 		ev := Event{
 			SessionID: sessionID,
 		}
 		switch e.Type {
 		case "text_delta":
-			ev.Type = "text_delta"
-			ev.Data = e.Text
+			textSoFar.WriteString(e.Text)
+			continue
 		case "thinking":
 			ev.Type = "thinking"
 			ev.Data = e.Text
@@ -3059,6 +3087,13 @@ func snapshotEvents(sessionID string) []Event {
 		}
 		out = append(out, ev)
 	}
+	if t := textSoFar.String(); t != "" {
+		out = append(out, Event{
+			SessionID: sessionID,
+			Type:      "text_snapshot",
+			Data:      t,
+		})
+	}
 	return out
 }
 
@@ -3067,10 +3102,8 @@ func snapshotEvents(sessionID string) []Event {
 // (even when the EventSource is already open) so the UI can replay trace
 // cards without waiting for the next real event.
 func streamSnapshot(c *tool.Ctx) {
-	if globalPool == nil {
-		c.JSON(http.StatusOK, []Event{})
-		return
-	}
+	// No early return on a nil pool: the snapshot also carries git_status,
+	// which is session state and has nothing to do with a live agent.
 	sessionID := c.Query("session")
 	if sessionID == "" {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "session required"})

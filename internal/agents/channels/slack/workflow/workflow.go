@@ -76,6 +76,7 @@ func RegisterAll(reg *integration.Registry, pick ChannelPicker) {
 	// Actions — outbound (workflow node → Slack API). Bound to pick so
 	// each Execute closure dispatches against the run's own bot.
 	registerActionSendMessage(reg, pick)
+	registerActionSendToSession(reg, pick)
 	registerActionSendEphemeral(reg, pick)
 	registerActionUpdateMessage(reg, pick)
 	registerActionAddReaction(reg, pick)

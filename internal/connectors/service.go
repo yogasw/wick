@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/yogasw/wick/internal/pkg/upgrade"
 	"net/http"
 	"strings"
 	"sync"
@@ -183,7 +184,7 @@ type Service struct {
 	// set of runIDs) so CancelSession can abort every op bound to a live session
 	// at once. Both guarded by inflightMu.
 	inflightMu sync.Mutex
-	inflight   map[string]context.CancelFunc // runID -> cancel
+	inflight   map[string]context.CancelFunc  // runID -> cancel
 	bySession  map[string]map[string]struct{} // sessionID -> set of runIDs
 }
 
@@ -292,8 +293,17 @@ func (s *Service) SetConfigs(c *configs.Service) {
 // HTTP client. The HTTP client is the one Ctx.HTTP exposes to every
 // ExecuteFunc — replace with a custom client at construction time when
 // tests need a transport hook.
+// InflightCount is how many connector operations are executing right now. A
+// single op can legitimately take minutes (a big Metabase query, a slow
+// third-party API), which is exactly why a restart must not cut it off.
+func (s *Service) InflightCount() int {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	return len(s.inflight)
+}
+
 func NewService(r *Repo) *Service {
-	return &Service{
+	svc := &Service{
 		repo:       r,
 		httpClient: connector.NewHTTPClient(),
 		modules:    make(map[string]connector.Module),
@@ -302,6 +312,8 @@ func NewService(r *Repo) *Service {
 		inflight:   make(map[string]context.CancelFunc),
 		bySession:  make(map[string]map[string]struct{}),
 	}
+	upgrade.Register("connector ops", svc.InflightCount)
+	return svc
 }
 
 // SetMetrics wires a telemetry recorder into the service. Call once at
