@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -341,7 +342,7 @@ func reloadWithBinary(p daemon.Paths, o reloadOpts) error {
 		if !stdinIsTerminal() {
 			return errors.New("stdin is not a terminal and --yes was not given — refusing to swap a binary nobody confirmed")
 		}
-		if !promptYesNo(fmt.Sprintf("swap %s and hand over?", filepath.Base(target))) {
+		if !promptYesNo(os.Stdin, fmt.Sprintf("swap %s and hand over?", filepath.Base(target))) {
 			fmt.Println("aborted; nothing was changed")
 			return nil
 		}
@@ -418,18 +419,26 @@ func printReloadSummary(candidate, running daemon.BinaryInfo, target string, pid
 // stdinIsTerminal reports whether a human is there to answer. A non-TTY
 // stdin means a script is driving, and a script must say --yes explicitly
 // rather than have silence read as consent.
+//
+// Note the mode bits are NOT enough on their own: /dev/null is a character
+// device, so `cmd < /dev/null` — exactly how a deploy script runs — passes a
+// naive ModeCharDevice test. Hence a real isatty where we have one, and
+// promptYesNo treating EOF as "no" everywhere else.
 func stdinIsTerminal() bool {
-	st, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return st.Mode()&os.ModeCharDevice != 0
+	return isTerminal(os.Stdin)
 }
 
-func promptYesNo(question string) bool {
+// promptYesNo asks a yes/no question. Enter means yes, but EOF does NOT:
+// a closed or empty stdin is the absence of an answer, and reading it as
+// consent is how an unattended script ends up swapping a binary nobody
+// approved.
+func promptYesNo(in io.Reader, question string) bool {
 	fmt.Printf("%s [Y/n]: ", question)
-	reader := bufio.NewReader(os.Stdin)
-	answer, _ := reader.ReadString('\n')
+	answer, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && answer == "" {
+		fmt.Println()
+		return false
+	}
 	answer = strings.TrimSpace(strings.ToLower(answer))
 	return answer == "" || answer == "y" || answer == "yes"
 }
