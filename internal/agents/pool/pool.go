@@ -435,10 +435,11 @@ const reconcileDeadThreshold = 2
 // the pool exists. Same pattern for every background subsystem.
 func (p *Pool) registerDrain() {
 	// Resumable: a turn cut short is not lost work — the session is on disk
-	// and the next message resumes it. So a handover waits only a short
-	// grace for turns, instead of keeping the old process alive for as long
-	// as somebody keeps chatting.
-	upgrade.RegisterResumable("agent turns", p.ActiveCount, p.ActiveSessions)
+	// and the next message resumes it. But "not lost" is not "free": the
+	// person waiting sees a reply stop mid-sentence, so the handover waits
+	// for the pool to settle instead of running a clock against the work.
+	// See HandoverBlockers for what counts as settled.
+	upgrade.RegisterResumable("agent turns", p.HandoverBlockerCount, p.HandoverBlockers)
 }
 
 func New(cfg PoolConfig) *Pool {
@@ -1815,6 +1816,47 @@ func (p *Pool) Drain(ctx context.Context) int {
 		}
 	}
 }
+
+// HandoverBlockers names the reasons a graceful handover must not complete
+// yet. Empty means the pool has settled and the successor can take over.
+//
+// One kind of blocker, and it is not a clock running against the work:
+//
+//   - A turn is actually producing (lifecycle spawning or working). The
+//     lifecycle is driven by normalised agent events, so this holds for every
+//     provider — claude, codex, anything added later — without this code
+//     knowing which one is running.
+//   - Nothing else. The gap AFTER a turn ends — where a tool result, a queued
+//     message or a sub-agent reply usually lands — is covered once, globally,
+//     by the drain's settle window (upgrade.DrainQuiet), so it does not need
+//     repeating per subsystem here.
+//
+// An idle subprocess is deliberately NOT a blocker. It holds no turn — it is
+// waiting out its auto-kill countdown — and the next message spawns in the
+// successor. Counting those is what forced the old fixed grace: len(active)
+// stays non-zero for minutes after everybody has stopped talking, so waiting
+// on it meant waiting on the idle TTL, and the only way out was a deadline
+// that also cut live turns.
+func (p *Pool) HandoverBlockers() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []string
+	for _, e := range p.active {
+		if e == nil || e.state == nil {
+			continue
+		}
+		switch e.state.Lifecycle() {
+		case state.LifecycleSpawning, state.LifecycleWorking:
+			out = append(out, e.sessID)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// HandoverBlockerCount is HandoverBlockers as the count the drain tracker
+// polls. Zero means settled.
+func (p *Pool) HandoverBlockerCount() int { return len(p.HandoverBlockers()) }
 
 // ActiveCount reports how many turns are running right now. Used by the
 // drain path for progress logging.

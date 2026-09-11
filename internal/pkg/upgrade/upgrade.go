@@ -39,12 +39,15 @@ package upgrade
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -54,6 +57,218 @@ import (
 // ErrUnsupported is returned by Upgrade when this build or this platform
 // cannot hand a listener to a new process.
 var ErrUnsupported = errors.New("graceful upgrade not supported here")
+
+// forced is set by a HUMAN who has decided not to wait for the drain — the
+// Force swap control in the UI. It is the only thing that cuts running work
+// short on the default configuration, and it is deliberately not something a
+// timer can set: the operator is shown what is still running and chooses.
+var forced atomic.Bool
+
+// ForceDrain tells the next (or current) drain to stop waiting. Set it BEFORE
+// triggering the handover: once a process is draining it no longer answers
+// HTTP, so nothing can reach it to change its mind.
+func ForceDrain() { forced.Store(true) }
+
+// Forced reports whether a human asked for the wait to be cut short.
+func Forced() bool { return forced.Load() }
+
+// ClearForce resets the flag. Used by tests, and after a handover attempt
+// that never started, so a stale force cannot ambush the next upgrade.
+func ClearForce() { forced.Store(false) }
+
+// inherited records that this process took over from a predecessor — the one
+// fact that proves a handover SUCCEEDED, read after the fact by a UI that
+// wants to say so instead of leaving the operator refreshing the page.
+var inherited atomic.Bool
+
+// startedAt is when this process began serving, so "took over 20s ago" can be
+// distinguished from "has been running since Tuesday".
+var startedAt atomic.Int64
+
+// lastHandover remembers the outcome of the most recent attempt to start a
+// successor FROM this process. A failed attempt is invisible otherwise: the
+// old process simply keeps serving, which looks exactly like nothing having
+// been tried.
+var lastHandover atomic.Value // handoverResult
+
+type handoverResult struct {
+	At    time.Time `json:"at"`
+	OK    bool      `json:"ok"`
+	Error string    `json:"error,omitempty"`
+}
+
+// MarkServing records that this process now answers on the socket, and
+// whether it got there by taking over from a predecessor.
+func MarkServing(fromHandover bool) {
+	inherited.Store(fromHandover)
+	startedAt.Store(time.Now().Unix())
+}
+
+// Inherited reports whether this process took over from a predecessor.
+func Inherited() bool { return inherited.Load() }
+
+// ServingSince reports when this process started serving (zero if unknown).
+func ServingSince() time.Time {
+	if v := startedAt.Load(); v > 0 {
+		return time.Unix(v, 0)
+	}
+	return time.Time{}
+}
+
+// LastHandover returns the outcome of the last successor this process tried
+// to start: zero time when it has never tried.
+func LastHandover() (at time.Time, ok bool, errMsg string) {
+	v, _ := lastHandover.Load().(handoverResult)
+	return v.At, v.OK, v.Error
+}
+
+func recordHandover(err error) {
+	r := handoverResult{At: time.Now(), OK: err == nil}
+	if err != nil {
+		r.Error = err.Error()
+	}
+	lastHandover.Store(r)
+}
+
+// AutoSwap is what the binary watcher is doing right now, published so the UI
+// can show it. Without this the watcher is invisible: a build sits on disk,
+// nothing appears to happen for up to two check intervals, and an operator
+// reasonably concludes it is stuck.
+type AutoSwap struct {
+	// State: "" (nothing waiting), "settling" (a new file was just seen and
+	// has to hold still before it is trusted), "waiting" (stable, but work is
+	// in flight), "previous_draining" (an earlier generation has not exited,
+	// so only two processes may exist at once), "handing_over" (the successor
+	// has been started).
+	State string `json:"state"`
+	To    string `json:"to,omitempty"`
+	// NextCheckIn is seconds until the next check, so a countdown can run.
+	NextCheckIn int `json:"next_check_in,omitempty"`
+	// ElapsedSeconds is how long this state has been in force. Counted on the
+	// SERVER, because a page refresh must not restart the clock on a handover
+	// that has been underway for a minute.
+	ElapsedSeconds int `json:"elapsed_seconds,omitempty"`
+	// GivesUpInSeconds is how long the predecessor waits for a successor
+	// before giving up and carrying on — the honest answer to "until when?".
+	GivesUpInSeconds int `json:"gives_up_in_seconds,omitempty"`
+
+	since time.Time
+}
+
+var autoSwap atomic.Value // AutoSwap
+
+// SetAutoSwap publishes the watcher's current state. Entering a DIFFERENT
+// state restarts its clock; repeating the same one does not, so the elapsed
+// time survives both the 15s tick and a browser refresh.
+func SetAutoSwap(s AutoSwap) {
+	prev, _ := autoSwap.Load().(AutoSwap)
+	if prev.State == s.State && !prev.since.IsZero() {
+		s.since = prev.since
+	} else {
+		s.since = time.Now()
+	}
+	autoSwap.Store(s)
+}
+
+// HandoverTimeout is how long a process waits for its successor to report
+// ready before giving up on it and continuing to serve.
+func HandoverTimeout() time.Duration { return upgradeTimeout }
+
+// processStart is when this process began. Used to measure how long a boot
+// actually takes here, which is the only honest basis for telling an operator
+// how much longer a handover has to go.
+var processStart = time.Now()
+
+// typicalBoot is the last measured boot, in seconds. Zero until one has been
+// recorded on this host.
+var typicalBoot atomic.Int64
+
+const bootStatsFile = "last-boot.json"
+
+// TypicalBootSeconds is how long the previous boot took here — an estimate
+// grounded in this host's own history rather than a guess. 0 when unknown.
+func TypicalBootSeconds() int { return int(typicalBoot.Load()) }
+
+// LoadBootStats reads the recorded boot duration. Call once at startup.
+func LoadBootStats(dir string) {
+	if dir == "" {
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(dir, bootStatsFile))
+	if err != nil {
+		return
+	}
+	var v struct {
+		Seconds int64 `json:"seconds"`
+	}
+	if json.Unmarshal(b, &v) == nil && v.Seconds > 0 {
+		typicalBoot.Store(v.Seconds)
+	}
+}
+
+// RecordBootComplete stores how long THIS process took to become ready, so
+// the next handover can say "usually about this long" instead of leaving the
+// operator guessing whether a minute of silence is normal.
+func RecordBootComplete(dir string) {
+	secs := int64(time.Since(processStart).Seconds())
+	if secs <= 0 {
+		secs = 1
+	}
+	typicalBoot.Store(secs)
+	if dir == "" {
+		return
+	}
+	b, err := json.Marshal(struct {
+		Seconds int64     `json:"seconds"`
+		At      time.Time `json:"at"`
+	}{secs, time.Now()})
+	if err != nil {
+		return
+	}
+	//nolint:errcheck // a missing stat file only costs the next estimate
+	_ = os.WriteFile(filepath.Join(dir, bootStatsFile), b, 0o644)
+}
+
+// AutoSwapStatus reports the watcher's last published state, with the elapsed
+// and remaining seconds filled in as of now.
+func AutoSwapStatus() AutoSwap {
+	v, _ := autoSwap.Load().(AutoSwap)
+	if v.State == "" || v.since.IsZero() {
+		return v
+	}
+	elapsed := time.Since(v.since)
+	v.ElapsedSeconds = int(elapsed.Seconds())
+	if v.State == "handing_over" {
+		if left := HandoverTimeout() - elapsed; left > 0 {
+			v.GivesUpInSeconds = int(left.Seconds())
+		}
+	}
+	return v
+}
+
+// draining marks a process that has already handed its socket over and is
+// finishing its work. It stops the binary watcher: a successor is serving
+// now, and it is the one that should decide about any newer build. Two
+// generations both trying to start a third is a fight nobody wins.
+var draining atomic.Bool
+
+// MarkDraining records that this process has been superseded.
+func MarkDraining() { draining.Store(true) }
+
+// Draining reports whether this process is on its way out.
+func Draining() bool { return draining.Load() }
+
+// armed mirrors whether THIS process can hand its socket to a successor, for
+// callers that only need the answer (the admin UI) and have no reason to hold
+// the Upgrader itself.
+var armed atomic.Bool
+
+// MarkArmed records whether graceful upgrade is available in this process.
+func MarkArmed(v bool) { armed.Store(v) }
+
+// Armed reports what MarkArmed recorded: true when a reload hands over, false
+// when it would be a stop/start.
+func Armed() bool { return armed.Load() }
 
 // flipper is the descriptor-passing engine, implemented by tableflip on
 // unix and by nothing at all on Windows.
@@ -180,11 +395,47 @@ func (u *Upgrader) Exit() <-chan struct{} {
 // inside server startup, while the log plumbing is set up in main.
 var SpawnWrapper func(func() error) error
 
+// trigger starts a successor. Registered by the server so callers that have
+// no business holding the Upgrader — the admin UI — can still ask for a
+// handover, which is otherwise only reachable by sending this process
+// SIGHUP from a shell.
+var trigger atomic.Value // func() error
+
+// SetTrigger registers how a handover is started in this process.
+func SetTrigger(fn func() error) {
+	if fn != nil {
+		trigger.Store(fn)
+	}
+}
+
+// Trigger starts a successor, exactly as SIGHUP would. ErrUnsupported when
+// graceful upgrade is not available here.
+func Trigger() error {
+	fn, _ := trigger.Load().(func() error)
+	if fn == nil {
+		return ErrUnsupported
+	}
+	return fn()
+}
+
+// BeforeSpawn runs in this process immediately before a successor is forked.
+// It is where state that only lives in memory is handed across — the scoped
+// MCP tokens the running agents authenticate with, which the successor would
+// otherwise reject with a 401 the moment it owns the socket.
+//
+// A package var rather than a constructor argument, for the same reason as
+// SpawnWrapper: the upgrader is built deep inside server startup, while what
+// it needs to persist is owned elsewhere.
+var BeforeSpawn func()
+
 // Upgrade starts a successor process. Returns ErrUnsupported when this build
 // cannot.
 func (u *Upgrader) Upgrade() error {
 	if !u.Enabled() {
 		return ErrUnsupported
+	}
+	if BeforeSpawn != nil {
+		BeforeSpawn()
 	}
 	if SpawnWrapper != nil {
 		return SpawnWrapper(u.flip.Upgrade)
@@ -223,6 +474,7 @@ func (u *Upgrader) WatchSignal(ctx context.Context) {
 				log.Info().Msg("upgrade: SIGHUP received — starting successor process")
 				_ = NotifyStatus("starting successor process")
 				if err := u.Upgrade(); err != nil {
+					recordHandover(err)
 					ev := log.Error().Err(err)
 					if strings.Contains(err.Error(), "parent hasn't exited") {
 						// At most two generations may exist at once. This
@@ -239,6 +491,7 @@ func (u *Upgrader) WatchSignal(ctx context.Context) {
 					_ = NotifyStatus("ready")
 					continue
 				}
+				recordHandover(nil)
 				log.Info().Msg("upgrade: successor is ready")
 			}
 		}
@@ -252,29 +505,38 @@ func (u *Upgrader) AcquireIntake(ctx context.Context) (*IntakeBaton, error) {
 	return acquireIntake(ctx, u.baseDir)
 }
 
-// DrainTimeout caps how long a draining parent waits for work that CANNOT be
-// resumed — a workflow run mid-node, a cron job mid-write, a connector call.
-// Minutes are normal for those, so the default is generous; WICK_DRAIN_TIMEOUT
-// overrides it (any Go duration).
+// DrainTimeout is an OPTIONAL hard ceiling on the whole drain, for an
+// unattended deploy that must finish inside a known time. Unset (0) by
+// default, because a ceiling here does not stop work — it kills it: a
+// workflow run cut off mid-node, a cron job cut off mid-write, an agent
+// reply cut off mid-sentence. The drain otherwise waits for the work.
+//
+// WICK_DRAIN_TIMEOUT sets it (any Go duration).
 func DrainTimeout() time.Duration {
-	return envDuration("WICK_DRAIN_TIMEOUT", 20*time.Minute)
+	return envDuration("WICK_DRAIN_TIMEOUT", 0)
 }
 
-// AgentGrace caps how long a draining parent waits for RESUMABLE work —
-// agent turns. Short by default, and that is a deliberate trade:
+// DrainQuiet is the SETTLE WINDOW the whole drain switches on. It is not a
+// deadline on anything: no work is ever interrupted because it expired.
 //
-// An interactive Slack session is "in flight" for as long as somebody keeps
-// talking to it, so waiting for it kept the old process alive for hours. Two
-// processes at once is visible and confusing (only one holds intake, so the
-// browser talks to one while the agents run in the other), and it also blocks
-// the NEXT upgrade — tableflip refuses while a parent is still alive.
+// The condition it completes is "this process has stopped", not "enough time
+// has passed" — every registered subsystem at zero, and still at zero this
+// long afterwards. The window exists because work going quiet for an instant
+// is not work ending: a tool result, a queued message, the next node of a
+// workflow or a sub-agent reporting back lands moments later, and handing
+// over inside that gap cuts off work that had merely paused.
 //
-// A turn interrupted here is not lost work: the session lives on disk and the
-// next message resumes it. Set WICK_DRAIN_AGENT_GRACE higher (e.g. 20m) to
-// let long debug runs finish instead, accepting the longer overlap; set 0 to
-// hand over immediately.
-func AgentGrace() time.Duration {
-	return envDuration("WICK_DRAIN_AGENT_GRACE", 45*time.Second)
+// It applies to agent turns, workflow runs, cron jobs, connector and plugin
+// calls, delegations and scheduled deliveries alike — one rule, so a
+// subsystem added later is covered by registering itself and nothing else.
+//
+// WICK_DRAIN_QUIET overrides it (any Go duration); WICK_DRAIN_AGENT_QUIET is
+// still read for continuity with the agent-only window it replaces.
+func DrainQuiet() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("WICK_DRAIN_QUIET")); v != "" {
+		return envDuration("WICK_DRAIN_QUIET", 15*time.Second)
+	}
+	return envDuration("WICK_DRAIN_AGENT_QUIET", 15*time.Second)
 }
 
 func envDuration(key string, def time.Duration) time.Duration {

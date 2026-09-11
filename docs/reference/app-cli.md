@@ -204,20 +204,26 @@ back to `restart`.
 
 **What the drain waits for**, because interrupting them costs different things:
 
-| Work | Deadline | Why |
+| Work | Waited for | Why |
 |---|---|---|
-| Workflow runs, cron jobs, connector calls, plugin requests, scheduled deliveries | `WICK_DRAIN_TIMEOUT` (default `20m`) | Interrupting them loses the work |
-| Agent turns | `WICK_DRAIN_AGENT_GRACE` (default `45s`) | The session is on disk and resumes on the next message |
+| Agent turns, workflow runs, cron jobs, connector calls, plugin requests, delegations, scheduled deliveries | until every subsystem is at zero and has stayed there for `WICK_DRAIN_QUIET` (default `15s`) | Interrupting them loses work, or cuts a reply off mid-sentence |
 
-The short grace for agent turns is deliberate: an interactive session stays "in flight" for as
-long as somebody keeps talking to it, so waiting for it would keep two processes alive for hours
-— and only one handover can be in flight at a time. Raise it (`WICK_DRAIN_AGENT_GRACE=20m`) when
-you would rather let a long run finish, and accept the longer overlap; `0` hands over
-immediately. Both are read at process start, so changing them needs a `restart` rather than a
-`reload` — a successor inherits its parent's environment.
+There is no default deadline, on purpose: a ceiling on a drain does not stop work, it kills it.
+Whatever is running is waited for however long it takes, and the process exits the moment the
+last of it settles. An idle agent subprocess holds nothing and never blocks the handover.
+`WICK_DRAIN_TIMEOUT` adds an optional hard cap for an unattended deploy that must finish inside a
+known time, and is unset by default. It is read at process start, so changing it needs a
+`restart` rather than a `reload` — a successor inherits its parent's environment.
 
 Every 15 seconds a drain logs what is still outstanding, by name, so a long wait reads as
-"finishing a run" instead of a hang.
+"finishing a run" instead of a hang. The same list is on the System page
+(`/admin/advanced/software-update`) as **Running now**, next to a **Force swap** control for an
+operator who has read it and decided not to wait — the only thing on a default configuration that
+interrupts running work.
+
+In-flight HTTP requests are waited for like any other work. Streams (SSE, hijacked websockets)
+are excluded — they do not end while a client is watching — and are dropped at the very end,
+after everything else has settled.
 
 **Self-update takes the same path.** With graceful upgrade armed, applying an update from the
 admin UI swaps the binary and then hands over exactly like `reload` — no separate step, and no

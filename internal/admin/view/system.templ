@@ -2,10 +2,20 @@ package view
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/yogasw/wick/internal/entity"
 )
+
+// boolAttr renders a bool as "1"/"0" for a data- attribute the inline
+// script reads back.
+func boolAttr(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
+}
 
 // orDash returns s, or an em dash when s is empty — keeps version rows
 // from rendering a blank cell.
@@ -95,6 +105,22 @@ type SystemPageData struct {
 	WickNotes       string // wick changelog (current→latest), markdown
 	WickPublishedAt string // latest wick release date (RFC3339)
 	WickChangelogURL string // full wick changelog link
+
+	// Live process state, so the page can tell a completed handover from a
+	// page it merely reloaded, and can show what a Force swap would cut off.
+	ServingPID int      // pid of the process that rendered this page
+	Settle     string   // drain settle window, e.g. "15s"
+
+	// A build that is installed or downloaded but not yet running. The card
+	// only appears while one is waiting — with nothing to swap there is
+	// nothing to say.
+	SwapPending bool
+	SwapFrom    string // version running now
+	SwapTo      string // version waiting
+	SwapSource  string // binary path, or "staged update (not applied yet)"
+	SwapBuilt   string // build timestamp of the waiting binary
+	Graceful   bool     // this process can hand its socket to a successor
+	Busy       []string // work in flight right now ("agent turns=2 (sess-x)")
 }
 
 // SystemPage renders version info, the update controls (Check →
@@ -113,6 +139,13 @@ templ SystemPage(d SystemPageData, user *entity.User) {
 			<h1 class="mt-2 text-[1.375rem] font-semibold text-black-900 dark:text-white-100">Software Update</h1>
 			<p class="mt-1 text-sm text-black-800 dark:text-black-600">Check for a new release, download it, and restart the service to apply. The service re-execs in place — running sessions reconnect once it's back.</p>
 			<div class="mt-6 flex flex-col gap-4">
+				// First card on the page, above everything else: when a build
+				// is waiting, that is the only thing on this screen anybody
+				// came for. Outside the Configured branch on purpose — it
+				// describes the PROCESS, not the updater, and a host that
+				// deploys from the CLI has no release source configured at
+				// all.
+				@runningNowCard(d)
 				@autoUpdateCard(d)
 				@versionCard(d)
 				if d.Configured {
@@ -382,6 +415,129 @@ templ updateCard(d SystemPageData) {
 	</div>
 }
 
+// runningNowCard shows what THIS process is doing, and whether replacing it
+// would wait for that work or interrupt it.
+//
+// It carries the pid the inline script compares to detect a completed
+// handover: a zero-downtime swap never drops a connection, so there is no
+// outage to watch for — only a different process answering.
+templ runningNowCard(d SystemPageData) {
+	// The outer element is always in the DOM — it carries the pid the script
+	// compares to detect a completed handover, and the script reveals the
+	// card when a build is waiting. Hidden otherwise: a process that is
+	// simply running has nothing to report here.
+	<div
+		id="sys-live"
+		data-pid={ strconv.Itoa(d.ServingPID) }
+		data-graceful={ boolAttr(d.Graceful) }
+		class={ "rounded-xl border border-white-300 dark:border-navy-600 border-l-4 border-l-green-500 bg-white-100 dark:bg-navy-700 p-6 shadow-sm", templ.KV("hidden", !d.SwapPending) }
+	>
+		<div class="flex items-start justify-between gap-4">
+			<div>
+				<h2 id="sys-title" class="text-base font-semibold text-black-900 dark:text-white-100">Update waiting to be applied</h2>
+				<p id="sys-swap-line" class="mt-1 text-sm font-mono text-black-900 dark:text-white-100">{ swapHeadline(d) }</p>
+				<p id="sys-swap-source" class="mt-1 text-xs text-black-700 dark:text-black-600">{ swapSourceLine(d) }</p>
+			</div>
+			<div class="shrink-0 text-right">
+				<p class="text-xs font-mono text-black-700 dark:text-black-600">pid { strconv.Itoa(d.ServingPID) }</p>
+				if d.Graceful {
+					<p class="mt-1 text-xs text-pos-400" title={ "The new process takes the listening socket before this one exits, so no request is refused and nothing running is killed. Quiet window before the swap: " + d.Settle }>
+						updates without downtime
+					</p>
+				} else {
+					<p class="mt-1 text-xs text-neg-400" title="Graceful handover is unavailable in this process, so applying an update means stopping and starting: the port closes and running work is interrupted.">
+						updates cause a restart
+					</p>
+				}
+			</div>
+		</div>
+		// The sequence as three panels. A sentence alone kept raising the
+		// same question — "so what happens next, and where is it now?" — and
+		// a strip answers that at a glance, without being read word by word.
+		// Each panel carries its own live detail, so the countdown sits in
+		// the step it belongs to instead of floating under the card.
+		<ol id="sys-steps" class="mt-5 grid gap-3 sm:grid-cols-3">
+			@swapStep("detected", "New build detected", swapSourceLine(d))
+			@swapStep("idle", "Waiting for idle", initialStateLine(d))
+			@swapStep("swap", "Swapping over", "not started yet")
+		</ol>
+		<div id="sys-boot-bar-wrap" class="mt-3 hidden h-1 w-full overflow-hidden rounded-full bg-white-300 dark:bg-navy-800">
+			<div id="sys-boot-bar" class="h-full rounded-full bg-green-500 transition-[width] duration-1000" style="width:0%"></div>
+		</div>
+		<div class="mt-4 flex flex-wrap items-center gap-3">
+			if d.Graceful {
+				// One control, and it is the impatient one. The patient path
+				// already exists and is better: `reload --binary` installs and
+				// hands over in a single step, with a preflight on the file.
+				// What the UI adds is what a CLI cannot do well — a decision
+				// taken while looking at the work it would cut off.
+				<button
+					id="sys-swap-force"
+					type="button"
+					title="Hand over immediately and interrupt whatever is still running"
+					class="rounded-lg border border-neg-300 px-3 py-2 text-sm font-medium text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-800"
+				>Force swap</button>
+			}
+			<p id="sys-swap-msg" class="text-xs text-black-700 dark:text-black-600">
+				if d.Graceful {
+					Nothing is killed: the new process takes the socket first, the old one finishes whatever it started, then exits.
+				} else {
+					Graceful handover is off in this process, so applying this is a stop/start — running work would be interrupted.
+				}
+			</p>
+		</div>
+	</div>
+}
+
+// swapStep is one panel of the A → B → C strip. Status lives in a data
+// attribute rather than in class soup, so the script flips one value and the
+// styling follows.
+templ swapStep(key string, label string, detail string) {
+	// No A/B/C: lettered steps read as multiple choice. A tick for done, a
+	// filled dot for the one in progress, an empty ring for what is still
+	// ahead — the same vocabulary every progress list uses.
+	<li data-step={ key } data-status="todo" class="min-w-0 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3 opacity-70 transition-all">
+		<div class="flex items-center gap-2">
+			<span data-dot class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-white-400 dark:border-navy-600 text-[0.7rem] font-semibold text-black-700 dark:text-black-600"></span>
+			<span class="text-sm font-medium text-black-900 dark:text-white-100">{ label }</span>
+		</div>
+		// break-words, not truncate: the detail is short now that ids are
+		// gone, but a long cron name must wrap inside the panel rather than
+		// push past its border.
+		<p data-detail class="mt-1.5 break-words text-xs text-black-700 dark:text-black-600">{ detail }</p>
+	</li>
+}
+
+
+// initialStateLine is the first paint of step B. The stream overwrites it
+// within a second; it exists so the panel is never briefly blank, and so it
+// still says something true with JS disabled.
+func initialStateLine(d SystemPageData) string {
+	if len(d.Busy) > 0 {
+		return strings.Join(d.Busy, ", ")
+	}
+	return "nothing running"
+}
+
+// swapHeadline is the one line that answers "from what, to what".
+func swapHeadline(d SystemPageData) string {
+	from, to := orDash(d.SwapFrom), orDash(d.SwapTo)
+	return from + "  →  " + to
+}
+
+// swapSourceLine says where the waiting build came from, and when it was
+// built — the two things that tell an operator whether it is the one they
+// just installed.
+func swapSourceLine(d SystemPageData) string {
+	if d.SwapSource == "" {
+		return ""
+	}
+	if d.SwapBuilt == "" {
+		return d.SwapSource
+	}
+	return d.SwapSource + " · built " + d.SwapBuilt
+}
+
 // actionSlot renders the top-right action for the current phase: the
 // single control that swaps Check → download progress → Apply & restart
 // → Restarting. Server-side first paint; the SSE handler mirrors this
@@ -398,12 +554,26 @@ templ actionSlot(d SystemPageData) {
 				<p id="sys-progress-pct" class="mt-1.5 text-right text-xs font-mono text-black-700 dark:text-black-600">{ pctText(d.Percent) }</p>
 			</div>
 		case "staged":
-			<button
-				id="sys-apply"
-				type="button"
-				data-staged={ d.StagedVersion }
-				class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600"
-			>Apply &amp; restart</button>
+			<div class="flex items-center gap-2">
+				<button
+					id="sys-apply"
+					type="button"
+					data-staged={ d.StagedVersion }
+					class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600"
+				>Apply &amp; restart</button>
+				if d.Graceful {
+					// Escape hatch for an operator who has seen the list above
+					// and decided not to wait. Deliberately a separate,
+					// quieter control: waiting is the default, and cutting
+					// work off is a choice a person makes, not a timer.
+					<button
+						id="sys-force"
+						type="button"
+						title="Swap immediately and interrupt whatever is still running"
+						class="rounded-lg border border-neg-300 px-3 py-2 text-sm font-medium text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-800"
+					>Force swap</button>
+				}
+			</div>
 		case "applying":
 			<span class="inline-flex items-center gap-2 text-sm text-black-800 dark:text-black-600">
 				<span class="h-4 w-4 animate-spin rounded-full border-2 border-white-400 border-t-green-500"></span>
@@ -500,6 +670,18 @@ templ systemUpdateScript() {
 		// is rendered to HTML once on load — no fetch.
 		var wickNotesBody = document.getElementById('sys-wick-notes-body');
 
+		// Live process state. The pid is how this page knows a handover
+		// finished: a zero-downtime swap never drops a connection, so there
+		// is no outage to watch for — only a different process answering.
+		var liveEl = document.getElementById('sys-live');
+		var busyEl = document.getElementById('sys-busy');
+		var busyEmptyEl = document.getElementById('sys-busy-empty');
+		var swapLineEl = document.getElementById('sys-swap-line');
+		var swapSrcEl = document.getElementById('sys-swap-source');
+		var myPID = liveEl ? liveEl.dataset.pid : '';
+		var graceful = liveEl ? liveEl.dataset.graceful === '1' : false;
+		var lastBusy = [];
+
 		var applying = false; // latched once Apply is clicked, until reload
 
 		function fmtDate(s) {
@@ -561,7 +743,10 @@ templ systemUpdateScript() {
 					'<div class="h-full rounded-full bg-green-500 transition-[width] duration-200" style="width:' + p + '%"></div></div>' +
 					'<p class="mt-1.5 text-right text-xs font-mono text-black-700 dark:text-black-600">' + p + '%</p></div>';
 			} else if (s === 'staged') {
-				actionEl.innerHTML = '<button id="sys-apply" type="button" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">Apply &amp; restart</button>';
+				actionEl.innerHTML = '<div class="flex items-center gap-2">' +
+					'<button id="sys-apply" type="button" class="rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white-100 hover:bg-green-600">Apply &amp; restart</button>' +
+					(graceful ? '<button id="sys-force" type="button" title="Swap immediately and interrupt whatever is still running" class="rounded-lg border border-neg-300 px-3 py-2 text-sm font-medium text-neg-400 hover:bg-neg-100 dark:hover:bg-navy-800">Force swap</button>' : '') +
+					'</div>';
 			} else if (s === 'applying') {
 				actionEl.innerHTML = '<span class="inline-flex items-center gap-2 text-sm text-black-800 dark:text-black-600"><span class="h-4 w-4 animate-spin rounded-full border-2 border-white-400 border-t-green-500"></span>Restarting…</span>';
 			} else if (s === 'checking') {
@@ -599,7 +784,6 @@ templ systemUpdateScript() {
 			if (st.phase === 'applying') {
 				applying = true;
 				renderAction({ phase: 'applying' });
-				startHealthPoll();
 			}
 		}
 
@@ -610,50 +794,269 @@ templ systemUpdateScript() {
 				.catch(function () { if (statusEl) statusEl.textContent = 'Could not start the check.'; });
 		}
 
-		// startHealthPoll watches /health and reloads the page once the
-		// service comes back. It is idempotent (polling guard) so it can be
-		// called from triggerApply AND from render() when the phase is
-		// 'applying' — so a tab that merely LOADS mid-restart still auto-
-		// reloads, instead of getting stuck on "Restarting…" until a manual
-		// refresh. It waits for /health to go DOWN first, then reloads on the
-		// first success after that — otherwise the brief window where the old
-		// server is still answering would reload us straight back onto the
-		// old build. A time cap reloads anyway as a fallback.
-		var polling = false;
-		function startHealthPoll() {
-			if (polling) return;
-			polling = true;
-			var tries = 0, sawDown = false;
-			(function tick() {
-				tries++;
-				fetch('/health', { cache: 'no-store' })
-					.then(function (r) {
-						if (r.ok) {
-							// Up. Reload only once we've seen it go down — that's
-							// the new build answering, not the pre-restart one.
-							if (sawDown) { location.reload(); return; }
-						} else {
-							sawDown = true; // non-2xx counts as down
-						}
-						if (tries > 150) { location.reload(); return; } // ~5min cap
-						setTimeout(tick, 2000);
-					})
-					.catch(function () {
-						sawDown = true; // connection refused — server is down
-						if (tries > 150) { location.reload(); return; }
-						setTimeout(tick, 2000);
-					});
-			})();
+		// renderBusy only records; step B does the talking. lastBusy is also
+		// what the Force confirm dialog enumerates.
+		function renderBusy(list) {
+			lastBusy = list || [];
+			paintAuto();
 		}
-		function triggerApply() {
+
+		// renderSwap reveals the card when a build is installed but not yet
+		// running — including one dropped in by the CLI while this page sat
+		// open, which is the normal way this host deploys.
+		function renderSwap(sw) {
+			if (!liveEl) return;
+			var pending = !!(sw && sw.pending);
+			liveEl.classList.toggle('hidden', !pending);
+			if (!pending) return;
+			if (swapLineEl) swapLineEl.textContent = (sw.from || '—') + '  →  ' + (sw.to || '—');
+			if (swapSrcEl) swapSrcEl.textContent = (sw.source || '') + (sw.built ? ' · built ' + sw.built : '');
+		}
+
+		// ── The A → B → C strip ────────────────────────────────────────
+		// Each panel says where the swap is and carries its own live detail,
+		// so a countdown sits in the step it belongs to instead of floating
+		// under the card as a paragraph nobody finished reading.
+		var titleEl = document.getElementById('sys-title');
+		var stepsEl = document.getElementById('sys-steps');
+		var autoState = '', autoLeft = 0, autoElapsed = 0, typicalBoot = 0;
+		var installedAgo = 0;
+
+		function mmss(n) {
+			if (n < 60) return n + 's';
+			return Math.floor(n / 60) + 'm' + String(n % 60).padStart(2, '0') + 's';
+		}
+
+		// Which panel each phase lights up. 'settling' belongs to B: the file
+		// is being confirmed BEFORE anything is handed over.
+		function stepStatus(key) {
+			var s = autoState;
+			if (key === 'detected') return 'done';
+			if (key === 'idle') {
+				if (s === 'handing_over') return 'done';
+				if (s === 'waiting' || s === 'settling' || s === 'previous_draining') return 'active';
+				return 'todo';
+			}
+			// swap
+			return s === 'handing_over' ? 'active' : 'todo';
+		}
+
+		// One line per panel, and at most ONE number in it. Two numbers — a
+		// stopwatch and a deadline in one sentence — is what made the old
+		// version unreadable.
+		function stepDetail(key) {
+			if (key === 'detected') {
+				// "Built at 14:32Z" does not answer "has this been waiting all
+				// morning?" — which is the actual question when a build sits
+				// unapplied.
+				if (installedAgo > 0) return 'installed ' + mmss(installedAgo) + ' ago';
+				return 'installed at the exec path';
+			}
+			if (key === 'idle') {
+				switch (autoState) {
+					case 'settling': return 'nothing running — swapping in ' + mmss(autoLeft);
+					case 'previous_draining': return 'previous process still finishing — retrying in ' + mmss(autoLeft);
+					case 'waiting': return lastBusy.length ? lastBusy.join(', ') : 'waiting for this process to go idle';
+					case 'handing_over': return 'idle — nothing was interrupted';
+				}
+				return lastBusy.length ? lastBusy.join(', ') : 'nothing running';
+			}
+			if (autoState !== 'handing_over') return 'not started yet';
+			var t = 'new process booting — ' + mmss(autoElapsed);
+			// Grounded in what a boot ACTUALLY took here last time, not a
+			// guess. Without it, a minute of silence reads as a hang.
+			if (typicalBoot > 0) t += ' of ~' + mmss(typicalBoot) + ' usual';
+			// The 3-minute abort limit is real but almost never reached, so it
+			// stays out of the way until it is close.
+			if (autoLeft > 0 && autoLeft <= 45) t += ' · giving up in ' + mmss(autoLeft);
+			return t;
+		}
+
+		var DOT_TEXT = { done: '✓', active: '', todo: '' };
+		var STEP_CLASS = {
+			done: 'min-w-0 rounded-lg border border-pos-300 bg-pos-100 dark:border-navy-600 dark:bg-navy-800 p-3 transition-all',
+			active: 'min-w-0 rounded-lg border border-green-400 dark:border-green-600 bg-green-50 dark:bg-navy-800 p-3 shadow-sm ring-1 ring-green-200 dark:ring-green-800 transition-all',
+			todo: 'min-w-0 rounded-lg border border-white-300 dark:border-navy-600 bg-white-200 dark:bg-navy-800 p-3 opacity-70 transition-all'
+		};
+		var DOT_CLASS = {
+			done: 'flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-pos-400 text-[0.7rem] font-semibold text-white-100',
+			active: 'flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-green-500 text-[0.7rem] font-semibold text-white-100 animate-pulse',
+			todo: 'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-white-400 dark:border-navy-600 text-[0.7rem] font-semibold text-black-700 dark:text-black-600'
+		};
+
+		function paintAuto() {
+			if (titleEl) {
+				titleEl.textContent = autoState === 'handing_over'
+					? 'Swapping to the new build'
+					: 'Update waiting to be applied';
+			}
+			if (stepsEl) {
+				var panels = stepsEl.querySelectorAll('[data-step]');
+				for (var i = 0; i < panels.length; i++) {
+					var key = panels[i].getAttribute('data-step');
+					var st = stepStatus(key);
+					panels[i].setAttribute('data-status', st);
+					panels[i].className = STEP_CLASS[st];
+					var dot = panels[i].querySelector('[data-dot]');
+					if (dot) { dot.className = DOT_CLASS[st]; dot.textContent = DOT_TEXT[st]; }
+					var det = panels[i].querySelector('[data-detail]');
+					if (det) det.textContent = stepDetail(key);
+				}
+			}
+			// A bar for the one phase that has a duration worth showing. Capped
+			// at 97% so it never claims to be finished before it is.
+			var bar = document.getElementById('sys-boot-bar');
+			var barWrap = document.getElementById('sys-boot-bar-wrap');
+			if (barWrap && bar) {
+				var show = autoState === 'handing_over' && typicalBoot > 0;
+				barWrap.classList.toggle('hidden', !show);
+				if (show) {
+					var pct = Math.min(97, Math.round((autoElapsed / typicalBoot) * 100));
+					bar.style.width = pct + '%';
+				}
+			}
+			// Grey the control out once a handover is underway: there is no
+			// second successor to start, and a button that answers "upgrade in
+			// progress" is a button that lied about being clickable.
+			var btn = document.getElementById('sys-swap-force');
+			if (!btn) return;
+			var dead = autoState === 'handing_over';
+			btn.disabled = dead;
+			btn.title = dead
+				? 'A handover is already underway — the new process is booting.'
+				: 'Hand over immediately and interrupt whatever is still running';
+			btn.classList.toggle('opacity-50', dead);
+			btn.classList.toggle('cursor-not-allowed', dead);
+			btn.classList.toggle('hover:bg-neg-100', !dead);
+			btn.classList.toggle('dark:hover:bg-navy-800', !dead);
+		}
+
+		function renderAuto(a) {
+			autoState = (a && a.state) || '';
+			autoElapsed = (a && a.elapsed_seconds) || 0;
+			autoLeft = autoState === 'handing_over'
+				? ((a && a.gives_up_in_seconds) || 0)
+				: ((a && a.next_check_in) || 0);
+			paintAuto();
+		}
+		// Local tick only as a smoother between server updates; every update
+		// overwrites it, so the page can never disagree with the daemon.
+		setInterval(function () {
+			if (autoState === 'handing_over') autoElapsed++;
+			if (autoLeft > 0) autoLeft--;
+			if (autoState !== '') paintAuto();
+		}, 1000);
+
+		// The two controls on the pending-swap card. "Apply now" is the normal
+		// handover; "Force swap" is the same thing with the drain told not to
+		// wait — confirmed against the list, so nobody cuts off work they
+		// could not see.
+		var swapMsgEl = document.getElementById('sys-swap-msg');
+		function triggerSwap(force) {
+			if (swapMsgEl) swapMsgEl.textContent = force ? 'Swapping now — interrupting running work…' : 'Handing over — the new process is booting…';
+			applying = true;
+			fetch('/admin/advanced/software-update/swap' + (force ? '?force=1' : ''), { method: 'POST' })
+				.then(function (r) { return r.json(); })
+				.then(function (d) {
+					if (!d || !d.ok) {
+						applying = false;
+						if (swapMsgEl) swapMsgEl.textContent = 'Could not start the handover: ' + ((d && d.error) || 'unknown error');
+					} else if (d.message && swapMsgEl) {
+						// e.g. the click raced a handover that had just started
+						swapMsgEl.textContent = d.message;
+					}
+					// On success there is nothing more to do here: the poll
+					// notices a different pid answering and reloads.
+				})
+				.catch(function () {
+					applying = false;
+					if (swapMsgEl) swapMsgEl.textContent = 'Could not start the handover — see the server log.';
+				});
+		}
+		document.addEventListener('click', function (e) {
+			var btn = e.target.closest ? e.target.closest('button') : null;
+			if (!btn) return;
+			if (btn.id === 'sys-swap-force') {
+				if (btn.disabled) return;
+				var what = lastBusy.length
+					? 'This will interrupt:\n\n' + lastBusy.join('\n') + '\n\nWorkflow runs, cron jobs and connector calls cut off here lose their work; agent turns resume on the next message.'
+					: 'Nothing is running right now, so nothing gets interrupted.';
+				if (window.confirm('Hand over immediately?\n\n' + what)) triggerSwap(true);
+			}
+		});
+
+		// One poll, always running: it keeps the "Waiting for" list live, and
+		// it is also how the page learns a handover completed — the pid it
+		// gets back stops matching the one that rendered the page.
+		//
+		// The old version polled /health and waited for it to go DOWN before
+		// reloading. That is precisely what a zero-downtime upgrade never
+		// does, so the page sat on "Restarting…" for its whole five-minute
+		// cap after a perfectly successful swap. Readiness has to come from
+		// wick, not from an outage that is not coming.
+		// Realtime first: one SSE stream pushes this every second, so the
+		// countdown moves smoothly and a completed swap shows immediately.
+		// The poll below stays as the fallback for a browser or proxy that
+		// cannot hold the stream.
+		var streamOK = false;
+		try {
+			var servingES = new EventSource('/admin/advanced/software-update/serving/stream');
+			servingES.addEventListener('serving', function (e) {
+				try {
+					var d = JSON.parse(e.data);
+					streamOK = true;
+					applyServing(d);
+				} catch (_) {}
+			});
+			servingES.onerror = function () { streamOK = false; };
+		} catch (_) { /* no EventSource — the poll covers it */ }
+
+		function applyServing(d) {
+			if (!d) return;
+			// Prefer the server's human wording; fall back to the raw list on
+			// an older daemon that does not send it yet.
+			d.busy = (d.busy_label && d.busy_label.length) ? d.busy_label : d.busy;
+			typicalBoot = d.typical_boot_seconds || 0;
+			installedAgo = (d.swap && d.swap.installed_ago) || 0;
+			if (myPID && String(d.pid) !== String(myPID)) { location.reload(); return; }
+			if (!myPID) myPID = String(d.pid);
+			graceful = !!d.graceful;
+			renderBusy(d.busy);
+			renderSwap(d.swap);
+			renderAuto(d.auto_swap);
+		}
+
+		var pollTries = 0;
+		(function pollServing() {
+			fetch('/admin/advanced/software-update/serving', { cache: 'no-store' })
+				.then(function (r) { return r.ok ? r.json() : null; })
+				.then(function (d) {
+					if (d && !streamOK) applyServing(d);
+					pollTries = 0;
+					// The stream carries it when it is up; the poll then only
+					// needs to notice that the stream died.
+					setTimeout(pollServing, streamOK ? 15000 : (applying ? 1500 : 5000));
+				})
+				.catch(function () {
+					// Unreachable: a stop/start restart (no handover), or the
+					// box is busy. Keep looking; reload as a fallback if this
+					// drags on while an update is being applied.
+					pollTries++;
+					if (applying && pollTries > 120) { location.reload(); return; }
+					setTimeout(pollServing, 2000);
+				});
+		})();
+		function triggerApply(force) {
 			applying = true;
 			renderAction({ phase: 'applying' });
-			if (statusEl) statusEl.textContent = 'Applying update…';
-			fetch('/admin/advanced/software-update/apply', { method: 'POST' })
+			if (statusEl) statusEl.textContent = force ? 'Swapping now — interrupting running work…' : 'Applying update…';
+			fetch('/admin/advanced/software-update/apply' + (force ? '?force=1' : ''), { method: 'POST' })
 				.then(function (r) { return r.json(); })
 				.then(function (d) {
 					if (d && d.restart) {
-						setTimeout(startHealthPoll, 1500);
+						// Nothing else to start: the poll above is already
+						// running and reloads as soon as a different pid
+						// answers.
 					} else {
 						applying = false;
 						if (statusEl) statusEl.textContent = (d && (d.error || d.message)) || 'Could not apply the update.';
@@ -674,7 +1077,15 @@ templ systemUpdateScript() {
 				var btn = e.target.closest('button');
 				if (!btn) return;
 				if (btn.id === 'sys-check') triggerCheck();
-				else if (btn.id === 'sys-apply') triggerApply();
+				else if (btn.id === 'sys-apply') triggerApply(false);
+				else if (btn.id === 'sys-force') {
+					// Name the work in the confirm. "Interrupt running work?"
+					// with nothing to look at is not a decision, it is a dare.
+					var what = lastBusy.length
+						? 'This will interrupt:\n\n' + lastBusy.join('\n') + '\n\nWorkflow runs, cron jobs and connector calls cut off here lose their work; agent turns resume on the next message.'
+						: 'Nothing is running right now, so this behaves like a normal apply.';
+					if (window.confirm('Swap to the new build immediately?\n\n' + what)) triggerApply(true);
+				}
 			});
 		}
 

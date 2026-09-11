@@ -21,7 +21,8 @@ func TestZeroDowntimeUpgradeSkillIsShipped(t *testing.T) {
 		"name: wick-zero-downtime-upgrade",
 		"WICK_GRACEFUL_UPGRADE=1",
 		"TimeoutStartSec=infinity",
-		"WICK_DRAIN_AGENT_GRACE",
+		"WICK_DRAIN_QUIET",
+		"WICK_DRAIN_TIMEOUT",
 		// The command that installs the binary is the first thing an
 		// operator needs; losing it from the skill leaves them on the
 		// manual recipe with no preflight.

@@ -125,7 +125,11 @@ type SystemConfig struct {
 	// cached changelog from it instead of doing a live request on load.
 	VersionCache *updater.VersionCache
 	AppName      string
-	WickVersion  string
+	// AppVersion is the version THIS process is running — compared against
+	// the binary on disk to spot a build that is installed but not yet
+	// swapped in.
+	AppVersion  string
+	WickVersion string
 	Commit       string
 	BuildTime    string
 }
@@ -235,6 +239,9 @@ func (h *Handler) Register(mux *http.ServeMux, sessionMidd *login.Middleware) {
 	mux.Handle("GET /admin/advanced/software-update/status", admin(h.systemUpdateStatus))
 	mux.Handle("POST /admin/advanced/software-update/check", admin(h.systemUpdateCheck))
 	mux.Handle("POST /admin/advanced/software-update/apply", admin(h.systemUpdateApply))
+	mux.Handle("GET /admin/advanced/software-update/serving", admin(h.systemServingInfo))
+	mux.Handle("GET /admin/advanced/software-update/serving/stream", admin(h.systemServingStream))
+	mux.Handle("POST /admin/advanced/software-update/swap", admin(h.systemSwapNow))
 	mux.Handle("POST /admin/advanced/software-update/auto-update", admin(h.systemSetAutoUpdate))
 
 	// Variables (app-level configs)
