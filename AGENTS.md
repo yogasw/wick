@@ -40,6 +40,7 @@ If nothing is found, run `make setup` once — it auto-detects OS/arch and downl
 | Compile check | `go build ./...` |
 | Run server (foreground) | `go run main.go server` |
 | Run tests | `go test ./...` |
+| Run the nested plugins module | `cd plugins && go test ./...` (go.work module — `./...` from the root never reaches it) |
 | Setup Tailwind CLI | `make setup` (one-time) |
 
 ## Before declaring a task done
