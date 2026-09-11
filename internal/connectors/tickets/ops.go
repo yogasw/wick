@@ -3,6 +3,7 @@ package tickets
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -184,6 +185,148 @@ func (h *handlers) listFiltered(c *connector.Ctx, assignee string) (any, error) 
 		res["status_filter"] = filter
 	}
 	return res, nil
+}
+
+// search answers the question a filter cannot: "where is the ticket about X".
+//
+// It reads the project's tickets and matches the query against the id, title,
+// body and field VALUES. Matching the body matters more than it looks — a
+// ticket's title is written in the first minute, when the least is known,
+// while the detail that makes it findable later ends up in the description.
+//
+// Each hit says where it matched. Without that, a ticket whose body mentions
+// "webhook" in passing looks exactly like one whose title is about webhooks,
+// and the model has no way to rank them.
+func (h *handlers) search(c *connector.Ctx) (any, error) {
+	q := strings.ToLower(strings.TrimSpace(c.Input("query")))
+	if q == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	projectID, err := resolveProject(h.layout, c, c.Input("project_id"))
+	if err != nil {
+		return nil, err
+	}
+	assignee, err := resolveAssigneeFilter(c)
+	if err != nil {
+		return nil, err
+	}
+	all, err := ticket.List(h.layout, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list tickets: %w", err)
+	}
+	cfg, err := h.ticketConfig(projectID)
+	if err != nil {
+		return nil, err
+	}
+	status := strings.TrimSpace(c.Input("status"))
+	if status != "" && !ticket.ValidStatus(cfg, status) {
+		return nil, fmt.Errorf("invalid status %q (want %s)", status, strings.Join(cfg.StatusKeys(), ", "))
+	}
+	limit := c.InputInt("limit")
+	if limit <= 0 {
+		limit = 20
+	}
+
+	type hit struct {
+		ticketView
+		MatchedIn []string `json:"matched_in"`
+	}
+	out := make([]hit, 0, limit)
+	scanned := 0
+	for _, tk := range all {
+		if !matchesAssignee(tk, assignee) {
+			continue
+		}
+		if status != "" && tk.Status != status {
+			continue
+		}
+		scanned++
+		where := matchedIn(tk, q)
+		if len(where) == 0 {
+			continue
+		}
+		if len(out) >= limit {
+			// Keep counting so the caller learns the result was cut, rather
+			// than believing it saw everything.
+			continue
+		}
+		v := h.view(c, tk)
+		if len(v.Body) > 280 {
+			v.Body = v.Body[:280] + "…"
+		}
+		out = append(out, hit{ticketView: v, MatchedIn: where})
+	}
+	// Title hits first: a ticket named after the thing you searched for is
+	// almost always the one you meant, and it must not sit below three that
+	// merely mention it.
+	sort.SliceStable(out, func(i, j int) bool {
+		return matchRank(out[i].MatchedIn) < matchRank(out[j].MatchedIn)
+	})
+
+	res := map[string]any{
+		"project_id": projectID,
+		"query":      strings.TrimSpace(c.Input("query")),
+		"tickets":    out,
+		"total":      len(out),
+		"scanned":    scanned,
+	}
+	if assignee != "" {
+		res["assignee_filter"] = assignee
+	}
+	if status != "" {
+		res["status_filter"] = status
+	}
+	return res, nil
+}
+
+// matchedIn reports which parts of a ticket contain the query, in the order
+// they are worth trusting.
+func matchedIn(tk ticket.Ticket, q string) []string {
+	var where []string
+	if strings.Contains(strings.ToLower(tk.Title), q) {
+		where = append(where, "title")
+	}
+	if strings.Contains(strings.ToLower(tk.Body), q) {
+		where = append(where, "body")
+	}
+	if strings.Contains(strings.ToLower(tk.ID), q) {
+		where = append(where, "id")
+	}
+	for k, v := range tk.Fields {
+		if strings.Contains(strings.ToLower(v), q) {
+			where = append(where, "field:"+k)
+		}
+	}
+	// Field order from a map is random; sorting keeps a response stable
+	// across identical calls.
+	if len(where) > 1 {
+		sort.SliceStable(where, func(i, j int) bool { return fieldRank(where[i]) < fieldRank(where[j]) })
+	}
+	return where
+}
+
+func fieldRank(s string) int {
+	switch {
+	case s == "title":
+		return 0
+	case s == "body":
+		return 1
+	case s == "id":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// matchRank ranks a hit by its strongest match.
+func matchRank(where []string) int {
+	best := 9
+	for _, w := range where {
+		if r := fieldRank(w); r < best {
+			best = r
+		}
+	}
+	return best
 }
 
 func (h *handlers) get(c *connector.Ctx) (any, error) {

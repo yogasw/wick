@@ -289,6 +289,9 @@ func Register(r tool.Router) {
 	r.POST("/api/sessions/{id}/subagents/interrupt-all", interruptAllSubAgents)
 	// Agent-to-agent thread + the human-only hop refill.
 	r.GET("/api/sessions/{id}/messages", sessionMessages)
+	// The session's checklists — the live one and the ones before it. The
+	// trace carries the same calls, but not which list is current.
+	r.GET("/api/sessions/{id}/todos", apiSessionTodos)
 	r.POST("/api/sessions/{id}/hops/reset", resetSessionHops)
 	r.POST("/api/delegations/{delegationID}/interrupt", interruptSubAgent)
 	r.POST("/api/delegations/{delegationID}/continue", continueSubAgent)

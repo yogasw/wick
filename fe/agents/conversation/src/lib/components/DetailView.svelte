@@ -24,6 +24,7 @@
   import { getConversation, getSessionMeta, deleteSession, getTurnTrace, getTurnEvent, cancelRun } from "../api/sessions.js";
   import { getProviderOptions, getProviderOptionModels, getProjectOptions, switchProvider, moveProject } from "../api/options.js";
   import { getAsks, answerAsk } from "../api/asks.js";
+  import { getTodos, type TodoList } from "../api/todos.js";
   import { getApprovals, sendApprovalDecision, revokeApproval } from "../api/approvals.js";
   import { sendMessage } from "../api/messages.js";
   import { listFiles, searchTree, searchMentionPaths, readFile, saveFile, createFile, deleteFile, downloadURL } from "../api/files.js";
@@ -81,6 +82,7 @@
   import ProcessPanel from "./ProcessPanel.svelte";
   import WorkspacePanel from "./WorkspacePanel.svelte";
   import SchedulePanel from "./SchedulePanel.svelte";
+  import TodoPanel from "./TodoPanel.svelte";
   import AskUserModal from "./AskUserModal.svelte";
   import ApprovalsModal from "./ApprovalsModal.svelte";
   import ApprovedPanel from "./ApprovedPanel.svelte";
@@ -177,7 +179,7 @@
   let sseStatus = $state<SSEStatus>("connecting");
 
   /* ── vertical rail tabs ────────────────────────────────────────── */
-  type RailTab = "context" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents" | "ticket" | "notes";
+  type RailTab = "context" | "process" | "workspace" | "scheduled" | "browser" | "source" | "subagents" | "ticket" | "notes" | "todos";
   let railTab = $state<RailTab | null>(null);
 
   /* ── thread scroll ref ─────────────────────────────────────────── */
@@ -990,6 +992,68 @@
       .catch(() => { notesInfo = null; });
   }
 
+  /* Todo rail data. The todo tool writes its list to the session, so
+     the panel shows the SAME list the agent works from — not a reconstruction
+     of the tool calls in the trace, which scroll away and give no answer to
+     "which of these five is the current one?". */
+  let todosActive = $state<TodoList | null>(null);
+  let todosHistory = $state<TodoList[]>([]);
+  let todosLoading = $state(false);
+  let todosError = $state<string | null>(null);
+  /* started_at of the list already on screen. A CHANGE here means the agent
+     started a new checklist, which is the only moment worth opening the rail
+     for; every other update is the same list moving forward. */
+  let todosSeen = $state<string | null>(null);
+  /* True while the rail is open on Todo because the PANEL opened it,
+     not the user. Only that is undone when the list finishes: closing a
+     panel somebody opened themselves is the same rudeness as stealing focus,
+     just in the other direction. */
+  let todosAutoOpened = $state(false);
+
+  function loadTodos() {
+    todosLoading = true;
+    run(getTodos(base, sessionId).pipe(Effect.provide(WickClientLayer)))
+      .then((res) => {
+        todosActive = res.active;
+        todosHistory = res.history;
+        todosError = null;
+        const start = res.active?.started_at ?? null;
+        if (start && start !== todosSeen) {
+          todosSeen = start;
+          // Open the rail on a NEW list, and only when nothing else is
+          // open: a panel that yanks you off the one you were reading is
+          // worse than one you have to click.
+          if (railTab === null) {
+            railTab = "todos";
+            todosAutoOpened = true;
+          }
+        }
+        // Finished list → put the rail back the way it was. Symmetric with
+        // the open above, and only for an auto-open: a panel the user chose
+        // stays until they choose otherwise.
+        if (res.active?.done && todosAutoOpened && railTab === "todos") {
+          railTab = null;
+          todosAutoOpened = false;
+        }
+      })
+      .catch(() => {
+        // An older server has no endpoint; treat it as "no checklists" so
+        // the tab stays hidden rather than showing a broken panel.
+        todosError = null;
+        todosActive = null;
+        todosHistory = [];
+      })
+      .finally(() => { todosLoading = false; });
+  }
+
+  /* Coalesce: a turn writes its checklist repeatedly, and each write would
+     otherwise cost a fetch. */
+  let todoReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleTodoReload() {
+    if (todoReloadTimer) clearTimeout(todoReloadTimer);
+    todoReloadTimer = setTimeout(() => { todoReloadTimer = null; loadTodos(); }, 400);
+  }
+
   /* Jump from this chat to its ticket — offered only where a board exists.
      A chat already ON a ticket opens that ticket; one that is not opens the
      board, which is where it would be put on one. The ticket rail can do
@@ -1446,6 +1510,10 @@
         // reloaded, which is precisely when you most want to see that
         // sub-agents are running.
         if (isDelegationTool(ev.tool_name)) scheduleSubAgentReload();
+        // A checklist is written mid-turn. Without this the panel only
+        // caught up when the turn ended — which is exactly the stretch
+        // during which somebody wants to see what is being worked on.
+        if (bareToolName(ev.tool_name ?? "") === "todo") scheduleTodoReload();
       } else if (ev.type === "lifecycle") {
         scheduleProcessReload();
         scheduleSubAgentReload();
@@ -1606,6 +1674,9 @@
   /* ── rail toggle ──────────────────────────────────────────────── */
   function toggleRail(tab: RailTab) {
     railTab = railTab === tab ? null : tab;
+    // Any deliberate click hands the rail back to the user, so a finishing
+    // checklist no longer closes it under them.
+    todosAutoOpened = false;
   }
 
   // When a panel opens (via a `/` command or a tab click), move focus into it so
@@ -1691,6 +1762,7 @@
     loadWorkspace();
     loadSchedules();
     loadTicket();
+    loadTodos();
     loadProviderOptions();
     loadProjectOptions();
     loadPendingAsk();
@@ -1758,6 +1830,15 @@
       icon: '<path d="M4 2.5h8v11H4z" stroke-linejoin="round"></path><path d="M6 5.5h4M6 8h4M6 10.5h2.5" stroke-linecap="round"></path>',
     },
     {
+      // Todos live in their own tab rather than inside Context: they are the
+      // one thing in this rail that changes minute to minute. Named after the
+      // tool and the endpoint — todo / /todos — so the thing on screen and
+      // the thing in the API are obviously the same thing.
+      id: "todos",
+      label: "Todo",
+      icon: '<path d="M5.5 4.5h7M5.5 8h7M5.5 11.5h4" stroke-linecap="round"></path><path d="M2.5 4.5l1 1 1.5-2M2.5 8l1 1 1.5-2" stroke-linecap="round" stroke-linejoin="round"></path>',
+    },
+    {
       id: "context",
       label: "Context",
       icon: '<path d="M2 4a1 1 0 011-1h3l2 2h5a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V4z" stroke-linejoin="round"></path>',
@@ -1797,6 +1878,9 @@
     railTabsAll.filter(
       (t) =>
         (t.id !== "browser" || hasBrowserInstance) &&
+        // Hidden until there is something to show, then it appears on its
+        // own — the badge promotes it into the strip from there.
+        (t.id !== "todos" || todosActive !== null || todosHistory.length > 0) &&
         (t.id !== "subagents" || subAgents.length > 0) &&
         // Notes need nothing but a reachable scope; the Ticket tab needs a
         // project, since a chat outside one cannot hold a ticket.
@@ -1965,7 +2049,11 @@
     return id === "subagents" && subAgentsBusy;
   }
 
+  const openTodoCount = $derived(
+    todosActive ? Math.max(0, todosActive.total - todosActive.completed) : 0,
+  );
   function railCount(id: RailTab): number {
+    if (id === "todos") return openTodoCount;
     if (id === "notes") return noteCount;
     if (id === "context") return contextCount;
     if (id === "process") return processCount;
@@ -2278,6 +2366,14 @@
           onDelete={removeEntry}
           onNewHere={(dir) => createEntry(false, dir)}
         />
+      {:else if railTab === "todos"}
+        <TodoPanel
+          active={todosActive}
+          history={todosHistory}
+          loading={todosLoading}
+          error={todosError}
+          onRefresh={loadTodos}
+        />
       {:else if railTab === "process"}
         <ProcessPanel
           processes={liveProcesses}
@@ -2455,6 +2551,14 @@
               onDownload={(p) => { window.open(downloadURL(base, sessionId, p), "_blank"); }}
               onDelete={removeEntry}
               onNewHere={(dir) => createEntry(false, dir)}
+            />
+          {:else if railTab === "todos"}
+            <TodoPanel
+              active={todosActive}
+              history={todosHistory}
+              loading={todosLoading}
+              error={todosError}
+              onRefresh={loadTodos}
             />
           {:else if railTab === "process"}
             <ProcessPanel

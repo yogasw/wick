@@ -6,7 +6,15 @@ All notable changes to Wick are documented here.
 
 ## [Unreleased]
 
-_Nothing yet — notes for the next release go here._
+### Changed
+
+*   **The drain waits for the work instead of running a clock against it**: a handover now completes on a condition — every subsystem at zero, and still at zero for the settle window `WICK_DRAIN_QUIET` (default `15s`) — rather than on two deadlines that killed what they were supposed to protect (`WICK_DRAIN_TIMEOUT` 20m for workflow runs and cron jobs, a fixed 45s grace for agent turns). An agent turn or workflow run that takes hours is waited for, for hours, and the process exits the moment the last of it settles. `WICK_DRAIN_TIMEOUT` remains as an optional hard cap and is now unset by default; `WICK_DRAIN_AGENT_GRACE` is gone (a host that still sets it gets a warning). The pool now reports turns that are actually producing rather than live subprocesses, so an idle-but-alive spawn no longer holds a handover open. Requests being handled are waited for too (the HTTP shutdown lost its 30s cap); SSE and websocket streams are excluded and dropped last. Readiness lost its 2-minute ceiling as well: a successor reports ready only once its own boot gate lifts.
+
+### Added
+
+*   **Force swap, with the work it would interrupt shown first**: `/admin/advanced/software-update` renders a live “Running now” list (agent turns, workflow runs, cron jobs, in-flight requests) from a new `GET /admin/advanced/software-update/serving` endpoint, alongside a Force swap control that hands over immediately instead of waiting. The page also detects a completed handover by comparing the serving pid, replacing a `/health` poll that waited for an outage a zero-downtime upgrade never produces.
+*   **A binary installed at the exec path applies itself**: the daemon never watched its own file, so a build copied into place sat there until someone sent SIGHUP — with the app looking perfectly normal on the old version. A watcher now hands over once the file differs from the running image, has stopped changing (so a copy in flight is never executed), and nothing is in flight. A file that fails to take over is not retried.
+*   **MCP credentials survive a handover**: scoped per-spawn tokens are passed to the successor (0600 beside the intake baton, deleted as it is read, original expiry kept), so an agent still finishing its turn in the outgoing process keeps its wick tools instead of getting `401`.
 
 ---
 
