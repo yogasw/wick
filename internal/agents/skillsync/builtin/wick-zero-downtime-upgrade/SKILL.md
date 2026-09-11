@@ -1,6 +1,6 @@
 ---
 name: wick-zero-downtime-upgrade
-description: Use when replacing the wick binary on a running host, or when an update caused downtime — a 502/503 during deploy, killed agent turns, an interrupted workflow run, two wick processes at once, "upgrade failed: parent hasn't exited", or a reload that did nothing. Covers reload vs restart, the systemd unit a handover needs, what the drain does and does not wait for, and how to prove there was no downtime.
+description: Use when deploying or replacing the wick binary on a running host — "how do I ship this build", `reload --binary`, a refused candidate ("refusing to install this binary", sha256 mismatch, "--yes was not given", "cannot replace … as this user") — or when an update caused downtime: a 502/503 during deploy, killed agent turns, an interrupted workflow run, two wick processes at once, "upgrade failed: parent hasn't exited", or a reload that did nothing. Covers reload vs restart, installing the new binary safely, the systemd unit a handover needs, what the drain does and does not wait for, and how to prove there was no downtime.
 ---
 
 # Upgrading wick without downtime
@@ -46,7 +46,32 @@ After editing the unit: `systemctl --user daemon-reload`. A host already running
 
 ## Doing the upgrade
 
-Install the new binary, then reload:
+One command installs the new build and hands over to it:
+
+```bash
+<app> reload --binary <new-binary>       # --sudo when the target directory is root-owned
+```
+
+It inspects the candidate before touching anything, swaps it in atomically, signals the handover, then waits to confirm the successor really took over — printing `handover done: pid <old> -> <new>, <old version> -> <new version>`. Add `--wait-drain` to also wait for the old process to exit, which is the moment channels, cron and the schedule runner move across.
+
+### What it checks
+
+Identity comes from the candidate's embedded build info — the module graph plus the `-X` ldflags `wick build` bakes in. The file is never executed to identify it: running an unknown binary is self-defeating when the whole question is whether it is what you think it is.
+
+- **FATAL, no override** — built for another OS or architecture, or nothing in its module graph depends on wick. A wrong-architecture binary in place is a crash-loop (`status=203/EXEC`) that the service manager retries forever.
+- **BLOCK, `--force` to proceed** — a different main module, a different `BuildAppName` (that app has its own data dir, unit and paths), or a version older than the one running.
+- **WARN** — same version as the running binary, or a wick resolved through a local `replace` tree instead of a released tag.
+
+Two gates sit beside the identity check:
+
+- `--sha256 <sum>` is verified before anything else reads or copies the file. Use it when the binary arrived from CI or from someone else.
+- `--yes` is **required when stdin is not a terminal**. A deploy script runs with stdin closed or pointed at `/dev/null`, and a prompt that reads silence as consent is how the wrong binary ships with nobody watching.
+
+If the successor never takes over within `--timeout`, the previous binary is put back and the command exits non-zero. Nothing is down while that happens — the old process only steps aside once a successor reports ready.
+
+### The manual equivalent
+
+Worth knowing, because it is what the command does for you, and what you fall back to on a host whose binary predates the flag:
 
 ```bash
 cp <new-binary> /usr/bin/<app>.new && chmod +x /usr/bin/<app>.new
@@ -55,6 +80,8 @@ mv -f /usr/bin/<app>.new /usr/bin/<app>      # atomic rename
 ```
 
 The rename matters. Copying **onto** a running binary fails with `ETXTBSY` ("Text file busy"); a rename replaces the directory entry while the running process keeps its old inode, so it can finish its work on the code it started with.
+
+**Install it where the successor will look.** The handover re-execs `os.Args[0]`, resolved through `PATH` — not the inode currently running, which is gone the moment the file is replaced. If the unit says `ExecStart=/usr/bin/<app> all`, that path is the one that must hold the new bytes; anywhere else gives a reload that reports success and brings the old version back. `reload --binary` resolves that path from the running process instead of assuming it.
 
 `<app> reload` routes itself: a systemd unit gets `systemctl reload`; a unit with no `ExecReload` is signalled by MainPID; a PID-file daemon is signalled directly. `kill -HUP <pid>` works too.
 
@@ -102,12 +129,17 @@ Then check that the failures are zero **and** that the log covers the moment of 
 grep -v ' 200$' probe.log        # anything here is real downtime
 ```
 
-Correlate with the daemon log lines `upgrade: successor is serving`, `upgrade: waiting for …`, and `upgrade: drained, exiting`, and with `systemctl show <app> -p MainPID` before and after — the pid must change while the unit never leaves `active`.
+Correlate with the daemon log lines `upgrade: successor is serving`, `upgrade: waiting for …`, and `upgrade: drained, exiting`, and with `systemctl show <app> -p MainPID` before and after — the pid must change while the unit never leaves `active`. (`reload --binary` prints that pid change itself, so a deploy through it needs only the probe.)
 
 Watch out for two things that look like handover downtime but are not: a **build running on the same host** (compiling saturates a small box and the app degrades under it — build elsewhere, or accept the dip), and a **database that throttles logins** while two processes briefly hold two connection pools.
 
 ## Troubleshooting
 
+- **`refusing to install this binary`** — the preflight rejected the candidate; the reason is the `FATAL` or `BLOCK` line above it. FATAL is final. BLOCK is a judgement call — read which one fired before reaching for `--force`, because "different app" and "downgrade" fail very differently.
+- **`sha256 mismatch`** — the file is not the one the checksum was issued for. Nothing was touched.
+- **`stdin is not a terminal and --yes was not given`** — a script or CI step is driving. Pass `--yes` deliberately rather than wiring a terminal in.
+- **`cannot replace <path> as this user`** — the binary sits in a root-owned directory. Re-run with `--sudo`, which elevates only the file swap; the handover signal still goes through your own session, where the user service manager lives.
+- **`successor did not take over in time`** — the new binary failed to boot. It has been rolled back and the old process is still serving; the daemon log says why the successor died.
 - **`upgrade failed: parent hasn't exited`** — a previous upgrade's old process is still draining, and only one handover can be in flight at a time. Look at what the drain is waiting for in the log; it exits on its own when that finishes, or at the timeout.
 - **Reload did nothing / SIGHUP killed the daemon** — the running binary predates graceful upgrade, or `WICK_GRACEFUL_UPGRADE` is not set. Restart once onto the new binary with the env var in place.
 - **Unit went `activating` and then failed at once** — `TimeoutStartSec=0`. Change it to `infinity`.
