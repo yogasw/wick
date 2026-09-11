@@ -137,7 +137,46 @@ closed for the successor's whole boot — tens of seconds once a registry restor
 connectors are involved — and everything in flight is killed.
 
 ```bash
-# install the new binary FIRST, then hand over
+# check the candidate, install it, hand over, verify — one command
+./bin/myapp reload --binary ./bin/myapp     # --sudo when the target directory is root-owned
+```
+
+It waits for the handover and reports it, rather than firing a signal and leaving you to guess:
+
+```
+handover done: pid 618434 -> 668241, 0.1.113 -> 0.1.114
+```
+
+| Flag | |
+|---|---|
+| `--binary <path>` | install this build at the daemon's exec path, then hand over to it |
+| `--sha256 <sum>` | verify the file's checksum before anything else reads or copies it |
+| `--yes` / `-y` | skip the confirmation prompt — **required** when stdin is not a terminal |
+| `--force` | proceed despite a blocking finding; never overrides OS/arch or a non-wick binary |
+| `--sudo` | run the file swap through `sudo`, for a root-owned target directory |
+| `--wait-drain` | also wait for the previous process to finish its work and exit |
+| `--timeout <dur>` | how long to wait for the successor to take over (default `5m`) |
+
+**The candidate is checked before the file is touched.** Identity comes from its embedded build
+info, never from running it — executing an unknown binary is self-defeating when the whole
+question is whether it is what you think it is:
+
+- **FATAL, no override** — built for another OS or architecture, or nothing in its module graph
+  depends on wick. A wrong-architecture binary in place is a crash-loop the service manager
+  retries forever.
+- **BLOCK, `--force` to proceed** — a different main module, a different `BuildAppName` (that app
+  has its own data dir, unit and paths), or a version older than the one running.
+- **WARN** — same version as the running binary, or a wick resolved through a local `replace`
+  tree instead of a released tag.
+
+If the successor does not take over within `--timeout`, the previous binary is restored and the
+command exits non-zero. Nothing is down while that happens — the old process only steps aside
+once a successor reports ready.
+
+**By hand**, which is what the command does for you and the fallback on a host whose binary
+predates the flag:
+
+```bash
 cp ./bin/myapp /usr/local/bin/myapp.new && chmod +x /usr/local/bin/myapp.new
 mv -f /usr/local/bin/myapp.new /usr/local/bin/myapp   # atomic rename
 ./bin/myapp reload
@@ -146,6 +185,12 @@ mv -f /usr/local/bin/myapp.new /usr/local/bin/myapp   # atomic rename
 The rename is not a detail: copying **onto** a running binary fails with `ETXTBSY`
 ("Text file busy"), while a rename swaps the directory entry and lets the running process keep
 its old inode until it exits.
+
+Install it at the path the successor will *exec*: the handover re-execs `os.Args[0]` resolved
+through `PATH`, not the inode currently running — that one is gone as soon as the file is
+replaced. If the unit says `ExecStart=/usr/local/bin/myapp all`, that file is the one that must
+hold the new bytes; anywhere else gives a reload that reports success and brings the old version
+back. `--binary` resolves that path from the running process instead of assuming it.
 
 Requires the daemon to run with `WICK_GRACEFUL_UPGRADE=1`; without it the signal is logged and
 ignored, and you should use `restart`. Supported on Linux, macOS and BSD, as a plain daemon or
