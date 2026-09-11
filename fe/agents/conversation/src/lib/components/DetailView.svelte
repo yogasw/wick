@@ -992,7 +992,7 @@
       .catch(() => { notesInfo = null; });
   }
 
-  /* Checklist rail data. The todo tool writes its list to the session, so
+  /* Todo rail data. The todo tool writes its list to the session, so
      the panel shows the SAME list the agent works from — not a reconstruction
      of the tool calls in the trace, which scroll away and give no answer to
      "which of these five is the current one?". */
@@ -1004,6 +1004,11 @@
      started a new checklist, which is the only moment worth opening the rail
      for; every other update is the same list moving forward. */
   let todosSeen = $state<string | null>(null);
+  /* True while the rail is open on Todo because the PANEL opened it,
+     not the user. Only that is undone when the list finishes: closing a
+     panel somebody opened themselves is the same rudeness as stealing focus,
+     just in the other direction. */
+  let todosAutoOpened = $state(false);
 
   function loadTodos() {
     todosLoading = true;
@@ -1018,7 +1023,17 @@
           // Open the rail on a NEW list, and only when nothing else is
           // open: a panel that yanks you off the one you were reading is
           // worse than one you have to click.
-          if (railTab === null) railTab = "todos";
+          if (railTab === null) {
+            railTab = "todos";
+            todosAutoOpened = true;
+          }
+        }
+        // Finished list → put the rail back the way it was. Symmetric with
+        // the open above, and only for an auto-open: a panel the user chose
+        // stays until they choose otherwise.
+        if (res.active?.done && todosAutoOpened && railTab === "todos") {
+          railTab = null;
+          todosAutoOpened = false;
         }
       })
       .catch(() => {
@@ -1659,6 +1674,9 @@
   /* ── rail toggle ──────────────────────────────────────────────── */
   function toggleRail(tab: RailTab) {
     railTab = railTab === tab ? null : tab;
+    // Any deliberate click hands the rail back to the user, so a finishing
+    // checklist no longer closes it under them.
+    todosAutoOpened = false;
   }
 
   // When a panel opens (via a `/` command or a tab click), move focus into it so
@@ -1812,10 +1830,12 @@
       icon: '<path d="M4 2.5h8v11H4z" stroke-linejoin="round"></path><path d="M6 5.5h4M6 8h4M6 10.5h2.5" stroke-linecap="round"></path>',
     },
     {
-      // Checklists live in their own tab rather than inside Context: they
-      // are the one thing in this rail that changes minute to minute.
+      // Todos live in their own tab rather than inside Context: they are the
+      // one thing in this rail that changes minute to minute. Named after the
+      // tool and the endpoint — todo / /todos — so the thing on screen and
+      // the thing in the API are obviously the same thing.
       id: "todos",
-      label: "Checklist",
+      label: "Todo",
       icon: '<path d="M5.5 4.5h7M5.5 8h7M5.5 11.5h4" stroke-linecap="round"></path><path d="M2.5 4.5l1 1 1.5-2M2.5 8l1 1 1.5-2" stroke-linecap="round" stroke-linejoin="round"></path>',
     },
     {

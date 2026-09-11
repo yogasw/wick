@@ -51,6 +51,7 @@ import (
 	"github.com/yogasw/wick/internal/agents/store"
 	"github.com/yogasw/wick/internal/agents/ticket"
 	"github.com/yogasw/wick/internal/agents/ticketprompt"
+	"github.com/yogasw/wick/internal/agents/todoprompt"
 	// systemprompt "github.com/yogasw/wick/internal/agents/system-prompt" // disabled: ConnectorCatalog injection (see ConnectorCatalogLoader below)
 	wf "github.com/yogasw/wick/internal/agents/workflow"
 	wfguard "github.com/yogasw/wick/internal/agents/workflow/guard"
@@ -666,8 +667,19 @@ func NewServer() *Server {
 	// notes so the agent knows to read them through the notes connector.
 	// Read per Build, so a ticket attached (or a note added) mid-session
 	// shows up on the next spawn without a restart.
+	// The unfinished todo list rides along on the same hook: a fresh
+	// subprocess otherwise starts blind to the checklist it wrote itself,
+	// and either abandons it or replaces it with an unrelated one while the
+	// person watching the panel sees the work stop.
 	agentsFactory.TicketPointerLoader = func(sessionID string) string {
-		return ticketprompt.Pointer(agentsLayout, sessionID)
+		parts := make([]string, 0, 2)
+		if p := ticketprompt.Pointer(agentsLayout, sessionID); p != "" {
+			parts = append(parts, p)
+		}
+		if p := todoprompt.Pointer(agentsLayout, sessionID); p != "" {
+			parts = append(parts, p)
+		}
+		return strings.Join(parts, "\n\n")
 	}
 	// Memory guard. Read per Build so mode and limits can change in the UI
 	// without a restart. An unset or "off" mode returns nil, which is the

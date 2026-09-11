@@ -32,7 +32,7 @@ describe("TodoPanel", () => {
   test("says nothing is there rather than showing an empty box", () => {
     // A panel that appears blank reads as broken; it has to say why it is empty.
     render(TodoPanel, { active: null, history: [], loading: false, error: null, onRefresh: noop });
-    expect(screen.getByText(/No checklist yet/i)).toBeTruthy();
+    expect(screen.getByText(/No todo list yet/i)).toBeTruthy();
   });
 
   test("only shows a spinner on the FIRST load", () => {
@@ -45,13 +45,13 @@ describe("TodoPanel", () => {
       error: null,
       onRefresh: noop,
     });
-    expect(queryByText(/Loading the checklist/i)).toBeNull();
+    expect(queryByText(/Loading the todo list/i)).toBeNull();
     expect(screen.getByText("write the fix")).toBeTruthy();
   });
 
   test("shows the loading line when there is nothing yet", () => {
     render(TodoPanel, { active: null, history: [], loading: true, error: null, onRefresh: noop });
-    expect(screen.getByText(/Loading the checklist/i)).toBeTruthy();
+    expect(screen.getByText(/Loading the todo list/i)).toBeTruthy();
   });
 
   test("earlier lists are collapsed to one line", () => {

@@ -1,5 +1,5 @@
 <!--
-  Purpose:    The session's checklist, as a panel rather than a card buried
+  Purpose:    The session's todo list, as a panel rather than a card buried
               in the scrollback. The same list the agent is working from —
               so the person watching and the agent doing are looking at one
               thing — plus the lists that came before it.
@@ -55,7 +55,7 @@
 
 <div class="flex h-full flex-col overflow-hidden">
   <div class="flex items-center justify-between gap-2 border-b border-white-300 dark:border-navy-600 px-3 py-2">
-    <span class="text-sm font-medium text-black-900 dark:text-white-100">Checklist</span>
+    <span class="text-sm font-medium text-black-900 dark:text-white-100">Todo</span>
     <button
       type="button"
       onclick={onRefresh}
@@ -68,12 +68,12 @@
     {#if loading && !active && history.length === 0}
       <!-- Only on the FIRST load: a spinner over a list that is already on
            screen hides the thing the panel exists to show. -->
-      <p class="text-xs text-black-700 dark:text-black-600">Loading the checklist…</p>
+      <p class="text-xs text-black-700 dark:text-black-600">Loading the todo list…</p>
     {:else if error}
       <p class="text-xs text-neg-400">{error}</p>
     {:else if !active && history.length === 0}
       <p class="text-xs text-black-700 dark:text-black-600">
-        No checklist yet. One appears here as soon as the agent writes a todo list — it is the same list it works from.
+        No todo list yet. One appears here as soon as the agent writes one — it is the same list it works from.
       </p>
     {:else}
       {#if active}
