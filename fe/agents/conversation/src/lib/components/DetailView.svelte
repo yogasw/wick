@@ -1135,11 +1135,18 @@
 
     // A real user scroll: release the bottom-pin the moment they move up, and
     // re-pin once they return to the bottom. Drives the Jump button.
+    //
+    // The two thresholds are deliberately NOT the same. 80px is the Jump-button
+    // threshold — far enough up that an overlay is worth showing. Re-pinning is
+    // stricter: only when the thread is actually parked at the bottom. Sharing
+    // the 80px for both made every short scroll (one wheel notch ≈ 40px) set
+    // stickToBottom back to true, which re-ran the pin effect below and yanked
+    // the thread down again — the panel appeared to blink on small scrolls.
     function onScroll() {
       if (suppressScrollCheck) return;
       const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       userScrolledUp = distFromBottom > 80;
-      stickToBottom = !userScrolledUp;
+      if (distFromBottom <= 4) stickToBottom = true;
       showJumpBtn = userScrolledUp;
       // Near the top → pull the next older history page in.
       if (el.scrollTop < 80) loadOlderHistory();
