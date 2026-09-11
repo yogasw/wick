@@ -196,6 +196,9 @@ func daemonReloadCmd() *cobra.Command {
 		Use:     "reload",
 		Aliases: []string{"upgrade-inplace"},
 		Short:   "Hand over to the new binary without dropping in-flight work",
+		// A refused binary is the whole point of --binary, so the refusal
+		// must be the last thing on screen — not buried under a flag dump.
+		SilenceUsage: true,
 		Long: "Graceful upgrade of a running " + BuildAppName + " daemon.\n\n" +
 			"The current process starts a successor, passes it the listening socket, and\n" +
 			"then waits for its own in-flight work (agent turns, workflow runs, jobs) to\n" +
