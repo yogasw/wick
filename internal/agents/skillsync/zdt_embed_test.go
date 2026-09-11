@@ -22,6 +22,10 @@ func TestZeroDowntimeUpgradeSkillIsShipped(t *testing.T) {
 		"WICK_GRACEFUL_UPGRADE=1",
 		"TimeoutStartSec=infinity",
 		"WICK_DRAIN_AGENT_GRACE",
+		// The command that installs the binary is the first thing an
+		// operator needs; losing it from the skill leaves them on the
+		// manual recipe with no preflight.
+		"reload --binary",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("SKILL.md missing %q", want)
