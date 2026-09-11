@@ -318,6 +318,13 @@ type Channel struct {
 	socketMu    sync.RWMutex
 	socketState string // "", "connecting", "connected", "error", "disconnected"
 	socketAt    time.Time
+
+	// unboundWarned holds the sessions already reported as having nowhere to
+	// deliver to, so ensureTurn — which runs on every streamed delta — says it
+	// once per session instead of thousands of times. Cleared as soon as a
+	// binding turns up, so a session that is fixed and later breaks again is
+	// reported again. Zero value is usable; no constructor wiring needed.
+	unboundWarned sync.Map
 }
 
 // New builds a Slack Channel from the operator-supplied config alone.
@@ -461,6 +468,7 @@ func (s *Channel) ensureTurn(sessionKey string) *turn {
 	}
 	b, ok := s.sessions.ThreadBinding(sessionKey)
 	if !ok || b.Channel != "slack" || b.ChatID == "" {
+		s.warnUnbound(sessionKey)
 		return nil
 	}
 	threadTS := b.ThreadID
@@ -470,8 +478,10 @@ func (s *Channel) ensureTurn(sessionKey string) *turn {
 		threadTS = strings.TrimPrefix(sessionKey, s.sessionPrefixSnapshot())
 	}
 	if threadTS == "" {
+		s.warnUnbound(sessionKey)
 		return nil
 	}
+	s.unboundWarned.Delete(sessionKey)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -487,6 +497,30 @@ func (s *Channel) ensureTurn(sessionKey string) *turn {
 		Str("slack_channel", b.ChatID).Str("thread_ts", threadTS).
 		Msg("turn restored from the session's stored thread binding")
 	return t
+}
+
+// warnUnbound reports, once per session, that a turn finished with nowhere to
+// deliver it.
+//
+// ensureTurn returning nil is silent ABOVE this point on purpose: NotifyState
+// runs for every session on every channel, so a web-only conversation would
+// log on every turn it ever takes. Past the OwnsSession check the shape is
+// different — the session key carries THIS instance's prefix, so its reply
+// belongs in a Slack thread and a missing binding is a fault, not a normal
+// session that simply lives elsewhere.
+//
+// It is a fault worth a line because the binding is only ever written by an
+// inbound path (a message in the thread, or a workflow handing work to one).
+// A session whose turns all arrive from a SCHEDULE never takes that path, so
+// it can lose a reply every day and produce no error, no reaction and no log —
+// the schedule still records "delivered". The only signal left was somebody
+// eventually noticing the report never came.
+func (s *Channel) warnUnbound(sessionKey string) {
+	if _, seen := s.unboundWarned.LoadOrStore(sessionKey, struct{}{}); seen {
+		return
+	}
+	log.Warn().Str("channel", "slack").Str("session", sessionKey).
+		Msg("no thread binding for a session this instance owns — its reply is dropped; the binding is recorded when someone posts in the thread, so a schedule-only session never gets one")
 }
 
 // API returns the live Slack web-API client. Returns nil when the
@@ -1435,6 +1469,12 @@ func (s *Channel) handleReactionAdded(ctx context.Context, ev *slackevents.React
 	}
 
 	s.setAutoReply(sessionID, true)
+	// Arming a thread is the moment its replies start coming from automation
+	// rather than from someone typing, so record where they belong while the
+	// event still carries the channel. Without this the switch can be on for
+	// a thread whose binding is never written, which is precisely the thread
+	// whose answers nobody is waiting at the keyboard to miss.
+	s.persistThreadBinding(sessionID, channelID, parentTS)
 	l.Info().Str("thread_ts", parentTS).Str("session", sessionID).Msg("auto-reply switch ON")
 	_ = ctx
 }
