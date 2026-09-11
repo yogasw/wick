@@ -2001,6 +2001,7 @@
     {#if activeView === "conversation"}
       <div
         class="flex-1 min-h-0 overflow-y-auto bg-white-200 dark:bg-navy-800"
+        style="overflow-anchor: none"
         bind:this={threadEl}
         data-chat-panel
       >
