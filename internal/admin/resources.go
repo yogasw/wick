@@ -54,8 +54,11 @@ func (h *Handler) projectsAdminPage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) setProjectTags(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	r.ParseForm()
-	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	ids, ok := tagIDsFromForm(r)
+	if !ok {
+		refuseUnreadableTagForm(w)
+		return
+	}
 	if err := h.repo.SetToolTags(r.Context(), "/projects/"+id, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -113,8 +116,11 @@ func (h *Handler) workflowsAdminPage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) setWorkflowTags(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	r.ParseForm()
-	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	ids, ok := tagIDsFromForm(r)
+	if !ok {
+		refuseUnreadableTagForm(w)
+		return
+	}
 	if err := h.repo.SetToolTags(r.Context(), "/workflows/"+id, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -170,8 +176,11 @@ func (h *Handler) skillsAdminPage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) setSkillTags(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	r.ParseForm()
-	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	ids, ok := tagIDsFromForm(r)
+	if !ok {
+		refuseUnreadableTagForm(w)
+		return
+	}
 	if err := h.repo.SetToolTags(r.Context(), "/skills/"+name, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -225,8 +234,11 @@ func (h *Handler) dataTablesAdminPage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) setDataTableTags(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
-	r.ParseForm()
-	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	ids, ok := tagIDsFromForm(r)
+	if !ok {
+		refuseUnreadableTagForm(w)
+		return
+	}
 	if err := h.repo.SetToolTags(r.Context(), "/data-tables/"+slug, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

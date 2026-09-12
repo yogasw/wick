@@ -94,10 +94,20 @@
       e.preventDefault();
       btn.disabled = true;
       status.textContent = 'saving…';
+      // URL-ENCODED, NOT FormData. fetch() sends a FormData body as
+      // multipart/form-data, and Go's r.ParseForm() does not parse a
+      // multipart body at all: the handler read an empty tag list and
+      // saved it, wiping the row. This is the exact shape a plain form
+      // post sends, which is the shape the handlers have always read.
+      const body = new URLSearchParams();
+      for (const [k, v] of new FormData(form).entries()) body.append(k, String(v));
       fetch(form.action, {
         method: form.method || 'POST',
-        body: new FormData(form),
-        headers: { [ASYNC_HEADER]: '1' },
+        body,
+        headers: {
+          [ASYNC_HEADER]: '1',
+          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        },
         credentials: 'same-origin',
       }).then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status);

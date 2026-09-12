@@ -647,8 +647,11 @@ func (h *Handler) setRole(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) setUserTags(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	r.ParseForm()
-	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	ids, ok := tagIDsFromForm(r)
+	if !ok {
+		refuseUnreadableTagForm(w)
+		return
+	}
 	if err := h.repo.SetUserTags(r.Context(), id, ids); err != nil {
 		if errors.Is(err, ErrUserNotApproved) || errors.Is(err, ErrSystemTagAssignment) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -729,8 +732,11 @@ func (h *Handler) setJobTags(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, ErrSystemEntityImmutable.Error(), http.StatusBadRequest)
 		return
 	}
-	r.ParseForm()
-	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	ids, ok := tagIDsFromForm(r)
+	if !ok {
+		refuseUnreadableTagForm(w)
+		return
+	}
 	if err := h.repo.SetToolTags(r.Context(), path, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -766,8 +772,11 @@ func (h *Handler) setToolDisabled(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) setToolTags(w http.ResponseWriter, r *http.Request) {
 	path := "/tools/" + r.PathValue("path")
-	r.ParseForm()
-	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	ids, ok := tagIDsFromForm(r)
+	if !ok {
+		refuseUnreadableTagForm(w)
+		return
+	}
 	if err := h.repo.SetToolTags(r.Context(), path, ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

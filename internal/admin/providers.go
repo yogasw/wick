@@ -102,8 +102,11 @@ func (h *Handler) setProviderTags(w http.ResponseWriter, r *http.Request, path f
 		http.Error(w, "provider not found", http.StatusNotFound)
 		return
 	}
-	_ = r.ParseForm()
-	ids := dedupNonEmpty(r.Form["tag_ids[]"])
+	ids, ok := tagIDsFromForm(r)
+	if !ok {
+		refuseUnreadableTagForm(w)
+		return
+	}
 	if err := h.repo.SetToolTags(r.Context(), path(typ, name), ids); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
