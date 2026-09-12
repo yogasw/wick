@@ -273,5 +273,18 @@ export interface ProviderConnection {
      (codex/gemini today) — distinct from a fetch that failed. */
   usageSupported: boolean;
   usageErr: string;
+  /* usagePending is true while the first reading for this account is
+     still being fetched. The probe is paced to stay under the
+     endpoint's rate limit, so a cold page shows this before numbers. */
+  usagePending: boolean;
+  /* usageChecking is true while a probe for this account is in flight,
+     so the card can show it is working instead of looking frozen. */
+  usageChecking: boolean;
+  /* Provenance of the reading: when it was taken (RFC3339), its age in
+     seconds, and how long until the next probe is allowed. Readings are
+     cached per account, so the card shows how old the numbers are. */
+  usageFetchedAt: string;
+  usageAgeS: number;
+  usageNextS: number;
   windows: { key: string; utilization: number; resetsAt: string }[];
 }

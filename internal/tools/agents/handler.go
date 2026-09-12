@@ -396,6 +396,7 @@ func Register(r tool.Router) {
 	// wick PTY, streamed to the browser terminal over ws. TTL-bound.
 	r.GET("/api/providers/{type}/{name}/logintty", apiProviderLoginTTYStatus)
 	r.GET("/api/providers/{type}/{name}/logintty/usage", apiProviderLoginTTYUsage)
+	r.POST("/api/providers/{type}/{name}/logintty/usage/refresh", apiProviderLoginTTYUsageRefresh)
 	r.POST("/api/providers/{type}/{name}/logintty/start", apiProviderLoginTTYStart)
 	r.POST("/api/providers/{type}/{name}/logintty/extend", apiProviderLoginTTYExtend)
 	r.POST("/api/providers/{type}/{name}/logintty/kill", apiProviderLoginTTYKill)

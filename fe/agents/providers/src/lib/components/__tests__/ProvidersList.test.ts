@@ -2,9 +2,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import ProvidersList from "../ProvidersList.svelte";
 import * as api from "$lib/api.js";
+import * as tty from "$lib/logintty.js";
 import type { ProvidersListResponse, ProviderConnection } from "$lib/types.js";
 
 vi.mock("$lib/api.js");
+vi.mock("$lib/logintty.js");
 vi.mock("@wick-fe/common-stores", () => ({
   toastOk: vi.fn(),
   toastError: vi.fn(),
@@ -63,6 +65,7 @@ beforeEach(() => {
   vi.mocked(api.apiGateModes).mockResolvedValue(undefined);
   vi.mocked(api.apiDeleteProvider).mockResolvedValue(undefined);
   vi.mocked(api.apiAutoRescanToggle).mockResolvedValue(undefined);
+  vi.mocked(tty.apiLoginTTYUsageRefresh).mockResolvedValue({ accepted: true, checking: true, waitS: 0 });
   vi.mocked(api.apiMCPInstall).mockResolvedValue(undefined);
   vi.mocked(api.apiMCPUninstall).mockResolvedValue(undefined);
   vi.mocked(api.apiCreateProvider).mockResolvedValue(undefined);
@@ -265,6 +268,11 @@ describe("ProvidersList connection badges", () => {
       authMethod: "Claude AI",
       usageSupported: true,
       usageErr: "",
+      usagePending: false,
+      usageChecking: false,
+      usageFetchedAt: "",
+      usageAgeS: 0,
+      usageNextS: 0,
       windows: [
         { key: "five_hour", utilization: 42, resetsAt: "" },
         { key: "seven_day", utilization: 80, resetsAt: "" },
@@ -302,6 +310,67 @@ describe("ProvidersList connection badges", () => {
     render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
     await screen.findByText("dev@abc.com");
     expect(screen.getAllByText("dev@abc.com")).toHaveLength(1);
+  });
+
+  it("stamps the usage row with how old the cached reading is", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([
+      conn({ usageAgeS: 45, usageNextS: 15, usageFetchedAt: "2026-09-12T10:00:00Z" }),
+    ]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    // The numbers come from a shared server-side cache, so the card must
+    // say so rather than implying it fetched them on this paint.
+    expect(screen.getByText("45s ago")).toBeTruthy();
+    expect(screen.getByTestId("usage-cache-chip").getAttribute("title")).toContain("next refresh in 15s");
+  });
+
+  it("shows a pending reading as pending, not as an error", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([
+      conn({ windows: [], usagePending: true }),
+    ]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    expect(await screen.findByTestId("usage-checking")).toBeTruthy();
+  });
+
+  it("says when the next probe runs after a failed one", async () => {
+    // Retrying a 429 is what keeps it alive, so the card explains the
+    // wait instead of looking stuck.
+    vi.mocked(api.apiGetConnections).mockResolvedValue([
+      conn({ windows: [], usageErr: "usage endpoint: 429 Too Many Requests", usageNextS: 120 }),
+    ]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    expect(await screen.findByText("retry in 2m")).toBeTruthy();
+  });
+
+  // The button must be there even when the card HAS numbers — a reading
+  // is cached for a minute, and "I want it now" is a legitimate ask.
+  it("offers a re-check on a card that already has usage", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn({ usageAgeS: 30 })]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    await fireEvent.click(screen.getAllByTestId("usage-recheck")[0]);
+    expect(tty.apiLoginTTYUsageRefresh).toHaveBeenCalledWith("", "claude", "claude");
+  });
+
+  it("explains a refused re-check as a wait, not as a failure", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn({ usageAgeS: 30 })]);
+    // The server declines because a probe now would land inside the
+    // upstream's own cooldown.
+    vi.mocked(tty.apiLoginTTYUsageRefresh).mockResolvedValue({ accepted: false, checking: false, waitS: 240 });
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    await fireEvent.click(screen.getAllByTestId("usage-recheck")[0]);
+    expect(await screen.findByText("wait 4m")).toBeTruthy();
+  });
+
+  it("shows the checking state while a probe is in flight", async () => {
+    vi.mocked(api.apiGetConnections).mockResolvedValue([conn({ usageAgeS: 30, usageChecking: true })]);
+    render(ProvidersList, { props: { onNavigate: vi.fn(), onOpenSession: vi.fn(), base: "" } });
+    await screen.findByText("dev@abc.com");
+    expect(screen.getByTestId("usage-checking")).toBeTruthy();
+    // While it works, the button is disabled — a second click would only
+    // queue behind the same probe.
+    expect((screen.getAllByTestId("usage-recheck")[0] as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("renders cards even when the connections request fails", async () => {
