@@ -122,12 +122,45 @@ func LastHandover() (at time.Time, ok bool, errMsg string) {
 	return v.At, v.OK, v.Error
 }
 
+// handoverStateFile is where the outcome of the last attempt is left for a
+// process that is not this one. `reload` polls for a new pid and has no way to
+// hear "I refused to start a successor" — so it waited out its whole timeout
+// for a handover that was never going to happen. Five minutes of an operator's
+// time, for something the daemon knew instantly.
+const handoverStateFile = "handover-last.json"
+
 func recordHandover(err error) {
 	r := handoverResult{At: time.Now(), OK: err == nil}
 	if err != nil {
 		r.Error = err.Error()
 	}
 	lastHandover.Store(r)
+	writeHandoverState(r)
+}
+
+// writeHandoverState persists the attempt. Best-effort: a missing file only
+// costs the CLI its early exit.
+func writeHandoverState(r handoverResult) {
+	dir := stateDir.Load()
+	if dir == nil || *dir == "" {
+		return
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return
+	}
+	//nolint:errcheck // see doc comment
+	_ = os.WriteFile(filepath.Join(*dir, handoverStateFile), b, 0o644)
+}
+
+// stateDir is the data dir, remembered so package-level helpers can write
+// beside the pid file without every caller threading it through.
+var stateDir atomic.Pointer[string]
+
+// HandoverStatePath is where the last attempt is recorded. Exported so the
+// CLI reads the same path the daemon writes.
+func HandoverStatePath(baseDir string) string {
+	return filepath.Join(baseDir, handoverStateFile)
 }
 
 // AutoSwap is what the binary watcher is doing right now, published so the UI
@@ -312,6 +345,10 @@ func Wanted() bool {
 // the reason, so the daemon boots either way.
 func New(baseDir string) (*Upgrader, string) {
 	u := &Upgrader{baseDir: baseDir, never: make(chan struct{})}
+	if baseDir != "" {
+		d := baseDir
+		stateDir.Store(&d)
+	}
 	if !Wanted() {
 		return u, "disabled (set WICK_GRACEFUL_UPGRADE=1 to enable)"
 	}

@@ -521,6 +521,9 @@ func (s *Store) flushAssistantTurn(wasInterrupted bool) error {
 		return nil
 	}
 	body := s.turnBuf.String()
+	// A resumed turn replays the interrupted one from its first word; drop
+	// what the reader already has. See resume_dedupe.go.
+	body = s.dedupeResumedPrefix(body)
 	truncated := wasInterrupted
 	s.mu.Lock()
 	evSnap := s.eventBuf

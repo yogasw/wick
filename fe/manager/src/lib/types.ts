@@ -161,6 +161,7 @@ export interface ConnectorDetail {
   multi_account: boolean;
   allow_others_connect_sso: boolean;
   allow_others_configure: boolean;
+  allow_others_see_accounts: boolean;
   session_config_capable: boolean;
   session_config_allowed: boolean;
 }

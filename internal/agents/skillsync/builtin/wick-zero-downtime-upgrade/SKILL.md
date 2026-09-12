@@ -52,7 +52,11 @@ One command installs the new build and hands over to it:
 <app> reload --binary <new-binary>       # --sudo when the target directory is root-owned
 ```
 
-It inspects the candidate before touching anything, swaps it in atomically, signals the handover, then waits to confirm the successor really took over — printing `handover done: pid <old> -> <new>, <old version> -> <new version>`. Add `--wait-drain` to also wait for the old process to exit, which is the moment channels, cron and the schedule runner move across.
+It inspects the candidate before touching anything, swaps it in atomically, signals the handover, and **returns** — printing `handover started: pid <old> is booting the successor`. It does not block: the boot takes about a minute and a half, the old process serves every request throughout it, so waiting buys a blocked caller and nothing else. An immediate refusal is still caught, because the daemon answers that in milliseconds.
+
+Add `--wait` when a script needs the confirmation — it blocks until the successor is serving, prints `handover done: pid <old> -> <new>, <old version> -> <new version>`, and rolls the binary back if the successor never gets there. `--wait-drain` implies it and also waits for the old process to exit, which is the moment channels, cron and the schedule runner move across.
+
+**From inside an agent turn, do neither.** Install the binary and stop there; the watcher applies it. A reload that waits holds the turn open, and an open turn is itself something the next swap has to reckon with — the agent ends up waiting on a swap that is waiting on the agent.
 
 ### What it checks
 
@@ -186,10 +190,11 @@ A compact version of the same thing sits in the **admin layout**, so it shows on
 
 Two different questions, and they need different evidence.
 
-**“Did the switch actually happen, onto the build I meant?”** — ask wick. `reload --binary` prints the answer itself:
+**“Did the switch actually happen, onto the build I meant?”** — ask wick. `reload --binary` tells you it started, and with `--wait` it tells you it finished:
 
 ```
-handover done: pid 41233 -> 41871, v1.9.0 -> v1.9.1
+handover started: pid 41233 is booting the successor (v1.9.0 -> v1.9.1)
+handover done:    pid 41233 -> 41871, v1.9.0 -> v1.9.1     # only with --wait
 ```
 
 and the daemon log carries the same story from both sides: `upgrade: SIGHUP received — starting successor process`, `upgrade: successor is serving — draining this process (nothing is killed)`, `upgrade: waiting for non-resumable work to finish`, `upgrade: intake baton handed to the successor`, `upgrade: drained, exiting`. Under systemd, `systemctl show <app> -p MainPID` must show a changed pid while the unit never leaves `active`. `/boot-status` says whether the pid now serving is done booting.

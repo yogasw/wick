@@ -432,3 +432,18 @@ func firstNonEmpty(vals ...string) string {
 	}
 	return ""
 }
+
+// FileFingerprint identifies the exact bytes at path, cheaply: size and
+// modification time, which together change on any replacement a deploy can
+// perform (rename, copy, install). Empty when the file cannot be read.
+//
+// Used to answer "is this still the file I put here?" — the question a
+// rollback has to ask before undoing anything, because on a busy host the
+// answer is sometimes no.
+func FileFingerprint(path string) string {
+	st, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d:%d", st.Size(), st.ModTime().UnixNano())
+}

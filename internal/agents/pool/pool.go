@@ -1353,6 +1353,11 @@ func (p *Pool) spawn(ctx context.Context, sessionID, agentName, source string) e
 //
 // The whole body runs under p.wg so Stop() can wait for any tail
 // work to finish before tearing down.
+// mcpRevokeGrace is how long a dead spawn's MCP credential stays valid after
+// its process is gone. Long enough to cover a call already in flight and a
+// client reconnecting across a handover; far short of the token's own TTL.
+const mcpRevokeGrace = 90 * time.Second
+
 func (p *Pool) onAgentExit(sessionID, agentName string) {
 	key := sessionKey(sessionID, agentName)
 	p.mu.Lock()
@@ -1391,14 +1396,22 @@ func (p *Pool) onAgentExit(sessionID, agentName string) {
 		Str("agent", agentName).
 		Logger()
 	l.Debug().Msg("pool.exit: subprocess exited — releasing slot")
-	// Revoke the dead spawn's per-session MCP credential now rather than
-	// letting it stay valid until its TTL: the process that held it is gone,
-	// so nothing legitimate still needs it. Only per-session tokens are set
-	// here — the shared per-boot token is never reported to the entry, so it
-	// can't be revoked out from under other spawns.
+	// Revoke the dead spawn's per-session MCP credential rather than letting
+	// it live out its TTL — but not this instant. "The subprocess exited" is
+	// not the same as "nothing is using this token": a tool call can be in
+	// flight on the loopback MCP server as the process goes, and a client
+	// reconnecting across a handover presents the credential it was given at
+	// spawn. Revoking on the exit itself turned both into `401 token
+	// expired` mid-conversation, which reads as the agent losing its tools
+	// for no reason anyone can see.
+	//
+	// The grace costs nothing real: a new spawn mints its own token, so this
+	// one is not reused, and it still dies long before its 12h TTL.
 	if ok && entry != nil && entry.mcpToken != "" && p.cfg.RevokeMCPToken != nil {
-		p.cfg.RevokeMCPToken(entry.mcpToken)
-		l.Debug().Msg("pool.exit: revoked per-session MCP token")
+		tok := entry.mcpToken
+		revoke := p.cfg.RevokeMCPToken
+		time.AfterFunc(mcpRevokeGrace, func() { revoke(tok) })
+		l.Debug().Dur("in", mcpRevokeGrace).Msg("pool.exit: per-session MCP token scheduled for revocation")
 	}
 	_ = p.markStatus(sessionID, session.StatusIdle)
 	p.releaseSlot(key)

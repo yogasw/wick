@@ -856,10 +856,13 @@ templ systemUpdateScript() {
 				switch (autoState) {
 					case 'settling': return 'nothing running — swapping in ' + mmss(autoLeft);
 					case 'previous_draining': return 'previous process still finishing — retrying in ' + mmss(autoLeft);
-					case 'waiting': return lastBusy.length ? lastBusy.join(', ') : 'waiting for this process to go idle';
-					case 'handing_over': return 'idle — nothing was interrupted';
+					// Only work that cannot be resumed reaches this state. Agent
+					// turns never hold the swap back: they finish in the
+					// outgoing process either way.
+					case 'waiting': return lastBusy.length ? lastBusy.join(', ') : 'work that cannot be interrupted';
+					case 'handing_over': return 'clear — running turns finish in the old process';
 				}
-				return lastBusy.length ? lastBusy.join(', ') : 'nothing running';
+				return lastBusy.length ? lastBusy.join(', ') : 'nothing to wait for';
 			}
 			if (autoState !== 'handing_over') return 'not started yet';
 			var t = 'new process booting — ' + mmss(autoElapsed);

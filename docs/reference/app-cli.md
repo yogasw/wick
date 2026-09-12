@@ -141,7 +141,19 @@ connectors are involved — and everything in flight is killed.
 ./bin/myapp reload --binary ./bin/myapp     # --sudo when the target directory is root-owned
 ```
 
-It waits for the handover and reports it, rather than firing a signal and leaving you to guess:
+It checks the candidate, installs it, signals the handover and returns — about a
+second, not a minute and a half:
+
+```
+installed /usr/bin/myapp (previous kept at /usr/bin/myapp.prev)
+handover started: pid 319449 is booting the successor (0.1.155 -> 0.1.156)
+not waiting for it; the old process keeps serving until the new one is ready
+```
+
+It does not block, because there is nothing to block for: the old process
+answers every request for the whole boot. A refusal IS caught before it
+returns — the daemon records one within milliseconds — and that path rolls the
+binary back. Add `--wait` when a script wants the confirmation instead:
 
 ```
 handover done: pid 618434 -> 668241, 0.1.113 -> 0.1.114
@@ -154,7 +166,8 @@ handover done: pid 618434 -> 668241, 0.1.113 -> 0.1.114
 | `--yes` / `-y` | skip the confirmation prompt — **required** when stdin is not a terminal |
 | `--force` | proceed despite a blocking finding; never overrides OS/arch or a non-wick binary |
 | `--sudo` | run the file swap through `sudo`, for a root-owned target directory |
-| `--wait-drain` | also wait for the previous process to finish its work and exit |
+| `--wait` | block until the successor is serving, and roll back if it never gets there. Off by default — the old process serves throughout the boot, so waiting blocks the caller and helps nobody |
+| `--wait-drain` | also wait for the previous process to finish its work and exit (implies `--wait`) |
 | `--timeout <dur>` | how long to wait for the successor to take over (default `5m`) |
 
 **The candidate is checked before the file is touched.** Identity comes from its embedded build

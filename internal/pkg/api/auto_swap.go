@@ -31,10 +31,19 @@ const autoSwapInterval = 15 * time.Second
 //   - the file differs from the running image (version or build timestamp),
 //   - it looked exactly the same one interval ago — size and mtime — so a
 //     half-written file is never executed,
-//   - nothing is in flight. The handover itself never interrupts work, but
-//     firing it while an agent turn or workflow run is going leaves two
-//     processes alive for as long as that work takes; waiting for idle keeps
-//     the swap boring.
+//   - nothing UNRESUMABLE is in flight — a workflow run mid-node, a cron job
+//     mid-write, a connector call. Those are the ones a handover could strand,
+//     and they are short.
+//
+// Agent turns deliberately do NOT hold it back. The handover does not touch
+// them: the old process keeps serving its turns to the end and only then
+// exits, so a turn is no more interrupted by swapping than by not swapping.
+// Waiting for them was a mistake that only showed on a busy host — with two
+// conversations replying in turn, "nothing in flight" is a moment that may
+// never arrive, and the swap sat in "waiting for idle" for minutes while the
+// dashboard insisted something was happening. Two generations alive for the
+// length of a long turn is the price, and it is the price this whole feature
+// already pays during the drain.
 //
 // A file that fails to take over is not retried. Otherwise a broken build
 // would be handed over to every 15 seconds, forever.
@@ -56,20 +65,24 @@ func (s *Server) watchBinarySwap(ctx context.Context, runningVersion, runningBui
 			return
 		}
 		p, ok := sw.inspect(runningVersion, runningBuiltAt)
-		busy := upgrade.Busy()
+		// Only work that CANNOT be resumed gates the trigger; see the
+		// comment on watchBinarySwap. Busy() is still what gets logged, so
+		// the line says everything that was running, not just the blockers.
+		busy := upgrade.BusyKind(false)
 		fire := sw.shouldSwap(p, ok, busy)
 		// Publish what this tick concluded BEFORE acting on it, so a page open
 		// during the wait shows the reason rather than an unexplained pause.
 		upgrade.SetAutoSwap(sw.status(p, ok, busy, fire))
 		if !fire {
 			if ok && len(busy) > 0 {
-				logger.Debug().Strs("outstanding", busy).Str("to", p.Version).
-					Msg("auto-swap: a new binary is installed, waiting for this process to go idle")
+				logger.Debug().Strs("blocking", busy).Strs("running", upgrade.Busy()).Str("to", p.Version).
+					Msg("auto-swap: a new binary is installed, waiting for work that cannot be resumed")
 			}
 			continue
 		}
 		logger.Info().Str("from", runningVersion).Str("to", p.Version).Str("path", p.Path).
-			Msg("auto-swap: idle and a new binary is installed — handing over")
+			Strs("still_running", upgrade.Busy()).
+			Msg("auto-swap: a new binary is installed — handing over (running turns finish in this process)")
 		if err := upgrade.Trigger(); err != nil {
 			upgrade.SetAutoSwap(upgrade.AutoSwap{})
 			// "parent hasn't exited" means a PREVIOUS generation is still
@@ -154,8 +167,9 @@ func (a *autoSwapper) shouldSwap(p daemon.Pending, pending bool, busy []string) 
 		a.seen = p // first sighting, or still being written — wait one more tick
 		return false
 	}
-	// The handover never interrupts work, but firing it mid-turn keeps two
-	// processes alive for as long as that work runs. Idle keeps it boring.
+	// busy here is the UNRESUMABLE work only (see watchBinarySwap): those are
+	// the calls a handover could strand. Agent turns finish in the outgoing
+	// process either way, so they are not consulted.
 	return len(busy) == 0
 }
 

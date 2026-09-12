@@ -39,18 +39,18 @@ func TestAutoSwapDecision(t *testing.T) {
 		}
 	})
 
-	t.Run("work in flight holds the swap", func(t *testing.T) {
-		// Not because the handover would interrupt it — it would not — but
-		// because two processes alive for the length of a long agent turn is
-		// a state nobody chose.
+	t.Run("work that cannot be resumed holds the swap", func(t *testing.T) {
+		// A workflow run mid-node or a cron job mid-write is what a handover
+		// could strand. Note the caller passes ONLY unresumable work here —
+		// agent turns are not consulted at all (see watchBinarySwap).
 		var a autoSwapper
 		p := pend("0.2.0", 100, 10)
-		a.shouldSwap(p, true, []string{"agent turns=1 (sess-a)"})
-		if a.shouldSwap(p, true, []string{"agent turns=1 (sess-a)"}) {
-			t.Fatal("swapped while an agent turn was running")
+		a.shouldSwap(p, true, []string{"workflow runs=1"})
+		if a.shouldSwap(p, true, []string{"workflow runs=1"}) {
+			t.Fatal("swapped while a workflow run was mid-node")
 		}
 		if !a.shouldSwap(p, true, nil) {
-			t.Fatal("did not swap once the turn finished")
+			t.Fatal("did not swap once the run finished")
 		}
 	})
 
